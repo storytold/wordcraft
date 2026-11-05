@@ -213,6 +213,45 @@ pub struct ShapeExtra {
     /// main colour (the shape's `stroke`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outline_fill: Option<crate::fill::Fill>,
+    /// An ODF custom shape's geometry as read (its `draw:enhanced-geometry`, equations and
+    /// handles), whose path the shape's freeform was worked out from: saved back as it was, so
+    /// LibreOffice draws its own shape (or a preset WordCraft draws as a rectangle: kept with
+    /// it). Dropped when the shape is made another kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub odf_geometry: Option<std::sync::Arc<String>>,
+    /// A horizontal rule (VML `o:hr`: a web page's `<hr>` pasted into Word): it takes its whole
+    /// line, and is drawn across [`HorizontalRule::pct`] of it or at the shape's own width.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hr: Option<HorizontalRule>,
+}
+
+/// How a horizontal rule sits on its line (VML `o:hrpct`, `o:hralign`), as Word draws one:
+/// across `pct` percent of the line's width (the paragraph's, inside its indents), or at the
+/// shape's own width when `pct` is 0; `align` places it when it is narrower than the line.
+#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HorizontalRule {
+    pub pct: f32,
+    pub align: crate::props::Align,
+    /// Word's standard look (`o:hrstd`), kept for saving.
+    pub standard: bool,
+}
+
+impl HorizontalRule {
+    /// The rule's width on a line `line` wide, for a shape `own` wide.
+    pub fn width(&self, line: f32, own: f32) -> f32 {
+        let line = line.max(0.0);
+        if self.pct.is_finite() && self.pct > 0.0 { line * (self.pct.min(100.0) / 100.0) } else { own.clamp(0.0, line) }
+    }
+
+    /// Where a rule `w` wide starts on a line from `x`, `line` wide.
+    pub fn left(&self, x: f32, line: f32, w: f32) -> f32 {
+        match self.align {
+            crate::props::Align::Center => x + (line - w) / 2.0,
+            crate::props::Align::Right => x + line - w,
+            _ => x,
+        }
+    }
 }
 
 fn is_zero(v: &u32) -> bool {
@@ -351,7 +390,6 @@ pub fn end_direction(kind: ShapeKind, w: f32, h: f32, at_end: bool) -> (f32, f32
                 (0.0, 1.0)
             }
         }
-        ShapeKind::Line => (w, -h),
         _ => (w, h),
     };
     let len = (dx * dx + dy * dy).sqrt();
