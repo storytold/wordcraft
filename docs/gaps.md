@@ -222,6 +222,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-10-30 | trivial | #29: typed `\int`, `\sum` and the other n-ary operators wait for their limits; `_x^y` then Space builds them and the operand typed next goes inside; any character that can't continue `\name` corrects it (`\int_0^1`), observed in Word for Windows on #4938 (#4917); estimate unchanged |
 | 2026-10-17 | trivial | #10 narrowed: Drawing Canvas members are picked, moved, resized and formatted on their own (#2637); several at once and dragging one out of the canvas remain |
 | 2026-11-04 | trivial | CLI input paths keep their native filename when a value-taking option comes first; regression coverage includes conversion to Flat OPC and rejection of non-Unicode option values. |
+| 2026-11-05 | trivial | Hidden text: `file.open` warns about it (the fact, counts, tell the human, and what removes it), `file.info` gains `hasHidden`, `inspect_document` cleans through MCP, and File › Info gains Check for Issues › Inspect Document with Remove All per category, as Word's. `file.inspect`'s machinery is reused |
 | 2026-11-05 | trivial | DOCX preserves `w:adjustRightInd` with its true default and writes it in schema order; grid layout remains open |
 | 2026-10-28 | trivial | Ink page lookups reuse scanned paragraph prefixes, #3614. Drawing order, geometry and saved data retain their behavior; no readiness estimate change |
 | 2026-11-05 | trivial | #19: ODT default language kept when styles are written from the model |
