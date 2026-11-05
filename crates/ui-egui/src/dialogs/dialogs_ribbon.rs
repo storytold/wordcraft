@@ -88,7 +88,7 @@ fn label_of(app: &WordApp, id: &str) -> String {
 
 /// The dialog body; true closes it.
 pub fn customize_ribbon(app: &mut WordApp, ui: &mut Ui, f: &mut RibbonForm) -> bool {
-    let names = ["Ribbon", "Quick Access Toolbar"].map(|n| tl!(n).to_string());
+    let names = [tl!("Ribbon").to_string(), tl!("Quick Access Toolbar").to_string()];
     if let Some(k) = crate::widgets::dialog_tabs(ui, &names, (f.page == Page::QuickAccess) as usize) {
         f.page = if k == 0 { Page::Ribbon } else { Page::QuickAccess };
         f.renaming = None;

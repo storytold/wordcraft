@@ -488,7 +488,7 @@ fn body(ui: &mut Ui, d: &mut ColorsDialog) -> Option<bool> {
     ui.set_width(430.0);
     ui.label(egui::RichText::new(tl!("Colors")).font(crate::theme::semibold(14.0)));
     ui.add_space(6.0);
-    let names = ["Standard", "Custom"].map(|n| tl!(n).to_string());
+    let names = [tl!("Standard").to_string(), tl!("Custom").to_string()];
     if let Some(k) = crate::widgets::dialog_tabs(ui, &names, d.tab as usize) {
         d.tab = if k == 0 { ColorsTab::Standard } else { ColorsTab::Custom };
     }

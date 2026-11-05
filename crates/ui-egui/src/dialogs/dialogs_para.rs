@@ -552,7 +552,7 @@ impl BordersForm {
 
 /// The Borders and Shading dialog body. Returns true to close.
 pub fn borders(app: &mut WordApp, ui: &mut Ui, f: &mut BordersForm) -> bool {
-    let names = ["Borders", "Page Border", "Shading"].map(|n| tl!(n).to_string());
+    let names = [tl!("Borders").to_string(), tl!("Page Border").to_string(), tl!("Shading").to_string()];
     if let Some(k) = crate::widgets::dialog_tabs(ui, &names, f.tab as usize) {
         f.tab = k as u8;
     }

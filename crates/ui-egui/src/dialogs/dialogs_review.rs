@@ -396,7 +396,7 @@ fn list_change(app: &mut WordApp, f: &mut AutoCorrectForm, params: Value) -> boo
 }
 
 fn autocorrect_ui(app: &mut WordApp, ui: &mut Ui, f: &mut AutoCorrectForm) -> bool {
-    let names = ["AutoCorrect", "AutoFormat As You Type", "Math AutoCorrect"].map(|n| tl!(n).to_string());
+    let names = [tl!("AutoCorrect").to_string(), tl!("AutoFormat As You Type").to_string(), tl!("Math AutoCorrect").to_string()];
     if let Some(k) = crate::widgets::dialog_tabs(ui, &names, f.tab as usize) {
         f.tab = k as u8;
     }

@@ -269,7 +269,7 @@ fn symbol_cell(app: &mut WordApp, ui: &mut Ui, font: &str, c: char, selected: bo
 pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> bool {
     let t = Tokens::get(ui.ctx());
     ui.set_width(GRID_COLS as f32 * CELL + 24.0);
-    let names = ["Symbols", "Special Characters"].map(|n| tl!(n).to_string());
+    let names = [tl!("Symbols").to_string(), tl!("Special Characters").to_string()];
     if let Some(k) = crate::widgets::dialog_tabs(ui, &names, f.tab as usize) {
         f.tab = k as u8;
     }
