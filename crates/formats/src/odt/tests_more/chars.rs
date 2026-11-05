@@ -284,3 +284,56 @@ fn objects_in_hidden_text_are_kept() {
     assert!(p.text.contains("Hidden"), "{:?}", p.text);
     assert!(p.objects.iter().any(|o| matches!(o, wordcraft_doc::para::InlineObject::BookmarkStart { name } if name == "Secret")), "{:?}", p.objects);
 }
+
+/// A paragraph in style `style` holding `span`, with `auto` among its automatic styles.
+fn off_doc(styles: &str, style: &str, auto: &str, span: &str) -> Document {
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles>{auto}</office:automatic-styles><office:body><office:text><text:p text:style-name="{style}">{span}</text:p></office:text></office:body></office:document-content>"#
+    );
+    let styles = format!("<office:document-styles {NS_T}><office:styles>{styles}</office:styles></office:document-styles>");
+    import(&crate::odt::tests::package(&content, Some(&styles))).unwrap()
+}
+
+#[test]
+fn text_turning_off_what_its_style_turns_on_stays_off() {
+    // A word not bold in a bold heading: it showed bold, on screen and after a save.
+    let on = r#"fo:font-weight="bold" fo:font-style="italic" style:text-underline-style="solid" style:text-line-through-style="solid" fo:font-variant="small-caps" fo:text-transform="uppercase""#;
+    let off = r#"fo:font-weight="normal" fo:font-style="normal" style:text-underline-style="none" style:text-line-through-style="none" fo:font-variant="normal" fo:text-transform="none""#;
+    let styles = format!(r#"<style:style style:name="Laut" style:family="paragraph"><style:text-properties {on}/></style:style>"#);
+    let auto = format!(r#"<style:style style:name="T1" style:family="text"><style:text-properties {off}/></style:style>"#);
+    let check = |d: &Document, what: &str| {
+        let p = d.body[0].as_para().unwrap();
+        let shown = |run: usize| d.styles.resolve_char(p.props.style.as_deref(), &p.runs[run].props);
+        assert_eq!(p.text, "onoff", "{what}");
+        let (a, b) = (shown(0), shown(1));
+        assert_eq!((a.bold, a.italic, a.strike, a.small_caps, a.caps), (true, true, true, true, true), "{what}: the style's");
+        assert!(a.underline != Underline::None, "{what}");
+        assert_eq!((b.bold, b.italic, b.strike, b.small_caps, b.caps), (false, false, false, false, false), "{what}: turned off");
+        assert_eq!(b.underline, Underline::None, "{what}");
+    };
+    let d = off_doc(&styles, "Laut", &auto, r#"on<text:span text:style-name="T1">off</text:span>"#);
+    check(&d, "read");
+    check(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap(), "written from the model");
+    check(&import(&export(&d).unwrap()).unwrap(), "written as read");
+    // Turned back on inside it: on.
+    let auto = format!(
+        r#"{auto}<style:style style:name="T2" style:family="text"><style:text-properties fo:font-weight="bold" style:text-underline-style="solid"/></style:style>"#
+    );
+    let d = off_doc(&styles, "Laut", &auto, r#"<text:span text:style-name="T1"><text:span text:style-name="T2">x</text:span></text:span>"#);
+    let p = d.body[0].as_para().unwrap();
+    let x = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+    assert!(x.bold);
+    assert!(x.underline != Underline::None, "{x:?}");
+    assert!(!x.italic, "still off");
+    // A character style's: off in the automatic style based on it.
+    let styles = r#"<style:style style:name="Zeichen" style:family="text"><style:text-properties fo:font-weight="bold" style:text-underline-style="solid"/></style:style>"#;
+    let auto = r#"<style:style style:name="T3" style:family="text" style:parent-style-name="Zeichen"><style:text-properties fo:font-weight="normal" style:text-underline-style="none"/></style:style>"#;
+    let d = off_doc(styles, "Standard", auto, r#"<text:span text:style-name="T3">x</text:span>"#);
+    let p = d.body[0].as_para().unwrap();
+    let x = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+    assert_eq!((x.bold, x.underline), (false, Underline::None), "{x:?}");
+    // Text nothing turned on says nothing.
+    let d = off_doc("", "Standard", "", "plain");
+    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    assert!(!c.contains(r#"fo:font-weight="normal""#) && !c.contains(r#"style:text-underline-style="none""#), "{c}");
+}
