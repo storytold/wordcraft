@@ -504,24 +504,25 @@ impl FontDb {
             faces.retain(|f| !gone.contains(&f.id) && f.bytes.owned_ptr().is_none_or(|p| !files.contains(&p)));
             removed = before - faces.len();
         }
-        let mut added = 0;
-        if removed > 0 {
-            // A file with faces skipped as already present may have stood on removed ones: those
-            // still claimed add them again from the copy kept for this (the faces still present
-            // are skipped again).
-            for file in document.values_mut().filter(|f| !f.owners.is_empty()) {
-                if let Some((data, name)) = &file.skipped {
-                    let ids = self.add_faces(vec![(data.clone(), Some(name.clone()))]);
-                    added += ids.len();
-                    file.ids.extend(ids);
-                }
-            }
-        }
-        added += self.add_new_document_fonts(&mut document, files);
+        // Files this document claims that were recorded before: loaded unclaimed (a document read
+        // before it was opened), or claimed by another open document.
+        let known: Vec<u64> = wanted.iter().copied().filter(|k| document.contains_key(k)).collect();
+        let mut added = self.add_new_document_fonts(&mut document, files);
         for key in &wanted {
             if let Some(file) = document.get_mut(key) {
                 file.owners.insert(owner);
                 file.claimed = true;
+            }
+        }
+        // A claimed file keeps its faces in the list. One with faces skipped as already present may
+        // have stood on faces removed since: by this change, or, for a file first loaded unclaimed
+        // and claimed only now, by an earlier one. It adds them again from the copy kept for this
+        // (the faces still present are skipped again).
+        for (_, file) in document.iter_mut().filter(|(k, f)| !f.owners.is_empty() && (removed > 0 || known.contains(k))) {
+            if let Some((data, name)) = &file.skipped {
+                let ids = self.add_faces(vec![(data.clone(), Some(name.clone()))]);
+                added += ids.len();
+                file.ids.extend(ids);
             }
         }
         drop(document);

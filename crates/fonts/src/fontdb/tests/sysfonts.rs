@@ -668,15 +668,23 @@ fn circle_without_text_face() {
     assert!(found.covers('●'));
 }
 
-/// #3687: a document's fonts stay only while an open document claims them. Closing it takes the
-/// family away (the name resolves as for any font that isn't installed); setting the same files
-/// again changes nothing; when two documents embed different files under one family, the second's
-/// face takes over once the first is closed; and a file only loaded, never claimed, stays.
-#[test]
-fn document_fonts_leave_with_the_last_document_that_embeds_them() {
+/// A font file a document embeds, and a second file of the same font (padded, so its bytes differ):
+/// the database, with no system fonts.
+fn corporate_sans() -> (FontDb, (Vec<u8>, String), (Vec<u8>, String)) {
     let db = FontDb::with_font_dirs(Vec::new());
     db.set_system_fallback(false);
     let a = (named_face("SourceSerif4-Regular.ttf", "Corporate Sans"), "Corporate Sans".to_string());
+    let mut padded = a.0.clone();
+    padded.extend([0; 4]);
+    (db, a, (padded, "Corporate Sans".to_string()))
+}
+
+/// A document's embedded fonts stay in the font list while it is open and leave when it closes
+/// (#3687): claiming the same files again changes nothing; releasing them removes the family and
+/// bumps the generation, so lookups made while it was there are forgotten.
+#[test]
+fn document_fonts_leave_with_the_last_document_that_embeds_them() {
+    let (db, a, _) = corporate_sans();
     assert!(db.set_document_fonts(1, vec![a.clone()]));
     assert!(db.has_family("Corporate Sans"));
     let generation = db.generation();
@@ -687,14 +695,15 @@ fn document_fonts_leave_with_the_last_document_that_embeds_them() {
     assert!(!db.has_family("Corporate Sans"), "no open document embeds it");
     assert!(db.generation() > generation, "lookups made while it was loaded are forgotten");
     assert!(!db.face("Corporate Sans", "Regular").named("Corporate Sans"));
+}
 
-    // Two documents embed different files of one font (a padded copy): the second one's face
-    // matches the first's and is skipped, then added once the first document closes.
-    let mut padded = a.0.clone();
-    padded.extend([0; 4]);
-    let b = (padded, "Corporate Sans".to_string());
-    assert!(db.set_document_fonts(1, vec![a.clone()]));
-    assert!(!db.set_document_fonts(2, vec![b.clone()]), "its face is present already");
+/// Two documents embed different files of one font: the second one's face matches the first's and
+/// is skipped, then added once the first document closes.
+#[test]
+fn a_skipped_document_font_takes_over_when_the_first_document_closes() {
+    let (db, a, b) = corporate_sans();
+    assert!(db.set_document_fonts(1, vec![a]));
+    assert!(!db.set_document_fonts(2, vec![b]), "its face is present already");
     let first = db.face("Corporate Sans", "Regular").id;
     assert!(db.set_document_fonts(1, Vec::new()), "the first document closed");
     let face = db.face("Corporate Sans", "Regular");
@@ -702,12 +711,16 @@ fn document_fonts_leave_with_the_last_document_that_embeds_them() {
     assert_ne!(face.id, first, "its own file, not the closed document's");
     assert!(db.set_document_fonts(2, Vec::new()));
     assert!(!db.has_family("Corporate Sans"));
+}
 
-    // A collection only partly present: its Bold is added and its Regular skipped for the first
-    // document's, then added once that document closes.
+/// A collection only partly present: its Bold is added and its Regular skipped for the first
+/// document's, then added once that document closes.
+#[test]
+fn a_partly_duplicate_collection_gets_its_skipped_face_back() {
+    let (db, a, _) = corporate_sans();
     let c = (collection(&[a.0.clone(), named_face("SourceSans3-Bold.ttf", "Corporate Sans")]), "Corporate Sans".to_string());
-    assert!(db.set_document_fonts(1, vec![a.clone()]));
-    assert!(db.set_document_fonts(2, vec![c.clone()]), "its Bold is new");
+    assert!(db.set_document_fonts(1, vec![a]));
+    assert!(db.set_document_fonts(2, vec![c]), "its Bold is new");
     let first = db.face("Corporate Sans", "Regular").id;
     assert!(db.set_document_fonts(1, Vec::new()), "the first document closed");
     let face = db.face("Corporate Sans", "Regular");
@@ -715,9 +728,31 @@ fn document_fonts_leave_with_the_last_document_that_embeds_them() {
     assert_ne!(face.id, first);
     assert!(db.set_document_fonts(2, Vec::new()));
     assert!(!db.has_family("Corporate Sans"));
+}
 
-    // Loaded without a document claiming it (a document read for its styles): it stays.
-    db.add_document_fonts(vec![a.clone()]);
+/// A replacement read before it is opened (`Session::set_document`) loads its file unclaimed; its
+/// face is skipped while the replaced document's copy is there. Once that one is released and the
+/// replacement claims its file, its own face is in the list.
+#[test]
+fn a_replacement_read_before_it_is_claimed_gets_its_own_face() {
+    let (db, a, b) = corporate_sans();
+    assert!(db.set_document_fonts(1, vec![a]));
+    db.add_document_fonts(vec![b.clone()]);
+    let first = db.face("Corporate Sans", "Regular").id;
+    assert!(db.set_document_fonts(1, Vec::new()), "the replaced document released");
+    assert!(db.set_document_fonts(2, vec![b]), "the replacement claimed");
+    let face = db.face("Corporate Sans", "Regular");
+    assert!(face.named("Corporate Sans"), "the replacement has its font");
+    assert_ne!(face.id, first, "its own file, not the replaced document's");
+    assert!(db.set_document_fonts(2, Vec::new()));
+    assert!(!db.has_family("Corporate Sans"));
+}
+
+/// A font loaded without a document claiming it (a document read for its styles) stays.
+#[test]
+fn a_document_font_never_claimed_stays() {
+    let (db, a, _) = corporate_sans();
+    db.add_document_fonts(vec![a]);
     assert!(!db.set_document_fonts(3, Vec::new()));
     assert!(db.has_family("Corporate Sans"));
 }
