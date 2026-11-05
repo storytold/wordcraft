@@ -1,6 +1,6 @@
 //! Numbered REF results, adapted from @Alyosha-dot-shop's patch in #4533.
 
-use super::{Counters, NumFormat, Path, StoryRef};
+use super::{Counters, NumFormat, Path, Pos, StoryRef};
 
 /// What a numbered body paragraph shows: the counter value of each level down to its own, the
 /// label each of those levels shows at that point (`["14.", "(a)"]` for 14(a)), and the levels
@@ -22,9 +22,20 @@ pub(super) struct ParaNumbers {
     order: std::collections::HashMap<Path, usize>,
     /// Each list's numbered paragraphs, by their place in document order (ascending).
     lists: std::collections::HashMap<u32, Vec<(usize, Path)>>,
+    /// The bullet of each bullet item.
+    bullets: std::collections::HashMap<Path, String>,
 }
 
 impl ParaNumbers {
+    /// Where the body place `target` is from the body place `at` (a paragraph and an offset in
+    /// it), as `REF \p` says it: "above" when it comes first, else "below" (Word for Windows,
+    /// also within one paragraph). `None` when either is not a body paragraph.
+    fn place(&self, target: &Pos, (at, off): (&Path, usize)) -> Option<&'static str> {
+        let t = (*self.order.get(&target.path)?, target.off);
+        let f = (*self.order.get(at)?, off);
+        Some(if t < f { "above" } else { "below" })
+    }
+
     /// The last paragraph of `list` at or before the body paragraph `at`: what `REF \r` there
     /// takes its context from.
     fn context(&self, list: u32, at: &Path) -> Option<&ParaNumber> {
@@ -58,7 +69,7 @@ fn in_merged_cell(doc: &wordcraft_doc::Document, path: &Path) -> bool {
 }
 
 /// Every numbered body paragraph's number, by path, walking the lists in document order as the
-/// layout does (cells merged into the one above count nothing). Bullets have no number.
+/// layout does (cells merged into the one above count nothing), and every bullet item's bullet.
 pub(super) fn para_numbers(doc: &wordcraft_doc::Document) -> ParaNumbers {
     let mut counters = Counters::default();
     let mut out = ParaNumbers::default();
@@ -69,8 +80,12 @@ pub(super) fn para_numbers(doc: &wordcraft_doc::Document) -> ParaNumbers {
         }
         let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
         let Some(n) = p.props.numbering.or_else(|| doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0) else { continue };
-        let Some((_, def)) = counters.next_label(&doc.numbering, n.num, n.level) else { continue };
+        let Some((label, def)) = counters.next_label(&doc.numbering, n.num, n.level) else { continue };
         if def.format == NumFormat::Bullet {
+            // A reference to a bullet item shows its bullet (Word for Windows), as drawn: a
+            // Symbol-font bullet is its Unicode character.
+            let font = def.chr.font.as_deref().unwrap_or("");
+            out.bullets.insert(path, wordcraft_doc::symbol_fonts::map_text(font, &label));
             continue;
         }
         let level = usize::from(n.level.min(8));
@@ -111,9 +126,13 @@ fn ref_part(label: &str) -> &str {
 ///
 /// A level above the target that its list never used shows the number it counted from: Word shows
 /// `1.1(a)` for an `(a)` item whose list has no clause above it. All measured in Word for Windows.
-/// `None` when the target paragraph has no number.
+/// A bullet item shows its bullet, and a body paragraph with no number (none at all, or a level
+/// whose format is none) shows 0, whatever the switch, as in Word. `None` (the stored result
+/// stays) when the number can't be put together without inventing a delimiter.
 pub(super) fn ref_number(numbers: &ParaNumbers, target: &Path, from: Option<&Path>, switch: char) -> Option<String> {
-    let t = numbers.numbers.get(target)?;
+    let Some(t) = numbers.numbers.get(target) else {
+        return Some(numbers.bullets.get(target).cloned().unwrap_or_else(|| "0".into()));
+    };
     let level = t.values.len().checked_sub(1)?;
     let own = t.labels.get(level)?.as_deref()?;
     let mut out = ref_part(own).to_string();
@@ -144,13 +163,38 @@ pub(super) fn ref_number(numbers: &ParaNumbers, target: &Path, from: Option<&Pat
     Some(out)
 }
 
-/// Index the first body paragraph for each bookmark name, retaining document-order lookup semantics.
-pub(super) fn body_bookmark_paths(doc: &wordcraft_doc::Document) -> std::collections::HashMap<String, Path> {
-    let mut paths = std::collections::HashMap::new();
+/// What a REF to the body bookmark starting at `target` shows with the paragraph number switch
+/// `number` (`\r`, `\n` or `\w`) and, with `position`, `\p`: the number, "above" or "below", or
+/// the number then the position ("(a) above"), as Word for Windows shows them. `from` is the
+/// field's place, a body paragraph and the field's offset in it (`None` elsewhere: no relative
+/// context, and no position). `None` keeps the stored result.
+pub(super) fn ref_paragraph_result(
+    numbers: &ParaNumbers,
+    target: &Pos,
+    from: Option<(&Path, usize)>,
+    number: Option<char>,
+    position: bool,
+) -> Option<String> {
+    let number = match number {
+        Some(sw) => Some(ref_number(numbers, &target.path, from.map(|(p, _)| p), sw)?),
+        None => None,
+    };
+    let place = if position { Some(numbers.place(target, from?)?) } else { None };
+    match (number, place) {
+        (Some(n), Some(p)) => Some(format!("{n} {p}")),
+        (Some(n), None) => Some(n),
+        (None, Some(p)) => Some(p.to_string()),
+        (None, None) => None,
+    }
+}
+
+/// Where each bookmark name first starts in the body, retaining document-order lookup semantics.
+pub(super) fn body_bookmarks(doc: &wordcraft_doc::Document) -> std::collections::HashMap<String, Pos> {
+    let mut starts = std::collections::HashMap::new();
     for (name, pos) in doc.bookmarks() {
         if pos.story == StoryRef::Body {
-            paths.entry(name).or_insert(pos.path);
+            starts.entry(name).or_insert(pos);
         }
     }
-    paths
+    starts
 }

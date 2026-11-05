@@ -158,9 +158,9 @@ fn ref_number_switches_show_the_paragraph_number_as_word_does() {
                 field(r"REF _RefE \r \h", "STALE"),
                 field(r"REF _RefD \n \h", "STALE"),
                 field(r"REF _RefG \r \h", "STALE"),
-                // Unchanged: no number switch shows the text; \p (above/below) is left as it is.
+                // No number switch shows the text; \p adds where the target is.
                 field(r"REF _RefB \h", "STALE"),
-                field(r"REF _RefA \r \p", "KEEP"),
+                field(r"REF _RefA \r \p", "STALE"),
             ]
             .concat(),
         ),
@@ -183,7 +183,7 @@ fn ref_number_switches_show_the_paragraph_number_as_word_does() {
         (r"REF _RefD \n \h", "2"),
         (r"REF _RefG \r \h", "(b)"),
         (r"REF _RefB \h", "Point"),
-        (r"REF _RefA \r \p", "KEEP"),
+        (r"REF _RefA \r \p", "(a) above"),
     ];
     let want: Vec<(String, String)> = want.iter().map(|(i, r)| (i.to_string(), r.to_string())).collect();
     assert_eq!(got, want);
@@ -208,9 +208,11 @@ fn relative_number_keeps_context_already_in_the_target_label() {
     assert_eq!(got, ["1.1.1", "1.1.1", "1.1.1"]);
 }
 
-/// Cached values of unsupported switches, missing targets and locked fields are not replaced with paragraph text.
+/// Unsupported switches (`\d`, `\t`) and locked fields keep their cached values, never the
+/// paragraph's text. As in Word for Windows, a missing bookmark gives Word's error and a
+/// paragraph with no number shows 0.
 #[test]
-fn unsupported_or_unresolvable_numeric_refs_preserve_their_cache() {
+fn unsupported_numeric_refs_keep_their_cache_and_unresolvable_ones_show_what_word_does() {
     let body = [
         para(Some((1, 0)), &marked("_Root", 30, "Synthetic root")),
         para(
@@ -218,9 +220,10 @@ fn unsupported_or_unresolvable_numeric_refs_preserve_their_cache() {
             &[
                 field(r"REF _Root \w \d /", "KEEP DELIMITER"),
                 field(r"REF _Root \n \t", "KEEP TEXT"),
-                field(r"REF _Root \r \p", "KEEP POSITION"),
-                field(r"REF _Missing \w", "KEEP MISSING"),
-                field(r"REF _Plain \n", "KEEP UNNUMBERED"),
+                field(r"REF _Root \p \d /", "KEEP POSITION"),
+                field(r"REF _Missing \w", "STALE"),
+                field(r"REF _Missing \p", "STALE"),
+                field(r"REF _Plain \n", "STALE"),
                 field(r"REF _Root \n", "KEEP LOCKED").replace(r#"w:fldCharType="begin""#, r#"w:fldCharType="begin" w:fldLock="true""#),
             ]
             .concat(),
@@ -229,9 +232,88 @@ fn unsupported_or_unresolvable_numeric_refs_preserve_their_cache() {
     ]
     .concat();
     let mut s = open(&body);
-    let before = fields(&s);
     s.run("references.updateFields", &json!({"all":true})).unwrap();
-    assert_eq!(fields(&s), before);
+    let got: Vec<_> = fields(&s).into_iter().map(|(_, r)| r).collect();
+    let error = wordcraft_engine::cmd::references::REFERENCE_NOT_FOUND;
+    assert_eq!(got, ["KEEP DELIMITER", "KEEP TEXT", "KEEP POSITION", error, error, "0", "KEEP LOCKED"]);
+}
+
+/// `\p` says where the bookmark is from the field: "above" or "below", also within one
+/// paragraph, after the number when a number switch comes with it, in the case a case switch
+/// asks for. A bullet item's number is its bullet, and a paragraph with no number, or numbered
+/// at a level whose format is none, is 0. Every value measured in Word for Windows.
+#[test]
+fn position_bullets_and_unnumbered_targets_show_what_word_does() {
+    let refs = |cached: &str| {
+        [
+            field(r"REF _T \p", cached),
+            field(r"REF _T \r \p", cached),
+            field(r"REF _T \w \p", cached),
+            field(r"REF _U \p", cached),
+            field(r"REF _U \r \p", cached),
+            field(r"REF _T \p \* Upper", cached),
+        ]
+        .concat()
+    };
+    let mut s = open(
+        &[
+            para(None, &refs("before")),
+            para(Some((4, 0)), &text("Synthetic one")),
+            para(Some((4, 1)), &[field(r"REF _T \p", "own"), marked("_T", 100, "Synthetic target"), field(r"REF _T \r \p", "own")].concat()),
+            para(None, &marked("_U", 101, "Synthetic plain")),
+            para(None, &refs("after")),
+        ]
+        .concat(),
+    );
+    s.run("references.updateFields", &json!({"all":true})).unwrap();
+    let got: Vec<_> = fields(&s).into_iter().map(|(_, r)| r).collect();
+    assert_eq!(
+        got,
+        [
+            "below",
+            "1(a) below",
+            "1(a) below",
+            "below",
+            "0 below",
+            "BELOW", //
+            "below",
+            "(a) above", //
+            "above",
+            "(a) above",
+            "1(a) above",
+            "above",
+            "0 above",
+            "ABOVE",
+        ]
+    );
+}
+
+/// A bullet item shows its bullet, a Symbol-font bullet as its Unicode character; a level whose
+/// format is none shows 0 (Word for Windows).
+#[test]
+fn references_to_bullets_and_none_format_levels() {
+    let mut s = open(
+        &[
+            para(Some((11, 0)), &marked("_Bullet", 110, "Synthetic bullet item")),
+            para(Some((12, 0)), &marked("_None", 111, "Synthetic none-format item")),
+            para(None, &[field(r"REF _Bullet \r", "STALE"), field(r"REF _Bullet \w \p", "STALE"), field(r"REF _None \w", "STALE")].concat()),
+        ]
+        .concat(),
+    );
+    let numbering = std::sync::Arc::make_mut(&mut s.doc.numbering);
+    for (id, format, text, font) in
+        [(11u32, wordcraft_doc::section::NumFormat::Bullet, "\u{F0B7}", Some("Symbol")), (12, wordcraft_doc::section::NumFormat::None, "", None)]
+    {
+        let mut n = numbering.nums.iter().find(|n| n.id == 1).unwrap().clone();
+        n.id = id;
+        let mut lvl = wordcraft_doc::numbering::Level { format, text: text.into(), ..Default::default() };
+        lvl.chr.font = font.map(Into::into);
+        n.level_overrides = vec![(0, lvl)];
+        numbering.nums.push(n);
+    }
+    s.run("references.updateFields", &json!({"all":true})).unwrap();
+    let got: Vec<_> = fields(&s).into_iter().map(|(_, r)| r).collect();
+    assert_eq!(got, ["\u{2022}", "\u{2022} above", "0"]);
 }
 
 /// Updating, undoing and saving keep the field instructions and their numeric results intact.
@@ -491,6 +573,9 @@ fn output_computes_paragraph_number_references() {
                     field(r"REF _Three \n \h", "9"),
                     field(r"REF _Three \w \h", "9"),
                     field(r"REF _SubB \r \h", "9"),
+                    field(r"REF _SubB \p", "9"),
+                    field(r"REF _SubB \r \p", "9"),
+                    field(r"REF _Missing \n", "9"),
                     field(r"REF _SubB \w \d /", "KEEP DELIMITER"),
                 ]
                 .concat(),
@@ -498,6 +583,7 @@ fn output_computes_paragraph_number_references() {
         ]
         .concat(),
     );
+    let error = wordcraft_engine::cmd::references::REFERENCE_NOT_FOUND;
     let out = wordcraft_engine::cmd::references::output_fields(&s.doc).expect("the stale numbers change");
     let results = |d: &wordcraft_doc::Document| -> Vec<String> {
         let last = d.para_paths(StoryRef::Body).pop().unwrap();
@@ -511,8 +597,8 @@ fn output_computes_paragraph_number_references() {
             })
             .collect()
     };
-    assert_eq!(results(&out), ["3", "3", "(b)", "KEEP DELIMITER"]);
-    assert_eq!(results(&s.doc), ["9", "9", "9", "KEEP DELIMITER"], "the document keeps them");
+    assert_eq!(results(&out), ["3", "3", "(b)", "above", "(b) above", error, "KEEP DELIMITER"]);
+    assert_eq!(results(&s.doc), ["9", "9", "9", "9", "9", "9", "KEEP DELIMITER"], "the document keeps them");
     // F9 gives the same numbers.
     s.run("references.updateFields", &json!({"all":true})).unwrap();
     assert_eq!(results(&s.doc), results(&out));

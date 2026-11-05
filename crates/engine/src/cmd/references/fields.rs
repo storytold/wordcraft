@@ -1,4 +1,4 @@
-use super::numbers::{body_bookmark_paths, para_numbers, ref_number};
+use super::numbers::{body_bookmarks, para_numbers, ref_paragraph_result};
 use super::properties::{
     bookmark_ends_in_its_paragraph, bookmark_text, bookmark_text_at, count_text, date_picture, doc_property, doc_property_arg, new_property_value,
     set_summary_property, summary_property, text_result,
@@ -182,9 +182,10 @@ pub const REFERENCE_NOT_FOUND: &str = "Error! Reference source not found.";
 
 /// The fresh results of the body's unlocked REF fields as output shows them: the bookmark's
 /// text, or Word's error when the document lacks the bookmark (measured in Word for Windows);
-/// with `\r`, `\n` or `\w`, the bookmarked body paragraph's number as F9 computes it (Word's
-/// output computes it too, measured in Word for Windows). `\p` ("above" or "below") keeps the
-/// stored result, and so does a REF to a bookmark that ends in a later paragraph: Word shows such
+/// with `\r`, `\n`, `\w` or `\p`, the bookmarked body paragraph's number and where it is, as F9
+/// computes them (Word's output computes them too, measured in Word for Windows; such a REF to a
+/// bookmark outside the body keeps its stored result). A REF to a bookmark that ends in a later
+/// paragraph keeps its stored result too: Word shows such
 /// a bookmark's paragraphs as paragraphs of the result, which a field's one-paragraph result
 /// can't hold (measured in Word for Windows). A bookmark in a header, footer, footnote, endnote,
 /// comment or text box is found too, and a REF to it shows that text as `stored` holds it, its
@@ -200,31 +201,35 @@ fn ref_results(doc: &wordcraft_doc::Document, stored: &wordcraft_doc::Document) 
     }
     // A bookmark's text, `None` when it ends in a later paragraph.
     let mut texts: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
-    // Built once, when a paragraph number is asked for.
+    // Built once, when a paragraph number or position is asked for.
     let mut numbers = None;
-    let mut bookmark_paths = None;
     for path in doc.para_paths(StoryRef::Body) {
         let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
+        // The objects' offsets, found once for a paragraph that needs one.
+        let mut offsets: Option<Vec<usize>> = None;
         for (k, o) in p.objects.iter().enumerate() {
             let InlineObject::Field { instr, locked: false, .. } = o else { continue };
-            if wordcraft_layout::fields::field_name(instr) != "REF" || has_switch(instr, 'p') {
+            if wordcraft_layout::fields::field_name(instr) != "REF" {
                 continue;
             }
             let f = FieldCode::parse(instr);
             let target = f.args.first().map(|s| s.split('\\').next().unwrap_or("").trim_matches('"')).unwrap_or("");
-            if let Some(number) = number_switch(instr) {
-                // Never the paragraph's text: a number this can't work out keeps the stored result.
-                let numbers = numbers.get_or_insert_with(|| para_numbers(doc));
-                let paths = bookmark_paths.get_or_insert_with(|| body_bookmark_paths(doc));
-                if let Some(r) = number.and_then(|sw| paths.get(target).and_then(|tp| ref_number(numbers, tp, Some(&path), sw))) {
-                    out.push((StoryRef::Body, path.clone(), k, text_result(instr, r)));
-                }
-                continue;
-            }
             let Some(start) = starts.get(target) else {
                 out.push((StoryRef::Body, path.clone(), k, REFERENCE_NOT_FOUND.to_string()));
                 continue;
             };
+            if let Some((number, position)) = paragraph_switches(instr) {
+                // Never the paragraph's text: what this can't work out keeps the stored result.
+                if start.story != StoryRef::Body || unsupported_number_switches(instr) {
+                    continue;
+                }
+                let numbers = numbers.get_or_insert_with(|| para_numbers(doc));
+                let off = offsets.get_or_insert_with(|| p.object_offsets()).get(k).copied();
+                if let Some(r) = off.and_then(|off| ref_paragraph_result(numbers, start, Some((&path, off)), number, position)) {
+                    out.push((StoryRef::Body, path.clone(), k, text_result(instr, r)));
+                }
+                continue;
+            }
             let text = texts.entry(target.to_string()).or_insert_with(|| {
                 let source = if start.story == StoryRef::Body { doc } else { stored };
                 bookmark_ends_in_its_paragraph(source, target, start).then(|| bookmark_text_at(source, target, start)).flatten()
@@ -302,11 +307,19 @@ pub fn output_fields(doc: &wordcraft_doc::Document) -> Option<wordcraft_doc::Doc
     out
 }
 
-/// For a REF showing a paragraph number, `Some` of its switch (`\w`, `\r` or `\n`), or
-/// `Some(None)` when it has `\d` or `\t` too, which aren't supported; `None` when it shows text.
-fn number_switch(instr: &str) -> Option<Option<char>> {
-    let sw = ['w', 'r', 'n'].into_iter().find(|c| has_switch(instr, *c))?;
-    Some((!has_switch(instr, 'd') && !has_switch(instr, 't')).then_some(sw))
+/// For a REF that shows where its bookmark's paragraph is rather than its text: its paragraph
+/// number switch (`\w`, `\r` or `\n`), if any, and whether it has `\p` (above or below). `None`
+/// for a REF that shows the bookmark's text.
+fn paragraph_switches(instr: &str) -> Option<(Option<char>, bool)> {
+    let number = ['w', 'r', 'n'].into_iter().find(|c| has_switch(instr, *c));
+    let position = has_switch(instr, 'p');
+    (number.is_some() || position).then_some((number, position))
+}
+
+/// Whether a paragraph-number REF has `\d` (a separator) or `\t` (the number without its text),
+/// which aren't supported: it keeps its stored result.
+fn unsupported_number_switches(instr: &str) -> bool {
+    has_switch(instr, 'd') || has_switch(instr, 't')
 }
 
 /// Whether `instr` has the one-letter switch `\sw`, also run together with another (`\p\h`).
@@ -354,9 +367,10 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
     // The document properties as the fields read and set them (`SUBJECT "New subject"`): a field
     // after one that sets a property shows the new value.
     let mut core = s.doc.core.clone();
-    // Build each body lookup once, only when a supported numeric REF needs it.
+    // Build each lookup once, only when a REF to a paragraph's number or position needs it.
     let mut numbers = None;
-    let mut bookmark_paths = None;
+    let mut body_marks = None;
+    let mut part_marks: Option<std::collections::HashSet<String>> = None;
     let paths: Vec<(StoryRef, Path)> = stories.into_iter().flat_map(|st| s.doc.para_paths(st).into_iter().map(move |p| (st, p))).collect();
     // SET <name> "<text>" (ECMA-376 §17.16.5.58): the values it gives, which REF <name> shows; a
     // REF before the SET shows the last value set, as Word's bookmark does after an update.
@@ -368,6 +382,8 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
             continue;
         }
         let mut updates: Vec<(usize, String)> = Vec::new();
+        // The objects' offsets, found once for a paragraph that needs one.
+        let mut offsets: Option<Vec<usize>> = None;
         for (k, o) in p.objects.iter().enumerate() {
             let InlineObject::Field { instr, locked: false, .. } = o else { continue };
             // A table formula reads the cells around its own cell again.
@@ -394,16 +410,24 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     let f = FieldCode::parse(instr);
                     let target = f.args.first().map(|s| s.split('\\').next().unwrap_or("").trim_matches('"')).unwrap_or("");
                     let r = if name == "REF" {
-                        if has_switch(instr, 'p') {
-                            None
-                        } else if let Some(number) = number_switch(instr) {
-                            let Some(sw) = number else {
-                                continue; // Preserve cached results for unsupported delimiter/text switches.
+                        if let Some((number, position)) = paragraph_switches(instr) {
+                            let marks = body_marks.get_or_insert_with(|| body_bookmarks(&s.doc));
+                            let Some(start) = marks.get(target) else {
+                                // Word's error for a bookmark the document lacks; one outside the
+                                // body keeps the stored result.
+                                let parts = part_marks.get_or_insert_with(|| part_bookmarks(&s.doc).into_iter().map(|(n, _)| n).collect());
+                                if !parts.contains(target) {
+                                    updates.push((k, REFERENCE_NOT_FOUND.to_string()));
+                                }
+                                continue;
                             };
+                            if unsupported_number_switches(instr) {
+                                continue; // Preserve cached results for unsupported delimiter/text switches.
+                            }
                             let numbers = numbers.get_or_insert_with(|| para_numbers(&s.doc));
-                            let from = (story == StoryRef::Body).then_some(&path);
-                            let paths = bookmark_paths.get_or_insert_with(|| body_bookmark_paths(&s.doc));
-                            paths.get(target).and_then(|tp| ref_number(numbers, tp, from, sw))
+                            let off = offsets.get_or_insert_with(|| p.object_offsets()).get(k).copied();
+                            let from = if story == StoryRef::Body { off.map(|off| (&path, off)) } else { None };
+                            ref_paragraph_result(numbers, start, from, number, position)
                         } else {
                             bookmark_text(&s.doc, target).or_else(|| {
                                 let key = target.to_lowercase();

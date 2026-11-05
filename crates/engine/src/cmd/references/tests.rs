@@ -714,8 +714,8 @@ fn output_shows_references_to_bookmarks_outside_the_body() {
 }
 
 /// Printed or exported, a REF to a bookmark the document doesn't have shows Word's error
-/// (measured in Word for Windows: "Error! Reference source not found."); the editor and the
-/// document keep the stored result, and a REF showing "above" or "below" (`\p`) keeps it too.
+/// (measured in Word for Windows: "Error! Reference source not found."), also one showing
+/// "above" or "below" (`\p`); the editor and the document keep the stored result.
 #[test]
 fn output_shows_words_error_for_a_reference_to_a_missing_bookmark() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("See "));
@@ -741,16 +741,16 @@ fn output_shows_words_error_for_a_reference_to_a_missing_bookmark() {
             })
             .collect()
     };
-    assert_eq!(shown(&s.export_layout()), [REFERENCE_NOT_FOUND, "stale"]);
+    assert_eq!(shown(&s.export_layout()), [REFERENCE_NOT_FOUND, REFERENCE_NOT_FOUND]);
     assert_eq!(shown(&s.layout()), ["stale", "stale"], "the editor shows the stored result");
     assert_eq!(fields(&s).iter().map(|f| f.1.as_str()).collect::<Vec<_>>(), ["stale", "stale"], "the document keeps it");
 }
 
-/// A REF showing the number (`\r`, `\n`, `\w`) of a bookmarked paragraph that has none keeps its
-/// stored result when printed or exported rather than show the paragraph's text; a plain REF to
-/// the same bookmark is filled in.
+/// A REF showing the number (`\r`, `\n`, `\w`) of a bookmarked paragraph that has none shows
+/// 0 when printed or exported, as Word does, never the paragraph's text; a plain REF to the same
+/// bookmark shows the text.
 #[test]
-fn output_keeps_number_references_to_an_unnumbered_paragraph_as_stored() {
+fn output_shows_zero_for_number_references_to_an_unnumbered_paragraph() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Target heading\nRefs "));
     s.run("select.text", &json!({"text": "Target heading"})).unwrap();
     s.run("insert.bookmark", &json!({"name": "Mark"})).unwrap();
@@ -768,7 +768,7 @@ fn output_keeps_number_references_to_an_unnumbered_paragraph_as_stored() {
         }
     }
     para.touch();
-    let out = output_fields(&s.doc).expect("the plain REF changes");
+    let out = output_fields(&s.doc).expect("the stale results change");
     let results: Vec<String> = out
         .para(StoryRef::Body, &last)
         .unwrap()
@@ -779,7 +779,7 @@ fn output_keeps_number_references_to_an_unnumbered_paragraph_as_stored() {
             _ => None,
         })
         .collect();
-    assert_eq!(results, ["2.1", "2.1", "2.1", "Target heading"]);
+    assert_eq!(results, ["0", "0", "0", "Target heading"]);
 }
 
 /// The results of the fields in the paragraph at `path` of `d`.
