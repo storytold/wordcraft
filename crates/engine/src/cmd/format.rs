@@ -138,6 +138,17 @@ pub fn specs() -> Vec<CommandSpec> {
             apply(s, &|c| c.position = Some(x))
         })
         .params(r#"{"points": number}"#),
+        // Font › Emphasis mark: a mark over (or under) each character.
+        CommandSpec::new("format.emphasisMark", "Emphasis Mark", "Home › Font › Font", |s, v| {
+            use wordcraft_doc::props::EmphasisMark;
+            let name = p::str(v, "mark").unwrap_or("dot");
+            let mark = EmphasisMark::ALL
+                .into_iter()
+                .find(|m| m.ooxml().eq_ignore_ascii_case(name.trim()))
+                .ok_or_else(|| CmdError::Params(format!("unknown emphasis mark `{name}` (none, dot, comma, circle, underDot)")))?;
+            apply(s, &|c| c.emphasis = Some(mark))
+        })
+        .params(r#"{"mark"?: "none" | "dot" | "comma" | "circle" | "underDot"}"#),
         CommandSpec::new("format.charStyle", "Apply Character Style", "Home › Styles", char_style).params(r#"{"style": string}"#),
         CommandSpec::new("format.set", "Set Character Formatting", "Home › Font › Font", set).params(r#"{"props": CharProps}"#),
         CommandSpec::new("format.fontDialog", "Font Dialog", "Home › Font", |s, _| {
@@ -888,6 +899,7 @@ pub fn state(s: &Session) -> Value {
         "caps": all.iter().all(|r| r.caps),
         "hidden": all.iter().all(|r| r.hidden),
         "spacing": same(&|r| json!(r.spacing)),
+        "emphasisMark": same(&|r| json!(r.emphasis.ooxml())),
         // Kerning for fonts: the smallest kerned size, points; 0 = off.
         "kern": same(&|r| json!(r.kern)),
         "color": same(&|r| json!(match r.color { TextColor::Auto => "auto".to_string(), TextColor::Rgb(c) => c.hex() })),

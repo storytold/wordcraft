@@ -65,7 +65,16 @@ fn sample() -> Document {
     let n = ip.len();
     ip.insert_object(
         n,
-        InlineObject::Image { media: key, w: 60.0, h: 30.0, alt: "tiny".into(), float: Default::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media: key,
+            w: 60.0,
+            h: 30.0,
+            alt: "tiny".into(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -205,7 +214,10 @@ fn markdown_list_items_that_start_like_blocks_keep_their_text() {
         let bytes = export("md", &d).unwrap().unwrap();
         let blocks = flat(&import("md", &bytes).unwrap().unwrap());
         let [FBlock::Para(p)] = blocks.as_slice() else { panic!("{text}: {}", String::from_utf8_lossy(&bytes)) };
-        assert_eq!((p.text().as_str(), p.kind, p.list), (text, Kind::Normal, Some(model::ListInfo { ordered: false, level: 0, start: 1 })));
+        assert_eq!(
+            (p.text().as_str(), p.kind, p.list),
+            (text, Kind::Normal, Some(model::ListInfo { ordered: false, level: 0, start: 1, ..Default::default() }))
+        );
     }
 }
 
@@ -685,7 +697,7 @@ fn decorative_picture_exports_with_empty_alt_text() {
         let mut d = Document::new();
         let media = d.add_media(png(), "png");
         let float = Float { alt: AltText { decorative, ..Default::default() }, ..Default::default() };
-        let pic = InlineObject::Image { media, w: 40.0, h: 20.0, alt: "Blue bar".into(), float, crop: [0.0; 4], ole: None };
+        let pic = InlineObject::Image { media, w: 40.0, h: 20.0, alt: "Blue bar".into(), float, crop: [0.0; 4], fx: Default::default(), ole: None };
         let mut p = Paragraph::with_text("Logo: ", CharProps::default());
         let n = p.len();
         p.insert_object(n, pic, &CharProps::default()).unwrap();
@@ -888,7 +900,16 @@ fn hidden_drawings_are_left_out_of_exports() {
     let key = d.add_media(vec![0x89, b'P', b'N', b'G'], "png");
     for hidden in [false, true] {
         let float = wordcraft_doc::para::Float { hidden, ..Default::default() };
-        let image = wordcraft_doc::InlineObject::Image { media: key.clone(), w: 10.0, h: 10.0, alt: "Logo".into(), float, crop: [0.0; 4], ole: None };
+        let image = wordcraft_doc::InlineObject::Image {
+            media: key.clone(),
+            w: 10.0,
+            h: 10.0,
+            alt: "Logo".into(),
+            float,
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        };
         d.insert_object(&wordcraft_doc::Pos::body(0, 0), image, &Default::default()).unwrap();
     }
     // Two pictures, one hidden: one comes out.
