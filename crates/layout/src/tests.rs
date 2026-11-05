@@ -7244,7 +7244,7 @@ fn a_footer_table_offset_past_the_page_stays_on_the_page() {
 
 /// A document whose footer holds floating tables (`floats`: one `TableFloat` each, 40 pt wide
 /// cells), anchored to the paragraph and the column.
-fn footer_with_floating_tables(floats: &[wordcraft_doc::props::TableFloat], pages: usize) -> Document {
+fn footer_with_floating_tables(floats: &[wordcraft_doc::props::TableFloat], pages: usize, row_h: Option<f32>) -> Document {
     let mut d = Document::from_text(&vec!["Body"; pages].join("\n"));
     if pages > 1 {
         d.format_paragraphs(&Pos::body(1, 0), &Pos::body(pages - 1, 0), &|p| p.page_break_before = Some(true)).unwrap();
@@ -7253,6 +7253,10 @@ fn footer_with_floating_tables(floats: &[wordcraft_doc::props::TableFloat], page
     for f in floats {
         let mut t = Table::new(1, 1, 40.0);
         t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Stamp", Default::default()))];
+        if let Some(h) = row_h {
+            t.rows[0].props.height = Some(h);
+            t.rows[0].props.height_rule = HeightRule::Exact;
+        }
         t.props.float = Some(*f);
         blocks.push(std::sync::Arc::new(wordcraft_doc::Block::Table(t)));
     }
@@ -7267,7 +7271,7 @@ fn footer_tables_that_may_not_overlap_stay_apart_after_staying_on_the_page() {
     use wordcraft_doc::props::TableFloat;
     // Both start far below the page: each is brought back onto it, the second above the first.
     let f = TableFloat { h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 785.0, overlap: false, ..Default::default() };
-    let d = footer_with_floating_tables(&[f, f], 1);
+    let d = footer_with_floating_tables(&[f, f], 1, None);
     let l = lay(&d);
     let cells: Vec<_> = l.pages[0].footer.iter().filter_map(|it| if let Placed::Cell { rect, .. } = it { Some(*rect) } else { None }).collect();
     assert_eq!(cells.len(), 2, "two tables: {cells:?}");
@@ -7276,11 +7280,32 @@ fn footer_tables_that_may_not_overlap_stay_apart_after_staying_on_the_page() {
 }
 
 #[test]
+fn three_footer_tables_stack_upwards_and_the_one_without_room_stays_visible() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let f = TableFloat { h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 785.0, overlap: false, ..Default::default() };
+    let cells = |row_h: f32| {
+        let l = lay(&footer_with_floating_tables(&[f, f, f], 1, Some(row_h)));
+        let h = l.pages[0].h;
+        let cells: Vec<_> = l.pages[0].footer.iter().filter_map(|it| if let Placed::Cell { rect, .. } = it { Some(*rect) } else { None }).collect();
+        (cells, h)
+    };
+    // Room for all three: each above the last, apart, on the page.
+    let (c, h) = cells(100.0);
+    assert_eq!(c.len(), 3, "three tables: {c:?}");
+    assert!(c.iter().all(|r| r.y >= -0.01 && r.bottom() <= h + 0.01), "off the page ({h}): {c:?}");
+    assert!(!c[0].intersects(&c[1]) && !c[1].intersects(&c[2]) && !c[0].intersects(&c[2]), "overlap: {c:?}");
+    // 300 pt each on a page about 842 pt tall: two fit; the third overlaps rather than vanish.
+    let (c, h) = cells(300.0);
+    assert!(c.iter().all(|r| r.y >= -0.01 && r.bottom() <= h + 0.01), "a table is off the page ({h}): {c:?}");
+}
+
+#[test]
 fn a_clamped_footer_table_stays_on_a_mirrored_even_page() {
     use wordcraft_doc::para::Anchor;
     use wordcraft_doc::props::TableFloat;
     let f = TableFloat { h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 5000.0, y: 0.0, ..Default::default() };
-    let mut d = footer_with_floating_tables(&[f], 2);
+    let mut d = footer_with_floating_tables(&[f], 2, None);
     d.settings.mirror_margins = true;
     d.last_section.margin_left = 20.0;
     d.last_section.margin_right = 100.0;

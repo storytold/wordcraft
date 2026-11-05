@@ -511,9 +511,12 @@ fn box_float_table_rect(
             let Some(above) = float_tables.iter().filter(|o| !f.overlap && o.intersects(&area)).map(|o| o.y).reduce(f32::min) else { break };
             up.y = above - db - h - 0.01;
         }
-        if up.y + fr.origin.1 >= -0.02 && !float_tables.iter().any(|o| !f.overlap && o.intersects(&up.inset(-dl, -dt, -dr, -db))) {
-            r = up;
-        }
+        // With no room above either, it stays on the page over the others: seen, if overlapping.
+        r = if up.y + fr.origin.1 >= -0.02 && !float_tables.iter().any(|o| !f.overlap && o.intersects(&up.inset(-dl, -dt, -dr, -db))) {
+            up
+        } else {
+            Rect::new(r.x, clamped.y, clamped.w, clamped.h)
+        };
     }
     let [dl, dt, dr, db] = f.dist_from_text();
     (r, r.inset(-dl, -dt, -dr, -db))
