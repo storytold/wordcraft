@@ -116,11 +116,13 @@ The same gaps grouped the way the parity documents are, for agents working in on
   their formatting (system clipboard HTML/RTF), Merge Formatting keeps emphasis, Paste Special lists
   what the system clipboard holds, and Linux/Wayland clipboard pictures paste (#687, #833);
 - **UI/UX gaps:** #7, #18, #24; context menus for objects (the table's landed; it still lacks Border Styles); Linux title bar theming (#78); File ›
-  still missing: the Paste Options button after a paste, and RTF on macOS and X11. Copy puts
-  HTML beside the text on the clipboard, so other programs keep the formatting (#1523), with
-  equations as MathML (#816), and a lone equation also in the MathML clipboard formats on
-  Windows and macOS (#1297; pasting into Word/LibreOffice not yet verified); RTF on the
-  clipboard is not written yet.
+  still missing: the Paste Options button after a paste. Copy puts HTML and RTF beside the text
+  on the clipboard, so other programs keep the formatting (#1523), with equations as MathML
+  (#816), and a lone equation also in the MathML clipboard formats on Windows and macOS (#1297;
+  pasting into Word/LibreOffice not yet verified); RTF is written on Windows, macOS and Wayland,
+  while an X11 copy still carries text and HTML only (arboard owns the selection there); a
+  copy of only pictures or shapes carries neither, so WordCraft pastes its own copy. Paste
+  reads RTF on all four.
   Options › Animation effects › Use system setting reads macOS (Reduce motion) and the Linux/BSD
   desktops (`apps/wordcraft/src/animations.rs`) but hasn't been tried on a Mac or in a real
   GNOME or KDE session yet.
@@ -165,6 +167,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | trivial | PR #4545: eligible cell floats retain in-bounds offsets and touch the outer cell edge only on overflow, ignoring wrap distances for object placement. Front-of-text, turned-cell and outside-cell opt-outs remain. Synthetic geometry controls; native front/behind-text parity remains unqualified. |
 | 2026-11-05 | trivial | DOCX preserves `w:adjustRightInd` with its true default and writes it in schema order; grid layout remains open |
 | 2026-10-28 | trivial | Ink page lookups reuse scanned paragraph prefixes, #3614. Drawing order, geometry and saved data retain their behavior; no readiness estimate change |
 | 2026-11-04 | trivial | #19: ODT settings for what the standard leaves open removed: one choice for each case |
@@ -175,6 +178,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 | 2026-10-29 | trivial | Print Markup balloon anchor discovery no longer repeats paragraph-prefix scans (#3614); readiness estimates unchanged |
 | 2026-10-28 | trivial | Print Markup text-copy comment discovery walks paragraph objects once (#3614); quotes, order, limits and readiness estimates unchanged |
 | 2026-10-30 | trivial | #20 narrowed: layout resource caps and linear-time passes (#3867, #3866) |
+| 2026-10-17 | trivial | UI/UX gaps: copies put RTF on the clipboard (Windows, macOS, Wayland; not X11), and paste reads RTF on macOS and X11 too |
 | 2026-11-03 | minor | #11: Arabic interface with mirrored shell (#1195); key languages missing are now hi and id (plus pt-PT); Hebrew UI still open |
 | 2026-11-03 | trivial | #8 (CP4.3): one language list: Set Proofing Language, Review › Language and the status bar offer the Language pack languages (Bulgarian was in none); every published pack named in English; Valencian is `ca-ES-valencia`; gap 8 names built-in proofing |
 | 2026-11-03 | trivial | #8 (CP4.3): the missing-pack bar offers a language before the list of packs is fetched (a fresh install, or a list cached for an older pin) and gets it on Install; with downloading on, a missing or stale list is fetched once in the background; the caret's typing language counts; the spelling context menu's heading is in the interface language |
