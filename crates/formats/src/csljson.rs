@@ -137,7 +137,7 @@ fn date_parts(v: Option<&Value>) -> Vec<String> {
 /// A source from one item; unknown fields are ignored.
 fn source(o: &serde_json::Map<String, Value>) -> Source {
     Source {
-        tag: clamp_value(text(o.get("id"))),
+        tag: clamp_value(crate::sanitize_tag(&text(o.get("id")))),
         kind: kind_of(&text(o.get("type"))).into(),
         author: clamp_value(names(o.get("author"))),
         editor: clamp_value(names(o.get("editor"))),

@@ -72,6 +72,7 @@ languages, screen-reader access, ecosystem decisions (VBA, add-ins, cloud), an i
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | trivial | DOCX text-frame anchor locks survive JSON and two save/reopen cycles, including position and size edits |
 | 2026-11-03 | minor | M15: Arabic mirrored interface (#1195); 28 UI languages from craft-i18n; Hebrew UI, native-speaker review and native IME acceptance (#155–#164) remain open |
 | 2026-10-29 | trivial | HTML import keeps preformatted lines with CR, CRLF or LF input newlines (#4810); numeric character references retain their separate meaning; readiness estimates unchanged. |
 | 2026-10-25 | trivial | egui 0.37 migration: 27 interface languages remain pinned by `craft-i18n.rev` (9205108…); input-method surrounding-delete and commit handling has synthetic regressions only, with managed CI passing; native acceptance (#155–#164) and native-speaker review remain open |
@@ -82,6 +83,7 @@ languages, screen-reader access, ecosystem decisions (VBA, add-ins, cloud), an i
 | 2026-10-13 | minor | M6: any CSL 1.0.2 style file installs and renders (References ▸ Style ▸ Add style from file…, `references.cslStyles`; the `csl:<id>` choice round-trips through DOCX; [csl-styles.md](csl-styles.md)), #1058 slice 2; remaining 12–20 → 10–16 h |
 | 2026-11-05 | minor | M6: the stack merged current main (Mendeley/EndNote fields round-trip on it); remaining 10–16 → 8–14 h |
 | 2026-10-13 | minor | M6: source libraries import (BibTeX, RIS, CSL-JSON; `references.importSources`) and bibliography sources DOCX round-trip in Word's customXml layout (#1058); remaining 15–25 → 12–20 h |
+| 2026-11-05 | minor | M6: the stack merged current main (CSL styles beside the import; bibliography round-trip now main's #532 layout); remaining 12–20 → 10–16 h |
 | 2026-10-12 | minor | M15: Portuguese proofing (pt-BR spelling from the installed VERO dictionary, suggestions, grammar, hyphenation; Review › Language gains Português (Brasil)) |
 | 2026-10-11 | trivial | M15: Polish interface and Polish proofing landed |
 | 2026-10-11 | trivial | M3: icons landed (#309) |

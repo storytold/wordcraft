@@ -24,7 +24,9 @@ use std::collections::HashMap;
 
 use wordcraft_doc::Source;
 
-use crate::{MAX_LIBRARY_BYTES, MAX_NEST, MAX_SOURCES, MAX_VALUE, clamp_value, utf8_or_latin1};
+use crate::{
+    sanitize_tag, {MAX_LIBRARY_BYTES, MAX_NEST, MAX_SOURCES, MAX_VALUE, clamp_value, utf8_or_latin1},
+};
 
 /// Import the sources of a BibTeX library.
 pub fn import(bytes: &[u8]) -> Result<Vec<Source>, String> {
@@ -60,21 +62,6 @@ fn kind_of(ty: &str) -> &'static str {
 }
 
 /// The entry key as a citation tag: `[A-Za-z0-9_./:-]` kept, other runs one `-`.
-fn sanitize_tag(key: &str) -> String {
-    let mut out = String::new();
-    let mut dash = false;
-    for c in key.chars() {
-        if c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | ':' | '-') {
-            out.push(c);
-            dash = false;
-        } else if !dash {
-            out.push('-');
-            dash = true;
-        }
-    }
-    out
-}
-
 /// The `jan`…`dec` macros the standard styles define.
 fn month_macro(token: &str) -> Option<&'static str> {
     const MONTHS: [(&str, &str); 12] = [
@@ -95,10 +82,60 @@ fn month_macro(token: &str) -> Option<&'static str> {
 }
 
 /// Set a mapped field, first value wins, `pages` normalised to an en dash range.
+/// A name list with BibTeX's top-level ` and ` separators turned into the model's `; `:
+/// brace depth guards the word, so an `and` inside a braced name stays, and matching is
+/// ASCII-case-insensitive (`AND`, `And`). Each name is trimmed; empty names are dropped.
+fn join_names(value: &str) -> String {
+    let chars: Vec<char> = value.chars().collect();
+    let is_and_at = |k: usize| -> bool {
+        // `and` (any case) standing alone: whitespace (or the ends) around it.
+        k + 3 <= chars.len()
+            && chars[k].eq_ignore_ascii_case(&'a')
+            && chars[k + 1].eq_ignore_ascii_case(&'n')
+            && chars[k + 2].eq_ignore_ascii_case(&'d')
+            && (k == 0 || chars[k - 1].is_whitespace())
+            && (k + 3 == chars.len() || chars[k + 3].is_whitespace())
+    };
+    let mut names: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut depth = 0usize;
+    let mut k = 0;
+    while k < chars.len() {
+        let c = chars[k];
+        if c == '{' {
+            depth += 1;
+            cur.push(c);
+        } else if c == '}' {
+            depth = depth.saturating_sub(1);
+            cur.push(c);
+        } else if depth == 0 && is_and_at(k) {
+            names.push(cur.trim().to_string());
+            cur.clear();
+            k += 3;
+            continue;
+        } else {
+            cur.push(c);
+        }
+        k += 1;
+    }
+    names.push(cur.trim().to_string());
+    names.into_iter().filter(|n| !n.is_empty()).collect::<Vec<_>>().join("; ")
+}
+
 fn set_field(src: &mut Source, name: &str, value: &str) {
     if value.is_empty() {
         return;
     }
+    // BibTeX separates names with the word `and` ("Doe, Jane and Smith, John"); the model's
+    // lists are `Last, First; Last, First`, so top-level separators become `; `. Inside braces
+    // an `and` is a name's own words ("{Barnes and Noble}") and stays.
+    let joined;
+    let value = if matches!(name, "author" | "editor") {
+        joined = join_names(value);
+        joined.as_str()
+    } else {
+        value
+    };
     let set = |slot: &mut String| {
         if slot.is_empty() {
             *slot = clamp_value(value.to_string());
@@ -499,12 +536,24 @@ mod tests {
     }
 
     #[test]
+    fn author_and_editor_split_on_top_level_and() {
+        // Top-level `and` (any case, whitespace-bounded) separates names; inside braces it is a
+        // name's own words and survives.
+        let lib = br#"@book{a, author = {Doe, Jane AND Smith, John AND {Barnes and Noble}}, editor = {Roe, Sam and Lee, Ann}}
+@book{b, author = {Solo Author}}"#;
+        let out = import(lib).unwrap();
+        assert_eq!(out[0].author, "Doe, Jane; Smith, John; {Barnes and Noble}");
+        assert_eq!(out[0].editor, "Roe, Sam; Lee, Ann");
+        assert_eq!(out[1].author, "Solo Author");
+    }
+
+    #[test]
     fn golden_library_maps_every_field() {
         let out = import(LIB.as_bytes()).unwrap();
         assert_eq!(out.len(), 6);
 
         let mut e = src("doe2020", "article");
-        e.author = "Doe, Jane and Smith, John".into();
+        e.author = "Doe, Jane; Smith, John".into(); // top-level `and` → "; "
         e.title = "A Study of {Braces} and Café".into(); // inner braces are content, kept
         e.journal = "Journal of Experiments".into(); // @string interpolation
         e.volume = "12".into(); // bare number value
