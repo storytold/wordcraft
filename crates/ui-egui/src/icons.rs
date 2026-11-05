@@ -263,6 +263,12 @@ fn paint_clipboard_to_insert(pen: &Pen, name: &str) -> bool {
             pen.fcircle(16.5, 13.5, 1.6, a);
             pen.frect(2.0, 16.5, 18.0, 19.0, yellow);
         }
+        // The Shading buttons draw the last colour as their own bar, so this has no bar of its own.
+        "shadingNoBar" => {
+            pen.fill(&[(4.0, 9.0), (10.0, 3.0), (16.0, 9.0), (10.0, 15.0)], Color32::TRANSPARENT);
+            pen.closed(&[(4.0, 9.0), (10.0, 3.0), (16.0, 9.0), (10.0, 15.0)], c);
+            pen.fcircle(16.5, 13.5, 1.6, a);
+        }
         "borders" => {
             for y in [3.0, 10.0, 17.0] {
                 for x in [3.0, 6.5, 10.0, 13.5, 17.0] {
@@ -1537,6 +1543,12 @@ fn paint_file_and_tools(pen: &Pen, name: &str) -> bool {
             pen.rect(5.0, 11.0, 15.0, 15.0, c);
             pen.line_c(&[(10.0, 15.0), (10.0, 18.5)], a);
         }
+        // A warning triangle: a document font that isn't installed (shown in another font).
+        "fontMissing" => {
+            pen.fill(&[(10.0, 2.5), (18.5, 17.5), (1.5, 17.5)], Color32::from_rgb(0xE0, 0x7B, 0x1F));
+            pen.line_c(&[(10.0, 7.5), (10.0, 12.5)], Color32::WHITE);
+            pen.fcircle(10.0, 15.0, 1.0, Color32::WHITE);
+        }
         "designMode" => {
             pen.line(&[(4.0, 16.0), (16.0, 16.0), (4.0, 4.0), (4.0, 16.0)]);
             pen.line_c(&[(4.0, 12.0), (8.0, 16.0)], a);
@@ -1693,5 +1705,12 @@ mod tests {
     fn no_colour_highlight_icon_has_no_yellow_bar() {
         assert!(has_default_highlight_bar("highlight"));
         assert!(!has_default_highlight_bar("highlightNoColor"));
+    }
+
+    /// #4412: the Shading buttons paint the last colour as their bar, so their icon has none of its own.
+    #[test]
+    fn the_shading_button_icon_has_no_bar_of_its_own() {
+        assert!(has_default_highlight_bar("shading"));
+        assert!(!has_default_highlight_bar("shadingNoBar"));
     }
 }
