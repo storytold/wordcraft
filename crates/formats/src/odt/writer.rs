@@ -796,7 +796,9 @@ impl Writer {
         }
         // A list without its own `xml:id` (older files' lists) is given one, for a list going on
         // with it to name.
-        if p.list.is_some()
+        // (Its first numbered paragraph's: a list header has no number.)
+        let list = run.iter().find_map(|b| if let FBlock::Para(q) = b { q.list } else { None });
+        if list.is_some()
             && list_xml_id(&ix.0).is_none()
             && let Some(at) = markup.find("<text:list").map(|i| i + "<text:list".len())
         {
@@ -812,7 +814,7 @@ impl Writer {
         self.close_wrap(last.as_ref(), 0, out);
         self.master = None;
         // A list kept so: a list continuing it, written from the model, names it.
-        if let Some(l) = p.list
+        if let Some(l) = list
             && let Some(id) = markup.find("<text:list").and_then(|i| markup.get(i..)).and_then(list_xml_id)
         {
             if l.list != 0 {

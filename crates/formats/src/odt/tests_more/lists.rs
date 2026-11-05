@@ -166,3 +166,42 @@ fn list_level_positions_are_read_and_written() {
     assert_eq!((c.indent, c.hanging, c.align), (a.indent, a.hanging, a.align));
     assert!((e.indent - b.indent).abs() < 0.01 && (e.hanging - b.hanging).abs() < 0.01);
 }
+
+#[test]
+fn a_list_items_further_paragraphs_are_paragraphs_with_no_number() {
+    // LibreOffice writes an unnumbered entry as an item's second paragraph. It was joined to the
+    // first by a line break, losing its paragraph, and so the first's markup too.
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><text:list-style style:name="L"><text:list-level-style-number text:level="1" style:num-format="1"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment fo:margin-left="1in" fo:text-indent="-0.25in"/></style:list-level-properties></text:list-level-style-number></text:list-style></office:styles></office:document-styles>"#
+    );
+    let body = r#"<text:list text:style-name="L"><text:list-header><text:p>Header</text:p></text:list-header><text:list-item><text:p>One</text:p><text:p>Still one</text:p><text:p>And again</text:p></text:list-item><text:list-item><text:p>Two</text:p></text:list-item></text:list><text:p>After</text:p>"#;
+    let content = format!("<office:document-content {NS_T}><office:body><office:text>{body}</office:text></office:body></office:document-content>");
+    let shape = |d: &wordcraft_doc::Document| {
+        d.body.iter().filter_map(|b| b.as_para()).map(|p| (p.text.clone(), p.props.numbering.is_some(), p.props.indent_left)).collect::<Vec<_>>()
+    };
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let want = |a: &[(String, bool, Option<f32>)]| {
+        let row = |t: &str| a.iter().find(|r| r.0 == t).unwrap_or_else(|| panic!("{t} in {a:?}"));
+        assert_eq!(a.len(), 6, "each its own paragraph: {a:?}");
+        for t in ["Header", "Still one", "And again"] {
+            assert!(!row(t).1, "{t} has no number: {a:?}");
+            assert_eq!(row(t).2, Some(72.0), "{t} at the item's text: {a:?}");
+        }
+        for t in ["One", "Two"] {
+            assert!(row(t).1, "{t} is numbered: {a:?}");
+        }
+        assert!(!row("After").1);
+    };
+    want(&shape(&d));
+    // The numbers go on past the unnumbered paragraph: one list.
+    let nums: Vec<u32> = d.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.props.numbering.map(|n| n.num)).collect();
+    assert_eq!(nums.len(), 2);
+    assert_eq!(nums[0], nums[1], "{nums:?}");
+    // And so do they written from the model, and written as read.
+    for saved in [crate::odt::tests::export_model(&d).unwrap(), export(&d).unwrap()] {
+        let back = import(&saved).unwrap();
+        want(&shape(&back));
+        let nums: Vec<u32> = back.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.props.numbering.map(|n| n.num)).collect();
+        assert_eq!(nums[0], nums[1], "{nums:?}");
+    }
+}
