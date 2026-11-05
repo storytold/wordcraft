@@ -103,6 +103,9 @@ staple() {
   if xcrun --find stapler >/dev/null 2>&1; then
     stapler_retry staple "$1"
     stapler_retry validate "$1"
+  elif [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    echo "error: native stapler is required in GitHub Actions to staple and validate release tickets" >&2
+    return 1
   elif command -v rcodesign >/dev/null 2>&1; then
     stapler_retry staple "$1" rcodesign
   else

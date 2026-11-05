@@ -16,40 +16,19 @@ fn bash(path: &std::ffi::OsStr) -> Command {
     cmd
 }
 
-#[test]
-fn bash_is_resolved_from_the_supplied_executable_path() {
-    use std::os::unix::fs::PermissionsExt;
-    let root = std::env::var_os("CARGO_TARGET_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target"))
-        .join("macos-test-bash-path");
-    std::fs::create_dir_all(&root).unwrap();
-    let mut fixture = None;
-    for n in 0..1000 {
-        let dir = root.join(format!("wordcraft-bash-path-{}-{n}", std::process::id()));
-        match std::fs::create_dir(&dir) {
-            Ok(()) => {
-                fixture = Some(dir);
-                break;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => panic!("create test directory: {e}"),
-        }
-    }
-    let dir = fixture.unwrap();
-    let executable = dir.join("bash");
-    std::fs::write(&executable, "#!/bin/sh\nprintf 'synthetic-bash-from-path\\n'\n").unwrap();
-    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let out = bash(dir.as_os_str()).args(["-c", "exit 73"]).output().unwrap();
-    assert!(out.status.success());
-    assert_eq!(String::from_utf8(out.stdout).unwrap(), "synthetic-bash-from-path\n");
+fn run(tool: &str, failures: u8, dmg: bool) -> Output {
+    run_in_environment(tool, failures, dmg, false)
 }
 
-fn run(tool: &str, failures: u8, dmg: bool) -> Output {
+fn run_in_environment(tool: &str, failures: u8, dmg: bool, ci: bool) -> Output {
     let setup = r#"
 export PATH=/usr/bin:/bin
 APP='Synthetic App.app'; DMG='Synthetic image.dmg'; WORK='Synthetic work'; NOTARIZE=1
 attempts=0
+command() {
+  if [[ "$1" = -v && "$2" = rcodesign && "$TOOL" = none ]]; then return 1; fi
+  builtin command "$@"
+}
 warn() { printf '%s\n' "$*" >&2; }
 sleep() { printf 'PAUSE:%s\n' "$1"; }
 notarize() { :; }
@@ -86,6 +65,7 @@ fi
     let setup = format!("{setup}\nditto() {{ :; }}");
     let path = std::env::var_os("PATH").unwrap_or_default();
     bash(&path)
+        .env("GITHUB_ACTIONS", if ci { "true" } else { "" })
         .env("TOOL", tool)
         .env("FAILURES", failures.to_string())
         .env("FILE", if dmg { "Synthetic image.dmg" } else { "Synthetic App.app" })
@@ -148,5 +128,21 @@ fn persistent_stapling_errors_fail_instead_of_becoming_missing_tool_warnings() {
         assert!(!out.status.success());
         assert!(!String::from_utf8_lossy(&out.stdout).contains("ASSESS"));
         assert!(String::from_utf8_lossy(&out.stderr).contains("failed 4 times"));
+    }
+}
+
+#[test]
+fn release_ci_requires_native_stapling_and_validation() {
+    for dmg in [false, true] {
+        for tool in ["none", "rcodesign"] {
+            let out = run_in_environment(tool, 0, dmg, true);
+            assert!(!out.status.success(), "CI must reject unvalidated fallback: {tool}");
+            assert!(String::from_utf8_lossy(&out.stderr).contains("native stapler is required in GitHub Actions"));
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(!stdout.contains("RCODESIGN") && !stdout.contains("ASSESS"), "{stdout}");
+        }
+        let out = run_in_environment("native", 0, dmg, true);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(String::from_utf8_lossy(&out.stdout).contains("NATIVE:staple\nNATIVE:validate\n"));
     }
 }
