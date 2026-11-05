@@ -191,7 +191,7 @@ No overall parity estimate changes from these probes.
 
 | Measure | WordCraft | Word | Kind |
 |---|---|---|---|
-| Zoom gesture (pinch from 100% to 500% and back, sample document, 2x display) | 0.3–0.5 ms a frame (was 12 ms median, 36–65 ms p95); the pages sharpen within 4 ms a frame once the zoom holds still; a page bigger than about 4.5 MP at the zoom is tiles over the view, not one texture (a Letter page at 500% was 48 MP) | not measured | measured 2026-11-05, release, headless (`examples/perf_probe`); `canvas::tests::a_pinch_zoom_renders_nothing_until_it_holds_still`, `canvas::tests::zoomed_in_pages_render_only_tiles_in_view` |
+| Zoom gesture (pinch from 100% to 500% and back, sample document, 2x display) | 0.3–0.5 ms of CPU a frame (was 12 ms median, up to 68 ms); once the zoom holds still, sharpening renders start only while a frame has spent under 4 ms on rendering; a page bigger than about 4.5 MP at the zoom is tiles over the view, not one texture (a Letter page at 500% was 48 MP) | not measured | measured 2026-11-05, release, headless (`examples/perf_probe`); `canvas::tests::a_pinch_zoom_renders_nothing_until_it_holds_still`, `canvas::tests::zoomed_in_pages_render_only_tiles_in_view` |
 | Print Markup balloon anchor discovery with many unrelated inline markers (#3614) | Single forward object walk; document order, first-root filtering, UTF-8 byte positions and the 5,000-anchor cap unchanged | not measured | `balloons::anchor_tests` semantic, cap and thread-CPU scaling regressions |
 | Cold layout, 188-page document | 61 ms | not measured | measured 2026-10-06 (not re-run this pass) |
 | Relayout after an edit | 1.4 ms | not measured | measured 2026-10-06 |
@@ -266,7 +266,7 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 
 ## Revision history
 
-> 2026-11-05 · Zooming with the wheel or a pinch keeps the display's frame rate: the page rasters already on the GPU are stretched and nothing is rendered until the zoom holds still, then the pages sharpen within a time budget a frame. A page too big for one texture at the zoom is drawn as tiles over the part in view on a smaller underlay, so what a frame renders is bounded by the window, not the zoom (`canvas::tests::a_pinch_zoom_renders_nothing_until_it_holds_still`, `canvas::tests::zoomed_in_pages_render_only_tiles_in_view`).
+> 2026-11-05 · Zooming with the wheel or a pinch keeps frames cheap (0.3–0.5 ms of CPU a frame, headless, pinching from 100% to 500% and back): the page rasters already on the GPU are stretched and nothing is rendered until the zoom holds still, then the pages sharpen within a time budget a frame. A page too big for one texture at the zoom is drawn as tiles over the part in view on a smaller underlay, so what a frame renders is bounded by the window, not the zoom (`canvas::tests::a_pinch_zoom_renders_nothing_until_it_holds_still`, `canvas::tests::zoomed_in_pages_render_only_tiles_in_view`).
 
 > 2026-11-01 · Text in a turned text box is drawn turned with it, about its centre, on screen and in PNG and PDF export; flipped across, upside down; flipped side to side, still readable (as Word draws it). Clicks and the caret inside a turned box still go by its upright text (`layout::tests::a_turned_text_box_turns_its_text_with_it`).
 

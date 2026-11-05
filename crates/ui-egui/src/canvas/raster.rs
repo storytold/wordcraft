@@ -247,14 +247,21 @@ impl Rasterizer {
         if let Some(r) = app.canvas.textures.get(&i).filter(|r| r.content == job.content) {
             images.push((r.tex.id(), job.rect));
         }
-        // Tiles from before the zoom, stretched, until this scale's tiles are all in.
+        // Tiles from before the zoom, stretched, until this scale's tiles are all in. Two zooms in
+        // a row can leave tiles of two scales: the one nearest this scale is drawn on top.
         if !complete {
-            for (id, r) in app.canvas.tiles.iter().filter(|(id, r)| id.page == i && id.scale != bits && r.content == job.content) {
-                let at = tile_rect(job.rect.min, *id, tile, job.screen_scale / r.scale, r.tex.size_vec2());
-                if at.intersects(job.view) {
-                    self.keep.insert(*id);
-                    images.push((r.tex.id(), at));
-                }
+            let mut old: Vec<_> = app
+                .canvas
+                .tiles
+                .iter()
+                .filter(|(id, r)| id.page == i && id.scale != bits && r.content == job.content)
+                .map(|(id, r)| (*id, r.scale, r.tex.id(), tile_rect(job.rect.min, *id, tile, job.screen_scale / r.scale, r.tex.size_vec2())))
+                .filter(|(.., at)| at.intersects(job.view))
+                .collect();
+            old.sort_by(|a, b| (b.1 - s).abs().total_cmp(&(a.1 - s).abs()).then(a.0.scale.cmp(&b.0.scale)));
+            for (id, _, tex, at) in old {
+                self.keep.insert(id);
+                images.push((tex, at));
             }
         }
         let snap = |v: f32| (v * self.ppp).round() / self.ppp;

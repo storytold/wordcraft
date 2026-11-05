@@ -48,8 +48,12 @@ fn main() {
     session.run("file.open", &json!({"path": path})).expect("open");
     let open_ms = t_open.elapsed().as_secs_f64() * 1000.0;
     let app = WordApp::new(session, Services::default());
-    let mut h =
-        egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_pixels_per_point(2.0).with_max_steps(1_000_000).build_ui_state(
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .with_max_steps(1_000_000)
+        .build_ui_state(
             |ui, app: &mut WordApp| {
                 if !READY.load(std::sync::atomic::Ordering::Relaxed) {
                     return;
@@ -143,7 +147,8 @@ fn main() {
             h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(720.0, 500.0)));
             h.input_mut().events.push(egui::Event::Zoom(factor));
             f.push(step(h));
-            r.push(h.state().canvas.render_ms);
+            // `render_ms` keeps the last frame that rendered; a frame that rendered nothing took none.
+            r.push(if h.state().canvas.rendered == 0 { 0.0 } else { h.state().canvas.render_ms });
         }
         json!({"render_ms": stats(&r), "zoom": h.state().session.view.zoom, "frame_ms": stats(&f), "frames_over_8ms": f.iter().filter(|x| **x > 8.3).count(), "frames_over_16ms": f.iter().filter(|x| **x > 16.7).count()})
     };
