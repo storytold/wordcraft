@@ -463,6 +463,9 @@ impl WordApp {
                 other => self.dialog = dialogs::Dialog::open(other, self),
             }
         }
+        if let Some(what) = req.get("window").and_then(Value::as_str) {
+            self.handle_window_request(what, req);
+        }
         if req.get("close").is_some() {
             self.quit_requested = true;
         }

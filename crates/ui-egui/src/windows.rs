@@ -90,6 +90,10 @@ pub struct Windows {
     input_plugin: bool,
     /// The viewport driver draws the windows this frame, and titles them.
     driven: bool,
+    /// View Side by Side: the two window keys being compared (left, right).
+    pub(crate) side_by_side: Option<(u64, u64)>,
+    /// Synchronous Scrolling source scroll offset (x, y) from the last drawn paired window.
+    pub(crate) sync_scroll_offset: Option<egui::Vec2>,
 }
 
 impl Windows {
@@ -113,12 +117,18 @@ impl Windows {
             builder: egui::ViewportBuilder::default().with_inner_size([1440.0, 920.0]).with_min_inner_size([760.0, 480.0]),
             input_plugin: false,
             driven: false,
+            side_by_side: None,
+            sync_scroll_offset: None,
         }
     }
 
     /// Whether documents get native windows of their own.
     pub(crate) fn native(&self) -> bool {
         self.native
+    }
+
+    fn viewport_id(&self, id: WindowId) -> ViewportId {
+        self.viewports.as_ref().map(|v| v.viewport_id(id)).unwrap_or(ViewportId::ROOT)
     }
 
     /// One window for every document, as in the web app.
@@ -390,6 +400,93 @@ impl WordApp {
         }
         let view = self.session.copy_view();
         self.open_window(self.shown_document, Some(view));
+    }
+
+    /// The window that comes forward when the drawn window closes and other windows show its
+    /// document, which then stays open: the one of all the others focused last. `None` when the
+    /// drawn window is its document's only one.
+    pub(crate) fn handle_window_request(&mut self, what: &str, req: &Value) {
+        if !self.windows.native {
+            match what {
+                "syncScroll" => {
+                    if let Some(v) = req.get("value").and_then(Value::as_bool) {
+                        self.session.view.sync_scroll = v;
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+        match what {
+            "arrangeAll" => self.arrange_all_windows(),
+            "sideBySide" => self.view_side_by_side(req.get("id").and_then(Value::as_u64)),
+            "syncScroll" => {
+                let value = req.get("value").and_then(Value::as_bool).unwrap_or(!self.session.view.sync_scroll);
+                self.session.view.sync_scroll = value;
+                if !value {
+                    self.windows.side_by_side = None;
+                    self.windows.sync_scroll_offset = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn arrange_all_windows(&mut self) {
+        let Some(ctx) = self.ctx.clone() else { return };
+        let ids: Vec<WindowId> = self.windows.open.iter().filter_map(|w| w.id).collect();
+        if ids.len() < 2 {
+            return;
+        }
+        let monitor = ctx.input(|i| i.viewport().monitor_size).unwrap_or(egui::vec2(1440.0, 900.0));
+        let cols = ((ids.len() as f32).sqrt().ceil() as usize).max(1);
+        let rows = ids.len().div_ceil(cols);
+        let gap = 8.0f32;
+        let w = ((monitor.x - gap * (cols.saturating_sub(1) as f32 + 2.0)) / cols as f32).max(400.0);
+        let h = ((monitor.y - gap * (rows.saturating_sub(1) as f32 + 2.0) - 48.0) / rows as f32).max(300.0);
+        for (i, id) in ids.iter().copied().enumerate() {
+            let col = i % cols;
+            let row = i / cols;
+            let x = gap + col as f32 * (w + gap);
+            let y = gap + 40.0 + row as f32 * (h + gap);
+            ctx.send_viewport_cmd_to(self.windows.viewport_id(id), ViewportCommand::OuterPosition(egui::pos2(x, y)));
+            ctx.send_viewport_cmd_to(self.windows.viewport_id(id), ViewportCommand::InnerSize(egui::vec2(w, h)));
+        }
+        self.status(format!("Arranged {} windows", ids.len()));
+    }
+
+    fn view_side_by_side(&mut self, target_doc: Option<u64>) {
+        if self.windows.side_by_side.is_some() {
+            self.windows.side_by_side = None;
+            self.session.view.sync_scroll = false;
+            self.windows.sync_scroll_offset = None;
+            self.status("Side by side: off".to_string());
+            return;
+        }
+        let Some(ctx) = self.ctx.clone() else { return };
+        let shown = self.windows.shown;
+        let target_key = target_doc
+            .and_then(|doc| self.windows.open.iter().find(|w| w.doc == doc && w.key != shown).map(|w| w.key))
+            .or_else(|| self.windows.recent_keys().into_iter().find(|&k| k != shown && self.windows.open.iter().any(|w| w.key == *k)));
+        let Some(other_key) = target_key else {
+            self.status("Open another document in a window to view side by side".to_string());
+            return;
+        };
+        let Some(a) = self.windows.open.iter().find(|w| w.key == shown).and_then(|w| w.id) else { return };
+        let Some(b) = self.windows.open.iter().find(|w| w.key == other_key).and_then(|w| w.id) else { return };
+        let monitor = ctx.input(|i| i.viewport().monitor_size).unwrap_or(egui::vec2(1440.0, 900.0));
+        let gap = 8.0f32;
+        let w = ((monitor.x - gap * 3.0) / 2.0).max(420.0);
+        let h = (monitor.y - gap * 2.0 - 48.0).max(320.0);
+        for (i, id) in [a, b].into_iter().enumerate() {
+            let x = gap + i as f32 * (w + gap);
+            let y = gap + 40.0;
+            ctx.send_viewport_cmd_to(self.windows.viewport_id(id), ViewportCommand::OuterPosition(egui::pos2(x, y)));
+            ctx.send_viewport_cmd_to(self.windows.viewport_id(id), ViewportCommand::InnerSize(egui::vec2(w, h)));
+        }
+        self.windows.side_by_side = Some((shown, other_key));
+        self.session.view.sync_scroll = true;
+        self.status("Side by side".to_string());
     }
 
     /// The window that comes forward when the drawn window closes and other windows show its

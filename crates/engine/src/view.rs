@@ -104,6 +104,9 @@ pub struct ViewState {
     /// carries it to the window.
     #[serde(default)]
     pub full_screen: bool,
+    /// View › Window › Synchronous Scrolling: scroll paired windows together.
+    #[serde(default)]
+    pub sync_scroll: bool,
 }
 
 /// Where the Styles pane sits (`view.stylesPaneDock`, #1756).
@@ -205,6 +208,7 @@ impl Default for ViewState {
             outline: Default::default(),
             design_mode: false,
             full_screen: false,
+            sync_scroll: false,
         }
     }
 }
