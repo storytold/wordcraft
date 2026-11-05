@@ -71,10 +71,7 @@ pub(super) fn has_group(s: &Session) -> Option<&'static str> {
 
 /// Shape Fill and Shape Outline: a shape, or a Drawing Canvas's background and border.
 pub(crate) fn has_shape_or_canvas(s: &Session) -> Option<&'static str> {
-    match selected(s) {
-        Some((_, o)) if o.is_canvas() => None,
-        _ => has_shape(s),
-    }
+    if !styleable_targets(s).is_empty() { None } else { Some("select a shape first") }
 }
 
 pub(super) fn can_group(s: &Session) -> Option<&'static str> {
@@ -217,6 +214,18 @@ pub fn picked_objects(s: &Session) -> Vec<Pos> {
         }
     }
     out
+}
+
+/// Positions of all shapes and drawing canvases targeted by formatting commands in the selection and [`Session::also_selected`].
+pub(crate) fn styleable_targets(s: &Session) -> Vec<Pos> {
+    let styleable = |o: &InlineObject| matches!(o, InlineObject::Shape { .. }) || o.is_canvas();
+    let mut targets: Vec<Pos> = selected_all(s, 10_000).into_iter().filter(|(_, o)| styleable(o)).map(|(pos, _)| pos).collect();
+    for pos in picked_objects(s) {
+        if !targets.contains(&pos) && s.doc.para_at(&pos).and_then(|q| q.object_at(pos.off)).is_some_and(styleable) {
+            targets.push(pos);
+        }
+    }
+    targets
 }
 
 /// The object a `select.addObject` item names: a position, or a Selection Pane index.

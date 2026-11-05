@@ -208,10 +208,9 @@ fn outline_menu(ui: &mut Ui, app: &mut WordApp) {
     mi(ui, app, "No Outline", "shape.outline", json!({"color": null}));
     crate::colors::menu(ui, app, &theme, Target::cmd("shape.outline"));
     ui.separator();
-    let color = current(app).1.unwrap_or(Rgb::BLACK).hex();
     ui.menu_button(crate::tl!("Weight"), |ui| {
         for w in [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0] {
-            mi(ui, app, &format!("{w} pt"), "shape.outline", json!({"color": color, "width": w}));
+            mi(ui, app, &format!("{w} pt"), "shape.outline", json!({"width": w}));
         }
     });
 }
