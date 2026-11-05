@@ -21,7 +21,10 @@ Create Source, Templates, Macros, Compare and Combine, are refused before they o
 check applies to user actions and direct UI commands, and leaves an existing
 dialog in place when the requested editing dialog is refused.
 The mail-merge record dialogs are also refused before opening. The Styles gallery
-and Styles pane disable Modify while Viewing is active; leaving Viewing restores it.
+and Styles pane disable Modify while Viewing is active; an already-open Manage Styles
+dialog also refuses its Modify button and style double-click. Leaving Viewing restores
+these actions. Closing a dialog restores keyboard focus for navigation in Viewing,
+without enabling IME input.
 
 Change Picture is disabled even when a picture remains selected. Both user-facing
 and direct UI command entrypoints refuse it before opening a file picker or

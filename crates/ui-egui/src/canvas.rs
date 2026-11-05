@@ -1403,7 +1403,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         app.canvas.ime_preedit.clear();
         app.canvas.ime_preedit_range = None;
         app.canvas.ime_join_text = None;
-        app.canvas.want_focus = false;
+        // Keep deferred keyboard focus: update_canvas_focus consumes it when no modal owns it.
+        // IME stays disabled independently of navigation focus in Viewing.
     }
     let t = Tokens::get(ui.ctx());
     let full = ui.available_rect_before_wrap();

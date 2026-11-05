@@ -1916,3 +1916,71 @@ fn the_page_waits_for_the_keyboard_until_a_modal_dialog_closes() {
     h.run_steps(2);
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "!", "the page has it after the dialog");
 }
+
+/// Both Manage Styles editor entrypoints respect Viewing, including a dialog already open before the mode changed.
+#[test]
+fn viewing_blocks_manage_styles_modify_button_and_double_click() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    for viewing in [true, false] {
+        for double_click in [true, false] {
+            let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default());
+            app.ui.language = "en".into();
+            app.run("view.viewing", json!({"value": viewing})).unwrap();
+            let before = app.session.doc.clone();
+            let depth = app.session.undo_depth();
+            let mut fonts = false;
+            let mut alphabetical = false;
+            let mut selected = "Normal".to_string();
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(500.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+                move |ui, app: &mut WordApp| {
+                    if !fonts {
+                        crate::theme::install_fonts(ui.ctx());
+                        fonts = true;
+                        return;
+                    }
+                    super::styles::manage_styles(app, ui, &mut alphabetical, &mut selected);
+                },
+                app,
+            );
+            h.run_steps(4);
+            assert_eq!(h.get_by_label("Modify…").accesskit_node().is_disabled(), viewing);
+            if double_click {
+                h.get_by_label("¶  Normal").click();
+                h.run_steps(2);
+                h.get_by_label("¶  Normal").click();
+            } else {
+                h.get_by_label("Modify…").click();
+            }
+            h.run_steps(2);
+            assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), if viewing { None } else { Some("modifyStyle") });
+            assert!(h.state().session.doc.same_content(&before));
+            assert_eq!(h.state().session.undo_depth(), depth);
+        }
+    }
+}
+
+/// A modal keeps a pending page-focus request; closing it restores navigation in Viewing without enabling IME.
+#[test]
+fn viewing_preserves_deferred_canvas_focus_until_a_dialog_closes() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default());
+    app.ui.language = "en".into();
+    app.run("view.viewing", json!({"value": true})).unwrap();
+    app.run("ui.dialog", json!({"name": "wordCount"})).unwrap();
+    app.canvas.want_focus = true;
+    let before = app.session.doc.clone();
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    assert!(h.state().canvas.want_focus, "the modal prevents consumption of the pending request");
+    h.get_by_label("Close").click();
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none());
+    assert!(h.state().canvas.focused);
+    assert!(!h.state().canvas.want_focus, "the normal focus update consumes the request");
+    assert!(h.output().platform_output.ime.is_none());
+    h.state_mut().run("caret.docEnd", json!({})).unwrap();
+    assert!(h.state().session.doc.same_content(&before));
+    h.state_mut().run("view.viewing", json!({"value": false})).unwrap();
+    h.run_steps(3);
+    assert!(h.output().platform_output.ime.is_some());
+}
