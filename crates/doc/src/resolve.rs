@@ -11,6 +11,8 @@ use crate::styles::{StyleKind, StyleSheet};
 /// Automatic (HTML-style) paragraph spacing, points: what Word for Windows gives `w:beforeAutospacing`
 /// and `w:afterAutospacing` at any font size (measured).
 pub const AUTO_SPACING: f32 = 14.0;
+/// The largest drop cap distance from the text, in points (22", as Word's dialog allows).
+pub const MAX_DROP_CAP_DISTANCE: f32 = 1584.0;
 
 /// Concrete character formatting.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -39,6 +41,13 @@ pub struct ResolvedChar {
     /// Kerning: the smallest font size, in points, that is kerned (`w:kern`); 0 = never kerned.
     #[serde(default)]
     pub kern: f32,
+    /// A mark over or under each character (Font › Emphasis mark).
+    #[serde(default)]
+    pub emphasis: crate::props::EmphasisMark,
+    /// OpenType ligatures (`w14:ligatures`); `None` = the shaper's default (standard and
+    /// contextual).
+    #[serde(default)]
+    pub ligatures: Option<crate::props::Ligatures>,
     pub outline: bool,
     pub shadow: bool,
     pub emboss: bool,
@@ -70,8 +79,9 @@ pub struct ResolvedChar {
 impl ResolvedChar {
     fn from(c: &CharProps) -> ResolvedChar {
         ResolvedChar {
-            font: c.font.clone().unwrap_or_else(|| crate::styles::BODY_FONT.to_string()),
-            size: c.size.unwrap_or(11.0).clamp(1.0, 1638.0),
+            // A symbol character is shown in its own font (`w:sym`), whatever the run's font.
+            font: c.shown_font().map(str::to_string).unwrap_or_else(|| crate::styles::BODY_FONT.to_string()),
+            size: c.size.unwrap_or(crate::props::DEFAULT_FONT_SIZE).clamp(1.0, 1638.0),
             bold: c.bold.unwrap_or(false),
             italic: c.italic.unwrap_or(false),
             underline: c.underline.unwrap_or_default(),
@@ -90,6 +100,8 @@ impl ResolvedChar {
             scale: c.scale.unwrap_or(100.0).clamp(1.0, 600.0),
             position: c.position.unwrap_or(0.0).clamp(-800.0, 800.0),
             kern: c.kern.filter(|k| k.is_finite()).unwrap_or(0.0).clamp(0.0, 1638.0),
+            emphasis: c.emphasis.unwrap_or_default(),
+            ligatures: c.ligatures,
             outline: c.outline.unwrap_or(false),
             shadow: c.shadow.unwrap_or(false),
             emboss: c.emboss.unwrap_or(false),
@@ -105,7 +117,7 @@ impl ResolvedChar {
             cs: c.cs.unwrap_or(false),
             font_cs: c.font_cs.clone().or_else(|| c.font.clone()).unwrap_or_else(|| crate::styles::BODY_FONT.to_string()),
             font_ea: c.font_ea.clone(),
-            size_cs: c.size_cs.or(c.size).unwrap_or(11.0).clamp(1.0, 1638.0),
+            size_cs: c.size_cs.or(c.size).unwrap_or(crate::props::DEFAULT_FONT_SIZE).clamp(1.0, 1638.0),
             bold_cs: c.bold_cs.or(c.bold).unwrap_or(false),
             italic_cs: c.italic_cs.or(c.italic).unwrap_or(false),
         }
@@ -170,8 +182,21 @@ pub struct ResolvedPara {
     pub tabs: Vec<TabStop>,
     pub shading: Option<Rgb>,
     pub borders: Option<Borders>,
+    /// Padding on the sides without a line (top, left, bottom, right), points. ODF's box model
+    /// (XSL's) keeps it for documents opened from ODF (`Settings::odf`); Word drops it.
+    #[serde(default)]
+    pub padding: [f32; 4],
     pub bidi: bool,
     pub drop_cap: u8,
+    /// The drop cap hangs in the margin (see `ParaProps::drop_cap_margin`).
+    #[serde(default)]
+    pub drop_cap_margin: bool,
+    /// The drop cap's distance from the text, in points.
+    #[serde(default)]
+    pub drop_cap_distance: f32,
+    /// The drop cap letter's font family; `None` = the text's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drop_cap_font: Option<String>,
     /// A text frame the paragraph sits in (see `ParaProps::frame`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame: Option<crate::props::TextFrame>,
@@ -248,9 +273,21 @@ impl ResolvedPara {
             tabs,
             shading: p.shading,
             borders: p.borders.filter(Borders::any_visible),
+            padding: p.borders.map_or([0.0; 4], |b| {
+                [b.top, b.left, b.bottom, b.right]
+                    .map(|s| s.filter(|l| !l.is_visible() && l.space.is_finite() && l.space > 0.0).map_or(0.0, |l| l.space.min(1584.0)))
+            }),
             bidi: p.bidi.unwrap_or(false),
             drop_cap: p.drop_cap.unwrap_or(0).min(10),
-            frame: p.frame.clone().filter(|_| p.drop_cap.unwrap_or(0) == 0),
+            drop_cap_margin: p.drop_cap_margin.unwrap_or(false),
+            drop_cap_distance: p.drop_cap_distance.filter(|d| d.is_finite()).unwrap_or(0.0).clamp(0.0, MAX_DROP_CAP_DISTANCE),
+            drop_cap_font: p.drop_cap_font.clone().filter(|f| !f.trim().is_empty()),
+            // Explicit zero dimensions cancel a frame; omitted dimensions still fit its text.
+            frame: p.frame.clone().filter(|f| p.drop_cap.unwrap_or(0) == 0 && (f.w != Some(0.0) || f.h != Some(0.0))).map(|mut f| {
+                f.w = f.w.filter(|v| *v != 0.0);
+                f.h = f.h.filter(|v| *v != 0.0);
+                f
+            }),
             suppress_hyphens: p.suppress_hyphens.unwrap_or(false),
             suppress_line_numbers: p.suppress_line_numbers.unwrap_or(false),
             kinsoku: p.kinsoku.unwrap_or(true),
@@ -275,8 +312,12 @@ impl StyleSheet {
         self.para_style_props_over(style, self.default_para.clone(), self.default_chr.clone())
     }
 
-    /// The paragraph style chain of `style` applied over `pp` / `cp`.
+    /// The paragraph style chain of `style` applied over `pp` / `cp`. A style the document doesn't
+    /// define is the default paragraph style, Normal, as in Word: a footer naming a `Footer` style
+    /// that `styles.xml` leaves out is formatted as Normal, not with the document defaults alone
+    /// (#5077).
     fn para_style_props_over(&self, style: &str, mut pp: ParaProps, mut cp: CharProps) -> (ParaProps, CharProps) {
+        let style = if self.get(style).is_some() { style } else { "Normal" };
         for s in self.chain(style) {
             if s.kind == StyleKind::Paragraph {
                 let mut sp = s.para.clone();
@@ -292,6 +333,38 @@ impl StyleSheet {
         }
         pp.style = None;
         (pp, cp)
+    }
+
+    /// What a table style's paragraph formatting `table` changes for a paragraph with `p`, once
+    /// the paragraph style chain is applied over it (ECMA-376 §17.7.2): each property it gives
+    /// that the chain doesn't set. Formats without table styles state these directly.
+    pub fn table_para_patch(&self, p: &ParaProps, table: &ParaProps) -> ParaProps {
+        let style = p.style.clone().unwrap_or_else(|| "Normal".into());
+        let mut with = self.default_para.clone();
+        with.overlay(&ParaProps { style: None, ..table.clone() });
+        let (with, _) = self.para_style_props_over(&style, with, CharProps::default());
+        let (without, _) = self.para_style_props_over(&style, self.default_para.clone(), CharProps::default());
+        diff_patch(&with, &without)
+    }
+
+    /// What a table style's run formatting `table` changes for a run of character style
+    /// `run_style` in a paragraph of style `para_style`, once the paragraph and character style
+    /// chains are applied over it (ECMA-376 §17.7.2).
+    pub fn table_char_patch(&self, para_style: Option<&str>, run_style: Option<&str>, table: &CharProps) -> CharProps {
+        let chain = |defaults: CharProps| {
+            let (_, mut cp) = self.para_style_props_over(para_style.unwrap_or("Normal"), ParaProps::default(), defaults);
+            if let Some(cs) = run_style {
+                for s in self.chain(cs) {
+                    if s.kind == StyleKind::Character || s.kind == StyleKind::Paragraph {
+                        cp.overlay(&s.chr);
+                    }
+                }
+            }
+            cp
+        };
+        let mut with = self.default_chr.clone();
+        with.overlay(&CharProps { style: None, ..table.clone() });
+        diff_patch(&chain(with), &chain(self.default_chr.clone()))
     }
 
     /// Resolve a paragraph's properties.
@@ -349,6 +422,8 @@ impl StyleSheet {
                 }
             }
         }
+        // Only a character itself has a symbol font of its own (`w:sym`); a style never gives one.
+        cp.sym_font = None;
         let mut direct = c.clone();
         direct.style = None;
         cp.overlay(&direct);
@@ -356,9 +431,57 @@ impl StyleSheet {
     }
 }
 
+/// The properties of `with` that differ from `without` (both fully resolved property sets of one
+/// kind), as a set of only those; empty when serialisation fails.
+fn diff_patch<T: Serialize + serde::de::DeserializeOwned + Default>(with: &T, without: &T) -> T {
+    let (Ok(serde_json::Value::Object(w)), Ok(serde_json::Value::Object(o))) = (serde_json::to_value(with), serde_json::to_value(without)) else {
+        return T::default();
+    };
+    let patch: serde_json::Map<String, serde_json::Value> = w.into_iter().filter(|(k, v)| o.get(k) != Some(v)).collect();
+    serde_json::from_value(serde_json::Value::Object(patch)).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #2036: only a character itself (direct formatting) has a symbol font of its own; a
+    /// style never gives one to its text.
+    #[test]
+    fn a_style_never_gives_text_a_symbol_font() {
+        let mut s = StyleSheet::builtin();
+        if let Some(n) = s.get_mut("Normal") {
+            n.chr.sym_font = Some("Wingdings".into());
+        }
+        assert_ne!(s.resolve_char(None, &CharProps::default()).font, "Wingdings");
+        let direct = CharProps { sym_font: Some("Wingdings".into()), ..Default::default() };
+        assert_eq!(s.resolve_char(None, &direct).font, "Wingdings");
+    }
+
+    /// #5077: a paragraph naming a style the document doesn't define is formatted as Normal,
+    /// paragraph and run alike, not with the document defaults alone.
+    #[test]
+    fn an_undefined_paragraph_style_is_normal() {
+        let mut s = StyleSheet::builtin();
+        s.default_para.space_after = Some(10.0);
+        if let Some(n) = s.get_mut("Normal") {
+            n.para.space_after = Some(2.0);
+            n.chr.size = Some(13.0);
+        }
+        let undefined = ParaProps { style: Some("NoSuchStyle".into()), ..Default::default() };
+        let normal = s.resolve_para(&ParaProps::default());
+        let p = s.resolve_para(&undefined);
+        assert_eq!(p.space_after, 2.0);
+        assert_eq!(p.space_after, normal.space_after);
+        assert_eq!(p.line_spacing, normal.line_spacing);
+        assert_eq!(s.resolve_char(Some("NoSuchStyle"), &CharProps::default()).size, 13.0);
+        // The paragraph keeps the style it names; direct formatting still wins.
+        assert_eq!(p.style, "NoSuchStyle");
+        let direct = ParaProps { space_after: Some(7.0), ..undefined };
+        assert_eq!(s.resolve_para(&direct).space_after, 7.0);
+        // A defined style is unchanged.
+        assert_eq!(s.resolve_para(&ParaProps { style: Some("Heading1".into()), ..Default::default() }).space_after, 4.0);
+    }
 
     #[test]
     fn heading_resolves() {
@@ -454,5 +577,16 @@ mod tests {
         });
         assert_eq!(p.tabs.len(), 3);
         assert_eq!(p.tabs[0].pos, 100.0);
+    }
+
+    /// Resolved formatting saved before paragraph padding existed still reads: no padding.
+    #[test]
+    fn resolved_para_without_padding_reads() {
+        let p = StyleSheet::builtin().resolve_para(&ParaProps::default());
+        let mut v = serde_json::to_value(&p).unwrap();
+        v.as_object_mut().unwrap().remove("padding");
+        let back: ResolvedPara = serde_json::from_value(v).unwrap();
+        assert_eq!(back.padding, [0.0; 4]);
+        assert_eq!(back, ResolvedPara { padding: [0.0; 4], ..p });
     }
 }

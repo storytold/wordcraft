@@ -38,7 +38,7 @@ fn field_starts(d: &Document, story: StoryRef) -> Vec<(String, bool, Option<Stri
             match b.as_para() {
                 Some(p) => {
                     for o in &p.objects {
-                        if let InlineObject::FieldStart { instr, locked, data } = o {
+                        if let InlineObject::FieldStart { instr, locked, data, .. } = o {
                             out.push((instr.clone(), *locked, data.clone()));
                         }
                     }
@@ -117,7 +117,10 @@ fn check_manager_fields(d: &Document) {
     // A simple field stays atomic, with its cached result and view state off.
     let p6 = para(d, 6);
     let page = p6.objects.iter().find(|o| matches!(o, InlineObject::Field { .. })).expect("PAGE field");
-    assert_eq!(page, &InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, code: false });
+    assert_eq!(
+        page,
+        &InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, code: false, dirty: false, form: String::new() }
+    );
 
     // The footnote's story holds its own citation, with its own data.
     let note = note_part(d, 4);

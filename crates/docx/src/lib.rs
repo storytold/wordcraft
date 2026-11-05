@@ -7,26 +7,34 @@
 //! error or a best-effort document, never a panic.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod bibliography;
 mod chart_spec;
 mod crypt;
 mod custom;
 mod flat;
+mod fonts;
 mod package;
 mod read;
 mod smart_art;
+#[cfg(test)]
+mod test_log;
 mod units;
 mod wordml2003;
+mod wordml2003_write;
 mod write;
 mod xml;
 
+pub use bibliography::{MAX_SOURCES, Sources, read_sources};
 pub use chart_spec::{chart_items, chart_xml};
 pub use crypt::{
-    DEFAULT_SPIN_COUNT, MAX_PASSWORD_CHARS, PasswordCheck, check_password, check_protection_password, decrypt, encrypt, encrypt_with_spin_count,
-    is_encrypted, protection_hash,
+    DEFAULT_SPIN_COUNT, MAX_PASSWORD_CHARS, PasswordCheck, check_password, check_protection_password, decrypt, encrypt, encrypt_standard_for_tests,
+    encrypt_with_spin_count, is_encrypted, protection_hash,
 };
 pub use flat::{XmlKind, sniff_xml, write as write_flat};
-pub use read::read;
+pub use fonts::{EmbeddedFont, embedded_fonts};
+pub use read::{AltChunk, ChunkImporter, ReadOptions, read};
 pub use smart_art::smart_art_items;
+pub use wordml2003_write::write as write_wordml2003;
 pub use write::{write, write_as};
 
 /// Largest `.xml` file read as a Word XML document.
@@ -46,6 +54,30 @@ pub fn read_xml(bytes: &[u8]) -> Result<wordcraft_doc::Document, DocxError> {
     }
 }
 
+/// The title (`dc:title`) in a package's core properties part (`docProps/core.xml`, ECMA-376
+/// Part 2 §11), trimmed; `None` when the part can't be read or has no title. Only the package's
+/// directory and at most `max_part` bytes of that part are inflated: for listing templates by
+/// name without unpacking the whole package. A package over 64 MiB, or one declaring more entries
+/// than `MAX_ENTRIES` (20,000), has none (#3660).
+pub fn package_title<R: std::io::Read>(package: R, max_part: u64) -> Option<String> {
+    use std::io::Read;
+    const MAX_PACKAGE: u64 = 64 << 20;
+    let mut bytes = Vec::new();
+    package.take(MAX_PACKAGE + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > MAX_PACKAGE {
+        return None;
+    }
+    wordcraft_doc::zip_guard::check(&bytes, package::MAX_ENTRIES as u64).ok()?;
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).ok()?;
+    let part = zip.by_name("docProps/core.xml").ok()?;
+    let mut xml = Vec::new();
+    part.take(max_part).read_to_end(&mut xml).ok()?;
+    let root = xml::parse(&xml).ok()?;
+    let title = root.child("dc:title")?.text();
+    let title = title.trim();
+    (!title.is_empty()).then(|| title.to_string())
+}
+
 /// What [`DocxError::PasswordRequired`] says.
 pub const PASSWORD_REQUIRED: &str = "this document is protected with a password";
 /// What [`DocxError::WrongPassword`] says.
@@ -60,11 +92,18 @@ pub(crate) const CANVAS_SPIN_EXT: &str = "urn:wordcraft:canvas-xfrm";
 /// `password` first. An encrypted package without a password gives
 /// [`DocxError::PasswordRequired`]; a wrong one, [`DocxError::WrongPassword`].
 pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<wordcraft_doc::Document, DocxError> {
+    read_with(bytes, &ReadOptions { password, ..Default::default() })
+}
+
+/// Read a package with options: the password of an encrypted one ([`read_with_password`]) and
+/// an importer for `w:altChunk` content in formats other than WordprocessingML (see
+/// [`ChunkImporter`]).
+pub fn read_with(bytes: &[u8], opts: &ReadOptions) -> Result<wordcraft_doc::Document, DocxError> {
     if is_encrypted(bytes) {
-        let package = zeroize::Zeroizing::new(decrypt(bytes, password)?);
-        return read::read_package(&package);
+        let package = zeroize::Zeroizing::new(decrypt(bytes, opts.password)?);
+        return read::read_package(&package, opts.chunks);
     }
-    read(bytes)
+    read::read_package(bytes, opts.chunks)
 }
 
 /// Which kind of WordprocessingML package to write. The main part's content type differs per

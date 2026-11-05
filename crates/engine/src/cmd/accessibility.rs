@@ -114,8 +114,9 @@ impl Checker<'_> {
             let Some(o) = p.object_at(off).filter(|o| o.is_drawing()) else { continue };
             let pos = at(path, off);
             let select = json!({"anchor": pos, "focus": at(path, off + OBJ.len_utf8())});
-            // Ink: every stroke is its own object, so asking about each would bury the report.
-            if o.is_decorative() || o.ink().is_some() {
+            // Ink: every stroke is its own object, so asking about each would bury the report. A
+            // hidden drawing isn't shown, so nobody reads it.
+            if o.is_decorative() || o.ink().is_some() || o.frame().is_some_and(|(_, _, f)| f.hidden) {
                 continue;
             }
             let titled = o.frame().is_some_and(|(_, _, f)| !f.alt.title.trim().is_empty());

@@ -8,9 +8,13 @@
 //! `{"steps": n}` to run extra frames, or `{"wait": ms}` to keep running frames for a while (for
 //! background work such as a Zotero session), or `{"cslStyles": "/dir"}` to load CSL styles from
 //! a folder before the script runs (the desktop app's styles folder; the sample session wires
-//! none). The window is 1440×900 pt at 2× and opens the sample document unless the first line is
-//! `{"empty": true}`; `{"empty": true, "startScreen": true}` starts the way the desktop app does
-//! with nothing to open (File › Home, #766).
+//! none). The window is 1440×900 pt at 2× and opens the sample
+//! document unless the first line is `{"empty": true}`; `{"empty": true, "startScreen": true}`
+//! starts the way the desktop app does with nothing to open (File › Home, #766). A line
+//! `{"demoPacks": true}` lists a few sample Language packs (installs only record themselves), and
+//! (with `{"network": true}` on a line, downloading is already on) `{"demoPacks": "store"}` uses a real font store, as the desktop app does, in a new temporary
+//! folder rather than the person's, or in `"storeDir"` given on the same line (with
+//! `CRAFT_LANGUAGE_PACK_INDEX` for a local pack index).
 
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{ControlRequest, Services, WordApp};
@@ -28,6 +32,26 @@ fn main() {
     } else {
         wordcraft_engine::sample::sample_document()
     };
+    match lines.iter().find_map(|l| l.get("demoPacks")) {
+        Some(serde_json::Value::String(s)) if s == "store" => {
+            // `"storeDir"` on the same line names the folder (to show packs put there beforehand).
+            let dir = lines
+                .iter()
+                .find_map(|l| l.get("storeDir").and_then(|v| v.as_str()))
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::env::temp_dir().join(format!("ui_shot-font-store-{}", std::process::id())));
+            wordcraft_engine::packs::use_font_store_in(dir, true);
+        }
+        Some(_) => {
+            // `"network": true` on a line has downloading already on (to show what follows a click on Add a language…).
+            let backend = wordcraft_engine::packs::FixedBackend::sample();
+            if lines.iter().any(|l| l.get("network") == Some(&serde_json::Value::Bool(true))) {
+                backend.network.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            wordcraft_engine::packs::set_backend(Some(std::sync::Arc::new(backend)));
+        }
+        None => {}
+    }
     let mut app = WordApp::new(Session::new(doc), Services::default()).with_control(rx);
     // A script line can wire the CSL styles folder the desktop app would (`{"cslStyles": …}`).
     if let Some(dir) = lines.iter().find_map(|l| l.get("cslStyles").and_then(|v| v.as_str())) {
@@ -90,9 +114,11 @@ fn main() {
     }
 }
 
+/// Applies the harness's pending raw input and advances one UI frame.
 fn step(harness: &mut egui_kittest::Harness<'_, WordApp>) {
     let mut raw = std::mem::take(harness.input_mut());
-    harness.state_mut().raw_input_hook(&mut raw);
+    let ctx = harness.ctx.clone();
+    harness.state_mut().raw_input_hook(&ctx, &mut raw);
     *harness.input_mut() = raw;
     harness.step();
 }

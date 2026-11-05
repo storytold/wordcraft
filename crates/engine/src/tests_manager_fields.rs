@@ -152,7 +152,11 @@ fn driven_fields_docx() -> Vec<u8> {
     let at = Pos::body(0, 6);
     let end = driven
         .doc
-        .insert_object(&at, InlineObject::FieldStart { instr: wordcraft_testkit::ZOTERO_CITE_INSTR.into(), locked: false, data: None }, &c)
+        .insert_object(
+            &at,
+            InlineObject::FieldStart { instr: wordcraft_testkit::ZOTERO_CITE_INSTR.into(), locked: false, dirty: false, data: None },
+            &c,
+        )
         .expect("field start");
     driven.doc.insert_text(&end, "(Doe, 2020)", &c).expect("result");
     let after = driven.doc.insert_text(&end, " ", &c).expect("space");

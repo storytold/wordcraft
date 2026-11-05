@@ -11,7 +11,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::model::*;
+use crate::model::{
+    AndStyle, Bibliography, Branch, Choose, Condition, Date, DatePart, DatePartName, DateParts, Element, Form, Group, Label, Layout, Match,
+    NameAsSortOrder, NameOptions, Names, Number, Plural, Position, SortDirection, SortField, SortKey, Style, Text, TextSource,
+};
 use crate::terms::TermSet;
 use crate::xml::{self, El};
 use crate::{for_each_element, referenced_macros, walk_elements};
