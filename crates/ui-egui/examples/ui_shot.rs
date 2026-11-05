@@ -12,7 +12,7 @@
 //! `{"width": w}`, `{"height": h}` or `{"ppp": s}` sets the window size in points or its pixels
 //! per point (e.g. 1.45 for a 145 % desktop, to see text as it is drawn there).
 //! `{"demoPacks": true}` lists a few sample Language packs (installs only record themselves), and
-//! `{"demoPacks": "store"}` uses a real font store, as the desktop app does, in a new temporary
+//! (with `{"network": true}` on a line, downloading is already on) `{"demoPacks": "store"}` uses a real font store, as the desktop app does, in a new temporary
 //! folder rather than the person's, or in `"storeDir"` given on the same line (with
 //! `CRAFT_LANGUAGE_PACK_INDEX` for a local pack index).
 
@@ -42,7 +42,14 @@ fn main() {
                 .unwrap_or_else(|| std::env::temp_dir().join(format!("ui_shot-font-store-{}", std::process::id())));
             wordcraft_engine::packs::use_font_store_in(dir, true);
         }
-        Some(_) => wordcraft_engine::packs::set_backend(Some(std::sync::Arc::new(wordcraft_engine::packs::FixedBackend::sample()))),
+        Some(_) => {
+            // `"network": true` on a line has downloading already on (to show what follows a click on Add a language…).
+            let backend = wordcraft_engine::packs::FixedBackend::sample();
+            if lines.iter().any(|l| l.get("network") == Some(&serde_json::Value::Bool(true))) {
+                backend.network.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            wordcraft_engine::packs::set_backend(Some(std::sync::Arc::new(backend)));
+        }
         None => {}
     }
     let mut app = WordApp::new(Session::new(doc), Services::default()).with_control(rx);

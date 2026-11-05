@@ -61,6 +61,7 @@ mod notes;
 mod page;
 mod pass;
 mod placed;
+mod substituted;
 mod table_flow;
 
 #[cfg(test)]
@@ -77,6 +78,9 @@ pub use floats::{is_floating, shape_figure_alt};
 use floats::{left_out_objects, wrap_area};
 #[cfg(test)]
 use headers::MAX_HEADER_ITEMS;
+#[cfg(test)]
+use headers::placed_cost;
+use headers::placed_cost_by;
 pub use notes::DECOR_STORY;
 pub(crate) use notes::NOTE_SEP_W;
 use notes::{MAX_NOTE_PASSES, footnote_pages};
@@ -86,6 +90,7 @@ use page::item_bottom;
 use pass::layout_pass;
 pub use pass::now_ms;
 pub use placed::{HfSlot, Placed, turn_point, turn_rect, unturn_point};
+pub use substituted::MAX_SUBSTITUTED;
 
 /// How the document is viewed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
