@@ -541,7 +541,7 @@ impl BordersForm {
         if self.para != b.para || self.to_text != b.to_text {
             if self.to_text {
                 let first = [TOP, LEFT, BOTTOM, RIGHT].into_iter().find(|i| self.para.sides.get(*i).copied().unwrap_or(false));
-                let mut border = match first {
+                let border = match first {
                     Some(i) => self.para.border(i),
                     None => Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0, ..Default::default() },
                 };
