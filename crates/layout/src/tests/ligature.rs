@@ -354,7 +354,7 @@ fn marked_grapheme_document(marks: bool, bidi: bool) -> Document {
             (13, wordcraft_doc::para::InlineObject::BookmarkStart { name: "g".into() }),
             (12, wordcraft_doc::para::InlineObject::CommentStart { id: 7 }),
             (1, wordcraft_doc::para::InlineObject::ControlStart { control: Box::default() }),
-            (0, wordcraft_doc::para::InlineObject::FieldStart { instr: "PAGE".into(), locked: false, dirty: false }),
+            (0, wordcraft_doc::para::InlineObject::FieldStart { instr: "PAGE".into(), locked: false, dirty: false, data: None }),
         ];
         for (at, mark) in marks {
             d.insert_object(&Pos::body(0, at), mark, &Default::default()).unwrap();

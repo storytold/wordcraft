@@ -228,6 +228,8 @@ impl Session {
             versions: _,
             autosave: _,
             bib_style: _,
+            csl_styles: _,
+            csl_styles_dir: _,
             merge: _,
             math: _,
             password: _,

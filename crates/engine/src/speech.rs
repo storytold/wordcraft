@@ -44,6 +44,19 @@ const ABBREVIATIONS: &[&str] = &[
     "est", "min", "max", "viz", "ibid",
 ];
 
+/// The ADDIN keywords that mark a citation manager's fields (after the `ADDIN` word).
+const ADDIN_CITATION_KEYS: &[&str] = &["ZOTERO_ITEM", "ZOTERO_BIBL", "CSL_CITATION", "CSL_BIBLIOGRAPHY", "MENDELEY", "EN.CITE", "EN.REFLIST"];
+
+/// The same keywords for the managers WordCraft does **not** drive: their fields are kept
+/// verbatim (instruction, result, lock, `w:fldData`) and never recomputed here. Zotero (and
+/// Word's own `CITATION` fields, which don't go through `ADDIN` at all) are driven live.
+const UNDRIVEN_ADDIN_KEYS: &[&str] = &["MENDELEY", "EN.CITE", "EN.REFLIST"];
+
+/// The text after a field code's `ADDIN` word, upper-cased for prefix matching.
+fn addin_rest(instr: &str) -> String {
+    instr.trim_start().get(5..).unwrap_or("").trim_start().to_ascii_uppercase()
+}
+
 /// Is this field code a citation or a bibliography (Zotero, Mendeley, EndNote, Word)?
 pub fn is_citation_code(instr: &str) -> bool {
     let code = instr.trim_start();
@@ -54,8 +67,21 @@ pub fn is_citation_code(instr: &str) -> bool {
     if word != "ADDIN" {
         return false;
     }
-    let rest = code.get(5..).unwrap_or("").trim_start().to_ascii_uppercase();
-    ["ZOTERO_ITEM", "ZOTERO_BIBL", "CSL_CITATION", "CSL_BIBLIOGRAPHY", "MENDELEY", "EN.CITE", "EN.REFLIST"].iter().any(|k| rest.starts_with(k))
+    let rest = addin_rest(instr);
+    ADDIN_CITATION_KEYS.iter().any(|k| rest.starts_with(k))
+}
+
+/// Is this field code a citation of a manager WordCraft doesn't drive (Mendeley, EndNote)?
+/// WordCraft refreshes Zotero fields and its own `CITATION` fields live; these it preserves
+/// as-is, and opening a document holding one says so in the status bar
+/// (see `cmd::file`'s `MANAGER_FIELDS_STATUS`).
+pub fn is_undriven_citation_code(instr: &str) -> bool {
+    let word = instr.split_whitespace().next().unwrap_or("").to_ascii_uppercase();
+    if word != "ADDIN" {
+        return false;
+    }
+    let rest = addin_rest(instr);
+    UNDRIVEN_ADDIN_KEYS.iter().any(|k| rest.starts_with(k))
 }
 
 /// One sentence to speak: its text and where it is in the document.

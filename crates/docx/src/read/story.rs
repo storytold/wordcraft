@@ -64,6 +64,25 @@ enum Item {
     Obj(Box<InlineObject>),
 }
 
+/// Longest `w:fldData` kept: opaque producer data (base64), capped like the code.
+const MAX_FIELD_DATA: usize = MAX_INSTR;
+
+/// Append `s` to `buf`, never past `cap` (file-sized payloads must not balloon the model):
+/// what doesn't fit is truncated at a character boundary.
+pub(super) fn push_capped(buf: &mut String, s: &str, cap: usize) {
+    if buf.len() >= cap {
+        return;
+    }
+    let room = cap - buf.len();
+    if s.len() <= room {
+        buf.push_str(s);
+        return;
+    }
+    // The END of the last whole character that fits (its start index would drop it).
+    let cut = s.char_indices().take_while(|(i, c)| i + c.len_utf8() <= room).last().map(|(i, c)| i + c.len_utf8()).unwrap_or(0);
+    buf.push_str(&s[..cut]);
+}
+
 struct FieldState {
     instr: String,
     phase: Phase,
@@ -81,6 +100,8 @@ struct FieldState {
     sizes: Vec<(usize, Option<f32>)>,
     /// A legacy form field's `w:ffData`, as raw XML.
     form: String,
+    /// `w:fldData` collected from the code part: opaque base64, re-saved verbatim.
+    data: Option<String>,
 }
 
 /// The last paragraph of a block list: its last block, or inside a final table the last
@@ -209,4 +230,30 @@ fn placeholder_of(s: &str) -> String {
 
 fn on_off_attr(e: &El, name: &str) -> bool {
     e.attr(name).is_some_and(|v| !matches!(v, "0" | "false" | "off"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::push_capped;
+
+    /// The cap keeps whole characters; truncation keeps the last character that fits (an
+    /// off-by-one cut its start index and dropped it).
+    #[test]
+    fn push_capped_truncates_at_the_last_fitting_character() {
+        let mut b = String::new();
+        push_capped(&mut b, "ab", 1);
+        assert_eq!(b, "a");
+        let mut b = String::new();
+        push_capped(&mut b, "éé", 3);
+        assert_eq!(b, "é");
+        let mut b = String::new();
+        push_capped(&mut b, "xé", 2);
+        assert_eq!(b, "x");
+        // Fits whole: unchanged; at or past the cap: nothing more.
+        let mut b = String::from("ab");
+        push_capped(&mut b, "cd", 4);
+        assert_eq!(b, "abcd");
+        push_capped(&mut b, "e", 4);
+        assert_eq!(b, "abcd");
+    }
 }

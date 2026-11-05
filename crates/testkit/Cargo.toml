@@ -1,0 +1,12 @@
+[package]
+name = "wordcraft-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Synthetic document fixtures shared by WordCraft's tests (hand-written markup, no exported files)"
+
+[lints]
+workspace = true
+
+[dependencies]
+zip = { workspace = true }

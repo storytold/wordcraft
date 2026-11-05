@@ -113,7 +113,7 @@ fn field_to_heading(body: &mut Blocks, i: usize) {
     }
     let Some((field, props, end)) = body.get(i).and_then(|b| b.as_para()).and_then(|p| {
         let (field, end) = match p.object_at(0) {
-            Some(InlineObject::FieldStart { instr, locked, dirty }) if is_toc(instr) => (
+            Some(InlineObject::FieldStart { instr, locked, dirty, .. }) if is_toc(instr) => (
                 InlineObject::Field { instr: instr.clone(), result: String::new(), locked: *locked, dirty: *dirty, code: false, form: String::new() },
                 Some(toc_range_end(body, i)?),
             ),

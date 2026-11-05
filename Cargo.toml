@@ -19,6 +19,7 @@ wordcraft-layout = { path = "crates/layout" }
 wordcraft-docx = { path = "crates/docx" }
 wordcraft-docbin = { path = "crates/docbin" }
 wordcraft-formats = { path = "crates/formats" }
+wordcraft-csl = { path = "crates/csl" }
 wordcraft-render = { path = "crates/render" }
 wordcraft-pdf = { path = "crates/pdf" }
 # Proofing is craft-libs' craft-proof (it was crates/proof); its Language data is craft-i18n's
@@ -37,6 +38,7 @@ wordcraft-zotero = { path = "crates/zotero" }
 wordcraft-control-key = { path = "crates/control-key" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
 wordcraft-metafile = { path = "crates/metafile" }
+wordcraft-testkit = { path = "crates/testkit" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }

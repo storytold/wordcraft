@@ -785,3 +785,354 @@ fn gost_numbers_follow_its_name_or_title_sort() {
     assert_eq!(find_style("Harvard - Anglia 2008").map(|x| x.name), Some("Harvard (Anglia)"));
     assert!(find_style("").is_none() && find_style("Vancouver").is_none());
 }
+
+/// `references.importSources`: a citation library is keyed data — a matching tag is updated in
+/// place (keeping its place in the list), a new one is added, and one `update_citations` covers
+/// the whole import.
+#[test]
+fn import_sources_upserts_by_tag() {
+    let dir = std::env::temp_dir().join(format!("wc-import-lib-upsert-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("lib.bib");
+    std::fs::write(&path, b"@article{doe2020, author = {Doe, Jane}, title = {The new title}, year = {2021}}\n@book{knuth84, author = {Knuth, Donald E.}, title = {The TeXbook}, year = {1984}}\n").unwrap();
+    let path = path.to_string_lossy().to_string();
+
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "See "})).unwrap();
+    s.run("references.sources", &json!({"add": {"tag": "doe2020", "author": "Doe, Jane", "title": "The old title", "year": "2020"}})).unwrap();
+    s.run("references.citation", &json!({"tag": "doe2020"})).unwrap();
+    assert!(s.doc.plain_text(StoryRef::Body).contains("(Doe, 2020)"), "{}", s.doc.plain_text(StoryRef::Body));
+    let r = s.run("references.importSources", &json!({"path": path})).unwrap();
+    assert_eq!(r["added"], json!(1), "{r}");
+    assert_eq!(r["updated"], json!(1), "{r}");
+    assert_eq!(r["total"], json!(2), "{r}");
+    assert_eq!(r["skipped"], json!([]), "{r}");
+    // The matching tag is updated in place: its place in the list is kept.
+    assert_eq!(s.doc.sources.len(), 2);
+    assert_eq!(s.doc.sources[0].tag, "doe2020");
+    assert_eq!(s.doc.sources[0].title, "The new title");
+    assert_eq!(s.doc.sources[1].tag, "knuth84");
+    // The import's one update_citations refreshed the citation to the new year.
+    let t = s.doc.plain_text(StoryRef::Body);
+    assert!(t.contains("(Doe, 2021)") && !t.contains("(Doe, 2020)"), "{t}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// RIS carries no key: tags are minted the way a new source's are, and a collision in one import
+/// gets the stem, then `1`, `2`…
+#[test]
+fn import_sources_generates_tags() {
+    let dir = std::env::temp_dir().join(format!("wc-import-lib-tags-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("lib.ris");
+    let ris = "TY  - JOUR\nAU  - Doe, Jane\nTI  - First paper\nPY  - 2020\nER  - \n\
+               TY  - JOUR\nAU  - Doe, Jane\nTI  - Second paper\nPY  - 2020\nER  - \n\
+               TY  - BOOK\nTI  - Anonymous editing\nPY  - 2019\nER  - \n";
+    std::fs::write(&path, ris).unwrap();
+    let path = path.to_string_lossy().to_string();
+
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    // `references.sources` mints Roe21 for a source with no tag.
+    s.run("references.sources", &json!({"add": {"author": "Roe, Sam", "title": "An untitled year", "year": "2021"}})).unwrap();
+    assert_eq!(s.doc.sources[0].tag, "Roe21");
+    let r = s.run("references.importSources", &json!({"path": path})).unwrap();
+    assert_eq!(r["added"], json!(3), "{r}");
+    let tags: Vec<&str> = s.doc.sources.iter().map(|x| x.tag.as_str()).collect();
+    assert_eq!(tags, ["Roe21", "Doe20", "Doe201", "Src19"], "{tags:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Without a library extension the content says the format, and `format` forces the reader; an
+/// unknown `format` or a wrong-format file is a parameter error, never a crash.
+#[test]
+fn import_sources_sniffs_and_forces_the_format() {
+    let dir = std::env::temp_dir().join(format!("wc-import-lib-sniff-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let write = |name: &str, bytes: &[u8]| {
+        let p = dir.join(name);
+        std::fs::write(&p, bytes).unwrap();
+        p.to_string_lossy().to_string()
+    };
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    // No library extension: the content says BibTeX (`@` opening a line).
+    let path = write("notes.txt", b"free text\n@misc{noext, title = {Sniffed}}\n");
+    let r = s.run("references.importSources", &json!({"path": path})).unwrap();
+    assert_eq!(r["added"], json!(1), "{r}");
+    assert_eq!(s.doc.sources[0].tag, "noext");
+    // Leading `TY  -`: RIS without the extension.
+    let path = write("library", b"TY  - BOOK\nTI  - Sniffed RIS\nPY  - 2019\nER  - \n");
+    let r = s.run("references.importSources", &json!({"path": path})).unwrap();
+    assert_eq!(r["added"], json!(1), "{r}");
+    assert_eq!(s.doc.sources[1].tag, "Src19");
+    // A JSON array of items with `id`/`type`: CSL-JSON.
+    let path = write("items.txt", br#"[{"id": "x1", "type": "book", "title": "Sniffed JSON"}]"#);
+    let r = s.run("references.importSources", &json!({"path": path})).unwrap();
+    assert_eq!(r["added"], json!(1), "{r}");
+    assert_eq!(s.doc.sources[2].tag, "x1");
+    // RIS under a .json name: `format` forces the reader.
+    let path = write("forced.json", b"TY  - JOUR\nAU  - Doe, Jane\nTI  - Forced\nPY  - 2020\nER  - \n");
+    let r = s.run("references.importSources", &json!({"path": path, "format": "ris"})).unwrap();
+    assert_eq!(r["added"], json!(1), "{r}");
+    assert_eq!(s.doc.sources[3].tag, "Doe20");
+    // An unknown `format` and a wrong-format file are parameter errors, never crashes.
+    assert!(s.run("references.importSources", &json!({"path": path, "format": "endnote"})).is_err());
+    let path = write("wrong.txt", b"just some text, nothing to import");
+    assert!(matches!(s.run("references.importSources", &json!({"path": path})), Err(CmdError::Params(_))));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A CSL-JSON `{}` item parses but holds nothing: skipped with a reason, not an error.
+#[test]
+fn import_sources_skips_empty_entries() {
+    let dir = std::env::temp_dir().join(format!("wc-import-lib-skip-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("lib.json");
+    std::fs::write(&path, br#"[{}, {"id": "web1", "type": "webpage", "title": "Fact sheet", "URL": "https://example.com"}]"#).unwrap();
+    let path = path.to_string_lossy().to_string();
+
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let r = s.run("references.importSources", &json!({"path": path})).unwrap();
+    assert_eq!(r["added"], json!(1), "{r}");
+    assert_eq!(r["skipped"], json!([{"reason": "no usable field"}]), "{r}");
+    assert_eq!(r["total"], json!(2), "{r}");
+    assert_eq!(s.doc.sources.len(), 1);
+    assert_eq!(s.doc.sources[0].tag, "web1");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The whole import is one undo step, and a citation works right after it.
+#[test]
+fn import_sources_is_one_undo_step_and_cites_after() {
+    let dir = std::env::temp_dir().join(format!("wc-import-lib-undo-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("lib.bib");
+    std::fs::write(&path, b"@article{doe2020, author = {Doe, Jane}, title = {A study}, year = {2020}, journal = {Journal of Things}}\n").unwrap();
+    let path = path.to_string_lossy().to_string();
+
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "Cite here: "})).unwrap();
+    let depth = s.undo_depth();
+    let r = s.run("references.importSources", &json!({"path": path})).unwrap();
+    assert_eq!(r["added"], json!(1), "{r}");
+    assert_eq!(s.undo_depth(), depth + 1, "one undo step for the whole import");
+    // One undo takes the whole import back out.
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(s.doc.sources.is_empty(), "{:?}", s.doc.sources);
+    // Import again: a citation works right after it.
+    s.run("references.importSources", &json!({"path": path})).unwrap();
+    s.run("references.citation", &json!({"tag": "doe2020"})).unwrap();
+    let t = s.doc.plain_text(StoryRef::Body);
+    assert!(t.contains("Cite here: (Doe, 2020)"), "{t}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `engine.commands` (control channel, MCP, the CLI's command list) is the registry's
+/// describe(); the catalog row makes command search and keytips see it too.
+#[test]
+fn import_sources_is_listed_in_engine_commands() {
+    let listed = crate::cmd::registry().describe();
+    let me = listed.as_array().unwrap().iter().find(|c| c["id"] == "references.importSources").unwrap();
+    assert_eq!(me["label"], "Import Sources Library");
+    assert_eq!(me["location"], "References › Citations & Bibliography");
+    assert!(
+        crate::catalog::entries()
+            .iter()
+            .any(|(tab, group, _, id)| { *tab == "References" && *group == "Citations" && *id == "references.importSources" })
+    );
+}
+
+// --- CSL styles (#1058) ---
+
+/// A numeric test style: cites `[n]`, the bibliography sorted by title with the number in
+/// front — written for these tests (our own file, like every asset here).
+const CSL_NUMERIC: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<style xmlns="http://purl.org/net/csl" version="1.0">
+  <info><id>http://wordcraft.test/numeric</id><title>WordCraft Test Numeric</title></info>
+  <citation><layout prefix="[" suffix="]"><text variable="citation-number"/></layout></citation>
+  <bibliography>
+    <sort><key variable="title"/></sort>
+    <layout><text variable="citation-number" prefix="[" suffix="] "/><text variable="title"/></layout>
+  </bibliography>
+</style>
+"#;
+
+/// A session wired to a fresh styles folder `wordcraft-csl-<label>-<pid>`, and a `.csl` file
+/// written beside it to add from.
+fn csl_session(label: &str) -> (Session, std::path::PathBuf, String) {
+    let dir = std::env::temp_dir().join(format!("wordcraft-csl-{label}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // The file to add sits in a folder beside the styles folder, not in it (a session loads
+    // the folder); its own name is what gets installed.
+    let pickup = std::env::temp_dir().join(format!("wordcraft-csl-{label}-src-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&pickup);
+    std::fs::create_dir_all(&pickup).unwrap();
+    let src = pickup.join("numeric.csl");
+    std::fs::write(&src, CSL_NUMERIC.as_bytes()).unwrap();
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.set_csl_styles_dir(dir.clone());
+    (s, dir, src.to_string_lossy().into_owned())
+}
+
+#[test]
+fn csl_styles_add_list_and_remove() {
+    let (mut s, dir, src) = csl_session("manage");
+    // Nothing installed: the built-ins don't need installing.
+    let r = s.run("references.cslStyles", &json!({})).unwrap();
+    assert_eq!(r["styles"], json!([]), "{r}");
+    // A style file anywhere is copied into the styles folder.
+    let r = s.run("references.cslStyles", &json!({"add": src})).unwrap();
+    assert_eq!(r["id"], json!("http://wordcraft.test/numeric"), "{r}");
+    assert_eq!(r["warnings"], json!([]), "{r}");
+    assert!(dir.join("numeric.csl").is_file(), "copied into {}", dir.display());
+    let r = s.run("references.cslStyles", &json!({})).unwrap();
+    assert_eq!(r["styles"], json!([{"id": "http://wordcraft.test/numeric", "title": "WordCraft Test Numeric", "file": "numeric.csl"}]), "{r}");
+    // A file that doesn't parse is a parameter error, and nothing is installed.
+    let bad = dir.parent().unwrap().join(format!("wordcraft-csl-bad-{}", std::process::id()));
+    std::fs::create_dir_all(&bad).unwrap();
+    let bad = bad.join("bad.csl");
+    std::fs::write(&bad, b"not xml at all").unwrap();
+    assert!(matches!(s.run("references.cslStyles", &json!({"add": bad.to_string_lossy()})), Err(CmdError::Params(_))));
+    assert_eq!(s.run("references.cslStyles", &json!({})).unwrap()["styles"].as_array().unwrap().len(), 1);
+    // Remove takes the id, and takes the file with it.
+    let r = s.run("references.cslStyles", &json!({"remove": "http://wordcraft.test/numeric"})).unwrap();
+    assert_eq!(r, json!({"removed": true}), "{r}");
+    assert!(!dir.join("numeric.csl").exists(), "the file is removed too");
+    assert_eq!(s.run("references.cslStyles", &json!({})).unwrap()["styles"], json!([]));
+    // Removing a style that isn't there is a parameter error.
+    assert!(matches!(s.run("references.cslStyles", &json!({"remove": "nope"})), Err(CmdError::Params(_))));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn re_adding_a_style_under_a_new_name_takes_the_old_file_with_it() {
+    let (mut s, dir, src) = csl_session("replace");
+    s.run("references.cslStyles", &json!({"add": src})).unwrap();
+    assert!(dir.join("numeric.csl").is_file());
+    // The same style under another file name: the replacement wins and the superseded file
+    // is deleted, so the next start loads exactly one style with this id.
+    let other = dir.parent().unwrap().join(format!("wordcraft-csl-replace-other-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&other);
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("renamed.csl"), CSL_NUMERIC.as_bytes()).unwrap();
+    let r = s.run("references.cslStyles", &json!({"add": other.join("renamed.csl").to_string_lossy()})).unwrap();
+    assert_eq!(r["id"], json!("http://wordcraft.test/numeric"), "{r}");
+    assert!(dir.join("renamed.csl").is_file(), "the new file is installed");
+    assert!(!dir.join("numeric.csl").exists(), "the superseded file is gone");
+    let listed = s.run("references.cslStyles", &json!({})).unwrap();
+    assert_eq!(listed["styles"].as_array().unwrap().len(), 1, "one entry, not two: {listed}");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&other);
+}
+
+#[test]
+fn csl_style_cites_and_lists() {
+    let (mut s, dir, src) = csl_session("use");
+    s.run("references.cslStyles", &json!({"add": src})).unwrap();
+    // Chosen by title, recorded as `csl:<id>` — in the session and the document.
+    s.run("references.citationStyle", &json!({"style": "wordcraft test numeric"})).unwrap();
+    assert_eq!(s.bib_style, "csl:http://wordcraft.test/numeric");
+    assert_eq!(s.doc.settings.bib_style.as_deref(), Some("csl:http://wordcraft.test/numeric"));
+    // Two sources cited out of title order: the numbers follow the style's own sort.
+    two_sources(&mut s, "Shared Spaces");
+    s.run("references.citation", &json!({"tag": "A"})).unwrap();
+    s.run("references.citation", &json!({"tag": "B"})).unwrap();
+    let t = s.doc.plain_text(StoryRef::Body);
+    assert!(t.contains("[2][1]"), "Kilns and Clay sorts before Shared Spaces: {t}");
+    s.run("text.newParagraph", &json!({})).unwrap();
+    s.run("references.bibliography", &json!({})).unwrap();
+    let t = s.doc.plain_text(StoryRef::Body);
+    assert!(t.contains("[1] Kilns and Clay\n[2] Shared Spaces"), "{t}");
+    assert!(t.contains("Bibliography"), "CSL styles don't title their bibliography; our fallback: {t}");
+    // Update under the style refreshes it; nothing falls back to APA.
+    s.run("references.updateFields", &json!({})).unwrap();
+    let t = s.doc.plain_text(StoryRef::Body);
+    assert!(t.contains("[2][1]") && t.contains("[1] Kilns and Clay\n[2] Shared Spaces"), "{t}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn missing_csl_style_is_an_error_never_a_silent_fallback() {
+    let (mut s, dir, src) = csl_session("missing");
+    s.run("references.cslStyles", &json!({"add": src})).unwrap();
+    two_sources(&mut s, "Shared Spaces");
+    s.run("references.citation", &json!({"tag": "A"})).unwrap();
+    s.run("references.citationStyle", &json!({"style": "csl:http://wordcraft.test/numeric"})).unwrap();
+    let before = s.doc.plain_text(StoryRef::Body);
+    // Uninstalling the style leaves the document asking for it.
+    s.run("references.cslStyles", &json!({"remove": "http://wordcraft.test/numeric"})).unwrap();
+    let err = s.run("references.updateFields", &json!({})).unwrap_err().to_string();
+    assert!(err.contains("http://wordcraft.test/numeric is not installed; re-add it"), "{err}");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), before, "existing field results stay untouched");
+    // Choosing a style that isn't installed is the same error, and keeps the current one.
+    let err = s.run("references.citationStyle", &json!({"style": "csl:ghost"})).unwrap_err().to_string();
+    assert!(err.contains("ghost is not installed"), "{err}");
+    assert_eq!(s.bib_style, "csl:http://wordcraft.test/numeric");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn csl_style_choice_survives_docx_save_and_reopen() {
+    let (mut s, dir, src) = csl_session("round");
+    s.run("references.cslStyles", &json!({"add": src})).unwrap();
+    s.run("references.citation", &json!({"source": {"author": "Rivera, Alex", "title": "Shared Spaces", "year": "2021"}})).unwrap();
+    s.run("references.citationStyle", &json!({"style": "csl:http://wordcraft.test/numeric"})).unwrap();
+    assert!(s.doc.plain_text(StoryRef::Body).contains("[1]"), "{}", s.doc.plain_text(StoryRef::Body));
+    // `csl:<id>` round-trips through the document untouched.
+    let bytes = wordcraft_docx::write(&s.doc).expect("docx write");
+    let doc = wordcraft_docx::read(&bytes).expect("docx read");
+    assert_eq!(doc.settings.bib_style.as_deref(), Some("csl:http://wordcraft.test/numeric"));
+    let mut reopened = Session::new(doc);
+    assert_eq!(reopened.bib_style, "csl:http://wordcraft.test/numeric");
+    // Reopened where the style isn't installed, the update names it; once it is, the
+    // citation renders through the style again.
+    let err = reopened.run("references.updateFields", &json!({})).unwrap_err().to_string();
+    assert!(err.contains("is not installed"), "{err}");
+    reopened.set_csl_styles_dir(dir.clone());
+    reopened.run("references.updateFields", &json!({})).unwrap();
+    assert!(reopened.doc.plain_text(StoryRef::Body).contains("[1]"), "{}", reopened.doc.plain_text(StoryRef::Body));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_csl_title_matching_a_builtin_alias_resolves_to_the_csl_style() {
+    // A style titled "IEEE" (or "Chicago Manual of Style…") must not fall into the built-in
+    // alias-prefix match: the exact name, then the installed styles, then the aliases.
+    let (mut s, dir, src) = csl_session("title");
+    s.run("references.cslStyles", &json!({"add": src})).unwrap();
+    // The numeric fixture's title is "WordCraft Test Numeric"; rename its id to a builtin-like
+    // title by asking through a second style file whose title is exactly "IEEE".
+    let ieee = dir.parent().unwrap().join(format!("wordcraft-csl-title-ieee-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&ieee);
+    std::fs::create_dir_all(&ieee).unwrap();
+    std::fs::write(ieee.join("ieee.csl"), CSL_NUMERIC.replace("WordCraft Test Numeric", "IEEE Transactions Numeric")).unwrap();
+    s.run("references.cslStyles", &json!({"add": ieee.join("ieee.csl").to_string_lossy()})).unwrap();
+    // A title that begins like a built-in alias ("IEEE Transactions…") is the installed style:
+    // without the CSL-first step the alias prefix silently picked the built-in IEEE.
+    s.run("references.citationStyle", &json!({"style": "IEEE Transactions Numeric"})).unwrap();
+    assert_eq!(s.bib_style, "csl:http://wordcraft.test/numeric", "the installed style, not the built-in IEEE");
+    // An exact built-in name still wins, and the plain alias keeps working.
+    let (mut plain, _d, _src) = csl_session("title2");
+    plain.run("references.citationStyle", &json!({"style": "ieee"})).unwrap();
+    assert_eq!(plain.bib_style, "IEEE");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&ieee);
+}
+
+#[test]
+fn csl_styles_is_listed_in_engine_commands() {
+    let listed = crate::cmd::registry().describe();
+    let me = listed.as_array().unwrap().iter().find(|c| c["id"] == "references.cslStyles").unwrap();
+    assert_eq!(me["label"], "Citation Styles (CSL)");
+    assert_eq!(me["location"], "References › Citations & Bibliography");
+    assert!(
+        crate::catalog::entries()
+            .iter()
+            .any(|(tab, group, _, id)| { *tab == "References" && *group == "Citations" && *id == "references.cslStyles" })
+    );
+}

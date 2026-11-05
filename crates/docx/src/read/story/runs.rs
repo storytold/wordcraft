@@ -179,7 +179,19 @@ impl Reader<'_> {
                     if f.sizes.len() < 64 {
                         f.sizes.push((f.instr.len(), props.size));
                     }
-                    f.instr.push_str(&k.text());
+                    super::push_capped(&mut f.instr, &k.text(), MAX_INSTR);
+                }
+            }
+            // Tolerated placement: some producers write the data as a run child instead of
+            // inside the begin marker (where the `w:fldChar` arm reads it).
+            // Unlike `w:instrText`'s guard, none is needed here: `push_capped` returns at cap.
+            "w:fldData" => {
+                if sc.ignored_begins == 0
+                    && let Some(f) = sc.fields.last_mut()
+                    && f.phase == Phase::Instr
+                    && !f.spilled
+                {
+                    super::push_capped(f.data.get_or_insert_with(String::new), &k.text(), super::MAX_FIELD_DATA);
                 }
             }
             "w:tab" => self.emit_text(sc, pb, "\t", props),
@@ -229,7 +241,19 @@ impl Reader<'_> {
             "w:fldChar" => match k.attr("w:fldCharType") {
                 Some("begin") => {
                     let form = k.child("w:ffData").map(|f| f.to_xml()).filter(|x| x.len() <= MAX_FORM).unwrap_or_default();
-                    self.begin_field(sc, props.clone(), String::new(), on_off_attr(k, "w:fldLock"), on_off_attr(k, "w:dirty"), form)
+                    self.begin_field(sc, props.clone(), String::new(), on_off_attr(k, "w:fldLock"), on_off_attr(k, "w:dirty"), form);
+                    // The spec's placement of field data (ECMA-376 "Custom Field Data"):
+                    // nested in the begin marker. It belongs to the field just opened — when
+                    // the begin wasn't ignored (past the nesting cap), that is.
+                    if sc.ignored_begins == 0
+                        && let Some(d) = k.child("w:fldData")
+                        && let Some(f) = sc.fields.last_mut()
+                        && f.phase == Phase::Instr
+                        && !f.spilled
+                    {
+                        let text = d.text();
+                        super::push_capped(f.data.get_or_insert_with(String::new), &text, super::MAX_FIELD_DATA);
+                    }
                 }
                 Some("separate") => self.separate_field(sc, pb),
                 Some("end") => self.end_field(sc, pb),

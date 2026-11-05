@@ -478,4 +478,41 @@ mod tests {
         let text = s.doc.plain_text(wordcraft_doc::StoryRef::Body);
         assert!(text.contains("2 of 1"), "unlinked text should reflect section 2: {text}");
     }
+    /// Manager citation fields (#1058) are range fields: `fields.selected` sees them, Shift+F9
+    /// refuses (it toggles simple fields only) and Alt+F9 shows simple fields' codes (`{ PAGE }`)
+    /// while the managers' results — ordinary paragraph text between the markers — stay; neither
+    /// touch changes the fields themselves.
+    #[test]
+    fn manager_citation_fields_keep_showing_their_results() {
+        let bytes = wordcraft_testkit::manager_fields_docx().expect("testkit package");
+        let mut s = Session::new(wordcraft_docx::read(&bytes).expect("docx read"));
+        let mendeley = wordcraft_testkit::MENDELEY_CITE.to_string();
+        let state = |s: &Session| s.doc.field_ranges(wordcraft_doc::StoryRef::Body).into_iter().map(|r| (r.instr, r.locked)).collect::<Vec<_>>();
+        let opening = state(&s);
+
+        // The caret inside the Mendeley citation: fields.selected sees the range field…
+        let inside = s.doc.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).and_then(|p| p.text.find("(Austen")).expect("result");
+        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, inside + 1));
+        let selected = s.run("fields.selected", &json!({})).unwrap();
+        assert_eq!(selected[0]["instr"], mendeley);
+        assert_eq!(selected[0]["range"], true);
+        assert_eq!(selected[0]["code"], false);
+        // …but Shift+F9 has nothing to say: it toggles simple fields only.
+        assert!(s.run("fields.toggleCode", &json!({})).is_err());
+
+        // Alt+F9: the simple PAGE field shows its code instead of its result; the object text
+        // the manager fields would draw — there is none: their results are the paragraphs'
+        // own text, which a view toggle cannot take away.
+        s.run("view.fieldCodes", &json!({})).unwrap();
+        let shown = page_text(&mut s);
+        assert!(shown.contains("{ PAGE }"), "{shown}");
+        assert!(!shown.contains("MENDELEY") && !shown.contains("ADDIN"), "a manager's code must not be drawn: {shown}");
+        s.run("view.fieldCodes", &json!({"value": false})).unwrap();
+        let shown = page_text(&mut s);
+        assert!(!shown.contains("{ PAGE }") && shown.contains("1"), "the PAGE field shows its result again: {shown}");
+
+        // Nothing about the fields changed: instruction, lock and boundaries as they opened.
+        assert_eq!(state(&s), opening);
+        assert!(!s.doc.has_unbalanced_field_ranges());
+    }
 }

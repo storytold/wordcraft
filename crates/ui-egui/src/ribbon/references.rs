@@ -1,6 +1,18 @@
 use super::common::{mi, mi_text, stack};
-use super::language::mi_check;
+use super::language::{mi_check, mi_check_text};
 use super::{Ui, WordApp, big, group, json, menu_button, small};
+
+/// The name the References ▸ Style combo shows for the document's citation style: a built-in's
+/// name, or the title of the CSL style a `csl:<id>` choice stands for (the id itself when that
+/// style is no longer installed).
+fn citation_style_name(app: &WordApp, bib_style: &str) -> String {
+    let Some(id) = bib_style.strip_prefix("csl:") else { return bib_style.to_string() };
+    app.session
+        .csl_styles
+        .iter()
+        .find(|e| e.id().eq_ignore_ascii_case(id))
+        .map_or_else(|| bib_style.to_string(), |e| if e.style.title.is_empty() { e.file.clone() } else { e.style.title.clone() })
+}
 
 pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Table of Contents", None, app, |ui, app| {
@@ -86,14 +98,46 @@ pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
                 crate::widgets::ButtonAction::new("references.sources", json!({}), false),
             );
             let current = app.session.bib_style.clone();
-            let label = crate::i18n::fmt(tl!("Style: {style}"), &[("style", &current)]);
+            let shown = citation_style_name(app, &current);
+            let label = crate::i18n::fmt(tl!("Style: {style}"), &[("style", &shown)]);
             menu_button(
                 ui,
                 app,
-                crate::widgets::MenuButtonOptions::new("styles", Some(&label), "Citation Style", false, "references.citationStyle"),
+                crate::widgets::MenuButtonOptions::new(
+                    "styles",
+                    Some(&label),
+                    "Citation Style (CSL styles: docs/csl-styles.md)",
+                    false,
+                    "references.citationStyle",
+                ),
                 |ui, app| {
                     for st in &wordcraft_engine::cmd::citations::STYLES {
                         mi_check(ui, app, st.name, st.name == current, "references.citationStyle", json!({"style": st.name}));
+                    }
+                    // #1058: styles added from CSL files, by title; the document's recorded choice is
+                    // `csl:<id>`.
+                    let csl: Vec<(String, String)> = app
+                        .session
+                        .csl_styles
+                        .iter()
+                        .map(|e| (e.id().to_string(), if e.style.title.is_empty() { e.file.clone() } else { e.style.title.clone() }))
+                        .collect();
+                    if !csl.is_empty() {
+                        ui.separator();
+                    }
+                    for (id, title) in &csl {
+                        let on = current.strip_prefix("csl:").is_some_and(|c| c.eq_ignore_ascii_case(id));
+                        mi_check_text(ui, app, title, on, "references.citationStyle", json!({"style": format!("csl:{id}")}));
+                    }
+                    ui.separator();
+                    // #1058: pick a CSL file to install as a style; it is added, its warnings show in
+                    // the status line, and it becomes the document's style.
+                    if ui.button(tl!("Add style from file…")).clicked() {
+                        let _ = app.ask_file(
+                            crate::file_dialogs::FileDialogRequest::Open { purpose: "csl-style".into() },
+                            crate::file_dialogs::AfterPick::CslStyle,
+                        );
+                        ui.close();
                     }
                 },
             );

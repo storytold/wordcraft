@@ -2228,7 +2228,12 @@ fn typing_after_a_citation_goes_outside_its_field() {
     let c = CharProps::default();
     let p = doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
     let start = p.len();
-    p.insert_object(start, InlineObject::FieldStart { instr: "ADDIN ZOTERO_ITEM CSL_CITATION {}".into(), locked: false, dirty: false }, &c).unwrap();
+    p.insert_object(
+        start,
+        InlineObject::FieldStart { instr: "ADDIN ZOTERO_ITEM CSL_CITATION {}".into(), locked: false, dirty: false, data: None },
+        &c,
+    )
+    .unwrap();
     let n = p.insert_text(p.len(), "(Smith 2020)", &c).unwrap();
     p.insert_object(start + 3 + n, InlineObject::FieldEnd, &c).unwrap();
     let mut s = Session::new(doc);

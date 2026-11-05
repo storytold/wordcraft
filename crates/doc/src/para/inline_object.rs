@@ -115,6 +115,12 @@ pub enum InlineObject {
         /// `w:dirty` on the begin marker, as [`InlineObject::Field::dirty`].
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         dirty: bool,
+        /// `w:fldData` (ECMA-376 "Custom Field Data"): the base64 text a producer nested in the
+        /// begin `w:fldChar` (citation managers' `ADDIN` fields carry their links in it).
+        /// Opaque to us: kept verbatim so another program's data survives our saves, never
+        /// interpreted. `None` = the producer stored none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<String>,
     },
     /// The end of the innermost open [`InlineObject::FieldStart`].
     FieldEnd,

@@ -1,5 +1,5 @@
 use super::drawing::{DrawingInfo, shape_name, spin_attrs, write_fill, xfrm_spin_only};
-use super::field::{FieldData, field_run};
+use super::field::{FieldBegin, FieldData, field_run};
 use super::section::comment_reference_style;
 use super::{CharProps, Fill, InlineObject, NoteKind, PartRels, TextColor, W, Wrap, Writer, emu, n, rpr};
 
@@ -59,9 +59,9 @@ impl Writer<'_> {
             InlineObject::Field { instr, result, locked, dirty, form, .. } => {
                 self.field(w, FieldData { instr, result, locked: *locked, dirty: *dirty, form }, props)
             }
-            InlineObject::FieldStart { instr, locked, dirty } => {
+            InlineObject::FieldStart { instr, locked, dirty, data } => {
                 self.rev_open(w, props);
-                self.field_start(w, instr, *locked, *dirty, "", props);
+                self.field_start(w, instr, *locked, *dirty, FieldBegin { data: data.as_deref(), form: "" }, props);
                 self.rev_close(w, props);
             }
             InlineObject::FieldEnd => {

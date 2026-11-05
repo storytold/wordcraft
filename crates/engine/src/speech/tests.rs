@@ -124,6 +124,22 @@ fn citation_codes() {
     assert!(!is_citation_code(""));
     assert!(!is_citation_code("ADD"));
 }
+/// Which managers WordCraft drives: Zotero (and Word's own CITATION fields) live; Mendeley
+/// and EndNote fields are preserved verbatim, and opening a document with one says so.
+#[test]
+fn undriven_citation_codes() {
+    assert!(is_undriven_citation_code(" ADDIN MENDELEY_Citation {\"citationId\":\"WC\"}"));
+    assert!(is_undriven_citation_code("ADDIN MENDELEY_Bibliography {}"));
+    assert!(is_undriven_citation_code("ADDIN EN.CITE <EndNote><Cite/></EndNote>"));
+    assert!(is_undriven_citation_code("ADDIN EN.REFLIST "));
+    // Driven live: no note.
+    assert!(!is_undriven_citation_code("ADDIN ZOTERO_ITEM CSL_CITATION {}"));
+    assert!(!is_undriven_citation_code("ADDIN ZOTERO_BIBL {} CSL_BIBLIOGRAPHY"));
+    assert!(!is_undriven_citation_code("ADDIN CSL_CITATION {}"));
+    assert!(!is_undriven_citation_code("CITATION Smi20 \\l 1033"));
+    assert!(!is_undriven_citation_code("BIBLIOGRAPHY"));
+    assert!(!is_undriven_citation_code("PAGE"));
+}
 
 #[test]
 fn plain_document_sentences() {
@@ -176,6 +192,7 @@ fn player_finishes_on_its_own() {
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+
     assert_eq!(r.state(), State::Stopped);
     assert_eq!(r.progress(), (3, 3));
     assert!(r.open, "the player stays open after the last sentence");

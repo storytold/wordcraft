@@ -6,7 +6,9 @@
 //! The script is JSON lines: control-channel requests (`{"method": …, "params": …}`, see
 //! `docs/control-protocol.md`), `{"shot": "/abs/out.png"}` to save the window as PNG, or
 //! `{"steps": n}` to run extra frames, or `{"wait": ms}` to keep running frames for a while (for
-//! background work such as a Zotero session). The window is 1440×900 pt at 2× and opens the sample
+//! background work such as a Zotero session), or `{"cslStyles": "/dir"}` to load CSL styles from
+//! a folder before the script runs (the desktop app's styles folder; the sample session wires
+//! none). The window is 1440×900 pt at 2× and opens the sample
 //! document unless the first line is `{"empty": true}`; `{"empty": true, "startScreen": true}`
 //! starts the way the desktop app does with nothing to open (File › Home, #766). A line
 //! `{"demoPacks": true}` lists a few sample Language packs (installs only record themselves), and
@@ -51,6 +53,10 @@ fn main() {
         None => {}
     }
     let mut app = WordApp::new(Session::new(doc), Services::default()).with_control(rx);
+    // A script line can wire the CSL styles folder the desktop app would (`{"cslStyles": …}`).
+    if let Some(dir) = lines.iter().find_map(|l| l.get("cslStyles").and_then(|v| v.as_str())) {
+        app.session.set_csl_styles_dir(std::path::PathBuf::from(dir));
+    }
     app.integrated_titlebar = true;
     if lines.first().is_some_and(|l| l.get("startScreen").is_some()) {
         app.start_screen();

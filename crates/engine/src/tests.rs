@@ -3787,7 +3787,12 @@ fn imported_range_toc_is_refreshed_in_place() {
             let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
             let n = p.len();
             p.insert_object(n, InlineObject::FieldEnd, &CharProps::default()).unwrap();
-            p.insert_object(0, InlineObject::FieldStart { instr: r#"TOC \o "1-2" \h"#.into(), locked, dirty: false }, &CharProps::default()).unwrap();
+            p.insert_object(
+                0,
+                InlineObject::FieldStart { instr: r#"TOC \o "1-2" \h"#.into(), locked, dirty: false, data: None },
+                &CharProps::default(),
+            )
+            .unwrap();
         }
         let mut s = Session::new(d);
         for (i, style) in [(2, "Heading 1"), (3, "Heading 2")] {
@@ -3836,8 +3841,12 @@ fn toc_menu_offers_update_field_after_save_and_reopen() {
         let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
         let n = p.len();
         p.insert_object(n, InlineObject::FieldEnd, &CharProps::default()).unwrap();
-        p.insert_object(0, InlineObject::FieldStart { instr: r#"TOC \o "1-2" \h"#.into(), locked: false, dirty: false }, &CharProps::default())
-            .unwrap();
+        p.insert_object(
+            0,
+            InlineObject::FieldStart { instr: r#"TOC \o "1-2" \h"#.into(), locked: false, dirty: false, data: None },
+            &CharProps::default(),
+        )
+        .unwrap();
     }
     let mut s = Session::new(d);
     for (i, style) in [(2, "Heading 1"), (3, "Heading 2")] {
@@ -4230,7 +4239,7 @@ fn toc_menu_targets_the_toc_update_table_refreshes() {
         let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(para)).unwrap();
         let n = p.len();
         p.insert_object(n, InlineObject::FieldEnd, &CharProps::default()).unwrap();
-        p.insert_object(0, InlineObject::FieldStart { instr: instr.into(), locked: false, dirty: false }, &CharProps::default()).unwrap();
+        p.insert_object(0, InlineObject::FieldStart { instr: instr.into(), locked: false, dirty: false, data: None }, &CharProps::default()).unwrap();
     }
     let mut s = Session::new(d);
     let at = |s: &mut Session, block: usize| {
@@ -4347,7 +4356,7 @@ fn imported_dirty_toc_updates_in_place_and_clears() {
         p.insert_object(n, wordcraft_doc::InlineObject::FieldEnd, &wordcraft_doc::props::CharProps::default()).unwrap();
         p.insert_object(
             0,
-            wordcraft_doc::InlineObject::FieldStart { instr: r#"TOC \o "1-3" \h \z \u"#.into(), locked: false, dirty: true },
+            wordcraft_doc::InlineObject::FieldStart { instr: r#"TOC \o "1-3" \h \z \u"#.into(), locked: false, dirty: true, data: None },
             &wordcraft_doc::props::CharProps::default(),
         )
         .unwrap();
@@ -4406,8 +4415,12 @@ fn toc_page_numbers_reach_the_right_margin() {
         toc2.para.indent_left = Some(36.9);
         toc2.para.indent_first = Some(-22.7);
         let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
-        p.insert_object(0, InlineObject::FieldStart { instr: r#"TOC \o "1-3" \h \z \u"#.into(), locked: false, dirty: false }, &CharProps::default())
-            .unwrap();
+        p.insert_object(
+            0,
+            InlineObject::FieldStart { instr: r#"TOC \o "1-3" \h \z \u"#.into(), locked: false, dirty: false, data: None },
+            &CharProps::default(),
+        )
+        .unwrap();
         let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(3)).unwrap();
         p.insert_object(0, InlineObject::FieldEnd, &CharProps::default()).unwrap();
     }
@@ -4640,6 +4653,87 @@ fn hostile_params_never_panic() {
             s.clamp_selection();
             let _ = s.layout();
         }
+    }
+    // `references.importSources` reads files, so the junk above (no string `path`) can't reach
+    // its read path: give it real hostile ones — every one is a `Params` error, never a panic.
+    {
+        let dir = std::env::temp_dir().join(format!("wordcraft-import-hostile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("empty.bib"), b"").unwrap();
+        std::fs::write(dir.join("wrong.txt"), b"not any kind of library").unwrap();
+        // A sparse 100 MB library: refused by its size, before the whole thing is read in.
+        std::fs::File::create(dir.join("big.bib")).unwrap().set_len(100 << 20).unwrap();
+        let mut s = Session::new(crate::sample::sample_document());
+        for bad in [
+            json!({}),
+            json!({"path": 5}),
+            json!({"path": ""}),
+            json!({"path": dir.to_string_lossy()}),
+            json!({"path": dir.join("missing.bib").to_string_lossy()}),
+            json!({"path": dir.join("empty.bib").to_string_lossy()}),
+            json!({"path": dir.join("wrong.txt").to_string_lossy()}),
+            json!({"path": dir.join("missing.ris").to_string_lossy(), "format": "nope"}),
+            json!({"path": dir.join("big.bib").to_string_lossy()}),
+        ] {
+            match s.run("references.importSources", &bad) {
+                Err(crate::CmdError::Params(_)) => {}
+                other => panic!("expected a Params error for {bad}, got {other:?}"),
+            }
+        }
+        // The oversized file is refused at the read, so the error names the cap (and the file
+        // is never read in, however large it is).
+        match s.run("references.importSources", &json!({"path": dir.join("big.bib").to_string_lossy()})) {
+            Err(e) => assert!(e.to_string().contains("larger than 16 MB"), "{e}"),
+            Ok(r) => panic!("expected a Params error for big.bib, got {r}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    // `references.cslStyles` reads and deletes files, so the junk above (no string `add`/
+    // `remove`) can't reach them: hostile paths and ids are parameter errors, never panics —
+    // wired to a styles folder or not.
+    {
+        let dir = std::env::temp_dir().join(format!("wordcraft-csl-hostile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("broken.csl"), b"<style").unwrap();
+        let reg = cmd::registry();
+        let mut s = Session::new(crate::sample::sample_document());
+        s.set_csl_styles_dir(dir.clone());
+        for bad in [
+            json!({}),
+            json!({"add": 5, "remove": 5}),
+            json!({"add": "", "remove": ""}),
+            json!({"add": dir.to_string_lossy()}),
+            json!({"add": dir.join("missing.csl").to_string_lossy()}),
+            json!({"add": dir.join("broken.csl").to_string_lossy()}),
+            json!({"remove": "not-an-id"}),
+            json!({"add": null, "remove": []}),
+        ] {
+            let r = s.run("references.cslStyles", &bad);
+            assert!(!caught_panic(&reg, &r), "cslStyles panicked on {bad}: {r:?}");
+            s.clamp_selection();
+            let _ = s.layout();
+        }
+        // A session without a styles folder (web, tests) refuses add/remove without crashing.
+        let mut bare = Session::new(crate::sample::sample_document());
+        for r in [
+            bare.run("references.cslStyles", &json!({"add": dir.join("broken.csl").to_string_lossy()})),
+            bare.run("references.cslStyles", &json!({"remove": "x"})),
+        ] {
+            assert!(!caught_panic(&reg, &r), "a session without a styles folder panicked: {r:?}");
+        }
+        // A CSL style that is no longer installed names itself; never a panic, never APA.
+        bare.bib_style = "csl:ghost".into();
+        for r in [
+            bare.run("references.updateFields", &json!({})),
+            bare.run("references.citationStyle", &json!({"style": "csl:ghost"})),
+            bare.run("references.citation", &json!({"tag": "x"})),
+            bare.run("references.bibliography", &json!({})),
+        ] {
+            assert!(!caught_panic(&reg, &r), "a missing CSL style panicked: {r:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
@@ -8875,17 +8969,21 @@ fn next_footnote_skips_endnotes() {
 
 /// Tests that install a test dictionary wait for the dictionaries-folder test, which changes the
 /// folder and then reads what each language reports: an install in between reports no file.
-static DICTIONARIES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// Tests that touch the global proofing slots (dictionary installs, language packs) take a
+/// turn on this lock: an install/remove while a dictionary test asserts reloads its slot, and
+/// the scheduling a new test shifts is enough to trip it.
+pub(crate) static DICTIONARIES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-fn dictionaries_turn() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn dictionaries_turn() -> std::sync::MutexGuard<'static, ()> {
     DICTIONARIES.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// A tiny synthetic Polish Hunspell dictionary (written for these tests). Real dictionaries are
 /// installed on the system, never bundled; every Polish test installs this same one.
-fn polish_test_dictionary() {
-    let _turn = dictionaries_turn();
+fn polish_test_dictionary() -> std::sync::MutexGuard<'static, ()> {
+    let turn = dictionaries_turn();
     wordcraft_proof::pl::install_dictionary(POLISH_TEST_AFF, POLISH_TEST_DIC).unwrap();
+    turn
 }
 
 const POLISH_TEST_AFF: &str = "SET UTF-8\nTRY aioeznrwcyszżtkpdmłjlubąęgh\nMAP 2\nMAP oó\nMAP zż\nREP 2\nREP ż rz\nREP rz ż\n";
@@ -8893,9 +8991,10 @@ const POLISH_TEST_DIC: &str = "12\npłynie\nrzeka\na\nto\nwiem\nże\ntak\nw\nog�
 
 /// A tiny synthetic Portuguese Hunspell dictionary (written for these tests). Real dictionaries
 /// are installed on the system, never bundled; every Portuguese test installs this same one.
-fn portuguese_test_dictionary() {
-    let _turn = dictionaries_turn();
+fn portuguese_test_dictionary() -> std::sync::MutexGuard<'static, ()> {
+    let turn = dictionaries_turn();
     wordcraft_proof::pt::install_dictionary(PORTUGUESE_TEST_AFF, PORTUGUESE_TEST_DIC).unwrap();
+    turn
 }
 
 const PORTUGUESE_TEST_AFF: &str =
@@ -8970,7 +9069,7 @@ fn dictionaries_folder_option_is_saved_searched_and_reported() {
 /// grammar, suggestions come from it, and a suggestion fixes the text.
 #[test]
 fn portuguese_proofing_through_the_review_commands() {
-    portuguese_test_dictionary();
+    let _turn = portuguese_test_dictionary();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Saudade coraçao, e ele ele disse."}));
     // English by default: the Portuguese words are English misspellings.
@@ -9001,9 +9100,10 @@ fn portuguese_proofing_through_the_review_commands() {
     assert_eq!(left.as_array().unwrap().len(), 1, "{left}");
 }
 
-fn indonesian_test_dictionary() {
-    let _turn = dictionaries_turn();
+fn indonesian_test_dictionary() -> std::sync::MutexGuard<'static, ()> {
+    let turn = dictionaries_turn();
     wordcraft_proof::id::install_dictionary(INDONESIAN_TEST_AFF, INDONESIAN_TEST_DIC).unwrap();
+    turn
 }
 
 // Hand-written synthetic fixture (no system dictionary data).
@@ -9014,7 +9114,7 @@ const INDONESIAN_TEST_DIC: &str = "8\nrumah\nsekolah\nanak\nbermain\ndi\nmakan/A
 /// Dictionary.
 #[test]
 fn indonesian_proofing_through_the_review_commands() {
-    indonesian_test_dictionary();
+    let _turn = indonesian_test_dictionary();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Saya di sekolha, anak anak bermain."}));
     run(&mut s, "select.all", json!({}));
@@ -9181,19 +9281,20 @@ const SPANISH_TEST_AFF: &str =
 const SPANISH_TEST_DIC: &str = "10\nesto\nes\nuna\nprueba/S\ndel\ncorrector\ntambién\nhabéis\nvenido\ndecir\n";
 const URUGUAYAN_TEST_DIC: &str = "10\nesto\nes\nuna\nprueba/S\ndel\ncorrector\ntambién\ntener\nvenir\ndecir\n";
 
-fn spanish_test_dictionaries() {
+fn spanish_test_dictionaries() -> std::sync::MutexGuard<'static, ()> {
     use wordcraft_proof::ProofLang;
-    let _turn = dictionaries_turn();
+    let turn = dictionaries_turn();
     for (lang, dic) in [(ProofLang::Es, SPANISH_TEST_DIC), (ProofLang::EsUy, URUGUAYAN_TEST_DIC)] {
         wordcraft_proof::es::install_dictionary(lang, SPANISH_TEST_AFF, dic).unwrap();
     }
+    turn
 }
 
 /// #3553: Spanish proofing through the same commands as Review, F7, Change and Add to
 /// Dictionary: `prueva` and `corector` are flagged with `prueba` and `corrector` offered.
 #[test]
 fn spanish_proofing_through_the_review_commands() {
-    spanish_test_dictionaries();
+    let _turn = spanish_test_dictionaries();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "esto es una prueva del corector. Habéis venido?"}));
     run(&mut s, "select.all", json!({}));
@@ -9224,7 +9325,7 @@ fn spanish_proofing_through_the_review_commands() {
 /// bytes.
 #[test]
 fn add_and_ignore_all_accept_both_normalization_forms() {
-    spanish_test_dictionaries();
+    let _turn = spanish_test_dictionaries();
     let mut s = s();
     let text = "esto zqanade\u{301}do y zqignora\u{301}do";
     run(&mut s, "document.setText", json!({"text": text}));
@@ -9253,7 +9354,7 @@ fn add_and_ignore_all_accept_both_normalization_forms() {
 /// Uruguayan Spanish accepts the `vos` forms, imperatives included, that Spain's flags.
 #[test]
 fn uruguayan_spanish_accepts_vos_forms() {
-    spanish_test_dictionaries();
+    let _turn = spanish_test_dictionaries();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Vení, decime qué tenés."}));
     run(&mut s, "select.all", json!({}));
@@ -9272,6 +9373,7 @@ fn uruguayan_spanish_accepts_vos_forms() {
 /// Czech proofing through the same commands as Review, F7, Change and Add to Dictionary.
 #[test]
 fn czech_proofing_through_the_review_commands() {
+    let _turn = dictionaries_turn();
     czech_test_dict::install();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Město pocitac, škola škola."}));
@@ -9311,9 +9413,10 @@ fn czech_proofing_through_the_review_commands() {
 const ITALIAN_TEST_AFF: &str = "SET UTF-8\nTRY aeiortnsclcaffèéè\nMAP 2\nMAP aà\nMAP eéè\nREP 1\nREP caffe caffè\n";
 const ITALIAN_TEST_DIC: &str = "6\ncasa\ncaffè\nroma\ndisse\ne\nper\n";
 
-fn italian_test_dictionary() {
-    let _turn = dictionaries_turn();
+fn italian_test_dictionary() -> std::sync::MutexGuard<'static, ()> {
+    let turn = dictionaries_turn();
     wordcraft_proof::it::install_dictionary(ITALIAN_TEST_AFF, ITALIAN_TEST_DIC).unwrap();
+    turn
 }
 
 /// Review › Language and the proofing commands work in Italian end to end: the language makes
@@ -9321,7 +9424,7 @@ fn italian_test_dictionary() {
 /// suggestions come from it, and a suggestion fixes the text.
 #[test]
 fn italian_proofing_through_the_review_commands() {
-    italian_test_dictionary();
+    let _turn = italian_test_dictionary();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Casa caffe, e roma roma disse."}));
     // English by default: the Italian words are English misspellings.
@@ -9354,7 +9457,7 @@ fn italian_proofing_through_the_review_commands() {
 
 #[test]
 fn polish_proofing_through_the_review_commands() {
-    polish_test_dictionary();
+    let _turn = polish_test_dictionary();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Płynie żeka, a wogóle to wiem że tak."}));
     // English by default: the Polish words are English misspellings.
@@ -9421,7 +9524,7 @@ fn turkish_proofing_through_the_review_commands() {
 /// no parameters keep the old meaning (US English), and `default` needs a language.
 #[test]
 fn review_language_validates_tags_and_marks_text_unchecked() {
-    polish_test_dictionary();
+    let _turn = polish_test_dictionary();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Hello wrold"}));
     run(&mut s, "select.all", json!({}));
@@ -9449,7 +9552,7 @@ fn review_language_validates_tags_and_marks_text_unchecked() {
 /// a document with changes never does, and templates stay English.
 #[test]
 fn new_documents_follow_the_editing_language() {
-    polish_test_dictionary();
+    let _turn = polish_test_dictionary();
     let mut s = s();
     s.set_editing_language(Some("pl-PL"));
     assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("pl-PL"), "the untouched blank document switches");
@@ -9555,7 +9658,7 @@ fn rejected_default_proofing_language_does_not_survive_a_restart() {
 /// English run (`w:lang`) come back, and so does the proofing.
 #[test]
 fn proofing_languages_survive_a_docx_round_trip() {
-    polish_test_dictionary();
+    let _turn = polish_test_dictionary();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Płynie żeka. Hello wrold."}));
     run(&mut s, "select.all", json!({}));

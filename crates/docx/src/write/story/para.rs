@@ -1,5 +1,6 @@
 use super::{
-    ChangeAttrs, CharProps, InlineObject, Paragraph, PartRels, Piece, PropChange, RevisionKind, W, Writer, open_change, ppr_inner, rpr, rpr_inner, rt,
+    ChangeAttrs, CharProps, InlineObject, Paragraph, PartRels, Piece, PropChange, RevisionKind, W, Writer, field::FieldBegin, open_change, ppr_inner,
+    rpr, rpr_inner, rt,
 };
 
 impl Writer<'_> {
@@ -115,7 +116,7 @@ impl Writer<'_> {
             && let Some((instr, locked, dirty, props)) = self.toc_field.take()
         {
             self.rev_open(w, &props);
-            self.field_start(w, &instr, locked, dirty, "", &props);
+            self.field_start(w, &instr, locked, dirty, FieldBegin { data: None, form: "" }, &props);
             self.rev_close(w, &props);
         }
         let toc_end = std::mem::take(&mut self.toc_end_here);

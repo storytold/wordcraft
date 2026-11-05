@@ -1,6 +1,14 @@
 use super::toc::is_toc;
 use super::{CharProps, W, Writer, rpr};
 
+/// What a field's begin marker carries besides its code: the producer's opaque `w:fldData`
+/// (ECMA-376 "Custom Field Data") and a legacy form field's `w:ffData`, both nested inside
+/// the begin `w:fldChar`.
+pub(super) struct FieldBegin<'a> {
+    pub data: Option<&'a str>,
+    pub form: &'a str,
+}
+
 pub(super) struct FieldData<'a> {
     pub instr: &'a str,
     pub result: &'a str,
@@ -32,7 +40,7 @@ impl Writer<'_> {
             w.close("w:r");
         };
         self.rev_open(w, props);
-        self.field_start(w, instr, locked, dirty, form, props);
+        self.field_start(w, instr, locked, dirty, FieldBegin { data: None, form }, props);
         if !result.is_empty() {
             run(w, &|w| {
                 let mut buf = String::new();
@@ -110,9 +118,10 @@ impl Writer<'_> {
     }
 
     /// A field's begin, instruction and separate runs.
-    /// A field's begin, code and separator; `form` is a legacy form field's `w:ffData`, which
-    /// belongs inside the begin.
-    pub(super) fn field_start(&self, w: &mut W, instr: &str, locked: bool, dirty: bool, form: &str, props: &CharProps) {
+    /// A field's begin, code and separator; `data` is the producer's `w:fldData` (ECMA-376
+    /// "Custom Field Data"), nested in the begin `w:fldChar` as Word writes it, and `form` is
+    /// a legacy form field's `w:ffData`, which belongs inside the begin too.
+    pub(super) fn field_start(&self, w: &mut W, instr: &str, locked: bool, dirty: bool, begin: FieldBegin<'_>, props: &CharProps) {
         let del = self.is_del(props);
         let run = |w: &mut W, f: &dyn Fn(&mut W)| {
             w.open("w:r", &[]);
@@ -120,6 +129,7 @@ impl Writer<'_> {
             f(w);
             w.close("w:r");
         };
+        let (data, form) = (begin.data, begin.form);
         run(w, &|w| {
             let mut attrs: Vec<(&str, &str)> = vec![("w:fldCharType", "begin")];
             if locked {
@@ -128,12 +138,21 @@ impl Writer<'_> {
             if dirty {
                 attrs.push(("w:dirty", "true"));
             }
-            if form.is_empty() {
-                w.empty("w:fldChar", &attrs);
-            } else {
-                w.open("w:fldChar", &attrs);
-                w.raw(form);
-                w.close("w:fldChar");
+            match (data.filter(|d| !d.is_empty()), form.is_empty()) {
+                (Some(d), _) => {
+                    w.open("w:fldChar", &attrs);
+                    w.leaf("w:fldData", &[("xml:space", "preserve")], d);
+                    if !form.is_empty() {
+                        w.raw(form);
+                    }
+                    w.close("w:fldChar");
+                }
+                (None, true) => w.empty("w:fldChar", &attrs),
+                (None, false) => {
+                    w.open("w:fldChar", &attrs);
+                    w.raw(form);
+                    w.close("w:fldChar");
+                }
             }
         });
         let instr_text = format!(" {} ", instr.trim());

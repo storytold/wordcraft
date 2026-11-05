@@ -1090,8 +1090,12 @@ fn field_dirty_flag_round_trips() {
 #[test]
 fn range_toc_dirty_flag_round_trips() {
     let mut toc = Paragraph::new();
-    toc.insert_object(0, InlineObject::FieldStart { instr: r#"TOC \o "1-3" \h \z \u"#.into(), locked: false, dirty: false }, &CharProps::default())
-        .unwrap();
+    toc.insert_object(
+        0,
+        InlineObject::FieldStart { instr: r#"TOC \o "1-3" \h \z \u"#.into(), locked: false, dirty: false, data: None },
+        &CharProps::default(),
+    )
+    .unwrap();
     let end = toc.len();
     toc.insert_text(end, "Placeholder: update fields (F9).", &CharProps::default()).unwrap();
     let end = toc.len();

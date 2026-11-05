@@ -158,6 +158,39 @@ fn past_citation(s: &mut Session, _: &Value) -> CmdResult {
 
 #[cfg(test)]
 mod tests {
+
+    /// A session over the testkit fixture: Mendeley, Zotero and EndNote citations, a
+    /// Mendeley bibliography across paragraphs, one citation in a footnote (#1058).
+    fn manager_session() -> Session {
+        let bytes = wordcraft_testkit::manager_fields_docx().expect("testkit package");
+        Session::new(wordcraft_docx::read(&bytes).expect("docx read"))
+    }
+
+    /// `caret.pastCitation` walks every manager's fields, not just Zotero's: Mendeley →
+    /// Zotero → the Mendeley bibliography (both its paragraphs) → EndNote → no more.
+    #[test]
+    fn past_citation_walks_manager_fields() {
+        use wordcraft_doc::{Path, StoryRef};
+        let mut s = manager_session();
+        s.sel = crate::Selection::caret(Pos::body(0, 0));
+        let rest = |s: &mut Session| {
+            s.run("caret.pastCitation", &json!({})).unwrap();
+            let f = &s.sel.focus;
+            s.doc.para_at(f).and_then(|p| p.text.get(f.off..)).map(str::to_string).unwrap_or_default()
+        };
+        assert_eq!(rest(&mut s), ".", "after the Mendeley citation");
+        assert_eq!(rest(&mut s), ".", "after the Zotero citation");
+        s.run("caret.pastCitation", &json!({})).unwrap();
+        let bibl_end = s.doc.para(StoryRef::Body, &Path::top(3)).map(|p| p.len()).unwrap_or(0);
+        assert_eq!(
+            (s.sel.focus.path.clone(), s.sel.focus.off),
+            (Path::top(3), bibl_end),
+            "after the bibliography's end marker, past both its paragraphs"
+        );
+        assert_eq!(rest(&mut s), ".", "after the EndNote citation");
+        assert!(s.run("caret.pastCitation", &json!({})).is_err(), "no citation after the last one");
+    }
+
     use serde_json::json;
     use wordcraft_doc::props::CharProps;
     use wordcraft_doc::{Document, InlineObject, Path, Pos, StoryRef};
@@ -168,8 +201,12 @@ mod tests {
     fn cite(d: &mut Document, block: usize, off: usize, text: &str) {
         let c = CharProps::default();
         let p = d.para_mut(StoryRef::Body, &Path::top(block)).unwrap();
-        p.insert_object(off, InlineObject::FieldStart { instr: "ADDIN ZOTERO_ITEM CSL_CITATION {}".into(), locked: false, dirty: false }, &c)
-            .unwrap();
+        p.insert_object(
+            off,
+            InlineObject::FieldStart { instr: "ADDIN ZOTERO_ITEM CSL_CITATION {}".into(), locked: false, dirty: false, data: None },
+            &c,
+        )
+        .unwrap();
         let n = p.insert_text(off + 3, text, &c).unwrap();
         p.insert_object(off + 3 + n, InlineObject::FieldEnd, &c).unwrap();
     }
@@ -183,7 +220,11 @@ mod tests {
         let c = CharProps::default();
         d.para_mut(StoryRef::Body, &Path::top(2))
             .unwrap()
-            .insert_object(0, InlineObject::FieldStart { instr: "ADDIN ZOTERO_BIBL {} CSL_BIBLIOGRAPHY".into(), locked: false, dirty: false }, &c)
+            .insert_object(
+                0,
+                InlineObject::FieldStart { instr: "ADDIN ZOTERO_BIBL {} CSL_BIBLIOGRAPHY".into(), locked: false, dirty: false, data: None },
+                &c,
+            )
             .unwrap();
         let p3 = d.para_mut(StoryRef::Body, &Path::top(3)).unwrap();
         let end = p3.len();

@@ -2,6 +2,7 @@
 
 use serde_json::{Value, json};
 use std::sync::Arc;
+use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::{Block, Document, StoryRef};
 
 use super::{pos_json, sel_result};
@@ -236,6 +237,37 @@ pub(crate) fn normal_document(s: &Session) -> Document {
     d
 }
 
+/// What the status bar says when an opened document holds citation fields of a manager
+/// WordCraft doesn't drive (Mendeley, EndNote — see [`crate::speech::is_undriven_citation_code`]):
+/// the fields are preserved verbatim, only Zotero (and Word's own `CITATION` fields) are
+/// driven live. One non-blocking note; in the i18n catalogs, one row per language.
+pub(crate) const MANAGER_FIELDS_STATUS: &str = "Mendeley and EndNote citations are preserved as written; only Zotero is driven live.";
+
+/// Does the document hold citation fields of a manager WordCraft doesn't drive? Every story —
+/// the body, footnotes, endnotes — and both field shapes: range fields (`ADDIN …` between
+/// markers) and simple cached ones.
+fn has_undriven_manager_fields(doc: &Document) -> bool {
+    let stories = std::iter::once(StoryRef::Body).chain(doc.parts.keys().map(|k| StoryRef::Part(*k)));
+    for story in stories {
+        for r in doc.field_ranges(story) {
+            if crate::speech::is_undriven_citation_code(&r.instr) {
+                return true;
+            }
+        }
+        for path in doc.para_paths(story) {
+            let Some(p) = doc.para(story, &path) else { continue };
+            for off in p.object_offsets() {
+                if let Some(InlineObject::Field { instr, .. }) = p.object_at(off)
+                    && crate::speech::is_undriven_citation_code(instr)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Open a document, using the saved proofing default only for plain text and Markdown. A file
 /// that is already open becomes the active document instead (`"alreadyOpen": true`). The file
 /// replaces an untouched blank document; otherwise it opens beside the open documents.
@@ -285,6 +317,10 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         super::view::restore_zoom(s, z);
     }
     s.path = Some(path.into());
+    // Another manager's citations ride along untouched; one status-bar note says so. Zotero
+    // fields and Word's own CITATION fields are driven live and say nothing. Unconditional:
+    // the note is about this document, so opening any other one clears it.
+    s.status = if has_undriven_manager_fields(&s.doc) { MANAGER_FIELDS_STATUS.into() } else { String::new() };
     // Like Word, a document opened with a password is saved with it again.
     if encrypted {
         s.password = password.map(crate::io::Password::new);

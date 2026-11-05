@@ -1,7 +1,5 @@
 use super::cross_refs::{caption_label, is_caption};
-use super::render::entry;
-use super::sources::bib_order;
-use super::styles::style;
+use super::csl_styles::session_style;
 use super::{
     Block, CharProps, CmdError, CmdResult, Document, FieldCode, InlineObject, Paragraph, Path, Pos, Session, SortKey, StoryRef, TabAlign, TabLeader,
     TabStop, Value, delete_selection, heading_letter, p, sel_result, sort_key,
@@ -282,6 +280,11 @@ pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
                 p.touch();
             }
         }
+        // A bibliography under a CSL style that is no longer installed is an error before
+        // the old entries are removed.
+        if kind.starts_with("BIBLIOGRAPHY") {
+            session_style(s)?;
+        }
         // Remove old entries, keeping their tab leader.
         let leader = s
             .doc
@@ -295,7 +298,7 @@ pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
         while s.doc.body.get(i + 1).and_then(|b| b.as_para()).is_some_and(|p| p.props.style.as_deref() == Some(ENTRY_STYLE)) {
             s.doc.remove_block(StoryRef::Body, &Path::top(i + 1))?;
         }
-        let lines = entries_for(s, &kind);
+        let lines = entries_for(s, &kind)?;
         let width = crate::cmd::page::sect(s).text_width();
         for (k, (text, hanging)) in lines.into_iter().enumerate() {
             let mut para = Paragraph::with_text(&text, CharProps::default()).styled(ENTRY_STYLE);
@@ -337,14 +340,10 @@ pub(super) fn page_of(s: &mut Session, pos: &Pos) -> u32 {
 }
 
 /// Entry lines (text, hanging indent) for a generated list.
-fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
+fn entries_for(s: &mut Session, kind: &str) -> Result<Vec<(String, bool)>, CmdError> {
     if kind.starts_with("BIBLIOGRAPHY") {
-        let st = style(&s.bib_style);
-        return bib_order(&s.doc, st, crate::cmd::default_lang(s))
-            .into_iter()
-            .enumerate()
-            .filter_map(|(k, i)| s.doc.sources.get(i).map(|x| (entry(x, st.name, k.saturating_add(1)), !st.numbered())))
-            .collect();
+        let st = session_style(s)?;
+        return Ok(st.bib_entries(&s.doc, crate::cmd::default_lang(s)));
     }
     // Collect marks with positions.
     let mut marks: Vec<(String, Pos)> = Vec::new();
@@ -403,7 +402,7 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
         // `\n` without page numbers; `\p` the separator before them (a tab by default).
         let f = FieldCode::parse(kind);
         let sep = f.arg('p').unwrap_or("\t");
-        return with_pages.into_iter().map(|(t, p)| (if f.has('n') { t } else { format!("{t}{sep}{p}") }, false)).collect();
+        return Ok(with_pages.into_iter().map(|(t, p)| (if f.has('n') { t } else { format!("{t}{sep}{p}") }, false)).collect());
     }
     // Index / TOA: group by entry, sort, list pages.
     let lang = crate::cmd::default_lang(s);
@@ -427,7 +426,7 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
         let list = pages.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
         out.push(if kind.starts_with("INDEX") { (format!("{e}, {list}"), true) } else { (format!("{e}\t{list}"), false) });
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -441,9 +440,9 @@ mod tests {
         let mut d = Document::from_text("Old one\nOld two\nAfter");
         let props = CharProps::default();
         if let Ok(p) = d.para_mut(StoryRef::Body, &Path::top(0)) {
-            p.insert_object(0, InlineObject::FieldStart { instr: "BIBLIOGRAPHY".into(), locked: false, dirty: false }, &props).unwrap();
+            p.insert_object(0, InlineObject::FieldStart { instr: "BIBLIOGRAPHY".into(), locked: false, dirty: false, data: None }, &props).unwrap();
             p.insert_object(0, InlineObject::FieldEnd, &props).unwrap();
-            p.insert_object(0, InlineObject::FieldStart { instr: "PAGE".into(), locked: false, dirty: false }, &props).unwrap();
+            p.insert_object(0, InlineObject::FieldStart { instr: "PAGE".into(), locked: false, dirty: false, data: None }, &props).unwrap();
         }
         if let Ok(p) = d.para_mut(StoryRef::Body, &Path::top(1)) {
             let n = p.len();
@@ -462,7 +461,7 @@ mod tests {
             p.insert_object(at, InlineObject::FieldEnd, &props).unwrap();
         }
         if let Ok(p) = d.para_mut(StoryRef::Body, &Path::top(first)) {
-            p.insert_object(0, InlineObject::FieldStart { instr: "BIBLIOGRAPHY".into(), locked: false, dirty: false }, &props).unwrap();
+            p.insert_object(0, InlineObject::FieldStart { instr: "BIBLIOGRAPHY".into(), locked: false, dirty: false, data: None }, &props).unwrap();
         }
         Session::new(d)
     }
@@ -514,7 +513,7 @@ mod tests {
         let props = CharProps::default();
         if let Ok(p) = s.doc.para_mut(StoryRef::Body, &Path::top(0)) {
             p.insert_object(0, InlineObject::FieldEnd, &props).unwrap();
-            p.insert_object(0, InlineObject::FieldStart { instr: "PAGE".into(), locked: false, dirty: false }, &props).unwrap();
+            p.insert_object(0, InlineObject::FieldStart { instr: "PAGE".into(), locked: false, dirty: false, data: None }, &props).unwrap();
             p.insert_object(0, InlineObject::BookmarkStart { name: "Sources".into() }, &props).unwrap();
         }
         update_generated(&mut s).unwrap();

@@ -45,4 +45,11 @@ thread_local! {
 }
 
 #[cfg(test)]
+thread_local! {
+    /// The menu buttons drawn this frame (their tip and rect). They paint their own text, so
+    /// they carry no AccessKit label; tests read this to click them where a user would.
+    pub(crate) static MENU_BUTTONS: std::cell::RefCell<Vec<(String, egui::Rect)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
 mod tests;

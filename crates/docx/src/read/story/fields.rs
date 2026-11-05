@@ -45,6 +45,7 @@ impl Reader<'_> {
             range: false,
             sizes: Vec::new(),
             form,
+            data: None,
         });
     }
 
@@ -68,7 +69,10 @@ impl Reader<'_> {
         f.phase = Phase::Result;
         if !f.spilled && !nested_in_instr && is_range_instr(&f.instr) {
             f.range = true;
-            let (obj, props) = (InlineObject::FieldStart { instr: f.instr.trim().to_string(), locked: f.locked, dirty: f.dirty }, f.props.clone());
+            let (obj, props) = (
+                InlineObject::FieldStart { instr: f.instr.trim().to_string(), locked: f.locked, dirty: f.dirty, data: f.data.clone() },
+                f.props.clone(),
+            );
             self.emit_obj(sc, pb, obj, &props);
         }
     }
@@ -89,7 +93,12 @@ impl Reader<'_> {
         }
         if f.phase == Phase::Instr && !nested_in_instr && is_range_instr(&f.instr) {
             // A range field with no result yet.
-            self.emit_obj(sc, pb, InlineObject::FieldStart { instr: f.instr.trim().to_string(), locked: f.locked, dirty: f.dirty }, &f.props);
+            self.emit_obj(
+                sc,
+                pb,
+                InlineObject::FieldStart { instr: f.instr.trim().to_string(), locked: f.locked, dirty: f.dirty, data: f.data.clone() },
+                &f.props,
+            );
             self.emit_obj(sc, pb, InlineObject::FieldEnd, &f.props);
             return;
         }
@@ -114,7 +123,12 @@ impl Reader<'_> {
         // each piece stays an ordinary run with its own `w:ins` / `w:del` (#1037).
         let tracked_inside = f.buf.iter().any(|(_, p)| (p.ins, p.del) != (f.props.ins, f.props.del));
         if !nested_in_instr && (tracked_inside || f.buf.iter().any(|(it, _)| matches!(it, Item::Obj(o) if o.frame().is_some()))) {
-            self.emit_obj(sc, pb, InlineObject::FieldStart { instr: f.instr.trim().to_string(), locked: f.locked, dirty: f.dirty }, &f.props);
+            self.emit_obj(
+                sc,
+                pb,
+                InlineObject::FieldStart { instr: f.instr.trim().to_string(), locked: f.locked, dirty: f.dirty, data: f.data.clone() },
+                &f.props,
+            );
             for (it, p) in f.buf {
                 match it {
                     Item::Text(t) => self.emit_text(sc, pb, &t, &p),

@@ -68,19 +68,21 @@ config works across the suite) keep the agent to the folders you give it:
 - Every file a command reads must lie inside the **read root**: `open_document` and `file.open`,
   `file.newFromTemplate`, `insert.textFromFile` and `insert.object`, `insert.picture` and
   `picture.change` with a `path`, `mailings.recipients` with a `path` (csv, tsv, txt, xlsx, xlsm,
-  ods), `review.compare` (`path` and `original`), the templates and documents `tools.updateStyles`,
+  ods), `references.importSources` with a `path` (bib, ris, json), `references.cslStyles` with an
+  `add` path (csl), `review.compare` (`path` and `original`), the templates and documents
+  `tools.updateStyles`,
   `styles.organizer` and `styles.copyFrom` read, and the folders `file.options` takes
   (`dictionariesFolder`, `userTemplatesFolder`). The pictures an opened HTML file names are read
   from beside that file and must be inside the read root too, even when the file was opened through
   a link (#3736).
 - Every file a command writes must lie inside the **write root**: `save_document`, `file.save`,
-  `file.saveAs`, `file.rename` (the file and its new name), `file.exportPdf`, `file.exportPng`, `file.printPdf`,
-  `file.saveTemplate`, and `mailings.finish` with a `path`. `font.add` and `font.remove` change the
-  user font folder, so they are refused when it is outside the write root (#3692), and so are
-  `proof.installPack` and `proof.removePack`, which change the font store's `language-packs`
-  folder. A save replaces
-  the name it is given, so that name must be inside the write root as well as what it leads to:
-  a link outside the root pointing in is refused (#3735).
+  `file.saveAs`, `file.rename` (the file and its new name), `file.exportPdf`, `file.exportPng`,
+  `file.printPdf`, `file.saveTemplate`, and `mailings.finish` with a `path`. `font.add` and
+  `font.remove` change the user font folder, so they are refused when it is outside the write
+  root (#3692), and so are `proof.installPack` and `proof.removePack`, which change the font
+  store's `language-packs` folder. `references.cslStyles`'s `add` copies the style file into the
+  styles folder under the config folder, so a write root that doesn't contain it refuses the
+  install, and `remove` deletes from it under the same rule.
 - Read and write access are separate. Give the same folder twice for both; a root left out grants
   none of its access (with only `--automation-read-root`, nothing can be written to disk). Without
   either flag nothing changes.

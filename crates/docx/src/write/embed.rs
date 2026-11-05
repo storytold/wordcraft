@@ -35,6 +35,9 @@ pub(crate) struct EmbedWriter<'d> {
     passthrough: &'d BTreeMap<String, Arc<Vec<u8>>>,
     /// Part names in use (lower case): this writer's own, and parts written so far.
     taken: HashSet<String>,
+    /// The document's sources make the model own the bibliography (#532): preserved
+    /// `b:Sources` stores are the old part and are not written.
+    bibliography_owned: bool,
     /// Next suffix to try when renaming a part.
     next: HashMap<String, u32>,
     /// Original part name → name written, for parts written by an object's first copy.
@@ -78,6 +81,7 @@ impl<'d> EmbedWriter<'d> {
         if !doc.sources.is_empty() {
             taken.extend(["customxml/item1.xml".into(), "customxml/itemprops1.xml".into()]);
         }
+        let bibliography_owned = !doc.sources.is_empty();
         // The macro project's parts keep their names (see `write_as`).
         if let Some(m) = doc.passthrough.get(VBA_RELATED) {
             for line in String::from_utf8_lossy(m).lines() {
@@ -90,6 +94,7 @@ impl<'d> EmbedWriter<'d> {
             manifest,
             passthrough: &doc.passthrough,
             taken,
+            bibliography_owned,
             next: HashMap::new(),
             first: HashMap::new(),
             copy_bytes: MAX_COPY_BYTES,
@@ -197,6 +202,12 @@ impl<'d> EmbedWriter<'d> {
             let fields: Vec<&str> = line.split('\t').collect();
             let [source, kind, target] = fields.as_slice() else { continue };
             if *source != owner || !rel_is(kind, rt::CUSTOM_XML) {
+                continue;
+            }
+            // The model owns the bibliography while the document has sources: a `b:Sources`
+            // store kept from the file (read as nothing usable, or another producer's) is the
+            // old bibliography part, and writing it beside the fresh one leaves a stale copy.
+            if self.bibliography_owned && self.passthrough.get(*target).map(|b| b.as_slice()).is_some_and(is_bibliography_store) {
                 continue;
             }
             if let Some(name) = self.copy_tree(target, &mut memo, &mut written) {
@@ -845,6 +856,12 @@ fn valid_part_name(name: &str) -> String {
         out.push(seg);
     }
     if out.is_empty() { "word/embeddings/part.xml".to_string() } else { out.join("/") }
+}
+
+/// Is this part a Word bibliography store (`b:Sources` root, either bibliography namespace)?
+/// Kept from the file; while the model owns the bibliography it is the superseded part.
+fn is_bibliography_store(bytes: &[u8]) -> bool {
+    crate::xml::parse(bytes).map(|r| r.local() == "Sources").unwrap_or(false)
 }
 
 #[cfg(test)]

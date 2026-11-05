@@ -549,7 +549,7 @@ fn notes_in_text_box_follow_nested_boxes_once() {
 }
 
 fn fs(instr: &str) -> InlineObject {
-    InlineObject::FieldStart { instr: instr.into(), locked: false, dirty: false }
+    InlineObject::FieldStart { instr: instr.into(), locked: false, dirty: false, data: None }
 }
 
 #[test]

@@ -55,6 +55,29 @@ in Word and WordCraft in turn, with Zotero working in both. (Zotero talks to Wor
 protocol it uses for LibreOffice and calls the field type "Reference Mark" there; WordCraft keeps
 Word's "Field" in the file.)
 
+## Other citation managers
+
+A document cited with Mendeley, EndNote or Word's own Citations & Bibliography keeps its
+citation fields through open → edit → save: the `ADDIN` code (instruction text split across
+runs joins), the lock (`w:fldLock`) and the manager's opaque data (`w:fldData`) come back as
+they were — in the body, in footnotes, inside tracked insertions — and a bibliography spanning
+paragraphs stays one field. Typing and deleting around them, the update paths (a style switch,
+inserting the bibliography, Update Fields / F9), undo and Read Aloud leave the fields alone.
+Show Field Codes (Alt+F9) doesn't unwrap them — the citation text is the paragraphs' own text,
+and a manager's code is never drawn — and Shift+F9, which toggles simple fields only, refuses.
+Oversized codes or data are cut at 2 MiB, never fatal. One known loss, on a degenerate
+shape: a field truncated mid-code — its code spilled past the paragraph end — loses that
+spilled `w:fldData`; everything else survives.
+Verified against synthetic OOXML fixtures shared by the DOCX and engine tests (#1058).
+
+WordCraft doesn't drive Mendeley or EndNote themselves: Mendeley Cite is a closed Office add-in
+with no published protocol to talk to. Opening such a document says so once in the status bar
+("Mendeley and EndNote citations are preserved as written; only Zotero is driven live."), and
+the fields stay verbatim until Word or the manager's own app edits them again. To go on citing
+in WordCraft: import the library (Manage Sources ▸ Import… reads BibTeX, RIS or CSL-JSON;
+`references.importSources`) and re-cite with Insert Citation in any of the twelve built-in
+styles or an installed CSL style — or move the library to Zotero and cite live.
+
 ## Limits
 
 - Zotero's "Bookmarks" field type isn't supported; keep the default.

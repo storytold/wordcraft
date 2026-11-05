@@ -116,6 +116,10 @@ impl Session {
             building_blocks: _,
             autosave: _,
             bib_style: _,
+            // The user's installed CSL styles, like the custom dictionary: host wiring, not
+            // an edit.
+            csl_styles: _,
+            csl_styles_dir: _,
             merge: _,
             ui_requests: _,
             document_id: _,
