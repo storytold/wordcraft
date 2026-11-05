@@ -20,6 +20,9 @@ static READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new
 /// duration in milliseconds.
 fn step(h: &mut egui_kittest::Harness<'_, WordApp>) -> f64 {
     let mut raw = std::mem::take(h.input_mut());
+    // What wgpu gives the app on a desktop GPU (the harness's default is far smaller, which
+    // caps zoomed-in page rasters and hides their cost).
+    raw.max_texture_side = Some(8192);
     let ctx = h.ctx.clone();
     h.state_mut().raw_input_hook(&ctx, &mut raw);
     *h.input_mut() = raw;
@@ -45,8 +48,12 @@ fn main() {
     session.run("file.open", &json!({"path": path})).expect("open");
     let open_ms = t_open.elapsed().as_secs_f64() * 1000.0;
     let app = WordApp::new(session, Services::default());
-    let mut h =
-        egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_pixels_per_point(2.0).with_max_steps(1_000_000).build_ui_state(
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(1.0 / 60.0)
+        .with_max_steps(1_000_000)
+        .build_ui_state(
             |ui, app: &mut WordApp| {
                 if !READY.load(std::sync::atomic::Ordering::Relaxed) {
                     return;
@@ -131,6 +138,41 @@ fn main() {
         zoom.push(json!({"zoom": z, "frame_ms": (a * 10.0).round() / 10.0, "next_ms": (b * 10.0).round() / 10.0}));
     }
     out["zoom"] = json!(zoom);
+
+    // Pinch zoom over the canvas, one zoom factor per frame: in from 100% to about 500%, then
+    // back out. Every frame has a new zoom, as with a trackpad pinch or an animated wheel zoom.
+    let pinch = |h: &mut egui_kittest::Harness<'_, WordApp>, factor: f32, n: usize| -> serde_json::Value {
+        let (mut f, mut r) = (Vec::new(), Vec::new());
+        for _ in 0..n {
+            h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(720.0, 500.0)));
+            h.input_mut().events.push(egui::Event::Zoom(factor));
+            f.push(step(h));
+            // `render_ms` keeps the last frame that rendered; a frame that rendered nothing took none.
+            r.push(if h.state().canvas.rendered == 0 { 0.0 } else { h.state().canvas.render_ms });
+        }
+        json!({"render_ms": stats(&r), "zoom": h.state().session.view.zoom, "frame_ms": stats(&f), "frames_over_8ms": f.iter().filter(|x| **x > 8.3).count(), "frames_over_16ms": f.iter().filter(|x| **x > 16.7).count()})
+    };
+    h.state_mut().session.run("view.zoom", &json!({"value": 100})).ok();
+    for _ in 0..3 {
+        step(&mut h);
+    }
+    // The frames after a pinch ends (one second at 60 Hz steps), while the pages sharpen.
+    let settle = |h: &mut egui_kittest::Harness<'_, WordApp>| -> serde_json::Value {
+        let f: Vec<f64> = (0..60).map(|_| step(h)).collect();
+        json!({"frame_ms": stats(&f), "frames_over_8ms": f.iter().filter(|x| **x > 8.3).count()})
+    };
+    out["pinch_in"] = pinch(&mut h, 1.03, 55);
+    out["pinch_in_settle"] = settle(&mut h);
+    out["pinch_out"] = pinch(&mut h, 1.0 / 1.03, 55);
+    out["pinch_out_settle"] = settle(&mut h);
+    // Settle, then scroll zoomed in: pages come into view at a large raster scale.
+    h.state_mut().session.run("view.zoom", &json!({"value": 400})).ok();
+    for _ in 0..3 {
+        step(&mut h);
+    }
+    out["scroll_wheel_400"] = scroll(&mut h, -120.0, 120);
+    out["typing_400"] = typing(&mut h, json!({"story": "body", "path": [doc_block], "off": mid}));
+    h.state_mut().session.run("view.zoom", &json!({"value": 100})).ok();
     let mut tabs = Vec::new();
     for t in ["Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Home"] {
         h.state_mut().execute("ui.tab", json!({"tab": t})).ok();

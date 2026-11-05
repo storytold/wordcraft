@@ -1,5 +1,7 @@
+use super::pages::{page_image, texel_aligned_rect};
 use super::*;
 use crate::table_resize::tests::{H, cell, screen, steps, table_window};
+use std::collections::HashSet;
 
 /// #3931: while Insert › Table's grid asks for a preview the page is laid out with that
 /// table; the document, its revision and undo history stay as they were, and without a
@@ -3125,20 +3127,26 @@ fn long_web_page_uses_only_visible_native_resolution_tiles() {
     let viewport = Rect::from_min_size(pos2(0.0, 100.0), vec2(1440.0, 700.0));
     assert!(17_843.0 * raster_scale > 8192.0);
     assert!(800.0 * raster_scale < 8192.0);
-    let tiles = visible_tiles(page, viewport, screen_scale, raster_scale, TILE_HEIGHT_PX);
-    assert!(!tiles.is_empty());
-    assert!(tiles.len() <= 3, "only the viewport should be rasterized: {tiles:?}");
+    let (rows, cols) = visible_tiles(page, viewport, screen_scale, raster_scale, TILE_PX);
+    assert!(!rows.is_empty());
+    assert!(rows.len() <= 3, "only the viewport should be rasterized: {rows:?}");
+    assert_eq!(cols, 0..3, "the page is 2134 px wide: three columns of tiles");
     let total_px = (17_843.0 * raster_scale).ceil() as usize;
-    for tile in tiles {
-        let start = tile * TILE_HEIGHT_PX;
+    for tile in rows {
+        let start = tile * TILE_PX;
         assert!(start < total_px);
-        assert!(total_px.saturating_sub(start).min(TILE_HEIGHT_PX) <= TILE_HEIGHT_PX);
+        assert!(total_px.saturating_sub(start).min(TILE_PX) <= TILE_PX);
     }
-    assert_eq!(visible_tiles(page, Rect::from_min_size(pos2(1500.0, 0.0), vec2(300.0, 500.0)), screen_scale, raster_scale, TILE_HEIGHT_PX), 0..0);
-    assert_eq!(visible_tiles(page, viewport, 0.0, raster_scale, TILE_HEIGHT_PX), 0..0);
-    assert_eq!(visible_tiles(page, viewport, screen_scale, f32::NAN, TILE_HEIGHT_PX), 0..0);
-    assert_eq!(visible_tiles(page, viewport, screen_scale, raster_scale, 0), 0..0);
-    assert!(visible_tiles(page, viewport, screen_scale, raster_scale, 512).len() <= 5);
+    let none = (0..0, 0..0);
+    assert_eq!(visible_tiles(page, Rect::from_min_size(pos2(1500.0, 0.0), vec2(300.0, 500.0)), screen_scale, raster_scale, TILE_PX), none);
+    assert_eq!(visible_tiles(page, viewport, 0.0, raster_scale, TILE_PX), none);
+    assert_eq!(visible_tiles(page, viewport, screen_scale, f32::NAN, TILE_PX), none);
+    assert_eq!(visible_tiles(page, viewport, screen_scale, raster_scale, 0), none);
+    assert!(visible_tiles(page, viewport, screen_scale, raster_scale, 512).0.len() <= 5);
+    // Zoomed in, only the columns in view: a 500% page on a 2x display is 6,000 px wide.
+    let wide = Rect::from_min_size(pos2(-2000.0, -1000.0), vec2(612.0 * 5.0 * PX_PER_PT, 792.0 * 5.0 * PX_PER_PT));
+    let (rows, cols) = visible_tiles(wide, viewport, 5.0 * PX_PER_PT, 10.0 * PX_PER_PT, TILE_PX);
+    assert_eq!((rows, cols), (2..4, 3..7));
 }
 
 #[test]
@@ -4987,4 +4995,93 @@ fn a_pictures_corrections_and_crop_change_its_page_key() {
     let plain = pages::page_content_key(&at([0.0; 4], PicFx::default()));
     assert_ne!(plain, pages::page_content_key(&at([0.1, 0.0, 0.0, 0.0], PicFx::default())), "crop");
     assert_ne!(plain, pages::page_content_key(&at([0.0; 4], PicFx::new(10_000, 0, 0))), "brightness");
+}
+
+/// One frame of `a` at 1280×800 and time `t` (seconds); whether it asked to be drawn again at once.
+fn frame_at(ctx: &egui::Context, a: &mut WordApp, t: f64, events: Vec<egui::Event>) -> bool {
+    let screen = Rect::from_min_size(Pos2::ZERO, vec2(1280.0, 800.0));
+    let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
+    let out = ctx.run_ui(input, |ui| {
+        a.logic(ui.ctx());
+        a.ui(ui);
+    });
+    let again = out.viewport_output.values().any(|v| v.repaint_delay.is_zero());
+    out.drop_without_applying_deltas();
+    again
+}
+
+/// A pinch zoom stretches the page rasters it has and renders none while it goes on, so every
+/// frame is as cheap as a scroll; once the zoom holds still the pages are rendered sharp at the
+/// zoom they ended at, and then nothing is left to do.
+#[test]
+fn a_pinch_zoom_renders_nothing_until_it_holds_still() {
+    let ctx = egui::Context::default();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+    let mut t = 0.0;
+    let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        t += 1.0 / 120.0;
+        frame_at(&ctx, a, t, events)
+    };
+    for _ in 0..3 {
+        frame(&mut a, Vec::new());
+    }
+    let pointer = a.canvas.canvas_rect.unwrap().center();
+    frame(&mut a, vec![egui::Event::PointerMoved(pointer)]);
+    while frame(&mut a, Vec::new()) {}
+    let before = a.canvas.scale;
+    for n in 0..30 {
+        frame(&mut a, vec![egui::Event::Zoom(1.03)]);
+        assert_eq!(a.canvas.rendered, 0, "frame {n} of the pinch rendered a page");
+    }
+    let zoomed = a.canvas.scale;
+    assert!(zoomed > before * 2.0, "the pinch zoomed in: {before} -> {zoomed}");
+    let mut renders = 0;
+    for _ in 0..240 {
+        frame(&mut a, Vec::new());
+        renders += a.canvas.rendered;
+    }
+    assert!(renders > 0, "the pages were rendered again once the zoom held still");
+    assert!(!frame(&mut a, Vec::new()) && a.canvas.rendered == 0, "and then nothing was left to do");
+    let (whole, tiles) = a.canvas.raster_sizes();
+    let sharp = |(scale, _): &(f32, [usize; 2])| (scale - zoomed).abs() < 1e-4;
+    assert!(whole.iter().any(sharp) || tiles.iter().any(sharp), "sharp at the zoom it ended at: {whole:?} {tiles:?}");
+    assert_eq!(a.canvas.scale, zoomed);
+}
+
+/// Zoomed far in, a page is tiles over the part in view: what is rendered (and kept on the GPU)
+/// is bounded by the window, not the zoom. A Letter page at 500% would be 4080×5280 px.
+#[test]
+fn zoomed_in_pages_render_only_tiles_in_view() {
+    let ctx = egui::Context::default();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        frame_at(&ctx, &mut a, t, Vec::new());
+    }
+    a.run("view.zoom", json!({"value": 500})).unwrap();
+    t += 1.0 / 60.0;
+    frame_at(&ctx, &mut a, t, Vec::new());
+    let (whole, tiles) = a.canvas.raster_sizes();
+    let scale = a.canvas.scale;
+    let sharp: Vec<_> = tiles.iter().filter(|(s, _)| (s - scale).abs() < 1e-4).collect();
+    assert!(!sharp.is_empty(), "the view is sharp in the frame of the zoom: {tiles:?}");
+    assert!(sharp.iter().all(|(_, [w, h])| *w <= TILE_PX && *h <= TILE_PX), "{sharp:?}");
+    let pixels: usize = sharp.iter().map(|(_, [w, h])| w * h).sum();
+    assert!(pixels <= 4 * 1280 * 800, "about the window's worth of pixels: {pixels}");
+    assert!(whole.iter().all(|(_, [w, h])| w * h <= 4_500_000), "no whole-page raster at 500%: {whole:?}");
+}
+
+/// A tiled page's underlay fits a texture whatever the page's size: rounding the scale's pixel
+/// size up (as render_page does) never passes the GPU's largest side, at the height clamp too.
+#[test]
+fn a_tiled_pages_underlay_fits_a_texture() {
+    for max_tex in [2048.0_f32, 7814.0, 8192.0, 16384.0] {
+        for (w, h) in [(612.0, 792.0), (600.0, 17_843.0), (600.0, 1e6), (1e6, 1e6), (1.0, 1e6), (0.5, 3e7)] {
+            let page = Page { w, h, ..Default::default() };
+            let s = underlay_scale(&page, max_tex);
+            let side = |len: f32| (len.clamp(1.0, 1e6) * s).ceil();
+            assert!(s > 0.0 && side(w) <= max_tex && side(h) <= max_tex, "{w}×{h} at {max_tex}: scale {s}");
+        }
+    }
 }
