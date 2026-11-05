@@ -59,7 +59,7 @@ pub fn class(c: char) -> Class {
     }
 }
 
-/// Is `c` a zero-width space or a word joiner: invisible, takes no room, may mark a word boundary?
+/// Is `c` a zero-width space (U+200B): invisible, takes no room, may mark a word boundary?
 pub fn is_zero_width_space(c: char) -> bool {
     c == '\u{200B}'
 }

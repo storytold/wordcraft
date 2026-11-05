@@ -167,6 +167,25 @@ fn thai_distributed_spaces_latin_letters_and_digits_but_khmer_justify_does_not()
 }
 
 #[test]
+fn a_space_before_a_manual_break_takes_no_room_in_a_stretched_line() {
+    for align in [Align::KhmerJustify, Align::ThaiDistribute] {
+        let phrase = "ព្រះរាជាណាចក្រកម្ពុជា";
+        // One paragraph with a manual line break in it (`from_text` would split at it).
+        let mut d = doc(&format!("{phrase}{phrase} {phrase}{phrase}"), align);
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        let at = format!("{phrase}{phrase} ").len();
+        p.text.replace_range(at..at, &wordcraft_doc::para::LINE_BREAK.to_string());
+        p.runs[0].len += 1;
+        let l = lay(&d);
+        let pl = para_layout(&l, 0);
+        let line = &pl.lines[0];
+        assert_eq!(line.end, LineEnd::LineBreak);
+        let end = (line.c0..line.c1).rev().find(|c| !matches!(pl.clusters[*c].kind, ClKind::Space | ClKind::LineBreak)).unwrap();
+        assert!((line.xs[end - line.c0] + pl.clusters[end].adv - line.right).abs() < 0.05, "{align:?}: text reaches the margin");
+    }
+}
+
+#[test]
 fn plain_justify_and_left_leave_khmer_alone() {
     for align in [Align::Left, Align::Justify] {
         let l = lay(&doc(&khmer_text(""), align));

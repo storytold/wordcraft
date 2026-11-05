@@ -540,10 +540,12 @@ impl<'e> Breaker<'e> {
             // start the line.
             let mode = if rp.align == Align::KhmerJustify { crate::khmer_just::Mode::Tiered } else { crate::khmer_just::Mode::Even };
             // The spaces before the first character (a Thai letter indents a paragraph with a run
-            // of them) keep their width, as in Word; so do anchors and empty objects around them.
+            // of them) keep their width, as in Word; so do anchors and empty objects around them,
+            // and the manual break a stretched line ends in (with the space before it).
             let blank = |k: usize| {
                 pl.clusters.get(k).is_some_and(|c| {
-                    matches!(c.kind, ClKind::Space | ClKind::Marker) || (matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0)
+                    matches!(c.kind, ClKind::Space | ClKind::Marker | ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak)
+                        || (matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0)
                 })
             };
             let first = (align_from..c1).find(|k| !blank(*k)).unwrap_or(c1);

@@ -100,8 +100,9 @@ Thai Distributed (Even) goes further, as Word does (measured by pakiat in Word 3
 If the caps hold back room (a very loose line) the remainder is shared evenly over all gaps, so
 the line always reaches the margin. A line with no gaps stays ragged (as Justify does with no
 spaces). *Thai Distributed* shares the room evenly over all gaps. Neither adds room after the
-last cluster of the line, after a hanging space, or in the spaces that start the line (Thai letters indent a paragraph with a run of them; Word keeps their width), nor on the paragraph's last line or a line
-ended by a manual break.
+last cluster of the line, after a hanging space, or in the spaces that start the line (Thai letters indent a paragraph with a run of them; Word keeps their width), nor on the paragraph's last line. A line ended by a manual break (Shift+Enter) is stretched
+like a wrapped one, unless `doNotExpandShiftReturn` is set; the space before the break and the
+break itself take no room.
 
 ## Known limits / next
 
