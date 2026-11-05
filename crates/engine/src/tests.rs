@@ -12429,3 +12429,37 @@ fn page_down_extends_a_selection_that_ends_in_collapsed_outline_text() {
     assert!(s.sel.focus.path.0[0] > 6, "Page Down extends the selection a page on: {:?}", s.sel.focus);
     assert!(s.layout().caret(&s.sel.focus).is_some(), "to a place the outline shows");
 }
+
+/// #5368: Save As adds the format's extension to a name with none, or with one WordCraft
+/// doesn't save, as Word adds .docx; a name with a format's extension (any case) is kept.
+#[test]
+fn save_as_adds_the_extension_to_a_name_without_a_format() {
+    use crate::io::with_save_ext;
+    assert_eq!(with_save_ext(r"C:\Docs\Report", "docx"), r"C:\Docs\Report.docx");
+    assert_eq!(with_save_ext(r"C:\My.Docs\Report", "docx"), r"C:\My.Docs\Report.docx", "a Windows folder's dot doesn't count either");
+    assert_eq!(with_save_ext("/home/me/Report v1.2", "docx"), "/home/me/Report v1.2.docx");
+    assert_eq!(with_save_ext("/home/me/notes.final", "dotx"), "/home/me/notes.final.dotx");
+    assert_eq!(with_save_ext("/home/me/Report.", "docx"), "/home/me/Report.docx");
+    assert_eq!(with_save_ext("/home/my.docs/Report", "pdf"), "/home/my.docs/Report.pdf", "a dot in a folder name doesn't count");
+    for kept in ["/a/Report.docx", "/a/Report.PDF", "/a/page.htm", "/a/notes.text", "/a/Report.odt"] {
+        assert_eq!(with_save_ext(kept, "docx"), kept);
+    }
+    // Every name it gives saves.
+    let doc = wordcraft_doc::Document::from_text("x");
+    for name in ["Report", "Report v1.2", "Report."] {
+        let path = with_save_ext(name, "docx");
+        assert!(crate::io::save_bytes(&path, &doc).is_ok(), "{path}");
+    }
+    assert!(crate::io::save_bytes("Report v1.2", &doc).is_err(), "it used to fail");
+    // Other spellings name the same format.
+    assert_eq!(crate::io::save_format("HTM"), Some("html"));
+    assert_eq!(crate::io::save_format("text"), Some("txt"));
+    assert_eq!(crate::io::save_format("2"), None);
+    // An export writes its own format, whatever format's extension the name has.
+    use crate::io::with_export_ext;
+    assert_eq!(with_export_ext("/a/Handout", "pdf"), "/a/Handout.pdf");
+    assert_eq!(with_export_ext("/a/Handout.docx", "pdf"), "/a/Handout.docx.pdf");
+    assert_eq!(with_export_ext("/a/Handout.PDF", "pdf"), "/a/Handout.PDF");
+    assert_eq!(with_export_ext("/a/page.htm", "html"), "/a/page.htm");
+    assert_eq!(with_export_ext("/a/shot.pdf", "png"), "/a/shot.pdf.png");
+}
