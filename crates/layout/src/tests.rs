@@ -3285,11 +3285,18 @@ fn footnotes_carried_onto_a_filler_page_keep_the_ending_sections_footnote_placem
     d.last_section.start = SectionStart::OddPage;
     d.last_section.margin_left = 144.0;
     d.last_section.margin_right = 36.0;
+    // Section two's own note, on its own page: the filler's placement swap must have
+    // been undone by then, or this note would sit beneath the text too.
+    let id2 = footnote(&mut d, &Pos::body(1, 0), "Section two's own note.");
     let l = lay(&d);
     let pieces = note_pieces(&l, id);
     assert_eq!(pieces.len(), 2, "the note starts on section one's page and its rest carries onto the filler: {pieces:?}");
     assert_eq!(pieces[1].0, 1, "the rest is on the filler page: {pieces:?}");
     assert!(pieces[1].3 < 200.0, "the rest sits beneath the filler page's text (top {}), not at its bottom", pieces[1].3);
+    let own = note_pieces(&l, id2);
+    assert_eq!(own.len(), 1, "section two's short note fits on its own page: {own:?}");
+    assert_eq!(own[0].0, 2, "section two's note is on section two's page: {own:?}");
+    assert!(own[0].3 > 400.0, "section two's note sits at its page bottom (top {}), not beneath its text", own[0].3);
 }
 
 #[test]
