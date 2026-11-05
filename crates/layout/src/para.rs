@@ -32,6 +32,7 @@ pub(crate) use builder::left_out;
 #[cfg(test)]
 use chars::{MISSING_ROMAN_FONT, lookup_family};
 pub(crate) use chars::{caps_char, push_caps};
+pub use chars::{draws_something, east_asian_substitute_face, reported_font_name, substitute_face};
 #[cfg(test)]
 pub(crate) use chars::{ligature_features, remap_range, thai_run_face};
 pub use grid::{Exclusion, Grid, is_east_asian};
@@ -47,6 +48,9 @@ pub use proof::{ProofRun, is_list_item, paragraph_issues, proof_runs, proof_text
 #[derive(Clone, Debug)]
 pub struct ParaLayout {
     pub rp: ResolvedPara,
+    /// Fonts the shown text (and list label) asks for that aren't installed, each with a face
+    /// it was drawn in instead: a substitute or a fallback face covering its characters.
+    pub substituted: Vec<(String, FaceRef)>,
     pub styles: Vec<StyleRun>,
     pub glyphs: Vec<Glyph>,
     pub clusters: Vec<Cluster>,
