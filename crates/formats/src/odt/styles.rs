@@ -1050,7 +1050,7 @@ pub(super) struct Styles {
 }
 
 impl Styles {
-    pub(super) fn read(&mut self, xml: &[u8], auto_section_is_auto: bool) -> Result<(), String> {
+    pub(super) fn read(&mut self, xml: &[u8], auto_section_is_auto: bool) {
         let mut in_auto = false;
         let mut cur: Option<(String, StyleInfo)> = None;
         let mut in_default = false;
@@ -1170,7 +1170,6 @@ impl Styles {
             },
             Ev::Text(_) => {}
         });
-        Ok(())
     }
 
     /// The document's default font size: the Standard paragraph style's (the document's

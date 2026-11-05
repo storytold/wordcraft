@@ -65,6 +65,22 @@ fn rejects_garbage() {
     assert!(parse(b"not a zip").is_err());
 }
 
+#[test]
+fn rejects_non_utf8_odt_xml_instead_of_truncating_import() {
+    let content = [
+        b"<office:document-content><office:body><office:text><text:p>Caf".as_slice(),
+        &[0xE9],
+        b"</text:p><text:p>Second</text:p></office:text></office:body></office:document-content>",
+    ]
+    .concat();
+    let clean_content = b"<office:document-content/>";
+    let bad_styles = [b"<office:document-styles/>".as_slice(), &[0xE9]].concat();
+    let bad_meta = [b"<office:document-meta/>".as_slice(), &[0xE9]].concat();
+    assert!(parse(&zip_of(&[("content.xml", &content)])).is_err());
+    assert!(parse(&zip_of(&[("content.xml", clean_content), ("styles.xml", &bad_styles)])).is_err());
+    assert!(parse(&zip_of(&[("content.xml", clean_content), ("meta.xml", &bad_meta)])).is_err());
+}
+
 /// A package holding `entries`, deflated.
 pub(super) fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));

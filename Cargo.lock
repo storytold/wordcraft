@@ -6879,7 +6879,7 @@ dependencies = [
  "image",
  "log",
  "proptest",
- "quick-xml 0.41.0",
+ "quick-xml 0.42.0",
  "serde_json",
  "sha1 0.11.0",
  "sha2 0.11.1",

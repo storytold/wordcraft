@@ -724,17 +724,27 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
         None if styles_xml.is_some() => EMPTY_CONTENT.as_bytes().to_vec(),
         None => return Err("ODT: content.xml is missing".into()),
     };
+    // quick-xml 0.42 rejects invalid UTF-8 per event; validate whole parts before the event
+    // walker can mistake that error for the end of a document and silently truncate it.
+    std::str::from_utf8(&content).map_err(|e| format!("ODT: content.xml is not UTF-8 ({e})"))?;
+    if let Some(styles) = &styles_xml {
+        std::str::from_utf8(styles).map_err(|e| format!("ODT: styles.xml is not UTF-8 ({e})"))?;
+    }
+    let meta_xml = read_entry(&mut z, "meta.xml");
+    if let Some(meta) = &meta_xml {
+        std::str::from_utf8(meta).map_err(|e| format!("ODT: meta.xml is not UTF-8 ({e})"))?;
+    }
     let mut styles = Styles::default();
     let mut pages = Pages::default();
     if let Some(s) = &styles_xml {
-        styles.read(s, false)?;
+        styles.read(s, false);
         pages = read_pages(s, paper);
     }
     // No page layout at all (no styles.xml, or no master page).
     if pages.first.is_none() {
         pages.first = Some(unstated_page(paper));
     }
-    styles.read(&content, true)?;
+    styles.read(&content, true);
     let settings = read_entry(&mut z, "settings.xml");
     // Where tab stops are measured from: as the document's settings say (LibreOffice's own), else
     // the margin, as Word (the standard ties it only to indexes, §19.512.3).
@@ -742,7 +752,6 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
     // How the space between two paragraphs adds up: as LibreOffice's `AddParaTableSpacing` says
     // (false: the larger of the two, as Word), else the larger (the standard doesn't say).
     let sum_spacing = settings.as_deref().and_then(|s| setting(s, "AddParaTableSpacing")).unwrap_or(false);
-    let meta_xml = read_entry(&mut z, "meta.xml");
     let meta = meta_xml.as_deref().map(read_meta).unwrap_or_default();
     let changes = meta_xml.as_deref().map(read_changes).unwrap_or_default();
     // Custom document properties, then the user fields not among them.
