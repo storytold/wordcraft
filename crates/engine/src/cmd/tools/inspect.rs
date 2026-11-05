@@ -296,7 +296,8 @@ fn unsupported_hidden(doc: &Document) -> Vec<Value> {
 }
 
 /// Tables whose table style (or one of its conditional parts: header row, bands, first or last
-/// column, total row) hides text. The inspector doesn't resolve table styles, so it lists them.
+/// column, total row) hides text. The inspector doesn't resolve table styles, so it lists them —
+/// but only tables that hold text: an empty table hides nothing, whatever its style says.
 fn tables_hiding_text(doc: &Document, story: StoryRef, blocks: &wordcraft_doc::Blocks, depth: usize, out: &mut Vec<Value>) {
     if depth > 32 {
         return;
@@ -305,6 +306,7 @@ fn tables_hiding_text(doc: &Document, story: StoryRef, blocks: &wordcraft_doc::B
         let Block::Table(t) = &**b else { continue };
         if let Some(id) = t.props.style.as_deref()
             && let Some(ts) = doc.styles.table_style(id)
+            && table_has_text(t)
         {
             let q = &ts.parts;
             if [&ts.chr, &q.header_chr, &q.band_chr, &q.col_band_chr, &q.first_col_chr, &q.last_col_chr, &q.total_chr]
@@ -320,4 +322,16 @@ fn tables_hiding_text(doc: &Document, story: StoryRef, blocks: &wordcraft_doc::B
             }
         }
     }
+}
+
+/// Whether the table holds any text at all: a paragraph with text, in a cell or in a nested table.
+fn table_has_text(t: &wordcraft_doc::table::Table) -> bool {
+    t.rows.iter().any(|r| {
+        r.cells.iter().any(|c| {
+            c.blocks.iter().any(|b| match &**b {
+                Block::Para(p) => !p.text.is_empty(),
+                Block::Table(t) => table_has_text(t),
+            })
+        })
+    })
 }

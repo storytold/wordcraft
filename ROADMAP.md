@@ -139,6 +139,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-05: Hidden text is visible to an agent before anyone acts on it: a file that carries it warns on `file.open` (the pieces and characters, tell the human, what `file.inspect` with `{"remove": ["hidden"]}` removes, and what it cannot reach inside objects or table styles), `file.info` reports `hasHidden`, `inspect_document` cleans through MCP (comments, revisions, properties, hidden text, headers; unknown categories refused), and File › Info gains Check for Issues › Inspect Document with Remove All per category, as Word's.
 - 2026-10-28: Ink replay, eraser picking, lasso selection and arrow-candidate discovery reuse the paragraph prefixes they have already scanned (#3614). Page item order, stroke geometry and saved data retain their behavior. This narrows the stability work; ink import fidelity, native pen input and broader corpus qualification remain open.
 
 - 2026-11-04: OpenDocument files have no display settings any more (gap 19): File › Options › Advanced › OpenDocument files, `file.options` `odf`, `WORDCRAFT_ODF`, the LibreOffice style and custom values are gone. WordCraft makes one choice for each case the standard leaves open, the one the default made, and still follows what a file states ([docs/odf-interpretation.md](docs/odf-interpretation.md)).

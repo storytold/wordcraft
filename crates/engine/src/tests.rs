@@ -11032,6 +11032,10 @@ fn file_open_warns_when_only_unsupported_hidden_content_is_present() {
     });
     let mut table = wordcraft_doc::table::Table::new(2, 2, 200.0);
     table.props.style = Some("HideHeader".into());
+    table.rows[0].cells[0].blocks = vec![std::sync::Arc::new(wordcraft_doc::Block::Para(wordcraft_doc::Paragraph::with_text(
+        "secret header text",
+        wordcraft_doc::props::CharProps::default(),
+    )))];
     doc.doc.body.insert(0, std::sync::Arc::new(wordcraft_doc::Block::Table(table)));
     assert_eq!(run(&mut doc, "file.info", json!({}))["hasHidden"], json!(true));
 
@@ -11095,7 +11099,8 @@ fn inspect_document_keeps_content_control_markers() {
 }
 
 /// #1344: text hidden by a table style isn't resolved by the inspector, so it says so: the table
-/// is listed as unsupported and the removal's residual isn't empty.
+/// is listed as unsupported and the removal's residual isn't empty. An empty table hides nothing,
+/// whatever its style says — it takes text in a cell.
 #[test]
 fn inspect_document_lists_tables_whose_style_hides_text() {
     use wordcraft_doc::styles::{Style, StyleKind, TableStyleParts};
@@ -11109,7 +11114,14 @@ fn inspect_document_lists_tables_whose_style_hides_text() {
     });
     let mut table = wordcraft_doc::table::Table::new(2, 2, 200.0);
     table.props.style = Some("HideHeader".into());
-    s.doc.body.insert(0, std::sync::Arc::new(wordcraft_doc::Block::Table(table)));
+    // An empty table hides nothing: no text in any cell, no finding.
+    s.doc.body.insert(0, std::sync::Arc::new(wordcraft_doc::Block::Table(table.clone())));
+    assert_eq!(run(&mut s, "file.inspect", json!({}))["found"]["unsupported"], json!([]), "an empty table is not a finding");
+    table.rows[0].cells[0].blocks = vec![std::sync::Arc::new(wordcraft_doc::Block::Para(wordcraft_doc::Paragraph::with_text(
+        "secret header text",
+        wordcraft_doc::props::CharProps::default(),
+    )))];
+    s.doc.body[0] = std::sync::Arc::new(wordcraft_doc::Block::Table(table));
     let found = run(&mut s, "file.inspect", json!({}))["found"].clone();
     let unsupported = found["unsupported"].as_array().cloned().unwrap_or_default();
     assert!(unsupported.iter().any(|u| u["object"] == "table" && u["story"] == "body" && u["style"] == "HideHeader"), "{found}");
