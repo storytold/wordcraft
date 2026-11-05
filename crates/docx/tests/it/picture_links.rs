@@ -87,6 +87,7 @@ fn a_linked_picture_is_saved_with_its_link_on_the_drawing_too() {
         float: Default::default(),
         crop: [0.0; 4],
         ole: None,
+        fx: Default::default(),
     };
     let linked = |l: &str| CharProps { link: Some(l.to_string()), ..Default::default() };
     // A place in this document stays a `w:hyperlink w:anchor` only: `a:hlinkClick` names a relationship.
