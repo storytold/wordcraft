@@ -143,6 +143,9 @@ pub fn set_backend(backend: Option<Arc<dyn Backend>>) {
     let dir = backend.as_ref().and_then(|b| b.packs_dir());
     *BACKEND.write().unwrap_or_else(PoisonError::into_inner) = backend;
     set_index(None);
+    FETCHED.store(false, Ordering::Relaxed);
+    AUTO_REFRESHED.store(false, Ordering::Relaxed);
+    WANTED.lock().unwrap_or_else(PoisonError::into_inner).clear();
     jobs().errors.clear();
     wordcraft_proof::packs::set_packs_dir(dir);
 }
@@ -219,6 +222,8 @@ pub fn refresh(cancel: &Cancel) -> Result<Vec<Pack>, String> {
     }
     let index = clean_index(b.fetch_index(cancel)?);
     set_index(Some(index.clone()));
+    FETCHED.store(true, Ordering::Relaxed);
+    install_wanted(&index);
     Ok(index)
 }
 
@@ -293,8 +298,12 @@ pub fn install(locale: &str, cancel: &Cancel, progress: &mut dyn FnMut(u64, u64)
 /// Remove the installed pack for `locale`.
 pub fn remove(locale: &str) -> Result<(), String> {
     let b = backend().ok_or_else(no_store)?;
-    if jobs().installs.iter().any(|(l, ..)| l == locale) {
-        return Err(format!("the {locale} pack is being installed: cancel it first"));
+    if let Some(job) = jobs().installs.iter().find(|j| j.locale == locale) {
+        return Err(if job.stopping() {
+            format!("the {locale} pack's cancelled install is still stopping: try again in a moment")
+        } else {
+            format!("the {locale} pack is being installed: cancel it first")
+        });
     }
     if !b.installed().iter().any(|p| p.locale == locale) {
         return Err(format!("no language pack is installed for {locale}"));
@@ -315,11 +324,33 @@ pub type Notify = Arc<dyn Fn() + Send + Sync>;
 
 static BACKGROUND: RwLock<Option<Notify>> = RwLock::new(None);
 
+/// An install running on a thread.
+struct InstallJob {
+    locale: String,
+    /// Bytes done.
+    done: u64,
+    /// Bytes in all.
+    total: u64,
+    /// Stops this run. A cancelled job stays listed (hidden from [`installing`]) until its thread
+    /// notices and ends, so two downloads of a locale never write its folder at once.
+    cancel: Cancel,
+    /// Install was asked again after a cancel, before the cancelled run ended: the thread starts
+    /// over (with the fresh `cancel`) instead of ending.
+    restart: bool,
+}
+
+impl InstallJob {
+    /// Cancelled, and its thread hasn't ended yet.
+    fn stopping(&self) -> bool {
+        self.cancel.is_cancelled()
+    }
+}
+
 /// Installs and fetches running on a thread, and how the finished ones ended.
 #[derive(Default)]
 struct Jobs {
-    /// Running installs by locale: (bytes done, bytes in all, its Cancel).
-    installs: Vec<(String, u64, u64, Cancel)>,
+    /// Running installs, one per locale.
+    installs: Vec<InstallJob>,
     fetching: bool,
     /// The last failure of each locale's install ("" for the list), until it is tried again.
     errors: Vec<(String, String)>,
@@ -358,9 +389,9 @@ pub struct Progress {
     pub total: u64,
 }
 
-/// The installs running now.
+/// The installs running now (not the cancelled ones still stopping).
 pub fn installing() -> Vec<Progress> {
-    jobs().installs.iter().map(|(l, d, t, _)| Progress { locale: l.clone(), done: *d, total: *t }).collect()
+    jobs().installs.iter().filter(|j| !j.stopping()).map(|j| Progress { locale: j.locale.clone(), done: j.done, total: j.total }).collect()
 }
 
 /// Whether the list is being fetched.
@@ -383,10 +414,12 @@ pub fn finished() -> u64 {
     jobs().finished
 }
 
-/// Stop `locale`'s running install.
+/// Stop `locale`'s running install. The person's own choice: it ends without an error, and
+/// [`installing`] stops listing it at once (Install shows again).
 pub fn cancel(locale: &str) {
-    if let Some((_, _, _, c)) = jobs().installs.iter().find(|(l, ..)| l == locale) {
-        c.cancel();
+    if let Some(job) = jobs().installs.iter_mut().find(|j| j.locale == locale) {
+        job.restart = false;
+        job.cancel.cancel();
     }
 }
 
@@ -400,7 +433,9 @@ fn set_error(locale: &str, e: Option<String>) {
 
 /// Start installing `locale` ([`install`]): on a thread when [`runs_in_background`], else now.
 /// What's wrong up front (no pack, downloading off, outside the write root) is an error at once.
-/// Returns whether it is still running (`false`: done, or it already was running).
+/// Returns whether it is still running (`false`: done). Asked again while it runs, it carries on;
+/// right after a cancel, before the cancelled download has stopped, it starts over once that
+/// one ends (never two downloads of a pack at once).
 pub fn start_install(locale: &str) -> Result<bool, String> {
     let b = backend().ok_or_else(no_store)?;
     let pack = find(locale).ok_or_else(|| format!("there is no language pack for {locale}"))?;
@@ -418,34 +453,55 @@ pub fn start_install(locale: &str) -> Result<bool, String> {
     let cancel = Cancel::new();
     {
         let mut j = jobs();
-        if j.installs.iter().any(|(l, ..)| l == locale) {
+        j.errors.retain(|(l, _)| l != locale);
+        if let Some(job) = j.installs.iter_mut().find(|j| j.locale == locale) {
+            if job.stopping() {
+                // Cancelled and not ended yet: its thread starts over when it does.
+                job.done = 0;
+                job.total = pack.size;
+                job.cancel = cancel;
+                job.restart = true;
+            }
             return Ok(true);
         }
-        j.installs.push((locale.to_string(), 0, pack.size, cancel.clone()));
-        j.errors.retain(|(l, _)| l != locale);
+        j.installs.push(InstallJob { locale: locale.to_string(), done: 0, total: pack.size, cancel: cancel.clone(), restart: false });
     }
     let key = locale.to_string();
     let locale = locale.to_string();
     let started = spawn(move || {
-        let progress_notify = notify.clone();
-        let r = install(&locale, &cancel, &mut |done, total| {
-            if let Some(job) = jobs().installs.iter_mut().find(|(l, ..)| *l == locale) {
-                job.1 = done;
-                job.2 = total;
+        let mut cancel = cancel;
+        loop {
+            let progress_notify = notify.clone();
+            let r = install(&locale, &cancel, &mut |done, total| {
+                if let Some(job) = jobs().installs.iter_mut().find(|j| j.locale == locale) {
+                    job.done = done;
+                    job.total = total;
+                }
+                progress_notify();
+            });
+            let mut j = jobs();
+            if let Some(job) = j.installs.iter_mut().find(|j| j.locale == locale && j.restart) {
+                job.restart = false;
+                cancel = job.cancel.clone();
+                drop(j);
+                notify();
+                continue;
             }
-            progress_notify();
-        });
-        let mut j = jobs();
-        j.installs.retain(|(l, ..)| *l != locale);
-        if let Err(e) = r {
-            j.errors.push((locale, e));
+            j.installs.retain(|j| j.locale != locale);
+            // The person's own cancel isn't a failure: nothing to show.
+            if let Err(e) = r
+                && !cancel.is_cancelled()
+            {
+                j.errors.push((locale, e));
+            }
+            j.finished = j.finished.wrapping_add(1);
+            drop(j);
+            notify();
+            break;
         }
-        j.finished = j.finished.wrapping_add(1);
-        drop(j);
-        notify();
     });
     if let Err(e) = started {
-        jobs().installs.retain(|(l, ..)| *l != key);
+        jobs().installs.retain(|j| j.locale != key);
         return Err(e);
     }
     Ok(true)
@@ -524,15 +580,50 @@ pub fn licence_texts() -> Vec<(String, String)> {
 /// About › Language data's title for SCOWL's notices.
 pub const SCOWL_TITLE: &str = "English spelling dictionaries (SCOWL)";
 
-/// The pack locale for a document language tag: the whole tag (`pt-pt`), else its language
-/// (`nl` for `nl-NL`), whichever the index has. `None` for English and tags with no pack.
+/// The pack locale for a document language tag: the whole tag (`pt-pt`), else each shorter
+/// prefix of it (`sr-latn` for `sr-Latn-RS`, `nl` for `nl-NL`), the first the index has. A
+/// variant after the region is also tried without the region, before the region alone
+/// (`ca-ES-valencia` is the `ca-valencia` pack's), as craft-proof looks its dictionary up. `None`
+/// for English and tags with no pack.
 pub fn pack_for_tag<'a>(tag: &str, packs: &'a [Pack]) -> Option<&'a Pack> {
-    let tag = tag.trim().replace('_', "-").to_ascii_lowercase();
-    let base = tag.split('-').next().unwrap_or("");
+    pack_candidates(tag).iter().find_map(|c| packs.iter().find(|p| &p.locale == c))
+}
+
+/// Is `subtag` a region, as it follows a tag's language (and script): two letters (`NL`) or
+/// three digits (`419`)? The one test of what a region is; the lists, the menus and
+/// [`pack_for_tag`] all use it.
+pub fn is_region(subtag: &str) -> bool {
+    (subtag.len() == 2 && subtag.bytes().all(|b| b.is_ascii_alphabetic())) || (subtag.len() == 3 && subtag.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// `tag` without its region subtags (`nl-NL` is `nl`, `sr-Latn-RS` is `sr-Latn`, `ca-ES-valencia`
+/// is `ca-valencia`), joined with `-` whichever of `-` and `_` separated them; the case is kept.
+/// The language itself (the first subtag) is never a region.
+pub fn without_region(tag: &str) -> String {
+    tag.split(['-', '_']).enumerate().filter(|(i, p)| *i == 0 || !is_region(p)).map(|(_, p)| p).collect::<Vec<&str>>().join("-")
+}
+
+/// The pack locales [`pack_for_tag`] tries for `tag`, best first.
+fn pack_candidates(tag: &str) -> Vec<String> {
+    // A tag is a handful of short subtags; anything longer is junk and only its start is read.
+    let tag: String = tag.trim().chars().take(64).collect::<String>().replace('_', "-").to_ascii_lowercase();
+    let parts: Vec<&str> = tag.split('-').collect();
+    let base = parts.first().copied().unwrap_or("");
     if base.is_empty() || base == "en" {
-        return None;
+        return Vec::new();
     }
-    packs.iter().find(|p| p.locale == tag).or_else(|| packs.iter().find(|p| p.locale == base))
+    let mut out: Vec<String> = Vec::new();
+    for n in (1..=parts.len()).rev() {
+        let prefix = parts.get(..n).unwrap_or_default().join("-");
+        // The prefix, then without its region: the variant's pack before the region alone.
+        let stripped = without_region(&prefix);
+        for c in [prefix, stripped] {
+            if !out.contains(&c) {
+                out.push(c);
+            }
+        }
+    }
+    out
 }
 
 /// The languages (`w:lang`, resolved through the styles) of the body text, in first-seen order.
@@ -579,14 +670,74 @@ pub fn proofable(tag: &str) -> bool {
 pub fn missing_dictionary(tag: Option<&str>) -> Option<&'static str> {
     let name = wordcraft_proof::missing_dictionary(tag)?;
     let lang = wordcraft_proof::ProofLang::from_tag(tag);
-    if lang.pack_locale().is_some() && pack_for_tag(tag.unwrap_or(""), &available()).is_none() {
+    if lang.pack_locale().is_some() && !has_pack_for_tag(tag.unwrap_or("")) {
         return None;
     }
     Some(name)
 }
 
-/// The packs the document's text asks for that are available and not installed: what the
-/// missing-pack bar offers. Never a language without a pack, nor one proofing can't use.
+/// The last answer of whether the index has a pack for a tag, for the index generation it was
+/// worked out for: the status bar asks every frame while the caret is in a pack language, and
+/// working it out copies the whole index.
+#[derive(Default)]
+struct PackLookup {
+    /// (index generation, tag, has a pack).
+    entry: Option<(u64, String, bool)>,
+}
+
+impl PackLookup {
+    /// The remembered answer for `tag` at `generation`, else `compute`'s (then remembered).
+    fn get(&mut self, generation: u64, tag: &str, compute: impl FnOnce() -> bool) -> bool {
+        if let Some((g, t, has)) = &self.entry
+            && *g == generation
+            && t == tag
+        {
+            return *has;
+        }
+        let has = compute();
+        self.entry = Some((generation, tag.to_string(), has));
+        has
+    }
+}
+
+static PACK_LOOKUP: Mutex<PackLookup> = Mutex::new(PackLookup { entry: None });
+
+/// Whether the index has a pack for `tag` ([`pack_for_tag`]), worked out again only when the
+/// index changes ([`index_generation`]) or the tag does.
+fn has_pack_for_tag(tag: &str) -> bool {
+    // Read before [`available`], which may fill the index and bump it: the answer is then worked
+    // out once more, never kept for a list it wasn't worked out from.
+    let generation = index_generation();
+    PACK_LOOKUP.lock().unwrap_or_else(PoisonError::into_inner).get(generation, tag, || pack_for_tag(tag, &available()).is_some())
+}
+
+/// The language new text at the caret gets (its typing language, resolved through the styles
+/// and the document default), unless it is marked Do not check spelling or grammar: choosing a
+/// language with nothing selected asks for its pack before anything is typed in it.
+pub fn caret_language(s: &Session) -> Option<String> {
+    let style = s.doc.para_at(&s.sel.focus).and_then(|p| p.props.style.as_deref());
+    let rc = s.doc.styles.resolve_char(style, &s.typing_props());
+    if rc.no_proof {
+        return None;
+    }
+    Some(rc.lang.unwrap_or_else(|| "en-US".into()))
+}
+
+/// The languages the missing-pack bar looks at: the body text's ([`document_languages`]), then
+/// the caret's typing language ([`caret_language`]).
+pub fn wanted_languages(s: &Session) -> Vec<String> {
+    let mut out = document_languages(s);
+    if let Some(tag) = caret_language(s)
+        && !out.contains(&tag)
+    {
+        out.push(tag);
+    }
+    out
+}
+
+/// The packs the document's text (or the caret's typing language) asks for that are available
+/// and not installed: what the missing-pack bar offers. Never a language without a pack, nor one
+/// proofing can't use.
 pub fn missing(s: &Session) -> Vec<Pack> {
     let packs = available();
     if packs.is_empty() {
@@ -594,7 +745,7 @@ pub fn missing(s: &Session) -> Vec<Pack> {
     }
     let installed = installed();
     let mut out: Vec<Pack> = Vec::new();
-    for tag in document_languages(s) {
+    for tag in wanted_languages(s) {
         if proofable(&tag)
             && let Some(p) = pack_for_tag(&tag, &packs)
             && !installed.iter().any(|i| i.locale == p.locale)
@@ -604,6 +755,265 @@ pub fn missing(s: &Session) -> Vec<Pack> {
         }
     }
     out
+}
+
+/// Where a language's proofing comes from (Options › Language › Your languages).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Proofing {
+    /// English: the embedded dictionaries.
+    BuiltIn,
+    /// An installed Language pack.
+    Installed,
+    /// A Hunspell dictionary in the person's own dictionaries folder.
+    OwnDictionary,
+    /// A Hunspell dictionary the system has.
+    SystemDictionary,
+    /// No dictionary yet; a Language pack can be installed.
+    Install,
+    /// Grammar and hyphenation rules built in; a Language pack adds spelling.
+    GrammarBuiltIn,
+    /// No dictionary and no pack for it.
+    NotAvailable,
+}
+
+/// A row of Options › Language › Your languages.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LanguageRow {
+    /// The tags the default proofing language or the open document use for this language (the
+    /// first is what Set as default sets); empty for a language listed for its installed pack.
+    pub tags: Vec<String>,
+    /// The pack locale: the installed pack, else the one the index offers.
+    pub pack: Option<String>,
+    /// Is the pack installed?
+    pub installed: bool,
+    /// Bytes of the offered pack (0 when the index has none).
+    pub size: u64,
+    pub proofing: Proofing,
+    /// Is this the default proofing language?
+    pub default: bool,
+}
+
+impl LanguageRow {
+    /// Is `tag` (the insertion point's language) one of this row's languages?
+    pub fn is_tag(&self, tag: &str) -> bool {
+        self.tags.iter().any(|t| t.eq_ignore_ascii_case(tag))
+    }
+}
+
+/// The first locale `has` accepts for `tag`, in [`pack_for_tag`]'s order. `None` for English and junk.
+fn locale_for_tag(tag: &str, has: &dyn Fn(&str) -> bool) -> Option<String> {
+    pack_candidates(tag).into_iter().find(|c| has(c))
+}
+
+/// [`your_languages_with`] against the dictionaries on this computer.
+pub fn your_languages(s: &Session) -> Vec<LanguageRow> {
+    let folder = s.prefs.dictionaries_folder.clone();
+    your_languages_with(s, folder.as_deref(), &dictionary_file)
+}
+
+/// The Hunspell `.dic` file proofing reads for `tag`'s language now (a built-in-rules language's
+/// own, or a pack language's), if any.
+fn dictionary_file(tag: &str) -> Option<PathBuf> {
+    let lang = wordcraft_proof::ProofLang::from_tag(Some(tag));
+    if let Some((_, f)) = wordcraft_proof::installed_dictionaries().into_iter().find(|(l, _)| *l == lang) {
+        return f;
+    }
+    wordcraft_proof::pack_dictionary_file(lang)
+}
+
+/// Options › Language › Your languages (unsorted; the window names and sorts them): each English
+/// variant in use (the default proofing language, American English and any in the open document), every language
+/// with an installed Language pack, and every proofing language of the open document. One row per
+/// language: tags one pack proofs share a row. `folder` is the person's own dictionaries folder;
+/// `dictionary` finds the `.dic` file proofing reads for a tag.
+pub fn your_languages_with(s: &Session, folder: Option<&str>, dictionary: &dyn Fn(&str) -> Option<PathBuf>) -> Vec<LanguageRow> {
+    let index = available();
+    let installed = installed();
+    let default_tag = s
+        .prefs
+        .default_language
+        .clone()
+        .or_else(|| s.editing_lang.clone())
+        .or_else(|| s.doc.styles.default_chr.lang.clone())
+        .unwrap_or_else(|| "en-US".to_string());
+    // American English stays listed whatever the default is, so it can always be set back.
+    let mut tags = vec![default_tag.clone(), "en-US".to_string()];
+    tags.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    for t in document_languages(s) {
+        if !tags.iter().any(|x| x.eq_ignore_ascii_case(&t)) {
+            tags.push(t);
+        }
+    }
+    let mut rows: Vec<LanguageRow> = Vec::new();
+    let mut add = |tag: Option<&str>, locale: Option<String>| {
+        let english = tag.is_some_and(|t| wordcraft_proof::ProofLang::from_tag(Some(t)).is_english());
+        // English variants stay apart (en-GB and en-US are two rows); a pack's tags share one.
+        let existing = rows.iter().position(|r| match (&locale, &r.pack) {
+            (Some(l), Some(p)) if !english => l == p,
+            _ => tag.is_some_and(|t| r.is_tag(t)),
+        });
+        let i = existing.unwrap_or_else(|| {
+            rows.push(LanguageRow {
+                tags: Vec::new(),
+                pack: locale.clone(),
+                installed: false,
+                size: 0,
+                proofing: Proofing::NotAvailable,
+                default: false,
+            });
+            rows.len() - 1
+        });
+        if let (Some(t), Some(row)) = (tag, rows.get_mut(i))
+            && !row.is_tag(t)
+        {
+            row.tags.push(t.to_string());
+        }
+    };
+    for t in &tags {
+        if !proofable(t) {
+            continue;
+        }
+        // The most specific pack, installed or offered, as the bar picks it ([`pack_for_tag`]): with
+        // `ca` installed, Valencian text is still the `ca-valencia` pack's row.
+        let locale = locale_for_tag(t, &|l| installed.iter().any(|i| i.locale == l) || index.iter().any(|p| p.locale == l));
+        add(Some(t), locale);
+    }
+    for i in &installed {
+        add(None, Some(i.locale.clone()));
+    }
+    for row in &mut rows {
+        let installed_here = row.pack.as_ref().is_some_and(|l| installed.iter().any(|i| &i.locale == l));
+        let offered = row.pack.as_ref().and_then(|l| index.iter().find(|p| &p.locale == l));
+        row.installed = installed_here;
+        row.size = offered.map_or(0, |p| p.size);
+        row.default = row.is_tag(&default_tag);
+        let tag = row.tags.first().cloned().or_else(|| row.pack.clone()).unwrap_or_default();
+        let lang = wordcraft_proof::ProofLang::from_tag(Some(&tag));
+        let file = if lang.is_english() { None } else { dictionary(&tag) };
+        let own = file.as_ref().is_some_and(|f| folder.is_some_and(|d| !d.trim().is_empty() && f.starts_with(d.trim())));
+        row.proofing = if lang.is_english() {
+            Proofing::BuiltIn
+        } else if own {
+            Proofing::OwnDictionary
+        } else if installed_here {
+            Proofing::Installed
+        } else if file.is_some() {
+            Proofing::SystemDictionary
+        } else if offered.is_some() {
+            if matches!(lang, wordcraft_proof::ProofLang::Pack(_)) { Proofing::Install } else { Proofing::GrammarBuiltIn }
+        } else {
+            Proofing::NotAvailable
+        };
+    }
+    rows
+}
+
+/// The index was fetched this session (since the backend was set): what it lists is then the
+/// whole answer, even when it lists nothing.
+static FETCHED: AtomicBool = AtomicBool::new(false);
+/// The automatic fetch of a missing or stale list ([`refresh_if_stale`]) was tried.
+static AUTO_REFRESHED: AtomicBool = AtomicBool::new(false);
+/// Languages (document tags) whose pack the person asked for before the list was known
+/// ([`start_get`]): installed once a fetch lists one.
+static WANTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Whether the index was fetched since the backend was set.
+pub fn fetched() -> bool {
+    FETCHED.load(Ordering::Relaxed)
+}
+
+/// The languages the document (or the caret) asks for while there is no list of packs yet (a
+/// fresh install, or a list cached for an older pin): proofable, not English, with no dictionary
+/// and no pack installed, one per proofing language, as the document tags them (`tr-TR`). The
+/// bar offers to get them: the list is fetched first, and the language then installed if it has
+/// a pack. Nothing once a list is known or was fetched this session ([`missing`] then answers).
+pub fn unlisted(s: &Session) -> Vec<String> {
+    if backend().is_none() || fetched() || available_len() > 0 {
+        return Vec::new();
+    }
+    let installed = installed();
+    let mut seen: Vec<wordcraft_proof::ProofLang> = Vec::new();
+    let mut out = Vec::new();
+    for tag in wanted_languages(s) {
+        let base = tag.split(['-', '_']).next().unwrap_or("").to_ascii_lowercase();
+        let lang = wordcraft_proof::ProofLang::from_tag(Some(&tag));
+        if base.is_empty()
+            || base == "en"
+            || !proofable(&tag)
+            || wordcraft_proof::missing_dictionary(Some(&tag)).is_none()
+            || seen.contains(&lang)
+            || installed.iter().any(|i| i.locale == base || tag.eq_ignore_ascii_case(&i.locale))
+        {
+            continue;
+        }
+        seen.push(lang);
+        out.push(tag);
+    }
+    out
+}
+
+/// The person asked for `tag`'s pack before the list was known (the bar's Install, after their
+/// consent turned downloading on): fetch the list ([`start_refresh`]), then install the pack it
+/// lists for `tag`, if any; with none, the bar stops offering it. Downloading must be on.
+/// Returns whether it is still running.
+pub fn start_get(tag: &str) -> Result<bool, String> {
+    let tag = tag.trim();
+    if tag.is_empty() || tag.len() > MAX_LOCALE_LEN {
+        return Err(format!("`{tag}` isn't a language tag"));
+    }
+    if let Some(p) = pack_for_tag(tag, &available()) {
+        return start_install(&p.locale);
+    }
+    let b = backend().ok_or_else(no_store)?;
+    if !b.network_on() {
+        // Never queued: a later fetch mustn't install what was refused.
+        return Err(network_off());
+    }
+    let queued = {
+        let mut w = WANTED.lock().unwrap_or_else(PoisonError::into_inner);
+        let new = !w.iter().any(|t| t == tag) && w.len() < MAX_DOC_LANGUAGES;
+        if new {
+            w.push(tag.to_string());
+        }
+        new
+    };
+    let r = start_refresh();
+    if r.is_err() && queued {
+        WANTED.lock().unwrap_or_else(PoisonError::into_inner).retain(|t| t != tag);
+    }
+    r
+}
+
+/// After a fetch: install the packs asked for before the list was known ([`start_get`]).
+fn install_wanted(index: &[Pack]) {
+    let wanted = std::mem::take(&mut *WANTED.lock().unwrap_or_else(PoisonError::into_inner));
+    for tag in wanted {
+        let Some(p) = pack_for_tag(&tag, index) else { continue };
+        if is_installed(&p.locale) {
+            continue;
+        }
+        if let Err(e) = start_install(&p.locale) {
+            set_error(&p.locale, Some(e));
+        }
+    }
+}
+
+/// Once a session (the first time it is asked once requests run on a thread, [`runs_in_background`]:
+/// the window), with downloading already on and no list (none cached, or one cached for an older
+/// pin): fetch it in the background, so the bar can offer packs. The person's consent is the
+/// downloading setting itself; nothing is asked. Its failure is recorded for Options (""). The
+/// window asks every frame: after the first time this reads nothing (the downloading setting is
+/// a file). Returns whether a fetch was started.
+pub fn refresh_if_stale() -> bool {
+    let Some(b) = backend() else { return false };
+    if !runs_in_background() || AUTO_REFRESHED.swap(true, Ordering::Relaxed) {
+        return false;
+    }
+    if !b.network_on() || fetched() || fetching() || available_len() > 0 {
+        return false;
+    }
+    start_refresh().is_ok()
 }
 
 /// A backend with a fixed list and installs that only record themselves: tests and `ui_shot`.
@@ -630,7 +1040,7 @@ impl FixedBackend {
             locale: locale.into(),
             name: name.into(),
             version: "0000000".into(),
-            url: format!("https://github.com/storytold/craft-i18n/releases/download/language-packs-1/{locale}.tar.zst"),
+            url: format!("https://github.com/storytold/craft-i18n/releases/download/language-packs-2/{locale}.tar.zst"),
             source: Some("https://github.com/LibreOffice/dictionaries".into()),
             size,
             licence: licence.into(),
@@ -711,6 +1121,29 @@ mod tests {
             }
             None => assert!(texts.iter().all(|(t, _)| t != super::SCOWL_TITLE), "no SCOWL data: no SCOWL entry"),
         }
+    }
+
+    /// FU.3: the status bar's "(no dictionary)" asks every frame whether the index has a pack
+    /// for the caret's language; the answer is reused until the index changes (a new
+    /// generation) or the tag does, so the index isn't copied every frame.
+    #[test]
+    fn the_pack_lookup_is_reused_until_the_index_changes() {
+        let mut lookup = super::PackLookup::default();
+        let mut computed = 0;
+        let mut ask = |lookup: &mut super::PackLookup, generation: u64, tag: &str, answer: bool| {
+            lookup.get(generation, tag, || {
+                computed += 1;
+                answer
+            })
+        };
+        assert!(ask(&mut lookup, 1, "ja-JP", true));
+        // Same generation and tag: the remembered answer, even where the list would now say no.
+        for _ in 0..10 {
+            assert!(ask(&mut lookup, 1, "ja-JP", false));
+        }
+        assert!(!ask(&mut lookup, 2, "ja-JP", false), "a new generation works it out again");
+        assert!(ask(&mut lookup, 2, "th-TH", true), "another tag too");
+        assert_eq!(computed, 3);
     }
 
     #[test]

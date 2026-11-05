@@ -3,6 +3,7 @@
 //! results are what Word produces for the same keys.
 
 use serde_json::json;
+use std::sync::Arc;
 use wordcraft_doc::props::{BorderStyle, VertAlign};
 use wordcraft_doc::{Pos, StoryRef};
 
@@ -483,7 +484,7 @@ fn autocorrect_replacement_list_follows_the_texts_language() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), "Ala i kot ", "document default from the editing language");
     let mut s = self::s();
     s.set_editing_language(Some("pl-PL"));
-    s.doc.styles.default_chr.lang = None;
+    Arc::make_mut(&mut s.doc.styles).default_chr.lang = None;
     typ(&mut s, "Ala i kot ");
     assert_eq!(s.doc.plain_text(StoryRef::Body), "Ala i kot ", "untagged text in the editing language");
     // `eng` is English too, as for proofing.
@@ -834,6 +835,28 @@ fn a_tracked_border_line_is_a_deletion_and_a_formatting_change() {
 }
 
 #[test]
+fn a_tracked_border_line_at_the_top_supersedes_another_authors_formatting() {
+    use wordcraft_doc::props::Align;
+    // Ana centers the characters' paragraph; Ben's Enter gives it the border. The formatting
+    // change is Ben's and holds Ana's centered paragraph without a border.
+    let mut s = typed("---");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    run(&mut s, "para.align", json!({"value": "center"}));
+    s.author = "Ben".into();
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert!(p.props.borders.and_then(|b| b.bottom).is_some());
+    let ch = p.props.fmt_change.as_deref();
+    let author = ch.and_then(|c| s.doc.revisions.get(c.rev as usize)).map(|r| r.author.as_str());
+    assert_eq!(author, Some("Ben"), "{:?}", s.doc.revisions);
+    assert_eq!(ch.map(|c| (c.old.align, c.old.borders.and_then(|b| b.bottom).is_some())), Some((Some(Align::Center), false)));
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.props.align, p.props.borders.and_then(|b| b.bottom).is_some()), (Some(Align::Center), false));
+}
+
+#[test]
 fn a_tracked_table_line_keeps_its_characters_as_a_deletion() {
     let mut s = typed("+--+------+");
     run(&mut s, "review.trackChanges", json!({"value": true}));
@@ -1065,7 +1088,7 @@ fn tab_before_a_later_line_of_a_paragraph_indents_the_whole_paragraph() {
     assert_eq!(indents(&s), (None, None));
     // A list level past the last one, from a style or set directly, goes to the last level.
     let mut s = style_inherited_list(wordcraft_doc::numbering::ListKind::Numbered, false);
-    let style = s.doc.styles.styles.iter_mut().find(|x| x.id == "ListBase").unwrap();
+    let style = Arc::make_mut(&mut s.doc.styles).styles.iter_mut().find(|x| x.id == "ListBase").unwrap();
     style.para.numbering = style.para.numbering.map(|n| wordcraft_doc::props::NumRef { level: u8::MAX, ..n });
     run(&mut s, "tools.autocorrect", json!({"tabIndent": true}));
     run(&mut s, "caret.docStart", json!({}));
@@ -1169,6 +1192,10 @@ fn two_enters_after_a_short_line_make_it_a_heading() {
     let s = with_heading_styles("One two three four five\n\n");
     assert_eq!(s.doc.body.first().and_then(|b| b.as_para()).and_then(|p| p.props.style.as_deref()), Some("Heading1"));
     assert_eq!(styled(&with_heading_styles("Introduction\nText")), [h("Introduction", None), h("Text", None)]);
+}
+
+#[test]
+fn a_line_that_is_not_a_short_line_of_body_text_stays_as_it_is() {
     // Not a heading: six words, a closing punctuation mark, three tabs, a list item, a style.
     for keys in ["One two three four five six\n\n", "Dear Sir,\n\n", "Is it?\n\n", "\t\t\tDeep\n\n", "* Item\n\n"] {
         let s = with_heading_styles(keys);
@@ -1186,15 +1213,26 @@ fn two_enters_after_a_short_line_make_it_a_heading() {
     // A list item numbered by the Normal style is not body text either.
     let mut q = self::s();
     run(&mut q, "tools.autocorrect", json!({"headingStyles": true}));
-    let num = q.doc.numbering.try_add_list(wordcraft_doc::ListKind::Bullet).unwrap();
-    if let Some(normal) = q.doc.styles.get_mut("Normal") {
+    let num = Arc::make_mut(&mut q.doc.numbering).try_add_list(wordcraft_doc::ListKind::Bullet).unwrap();
+    if let Some(normal) = Arc::make_mut(&mut q.doc.styles).get_mut("Normal") {
         normal.para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
     }
     typ(&mut q, "Item\n\n");
     assert!(styled(&q).iter().all(|(_, st)| st.as_deref().is_none_or(|st| !st.starts_with("Heading"))), "{:?}", styled(&q));
-    // Off by default.
+    // A line with an outline level stays; the body-text level (9 and above) is no outline level.
+    for (level, style) in [(0, None), (8, None), (9, Some("Heading1")), (u8::MAX, Some("Heading1"))] {
+        let mut q = with_heading_styles("Title\n");
+        q.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap().props.outline_level = Some(level);
+        typ(&mut q, "\n");
+        assert_eq!(styled(&q).first().and_then(|(_, st)| st.as_deref()), style, "outline level {level}");
+    }
+}
+
+#[test]
+fn built_in_heading_styles_are_off_by_default() {
     let s = typed("Introduction\n\n");
-    assert_eq!(styled(&s), [h("Introduction", None), h("", None), h("", None)]);
+    let h = |t: &str| (t.to_string(), None);
+    assert_eq!(styled(&s), [h("Introduction"), h(""), h("")]);
 }
 
 #[test]
@@ -1211,6 +1249,18 @@ fn undo_right_after_a_heading_autoformat_keeps_the_enter() {
 
 #[test]
 fn a_tracked_heading_autoformat_can_be_rejected() {
+    // Enter in the empty paragraph turns a zero-tab line into Heading 1.
+    let mut s = with_heading_styles("Title\n");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref()), ("Title", Some("Heading1")));
+    let ch = p.props.fmt_change.as_deref();
+    assert_eq!(ch.and_then(|c| s.doc.revisions.get(c.rev as usize)).map(|r| r.author.as_str()), Some("Ana"));
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(styled(&s).first(), Some(&("Title".to_string(), None)));
+
     // With Track Changes on, the tab is marked deleted and the style change is a formatting
     // revision, so Reject All brings the line back as it was.
     let mut s = with_heading_styles("\tMethods\n");
@@ -1245,6 +1295,64 @@ fn a_tracked_heading_autoformat_can_be_rejected() {
 }
 
 #[test]
+fn a_tracked_heading_autoformat_supersedes_another_authors_formatting() {
+    use wordcraft_doc::props::Align;
+    // Ana centers a zero-tab line; Ben's Enter makes it Heading 1.
+    let mut s = with_heading_styles("Title\n");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "para.align", json!({"value": "center"}));
+    s.author = "Ben".into();
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref()), ("Title", Some("Heading1")));
+    let ch = p.props.fmt_change.as_deref();
+    assert_eq!(ch.and_then(|c| s.doc.revisions.get(c.rev as usize)).map(|r| r.author.as_str()), Some("Ben"));
+    assert_eq!(ch.map(|c| (c.old.style.as_deref(), c.old.align)), Some((None, Some(Align::Center))));
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref(), p.props.align), ("Title", None, Some(Align::Center)));
+
+    // Ana centers the line; Ben types a tab before it and makes it Heading 2. Ben's tab is
+    // removed, and the heading's formatting change is Ben's, holding Ana's centered Normal line.
+    let mut s = with_heading_styles("Title\n");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "para.align", json!({"value": "center"}));
+    s.author = "Ben".into();
+    typ(&mut s, "\t");
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref()), ("Title", Some("Heading2")));
+    let ch = p.props.fmt_change.as_deref();
+    let author = ch.and_then(|c| s.doc.revisions.get(c.rev as usize)).map(|r| r.author.as_str());
+    assert_eq!(author, Some("Ben"), "{:?}", s.doc.revisions);
+    assert_eq!(ch.map(|c| (c.old.style.as_deref(), c.old.align)), Some((None, Some(Align::Center))));
+    // Rejecting it brings back Ana's centered Normal line.
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref(), p.props.align), ("Title", None, Some(Align::Center)));
+    // The author's own earlier change keeps the formatting before it.
+    let mut s = with_heading_styles("Title\n");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "para.align", json!({"value": "center"}));
+    typ(&mut s, "\t");
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    let ch = p.props.fmt_change.as_deref();
+    assert_eq!(ch.and_then(|c| s.doc.revisions.get(c.rev as usize)).map(|r| r.author.as_str()), Some("Ana"));
+    assert_eq!(ch.map(|c| c.old.style.as_deref()), Some(None));
+    assert!(ch.is_some_and(|c| c.old.align != Some(Align::Center)), "{ch:?}");
+}
+
+#[test]
 fn a_locked_heading_style_is_not_applied_as_you_type() {
     let mut s = s();
     run(&mut s, "tools.autocorrect", json!({"headingStyles": true}));
@@ -1253,6 +1361,25 @@ fn a_locked_heading_style_is_not_applied_as_you_type() {
     let st = styled(&s);
     assert_eq!(st.first(), Some(&("Locked".to_string(), None)), "{st:?}");
     assert!(st.contains(&("Open".to_string(), Some("Heading2".to_string()))), "{st:?}");
+}
+
+#[test]
+fn enter_in_an_editable_region_after_a_protected_short_line_breaks_the_paragraph() {
+    // Read only, with an editable region from the end of "Title" to the start of "End.": Enter
+    // twice in the region breaks the paragraph and leaves the protected line Normal text, and a
+    // border line typed there goes under the paragraph above it, inside the region.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Title\nX\nEnd."));
+    run(&mut s, "tools.autocorrect", json!({"headingStyles": true}));
+    s.sel = crate::Selection { anchor: Pos::body(0, 5), focus: Pos::body(2, 0) };
+    run(&mut s, "review.restrict", json!({"exception": "add"}));
+    run(&mut s, "review.restrict", json!({"mode": "readOnly"}));
+    run(&mut s, "select.text", json!({"text": "X"}));
+    typ(&mut s, "\n\n");
+    assert_eq!(s.doc.body.len(), 5, "{:?}", styled(&s));
+    assert!(styled(&s).iter().all(|(_, st)| st.is_none()), "{:?}", styled(&s));
+    typ(&mut s, "---\n");
+    assert!(s.doc.para_at(&Pos::body(2, 0)).and_then(|p| p.props.borders).and_then(|b| b.bottom).is_some());
+    assert_eq!(s.doc.plain_text(StoryRef::Body).replace(wordcraft_doc::para::OBJ, ""), "Title\n\n\n\nEnd.");
 }
 
 #[test]
@@ -2036,7 +2163,7 @@ fn typing_rtl_letters_into_an_empty_paragraph_makes_it_rtl() {
     assert_eq!(bidi(&s, 1), Some(true), "Enter carries the paragraph's direction on, as in Word");
     // A style that sets left-to-right wins.
     let mut doc = Session::new(wordcraft_doc::Document::new());
-    if let Some(st) = doc.doc.styles.get_mut("Normal") {
+    if let Some(st) = Arc::make_mut(&mut doc.doc.styles).get_mut("Normal") {
         st.para.bidi = Some(false);
     }
     typ(&mut doc, "سلام");
@@ -3043,15 +3170,15 @@ fn style_inherited_list(kind: wordcraft_doc::numbering::ListKind, chain: bool) -
     use wordcraft_doc::props::NumRef;
     use wordcraft_doc::styles::Style;
     let mut doc = wordcraft_doc::Document::from_text("Alpha\nBeta");
-    let num = doc.numbering.try_add_list(kind).unwrap();
-    doc.styles.styles.push(Style {
+    let num = Arc::make_mut(&mut doc.numbering).try_add_list(kind).unwrap();
+    Arc::make_mut(&mut doc.styles).styles.push(Style {
         id: "ListBase".into(),
         name: "Original List".into(),
         para: wordcraft_doc::ParaProps { numbering: Some(NumRef { num, level: 0 }), ..Default::default() },
         ..Default::default()
     });
     if chain {
-        doc.styles.styles.push(Style {
+        Arc::make_mut(&mut doc.styles).styles.push(Style {
             id: "ListChild".into(),
             name: "Original Derived".into(),
             based_on: Some("ListBase".into()),
@@ -3127,13 +3254,13 @@ fn list_toggle_uses_effective_level_and_override() {
             for explicit_kind in [false, true] {
                 let mut s = style_inherited_list(kind, true);
                 let opposite = if kind == ListKind::Bullet { ListKind::Numbered } else { ListKind::Bullet };
-                let num = s.doc.styles.styles.iter_mut().find(|x| x.id == "ListBase").unwrap().para.numbering.as_mut().unwrap();
+                let num = Arc::make_mut(&mut s.doc.styles).styles.iter_mut().find(|x| x.id == "ListBase").unwrap().para.numbering.as_mut().unwrap();
                 num.level = 1;
                 let num_id = num.num;
-                s.doc.numbering.abstracts[0].levels[0] = levels_for(opposite)[0].clone();
+                Arc::make_mut(&mut s.doc.numbering).abstracts[0].levels[0] = levels_for(opposite)[0].clone();
                 if override_level {
-                    s.doc.numbering.abstracts[0].levels[1] = levels_for(opposite)[1].clone();
-                    s.doc.numbering.nums[0].level_overrides.push((1, levels_for(kind)[1].clone()));
+                    Arc::make_mut(&mut s.doc.numbering).abstracts[0].levels[1] = levels_for(opposite)[1].clone();
+                    Arc::make_mut(&mut s.doc.numbering).nums[0].level_overrides.push((1, levels_for(kind)[1].clone()));
                 }
                 let before = s.doc.clone();
                 let params = if explicit_kind { json!({"kind": if kind == ListKind::Bullet { "bullet" } else { "numbered" }}) } else { json!({}) };
@@ -3162,7 +3289,7 @@ fn list_paragraph_style_survives_inherited_toggle_off() {
     use wordcraft_doc::styles::Style;
     for kind in [ListKind::Bullet, ListKind::Numbered] {
         let mut s = style_inherited_list(kind, false);
-        *s.doc.styles.styles.iter_mut().find(|x| x.id == "ListParagraph").unwrap() = Style {
+        *Arc::make_mut(&mut s.doc.styles).styles.iter_mut().find(|x| x.id == "ListParagraph").unwrap() = Style {
             id: "ListParagraph".into(),
             name: "Original formatted list".into(),
             based_on: Some("ListBase".into()),
@@ -3217,7 +3344,7 @@ fn a_new_list_uses_the_requested_kind_after_a_mixed_format_list() {
     for (kind, command) in [(ListKind::Bullet, "para.bullets"), (ListKind::Numbered, "para.numbering")] {
         let mut s = style_inherited_list(kind, false);
         let opposite = if kind == ListKind::Bullet { ListKind::Numbered } else { ListKind::Bullet };
-        s.doc.numbering.abstracts[0].levels[0] = levels_for(opposite)[0].clone();
+        Arc::make_mut(&mut s.doc.numbering).abstracts[0].levels[0] = levels_for(opposite)[0].clone();
         let num = s.doc.numbering.nums[0].id;
         s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering = Some(NumRef { num, level: 1 });
         s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().props = ParaProps::default();
@@ -3273,7 +3400,7 @@ fn highlight_toggle_handles_mixed_inherited_and_pending_formatting() {
     assert_eq!(s.run("format.state", &json!({})).unwrap()["highlight"], json!("0000FF"));
     run(&mut s, "format.highlight", json!({}));
     assert_eq!(s.run("format.state", &json!({})).unwrap()["highlight"], serde_json::Value::Null);
-    s.doc.styles.default_chr.highlight = Some(wordcraft_doc::props::Highlight::Blue);
+    Arc::make_mut(&mut s.doc.styles).default_chr.highlight = Some(wordcraft_doc::props::Highlight::Blue);
     run(&mut s, "format.highlight", json!({"color":"blue"}));
     run(&mut s, "format.highlight", json!({}));
     assert!(s.doc.body[0].as_para().unwrap().runs.iter().all(|r| r.props.highlight == Some(wordcraft_doc::props::Highlight::None)));
@@ -3335,7 +3462,7 @@ fn highlight_toggle_checks_past_the_resolved_run_limit() {
                 .map(|i| Run { len: 1, props: CharProps { highlight: Some(Highlight::Blue), bold: Some(i % 2 == 0), ..Default::default() } })
                 .collect();
             if inherited {
-                doc.styles.default_chr.highlight = Some(Highlight::Yellow);
+                Arc::make_mut(&mut doc.styles).default_chr.highlight = Some(Highlight::Yellow);
             } else {
                 doc.para_mut(StoryRef::Body, &Pos::body(1, 0).path).unwrap().runs[0].props.highlight = Some(Highlight::Yellow);
             }
@@ -3395,7 +3522,7 @@ fn highlight_toggle_checks_whole_cell_marks() {
                 Pos::new(StoryRef::Body, path, 0)
             };
             if inherited {
-                s.doc.styles.default_chr.highlight = Some(Highlight::Yellow);
+                Arc::make_mut(&mut s.doc.styles).default_chr.highlight = Some(Highlight::Yellow);
             }
             for row in 0..2 {
                 for col in 0..2 {
@@ -3447,7 +3574,7 @@ fn highlight_toggle_checks_ordinary_paragraph_marks() {
     use wordcraft_doc::props::Highlight;
     for text in ["AB", "AB\n\nAB", "\n"] {
         let mut doc = wordcraft_doc::Document::from_text(text);
-        doc.styles.default_chr.highlight = Some(Highlight::Blue);
+        Arc::make_mut(&mut doc.styles).default_chr.highlight = Some(Highlight::Blue);
         let paths = doc.para_paths(StoryRef::Body);
         for path in &paths {
             let p = doc.para_mut(StoryRef::Body, path).unwrap();
