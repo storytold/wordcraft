@@ -35,6 +35,8 @@ pub use shell::{body, open};
 pub use sources::SourceForm;
 #[cfg(test)]
 use sources::field_mut;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use sources::sources_status;
 pub use toc::{FiguresForm, TocForm};
 
 #[derive(Clone, Debug, Serialize)]
@@ -67,6 +69,8 @@ pub enum RefsDialog {
     Figures(FiguresForm),
     Sources {
         selected: Option<usize>,
+        /// Status line under the list actions: the import's outcome (#1058).
+        message: String,
     },
     Source(Box<SourceForm>),
 }

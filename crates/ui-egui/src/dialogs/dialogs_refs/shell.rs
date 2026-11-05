@@ -15,7 +15,7 @@ pub fn open(name: &str, app: &WordApp) -> Option<RefsDialog> {
         "markEntry" => RefsDialog::MarkEntry(MarkForm::read(app)),
         "toc" => RefsDialog::Toc(TocForm::read(app)),
         "tableOfFigures" => RefsDialog::Figures(FiguresForm::read(app)),
-        "sourceManager" => RefsDialog::Sources { selected: None },
+        "sourceManager" => RefsDialog::Sources { selected: None, message: String::new() },
         "createSource" => RefsDialog::Source(Box::new(SourceForm::new(true, false))),
         _ => return None,
     })
@@ -34,7 +34,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut RefsDialog) -> bool {
         RefsDialog::TocOptions { form, was } => toc_options_ui(app, ui, form, was),
         RefsDialog::TocStyles { form, level } => toc_styles_ui(app, ui, form, level),
         RefsDialog::Figures(f) => figures_ui(app, ui, f),
-        RefsDialog::Sources { selected } => sources_ui(app, ui, selected),
+        RefsDialog::Sources { selected, message } => sources_ui(app, ui, selected, message),
         RefsDialog::Source(f) => source_ui(app, ui, f),
     };
     match next {

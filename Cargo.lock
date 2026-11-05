@@ -6833,6 +6833,7 @@ version = "0.15.1"
 dependencies = [
  "serde_json",
  "sys-locale",
+ "wordcraft-control-key",
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-mcp",
@@ -6843,6 +6844,14 @@ dependencies = [
 [[package]]
 name = "wordcraft-control-key"
 version = "0.15.1"
+
+[[package]]
+name = "wordcraft-csl"
+version = "0.15.1"
+dependencies = [
+ "quick-xml 0.41.0",
+ "wordcraft-doc",
+]
 
 [[package]]
 name = "wordcraft-doc"
@@ -6920,6 +6929,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "wordcraft-csl",
  "wordcraft-doc",
  "wordcraft-docbin",
  "wordcraft-docx",
@@ -6965,6 +6975,7 @@ dependencies = [
  "miniz_oxide 0.9.1",
  "proptest",
  "quick-xml 0.41.0",
+ "serde_json",
  "sha1 0.11.0",
  "sha2 0.11.1",
  "wordcraft-doc",

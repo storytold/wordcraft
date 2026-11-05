@@ -1,5 +1,5 @@
 use super::Source;
-use super::styles::{Cite, Name, Names, style};
+use super::styles::{Cite, CiteStyle, Name, Names, style};
 
 /// A source's corporate author, when it has one: written as it is in place of the person names
 /// (Word's Corporate Author, #4848).
@@ -111,9 +111,13 @@ fn render(template: &str, field: &dyn Fn(&str) -> String) -> String {
     out
 }
 
-/// In-text citation for a style; `n` is the source's number in numbered styles.
+/// In-text citation for a style name; `n` is the source's number in numbered styles.
 pub fn cite(src: &Source, style_name: &str, n: usize, pages: &str) -> String {
-    let st = style(style_name);
+    built_cite(style(style_name), src, n, pages)
+}
+
+/// In-text citation for one of our styles; `n` is the source's number in numbered styles.
+pub(super) fn built_cite(st: &CiteStyle, src: &Source, n: usize, pages: &str) -> String {
     let au = authors(&src.author);
     let lasts: Vec<&str> = au.iter().map(|a| a.0.as_str()).collect();
     let who = match (corporate(src), lasts.as_slice()) {
@@ -148,9 +152,13 @@ fn gb_type(src: &Source) -> String {
     if src.url.is_empty() { code.into() } else { format!("{code}/OL") }
 }
 
-/// Bibliography entry for a style; `n` is the source's number in numbered styles.
+/// Bibliography entry for a style name; `n` is the source's number in numbered styles.
 pub fn entry(src: &Source, style_name: &str, n: usize) -> String {
-    let st = style(style_name);
+    built_entry(style(style_name), src, n)
+}
+
+/// Bibliography entry for one of our styles; `n` is the source's number in numbered styles.
+pub(super) fn built_entry(st: &CiteStyle, src: &Source, n: usize) -> String {
     let au = authors(&src.author);
     let field = |key: &str| -> String {
         match key {

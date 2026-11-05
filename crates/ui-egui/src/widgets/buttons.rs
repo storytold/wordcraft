@@ -278,6 +278,8 @@ pub fn menu_button(ui: &mut Ui, app: &mut WordApp, options: MenuButtonOptions<'_
     };
     let reason = if on { None } else { Some(app.session.why_disabled(id).unwrap_or("")) };
     let (title, notes) = tooltip_lines(tip, &shortcut_text(app, id), "", reason);
+    #[cfg(test)]
+    crate::widgets::MENU_BUTTONS.with_borrow_mut(|b| b.push((tip.to_string(), resp.rect)));
     show_hint(&resp, &title, &notes);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip));
     if !on {

@@ -900,3 +900,100 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+/// A test CSL style, clean (no warnings) — written for these tests, like every file here.
+const CSL_CLEAN: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<style xmlns="http://purl.org/net/csl" version="1.0">
+  <info><id>http://wordcraft.test/clean</id><title>WordCraft Test Clean</title></info>
+  <citation><layout><text variable="title"/></layout></citation>
+  <bibliography><layout><text variable="title"/></layout></bibliography>
+</style>
+"#;
+
+/// A test CSL style that loads with a warning (`default-locale` isn't en-US).
+const CSL_HARVARD: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<style xmlns="http://purl.org/net/csl" version="1.0" default-locale="de-DE">
+  <info><id>http://wordcraft.test/harvard</id><title>WordCraft Test Harvard</title></info>
+  <citation><layout><text variable="title"/></layout></citation>
+  <bibliography><layout><text variable="title"/></layout></bibliography>
+</style>
+"#;
+
+/// #1058: the References ▸ Style combo lists the built-ins, then the loaded CSL styles by
+/// title; picking one records `csl:<id>`, and "Add style from file…" asks for a CSL file and
+/// installs, selects and reports it.
+#[test]
+fn style_combo_lists_adds_and_selects_csl_styles() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::mpsc::{Sender, channel};
+
+    use egui_kittest::kittest::Queryable;
+
+    use crate::file_dialogs::{FileDialogAnswer, FileDialogRequest};
+
+    let dir = std::env::temp_dir().join(format!("wordcraft-ui-csl-combo-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let styles = dir.join("styles");
+    std::fs::create_dir_all(&styles).unwrap();
+    std::fs::write(styles.join("clean.csl"), CSL_CLEAN.as_bytes()).unwrap();
+    let to_add = dir.join("harvard.csl");
+    std::fs::write(&to_add, CSL_HARVARD.as_bytes()).unwrap();
+    let mut session = Session::new(wordcraft_doc::Document::new());
+    session.set_csl_styles_dir(styles.clone());
+    let shown: Rc<RefCell<Vec<(FileDialogRequest, Sender<FileDialogAnswer>)>>> = Rc::default();
+    let log = shown.clone();
+    let services = crate::Services {
+        file_dialog: Some(Box::new(move |req| {
+            let (tx, rx) = channel();
+            log.borrow_mut().push((req, tx));
+            rx
+        })),
+        ..Default::default()
+    };
+    let mut a = crate::WordApp::new(session, services);
+    a.run("ui.tab", json!({"tab": "References"})).unwrap();
+    // The menu buttons paint their own text (no AccessKit label), so the test reads the rects
+    // `menu_button` records while drawing, and clicks them like a pointer would.
+    let drawn: Rc<RefCell<Vec<(String, egui::Rect)>>> = Rc::default();
+    let seen = drawn.clone();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut crate::WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+            *seen.borrow_mut() = crate::widgets::MENU_BUTTONS.with_borrow_mut(std::mem::take);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let combo = || drawn.borrow().iter().rev().find(|(tip, _)| tip.starts_with("Citation Style")).map(|(_, r)| *r).expect("the style combo is drawn");
+    let click = |h: &mut egui_kittest::Harness<'_, crate::WordApp>, at: egui::Pos2| {
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        h.run_steps(2);
+    };
+    click(&mut h, combo().center());
+    assert!(h.query_by_label_contains("APA").is_some(), "the built-ins are still listed");
+    assert!(h.query(egui_kittest::kittest::By::new().label_contains("WordCraft Test Clean")).is_some(), "the loaded CSL style is listed by title");
+    h.get_by_label_contains("WordCraft Test Clean").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.bib_style, "csl:http://wordcraft.test/clean", "picking the CSL style records csl:<id>");
+    // Add style from file…: the host's file dialog, then install, warn and select.
+    click(&mut h, combo().center());
+    h.get_by_label("Add style from file…").click();
+    h.run_steps(2);
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "csl-style".into() });
+    let (_, tx) = shown.borrow_mut().pop().unwrap();
+    tx.send(Ok(vec![to_add.to_string_lossy().into_owned()])).unwrap();
+    h.run_steps(4);
+    assert!(styles.join("harvard.csl").is_file(), "the picked file is copied into the styles folder");
+    assert_eq!(h.state().session.bib_style, "csl:http://wordcraft.test/harvard", "the added style becomes the document's");
+    let status = h.state().status_msg.as_ref().map(|(m, _)| m.as_str()).unwrap_or_default();
+    assert!(status.contains("with warnings"), "the warnings show in the status line: {status}");
+    assert!(status.contains("WordCraft Test Harvard"), "the style the warnings belong to: {status}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

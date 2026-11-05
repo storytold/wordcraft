@@ -4641,6 +4641,77 @@ fn hostile_params_never_panic() {
             let _ = s.layout();
         }
     }
+    // `references.importSources` reads files, so the junk above (no string `path`) can't reach
+    // its read path: give it real hostile ones — every one is a `Params` error, never a panic.
+    {
+        let dir = std::env::temp_dir().join(format!("wordcraft-import-hostile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("empty.bib"), b"").unwrap();
+        std::fs::write(dir.join("wrong.txt"), b"not any kind of library").unwrap();
+        // A sparse 100 MB library: refused by its size, before the whole thing is read in.
+        std::fs::File::create(dir.join("big.bib")).unwrap().set_len(100 << 20).unwrap();
+        let mut s = Session::new(crate::sample::sample_document());
+        for bad in [
+            json!({}),
+            json!({"path": 5}),
+            json!({"path": ""}),
+            json!({"path": dir.to_string_lossy()}),
+            json!({"path": dir.join("missing.bib").to_string_lossy()}),
+            json!({"path": dir.join("empty.bib").to_string_lossy()}),
+            json!({"path": dir.join("wrong.txt").to_string_lossy()}),
+            json!({"path": dir.join("missing.ris").to_string_lossy(), "format": "nope"}),
+            json!({"path": dir.join("big.bib").to_string_lossy()}),
+        ] {
+            match s.run("references.importSources", &bad) {
+                Err(crate::CmdError::Params(_)) => {}
+                other => panic!("expected a Params error for {bad}, got {other:?}"),
+            }
+        }
+        // The oversized file is refused at the read, so the error names the cap (and the file
+        // is never read in, however large it is).
+        match s.run("references.importSources", &json!({"path": dir.join("big.bib").to_string_lossy()})) {
+            Err(e) => assert!(e.to_string().contains("larger than 16 MB"), "{e}"),
+            Ok(r) => panic!("expected a Params error for big.bib, got {r}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    // `references.cslStyles` reads and deletes files, so the junk above (no string `add`/
+    // `remove`) can't reach them: hostile paths and ids are parameter errors, never panics —
+    // wired to a styles folder or not.
+    {
+        let dir = std::env::temp_dir().join(format!("wordcraft-csl-hostile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("broken.csl"), b"<style").unwrap();
+        let mut s = Session::new(crate::sample::sample_document());
+        s.set_csl_styles_dir(dir.clone());
+        for bad in [
+            json!({}),
+            json!({"add": 5, "remove": 5}),
+            json!({"add": "", "remove": ""}),
+            json!({"add": dir.to_string_lossy()}),
+            json!({"add": dir.join("missing.csl").to_string_lossy()}),
+            json!({"add": dir.join("broken.csl").to_string_lossy()}),
+            json!({"remove": "not-an-id"}),
+            json!({"add": null, "remove": []}),
+        ] {
+            let _ = s.run("references.cslStyles", &bad);
+            s.clamp_selection();
+            let _ = s.layout();
+        }
+        // A session without a styles folder (web, tests) refuses add/remove without crashing.
+        let mut bare = Session::new(crate::sample::sample_document());
+        let _ = bare.run("references.cslStyles", &json!({"add": dir.join("broken.csl").to_string_lossy()}));
+        let _ = bare.run("references.cslStyles", &json!({"remove": "x"}));
+        // A CSL style that is no longer installed names itself; never a panic, never APA.
+        bare.bib_style = "csl:ghost".into();
+        let _ = bare.run("references.updateFields", &json!({}));
+        let _ = bare.run("references.citationStyle", &json!({"style": "csl:ghost"}));
+        let _ = bare.run("references.citation", &json!({"tag": "x"}));
+        let _ = bare.run("references.bibliography", &json!({}));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 /// A panic that `Session::run`'s guard turned into an error, in a command or one it ran: still a

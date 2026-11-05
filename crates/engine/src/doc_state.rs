@@ -167,9 +167,15 @@ pub(super) fn typed_range(text: &str, off: usize) -> Option<(usize, usize)> {
     text.get(start..off)?.chars().any(char::is_alphanumeric).then_some((start, end))
 }
 
-/// The name of `doc`'s bibliography style, APA when it names none we know.
+/// The name of `doc`'s bibliography style, APA when it names none we know. A recorded CSL
+/// style (`csl:<id>`) is kept exactly as written: it round-trips, and a session without the
+/// style installed says so (`citations::session_style`) instead of quietly falling back.
 pub(super) fn doc_bib_style(doc: &Document) -> String {
-    doc.settings.bib_style.as_deref().and_then(crate::cmd::citations::find_style).map_or("APA", |st| st.name).to_string()
+    let name = doc.settings.bib_style.as_deref().unwrap_or("");
+    if name.starts_with("csl:") {
+        return name.to_string();
+    }
+    crate::cmd::citations::find_style(name).map_or("APA", |st| st.name).to_string()
 }
 
 /// Most pending front-end requests a session keeps.

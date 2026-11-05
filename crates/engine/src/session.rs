@@ -174,8 +174,17 @@ pub struct Session {
     /// Quick Parts / AutoText entries.
     pub building_blocks: std::collections::BTreeMap<String, Fragment>,
     pub autosave: bool,
-    /// Citation style: APA, MLA, Chicago, IEEE.
+    /// Citation style: APA, MLA, Chicago, IEEE — or `csl:<id>`, a CSL style the user
+    /// installed through References ▸ Citation Styles (#1058).
     pub bib_style: String,
+    /// The CSL styles in the styles folder, loaded by the host through
+    /// [`Session::set_csl_styles_dir`] (the built-in styles are always available). A
+    /// document's `csl:<id>` style renders citations and the bibliography through these.
+    pub csl_styles: Vec<crate::cmd::citations::CslStyleEntry>,
+    /// Where `references.cslStyles` copies style files into, wired up by the host like
+    /// [`Session::user_dict_path`]: the desktop app, the CLI and the MCP server point it at
+    /// `<settings>/styles`; headless sessions without one keep the built-ins.
+    pub csl_styles_dir: Option<std::path::PathBuf>,
     /// Mail merge data source and preview.
     pub merge: crate::cmd::mailings::MergeState,
     /// Requests from commands to the UI (open a dialog, scroll…), drained by the front end.
@@ -239,4 +248,34 @@ pub struct Session {
 impl Session {
     /// File name of the persisted custom dictionary inside the settings folder.
     pub const USER_DICT_FILE: &str = "custom-dictionary.txt";
+
+    /// Folder of CSL styles inside the settings folder (References ▸ Citation Styles).
+    pub const CSL_STYLES_DIR: &str = "styles";
+
+    /// Point the session at its CSL styles folder (`<settings>/styles`) and load the `.csl`
+    /// files in it: the styles `references.cslStyles` lists and `csl:<id>` picks. A file
+    /// that doesn't parse is skipped with a note in the status bar; the built-in styles are
+    /// always there. Hosts call this once at startup, the way `user_dict_path` is wired up.
+    pub fn set_csl_styles_dir(&mut self, dir: std::path::PathBuf) {
+        self.reload_csl_styles_from(&dir);
+        self.csl_styles_dir = Some(dir);
+    }
+
+    /// Make `dir`'s `.csl` files the session's CSL styles (in file order), collecting the
+    /// files that had to be skipped into the status bar. A folder that doesn't exist yet
+    /// (nothing installed) simply holds no styles.
+    fn reload_csl_styles_from(&mut self, dir: &std::path::Path) {
+        self.csl_styles.clear();
+        let mut problems: Vec<String> = Vec::new();
+        for (name, bytes) in crate::io::read_dir_files(dir, ".csl") {
+            // The parser itself caps what it accepts (2 MiB) and refuses what it can't read.
+            match wordcraft_csl::parse(&bytes) {
+                Ok(style) => self.csl_styles.push(crate::cmd::citations::CslStyleEntry { file: name, style }),
+                Err(e) => problems.push(format!("{name}: {e}")),
+            }
+        }
+        if !problems.is_empty() {
+            self.status = format!("CSL styles not loaded: {}", problems.join("; "));
+        }
+    }
 }

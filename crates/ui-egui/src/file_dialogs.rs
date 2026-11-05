@@ -43,14 +43,16 @@ const DOCUMENTS: &[&str] =
     &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "ott", "fodt", "rtf", "txt", "md", "html", "htm", "mht", "mhtml", "tex", "json", "xml"];
 
 /// The file types Open offers, as (label, extensions; `*` is any file): pictures for Insert/Change
-/// Picture, recipient lists for Select Recipients › Use an Existing List…, documents otherwise.
-/// The host's system dialog and the built-in browser offer the same.
+/// Picture, recipient lists for Select Recipients › Use an Existing List…, source libraries for
+/// Manage Sources › Import…, documents otherwise. The host's system dialog and the built-in
+/// browser offer the same.
 pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'static str])] {
     match purpose {
         "picture" => &[("Pictures", PICTURES)],
         "font" => &[("Fonts", wordcraft_fonts::FONT_FILE_EXTS)],
-        "sources" => &[("Word sources", &["xml"]), ("All files", &["*"])],
         "recipients" => &[("Recipient lists", wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS), ("All files", &["*"])],
+        "sources" => &[("Word sources", &["xml"]), ("Source libraries", &["bib", "ris", "json"]), ("All files", &["*"])],
+        "csl-style" => &[("CSL styles", &["csl"]), ("All files", &["*"])],
         _ => &[("Documents", DOCUMENTS), ("Word document", &["docx"]), ("All files", &["*"])],
     }
 }
@@ -75,6 +77,10 @@ pub(crate) enum AfterPick {
     /// document through Manage Sources (#2640).
     #[cfg(not(target_arch = "wasm32"))]
     Sources,
+    /// Install the picked CSL file as a citation style (References ▸ Style ▸ Add style from
+    /// file…, #1058): `references.cslStyles {"add"}`, its warnings in the status line, then the
+    /// added style becomes the document's.
+    CslStyle,
     /// Hand the picked path to the open dialog (`WordApp::dialog_pick`): Templates and Add-ins,
     /// Organizer (#377).
     ForDialog,
@@ -263,16 +269,78 @@ impl WordApp {
             #[cfg(not(target_arch = "wasm32"))]
             AfterPick::Sources => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                // A reference-manager library (BibTeX, RIS, CSL-JSON: .bib/.ris/.json) imports
+                // through `references.importSources` (#1058); anything else goes to the Word
+                // bibliography import (#2640), and a file that is neither a Word bibliography
+                // nor a sniffable library keeps the Word import's error.
+                let library = ["bib", "ris", "json"]
+                    .iter()
+                    .any(|e| std::path::Path::new(&path).extension().and_then(|x| x.to_str()).is_some_and(|x| x.eq_ignore_ascii_case(e)));
                 let before = self.session.doc.sources.len();
-                let r = self.run("references.sources", json!({"import": path}));
-                if r.is_ok() {
-                    let added = self.session.doc.sources.len().saturating_sub(before);
-                    let msg = match added {
-                        0 => tl!("No new sources in that file").to_string(),
-                        1 => tl!("Imported 1 source").to_string(),
-                        n => crate::i18n::fmt(tl!("Imported {n} sources"), &[("n", &n.to_string())]),
-                    };
-                    self.status(msg);
+                let r = if library {
+                    self.run("references.importSources", json!({"path": path}))
+                } else {
+                    match self.run("references.sources", json!({"import": path})) {
+                        Err(e) => match self.run("references.importSources", json!({"path": path})) {
+                            Err(_) => Err(e),
+                            ok => ok,
+                        },
+                        ok => ok,
+                    }
+                };
+                match &r {
+                    Ok(v) => {
+                        let msg = match (v.get("added").and_then(Value::as_u64), v.get("updated").and_then(Value::as_u64)) {
+                            (Some(added), Some(updated)) => crate::i18n::fmt(
+                                tl!("{added} added, {updated} updated"),
+                                &[("added", &added.to_string()), ("updated", &updated.to_string())],
+                            ),
+                            _ => {
+                                let added = self.session.doc.sources.len().saturating_sub(before);
+                                match added {
+                                    0 => tl!("No new sources in that file").to_string(),
+                                    1 => tl!("Imported 1 source").to_string(),
+                                    n => crate::i18n::fmt(tl!("Imported {n} sources"), &[("n", &n.to_string())]),
+                                }
+                            }
+                        };
+                        crate::dialogs_refs::sources_status(self, msg);
+                    }
+                    Err(e) => crate::dialogs_refs::sources_status(self, e.clone()),
+                }
+                r
+            }
+            AfterPick::CslStyle => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                let r = self.run("references.cslStyles", json!({"add": path}));
+                match &r {
+                    Ok(v) => {
+                        // Say the warnings in the status line, then make the added style the
+                        // document's (`csl:<id>`), so the combo's label confirms what happened.
+                        let warnings = v
+                            .get("warnings")
+                            .and_then(Value::as_array)
+                            .map_or(String::new(), |w| w.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" "));
+                        let Some(id) = v.get("id").and_then(Value::as_str) else { return r };
+                        let title = self.session.csl_styles.iter().find(|e| e.id().eq_ignore_ascii_case(id)).map_or_else(
+                            || id.to_string(),
+                            |e| {
+                                if e.style.title.is_empty() { e.file.clone() } else { e.style.title.clone() }
+                            },
+                        );
+                        if warnings.is_empty() {
+                            self.status(crate::i18n::fmt(tl!("Style {style} added"), &[("style", &title)]));
+                        } else {
+                            self.status(crate::i18n::fmt(
+                                tl!("Style {style} added, with warnings: {warnings}"),
+                                &[("style", &title), ("warnings", &warnings)],
+                            ));
+                        }
+                        if let Err(e) = self.run("references.citationStyle", json!({"style": format!("csl:{id}")})) {
+                            self.status(e);
+                        }
+                    }
+                    Err(e) => self.status(e.clone()),
                 }
                 r
             }

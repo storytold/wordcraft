@@ -143,6 +143,8 @@ impl Session {
             building_blocks: Default::default(),
             autosave,
             bib_style,
+            csl_styles: Vec::new(),
+            csl_styles_dir: None,
             merge,
             ui_requests: Vec::new(),
             math,
