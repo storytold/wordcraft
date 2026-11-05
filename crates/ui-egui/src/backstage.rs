@@ -90,7 +90,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, band.height())), ui.scope_id().with("backstage_back"), Sense::click());
                 icons::paint(
                     ui.painter(),
-                    Rect::from_center_size(c, vec2(18.0, 18.0)),
+                    Rect::from_center_size(c, vec2(16.0, 16.0)),
                     if rtl { "chevronRight" } else { "chevronLeft" },
                     egui::Color32::WHITE,
                     egui::Color32::WHITE,
@@ -105,7 +105,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, r.height())), ui.scope_id().with("backstage_back"), Sense::click());
                 icons::paint(
                     ui.painter(),
-                    Rect::from_center_size(c, vec2(18.0, 18.0)),
+                    Rect::from_center_size(c, vec2(16.0, 16.0)),
                     if rtl { "chevronRight" } else { "chevronLeft" },
                     egui::Color32::WHITE,
                     egui::Color32::WHITE,
@@ -608,14 +608,14 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
         let rtl = crate::rtl::on();
         icons::paint(
             ui.painter(),
-            Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 18.0), r.center().y), vec2(22.0, 22.0)),
+            Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 20.0), r.center().y), vec2(32.0, 32.0)),
             "printLayout",
             t.icon,
             t.accent,
         );
         let side = crate::rtl::lead_center(rtl);
-        ui.painter().text(pos2(crate::rtl::lead_x(rtl, r, 40.0), r.min.y + 13.0), side, crate::i18n::isolate(name), medium(13.0), t.text);
-        ui.painter().text(pos2(crate::rtl::lead_x(rtl, r, 40.0), r.min.y + 29.0), side, crate::i18n::isolate_path(p), regular(11.0), t.text_dim);
+        ui.painter().text(pos2(crate::rtl::lead_x(rtl, r, 44.0), r.min.y + 13.0), side, crate::i18n::isolate(name), medium(13.0), t.text);
+        ui.painter().text(pos2(crate::rtl::lead_x(rtl, r, 44.0), r.min.y + 29.0), side, crate::i18n::isolate_path(p), regular(11.0), t.text_dim);
         if resp.clicked() {
             let failed = open_recent(app, p).err();
             ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));

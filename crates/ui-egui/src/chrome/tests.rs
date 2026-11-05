@@ -91,6 +91,49 @@ fn status_bar_controls_hold_still_across_zoom_levels() {
     }
 }
 
+/// The zoom buttons are 20 points square (they were 18): a press in the added edge strip, past
+/// the old 18-point square but inside the new one, zooms.
+#[test]
+fn zoom_buttons_take_a_press_in_their_outer_edge() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let ctx = ctx();
+    ctx.enable_accesskit();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 800.0));
+    let mut n = 0.0_f64;
+    let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        n += 1.0;
+        let input = egui::RawInput { time: Some(n / 60.0), screen_rect: Some(screen), events, ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| status_bar(a, ui));
+        out.textures_delta.clear();
+        out.platform_output.accesskit_update.take()
+    };
+    // The two icon buttons are the only 20 x 20 nodes; the left one is Zoom Out.
+    let update = frame(&mut a, vec![]).expect("accesskit is on");
+    let mut squares: Vec<egui::Rect> = update
+        .nodes
+        .iter()
+        .filter_map(|(_, node)| node.bounds())
+        .filter(|b| (b.x1 - b.x0 - 20.0).abs() < 0.01 && (b.y1 - b.y0 - 20.0).abs() < 0.01)
+        .map(|b| egui::Rect::from_min_max(egui::pos2(b.x0 as f32, b.y0 as f32), egui::pos2(b.x1 as f32, b.y1 as f32)))
+        .collect();
+    squares.sort_by(|p, q| p.min.x.total_cmp(&q.min.x));
+    assert_eq!(squares.len(), 2, "zoom out and zoom in: {squares:?}");
+    for (r, command, grows) in [(squares[0], "out", false), (squares[1], "in", true)] {
+        let before = a.canvas.scale;
+        // 9.5 points right of the centre: inside the 20-point square, outside the old 18-point one.
+        let pos = r.center() + vec2(9.5, 0.0);
+        let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        frame(&mut a, vec![egui::Event::PointerMoved(pos)]);
+        frame(&mut a, vec![button(true)]);
+        frame(&mut a, vec![button(false)]);
+        frame(&mut a, vec![]);
+        // The canvas applies the session's zoom on its next frame; the command has run by now.
+        let zoom = a.session.view.zoom;
+        assert!(if grows { zoom > 1.0 } else { zoom < 1.0 }, "zoom {command} ran from the edge strip (zoom is {zoom}, canvas {before})");
+        a.session.run("view.zoom", &json!({"value": 100})).unwrap();
+    }
+}
+
 /// #2402: a long message (the path of a file that isn't there) is shortened so that it stops
 /// before the controls on the right, instead of being drawn over the Focus button.
 #[test]

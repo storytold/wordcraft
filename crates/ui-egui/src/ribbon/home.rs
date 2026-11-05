@@ -292,7 +292,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                 split(
                     ui,
                     app,
-                    "shadingNoBar",
+                    "shading",
                     "Shading",
                     crate::widgets::ButtonAction::new("para.shading", json!({"color": app.canvas.last_shading.clone()}), false),
                     sw,
