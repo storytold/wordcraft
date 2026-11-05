@@ -33,6 +33,12 @@ pub fn esc(s: &str) -> String {
     o
 }
 
+/// [`esc`] for a `\fonttbl` name: `;` would end the entry, so it is written `\'3b`, and control
+/// characters, which `esc` writes as `\line` or `\tab`, are dropped.
+fn esc_font(name: &str) -> String {
+    esc(&name.replace(char::is_control, "")).replace(';', "\\'3b")
+}
+
 pub(super) struct Tables {
     pub(super) fonts: Vec<String>,
     pub(super) colors: Vec<Rgb>,
@@ -147,6 +153,15 @@ fn rtf_border_style(s: wordcraft_doc::props::BorderStyle) -> &'static str {
         BorderStyle::Triple => "\\brdrtriple",
         BorderStyle::DotDash => "\\brdrdashd",
         BorderStyle::Wave => "\\brdrwavy",
+        BorderStyle::ThinThickSmallGap => "\\brdrtnthsg",
+        BorderStyle::ThickThinSmallGap => "\\brdrthtnsg",
+        BorderStyle::ThinThickThinSmallGap => "\\brdrtnthtnsg",
+        BorderStyle::ThinThickMediumGap => "\\brdrtnthmg",
+        BorderStyle::ThickThinMediumGap => "\\brdrthtnmg",
+        BorderStyle::ThinThickThinMediumGap => "\\brdrtnthtnmg",
+        BorderStyle::ThinThickLargeGap => "\\brdrtnthlg",
+        BorderStyle::ThickThinLargeGap => "\\brdrthtnlg",
+        BorderStyle::ThinThickThinLargeGap => "\\brdrtnthtnlg",
     }
 }
 
@@ -401,7 +416,20 @@ impl Writer {
                 }
                 // RTF keeps no ruby yet: its base text, in the run's formatting.
                 Inline::Ruby { base, fmt, .. } => self.run(base, fmt, out),
-                Inline::Figure(_) | Inline::Equation { .. } => {}
+                // ASK and SET show nothing (see `model::shows_nothing`).
+                Inline::Field { instr, .. } if model::shows_nothing(instr) => {}
+                Inline::Field { result, fmt, .. } | Inline::Control { text: result, fmt, .. } => self.run(result, fmt, out),
+                Inline::Figure(_)
+                | Inline::Chart(_)
+                | Inline::Equation { .. }
+                | Inline::Note { .. }
+                | Inline::Comment { .. }
+                | Inline::CommentEnd(_)
+                | Inline::Shape { .. }
+                | Inline::Group { .. }
+                | Inline::FieldStart(_)
+                | Inline::FieldEnd
+                | Inline::AnchorEnd(_) => {}
             }
         }
     }
@@ -684,7 +712,7 @@ fn export_with(m: &Meta, w: &Writer, body: &str, sec: &wordcraft_doc::SectionPro
     let mut out = String::from("{\\rtf1\\ansi\\ansicpg1252\\deff0\\deflang1033\\uc1\n{\\fonttbl");
     for (i, f) in w.t.fonts.iter().enumerate() {
         let fam = if model::is_mono(f) { "\\fmodern" } else { "\\fswiss" };
-        out.push_str(&format!("{{\\f{i}{fam}\\fcharset0 {};}}", esc(f)));
+        out.push_str(&format!("{{\\f{i}{fam}\\fcharset0 {};}}", esc_font(f)));
     }
     out.push_str("}\n{\\colortbl;");
     for c in &w.t.colors {

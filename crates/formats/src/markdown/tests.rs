@@ -357,6 +357,67 @@ fn three_column_table_with_distinctive_text() {
 }
 
 #[test]
+fn table_cells_past_the_document_limits_are_not_built() {
+    // Every body row was padded to the header's width before any cap (#3701).
+    let wide = format!("{}|\n{}|\n|\n| b |\n", "|a".repeat(50_000), "|-".repeat(50_000));
+    crate::model::begin_import();
+    let flow = parse(&wide);
+    let FBlock::Table(t) = &flow.blocks[0] else { panic!("expected table") };
+    assert_eq!(t.rows.len(), 3);
+    assert!(t.rows.iter().all(|r| r.len() == MAX_COLS));
+    assert_eq!(t.rows[2][0].text(), "b");
+    assert!(crate::model::Dropped::TableCells.reported(), "the columns left out are logged");
+    // Rows past the limit still belong to the table, so the text after it reads as before.
+    let tall = format!("| a |\n| - |\n{}\nafter\n", "| x |\n".repeat(MAX_ROWS + 10));
+    crate::model::begin_import();
+    let flow = parse(&tall);
+    let FBlock::Table(t) = &flow.blocks[0] else { panic!("expected table") };
+    assert_eq!(t.rows.len(), MAX_ROWS);
+    let FBlock::Para(p) = &flow.blocks[1] else { panic!("expected paragraph") };
+    assert_eq!(p.text(), "after");
+    assert_eq!(flow.blocks.len(), 2);
+    assert!(crate::model::Dropped::TableCells.reported(), "the rows left out are logged");
+}
+
+/// A short row is padded to its header's width, so a small file of one-cell rows under wide
+/// headers made millions of cells (CodeRabbit on #3862). The document's tables share one cell
+/// budget: rows past it are left out and logged, and their lines make no paragraphs.
+#[test]
+fn tables_share_one_cell_budget() {
+    let header = |n: usize| format!("|{}|\n|{}|\n", vec![" h "; n].join("|"), vec!["-"; n].join("|"));
+    let fits = crate::markdown::MAX_TABLE_CELLS / MAX_COLS;
+    let src = format!("{}{}\nafter\n\n{}| 1 | 2 |\n", header(MAX_COLS), "| x |\n".repeat(fits + 100), header(2));
+    crate::model::begin_import();
+    let flow = parse(&src);
+    let tables: Vec<&FTable> = flow.blocks.iter().filter_map(|b| if let FBlock::Table(t) = b { Some(t) } else { None }).collect();
+    let cells: usize = tables.iter().flat_map(|t| &t.rows).map(Vec::len).sum();
+    assert!(cells <= crate::markdown::MAX_TABLE_CELLS, "{cells} cells");
+    assert_eq!(tables.iter().map(|t| t.rows.len()).collect::<Vec<_>>(), [fits], "the second table is past the budget");
+    let texts: Vec<String> = flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.text()) } else { None }).collect();
+    assert_eq!(texts, ["after"]);
+    assert!(crate::model::Dropped::TableCells.reported());
+    // Within the budget a table is whole and nothing is logged.
+    crate::model::begin_import();
+    let flow = parse(&format!("{}| 1 | 2 |\n", header(2)));
+    let [FBlock::Table(t)] = flow.blocks.as_slice() else { panic!("{:?}", flow.blocks) };
+    assert_eq!(t.rows.len(), 2);
+    assert!(!crate::model::Dropped::TableCells.reported());
+}
+
+#[test]
+fn a_wide_table_still_checks_every_header_and_delimiter_cell() {
+    // Only the first 63 cells are kept, but every one is counted and checked.
+    let head = "|a".repeat(100) + "|\n";
+    let delim = |bad: Option<usize>| (0..100).map(|i| if Some(i) == bad { "|x" } else { "|-" }).collect::<String>() + "|\n";
+    let is_table = |md: String| matches!(parse(&md).blocks.first(), Some(FBlock::Table(_)));
+    assert!(is_table(format!("{head}{}| b |\n", delim(None))));
+    assert!(!is_table(format!("{head}{}| b |\n", delim(Some(80)))), "a bad delimiter cell past the kept ones");
+    assert!(!is_table(format!("{}|\n{}| b |\n", "|a".repeat(99), delim(None))), "99 header cells, 100 delimiter cells");
+    let (cells, n) = split_row(r"| a | b \| c | d |", 2);
+    assert_eq!((cells, n), (vec!["a".to_string(), "b | c".to_string()], 3));
+}
+
+#[test]
 fn regular_table_cells_containing_escaped_pipes() {
     let md = "| Option | Description |\n| --- | --- |\n| Regular \\| Pipe | Normal text cell |\n";
     let flow = parse(md);
@@ -418,8 +479,8 @@ fn code_span_line_endings_stay_literal_on_export() {
     ];
     let shapes = [
         (Kind::Normal, None),
-        (Kind::Normal, Some(ListInfo { ordered: false, level: 0, start: 1 })),
-        (Kind::Code, Some(ListInfo { ordered: true, level: 0, start: 1 })),
+        (Kind::Normal, Some(ListInfo { ordered: false, level: 0, start: 1, ..Default::default() })),
+        (Kind::Code, Some(ListInfo { ordered: true, level: 0, start: 1, ..Default::default() })),
     ];
     for (source, expected) in cases {
         for (kind, list) in shapes {
@@ -558,6 +619,25 @@ fn ordered_list_keeps_start_number() {
     assert_eq!(export(&import("5. a\n6. b")).trim_end(), "5. a\n6. b");
 }
 
+/// A list inside a block quote stays in the quote: its items were imported as quoted list
+/// paragraphs but written back without `>`, so the list moved out of the quote.
+#[test]
+fn a_list_inside_a_quote_stays_quoted() {
+    let src = "> Intro\n>\n> - one\n> - two\n>   - nested\n> 1. first\n\nAfter.\n";
+    let want = "> Intro\n\n> - one\n> - two\n>     - nested\n> 1. first\n\nAfter.";
+    let md = export(&import(src));
+    assert_eq!(md.trim_end(), want);
+    assert_eq!(export(&import(&md)).trim_end(), want, "and stays so when read back");
+    // An item's continuation line is quoted too.
+    assert_eq!(export(&import("> - a\\\n>   b\n")).trim_end(), "> - a\\\n>   b");
+    // A list outside a quote is unchanged.
+    assert_eq!(export(&import("- one\n- two\n")).trim_end(), "- one\n- two");
+    // A list after a quoted list stays outside the quote.
+    let md = export(&import("> - a\n\n2. b\n"));
+    assert_eq!(md.trim_end(), "> - a\n\n2. b");
+    assert_eq!(export(&import(&md)).trim_end(), "> - a\n\n2. b", "and stays so when read back");
+}
+
 #[test]
 fn lines_after_line_break_stay_in_paragraph() {
     use wordcraft_doc::{CharProps, Document, Paragraph, StoryRef, para_block};
@@ -576,10 +656,10 @@ fn lines_after_line_break_stay_in_paragraph() {
 fn lines_after_line_break_stay_in_list_item_and_quote() {
     let cases = ["a\n- x", "a\n# h", "a\n1. x", "a\n--", "a\n---", "a\n==", "a\n> q"];
     let shapes: [(Kind, Option<ListInfo>); 5] = [
-        (Kind::Normal, Some(ListInfo { ordered: false, level: 0, start: 1 })),
-        (Kind::Normal, Some(ListInfo { ordered: true, level: 0, start: 1 })),
-        (Kind::Normal, Some(ListInfo { ordered: false, level: 1, start: 1 })),
-        (Kind::Normal, Some(ListInfo { ordered: true, level: 1, start: 1 })),
+        (Kind::Normal, Some(ListInfo { ordered: false, level: 0, start: 1, ..Default::default() })),
+        (Kind::Normal, Some(ListInfo { ordered: true, level: 0, start: 1, ..Default::default() })),
+        (Kind::Normal, Some(ListInfo { ordered: false, level: 1, start: 1, ..Default::default() })),
+        (Kind::Normal, Some(ListInfo { ordered: true, level: 1, start: 1, ..Default::default() })),
         (Kind::Quote, None),
     ];
     for s in cases {
@@ -587,7 +667,7 @@ fn lines_after_line_break_stay_in_list_item_and_quote() {
             let mut blocks = Vec::new();
             if let Some(li) = list.filter(|l| l.level > 0) {
                 let mut parent = Para::new(Kind::Normal);
-                parent.list = Some(ListInfo { ordered: li.ordered, level: 0, start: 1 });
+                parent.list = Some(ListInfo { ordered: li.ordered, level: 0, start: 1, ..Default::default() });
                 parent.push_text("top", &Fmt::default());
                 blocks.push(FBlock::Para(parent));
             }

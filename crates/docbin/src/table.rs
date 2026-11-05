@@ -83,6 +83,11 @@ pub(crate) struct RowInfo {
 
 /// Read the table context out of a paragraph mark's PAPX grpprl.
 impl RowInfo {
+    /// Does the mark belong to a table: inside one, ending a row, or ending a cell?
+    pub(crate) fn is_table(&self) -> bool {
+        self.in_table || self.ttp || self.cell_mark
+    }
+
     /// The row height from `sprmTDyaRowHeight`, for tests.
     #[cfg(test)]
     pub(crate) fn height(&self) -> Option<f32> {
@@ -101,10 +106,25 @@ impl RowInfo {
         self.widths.iter().rfind(|(k, _)| *k == i).map(|(_, w)| *w)
     }
 
+    /// How many per-cell overrides the row keeps, for tests.
+    #[cfg(test)]
+    pub(crate) fn overrides(&self) -> usize {
+        self.vmerge.len() + self.shading.len() + self.widths.len() + self.width_pcts.len() + self.valign.len() + self.merges.len()
+    }
+
     /// The width percentage cell `i` ends up with, for tests.
     #[cfg(test)]
     pub(crate) fn width_pct_of(&self, i: u8) -> Option<f32> {
         self.width_pcts.iter().rfind(|(k, _)| *k == i).map(|(_, w)| *w)
+    }
+}
+
+/// Set cell `c`'s override to `v`, replacing an earlier one: one slot per cell, however often
+/// a PAPX repeats the sprm, so a shared PAPX can't pile up copies on every paragraph mark.
+fn set<T>(slots: &mut Vec<(u8, T)>, c: u8, v: T) {
+    match slots.iter_mut().find(|(k, _)| *k == c) {
+        Some(slot) => slot.1 = v,
+        None => slots.push((c, v)),
     }
 }
 
@@ -144,8 +164,10 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
             T_DXA_GAP_HALF => gap_half = s16(&prl),
             T_TABLE_BORDERS_80 => r.borders = table_borders(prl.operand),
             T_MERGE => {
+                // Rows apply only the first MAX_COLS merges.
                 if let [a, b, ..] = prl.operand
                     && b > a
+                    && r.merges.len() < MAX_COLS
                 {
                     r.merges.push((*a, *b));
                 }
@@ -158,7 +180,8 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
                         1 => VMerge::Continue,
                         _ => VMerge::None,
                     };
-                    if m != VMerge::None {
+                    // The first override for a cell wins.
+                    if m != VMerge::None && !r.vmerge.iter().any(|(k, _)| k == itc) {
                         r.vmerge.push((*itc, m));
                     }
                 }
@@ -168,7 +191,7 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
                     && let [a, b, ..] = prl.operand.get(1..3).unwrap_or(&[])
                 {
                     for c in *a..(*b).min(MAX_COLS as u8) {
-                        r.shading.push((c, Some(rgb)));
+                        set(&mut r.shading, c, Some(rgb));
                     }
                 }
             }
@@ -176,7 +199,7 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
                 let cells = prl.operand.get(1..).unwrap_or(&[]);
                 for (i, b) in cells.as_chunks::<2>().0.iter().take(MAX_COLS).enumerate() {
                     if let Some(rgb) = shd80_rgb(b) {
-                        r.shading.push((i as u8, Some(rgb)));
+                        set(&mut r.shading, i as u8, Some(rgb));
                     }
                 }
             }
@@ -196,7 +219,7 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
                     if raw && b.get(8..10) == Some(&[0xFF, 0xFF]) {
                         continue;
                     }
-                    r.shading.push(((first + i) as u8, shd_rgb(b)));
+                    set(&mut r.shading, (first + i) as u8, shd_rgb(b));
                 }
             }
             T_CELL_WIDTH => {
@@ -207,12 +230,12 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
                     if *fts == 3 {
                         let w = (i16::from_le_bytes([*w0, *w1]) as f32 / 20.0).clamp(0.0, 1584.0);
                         for c in *a..(*b).min(MAX_COLS as u8) {
-                            r.widths.push((c, w));
+                            set(&mut r.widths, c, w);
                         }
                     } else if *fts == 2 {
                         let pct = (u16::from_le_bytes([*w0, *w1]) as f32 / 50.0).clamp(0.0, 100.0);
                         for c in *a..(*b).min(MAX_COLS as u8) {
-                            r.width_pcts.push((c, pct));
+                            set(&mut r.width_pcts, c, pct);
                         }
                     }
                 }
@@ -224,8 +247,8 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
                         2 => VAlign::Bottom,
                         _ => VAlign::Top,
                     };
-                    for c in *a..*b {
-                        r.valign.push((c, v));
+                    for c in *a..(*b).min(MAX_COLS as u8) {
+                        set(&mut r.valign, c, v);
                     }
                 }
             }
@@ -245,8 +268,8 @@ pub(crate) struct ParaOut {
     pub(crate) para: Paragraph,
     /// CP just past the terminating mark.
     pub(crate) end_cp: u32,
-    /// Table context from the mark's PAPX (empty default = not in a table).
-    pub(crate) row: RowInfo,
+    /// Table context from the mark's PAPX; `None` for a paragraph outside a table.
+    pub(crate) row: Option<Box<RowInfo>>,
 }
 
 /// Group consecutive in-table paragraphs into [`Table`] blocks; the rest pass through.
@@ -351,9 +374,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
     }
 
     for p in paras {
-        let info = p.row;
-        let is_table = info.in_table || info.ttp || info.cell_mark;
-        if !is_table {
+        let Some(info) = p.row else {
             if open {
                 flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
                 grid.clear();
@@ -368,7 +389,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             }
             out.push(para_block(p.para));
             continue;
-        }
+        };
         if !open {
             open = true;
         }

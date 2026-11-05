@@ -409,7 +409,7 @@ impl Reader {
             let rights = std::mem::take(&mut self.table_rights);
             let widths = column_grid(&mut rows, &rights);
             // Word draws only the borders the cells name: no grid style, each cell its own.
-            self.body.push(FBlock::Table(FTable { rows, widths, borderless: true }));
+            self.body.push(FBlock::Table(FTable { rows, widths, borderless: true, extra: None, kept: None, wrap: None }));
         }
     }
 }

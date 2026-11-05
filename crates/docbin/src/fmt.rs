@@ -109,12 +109,13 @@ pub(crate) fn ico(i: u8) -> Option<Rgb> {
     ICO.get(i as usize).copied()
 }
 
-/// The model border style a `brcType` stands for ([MS-DOC] §2.9.22 BrcType). Types the model
-/// doesn't carry (the gap variants, 3-D, inset/outset) draw as single lines, as the DOCX
-/// reader maps them.
+/// The model border style a `brcType` stands for ([MS-DOC] §2.9.22 BrcType; 0x02, thick, is in
+/// the BRC of Microsoft's Word 97-2007 specification). Types the model doesn't carry (the gap
+/// variants, 3-D, inset/outset) draw as single lines, as the DOCX reader maps them.
 fn brc_style(t: u8) -> BorderStyle {
     match t {
         0x00 => BorderStyle::None,
+        0x02 => BorderStyle::Thick,
         0x03 => BorderStyle::Double,
         0x06 => BorderStyle::Dotted,
         0x07 | 0x16 => BorderStyle::Dashed,

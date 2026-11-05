@@ -827,7 +827,7 @@ fn formatting_revisions_read_as_the_spec_writes_them() {
 fn list_item_with_a_formatting_change_keeps_its_list_on_reject() {
     use model::{FmtChange, ListInfo};
     // A numbered item Alice centred (it was left-aligned), and a second plain item.
-    let li = Some(ListInfo { ordered: true, level: 0, start: 1 });
+    let li = Some(ListInfo { ordered: true, level: 0, start: 1, ..Default::default() });
     let mark = RevMark { author: "Alice".into(), date: "2024-03-15T10:30:00Z".into(), id: None };
     let old = Para { list: li, align: Some(Align::Left), ..Default::default() };
     let mut item = Para { list: li, align: Some(Align::Center), fmt_change: Some(Box::new(FmtChange { mark, old })), ..Default::default() };
@@ -857,7 +857,7 @@ fn paragraph_that_was_a_list_item_gets_its_old_list_back_on_reject() {
     use model::{FmtChange, ListInfo};
     // Alice took the paragraph out of a numbered list: it is no list item now, but was one.
     let mark = RevMark { author: "Alice".into(), date: "2024-03-15T10:30:00Z".into(), id: None };
-    let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1 }), ..Default::default() };
+    let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1, ..Default::default() }), ..Default::default() };
     let mut item = Para { fmt_change: Some(Box::new(FmtChange { mark, old })), ..Default::default() };
     item.push_text("Item", &Fmt::default());
     let flow = Flow { blocks: vec![FBlock::Para(item)], meta: Meta::default() };
@@ -873,9 +873,9 @@ fn paragraph_that_was_a_list_item_gets_its_old_list_back_on_reject() {
 fn numbered_item_made_bulleted_gets_its_numbered_list_back_on_reject() {
     use model::{FmtChange, ListInfo};
     let mark = RevMark { author: "Alice".into(), date: "2024-03-15T10:30:00Z".into(), id: None };
-    let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1 }), ..Default::default() };
+    let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1, ..Default::default() }), ..Default::default() };
     let mut item = Para {
-        list: Some(ListInfo { ordered: false, level: 0, start: 1 }),
+        list: Some(ListInfo { ordered: false, level: 0, start: 1, ..Default::default() }),
         fmt_change: Some(Box::new(FmtChange { mark, old })),
         ..Default::default()
     };
@@ -1227,6 +1227,40 @@ fn a_code_paragraph_round_trips_without_a_direct_code_font() {
     let runs = text_runs(rtf.as_bytes());
     let f = run_fmt(&runs, "let x");
     assert_eq!((f.size, f.bold, f.code, f.font.as_deref()), (None, false, false, None), "{rtf}");
+}
+
+/// Escaped semicolons in a font name stop at the limit, as other characters do (review of #3862).
+#[test]
+fn escaped_semicolons_in_a_font_name_stop_at_the_limit() {
+    let mut r = reader::Reader::default();
+    r.st.dest = state::Dest::FontTbl;
+    for _ in 0..100_000 {
+        r.ch(';');
+    }
+    assert_eq!(r.font_name.len(), model::MAX_FONT_NAME + 1);
+    let rtf = format!(r"{{\rtf1{{\fonttbl{{\f0 {};}}}}\f0 x\par}}", r"\'3b".repeat(model::MAX_FONT_NAME + 1));
+    let runs = text_runs(rtf.as_bytes());
+    assert_eq!(run_fmt(&runs, "x").font, None);
+}
+
+#[test]
+fn a_semicolon_in_a_font_name_round_trips() {
+    // `;` ends a `\fonttbl` entry, so it is written `\'3b` and read back as part of the name (#3740).
+    let fonts = [("one", "Semi;Colon"), ("two", "Semi;Other"), ("three", "Tail;"), ("four", "Line\nBreak")];
+    let mut p = Para::default();
+    for (t, font) in fonts {
+        p.push_text(t, &Fmt { font: Some(font.into()), ..Default::default() });
+    }
+    let flow = Flow { blocks: vec![FBlock::Para(p)], meta: Meta::default() };
+    let rtf = export(&model::to_doc(&flow));
+    assert!(rtf.contains(r"Semi\'3bColon;") && !rtf.contains(r"\line"), "{rtf}");
+    let runs = text_runs(rtf.as_bytes());
+    for (t, font) in fonts {
+        assert_eq!(run_fmt(&runs, t).font.as_deref(), Some(font.replace('\n', "").as_str()), "{rtf}");
+    }
+    // A Unicode escape is part of the name too, in a multibyte code page as well; a literal `;` ends it.
+    let runs = text_runs(br"{\rtf1\ansi\ansicpg932{\fonttbl{\f0 A\u59?B;}{\f1 C\'3bD;}}\f0 x {\f1 y}\par}");
+    assert_eq!((run_fmt(&runs, "x ").font.as_deref(), run_fmt(&runs, "y").font.as_deref()), (Some("A;B"), Some("C;D")));
 }
 
 #[test]
@@ -1637,4 +1671,35 @@ fn rtf_backslash_space_and_special_breaks() {
     let doc = import(rtf).unwrap();
     let p = doc.body.first().unwrap().as_para().unwrap();
     assert_eq!(p.text, "A\u{00A0}B\u{00A0}C\u{200B}D\nE\u{000C}F");
+}
+
+#[test]
+fn compound_borders_round_trip() {
+    use wordcraft_doc::props::BorderStyle;
+    let lines = [
+        ("brdrtnthsg", BorderStyle::ThinThickSmallGap),
+        ("brdrthtnsg", BorderStyle::ThickThinSmallGap),
+        ("brdrtnthtnsg", BorderStyle::ThinThickThinSmallGap),
+        ("brdrtnthmg", BorderStyle::ThinThickMediumGap),
+        ("brdrthtnmg", BorderStyle::ThickThinMediumGap),
+        ("brdrtnthtnmg", BorderStyle::ThinThickThinMediumGap),
+        ("brdrtnthlg", BorderStyle::ThinThickLargeGap),
+        ("brdrthtnlg", BorderStyle::ThickThinLargeGap),
+        ("brdrtnthtnlg", BorderStyle::ThinThickThinLargeGap),
+    ];
+    let body: String = lines.iter().map(|(w, _)| format!("\\pard\\brdrt\\{w}\\brdrw30 {w}\\par\n")).collect();
+    let rtf = format!("{{\\rtf1\\ansi\n{body}}}");
+    let tops = |d: &wordcraft_doc::Document| -> Vec<Option<BorderStyle>> {
+        d.body
+            .iter()
+            .filter_map(|b| b.as_para())
+            .filter(|p| !p.plain_text().is_empty())
+            .map(|p| p.props.borders.and_then(|b| b.top).map(|t| t.style))
+            .collect()
+    };
+    let want: Vec<Option<BorderStyle>> = lines.iter().map(|(_, s)| Some(*s)).collect();
+    let d = import(rtf.as_bytes()).unwrap();
+    assert_eq!(tops(&d), want);
+    let back = import(export(&d).as_bytes()).unwrap();
+    assert_eq!(tops(&back), want);
 }
