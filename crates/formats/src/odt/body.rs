@@ -1324,7 +1324,7 @@ impl Body<'_> {
                 let h = get(a, "svg:height").and_then(length);
                 self.frame = Some((w, h, None, String::new(), None, None, None));
                 let g = get(a, "draw:style-name").map(|s| self.styles.graphic(s)).unwrap_or_default();
-                self.frame_float = Some(super::frames::place(a, w.unwrap_or(0.0), h.unwrap_or(0.0), &g, self.text_size(), &self.styles.defs.profile));
+                self.frame_float = Some(super::frames::place(a, w.unwrap_or(0.0), h.unwrap_or(0.0), &g, self.text_size()));
                 self.member_start(a, w.unwrap_or(0.0), h.unwrap_or(0.0), None);
                 // Without a height, a text box in it grows to its text (`fo:min-height` below).
                 self.frame_look = g.look(h.is_none(), &self.styles.defs);
@@ -1343,12 +1343,7 @@ impl Body<'_> {
                         // section in a one-column page) is no new section.
                         .filter(|c| c.count != self.sec.columns.count || (c.count > 1 && *c != self.sec.columns))
                 {
-                    let balance = get(a, "text:style-name").and_then(|s| self.styles.section_balance(s)).or(self
-                        .styles
-                        .defs
-                        .profile
-                        .balance_section_columns
-                        .then_some(true));
+                    let balance = get(a, "text:style-name").and_then(|s| self.styles.section_balance(s));
                     let next = SectionProps {
                         start: SectionStart::Continuous,
                         page_num_start: None,
@@ -1407,7 +1402,7 @@ impl Body<'_> {
                 control.form_size = Some([w, h]);
                 // Where it stands on the line (§20.387), as an in-line frame does.
                 let g = self.styles.shape_graphic(get(a, "draw:style-name"));
-                let raise = super::frames::place(a, w, h, &g, self.text_size(), &self.styles.defs.profile).y;
+                let raise = super::frames::place(a, w, h, &g, self.text_size()).y;
                 control.form_raise = (raise.is_finite() && raise != 0.0).then_some(raise);
             }
             let fmt = self.cur_fmt();

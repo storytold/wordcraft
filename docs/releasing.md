@@ -33,4 +33,5 @@ Local notarization can use `APPLE_KEYCHAIN_PROFILE` with a real `MACOS_SIGN_IDEN
 
 | Date | Change |
 |---|---|
-| 2026-11-02 | macOS packaging accepts a notarytool Keychain profile as an alternative to the three Apple authentication variables; synthetic tests cover profile priority and rejection-log authentication. |
+
+| 2026-11-05 | trivial | PR #5266: macOS notarization accepts a Keychain profile for submit and rejection logs, with legacy authentication retained. Synthetic authentication controls; no new Apple notarization run. |
