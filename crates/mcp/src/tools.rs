@@ -305,10 +305,16 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
             doc,
         )),
         "get_text" => wrap(exec(b, "document.text", json!({}), doc)),
-        "inspect_document" => match a.get("remove").and_then(Value::as_array) {
+        "inspect_document" => match a.get("remove") {
             // With `remove`, the Document Inspector's cleanup (file.inspect) instead of the read.
-            Some(remove) if !remove.is_empty() => wrap(b.call("file.inspect", addressed(json!({"remove": remove}), doc))),
-            _ => wrap(b.call("document.inspect", addressed(json!({}), doc))),
+            // A present value that isn't an array is refused, not read as absent: a caller that
+            // sent one meant to clean the document, and a successful read would say otherwise.
+            Some(Value::Array(remove)) if !remove.is_empty() => wrap(b.call("file.inspect", addressed(json!({"remove": remove}), doc))),
+            Some(Value::Array(_)) => wrap(b.call("document.inspect", addressed(json!({}), doc))),
+            Some(_) => {
+                ToolResult::error("`remove` must be an array of categories: [\"comments\", \"revisions\", \"properties\", \"hidden\", \"headers\"]")
+            }
+            None => wrap(b.call("document.inspect", addressed(json!({}), doc))),
         },
         "parity" => wrap(b.call("ui.parity", json!({}))),
         // Pictures travel inside the reply (`png`), headless or through the app: no file with a

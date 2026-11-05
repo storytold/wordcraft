@@ -159,14 +159,12 @@ test source in File › Options › Language and on the bar's Install.
   one-line control refuses; at most 10,000 lines — the cap is `text.insert`'s own, so a
   control-channel or CLI call is held to it too) |
 | `select_text` | select the n-th occurrence of some text |
-| `get_text` / `inspect_document` | read the document back (verify without screenshots). `inspect_document`
-  with `remove` cleans the document instead (the Document Inspector): `["comments", "revisions",
-  "properties", "hidden", "headers"]` — `"hidden"` takes hidden text out, whole hidden paragraphs
-  with their marks, as the Word Document Inspector does; removals are refused while the document
-  tracks changes. The reply's `residual` lists what a removal couldn't reach |
+| `get_text` / `inspect_document` | read the document back (verify without screenshots); `inspect_document` with `remove` cleans the document (see below) |
 | `render_page` | a page as PNG |
 | `parity` | feature coverage |
 | `screenshot`, `click`, `key`, `ui_inspect` | app only (`--connect`) |
+
+`inspect_document` with `remove` cleans the document instead (the Document Inspector): `["comments", "revisions", "properties", "hidden", "headers"]` — `"hidden"` takes hidden text out, whole hidden paragraphs with their marks, as the Word Document Inspector does; removals are refused while the document tracks changes. The reply's `residual` lists what a removal couldn't reach.
 
 ### Several documents
 

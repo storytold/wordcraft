@@ -10964,7 +10964,7 @@ fn file_open_warns_about_hidden_text_and_the_cleanup_takes_it_out() {
     assert_eq!(run(&mut s(), "file.info", json!({}))["hasHidden"], json!(false));
     let mut doc = s();
     doc.doc.body =
-        vec![para_block(Paragraph::with_text("keep-visible ", CharProps::default())), para_block(Paragraph::with_text("hide-me", hidden_props()))];
+        vec![para_block(Paragraph::with_text("keep-visible ", CharProps::default())), para_block(Paragraph::with_text("привет", hidden_props()))];
     assert_eq!(run(&mut doc, "file.info", json!({}))["hasHidden"], json!(true));
 
     let dir = std::env::temp_dir().join(format!("wordcraft-hidden-open-{}", std::process::id()));
@@ -10977,8 +10977,9 @@ fn file_open_warns_about_hidden_text_and_the_cleanup_takes_it_out() {
     let mut t = s();
     let reply = run(&mut t, "file.open", json!({"path": path.to_string_lossy()}));
     let hidden = reply.get("hiddenText").unwrap_or_else(|| panic!("no hiddenText: {reply}"));
+    // Characters, not the byte offsets the ranges are: "привет" is 6 characters, 12 bytes.
     assert_eq!(hidden["pieces"], json!(1), "{reply}");
-    assert_eq!(hidden["chars"], json!(7), "{reply}");
+    assert_eq!(hidden["chars"], json!(6), "{reply}");
     let warning = reply["warning"].as_str().unwrap_or_else(|| panic!("no warning: {reply}"));
     assert!(warning.contains("hidden text") && warning.contains("tell the human") && warning.contains("file.inspect"), "{warning}");
     // An already open document warns again.

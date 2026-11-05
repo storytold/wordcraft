@@ -1655,14 +1655,16 @@ fn inspect_document_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bo
         if found.get("truncated").and_then(Value::as_bool).unwrap_or(false) {
             ui.label(egui::RichText::new(tl!("The list of pieces is cut; the count is exact.")).weak());
         }
-        if !found.get("unsupported").and_then(Value::as_array).unwrap_or(&Vec::new()).is_empty() {
-            ui.label(egui::RichText::new(tl!("Some hidden text is inside objects or table styles the inspector can't remove.")).weak());
-        }
     } else {
         ui.horizontal(|ui| {
             ui.label(tl!("Hidden text"));
             ui.label(none());
         });
+    }
+    // Shown whatever the removable hidden-text branch says: hidden text the inspector can't
+    // reach is a finding of its own, and it stays after a removal took the removable out.
+    if !found.get("unsupported").and_then(Value::as_array).unwrap_or(&Vec::new()).is_empty() {
+        ui.label(egui::RichText::new(tl!("Some hidden text is inside objects or table styles the inspector can't remove.")).weak());
     }
     let headers = count("headers");
     ui.horizontal(|ui| {
