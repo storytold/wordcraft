@@ -81,6 +81,10 @@ impl Reader<'_> {
             self.read_canvas(sc, c, rels, w, h, float)
         } else if let Some(g) = gd.child("wpg:wgp") {
             self.read_group(sc, g, rels, w, h, float)?
+        } else if let Some(lc) = gd.child("lc:lockedCanvas") {
+            // Word 2007's shapes, pictures and text in a drawing: read as the group they are.
+            let g = super::locked_canvas::as_group(lc, &self.doc.settings.theme_colors);
+            self.read_group(sc, &g, rels, w, h, float)?
         } else if direct_shape.is_none() && gd.find("a:blip").is_some() {
             self.read_pic(gd, rels, w, h, alt.clone(), float)?
         } else {
