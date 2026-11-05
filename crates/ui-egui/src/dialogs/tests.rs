@@ -1934,19 +1934,23 @@ fn window_drags(h: &mut egui_kittest::Harness<WordApp>, at: egui::Pos2) -> usize
 }
 
 /// #5124: behind a modal dialog the window still moves by its title bar, as in Word for Mac, where
-/// WordCraft draws it; elsewhere the system's title bar does, and WordCraft's bar under it doesn't.
+/// WordCraft draws it, or by the top of File's side menu, which covers it there; elsewhere the
+/// system's title bar does, and WordCraft's bar under it doesn't.
 #[test]
 fn the_window_moves_by_its_title_bar_behind_a_modal_dialog() {
-    for mac in [true, false] {
+    for (mac, backstage) in [(true, false), (true, true), (false, false), (false, true)] {
         let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
         a.integrated_titlebar = mac;
+        a.ui.backstage = backstage;
         let mut h = app_harness(a);
         h.run_steps(6);
         let font = Dialog::open("font", h.state_mut());
         h.state_mut().dialog = font;
         h.run_steps(4);
-        assert_eq!(window_drags(&mut h, egui::pos2(300.0, 12.0)), usize::from(mac), "macOS: {mac}");
-        assert!(matches!(h.state().dialog, Some(Dialog::Font { .. })) && !h.state().ui.backstage, "Font stays, nothing behind it opened");
+        let at = egui::pos2(if backstage { 100.0 } else { 300.0 }, 12.0);
+        assert_eq!(window_drags(&mut h, at), usize::from(mac), "macOS: {mac}, File: {backstage}");
+        assert!(matches!(h.state().dialog, Some(Dialog::Font { .. })), "Font stays");
+        assert_eq!(h.state().ui.backstage, backstage, "nothing behind it opened or closed");
     }
 }
 
