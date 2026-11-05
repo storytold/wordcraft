@@ -46,10 +46,8 @@ impl Reader<'_> {
                         let cap_font = cap_run.and_then(|i| first.runs.get(i)).and_then(|r| r.props.font.clone());
                         let text_font = text_run(&p).and_then(|i| p.runs.get(i)).and_then(|r| r.props.font.clone());
                         if cap_font.is_some() && cap_font != text_font {
-                            if let Some(i) = cap_run.and_then(|i| first.runs.get_mut(i)) {
-                                // The frame's font belongs to the initial letter only. Other
-                                // explicitly formatted letters in the same paragraph keep theirs.
-                                i.props.font = text_font.clone();
+                            for r in first.runs.iter_mut().filter(|r| r.props.font == cap_font) {
+                                r.props.font = text_font.clone();
                             }
                             props.drop_cap_font = cap_font;
                         }
