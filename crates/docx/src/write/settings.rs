@@ -332,7 +332,8 @@ pub(super) fn core_xml(doc: &Document) -> Vec<u8> {
         w.leaf("cp:revision", &[], &c.revision.to_string());
     }
     for (tag, v) in [("dcterms:created", &c.created), ("dcterms:modified", &c.modified)] {
-        if !v.is_empty() {
+        // Word repairs a file whose W3CDTF-typed date isn't one; leave such a value out.
+        if !v.is_empty() && crate::w3cdtf::is_w3cdtf(v) {
             w.leaf(tag, &[("xsi:type", "dcterms:W3CDTF")], v);
         }
     }

@@ -19,6 +19,7 @@ mod smart_art;
 #[cfg(test)]
 mod test_log;
 mod units;
+mod w3cdtf;
 mod wordml2003;
 mod wordml2003_write;
 mod write;
