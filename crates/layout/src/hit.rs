@@ -74,6 +74,36 @@ pub struct ObjectHit {
     pub origin: Point,
 }
 
+/// Object positions in one layout, retaining each page occurrence for page-hinted lookups.
+/// Build once for a batch of lookups; rebuild when the layout changes.
+pub struct ObjectIndex {
+    by_pos: HashMap<Pos, Vec<ObjectHit>>,
+}
+
+impl ObjectIndex {
+    /// Like [`DocLayout::object`]: prefer `page_hint`, otherwise the first matching page.
+    pub fn object(&self, pos: &Pos, page_hint: usize) -> Option<&ObjectHit> {
+        let hits = self.by_pos.get(pos)?;
+        hits.binary_search_by_key(&page_hint, |h| h.page).ok().and_then(|i| hits.get(i)).or_else(|| hits.first())
+    }
+}
+
+/// The inputs for a column selection across laid-out lines.
+pub struct ColumnSelection<'a> {
+    /// The selection's first corner.
+    pub start: &'a Pos,
+    /// The selection's opposite corner.
+    pub end: &'a Pos,
+    /// One horizontal edge in page coordinates.
+    pub left: f32,
+    /// The other horizontal edge in page coordinates.
+    pub right: f32,
+    /// The page nearest the selection's starting corner.
+    pub page_hint: usize,
+    /// The maximum number of lines to return.
+    pub max_lines: usize,
+}
+
 impl ObjectHit {
     /// The object's position (its U+FFFC).
     pub fn pos(&self) -> Pos {
@@ -255,6 +285,13 @@ pub fn page_lines(page: &Page, story: StoryRef) -> Vec<LineHit<'_>> {
     v
 }
 
+/// Whether line `l` is above (`dir < 0`) or below the caret `c`: past the caret's middle, and
+/// not the caret's own line.
+fn beyond(l: &LineHit, c: &Caret, dir: i32) -> bool {
+    let (mid, cur_mid) = ((l.top + l.bottom) / 2.0, c.top + c.height / 2.0);
+    if dir < 0 { mid < cur_mid - 1.0 && l.bottom <= cur_mid } else { mid > cur_mid + 1.0 && l.top >= cur_mid }
+}
+
 /// Of `lines`, the one nearest the caret moving up (`dir < 0`) or down: the lowest above it or
 /// the highest below it.
 fn nearest<'a, 'b>(lines: &[&'b LineHit<'a>], dir: i32) -> Option<&'b LineHit<'a>> {
@@ -384,19 +421,20 @@ impl DocLayout {
     }
 
     /// The story whose text is under a point (body, footnotes, endnotes, text boxes; not
-    /// headers/footers). A text box wins inside its area, except one behind the text, which only
-    /// wins where no body text is.
+    /// headers/footers). A text box wins inside its area (its rotated area when it is turned, as
+    /// [`DocLayout::object_at`] takes it), except one behind the text, which only wins where no
+    /// body text is.
     pub fn story_at(&self, page: usize, x: f32, y: f32) -> Option<StoryRef> {
         let p = self.pages.get(page)?;
         let text_box = |behind: bool| {
-            objects(p, page).find(|o| o.behind() == behind && o.text_box.is_some() && o.rect.contains(Point::new(x, y))).and_then(|o| o.text_box)
+            objects(p, page).find(|o| o.behind() == behind && o.text_box.is_some() && o.rect.contains(o.unspin(x, y))).and_then(|o| o.text_box)
         };
         text_box(false).map(StoryRef::Part).or_else(|| text_at(p, page, x, y)).or_else(|| text_box(true).map(StoryRef::Part))
     }
 
     /// The object a press at (x, y) grabs: a picture or shape anywhere on it, a text box on its
-    /// border (within `edge` points either side; inside is its text). Topmost first; objects
-    /// behind the text only where there's no text.
+    /// border (within `edge` points either side; inside is its text, whatever lies under the
+    /// box). Topmost first; objects behind the text only where there's no text.
     pub fn object_at(&self, page: usize, x: f32, y: f32, edge: f32) -> Option<ObjectHit> {
         self.object_at_in(page, x, y, edge, StoryRef::Body)
     }
@@ -419,11 +457,17 @@ impl DocLayout {
             StoryRef::Body => text_at(p, page, x, y).is_some(),
             StoryRef::Part(id) => hf_text_at(p, id, x, y),
         };
-        cands
-            .iter()
-            .find(|o| !o.behind() && grabs(o))
-            .or_else(|| if text_here { None } else { cands.iter().find(|o| o.behind() && grabs(o)) })
-            .cloned()
+        // Inside a text box is its text: a press there grabs nothing, not an object under the box
+        // (a form scanned as a picture, with text boxes laid over it to fill in). The same holds
+        // among the objects behind the text.
+        let inside_text_box = |o: &ObjectHit| o.text_box.is_some() && !grabs(o) && o.rect.contains(o.unspin(x, y));
+        let topmost = |behind: bool| cands.iter().find(|o| o.behind() == behind && (grabs(o) || inside_text_box(o)));
+        match topmost(false) {
+            Some(o) if inside_text_box(o) => None,
+            Some(o) => Some(o.clone()),
+            None if text_here => None,
+            None => topmost(true).filter(|o| !inside_text_box(o)).cloned(),
+        }
     }
 
     /// The text box in the header or footer at (x, y) on `page`.
@@ -438,6 +482,22 @@ impl DocLayout {
     /// Where the object at `pos` (its U+FFFC) is laid out.
     pub fn object(&self, pos: &Pos, page_hint: usize) -> Option<ObjectHit> {
         self.find_object(page_hint, |o| o.story == pos.story && o.path == pos.path && o.off == pos.off)
+    }
+
+    /// Index objects once for repeated [`Self::object`] lookups, preserving their selection
+    /// order, including objects repeated on several pages (headers or repeated table rows).
+    pub fn object_index(&self) -> ObjectIndex {
+        let mut by_pos: HashMap<Pos, Vec<ObjectHit>> = HashMap::new();
+        for (i, page) in self.pages.iter().enumerate() {
+            for hit in all_objects(page, i) {
+                let hits = by_pos.entry(hit.pos()).or_default();
+                // all_objects has the same within-page order as find_object; first wins.
+                if hits.last().is_none_or(|prev| prev.page != i) {
+                    hits.push(hit);
+                }
+            }
+        }
+        ObjectIndex { by_pos }
     }
 
     /// Where the text box showing story `part` is laid out.
@@ -589,18 +649,7 @@ impl DocLayout {
         let gx = goal_x.unwrap_or(c.x);
         let page = self.pages.get(c.page)?;
         let lines = page_lines(page, pos.story);
-        let cur_mid = c.top + c.height / 2.0;
-        let cands: Vec<&LineHit> = lines
-            .iter()
-            .filter(|l| {
-                let mid = (l.top + l.bottom) / 2.0;
-                if dir < 0 {
-                    mid < cur_mid - 1.0 && l.bottom <= c.top + c.height * 0.5
-                } else {
-                    mid > cur_mid + 1.0 && l.top >= c.top + c.height * 0.5
-                }
-            })
-            .collect();
+        let cands: Vec<&LineHit> = lines.iter().filter(|l| beyond(l, &c, dir)).collect();
         let across: Vec<&LineHit> = cands.iter().copied().filter(|l| gx >= l.left - 2.0 && gx <= l.right + 2.0).collect();
         let target = match nearest(&across, dir) {
             // The nearest line across `gx`, unless lines between the caret's paragraph and that
@@ -628,6 +677,21 @@ impl DocLayout {
         let l = if dir < 0 { lines.iter().max_by(|a, b| a.top.total_cmp(&b.top))? } else { lines.iter().min_by(|a, b| a.top.total_cmp(&b.top))? };
         let off = l.para.off_at_x(l.li, gx - l.x);
         Some((Pos { story: l.story, path: l.path.clone(), off }, gx))
+    }
+
+    /// Page Up (`dir < 0`) or Page Down within the caret's page: of the lines above (or below)
+    /// the caret at `pos`, the one nearest page height `y`, on a tie the one horizontally nearest
+    /// page x `x`; the position at `x` on it. Unlike [`DocLayout::hit`], how far the lines are
+    /// sideways never keeps the caret on its own line. `None` when no line is that way.
+    pub fn line_toward(&self, pos: &Pos, page_hint: usize, x: f32, y: f32, dir: i32) -> Option<Pos> {
+        let c = self.caret_on(pos, page_hint)?;
+        let page = self.pages.get(c.page)?;
+        let lines = page_lines(page, pos.story);
+        let dy = |l: &LineHit| band_dist(y, l.top, l.bottom - l.top);
+        let dx = |l: &LineHit| (l.left - x).max(x - l.right).max(0.0);
+        let l = lines.iter().filter(|l| beyond(l, &c, dir)).min_by(|a, b| dy(a).total_cmp(&dy(b)).then(dx(a).total_cmp(&dx(b))))?;
+        let off = l.para.off_at_x(l.li, x - l.x);
+        Some(Pos { story: l.story, path: l.path.clone(), off })
     }
 
     /// Start and end of the visual line holding `pos` (Home / End).
@@ -709,8 +773,9 @@ impl DocLayout {
     /// Column (block) selection: the piece of every line from the line holding `a` to the line
     /// holding `b` (document order) that lies between page x `left` and `right`. One `(start,
     /// end)` pair per line, both in the same paragraph; lines shorter than `left` give an empty
-    /// pair. At most `max` lines.
-    pub fn column_segments(&self, doc: &Document, a: &Pos, b: &Pos, left: f32, right: f32, page_hint: usize, max: usize) -> Vec<(Pos, Pos)> {
+    /// pair. At most `selection.max_lines` lines.
+    pub fn column_segments(&self, doc: &Document, selection: ColumnSelection<'_>) -> Vec<(Pos, Pos)> {
+        let ColumnSelection { start: a, end: b, left, right, page_hint, max_lines } = selection;
         let (a, b) = if a <= b { (a, b) } else { (b, a) };
         let (left, right) = if left <= right { (left, right) } else { (right, left) };
         let mut out = Vec::new();
@@ -727,7 +792,7 @@ impl DocLayout {
                     if li < first || li > last {
                         continue;
                     }
-                    if out.len() >= max {
+                    if out.len() >= max_lines {
                         return out;
                     }
                     let o0 = para.off_at_x(li, left - x);
@@ -921,4 +986,47 @@ fn score(l: &LineHit, x: f32, y: f32) -> f32 {
         0.0
     };
     dy * 4.0 + dx
+}
+
+#[cfg(test)]
+mod object_index_tests {
+    use super::*;
+
+    /// Compare with the ordinary lookup, including repeated rows/parts and within-page ties.
+    #[test]
+    fn indexed_objects_keep_page_hints_and_first_match_order() {
+        let body = Pos::body(0, 3);
+        let header = Pos::new(StoryRef::Part(7), Path(vec![0, 0, 0, 1]), 6);
+        let footer = Pos::new(StoryRef::Part(8), Path(vec![0]), 0);
+        let object = |pos: &Pos, x| Placed::Object {
+            rect: Rect::new(x, 20.0, 40.0, 30.0),
+            spin: wordcraft_geom::Spin::default(),
+            story: pos.story,
+            path: pos.path.clone(),
+            off: pos.off,
+            text_box: None,
+            wrap: Wrap::InFrontOfText,
+            origin: Point::new(5.0, 6.0),
+        };
+        let layout = DocLayout {
+            pages: vec![
+                Page { items: vec![object(&body, 10.0), object(&body, 11.0)], header: vec![object(&header, 12.0)], ..Default::default() },
+                Page::default(),
+                Page {
+                    items: vec![object(&body, 30.0)],
+                    header: vec![object(&header, 31.0), object(&header, 32.0)],
+                    footer: vec![object(&footer, 33.0)],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let index = layout.object_index();
+        for pos in [body, header, footer, Pos::body(99, 0), Pos::new(StoryRef::Part(7), Path(vec![0]), 6)] {
+            for hint in [0, 1, 2, 3, usize::MAX] {
+                assert_eq!(index.object(&pos, hint).cloned(), layout.object(&pos, hint), "{pos:?}, page hint {hint}");
+            }
+        }
+        assert!(DocLayout::default().object_index().object(&Pos::body(0, 0), 0).is_none());
+    }
 }

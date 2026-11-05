@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, Border, ParaLayout, Path, Rect, Rgb, Spin, StoryRef, TextDirection, Wrap};
 
 /// Something placed on a page (page coordinates, points, y down).
 #[derive(Clone, Debug)]
@@ -36,6 +36,8 @@ pub enum Placed {
         path: Path,
         off: usize,
         spin: Spin,
+        /// Brightness, contrast and transparency (see [`wordcraft_doc::picfx`]).
+        fx: wordcraft_doc::picfx::PicFx,
     },
     Shape {
         rect: Rect,
@@ -48,7 +50,7 @@ pub enum Placed {
         effects: wordcraft_doc::effects::ShapeEffects,
         spin: Spin,
         /// Arrowheads and text warp (see [`wordcraft_doc::connector::ShapeExtra`]).
-        extra: wordcraft_doc::connector::ShapeExtra,
+        extra: Box<wordcraft_doc::connector::ShapeExtra>,
         /// The floating object it draws (a Drawing Canvas's members: the canvas's), for leaving
         /// exactly one object out of a page (see [`crate::display::DisplayOptions::hide_object`]).
         object: Option<wordcraft_doc::Pos>,
