@@ -201,27 +201,45 @@ fn copy_with(s: &mut Session, whole: Option<&Path>) -> CmdResult {
 /// The copy as a document whose top-level paragraphs carry, as their own formatting, the space
 /// before and after and the indents they have in the source document (`styles`): the copy holds
 /// only the built-in styles, so its HTML would otherwise lose what the source's styles give (#5537).
-fn with_source_spacing(f: &Fragment, styles: &wordcraft_doc::StyleSheet) -> wordcraft_doc::Document {
+/// A selection touching a table cell (`in_cell`) adds nothing: layout resolves a cell's paragraphs
+/// with the table style, which the flattened copy no longer knows.
+fn with_source_spacing(f: &Fragment, styles: &wordcraft_doc::StyleSheet, in_cell: bool) -> wordcraft_doc::Document {
     let mut d = f.to_document();
-    for b in &mut d.body {
+    if in_cell {
+        return d;
+    }
+    let names: Vec<Option<String>> = d
+        .body
+        .iter()
+        .map(|b| match &**b {
+            wordcraft_doc::Block::Para(p) => Some(styles.resolve_para(&p.props).style),
+            wordcraft_doc::Block::Table(_) => None,
+        })
+        .collect();
+    for (i, b) in d.body.iter_mut().enumerate() {
         if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
             let r = styles.resolve_para(&p.props);
             // A list item's indents come from its list, which the copy doesn't hold, and its
-            // style's spacing is contextual: it gets none, as before.
+            // style's spacing is contextual: it gets none, as before. A heading numbered through
+            // its style goes out as a heading, so it keeps its spacing, but not those indents.
             let list = r.numbering.is_some();
-            // Contextual spacing drops the space between paragraphs of one style, which a
-            // paragraph on its own can't show, so it is left out rather than shown everywhere.
+            let heading = r.outline_level.is_some() && p.props.numbering.is_none();
+            // Contextual spacing drops a paragraph's own space towards a neighbour of its style,
+            // as layout does; at the ends of the copy no neighbour takes it away.
             // Automatic spacing resolves to the 14 pt it is laid out with.
-            let space = |v: f32| (!list && !r.contextual_spacing).then_some(v);
+            let beside = |j: Option<usize>| r.contextual_spacing && j.and_then(|j| names.get(j)).and_then(Option::as_deref) == Some(r.style.as_str());
+            let space = |v: f32, gone: bool| (!list || heading).then_some(if gone { 0.0 } else { v });
             // A right-to-left paragraph's indents would land on the wrong side in an HTML
             // paragraph without a direction, so they are left out.
             let ind = |v: f32| (!list && !r.bidi).then_some(v);
+            // Other programs have no page margin for a negative indent to hang into.
+            let left = r.indent_left.max(0.0);
             let pp = &mut p.props;
-            pp.space_before = space(r.space_before);
-            pp.space_after = space(r.space_after);
-            pp.indent_left = ind(r.indent_left);
-            pp.indent_right = ind(r.indent_right);
-            pp.indent_first = ind(r.indent_first);
+            pp.space_before = space(r.space_before, beside(i.checked_sub(1)));
+            pp.space_after = space(r.space_after, beside(i.checked_add(1)));
+            pp.indent_left = ind(left);
+            pp.indent_right = ind(r.indent_right.max(0.0));
+            pp.indent_first = ind(r.indent_first.max(-left));
         }
     }
     d
@@ -231,8 +249,10 @@ fn with_source_spacing(f: &Fragment, styles: &wordcraft_doc::StyleSheet) -> word
 /// #816) for the host to put on the system clipboard too, so other programs keep the formatting;
 /// and for a copy of one equation alone, its MathML (#1297).
 pub(crate) fn copy_result(s: &mut Session) -> Value {
+    let (a, b) = s.sel.ordered();
+    let in_cell = a.path.0.len() > 1 || b.path.0.len() > 1;
     s.clipboard_html = match &s.clipboard {
-        Some(f) => wordcraft_formats::html::export_fragment(&with_source_spacing(f, &s.doc.styles)),
+        Some(f) => wordcraft_formats::html::export_fragment(&with_source_spacing(f, &s.doc.styles, in_cell)),
         None => String::new(),
     };
     let mut r = json!({"text": s.clipboard_text});

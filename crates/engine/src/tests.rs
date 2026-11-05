@@ -1311,6 +1311,115 @@ fn copying_a_bulleted_list_adds_no_spacing_to_its_items() {
     assert!(!html.contains("margin-") && !html.contains("text-indent"), "{html}");
 }
 
+/// #5537: in a cell layout resolves a paragraph with the table style, which the copy can't see, so
+/// a copy from inside a cell gets no spacing: the document default's 8 pt that Table Grid replaces
+/// must not reach the clipboard.
+#[test]
+fn copying_paragraphs_inside_a_table_cell_adds_no_spacing() {
+    let mut s = s();
+    let styles = std::sync::Arc::make_mut(&mut s.doc.styles);
+    styles.default_para.space_after = Some(8.0);
+    if let Some(n) = styles.get_mut("Normal") {
+        n.para.space_after = None;
+    }
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    run(&mut s, "text.insert", json!({"text": "One"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Two"}));
+    run(&mut s, "caret.up", json!({"extend": true}));
+    for _ in 0..3 {
+        run(&mut s, "caret.left", json!({"extend": true}));
+    }
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    assert!(html.contains("One") && html.contains("Two"), "{html}");
+    assert!(!html.contains("margin-") && !html.contains("text-indent"), "{html}");
+}
+
+/// A session whose Normal style gives 4 pt before and 10 pt after, contextually.
+fn normal_with_contextual_spacing() -> Session {
+    let mut s = normal_with_space_after();
+    if let Some(n) = std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Normal") {
+        n.para.contextual_spacing = Some(true);
+    }
+    s
+}
+
+/// #5537: contextual spacing drops only the space towards a neighbour of the same style.
+#[test]
+fn copying_contextual_paragraphs_drops_only_the_space_between_them() {
+    let mut s = normal_with_contextual_spacing();
+    run(&mut s, "document.setText", json!({"text": "One\nTwo\nThree"}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    let starts: Vec<usize> = html.match_indices("<p").map(|(i, _)| i).collect();
+    let (one, two, three) = (&html[starts[0]..starts[1]], &html[starts[1]..starts[2]], &html[starts[2]..]);
+    assert!(one.contains("margin-top:4pt") && one.contains("margin-bottom:0pt"), "{html}");
+    assert!(two.contains("margin-top:0pt") && two.contains("margin-bottom:0pt"), "{html}");
+    assert!(three.contains("margin-top:0pt") && three.contains("margin-bottom:10pt"), "{html}");
+}
+
+/// #5537: a contextual paragraph on its own, or beside another style, keeps its space.
+#[test]
+fn copying_a_contextual_paragraph_keeps_its_space_at_the_ends_of_the_copy() {
+    let mut s = normal_with_contextual_spacing();
+    run(&mut s, "document.setText", json!({"text": "One"}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    assert!(html.contains("margin-top:4pt") && html.contains("margin-bottom:10pt"), "{html}");
+
+    run(&mut s, "document.setText", json!({"text": "Two\nThree"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "para.style", json!({"style": "Heading1"}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    let two = html.split("<h1").next().unwrap_or_default();
+    assert!(two.contains("Two") && two.contains("margin-bottom:10pt"), "{html}");
+}
+
+/// #5537: a heading numbered through its style exports as a heading, not as a list item, so it
+/// keeps its spacing; the indents stay with its numbering, which the copy doesn't hold.
+#[test]
+fn copying_a_heading_numbered_by_its_style_keeps_its_spacing() {
+    let mut s = s();
+    let num = std::sync::Arc::make_mut(&mut s.doc.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+    if let Some(h) = std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Heading1") {
+        h.para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+        h.para.space_after = Some(9.0);
+        h.para.indent_left = Some(18.0);
+    }
+    run(&mut s, "document.setText", json!({"text": "One"}));
+    run(&mut s, "para.style", json!({"style": "Heading1"}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    assert!(html.contains("<h1") && html.contains("margin-bottom:9pt"), "{html}");
+    assert!(!html.contains("margin-left") && !html.contains("text-indent"), "{html}");
+}
+
+/// #5537: other programs have no page margin to hang a negative indent into, on either side or
+/// with the first line; a first line that hangs inside the left indent stays.
+#[test]
+fn copying_a_paragraph_with_negative_indents_clamps_them_to_the_margin() {
+    let mut s = normal_with_space_after();
+    run(&mut s, "document.setText", json!({"text": "One"}));
+    run(&mut s, "para.indents", json!({"left": -36, "right": -18, "firstLine": -9}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    assert!(html.contains("margin-left:0pt") && html.contains("margin-right:0pt"), "{html}");
+    assert!(!html.contains("text-indent"), "{html}");
+
+    run(&mut s, "para.indents", json!({"left": 36, "right": 0, "firstLine": -18}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    assert!(html.contains("margin-left:36pt") && html.contains("text-indent:-18pt"), "{html}");
+}
+
 /// Whether `xml` is one element whose tags all nest and close (enough to check a clipboard
 /// payload without an XML parser in the engine's tests).
 fn one_balanced_element(xml: &str) -> bool {
