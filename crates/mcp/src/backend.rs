@@ -59,11 +59,34 @@ fn write_all_by(s: &mut TcpStream, mut buf: &[u8], deadline: Instant) -> std::io
             Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
             Ok(n) => buf = buf.get(n..).unwrap_or_default(),
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            // An expired socket timeout is `WouldBlock` on Unix and `TimedOut` on Windows.
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Err(std::io::ErrorKind::TimedOut.into()),
             Err(e) => return Err(e),
         }
     }
     Ok(())
 }
+
+/// Send `line` and then its `\n` as two writes through `put`. The error says whether the whole
+/// line went out first: the app reads a line that ends at EOF as a request, so once only the
+/// `\n` is missing the request may run and must not be sent again.
+fn send_line(mut put: impl FnMut(&[u8]) -> std::io::Result<()>, line: &str) -> Result<(), (std::io::Error, bool)> {
+    put(line.as_bytes()).map_err(|e| (e, false))?;
+    // Any failure here counts as a timeout, so the exchange reports an unknown outcome and does not resend.
+    put(b"\n").map_err(|e| {
+        (
+            if e.kind() == std::io::ErrorKind::TimedOut {
+                e
+            } else {
+                std::io::Error::new(std::io::ErrorKind::TimedOut, format!("newline not sent: {e}"))
+            },
+            true,
+        )
+    })
+}
+
+/// Writes all of a buffer before a deadline (`write_all_by`; tests swap it).
+type WriteBy = fn(&mut TcpStream, &[u8], Instant) -> std::io::Result<()>;
 
 /// A running WordCraft app, reached through its loopback control port.
 pub struct Remote {
@@ -77,6 +100,7 @@ pub struct Remote {
     /// The control key, looked up once per connection (the app picks a new one at every start).
     key: Option<String>,
     find_key: KeyFinder,
+    put: WriteBy,
 }
 
 /// The control key: `env` (`WORDCRAFT_CONTROL_KEY`) when set, else the app's key file for
@@ -150,7 +174,8 @@ impl Remote {
     }
 
     fn connect_with(addr: &str, find_key: KeyFinder) -> std::io::Result<Self> {
-        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1, connected: false, send_key: false, key: None, find_key };
+        let mut r =
+            Self { addr: addr.to_string(), conn: None, next_id: 1, connected: false, send_key: false, key: None, find_key, put: write_all_by };
         r.reconnect()?;
         if let Some(w) = r.key_warning() {
             log::warn!("{w}");
@@ -161,7 +186,16 @@ impl Remote {
     /// A remote that connects on first use: the app may start after the MCP server, and a
     /// server that exits at once reads as failed for the client's whole session (#4078).
     pub fn lazy(addr: &str) -> Self {
-        Self { addr: addr.to_string(), conn: None, next_id: 1, connected: false, send_key: false, key: None, find_key: Box::new(find_key) }
+        Self {
+            addr: addr.to_string(),
+            conn: None,
+            next_id: 1,
+            connected: false,
+            send_key: false,
+            key: None,
+            find_key: Box::new(find_key),
+            put: write_all_by,
+        }
     }
 
     /// The address the app is reached at, as given.
@@ -229,7 +263,8 @@ impl Remote {
         // One overall deadline for the request and its whole reply.
         let deadline = Instant::now() + EXCHANGE;
         reader.get_mut().deadline = deadline;
-        write_all_by(writer, format!("{line}\n").as_bytes(), deadline).map_err(|e| (e, false))?;
+        let put = self.put;
+        send_line(|b| put(writer, b, deadline), line)?;
         match read_bounded_line(reader, MAX_REPLY_LINE).map_err(|e| (e, true))? {
             BoundedLine::Line(reply) => Ok(reply),
             BoundedLine::Eof => Err((std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "control channel closed"), true)),
@@ -459,6 +494,61 @@ mod tests {
         let e = r.call("engine.execute", json!({"command": "text.insert", "params": {"text": "x"}})).unwrap_err();
         assert!(e.contains("bad reply"), "{e}");
         assert_eq!(seen.load(Ordering::SeqCst), 1, "the request was sent once");
+    }
+
+    #[test]
+    fn a_failed_newline_counts_as_written_and_is_not_resent() {
+        // The connection drops (or the deadline expires) right before the `\n`: the line is out.
+        let mut sent = Vec::new();
+        let r = send_line(
+            |b| {
+                if b == b"\n" {
+                    return Err(std::io::ErrorKind::TimedOut.into());
+                }
+                sent.extend_from_slice(b);
+                Ok(())
+            },
+            "{\"id\":1}",
+        );
+        let (e, written) = r.unwrap_err();
+        assert!(written && e.kind() == std::io::ErrorKind::TimedOut);
+        assert_eq!(sent, b"{\"id\":1}");
+        // A failure of the line itself is not.
+        let (_, written) = send_line(|_| Err(std::io::ErrorKind::BrokenPipe.into()), "x").unwrap_err();
+        assert!(!written);
+    }
+
+    #[test]
+    fn a_connection_dropped_before_the_newline_is_not_resent() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(AtomicUsize::new(0));
+        let n = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let n = n.clone();
+                std::thread::spawn(move || {
+                    // The app runs a line that ends at EOF.
+                    for line in BufReader::new(stream).lines() {
+                        if line.is_ok_and(|l| !l.is_empty()) {
+                            n.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                });
+            }
+        });
+        let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k1")).unwrap();
+        // The connection goes down right after the line, before the `\n`.
+        r.put = |s, b, deadline| {
+            if b == b"\n" {
+                s.shutdown(std::net::Shutdown::Both)?;
+            }
+            write_all_by(s, b, deadline)
+        };
+        let e = r.call("engine.execute", json!({"command": "text.insert", "params": {"text": "x"}})).unwrap_err();
+        assert!(e.contains("outcome unknown"), "{e}");
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(seen.load(Ordering::SeqCst), 1, "the request ran once");
     }
 
     fn fixed_key(key: &'static str) -> KeyFinder {
