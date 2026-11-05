@@ -6430,9 +6430,9 @@ fn body_line_starts(d: &Document, m: f32) -> Vec<usize> {
         .collect()
 }
 
-/// #5402: a footnote mark stays with the text before it, as in Word: at no width does a line
-/// start with a mark that follows a full stop, a closing parenthesis or a word, and the comma
-/// after a mark stays with it too. A space beside a mark is still a place to break, after the
+/// #5402: a footnote mark stays with the text before it, as the report shows Word doing: at no
+/// width does a line start with a mark that follows a full stop, a closing parenthesis or a word.
+/// The comma after a mark stays with it too (not checked in Word). A space beside a mark is still a place to break, after the
 /// mark and before it.
 #[test]
 fn a_note_mark_stays_with_the_text_before_it() {
@@ -6542,13 +6542,16 @@ fn a_note_mark_after_a_hyphen_bookmark_or_soft_hyphen() {
 }
 
 /// #5402: whatever surrounds a note mark, no line starts with it, with what lies between it and
-/// the text it follows (a bookmark, hidden text), or with what is glued after it, at any width,
-/// with or without automatic hyphenation. Only a space after the mark is a place to break.
+/// the text it follows (a bookmark, hidden text), or with what is glued after it, with or without
+/// automatic hyphenation. Only a space after the mark is a place to break. Checked on the laid-out
+/// clusters, where every source of break opportunities has had its say: no forbidden place is a
+/// break or a hyphenation point. Then at narrow widths, where a word too long for its line is split
+/// at any letter, no line starts at a forbidden place either.
 #[test]
 fn a_note_mark_never_starts_a_line_whatever_surrounds_it() {
     let obj = wordcraft_doc::para::OBJ.len_utf8();
     let (head, tail) = ("Lorem ipsum dolor sit amet consectetur", " adipiscing elit sed do eiusmod tempor");
-    let mut layouts = 0;
+    let mut cases = 0;
     for before in [".", ")", "\u{201d}", "-", "\u{2013}", "\u{2014}", "\u{ad}", "/", "a", "7", "\u{5b57}"] {
         for between in ["", "bookmark", "hidden"] {
             for after in [",", ".", ")", "s", " ", ""] {
@@ -6577,22 +6580,34 @@ fn a_note_mark_never_starts_a_line_whatever_surrounds_it() {
                     if !after.is_empty() && after != " " {
                         forbidden.push(at + obj);
                     }
-                    for m in (100..=530).step_by(9) {
+                    let case = format!("{before:?} {between:?} mark {after:?} auto {auto}");
+                    cases += 1;
+                    // The clusters: no break and no hyphenation point before a forbidden place.
+                    let l = lay(&d);
+                    let para = l
+                        .pages
+                        .iter()
+                        .flat_map(|pg| pg.items.iter())
+                        .find_map(|it| if let Placed::Lines { story: StoryRef::Body, para, .. } = it { Some(para.clone()) } else { None })
+                        .unwrap();
+                    for f in &forbidden {
+                        let Some(k) = para.clusters.iter().position(|c| c.start == *f) else { continue };
+                        let Some(prev) = k.checked_sub(1) else { continue };
+                        assert!(!para.clusters[prev].break_after, "{case}: a break before {f}");
+                        assert!(!para.hyph_after.contains(&(prev as u32)), "{case}: a hyphenation point before {f}");
+                    }
+                    // Split words: down to a few letters a line.
+                    for m in (470..=530).step_by(12) {
                         let starts = body_line_starts(&d, m as f32);
-                        layouts += 1;
                         for f in &forbidden {
-                            assert!(
-                                !starts.contains(f),
-                                "{before:?} {between:?} mark {after:?} auto {auto}, margin {m}: a line starts at {f}: {starts:?} in {:?}",
-                                d.para(StoryRef::Body, &Path::top(0)).map(|p| p.text.clone())
-                            );
+                            assert!(!starts.contains(f), "{case}, margin {m}: a line starts at {f}: {starts:?}");
                         }
                     }
                 }
             }
         }
     }
-    assert!(layouts > 10_000, "{layouts} layouts");
+    assert_eq!(cases, 11 * 3 * 6 * 2);
 }
 
 /// #2963: a word after a slash ("caption /заполняется") wraps whole, as in Word. UAX #14 forbids a

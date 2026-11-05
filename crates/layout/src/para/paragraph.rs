@@ -684,9 +684,9 @@ fn keep_graphemes_whole(pl: &mut ParaLayout) {
     }
 }
 
-/// A footnote or endnote mark stays with what it follows and with what follows it, as in Word
-/// (#5402): "end.¹" never leaves "¹" to start the next line, "ash-¹" doesn't break at the hyphen,
-/// and "¹," keeps its comma. Only a space, a tab or a manual break beside a mark is a place to
+/// A footnote or endnote mark stays with what it follows and with what follows it: "end.¹" never
+/// leaves "¹" to start the next line, as the #5402 report shows Word doing, and "ash-¹" doesn't
+/// break at the hyphen. "¹," keeps its comma too; that side hasn't been checked in Word. Only a space, a tab or a manual break beside a mark is a place to
 /// break. Applied to the clusters after every other source of break opportunities (UAX #14,
 /// objects, hyphenation, whole graphemes), so none of them can bring a break back. Clusters that
 /// take no room (a bookmark, a hidden mark or hidden text) are looked through, and a hidden mark

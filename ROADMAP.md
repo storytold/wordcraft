@@ -139,7 +139,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
-- 2026-11-04: Layout: a footnote or endnote mark stays with the text before it and the punctuation after it, as in Word. Its object character has the UAX #14 class CB, which breaks on both sides, so `end.¹` could leave the mark alone at the start of the next line (#5402). Line breaking now glues each visible mark to the cluster it follows and the one after it, looking through bookmarks and hidden text, after every other source of break opportunities (UAX #14, objects, hyphenation) has run; only a space, a tab or a manual break beside a mark still breaks, and a word split for being too long never starts a line with the mark. Readiness unchanged.
+- 2026-11-04: Layout: a footnote or endnote mark stays with the text before it, as the #5402 report shows Word doing, and with what follows it (`¹,`), which hasn't been checked in Word. Its object character has the UAX #14 class CB, which breaks on both sides, so `end.¹` could leave the mark alone at the start of the next line (#5402). Line breaking now glues each visible mark to the cluster it follows and the one after it, looking through bookmarks and hidden text, after every other source of break opportunities (UAX #14, objects, hyphenation) has run; only a space, a tab or a manual break beside a mark still breaks, and a word split for being too long never starts a line with the mark. Readiness unchanged.
 - 2026-10-28: Ink replay, eraser picking, lasso selection and arrow-candidate discovery reuse the paragraph prefixes they have already scanned (#3614). Page item order, stroke geometry and saved data retain their behavior. This narrows the stability work; ink import fidelity, native pen input and broader corpus qualification remain open.
 
 - 2026-11-04: OpenDocument files have no display settings any more (gap 19): File › Options › Advanced › OpenDocument files, `file.options` `odf`, `WORDCRAFT_ODF`, the LibreOffice style and custom values are gone. WordCraft makes one choice for each case the standard leaves open, the one the default made, and still follows what a file states ([docs/odf-interpretation.md](docs/odf-interpretation.md)).
@@ -775,7 +775,7 @@ Section page-numbering settings preserve `w:chapStyle` values across the full un
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-04 | trivial | Progress log: a footnote mark stays with the text before it (#5402) |
+| 2026-11-05 | trivial | Progress log: a footnote mark stays with the text before it (#5402) |
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` is preserved with true, false and absent values; OOXML properties follow schema order. Grid layout remains open. |
 | 2026-10-28 | trivial | Per-page ink object lookups, #3614. Drawing order, geometry and saved data retain their behavior; no readiness estimate change |
 | 2026-11-04 | trivial | Progress log: OpenDocument display settings removed (gap 19) |
