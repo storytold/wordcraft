@@ -203,15 +203,22 @@ fn extra_text_properties(a: &Attrs, d: &mut FmtDelta) {
     if let Some(v) = get(a, "style:font-relief") {
         (x.emboss, x.engrave) = (Some(v.trim() == "embossed"), Some(v.trim() == "engraved"));
     }
+    if let Some(l) = language(a) {
+        x.lang = Some(l);
+    }
+}
+
+/// The language `fo:language` and `fo:country` state, as a tag (`de-DE`); `None` when they state
+/// none, or no language at all (`none`, `zxx`).
+fn language(a: &Attrs) -> Option<String> {
     fn tag(v: Option<&str>) -> Option<&str> {
         v.map(str::trim).filter(|v| (1..=8).contains(&v.len()) && v.chars().all(|c| c.is_ascii_alphanumeric()))
     }
-    if let Some(l) = tag(get(a, "fo:language")).filter(|l| *l != "none" && *l != "zxx") {
-        x.lang = Some(match tag(get(a, "fo:country")).filter(|c| *c != "none") {
-            Some(c) => format!("{l}-{c}"),
-            None => l.to_string(),
-        });
-    }
+    let l = tag(get(a, "fo:language")).filter(|l| *l != "none" && *l != "zxx")?;
+    Some(match tag(get(a, "fo:country")).filter(|c| *c != "none") {
+        Some(c) => format!("{l}-{c}"),
+        None => l.to_string(),
+    })
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1034,6 +1041,8 @@ pub(super) struct Styles {
     pub(super) default_tab: Option<f32>,
     /// The Asian and complex-script fonts and languages of `style:default-style` for paragraphs.
     pub(super) default_scripts: wordcraft_doc::props::CharProps,
+    /// The language the default paragraph style states.
+    pub(super) default_lang: Option<String>,
     /// Pair kerning of `style:default-style` for paragraphs (`style:letter-kerning`, §20.317;
     /// off unless it says so).
     pub(super) default_kern: bool,
@@ -1093,6 +1102,7 @@ impl Styles {
                     self.default_kern = get(&a, "style:letter-kerning").is_some_and(|k| k.trim() == "true");
                     self.default_color = get(&a, "fo:color").and_then(model::parse_color);
                     script_properties(&a, &mut self.default_scripts, &self.faces);
+                    self.default_lang = language(&a);
                 }
                 "paragraph-properties" if in_default && cur.is_none() => {
                     paragraph_spacing(&a, &mut self.default_spacing);
@@ -1188,6 +1198,12 @@ impl Styles {
             .or(self.default_size)
             .filter(|v| v.is_finite() && *v >= 1.0)
             .map(|v| v.min(1638.0))
+    }
+
+    /// The document's language: its Standard style's, else its default paragraph style's. (Written
+    /// from the model, Standard is empty and the default style says it for both.)
+    pub(super) fn document_lang(&self) -> Option<String> {
+        self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.fmt.extra.lang.clone()).or_else(|| self.default_lang.clone())
     }
 
     /// The document's default font: the Standard paragraph style's, else the default style's.

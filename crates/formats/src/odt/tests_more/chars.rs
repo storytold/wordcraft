@@ -284,3 +284,70 @@ fn objects_in_hidden_text_are_kept() {
     assert!(p.text.contains("Hidden"), "{:?}", p.text);
     assert!(p.objects.iter().any(|o| matches!(o, wordcraft_doc::para::InlineObject::BookmarkStart { name } if name == "Secret")), "{:?}", p.objects);
 }
+
+/// `default` as a document's default paragraph style's text properties, with `standard` as its
+/// Standard style's.
+fn with_default_text(default: &str, standard: &str) -> Vec<u8> {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties {default}/></style:default-style><style:style style:name="Standard" style:family="paragraph"><style:text-properties {standard}/></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>Hallo</text:p></office:text></office:body></office:document-content>"#
+    );
+    crate::odt::tests::package(&content, Some(&styles))
+}
+
+/// `styles`' default paragraph style.
+fn default_style(styles: &str) -> &str {
+    let at = styles.find(r#"<style:default-style style:family="paragraph">"#).expect("a default paragraph style");
+    styles[at..].split("</style:default-style>").next().unwrap_or_default()
+}
+
+#[test]
+fn the_default_language_is_the_files_and_written_back_from_the_model() {
+    let d = import(&with_default_text(r#"fo:language="de" fo:country="DE""#, "")).unwrap();
+    assert_eq!(d.styles.default_chr.lang.as_deref(), Some("de-DE"));
+    assert_eq!(d.styles.resolve_char(None, &Default::default()).lang.as_deref(), Some("de-DE"));
+    // Written from the model (a style or list definition changed), it is still the file's: without
+    // it LibreOffice shows the document in its own default language.
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let styles = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(default_style(&styles).contains(r#"fo:language="de" fo:country="DE""#), "{styles}");
+    assert!(!styles.contains(r#"fo:language="en""#), "no style says English: {styles}");
+    assert_eq!(import(&saved).unwrap().styles.default_chr.lang.as_deref(), Some("de-DE"));
+    // Saved as read, the styles WordCraft adds beside the file's don't say English either.
+    let styles = crate::odt::tests::entry(&export(&d).unwrap(), "styles.xml");
+    assert!(!styles.contains(r#"fo:language="en""#), "{styles}");
+}
+
+#[test]
+fn a_file_stating_no_language_has_none_and_writes_none() {
+    let d = import(&with_default_text("", "")).unwrap();
+    assert_eq!(d.styles.default_chr.lang, None, "not the English of WordCraft's new documents");
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    assert!(!crate::odt::tests::entry(&saved, "styles.xml").contains("fo:language"));
+    assert_eq!(import(&saved).unwrap().styles.default_chr.lang, None);
+    // `none` and `zxx` are no language.
+    for none in ["none", "zxx"] {
+        let d = import(&with_default_text(&format!(r#"fo:language="{none}" fo:country="none""#), "")).unwrap();
+        assert_eq!(d.styles.default_chr.lang, None, "{none}");
+    }
+}
+
+#[test]
+fn a_language_only_the_standard_style_states_survives_a_rewrite() {
+    let d = import(&with_default_text("", r#"fo:language="nb" fo:country="NO""#)).unwrap();
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let back = import(&saved).unwrap();
+    let p = back.body[0].as_para().unwrap();
+    let lang =
+        p.runs.first().and_then(|r| r.props.lang.clone()).or_else(|| back.styles.resolve_char(p.props.style.as_deref(), &Default::default()).lang);
+    assert_eq!(lang.as_deref(), Some("nb-NO"), "{}", crate::odt::tests::entry(&saved, "styles.xml"));
+}
+
+#[test]
+fn a_new_documents_language_is_stated() {
+    // WordCraft's own documents say their language, so a reader doesn't use its own default.
+    let styles = crate::odt::tests::entry(&export(&wordcraft_doc::Document::new()).unwrap(), "styles.xml");
+    assert!(default_style(&styles).contains(r#"fo:language="en" fo:country="US""#), "{styles}");
+}
