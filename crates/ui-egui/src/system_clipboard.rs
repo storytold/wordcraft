@@ -73,9 +73,11 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
 /// replace the HTML, so only one of them runs.
 pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str, mathml: &str) {
     if text.is_empty() {
-        // A copied picture or shape has no text, only HTML (#2276): empty the clipboard's text,
-        // else Paste would find the text copied before it and paste that instead of our copy.
-        if !html.is_empty() {
+        // A copied picture or shape has no text, only HTML (#2276). The host puts the HTML (and a
+        // lone picture as a picture) in place of everything on the clipboard, so other programs
+        // paste it; without one, the clipboard's text is emptied, else Paste would find the text
+        // copied before it and paste that instead of our copy.
+        if !html.is_empty() && !app.services.set_clipboard_html.as_ref().is_some_and(|f| f(html, text, mathml)) {
             ctx.copy_text(String::new());
         }
         return;

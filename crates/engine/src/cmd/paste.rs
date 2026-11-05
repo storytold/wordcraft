@@ -381,6 +381,96 @@ pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// Word's Overwrite Cells: a table pasted over selected table cells (copied cells from a
+/// spreadsheet, say) fills those cells from the top-left one, row by row, instead of nesting a
+/// table in the first of them. Rows the paste needs are added below, copies of the last row;
+/// cells past the table's right edge are left out. `false` (paste as before) when the fragment
+/// isn't one table, the selection isn't cells of one table (a caret in one cell nests the table,
+/// as Word does), or Track Changes is on.
+pub fn overwrite_cells(s: &mut Session, frag: &Fragment) -> Result<bool, CmdError> {
+    if s.doc.settings.track_changes {
+        return Ok(false);
+    }
+    let Some(src) = lone_table(frag) else { return Ok(false) };
+    let Some((story, tp, row0, grid0)) = selected_cells_start(s) else { return Ok(false) };
+    super::controls::prepare_edit(s)?;
+    let t = s.doc.table_mut(story, &tp)?;
+    let mut last = (row0, grid0);
+    for (i, src_row) in src.rows.iter().enumerate() {
+        let r = row0 + i;
+        if r >= t.rows.len() {
+            if t.rows.len() >= wordcraft_doc::table::MAX_ROWS {
+                break;
+            }
+            let Some(mut row) = t.rows.last().cloned() else { break };
+            for c in &mut row.cells {
+                c.blocks = wordcraft_doc::Cell::empty().blocks;
+                c.controls = Default::default();
+            }
+            row.controls = Default::default();
+            t.rows.push(row);
+        }
+        let row = &mut t.rows[r];
+        let mut g = grid0;
+        for src_cell in &src_row.cells {
+            let Some(c) = cell_at_grid(row, g) else { break };
+            row.cells[c].blocks = src_cell.blocks.clone();
+            last = (r, g);
+            g = grid_start(row, c) + row.cells[c].span();
+        }
+    }
+    super::table::touch_cells(s, &tp)?;
+    super::table::select_range(s, story, &tp, (row0, last.0), (grid0, last.1))?;
+    Ok(true)
+}
+
+/// The fragment's table when it is one table and nothing else (empty paragraphs around it aside).
+fn lone_table(frag: &Fragment) -> Option<&wordcraft_doc::Table> {
+    let mut table = None;
+    for b in &frag.blocks {
+        match b {
+            Block::Table(t) if table.is_none() => table = Some(t),
+            Block::Para(p) if p.is_empty() => {}
+            _ => return None,
+        }
+    }
+    table
+}
+
+/// Grid column where cell `c` of `row` starts.
+fn grid_start(row: &wordcraft_doc::Row, c: usize) -> usize {
+    row.first_grid() + row.cells.iter().take(c).map(wordcraft_doc::Cell::span).sum::<usize>()
+}
+
+/// The cell of `row` covering grid column `g`.
+fn cell_at_grid(row: &wordcraft_doc::Row, g: usize) -> Option<usize> {
+    let mut start = row.first_grid();
+    for (i, cell) in row.cells.iter().enumerate() {
+        let end = start + cell.span();
+        if g < end {
+            return (g >= start).then_some(i);
+        }
+        start = end;
+    }
+    None
+}
+
+/// The top-left (story, table, row, grid column) of a selection of cells of one table: whole cells
+/// selected, or a selection from one cell into another.
+fn selected_cells_start(s: &Session) -> Option<(wordcraft_doc::StoryRef, wordcraft_doc::Path, usize, usize)> {
+    if let Some(r) = s.cell_range() {
+        return Some((r.story, r.table.clone(), r.rows.0, r.cols.0));
+    }
+    let (a, b) = s.sel.ordered();
+    let ((ta, ra, ca), (tb, rb, cb)) = (a.path.cell()?, b.path.cell()?);
+    if a.story != b.story || ta != tb || (ra, ca) == (rb, cb) {
+        return None;
+    }
+    let t = s.doc.table(a.story, &ta)?;
+    let ga = grid_start(t.rows.get(ra)?, ca);
+    let gb = grid_start(t.rows.get(rb)?, cb);
+    Some((a.story, ta, ra.min(rb), ga.min(gb)))
+}
 /// Every paragraph in a block, tables included (bounded depth).
 pub(crate) fn each_para(b: &mut Block, depth: usize, f: &mut dyn FnMut(&mut Paragraph)) {
     if depth > MAX_DEPTH {

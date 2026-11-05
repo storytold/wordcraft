@@ -2705,6 +2705,32 @@ fn copying_a_picture_replaces_the_clipboards_old_text() {
     assert_eq!(body_text(&a).matches(UNSAVED).count(), 1, "and didn't paste the old text");
 }
 
+/// A copied picture reaches the host's clipboard as HTML with the picture in it, so other programs
+/// (PhotoCraft, paint programs) paste the picture; egui's empty text isn't set over it.
+#[test]
+fn copying_a_picture_hands_its_html_to_the_host() {
+    let got = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(String, String)>::new()));
+    let sink = got.clone();
+    let ctx = egui::Context::default();
+    let mut a = typed();
+    a.services.set_clipboard_html = Some(Box::new(move |h, t, _| {
+        sink.borrow_mut().push((h.to_string(), t.to_string()));
+        true
+    }));
+    a.ctx = Some(ctx.clone());
+    a.run("select.collapse", json!({"end": true})).unwrap();
+    let data = wordcraft_engine::cmd::insert::base64_encode(&png_bytes([200, 30, 30, 255]));
+    a.run("insert.picture", json!({"data": data})).unwrap();
+    assert!(crate::objects::selected(&a).is_some());
+    a.run("edit.copy", json!({})).unwrap();
+    let got = got.borrow();
+    let (html, text) = got.last().expect("the host got the copy");
+    assert!(html.contains("<img") && html.contains("data:image/png;base64,"), "{html}");
+    assert!(text.is_empty(), "{text:?}");
+    let empty_text_set = ctx.output(|o| o.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t.is_empty())));
+    assert!(!empty_text_set, "egui's text would replace the host's copy at the end of the frame");
+}
+
 /// #1265: every user entry point publishes Cut to the one clipboard sink — the ribbon's button
 /// and a real Cmd/Ctrl+X key event, not only the generic command dispatch the sink sits behind.
 #[test]

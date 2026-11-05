@@ -203,7 +203,13 @@ fn copy_with(s: &mut Session, whole: Option<&Path>) -> CmdResult {
 /// and for a copy of one equation alone, its MathML (#1297).
 pub(crate) fn copy_result(s: &mut Session) -> Value {
     s.clipboard_html = match &s.clipboard {
-        Some(f) => wordcraft_formats::html::export_fragment(&f.to_document()),
+        Some(f) => {
+            // The fragment's pictures name this document's media: give them their bytes (shared,
+            // not copied), else the HTML has no pictures for other programs to paste.
+            let mut d = f.to_document();
+            d.media = s.doc.media.clone();
+            wordcraft_formats::html::export_fragment(&d)
+        }
         None => String::new(),
     };
     let mut r = json!({"text": s.clipboard_text});
@@ -281,7 +287,11 @@ fn insert_spike(s: &mut Session, _: &Value) -> CmdResult {
 /// as Keep Text Only does.
 fn paste(s: &mut Session, v: &Value) -> CmdResult {
     match super::paste::paste_content(s, v)? {
-        super::paste::Pasted::Fragment(frag) => super::paste::insert(s, frag)?,
+        super::paste::Pasted::Fragment(frag) => {
+            if !super::paste::overwrite_cells(s, &frag)? {
+                super::paste::insert(s, frag)?;
+            }
+        }
         super::paste::Pasted::Text(text) => super::paste::insert_text(s, &text)?,
     }
     sel_result(s)
@@ -291,7 +301,9 @@ fn paste(s: &mut Session, v: &Value) -> CmdResult {
 fn paste_merge(s: &mut Session, v: &Value) -> CmdResult {
     let mut frag = super::paste::paste_fragment(s, v)?;
     super::paste::merge_formatting(s, &mut frag);
-    super::paste::insert(s, frag)?;
+    if !super::paste::overwrite_cells(s, &frag)? {
+        super::paste::insert(s, frag)?;
+    }
     sel_result(s)
 }
 

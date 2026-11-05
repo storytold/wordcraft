@@ -12413,3 +12413,30 @@ fn page_down_extends_a_selection_that_ends_in_collapsed_outline_text() {
     assert!(s.sel.focus.path.0[0] > 6, "Page Down extends the selection a page on: {:?}", s.sel.focus);
     assert!(s.layout().caret(&s.sel.focus).is_some(), "to a place the outline shows");
 }
+
+/// Cells copied in a spreadsheet, pasted over a matching selection of table cells, fill those
+/// cells (Word's Overwrite Cells) instead of nesting a small table in the first one.
+#[test]
+fn a_pasted_table_overwrites_the_selected_cells() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 3}));
+    let ti = s.doc.body.iter().position(|b| b.as_table().is_some()).expect("a table") as u32;
+    let at = |r: u32, c: u32| json!({"story": "body", "path": [ti, r, c, 0], "off": 0});
+    run(&mut s, "select.range", json!({"anchor": at(1, 1), "focus": at(2, 2)}));
+    let html = "<table><tr><td>Tiền</td><td>1.000</td></tr><tr><td>Thuế</td><td>100</td></tr><tr><td>Còn</td><td>900</td></tr></table>";
+    run(&mut s, "edit.paste", json!({"text": "Tiền\t1.000\nThuế\t100\nCòn\t900", "html": html}));
+    assert_eq!(s.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 1, "still one table");
+    let t = s.doc.body[ti as usize].as_table().unwrap();
+    let text = |r: usize, c: usize| crate::cmd::table::cell_text(&t.rows[r].cells[c]);
+    assert!(t.rows.iter().flat_map(|r| &r.cells).all(|c| c.blocks.iter().all(|b| b.as_table().is_none())), "no nested table");
+    assert_eq!((text(1, 1), text(1, 2), text(2, 1), text(2, 2)), ("Tiền".into(), "1.000".into(), "Thuế".into(), "100".into()));
+    // The third pasted row needs a row the table didn't have: one is added below.
+    assert_eq!(t.rows.len(), 4);
+    assert_eq!((text(3, 1), text(3, 2), text(3, 0)), ("Còn".into(), "900".into(), String::new()));
+    assert_eq!(text(0, 0), "");
+    // A caret in one cell still nests the table, as Word does.
+    run(&mut s, "caret.set", json!({"pos": at(0, 0)}));
+    run(&mut s, "edit.paste", json!({"text": "a\tb", "html": "<table><tr><td>a</td><td>b</td></tr></table>"}));
+    let t = s.doc.body[ti as usize].as_table().unwrap();
+    assert!(t.rows[0].cells[0].blocks.iter().any(|b| b.as_table().is_some()));
+}
