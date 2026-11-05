@@ -750,7 +750,7 @@ fn graphic_group(
                 };
                 Some(Member { x: rect[0] * sx, y, inline })
             }
-            GraphicItem::Image { rect, media } if finite(rect) => {
+            GraphicItem::Image { rect, media, crop } if finite(rect) => {
                 let data = doc.media.get(media)?;
                 let img = Img {
                     data: data.clone(),
@@ -760,7 +760,7 @@ fn graphic_group(
                     alt: String::new(),
                     float: None,
                     object: None,
-                    crop: [0.0; 4],
+                    crop: *crop,
                 };
                 Some(Member { x: rect[0] * sx, y: rect[1] * sy, inline: Inline::Image(img) })
             }

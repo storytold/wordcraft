@@ -48,7 +48,7 @@ pub enum AutoSaveBlock {
     Unsaved,
     /// A file in a format that can't keep everything (Markdown, plain text, HTML…), by file name.
     Format { name: String },
-    /// A file that was opened but not yet saved in this session.
+    /// A file that was opened but not yet saved in this session; the switch shows off and lifts it.
     NotSavedHere,
 }
 

@@ -213,6 +213,7 @@ impl WordApp {
             print_document: _,
             // Per document: the shown document's, swapped with `parked` on a document switch.
             autosave_path: _,
+            read_from: _,
             comment_drafts: _,
             parked: _,
             // Per window.
@@ -292,6 +293,7 @@ impl WordApp {
             mini_toolbar: _,
             alignment_guides: _,
             start_screen: _,
+            update_check: _,
             print_backgrounds: _,
             update_fields_before_print: _,
             dictionary: _,

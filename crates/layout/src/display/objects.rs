@@ -36,10 +36,10 @@ pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32)
                 })
             }
             GraphicItem::Text { rect: r, .. } => out.extend(text_glyphs(doc, inside(r), it, alpha, k)),
-            GraphicItem::Image { rect: r, media } => out.push(Draw::Image {
+            GraphicItem::Image { rect: r, media, crop } => out.push(Draw::Image {
                 rect: inside(r),
                 media: media.clone(),
-                crop: [0.0; 4],
+                crop: *crop,
                 alpha,
                 alt: String::new(),
                 fx: Default::default(),
@@ -452,10 +452,10 @@ pub(super) fn object_draws(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32
                 .items
                 .iter()
                 .filter_map(|it| match it {
-                    GraphicItem::Image { rect: r, media } => Some(Draw::Image {
+                    GraphicItem::Image { rect: r, media, crop } => Some(Draw::Image {
                         rect: Rect::new(rect.x + r[0] * sx, rect.y + r[1] * sy, r[2] * sx, r[3] * sy),
                         media: media.clone(),
-                        crop: [0.0; 4],
+                        crop: *crop,
                         alpha,
                         alt: String::new(),
                         fx: Default::default(),
