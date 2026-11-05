@@ -6823,6 +6823,7 @@ dependencies = [
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-fonts",
+ "wordcraft-render",
  "wordcraft-ui-egui",
  "zbus",
 ]
