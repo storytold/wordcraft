@@ -296,7 +296,7 @@ fn textbox_tight_wrap_survives_native_json() {
     let para = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
     para.props.textbox_tight_wrap = Some(props::TextboxTightWrap::AllLines);
     para.props.style = Some("TightWrap".into());
-    d.styles.upsert(Style {
+    Arc::make_mut(&mut d.styles).upsert(Style {
         id: "TightWrap".into(),
         name: "Tight Wrap".into(),
         para: props::ParaProps { textbox_tight_wrap: Some(props::TextboxTightWrap::FirstAndLastLine), ..Default::default() },
