@@ -502,11 +502,18 @@ fn a_deletion_inside_another_authors_insertion_is_listed_as_its_own_change() {
     let has = |kind: &str, who: &str, text: &str| list.iter().any(|c| c == &(kind.into(), who.into(), text.into()));
     assert!(has("insert", "Alice", " world"), "Alice's insertion is still listed: {list:?}");
     assert!(has("delete", "Bob", " world"), "Bob's deletion is listed, by Bob: {list:?}");
-    // Next Change still moves on past the struck text (both changes share its range).
+    // Carol adds text after it, so there is a change to move on to.
+    s.author = "Carol".into();
+    s.sel = Selection::caret(Pos::body(0, 11));
+    run(&mut s, "text.insert", json!({"text": "!"}));
+    // Next Change still moves on past the struck text (both changes share its range): it
+    // stops on it once, then goes on to Carol's.
     s.sel = Selection::caret(Pos::body(0, 0));
     run(&mut s, "review.nextChange", json!({}));
     run(&mut s, "review.nextChange", json!({}));
-    assert_eq!(s.sel.ordered().0.off, 5);
+    assert_eq!(s.sel.ordered(), (Pos::body(0, 5), Pos::body(0, 11)));
+    run(&mut s, "review.nextChange", json!({}));
+    assert_eq!(s.sel.ordered().0.off, 11, "on to Carol's insertion, not stuck on the struck text");
     run(&mut s, "review.rejectAll", json!({}));
     assert_eq!(visible(&s), "");
 }
@@ -564,4 +571,27 @@ fn a_deletion_of_another_authors_paragraph_mark_is_listed_as_its_own_change() {
     };
     assert!(at_mark("insert", "Alice"), "Alice's paragraph mark is still listed: {list:?}");
     assert!(at_mark("delete", "Bob"), "Bob's deletion of it is listed, by Bob: {list:?}");
+}
+
+#[test]
+fn moving_another_authors_insertion_lists_the_move_source_by_its_mover() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "document.setText", json!({"text": "First one."}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    // Alice adds a paragraph; Bob moves it to the top.
+    s.author = "Alice".into();
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Second one."}));
+    s.author = "Bob".into();
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 10}, "focus": {"block": 1, "off": 11}}));
+    run(&mut s, "edit.cut", json!({}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "edit.paste", json!({}));
+    let list = change_list(&mut s);
+    let has = |kind: &str, who: &str| list.iter().any(|(k, w, _)| k == kind && w == who);
+    assert!(has("moveTo", "Bob"), "Bob's destination is listed: {list:?}");
+    assert!(has("moveFrom", "Bob"), "Bob's source, inside Alice's insertion, is listed: {list:?}");
+    assert!(has("insert", "Alice"), "Alice's insertion is still listed: {list:?}");
+    assert!(crate::cmd::review::move_changes(&s).iter().any(|(_, who, from)| who == "Bob" && *from), "a Moved from balloon for Bob");
 }
