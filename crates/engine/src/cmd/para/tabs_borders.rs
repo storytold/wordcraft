@@ -96,31 +96,39 @@ pub fn border_sides(v: &Value, space_tb: f32, space_lr: f32) -> Result<Borders, 
 
 /// Keep each target's existing border flags when a sides update does not explicitly name them.
 pub(crate) fn preserve_unspecified_border_flags(updated: &mut Borders, existing: Borders, input: &Value) {
-    fn preserve(updated: &mut Option<Border>, existing: Option<Border>, input: Option<&Value>) {
+    preserve_unspecified_border_flags_with_style(updated, existing, Borders::default(), input);
+}
+
+fn preserve_unspecified_border_flags_with_style(updated: &mut Borders, direct: Borders, style: Borders, input: &Value) {
+    fn preserve(updated: &mut Option<Border>, direct: Option<Border>, style: Option<Border>, input: Option<&Value>) {
         let Some(updated) = updated else { return };
         if input.and_then(|side| side.get("shadow")).is_none() {
-            updated.shadow = existing.and_then(|border| border.shadow);
+            updated.shadow = direct.and_then(|border| border.shadow).or_else(|| style.and_then(|border| border.shadow));
         }
         if input.and_then(|side| side.get("frame")).is_none() {
-            updated.frame = existing.and_then(|border| border.frame);
+            updated.frame = direct.and_then(|border| border.frame).or_else(|| style.and_then(|border| border.frame));
         }
     }
 
-    preserve(&mut updated.top, existing.top, input.get("top"));
-    preserve(&mut updated.bottom, existing.bottom, input.get("bottom"));
-    preserve(&mut updated.left, existing.left, input.get("left"));
-    preserve(&mut updated.right, existing.right, input.get("right"));
-    preserve(&mut updated.between, existing.between, input.get("between"));
-    preserve(&mut updated.inside_v, existing.inside_v, input.get("insideV"));
+    preserve(&mut updated.top, direct.top, style.top, input.get("top"));
+    preserve(&mut updated.bottom, direct.bottom, style.bottom, input.get("bottom"));
+    preserve(&mut updated.left, direct.left, style.left, input.get("left"));
+    preserve(&mut updated.right, direct.right, style.right, input.get("right"));
+    preserve(&mut updated.between, direct.between, style.between, input.get("between"));
+    preserve(&mut updated.inside_v, direct.inside_v, style.inside_v, input.get("insideV"));
 }
 
 pub(super) fn borders(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(sides) = v.get("sides") {
         let b = border_sides(sides, 1.0, 4.0)?;
+        let styles = s.doc.styles.clone();
         // An explicit empty set keeps a style's borders off.
         return fmt(s, &|p| {
+            let mut style_props = p.clone();
+            style_props.borders = None;
+            let inherited = styles.resolve_para(&style_props).borders.unwrap_or_default();
             let mut b = b;
-            preserve_unspecified_border_flags(&mut b, p.borders.unwrap_or_default(), sides);
+            preserve_unspecified_border_flags_with_style(&mut b, p.borders.unwrap_or_default(), inherited, sides);
             p.borders = Some(b);
         });
     }

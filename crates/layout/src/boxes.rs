@@ -9,6 +9,7 @@ use super::{
     Anchor, Arc, Block, Blocks, Border, Document, Float, FloatAlign, HashMap, ParaLayout, Paragraph, Path, Rect, StoryRef, TableFloat, TextDirection,
     Wrap, WrapText, para, table,
 };
+use wordcraft_doc::props::Borders;
 
 /// Cell identity is independent of optional table-style formatting.
 pub(crate) enum BoxContext<'a> {
@@ -571,9 +572,28 @@ pub(crate) fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
 /// Word joins neighbouring paragraphs with the same borders and indents into one box: the top
 /// border goes above the first of them only, the bottom one below the last, and the shading and
 /// side borders run on through the space between them (`table`: the cell's paragraph properties).
+fn same_border(a: Option<Border>, b: Option<Border>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a.same_look(&b),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn same_borders(a: Borders, b: Borders) -> bool {
+    same_border(a.top, b.top)
+        && same_border(a.left, b.left)
+        && same_border(a.bottom, b.bottom)
+        && same_border(a.right, b.right)
+        && same_border(a.between, b.between)
+        && same_border(a.inside_v, b.inside_v)
+}
+
 fn border_group(doc: &Document, a: &Paragraph, b: &Paragraph, table: Option<&wordcraft_doc::props::ParaProps>) -> bool {
     let (a, b) = (doc.styles.resolve_para_in(&a.props, table), doc.styles.resolve_para_in(&b.props, table));
-    a.borders.is_some() && a.borders == b.borders && a.indent_left == b.indent_left && a.indent_right == b.indent_right
+    a.borders.is_some_and(|a_borders| b.borders.is_some_and(|b_borders| same_borders(a_borders, b_borders)))
+        && a.indent_left == b.indent_left
+        && a.indent_right == b.indent_right
 }
 
 /// Whether paragraph `i` of `blocks` and the one at `j` are of one border group.

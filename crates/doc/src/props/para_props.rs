@@ -225,6 +225,32 @@ impl Border {
     pub fn is_visible(&self) -> bool {
         self.style != BorderStyle::None && self.width > 0.0
     }
+
+    /// Compare the appearance of two borders; an omitted shadow or frame flag means off.
+    pub fn same_look(&self, other: &Self) -> bool {
+        self.style == other.style
+            && self.width == other.width
+            && self.color == other.color
+            && self.space == other.space
+            && self.shadow.unwrap_or(false) == other.shadow.unwrap_or(false)
+            && self.frame.unwrap_or(false) == other.frame.unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod border_tests {
+    use super::Border;
+
+    #[test]
+    fn omitted_shadow_and_frame_match_explicit_off() {
+        let omitted = Border::single(1.0);
+        let mut off = omitted;
+        off.shadow = Some(false);
+        off.frame = Some(false);
+        assert!(omitted.same_look(&off));
+        off.frame = Some(true);
+        assert!(!omitted.same_look(&off));
+    }
 }
 
 /// Borders on the four sides (plus inner borders for tables and runs of bordered paragraphs).

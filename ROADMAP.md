@@ -774,6 +774,7 @@ Section page-numbering settings preserve `w:chapStyle` values across the full un
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | trivial | Paragraph border shadow and frame flags survive edits; omitted and explicit off flags group the same |
 | 2026-10-28 | trivial | Per-page ink object lookups, #3614. Drawing order, geometry and saved data retain their behavior; no readiness estimate change |
 | 2026-11-04 | trivial | Progress log: OpenDocument display settings removed (gap 19) |
 | 2026-10-31 | trivial | Progress log: dialogs are modal except the five Word keeps modeless; a press beside one shakes it (#3859) |

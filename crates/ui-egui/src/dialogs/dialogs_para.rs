@@ -482,6 +482,12 @@ impl LineForm {
                 if Rgb::parse(&self.color).is_some() {
                     side["color"] = json!(self.color);
                 }
+                if let Some(shadow) = self.shadow.get(i).copied().flatten() {
+                    side["shadow"] = json!(shadow);
+                }
+                if let Some(frame) = self.frame.get(i).copied().flatten() {
+                    side["frame"] = json!(frame);
+                }
                 m.insert(k.into(), side);
             }
         }
@@ -515,7 +521,8 @@ impl BordersForm {
     pub fn read(app: &WordApp, tab: u8) -> Option<BordersForm> {
         let s = &app.session;
         let rp = s.doc.para_at(&s.sel.focus).map(|p| s.doc.styles.resolve_para(&p.props))?;
-        let text_border = s.doc.para_at(&s.sel.focus).and_then(|p| p.props_at(s.sel.focus.off).border);
+        let text_border =
+            s.doc.para_at(&s.sel.focus).and_then(|p| s.doc.styles.resolve_char(p.props.style.as_deref(), p.props_at(s.sel.focus.off)).border);
         let sect = wordcraft_engine::cmd::page::sect(s);
         let mut f = BordersForm {
             tab: tab.min(2),
@@ -880,6 +887,45 @@ mod tests {
         assert_eq!(borders.top.and_then(|side| side.frame), Some(true));
         assert_eq!(borders.right.and_then(|side| side.shadow), Some(true));
         assert_eq!(borders.right.and_then(|side| side.frame), Some(false));
+    }
+
+    #[test]
+    fn borders_dialog_preserves_style_border_flags() {
+        let mut app = app_with("Styled border");
+        let mut border = Border::single(0.5);
+        border.shadow = Some(true);
+        border.frame = Some(false);
+        app.session.doc.styles.get_mut("Normal").expect("built-in Normal style").para.borders =
+            Some(Borders { top: Some(border), ..Default::default() });
+
+        let Some(mut form) = BordersForm::read(&app, 0) else { panic!("Borders dialog opens") };
+        form.para.width = 1.0;
+        form.apply(&mut app);
+
+        let props = app.session.doc.para_at(&app.session.sel.focus).map(|p| p.props.clone()).unwrap_or_default();
+        let border = props.borders.and_then(|b| b.top).expect("edited direct border");
+        assert_eq!((border.shadow, border.frame), (Some(true), Some(false)));
+    }
+
+    #[test]
+    fn borders_dialog_preserves_character_style_flags_for_text_edits() {
+        let mut app = app_with("Border flags");
+        let mut border = Border::single(0.5);
+        border.shadow = Some(true);
+        border.frame = Some(false);
+        app.session.doc.styles.get_mut("Emphasis").expect("built-in character style").chr.border = Some(border);
+        let _ = app.run("para.borders", json!({"sides": {"top": {"style": "single"}}}));
+        let _ = app.run("select.text", json!({"text": "Border flags"}));
+        let _ = app.run("format.set", json!({"props": {"style": "Emphasis"}}));
+        let _ = app.run("para.borders", json!({}));
+        let Some(Dialog::Borders { form }) = app.dialog.take() else { panic!("Borders and Shading opens") };
+        let mut form = *form;
+        form.to_text = true;
+        form.para.width = 1.0;
+        form.apply(&mut app);
+
+        let border = app.session.doc.para_at(&app.session.sel.focus).and_then(|p| p.props_at(app.session.sel.focus.off).border).unwrap_or_default();
+        assert_eq!((border.shadow, border.frame), (Some(true), Some(false)));
     }
 
     #[test]
