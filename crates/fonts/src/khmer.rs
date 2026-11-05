@@ -53,11 +53,12 @@ fn triisap_glyph(with: &[(u32, i32)], without: &[(u32, i32)]) -> Option<u32> {
 /// Does a face need the rewrite for one base, given the triisap glyph over it (`tri_glyph`) and over a
 /// base that never takes the U-form (`above`), its shaping of the base with a triisap (`tri`) and
 /// with U+17BB (`u`), and its dotted-circle glyph (`circle`)? It does when the triisap stays as it is
-/// over that base, and the rewritten sequence neither adds width nor holds the dotted circle (the
-/// face rejects the invalid U + vowel pair). Each shaping entry is (glyph, advance).
+/// over that base, and the rewritten sequence is no wider and doesn't hold the dotted circle (a face
+/// that rejects the invalid U + vowel pair adds a circle and its width). Each shaping entry is
+/// (glyph, advance).
 fn needs_rewrite(tri_glyph: Option<u32>, above: Option<u32>, tri: &[(u32, i32)], u: &[(u32, i32)], circle: Option<u32>) -> bool {
     let width = |g: &[(u32, i32)]| g.iter().map(|x| x.1).sum::<i32>();
-    above.is_some() && tri_glyph == above && width(tri) == width(u) && !circle.is_some_and(|c| u.iter().any(|g| g.0 == c))
+    above.is_some() && tri_glyph == above && width(u) <= width(tri) && !circle.is_some_and(|c| u.iter().any(|g| g.0 == c))
 }
 
 /// For each base, whether `face` needs the rewrite (see [`needs_rewrite`]). A face that already
@@ -181,7 +182,9 @@ mod tests {
         assert!(needs_rewrite(Some(7), above, &tri, &[(1, 1500), (8, 0), (9, 0)], None));
         // A zero-width dotted circle among the glyphs: refused although the width matches.
         assert!(!needs_rewrite(Some(7), above, &tri, &[(1, 1500), (40, 0), (9, 0)], Some(40)));
-        // A wider result is still refused, and a triisap that is already below is left alone.
+        // A narrower result is fine (the triisap form had an advance), a wider one is refused, and a
+        // triisap that is already below is left alone.
+        assert!(needs_rewrite(Some(7), above, &[(1, 1500), (7, 300), (9, 0)], &[(1, 1500), (8, 0), (9, 0)], Some(40)));
         assert!(!needs_rewrite(Some(7), above, &tri, &[(1, 1500), (8, 0), (9, 1393)], Some(40)));
         assert!(!needs_rewrite(Some(8), above, &tri, &[(1, 1500), (8, 0), (9, 0)], Some(40)));
         // No triisap glyph found: nothing to rewrite.
