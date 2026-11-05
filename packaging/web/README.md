@@ -68,7 +68,8 @@ Save asks where to save, as it does for any document opened in the browser. File
 time, each up to 256 MB; at most 20 wait to be opened, and the app says how many more it left out.
 
 Browsers without installable apps or file handling (Firefox, Safari) run the page as before. An
-app in an iframe (`?host=parent`) doesn't take files from the system: its host page sends them.
+app run by a host page (`?host=parent` in an iframe, or `data-host="page"`) doesn't take files
+from the system: its host page sends them.
 
 ## Embedding in a page (iframe)
 
