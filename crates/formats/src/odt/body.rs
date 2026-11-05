@@ -1372,19 +1372,23 @@ impl Body<'_> {
         // LibreOffice's tables keep their columns' widths, whatever their content (and however
         // far past the margins): Word's fixed layout.
         let space = get(a, "table:style-name").map(|s| self.styles.table_space(s)).unwrap_or_default();
-        let extra = model::TableExtra { align, width: None, width_pct, heights: Vec::new(), fixed: true, space, header_rows: 0 };
+        let extra =
+            model::TableExtra { align, width: None, width_pct, heights: Vec::new(), keep_rows: Vec::new(), fixed: true, space, header_rows: 0 };
         self.tables.push(TableB { rows: Vec::new(), row: Vec::new(), hcover: 0, widths: Vec::new(), extra });
     }
 
     /// A table row (`table:table-row`) begins: its height, kept as rows are (see the row's end).
     fn start_row(&mut self, a: &Attrs) {
         let height = get(a, "table:style-name").and_then(|s| self.styles.row_height(s));
+        let keep = get(a, "table:style-name").is_some_and(|s| self.styles.row_keep(s));
         if let Some(t) = self.tables.last_mut() {
             t.row.clear();
             t.hcover = 0;
             if t.extra.heights.len() < wordcraft_doc::table::MAX_ROWS {
                 t.extra.heights.truncate(t.rows.len());
                 t.extra.heights.push(height);
+                t.extra.keep_rows.truncate(t.rows.len());
+                t.extra.keep_rows.push(keep);
             }
         }
     }

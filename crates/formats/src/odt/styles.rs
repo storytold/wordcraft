@@ -252,6 +252,8 @@ struct StyleInfo {
     /// A table-row style's `style:table-row-properties`: its height (`style:row-height`, exact)
     /// or least height (`style:min-row-height`), points.
     row_height: Option<(f32, bool)>,
+    /// `fo:keep-together` of a table-row style: the row doesn't break across pages.
+    row_keep: Option<bool>,
     /// `style:master-page-name` of a paragraph or table style: its paragraphs (tables) start a
     /// page of that master page. Empty: explicitly none, which stops the lookup up the chain.
     master_page: Option<String>,
@@ -622,6 +624,9 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
                 s.row_height = Some((h.min(MAX_LEN), true));
             } else if let Some(h) = get(a, "style:min-row-height").and_then(length).filter(|h| h.is_finite() && *h > 0.0) {
                 s.row_height = Some((h.min(MAX_LEN), false));
+            }
+            if let Some(k) = get(a, "fo:keep-together") {
+                s.row_keep = Some(k.trim() == "always");
             }
         }
         "table-column-properties" => {
@@ -1335,6 +1340,11 @@ impl Styles {
     /// A table-row style's height (points) and whether it is exact, whole chain.
     pub(super) fn row_height(&self, name: &str) -> Option<(f32, bool)> {
         self.chain(name).iter().find_map(|(_, s)| s.row_height)
+    }
+
+    /// Whether a table-row style keeps its row from breaking across pages (whole chain).
+    pub(super) fn row_keep(&self, name: &str) -> bool {
+        self.chain(name).iter().find_map(|(_, s)| s.row_keep).unwrap_or(false)
     }
 
     /// Background colour of a table-cell style (whole chain).

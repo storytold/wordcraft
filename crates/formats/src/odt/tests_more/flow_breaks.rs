@@ -159,3 +159,28 @@ fn a_table_starting_a_page_starts_it() {
     let c = content_of(&crate::odt::tests::export_model(&d).unwrap());
     assert_eq!(c.matches(r#"fo:break-before="page""#).count(), 2, "{c}");
 }
+
+#[test]
+fn a_row_that_keeps_together_says_so() {
+    // Table › Text Flow: a row not to break across pages. It came back from a save free to break.
+    let styles = r#"<style:style style:name="R" style:family="table-row"><style:table-row-properties fo:keep-together="always"/></style:style><style:style style:name="H" style:family="table-row"><style:table-row-properties style:min-row-height="1in" fo:keep-together="always"/></style:style>"#;
+    let row = |s: &str, t: &str| format!(r#"<table:table-row{s}><table:table-cell><text:p>{t}</text:p></table:table-cell></table:table-row>"#);
+    let table = format!(
+        "<table:table>{}{}{}</table:table>",
+        row(r#" table:style-name="R""#, "kept"),
+        row("", "free"),
+        row(r#" table:style-name="H""#, "kept and tall")
+    );
+    let shape = |d: &wordcraft_doc::Document| {
+        d.body
+            .iter()
+            .find_map(|b| b.as_table())
+            .map(|t| t.rows.iter().map(|r| (r.props.cant_split, r.props.height)).collect::<Vec<_>>())
+            .unwrap_or_default()
+    };
+    let d = doc(styles, &table);
+    assert_eq!(shape(&d), [(true, None), (false, None), (true, Some(72.0))]);
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    assert!(content_of(&saved).contains(r#"fo:keep-together="always""#));
+    assert_eq!(shape(&import(&saved).unwrap()), [(true, None), (false, None), (true, Some(72.0))]);
+}
