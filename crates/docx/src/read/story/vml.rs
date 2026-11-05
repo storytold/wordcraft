@@ -251,15 +251,15 @@ impl Reader<'_> {
                 }
                 // Text direction (DrawingML's `vert`): `layout-flow:vertical` (or
                 // `vertical-ideographic`, East Asian text standing upright) runs top to bottom,
-                // lines stacking from the right; `mso-layout-flow-alt:bottom-to-top` turns it the
-                // other way.
+                // lines stacking from the right; `mso-layout-flow-alt:bottom-to-top` (with it or
+                // alone) runs it bottom to top.
                 let tb_style = tb.attr("style").unwrap_or("");
-                if let Some(flow) = vml_style(tb_style, "layout-flow") {
-                    let flow = flow.trim().to_ascii_lowercase();
-                    if flow.starts_with("vertical") {
-                        let up = vml_style(tb_style, "mso-layout-flow-alt").is_some_and(|a| a.trim().eq_ignore_ascii_case("bottom-to-top"));
-                        part.body.vert = if up { wordcraft_doc::props::TextVert::Vert270 } else { wordcraft_doc::props::TextVert::Vert };
-                    }
+                let vertical = vml_style(tb_style, "layout-flow").is_some_and(|f| f.trim().to_ascii_lowercase().starts_with("vertical"));
+                let up = vml_style(tb_style, "mso-layout-flow-alt").is_some_and(|a| a.trim().eq_ignore_ascii_case("bottom-to-top"));
+                if up {
+                    part.body.vert = wordcraft_doc::props::TextVert::Vert270;
+                } else if vertical {
+                    part.body.vert = wordcraft_doc::props::TextVert::Vert;
                 }
             }
             let story = Some(id);

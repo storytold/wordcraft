@@ -157,7 +157,7 @@ fn vml_text_boxes_keep_their_inset_fit_and_anchor() {
 fn vml_text_boxes_keep_their_text_direction() {
     // VML `layout-flow` on `v:textbox` (DrawingML's `vert`): `vertical` and
     // `vertical-ideographic` (East Asian text standing upright) run top to bottom, lines
-    // stacking from the right; `mso-layout-flow-alt:bottom-to-top` runs bottom to top.
+    // stacking from the right; `mso-layout-flow-alt:bottom-to-top` (with it or alone) runs bottom to top.
     let content = r#"<w:txbxContent><w:p><w:r><w:t>Boxed</w:t></w:r></w:p></w:txbxContent>"#;
     let shape = |textbox: &str| {
         format!(
@@ -168,6 +168,7 @@ fn vml_text_boxes_keep_their_text_direction() {
         shape("layout-flow:vertical-ideographic"),
         shape("layout-flow:vertical"),
         shape("layout-flow:vertical;mso-layout-flow-alt:bottom-to-top"),
+        shape("mso-layout-flow-alt:bottom-to-top"),
         shape("layout-flow:horizontal"),
         shape("mso-fit-shape-to-text:t"),
     ]
@@ -178,7 +179,7 @@ fn vml_text_boxes_keep_their_text_direction() {
     let rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
     let d = wordcraft_docx::read(&zip(&[("_rels/.rels", rels), ("word/document.xml", doc.as_bytes())])).unwrap();
     let verts: Vec<TextVert> = boxes(&d).iter().map(|id| d.parts[id].body.vert).collect();
-    assert_eq!(verts, [TextVert::Vert, TextVert::Vert, TextVert::Vert270, TextVert::Horz, TextVert::Horz]);
+    assert_eq!(verts, [TextVert::Vert, TextVert::Vert, TextVert::Vert270, TextVert::Vert270, TextVert::Horz, TextVert::Horz]);
     // Saved and read again, they stay.
     let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     let again: Vec<TextVert> = boxes(&back).iter().map(|id| back.parts[id].body.vert).collect();
