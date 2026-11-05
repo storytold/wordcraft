@@ -188,16 +188,11 @@ fn take_out(xml: &str, files: &mut Vec<(String, Vec<u8>)>) -> String {
 
 /// Open a flat OpenDocument text document.
 pub fn import_flat(bytes: &[u8]) -> Result<Document, String> {
-    import_flat_with(bytes, &wordcraft_doc::SectionProps::default(), &wordcraft_doc::odf_profile::OdfProfile::default())
+    import_flat_on(bytes, &wordcraft_doc::SectionProps::default())
 }
 
-/// [`import_flat`] onto `page`, filling in what the standard leaves open as `profile` says (see
-/// [`super::import_with`]).
-pub fn import_flat_with(
-    bytes: &[u8],
-    page: &wordcraft_doc::SectionProps,
-    profile: &wordcraft_doc::odf_profile::OdfProfile,
-) -> Result<Document, String> {
+/// [`import_flat`] onto `page` (see [`super::import_on`]).
+pub fn import_flat_on(bytes: &[u8], page: &wordcraft_doc::SectionProps) -> Result<Document, String> {
     let xml = std::str::from_utf8(bytes).map_err(|_| "FODT: not UTF-8 text".to_string())?;
     let root = element(xml, "office:document");
     let [content, styles, meta, settings] = package_parts(root).ok_or("FODT: no office:document")?;
@@ -221,7 +216,7 @@ pub fn import_flat_with(
         z.write_all(data).map_err(|e| format!("FODT: {e}"))?;
     }
     let package = z.finish().map_err(|e| format!("FODT: {e}"))?.into_inner();
-    super::import_with(&package, page, profile)
+    super::import_on(&package, page)
 }
 
 /// Save `doc` as flat OpenDocument text: its package's files in one `office:document`, the

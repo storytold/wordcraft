@@ -317,7 +317,16 @@ fn a_chunks_pictures_come_with_it() {
         let mut d = Document::new();
         let key = d.add_media(vec![1, 2, 3], "png");
         let mut para = wordcraft_doc::Paragraph::new();
-        let image = InlineObject::Image { media: key, w: 10.0, h: 10.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+        let image = InlineObject::Image {
+            media: key,
+            w: 10.0,
+            h: 10.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            fx: Default::default(),
+        };
         para.insert_object(0, image, &Default::default()).unwrap();
         d.body = vec![std::sync::Arc::new(Block::Para(para))];
         Some(d)
