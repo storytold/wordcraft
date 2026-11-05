@@ -1207,8 +1207,9 @@ fn missing_recent_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool
     };
     let t = Tokens::get(ui.ctx());
     let name = std::path::Path::new(path.as_str()).file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().to_string());
+    let name = crate::i18n::isolate(&name).to_string();
     ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Can't find {name}"), &[("name", &name)])).font(semibold(15.0)));
-    ui.label(egui::RichText::new(path.as_str()).small().color(t.text_dim));
+    ui.label(egui::RichText::new(crate::i18n::isolate_path(path).to_string()).small().color(t.text_dim));
     ui.add_space(4.0);
     ui.label(tl!("It isn't at this location any more. Remove it from the Recent list?"));
     ui.label(tl!("If it's on a drive or network share that isn't connected, cancel to keep it in the list."));
