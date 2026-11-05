@@ -51,6 +51,7 @@ pub(crate) fn walk(bl: &Blocks, prefix: &mut Vec<u32>, out: &mut Vec<Path>, dept
         return;
     }
     for (i, b) in bl.iter().enumerate() {
+        crate::work::steps(1);
         prefix.push(i as u32);
         match &**b {
             Block::Para(_) => out.push(Path(prefix.clone())),
