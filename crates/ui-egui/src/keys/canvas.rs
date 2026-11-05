@@ -510,9 +510,12 @@ fn handle_event(app: &mut WordApp, ctx: &egui::Context, e: egui::Event) {
         egui::Event::Paste(t) => {
             // Mod+Alt+V arrives as a paste too (the shell reads the clipboard): Paste Special.
             let m = ctx.input(|i| i.modifiers);
+            // A browser sends Mod+Shift+V as a paste too: Keep Text Only, as the key does on the
+            // desktop (#1537). (egui-winit sends that chord as a key, and Shift+Insert has no Mod.)
             let id = match (m.alt, m.shift) {
                 (true, true) => "edit.pasteText",
                 (true, false) => "edit.pasteSpecial",
+                (false, true) if m.command => "edit.pasteText",
                 _ => "edit.paste",
             };
             let _ = app.run(id, json!({"text": t}));
