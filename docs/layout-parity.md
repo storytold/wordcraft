@@ -303,6 +303,7 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 | 2026-10-31 | trivial | A list level above that hasn't counted yet takes its first number at the first deeper item, as measured in Word (1.1, 1.2, then 2.; 10.1–10.4, then 11.), whether or not the deeper level's text shows it |
 | 2026-11-01 | trivial | #5088: paragraph side borders lie outside the text; top and bottom reach the corners; shading fills to the outer edges (#5036) |
 | 2026-11-01 | trivial | #2485: Port header Margin body-boundary placement to current modules; use the existing text-height floor for inline Margin extents and correct historical control labels. Source checks only; primary qualification pending. |
+| 2026-11-01 | trivial | #3915: preserve guarded whole-line ordinary-tab alignment with current main. Existing controls retained; source checks only, primary qualification pending. |
 | 2026-10-30 | trivial | Keep with next: a kept heading before a three-line paragraph under widow/orphan control needs room for all three lines, since that paragraph can only move over whole; with room for two, the heading goes to the next page with it instead of staying alone at the bottom, as in Word for Mac 16.93. `layout::tests::keep_with_next_carries_the_heading_when_a_three_line_paragraph_moves_whole` |
 | 2026-10-28 | trivial | Connector object lookups retain the typed column-selection inputs on current main (#3631); readiness estimates unchanged |
 | 2026-10-27 | trivial | Connector rerouting indexes laid-out object positions once per batch, preserving page hints, first-match order and same-page glue; synthetic equivalence, geometry and scaling regressions (#3631); routing policy and readiness estimates unchanged |
@@ -310,6 +311,7 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 | 2026-10-25 | trivial | Field results take the `\* DollarText`, `\* Hex` and `\* ArabicDash` switches in table formulas and in the page-number, SEQ, PAGEREF and count fields (#4226); readiness estimates unchanged |
 | 2026-10-25 | trivial | Header-cell pins and header-table obstacles share the rendered body-top override (#2485); model positioning and overlap controls, no new native comparison. |
 | 2026-10-19 | trivial | Header body-boundary adjustment applies only to the Margin anchor. TopMargin and InsideMargin keep their declared extent; synthetic alignment countercontrols are prepared, not yet executed. |
+| 2026-10-29 | trivial | Port #3915 to split layout modules: ordinary LTR tab groups follow paragraph alignment. Positional tabs, lists, RTL and display math retain their alignment paths. Source port only. |
 | 2026-10-25 | trivial | Arabic list labels: `arabicAlpha` and `arabicAbjad` draw the 28 Arabic letters (alphabetical and abjad order), doubling past the last letter; Hebrew, Hindi, Thai and Vietnamese still show decimal (`doc::section::tests::arabic_letters_count_in_both_orders`) |
 | 2026-10-24 | trivial | Preserve grapheme edit/wrap boundaries across independently drawn font/style pieces; original emoji regression retained, new mixed-style/bundled-font LTR/bidi controls pending managed validation |
 | 2026-10-24 | trivial | Exact-spacing table contact uses the specified line height in row selection and word skipping; large/small mark regressions in modes 11/12/14/15 (#3977); shape estimates unchanged |
@@ -484,3 +486,5 @@ and balloon layout while supplying explicit cell identity at every box call. The
 probes above are historical; this rebase has no new native or other-platform measurement.
 
 Repeated table-cell control, 12 October 2026: four same-style contextual paragraphs with 6 pt before/after and exactly 24 pt lines retain zero extra gap at every boundary. The body control uses the same fixture. This is an original specification-based regression; no new native Word table comparison was run.
+
+> 2026-10-29 · Port #3915 to split layout modules: ordinary LTR tab groups follow paragraph alignment. Positional tabs, lists, RTL and display math retain their alignment paths. Source port only; no test execution or new native measurements.
