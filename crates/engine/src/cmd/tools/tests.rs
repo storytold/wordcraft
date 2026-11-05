@@ -277,9 +277,10 @@ fn compare_shows_each_documents_own_pictures() {
     want.sort();
     assert_eq!(pictures(&s.doc), want, "the revised pictures show their own bytes, the original's is deleted");
     let path = std::env::temp_dir().join(format!("wc-5571-pictures-out-{}.docx", std::process::id()));
-    crate::io::save_path(&path, &s.doc).unwrap();
+    let saved = crate::io::save_path(&path, &s.doc);
     let back = crate::io::open_path(&path);
     let _ = std::fs::remove_file(&path);
+    saved.unwrap();
     assert_eq!(pictures(&back.unwrap()), want, "the saved result keeps each picture's bytes and deletion state");
     s.run("review.acceptAll", &json!({})).unwrap();
     let mut kept = vec![(b, false), (c, false)];
