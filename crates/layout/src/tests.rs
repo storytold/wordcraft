@@ -1423,6 +1423,32 @@ fn center_and_right_alignment() {
 }
 
 #[test]
+fn caret_on_an_empty_line_after_a_break_follows_alignment() {
+    // "BAB I", Shift+Enter: the empty line's caret sits where its alignment puts it (#4283).
+    let text = format!("BAB I{}", wordcraft_doc::para::LINE_BREAK);
+    for rtl in [false, true] {
+        for (align, ltr_x) in [(Align::Left, 72.0), (Align::Center, 306.0), (Align::Right, 540.0), (Align::Justify, 72.0)] {
+            let mut d = Document::new();
+            d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&text, Default::default()))];
+            let at = Pos::body(0, 0);
+            d.format_paragraphs(&at, &at, &|p: &mut ParaProps| {
+                p.align = Some(align);
+                p.bidi = Some(rtl);
+            })
+            .unwrap();
+            let expected = if rtl { 612.0 - ltr_x } else { ltr_x };
+            let x = lay(&d).caret(&Pos::body(0, text.len())).unwrap().x;
+            assert!((x - expected).abs() < 1.0, "{align:?} rtl={rtl}: {x}, expected {expected}");
+        }
+    }
+    // An empty centred paragraph without a break was already centred.
+    let mut d = Document::from_text("");
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.align = Some(Align::Center)).unwrap();
+    let x = lay(&d).caret(&Pos::body(0, 0)).unwrap().x;
+    assert!((x - 306.0).abs() < 1.0, "{x}");
+}
+
+#[test]
 fn tabs_land_on_default_stops() {
     let d = Document::from_text("a\tb");
     let l = lay(&d);
@@ -2933,6 +2959,44 @@ fn sections_land_on_the_side_their_break_and_numbering_ask_for() {
 }
 
 #[test]
+fn a_section_starting_a_page_flushes_the_page_before_with_its_own_margins() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    // Section one ends its last page with a footnote pending; section two starts a new page
+    // with a wider left margin. The footnotes on the page before keep section one's margin,
+    // whichever way the new page starts (#5289).
+    let note_x = |start: SectionStart| {
+        let mut d = Document::from_text("Section one text.\nTwo");
+        let note = wordcraft_doc::Paragraph::with_text("The note text.", Default::default());
+        let id = d.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(note)]);
+        d.insert_object(
+            &Pos::body(0, 5),
+            InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() },
+            &Default::default(),
+        )
+        .unwrap();
+        d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section = Some(Box::new(SectionProps::default()));
+        d.last_section.start = start;
+        d.last_section.margin_left = 144.0;
+        let l = lay(&d);
+        let x = l
+            .pages
+            .iter()
+            .flat_map(|p| p.items.iter())
+            .find_map(|it| match it {
+                Placed::Lines { story: StoryRef::Part(n), x, .. } if *n == id => Some(*x),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("the footnote is placed ({start:?})"));
+        (x, l.pages.len())
+    };
+    for start in [SectionStart::NextPage, SectionStart::EvenPage, SectionStart::OddPage] {
+        let (x, pages) = note_x(start);
+        assert!((x - 72.0).abs() < 0.01, "{start:?}: the footnote sits at section one's margin, not {x}");
+        assert!(pages >= 2, "{start:?}: the section starts a page");
+    }
+}
+
+#[test]
 fn paragraph_marks_sit_past_text_running_the_other_way() {
     // A left-to-right paragraph ending in Hebrew, and a right-to-left one ending in Latin: the
     // logically last letters are at the wrong edge, but the ¶ still goes past every glyph.
@@ -4366,6 +4430,46 @@ fn drop_cap_options_place_the_letter() {
     assert_ne!(text_style.as_deref(), Some("Liberation Mono"), "only the letter");
 }
 
+/// #2601: the letter's own font applies to complex-script and East Asian first letters too. In
+/// margin, the letter sits in the left margin for any alignment or first-line indent: its right
+/// edge is the distance left of the text column (of the first line's start, if that hangs further
+/// left), never beside centred text or inside the column.
+#[test]
+fn drop_cap_font_covers_scripts_and_alignment_keeps_the_gap() {
+    use wordcraft_doc::props::Align;
+    let font = drop_cap_layout(|p| p.drop_cap_font = Some("Liberation Mono".into()));
+    let rc = font.clusters.first().and_then(|c| font.styles.get(c.style as usize)).map(|s| s.rc.clone());
+    let Some(rc) = rc else { panic!("no style") };
+    assert_eq!(rc.font_cs, "Liberation Mono");
+    assert_eq!(rc.font_ea.as_deref(), Some("Liberation Mono"));
+
+    // (alignment, left indent, first-line indent, the column's edge the letter hangs from)
+    let cases = [
+        (Align::Left, 0.0, 0.0, 0.0),
+        (Align::Center, 0.0, 0.0, 0.0),
+        (Align::Right, 0.0, 0.0, 0.0),
+        (Align::Left, 0.0, 36.0, 0.0),
+        (Align::Center, 18.0, 36.0, 18.0),
+        (Align::Left, 36.0, -36.0, 0.0),
+    ];
+    for (align, left, first, edge) in cases {
+        let pl = drop_cap_layout(|p| {
+            p.align = Some(align);
+            p.indent_left = Some(left);
+            p.indent_first = Some(first);
+            p.drop_cap_margin = Some(true);
+            p.drop_cap_distance = Some(9.0);
+        });
+        let text_x = pl.lines.first().and_then(|l| l.xs.first().copied()).unwrap_or(f32::NAN);
+        let letter_right = text_x + pl.glyphs.first().map(|g| g.dx).unwrap_or(f32::NAN) + pl.drop_cap_w;
+        assert!(
+            (letter_right - (edge - 9.0)).abs() < 0.5,
+            "{align:?}, indents {left}/{first}: letter's right edge {letter_right}, expected {} (text at {text_x})",
+            edge - 9.0
+        );
+    }
+}
+
 #[test]
 fn auto_hyphenation_breaks_long_words() {
     let text = "Internationalization considerations notwithstanding, administrators systematically reconsidered extraordinarily uncharacteristic responsibilities. ".repeat(4);
@@ -4738,6 +4842,7 @@ fn a_press_inside_a_text_box_over_a_picture_goes_to_its_text() {
             float: float(wrap, picture_z),
             crop: [0.0; 4],
             ole: None,
+            fx: Default::default(),
         };
         d.insert_object(&Pos::body(0, 0), picture, &Default::default()).unwrap();
         let id = text_box(&mut d, 0, "Name", 200.0, 100.0, Float { x: 50.0, y: 150.0, rot, ..float(wrap, 2) });
@@ -5184,12 +5289,12 @@ fn list_label_does_not_inflate_an_inline_picture_floor() {
 }
 
 #[test]
-fn a_line_of_only_pictures_fits_them_in_odt_documents() {
-    // LibreOffice (ODT documents): a line holding only a picture is as tall as the picture;
-    // Word keeps the font's ascent and descent around it.
-    let height = |fit: bool, h: f32| {
+fn a_line_of_only_pictures_keeps_its_fonts_height_in_odt_documents() {
+    // The standard has no line-height algorithm: as in Word, the line keeps the font's height, and
+    // its descent below a taller picture.
+    let height = |h: f32| {
         let mut d = Document::from_text("");
-        d.settings.odf = Some(wordcraft_doc::odf_profile::OdfLayout { picture_lines_fit_pictures: fit, ..Default::default() });
+        d.settings.odf = Some(wordcraft_doc::OdfLayout::default());
         if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
             p.props.space_after = Some(0.0);
             p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
@@ -5199,20 +5304,8 @@ fn a_line_of_only_pictures_fits_them_in_odt_documents() {
         let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
         para.lines[0].height
     };
-    assert!((height(true, 3.5) - 3.5).abs() < 0.01, "{}", height(true, 3.5));
-    assert!((height(true, 40.0) - 40.0).abs() < 0.01, "{}", height(true, 40.0));
-    // Word's: the font's height at least, and its descent below a taller picture.
-    assert!(height(false, 3.5) > 10.0);
-    assert!(height(false, 40.0) > 42.0);
-    // Text on the line: its font counts either way.
-    let mut d = Document::from_text("Text");
-    d.settings.odf = Some(wordcraft_doc::odf_profile::OdfLayout { picture_lines_fit_pictures: true, ..Default::default() });
-    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
-        p.insert_object(0, picture(20.0, 3.5, Default::default()), &Default::default()).unwrap();
-    }
-    let l = lay(&d);
-    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
-    assert!(para.lines[0].height > 10.0);
+    assert!(height(3.5) > 10.0);
+    assert!(height(40.0) > 42.0);
 }
 
 #[test]
@@ -5220,7 +5313,7 @@ fn padding_without_a_border_takes_room_in_odt_documents() {
     // LibreOffice keeps a paragraph's padding on a side without a line; Word drops it.
     let place = |odf: bool| {
         let mut d = Document::from_text("Above\nPadded\nBelow");
-        d.settings.odf = odf.then_some(wordcraft_doc::odf_profile::OdfLayout::default());
+        d.settings.odf = odf.then_some(wordcraft_doc::OdfLayout::default());
         for b in d.body.iter_mut() {
             if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
                 (p.props.space_before, p.props.space_after) = (Some(0.0), Some(0.0));
@@ -11115,6 +11208,7 @@ fn split_cell_moves_image_frame() {
             rect,
             media: "synthetic".into(),
             crop: [0.1, 0.2, 0.3, 0.4],
+            fx: Default::default(),
             story: StoryRef::Body,
             path: Path::top(0),
             off: 0,
@@ -13188,7 +13282,7 @@ fn default_tab_stops_count_from_the_indent_in_odt_documents_that_say_so() {
     let x_of_b = |from_indent: bool, left: f32, first: f32| {
         let mut d = Document::from_text("a\tb");
         d.settings.default_tab = 36.0;
-        d.settings.odf = Some(wordcraft_doc::odf_profile::OdfLayout { tabs_from_indent: from_indent, ..Default::default() });
+        d.settings.odf = Some(wordcraft_doc::OdfLayout { tabs_from_indent: from_indent });
         d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
             p.indent_left = Some(left);
             p.indent_first = Some(first);

@@ -1672,3 +1672,34 @@ fn rtf_backslash_space_and_special_breaks() {
     let p = doc.body.first().unwrap().as_para().unwrap();
     assert_eq!(p.text, "A\u{00A0}B\u{00A0}C\u{200B}D\nE\u{000C}F");
 }
+
+#[test]
+fn compound_borders_round_trip() {
+    use wordcraft_doc::props::BorderStyle;
+    let lines = [
+        ("brdrtnthsg", BorderStyle::ThinThickSmallGap),
+        ("brdrthtnsg", BorderStyle::ThickThinSmallGap),
+        ("brdrtnthtnsg", BorderStyle::ThinThickThinSmallGap),
+        ("brdrtnthmg", BorderStyle::ThinThickMediumGap),
+        ("brdrthtnmg", BorderStyle::ThickThinMediumGap),
+        ("brdrtnthtnmg", BorderStyle::ThinThickThinMediumGap),
+        ("brdrtnthlg", BorderStyle::ThinThickLargeGap),
+        ("brdrthtnlg", BorderStyle::ThickThinLargeGap),
+        ("brdrtnthtnlg", BorderStyle::ThinThickThinLargeGap),
+    ];
+    let body: String = lines.iter().map(|(w, _)| format!("\\pard\\brdrt\\{w}\\brdrw30 {w}\\par\n")).collect();
+    let rtf = format!("{{\\rtf1\\ansi\n{body}}}");
+    let tops = |d: &wordcraft_doc::Document| -> Vec<Option<BorderStyle>> {
+        d.body
+            .iter()
+            .filter_map(|b| b.as_para())
+            .filter(|p| !p.plain_text().is_empty())
+            .map(|p| p.props.borders.and_then(|b| b.top).map(|t| t.style))
+            .collect()
+    };
+    let want: Vec<Option<BorderStyle>> = lines.iter().map(|(_, s)| Some(*s)).collect();
+    let d = import(rtf.as_bytes()).unwrap();
+    assert_eq!(tops(&d), want);
+    let back = import(export(&d).as_bytes()).unwrap();
+    assert_eq!(tops(&back), want);
+}
