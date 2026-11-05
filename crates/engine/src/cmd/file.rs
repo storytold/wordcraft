@@ -241,7 +241,7 @@ pub(crate) fn normal_document(s: &Session) -> Document {
 /// WordCraft doesn't drive (Mendeley, EndNote — see [`crate::speech::is_undriven_citation_code`]):
 /// the fields are preserved verbatim, only Zotero (and Word's own `CITATION` fields) are
 /// driven live. One non-blocking note; in the i18n catalogs, one row per language.
-pub(crate) const MANAGER_FIELDS_STATUS: &str = "Mendeley citations are preserved; the Mendeley app can't connect — Zotero works live.";
+pub(crate) const MANAGER_FIELDS_STATUS: &str = "Mendeley and EndNote citations are preserved as written; only Zotero is driven live.";
 
 /// Does the document hold citation fields of a manager WordCraft doesn't drive? Every story —
 /// the body, footnotes, endnotes — and both field shapes: range fields (`ADDIN …` between

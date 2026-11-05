@@ -76,9 +76,13 @@ config works across the suite) keep the agent to the folders you give it:
   from beside that file and must be inside the read root too, even when the file was opened through
   a link (#3736).
 - Every file a command writes must lie inside the **write root**: `save_document`, `file.save`,
-  `file.saveAs`, `file.exportPdf`, `file.exportPng`, `file.printPdf`, `file.saveTemplate`, and `mailings.finish` with
-  a `path`. `references.cslStyles`'s `add` copies the style file into the styles folder under the
-  config folder, so a write root that doesn't contain it refuses the install.
+  `file.saveAs`, `file.rename` (the file and its new name), `file.exportPdf`, `file.exportPng`,
+  `file.printPdf`, `file.saveTemplate`, and `mailings.finish` with a `path`. `font.add` and
+  `font.remove` change the user font folder, so they are refused when it is outside the write
+  root (#3692), and so are `proof.installPack` and `proof.removePack`, which change the font
+  store's `language-packs` folder. `references.cslStyles`'s `add` copies the style file into the
+  styles folder under the config folder, so a write root that doesn't contain it refuses the
+  install, and `remove` deletes from it under the same rule.
 - Read and write access are separate. Give the same folder twice for both; a root left out grants
   none of its access (with only `--automation-read-root`, nothing can be written to disk). Without
   either flag nothing changes.

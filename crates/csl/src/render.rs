@@ -38,6 +38,10 @@ pub(crate) const MAX_NAMES: usize = 256;
 /// Rendering recursion backstop. Macro expansion was bounded at parse time (32 levels);
 /// this guards a hand-built model that wasn't.
 pub(crate) const MAX_RENDER_DEPTH: u32 = 64;
+
+/// Most elements one render (a citation, a bibliography entry, a sort key) may draw: the
+/// total-work bound that keeps macro fan-out from exploding. Real styles sit far below it.
+const MAX_RENDER_WORK: u32 = 10_000;
 /// How many digit runs are read while parsing an `accessed` date (bounding hostile input).
 pub(crate) const MAX_DATE_RUNS: usize = 8;
 /// How many characters of an `accessed` value are scanned for its date (a valid
@@ -68,6 +72,12 @@ struct Ctx<'a> {
     /// root's at parse); every `<names>` renders under them where it sets nothing itself.
     name_defaults: NameOptions,
     depth: u32,
+    /// Render work left: every element rendered decrements this. Macro fan-out (each macro
+    /// referencing another twice) grows exponentially while the parse-time depth limit of 32
+    /// stays met, so the depth alone doesn't bound a render; this does. One citation or one
+    /// bibliography entry has more than enough for real styles, and a hostile style stops
+    /// here instead of hanging the edit loop.
+    work: u32,
 }
 
 /// The variables that hold names.
@@ -323,6 +333,7 @@ impl Style {
             in_bibliography: false,
             name_defaults: self.citation.name_options.clone(),
             depth: 0,
+            work: MAX_RENDER_WORK,
         };
         render_layout(&mut ctx, &self.citation).text
     }
@@ -347,6 +358,7 @@ impl Style {
                 in_bibliography: true,
                 name_defaults: name_defaults.clone(),
                 depth: 0,
+                work: MAX_RENDER_WORK,
             };
             out.push((render_layout(&mut ctx, &bib.layout).text, key));
         }
@@ -368,6 +380,7 @@ impl Style {
             in_bibliography: true,
             name_defaults: name_defaults.clone(),
             depth: 0,
+            work: MAX_RENDER_WORK,
         };
         sort.iter()
             .map(|k| match &k.field {
@@ -447,6 +460,12 @@ fn absorb(calls: &mut bool, nonempty: &mut bool, child: &Rendered, group_or_macr
 
 /// One rendering element.
 fn render_element(ctx: &mut Ctx, el: &Element) -> Rendered {
+    // The total-work bound: past it, nothing more renders (an exhausted budget reads as
+    // empty, exactly like the depth limit's empty output).
+    if ctx.work == 0 {
+        return Rendered::plain(String::new());
+    }
+    ctx.work -= 1;
     match el {
         Element::Text(t) => render_text(ctx, t),
         Element::Number(n) => render_number(ctx, n),

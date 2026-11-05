@@ -755,3 +755,23 @@ fn bib_title_is_none_and_dynamic_labels_do_not_warn() {
     .unwrap();
     assert!(s.warned().is_empty(), "{:?}", s.warned());
 }
+
+#[test]
+fn macro_fan_out_is_bounded_by_the_render_budget() {
+    // Each macro references the one below twice: depth 31 parses clean, but a render
+    // without a total-work bound expands ~2^31 bodies. The budget stops it; the citation
+    // comes back (short, empty tail) instead of hanging.
+    let mut defs = String::new();
+    for i in 0..31 {
+        defs.push_str(&format!("<macro name=\"m{i}\"><text macro=\"m{}\"/><text macro=\"m{}\"/></macro>", i + 1, i + 1));
+    }
+    defs.push_str("<macro name=\"m31\"><text value=\"x\"/></macro>");
+    let xml = format!("<style version=\"1.0\"><citation><layout><text macro=\"m0\"/></layout></citation>{defs}</style>");
+    let s = parse(xml.as_bytes()).unwrap();
+    assert!(s.warned().is_empty(), "{:?}", s.warned());
+    let item = src("a", "book");
+    let out = s.cite(&item, crate::Position::First, 1, "");
+    // The budget is 10 000 elements: the render stops there and returns (an unbounded
+    // render would expand ~2^31 bodies and never come back).
+    assert!(out.chars().count() <= 10_000, "the budget stops the fan-out: {} chars", out.chars().count());
+}

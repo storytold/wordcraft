@@ -173,7 +173,7 @@ fn driven_fields_docx() -> Vec<u8> {
 #[test]
 fn opening_a_manager_document_notes_it_in_the_status_bar() {
     let s = open_manager_doc();
-    assert_eq!(s.status, "Mendeley citations are preserved; the Mendeley app can't connect — Zotero works live.");
+    assert_eq!(s.status, "Mendeley and EndNote citations are preserved as written; only Zotero is driven live.");
     assert_eq!(s.status, crate::cmd::file::MANAGER_FIELDS_STATUS, "one source string, in the i18n catalogs");
 
     // A document whose fields WordCraft drives — a Zotero range citation and one of Word's

@@ -78,7 +78,8 @@ pub(super) fn push_capped(buf: &mut String, s: &str, cap: usize) {
         buf.push_str(s);
         return;
     }
-    let cut = s.char_indices().take_while(|(i, c)| i + c.len_utf8() <= room).map(|(i, _)| i).last().unwrap_or(0);
+    // The END of the last whole character that fits (its start index would drop it).
+    let cut = s.char_indices().take_while(|(i, c)| i + c.len_utf8() <= room).last().map(|(i, c)| i + c.len_utf8()).unwrap_or(0);
     buf.push_str(&s[..cut]);
 }
 
@@ -229,4 +230,30 @@ fn placeholder_of(s: &str) -> String {
 
 fn on_off_attr(e: &El, name: &str) -> bool {
     e.attr(name).is_some_and(|v| !matches!(v, "0" | "false" | "off"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::push_capped;
+
+    /// The cap keeps whole characters; truncation keeps the last character that fits (an
+    /// off-by-one cut its start index and dropped it).
+    #[test]
+    fn push_capped_truncates_at_the_last_fitting_character() {
+        let mut b = String::new();
+        push_capped(&mut b, "ab", 1);
+        assert_eq!(b, "a");
+        let mut b = String::new();
+        push_capped(&mut b, "éé", 3);
+        assert_eq!(b, "é");
+        let mut b = String::new();
+        push_capped(&mut b, "xé", 2);
+        assert_eq!(b, "x");
+        // Fits whole: unchanged; at or past the cap: nothing more.
+        let mut b = String::from("ab");
+        push_capped(&mut b, "cd", 4);
+        assert_eq!(b, "abcd");
+        push_capped(&mut b, "e", 4);
+        assert_eq!(b, "abcd");
+    }
 }

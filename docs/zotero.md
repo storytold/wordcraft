@@ -72,7 +72,7 @@ Verified against synthetic OOXML fixtures shared by the DOCX and engine tests (#
 
 WordCraft doesn't drive Mendeley or EndNote themselves: Mendeley Cite is a closed Office add-in
 with no published protocol to talk to. Opening such a document says so once in the status bar
-("Mendeley citations are preserved; the Mendeley app can't connect — Zotero works live."), and
+("Mendeley and EndNote citations are preserved as written; only Zotero is driven live."), and
 the fields stay verbatim until Word or the manager's own app edits them again. To go on citing
 in WordCraft: import the library (Manage Sources ▸ Import… reads BibTeX, RIS or CSL-JSON;
 `references.importSources`) and re-cite with Insert Citation in any of the twelve built-in

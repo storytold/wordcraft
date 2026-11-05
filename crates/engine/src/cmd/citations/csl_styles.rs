@@ -218,7 +218,9 @@ fn csl_add(s: &mut Session, path: &str) -> CmdResult {
         let cap = 2 << 20;
         let bytes = crate::io::read_file_capped(path, cap as u64 + 1024, "CSL style").map_err(|e| CmdError::Params(e.to_string()))?;
         let style = wordcraft_csl::parse(&bytes).map_err(CmdError::Params)?;
-        // Only the file's own name — never a path — and never empty (the path is hostile input).
+        // Only the file's own name — never a path — and never empty (the path is hostile
+        // input) — and ending in `.csl`, what the styles-folder loader reads back: a name
+        // like `harvard.xml` would install and then vanish at the next start.
         let file = std::path::Path::new(path)
             .file_name()
             .and_then(|n| n.to_str())
@@ -226,6 +228,7 @@ fn csl_add(s: &mut Session, path: &str) -> CmdResult {
             .filter(|n| !n.is_empty())
             .unwrap_or("style.csl")
             .to_string();
+        let file = if file.to_ascii_lowercase().ends_with(".csl") { file } else { format!("{file}.csl") };
         crate::io::create_dir(&dir).map_err(CmdError::Params)?;
         // `write_file`'s error already names the target path.
         crate::io::write_file(&dir.join(&file).to_string_lossy(), &bytes).map_err(CmdError::Params)?;

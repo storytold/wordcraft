@@ -55,5 +55,8 @@ zqzakázané/F
 ";
 
 pub fn install() {
+    // Installing bumps the global dictionary generation, which keys every session's layout
+    // cache: the caller holds the shared dictionaries turn for its whole body (the lock is
+    // not reentrant, so the turn is taken once, in the test).
     super::install_dictionary(AFF, DIC).unwrap();
 }
