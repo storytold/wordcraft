@@ -116,6 +116,12 @@ fn piece_bytes(p: &Piece) -> Vec<u8> {
 
 /// A document whose main text is the given pieces (extra subdocument text may follow).
 fn text_doc(main: &[Piece], extra: &[Piece], ccp_hdd: u32) -> Vec<u8> {
+    text_doc_with(main, extra, FibSpec { ccp_hdd, ..Default::default() }, &[])
+}
+
+/// [`text_doc`] with the FIB knobs given (`ccp_text` is filled in from `main`; `pairs` must be empty) and extra
+/// Table-stream data placed after the piece table: `(pair index, bytes)` for each.
+fn text_doc_with(main: &[Piece], extra: &[Piece], spec: FibSpec, table_data: &[(usize, &[u8])]) -> Vec<u8> {
     let all: Vec<Piece> = main.iter().chain(extra.iter()).cloned().collect();
     let ccp_text: u32 = main.iter().map(|p| p.text.chars().count() as u32).sum();
     let mut word = vec![0u8; TEXT_FC as usize];
@@ -128,7 +134,13 @@ fn text_doc(main: &[Piece], extra: &[Piece], ccp_hdd: u32) -> Vec<u8> {
     clx.extend_from_slice(&plc);
     let mut table = vec![0u8; CLX_AT as usize];
     table.extend_from_slice(&clx);
-    let spec = FibSpec { ccp_text, ccp_hdd, pairs: vec![(33, CLX_AT, clx.len() as u32)], ..Default::default() };
+    let mut pairs = vec![(33, CLX_AT, clx.len() as u32)];
+    for (pair, bytes) in table_data {
+        pairs.push((*pair, table.len() as u32, bytes.len() as u32));
+        table.extend_from_slice(bytes);
+    }
+    debug_assert!(spec.pairs.is_empty(), "text_doc_with sets the pairs itself");
+    let spec = FibSpec { ccp_text, pairs, ..spec };
     word[..fib_bytes(&spec).len()].copy_from_slice(&fib_bytes(&spec));
     cfb_file(&[("WordDocument", &word), ("0Table", &table)])
 }
@@ -245,6 +257,77 @@ fn empty_paragraphs_kept() {
     let f = text_doc(&[Piece { compressed: false, text: "a\r\rb\r".into() }], &[], 0);
     let doc = read(&f).expect("opens");
     assert_eq!(body_texts(&doc), ["a", "", "b"]);
+}
+
+/// A document of `n` copies of `mark` as one compressed piece.
+fn marks_doc(mark: char, n: usize) -> Vec<u8> {
+    text_doc(&[Piece { compressed: true, text: mark.to_string().repeat(n) }], &[], 0)
+}
+
+/// Paragraph marks are one byte each in the file but about 1 KB each in memory, so they have
+/// their own cap ([`super::MAX_PARAGRAPHS`]); a file past it is refused instead of growing
+/// until the machine runs out. A document exactly at the cap still opens.
+#[test]
+fn a_flood_of_paragraph_marks_is_refused() {
+    let at_cap = super::read_limited(&marks_doc('\r', 1000), None, 1000).expect("opens");
+    assert_eq!(at_cap.body.len(), 1000);
+    let over = super::read_limited(&marks_doc('\r', 1001), None, 1000);
+    assert!(matches!(over, Err(crate::DocbinError::Limit(_))), "{over:?}");
+}
+
+/// The paragraph cap is one budget for the whole document, not one per story: marks in the
+/// body and in a footnote add up. (A walk that got its own budget would open both over-cap files.)
+#[test]
+fn the_paragraph_cap_is_shared_by_the_body_and_a_footnote() {
+    // One footnote at CP 0 whose text is `note` marks, stored right after the body in the stream.
+    let doc_of = |body: usize, note: usize| {
+        let cps = |v: &[u32]| v.iter().flat_map(|c| c.to_le_bytes()).collect::<Vec<u8>>();
+        let mut refs = cps(&[0, 1]);
+        refs.extend_from_slice(&[0, 0]); // the one reference's data
+        let txt = cps(&[0, note as u32, note as u32]); // story 0..note, then the limit
+        let spec = FibSpec { ccp_ftn: note as u32, ..Default::default() };
+        text_doc_with(
+            &[Piece { compressed: true, text: "\r".repeat(body) }],
+            &[Piece { compressed: true, text: "\r".repeat(note) }],
+            spec,
+            &[(2, &refs), (3, &txt)],
+        )
+    };
+    let at_cap = super::read_limited(&doc_of(600, 400), None, 1000).expect("opens");
+    assert_eq!(at_cap.body.len(), 600);
+    assert_eq!(at_cap.parts.len(), 1);
+    let over = super::read_limited(&doc_of(600, 401), None, 1000);
+    assert!(matches!(over, Err(crate::DocbinError::Limit(_))), "{over:?}");
+    let over = super::read_limited(&doc_of(601, 400), None, 1000);
+    assert!(matches!(over, Err(crate::DocbinError::Limit(_))), "{over:?}");
+}
+
+/// Cell marks are paragraph marks too: a never-closed row of them is refused the same way.
+#[test]
+fn a_flood_of_cell_marks_is_refused() {
+    let over = super::read_limited(&marks_doc('\u{7}', 5000), None, 1000);
+    assert!(matches!(over, Err(crate::DocbinError::Limit(_))), "{over:?}");
+}
+
+/// The budget counts down across spends and notes the overrun (`walk` receives one shared by
+/// every story of the document).
+#[test]
+fn the_paragraph_budget_counts_down_and_notes_the_overrun() {
+    let budget = super::ParaBudget { left: std::cell::Cell::new(2), exceeded: std::cell::Cell::new(false) };
+    assert!(budget.spend() && budget.spend());
+    assert!(!budget.exceeded.get());
+    assert!(!budget.spend());
+    assert!(budget.exceeded.get());
+}
+
+/// The cap is far above any real document (10,000 pages of 50 paragraphs is 500,000), and a
+/// paragraph outside a table no longer carries a table context (a `ParaOut` was 1,224 bytes).
+#[test]
+fn the_paragraph_cap_leaves_room_and_a_paragraph_stays_small() {
+    const { assert!(super::MAX_PARAGRAPHS >= 1_000_000) };
+    assert!(std::mem::size_of::<crate::table::ParaOut>() < 1000, "{}", std::mem::size_of::<crate::table::ParaOut>());
+    let doc = read(&marks_doc('\r', 10)).expect("opens");
+    assert_eq!(doc.body.len(), 10);
 }
 
 #[test]
