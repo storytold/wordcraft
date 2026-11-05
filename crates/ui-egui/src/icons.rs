@@ -73,6 +73,10 @@ impl Pen<'_> {
 
 /// Paint icon `name` into `r`. `c` is the line colour; the accent comes from the theme.
 pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
+    if name == "wordcraft" || name == "logo" {
+        wordcraft_logo(p, r);
+        return;
+    }
     let pen = Pen { p, r, c, a: accent, w: 1.25 };
     if let Some(kind) = name.strip_prefix("shape.")
         && shape(&pen, kind)
@@ -1685,6 +1689,57 @@ pub fn library(p: &Painter, r: Rect, icon: &wordcraft_render::icon_lib::Icon, c:
     }
 }
 
+/// The official WordCraft logo from `assets/app-icon/wordcraft.svg`, drawn in vector code.
+pub fn wordcraft_logo(p: &Painter, r: Rect) {
+    let s = r.width().min(r.height()) / 512.0;
+    if s <= 0.0 {
+        return;
+    }
+    let o = r.center() - vec2(256.0 * s, 256.0 * s);
+
+    // Blue background tile with rounded corners (rx = 112 on a 512 box).
+    let bg_rect = Rect::from_min_size(o, vec2(512.0 * s, 512.0 * s));
+    p.rect_filled(bg_rect, 112.0 * s, Color32::from_rgb(0x3B, 0x5B, 0xDB));
+
+    // Rotated document (-6 degrees around center (256, 256)).
+    let rad = (-6.0_f32).to_radians();
+    let (sin, cos) = rad.sin_cos();
+    let pt = |x: f32, y: f32| {
+        let dx = x - 256.0;
+        let dy = y - 256.0;
+        let rx = 256.0 + dx * cos - dy * sin;
+        let ry = 256.0 + dx * sin + dy * cos;
+        pos2(o.x + rx * s, o.y + ry * s)
+    };
+
+    let ink = Color32::from_rgb(0x0B, 0x0B, 0x0C);
+    let paper = Color32::from_rgb(0xEF, 0xE9, 0xDC);
+    let stroke_w = (14.0 * s).max(1.0);
+
+    // Document page (folded top-right corner).
+    let doc_pts = vec![pt(150.0, 92.0), pt(322.0, 92.0), pt(384.0, 154.0), pt(384.0, 420.0), pt(150.0, 420.0)];
+    p.add(Shape::convex_polygon(doc_pts.clone(), paper, Stroke::NONE));
+    p.add(Shape::closed_line(doc_pts, Stroke::new(stroke_w, ink)));
+
+    // Folded corner flap.
+    p.add(Shape::line(vec![pt(322.0, 92.0), pt(322.0, 154.0), pt(384.0, 154.0)], Stroke::new(stroke_w, ink)));
+
+    // Four horizontal text lines.
+    for y in [200.0, 246.0, 292.0] {
+        p.add(Shape::line(vec![pt(190.0, y), pt(344.0, y)], Stroke::new(stroke_w, ink)));
+    }
+    p.add(Shape::line(vec![pt(190.0, 338.0), pt(290.0, 338.0)], Stroke::new(stroke_w, ink)));
+
+    // Pen Nib (not rotated).
+    let s_pt = |x: f32, y: f32| pos2(o.x + x * s, o.y + y * s);
+    let pen_body = vec![s_pt(300.0, 410.0), s_pt(418.0, 292.0), s_pt(446.0, 320.0), s_pt(328.0, 438.0), s_pt(292.0, 446.0)];
+    p.add(Shape::convex_polygon(pen_body, ink, Stroke::NONE));
+
+    let pen_tip = vec![s_pt(418.0, 292.0), s_pt(436.0, 274.0), s_pt(464.0, 302.0), s_pt(446.0, 320.0)];
+    let tip_stroke_w = (8.0 * s).max(1.0);
+    p.add(Shape::convex_polygon(pen_tip, paper, Stroke::new(tip_stroke_w, ink)));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1712,5 +1767,17 @@ mod tests {
     fn the_shading_button_icon_has_no_bar_of_its_own() {
         assert!(has_default_highlight_bar("shading"));
         assert!(!has_default_highlight_bar("shadingNoBar"));
+    }
+
+    /// The WordCraft logo renders without panicking and draws shapes.
+    #[test]
+    fn wordcraft_logo_renders_shapes() {
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            wordcraft_logo(ui.painter(), Rect::from_min_size(Pos2::ZERO, egui::vec2(32.0, 32.0)));
+            paint(ui.painter(), Rect::from_min_size(Pos2::ZERO, egui::vec2(20.0, 20.0)), "wordcraft", Color32::BLACK, Color32::BLACK);
+        });
+        assert!(!output.shapes.is_empty(), "wordcraft logo emitted shapes");
+        output.drop_without_applying_deltas();
     }
 }

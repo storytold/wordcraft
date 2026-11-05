@@ -313,6 +313,15 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
             crate::rtl::root(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
+                    // WordCraft App Logo: clickable to toggle File / Backstage.
+                    let logo_sz: f32 = (control_h - 6.0_f32).max(18.0_f32);
+                    let (logo_r, logo_resp) = ui.allocate_exact_size(vec2(logo_sz, logo_sz), Sense::click());
+                    icons::wordcraft_logo(ui.painter(), logo_r);
+                    let logo_resp = logo_resp.on_hover_text(tl!("WordCraft — File & Backstage")).on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if logo_resp.clicked() {
+                        let _ = app.run("ui.backstage", json!({"value": !app.ui.backstage}));
+                    }
+                    ui.add_space(6.0);
                     // AutoSave switch: greyed out, with the reason as its tooltip, when AutoSave can't
                     // cover the document (#196, #176); clicking it then offers Save As where that helps.
                     let block = app.autosave_block();

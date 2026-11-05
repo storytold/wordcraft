@@ -95,6 +95,15 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     egui::Color32::WHITE,
                     egui::Color32::WHITE,
                 );
+                let logo_rect = Rect::from_center_size(pos2(if rtl { c.x - 28.0 } else { c.x + 28.0 }, c.y), vec2(20.0, 20.0));
+                icons::wordcraft_logo(ui.painter(), logo_rect);
+                ui.painter().text(
+                    pos2(if rtl { c.x - 44.0 } else { c.x + 44.0 }, c.y),
+                    crate::rtl::lead_center(rtl),
+                    "WordCraft",
+                    semibold(14.0),
+                    egui::Color32::WHITE,
+                );
                 resp
             } else {
                 // The hit area is scoped to the chevron, not the whole 200px-wide row (#3041):
@@ -108,6 +117,15 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     Rect::from_center_size(c, vec2(18.0, 18.0)),
                     if rtl { "chevronRight" } else { "chevronLeft" },
                     egui::Color32::WHITE,
+                    egui::Color32::WHITE,
+                );
+                let logo_rect = Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 54.0), r.center().y), vec2(20.0, 20.0));
+                icons::wordcraft_logo(ui.painter(), logo_rect);
+                ui.painter().text(
+                    pos2(crate::rtl::lead_x(rtl, r, 70.0), r.center().y),
+                    crate::rtl::lead_center(rtl),
+                    "WordCraft",
+                    semibold(14.0),
                     egui::Color32::WHITE,
                 );
                 resp
