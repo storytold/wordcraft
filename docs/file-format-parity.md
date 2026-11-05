@@ -189,9 +189,10 @@ identify the store. Keeping displayed text alone does not preserve that mapping.
 preserves stores without evaluating XPath or synchronizing control edits into XML.
 Focused original tests cover package/main roots, multiple/shared stores, cycles, external schema
 references, missing parts, UTF-16 payloads, strict relationship types and reserved filenames.
-The bibliography's `customXml/itemN.xml` slot belongs to the bibliography writer, which rewrites
-it in place in Word's layout (sources round-trip, #1058); the opaque path skips it, and a
-relationship can't steer the bibliography onto parts another writer already took. Word-derived
+The bibliography lives in the bibliography writer's own part, `customXml/item1.xml` related from
+the package root (#532; sources round-trip, #1058): while the document has sources, a
+`b:Sources` store kept from the file is the superseded part and is not written, and a custom
+store displaced from `item1.xml` moves aside under a fresh name with its data kept. Word-derived
 files are not fixtures. No readiness estimate rises
 from these synthetic package checks, and native Word rendering/binding behavior remains untested.
 ## Native save-path guarantees
@@ -537,7 +538,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 | 2026-10-14 | trivial | `.doc` tables: cell shading read from every SHD record (`sprmTDefTableShd`/`ShdRaw` and their 2nd/3rd ranges for cells 22-62; Word 97 `Shd80` clear fills now show their background colour; exact colours win over the palette fallback), the row-end mark no longer becomes an extra empty column, and a table no longer inherits the previous table's grid, borders, alignment or indent (#1380). Horizontally merged rows (a row of fewer, wider cells) come with #1123 |
 | 2026-10-12 | trivial | Password-protected DOCX row corrected: agile-encrypted `.docx` opens and saves since #281 (was listed as unsupported); legacy encrypted `.doc` (RC4/XOR) split out, still refused |
 | 2026-10-12 | trivial | Restrict Editing: forms mode (`w:edit="forms"`) fills content controls — edits inside fillable controls run and everything else rolls back; `review.restrict` reports `formFields`; Find Next Region covers form fields; a save/reopen keeps `w:edit="forms"`, the filled value and the password guard; under active protection, content-control lock-flag property changes are refused, as Word blocks property edits until Stop Protection (#1077) |
-| 2026-10-13 | minor | Bibliography sources round-trip in Word's own customXml layout — package-root `customXml/itemN.xml` + `itemPropsN.xml` with content-type overrides, related from the document part (correcting #790's package-root relationship) — and `.bib`/`.ris`/`.json` source libraries import (`references.importSources`, #1058) |
+| 2026-10-13 | minor | Bibliography sources round-trip in Word's own customXml layout — the bibliography writer's `customXml/item1.xml` + `itemProps1.xml`, related from the package root (as #790 writes it) — and `.bib`/`.ris`/`.json` source libraries import (`references.importSources`, #1058) |
 | 2026-10-12 | trivial | Paste keeps the formatting of HTML and RTF on the system clipboard; Paste Special lists them and pictures (#687, #833) |
 | 2026-10-12 | trivial | ODT page size, orientation and margins read back from `styles.xml` on open, so they survive a save and reopen (#810) |
 | 2026-10-12 | trivial | All 13 table style conditional formatting parts round-trip with alignment (#714) |

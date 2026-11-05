@@ -232,15 +232,23 @@ fn csl_add(s: &mut Session, path: &str) -> CmdResult {
         let entry = CslStyleEntry { file, style };
         let id = entry.id().to_string();
         let warnings = entry.style.warned().to_vec();
-        // Replace the style it is (same id, or the same file re-added), else append.
-        match s.csl_styles.iter().position(|e| e.id().eq_ignore_ascii_case(&id) || e.file == entry.file) {
-            Some(i) => {
-                if let Some(x) = s.csl_styles.get_mut(i) {
-                    *x = entry;
-                }
-            }
-            None => s.csl_styles.push(entry),
+        // Replace the style it is — every entry with this id or file name, so a re-add under
+        // a new file name leaves one entry — and take the superseded files with it: a file
+        // left behind would reload at the next start and outrank the replacement in file
+        // order. Unrelated entries stay.
+        let stale: Vec<String> = s
+            .csl_styles
+            .iter()
+            .filter(|e| e.id().eq_ignore_ascii_case(&id) || e.file == entry.file)
+            .map(|e| e.file.clone())
+            .filter(|f| *f != entry.file)
+            .collect();
+        s.csl_styles.retain(|e| !e.id().eq_ignore_ascii_case(&id) && e.file != entry.file);
+        for f in stale {
+            // The styles folder is ours; a file that is already gone simply isn't there.
+            let _ = crate::io::delete_file(&dir.join(f));
         }
+        s.csl_styles.push(entry);
         Ok(json!({"id": id, "warnings": warnings}))
     }
 }

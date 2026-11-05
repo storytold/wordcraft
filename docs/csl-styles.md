@@ -2,11 +2,13 @@
 
 WordCraft's References ▸ Citations & Bibliography ▸ Style combo lists its twelve built-in
 citation styles (APA, MLA, Chicago…) and, below a separator, the CSL styles you added. Any
-style from the [Citation Style Language](https://docs.citationstyles.org) — the XML format
-Zotero and Mendeley styles are written in, a public spec — can be added: **Add style from
-file…** picks a `.csl` file, installs it and makes it the document's style. Warnings (a part
-of the file WordCraft's renderer doesn't draw on, a non-en-US locale) show in the status
-line; the style still loads.
+independent style from the [Citation Style Language](https://docs.citationstyles.org) — the
+XML format Zotero and Mendeley styles are written in, a public spec — can be added: **Add
+style from file…** picks a `.csl` file, installs it and makes it the document's style.
+Warnings (a part of the file WordCraft's renderer doesn't draw on, a non-en-US locale) show
+in the status line; the style still loads. A *dependent* style (one that only links to a
+parent style and carries no citation layout of its own) is refused — install its independent
+parent instead.
 
 ## Where the files live
 
@@ -43,8 +45,9 @@ the name/date/title keys, ascending or descending). The locale terms are the spe
 set; other locales load with a warning and render with en-US terms. Constructs that would
 silently change output — citation collapsing and disambiguation, formatting attributes
 (font style/weight/variant, text case), note-class styles, non-en-US locale terms and date
-formats, page-range formats — load with a warning instead of being misrendered, so an
-unsupported style says so rather than citing wrongly.
+formats, page-range formats — load with a warning. A warning does not prevent unsuitable
+output: a note-class style, say, still renders its citations in text. Inspect the rendered
+citations and bibliography before trusting an installed style.
 
 ## See also
 

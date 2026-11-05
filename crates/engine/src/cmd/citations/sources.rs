@@ -255,6 +255,11 @@ pub(super) fn import_library(s: &mut Session, v: &Value) -> CmdResult {
                     }
                     updated += 1;
                 }
+                None if s.doc.sources.len() >= wordcraft_docx::MAX_SOURCES => {
+                    // The document keeps no more sources than a DOCX file holds; past the cap
+                    // a save would silently drop them on reopen (#1058).
+                    skipped.push(json!({"tag": src.tag, "reason": "the document's source list is full"}));
+                }
                 None => {
                     index.insert(src.tag.clone(), s.doc.sources.len());
                     s.doc.sources.push(src);

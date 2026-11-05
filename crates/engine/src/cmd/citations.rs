@@ -49,10 +49,15 @@ pub fn specs() -> Vec<CommandSpec> {
             // A built-in (our name, or Word's style-sheet name), then the installed CSL
             // styles (`csl:<id>` or the style's title); a `csl:` style that is gone says so
             // rather than falling back, and any other unknown name is the usual list.
-            let stored = if let Some(st) = find_style(asked) {
+            // An exact built-in name wins; then an installed CSL style by title (before the
+            // alias prefixes below: a title like "IEEE" or "Chicago Manual of Style…" would
+            // otherwise match the built-in alias and silently pick it); the prefixes last.
+            let stored = if let Some(st) = STYLES.iter().find(|x| x.name.eq_ignore_ascii_case(asked.trim())) {
                 st.name.to_string()
             } else if let Some(id) = find_csl_entry(s, asked).map(|e| e.id().to_string()) {
                 format!("csl:{id}")
+            } else if let Some(st) = find_style(asked) {
+                st.name.to_string()
             } else if let Some(id) = asked.trim().strip_prefix("csl:") {
                 return Err(CmdError::Params(format!("CSL style {id} is not installed; re-add it in References ▸ Style")));
             } else {

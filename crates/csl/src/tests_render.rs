@@ -368,8 +368,8 @@ fn date_parts_limits_the_localized_forms() {
     d.month = "3".into();
     d.day = "15".into();
     // Defaults render everything; date-parts narrows the localized forms; the explicit
-    // parts render as written regardless (month-03 short stays "March", per the appendix).
-    assert_eq!(s.cite(&d, Position::First, 1, ""), "3/15/2021 | 2021 | 3/2021 | 2021 | March 2021");
+    // parts render as written regardless (month-03 short is the locale's "Mar.").
+    assert_eq!(s.cite(&d, Position::First, 1, ""), "3/15/2021 | 2021 | 3/2021 | 2021 | Mar. 2021");
 
     // A year-month date with a day set: the day drops out of the localized forms (the
     // text form's month-year join is the subset's ", ").
