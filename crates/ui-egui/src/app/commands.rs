@@ -508,8 +508,10 @@ impl WordApp {
                 if tab == "File" {
                     self.ui.backstage = true;
                 } else {
+                    // Word for Mac: a click on any tab but File shows a collapsed ribbon and keeps it open.
                     self.ui.tab = tab;
                     self.ui.backstage = false;
+                    self.ui.ribbon_collapsed = false;
                 }
                 json!({"tab": self.ui.tab})
             }
