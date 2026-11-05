@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
+use crate::launch_failures::Failures;
 use wasm_bindgen::JsCast as _;
 use wordcraft_ui_egui::Inbox;
 use wordcraft_ui_egui::i18n;
@@ -21,8 +22,6 @@ const MAX_LAUNCHED_BYTES: f64 = (256u32 << 20) as f64;
 const MAX_WAITING_FILES: usize = 20;
 /// How often the reader looks whether the app has opened the file it read last.
 const DRAIN_POLL_MS: i32 = 50;
-/// Most read failures one report names on the status bar.
-const MAX_REPORTED_FAILURES: usize = 3;
 
 /// Launched files not read yet, whether a reader is going through them, and how many files the
 /// launches since the last report left out.
@@ -81,7 +80,7 @@ pub(super) fn listen(inbox: Inbox, ctx: egui::Context, messages: Rc<RefCell<Vec<
 /// read are reported then too, for the same reason: a failure shown earlier would be replaced as
 /// soon as the next file opened.
 async fn read_all(launches: Rc<RefCell<Launches>>, inbox: Inbox, ctx: egui::Context, messages: Rc<RefCell<Vec<String>>>) {
-    let mut failed: Vec<String> = Vec::new();
+    let mut failures = Failures::default();
     loop {
         let next = launches.borrow_mut().waiting.pop_front();
         let Some(handle) = next else {
@@ -102,7 +101,7 @@ async fn read_all(launches: Rc<RefCell<Launches>>, inbox: Inbox, ctx: egui::Cont
                     &[("count", &omitted.to_string()), ("limit", &MAX_WAITING_FILES.to_string())],
                 )
             });
-            let report: Vec<String> = std::mem::take(&mut failed).into_iter().chain(omission).collect();
+            let report: Vec<String> = std::mem::take(&mut failures).report().into_iter().chain(omission).collect();
             if !report.is_empty() {
                 messages.borrow_mut().push(report.join(" "));
                 ctx.request_repaint();
@@ -117,10 +116,7 @@ async fn read_all(launches: Rc<RefCell<Launches>>, inbox: Inbox, ctx: egui::Cont
             Ok(bytes) => inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes)),
             Err(error) => {
                 log::warn!("{name}: {error}");
-                // The rest are in the log: a status line holds a few files at most.
-                if failed.len() < MAX_REPORTED_FAILURES {
-                    failed.push(i18n::fmt(i18n::t("Couldn't open {path}: {error}"), &[("path", &name), ("error", &error)]));
-                }
+                failures.add(name, error);
             }
         }
         ctx.request_repaint();
