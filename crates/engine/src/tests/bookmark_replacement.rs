@@ -43,3 +43,24 @@ fn replacing_or_readding_a_column_bookmark_discards_source_placement() {
         }
     }
 }
+
+#[test]
+fn readding_a_name_after_its_markers_were_removed_drops_orphaned_attrs() {
+    use wordcraft_doc::StoryRef;
+    let mut doc = source();
+    for path in doc.para_paths(StoryRef::Body) {
+        let p = doc.para_mut(StoryRef::Body, &path).unwrap();
+        for off in p.object_offsets().into_iter().rev() {
+            p.delete(off, off + wordcraft_doc::para::OBJ.len_utf8()).unwrap();
+        }
+    }
+    assert!(doc.bookmarks().is_empty());
+    assert!(doc.bookmark_attrs.contains_key("Cols"));
+    let mut s = Session::new(doc);
+    run(&mut s, "select.text", json!({"text":"abc"}));
+    run(&mut s, "insert.bookmark", json!({"name":"Cols"}));
+    assert!(!s.doc.bookmark_attrs.contains_key("Cols"));
+    let saved = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+    let attrs = saved.bookmark_attrs.get("Cols").unwrap();
+    assert!(attrs.start.is_none() && attrs.col_first.is_none() && attrs.col_last.is_none());
+}
