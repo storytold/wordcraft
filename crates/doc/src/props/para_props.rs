@@ -454,9 +454,7 @@ impl ParaProps {
         self.overlay_pagination(patch);
         self.overlay_script_layout(patch);
         if let Some(p) = &patch.cnf_style {
-            self.cnf_style
-                .get_or_insert_with(|| Box::new(CnfStyle::default()))
-                .overlay(p);
+            self.cnf_style.get_or_insert_with(|| Box::new(CnfStyle::default())).overlay(p);
         }
     }
 

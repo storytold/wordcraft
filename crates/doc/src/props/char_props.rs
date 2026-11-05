@@ -540,9 +540,7 @@ impl CharProps {
         self.overlay_script_style(patch);
         self.overlay_document_marks(patch);
         if let Some(p) = &patch.cnf_style {
-            self.cnf_style
-                .get_or_insert_with(|| Box::new(CnfStyle::default()))
-                .overlay(p);
+            self.cnf_style.get_or_insert_with(|| Box::new(CnfStyle::default())).overlay(p);
         }
         if let Some(p) = &patch.text_effects {
             self.text_effects.get_or_insert_with(Default::default).overlay(p);
