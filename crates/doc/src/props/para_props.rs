@@ -199,7 +199,6 @@ impl BorderStyle {
             "thinThickLargeGap" => BorderStyle::ThinThickLargeGap,
             "thickThinLargeGap" => BorderStyle::ThickThinLargeGap,
             "thinThickThinLargeGap" => BorderStyle::ThinThickThinLargeGap,
-            _ => BorderStyle::Single,
             _ => return None,
         })
     }
