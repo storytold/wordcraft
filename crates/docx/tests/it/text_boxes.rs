@@ -154,6 +154,38 @@ fn vml_text_boxes_keep_their_inset_fit_and_anchor() {
 }
 
 #[test]
+fn vml_text_boxes_keep_their_text_direction() {
+    // VML `layout-flow` on `v:textbox` (DrawingML's `vert`): `vertical` and
+    // `vertical-ideographic` (East Asian text standing upright) run top to bottom, lines
+    // stacking from the right; `mso-layout-flow-alt:bottom-to-top` runs bottom to top.
+    let content = r#"<w:txbxContent><w:p><w:r><w:t>Boxed</w:t></w:r></w:p></w:txbxContent>"#;
+    let shape = |textbox: &str| {
+        format!(
+            r#"<w:p><w:r><w:pict><v:shape style="width:100pt;height:40pt"><v:textbox style="{textbox}">{content}</v:textbox></v:shape></w:pict></w:r></w:p>"#
+        )
+    };
+    let body = [
+        shape("layout-flow:vertical-ideographic"),
+        shape("layout-flow:vertical"),
+        shape("layout-flow:vertical;mso-layout-flow-alt:bottom-to-top"),
+        shape("layout-flow:horizontal"),
+        shape("mso-fit-shape-to-text:t"),
+    ]
+    .concat();
+    let doc = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><w:body>{body}</w:body></w:document>"#
+    );
+    let rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let d = wordcraft_docx::read(&zip(&[("_rels/.rels", rels), ("word/document.xml", doc.as_bytes())])).unwrap();
+    let verts: Vec<TextVert> = boxes(&d).iter().map(|id| d.parts[id].body.vert).collect();
+    assert_eq!(verts, [TextVert::Vert, TextVert::Vert, TextVert::Vert270, TextVert::Horz, TextVert::Horz]);
+    // Saved and read again, they stay.
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let again: Vec<TextVert> = boxes(&back).iter().map(|id| back.parts[id].body.vert).collect();
+    assert_eq!(again, verts);
+}
+
+#[test]
 fn hidden_drawings_stay_hidden() {
     // VML `visibility:hidden` (floating or inline) and DrawingML `wp:docPr/@hidden` (also a group
     // member's `wps:cNvPr/@hidden`) mark a drawing hidden; it is kept, and saved hidden.
