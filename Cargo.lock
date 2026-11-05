@@ -1081,7 +1081,7 @@ dependencies = [
 [[package]]
 name = "craft-pdf"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0#92d392cff132eaf53e13afff77f38b5c11b73aa0"
+source = "git+https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955caffb5bee5997aebf7#c5a1cbfb5f9049f9270955caffb5bee5997aebf7"
 dependencies = [
  "krilla",
  "thiserror 2.0.21",
@@ -2960,7 +2960,7 @@ dependencies = [
 [[package]]
 name = "krilla"
 version = "0.8.2"
-source = "git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0#92d392cff132eaf53e13afff77f38b5c11b73aa0"
+source = "git+https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955caffb5bee5997aebf7#c5a1cbfb5f9049f9270955caffb5bee5997aebf7"
 dependencies = [
  "base64 0.22.1",
  "bumpalo",
@@ -6941,18 +6941,26 @@ dependencies = [
 name = "wordcraft-formats"
 version = "0.15.1"
 dependencies = [
+ "aes",
+ "base64 0.23.1",
  "cfb",
  "chardetng",
  "chrono",
  "encoding_rs",
+ "getrandom 0.3.4",
+ "hmac",
  "image",
  "js-sys",
  "log",
+ "miniz_oxide 0.9.1",
  "proptest",
  "quick-xml 0.41.0",
+ "sha1 0.11.0",
+ "sha2 0.11.1",
  "wordcraft-doc",
  "wordcraft-geom",
  "wordcraft-metafile",
+ "zeroize",
  "zip 3.0.0",
 ]
 
@@ -7043,6 +7051,7 @@ dependencies = [
 name = "wordcraft-ui-egui"
 version = "0.15.1"
 dependencies = [
+ "accesskit_consumer",
  "cfb",
  "chrono",
  "craft-i18n",
