@@ -42,9 +42,14 @@ overrides:
       - mesa-vulkan-drivers
       - xdg-desktop-portal
   rpm:
+    # Library sonames rather than package names, so the same requirements resolve on Fedora/RHEL
+    # and openSUSE (which has no libxkbcommon, vulkan-loader or libglvnd-egl package).
     depends:
-      - libxkbcommon
-      - (vulkan-loader or libglvnd-egl)
+      - libc.so.6()(64bit)
+      - libm.so.6(GLIBC_2.35)(64bit)
+      - libgcc_s.so.1()(64bit)
+      - libxkbcommon.so.0()(64bit)
+      - (libvulkan.so.1()(64bit) or libEGL.so.1()(64bit))
     recommends:
       - libwayland-client
       - libX11
@@ -61,8 +66,20 @@ contents:
   - src: ${STAGE}/usr/bin/wordcraft-cli
     dst: /usr/bin/wordcraft-cli
     file_info: { mode: 0755 }
-  - src: ${STAGE}/usr/share/
-    dst: /usr/share/
+  # Named one by one rather than as a tree of /usr/share: a tree would also own shared directories
+  # such as /usr/share/mime, which openSUSE's filesystem package owns with other modes, and RPM
+  # refuses to install a package that conflicts with it.
+  - src: ${STAGE}/usr/share/applications/ai.storyteller.wordcraft.desktop
+    dst: /usr/share/applications/ai.storyteller.wordcraft.desktop
+  - src: ${STAGE}/usr/share/mime/packages/ai.storyteller.wordcraft.xml
+    dst: /usr/share/mime/packages/ai.storyteller.wordcraft.xml
+  - src: ${STAGE}/usr/share/metainfo/ai.storyteller.wordcraft.metainfo.xml
+    dst: /usr/share/metainfo/ai.storyteller.wordcraft.metainfo.xml
+  - src: ${STAGE}/usr/share/icons/hicolor/
+    dst: /usr/share/icons/hicolor/
+    type: tree
+  - src: ${STAGE}/usr/share/doc/wordcraft/
+    dst: /usr/share/doc/wordcraft/
     type: tree
 
 scripts:
