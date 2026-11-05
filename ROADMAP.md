@@ -1,5 +1,7 @@
 # WordCraft roadmap
 
+> **Tracked-change lookup update:** 2026-10-28 · Accept and Reject at the caret index comment-anchor positions once per lookup instead of recounting earlier objects for every run. Same-revision joining, Unicode offsets, marker pairing, formatting-only changes, history, protection and saved content retain their behavior. Other revision-resolution costs remain separate. Original synthetic Linux tests cover this change; native desktop and Word were not tested. Readiness estimates unchanged.
+>
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -139,6 +141,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-10-28: Accept and Reject at the caret avoid repeated object-prefix scans while finding a tracked change across comment anchors (#3614). The per-call index is built only when a join reaches an object; the existing span, history, protection and save/reopen behavior is preserved. Broader resolution costs remain separate.
 - 2026-11-04: OpenDocument files have no display settings any more (gap 19): File › Options › Advanced › OpenDocument files, `file.options` `odf`, `WORDCRAFT_ODF`, the LibreOffice style and custom values are gone. WordCraft makes one choice for each case the standard leaves open, the one the default made, and still follows what a file states ([docs/odf-interpretation.md](docs/odf-interpretation.md)).
 - 2026-10-31: Dialogs are modal, as in Word (#3859): while one is open, the ribbon, File, the page and the panes of its document window take no clicks, and typing and shortcuts (Ctrl+O…) do nothing until it closes; WordCraft's own Open/Save As window is modal too. A press beside a modal dialog shakes it a little, so it is clear why nothing behind it reacts (Word beeps); with animation effects off, its border flashes instead. Find and Replace, Symbol, Mark Index Entry, Cross-reference and Insert Merge Field stay modeless, as in Word for Mac 16.114.1 (checked on a newer build than the 16.113.4 the parity target names).
 - 2026-11-04: OpenDocument files are shown in one of two styles (gap 19): Microsoft Word style, the default, or LibreOffice style (File › Options › Advanced › OpenDocument files; `file.options` `{"odf": {"preset": "word"}}` or `"libreoffice"`; `WORDCRAFT_ODF=word` or `WORDCRAFT_ODF=libreoffice`). Custom stays for one's own value per case; `wordcraft`, the earlier id of Word's style, is still taken.
@@ -770,6 +773,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | trivial | Accept/Reject at the caret reuses a lazy comment-anchor offset index across tracked runs (#3614); existing span and saved-content behavior retained, broader resolution costs and readiness estimates unchanged |
 | 2026-11-04 | trivial | Progress log: OpenDocument display settings removed (gap 19) |
 | 2026-10-31 | trivial | Progress log: dialogs are modal except the five Word keeps modeless; a press beside one shakes it (#3859) |
 | 2026-11-04 | trivial | Progress log: picture brightness, contrast and transparency (#1711, #1766) |
