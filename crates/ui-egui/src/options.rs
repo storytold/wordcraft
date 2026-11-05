@@ -313,6 +313,9 @@ fn display(app: &mut WordApp, ui: &mut Ui) {
     }
     numeral_picker(app, ui);
     ui.add_space(8.0);
+    section(ui, "Touchpad");
+    ui.checkbox(&mut app.ui.pinch_zoom, tl!("Pinch to zoom (two fingers)"));
+    ui.add_space(8.0);
     section(ui, "Printing");
     ui.checkbox(&mut app.ui.print_backgrounds, tl!("Print the page color"));
     ui.checkbox(&mut app.ui.update_fields_before_print, tl!("Update fields before printing"));

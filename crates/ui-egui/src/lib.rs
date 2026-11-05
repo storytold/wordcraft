@@ -281,6 +281,9 @@ pub struct UiState {
     pub print_backgrounds: bool,
     /// File › Options › Display: update fields (dates, page numbers, SEQ…) before printing.
     pub update_fields_before_print: bool,
+    /// File › Options › Display › Touchpad: a two-finger pinch zooms the document in and out.
+    /// Off: Ctrl/⌘+wheel stays the only touchpad zoom (the Word default).
+    pub pinch_zoom: bool,
     /// The custom dictionary (File › Options › Proofing, Add to Dictionary), kept between runs.
     pub dictionary: Vec<String>,
 }
@@ -357,6 +360,7 @@ impl Default for UiState {
             start_screen: true,
             print_backgrounds: false,
             update_fields_before_print: false,
+            pinch_zoom: false,
             dictionary: Vec::new(),
         }
     }
