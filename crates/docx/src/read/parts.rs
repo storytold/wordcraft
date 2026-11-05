@@ -48,17 +48,22 @@ impl Reader<'_> {
         }
     }
 
-    /// The fonts the font table classes as roman (`w:font/w:family w:val="roman"`).
+    /// The fonts the font table classes as roman (`w:font/w:family w:val="roman"`) and those it
+    /// marks as fixed pitch (`w:pitch w:val="fixed"`).
     pub(super) fn read_font_families(&mut self, path: &str) {
         let Ok(Some(table)) = self.xml(path) else { return };
-        self.doc.settings.roman_fonts = table
-            .children("w:font")
-            .filter(|f| f.child("w:family").and_then(|v| v.attr("w:val")) == Some("roman"))
-            .filter_map(|f| f.attr("w:name"))
-            .filter(|n| !n.is_empty() && n.len() <= MAX_FONT_NAME)
-            .take(MAX_TABLE_FONTS)
-            .map(str::to_string)
-            .collect();
+        let named = |child: &str, val: &str| -> Vec<String> {
+            table
+                .children("w:font")
+                .filter(|f| f.child(child).and_then(|v| v.attr("w:val")) == Some(val))
+                .filter_map(|f| f.attr("w:name"))
+                .filter(|n| !n.is_empty() && n.len() <= MAX_FONT_NAME)
+                .take(MAX_TABLE_FONTS)
+                .map(str::to_string)
+                .collect()
+        };
+        self.doc.settings.roman_fonts = named("w:family", "roman");
+        self.doc.settings.fixed_pitch_fonts = named("w:pitch", "fixed");
     }
 
     pub(super) fn xml(&self, path: &str) -> Result<Option<El>, DocxError> {

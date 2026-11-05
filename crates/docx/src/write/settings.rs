@@ -101,7 +101,7 @@ pub(super) fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, temp
             w.val(tag, &crate::units::twips(v.clamp(0.5, 1584.0)));
         }
     }
-    w.val("w:characterSpacingControl", "doNotCompress");
+    w.val("w:characterSpacingControl", s.character_spacing.to_ooxml());
     write_note_settings(&mut w, s, s_notes, footnotes, endnotes);
     write_compatibility_settings(&mut w, doc);
     if let Some(m) = &s.math {
@@ -139,6 +139,9 @@ fn write_note_settings(
 fn write_compatibility_settings(w: &mut W, doc: &Document) {
     w.open("w:compat", &[]);
     // CT_Compat: the older switches come before the `w:compatSetting`s.
+    if doc.settings.balance_sbcs_dbcs {
+        w.empty("w:balanceSingleByteDoubleByteWidth", &[]);
+    }
     if doc.settings.do_not_expand_shift_return {
         w.empty("w:doNotExpandShiftReturn", &[]);
     }

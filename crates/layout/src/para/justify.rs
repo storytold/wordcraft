@@ -51,6 +51,58 @@ pub(super) fn shrink_line_spaces(pl: &ParaLayout, xs: &mut [f32], c0: usize, c1:
     }
 }
 
+/// How much of its width a full-width punctuation mark may give up when the document compresses
+/// punctuation. Word's print of one form (zh-TW, 12 pt marks) bounds it: a line that needed 3.0
+/// to 3.7 pt from each of its marks was compressed onto the line, one that needed 4.25 pt from
+/// each wasn't (its last character went to the next line). A third of the mark lies between;
+/// Word's own figure isn't known.
+const MAX_PUNCT_SHRINK: f32 = 1.0 / 3.0;
+
+/// How far a line may run past its edge when its full-width punctuation, `punct` wide in all,
+/// is compressed (`w:characterSpacingControl`, ECMA-376 §17.15.1.18).
+pub(super) fn punct_room(punct: f32) -> f32 {
+    punct.max(0.0) * MAX_PUNCT_SHRINK
+}
+
+/// Take `-slack` (an overflow) out of the line's compressible punctuation ([`ParaLayout::compressible`]),
+/// in proportion to the marks' widths and never more than [`MAX_PUNCT_SHRINK`] of them; each
+/// mark gives up room on both sides alike. Returns how much was taken. Only what the line needs
+/// is taken, as in Word's print of one form (zh-TW text, `compressPunctuation`): a 552 pt line
+/// of 46 full-width characters, 6 of them punctuation, was set in the 549 pt line, each of the
+/// marks narrower by 0.4 to 0.6 pt; a line with room keeps its marks whole.
+pub(super) fn shrink_line_punct(pl: &ParaLayout, xs: &mut [f32], c0: usize, c1: usize, content_end: f32, slack: f32) -> f32 {
+    let lo = pl.compressible.partition_point(|&k| (k as usize) < c0);
+    let marks: Vec<(usize, f32)> = pl
+        .compressible
+        .get(lo..)
+        .unwrap_or_default()
+        .iter()
+        .map(|&k| k as usize)
+        .take_while(|&k| k < c1)
+        .filter(|&k| xs.get(k - c0).copied().unwrap_or(f32::MAX) < content_end - 0.01)
+        .filter_map(|k| pl.clusters.get(k).map(|c| (k, c.adv)))
+        .filter(|(_, adv)| *adv > 0.0)
+        .collect();
+    let total: f32 = marks.iter().map(|m| m.1).sum();
+    if total <= 0.0 || !slack.is_finite() || slack >= 0.0 {
+        return 0.0;
+    }
+    let ratio = (-slack / total).clamp(0.0, MAX_PUNCT_SHRINK);
+    let mut take = 0.0;
+    let mut next = marks.iter().peekable();
+    for k in c0..c1 {
+        let mark = next.next_if(|m| m.0 == k).map(|m| m.1 * ratio);
+        if let Some(v) = xs.get_mut(k - c0) {
+            *v -= take + mark.unwrap_or(0.0) / 2.0;
+        }
+        take += mark.unwrap_or(0.0);
+    }
+    if let Some(v) = xs.get_mut(c1 - c0) {
+        *v -= take;
+    }
+    take
+}
+
 /// The hyphen glyph and advance in a style (cached per paragraph).
 pub(super) fn hyphen_glyph(pl: &ParaLayout, style: u32, cache: &mut Vec<(u32, u32, f32)>) -> (u32, u32, f32) {
     if let Some(h) = cache.iter().find(|h| h.0 == style) {

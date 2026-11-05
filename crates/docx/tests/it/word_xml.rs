@@ -270,3 +270,54 @@ fn flat_opc_limits_count_what_is_not_kept() {
     // A part nothing reads, one element over what the XML tree reader takes in a part (8 000 000).
     assert!(limited(&format!(r#"<pkg:part pkg:name="/word/unused.xml"><pkg:xmlData><r>{}</r></pkg:xmlData></pkg:part>"#, "<y/>".repeat(8_000_000))));
 }
+
+/// A Word 2003 XML Document with the given `w:fonts` and `w:docPr` children and one paragraph.
+fn wordml_2003_with(fonts: &str, doc_pr: &str, text: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:wordDocument xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml"><w:fonts>{fonts}</w:fonts><w:docPr>{doc_pr}</w:docPr><w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:body></w:wordDocument>"#
+    )
+}
+
+/// The East Asian typography settings in `w:docPr` (Word 2003 XML Reference: `docPr`,
+/// `characterSpacingControl` with capitalised values, `compat`) and the font table's pitch and
+/// family (`w:fonts/w:font`, `Roman` capitalised) are read, and kept when saved as DOCX and as
+/// Word 2003 XML.
+#[test]
+fn word_2003_xml_reads_character_spacing_balance_and_font_pitch() {
+    use wordcraft_doc::CharacterSpacing;
+    let fonts = r#"<w:defaultFonts w:ascii="Times New Roman" w:fareast="Brand Ming" w:h-ansi="Times New Roman" w:cs="Times New Roman"/><w:font w:name="Brand Kai"><w:altName w:val="BrandKai"/><w:panose-1 w:val="03000509000000000000"/><w:charset w:val="88"/><w:family w:val="Script"/><w:pitch w:val="fixed"/><w:sig w:usb-0="00000003" w:usb-1="080E0000" w:usb-2="00000010" w:usb-3="00000000" w:csb-0="00100001" w:csb-1="00000000"/></w:font><w:font w:name="Brand Ming"><w:family w:val="Roman"/><w:pitch w:val="variable"/></w:font>"#;
+    let doc_pr = r#"<w:view w:val="print"/><w:characterSpacingControl w:val="CompressPunctuation"/><w:compat><w:balanceSingleByteDoubleByteWidth/><w:doNotExpandShiftReturn/><w:useFELayout/></w:compat>"#;
+    let d = read_xml(wordml_2003_with(fonts, doc_pr, "x").as_bytes()).unwrap();
+    let s = &d.settings;
+    assert_eq!(s.character_spacing, CharacterSpacing::CompressPunctuation);
+    assert!(s.balance_sbcs_dbcs && s.do_not_expand_shift_return);
+    assert_eq!(s.fixed_pitch_fonts, ["Brand Kai"]);
+    assert_eq!(s.roman_fonts, ["Brand Ming"]);
+    // Saved as DOCX: the settings are written, and the font table (now ECMA-376's) rides along.
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(again.settings.character_spacing, CharacterSpacing::CompressPunctuation);
+    assert!(again.settings.balance_sbcs_dbcs);
+    assert_eq!(again.settings.fixed_pitch_fonts, ["Brand Kai"]);
+    assert_eq!(again.settings.roman_fonts, ["Brand Ming"]);
+    // Saved as Word 2003 XML.
+    let xml = wordcraft_docx::write_wordml2003(&d).unwrap();
+    let text = std::str::from_utf8(&xml).unwrap();
+    assert!(text.contains(r#"<w:characterSpacingControl w:val="CompressPunctuation"/>"#), "{text}");
+    let back = read_xml(&xml).unwrap();
+    assert_eq!(back.settings.character_spacing, CharacterSpacing::CompressPunctuation);
+    assert!(back.settings.balance_sbcs_dbcs && back.settings.do_not_expand_shift_return);
+    assert_eq!(back.settings.fixed_pitch_fonts, ["Brand Kai"]);
+    // Without them: no compression, no balancing.
+    let plain = read_xml(wordml_2003_with("", r#"<w:characterSpacingControl w:val="DontCompress"/>"#, "x").as_bytes()).unwrap();
+    assert_eq!(plain.settings.character_spacing, CharacterSpacing::DoNotCompress);
+    assert!(!plain.settings.balance_sbcs_dbcs && plain.settings.fixed_pitch_fonts.is_empty());
+}
+
+/// A file saved with Windows line ends: XML reads CR LF as one line feed (XML 1.0 §2.11), so a
+/// line break inside `w:t` is one space, not two.
+#[test]
+fn word_2003_xml_with_windows_line_ends_reads_one_space_per_line_break() {
+    let xml = wordml_2003_with("", "", "a\r\nb").replace('\n', "\r\n").replace("\r\r\n", "\r\n");
+    let d = read_xml(xml.as_bytes()).unwrap();
+    assert_eq!(paras(&d)[0].plain_text(), "a b");
+}

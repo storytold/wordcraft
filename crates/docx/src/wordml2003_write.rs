@@ -70,17 +70,14 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
     }
 
     let mut kids: Vec<Node> = vec![Node::El(core_props(doc))];
-    if let Some(f) = c.default_fonts() {
+    if let Some(f) = fonts(c.default_fonts(), doc) {
         kids.push(Node::El(f));
     }
     if let Some(l) = c.lists() {
         kids.push(Node::El(l));
     }
     kids.push(Node::El(c.styles()));
-    kids.push(Node::El(plain(
-        "w:docPr",
-        vec![Node::El(attr_el("w:view", &[("w:val", "print")])), Node::El(attr_el("w:zoom", &[("w:percent", "100")]))],
-    )));
+    kids.push(Node::El(doc_pr(doc)));
     kids.push(Node::El(plain("w:body", vec![Node::El(plain("wx:sect", body))])));
 
     let attrs = [
@@ -99,6 +96,49 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
     let mut s = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<?mso-application progid=\"Word.Document\"?>\n");
     s.push_str(&root.to_xml());
     Ok(s.into_bytes())
+}
+
+/// `w:docPr`: print view at 100%, Character spacing control and the compatibility options the
+/// model keeps, in `docPrElt`'s order (Word 2003 XML Reference); the 2003 names are capitalised
+/// (`CompressPunctuation`).
+fn doc_pr(doc: &Document) -> El {
+    let s = &doc.settings;
+    let mut kids = vec![Node::El(attr_el("w:view", &[("w:val", "print")])), Node::El(attr_el("w:zoom", &[("w:percent", "100")]))];
+    let spacing = match s.character_spacing {
+        wordcraft_doc::CharacterSpacing::DoNotCompress => "DontCompress",
+        wordcraft_doc::CharacterSpacing::CompressPunctuation => "CompressPunctuation",
+        wordcraft_doc::CharacterSpacing::CompressPunctuationAndJapaneseKana => "CompressPunctuationAndJapaneseKana",
+    };
+    kids.push(Node::El(attr_el("w:characterSpacingControl", &[("w:val", spacing)])));
+    // `compatElt`'s order: balanceSingleByteDoubleByteWidth, doNotExpandShiftReturn, then
+    // doNotUseHTMLParagraphAutoSpacing.
+    let compat: Vec<Node> = [
+        (s.balance_sbcs_dbcs, "w:balanceSingleByteDoubleByteWidth"),
+        (s.do_not_expand_shift_return, "w:doNotExpandShiftReturn"),
+        (s.sum_paragraph_spacing, "w:doNotUseHTMLParagraphAutoSpacing"),
+    ]
+    .into_iter()
+    .filter(|(on, _)| *on)
+    .map(|(_, name)| Node::El(plain(name, Vec::new())))
+    .collect();
+    if !compat.is_empty() {
+        kids.push(Node::El(plain("w:compat", compat)));
+    }
+    plain("w:docPr", kids)
+}
+
+/// `w:fonts`: the default fonts, then a `w:font` with `w:pitch w:val="fixed"` for each font the
+/// document's font table marks as fixed pitch.
+fn fonts(defaults: Option<El>, doc: &Document) -> Option<El> {
+    let mut f = defaults.unwrap_or_else(|| plain("w:fonts", Vec::new()));
+    for name in &doc.settings.fixed_pitch_fonts {
+        f.kids.push(Node::El(El {
+            name: "w:font".into(),
+            attrs: vec![("w:name".into(), name.clone())],
+            kids: vec![Node::El(attr_el("w:pitch", &[("w:val", "fixed")]))],
+        }));
+    }
+    (!f.kids.is_empty()).then_some(f)
 }
 
 fn plain(name: &str, kids: Vec<Node>) -> El {

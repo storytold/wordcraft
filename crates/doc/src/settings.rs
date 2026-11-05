@@ -126,6 +126,18 @@ pub struct Settings {
     /// draws one that isn't installed in a serif face.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub roman_fonts: Vec<String>,
+    /// Fonts the document's font table marks as fixed pitch (`w:font/w:pitch w:val="fixed"`,
+    /// ECMA-376 §17.8.3.14), for [`Settings::balance_sbcs_dbcs`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fixed_pitch_fonts: Vec<String>,
+    /// `w:balanceSingleByteDoubleByteWidth` (ECMA-376 §17.15.3.3): a fixed-pitch font's half-width
+    /// space is half as wide as its full-width space, half an em.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub balance_sbcs_dbcs: bool,
+    /// `w:characterSpacingControl` (ECMA-376 §17.15.1.18): which full-width characters may give up
+    /// their blank space so a line fits.
+    #[serde(default, skip_serializing_if = "CharacterSpacing::is_default")]
+    pub character_spacing: CharacterSpacing,
     /// `w:doNotUseHTMLParagraphAutoSpacing`: the space between two paragraphs is the first's space
     /// after plus the second's space before, not the larger of the two.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -183,6 +195,52 @@ pub struct OdfLayout {
     /// explicit stops are held from the margin either way; the default ones are counted from the
     /// indent.
     pub tabs_from_indent: bool,
+}
+
+/// Character-level whitespace compression (ECMA-376 §17.18.7 `ST_CharacterSpacing`, Asian
+/// Typography's Character spacing control).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CharacterSpacing {
+    /// `doNotCompress`, the default when a document doesn't say.
+    #[default]
+    DoNotCompress,
+    /// `compressPunctuation`: full-width punctuation.
+    CompressPunctuation,
+    /// `compressPunctuationAndJapaneseKana`: full-width punctuation and Japanese kana (laid out
+    /// like `compressPunctuation`; kana aren't compressed).
+    CompressPunctuationAndJapaneseKana,
+}
+
+impl CharacterSpacing {
+    /// The `w:val` it is written as.
+    pub fn to_ooxml(self) -> &'static str {
+        match self {
+            CharacterSpacing::DoNotCompress => "doNotCompress",
+            CharacterSpacing::CompressPunctuation => "compressPunctuation",
+            CharacterSpacing::CompressPunctuationAndJapaneseKana => "compressPunctuationAndJapaneseKana",
+        }
+    }
+
+    /// A `w:val`; Word 2003 XML capitalises the names and says `DontCompress`. Unknown values
+    /// are `None`.
+    pub fn from_ooxml(v: &str) -> Option<Self> {
+        match v.to_ascii_lowercase().as_str() {
+            "donotcompress" | "dontcompress" => Some(CharacterSpacing::DoNotCompress),
+            "compresspunctuation" => Some(CharacterSpacing::CompressPunctuation),
+            "compresspunctuationandjapanesekana" => Some(CharacterSpacing::CompressPunctuationAndJapaneseKana),
+            _ => None,
+        }
+    }
+
+    /// Whether full-width punctuation may be compressed.
+    pub fn compresses_punctuation(self) -> bool {
+        self != CharacterSpacing::DoNotCompress
+    }
+
+    fn is_default(&self) -> bool {
+        *self == CharacterSpacing::DoNotCompress
+    }
 }
 
 /// A saved zoom: a percentage, or a fit mode (the percentage it last came to).
@@ -316,6 +374,9 @@ impl Default for Settings {
             protect_hash: Vec::new(),
             compat_mode: COMPAT_MODE_CURRENT,
             roman_fonts: Vec::new(),
+            fixed_pitch_fonts: Vec::new(),
+            balance_sbcs_dbcs: false,
+            character_spacing: CharacterSpacing::DoNotCompress,
             sum_paragraph_spacing: false,
             do_not_expand_shift_return: false,
             allow_space_of_same_style_in_table: false,

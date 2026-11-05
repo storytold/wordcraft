@@ -381,6 +381,9 @@ impl<'a> Builder<'a> {
             };
             let k = st.size / st.face.upem.max(1.0) as f32;
             let hscale = rc.scale / 100.0;
+            // Balance SBCS and DBCS width: a space beside text whose East Asian font is fixed
+            // pitch is half the full-width space, half an em (see `balanced_space`).
+            let half_space = balanced_space(self.env.doc, rc).then_some(st.size * 0.5 * hscale);
             // Group glyphs by cluster byte offset; graphemes may span several shaper clusters.
             // Complex-script syllables the graphemes split (Myanmar vowel signs, stacked
             // consonants) stay one cluster: the caret never stops inside them.
@@ -414,7 +417,11 @@ impl<'a> Builder<'a> {
                 } else {
                     ClKind::Text
                 });
-                let adv = if kind == ClKind::Marker { 0.0 } else { adv + rc.spacing };
+                let adv = match half_space {
+                    _ if kind == ClKind::Marker => 0.0,
+                    Some(h) if s == " " => h + rc.spacing,
+                    _ => adv + rc.spacing,
+                };
                 // Clusters index the document text, never the displayed text.
                 let (cs, ce) = if substituted { remap_range(&map_starts, &orig_of, sub.len(), gs, ge) } else { (gs, ge) };
                 self.clusters.push(Cluster {
@@ -734,4 +741,17 @@ impl Builder<'_> {
 /// tracked deletions in the final text. It takes no room, draws nothing and is no place to break.
 pub(crate) fn left_out(doc: &Document, rc: &ResolvedChar, show_hidden: bool, hide_deleted: crate::HideDeleted) -> bool {
     (rc.hidden && !show_hidden) || hide_deleted.hides(doc, rc.del)
+}
+
+/// Whether a run's spaces are balanced against its full-width characters
+/// (`w:balanceSingleByteDoubleByteWidth`, ECMA-376 §17.15.3.3: "adjust the fixed pitch fonts'
+/// half-width space character and full-width space character to attain a 1 to 2 ratio"): the
+/// setting is on and the run's East Asian font is fixed pitch in the document's font table. The
+/// standard gives a space the ASCII font (§17.3.2.26), but Word's print of one form (East Asian
+/// font 標楷體, fixed pitch; ASCII font Times New Roman) shows its spaces half an em wide, 6.00 pt
+/// at 12 pt and 5.05 pt at 10 pt, with and without `w:hint="eastAsia"`. Whether Word does this
+/// when the run's East Asian font is variable pitch is not checked.
+fn balanced_space(doc: &Document, rc: &ResolvedChar) -> bool {
+    let s = &doc.settings;
+    s.balance_sbcs_dbcs && rc.font_ea.as_deref().is_some_and(|f| s.fixed_pitch_fonts.iter().any(|x| x.eq_ignore_ascii_case(f)))
 }

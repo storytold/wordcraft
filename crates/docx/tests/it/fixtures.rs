@@ -3897,6 +3897,43 @@ fn roman_fonts_are_read_from_the_font_table() {
     assert_eq!(d.settings.roman_fonts, ["Brand Serif"]);
 }
 
+/// The font table's pitch (ECMA-376 §17.8.3.14): the fixed-pitch fonts, for balancing spaces.
+#[test]
+fn fixed_pitch_fonts_are_read_from_the_font_table() {
+    let fonts = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:font w:name="Brand Kai"><w:pitch w:val="fixed"/></w:font><w:font w:name="Brand Sans"><w:pitch w:val="variable"/></w:font><w:font w:name="Brand Mono"/></w:fonts>"#;
+    let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable", "fontTable.xml")];
+    let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/fontTable.xml", fonts)])).unwrap();
+    assert_eq!(d.settings.fixed_pitch_fonts, ["Brand Kai"]);
+}
+
+/// Character spacing control (ECMA-376 §17.15.1.18) and `w:balanceSingleByteDoubleByteWidth`
+/// (§17.15.3.3) are read and written back; WordCraft wrote `doNotCompress` whatever the file said.
+#[test]
+fn character_spacing_control_and_balanced_width_are_read_and_kept() {
+    use wordcraft_doc::CharacterSpacing;
+    let settings = |inner: &str| {
+        let s = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings {W_NS}>{inner}</w:settings>"#);
+        let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings", "settings.xml")];
+        let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/settings.xml", &s)])).unwrap();
+        let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        assert_eq!(
+            (d.settings.character_spacing, d.settings.balance_sbcs_dbcs),
+            (again.settings.character_spacing, again.settings.balance_sbcs_dbcs)
+        );
+        (d.settings.character_spacing, d.settings.balance_sbcs_dbcs)
+    };
+    assert_eq!(
+        settings(r#"<w:characterSpacingControl w:val="compressPunctuation"/><w:compat><w:balanceSingleByteDoubleByteWidth/></w:compat>"#),
+        (CharacterSpacing::CompressPunctuation, true)
+    );
+    assert_eq!(
+        settings(r#"<w:characterSpacingControl w:val="compressPunctuationAndJapaneseKana"/>"#),
+        (CharacterSpacing::CompressPunctuationAndJapaneseKana, false)
+    );
+    assert_eq!(settings(r#"<w:characterSpacingControl w:val="bogus"/>"#), (CharacterSpacing::DoNotCompress, false));
+    assert_eq!(settings(""), (CharacterSpacing::DoNotCompress, false));
+}
+
 /// `w:doNotUseHTMLParagraphAutoSpacing` in the settings' `w:compat`: paragraph spacing adds up.
 #[test]
 fn html_auto_spacing_off_is_read_and_kept() {

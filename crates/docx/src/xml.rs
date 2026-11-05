@@ -419,15 +419,19 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
                     attach(&mut stack, &mut root, el);
                 }
             }
+            // Line ends are normalised as XML 1.0 says (§2.11): CR LF and a lone CR are read as
+            // LF, so a file saved with Windows line ends has no CR in its text. A CR written as
+            // `&#13;` is a character reference and stays.
             Event::Text(t) => {
                 if let Some(top) = stack.last_mut() {
-                    let s = t.decode().map_err(|e| DocxError::Xml(e.to_string()))?;
+                    let s = t.xml_content(XmlVersion::Explicit1_0).map_err(|e| DocxError::Xml(e.to_string()))?;
                     push_text(top, &s);
                 }
             }
             Event::CData(t) => {
                 if let Some(top) = stack.last_mut() {
-                    let s = String::from_utf8_lossy(&t).into_owned();
+                    let s =
+                        t.xml_content(XmlVersion::Explicit1_0).map(|s| s.into_owned()).unwrap_or_else(|_| String::from_utf8_lossy(&t).into_owned());
                     push_text(top, &s);
                 }
             }
@@ -643,6 +647,13 @@ mod tests {
         let t = p.child("w:t").unwrap();
         assert_eq!(t.text(), " hi A< ");
         assert_eq!(t.attr("xml:space"), Some("preserve"));
+    }
+
+    #[test]
+    fn line_ends_in_text_are_normalised_but_a_cr_reference_stays() {
+        let x = b"<x:document xmlns:x=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><x:t>a\r\nb\rc&#13;d<![CDATA[e\r\nf]]></x:t></x:document>";
+        let e = parse(x).unwrap();
+        assert_eq!(e.child("w:t").unwrap().text(), "a\nb\nc\rde\nf");
     }
 
     #[test]

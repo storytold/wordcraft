@@ -98,6 +98,16 @@ pub(crate) fn convert(bytes: &[u8]) -> Result<Package, DocxError> {
     c.put("word/styles.xml", &styles);
     c.rels[DOC].add(rt::STYLES, "styles.xml", false);
     overrides.push(("/word/styles.xml".into(), "styles"));
+    if let Some(settings) = root.child("w:docPr").and_then(settings) {
+        c.put("word/settings.xml", &settings);
+        c.rels[DOC].add(rt::SETTINGS, "settings.xml", false);
+        overrides.push(("/word/settings.xml".into(), "settings"));
+    }
+    if let Some(fonts) = root.child("w:fonts").and_then(font_table) {
+        c.put("word/fontTable.xml", &fonts);
+        c.rels[DOC].add(rt::FONT_TABLE, "fontTable.xml", false);
+        overrides.push(("/word/fontTable.xml".into(), "fontTable"));
+    }
     if let Some(n) = root.child("w:lists").map(|l| c.numbering(l)) {
         c.put("word/numbering.xml", &n);
         c.rels[DOC].add(rt::NUMBERING, "numbering.xml", false);
@@ -542,6 +552,58 @@ fn media_type(ext: &str) -> &'static str {
         "wmf" => "image/x-wmf",
         _ => "application/octet-stream",
     }
+}
+
+/// The `w:docPr` settings that `settings.xml` names and means the same way (Word 2003 XML
+/// Reference, `docPr` and `compat`): Character spacing control (`w:characterSpacingControl`,
+/// whose 2003 values are capitalised) and the compatibility options (`w:compat`, on/off
+/// switches). `None` when it has neither.
+fn settings(doc_pr: &El) -> Option<El> {
+    let mut kids = Vec::new();
+    if let Some(v) = doc_pr.child("w:characterSpacingControl").and_then(|k| k.attr("w:val")).and_then(wordcraft_doc::CharacterSpacing::from_ooxml) {
+        kids.push(Node::El(El { name: "w:characterSpacingControl".into(), attrs: vec![("w:val".into(), v.to_ooxml().into())], kids: Vec::new() }));
+    }
+    if let Some(compat) = doc_pr.child("w:compat") {
+        let switches = compat
+            .els()
+            .filter(|k| k.name.starts_with("w:") && k.name.len() <= 64)
+            .take(256)
+            .map(|k| {
+                let val = k.attr("w:val").map(|v| vec![("w:val".to_string(), v.to_string())]).unwrap_or_default();
+                Node::El(El { name: k.name.clone(), attrs: val, kids: Vec::new() })
+            })
+            .collect();
+        kids.push(Node::El(El { name: "w:compat".into(), attrs: Vec::new(), kids: switches }));
+    }
+    (!kids.is_empty()).then(|| El { name: "w:settings".into(), attrs: xml::body_ns(), kids })
+}
+
+/// `w:fonts` → `fontTable.xml`: each `w:font` with the parts ECMA-376 keeps under the same
+/// meaning (§17.8.3): `w:altName`, `w:panose-1` as `w:panose1`, `w:charset`, `w:family` (2003
+/// capitalises it: `Roman`), `w:notTrueType` and `w:pitch`. The font signature (`w:sig`) is left
+/// out: its 2003 attributes are named differently. `None` without fonts.
+fn font_table(fonts: &El) -> Option<El> {
+    let kids: Vec<Node> = fonts
+        .children("w:font")
+        .filter_map(|f| {
+            let name = f.attr("w:name").filter(|n| !n.is_empty())?;
+            let mut kids = Vec::new();
+            for k in f.els() {
+                let (el, val) = match k.name.as_str() {
+                    "w:altName" | "w:charset" | "w:pitch" => (k.name.as_str(), k.attr("w:val").map(str::to_string)),
+                    "w:panose-1" => ("w:panose1", k.attr("w:val").map(str::to_string)),
+                    "w:family" => ("w:family", k.attr("w:val").map(str::to_ascii_lowercase)),
+                    "w:notTrueType" => ("w:notTrueType", k.attr("w:val").map(str::to_string)),
+                    _ => continue,
+                };
+                let attrs = val.map(|v| vec![("w:val".to_string(), v)]).unwrap_or_default();
+                kids.push(Node::El(El { name: el.into(), attrs, kids: Vec::new() }));
+            }
+            Some(Node::El(El { name: "w:font".into(), attrs: vec![("w:name".into(), name.to_string())], kids }))
+        })
+        .take(4096)
+        .collect();
+    (!kids.is_empty()).then(|| El { name: "w:fonts".into(), attrs: xml::body_ns(), kids })
 }
 
 /// `o:DocumentProperties` → `docProps/core.xml`.

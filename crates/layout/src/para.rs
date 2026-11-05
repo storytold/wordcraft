@@ -98,6 +98,10 @@ pub struct ParaLayout {
     /// Room after a cluster between Asian text and Latin text or digits ([`auto_space`]), by
     /// cluster index, sorted. It is part of the cluster's advance, but takes no room at a line's end.
     pub auto_space: Vec<(usize, f32)>,
+    /// Full-width punctuation clusters, by index, sorted, when the document compresses
+    /// punctuation (`w:characterSpacingControl`): a line that would overflow fits by narrowing
+    /// them ([`justify::punct_room`]). Empty otherwise.
+    pub compressible: Vec<u32>,
 }
 
 impl ParaLayout {

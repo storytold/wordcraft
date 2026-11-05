@@ -1,6 +1,6 @@
 use super::bidi::{even_row, reorder_line};
 use super::grid::{Exclusion, Grid};
-use super::justify::{HYPHENATION_ZONE, hyphen_glyph, shrink_line_spaces, space_room};
+use super::justify::{HYPHENATION_ZONE, hyphen_glyph, punct_room, shrink_line_punct, shrink_line_spaces, space_room};
 use super::model::{ClKind, Cluster, Line, LineEnd, ParaEnv};
 use super::paragraph::word_widths;
 use super::tabs::{next_tab, pl_text_at, ptab_stop, resolve_tab};
@@ -94,6 +94,8 @@ struct Scan {
     pending_tab: Option<(usize, TabStop, f32)>,
     /// The width of the spaces so far on this line.
     space_w: f32,
+    /// The width of the compressible full-width punctuation so far on this line.
+    punct_w: f32,
     has_tab: bool,
     /// The first word doesn't fit a span narrowed by a floating object: it moves on whole.
     skip: bool,
@@ -280,6 +282,7 @@ impl<'e> Breaker<'e> {
             j: self.i,
             pending_tab: None,
             space_w: 0.0,
+            punct_w: 0.0,
             has_tab: false,
             skip: false,
         }
@@ -528,6 +531,8 @@ impl<'e> Breaker<'e> {
         // A line ending in a manual line break is stretched too, unless `doNotExpandShiftReturn` says not to.
         let stretch_end = sc.end == LineEnd::Wrap || (sc.end == LineEnd::LineBreak && self.expand_break);
         let justify = display.is_none() && ((rp.align == Align::Justify && stretch_end) || rp.align == Align::Distribute);
+        // Compressible punctuation gives up room first, then (Word 2013+, justified) the spaces.
+        let slack = if display.is_none() && slack < 0.0 { slack + shrink_line_punct(pl, &mut sc.xs, c0, c1, content_end, slack) } else { slack };
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
         let shrink = display.is_none() && self.shrink_spaces && slack < 0.0 && last_tab.is_none();
         if shrink {
@@ -823,11 +828,13 @@ impl Scan {
         // each segment's font, glyphs and position for painting.
         let advance = pl.atomic_advance(j);
         let absorbs = self.absorbs(pl, advance);
-        let shrink = if bk.shrink_spaces && !self.has_tab {
+        let spaces = if bk.shrink_spaces && !self.has_tab {
             space_room(self.space_w, self.x + advance - pl.auto_space_after(j) - self.word_from)
         } else {
             0.0
         };
+        let compressible = pl.compressible.binary_search(&(j as u32)).is_ok();
+        let shrink = spaces + if pl.compressible.is_empty() { 0.0 } else { punct_room(self.punct_w + if compressible { advance } else { 0.0 }) };
         let fits = absorbs
             || self.x + advance - pl.auto_space_after(j) <= self.right_edge + shrink + 0.01
             || c.kind == ClKind::Space
@@ -840,6 +847,9 @@ impl Scan {
         self.x += c.adv;
         if c.kind == ClKind::Space {
             self.space_w += c.adv;
+        }
+        if compressible {
+            self.punct_w += c.adv;
         }
         self.shift_pending_tab(pl);
         if is_display {

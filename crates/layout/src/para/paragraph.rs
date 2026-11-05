@@ -651,7 +651,11 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         left_out: Vec::new(),
         enclosures,
         auto_space,
+        compressible: Vec::new(),
     };
+    if doc.settings.character_spacing.compresses_punctuation() {
+        pl.compressible = compressible_punctuation(&p.text, &pl.clusters);
+    }
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&bt.text, |i| bt.to_para(i), &pl, auto, env.doc.settings.hyphenate_caps, &runs);
     // A paragraph whose text and mark are all a deletion the layout leaves out (a deleted
@@ -667,6 +671,18 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         collapse(&mut pl);
     }
     pl
+}
+
+/// The clusters that are full-width punctuation ([`kinsoku::is_full_width_punctuation`]).
+fn compressible_punctuation(text: &str, clusters: &[Cluster]) -> Vec<u32> {
+    clusters
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| {
+            c.kind == ClKind::Text && text.get(c.start..).and_then(|t| t.chars().next()).is_some_and(crate::kinsoku::is_full_width_punctuation)
+        })
+        .map(|(k, _)| k as u32)
+        .collect()
 }
 
 /// Neither ordinary nor hyphenated wrapping may split a drawing group inside a grapheme.

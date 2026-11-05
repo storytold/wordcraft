@@ -39,6 +39,12 @@ impl Reader<'_> {
                     }
                     s.sum_paragraph_spacing = k.children("w:doNotUseHTMLParagraphAutoSpacing").any(on_off);
                     s.do_not_expand_shift_return = k.children("w:doNotExpandShiftReturn").any(on_off);
+                    s.balance_sbcs_dbcs = k.children("w:balanceSingleByteDoubleByteWidth").any(on_off);
+                }
+                "w:characterSpacingControl" => {
+                    if let Some(v) = k.attr("w:val").and_then(wordcraft_doc::CharacterSpacing::from_ooxml) {
+                        s.character_spacing = v;
+                    }
                 }
                 "w:trackRevisions" => s.track_changes = on_off(k),
                 "w:doNotTrackMoves" => s.track_moves = !on_off(k),

@@ -49,6 +49,37 @@ pub fn is_east_asian(c: char) -> bool {
         | 0x20000..=0x3FFFF) // supplementary ideographs
 }
 
+/// Whether `c` is full-width punctuation, which Character spacing control's
+/// `compressPunctuation` may compress (ECMA-376 §17.18.7): the punctuation characters (Unicode
+/// general category P) that are wide or full-width (East Asian Width W or F), Unicode 16.0.
+pub fn is_full_width_punctuation(c: char) -> bool {
+    matches!(c as u32,
+        0x2329..=0x232A
+        | 0x3001..=0x3003
+        | 0x3008..=0x3011
+        | 0x3014..=0x301F
+        | 0x3030
+        | 0x303D
+        | 0x30A0
+        | 0x30FB
+        | 0xFE10..=0xFE19
+        | 0xFE30..=0xFE52
+        | 0xFE54..=0xFE61
+        | 0xFE63
+        | 0xFE68
+        | 0xFE6A..=0xFE6B
+        | 0xFF01..=0xFF03
+        | 0xFF05..=0xFF0A
+        | 0xFF0C..=0xFF0F
+        | 0xFF1A..=0xFF1B
+        | 0xFF1F..=0xFF20
+        | 0xFF3B..=0xFF3D
+        | 0xFF3F
+        | 0xFF5B
+        | 0xFF5D
+        | 0xFF5F..=0xFF60)
+}
+
 /// Adjust the break opportunities `opps` (byte offsets into `text`: a line may start there) for
 /// the paragraph's kinsoku and word-wrap settings. The result is sorted and has no duplicates.
 pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool) {
