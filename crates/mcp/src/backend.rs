@@ -40,7 +40,8 @@ struct Timed {
 impl Read for Timed {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.s.set_read_timeout(Some(time_left(self.deadline)?))?;
-        self.s.read(buf)
+        // An expired socket timeout is `WouldBlock` on Unix and `TimedOut` on Windows.
+        self.s.read(buf).map_err(|e| if e.kind() == std::io::ErrorKind::WouldBlock { std::io::ErrorKind::TimedOut.into() } else { e })
     }
 }
 
@@ -230,7 +231,11 @@ impl Remote {
         let deadline = Instant::now() + EXCHANGE;
         reader.get_mut().deadline = deadline;
         write_all_by(writer, format!("{line}\n").as_bytes(), deadline).map_err(Failure::Unknown)?;
-        read_reply(reader)
+        read_reply(reader).map_err(|f| match f {
+            // Fully written, no reply in time: the app may still run it.
+            Failure::Unknown(e) if e.kind() == std::io::ErrorKind::TimedOut => Failure::TimedOut(e),
+            f => f,
+        })
     }
 
     /// One request and its reply. A request that was not sent, or one that only reads, is tried
@@ -259,12 +264,20 @@ impl Remote {
                     let line = self.request_line(id, method, params)?;
                     roundtrip(self, &line)
                 }
-                Err(e) => Err(e),
+                Err(f) => Err(f),
             };
             match result {
                 Ok(r) => break r,
                 Err(f) => {
                     self.conn = None;
+                    // The request was fully written and no reply came in time: the app may
+                    // still run it, so sending it again could run an edit twice.
+                    if matches!(f, Failure::TimedOut(_)) {
+                        return Err(format!(
+                            "WordCraft app at {} did not reply in time; outcome unknown (the request may still run), not retried",
+                            self.addr
+                        ));
+                    }
                     // A reply that arrived but can't be read (too long, not UTF-8): the app has
                     // run the request, so sending it again could run a state-changing one twice.
                     if let Failure::Unknown(e) = &f
@@ -316,12 +329,14 @@ enum Failure {
     NotSent(std::io::Error),
     /// After the request was sent: the app may have run it.
     Unknown(std::io::Error),
+    /// The request was fully written and no reply came in time: never sent again.
+    TimedOut(std::io::Error),
 }
 
 impl Failure {
     fn into_error(self) -> std::io::Error {
         match self {
-            Self::NotSent(e) | Self::Unknown(e) => e,
+            Self::NotSent(e) | Self::Unknown(e) | Self::TimedOut(e) => e,
         }
     }
 }
@@ -580,6 +595,33 @@ mod tests {
     }
 
     #[test]
+    fn a_timeout_after_a_completed_write_is_not_retried() {
+        // The app reads the request and never answers.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(AtomicUsize::new(0));
+        let n = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let n = n.clone();
+                std::thread::spawn(move || {
+                    for line in BufReader::new(stream.try_clone().unwrap()).lines() {
+                        if line.is_err() {
+                            return;
+                        }
+                        n.fetch_add(1, Ordering::SeqCst);
+                    }
+                });
+            }
+        });
+        let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k1")).unwrap();
+        let e = r.call("engine.execute", json!({"command": "text.insert", "params": {"text": "x"}})).unwrap_err();
+        assert!(e.contains("outcome unknown"), "{e}");
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(seen.load(Ordering::SeqCst), 1, "the request was sent once");
+    }
+
+    #[test]
     fn a_drip_fed_reply_hits_the_exchange_deadline() {
         // The peer reads the request, then sends one byte every 50 ms and never a newline.
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -601,7 +643,7 @@ mod tests {
         std::thread::spawn(move || {
             let _ = tx.send(r.call("document.inspect", json!({})));
         });
-        // Tests use a 1 s exchange deadline; the call (with its one retry) ends well within 5 s.
+        // Tests use a 1 s exchange deadline; the call ends well within 5 s.
         let result = rx.recv_timeout(WAIT).expect("Remote::call still blocked on a drip-fed reply");
         assert!(result.is_err(), "{result:?}");
     }
