@@ -59,17 +59,6 @@ pub struct Prefs {
     /// in Word). A damaged saved value reads as the defaults.
     #[serde(deserialize_with = "crate::cmd::tools::lenient_autocorrect")]
     pub autocorrect: crate::cmd::tools::AutoCorrectPrefs,
-    /// How OpenDocument files fill in what their standard leaves to the application: WordCraft's
-    /// choices, LibreOffice's, or the user's own (File › Options › Advanced, `file.options`'s
-    /// `odf`; see `docs/odf-interpretation.md`). A damaged saved value reads as WordCraft's.
-    #[serde(deserialize_with = "lenient_odf")]
-    pub odf: wordcraft_doc::odf_profile::OdfProfile,
-}
-
-/// A saved ODF profile that doesn't read (an older or damaged one) is WordCraft's.
-fn lenient_odf<'de, D: serde::Deserializer<'de>>(d: D) -> Result<wordcraft_doc::odf_profile::OdfProfile, D::Error> {
-    let v = serde_json::Value::deserialize(d)?;
-    Ok(serde_json::from_value(v).unwrap_or_default())
 }
 
 impl Default for Prefs {
@@ -95,7 +84,6 @@ impl Default for Prefs {
             detect_language: true,
             default_language: None,
             autocorrect: Default::default(),
-            odf: Default::default(),
         }
     }
 }
