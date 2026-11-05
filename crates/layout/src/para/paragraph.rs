@@ -264,6 +264,8 @@ impl<'a> Shaped<'a> {
         big.size_cs = wordcraft_doc::resolve::drop_cap_size(rc.size_cs, rp.drop_cap);
         if let Some(f) = &rp.drop_cap_font {
             big.font = f.clone();
+            big.font_cs = f.clone();
+            big.font_ea = Some(f.clone());
         }
         let before = self.b.clusters.len();
         self.b.shape(first, 0, &Arc::new(big), None);
