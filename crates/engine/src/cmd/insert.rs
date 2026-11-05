@@ -20,8 +20,8 @@ use items::{cover_page, date_time, drop_cap, drop_cap_off, field, page_number, s
 use links::{bookmark, delete_bookmark, link, link_targets};
 pub use links::{bookmark_name_ok, bookmark_range, bookmark_span};
 pub use objects::{base64_decode, base64_encode};
+pub(crate) use objects::{check_picture_size, image_ext, picture};
 use objects::{icon, shape, table, text_box};
-pub(crate) use objects::{image_ext, picture};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![

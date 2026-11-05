@@ -114,6 +114,18 @@ pub(crate) fn image_ext(bytes: &[u8]) -> &'static str {
     }
 }
 
+/// Refuse a raster picture the renderer cannot display, without decoding its pixels (#5637).
+/// A smaller display width does not change the decode peak; the pixmap also has `u16` sides.
+pub(crate) fn check_picture_size(pic: &wordcraft_geom::picture::Probe<'_>) -> Result<(), CmdError> {
+    if !pic.fits(wordcraft_geom::MAX_DECODED_BYTES) || pic.width > u32::from(u16::MAX) || pic.height > u32::from(u16::MAX) {
+        return Err(CmdError::Failed(format!(
+            "the picture is too large to display ({} × {} pixels); resize it and try again",
+            pic.width, pic.height
+        )));
+    }
+    Ok(())
+}
+
 /// Insert an encoded image at the selection as an inline picture, `width` points wide (default:
 /// its natural size at 96 ppi), never wider than the text column. The caret ends after it, so a
 /// script's next typing doesn't replace it (#965); Picture Format commands still act on it. The
@@ -125,7 +137,10 @@ fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str)
     // Natural size: pixels at 96 ppi, or a metafile's own frame (WMF, EMF: #802). A picture that
     // is never decoded (a TIFF with JPEG strips, #3645) isn't inserted.
     let (natural_w, natural_h, ext) = match wordcraft_geom::picture::probe(&bytes) {
-        Ok(pic) => (pic.width as f32 * 0.75, pic.height as f32 * 0.75, image_ext(&bytes)),
+        Ok(pic) => {
+            check_picture_size(&pic)?;
+            (pic.width as f32 * 0.75, pic.height as f32 * 0.75, image_ext(&bytes))
+        }
         Err(wordcraft_geom::picture::Refusal::Unsupported(why)) => return Err(CmdError::Failed(why.into())),
         Err(_) => match wordcraft_render::metafile_size(&bytes) {
             Some(size) => size,

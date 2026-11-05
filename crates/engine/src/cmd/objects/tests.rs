@@ -279,11 +279,31 @@ fn header_only_png(w: u32, h: u32) -> Vec<u8> {
     b
 }
 
+/// An existing picture, as an opened document can contain. Insertion itself now refuses
+/// undisplayable sizes (#5637); editing must still safely handle pictures already in a file.
+fn session_with_existing_picture(bytes: Vec<u8>) -> Session {
+    let mut doc = wordcraft_doc::Document::new();
+    let media = doc.add_media(bytes, "png");
+    let obj = InlineObject::Image {
+        media,
+        w: 72.0,
+        h: 72.0,
+        alt: String::new(),
+        float: Float::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
+    let end = doc.insert_object(&doc.start_of(StoryRef::Body), obj, &Default::default()).unwrap();
+    let mut s = Session::new(doc);
+    s.sel = Selection::caret(end);
+    s
+}
+
 #[test]
 fn picture_edits_refuse_an_over_budget_header_before_decoding() {
-    // Inserting reads the size only; every edit then refuses it from the header (#3644, #3647).
-    let mut s = Session::new(wordcraft_doc::Document::new());
-    s.run("insert.picture", &json!({"data": super::super::insert::base64_encode(&header_only_png(20_000, 20_000))})).unwrap();
+    // Every edit refuses an existing oversized picture from its header (#3644, #3647).
+    let mut s = session_with_existing_picture(header_only_png(20_000, 20_000));
     let media = s.doc.media.len();
     for (id, v) in [
         ("picture.corrections", json!({"brightness": 10})),
@@ -353,8 +373,7 @@ fn remove_background_keeps_a_small_stack() {
 fn picture_styles_and_borders_check_the_size_they_draw() {
     let mut thin = Vec::new();
     image::GrayImage::new(1, 2_000_000).write_to(&mut std::io::Cursor::new(&mut thin), image::ImageFormat::Png).unwrap();
-    let mut s = Session::new(wordcraft_doc::Document::new());
-    s.run("insert.picture", &json!({"data": super::super::insert::base64_encode(&thin)})).unwrap();
+    let mut s = session_with_existing_picture(thin);
     let media = s.doc.media.len();
     for (id, v) in [
         ("picture.style", json!({"style": "thickFrame"})),
