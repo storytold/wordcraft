@@ -4351,6 +4351,38 @@ fn title_bar_search_takes_the_first_keys_and_enter_opens_the_result() {
     assert!(matches!(h.state().dialog, Some(dialogs::Dialog::WordCount { .. })), "Word Count is open, not closed by the same Enter");
 }
 
+/// #5398 (review): Tab moves from the Search box to its results, and the box doesn't take the
+/// focus back, so a keyboard user can pick a result; Enter on it runs it.
+#[test]
+fn tab_moves_to_a_search_result_and_enter_runs_it() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app(),
+    );
+    h.run_steps(6);
+    let query = |h: &egui_kittest::Harness<WordApp>| crate::chrome::title_search_query(h.state(), &h.ctx);
+    let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+    let _ = h.state_mut().run("ui.dialog", json!({"name": "commands"}));
+    h.step();
+    h.event(egui::Event::Text("word count".into()));
+    h.run_steps(2);
+    let edit = h.state().window_id("title_search_edit");
+    assert!(h.ctx.memory(|m| m.has_focus(edit)), "the box has the keys");
+    h.event(key(egui::Key::Tab));
+    h.run_steps(3);
+    assert!(!h.ctx.memory(|m| m.has_focus(edit)), "the box didn't take the focus back");
+    assert!(h.ctx.memory(|m| m.focused()).is_some(), "a result has it");
+    assert_eq!(query(&h).as_deref(), Some("word count"), "Search is still open");
+    h.event(key(egui::Key::Enter));
+    h.run_steps(4);
+    assert!(query(&h).is_none(), "Enter ran the result that has the focus");
+    assert!(h.state().dialog.is_some(), "its dialog is open, not closed by the same Enter");
+}
+
 /// #5398 (review): Alt+Q pressed on the page opens Search while the page has the keys; what is
 /// typed on the very next frame goes into the Search box, not into the document.
 #[cfg(not(target_os = "macos"))]

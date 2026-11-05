@@ -512,12 +512,19 @@ fn typing_search(app: &mut WordApp, ui: &mut Ui, control_h: f32, s: &mut TitleSe
     }
     let ph = tl!("Search commands and help");
     // The box takes the keys from its first frame: focused before it reads this frame's input,
-    // so what is typed straight after Alt+Q goes into it. Only when it lacks focus, and not
-    // while a press on a result is under way (#2986).
+    // so what is typed straight after Alt+Q goes into it. It takes the focus back whenever it lost
+    // it, except to one of its results (Tab moves there, so a keyboard user can pick one), and
+    // not while a press on a result is under way (#2986).
     let id = app.window_id("title_search_edit");
-    if !ui.memory(|m| m.has_focus(id)) && !ui.input(|i| i.pointer.any_down()) {
+    let on_result = ui
+        .memory(|m| m.focused())
+        .filter(|f| *f != id)
+        .and_then(|f| ui.ctx().read_response(f))
+        .is_some_and(|r| s.results.is_some_and(|x| x.contains_rect(r.rect)));
+    if !on_result && !ui.memory(|m| m.has_focus(id)) && !ui.input(|i| i.pointer.any_down()) {
         ui.memory_mut(|m| m.request_focus(id));
     }
+    let typing = ui.memory(|m| m.has_focus(id));
     let edit = ui.add_sized(
         vec2(SEARCH_BOX_W, control_h),
         egui::TextEdit::singleline(&mut s.query).id(id).hint_text(ph).align(if crate::rtl::on() {
@@ -527,11 +534,12 @@ fn typing_search(app: &mut WordApp, ui: &mut Ui, control_h: f32, s: &mut TitleSe
         }),
     );
     let r = edit.rect;
-    // Enter runs the first result here, and is used up: a dialog that result opens (Word Count)
-    // mustn't take the same Enter as its OK.
+    // Enter in the box runs the first result, and is used up: a dialog that result opens (Word
+    // Count) mustn't take the same Enter as its OK. A result Tab moved to takes Enter or Space
+    // itself.
     let (enter, escape, pressed_at) = ui.input_mut(|i| {
         let pressed = i.pointer.any_pressed().then(|| i.pointer.press_origin()).flatten();
-        (i.consume_key(egui::Modifiers::NONE, egui::Key::Enter), i.key_pressed(egui::Key::Escape), pressed)
+        (typing && i.consume_key(egui::Modifiers::NONE, egui::Key::Enter), i.key_pressed(egui::Key::Escape), pressed)
     });
     let inside = |p: egui::Pos2| r.contains(p) || s.results.is_some_and(|x| x.contains(p));
     if escape || pressed_at.is_some_and(|p| !inside(p)) {
@@ -553,6 +561,10 @@ fn typing_search(app: &mut WordApp, ui: &mut Ui, control_h: f32, s: &mut TitleSe
             });
         });
     s.results = Some(shown.response.rect);
+    if done {
+        // A result run with Enter from the keyboard: the dialog it opens mustn't take that Enter.
+        ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+    }
     !done
 }
 
