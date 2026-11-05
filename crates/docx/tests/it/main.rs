@@ -1,6 +1,7 @@
 mod alt_chunks;
 mod bidi;
 mod bidi_runs;
+mod border_lines;
 mod cell_margin_inheritance;
 mod char_units;
 mod citations;
@@ -32,6 +33,7 @@ mod section_page_number_type;
 mod section_text_direction;
 mod section_valign;
 mod settings_merge;
+mod text_alignment;
 mod text_boxes;
 mod toc_ranges;
 mod undefined_style;
