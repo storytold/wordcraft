@@ -985,6 +985,40 @@ fn opened_paper(app: &mut WordApp) -> ((f32, f32), Option<&'static str>) {
     ((paper.0 * ppu, paper.1 * ppu), paper_entry(paper))
 }
 
+/// #5650: a long paste scrolls inside Page Setup's number boxes instead of enlarging the
+/// dialog, including after leaving the field and reopening the dialog.
+#[test]
+fn page_setup_number_fields_do_not_expand_after_paste() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    for label in ["Bottom:", "Top:", "Left:", "Right:", "Width:", "Height:", "Characters per line:", "Lines per page:"] {
+        let mut h = app_harness(app_with("Page"));
+        h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+        if let Some(Dialog::PageSetup { grid, .. }) = h.state_mut().dialog.as_mut() {
+            grid.0 = 2; // Enable both document-grid number boxes.
+        }
+        h.run_steps(3);
+        let width =
+            |h: &egui_kittest::Harness<'_, WordApp>| h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Page Setup")))).unwrap().width();
+        let before = width(&h);
+        h.get_by_role_and_label(Role::SpinButton, label).click();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Paste("a".repeat(400)));
+        h.run_steps(3);
+        assert!(width(&h) <= before + 2.0, "{label}: pasted text grew the dialog from {before} to {}", width(&h));
+        h.key_press(egui::Key::Tab);
+        h.run_steps(3);
+        assert!(width(&h) <= before + 2.0, "{label}: leaving the field kept a larger dialog");
+        h.get_by_role_and_label(Role::Button, "Cancel").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+        h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+        h.run_steps(3);
+        assert!(width(&h) <= before + 2.0, "{label}: reopening kept a larger dialog");
+    }
+}
+
 /// #1433: Page Setup's Paper size shows the named size the section has, in either
 /// orientation, and Custom size (None) for anything else.
 #[test]
