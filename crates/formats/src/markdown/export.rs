@@ -132,8 +132,21 @@ fn inlines_md_impl(inlines: &[Inline], in_table: bool) -> String {
                 let safe: String = a.chars().filter(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | ':')).collect();
                 pieces.push((String::new(), Fmt::default(), Some(format!("<a id=\"{safe}\"></a>"))));
             }
-            Inline::Figure(alt) => pieces.push((String::new(), Fmt::default(), Some(format!("![{}]()", escape(alt))))),
+            Inline::Figure(alt) | Inline::Chart(crate::model::Chart { alt, .. }) => {
+                pieces.push((String::new(), Fmt::default(), Some(format!("![{}]()", escape(alt)))))
+            }
             Inline::Equation { .. } => {}
+            // ASK and SET show nothing (see `model::shows_nothing`).
+            Inline::Field { instr, .. } if model::shows_nothing(instr) => {}
+            Inline::Field { result, fmt, .. } | Inline::Control { text: result, fmt, .. } => pieces.push((result.clone(), fmt.clone(), None)),
+            Inline::Note { .. }
+            | Inline::Comment { .. }
+            | Inline::CommentEnd(_)
+            | Inline::Shape { .. }
+            | Inline::Group { .. }
+            | Inline::FieldStart(_)
+            | Inline::FieldEnd
+            | Inline::AnchorEnd(_) => {}
             // Read as its base text by `ruby_as_text` above.
             Inline::Ruby { .. } => {}
         }
@@ -380,9 +393,16 @@ pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
                             // The bullet marker can turn a short run of hyphens into a rule.
                             if thematic_break(&format!("{marker} {body}")) { format!("\\{body}") } else { body }
                         };
-                        out.push(format!("{pad}{marker} {body}").trim_end().to_string());
+                        let line = format!("{pad}{marker} {body}").trim_end().to_string();
+                        // A list inside a block quote stays in it: every line of the item, its
+                        // continuation lines included, takes the quote marker.
+                        let line = if p.kind == Kind::Quote { format!("> {}", line.replace('\n', "\n> ")) } else { line };
+                        out.push(line);
                         prev_list = true;
-                        let next_is_list = matches!(blocks.get(i + 1), Some(FBlock::Para(q)) if q.list.is_some());
+                        // A list going into or out of a block quote is a new block: without the
+                        // blank line, an unquoted item would be read back into the quote.
+                        let quoted = |k: Kind| k == Kind::Quote;
+                        let next_is_list = matches!(blocks.get(i + 1), Some(FBlock::Para(q)) if q.list.is_some() && quoted(q.kind) == quoted(p.kind));
                         if !next_is_list {
                             out.push(String::new());
                         }
