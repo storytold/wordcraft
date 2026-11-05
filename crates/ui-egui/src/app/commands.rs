@@ -109,6 +109,10 @@ impl WordApp {
     /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
     /// UI-level commands (`ui.*`) are handled here, the rest by the engine.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        self.execute_inner(id, params, false)
+    }
+
+    fn execute_inner(&mut self, id: &str, params: Value, user_initiated: bool) -> Result<Value, String> {
         self.clear_command_targets(id);
         if let Some(error) = self.document_required_error(id) {
             return Err(error);
@@ -264,7 +268,7 @@ impl WordApp {
         if let Ok(v) = &r {
             self.keep_web_font(id, &params, v);
         }
-        self.after_command(id);
+        self.after_command(id, user_initiated);
         if let Err(e) = &r {
             self.status(e.clone());
         }
@@ -313,8 +317,8 @@ impl WordApp {
             };
         }
         let retry = (id == "file.open").then(|| params.clone());
+        let r = self.execute_inner(id, params, true);
         let retry_path = retry.clone();
-        let r = self.execute(id, params);
         if let (Err(e), Some(params)) = (&r, retry)
             && wordcraft_engine::io::needs_password(e)
         {
@@ -342,7 +346,7 @@ impl WordApp {
         r
     }
 
-    fn after_command(&mut self, id: &str) {
+    fn after_command(&mut self, id: &str, user_initiated: bool) {
         options::sync(self);
         self.canvas.caret_visible_since = now_ms();
         if id == "view.outline" {
@@ -387,6 +391,11 @@ impl WordApp {
             self.canvas.scroll_to_caret = true;
         }
         for req in std::mem::take(&mut self.session.ui_requests) {
+            // Programmatic saves receive the confirmation requirement as a result; only UI
+            // initiated saves may interrupt the user with a confirmation dialog.
+            if !user_initiated && req.get("open").and_then(Value::as_str) == Some("confirmDamagedSave") {
+                continue;
+            }
             self.handle_request(&req);
         }
         if let Some(p) = self.session.path.as_ref().map(|p| p.to_string_lossy().to_string())
@@ -439,6 +448,19 @@ impl WordApp {
         if let Some(what) = req.get("open").and_then(Value::as_str) {
             match what {
                 "openFile" => self.open_dialog(),
+                "confirmDamagedSave" => {
+                    let Some(path) = req.get("path").and_then(Value::as_str) else { return };
+                    let skipped_parts = req
+                        .get("skippedParts")
+                        .and_then(Value::as_array)
+                        .map(|parts| parts.iter().filter_map(Value::as_str).map(str::to_owned).take(3).collect())
+                        .unwrap_or_default();
+                    let skipped_parts_more = req.get("skippedPartsMore").and_then(Value::as_u64).unwrap_or(0) as usize;
+                    let document = req.get("document").and_then(Value::as_u64).unwrap_or_else(|| self.session.document_id());
+                    let params = req.get("params").cloned().unwrap_or_else(|| json!({"path": path}));
+                    self.dialog =
+                        Some(dialogs::Dialog::ConfirmDamagedSave { path: path.into(), skipped_parts, skipped_parts_more, document, params });
+                }
                 "saveAs" => {
                     self.save_as_dialog();
                 }

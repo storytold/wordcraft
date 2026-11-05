@@ -372,3 +372,136 @@ fn hostile_chunks_never_panic() {
     let bytes = package(&format!(r#"<w:altChunk r:id="nope"/><w:altChunk/>{}"#, p("y")), None);
     assert_eq!(body_lines(&read(&bytes).unwrap()), ["y"]);
 }
+
+/// A package whose body is `body`, with the main part's relationships `rels` and the parts
+/// `parts`, every entry stored as is (so a changed byte fails its checksum).
+fn package_with_rels(body: &str, rels: &str, parts: &[(&str, &[u8])]) -> Vec<u8> {
+    let doc = format!(r#"<w:document {NS}><w:body>{body}<w:sectPr/></w:body></w:document>"#);
+    let rels = format!(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{rels}</Relationships>"#);
+    let mut files: Vec<(&str, &[u8])> =
+        vec![("_rels/.rels", ROOT_RELS.as_bytes()), ("word/document.xml", doc.as_bytes()), ("word/_rels/document.xml.rels", rels.as_bytes())];
+    files.extend_from_slice(parts);
+    let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, bytes) in files {
+        zw.start_file(name, stored).unwrap();
+        zw.write_all(bytes).unwrap();
+    }
+    zw.finish().unwrap().into_inner()
+}
+
+fn chunk_rel(id: &str, ty: &str, target: &str, external: bool) -> String {
+    let mode = if external { r#" TargetMode="External""# } else { "" };
+    format!(r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{ty}" Target="{target}"{mode}/>"#)
+}
+
+/// Every chunk the reader doesn't bring in is named once in `skipped_parts`, whatever the reason;
+/// one brought in names nothing (#5583).
+#[test]
+fn a_chunk_left_out_is_named_in_the_skipped_parts() {
+    let import_html = |c: &AltChunk| (c.content_type == "text/html").then(|| Document::from_text("Imported"));
+    let html: &[u8] = b"<p>x</p>";
+    let not_a_zip: &[u8] = b"PK\x03\x04 not a zip";
+    let unknown: &[u8] = b"\x00\xff\x00";
+    let inner_with_unknown = package(&format!("{CHUNK}{}", p("Inner")), Some(("bin", "application/octet-stream", unknown)));
+    let inner_sound = package(&p("Inner"), None);
+    let mut deep = package(&p("Deepest"), None);
+    for level in 0..8 {
+        deep = package(&format!("{}{CHUNK}", p(&format!("Level {level}"))), Some(("docx", DOCX_MAIN, &deep)));
+    }
+    let five_deep = ["word/afchunk.docx"; 5].join(": ");
+    let cases: Vec<(&str, Vec<u8>, Vec<String>)> = vec![
+        ("no r:id", package_with_rels(&format!("<w:altChunk/>{}", p("x")), "", &[]), vec![]),
+        (
+            "no such relationship",
+            package_with_rels(&format!(r#"<w:altChunk r:id="nope"/>{}"#, p("x")), "", &[]),
+            vec!["alternative format chunk nope".into()],
+        ),
+        (
+            "an external target",
+            package_with_rels(&format!("{CHUNK}{}", p("x")), &chunk_rel("rIdC", "aFChunk", "https://example.invalid/x.html", true), &[]),
+            vec!["https://example.invalid/x.html".into()],
+        ),
+        (
+            "another relationship type",
+            package_with_rels(&format!("{CHUNK}{}", p("x")), &chunk_rel("rIdC", "image", "media/a.png", false), &[("word/media/a.png", html)]),
+            vec!["word/media/a.png".into()],
+        ),
+        (
+            "a missing part",
+            package_with_rels(&format!("{CHUNK}{}", p("x")), &chunk_rel("rIdC", "aFChunk", "afchunk.htm", false), &[]),
+            vec!["word/afchunk.htm".into()],
+        ),
+        ("over the chunk budget, named once", package(&CHUNK.repeat(300), Some(("htm", "text/html", html))), vec!["word/afchunk.htm".into()]),
+        (
+            "no importer for the format",
+            package(&format!("{CHUNK}{}", p("x")), Some(("bin", "application/octet-stream", unknown))),
+            vec!["word/afchunk.bin".into()],
+        ),
+        (
+            "the importer gives up",
+            package(&format!("{CHUNK}{}", p("x")), Some(("rtf", "application/rtf", b"{\\rtf1 x}"))),
+            vec!["word/afchunk.rtf".into()],
+        ),
+        ("not a zip", package(&format!("{CHUNK}{}", p("x")), Some(("docx", DOCX_MAIN, not_a_zip))), vec!["word/afchunk.docx".into()]),
+        ("nested past the depth", deep, vec![five_deep]),
+        (
+            "left out inside a nested document",
+            package(&format!("{CHUNK}{}", p("x")), Some(("docx", DOCX_MAIN, &inner_with_unknown))),
+            vec!["word/afchunk.docx: word/afchunk.bin".into()],
+        ),
+        (
+            "named twice, listed once",
+            package_with_rels(&format!(r#"<w:altChunk r:id="nope"/><w:altChunk r:id="nope"/>{}"#, p("x")), "", &[]),
+            vec!["alternative format chunk nope".into()],
+        ),
+        ("brought in through the importer", package(&format!("{CHUNK}{}", p("x")), Some(("htm", "text/html", html))), vec![]),
+        ("a Word document brought in", package(&format!("{CHUNK}{}", p("x")), Some(("docx", DOCX_MAIN, &inner_sound))), vec![]),
+    ];
+    for (what, bytes, want) in cases {
+        let d = read_with(&bytes, &ReadOptions { chunks: Some(&import_html), ..Default::default() }).unwrap();
+        assert_eq!(d.skipped_parts, want, "{what}");
+    }
+}
+
+/// A chunk in a note is named too (the stories share one reader).
+#[test]
+fn a_chunk_left_out_of_a_footnote_is_named() {
+    let notes = format!(r#"<w:footnotes {NS}><w:footnote w:id="1"><w:altChunk r:id="rIdC"/></w:footnote></w:footnotes>"#);
+    let body = format!(r#"{}<w:p><w:r><w:footnoteReference w:id="1"/></w:r></w:p>"#, p("Host"));
+    let d = read(&package_with_stories(&body, &[("footnotes", "footnotes.xml", notes)], Some(b"PK\x03\x04 not a zip"))).unwrap();
+    assert_eq!(d.skipped_parts, ["word/afchunk.docx"]);
+}
+
+/// The package's unreadable entries come first, then the chunks left out, and neither drops the
+/// other.
+#[test]
+fn unreadable_entries_and_chunks_left_out_are_both_named() {
+    let rels = chunk_rel("rIdC", "aFChunk", "afchunk.htm", false);
+    let mut z = package_with_rels(&format!("{CHUNK}{}", p("kept")), &rels, &[("word/media/image1.png", b"PICTURE-BYTES-0123456789")]);
+    let at = z.windows(7).position(|w| w == b"PICTURE").unwrap();
+    z[at] = b'p';
+    let d = read(&z).unwrap();
+    assert_eq!(body_lines(&d), ["kept"]);
+    assert_eq!(d.skipped_parts, ["word/media/image1.png", "word/afchunk.htm"]);
+    // A chunk whose own entry is the unreadable one is named once, by the package, however the
+    // relationship spells its name.
+    for target in ["afchunk.htm", "AFCHUNK.htm"] {
+        let rels = chunk_rel("rIdC", "aFChunk", target, false);
+        let mut z = package_with_rels(&format!("{CHUNK}{}", p("kept")), &rels, &[("word/afchunk.htm", b"<p>ZQXJ-BYTES-0123456789</p>")]);
+        let at = z.windows(4).position(|w| w == b"ZQXJ").unwrap();
+        z[at] = b'z';
+        let d = read(&z).unwrap();
+        assert_eq!(body_lines(&d), ["kept"], "{target}");
+        assert_eq!(d.skipped_parts, ["word/afchunk.htm"], "{target}");
+    }
+}
+
+/// A file naming more chunks than the reader brings in has the first 256 named, not all of them.
+#[test]
+fn chunks_left_out_are_named_up_to_a_bound() {
+    let body: String = (0..300).map(|i| format!(r#"<w:altChunk r:id="nope{i}"/>"#)).collect();
+    let d = read(&package_with_rels(&body, "", &[])).unwrap();
+    let want: Vec<String> = (0..256).map(|i| format!("alternative format chunk nope{i}")).collect();
+    assert_eq!(d.skipped_parts, want);
+}

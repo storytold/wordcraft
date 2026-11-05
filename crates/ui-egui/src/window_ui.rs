@@ -12,6 +12,7 @@
 //!
 //! `swap_window` names every field, so a new field doesn't compile until it is classified.
 
+use crate::DamagedSaveContinuation;
 use crate::{AwaitingSave, UiState, WordApp, canvas, colors, content_controls, dialogs, dialogs_review, file_dialogs, keytips, previews, print_page};
 
 /// A window's state while another window is drawn. Fields mirror their namesakes in [`WordApp`]
@@ -50,6 +51,7 @@ pub(crate) struct WindowUi {
     pub(crate) outline_prev_tab: Option<String>,
     pub(crate) read_aloud_at: Option<wordcraft_engine::doc::Pos>,
     pub(crate) awaiting_save: Option<AwaitingSave>,
+    pub(crate) damaged_save_continuation: Option<DamagedSaveContinuation>,
     pub(crate) file_dialog: Option<file_dialogs::PendingDialog>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) file_browser: crate::file_browser::State,
@@ -121,6 +123,7 @@ impl WindowUi {
             outline_prev_tab: None,
             read_aloud_at: None,
             awaiting_save: None,
+            damaged_save_continuation: None,
             file_dialog: None,
             #[cfg(not(target_arch = "wasm32"))]
             file_browser: Default::default(),
@@ -248,6 +251,7 @@ impl WordApp {
             outline_prev_tab,
             read_aloud_at,
             awaiting_save,
+            damaged_save_continuation,
             file_dialog,
             #[cfg(not(target_arch = "wasm32"))]
             file_browser,
@@ -346,6 +350,7 @@ impl WordApp {
             outline_prev_tab,
             read_aloud_at,
             awaiting_save,
+            damaged_save_continuation,
             file_dialog,
             #[cfg(not(target_arch = "wasm32"))]
             file_browser,

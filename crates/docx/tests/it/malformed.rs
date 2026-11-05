@@ -88,6 +88,31 @@ fn a_malformed_main_part_is_an_error_not_a_truncated_document() {
 }
 
 #[test]
+fn a_part_with_a_bad_checksum_is_left_out_and_reported() {
+    let body = format!("<w:document {W_NS}><w:body><w:p><w:r><w:t>kept</w:t></w:r></w:p></w:body></w:document>");
+    let build = |extra: &[u8]| {
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zw.start_file("_rels/.rels", stored).unwrap();
+        zw.write_all(ROOT_RELS.as_bytes()).unwrap();
+        zw.start_file("word/document.xml", stored).unwrap();
+        zw.write_all(body.as_bytes()).unwrap();
+        zw.start_file("word/media/image1.png", stored).unwrap();
+        zw.write_all(extra).unwrap();
+        zw.finish().unwrap().into_inner()
+    };
+    let sound = read(&build(b"PICTURE-BYTES-0123456789")).unwrap();
+    assert!(sound.skipped_parts.is_empty(), "a sound file reports nothing");
+    // The entry is stored as is, so one changed byte fails its checksum when it is read.
+    let mut z = build(b"PICTURE-BYTES-0123456789");
+    let at = z.windows(7).position(|w| w == b"PICTURE").unwrap();
+    z[at] = b'p';
+    let damaged = read(&z).unwrap();
+    assert_eq!(damaged.plain_text(wordcraft_doc::StoryRef::Body), "kept", "the rest still opens");
+    assert_eq!(damaged.skipped_parts, vec!["word/media/image1.png".to_string()]);
+}
+
+#[test]
 fn deep_nesting_is_rejected() {
     let mut x = format!("<w:document {W_NS}><w:body>");
     for _ in 0..5_000 {

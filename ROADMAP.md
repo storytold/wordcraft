@@ -139,6 +139,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-04: A `.docx` whose `w:altChunk` content can't be brought in (a missing part, a web address, a format without a reader) no longer opens as if nothing were missing: the open warning names the chunk, and saving over the file asks first, as for an unreadable part (#5583).
 - 2026-10-28: Ink replay, eraser picking, lasso selection and arrow-candidate discovery reuse the paragraph prefixes they have already scanned (#3614). Page item order, stroke geometry and saved data retain their behavior. This narrows the stability work; ink import fidelity, native pen input and broader corpus qualification remain open.
 
 - 2026-11-04: OpenDocument files have no display settings any more (gap 19): File › Options › Advanced › OpenDocument files, `file.options` `odf`, `WORDCRAFT_ODF`, the LibreOffice style and custom values are gone. WordCraft makes one choice for each case the standard leaves open, the one the default made, and still follows what a file states ([docs/odf-interpretation.md](docs/odf-interpretation.md)).
