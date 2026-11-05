@@ -417,11 +417,20 @@ pub(super) fn place(a: &Attrs, w: f32, h: f32, g: &Graphic, size: f32) -> Float 
         f.rot = rot;
     }
     f.z = z_of(a);
+    f.page = page_of(a);
     if f.wrap == Wrap::Inline {
         f.y = inline_raise(g, y.as_deref().and_then(length), h, size);
     }
     f
 }
+
+/// The page a drawing anchored to a page is on (§19.872 `text:anchor-page-number`), 0 when none.
+pub(super) fn page_of(a: &Attrs) -> u32 {
+    get(a, "text:anchor-page-number").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0).min(MAX_ANCHOR_PAGE)
+}
+
+/// Highest anchor page kept.
+const MAX_ANCHOR_PAGE: u32 = 1_000_000;
 
 /// A drawing's place in the stacking order (§19.231 `draw:z-index`, from 0 at the bottom) as
 /// WordCraft's [`Float::z`] (higher on top, 0 for unknown): one more.
@@ -564,7 +573,7 @@ pub(super) fn turned(f: &Float) -> bool {
 /// `style:graphic-properties` attributes, and the frame's `svg:x`/`svg:y` attributes, or its
 /// `draw:transform` when it is turned (`w` × `h` its size).
 pub(super) fn frame_of(f: &Float, w: f32, h: f32) -> (&'static str, String, String) {
-    let anchor = if f.h_rel == Anchor::Page && f.v_rel == Anchor::Page {
+    let anchor = if f.page > 0 || (f.h_rel == Anchor::Page && f.v_rel == Anchor::Page) {
         "page"
     } else if f.v_rel == Anchor::Line {
         "char"

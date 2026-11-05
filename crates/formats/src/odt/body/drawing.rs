@@ -358,6 +358,7 @@ impl Body<'_> {
             let at = |v: Option<f32>| v.map(crate::odt::writer::pt);
             let mut f = crate::odt::frames::float_of(get(a, "text:anchor-type"), at(x).as_deref(), at(y).as_deref(), &g);
             f.z = crate::odt::frames::z_of(a);
+            f.page = crate::odt::frames::page_of(a);
             f
         } else {
             crate::odt::frames::place(a, w, h, &g, self.text_size())

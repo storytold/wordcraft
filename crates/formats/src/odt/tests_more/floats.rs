@@ -367,3 +367,29 @@ fn a_frame_keeps_its_place_in_the_stacking_order() {
     assert_eq!(float(&d).z, 0);
     assert!(crate::odt::tests::entry(&crate::odt::tests::export_model(&d).unwrap(), "content.xml").contains(r#"draw:z-index="0""#));
 }
+
+#[test]
+fn a_frame_anchored_to_a_page_stays_on_that_page() {
+    // LibreOffice's page-anchored frames name their page. Written without it, a frame on page 3
+    // came back on page 1 in LibreOffice.
+    let frame = |attrs: &str| {
+        let content = format!(
+            r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><draw:frame {attrs} svg:x="5cm" svg:y="5cm" svg:width="4cm" svg:height="2cm"><draw:text-box><text:p>On it</text:p></draw:text-box></draw:frame><text:p>One</text:p></office:text></office:body></office:document-content>"#
+        );
+        import(&crate::odt::tests::package(&content, None)).unwrap()
+    };
+    let d = frame(r#"text:anchor-type="page" text:anchor-page-number="3""#);
+    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    assert!(c.contains(r#"text:anchor-type="page" text:anchor-page-number="3""#), "{c}");
+    let back =
+        crate::odt::tests::content_of(&crate::odt::tests::export_model(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()).unwrap());
+    assert!(back.contains(r#"text:anchor-page-number="3""#), "again: {back}");
+    // A frame anchored to its paragraph names no page, and junk is none.
+    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&frame(r#"text:anchor-type="paragraph""#)).unwrap());
+    assert!(!c.contains("anchor-page-number"), "{c}");
+    for junk in ["-1", "abc", "", "99999999999999"] {
+        let d = frame(&format!(r#"text:anchor-type="page" text:anchor-page-number="{junk}""#));
+        let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+        assert!(!c.contains("anchor-page-number"), "{junk}: {c}");
+    }
+}
