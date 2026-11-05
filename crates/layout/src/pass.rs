@@ -509,6 +509,12 @@ pub(crate) fn layout_pass(
         let tops = section_tops(&mut ctx, &hf, (si, sect), mode.reflow || turn.is_turned());
         let start = if si == 0 { SectionStart::NextPage } else { sect.start };
         let sec = Sec { si, sect, start, tops };
+        if !mode.web && !pb.pages.is_empty() && (start != SectionStart::Continuous || turn != prev_turn) {
+            // The page the section before ends on is finished with its own margins and footnote
+            // separators, before this section's replace them: the footnotes pending on it
+            // belong to the section whose page it is (#5289).
+            pb.finish_page();
+        }
         begin_section_state(&mut ctx, &mut pb, &sec, totals, mode.web);
         if mode.web && si > 0 {
             // one long page
