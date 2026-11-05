@@ -37,6 +37,7 @@ fn has_sel(s: &Session) -> Option<&'static str> {
     if s.sel.is_collapsed() && s.cell_range().is_none() { Some("nothing is selected") } else { None }
 }
 
+/// Disable scoped Replace All unless the stream or block selection contains editable text.
 fn has_replace_selection(s: &Session) -> Option<&'static str> {
     match s.column_segments() {
         Some(segments) if !segments.iter().any(|(a, b)| a != b) => Some("nothing is selected"),
@@ -470,7 +471,10 @@ struct Seg {
     mark: bool,
 }
 
-/// The selection ranges touching a chunk, without scanning every range for every paragraph.
+/// Return selected ranges intersecting a paragraph chunk without scanning all ranges.
+///
+/// Both the chunk paths and selected ranges are ordered, so binary partition points keep this
+/// lookup bounded even when a selection spans many paragraphs.
 fn chunk_ranges<'a>(ranges: &'a [(Pos, Pos)], paths: &[Path]) -> &'a [(Pos, Pos)] {
     let (Some(first), Some(last)) = (paths.first(), paths.last()) else { return &[] };
     let start = ranges.partition_point(|(_, b)| b.path < *first);
@@ -478,16 +482,21 @@ fn chunk_ranges<'a>(ranges: &'a [(Pos, Pos)], paths: &[Path]) -> &'a [(Pos, Pos)
     ranges.get(start..end).unwrap_or_default()
 }
 
-/// A document position as an offset in the live search text. Positions in deleted text map to
-/// the next live stretch; positions outside the chunk map to its start or end.
+/// Convert a document position to a byte offset in the live search text.
+///
+/// Positions in tracked-deleted text map to the next live stretch; positions outside the chunk
+/// map to its start or end.
 fn hay_offset(pos: &Pos, paths: &[Path], segs: &[Seg], len: usize) -> usize {
     let para = paths.partition_point(|path| *path < pos.path);
     let k = segs.partition_point(|sg| sg.para < para || (sg.para == para && sg.raw + sg.len <= pos.off));
     segs.get(k).map_or(len, |sg| sg.hay + if sg.para == para { pos.off.saturating_sub(sg.raw).min(sg.len) } else { 0 })
 }
 
-/// Intersect selected stretches with the live-text cuts. Constrain the regex input before
-/// matching, so an earlier or greedy match outside the selection cannot consume selected text.
+/// Return regex-search spans intersecting the selected ranges and live-text cuts.
+///
+/// Constraining the regex input before matching prevents an earlier or greedy match outside the
+/// selection from consuming selected text. A whole-story search uses a single span for the
+/// entire haystack.
 fn search_spans<'a>(
     within: Option<&'a [(Pos, Pos)]>,
     paths: &'a [Path],
@@ -548,8 +557,11 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
     search_full_within(s, story, with_rep, None)
 }
 
-/// Only fully contained matches count toward the result limit when a selection is supplied.
-/// Search the original paragraph text so word boundaries and anchors keep their context.
+/// Search a story, optionally restricting the haystack to selected ranges.
+///
+/// Only matches wholly contained in selected ranges count toward the result limit. The regex still
+/// sees the original paragraph text around each range, so word boundaries and anchors retain
+/// their document context.
 fn search_full_within(s: &Session, story: StoryRef, with_rep: bool, within: Option<&[(Pos, Pos)]>) -> Result<Vec<Found>, CmdError> {
     use regex_automata::{Input, meta, util::syntax};
     let f = &s.find;
@@ -799,8 +811,11 @@ fn replace(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"remaining": search(s, story)?.len()}))
 }
 
-/// The selected stretches, ordered and merged, never the bounding rectangle of a column or
-/// table-cell selection. Invalid endpoints fail closed rather than widening the edit's scope.
+/// Get validated, ordered, merged ranges for the current text or block selection.
+///
+/// Block selections use their individual selected stretches rather than the bounding range, which
+/// could include unselected paragraphs or table cells. Invalid endpoints fail closed rather than
+/// widening the edit's scope.
 fn replacement_ranges(s: &Session) -> Result<Vec<(Pos, Pos)>, CmdError> {
     let mut ranges = s.column_segments().map_or_else(|| vec![s.sel.ordered()], <[(Pos, Pos)]>::to_vec);
     let story = s.sel.focus.story;
@@ -827,6 +842,7 @@ fn replacement_ranges(s: &Session) -> Result<Vec<(Pos, Pos)>, CmdError> {
     Ok(merged)
 }
 
+/// Replace every matching string in the current story, or in the selection when `in` requests it.
 fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
     let selection = match v.get("in") {
         None => false,
@@ -837,12 +853,16 @@ fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
     replace_all_within(s, v, selection)
 }
 
+/// Replace all matches in the current selection; never fall back to searching the whole story.
 fn replace_all_in_selection(s: &mut Session, v: &Value) -> CmdResult {
     replace_all_within(s, v, true)
 }
 
-/// Every match replaced, last first so earlier positions stay valid (one undo step). A `\r` in
-/// the replacement (`^p`) splits the paragraph. Scope is captured before finding or editing.
+/// Replace every match in the captured story or selection, last first to preserve earlier offsets.
+///
+/// The batch is one undo step. A `\r` in the replacement (`^p`) splits a paragraph; tracked
+/// changes and deletion-lock checks use the same paths as single-match replacement. When scoped
+/// to the selection, the caret moves to the first replacement and stale block ranges are cleared.
 fn replace_all_within(s: &mut Session, v: &Value, selection: bool) -> CmdResult {
     let ranges = if selection { Some(replacement_ranges(s)?) } else { None };
     need_query(s, v)?;
