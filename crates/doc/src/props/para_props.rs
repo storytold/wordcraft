@@ -26,6 +26,40 @@ impl Align {
     }
 }
 
+/// Vertical alignment of characters of different sizes on a line (`w:textAlignment`,
+/// ECMA-376 §17.3.1.39).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextAlignment {
+    Auto,
+    Top,
+    Center,
+    Baseline,
+    Bottom,
+}
+
+impl TextAlignment {
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            TextAlignment::Auto => "auto",
+            TextAlignment::Top => "top",
+            TextAlignment::Center => "center",
+            TextAlignment::Baseline => "baseline",
+            TextAlignment::Bottom => "bottom",
+        }
+    }
+    pub fn from_ooxml(s: &str) -> Option<TextAlignment> {
+        match s {
+            "auto" => Some(TextAlignment::Auto),
+            "top" => Some(TextAlignment::Top),
+            "center" => Some(TextAlignment::Center),
+            "baseline" => Some(TextAlignment::Baseline),
+            "bottom" => Some(TextAlignment::Bottom),
+            _ => None,
+        }
+    }
+}
+
 /// Line spacing rule.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "rule", content = "value")]
@@ -398,6 +432,10 @@ pub struct ParaProps {
     /// `w:snapToGrid`: lines snap to the section's document grid. Unset = on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snap_to_grid: Option<bool>,
+    /// `w:textAlignment`: how characters of different sizes line up on a line. Kept for the
+    /// file (not laid out yet); Word sizes a line by it, so dropping it changes Word's pages.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_alignment: Option<TextAlignment>,
 }
 
 impl ParaProps {
@@ -418,7 +456,7 @@ impl ParaProps {
     }
 
     fn overlay_script_layout(&mut self, patch: &ParaProps) {
-        overlay_fields!(self, patch; bidi, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn);
+        overlay_fields!(self, patch; bidi, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn, text_alignment);
     }
     pub fn overlaid(mut self, patch: &ParaProps) -> ParaProps {
         self.overlay(patch);
