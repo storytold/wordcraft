@@ -16,6 +16,8 @@ path = "src/main.rs"
 [dependencies]
 wordcraft-engine = { workspace = true }
 wordcraft-ui-egui = { workspace = true }
+# The host messages (storytold/craft-libs): one contract and one bridge for the web builds.
+craft-web-host = { git = "https://github.com/storytold/craft-libs", rev = "2e2312ddaf21bc3d85cd3395d0955c7d239306f6", version = "0.1.0" }
 egui = { workspace = true }
 log = { workspace = true }
 serde_json = { workspace = true }
@@ -29,4 +31,4 @@ rfd = { workspace = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "HtmlIFrameElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Event", "EventTarget", "BeforeUnloadEvent", "ClipboardEvent", "DataTransfer", "FileList", "File", "DomStringList", "IdbFactory", "IdbOpenDbRequest", "IdbRequest", "IdbDatabase", "IdbObjectStore", "IdbTransaction", "IdbTransactionMode", "MediaQueryList", "Storage", "MessageEvent", "UrlSearchParams"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "HtmlIFrameElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Event", "EventTarget", "BeforeUnloadEvent", "ClipboardEvent", "DataTransfer", "FileList", "File", "DomStringList", "IdbFactory", "IdbOpenDbRequest", "IdbRequest", "IdbDatabase", "IdbObjectStore", "IdbTransaction", "IdbTransactionMode", "MediaQueryList", "Storage", "MessageEvent", "UrlSearchParams", "CustomEvent", "CustomEventInit"] }
