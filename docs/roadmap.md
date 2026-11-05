@@ -52,7 +52,8 @@ partial rows are fidelity gaps (beta work), not broken workflows. WordCraft stay
 | M3 | Insert tab | mostly done; equations done (#191), icons done (#309); charts, SmartArt, 3D, screenshot, online media missing | 50–80 h |
 | M4 | Layout and Design tabs | done except column balancing, group | 6–10 h |
 | M5 | Tables | done (row splitting, floating tables, style formatting); custom table styles (#256); Draw Table and Eraser (#303) | 6–10 h |
-| M6 | References | first version done (TOC fields, cross-references, Zotero); footnote continuation missing; all 12 bibliography styles (#383); bibliography sources import from Word's `Sources.xml` (#2640) and reference-manager libraries — BibTeX, RIS, CSL-JSON — through `references.importSources` (#1058); Mendeley/EndNote live integration remaining | 12–20 h || M7 | Review | done (balloons, paragraph-mark revisions, formatting revisions #41); move tracking, multilingual proofing missing | 35–60 h |
+| M6 | References | first version done (TOC fields, cross-references, Zotero); footnote continuation missing; all 12 bibliography styles (#383); bibliography sources import from Word's `Sources.xml` (#2640) and reference-manager libraries — BibTeX, RIS, CSL-JSON — through `references.importSources` (#1058); Mendeley/EndNote live integration remaining | 12–20 h |
+| M7 | Review | done (balloons, paragraph-mark revisions, formatting revisions #41); move tracking, multilingual proofing missing | 35–60 h |
 | M8 | View | mostly done; window commands missing | 3–5 h |
 | M9 | Mailings | done (first version); Excel/Outlook data sources and email merge missing | 6–10 h |
 | M10 | File/Backstage | mostly done; native printing, Options depth missing | 12–20 h |

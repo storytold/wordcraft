@@ -96,15 +96,34 @@ fn clamp_value(mut s: String) -> String {
     s
 }
 
-/// Citation-library bytes as text: UTF-8 first (BOM stripped), then byte-preserving latin-1
-/// (Mendeley exports both), so no byte is lost or replaced.
+/// Citation-library bytes as text: UTF-8 first (BOM stripped), then Windows-1252 (a superset of
+/// latin-1 that also covers curly quotes and dashes), so no byte is lost or replaced.
 fn utf8_or_latin1(b: &[u8]) -> String {
     let b = b.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(b);
     match std::str::from_utf8(b) {
         Ok(s) => s.to_string(),
-        // Latin-1 maps every byte to the character of its value.
-        Err(_) => b.iter().map(|c| char::from(*c)).collect(),
+        // Windows-1252 keeps latin-1's 0xA0–0xFF and turns 0x80–0x9F into the printable
+        // characters reference managers on Windows write (curly quotes, dashes, €), where
+        // strict latin-1 would keep invisible C1 controls.
+        Err(_) => encoding_rs::WINDOWS_1252.decode_without_bom_handling(b).0.into_owned(),
     }
+}
+
+/// A citation key made safe for a `CITATION <tag>` field instruction (one whitespace-free
+/// word): anything but letters, digits and `_ . / : -` collapses into single dashes.
+pub(crate) fn sanitize_tag(key: &str) -> String {
+    let mut out = String::new();
+    let mut dash = false;
+    for c in key.chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | ':' | '-') {
+            out.push(c);
+            dash = false;
+        } else if !dash {
+            out.push('-');
+            dash = true;
+        }
+    }
+    out
 }
 
 /// Import a citation library (References ▸ Manage Sources) in the format named by `ext`.
