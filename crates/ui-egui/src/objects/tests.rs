@@ -204,8 +204,16 @@ fn ctrl_shift_drag_copies_an_inline_picture_at_the_text_cursor() {
     use egui::{Event, Modifiers, PointerButton};
     let mut app = WordApp::new(wordcraft_engine::Session::new(Document::from_text("First paragraph.\nSecond paragraph.")), Default::default());
     app.run("view.commentsPane", json!({"value": false})).unwrap();
-    let image =
-        InlineObject::Image { media: String::new(), w: 80.0, h: 40.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    let image = InlineObject::Image {
+        media: String::new(),
+        w: 80.0,
+        h: 40.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
     app.session.doc.insert_object(&Pos::body(1, 0), image, &Default::default()).unwrap();
     app.session.touch();
     app.run("select.range", json!({"anchor": Pos::body(1, 0), "focus": Pos::body(1, 3)})).unwrap();
@@ -503,8 +511,16 @@ fn an_inline_picture_drags_to_the_insertion_cursor_and_stays_inline() {
         Default::default(),
     );
     a.run("view.commentsPane", json!({"value": false})).unwrap();
-    let picture =
-        InlineObject::Image { media: String::new(), w: 80.0, h: 40.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    let picture = InlineObject::Image {
+        media: String::new(),
+        w: 80.0,
+        h: 40.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
     a.session.doc.insert_object(&Pos::body(1, 0), picture, &Default::default()).unwrap();
     a.session.touch();
     let mut h: H = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
@@ -563,7 +579,8 @@ fn an_inline_picture_drags_to_the_insertion_cursor_and_stays_inline() {
 /// page: its preview has its red outline and nothing dark inside.
 #[test]
 fn a_dragged_shape_leaves_the_text_behind_it() {
-    use crate::table_resize::tests::{H, button, steps};
+    use crate::table_resize::tests::{H, button, gpu_turn, steps};
+    let _gpu = gpu_turn();
     let text = "MMMMMMMMMMMM ".repeat(12);
     let mut a = WordApp::new(wordcraft_engine::Session::new(Document::from_text(&text)), Default::default());
     let shape = InlineObject::Shape {
@@ -758,7 +775,8 @@ fn rotation_window(app: WordApp) -> crate::table_resize::tests::H {
 /// pictures whose cached preview already contains a rotation and either reflection.
 #[test]
 fn rotation_drag_turns_picture_pixels_live_and_commits_once_or_cancels() {
-    use crate::table_resize::tests::{H, button, steps};
+    use crate::table_resize::tests::{H, button, gpu_turn, steps};
+    let _gpu = gpu_turn();
     for (initial, flip_h, flip_v) in [(0.0, false, false), (30.0, true, false), (90.0, false, true), (315.0, true, true)] {
         // Four original colour quadrants make both accidental extra rotation and reflected
         // UVs observable. Sample near the long ends after a quarter turn, outside the old
@@ -782,6 +800,7 @@ fn rotation_drag_turns_picture_pixels_live_and_commits_once_or_cancels() {
             alt: String::new(),
             float: wordcraft_doc::para::Float { wrap: Wrap::InFrontOfText, x: 150.0, y: 180.0, rot: initial, flip_h, flip_v, ..Default::default() },
             crop: [0.0; 4],
+            fx: Default::default(),
             ole: None,
         };
         let (mut app, _) = app_with(picture);

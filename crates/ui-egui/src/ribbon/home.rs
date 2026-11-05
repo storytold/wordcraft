@@ -46,6 +46,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
                 let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
+                let warning = app.font_box_warning(&font);
                 let font = app.previews.font_shown(&font);
                 let fams = app.previews.families();
                 let monospaced = app.previews.monospaced_families();
@@ -62,6 +63,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                         monospaced: &monospaced,
                         preview: Some(&*prev),
                         tip: tl!("Font"),
+                        shown_as: warning.as_deref(),
                     },
                 ) {
                     let _ = if f == crate::widgets::ADD_FONT {

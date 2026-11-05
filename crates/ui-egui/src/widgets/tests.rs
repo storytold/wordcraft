@@ -388,6 +388,7 @@ fn the_monospace_filter_keeps_only_monospaced_families() {
                         monospaced: &monospaced,
                         preview: None,
                         tip: "",
+                        shown_as: None,
                     },
                 );
             });
@@ -413,7 +414,17 @@ fn the_dropdown_offers_a_monospace_only_box() {
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(300.0, 400.0)).build_ui(|ui| {
         font_combo_with_recent_hint(
             ui,
-            FontComboOptions { id: "f", width: 150.0, current: "", items: &fonts, recent: &[], monospaced: &monospaced, preview: None, tip: "Font" },
+            FontComboOptions {
+                id: "f",
+                width: 150.0,
+                current: "",
+                items: &fonts,
+                recent: &[],
+                monospaced: &monospaced,
+                preview: None,
+                tip: "Font",
+                shown_as: None,
+            },
         );
     });
     h.run_steps(2);
