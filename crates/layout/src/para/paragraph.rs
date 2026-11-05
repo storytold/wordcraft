@@ -100,7 +100,24 @@ fn paragraph_props(p: &Paragraph, env: &ParaEnv) -> ResolvedPara {
         rp.set_char_unit(doc.styles.resolve_char_in(p.props.style.as_deref(), env.table.map(|t| &t.chr), &p.mark).size);
     }
     list_indents(&mut rp, p, env);
+    // ODF (XSL's box model): padding takes room whether or not a side has a border.
+    if doc.settings.odf.is_some() {
+        odf_padding(&mut rp);
+    }
     rp
+}
+
+/// ODF keeps a paragraph's padding on a side without a border (XSL's box model; Word drops it): the room
+/// it takes is added to the spacing above or below, or to the indent beside.
+fn odf_padding(rp: &mut ResolvedPara) {
+    let [top, left, bottom, right] = rp.padding;
+    rp.space_before += top;
+    rp.space_after += bottom;
+    // Padding is on a physical side, the indents on a logical one: in a right-to-left paragraph
+    // the left padding is at its end.
+    let (start, end) = if rp.bidi { (right, left) } else { (left, right) };
+    rp.indent_left += start;
+    rp.indent_right += end;
 }
 
 /// List level indents apply unless the paragraph sets its own, or, for a list from the style,
@@ -249,6 +266,8 @@ impl<'a> Shaped<'a> {
         big.size = (((lines - 1.0) * line_h + rc.size * 0.7) / 0.7).min(1000.0).max(rc.size);
         if let Some(f) = &rp.drop_cap_font {
             big.font = f.clone();
+            big.font_cs = f.clone();
+            big.font_ea = Some(f.clone());
         }
         let before = self.b.clusters.len();
         self.b.shape(first, 0, &Arc::new(big), None);
@@ -289,7 +308,7 @@ impl<'a> Shaped<'a> {
             return;
         };
         match o {
-            _ if o.is_drawing() => self.drawing(cx, (k, o), slot),
+            _ if o.is_drawing() => self.drawing(cx, (k, o), slot, rc.position),
             InlineObject::Field { .. } => self.field(cx, (k, o), slot, rc),
             InlineObject::NoteRef { kind, id, custom } => self.note_ref(cx, (*kind, *id, custom), slot, rc),
             InlineObject::Equation { linear, display, math } => self.equation(cx, k, slot, rc, (linear, *display, math)),
@@ -315,7 +334,10 @@ impl<'a> Shaped<'a> {
     }
 
     /// A picture, shape or text box: inline, as wide and high as it is; a floating one takes no room.
-    fn drawing(&mut self, cx: &Cx, (k, o): (usize, &InlineObject), slot: Slot) {
+    /// An inline drawing: it stands on the baseline, raised or lowered by its run's position
+    /// (`raise`, points, as Word moves an inline picture with `w:position`). Its cluster reaches
+    /// `obj_h` above the baseline and `obj_d` below it (negative when raised clear of it).
+    fn drawing(&mut self, cx: &Cx, (k, o): (usize, &InlineObject), slot: Slot, raise: f32) {
         let env = cx.env;
         // A hidden one takes no room, and with no height its line doesn't draw it.
         if let Some((w, saved_h, float)) = o.frame()
@@ -343,7 +365,12 @@ impl<'a> Shaped<'a> {
             // for a rotated one's bounds, as Word does.
             let [el, et, er, eb] = float.effect_extent();
             let (px, py) = float.spin_pad(w * s, h * s);
-            self.push(slot, ClKind::Object(k), w * s + el + er + 2.0 * px, h * s + et + eb + 2.0 * py);
+            let tall = h * s + et + eb + 2.0 * py;
+            // Lowered at most until its top is on the baseline. The bound is made finite and
+            // not above `clamp`'s top whatever the extents give (`clamp` panics otherwise).
+            let floor = if tall.is_finite() { -tall.max(0.0) } else { 0.0 };
+            let raise = if raise.is_finite() { raise.clamp(floor, 1584.0) } else { 0.0 };
+            self.b.clusters.push(slot.cluster(ClKind::Object(k), w * s + el + er + 2.0 * px, (tall + raise, -raise)));
         } else {
             self.push(slot, ClKind::Object(k), 0.0, 0.0);
         }
@@ -568,7 +595,16 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let rp = paragraph_props(p, env);
     let res = Resolver { doc, style: p.props.style.as_deref(), table: env.table.map(|t| &t.chr) };
     let levels = bidi_levels(&p.text, rp.bidi);
-    let b = Builder { env, styles: Vec::new(), style_index: Default::default(), glyphs: Vec::new(), clusters: Vec::new(), levels, shown: Vec::new() };
+    let b = Builder {
+        env,
+        styles: Vec::new(),
+        style_index: Default::default(),
+        glyphs: Vec::new(),
+        clusters: Vec::new(),
+        levels,
+        shown: Vec::new(),
+        substituted: Vec::new(),
+    };
     let cx = Cx { p, env, rp: &rp, res, math_props: doc.settings.math.clone().unwrap_or_default(), drop_first: drop_cap_char(p, &rp) };
     let mut sh = Shaped::new(b, env.eq_number);
     let mark_rc = cx.res.char(&p.mark);
@@ -591,6 +627,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
     let mut pl = ParaLayout {
         rp,
+        substituted: b.substituted,
         styles: b.styles,
         glyphs: b.glyphs,
         clusters: b.clusters,
@@ -689,6 +726,8 @@ fn collapse(pl: &mut ParaLayout) {
     pl.rp.space_before = 0.0;
     pl.rp.space_after = 0.0;
     pl.label = None;
+    // It draws nothing, so no font it asks for is shown in another (its label was shaped).
+    pl.substituted.clear();
     // Its shading and borders would be drawn across the page at no height.
     pl.rp.shading = None;
     pl.rp.borders = None;
@@ -765,4 +804,26 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
     // Asian typography: kinsoku and breaking Latin words anywhere.
     crate::kinsoku::apply(text, &mut found, rp.kinsoku, rp.word_wrap);
     found
+}
+
+#[cfg(test)]
+mod padding_tests {
+    /// ODF padding is physical: a right-to-left paragraph's left padding widens its end indent
+    /// (the indents being logical), a left-to-right one's its start indent.
+    #[test]
+    fn a_right_to_left_paragraphs_left_padding_is_at_its_end() {
+        let doc = wordcraft_doc::Document::new();
+        let mut rp = doc.styles.resolve_para(&wordcraft_doc::props::ParaProps::default());
+        rp.padding = [1.0, 10.0, 2.0, 3.0];
+        let (left, right) = (rp.indent_left, rp.indent_right);
+        let mut ltr = rp.clone();
+        super::odf_padding(&mut ltr);
+        assert_eq!((ltr.indent_left - left, ltr.indent_right - right), (10.0, 3.0));
+        rp.bidi = true;
+        super::odf_padding(&mut rp);
+        assert_eq!((rp.indent_left - left, rp.indent_right - right), (3.0, 10.0));
+        // Shown on the page: the left padding still on the left.
+        assert_eq!(rp.visual_indents(), (right + 10.0, left + 3.0));
+        assert_eq!((rp.space_before, rp.space_after), (ltr.space_before, ltr.space_after));
+    }
 }
