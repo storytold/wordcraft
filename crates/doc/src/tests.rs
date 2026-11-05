@@ -290,6 +290,7 @@ fn json_round_trip() {
     assert_eq!(back.para(StoryRef::Body, &Path::top(0)).unwrap().runs[0].props.bold, Some(true));
 }
 
+/// Preserves paragraph and style tight-wrap values in native JSON.
 #[test]
 fn textbox_tight_wrap_survives_native_json() {
     let mut d = Document::from_text("text");

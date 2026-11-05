@@ -84,6 +84,7 @@ pub enum TextboxTightWrap {
 }
 
 impl TextboxTightWrap {
+    /// Parses an OOXML tight-wrap value, returning `None` for unknown values.
     pub fn from_ooxml(value: &str) -> Option<Self> {
         match value {
             "none" => Some(Self::None),
@@ -95,6 +96,7 @@ impl TextboxTightWrap {
         }
     }
 
+    /// Returns the OOXML value for this tight-wrap mode.
     pub const fn ooxml(self) -> &'static str {
         match self {
             Self::None => "none",

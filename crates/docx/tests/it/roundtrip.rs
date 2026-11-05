@@ -248,6 +248,7 @@ fn every_para_prop_round_trips() {
     }
 }
 
+/// Preserves each tight-wrap mode through two DOCX save and reopen cycles.
 #[test]
 fn textbox_tight_wrap_survives_two_docx_saves() {
     let modes = [
