@@ -12566,3 +12566,43 @@ fn body_tables_keep_the_pointer_from_a_text_box_or_a_note_and_a_footer_table_tak
     run(&mut s, "table.resizeDrag", json!({"page": 0, "x": fx, "y": fy, "toX": fx + 20.0, "toY": fy}));
     assert!(grid(&s, StoryRef::Part(foot))[0] > before[0] + 10.0, "the drag widened the footer's column");
 }
+
+/// #5558 review: `table.eraser` and `table.draw` with a `story` work on that story's tables only:
+/// a border of another story's table drawn there (a table in a body text box, among the body's
+/// items) is left alone; the named story's own is erased.
+#[test]
+fn the_eraser_and_the_pen_keep_to_the_story_they_are_given() {
+    use wordcraft_layout::Placed;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Body"}));
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    // A text box in the body with a table of its own.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    let boxed = StoryRef::Part(run(&mut s, "insert.textBox", json!({"text": "Box"}))["story"].as_u64().unwrap() as u32);
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    let first = |s: &mut Session, story: StoryRef| {
+        let l = s.layout();
+        let r = l.pages[0].items.iter().find_map(|it| match it {
+            Placed::Cell { rect, row: 0, cell: 0, story: st, .. } if *st == story => Some(*rect),
+            _ => None,
+        });
+        r.unwrap_or_else(|| panic!("{story:?}'s table is laid out"))
+    };
+    let cols = |s: &Session, story: StoryRef| {
+        s.doc.story(story).and_then(|b| b.iter().find_map(|b| b.as_table().map(|t| t.rows[0].cells.len()))).unwrap_or(0)
+    };
+    let body = serde_json::to_value(StoryRef::Body).unwrap();
+    // Named the body: the text box's table, though drawn among the body's items, is left alone.
+    let b = first(&mut s, boxed);
+    let erase = json!({"page": 0, "x": b.right(), "y": b.y + b.h / 2.0, "story": body.clone()});
+    assert!(s.run("table.eraser", &erase).is_err(), "no body border there");
+    let mid = b.x + b.w / 2.0;
+    let line = json!({"page": 0, "x0": mid, "y0": b.y + 1.0, "x1": mid, "y1": b.bottom() - 1.0, "story": body.clone()});
+    assert!(s.run("table.draw", &line).is_err(), "no body table to split there");
+    assert_eq!(cols(&s, boxed), 2, "the text box's table is as it was");
+    // The body's own border is erased.
+    let t = first(&mut s, StoryRef::Body);
+    run(&mut s, "table.eraser", json!({"page": 0, "x": t.right(), "y": t.y + t.h / 2.0, "story": body}));
+    assert_eq!(cols(&s, StoryRef::Body), 1, "the body table's two cells merged");
+}
