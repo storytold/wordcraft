@@ -70,7 +70,7 @@ const TEST_FONT: &str = "Source Sans 3";
 /// The paragraphs of `text` (one per line) in [`TEST_FONT`].
 fn pinned(text: &str) -> Document {
     let mut d = Document::from_text(text);
-    d.styles.default_chr.font = Some(TEST_FONT.into());
+    Arc::make_mut(&mut d.styles).default_chr.font = Some(TEST_FONT.into());
     d
 }
 
@@ -170,7 +170,7 @@ fn of_the_paragraphs_before_a_floating_table_those_in_its_way_move_below_it() {
         for spacing in [LineSpacing::Exactly(17.0), LineSpacing::AtLeast(17.0)] {
             for y in (0..17).map(|k| 106.5 + k as f32).chain([160.0]) {
                 let mut d = doc_with_table(&text_8, 8, float_table(612.0, 100.0, on_page(y)));
-                d.styles.default_chr.font = Some(font.into());
+                Arc::make_mut(&mut d.styles).default_chr.font = Some(font.into());
                 for b in &mut d.body {
                     if let Block::Para(p) = Arc::make_mut(b) {
                         p.props.line_spacing = Some(spacing);
@@ -201,7 +201,7 @@ fn exact_and_at_least_lines_keep_their_whole_height_clear_of_a_float_before_or_a
     let text_8 = (1..=8).map(|i| format!("P{i} word")).collect::<Vec<_>>().join("\n");
     let square = |y: f32| Float { wrap: Wrap::Square, h_rel: Anchor::Page, v_rel: Anchor::Page, y, ..Default::default() };
     let in_font = |mut d: Document, font: &str, spacing: LineSpacing| {
-        d.styles.default_chr.font = Some(font.into());
+        Arc::make_mut(&mut d.styles).default_chr.font = Some(font.into());
         for b in &mut d.body {
             if let Block::Para(p) = Arc::make_mut(b) {
                 p.props.line_spacing = Some(spacing);

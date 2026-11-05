@@ -60,7 +60,7 @@ pub use navigation::{nearest_page, page_at, page_to_screen};
 use navigation::{scrollbar_page_tip, viewed_page};
 #[cfg(test)]
 use pages::{DRAWING_GRID_MAX_LINES, DRAWING_GRID_MIN_PX};
-pub(crate) use pages::{PageKeys, page_doc, page_screen_scale, preview_sel, screen_render_options};
+pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options};
 use pages::{
     drawing_grid, drawing_grid_step, gridline_cells, page_image, page_key, page_render_options, shown_layout, texel_aligned_rect, view_key,
     visible_tiles,
@@ -257,6 +257,8 @@ pub struct CanvasState {
     /// The character an Alt code just typed: if the platform also sends its own composed
     /// character as text on the Alt release (Windows does), it isn't typed twice.
     pub(crate) alt_code_echo: Option<crate::keys::AltCodeEcho>,
+    /// Alt+numpad entry in the focused text box, while the page doesn't have the keyboard (#4403).
+    pub(crate) field_alt_code: crate::keys::FieldAltCode,
     /// Create Link is waiting for a click on the text box to link to: the linking box's object.
     pub(crate) link_from: Option<wordcraft_doc::Pos>,
     /// What screen readers were last told about the document (#488).
@@ -272,15 +274,23 @@ pub struct CanvasState {
     /// The rows and columns hovered in Insert › Table's grid this frame: the page shows that
     /// table where it would go (#3931). Set by the grid each frame, taken by [`show`].
     pub(crate) table_preview: Option<(usize, usize)>,
+    /// A command (id, params) the page shows run on the selection, without running it: the
+    /// formatting button the floating mini toolbar is hovered over. Set each frame, taken by [`show`].
+    pub(crate) command_preview: Option<(String, serde_json::Value)>,
+    /// The command preview the page last drew, so the bar repaints only when its hover changes.
+    pub(crate) command_previewed: Option<(String, serde_json::Value)>,
+    /// The scroll offset held while a command preview is shown, so the page does not move as
+    /// the previewed text reflows.
+    pub(crate) preview_scroll: Option<egui::Vec2>,
     /// The last previewed table's layout, the copy of the document it was laid out from and the
     /// copy's selection, with
-    /// what it was laid out for (rows, columns, document id, revision, selection, and the
+    /// what it was laid out for (command, params, document id, revision, selection, and the
     /// document's own layout, which a view change replaces), so a still pointer doesn't lay the
     /// document out every frame. Set only while the page shows the preview.
     table_preview_layout: Option<(TablePreviewKey, wordcraft_doc::Document, wordcraft_engine::Selection, std::sync::Arc<DocLayout>)>,
 }
 
-type TablePreviewKey = ((usize, usize, u64, u64, wordcraft_engine::Selection), std::sync::Arc<DocLayout>);
+type TablePreviewKey = ((String, serde_json::Value, u64, u64, wordcraft_engine::Selection), std::sync::Arc<DocLayout>);
 
 impl CanvasState {
     /// Another document is shown in the window: everything about the page that was shown (drags,
@@ -403,6 +413,7 @@ impl Default for CanvasState {
             ime_viewport: None,
             alt_code: String::new(),
             alt_code_echo: None,
+            field_alt_code: Default::default(),
             wheel: Default::default(),
             auto_scroll: Default::default(),
             scroll_offset: egui::Vec2::ZERO,
@@ -425,6 +436,9 @@ impl Default for CanvasState {
             tab_drag: None,
             drawn_ibeam: crate::ibeam::DRAWN,
             table_preview: None,
+            command_preview: None,
+            command_previewed: None,
+            preview_scroll: None,
             table_preview_layout: None,
         }
     }
@@ -484,8 +498,7 @@ struct CanvasView {
     area: Rect,
     hruler: Option<Rect>,
     vruler: Option<Rect>,
-    dark_page: bool,
-    sepia_page: bool,
+    paper: Color32,
     animate: bool,
     opts: egui::InputOptions,
     geo: Geometry,
@@ -495,10 +508,13 @@ struct CanvasView {
 }
 
 fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> CanvasView {
-    use wordcraft_engine::cmd::view::ReadPageColor;
     let read_mode = app.session.view.read_mode;
-    let dark_page = if read_mode { app.session.view.read_page_color == ReadPageColor::Inverse } else { app.session.view.dark_mode };
-    let sepia_page = read_mode && app.session.view.read_page_color == ReadPageColor::Sepia;
+    // The paper under each page, as the page raster draws it without a page color: the dark page
+    // of View › Switch Modes, or in Read Mode the Page color's white, sepia or dark paper.
+    let paper = {
+        let p = page_render_options(app, false).blank_paper();
+        Color32::from_rgb(p.0, p.1, p.2)
+    };
     let show_ruler = app.session.view.ruler
         && app.session.view.mode == wordcraft_layout::ViewMode::Print
         && !read_mode
@@ -566,7 +582,7 @@ fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> C
     {
         app.session.page_hint = c.page;
     }
-    CanvasView { area, hruler, vruler, dark_page, sepia_page, animate, opts, geo, dim_body, grid_story, caret }
+    CanvasView { area, hruler, vruler, paper, animate, opts, geo, dim_body, grid_story, caret }
 }
 
 fn update_caret_scroll(app: &mut WordApp, view: &CanvasView) -> Option<Rect> {
@@ -713,7 +729,9 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
 fn prepare_layout(app: &mut WordApp, ui: &Ui, full: Rect) -> std::sync::Arc<DocLayout> {
     let now = ui.input(|i| i.time);
     let reflow_anchor = update_viewport(app, ui, full, now);
-    if app.canvas.focused && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
+    // While a modal dialog ("Save changes?" too) is up, keys answer it rather than edit the
+    // document behind it, also in the frame it opens, before the canvas has given up focus.
+    if app.canvas.focused && !app.modal_open() {
         crate::keys::canvas_events(app, ui.ctx());
     } else {
         app.canvas.alt_code.clear();
@@ -793,10 +811,12 @@ fn update_canvas_focus(app: &mut WordApp, ui: &mut Ui, resp: &egui::Response, im
     if focus_click {
         ui.memory_mut(|memory| memory.interrupt_ime());
     }
-    if focus_click || (app.canvas.want_focus && !resp.has_focus()) {
+    // Not while a modal dialog is open: it has the keyboard, and the page takes it when it closes.
+    let wants = app.canvas.want_focus && !app.modal_open();
+    if focus_click || (wants && !resp.has_focus()) {
         resp.request_focus();
     }
-    if focus_click || app.canvas.want_focus {
+    if focus_click || wants {
         app.canvas.want_focus = false;
     }
     app.canvas.widget_id = Some((resp.id, ui.ctx().cumulative_pass_nr()));
@@ -830,8 +850,7 @@ struct PagePaint<'a> {
     t: &'a Tokens,
     painter: &'a egui::Painter,
     dim_body: bool,
-    dark_page: bool,
-    sepia_page: bool,
+    paper: Color32,
     hidden: Option<(usize, Pos)>,
     view: u64,
     content_origin: Pos2,
@@ -878,8 +897,7 @@ fn draw_page_gridlines(app: &WordApp, painter: &egui::Painter, t: &Tokens, page:
 }
 
 fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
-    let PagePaint { app, ui, layout, geo, t, painter, dim_body, dark_page, sepia_page, hidden, view, content_origin, ppp, max_tex, grid_story } =
-        pass;
+    let PagePaint { app, ui, layout, geo, t, painter, dim_body, paper, hidden, view, content_origin, ppp, max_tex, grid_story } = pass;
     let mut visible_tile_keys = HashSet::new();
     let mut rendered = 0;
     let mut rects = Vec::with_capacity(geo.rects.len());
@@ -942,14 +960,6 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
             if band_top <= 0.0 && band_bot >= sr.height() { painter.clone() } else { painter.with_clip_rect(painter.clip_rect().intersect(band)) };
         // Shadow and paper.
         painter.rect_filled(visual_sr.translate(vec2(0.0, 2.0)).expand(1.5), 1.0, t.page_shadow);
-        let paper = if dark_page {
-            Color32::from_gray(wordcraft_render::DARK_PAPER)
-        } else if sepia_page {
-            let s = wordcraft_render::SEPIA_PAPER;
-            Color32::from_rgb(s.0, s.1, s.2)
-        } else {
-            Color32::WHITE
-        };
         painter.rect_filled(visual_sr, 0.0, paper);
         if tiled {
             // Render before painting to keep the frame sharp immediately after an edit or
@@ -1078,6 +1088,23 @@ fn handle_primary_pointer(
     geo: &Geometry,
     middle_gesture: bool,
 ) {
+    // A press that began on a drop-down's list button opens the list (`content_controls::clicks`) and must
+    // not move the caret: the button hangs over what follows the control, and a caret placed
+    // there leaves the control, which closes the list in the frame it opens (#5389).
+    // A press and its release in one frame (a quick click on a slow frame) leave no `press_origin`;
+    // the press is still among the frame's events. A table tool owns the pointer instead: a stroke
+    // may start over the button.
+    let press = ui.input(|i| {
+        i.pointer.press_origin().or_else(|| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::PointerButton { pos, pressed: true, .. } => Some(*pos),
+                _ => None,
+            })
+        })
+    });
+    if app.canvas.table_tool.is_none() && press.is_some_and(|p| app.controls.on_button(p)) {
+        return;
+    }
     // Double-click the space between two pages (or the line between them) to hide or show it.
     if resp.double_clicked()
         && app.session.view.mode == wordcraft_layout::ViewMode::Print
@@ -1311,15 +1338,56 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
 /// Lays out and paints the document pages for print, Read and Web views, settles viewports, draw
 /// rulers and overlays, anchors zoom and scrolling, and routes pointer, selection, IME and caret
 /// input.
+/// While the page shows a command preview the view stays where it was when the preview began:
+/// no scrolling to the caret, and the offset is held against the previewed text's reflow.
+fn hold_scroll_for_preview(app: &mut WordApp) -> bool {
+    if app.canvas.command_previewed.is_none() {
+        app.canvas.preview_scroll = None;
+        return false;
+    }
+    let at = *app.canvas.preview_scroll.get_or_insert(app.canvas.scroll_offset);
+    app.canvas.scroll_request = Some(at);
+    true
+}
+
+/// The live selection's rects on screen, from the document's own layout rather than a command
+/// preview's, which can move the lines (Align Right) from under the mini toolbar's pointer.
+fn live_selection_screen_rects(app: &mut WordApp, rects: &[Rect], scale: f32) -> Vec<Rect> {
+    let layout = app.session.layout();
+    let selected: Vec<_> = if crate::objects::selected(app).is_some() {
+        Vec::new()
+    } else if let Some(range) = app.session.cell_range() {
+        wordcraft_engine::cmd::table_mouse::cell_rects(&layout, &app.session.doc, range)
+    } else if !app.session.sel.is_collapsed() {
+        match app.session.column_segments() {
+            Some(segs) => segs.iter().flat_map(|(a, b)| layout.selection_rects(&app.session.doc, a, b, app.session.page_hint)).collect(),
+            None => {
+                let (a, b) = app.session.sel.ordered();
+                wordcraft_engine::cmd::table_mouse::selection_rects(&layout, &app.session.doc, &a, &b, app.session.page_hint)
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    selected
+        .into_iter()
+        .filter_map(|(pi, r)| {
+            let pr = rects.get(pi)?;
+            let scale = layout.pages.get(pi).map_or(scale, |page| page_screen_scale(*pr, page, scale));
+            Some(Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale)))
+        })
+        .collect()
+}
+
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.available_rect_before_wrap();
     let layout = prepare_layout(app, ui, full);
     let view = prepare_view(app, ui, full, &layout);
-    let scroll_target = update_caret_scroll(app, &view);
+    let scroll_target = if hold_scroll_for_preview(app) { None } else { update_caret_scroll(app, &view) };
     let motion = scroll_motion(app, ui, full, &view);
     let scroll_area = configure_scroll_area(app, ui, &view, motion);
-    let CanvasView { area, hruler, vruler, dark_page, sepia_page, geo, dim_body, grid_story, caret, .. } = view;
+    let CanvasView { area, hruler, vruler, paper, geo, dim_body, grid_story, caret, .. } = view;
     let mut origin = area.min;
     let mut ui_area = ui.new_child(egui::UiBuilder::new().max_rect(area));
     let mut ime_geometry: Option<(Rect, Rect)> = None;
@@ -1346,8 +1414,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             t: &t,
             painter: &painter,
             dim_body,
-            dark_page,
-            sepia_page,
+            paper,
             hidden,
             view: page_view,
             content_origin,
@@ -1371,14 +1438,16 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         if floating_comments(app) {
             // Its own layer, so presses on the card never reach the canvas under it.
             let ctx = ui.ctx().clone();
-            egui::Area::new(egui::Id::unique("floating_comment")).order(egui::Order::Foreground).fixed_pos(Pos2::ZERO).sense(Sense::hover()).show(
-                &ctx,
-                |aui| {
+            egui::Area::new(egui::Id::unique("floating_comment"))
+                .order(egui::Order::Foreground)
+                .interactable(!app.modal_open())
+                .fixed_pos(Pos2::ZERO)
+                .sense(Sense::hover())
+                .show(&ctx, |aui| {
                     aui.set_clip_rect(view_rect);
                     let ap = aui.painter().clone();
                     balloons(app, aui, &ap, &rects, &layout, geo.scale, view_rect);
-                },
-            );
+                });
         } else {
             balloons(app, ui, &painter, &rects, &layout, geo.scale, view_rect);
         }
@@ -1432,7 +1501,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // Anchor only to visible selection geometry. A selection can span pages, and its
         // document-first line may be scrolled offscreen; using it would pin the toolbar to an
         // old screen position unrelated to the visible selection.
-        app.canvas.mini_anchor = crate::mini_toolbar::visible_anchor(screen_rects, visible_clip);
+        // Alignment previews can move the selected text while the pointer is still over a mini
+        // toolbar button. Keep the bar anchored to the live selection until the preview ends, or
+        // it can move out from under the pointer and flicker between preview and live layouts.
+        let anchor_rects = if app.canvas.command_previewed.is_some() { live_selection_screen_rects(app, &rects, geo.scale) } else { screen_rects };
+        app.canvas.mini_anchor = crate::mini_toolbar::visible_anchor(anchor_rects, visible_clip);
         // Content controls: the frame of the one the caret is in (all of them in Design Mode).
         crate::content_controls::paint(app, &painter, &t, &layout, &rects, geo.scale);
         paint_read_aloud_highlight(app, &painter, &layout, &rects, &geo, &t);
