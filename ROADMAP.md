@@ -775,7 +775,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-05 | trivial | PR #5254: preserve structural DOCX bookmarks and source column bounds while the original markers remain; replacing or deleting a bookmark clears its source placement. Synthetic edit, undo/redo and repeated-save controls; native Word and broader corpus acceptance remain open. Unsupported chunks that produce no blocks retain pending bookmarks in one empty carrier paragraph. |
+| 2026-11-05 | trivial | PR #5254: preserve structural DOCX bookmarks and source column bounds only while the original markers remain at the matching paragraph edges; moved markers are saved inline; replacing or deleting a bookmark clears its source placement. Synthetic edit, undo/redo and repeated-save controls; native Word and broader corpus acceptance remain open. Unsupported chunks that produce no blocks retain pending bookmarks in one empty carrier paragraph. |
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` is preserved with true, false and absent values; OOXML properties follow schema order. Grid layout remains open. |
 | 2026-10-28 | trivial | Per-page ink object lookups, #3614. Drawing order, geometry and saved data retain their behavior; no readiness estimate change |
 | 2026-10-28 | trivial | Shared MATH construction records reuse variants and assembly data without changing glyph mappings or existing limits (#3630); readiness estimates unchanged |
