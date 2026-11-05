@@ -1,4 +1,6 @@
-use super::actions::{customize_keyboard, customize_ribbon, hf_nav, language, macros, quick_parts, search_commands, select_similar};
+use super::actions::{
+    customize_keyboard, customize_ribbon, hf_nav, language, macros, preferred_language, quick_parts, search_commands, select_similar,
+};
 use super::autocorrect::autocorrect_options;
 use super::compare::{COMPARE_PARAMS, compare};
 use super::inspect::{accessibility, inspect_doc};
@@ -6,6 +8,7 @@ use super::{
     Block, CharProps, CmdError, CommandSpec, InlineObject, NumRef, Paragraph, Selection, StoryRef, Value, delete_selection, json, p, para_block,
     sel_result,
 };
+use std::sync::Arc;
 
 /// Builds the tools, review, file and insertion command table: Repeat and macros; AutoCorrect,
 /// keyboard and ribbon customization and search; Compare, accessibility, inspection, protection,
@@ -297,8 +300,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 .and_then(|x| x.props.numbering)
                 .filter(|n| n.num != 0)
                 .ok_or_else(|| CmdError::Failed("not in a numbered list".into()))?;
-            let new = s.doc.numbering.restart(n.num).ok_or_else(|| CmdError::Failed("bad list".into()))?;
-            if let Some(num) = s.doc.numbering.nums.iter_mut().find(|x| x.id == new) {
+            let new = Arc::make_mut(&mut s.doc.numbering).restart(n.num).ok_or_else(|| CmdError::Failed("bad list".into()))?;
+            if let Some(num) = Arc::make_mut(&mut s.doc.numbering).nums.iter_mut().find(|x| x.id == new) {
                 num.start_overrides = vec![(n.level, value)];
             }
             let paths: Vec<_> = s.doc.para_paths(f.story).into_iter().filter(|q| *q >= f.path).collect();
@@ -321,9 +324,9 @@ pub fn specs() -> Vec<CommandSpec> {
             let fmt = wordcraft_doc::section::NumFormat::from_ooxml(p::str(v, "format").unwrap_or("decimal"));
             let text = p::str(v, "text").unwrap_or("%1.").to_string();
             let start = p::u64(v, "start").unwrap_or(1).min(100_000) as u32;
-            let id = s.doc.numbering.try_add_list(wordcraft_doc::ListKind::Numbered)?;
+            let id = Arc::make_mut(&mut s.doc.numbering).try_add_list(wordcraft_doc::ListKind::Numbered)?;
             if let Some(a) = s.doc.numbering.abstract_of(id).map(|a| a.id)
-                && let Some(abs) = s.doc.numbering.abstracts.iter_mut().find(|x| x.id == a)
+                && let Some(abs) = Arc::make_mut(&mut s.doc.numbering).abstracts.iter_mut().find(|x| x.id == a)
                 && let Some(l) = abs.levels.first_mut()
             {
                 l.format = fmt;
@@ -339,6 +342,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("review.language", "Language", "Review › Language", language).params(
             r#"{"lang"?: "en-US|en-GB|pl-PL|fr-FR|…" (BCP 47; default en-US), "noProof"?: bool, "detect"?: bool (detect language automatically, a preference), "default"?: bool (also the document's default and the saved language for future blank documents)}"#,
         ),
+        CommandSpec::new("review.language.preferred", "Set as Default Language", "File › Options › Language", preferred_language)
+            .params(r#"{"lang": "en-US|en-GB|pl-PL|nl-NL|…" (BCP 47)} — only the saved default proofing language, what future blank documents are written in, as Options › Language › Set as default does; the open document, the selection and the undo history don't change. Returns {"preferred": tag}."#)
+            .pure(),
         CommandSpec::new("review.showMarkup", "Show Markup", "Review › Tracking", |s, v| {
             s.view.show_markup = p::bool(v, "value").unwrap_or(!s.view.show_markup);
             s.relayout();

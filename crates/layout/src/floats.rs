@@ -244,8 +244,8 @@ fn float_items(o: &InlineObject, rect: Rect, outer: (Spin, Point), story: StoryR
     let rect = carried(rect, ospin, oc);
     let spin = own.within(ospin);
     match o {
-        InlineObject::Image { media, crop, .. } => {
-            vec![Placed::Image { rect, media: media.clone(), crop: *crop, story, path: Path(path.to_vec()), off, spin }]
+        InlineObject::Image { media, crop, fx, .. } => {
+            vec![Placed::Image { rect, media: media.clone(), crop: *crop, story, path: Path(path.to_vec()), off, spin, fx: *fx }]
         }
         InlineObject::Shape { kind, fill, stroke, stroke_width, effects, freeform, extra, .. } => {
             let object = wordcraft_doc::Pos { story, path: Path(path.to_vec()), off };
@@ -363,6 +363,7 @@ pub(crate) fn anchor_floats(
             if left_out(oi) {
                 continue;
             }
+            let h = ctx.float_height(o, w, h);
             // Positions relative to the paragraph start above its space before (Word for Windows).
             let mut r = float_rect(Some(frame), (col_x, width), y0 - before, w, h, float);
             let outline = ctx.wrap_outline(o);
@@ -488,10 +489,16 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
             let rect = if let Some(r) = pinned {
                 r
             } else if floating {
-                floats.get(&oi).copied().unwrap_or_else(|| float_rect(at.page, at.col, at.para_y, w, h, float))
+                match floats.get(&oi) {
+                    Some(r) => *r,
+                    None => {
+                        let h = ctx.float_height(obj, w, h);
+                        float_rect(at.page, at.col, at.para_y, w, h, float)
+                    }
+                }
             } else {
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
-                display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, c.obj_h, pl.rule_room(line, k))
+                display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, (c.obj_h, c.obj_d), pl.rule_room(line, k))
             };
             let (mut behind, mut front) = (Vec::new(), Vec::new());
             let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
