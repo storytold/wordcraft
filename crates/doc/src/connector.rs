@@ -217,6 +217,12 @@ pub struct ShapeExtra {
     /// main colour (the shape's `stroke`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outline_fill: Option<crate::fill::Fill>,
+    /// An ODF custom shape's geometry as read (its `draw:enhanced-geometry`, equations and
+    /// handles), whose path the shape's freeform was worked out from: saved back as it was, so
+    /// LibreOffice draws its own shape (or a preset WordCraft draws as a rectangle: kept with
+    /// it). Dropped when the shape is made another kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub odf_geometry: Option<std::sync::Arc<String>>,
     /// A horizontal rule (VML `o:hr`: a web page's `<hr>` pasted into Word): it takes its whole
     /// line, and is drawn across [`HorizontalRule::pct`] of it or at the shape's own width.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -475,7 +481,6 @@ pub fn connector_segs(kind: ShapeKind, w: f32, h: f32, geom: Option<&ConnectorGe
 pub fn end_direction(kind: ShapeKind, w: f32, h: f32, at_end: bool, geom: Option<&ConnectorGeom>) -> (f32, f32) {
     let (dx, dy) = match kind {
         ShapeKind::ElbowConnector | ShapeKind::CurvedConnector => leg_direction(&connector_segs(kind, w, h, geom).unwrap_or_default(), at_end),
-        ShapeKind::Line => (w, -h),
         _ => (w, h),
     };
     let len = (dx * dx + dy * dy).sqrt();
