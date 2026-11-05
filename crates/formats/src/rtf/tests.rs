@@ -68,6 +68,21 @@ fn unicode_fallback_uses_the_declared_count() {
 }
 
 #[test]
+fn unicode_fallback_info_words_preserve_following_metadata() {
+    for (rtf, title, body) in [
+        (br"{\rtf1{\info{\title\uc9\u233abcdefgh\info X}{\author Alice}} Text}".as_slice(), "éX", "Text"),
+        (br"{\rtf1{\info{\title\uc1\u233\info X}{\author Alice}} Text}", "éX", "Text"),
+        (br"{\rtf1{\info{\title\uc0\u233X}{\author Alice}} Text}", "éX", "Text"),
+        (br"{\rtf1\uc0\u233{\info{\title Plain}{\author Alice}}Text}", "Plain", "éText"),
+    ] {
+        let doc = import(rtf).unwrap();
+        assert_eq!(doc.core.title, title, "{rtf:?}");
+        assert_eq!(doc.core.creator, "Alice", "{rtf:?}");
+        assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), body, "{rtf:?}");
+    }
+}
+
+#[test]
 fn unicode_fallback_in_revision_authors_counts_control_words() {
     for (rtf, expected) in [
         (br"{\rtf1{\*\revtbl{Unknown;}{\uc9\u233abcdefgh\par Zed;}}{\revised\revauth1 text}}".as_slice(), "éZed"),
