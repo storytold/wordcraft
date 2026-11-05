@@ -19,6 +19,15 @@ wordcraft-fonts = { workspace = true }
 wordcraft-ui-egui = { workspace = true }
 # The control key file's location (shared with the MCP bridge).
 wordcraft-control-key = { workspace = true }
+# GeenioAI's host (`assistant_host`): the FANTASTICO account as a connection of the shared Craft
+# AI layer, its key in the system keychain, each request a job of the layer. The layer is
+# provisional, so it is pinned to the revision `craft-ai-fantastico` is built against.
+wordcraft-assistant = { workspace = true }
+fantastico-sdk = { workspace = true }
+craft-ai-core = { git = "https://github.com/storytold/craft-ai-integrations", rev = "ea85917afe35afcd48a6d19a27daca0621c74db2" }
+craft-ai-client = { git = "https://github.com/storytold/craft-ai-integrations", rev = "ea85917afe35afcd48a6d19a27daca0621c74db2" }
+craft-ai-native = { git = "https://github.com/storytold/craft-ai-integrations", rev = "ea85917afe35afcd48a6d19a27daca0621c74db2" }
+craft-ai-fantastico = { git = "https://github.com/Byte42-it/craft-ai-fantastico", rev = "24f907ace58bb87a2d54a08303973b37e2c6801f" }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "clipboard", "wayland", "x11", "links"] }
 egui = { workspace = true }
 serde_json = { workspace = true }

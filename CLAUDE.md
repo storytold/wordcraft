@@ -36,7 +36,7 @@ People trust WordCraft with their writing; a crash loses their work. **This outr
 | L2 | `layout`, `docx`, `formats` | line breaking, pagination, tables, headers/footers, hit testing; OOXML I/O; TXT/MD/HTML/RTF/ODT |
 | L3 | `render`, `pdf` | vello_cpu rasteriser; krilla PDF |
 | L4 | `engine` | Session, undo, **command registry**, Word feature catalog, samples, I/O dispatch |
-| L5 | `mcp` | MCP server (headless or bridged to the app) |
+| L5 | `mcp`, `assistant`, `fantastico` | MCP server (headless or bridged to the app); GeenioAI's agent loop over the MCP tools and its streaming FANTASTICO endpoint, native only (`docs/assistant.md`) |
 | L6 | `ui-egui` | Word-style egui front end (swappable) |
 | apps | `apps/wordcraft`, `apps/wordcraft-cli`, `apps/wordcraft-web` | binaries |
 | external | `craft-proof` (craft-libs, used as `wordcraft-proof`, sits at L1) | proofing: spelling, grammar, hyphenation; its word lists and patterns are craft-i18n's `language-data/` (`CRAFT_I18N_DIR`) |

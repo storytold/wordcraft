@@ -1,6 +1,6 @@
 //! Task panes: Navigation (headings, pages, search results), Clipboard, Styles, Style Inspector,
 //! Accessibility and Alt Text (see `a11y_pane`), Format Shape (see `format_shape`), Restrict Editing
-//! ([`crate::dialogs_review`]), Comments, and the SmartArt Text Pane. `craft_ui::panes` draws them
+//! ([`crate::dialogs_review`]), Comments, GeenioAI (see `assistant`), and the SmartArt Text Pane. `craft_ui::panes` draws them
 //! around the document, with their title bars, menus and resize edges; the session's view flags say
 //! which are open.
 
@@ -62,6 +62,8 @@ pub enum Pane {
     RestrictEditing,
     Proofing,
     Comments,
+    /// GeenioAI, the AI assistant (Home › GeenioAI), on the right like Word's Copilot pane.
+    Assistant,
 }
 
 impl Pane {
@@ -78,6 +80,7 @@ impl Pane {
             Self::RestrictEditing => "Restrict Editing",
             Self::Proofing => "Proofing",
             Self::Comments => "Comments",
+            Self::Assistant => "GeenioAI",
         }
     }
 
@@ -94,6 +97,7 @@ impl Pane {
             Self::RestrictEditing => (Edge::End, 270.0),
             Self::Proofing => (Edge::End, 400.0),
             Self::Comments => (Edge::End, 290.0),
+            Self::Assistant => (Edge::End, 340.0),
         };
         PaneState::docked(edge, width)
     }
@@ -112,10 +116,11 @@ impl Pane {
             Self::RestrictEditing => "restrictEditing",
             Self::Proofing => "proofing",
             Self::Comments => "comments",
+            Self::Assistant => "assistant",
         }
     }
 
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 12] = [
         Self::SmartArtText,
         Self::Navigation,
         Self::Clipboard,
@@ -127,13 +132,15 @@ impl Pane {
         Self::RestrictEditing,
         Self::Proofing,
         Self::Comments,
+        Self::Assistant,
     ];
 
     fn from_key(key: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|pane| pane.key() == key)
     }
 
-    /// The command that closes the pane; Restrict Editing has none and closes in [`close`].
+    /// The command that closes the pane; Restrict Editing, Proofing and GeenioAI have none and close
+    /// in [`close`].
     fn close_command(self) -> Option<&'static str> {
         match self {
             Self::SmartArtText => Some("smartArt.textPane"),
@@ -145,7 +152,7 @@ impl Pane {
             Self::AltText => Some("view.altTextPane"),
             Self::FormatShape => Some("view.formatShapePane"),
             Self::Comments => Some("view.commentsPane"),
-            Self::RestrictEditing | Self::Proofing => None,
+            Self::RestrictEditing | Self::Assistant | Self::Proofing => None,
         }
     }
 }
@@ -171,6 +178,7 @@ impl PaneContent<Pane> for Content<'_> {
             Pane::RestrictEditing => crate::dialogs_review::restrict_pane(app, ui),
             Pane::Proofing => crate::proofing_pane::show(app, ui),
             Pane::Comments => comments(app, ui),
+            Pane::Assistant => crate::assistant::show(app, ui),
         })
     }
 

@@ -1254,6 +1254,48 @@ fn paint_view_and_tables(pen: &Pen, name: &str) -> bool {
             pen.circle(8.5, 8.5, 5.0, c);
             pen.line(&[(12.0, 12.0), (16.5, 16.5)]);
         }
+        // The AI Assistant: a four-pointed spark with a smaller one beside it. Two rhombi make
+        // the big spark (a star isn't convex), the small one the same way.
+        "assistant" => {
+            pen.fill(&[(8.0, 1.5), (9.8, 8.2), (8.0, 15.0), (6.2, 8.2)], a);
+            pen.fill(&[(1.5, 8.2), (8.0, 6.4), (14.5, 8.2), (8.0, 10.0)], a);
+            pen.fill(&[(15.0, 11.0), (16.0, 14.3), (15.0, 18.0), (14.0, 14.3)], c);
+            pen.fill(&[(11.8, 14.5), (15.0, 13.5), (18.2, 14.5), (15.0, 15.5)], c);
+        }
+        // A cog: the ring and eight teeth.
+        "gear" => {
+            pen.circle(10.0, 10.0, 3.0, c);
+            for k in 0..8 {
+                let angle = std::f32::consts::TAU * k as f32 / 8.0;
+                let (s, co) = angle.sin_cos();
+                pen.line(&[(10.0 + 5.3 * co, 10.0 + 5.3 * s), (10.0 + 8.0 * co, 10.0 + 8.0 * s)]);
+            }
+            pen.circle(10.0, 10.0, 5.3, c);
+        }
+        // Sweep away: a fresh start. The handle, then the head widening towards the bristles.
+        "broom" => {
+            pen.line(&[(16.5, 3.0), (10.0, 9.5)]);
+            pen.closed(&[(8.3, 8.5), (11.5, 11.7), (9.0, 17.0), (3.0, 13.0)], c);
+            pen.line(&[(5.5, 14.5), (7.0, 12.5)]);
+            pen.line(&[(7.0, 16.0), (8.6, 13.8)]);
+        }
+        // Read again: an open ring with an arrow head.
+        "refresh" => {
+            let pts: Vec<(f32, f32)> = (0..=18)
+                .map(|i| {
+                    let a = (35.0 + i as f32 * 15.0).to_radians();
+                    (10.0 + 6.0 * a.cos(), 10.0 - 6.0 * a.sin())
+                })
+                .collect();
+            pen.line(&pts);
+            pen.fill(&[(16.0, 3.2), (17.6, 8.2), (12.6, 7.0)], c);
+        }
+        // Pay: top up a credit. The card, its stripe and the signature line.
+        "creditCard" => {
+            pen.rect(2.5, 5.0, 17.5, 15.0, c);
+            pen.frect(2.5, 7.5, 17.5, 9.5, c);
+            pen.line(&[(5.0, 12.5), (10.0, 12.5)]);
+        }
         "share" => {
             pen.line(&[(10.0, 3.0), (10.0, 12.0)]);
             pen.line(&[(6.5, 6.5), (10.0, 3.0), (13.5, 6.5)]);
