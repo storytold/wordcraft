@@ -140,6 +140,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-05: Damaged DOCX entries (#3724) now retain same-source overwrite protection when opened by the CLI; refusals from `--save`, `--cmd`, and scripts are reported as errors. Regression test covers all three paths; readiness estimates unchanged.
+
 - 2026-11-04: CLI `convert` rejects a missing or repeated `--format` value before opening the input or writing output, matching the existing page/scale option checks. Readiness estimates unchanged.
 - 2026-11-04: MHT import keeps semicolons and escaped quotes inside quoted MIME parameters, so an unrelated parameter cannot supply a false multipart boundary and hide the document text. Readiness estimates unchanged.
 - 2026-10-28: Ink replay, eraser picking, lasso selection and arrow-candidate discovery reuse the paragraph prefixes they have already scanned (#3614). Page item order, stroke geometry and saved data retain their behavior. This narrows the stability work; ink import fidelity, native pen input and broader corpus qualification remain open.

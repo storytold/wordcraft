@@ -9,8 +9,9 @@ Group connectors (gap 10): re-routing preserves displayed rotated and flipped fr
 
 Damaged DOCX entries are skipped with their names exposed by `file.open`; the status names the
 omitted parts, and overwriting the same source requires confirmation. The CLI reports skipped
-parts and requires `--confirm-damaged` to replace the source. This closes the data-loss path in
-#3724; malformed required XML and fidelity across real-world DOCX files remain separate gaps.
+parts and refuses unconfirmed overwrites through `--save`, `--cmd` and scripts; `convert` requires
+`--confirm-damaged` to replace the source. This closes the data-loss path in #3724; malformed
+required XML and fidelity across real-world DOCX files remain separate gaps.
 
 > **Printing update:** 2026-10-12 · direct desktop printing through craft-print; details below.
 
