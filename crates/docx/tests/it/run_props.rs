@@ -110,9 +110,9 @@ fn run_and_style_emphasis_marks_survive_two_saves() {
         ("NoMark", Some(EmphasisMark::None)),
     ];
     for (id, mark) in expected_styles {
-        assert_eq!(doc.styles.get(id).and_then(|style| style.chr.emphasis_mark), mark);
+        assert_eq!(doc.styles.get(id).and_then(|style| style.chr.emphasis), mark);
     }
-    assert_eq!(p.runs[4].props.emphasis_mark, Some(EmphasisMark::None));
+    assert_eq!(p.runs[4].props.emphasis, Some(EmphasisMark::None));
     let expected_runs = [
         Some(EmphasisMark::Dot),
         Some(EmphasisMark::Comma),
@@ -122,7 +122,7 @@ fn run_and_style_emphasis_marks_survive_two_saves() {
         None,
     ];
     for (run, mark) in p.runs.iter().skip(6).zip(expected_runs) {
-        assert_eq!(run.props.emphasis_mark, mark);
+        assert_eq!(run.props.emphasis, mark);
     }
 
     for pass in 0..2 {
@@ -136,15 +136,15 @@ fn run_and_style_emphasis_marks_survive_two_saves() {
         assert!(document_xml.contains("default dot"));
         doc = wordcraft_docx::read(&out).unwrap();
         for (id, mark) in expected_styles {
-            assert_eq!(doc.styles.get(id).and_then(|style| style.chr.emphasis_mark), mark, "pass {pass}");
+            assert_eq!(doc.styles.get(id).and_then(|style| style.chr.emphasis), mark, "pass {pass}");
         }
         let p = doc.body.iter().find_map(|b| b.as_para()).unwrap();
         for index in [0, 1, 2, 3, 5] {
-            assert_eq!(p.runs[index].props.emphasis_mark, None, "pass {pass}: run {index}");
+            assert_eq!(p.runs[index].props.emphasis, None, "pass {pass}: run {index}");
         }
-        assert_eq!(p.runs[4].props.emphasis_mark, Some(EmphasisMark::None), "pass {pass}: run 4",);
+        assert_eq!(p.runs[4].props.emphasis, Some(EmphasisMark::None), "pass {pass}: run 4",);
         for (run, mark) in p.runs.iter().skip(6).zip(expected_runs) {
-            assert_eq!(run.props.emphasis_mark, mark, "pass {pass}");
+            assert_eq!(run.props.emphasis, mark, "pass {pass}");
         }
     }
 }
