@@ -5071,3 +5071,17 @@ fn zoomed_in_pages_render_only_tiles_in_view() {
     assert!(pixels <= 4 * 1280 * 800, "about the window's worth of pixels: {pixels}");
     assert!(whole.iter().all(|(_, [w, h])| w * h <= 4_500_000), "no whole-page raster at 500%: {whole:?}");
 }
+
+/// A tiled page's underlay fits a texture whatever the page's size: rounding the scale's pixel
+/// size up (as render_page does) never passes the GPU's largest side, at the height clamp too.
+#[test]
+fn a_tiled_pages_underlay_fits_a_texture() {
+    for max_tex in [2048.0_f32, 7814.0, 8192.0, 16384.0] {
+        for (w, h) in [(612.0, 792.0), (600.0, 17_843.0), (600.0, 1e6), (1e6, 1e6), (1.0, 1e6), (0.5, 3e7)] {
+            let page = Page { w, h, ..Default::default() };
+            let s = underlay_scale(&page, max_tex);
+            let side = |len: f32| (len.clamp(1.0, 1e6) * s).ceil();
+            assert!(s > 0.0 && side(w) <= max_tex && side(h) <= max_tex, "{w}×{h} at {max_tex}: scale {s}");
+        }
+    }
+}

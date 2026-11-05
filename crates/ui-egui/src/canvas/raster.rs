@@ -254,7 +254,7 @@ impl Rasterizer {
             images.push((r.tex.id(), job.rect));
         }
         // Tiles from before the zoom, stretched, until this scale's tiles are all in. Two zooms in
-        // a row can leave tiles of two scales: the one nearest this scale is drawn on top.
+        // a row can leave tiles of two scales: the sharper one (the larger scale) is drawn on top.
         if !complete {
             let mut old: Vec<_> = app
                 .canvas
@@ -264,7 +264,7 @@ impl Rasterizer {
                 .map(|(id, r)| (*id, r.scale, r.tex.id(), tile_rect(job.rect.min, *id, tile, job.screen_scale / r.scale, r.tex.size_vec2())))
                 .filter(|(.., at)| at.intersects(job.view))
                 .collect();
-            old.sort_by(|a, b| (b.1 - s).abs().total_cmp(&(a.1 - s).abs()).then(a.0.scale.cmp(&b.0.scale)));
+            old.sort_by(|a, b| a.1.total_cmp(&b.1));
             for (id, _, tex, at) in old {
                 self.keep.insert(id);
                 images.push((tex, at));
@@ -327,9 +327,11 @@ fn raster_px(len: f32, s: f32) -> usize {
 }
 
 /// Pixels per point for a tiled page's underlay: about [`UNDERLAY_PX`], within a texture.
-fn underlay_scale(page: &Page, max_tex: f32) -> f32 {
+pub(super) fn underlay_scale(page: &Page, max_tex: f32) -> f32 {
     let (w, h) = (page.w.clamp(1.0, 1e6), page.h.clamp(1.0, 1e6));
-    (UNDERLAY_PX / (w * h)).sqrt().min(max_tex / w).min(max_tex / h).max(1e-3)
+    // A pixel spare: render_page rounds its size up, and f32 can put `max_tex / h * h` over.
+    let side = (max_tex - 1.0).max(1.0);
+    (UNDERLAY_PX / (w * h)).sqrt().min(side / w).min(side / h).max(1e-3)
 }
 
 /// Where tile `id` (`size` texels) goes on screen: `origin` is the page's corner and `k` screen

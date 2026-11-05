@@ -65,9 +65,9 @@ use pages::visible_tiles;
 use pages::{DRAWING_GRID_MAX_LINES, DRAWING_GRID_MIN_PX};
 pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options};
 use pages::{drawing_grid, drawing_grid_step, gridline_cells, page_key, page_render_options, shown_layout, view_key};
-#[cfg(test)]
-use raster::TILE_PX;
 use raster::{PageJob, Raster, Rasterizer, TileId};
+#[cfg(test)]
+use raster::{TILE_PX, underlay_scale};
 pub(crate) use reading::turn_read_page;
 #[cfg(test)]
 use reading::{READ_NAV_BAR, RESIZE_SETTLE, place_read_pages};
