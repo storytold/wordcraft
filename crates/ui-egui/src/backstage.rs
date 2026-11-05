@@ -335,6 +335,29 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
         if let Some(h) = tex {
             ui.painter().image(h.id(), r.shrink(1.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
         }
+        if template == "blank" {
+            let cy = r.center().y;
+            let cx = r.center().x;
+            let c = pos2(cx, cy - 12.0);
+            let hovered = resp.hovered();
+
+            let circle_fill = if hovered { t.accent } else { t.accent.linear_multiply(0.08) };
+            let circle_stroke = Stroke::new(1.5, t.accent);
+            ui.painter().circle(c, 18.0, circle_fill, circle_stroke);
+
+            let plus_color = if hovered { egui::Color32::WHITE } else { t.accent };
+            let plus_stroke = Stroke::new(2.0, plus_color);
+            let arm = 7.0;
+            ui.painter().line_segment([pos2(c.x - arm, c.y), pos2(c.x + arm, c.y)], plus_stroke);
+            ui.painter().line_segment([pos2(c.x, c.y - arm), pos2(c.x, c.y + arm)], plus_stroke);
+
+            let font = if hovered { semibold(12.5) } else { medium(12.5) };
+            let text_color = if hovered { t.accent } else { t.accent_text };
+            let text = tl!("New Document");
+            let text_galley = ui.painter().layout_no_wrap(text.to_string(), font, text_color);
+            let text_pos = pos2(cx - text_galley.size().x / 2.0, c.y + 18.0 + 10.0);
+            ui.painter().galley(text_pos, text_galley, text_color);
+        }
         ui.painter().galley(pos2(r.min.x, r.max.y), galley, ui.visuals().text_color());
         if resp.clicked() {
             let _ = app.run("file.new", json!({"template": template}));
