@@ -26,6 +26,14 @@ pub const MAX_CELL_VISITS: usize = 100_000;
 /// further this many bytes in a cell count as one more cell read against [`MAX_CELL_VISITS`].
 const MAX_NUMBER_TEXT: usize = 1024;
 
+/// The message of the error given when a formula reads too many cells.
+const TOO_COMPLEX: &str = "Formula too complex";
+
+/// Whether `e` is the error of a spent cell budget (and not a fault of the formula itself).
+pub fn is_too_complex(e: &CmdError) -> bool {
+    matches!(e, CmdError::Failed(m) if m == TOO_COMPLEX)
+}
+
 /// The cells formulas may still read (see [`MAX_CELL_VISITS`]). One budget is shared by every
 /// formula an Update Fields pass works out, so many fields can't add up to a hang.
 #[derive(Debug, Default)]
@@ -38,11 +46,22 @@ impl FormulaBudget {
         Self::default()
     }
 
+    /// The cells read so far.
+    pub fn used(&self) -> usize {
+        self.visits.get()
+    }
+
     /// Count `n` more cells read, failing once the budget is spent.
     fn spend(&self, n: usize) -> Result<(), CmdError> {
         let total = self.visits.get().saturating_add(n);
         self.visits.set(total);
-        if total > MAX_CELL_VISITS { Err(CmdError::Failed("Formula too complex".into())) } else { Ok(()) }
+        // The overshoot is recorded before failing, so `is_spent` is true after a failed spend.
+        if total > MAX_CELL_VISITS { Err(CmdError::Failed(TOO_COMPLEX.into())) } else { Ok(()) }
+    }
+
+    /// Whether the budget has been overspent.
+    pub fn is_spent(&self) -> bool {
+        self.visits.get() > MAX_CELL_VISITS
     }
 
     /// Charge reading `c`: one, plus one per [`MAX_NUMBER_TEXT`] bytes of its text. The text is
@@ -50,7 +69,22 @@ impl FormulaBudget {
     fn charge_cell(&self, c: &Cell) -> Result<(), CmdError> {
         let left = MAX_CELL_VISITS.saturating_sub(self.visits.get());
         let bytes = cell_bytes(c, left.saturating_mul(MAX_NUMBER_TEXT));
-        self.spend(1usize.saturating_add(bytes / MAX_NUMBER_TEXT))
+        // A nested table's cells are skipped when reading the text, but walking past them is
+        // work, so each one (at any depth) counts as a cell read, as far as the budget allows.
+        let mut nested = 0usize;
+        let mut stack = vec![c];
+        while let Some(cell) = stack.pop() {
+            for t in cell.blocks.iter().filter_map(|b| b.as_table()) {
+                for nc in t.rows.iter().flat_map(|row| row.cells.iter()) {
+                    nested = nested.saturating_add(1);
+                    if nested > left {
+                        return self.spend(nested);
+                    }
+                    stack.push(nc);
+                }
+            }
+        }
+        self.spend(1usize.saturating_add(bytes / MAX_NUMBER_TEXT).saturating_add(nested))
     }
 }
 
@@ -134,13 +168,20 @@ pub fn evaluate_field_budgeted(
     let text = match switch.and_then(picture_of) {
         Some(picture) => format_picture(value, &picture),
         None => {
-            // The language of the formula's cell, else of the table's first cells; each cell
-            // looked at is charged to the budget.
+            // The language of the formula's cell, else of the table's first cells. Only the
+            // field's own cell is charged to the budget; the others are a fixed few, and a cell
+            // too big to hold a number is not looked at.
             let mut out_lang = None;
             if let Some(d) = doc {
                 let own = t.rows.get(r).and_then(|row| row.cells.get(c));
-                for cl in own.into_iter().chain(t.rows.iter().flat_map(|row| row.cells.iter()).take(100)) {
+                if let Some(cl) = own {
                     budget.charge_cell(cl)?;
+                }
+                let first =
+                    t.rows.iter().enumerate().flat_map(|(ri, row)| row.cells.iter().enumerate().map(move |(ci, cl)| ((ri, ci), cl))).take(100);
+                let others =
+                    first.filter(|(pos, _)| *pos != (r, c)).map(|(_, cl)| cl).filter(|cl| cell_bytes(cl, MAX_NUMBER_TEXT) <= MAX_NUMBER_TEXT);
+                for cl in own.into_iter().chain(others) {
                     let lang =
                         cl.blocks.iter().filter_map(|b| b.as_para()).find(|p| !p.plain_text().trim().is_empty()).and_then(|p| super::para_lang(d, p));
                     if lang.is_some() {
@@ -640,8 +681,9 @@ impl Here<'_> {
 /// Counting stops once it passes `cap`, so the answer is exact only up to `cap`.
 fn cell_bytes(c: &Cell, cap: usize) -> usize {
     let mut n = 0usize;
-    for p in c.blocks.iter().filter_map(|b| b.as_para()) {
-        n = n.saturating_add(p.text.len()).saturating_add(1);
+    for (i, p) in c.blocks.iter().filter_map(|b| b.as_para()).enumerate() {
+        // `table::cell_text` joins paragraphs with one separator, between them only.
+        n = n.saturating_add(p.text.len()).saturating_add(usize::from(i > 0));
         for o in &p.objects {
             if n > cap {
                 return n;
@@ -1160,6 +1202,13 @@ mod tests {
         let err = ev(&t, 0, 1, &too_much).unwrap_err();
         assert_eq!(err, CmdError::Failed("Formula too complex".into()));
         assert_eq!(evaluate_field(&t, 0, 1, &too_much).unwrap_err().to_string(), "Formula too complex");
+    }
+
+    #[test]
+    fn a_one_paragraph_cell_of_exactly_the_number_limit_is_read() {
+        let text = format!("1{}", " ".repeat(MAX_NUMBER_TEXT - 1));
+        let t = table(&[&[text.as_str(), ""]]);
+        assert_eq!(ev(&t, 0, 1, "=A1").unwrap(), 1.0);
     }
 
     #[test]

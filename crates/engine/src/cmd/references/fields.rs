@@ -360,6 +360,7 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     && let Some(t) = s.doc.table(StoryRef::Body, &tp)
                 {
                     let default_lang = crate::cmd::default_lang(s);
+                    let used_before = formula_budget.used();
                     let text = match crate::cmd::table_formula::evaluate_field_budgeted(
                         t,
                         Some(&s.doc),
@@ -370,6 +371,9 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                         &formula_budget,
                     ) {
                         Ok(text) => text,
+                        // Earlier fields used up the pass's budget: this one isn't too complex
+                        // by itself, so its cached result stays as it is.
+                        Err(e) if used_before > 0 && formula_budget.is_spent() && crate::cmd::table_formula::is_too_complex(&e) => continue,
                         Err(e) => format!("!{e}"),
                     };
                     updates.push((k, text));
