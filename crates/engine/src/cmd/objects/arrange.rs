@@ -150,17 +150,12 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
     if pos.path.depth() > 0 || !movable_story(s, pos.story) {
         return Err(CmdError::Disabled("only objects in the body text, headers and footers can be moved".into()));
     }
-    let story = pos.story;
     let layout = s.layout();
-    let pg = layout.pages.get(page).ok_or_else(|| CmdError::Params(format!("no page {page}")))?;
-    // Keep a corner of it on the page.
-    let x = x.max(12.0 - w).min(pg.w - 12.0);
-    let y = y.max(12.0 - h).min(pg.h.min(MAX_OFFSET) - 12.0);
-    // The paragraph under the middle of its top edge: in the column it mostly lands in.
-    let (anchor, on_page) = match anchor_paragraph(&s.doc, &layout, page, (x + w / 2.0, y), story) {
-        Some(path) => (Pos { story, path, off: 0 }, false),
-        None => (nearest_line(&layout, page, y, story).ok_or_else(|| CmdError::Params("no text on that page to anchor to".into()))?, true),
-    };
+    if layout.pages.get(page).is_none() {
+        return Err(CmdError::Params(format!("no page {page}")));
+    }
+    let ((x, y), anchor, on_page) =
+        drop_anchor(&s.doc, &layout, page, (x, y), (w, h), pos.story).ok_or_else(|| CmdError::Params("no text on that page to anchor to".into()))?;
     // Move its character to the anchor (unless it's already in that paragraph).
     let at = if anchor.story == pos.story && anchor.path == pos.path && !on_page {
         pos.clone()
@@ -255,6 +250,27 @@ pub(super) fn move_with_text(s: &mut Session, with_text: bool) -> CmdResult {
         f.y = y.clamp(-MAX_OFFSET, MAX_OFFSET);
     })?;
     Ok(json!({"object": serde_json::to_value(o).unwrap_or(Value::Null)}))
+}
+
+/// A floating object of `story` dropped with its top-left at (`x`, `y`) on `page` (`w` × `h`): that
+/// point moved to keep a corner of it on the page, its anchor (the start of the paragraph under
+/// the middle of its top edge, in the column it mostly lands in) and false; on a page where no
+/// paragraph starts, the nearest line and true (it is positioned on the page).
+pub fn drop_anchor(
+    doc: &wordcraft_doc::Document,
+    layout: &wordcraft_layout::DocLayout,
+    page: usize,
+    (x, y): (f32, f32),
+    (w, h): (f32, f32),
+    story: StoryRef,
+) -> Option<((f32, f32), Pos, bool)> {
+    let pg = layout.pages.get(page)?;
+    let x = x.max(12.0 - w).min(pg.w - 12.0);
+    let y = y.max(12.0 - h).min(pg.h.min(MAX_OFFSET) - 12.0);
+    match anchor_paragraph(doc, layout, page, (x + w / 2.0, y), story) {
+        Some(path) => Some(((x, y), Pos { story, path, off: 0 }, false)),
+        None => Some(((x, y), nearest_line(layout, page, y, story)?, true)),
+    }
 }
 
 /// The top-level paragraph of `story` under `(x, y)` on `page`: in the column under `x` (from

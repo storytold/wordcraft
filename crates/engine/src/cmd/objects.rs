@@ -20,8 +20,8 @@ mod select;
 mod shape;
 mod specs;
 
-pub use arrange::moves_with_text;
 pub(crate) use arrange::{anchor_paragraph, nearest_line};
+pub use arrange::{drop_anchor, moves_with_text};
 #[cfg(test)]
 use group::ungroup;
 pub use picture::{OriginalSize, PictureLook, cropped_original_size, fit_size, original_size};
