@@ -40,7 +40,8 @@ struct Timed {
 impl Read for Timed {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.s.set_read_timeout(Some(time_left(self.deadline)?))?;
-        self.s.read(buf)
+        // An expired socket timeout is `WouldBlock` on Unix and `TimedOut` on Windows.
+        self.s.read(buf).map_err(|e| if e.kind() == std::io::ErrorKind::WouldBlock { std::io::ErrorKind::TimedOut.into() } else { e })
     }
 }
 
@@ -220,18 +221,19 @@ impl Remote {
         Ok(req.to_string())
     }
 
-    fn roundtrip(&mut self, line: &str) -> std::io::Result<String> {
+    /// The error says whether the request was fully written before it happened.
+    fn roundtrip(&mut self, line: &str) -> Result<String, (std::io::Error, bool)> {
         let Some((reader, writer)) = self.conn.as_mut() else {
-            return Err(std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected"));
+            return Err((std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected"), false));
         };
         // One overall deadline for the request and its whole reply.
         let deadline = Instant::now() + EXCHANGE;
         reader.get_mut().deadline = deadline;
-        write_all_by(writer, format!("{line}\n").as_bytes(), deadline)?;
-        match read_bounded_line(reader, MAX_REPLY_LINE)? {
+        write_all_by(writer, format!("{line}\n").as_bytes(), deadline).map_err(|e| (e, false))?;
+        match read_bounded_line(reader, MAX_REPLY_LINE).map_err(|e| (e, true))? {
             BoundedLine::Line(reply) => Ok(reply),
-            BoundedLine::Eof => Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "control channel closed")),
-            BoundedLine::TooLong => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "reply from app too long")),
+            BoundedLine::Eof => Err((std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "control channel closed"), true)),
+            BoundedLine::TooLong => Err((std::io::Error::new(std::io::ErrorKind::InvalidData, "reply from app too long"), true)),
         }
     }
 
@@ -250,12 +252,20 @@ impl Remote {
                     let line = self.request_line(id, method, params)?;
                     self.roundtrip(&line)
                 }
-                Err(e) => Err(e),
+                Err(e) => Err((e, false)),
             };
             match result {
                 Ok(r) => break r,
-                Err(e) => {
+                Err((e, written)) => {
                     self.conn = None;
+                    // The request was fully written and no reply came in time: the app may
+                    // still run it, so sending it again could run an edit twice.
+                    if written && e.kind() == std::io::ErrorKind::TimedOut {
+                        return Err(format!(
+                            "WordCraft app at {} did not reply in time; outcome unknown (the request may still run), not retried",
+                            self.addr
+                        ));
+                    }
                     // A reply that arrived but can't be read (too long, not UTF-8): the app has
                     // run the request, so sending it again could run a state-changing one twice.
                     if e.kind() == std::io::ErrorKind::InvalidData {
@@ -517,6 +527,33 @@ mod tests {
     }
 
     #[test]
+    fn a_timeout_after_a_completed_write_is_not_retried() {
+        // The app reads the request and never answers.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(AtomicUsize::new(0));
+        let n = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let n = n.clone();
+                std::thread::spawn(move || {
+                    for line in BufReader::new(stream.try_clone().unwrap()).lines() {
+                        if line.is_err() {
+                            return;
+                        }
+                        n.fetch_add(1, Ordering::SeqCst);
+                    }
+                });
+            }
+        });
+        let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k1")).unwrap();
+        let e = r.call("engine.execute", json!({"command": "text.insert", "params": {"text": "x"}})).unwrap_err();
+        assert!(e.contains("outcome unknown"), "{e}");
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(seen.load(Ordering::SeqCst), 1, "the request was sent once");
+    }
+
+    #[test]
     fn a_drip_fed_reply_hits_the_exchange_deadline() {
         // The peer reads the request, then sends one byte every 50 ms and never a newline.
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -538,7 +575,7 @@ mod tests {
         std::thread::spawn(move || {
             let _ = tx.send(r.call("document.inspect", json!({})));
         });
-        // Tests use a 1 s exchange deadline; the call (with its one retry) ends well within 5 s.
+        // Tests use a 1 s exchange deadline; the call ends well within 5 s.
         let result = rx.recv_timeout(WAIT).expect("Remote::call still blocked on a drip-fed reply");
         assert!(result.is_err(), "{result:?}");
     }
