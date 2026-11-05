@@ -206,7 +206,8 @@ impl PropCtx {
         Some(c)
     }
 
-    /// `w:shd`: its fill colour (a theme fill first), or a solid pattern's colour.
+    /// `w:shd`: its fill colour (a theme fill first), a solid pattern's colour, or a percentage
+    /// pattern's colour (theme colours first) mixed over the fill at its share ([`pct_mix`]).
     pub fn shd_fill(&self, e: &El) -> Option<Rgb> {
         // `nil` counts as no shading, whatever fill it carries (MS-OI29500 17.18.78).
         if e.attr("w:val") == Some("nil") {
@@ -486,8 +487,8 @@ fn shd_pct(e: &El) -> Option<u16> {
     }
 }
 
-/// (automatic: white) in that share (tenths of a percent), so `pct5` on no fill is a light grey.
-/// (automatic: white) in that share, so `pct5` on no fill is a light grey.
+/// A percentage pattern drawn as one colour: the pattern colour (automatic: black) over the fill
+/// (automatic: white) in share `n` (tenths of a percent), so `pct5` on no fill is a light grey.
 fn pct_mix(fg: Option<Rgb>, bg: Option<Rgb>, n: u16) -> Rgb {
     let (fg, bg) = (fg.unwrap_or(Rgb(0, 0, 0)), bg.unwrap_or(Rgb(255, 255, 255)));
     let n = u32::from(n.min(1000));
@@ -495,7 +496,8 @@ fn pct_mix(fg: Option<Rgb>, bg: Option<Rgb>, n: u16) -> Rgb {
     Rgb(mix(fg.0, bg.0), mix(fg.1, bg.1), mix(fg.2, bg.2))
 }
 
-/// `w:shd/@w:fill` (a solid fill colour; `auto` = none), ignoring theme fills ([`PropCtx::shd_fill`]).
+/// `w:shd/@w:fill` (a solid fill colour; `auto` = none), or a percentage pattern mixed over it,
+/// ignoring theme colours ([`PropCtx::shd_fill`]).
 fn shd_fill(e: &El) -> Option<Rgb> {
     let fill = e.attr("w:fill").and_then(Rgb::parse);
     if let Some(n) = shd_pct(e) {
