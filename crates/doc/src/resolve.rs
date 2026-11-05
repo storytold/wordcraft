@@ -41,6 +41,9 @@ pub struct ResolvedChar {
     /// Kerning: the smallest font size, in points, that is kerned (`w:kern`); 0 = never kerned.
     #[serde(default)]
     pub kern: f32,
+    /// A mark over or under each character (Font › Emphasis mark).
+    #[serde(default)]
+    pub emphasis: crate::props::EmphasisMark,
     /// OpenType ligatures (`w14:ligatures`); `None` = the shaper's default (standard and
     /// contextual).
     #[serde(default)]
@@ -97,6 +100,7 @@ impl ResolvedChar {
             scale: c.scale.unwrap_or(100.0).clamp(1.0, 600.0),
             position: c.position.unwrap_or(0.0).clamp(-800.0, 800.0),
             kern: c.kern.filter(|k| k.is_finite()).unwrap_or(0.0).clamp(0.0, 1638.0),
+            emphasis: c.emphasis.unwrap_or_default(),
             ligatures: c.ligatures,
             outline: c.outline.unwrap_or(false),
             shadow: c.shadow.unwrap_or(false),
@@ -149,6 +153,10 @@ impl ResolvedChar {
 }
 
 /// Concrete paragraph formatting.
+fn default_adjust_right_indent() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedPara {
@@ -169,6 +177,9 @@ pub struct ResolvedPara {
     pub contextual_spacing: bool,
     /// Left/right indents are inside/outside: they swap on even pages.
     pub mirror_indents: bool,
+    /// Automatically adjust the right indent for the document grid when enabled; keep the specified right indent when disabled.
+    #[serde(default = "default_adjust_right_indent")]
+    pub adjust_right_indent: bool,
     pub keep_next: bool,
     pub keep_lines: bool,
     pub page_break_before: bool,
@@ -178,6 +189,10 @@ pub struct ResolvedPara {
     pub tabs: Vec<TabStop>,
     pub shading: Option<Rgb>,
     pub borders: Option<Borders>,
+    /// Padding on the sides without a line (top, left, bottom, right), points. ODF's box model
+    /// (XSL's) keeps it for documents opened from ODF (`Settings::odf`); Word drops it.
+    #[serde(default)]
+    pub padding: [f32; 4],
     pub bidi: bool,
     pub drop_cap: u8,
     /// The drop cap hangs in the margin (see `ParaProps::drop_cap_margin`).
@@ -256,6 +271,7 @@ impl ResolvedPara {
             },
             contextual_spacing: p.contextual_spacing.unwrap_or(false),
             mirror_indents: p.mirror_indents.unwrap_or(false),
+            adjust_right_indent: p.adjust_right_indent.unwrap_or(true),
             keep_next: p.keep_next.unwrap_or(false),
             keep_lines: p.keep_lines.unwrap_or(false),
             page_break_before: p.page_break_before.unwrap_or(false),
@@ -265,6 +281,10 @@ impl ResolvedPara {
             tabs,
             shading: p.shading,
             borders: p.borders.filter(Borders::any_visible),
+            padding: p.borders.map_or([0.0; 4], |b| {
+                [b.top, b.left, b.bottom, b.right]
+                    .map(|s| s.filter(|l| !l.is_visible() && l.space.is_finite() && l.space > 0.0).map_or(0.0, |l| l.space.min(1584.0)))
+            }),
             bidi: p.bidi.unwrap_or(false),
             drop_cap: p.drop_cap.unwrap_or(0).min(10),
             drop_cap_margin: p.drop_cap_margin.unwrap_or(false),
@@ -321,6 +341,38 @@ impl StyleSheet {
         }
         pp.style = None;
         (pp, cp)
+    }
+
+    /// What a table style's paragraph formatting `table` changes for a paragraph with `p`, once
+    /// the paragraph style chain is applied over it (ECMA-376 §17.7.2): each property it gives
+    /// that the chain doesn't set. Formats without table styles state these directly.
+    pub fn table_para_patch(&self, p: &ParaProps, table: &ParaProps) -> ParaProps {
+        let style = p.style.clone().unwrap_or_else(|| "Normal".into());
+        let mut with = self.default_para.clone();
+        with.overlay(&ParaProps { style: None, ..table.clone() });
+        let (with, _) = self.para_style_props_over(&style, with, CharProps::default());
+        let (without, _) = self.para_style_props_over(&style, self.default_para.clone(), CharProps::default());
+        diff_patch(&with, &without)
+    }
+
+    /// What a table style's run formatting `table` changes for a run of character style
+    /// `run_style` in a paragraph of style `para_style`, once the paragraph and character style
+    /// chains are applied over it (ECMA-376 §17.7.2).
+    pub fn table_char_patch(&self, para_style: Option<&str>, run_style: Option<&str>, table: &CharProps) -> CharProps {
+        let chain = |defaults: CharProps| {
+            let (_, mut cp) = self.para_style_props_over(para_style.unwrap_or("Normal"), ParaProps::default(), defaults);
+            if let Some(cs) = run_style {
+                for s in self.chain(cs) {
+                    if s.kind == StyleKind::Character || s.kind == StyleKind::Paragraph {
+                        cp.overlay(&s.chr);
+                    }
+                }
+            }
+            cp
+        };
+        let mut with = self.default_chr.clone();
+        with.overlay(&CharProps { style: None, ..table.clone() });
+        diff_patch(&chain(with), &chain(self.default_chr.clone()))
     }
 
     /// Resolve a paragraph's properties.
@@ -385,6 +437,16 @@ impl StyleSheet {
         cp.overlay(&direct);
         ResolvedChar::from(&cp)
     }
+}
+
+/// The properties of `with` that differ from `without` (both fully resolved property sets of one
+/// kind), as a set of only those; empty when serialisation fails.
+fn diff_patch<T: Serialize + serde::de::DeserializeOwned + Default>(with: &T, without: &T) -> T {
+    let (Ok(serde_json::Value::Object(w)), Ok(serde_json::Value::Object(o))) = (serde_json::to_value(with), serde_json::to_value(without)) else {
+        return T::default();
+    };
+    let patch: serde_json::Map<String, serde_json::Value> = w.into_iter().filter(|(k, v)| o.get(k) != Some(v)).collect();
+    serde_json::from_value(serde_json::Value::Object(patch)).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -523,5 +585,16 @@ mod tests {
         });
         assert_eq!(p.tabs.len(), 3);
         assert_eq!(p.tabs[0].pos, 100.0);
+    }
+
+    /// Resolved formatting saved before paragraph padding existed still reads: no padding.
+    #[test]
+    fn resolved_para_without_padding_reads() {
+        let p = StyleSheet::builtin().resolve_para(&ParaProps::default());
+        let mut v = serde_json::to_value(&p).unwrap();
+        v.as_object_mut().unwrap().remove("padding");
+        let back: ResolvedPara = serde_json::from_value(v).unwrap();
+        assert_eq!(back.padding, [0.0; 4]);
+        assert_eq!(back, ResolvedPara { padding: [0.0; 4], ..p });
     }
 }
