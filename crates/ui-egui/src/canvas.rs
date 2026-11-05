@@ -1085,6 +1085,23 @@ fn handle_primary_pointer(
     geo: &Geometry,
     middle_gesture: bool,
 ) {
+    // A press that began on a drop-down's list button opens the list (`content_controls::clicks`) and must
+    // not move the caret: the button hangs over what follows the control, and a caret placed
+    // there leaves the control, which closes the list in the frame it opens (#5389).
+    // A press and its release in one frame (a quick click on a slow frame) leave no `press_origin`;
+    // the press is still among the frame's events. A table tool owns the pointer instead: a stroke
+    // may start over the button.
+    let press = ui.input(|i| {
+        i.pointer.press_origin().or_else(|| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::PointerButton { pos, pressed: true, .. } => Some(*pos),
+                _ => None,
+            })
+        })
+    });
+    if app.canvas.table_tool.is_none() && press.is_some_and(|p| app.controls.on_button(p)) {
+        return;
+    }
     // Double-click the space between two pages (or the line between them) to hide or show it.
     if resp.double_clicked()
         && app.session.view.mode == wordcraft_layout::ViewMode::Print
