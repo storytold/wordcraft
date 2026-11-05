@@ -52,7 +52,7 @@ fn distribute(s: &mut Session) -> CmdResult {
         .filter_map(|path| {
             let para = s.doc.para(story, &path)?;
             let resolved = s.doc.styles.resolve_para(&para.props);
-            let target = if paragraph_has_thai_letter(&para.text) { Align::ThaiDistribute } else { Align::Distribute };
+            let target = if paragraph_has_thai_letter(&para.final_text()) { Align::ThaiDistribute } else { Align::Distribute };
             Some((path, target.visual(resolved.bidi)))
         })
         .collect();
