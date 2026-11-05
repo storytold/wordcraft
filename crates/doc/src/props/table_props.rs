@@ -136,9 +136,11 @@ pub struct TableProps {
     pub borders: Option<Borders>,
     /// Default cell margins (top, left, bottom, right), points.
     pub cell_margins: Option<[f32; 4]>,
-    /// Rows per band (`w:tblStyleRowBandSize`) set directly on this table or row exception.
+    /// Rows per band (`w:tblStyleRowBandSize`) set directly on this table.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub band_size: Option<u32>,
-    /// Columns per band (`w:tblStyleColBandSize`) set directly on this table or row exception.
+    /// Columns per band (`w:tblStyleColBandSize`) set directly on this table.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub col_band_size: Option<u32>,
     /// Fixed column widths (no auto-fit).
     pub fixed: bool,

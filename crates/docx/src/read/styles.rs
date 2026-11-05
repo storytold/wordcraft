@@ -201,8 +201,8 @@ impl Reader<'_> {
             }
             t.fill = tp.child("w:shd").and_then(|e| self.pc.shd_fill(e));
             t.cell_margins = tp.child("w:tblCellMar").map(props::margins);
-            t.band_size = tp.child_val("w:tblStyleRowBandSize").and_then(props::band_size);
-            t.col_band_size = tp.child_val("w:tblStyleColBandSize").and_then(props::band_size);
+            t.band_size = tp.child_val("w:tblStyleRowBandSize").and_then(u32_of).map(|n| n.min(1000));
+            t.col_band_size = tp.child_val("w:tblStyleColBandSize").and_then(u32_of).map(|n| n.min(1000));
         }
         for c in s.children("w:tblStylePr").take(64) {
             let Some(part) = c.attr("w:type").and_then(TablePart::from_ooxml) else { continue };

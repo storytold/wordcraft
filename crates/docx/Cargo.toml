@@ -36,4 +36,3 @@ serde_json = { workspace = true }
 proptest = { workspace = true }
 image = { workspace = true }
 zip = { workspace = true }
-serde_json = { workspace = true }

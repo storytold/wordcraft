@@ -36,16 +36,19 @@ fn table(row_band: &str, col_band: &str, exception: &str) -> String {
 }
 
 #[test]
-fn direct_table_band_sizes_survive_json_and_two_docx_saves() {
+fn direct_table_band_sizes_survive_json_and_two_docx_saves_without_invalid_row_exceptions() {
     let exception = r#"<w:tblPrEx><w:tblStyleRowBandSize w:val="4"/><w:tblStyleColBandSize w:val="5"/></w:tblPrEx>"#;
     let input = docx(&table(r#"<w:tblStyleRowBandSize w:val="2"/>"#, r#"<w:tblStyleColBandSize w:val="3"/>"#, exception));
     let doc = wordcraft_docx::read(&input).unwrap();
     let native_json = serde_json::to_vec(&doc).unwrap();
-    let mut doc: wordcraft_doc::Document = serde_json::from_slice(&native_json).unwrap();
+    let native_json = String::from_utf8(native_json).unwrap();
+    assert!(!native_json.contains("\"bandSize\":null"), "{native_json}");
+    assert!(!native_json.contains("\"colBandSize\":null"), "{native_json}");
+    let mut doc: wordcraft_doc::Document = serde_json::from_str(&native_json).unwrap();
     assert_eq!(doc.styles.table_style("Control").map(|s| (s.parts.band_size, s.parts.col_band_size)), Some((Some(6), Some(7))));
     let table = doc.body.iter().find_map(|b| b.as_table()).unwrap();
     let ex = table.rows[0].props.exceptions.as_ref().expect("read row exception");
-    assert_eq!((ex.band_size, ex.col_band_size), (Some(4), Some(5)));
+    assert_eq!((ex.band_size, ex.col_band_size), (None, None));
 
     for _ in 0..2 {
         let tbl = doc.body.iter().find_map(|b| b.as_table()).unwrap();
@@ -54,7 +57,9 @@ fn direct_table_band_sizes_survive_json_and_two_docx_saves() {
         let xml = document_xml(&saved);
         assert!(xml.contains(r#"<w:tblStyleRowBandSize w:val="2"/>"#), "{xml}");
         assert!(xml.contains(r#"<w:tblStyleColBandSize w:val="3"/>"#), "{xml}");
-        assert!(xml.contains(r#"<w:tblPrEx><w:tblStyleRowBandSize w:val="4"/><w:tblStyleColBandSize w:val="5"/></w:tblPrEx>"#), "{xml}");
+        let ex_xml = xml.split_once("<w:tblPrEx>").unwrap().1.split_once("</w:tblPrEx>").unwrap().0;
+        assert!(!ex_xml.contains("tblStyleRowBandSize"), "row-exception band sizes are not valid CT_TblPrExBase children: {xml}");
+        assert!(!ex_xml.contains("tblStyleColBandSize"), "row-exception band sizes are not valid CT_TblPrExBase children: {xml}");
         let tblpr = xml.split_once("<w:tblPr>").unwrap().1.split_once("</w:tblPr>").unwrap().0;
         assert!(tblpr.find("w:tblStyleColBandSize").unwrap() < tblpr.find("w:tblW").unwrap(), "{tblpr}");
         doc = wordcraft_docx::read(&saved).unwrap();
@@ -62,7 +67,7 @@ fn direct_table_band_sizes_survive_json_and_two_docx_saves() {
         let table = doc.body.iter().find_map(|b| b.as_table()).unwrap();
         assert_eq!((table.props.band_size, table.props.col_band_size), (Some(2), Some(3)));
         let ex = table.rows[0].props.exceptions.as_ref().expect("row exception retained");
-        assert_eq!((ex.band_size, ex.col_band_size), (Some(4), Some(5)));
+        assert_eq!((ex.band_size, ex.col_band_size), (None, None));
     }
 }
 
@@ -77,7 +82,7 @@ fn direct_band_sizes_preserve_zero_and_bound_invalid_or_oversized_values() {
     let tbl = doc.body.iter().find_map(|b| b.as_table()).unwrap();
     assert_eq!((tbl.props.band_size, tbl.props.col_band_size), (Some(0), Some(1000)));
     let ex = tbl.rows[0].props.exceptions.as_ref().expect("row exception retained");
-    assert_eq!((ex.band_size, ex.col_band_size), (None, Some(1000)));
+    assert_eq!((ex.band_size, ex.col_band_size), (None, None));
     let saved = wordcraft_docx::write(&doc).unwrap();
     let xml = document_xml(&saved);
     assert!(xml.contains(r#"<w:tblStyleRowBandSize w:val="0"/>"#), "{xml}");
