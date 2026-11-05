@@ -177,6 +177,24 @@ fn clear_list_asks_then_empties_the_recent_list() {
     assert!(h.query_by_label("Clear list…").is_none(), "nothing is left to clear");
 }
 
+/// Escape answers the Colors dialog alone: File, under it, stays open, and the next Escape closes
+/// File.
+#[test]
+fn escape_in_the_colors_dialog_leaves_file_open() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("ui.backstage", json!({"value": true, "page": "open"})).unwrap();
+    a.run("ui.dialog", json!({"name": "colors"})).unwrap();
+    let mut h = a11y_harness(a);
+    assert!(h.state().colors.is_some(), "the Colors dialog is open");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(4);
+    assert!(h.state().colors.is_none(), "Escape closes the Colors dialog");
+    assert!(h.state().ui.backstage, "and leaves File open");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(4);
+    assert!(!h.state().ui.backstage, "with nothing over it, Escape closes File");
+}
+
 /// Right-click a recent document: Remove from list takes that one off; Clear list… asks about
 /// the whole list, as the button beside Recent does.
 #[test]

@@ -113,9 +113,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 resp
             };
             // Escape closes File unless something over it takes the key: the built-in file
-            // browser, a dialog (Clear list…, a recent document that isn't there) or a menu (a
-            // recent document's right-click menu).
-            let escape_closes = !app.file_dialog_open() && app.dialog.is_none() && !egui::Popup::is_any_open(ui.ctx());
+            // browser, a dialog (Clear list…, a recent document that isn't there), the Colors
+            // dialog or a menu (a recent document's right-click menu).
+            let escape_closes = !app.file_dialog_open() && app.dialog.is_none() && app.colors.is_none() && !egui::Popup::is_any_open(ui.ctx());
             if back.clicked() || (escape_closes && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
                 app.ui.backstage = false;
                 app.canvas.want_focus = true;
