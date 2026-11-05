@@ -1,6 +1,7 @@
 mod alt_chunks;
 mod bidi;
 mod bidi_runs;
+mod border_lines;
 mod cell_margin_inheritance;
 mod char_units;
 mod citations;

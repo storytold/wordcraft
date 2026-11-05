@@ -10,16 +10,11 @@ use wordcraft_doc::para::{Anchor, Float, FloatAlign, InlineObject, Wrap, WrapTex
 const NS_D: &str = r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink""#;
 
 fn open(graphic: &str, frame: &str) -> Document {
-    open_as(graphic, frame, &wordcraft_doc::odf_profile::OdfProfile::default())
-}
-
-/// [`open`], filling in what the standard leaves open as `profile` says.
-fn open_as(graphic: &str, frame: &str, profile: &wordcraft_doc::odf_profile::OdfProfile) -> Document {
     let png = [b"\x89PNG\r\n\x1a\n".as_slice(), &[7u8; 64]].concat();
     let content = format!(
         r#"<office:document-content {NS_T} {NS_D}><office:automatic-styles><style:style style:name="fr1" style:family="graphic"><style:graphic-properties {graphic}/></style:style></office:automatic-styles><office:body><office:text><text:p><draw:frame draw:style-name="fr1" svg:width="2in" svg:height="1in" {frame}><draw:image xlink:href="Pictures/a.png"/></draw:frame>Text beside.</text:p></office:text></office:body></office:document-content>"#
     );
-    crate::odt::tests::import_as(&zip_of(&[("content.xml", content.as_bytes()), ("Pictures/a.png", &png)]), profile)
+    crate::odt::import(&zip_of(&[("content.xml", content.as_bytes()), ("Pictures/a.png", &png)])).unwrap()
 }
 
 fn float(d: &Document) -> Float {
@@ -109,7 +104,7 @@ fn float_doc_inline() -> Document {
 fn a_picture_alone_in_its_paragraph_keeps_its_raise_and_the_paragraphs_size() {
     // LibreOffice's elegant agenda: a rule raised 0.2 in above the baseline in a 9 pt paragraph.
     // Its parent style's `vertical-rel="paragraph"` is no in-line frame's (the standard doesn't
-    // define it): LibreOffice places it from the baseline anyway, WordCraft stands it on it.
+    // define it): it stands on the baseline. Placed against the baseline, it is raised.
     let pic = {
         let img = image::RgbaImage::from_fn(4, 4, |_, _| image::Rgba([10, 20, 30, 255]));
         let mut png = Vec::new();
@@ -131,41 +126,31 @@ fn a_picture_alone_in_its_paragraph_keeps_its_raise_and_the_paragraphs_size() {
         let props = p.props_at(off + wordcraft_doc::para::OBJ.len_utf8());
         (props.position.map(|v| (v * 10.0).round() / 10.0), props.size, p.mark.size)
     };
-    let doc = crate::odt::tests::import_as(&pkg, &wordcraft_doc::odf_profile::OdfProfile::libreoffice());
+    let doc = crate::odt::import(&pkg).unwrap();
+    assert_eq!(look(&doc), (None, Some(9.0), Some(9.0)));
+    let baseline = styles.replace(r#"style:vertical-rel="paragraph""#, r#"style:vertical-rel="baseline""#);
+    let pkg = crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", baseline.as_bytes()), ("Pictures/p.png", &pic)]);
+    let doc = crate::odt::import(&pkg).unwrap();
     assert_eq!(look(&doc), (Some(10.8), Some(9.0), Some(9.0)));
     // Saved, it says so in terms every reader takes the same way.
     let again = crate::odt::import(&crate::odt::tests::export_model(&doc).unwrap()).unwrap();
     assert_eq!(look(&again), (Some(10.8), Some(9.0), Some(9.0)));
-    let doc = crate::odt::import(&pkg).unwrap();
-    assert_eq!(look(&doc), (None, Some(9.0), Some(9.0)));
 }
 
 #[test]
-fn a_page_anchored_frames_paragraph_relations_are_the_pages() {
-    // LibreOffice's letter templates: a page-anchored frame "from the paragraph" (a combination
-    // the standard doesn't define) is placed from the page's edge in LibreOffice, from the
-    // page's text area in WordCraft; "from the paragraph's content" from its text area in both.
-    let paragraph = |profile| {
-        float(&open_as(
-            r#"style:wrap="run-through" style:horizontal-pos="from-left" style:horizontal-rel="paragraph" style:vertical-pos="from-top" style:vertical-rel="paragraph""#,
-            r#"text:anchor-type="page" svg:x="2cm" svg:y="2cm""#,
-            &profile,
-        ))
-    };
-    let f = paragraph(wordcraft_doc::odf_profile::OdfProfile::libreoffice());
-    assert_eq!((f.h_rel, f.v_rel), (Anchor::Page, Anchor::Page));
-    let f = paragraph(wordcraft_doc::odf_profile::OdfProfile::word());
+fn a_page_anchored_frames_paragraph_relations_are_its_text_area() {
+    // LibreOffice's letter templates: a page-anchored frame "from the paragraph" or "from the
+    // paragraph's content" (combinations the standard doesn't define) is placed from the page's
+    // text area.
+    let f = float(&open(
+        r#"style:wrap="run-through" style:horizontal-pos="from-left" style:horizontal-rel="paragraph" style:vertical-pos="from-top" style:vertical-rel="paragraph""#,
+        r#"text:anchor-type="page" svg:x="2cm" svg:y="2cm""#,
+    ));
     assert_eq!((f.h_rel, f.v_rel), (Anchor::Margin, Anchor::Margin));
-    let content = |profile| {
-        float(&open_as(
-            r#"style:wrap="run-through" style:horizontal-pos="from-left" style:horizontal-rel="paragraph-content" style:vertical-rel="char""#,
-            r#"text:anchor-type="page" svg:x="2cm""#,
-            &profile,
-        ))
-    };
-    let f = content(wordcraft_doc::odf_profile::OdfProfile::libreoffice());
-    assert_eq!((f.h_rel, f.v_rel), (Anchor::Margin, Anchor::Page));
-    let f = content(wordcraft_doc::odf_profile::OdfProfile::word());
+    let f = float(&open(
+        r#"style:wrap="run-through" style:horizontal-pos="from-left" style:horizontal-rel="paragraph-content" style:vertical-rel="char""#,
+        r#"text:anchor-type="page" svg:x="2cm""#,
+    ));
     assert_eq!((f.h_rel, f.v_rel), (Anchor::Margin, Anchor::Margin));
     // Anchored to a paragraph, they stay the paragraph's.
     let f = float(&open(r#"style:horizontal-rel="paragraph-content" style:vertical-rel="char""#, r#"text:anchor-type="char""#));

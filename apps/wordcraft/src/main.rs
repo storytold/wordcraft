@@ -27,7 +27,7 @@ mod traffic_lights;
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{
     Services, UiState, WordApp,
-    window_geometry::{RawWindowState, WindowGeometry, take_rescue},
+    window_geometry::{RawWindowState, WindowGeometry, reachable, take_rescue},
 };
 
 /// The app, the restored window geometry (or, with none, the default: no position) until the
@@ -54,7 +54,13 @@ impl eframe::App for App {
         apple_events::poll(&self.5, &mut self.0, ctx);
         self.0.logic(ctx);
         self.3.show(frame);
-        let window = self.4;
+        let mut window = self.4;
+        // Only until the off-screen check below has run: it is the one reader.
+        if self.1.is_some() {
+            let (on_a_monitor, primary_monitor_rect) = monitor_geometry(frame, ctx.pixels_per_point());
+            window.on_a_monitor = on_a_monitor;
+            window.primary_monitor_rect = primary_monitor_rect;
+        }
         // A window that doesn't fit on its screen (the default size on a laptop) shrinks to fit
         // there, so all of the scroll bar can be dragged (#1215). Checked on the frame that first
         // knows the monitor: the off-screen check below takes the pending geometry then.
@@ -124,6 +130,37 @@ impl eframe::App for App {
             key_file.remove();
         }
     }
+}
+
+/// Whether a grippable part of the window is on a monitor, and the primary monitor bounds.
+/// Winit reports physical pixels; egui positions use points. `None` where the platform cannot
+/// report the window or primary monitor (Wayland, headless).
+fn monitor_geometry(frame: &eframe::Frame, pixels_per_point: f32) -> (Option<bool>, Option<egui::Rect>) {
+    let Some(w) = frame.winit_window() else {
+        return (None, None);
+    };
+    if !pixels_per_point.is_finite() || pixels_per_point <= 0.0 {
+        return (None, None);
+    }
+    let Some(pos) = w.outer_position().ok() else {
+        return (None, None);
+    };
+    let size = w.outer_size();
+    let physical_rect = |(x, y): (i32, i32), (width, height): (u32, u32)| {
+        egui::Rect::from_min_size(egui::pos2(x as f32, y as f32), egui::vec2(width as f32, height as f32))
+    };
+    let monitors: Vec<egui::Rect> =
+        w.available_monitors().map(|m| physical_rect((m.position().x, m.position().y), (m.size().width, m.size().height))).collect();
+    let on_a_monitor = (!monitors.is_empty()).then(|| reachable(physical_rect((pos.x, pos.y), (size.width, size.height)), &monitors));
+    let primary_monitor_rect = w.primary_monitor().map(|m| {
+        let pos = m.position();
+        let size = m.size();
+        egui::Rect::from_min_size(
+            egui::pos2(pos.x as f32, pos.y as f32) / pixels_per_point,
+            egui::vec2(size.width as f32, size.height as f32) / pixels_per_point,
+        )
+    });
+    (on_a_monitor, primary_monitor_rect)
 }
 
 /// Quit the way Command-Q does, on the next turn of the main queue.
