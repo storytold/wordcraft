@@ -34,20 +34,48 @@ pub fn enabled(app: &WordApp, id: &str) -> bool {
     }
 }
 
-pub(crate) fn bg(ui: &Ui, r: Rect, resp: &Response, checked: bool, t: &Tokens) {
-    let fill = if resp.is_pointer_button_down_on() {
-        t.pressed
-    } else if checked {
-        t.checked
-    } else if resp.hovered() {
-        t.hover
+pub(crate) fn bg(ui: &Ui, r: Rect, resp: &Response, checked: bool, t: &Tokens) -> f32 {
+    let animated = ui.style().animation_time > 0.0;
+    let down = resp.is_pointer_button_down_on();
+    let hovered = resp.hovered() || down;
+
+    let h = if animated {
+        ui.ctx().animate_bool_responsive(resp.id.with("btn_hover"), hovered)
+    } else if hovered {
+        1.0
     } else {
-        return;
+        0.0
     };
-    ui.painter().rect_filled(r, CornerRadius::same(4), fill);
-    if checked {
-        ui.painter().rect_stroke(r, CornerRadius::same(4), Stroke::new(1.0, t.accent.linear_multiply(0.5)), egui::StrokeKind::Inside);
+
+    let p = if animated {
+        ui.ctx().animate_bool_with_time(resp.id.with("btn_press"), down, ui.style().animation_time.min(0.08))
+    } else if down {
+        1.0
+    } else {
+        0.0
+    };
+
+    let dy = if p > 0.001 { 0.75 * p } else { 0.0 };
+
+    if h > 0.001 || p > 0.001 || checked {
+        let draw_r = if p > 0.001 {
+            r.shrink(0.5 * p).translate(vec2(0.0, dy))
+        } else {
+            r
+        };
+
+        let base = if checked { t.checked } else { Color32::TRANSPARENT };
+        let hover_color = if checked { t.checked } else { t.hover };
+        let fill = base.lerp_to_gamma(hover_color, h).lerp_to_gamma(t.pressed, p);
+
+        ui.painter().rect_filled(draw_r, CornerRadius::same(4), fill);
+        if checked {
+            let stroke = Stroke::new(1.0, t.accent.linear_multiply(0.5));
+            ui.painter().rect_stroke(draw_r, CornerRadius::same(4), stroke, egui::StrokeKind::Inside);
+        }
     }
+
+    dy
 }
 
 /// Runs a ribbon button's command, then hands keyboard focus back to the document so typing
@@ -105,11 +133,11 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
     let (r, resp) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::click());
     keytip_badge(ui, r, id, &label.replace('\n', " "));
     let on = enabled(app, id);
-    bg(ui, r, &resp, checked, &t);
-    let ic = Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0));
+    let dy = bg(ui, r, &resp, checked, &t);
+    let ic = Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y + dy), vec2(32.0, 32.0));
     let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
     icons::paint(ui.painter(), ic, icon, c, a);
-    let mut y = r.min.y + BIG_LABEL_Y;
+    let mut y = r.min.y + BIG_LABEL_Y + dy;
     let lines: Vec<&str> = label.split('\n').collect();
     for (i, l) in lines.iter().enumerate() {
         label_line(ui, r.center().x, y, l, regular(11.5), if on { t.text } else { t.text_disabled }, menu && i + 1 == lines.len());
@@ -146,13 +174,13 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w, 22.0), Sense::click());
     keytip_badge(ui, r, id, tip);
     let on = enabled(app, id);
-    bg(ui, r, &resp, checked, &t);
+    let dy = bg(ui, r, &resp, checked, &t);
     let rtl = crate::rtl::flows(ui);
-    let ic = Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 12.0), r.center().y), vec2(17.0, 17.0));
+    let ic = Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 12.0), r.center().y + dy), vec2(17.0, 17.0));
     let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
     icons::paint(ui.painter(), ic, icon, c, a);
     if let Some(l) = label {
-        let at = pos2(crate::rtl::lead_x(rtl, r, 24.0), r.center().y);
+        let at = pos2(crate::rtl::lead_x(rtl, r, 24.0), r.center().y + dy);
         ui.painter().text(at, crate::rtl::lead_center(rtl), l, regular(11.5), if on { t.text } else { t.text_disabled });
     }
     let resp = tooltip(app, resp, tip, id);
@@ -181,18 +209,18 @@ pub fn split(
     keytip_badge(ui, r, id, tip);
     let (ar, aresp) = ui.allocate_exact_size(vec2(11.0, 22.0), Sense::click());
     let on = enabled(app, id);
-    bg(ui, r, &resp, checked, &t);
-    bg(ui, ar, &aresp, false, &t);
-    let ic = Rect::from_center_size(r.center(), vec2(17.0, 17.0));
+    let dy = bg(ui, r, &resp, checked, &t);
+    let ady = bg(ui, ar, &aresp, false, &t);
+    let ic = Rect::from_center_size(pos2(r.center().x, r.center().y + dy), vec2(17.0, 17.0));
     let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
     icons::paint(ui.painter(), ic, icon, c, a);
     if let Some(sw) = swatch {
         let sw = if on { sw } else { t.text_disabled };
-        let bar = Rect::from_min_max(pos2(r.min.x + 4.0, r.max.y - 5.0), pos2(r.max.x - 4.0, r.max.y - 2.0));
+        let bar = Rect::from_min_max(pos2(r.min.x + 4.0, r.max.y - 5.0 + dy), pos2(r.max.x - 4.0, r.max.y - 2.0 + dy));
         ui.painter().rect_filled(bar, 0.0, sw);
         ui.painter().rect_stroke(bar, 0.0, Stroke::new(0.5, t.border), egui::StrokeKind::Inside);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, a);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(ar.center().x, ar.center().y + ady), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, a);
     let resp = tooltip(app, resp, tip, id);
     command_menu(&resp, app, id);
     if resp.clicked() && on {
@@ -252,10 +280,10 @@ pub fn menu_button(ui: &mut Ui, app: &mut WordApp, options: MenuButtonOptions<'_
         let w = (galley_w + 22.0).max(44.0);
         let (r, resp) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::click());
         keytip_badge(ui, r, "menu", tip);
-        bg(ui, r, &resp, false, &t);
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0)), icon, c, a);
+        let dy = bg(ui, r, &resp, false, &t);
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y + dy), vec2(32.0, 32.0)), icon, c, a);
         let lines: Vec<&str> = label.unwrap_or("").split('\n').collect();
-        let mut y = r.min.y + BIG_LABEL_Y;
+        let mut y = r.min.y + BIG_LABEL_Y + dy;
         for (i, l) in lines.iter().enumerate() {
             label_line(ui, r.center().x, y, l, regular(11.5), text, i + 1 == lines.len());
             y += LABEL_PITCH;
@@ -265,14 +293,14 @@ pub fn menu_button(ui: &mut Ui, app: &mut WordApp, options: MenuButtonOptions<'_
         let text_w = label.map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x) + 6.0).unwrap_or(0.0);
         let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w + 10.0, 22.0), Sense::click());
         keytip_badge(ui, r, "menu", tip);
-        bg(ui, r, &resp, false, &t);
+        let dy = bg(ui, r, &resp, false, &t);
         let rtl = crate::rtl::flows(ui);
         let lead = |inset: f32| crate::rtl::lead_x(rtl, r, inset);
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(lead(12.0), r.center().y), vec2(17.0, 17.0)), icon, c, a);
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(lead(12.0), r.center().y + dy), vec2(17.0, 17.0)), icon, c, a);
         if let Some(l) = label {
-            ui.painter().text(pos2(lead(24.0), r.center().y), crate::rtl::lead_center(rtl), l, regular(11.5), text);
+            ui.painter().text(pos2(lead(24.0), r.center().y + dy), crate::rtl::lead_center(rtl), l, regular(11.5), text);
         }
-        let arrow = pos2(crate::rtl::trail_x(rtl, r, 6.0), r.center().y);
+        let arrow = pos2(crate::rtl::trail_x(rtl, r, 6.0), r.center().y + dy);
         icons::paint(ui.painter(), Rect::from_center_size(arrow, vec2(DROPDOWN, DROPDOWN)), "dropdown", c, c);
         resp
     };

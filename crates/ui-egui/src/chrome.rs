@@ -33,11 +33,14 @@ fn qat_button(ui: &mut Ui, app: &mut WordApp, icon: &str, tip: &str, id: &str, e
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::hover());
     let resp = ui.interact(r, qat_button_id(id), Sense::click());
-    if resp.hovered() && enabled {
-        ui.painter().rect_filled(r, 4.0, t.hover);
+    let hover_t = ui.ctx().animate_bool_responsive(resp.id.with("hover"), resp.hovered() && enabled);
+    let press_t = ui.ctx().animate_bool_responsive(resp.id.with("press"), resp.is_pointer_button_down_on() && enabled);
+    let dy = press_t * 0.75;
+    if hover_t > 0.001 {
+        ui.painter().rect_filled(r.shrink(press_t * 0.5).translate(vec2(0.0, dy * 0.5)), 4.0, t.hover.gamma_multiply(hover_t));
     }
     let c = if enabled { t.icon } else { t.text_disabled };
-    icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), icon, c, if enabled { t.accent } else { c });
+    icons::paint(ui.painter(), Rect::from_center_size(r.center() + vec2(0.0, dy), vec2(16.0, 16.0)), icon, c, if enabled { t.accent } else { c });
     let sc = crate::widgets::shortcut_text(app, id);
     let resp = resp.on_hover_text(if sc.is_empty() { tip.to_string() } else { format!("{tip} ({sc})") });
     if resp.clicked() && enabled {
@@ -88,10 +91,13 @@ fn quick_access(ui: &mut Ui, app: &mut WordApp) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::hover());
     let resp = ui.interact(r, qat_menu_button_id(), Sense::click());
-    if resp.hovered() {
-        ui.painter().rect_filled(r, 4.0, t.hover);
+    let hover_t = ui.ctx().animate_bool_responsive(resp.id.with("hover"), resp.hovered());
+    let press_t = ui.ctx().animate_bool_responsive(resp.id.with("press"), resp.is_pointer_button_down_on());
+    let dy = press_t * 0.75;
+    if hover_t > 0.001 {
+        ui.painter().rect_filled(r.shrink(press_t * 0.5).translate(vec2(0.0, dy * 0.5)), 4.0, t.hover.gamma_multiply(hover_t));
     }
-    icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), "more", t.icon, t.accent);
+    icons::paint(ui.painter(), Rect::from_center_size(r.center() + vec2(0.0, dy), vec2(16.0, 16.0)), "more", t.icon, t.accent);
     let resp = resp.on_hover_text(tl!("Customize Quick Access Toolbar"));
     crate::rtl::menu(&resp).show(|ui| {
         ui.set_min_width(220.0);
@@ -138,11 +144,14 @@ fn undo_list_button(ui: &mut Ui, app: &mut WordApp, enabled: bool) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(12.0, 24.0), Sense::hover());
     let resp = ui.interact(r, undo_list_button_id(), if enabled { Sense::click() } else { Sense::hover() });
-    if resp.hovered() && enabled {
-        ui.painter().rect_filled(r, 4.0, t.hover);
+    let hover_t = ui.ctx().animate_bool_responsive(resp.id.with("hover"), resp.hovered() && enabled);
+    let press_t = ui.ctx().animate_bool_responsive(resp.id.with("press"), resp.is_pointer_button_down_on() && enabled);
+    let dy = press_t * 0.75;
+    if hover_t > 0.001 {
+        ui.painter().rect_filled(r.shrink(press_t * 0.5).translate(vec2(0.0, dy * 0.5)), 4.0, t.hover.gamma_multiply(hover_t));
     }
     let c = if enabled { t.icon } else { t.text_disabled };
-    icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(9.0, 9.0)), "dropdown", c, c);
+    icons::paint(ui.painter(), Rect::from_center_size(r.center() + vec2(0.0, dy), vec2(9.0, 9.0)), "dropdown", c, c);
     let resp = resp.on_hover_text(tl!("Undo History"));
     crate::rtl::menu(&resp).show(|ui| undo_list(ui, app));
 }
@@ -360,26 +369,31 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
                         // Account / community.
                         let (r, resp) = ui.allocate_exact_size(vec2(control_h, control_h), Sense::click());
-                        ui.painter().circle_filled(r.center(), control_h / 2.0 - 1.0, t.accent);
+                        let acct_press_t = ui.ctx().animate_bool_responsive(resp.id.with("press"), resp.is_pointer_button_down_on());
+                        let acct_dy = acct_press_t * 0.75;
+                        let acct_rad = (control_h / 2.0 - 1.0) - acct_press_t * 0.5;
+                        ui.painter().circle_filled(r.center() + vec2(0.0, acct_dy), acct_rad, t.accent);
                         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Account")));
                         let initials: String = app.session.user_initials().chars().take(2).collect();
-                        ui.painter().text(r.center(), Align2::CENTER_CENTER, initials, semibold(10.5), t.on_accent);
+                        ui.painter().text(r.center() + vec2(0.0, acct_dy), Align2::CENTER_CENTER, initials, semibold(10.5), t.on_accent);
                         if resp.on_hover_text(format!("{} — set your name in File › Options", app.session.author)).clicked() {
                             let _ = app.run("ui.backstage", json!({"value": true, "page": "options", "pane": "general"}));
                         }
                         ui.add_space(8.0);
                         if app.ui.show_discord {
                             let (r, resp) = ui.allocate_exact_size(vec2(84.0, 22.0), Sense::click());
-                            ui.painter().rect_filled(r, 11.0, if resp.hovered() { t.accent_text } else { t.accent });
+                            let disc_press_t = ui.ctx().animate_bool_responsive(resp.id.with("press"), resp.is_pointer_button_down_on());
+                            let disc_dy = disc_press_t * 0.75;
+                            ui.painter().rect_filled(r.shrink(disc_press_t * 0.5).translate(vec2(0.0, disc_dy * 0.5)), 11.0, if resp.hovered() { t.accent_text } else { t.accent });
                             icons::paint(
                                 ui.painter(),
-                                Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 13.0), r.center().y), vec2(14.0, 14.0)),
+                                Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 13.0), r.center().y + disc_dy), vec2(14.0, 14.0)),
                                 "discord",
                                 t.on_accent,
                                 t.on_accent,
                             );
                             ui.painter().text(
-                                pos2(crate::rtl::lead_x(rtl, r, 24.0), r.center().y),
+                                pos2(crate::rtl::lead_x(rtl, r, 24.0), r.center().y + disc_dy),
                                 crate::rtl::lead_center(rtl),
                                 tl!("Discord"),
                                 medium(11.5),
