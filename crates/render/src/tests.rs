@@ -305,6 +305,16 @@ fn page_picture_is_painted_behind_the_text() {
         let i = ((300 * img.width + 300) * 4) as usize;
         assert_eq!(&img.pixels[i..i + 3], &[10, 200, 30], "{kind}");
     }
+    // Centred once at its own size (8 px = 6 pt), the rest of the page paper.
+    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "bg.png".into(), fill_type: "center".into(), title: String::new() });
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let img = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
+    let px = |x: u32, y: u32| {
+        let i = ((y * img.width + x) * 4) as usize;
+        [img.pixels[i], img.pixels[i + 1], img.pixels[i + 2]]
+    };
+    assert_eq!(px(img.width / 2, img.height / 2), [10, 200, 30], "centred");
+    assert_eq!(px(5, 5), [255, 255, 255], "only in the middle");
     // An undecodable picture leaves the paper alone.
     d.media.insert("bg.png".into(), Arc::new(b"junk".to_vec()));
     let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
@@ -348,6 +358,26 @@ fn read_paper_replaces_the_page_background() {
     let plain = render_page(&d, page, 2.0, &RenderOptions::default());
     let on_sepia = render_page(&d, page, 2.0, &sepia);
     assert!(darkest(&plain) < 0x40 && darkest(&on_sepia) <= darkest(&plain) + 8, "{} {}", darkest(&plain), darkest(&on_sepia));
+}
+
+/// The paper the canvas draws under a page before its raster: white, the reading paper, or
+/// the dark paper grey on a dark page, never the document's page color.
+#[test]
+fn blank_paper_is_the_reading_paper_or_white_on_screen() {
+    let mut d = Document::from_text("Hello");
+    d.settings.page_color = Some(Rgb(0x10, 0x10, 0x40));
+    let grey = Rgb(DARK_PAPER, DARK_PAPER, DARK_PAPER);
+    for (opts, paper) in [
+        (RenderOptions::default(), Rgb::WHITE),
+        (RenderOptions { read_paper: Some(SEPIA_PAPER), ..Default::default() }, SEPIA_PAPER),
+        (RenderOptions { read_paper: Some(Rgb::WHITE), dark: true, ..Default::default() }, grey),
+        (RenderOptions { dark: true, ..Default::default() }, grey),
+    ] {
+        assert_eq!(opts.blank_paper(), paper);
+        if opts.read_paper.is_some() {
+            assert_eq!(opts.paper_of(&d), paper, "the reading paper hides the page color");
+        }
+    }
 }
 
 /// A PNG signature, an IHDR declaring `w`×`h` 8-bit RGBA and a short IDAT (all CRCs valid, so
