@@ -120,7 +120,7 @@ const DIB24_RGBA: [u8; 16] = [255, 0, 0, 255, 255, 255, 255, 255, 0, 0, 255, 255
 fn path_segs(item: &Item) -> (&Vec<Seg>, Option<[u8; 4]>, Option<([u8; 4], f32)>, bool) {
     match item {
         Item::Path { segs, fill, stroke, even_odd } => (segs, *fill, *stroke, *even_odd),
-        Item::Bitmap { .. } | Item::Text { .. } => panic!("expected a path"),
+        Item::Bitmap { .. } | Item::Text(_) => panic!("expected a path"),
     }
 }
 
@@ -336,10 +336,6 @@ fn truncated_random_and_mutated_inputs_never_panic() {
     payload.extend(dib24_bottom_up().get(40..).unwrap_or_default());
     let efile = emf(
         &[
-            erec(24, &h32(0)),
-            erec(82, &font_payload(-30, "Arial")),
-            erec(37, &h32(1)),
-            textout_rec(84, (10, 10), &utf16le("KDF")),
             erec(59, &[]),
             erec(27, &cat(vec![e32(0), e32(0)])),
             erec(54, &cat(vec![e32(9), e32(9)])),
@@ -521,306 +517,6 @@ fn dib_rec(typ: u32, fields: &[(usize, u32)], blobs: &[(usize, &[u8])], info: &[
 fn bitblt_rec(rop: u32, dst: [u32; 4], info: &[u8], bits: &[u8]) -> Vec<u8> {
     let fields = [(24, dst[0]), (28, dst[1]), (32, dst[2]), (36, dst[3]), (40, rop)];
     dib_rec(76, &fields, &[], info, bits)
-}
-
-/// `s` as UTF-16LE bytes.
-fn utf16le(s: &str) -> Vec<u8> {
-    s.chars().flat_map(|c| (c as u16).to_le_bytes().to_vec()).collect()
-}
-
-/// An EMR_EXTCREATEFONTINDIRECTW payload: ihFont 1, then LogFontW (height at 0, facename at 28),
-/// with lfEscapement (LogFontW offset 8, tenths of a degree) set.
-fn font_payload_esc(height: i32, face: &str, escapement: i32) -> Vec<u8> {
-    let mut v = h32(1);
-    v.extend(e32(height));
-    v.extend(e32(0)); // lfWidth
-    v.extend(e32(escapement));
-    v.extend(vec![0u8; 16]);
-    v.extend(utf16le(face));
-    v.extend([0u8, 0]);
-    v
-}
-
-fn font_payload(height: i32, face: &str) -> Vec<u8> {
-    font_payload_esc(height, face, 0)
-}
-
-/// EMR_EXTTEXTOUTA/W at reference point `at` with the string bytes at the spec's offset 76.
-fn textout_rec(typ: u32, at: (i32, i32), string: &[u8]) -> Vec<u8> {
-    let wide = typ == 84;
-    let n_chars = if wide { string.len() / 2 } else { string.len() };
-    let total = (76 + string.len()).div_ceil(4) * 4;
-    erec_at(typ, total, &[(36, at.0 as u32), (40, at.1 as u32), (44, n_chars as u32), (48, 76), (52, 0), (72, 0)], &[(76, string)])
-}
-
-/// EMR_EXTTEXTOUTW at reference point `at` with a per-character `Dx` array after the string: the
-/// i32 advances sit at the next 4-byte boundary past the string, and `offDx` (spec offset 72)
-/// points there.
-fn textout_rec_dx(at: (i32, i32), string: &[u8], dx: &[i32]) -> Vec<u8> {
-    let dx_at = (76 + string.len()).div_ceil(4) * 4;
-    let total = (dx_at + dx.len() * 4).div_ceil(4) * 4;
-    let dx_payload: Vec<u8> = dx.iter().flat_map(|v| v.to_le_bytes()).collect();
-    erec_at(
-        84,
-        total,
-        &[(36, at.0 as u32), (40, at.1 as u32), (44, (string.len() / 2) as u32), (48, 76), (52, 0), (72, dx_at as u32)],
-        &[(76, string), (dx_at, &dx_payload)],
-    )
-}
-
-#[test]
-fn emf_exttextoutw_becomes_text_item() {
-    // SetTextColor blue, a 120-unit Arial font selected, then ExtTextOutW "KDF" at (100, 200).
-    let recs = [erec(24, &h32(0x00FF_0000)), erec(82, &font_payload(-120, "Arial")), erec(37, &h32(1)), textout_rec(84, (100, 200), &utf16le("KDF"))];
-    let p = parse(&emf(&recs, [0, 0, 1000, 1000], [0; 4])).unwrap();
-    let Item::Text { at, text, font, h, color, .. } = &p.items[0] else { panic!("expected text, got {:?}", p.items) };
-    assert_eq!(*at, (100.0, 200.0));
-    assert_eq!(text, "KDF");
-    assert_eq!(font, "Arial");
-    assert_eq!(*color, [0, 0, 255, 255]);
-    assert!(close(*h, 120.0));
-    // Placed 2000 x 1000: x doubles, y keeps, and the height takes the mean axis factor 1.5.
-    let placed = p.place(kurbo::Rect::new(0.0, 0.0, 2000.0, 1000.0), [0.0; 4]);
-    let crate::PlacedItem::Text { pos, text, size, .. } = &placed[0] else { panic!("expected placed text") };
-    assert_eq!(*pos, (200.0, 200.0));
-    assert_eq!(text, "KDF");
-    assert!(close(*size as f32, 180.0), "size {size}");
-}
-
-#[test]
-fn emf_exttextouta_decodes_ansi() {
-    // CP1252 0x96 is an en dash; without a font selected the default (empty facename) draws it.
-    let recs = [textout_rec(83, (10, 20), b"K\x96DF")];
-    let p = parse(&emf(&recs, [0, 0, 100, 100], [0; 4])).unwrap();
-    let Item::Text { text, font, h, color, .. } = &p.items[0] else { panic!("expected text, got {:?}", p.items) };
-    assert_eq!(text, "K\u{2013}DF");
-    assert_eq!(font, "");
-    assert!(close(*h, 12.0), "default font height, got {h}");
-    assert_eq!(*color, [0, 0, 0, 255]);
-}
-
-#[test]
-fn emf_settextalign_baseline_anchor() {
-    // SetTextAlign(TA_BASELINE = 24): the reference point is the baseline, not the top of the cell.
-    // SaveDC snapshots the alignment, so a SetTextAlign inside the bracket does not survive RestoreDC.
-    let state = [erec(24, &h32(0)), erec(82, &font_payload(-120, "Arial")), erec(37, &h32(1))];
-    let recs = [
-        state.concat(),
-        erec(22, &h32(24)),
-        textout_rec(84, (10, 10), &utf16le("a")),
-        erec(33, &[]),
-        erec(22, &h32(0)),
-        textout_rec(84, (20, 10), &utf16le("b")),
-        erec(34, &e32(-1)),
-        textout_rec(84, (30, 10), &utf16le("c")),
-    ];
-    let p = parse(&emf(&recs, [0, 0, 100, 100], [0; 4])).unwrap();
-    let modes: Vec<(&str, crate::TextHAlign, crate::TextVAlign)> = p
-        .items
-        .iter()
-        .map(|i| match i {
-            Item::Text { text, align_h, align_v, .. } => (text.as_str(), *align_h, *align_v),
-            _ => panic!("expected text, got {i:?}"),
-        })
-        .collect();
-    assert_eq!(
-        modes,
-        [
-            ("a", crate::TextHAlign::Left, crate::TextVAlign::Baseline),
-            ("b", crate::TextHAlign::Left, crate::TextVAlign::Top),
-            ("c", crate::TextHAlign::Left, crate::TextVAlign::Baseline)
-        ]
-    );
-}
-
-#[test]
-fn emf_settextalign_center_right() {
-    // TA_CENTER (6) and TA_RIGHT (2) move the run against its reference point; combined with the
-    // vertical bits (0x1E = TA_BASELINE | TA_CENTER) both modes carry into the placed items.
-    let state = [erec(24, &h32(0)), erec(82, &font_payload(-120, "Arial")), erec(37, &h32(1))];
-    let recs = [
-        state.concat(),
-        erec(22, &h32(6)),
-        textout_rec(84, (10, 10), &utf16le("a")),
-        erec(22, &h32(0x1E)),
-        textout_rec(84, (20, 10), &utf16le("b")),
-        erec(22, &h32(2)),
-        textout_rec(84, (30, 10), &utf16le("c")),
-    ];
-    let p = parse(&emf(&recs, [0, 0, 100, 100], [0; 4])).unwrap();
-    let placed = p.place(kurbo::Rect::new(0.0, 0.0, 100.0, 100.0), [0.0; 4]);
-    let modes: Vec<(&str, crate::TextHAlign, crate::TextVAlign)> = placed
-        .iter()
-        .map(|i| match i {
-            crate::PlacedItem::Text { text, align_h, align_v, .. } => (text.as_str(), *align_h, *align_v),
-            _ => panic!("expected placed text"),
-        })
-        .collect();
-    assert_eq!(
-        modes,
-        [
-            ("a", crate::TextHAlign::Center, crate::TextVAlign::Top),
-            ("b", crate::TextHAlign::Center, crate::TextVAlign::Baseline),
-            ("c", crate::TextHAlign::Right, crate::TextVAlign::Top)
-        ]
-    );
-}
-
-#[test]
-fn emf_updatecp_draws_at_the_current_position() {
-    // SetTextAlign(TA_UPDATECP|TA_BASELINE = 0x19) ignores the EMRTEXT reference point and draws at
-    // the current position, which MoveTo (30, 40) sets; the run's extent (the Dx sum 17+17+13 = 47)
-    // advances it, so a second run without a MoveTo follows on at (77, 40). RestoreDC brings back
-    // the alignment saved before the bracket.
-    let state = [erec(24, &h32(0)), erec(82, &font_payload(-120, "Arial")), erec(37, &h32(1))];
-    let recs = [
-        state.concat(),
-        erec(33, &[]),
-        erec(22, &h32(0x19)),
-        erec(27, &cat(vec![e32(30), e32(40)])),
-        textout_rec_dx((99, 99), &utf16le("KDF"), &[17, 17, 13]),
-        textout_rec_dx((99, 99), &utf16le("ab"), &[5, 7]),
-        erec(34, &e32(-1)),
-        textout_rec_dx((99, 99), &utf16le("cd"), &[1, 1]),
-    ];
-    let p = parse(&emf(&recs, [0, 0, 100, 100], [0; 4])).unwrap();
-    let runs: Vec<((f32, f32), &str)> = p
-        .items
-        .iter()
-        .map(|i| match i {
-            Item::Text { at, text, .. } => (*at, text.as_str()),
-            _ => panic!("expected text, got {i:?}"),
-        })
-        .collect();
-    assert_eq!(
-        runs,
-        [((30.0, 40.0), "KDF"), ((77.0, 40.0), "ab"), ((99.0, 99.0), "cd")],
-        "current-position runs, then the EMRTEXT point after the restore"
-    );
-    // The anchor mode comes with it: UPDATECP here kept TA_BASELINE from the same mode word.
-    let Item::Text { align_v, .. } = &p.items[0] else { panic!("expected text") };
-    assert_eq!(*align_v, crate::TextVAlign::Baseline);
-}
-
-#[test]
-fn emf_escapement_rotates_text() {
-    // lfEscapement 900 (90° in tenths of a degree) turns the run; placing scales the picture but
-    // not the angle. The same 90° arrives through the world transform (MODIFYWORLDTRANSFORM mode 2
-    // with a rotation matrix), which is how the repro's rotated labels carry it, composed with the
-    // escapement.
-    let font = font_payload_esc(-120, "Arial", 900);
-    let recs = [erec(24, &h32(0)), erec(82, &font), erec(37, &h32(1)), textout_rec(84, (10, 10), &utf16le("KDF"))];
-    let p = parse(&emf(&recs, [0, 0, 100, 100], [0; 4])).unwrap();
-    let Item::Text { rotation, .. } = &p.items[0] else { panic!("expected text, got {:?}", p.items) };
-    assert!(close(*rotation, 90.0), "rotation {rotation}");
-    let placed = p.place(kurbo::Rect::new(0.0, 0.0, 200.0, 50.0), [0.0; 4]);
-    let crate::PlacedItem::Text { rotation, .. } = &placed[0] else { panic!("expected placed text") };
-    assert_eq!(*rotation, 90.0);
-
-    // World-transform rotation: MWT_LEFTMULTIPLY (2) of a 90° turn, reference point (0, 0) maps to
-    // the transform's translation.
-    let mut mw = Vec::new();
-    for v in [0.0f32, -1.0, 1.0, 0.0, 50.0, 50.0] {
-        mw.extend(v.to_le_bytes());
-    }
-    mw.extend(h32(2));
-    let recs =
-        [erec(24, &h32(0)), erec(82, &font_payload(-120, "Arial")), erec(37, &h32(1)), erec(36, &mw), textout_rec(84, (0, 0), &utf16le("KDF"))];
-    let p = parse(&emf(&recs, [0, 0, 100, 100], [0; 4])).unwrap();
-    let Item::Text { at, rotation, .. } = &p.items[0] else { panic!("expected text, got {:?}", p.items) };
-    assert_eq!(*at, (50.0, 50.0));
-    assert!(close(*rotation, 90.0), "world rotation {rotation}");
-
-    // Both together add up: escapement 270 (reads top-to-bottom) plus a 90° world turn is upright.
-    let recs = [
-        erec(24, &h32(0)),
-        erec(82, &font_payload_esc(-120, "Arial", 2700)),
-        erec(37, &h32(1)),
-        erec(36, &mw),
-        textout_rec(84, (0, 0), &utf16le("KDF")),
-    ];
-    let p = parse(&emf(&recs, [0, 0, 100, 100], [0; 4])).unwrap();
-    let Item::Text { rotation, .. } = &p.items[0] else { panic!("expected text, got {:?}", p.items) };
-    assert!(close(*rotation, 0.0), "composed rotation {rotation}");
-}
-
-#[test]
-fn hostile_exttextout() {
-    let state = [erec(24, &h32(0)), erec(82, &font_payload(-120, "Arial")), erec(37, &h32(1))];
-    // offString far past the record end, and nChars = 0: both are dropped.
-    let far = erec_at(84, 84, &[(36, 0), (40, 0), (44, 3), (48, 100_000)], &[]);
-    let empty = textout_rec(84, (0, 0), &[]);
-    let p = parse(&emf(&[state.concat(), far, empty], [0, 0, 100, 100], [0; 4])).unwrap();
-    assert!(p.items.is_empty(), "{:?}", p.items);
-    // A pen selected instead of a font: the label falls back to the default font, not a panic.
-    let pen = erec_at(38, 28, &[(8, 0), (12, 0), (16, 4), (24, 0)], &[]);
-    let p = parse(&emf(&[pen, erec(37, &h32(0)), textout_rec(84, (10, 10), &utf16le("K"))], [0, 0, 100, 100], [0; 4])).unwrap();
-    let Item::Text { font, .. } = &p.items[0] else { panic!("expected text, got {:?}", p.items) };
-    assert_eq!(font, "");
-    // SetTextAlign with junk words and wild escapements: normalised or defaulted, never a panic.
-    // 0xFFFF..FF has every mode bit set (center + baseline); a full turn of escapement is 0.
-    let junk = [erec(22, &h32(u32::MAX)), erec(22, &h32(7)), erec(22, &h32(0x1E))];
-    let wild = erec(82, &font_payload_esc(-120, "Arial", 3600));
-    let p =
-        parse(&emf(&[state.concat(), junk.concat(), wild, erec(37, &h32(1)), textout_rec(84, (10, 10), &utf16le("KDF"))], [0, 0, 100, 100], [0; 4]))
-            .unwrap();
-    let Item::Text { align_h, align_v, rotation, .. } = &p.items[0] else { panic!("expected text, got {:?}", p.items) };
-    assert_eq!((*align_h, *align_v), (crate::TextHAlign::Center, crate::TextVAlign::Baseline));
-    assert!(close(*rotation, 0.0), "a full turn is no turn, got {rotation}");
-    // UPDATECP with a Dx array pointing past the record, and with junk advances: the run draws and
-    // the position advances by a finite amount, never a panic and never a wild placed position.
-    let far_dx = erec_at(84, 88, &[(36, 0), (40, 0), (44, 3), (48, 76), (72, 100_000)], &[(76, &utf16le("KDF"))]);
-    let junk_dx = textout_rec_dx((99, 99), &utf16le("KDF"), &[i32::MAX, i32::MIN, i32::MAX]);
-    let p = parse(&emf(&[state.concat(), erec(22, &h32(0x19)), erec(27, &cat(vec![e32(10), e32(10)])), far_dx, junk_dx], [0, 0, 100, 100], [0; 4]))
-        .unwrap();
-    let runs: Vec<(f32, f32)> = p.items.iter().map(|i| if let Item::Text { at, .. } = i { *at } else { panic!("expected text") }).collect();
-    assert_eq!(runs.len(), 2);
-    assert_eq!(runs[0], (10.0, 10.0), "UPDATECP draws at the current position");
-    assert!(runs[1].0.is_finite() && runs[1].0 < 1e6 && runs[1].1.is_finite(), "the advanced position stays finite: {runs:?}");
-    for esc in [-900, i32::MIN, i32::MAX] {
-        let recs =
-            [erec(24, &h32(0)), erec(82, &font_payload_esc(-120, "Arial", esc)), erec(37, &h32(1)), textout_rec(84, (10, 10), &utf16le("KDF"))];
-        let p = parse(&emf(&recs, [0, 0, 100, 100], [0; 4])).unwrap();
-        let Item::Text { rotation, .. } = &p.items[0] else { panic!("expected text, got {:?}", p.items) };
-        assert!(rotation.is_finite() && (0.0..360.0).contains(rotation), "escapement {esc} became {rotation}");
-    }
-    // Random mutations of a text-bearing file (alignment and escapement included): dropped or
-    // defaulted, never a panic.
-    let good = emf(
-        &[state.concat(), erec(22, &h32(0x1E)), erec(82, &font_payload_esc(-120, "Arial", 900)), textout_rec(84, (50, 50), &utf16le("KDF"))],
-        [0, 0, 100, 100],
-        [0; 4],
-    );
-    let mut rng = Lcg(0x0123_4567_89AB_CDEF);
-    for _ in 0..2000 {
-        let mut buf = good.clone();
-        for _ in 0..8 {
-            let at = rng.rnd() as usize % buf.len();
-            buf[at] = rng.rnd() as u8;
-        }
-        let _ = parse(&buf);
-    }
-}
-
-#[test]
-fn place_maps_text_and_drops_far_or_empty_items() {
-    let text = |at: (f32, f32), t: &str| Item::Text {
-        at,
-        text: t.to_string(),
-        font: String::new(),
-        h: 10.0,
-        color: [0, 0, 0, 255],
-        align_h: crate::TextHAlign::Left,
-        align_v: crate::TextVAlign::Top,
-        rotation: 0.0,
-    };
-    let pic = crate::Picture { width: 100.0, height: 50.0, items: vec![text((2e6, 0.0), "x"), text((0.0, 0.0), ""), text((10.0, 5.0), "K")] };
-    let placed = pic.place(kurbo::Rect::new(0.0, 0.0, 200.0, 100.0), [0.0; 4]);
-    assert_eq!(placed.len(), 1);
-    let crate::PlacedItem::Text { pos, text, font, size, color, .. } = &placed[0] else { panic!("expected text") };
-    assert_eq!(pos, &(20.0, 10.0));
-    assert_eq!((text.as_str(), font.as_str()), ("K", ""));
-    assert_eq!((*size, *color), (20.0, [0, 0, 0, 255]));
 }
 
 #[test]
@@ -1195,6 +891,43 @@ fn place_fits_the_frame_scales_strokes_and_drops_far_paths() {
     assert_eq!(stroke.map(|s| s.1), Some(8.0));
 }
 
+/// #1899: a crop keeps what the file says down to a sliver (a header's bar is 2.7% of a page-sized
+/// metafile), and junk sides give a finite part of the source with some area.
+#[test]
+fn crop_window_keeps_a_sliver_and_stays_finite() {
+    let [x, y, w, h] = crate::crop_window([0.0, 0.51771, 0.0, 0.45485]);
+    assert!(x == 0.0 && w == 1.0 && (y - 0.51771).abs() < 1e-6 && (h - 0.02744).abs() < 1e-5, "{y} {h}");
+    let pic = crate::Picture { width: 100.0, height: 1000.0, items: Vec::new() };
+    let tf = pic.fit(kurbo::Rect::new(0.0, 0.0, 100.0, 27.44), [0.0, 0.51771, 0.0, 0.45485]).unwrap();
+    // The kept band of the source (517.71..545.15) is the frame (0..27.44).
+    let top = tf * kurbo::Point::new(0.0, 517.71);
+    let bottom = tf * kurbo::Point::new(0.0, 545.15);
+    assert!(top.y.abs() < 1e-3 && (bottom.y - 27.44).abs() < 1e-3, "{top:?} {bottom:?}");
+    for c in [[f32::NAN, f32::INFINITY, -1.0, 2.0], [0.9; 4], [1.0, 1.0, 0.0, 0.0], [f32::MAX, f32::MIN, f32::NEG_INFINITY, 0.5]] {
+        let [x, y, w, h] = crate::crop_window(c);
+        assert!([x, y, w, h].iter().all(|v| v.is_finite()) && w > 0.0 && h > 0.0 && x + w <= 1.0 + 1e-9 && y + h <= 1.0 + 1e-9, "{c:?}");
+    }
+}
+
+/// The narrowest crop on the largest frame layout makes (4000 pt, far down a 22-inch page) still
+/// places the source's content: none of it is left out as far off the page.
+#[test]
+fn the_narrowest_crop_on_the_largest_frame_keeps_its_content() {
+    let pic = crate::Picture {
+        width: 100.0,
+        height: 100.0,
+        items: vec![
+            Item::Bitmap { rect: [0.0, 0.0, 100.0, 100.0], width: 1, height: 1, rgba: vec![255; 4] },
+            Item::Path { segs: vec![Seg::Move(0.0, 0.0), Seg::Line(100.0, 100.0)], fill: None, stroke: Some(([0, 0, 0, 255], 1.0)), even_odd: false },
+        ],
+    };
+    let frame = kurbo::Rect::new(1584.0, 1584.0, 5584.0, 5584.0);
+    // The last sliver, the first sliver, and sides that overlap.
+    for crop in [[1.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 1.0], [0.9999, 0.6, 0.5, 0.9999]] {
+        assert_eq!(pic.place(frame, crop).len(), 2, "{crop:?}");
+    }
+}
+
 #[test]
 fn place_keeps_only_finite_bounded_bitmaps_with_area() {
     let bitmap = |rect: [f32; 4]| Item::Bitmap { rect, width: 1, height: 1, rgba: vec![0; 4] };
@@ -1215,6 +948,123 @@ fn place_keeps_only_finite_bounded_bitmaps_with_area() {
     assert_eq!((*index, *rect), (4, kurbo::Rect::new(20.0, 10.0, 40.0, 30.0)));
 }
 
+/// `size` against the full parse: same numbers or same error, and whether the header decided it.
+fn assert_size_matches_parse(file: &[u8], from_header: bool, what: &str) {
+    let full = parse(file).map(|p| (p.width, p.height));
+    assert_eq!(crate::size(file), full, "{what}");
+    assert_eq!(crate::size::header_size(crate::bytes::Bytes(file)).is_some(), from_header, "{what}: header path");
+    if let Some(s) = crate::size::header_size(crate::bytes::Bytes(file)) {
+        assert_eq!(Ok(s), full, "{what}: header size");
+    }
+}
+
+#[test]
+fn size_from_the_header_equals_the_full_parse() {
+    let rect = || erec(43, &cat(vec![e32(0), e32(0), e32(50), e32(25)]));
+    let emfs = [
+        ("emf with a frame", emf(&[rect()], [0, 0, 50, 25], [0, 0, 2500, 1250]), true),
+        ("emf with a large frame", emf(&[rect()], [0, 0, 50, 25], [-90_000, 0, 900_000, 1_250_000]), true),
+        ("emf with an empty frame", emf(&[rect()], [0, 0, 50, 25], [0; 4]), false),
+        ("emf with no records", emf(&[], [0, 0, 50, 25], [0, 0, 2500, 1250]), false),
+        ("emf with no frame and no bounds", emf(&[rect()], [0; 4], [0; 4]), false),
+    ];
+    for (what, file, header) in &emfs {
+        assert_size_matches_parse(file, *header, what);
+    }
+    let draw = [wrec(0x041B, &cat(vec![h16(1440), h16(2880), h16(0), h16(0)]))];
+    let wmfs = [
+        ("placeable wmf", wmf(&draw, Some([0, 0, 2880, 1440])), true),
+        (
+            "placeable wmf with a window mapping",
+            wmf(
+                &[wrec(0x0103, &h16(8)), wrec(0x020C, &cat(vec![h16(100), h16(200)])), wrec(0x020E, &cat(vec![h16(50), h16(100)])), draw[0].clone()],
+                Some([0, 0, 200, 100]),
+            ),
+            false,
+        ),
+        (
+            "placeable wmf with a zero viewport",
+            wmf(&[wrec(0x0103, &h16(8)), wrec(0x020E, &cat(vec![h16(0), h16(0)])), draw[0].clone()], Some([0, 0, 200, 100])),
+            false,
+        ),
+        ("placeable wmf with a window only", wmf(&[wrec(0x020C, &cat(vec![h16(100), h16(200)])), draw[0].clone()], Some([0, 0, 200, 100])), true),
+        ("placeable wmf with an empty box", wmf(&draw, Some([0, 0, 0, 0])), false),
+        ("placeable wmf with no records", wmf(&[], Some([0, 0, 2880, 1440])), false),
+        ("plain wmf", wmf(&draw, None), false),
+    ];
+    for (what, file, header) in &wmfs {
+        assert_size_matches_parse(file, *header, what);
+    }
+    assert_size_matches_parse(b"not a metafile at all", false, "garbage");
+    assert_size_matches_parse(&[], false, "empty");
+}
+
+#[test]
+fn size_of_a_truncated_or_mutated_file_equals_the_full_parse() {
+    let rect = erec(43, &cat(vec![e32(0), e32(0), e32(50), e32(25)]));
+    let draw = wrec(0x041B, &cat(vec![h16(1440), h16(2880), h16(0), h16(0)]));
+    let files = [emf(&[rect], [0, 0, 50, 25], [0, 0, 2500, 1250]), wmf(&[draw], Some([0, 0, 2880, 1440]))];
+    let mut seed = 0x1234_5678_9ABC_DEF0u64;
+    for file in &files {
+        for len in 0..=file.len() {
+            let cut = &file[..len];
+            assert_eq!(crate::size(cut), parse(cut).map(|p| (p.width, p.height)), "cut at {len}");
+        }
+        for _ in 0..3000 {
+            let mut m = file.clone();
+            for _ in 0..3 {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                let at = (seed % m.len() as u64) as usize;
+                m[at] = (seed >> 32) as u8;
+            }
+            let full = parse(&m).map(|p| (p.width, p.height));
+            let fast = crate::size(&m);
+            assert_eq!(fast, full, "{m:?}");
+        }
+    }
+}
+
+/// Time of the full parse against the header-only size for an EMF with one 8000 x 5000, 1 bpp bitmap
+/// (5 MB, decodes to 160 MB): `cargo test -p wordcraft-metafile --release -- --ignored --nocapture size_speed`.
+#[test]
+#[ignore = "timing only"]
+fn size_speed() {
+    let (w, h) = (8000i32, 5000i32);
+    let mut payload = vec![0u8; 16];
+    payload.extend(cat(vec![
+        e32(0),
+        e32(0),
+        e32(0),
+        e32(0),
+        e32(w),
+        e32(h),
+        e32(80),
+        e32(48),
+        e32(128),
+        h32((w / 8 * h) as u32),
+        e32(0),
+        e32(0x00CC_0020),
+        e32(100),
+        e32(50),
+    ]));
+    payload.extend(info_header(w, h, 1, 0));
+    payload.extend([0, 0, 0, 0, 255, 255, 255, 0]);
+    payload.extend((0..(w / 8 * h) as usize).map(|i| (i * 31) as u8));
+    let file = emf(&[erec(81, &payload)], [0, 0, 100, 50], [0, 0, 2500, 1250]);
+    for round in 0..4 {
+        let t = std::time::Instant::now();
+        let full = parse(&file).map(|p| (p.width, p.height));
+        let full_ms = t.elapsed().as_secs_f64() * 1e3;
+        let t = std::time::Instant::now();
+        let fast = crate::size(&file);
+        let fast_ms = t.elapsed().as_secs_f64() * 1e6;
+        assert_eq!(full, fast);
+        eprintln!("round {round}: parse {full_ms:.1} ms, size {fast_ms:.1} us");
+    }
+}
+
 #[test]
 fn take_pixels_returns_only_drawable_bitmaps() {
     let mut ok = Item::Bitmap { rect: [0.0; 4], width: 2, height: 1, rgba: vec![7; 8] };
@@ -1227,17 +1077,6 @@ fn take_pixels_returns_only_drawable_bitmaps() {
     assert_eq!(wide.take_pixels(), None);
     let mut path = Item::Path { segs: Vec::new(), fill: None, stroke: None, even_odd: false };
     assert_eq!(path.take_pixels(), None);
-    let mut text = Item::Text {
-        at: (0.0, 0.0),
-        text: "K".to_string(),
-        font: String::new(),
-        h: 10.0,
-        color: [0, 0, 0, 255],
-        align_h: crate::TextHAlign::Left,
-        align_v: crate::TextVAlign::Top,
-        rotation: 0.0,
-    };
-    assert_eq!(text.take_pixels(), None);
     let pic = |width: f32, height: f32| crate::Picture { width, height, items: Vec::new() };
     assert!(pic(1.0, 2.0).has_size());
     assert!(!pic(0.0, 2.0).has_size() && !pic(f32::NAN, 2.0).has_size() && !pic(1.0, f32::INFINITY).has_size());
@@ -1330,4 +1169,19 @@ fn plain_wmf_target_comes_from_a_window_that_was_read() {
     assert_eq!((p.width, p.height), (200.0, 100.0));
     let (x0, y0, x1, y1) = rect_extent(&p.items[0]);
     assert!(close(x0, 0.0) && close(y0, 0.0) && close(x1, 200.0) && close(y1, 100.0), "{x0} {y0} {x1} {y1}");
+}
+
+/// A poly-polygon's group counts are file data: a long list of empty groups adds no ops, so it
+/// mustn't reserve room for them either (the canvas charges what a path holds, capacity included).
+#[test]
+fn empty_poly_groups_reserve_nothing() {
+    let pts = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)];
+    let mut counts = vec![0usize; 100_000];
+    counts.push(3);
+    let ops = crate::geom::subpaths(&pts, &counts, true);
+    assert_eq!(ops.len(), 4, "M L L Z");
+    assert!(ops.capacity() <= 8, "capacity {}", ops.capacity());
+    // Counts past the points are cut short, and the size still matches.
+    let ops = crate::geom::subpaths(&pts, &[2, 5, 4], false);
+    assert_eq!((ops.len(), ops.capacity()), (3, 3));
 }

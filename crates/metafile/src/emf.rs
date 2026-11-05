@@ -15,6 +15,9 @@ const SRCCOPY: u32 = 0x00CC_0020;
 /// LogPenEx pen type bits; PS_COSMETIC pens are one device pixel wide.
 const PS_TYPE_MASK: u32 = 0x000F_0000;
 const PS_COSMETIC: u32 = 0;
+/// EXTTEXTOUT options: the string holds glyph indices, and the dx array holds (x, y) pairs.
+const ETO_GLYPH_INDEX: u32 = 0x10;
+const ETO_PDY: u32 = 0x2000;
 
 pub(crate) fn is_emf(b: Bytes) -> bool {
     b.u32(0) == Some(1) && b.u32(40) == Some(EMF_SIGNATURE)
@@ -65,7 +68,7 @@ fn device_px_per_mm(input: Bytes) -> Option<(f64, f64)> {
 }
 
 /// The frame from `rclFrame` (offset 24), `szlDevice` (72) and `szlMillimeters` (80) in the header.
-fn frame_from_header(input: Bytes) -> Option<Frame> {
+pub(crate) fn frame_from_header(input: Bytes) -> Option<Frame> {
     let [fl, ft, fr, fb] = rect32(input, 24)?;
     if fr <= fl || fb <= ft {
         return None;
@@ -89,8 +92,6 @@ fn record(cv: &mut Canvas, typ: u32, r: Bytes) {
         17 => r.u32(8).map(|m| cv.set_map_mode(m)),
         19 => r.u32(8).map(|m| cv.set_polyfill(m)),
         20 => r.u32(8).map(|m| cv.set_rop2(m)),
-        22 => r.u32(8).map(|m| cv.set_text_align(m)),
-        24 => r.u32(8).map(|c| cv.set_text_color(colorref(c))),
         33 => {
             cv.save_dc();
             Some(())
@@ -103,7 +104,9 @@ fn record(cv: &mut Canvas, typ: u32, r: Bytes) {
         95 => create_ext_pen(cv, r),
         39 => create_brush(cv, r),
         82 => create_font(cv, r),
-        83 | 84 => ext_text_out(cv, r, typ == 84),
+        22 => r.u32(8).map(|a| cv.set_text_align(a)),
+        24 => r.u32(8).map(|c| cv.set_text_color(colorref(c))),
+        84 => ext_text_out_w(cv, r),
         40 => r.u32(8).map(|i| cv.delete_object(i)),
         27 => xy32(r, 8).map(|p| cv.move_to(p)),
         54 => xy32(r, 8).map(|p| cv.line_to(p)),
@@ -254,71 +257,53 @@ fn create_brush(cv: &mut Canvas, r: Bytes) -> Option<()> {
     Some(())
 }
 
-/// EMR_EXTCREATEFONTINDIRECTW: handle, then LogFontW. Only the character height, the escapement
-/// and the facename matter here (no per-character positioning). A negative `lfHeight` is the
-/// character height, a positive one the cell height; the difference is the font's internal leading,
-/// which a metafile does not carry, so the value is used as-is with a floor of 1. `lfEscapement`
-/// (LogFontW + 8, tenths of a degree) turns the run; it is normalised to 0..360, so junk (a full
-/// turn, a negative angle) stays a finite degree value.
+/// EMR_EXTCREATEFONTINDIRECTW: handle, then a LogFont (height, width, escapement, orientation, weight,
+/// italic, ..., face name of 32 UTF-16 units at 40).
 fn create_font(cv: &mut Canvas, r: Bytes) -> Option<()> {
     let slot = r.u32(8)? as usize;
-    let lf_height = r.i32(12)?;
-    // A zero height means GDI's default, like no font selected at all.
-    let height = if lf_height == 0 { Font::default().height } else { f64::from(lf_height.unsigned_abs()).max(1.0) };
-    let escapement = r.i32(20).map_or(0.0, |e| f64::from(e) / 10.0).rem_euclid(360.0);
-    let name = r.tail(12 + 28).map(|t| utf16_z(t.0)).unwrap_or_default();
-    cv.add_object(Some(slot), Obj::Font(Font { name, height, escapement }));
+    let mut face = [0u16; 32];
+    for (i, u) in face.iter_mut().enumerate() {
+        *u = r.u16(40 + i * 2).unwrap_or(0);
+    }
+    let font = Font { height: r.i32(12)?, escapement: r.i32(20)?, weight: r.i32(28)?, italic: *r.0.get(32)? != 0, face };
+    cv.add_object(Some(slot), Obj::Font(font));
     Some(())
 }
 
-/// EMR_EXTTEXTOUTA/W (MS-EMF 2.3.5.7): bounds, graphics mode, scales, then one EMRTEXT — reference
-/// point at 36, character count at 44 and the string offset at 48, relative to the record start.
-/// The string is UTF-16LE for W and 8-bit ANSI for A; the options rectangle and the per-character
-/// positioning of the `Dx` array are ignored (only the sum feeds the TA_UPDATECP position advance).
-fn ext_text_out(cv: &mut Canvas, r: Bytes, wide: bool) -> Option<()> {
+/// EMR_EXTTEXTOUTW: an EmrText at 36 with the reference point, the character count at 44, the string
+/// offset at 48, the options at 52 and the dx array offset at 72 (offsets from the record start).
+/// Glyph-index strings are skipped: they cannot be mapped back to characters.
+fn ext_text_out_w(cv: &mut Canvas, r: Bytes) -> Option<()> {
     let at = xy32(r, 36)?;
     let n = r.u32(44)? as usize;
-    let off = r.u32(48)? as usize;
-    let len = n.checked_mul(if wide { 2 } else { 1 })?;
-    let bytes = r.slice(off, len)?;
-    let text = if wide { utf16(bytes) } else { ansi(bytes) };
-    // The per-character Dx advances feed only the TA_UPDATECP position advance; a hostile or
-    // missing array (offDx 0, or pointing outside the record) is ignored, not fatal.
-    let dx: Vec<f64> = r
-        .u32(72)
-        .filter(|o| *o > 0)
-        .and_then(|o| r.slice(o as usize, n.checked_mul(4)?))
-        .map(|raw| raw.as_chunks::<4>().0.iter().map(|v| f64::from(i32::from_le_bytes(*v))).collect())
-        .unwrap_or_default();
+    let (off, options, off_dx) = (r.u32(48)? as usize, r.u32(52)?, r.u32(72)? as usize);
+    if options & ETO_GLYPH_INDEX != 0 || n == 0 {
+        return None;
+    }
+    let units: Vec<u16> = r.slice(off, n.checked_mul(2)?)?.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
+    // dx has one entry per UTF-16 unit (two with ETO_PDY); a character takes the sum of its units.
+    let step = if options & ETO_PDY != 0 { 8 } else { 4 };
+    let raw_dx: Vec<f64> = match r.slice(off_dx, n.checked_mul(step)?) {
+        Some(b) if off_dx != 0 => b.chunks_exact(step).filter_map(|c| Some(f64::from(i32::from_le_bytes(c.get(..4)?.try_into().ok()?)))).collect(),
+        _ => Vec::new(),
+    };
+    let mut text = String::new();
+    let mut dx = Vec::new();
+    let mut i = 0;
+    for ch in char::decode_utf16(units.iter().copied()) {
+        let c = ch.unwrap_or(char::REPLACEMENT_CHARACTER);
+        // A replacement stands for one unpaired unit.
+        let w = if c == char::REPLACEMENT_CHARACTER { 1 } else { c.len_utf16() };
+        if !raw_dx.is_empty() {
+            dx.push(raw_dx.get(i..i + w).map_or(0.0, |s| s.iter().sum()));
+        }
+        i += w;
+        text.push(c);
+    }
+    let text = text.trim_end_matches('\0').to_string();
+    dx.truncate(text.chars().count());
     cv.text(at, text, &dx);
     Some(())
-}
-
-/// UTF-16LE bytes as text; unpaired surrogates become replacement characters.
-fn utf16(bytes: &[u8]) -> String {
-    utf16_pairs(bytes.as_chunks::<2>().0)
-}
-
-/// The NUL-terminated UTF-16LE string at the start of `bytes` (at most LogFontW's 32 characters).
-fn utf16_z(bytes: &[u8]) -> String {
-    let pairs = bytes.as_chunks::<2>().0;
-    let n = pairs.iter().position(|p| *p == [0, 0]).unwrap_or(pairs.len()).min(32);
-    utf16_pairs(&pairs[..n])
-}
-
-fn utf16_pairs(pairs: &[[u8; 2]]) -> String {
-    let units: Vec<u16> = pairs.iter().map(|p| u16::from_le_bytes(*p)).collect();
-    String::from_utf16_lossy(&units)
-}
-
-/// 8-bit ANSI text (CP1252): the defined 0x80–0x9F characters, Latin-1 for the rest.
-fn ansi(bytes: &[u8]) -> String {
-    const HIGH: [char; 32] = [
-        '\u{20AC}', '\u{FFFD}', '\u{201A}', '\u{0192}', '\u{201E}', '\u{2026}', '\u{2020}', '\u{2021}', '\u{02C6}', '\u{2030}', '\u{0160}',
-        '\u{2039}', '\u{0152}', '\u{FFFD}', '\u{017D}', '\u{FFFD}', '\u{FFFD}', '\u{2018}', '\u{2019}', '\u{201C}', '\u{201D}', '\u{2022}',
-        '\u{2013}', '\u{2014}', '\u{02DC}', '\u{2122}', '\u{0161}', '\u{203A}', '\u{0153}', '\u{FFFD}', '\u{017E}', '\u{0178}',
-    ];
-    bytes.iter().map(|&b| if b >= 0x80 { HIGH[(b - 0x80) as usize] } else { char::from(b) }).collect()
 }
 
 /// BITBLT (76) and STRETCHBLT (77): dest at 24..40, rop at 40, source x/y at 44, bmi at 84, bits at

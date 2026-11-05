@@ -1,9 +1,10 @@
 //! Sprm decoding ([MS-DOC] §2.6). A Prl is a 2-byte opcode followed by an operand whose
 //! size comes from the opcode's `spra` field (with two variable-length exceptions).
 
-/// `sprmPChgTabs`: custom tab stops, the piece-table form ([MS-DOC] §2.6.2 — the operand
-/// is a `PChgTabsOperand`, decoded in `fmt`; here only its length matters).
-const P_CHG_TABS: u16 = 0xC615;
+/// `sprmPChgTabs`: custom tab stops added and removed ([MS-DOC] §2.6.3, PChgTabsOperand).
+pub(crate) const P_CHG_TABS: u16 = 0xC615;
+/// `sprmPChgTabsPapx`: the same for paragraph and style formatting (PChgTabsPapxOperand).
+pub(crate) const P_CHG_TABS_PAPX: u16 = 0xC60D;
 /// `sprmTDefTable`: table cell borders and widths.
 const T_DEF_TABLE: u16 = 0xD608;
 
@@ -33,20 +34,16 @@ pub(crate) fn iter(grpprl: &[u8]) -> impl Iterator<Item = Prl<'_>> {
         let after = &rest[2..];
         // Operand size per spra, with the exceptions whose size byte lies.
         let len = match (op >> 13, op) {
-            // PChgTabsOperand: cb is one byte counting the bytes after it; cb 255 is the
-            // escape whose length comes from the counts instead ([MS-DOC] PChgTabsOperand)
-            // — a deleted tab costs 4 bytes there (position + close), an added one 3.
-            (_, P_CHG_TABS) => {
-                let cb = after.first().copied().unwrap_or(0) as usize;
-                if cb < 255 {
-                    Some(1 + cb)
-                } else {
-                    let n_del = after.get(1).copied().unwrap_or(0) as usize;
-                    let dels = 4usize.checked_mul(n_del)?;
-                    let n_add = after.get(2 + dels).copied().unwrap_or(0) as usize;
-                    Some(3 + dels + 3 * n_add)
-                }
-            }
+            // PChgTabsOperand.cb is one byte, the size after it; 255 means "work it out" from the
+            // two counts: cb, cTabs, 4 bytes per removed stop, cTabs, 3 bytes per added stop.
+            (_, P_CHG_TABS) => match after.first().copied() {
+                Some(255) => after.get(1).and_then(|&del| {
+                    let add = after.get(2 + 4 * del as usize).copied()?;
+                    Some(1 + 1 + 4 * del as usize + 1 + 3 * add as usize)
+                }),
+                Some(cb) => Some(1 + cb as usize),
+                None => None,
+            },
             // TDefTableOperand.cb counts the bytes after cb, incremented by 1, so the
             // operand is one byte longer than cb.
             (_, T_DEF_TABLE) => after.get(..2).map(|b| 1 + u16::from_le_bytes([b[0], b[1]]) as usize),

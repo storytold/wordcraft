@@ -41,6 +41,24 @@ impl Math {
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
+
+    /// Rough heap bytes a clone copies: every node, its argument lists and its run text.
+    /// Iterative, so it costs at most the size of the structure.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        let mut n = self.omml.len();
+        let mut todo: Vec<&MNode> = self.nodes.iter().collect();
+        while let Some(node) = todo.pop() {
+            n = n.saturating_add(std::mem::size_of::<MNode>());
+            if let MNode::Run(r) = node {
+                n = n.saturating_add(r.text.len()).saturating_add(r.font.as_ref().map_or(0, String::len));
+            }
+            each_arg(node, &mut |a| {
+                n = n.saturating_add(std::mem::size_of::<Arg>());
+                todo.extend(a);
+            });
+        }
+        n
+    }
 }
 
 /// Display equation justification (`m:oMathParaPr/m:jc`).
@@ -470,8 +488,27 @@ fn lin_arg(a: &[MNode], s: &mut String, depth: usize) {
     if depth > MAX_DEPTH {
         return;
     }
-    for n in a {
+    for (i, n) in a.iter().enumerate() {
         lin_node(n, s, depth + 1);
+        // A bare script or limit ends at a space: a letter, digit or period after it is its own item.
+        if matches!(n, MNode::Script { kind, .. } if *kind != ScriptKind::Pre) || matches!(n, MNode::Lim { .. }) {
+            let ends_bare = s.chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '.');
+            if ends_bare && a.get(i + 1).and_then(first_lin_char).is_some_and(|c| c.is_alphanumeric() || c == '.') {
+                s.push(' ');
+            }
+        }
+    }
+}
+
+/// The first character `n` is written with, when that is cheap to tell (letters and digits).
+fn first_lin_char(n: &MNode) -> Option<char> {
+    match n {
+        MNode::Run(r) => r.text.chars().next(),
+        MNode::Func { name, .. } => name.first().and_then(first_lin_char),
+        MNode::Script { kind, base, .. } if *kind != ScriptKind::Pre => base.first().and_then(first_lin_char),
+        MNode::Lim { e, .. } => e.first().and_then(first_lin_char),
+        MNode::Frac { num, .. } => num.first().and_then(first_lin_char),
+        _ => None,
     }
 }
 
@@ -499,6 +536,27 @@ fn lin_operand(a: &[MNode], s: &mut String, depth: usize) {
     }
 }
 
+/// A script or limit operand. The parser reads a run of letters and digits up to the next space or
+/// operator, so `V_dd` is written bare as Word's Linear format shows it (`V_(dd)` reads back the same).
+fn lin_script(a: &[MNode], s: &mut String, depth: usize) {
+    // Bare only when the parser reads the whole run back, in the same style.
+    if let [MNode::Run(r)] = a
+        && r.text.chars().nth(1).is_some()
+    {
+        let upright_name = r.sty == Some(MSty::Plain) && crate::math_linear::FUNCTION_NAMES.contains(&r.text.as_str());
+        let number = r.text.starts_with(|c: char| c.is_ascii_digit()) && r.text.chars().all(|c| c.is_alphanumeric() || c == '.');
+        let word = r.text.starts_with(char::is_alphabetic) && r.text.chars().all(char::is_alphanumeric);
+        let upright_other = r.sty == Some(MSty::Plain) && !upright_name;
+        if upright_other || (!number && !word) {
+            s.push('(');
+            s.push_str(&r.text);
+            s.push(')');
+            return;
+        }
+    }
+    lin_operand(a, s, depth);
+}
+
 fn lin_node(n: &MNode, s: &mut String, depth: usize) {
     match n {
         MNode::Run(r) => s.push_str(&r.text),
@@ -515,9 +573,9 @@ fn lin_node(n: &MNode, s: &mut String, depth: usize) {
         MNode::Script { kind, base, sub, sup } => {
             if *kind == ScriptKind::Pre {
                 s.push('_');
-                lin_operand(sub, s, depth);
+                lin_script(sub, s, depth);
                 s.push('^');
-                lin_operand(sup, s, depth);
+                lin_script(sup, s, depth);
                 s.push('▒');
                 lin_operand(base, s, depth);
                 return;
@@ -525,11 +583,11 @@ fn lin_node(n: &MNode, s: &mut String, depth: usize) {
             lin_operand(base, s, depth);
             if matches!(kind, ScriptKind::Sub | ScriptKind::SubSup) {
                 s.push('_');
-                lin_operand(sub, s, depth);
+                lin_script(sub, s, depth);
             }
             if matches!(kind, ScriptKind::Sup | ScriptKind::SubSup) {
                 s.push('^');
-                lin_operand(sup, s, depth);
+                lin_script(sup, s, depth);
             }
         }
         MNode::Rad { deg, deg_hide, e } => {
@@ -548,11 +606,11 @@ fn lin_node(n: &MNode, s: &mut String, depth: usize) {
             s.push(*chr);
             if !sub_hide && !sub.is_empty() {
                 s.push('_');
-                lin_operand(sub, s, depth);
+                lin_script(sub, s, depth);
             }
             if !sup_hide && !sup.is_empty() {
                 s.push('^');
-                lin_operand(sup, s, depth);
+                lin_script(sup, s, depth);
             }
             s.push('▒');
             lin_operand(e, s, depth);
@@ -592,7 +650,7 @@ fn lin_node(n: &MNode, s: &mut String, depth: usize) {
         MNode::Lim { upper, e, lim } => {
             lin_operand(e, s, depth);
             s.push(if *upper { '┴' } else { '┬' });
-            lin_operand(lim, s, depth);
+            lin_script(lim, s, depth);
         }
         MNode::Acc { chr, e } => {
             lin_operand(e, s, depth);
@@ -946,6 +1004,106 @@ mod tests {
     }
 
     #[test]
+    fn multi_letter_scripts_round_trip() {
+        // Word for Mac 16.113.4 (#1609): a script is the whole run up to a space or operator, and Word's
+        // Linear format shows it bare (`V_dd`); the parenthesised form reads back identically.
+        let script = |kind, sub: &str, sup: &str| MNode::Script { kind, base: vec![run("V")], sub: parse_linear(sub), sup: parse_linear(sup) };
+        for n in [
+            vec![script(ScriptKind::Sub, "dd", "")],
+            vec![script(ScriptKind::Sup, "", "ab")],
+            vec![script(ScriptKind::SubSup, "in", "2")],
+            vec![MNode::Nary {
+                chr: '∑',
+                lim_loc: None,
+                grow: false,
+                sub_hide: false,
+                sup_hide: false,
+                sub: vec![run("ij")],
+                sup: vec![run("n")],
+                e: vec![run("x")],
+            }],
+            vec![MNode::Lim { upper: false, e: vec![run("⟶")], lim: vec![run("yields")] }],
+        ] {
+            assert_eq!(parse_linear(&to_linear(&n)), n, "{}", to_linear(&n));
+        }
+        // Numbers and single letters stay bare.
+        assert_eq!(to_linear(&[script(ScriptKind::SubSup, "10", "2.5")]), "V_10^2.5");
+        assert_eq!(to_linear(&[script(ScriptKind::Sub, "d", "")]), "V_d");
+        assert_eq!(to_linear(&[script(ScriptKind::Sub, "dd", "")]), "V_dd");
+        assert_eq!(to_linear(&[script(ScriptKind::Sup, "", "ab")]), "V^ab");
+    }
+
+    #[test]
+    fn multi_letter_script_operands_follow_word() {
+        // #1609, Word for Mac 16.113.4: `V_dd` and `V_(dd)` build up the same; `dd` is all subscript.
+        let sub_dd = MNode::Script { kind: ScriptKind::Sub, base: vec![run("V")], sub: vec![run("dd")], sup: vec![] };
+        assert_eq!(parse_linear("V_dd"), vec![sub_dd.clone()]);
+        assert_eq!(parse_linear("V_(dd)"), vec![sub_dd]);
+        let sup_ab = MNode::Script { kind: ScriptKind::Sup, base: vec![run("x")], sub: vec![], sup: vec![run("ab")] };
+        assert_eq!(parse_linear("x^ab"), vec![sup_ab.clone()]);
+        assert_eq!(parse_linear("x^(ab)"), vec![sup_ab]);
+        // Delimiters still end the operand.
+        let both = MNode::Script { kind: ScriptKind::SubSup, base: vec![run("x")], sub: vec![run("i")], sup: vec![run("2")] };
+        assert_eq!(parse_linear("x_i^2"), vec![both]);
+        let a_i = MNode::Script { kind: ScriptKind::Sub, base: vec![run("a")], sub: vec![run("i")], sup: vec![] };
+        assert_eq!(parse_linear("a_i b"), vec![a_i, run("b")]);
+        let both2 = MNode::Script { kind: ScriptKind::SubSup, base: vec![run("x")], sub: vec![run("ij")], sup: vec![run("kl")] };
+        assert_eq!(parse_linear("x_ij^kl"), vec![both2]);
+        // Round trip is Word's bare form.
+        assert_eq!(to_linear(&parse_linear("V_(dd)")), "V_dd");
+    }
+
+    #[test]
+    fn a_bare_script_does_not_absorb_what_follows() {
+        // #1609 review: `x_i` then `y` must not read back as x with subscript `iy`.
+        let sc =
+            |kind, base: &str, sub: &str, sup: &str| MNode::Script { kind, base: vec![run(base)], sub: parse_linear(sub), sup: parse_linear(sup) };
+        let sin_x = MNode::Func { name: vec![MNode::Run(MRun::plain("sin"))], e: vec![run("x")] };
+        let lim = MNode::Lim { upper: false, e: vec![run("a")], lim: vec![run("n")] };
+        for n in [
+            vec![sc(ScriptKind::Sub, "x", "i", ""), run("y")],
+            vec![sc(ScriptKind::Sub, "a", "i", ""), sc(ScriptKind::Sub, "b", "j", "")],
+            vec![sc(ScriptKind::Sup, "x", "", "2"), run("y")],
+            vec![sc(ScriptKind::Sup, "x", "", "2"), run("3")],
+            vec![sc(ScriptKind::Sub, "x", "i", ""), sin_x],
+            vec![lim.clone(), run("y")],
+            vec![sc(ScriptKind::Sub, "x", "ab", ""), run("y")],
+            vec![sc(ScriptKind::Sub, "x", "i", ""), run(".5")],
+        ] {
+            let lin = to_linear(&n);
+            assert_eq!(parse_linear(&lin), n, "{lin}");
+        }
+        assert_eq!(to_linear(&[sc(ScriptKind::Sub, "x", "i", ""), run("y")]), "x_i y");
+        // Nothing extra when the script already ends in a bracket or a symbol follows.
+        assert_eq!(to_linear(&[sc(ScriptKind::Sub, "x", "i", ""), run("+")]), "x_i+");
+    }
+
+    #[test]
+    fn a_function_name_in_a_script_stays_upright() {
+        // Word for Mac (#1609): `x_max` and `x_(max)` both give an upright function name.
+        let up = vec![MNode::Script { kind: ScriptKind::Sub, base: vec![run("x")], sub: vec![MNode::Run(MRun::plain("max"))], sup: vec![] }];
+        assert_eq!(parse_linear("x_max"), up);
+        assert_eq!(parse_linear("x_(max)"), up);
+        assert_eq!(parse_linear(&to_linear(&up)), up, "{}", to_linear(&up));
+        // Other upright text is not a function name: it keeps its parentheses.
+        let other = vec![MNode::Script { kind: ScriptKind::Sub, base: vec![run("x")], sub: vec![MNode::Run(MRun::plain("ab"))], sup: vec![] }];
+        assert_eq!(to_linear(&other), "x_(ab)");
+    }
+
+    #[test]
+    fn digits_then_letters_continue_a_script() {
+        // Word for Mac (#1609): a script runs to a space or operator, so `x_2a` is subscript "2a".
+        let sub = |t: &str| vec![MNode::Script { kind: ScriptKind::Sub, base: vec![run("x")], sub: vec![run(t)], sup: vec![] }];
+        assert_eq!(parse_linear("x_2a"), sub("2a"));
+        assert_eq!(parse_linear("x_a2"), sub("a2"));
+        assert_eq!(parse_linear("x_αβ"), sub("αβ"));
+        assert_eq!(parse_linear("x_10"), sub("10"));
+        assert_eq!(parse_linear("x_2.5"), sub("2.5"));
+        assert_eq!(to_linear(&sub("2a")), "x_2a");
+        assert_eq!(parse_linear(&to_linear(&sub("2a"))), sub("2a"));
+    }
+
+    #[test]
     fn hostile_linear_never_panics() {
         for s in ["", "/", "^", "_", "√", "∑", "((((", "))))", "■(", "█(@@&&", "a/", "/b", "^^^__", "√(&)", "∫_^▒", "lim_", "sin"] {
             let _ = to_linear(&parse_linear(s));
@@ -954,5 +1112,21 @@ mod tests {
         let _ = parse_linear(&deep);
         let deep = "√".repeat(3000);
         let _ = parse_linear(&deep);
+    }
+
+    #[test]
+    fn a_long_run_of_letters_parses_in_linear_time() {
+        // Each letter that doesn't start a function name used to rescan (and copy) the rest of
+        // the run, so a 20,000-letter equation did 200 million steps. (No wall-clock assert: a
+        // loaded runner would fail it; a regression shows as a slow test.)
+        for _ in 0..5 {
+            let e = parse_linear(&"x".repeat(30_000));
+            assert!(matches!(e.as_slice(), [MNode::Run(r)] if r.text.len() == 20_000), "{:?}", e.len());
+        }
+        // Function names are still found at the start of a run, and only as whole runs.
+        assert!(matches!(parse_linear("sin x").as_slice(), [MNode::Func { .. }]));
+        assert!(matches!(parse_linear("arcsin x").as_slice(), [MNode::Func { .. }]));
+        assert!(matches!(parse_linear("sinx").as_slice(), [MNode::Run(_)]));
+        assert!(matches!(parse_linear("arcsinhx").as_slice(), [MNode::Run(_)]));
     }
 }

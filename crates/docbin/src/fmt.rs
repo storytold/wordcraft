@@ -1,7 +1,9 @@
 //! Sprms → model properties, and style-chain resolution.
 
 use wordcraft_doc::Rgb;
-use wordcraft_doc::props::{Align, CharProps, Highlight, LineSpacing, ParaProps, TabAlign, TabLeader, TabStop, TextColor, Underline, VertAlign};
+use wordcraft_doc::props::{
+    Align, Border, BorderStyle, Borders, CharProps, Highlight, LineSpacing, ParaProps, TabAlign, TabLeader, TabStop, TextColor, Underline, VertAlign,
+};
 use wordcraft_doc::styles::{Style, StyleKind, StyleSheet};
 
 use crate::sprm::{self, Prl, Toggle};
@@ -18,7 +20,9 @@ const C_ICO: u16 = 0x2A42; // palette colour
 const C_CR: u16 = 0x6870; // explicit COLORREF
 const C_HPS: u16 = 0x4A43; // half-points
 const C_HPS_POS: u16 = 0x4845; // super/subscript by half-points
-const C_FTC0: u16 = 0x4A4F; // font index
+const C_FTC0: u16 = 0x4A4F; // font index (ASCII)
+const C_FTC1: u16 = 0x4A50; // East Asian font index (sprmCRgFtc1)
+const C_FTC_BI: u16 = 0x4A5E; // complex-script font index (sprmCFtcBi)
 const C_HIGHLIGHT: u16 = 0x2A0C;
 const C_ISTD: u16 = 0x4A30; // character style
 
@@ -42,11 +46,18 @@ const P_KEEP: u16 = 0x2405; // keep lines together
 const P_KEEP_FOLLOW: u16 = 0x2406; // keep with next
 const P_PAGE_BREAK_BEFORE: u16 = 0x2407;
 const P_OUTLVL: u16 = 0x2640;
-/// `sprmPChgTabsPapx`: custom tab stops of a PAPX or style ([MS-DOC] §2.6.2, PChgTabsPapxOperand).
-const P_CHG_TABS_PAPX: u16 = 0xC60D;
-/// `sprmPChgTabs`: the piece-table form, whose deletes also carry a rgdxaClose i16
-/// ([MS-DOC] §2.6.2, PChgTabsOperand).
-const P_CHG_TABS: u16 = 0xC615;
+// Paragraph borders ([MS-DOC] §2.6.2). The 80 forms carry a Brc80 (palette colour), the
+// newer ones a BrcOperand: cb(1) + Brc(8, with a full COLORREF).
+const P_BRC_TOP80: u16 = 0x6424;
+const P_BRC_LEFT80: u16 = 0x6425;
+const P_BRC_BOTTOM80: u16 = 0x6426;
+const P_BRC_RIGHT80: u16 = 0x6427;
+const P_BRC_BETWEEN80: u16 = 0x6428;
+const P_BRC_TOP: u16 = 0xC64E;
+const P_BRC_LEFT: u16 = 0xC64F;
+const P_BRC_BOTTOM: u16 = 0xC650;
+const P_BRC_RIGHT: u16 = 0xC651;
+const P_BRC_BETWEEN: u16 = 0xC652;
 
 /// Word's 16-colour `Ico` palette ([MS-DOC] §2.9.135), 0 = automatic.
 const ICO: [Rgb; 17] = [
@@ -96,6 +107,70 @@ pub(crate) fn ico(i: u8) -> Option<Rgb> {
         return None;
     }
     ICO.get(i as usize).copied()
+}
+
+/// The model border style a `brcType` stands for ([MS-DOC] §2.9.22 BrcType; 0x02, thick, is in
+/// the BRC of Microsoft's Word 97-2007 specification). Types the model doesn't carry (the gap
+/// variants, 3-D, inset/outset) draw as single lines, as the DOCX reader maps them.
+fn brc_style(t: u8) -> BorderStyle {
+    match t {
+        0x00 => BorderStyle::None,
+        0x02 => BorderStyle::Thick,
+        0x03 => BorderStyle::Double,
+        0x06 => BorderStyle::Dotted,
+        0x07 | 0x16 => BorderStyle::Dashed,
+        0x08 | 0x09 => BorderStyle::DotDash,
+        0x0A => BorderStyle::Triple,
+        0x14 | 0x15 => BorderStyle::Wave,
+        _ => BorderStyle::Single,
+    }
+}
+
+/// The border width in points: `dptLineWidth` in 1/8-point steps from 2 to 96, as DOCX `w:sz`
+/// reads (1-point steps for page borders, which never reach a paragraph property).
+fn brc_width(t: u8, dpt: u8) -> f32 {
+    if t >= 0x40 { f32::from(dpt) } else { (f32::from(dpt.max(2)) / 8.0).min(12.0) }
+}
+
+/// One border from a Brc80 operand ([MS-DOC] §2.9.18). All bits set means "no border"; a
+/// truncated operand is ignored.
+pub(crate) fn brc80(op: &[u8]) -> Option<Border> {
+    let [dpt, ty, ico_index, tail, ..] = op else { return None };
+    if [*dpt, *ty, *ico_index, *tail] == [0xFF; 4] {
+        return Some(Border::default());
+    }
+    Some(Border { style: brc_style(*ty), width: brc_width(*ty, *dpt), color: ico(*ico_index), space: f32::from(tail & 0x1F) })
+}
+
+/// One border from a `BrcOperand` ([MS-DOC] §2.9.21): cb(1, MUST be 8) + Brc(8).
+fn brc(op: &[u8]) -> Option<Border> {
+    if op.first() != Some(&8) {
+        return None;
+    }
+    let b = op.get(1..9)?;
+    if b.iter().all(|x| *x == 0xFF) {
+        return Some(Border::default());
+    }
+    let color = match b.get(..4) {
+        Some([0, 0, 0, 0]) => None, // automatic
+        Some(px) => Some(Rgb(px[0], px[1], px[2])),
+        None => None,
+    };
+    Some(Border { style: brc_style(b[5]), width: brc_width(b[5], b[4]), color, space: f32::from(b[6] & 0x1F) })
+}
+
+/// Put a decoded border on the side its sprm names (`between` = the border between this
+/// paragraph and the next).
+fn set_border(p: &mut ParaProps, op: u16, b: Border) {
+    let borders = p.borders.get_or_insert_with(Borders::default);
+    let slot = match op {
+        P_BRC_TOP80 | P_BRC_TOP => &mut borders.top,
+        P_BRC_LEFT80 | P_BRC_LEFT => &mut borders.left,
+        P_BRC_BOTTOM80 | P_BRC_BOTTOM => &mut borders.bottom,
+        P_BRC_RIGHT80 | P_BRC_RIGHT => &mut borders.right,
+        _ => &mut borders.between,
+    };
+    *slot = Some(b);
 }
 
 fn u16_of(p: &Prl) -> Option<u16> {
@@ -182,6 +257,16 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
                 p.font = Some(name.clone());
             }
         }
+        C_FTC1 => {
+            if let Some(name) = u16_of(prl).and_then(|i| fonts.get(i as usize)) {
+                p.font_ea = Some(name.clone());
+            }
+        }
+        C_FTC_BI => {
+            if let Some(name) = u16_of(prl).and_then(|i| fonts.get(i as usize)) {
+                p.font_cs = Some(name.clone());
+            }
+        }
         C_HIGHLIGHT => {
             if let Some(h) = HL.get(prl.operand.first().copied().unwrap_or(0) as usize) {
                 p.highlight = Some(*h);
@@ -192,11 +277,63 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
     }
 }
 
+/// Custom tab stops from `sprmPChgTabsPapx` / `sprmPChgTabs` ([MS-DOC] PChgTabsPapxOperand,
+/// PChgTabsOperand): the stops removed become `Clear` stops (they hide inherited ones) and the
+/// stops added carry their alignment and leader (TBD: jc in bits 0–2, tlc in bits 3–5).
+fn change_tabs(p: &mut ParaProps, prl: &Prl) {
+    let op = prl.operand;
+    let i16_at = |i: usize| op.get(i..i + 2).map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 20.0);
+    // Both operands start with cb; sprmPChgTabs's removals also carry a "close" distance each.
+    let close = prl.op == sprm::P_CHG_TABS;
+    let mut at = 1;
+    let Some(&del) = op.get(at) else { return };
+    let del = usize::from(del.min(64));
+    at += 1;
+    let mut removed = Vec::with_capacity(del);
+    for k in 0..del {
+        if let Some(x) = i16_at(at + 2 * k) {
+            removed.push(x);
+        }
+    }
+    at += 2 * del * if close { 2 } else { 1 };
+    let Some(&add) = op.get(at) else { return };
+    let add = usize::from(add.min(64));
+    at += 1;
+    let mut tabs = p.tabs.take().unwrap_or_default();
+    // Removed within 25 twips (1.25 pt), as the format says.
+    tabs.retain(|t| !removed.iter().any(|x| (t.pos - x).abs() <= 1.25));
+    for x in removed {
+        tabs.push(TabStop { pos: x, align: TabAlign::Clear, leader: TabLeader::None });
+    }
+    for k in 0..add {
+        let (Some(pos), Some(&tbd)) = (i16_at(at + 2 * k), op.get(at + 2 * add + k)) else { break };
+        let align = match tbd & 7 {
+            1 => TabAlign::Center,
+            2 => TabAlign::Right,
+            3 => TabAlign::Decimal,
+            4 => TabAlign::Bar,
+            _ => TabAlign::Left,
+        };
+        let leader = match (tbd >> 3) & 7 {
+            1 => TabLeader::Dot,
+            2 => TabLeader::Hyphen,
+            3 | 4 => TabLeader::Underscore,
+            5 => TabLeader::MiddleDot,
+            _ => TabLeader::None,
+        };
+        tabs.retain(|t| (t.pos - pos).abs() > 0.05);
+        tabs.push(TabStop { pos, align, leader });
+    }
+    tabs.sort_by(|a, b| a.pos.total_cmp(&b.pos));
+    p.tabs = Some(tabs);
+}
+
 /// Apply a paragraph-property sprm.
 pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
     let tw = |v: i32| (v as f32 / 20.0).clamp(-1000.0, 1000.0);
     let s16 = |prl: &Prl| -> Option<i16> { u16_of(prl).map(|v| v as i16) };
     match prl.op {
+        sprm::P_CHG_TABS | sprm::P_CHG_TABS_PAPX => change_tabs(p, prl),
         P_JC | P_JC80 => {
             p.align = match prl.operand.first().copied().unwrap_or(0) {
                 1 => Some(Align::Center),
@@ -277,96 +414,31 @@ pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
                 p.outline_level = Some(l.min(8));
             }
         }
-        P_CHG_TABS_PAPX | P_CHG_TABS => apply_tabs(p, prl.op, prl.operand),
+        P_BRC_TOP80 | P_BRC_LEFT80 | P_BRC_BOTTOM80 | P_BRC_RIGHT80 | P_BRC_BETWEEN80 => {
+            if let Some(b) = brc80(prl.operand) {
+                set_border(p, prl.op, b);
+            }
+        }
+        P_BRC_TOP | P_BRC_LEFT | P_BRC_BOTTOM | P_BRC_RIGHT | P_BRC_BETWEEN => {
+            if let Some(b) = brc(prl.operand) {
+                set_border(p, prl.op, b);
+            }
+        }
         _ => {}
-    }
-}
-
-/// Most tab stops one list keeps: deletes (as Clear stops) plus added stops, twice over.
-const MAX_TABS: usize = 128;
-/// Positions live inside ±22", Word's own limit for tab stops.
-const MAX_TAB_POS: f32 = 1584.0;
-/// Two stops within half a point are the same stop, as the doc model merges them.
-const TAB_SAME: f32 = 0.5;
-
-/// Apply a tab-change sprm to `p.tabs`. Deleted positions drop stops already in the list
-/// and become `TabAlign::Clear` stops, the model's mechanism for removing inherited
-/// (style) stops at the same position; added stops replace same-position entries. Junk is
-/// dropped, positions clamped, the list bounded — a hostile operand only loses tabs.
-fn apply_tabs(p: &mut ParaProps, op: u16, operand: &[u8]) {
-    let (dels, adds) = tab_changes(op, operand);
-    let mut list = p.tabs.take().unwrap_or_default();
-    let pt = |tw: i16| (f32::from(tw) / 20.0).clamp(-MAX_TAB_POS, MAX_TAB_POS);
-    for d in dels {
-        let pos = pt(d);
-        list.retain(|t| (t.pos - pos).abs() >= TAB_SAME);
-        list.push(TabStop { pos, align: TabAlign::Clear, leader: TabLeader::None });
-    }
-    for (tw, tbd) in adds {
-        let pos = pt(tw);
-        list.retain(|t| (t.pos - pos).abs() >= TAB_SAME);
-        list.push(TabStop { pos, align: tab_align(tbd), leader: tab_leader(tbd) });
-    }
-    if !list.is_empty() {
-        list.truncate(MAX_TABS);
-        p.tabs = Some(list);
-    }
-}
-
-/// Decode a tab-change operand: positions of stops to delete and (position, descriptor)
-/// pairs of stops to add. Layout per [MS-DOC]: `cb`, a count then that many i16 positions
-/// (the PChgTabs form adds an i16 close tolerance per delete), then a count and that many
-/// (i16 position, u8 descriptor) pairs. `cb` itself only shaped the Prl in `sprm::iter`;
-/// here the counts are read against the bytes that really exist, capped at the spec's 64.
-fn tab_changes(op: u16, operand: &[u8]) -> (Vec<i16>, Vec<(i16, u8)>) {
-    // The i16s at `at`, as many as wholly fit, at most `max`.
-    let i16s = |body: &[u8], at: usize, max: usize| -> (Vec<i16>, usize) {
-        let n = max.min(body.len().saturating_sub(at) / 2);
-        let v = (0..n).filter_map(|i| body.get(at + 2 * i..at + 2 * i + 2).map(|b| i16::from_le_bytes([b[0], b[1]]))).collect();
-        (v, at + 2 * n)
-    };
-    let body = operand.get(1..).unwrap_or(&[]); // past cb
-    let (dels, mut at) = i16s(body, 1, usize::from(body.first().copied().unwrap_or(0).min(64)));
-    if op == P_CHG_TABS {
-        // rgdxaClose: one i16 per delete, skipped (Word's ±25-twip window is covered by
-        // the doc model's own same-position merge).
-        let n = dels.len();
-        at += 2 * n;
-    }
-    let n_add = usize::from(body.get(at).copied().unwrap_or(0).min(64));
-    let (poss, at) = i16s(body, at + 1, n_add);
-    let tbds: Vec<u8> = (0..n_add).filter_map(|i| body.get(at + i).copied()).collect();
-    (dels, poss.into_iter().zip(tbds).collect())
-}
-
-/// TBD alignment, bits 0-2 ([MS-DOC] TabJC); unknown and list codes read as left.
-fn tab_align(tbd: u8) -> TabAlign {
-    match tbd & 0x07 {
-        1 => TabAlign::Center,
-        2 => TabAlign::Right,
-        3 => TabAlign::Decimal,
-        4 => TabAlign::Bar,
-        _ => TabAlign::Left,
-    }
-}
-
-/// TBD leader, bits 3-5 ([MS-DOC] TabLC); heavy renders as underscore, like the docx reader.
-fn tab_leader(tbd: u8) -> TabLeader {
-    match (tbd >> 3) & 0x07 {
-        1 => TabLeader::Dot,
-        2 => TabLeader::Hyphen,
-        3 | 4 => TabLeader::Underscore,
-        5 => TabLeader::MiddleDot,
-        _ => TabLeader::None,
     }
 }
 
 /// Build the model stylesheet: resolve each raw style's chain (base → this) and the ids we
 /// reference from paragraphs.
-pub(crate) fn stylesheet(raw: &[crate::stsh::RawStyle], fonts: &[String]) -> StyleSheet {
+pub(crate) fn stylesheet(raw: &[crate::stsh::RawStyle], fonts: &[String], standard: crate::stsh::StandardFonts) -> StyleSheet {
     let mut sheet = StyleSheet::empty();
-    // Word's base character properties: font index 0 of the table, 10 pt ([MS-DOC] sprmCHps).
-    sheet.default_chr.font = fonts.first().cloned();
+    // Word's base character properties: the stylesheet's standard fonts (Aptos in a Word 365
+    // file, whose font table still starts with Times New Roman, #5066), else font index 0 of the
+    // table; 10 pt ([MS-DOC] sprmCHps).
+    let font = |i: Option<u16>| i.and_then(|i| fonts.get(usize::from(i))).cloned();
+    sheet.default_chr.font = font(standard.ascii).or_else(|| fonts.first().cloned());
+    sheet.default_chr.font_ea = font(standard.east_asian);
+    sheet.default_chr.font_cs = font(standard.bidi);
     if sheet.default_chr.size.is_none() {
         sheet.default_chr.size = Some(10.0);
     }

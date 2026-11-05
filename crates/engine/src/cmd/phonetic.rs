@@ -23,7 +23,7 @@ pub fn specs() -> Vec<CommandSpec> {
 /// dialog and returns the selection's phonetic guide (`base`, `ruby`, `align`, `size`, `offset`).
 fn phonetic(s: &mut Session, v: &Value) -> CmdResult {
     let Some(rv) = v.get("ruby") else {
-        s.ui_requests.push(json!({"open": "phonetic"}));
+        s.push_ui_request(json!({"open": "phonetic"}));
         return Ok(state(s));
     };
     let text: String = match rv {
@@ -82,7 +82,11 @@ fn phonetic(s: &mut Session, v: &Value) -> CmdResult {
     if base.chars().count() > MAX_CHARS {
         return Err(CmdError::Failed(format!("a phonetic guide covers at most {MAX_CHARS} characters")));
     }
-    let props = para.props_of_char(a.off).clone();
+    // One set of formatting draws the whole guide: a symbol font only when every base character
+    // has it, else the symbol's font would turn the other letters and the guide into symbols.
+    let first = para.props_of_char(a.off).clone();
+    let all_symbols = base.char_indices().all(|(i, _)| para.props_of_char(a.off + i).sym_font == first.sym_font);
+    let props = if all_symbols { first } else { first.without_symbol() };
     let bsz = base_size(s, &a);
     let size = size.unwrap_or_else(|| default_size(bsz));
     let raise = ruby_raise(offset.unwrap_or(0.0), bsz, size).clamp(0.0, 1584.0);
@@ -157,6 +161,23 @@ mod tests {
 
     fn para(s: &Session) -> Paragraph {
         s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).cloned().unwrap()
+    }
+
+    /// #2036: a guide over text that starts with a symbol doesn't draw the rest (and the guide)
+    /// in the symbol font; a guide over symbols only keeps their font.
+    #[test]
+    fn a_phonetic_guide_takes_a_symbol_font_only_over_symbols() {
+        for (text, kept) in [("\u{F0FC}ab", None), ("\u{F0FC}\u{F0FB}", Some("Wingdings".to_string()))] {
+            let mut s = session(text);
+            let end = wordcraft_doc::Pos::body(0, text.len());
+            s.doc.format_range(&wordcraft_doc::Pos::body(0, 0), &end, &|c| c.sym_font = Some("Wingdings".into())).unwrap();
+            if kept.is_none() {
+                s.doc.format_range(&wordcraft_doc::Pos::body(0, 3), &end, &|c| c.sym_font = None).unwrap();
+            }
+            s.run("select.text", &json!({"text": text})).unwrap();
+            s.run("format.phonetic", &json!({"ruby": "r"})).unwrap();
+            assert_eq!(para(&s).props_of_char(0).sym_font, kept, "{text:?}");
+        }
     }
 
     #[test]

@@ -1,4 +1,5 @@
-//! Freeform shapes (DrawingML custom geometry, `a:custGeom`) and ink strokes drawn with them.
+//! Freeform shapes (DrawingML custom geometry, `a:custGeom`; legacy VML paths) and ink strokes
+//! drawn with them.
 
 use wordcraft_doc::freeform::{FreePath, Freeform, InkTool, MAX_PATHS, MAX_POINTS};
 
@@ -7,6 +8,10 @@ use crate::xml::El;
 
 /// Straight pieces a Bézier curve is flattened into.
 const CURVE_STEPS: usize = 8;
+/// Points read from one path segment. A conformant `a:lnTo`/`a:moveTo` has one, `a:quadBezTo`
+/// two and `a:cubicBezTo` three; the cap bounds the de Casteljau control polygon so a segment
+/// stuffed with points can't make curve flattening quadratic in the point count.
+const MAX_SEG_POINTS: usize = 8;
 /// Largest path coordinate kept, in EMUs.
 const MAX_EMU: f64 = 1.0e12;
 
@@ -41,7 +46,7 @@ pub fn cust_geom(sppr: &El, w: f32, h: f32) -> Option<Freeform> {
             if cur.len() >= MAX_POINTS || done.len() >= MAX_PATHS {
                 break;
             }
-            let pts: Vec<[f64; 2]> = seg.children("a:pt").filter_map(pt).collect();
+            let pts: Vec<[f64; 2]> = seg.children("a:pt").filter_map(pt).take(MAX_SEG_POINTS).collect();
             match seg.local() {
                 "moveTo" => {
                     if !cur.is_empty() {
@@ -76,6 +81,233 @@ pub fn cust_geom(sppr: &El, w: f32, h: f32) -> Option<Freeform> {
     }
     let f = Freeform { w, h, paths, alpha: 1.0, ink: None, order: None }.sanitized();
     (!f.paths.is_empty()).then_some(f)
+}
+
+/// Largest VML path coordinate kept (coordinate-space units).
+const MAX_VML: f64 = 1.0e12;
+/// Characters of a VML `path` attribute read; the rest is ignored.
+const MAX_VML_PATH: usize = 1 << 20;
+/// Parameters of a VML path kept, all commands together.
+const MAX_VML_PARAMS: usize = MAX_POINTS * 8;
+
+/// A legacy VML freeform (`v:shape` with a `path`, ECMA-376 Part 4 §14.1.2.19).
+pub struct VmlPath {
+    pub freeform: Freeform,
+    /// `nf` in the path: no fill.
+    pub no_fill: bool,
+    /// `ns` in the path: no outline.
+    pub no_stroke: bool,
+}
+
+/// The VML path commands that are two letters long.
+const VML_TWO: [&str; 11] = ["nf", "ns", "ae", "al", "at", "ar", "wa", "wr", "qx", "qy", "qb"];
+
+/// The VML `path` of a shape, mapped onto its `w` × `h` frame (points) through its `coordsize`
+/// (default `1000,1000`) and `coordorigin` (default `0,0`). Commands: `m`/`t` move (absolute /
+/// relative), `l`/`r` line, `c`/`v` cubic Bézier (flattened), `x` close, `e` end, `nf`/`ns` no
+/// fill / no outline; arcs (`at`, `ar`, `wa`, `wr`) and quadrants (`qx`, `qy`) are drawn straight
+/// to their end, `qb` straight to its last point, and ellipses (`ae`, `al`) are skipped. An empty
+/// parameter is 0. `None` when the path has no points, or uses formulas (`@n`, from `v:formulas`,
+/// which aren't evaluated): such a shape isn't drawn rather than drawn wrong.
+pub fn vml_path(path: &str, coordsize: Option<&str>, coordorigin: Option<&str>, w: f32, h: f32) -> Option<VmlPath> {
+    if path.contains('@') {
+        return None;
+    }
+    let pair = |v: Option<&str>| -> Option<(f64, f64)> {
+        let v = v?;
+        let (a, b) = v.split_once(',').unwrap_or((v, ""));
+        let n = |s: &str| int(s).map(|i| (i as f64).clamp(-MAX_VML, MAX_VML));
+        Some((n(a)?, n(b).unwrap_or(0.0)))
+    };
+    let size = |v: f64| if v > 0.0 { v } else { 1000.0 };
+    let (cw, ch) = pair(coordsize).map_or((1000.0, 1000.0), |(a, b)| (size(a), size(b)));
+    let (ox, oy) = pair(coordorigin).unwrap_or((0.0, 0.0));
+    let (sx, sy) = (w as f64 / cw, h as f64 / ch);
+    let scale = |[x, y]: [f64; 2]| -> [f32; 2] { [((x - ox) * sx) as f32, ((y - oy) * sy) as f32] };
+
+    let mut d = Draw::default();
+    let (mut no_fill, mut no_stroke) = (false, false);
+    for (cmd, params) in vml_commands(path) {
+        if d.full() {
+            break;
+        }
+        let pts: Vec<[f64; 2]> = params.as_chunks::<2>().0.to_vec();
+        match cmd.as_str() {
+            "m" | "t" => {
+                for (i, &p) in pts.iter().enumerate() {
+                    let p = if cmd == "t" { d.rel(p) } else { p };
+                    if i == 0 {
+                        d.move_to(p);
+                    } else {
+                        d.line_to(p);
+                    }
+                }
+            }
+            "l" | "r" | "qx" | "qy" => {
+                for &p in &pts {
+                    let p = if cmd == "r" { d.rel(p) } else { p };
+                    d.line_to(p);
+                }
+            }
+            "c" | "v" => {
+                for c in pts.as_chunks::<3>().0 {
+                    let start = d.at;
+                    let ctrl: Vec<[f64; 2]> = std::iter::once(start).chain(c.iter().map(|&p| if cmd == "v" { d.rel(p) } else { p })).collect();
+                    for i in 1..=CURVE_STEPS {
+                        d.line_to(bezier(&ctrl, i as f64 / CURVE_STEPS as f64));
+                    }
+                }
+            }
+            "qb" => {
+                if let Some(&p) = pts.last() {
+                    d.line_to(p);
+                }
+            }
+            // Bounding box, then start and end: `at`/`wa` draw a line to the start, `ar`/`wr` move there.
+            "at" | "ar" | "wa" | "wr" => {
+                for [_, _, s, e] in pts.as_chunks::<4>().0 {
+                    if matches!(cmd.as_str(), "ar" | "wr") {
+                        d.move_to(*s);
+                    } else {
+                        d.line_to(*s);
+                    }
+                    d.line_to(*e);
+                }
+            }
+            "x" => d.end(true),
+            "e" => d.end(false),
+            "nf" => no_fill = true,
+            "ns" => no_stroke = true,
+            _ => {}
+        }
+    }
+    d.end(false);
+    let paths = d.done.into_iter().map(|(pts, closed)| FreePath { pts: pts.into_iter().map(scale).collect(), closed }).collect();
+    let freeform = Freeform { w, h, paths, alpha: 1.0, ink: None, order: None }.sanitized();
+    (!freeform.paths.is_empty()).then_some(VmlPath { freeform, no_fill, no_stroke })
+}
+
+/// The pen while a VML path is drawn: where it is, where the subpath began, the subpath being
+/// drawn and those done (closed or not).
+#[derive(Default)]
+struct Draw {
+    at: [f64; 2],
+    start: [f64; 2],
+    cur: Vec<[f64; 2]>,
+    done: Vec<(Vec<[f64; 2]>, bool)>,
+}
+
+impl Draw {
+    fn full(&self) -> bool {
+        self.done.len() >= MAX_PATHS
+    }
+
+    fn rel(&self, [x, y]: [f64; 2]) -> [f64; 2] {
+        [(self.at[0] + x).clamp(-MAX_VML, MAX_VML), (self.at[1] + y).clamp(-MAX_VML, MAX_VML)]
+    }
+
+    fn move_to(&mut self, p: [f64; 2]) {
+        self.end(false);
+        self.at = p;
+        self.start = p;
+        self.cur.push(p);
+    }
+
+    fn line_to(&mut self, p: [f64; 2]) {
+        if self.cur.is_empty() {
+            self.cur.push(self.at);
+            self.start = self.at;
+        }
+        if self.cur.len() < MAX_POINTS {
+            self.cur.push(p);
+        }
+        self.at = p;
+    }
+
+    /// Finish the subpath being drawn, closed back to its start or not.
+    fn end(&mut self, closed: bool) {
+        if !self.cur.is_empty() && !self.full() {
+            self.done.push((std::mem::take(&mut self.cur), closed));
+        }
+        self.cur.clear();
+        if closed {
+            self.at = self.start;
+        }
+    }
+}
+
+/// The commands of a VML path with their parameters: a command is a letter (or one of
+/// [`VML_TWO`]) followed by numbers separated by commas or spaces. An empty parameter (nothing
+/// before a comma) is 0, and so is a formula reference (`@n`, not expected here: see
+/// [`vml_path`]); fractions are dropped. Anything else is skipped.
+fn vml_commands(path: &str) -> Vec<(String, Vec<f64>)> {
+    let mut out: Vec<(String, Vec<f64>)> = Vec::new();
+    let mut chars = path.chars().take(MAX_VML_PATH).peekable();
+    // Whether a number was read since the command or the last comma.
+    let mut has_num = true;
+    let mut kept = 0usize;
+    let mut push = |out: &mut Vec<(String, Vec<f64>)>, v: f64| {
+        if kept < MAX_VML_PARAMS
+            && let Some((_, p)) = out.last_mut()
+        {
+            p.push(v);
+            kept += 1;
+        }
+    };
+    while let Some(c) = chars.next() {
+        if c.is_ascii_alphabetic() {
+            // Cap the commands too, so a path of bare letters can't build a million entries.
+            if out.len() >= MAX_VML_PARAMS {
+                break;
+            }
+            if !has_num {
+                push(&mut out, 0.0);
+            }
+            has_num = false;
+            let lower = c.to_ascii_lowercase();
+            let mut cmd = lower.to_string();
+            if let Some(&n) = chars.peek() {
+                let two: String = [lower, n.to_ascii_lowercase()].iter().collect();
+                if VML_TWO.contains(&two.as_str()) {
+                    chars.next();
+                    cmd = two;
+                }
+            }
+            out.push((cmd, Vec::new()));
+        } else if c == ',' {
+            if !has_num {
+                push(&mut out, 0.0);
+            }
+            has_num = false;
+        } else if matches!(c, '@' | '-' | '+' | '.') || c.is_ascii_digit() {
+            let mut v = c.to_digit(10).map_or(0.0, f64::from);
+            let mut frac = c == '.';
+            while let Some(&n) = chars.peek() {
+                if n == '.' {
+                    frac = true;
+                } else if n.is_ascii_digit() {
+                    if !frac {
+                        v = (v * 10.0 + n.to_digit(10).map_or(0.0, f64::from)).min(MAX_VML);
+                    }
+                } else {
+                    break;
+                }
+                chars.next();
+            }
+            let v = match c {
+                '@' => 0.0,
+                '-' => -v,
+                _ => v,
+            };
+            has_num = true;
+            push(&mut out, v);
+        }
+        // Whitespace and anything else only separate numbers.
+    }
+    if !has_num {
+        push(&mut out, 0.0);
+    }
+    out
 }
 
 /// The pen of an ink stroke written by WordCraft, from its drawing's name (`Ink Pen 3`,
@@ -117,4 +349,44 @@ fn bezier(c: &[[f64; 2]], t: f64) -> [f64; 2] {
             .collect();
     }
     p.first().copied().unwrap_or([0.0, 0.0])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sppr(seg: &str) -> crate::xml::El {
+        let xml = format!(
+            "<wps:spPr xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" \
+             xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\">\
+             <a:custGeom><a:pathLst><a:path w=\"100\" h=\"100\">\
+             <a:moveTo><a:pt x=\"0\" y=\"0\"/></a:moveTo>{seg}</a:path></a:pathLst></a:custGeom></wps:spPr>"
+        );
+        crate::xml::parse(xml.as_bytes()).expect("parse spPr")
+    }
+
+    #[test]
+    fn a_vml_path_of_bare_letters_builds_a_bounded_command_list() {
+        let path = "x".repeat(MAX_VML_PATH);
+        let n = vml_commands(&path).len();
+        assert!(n <= MAX_VML_PARAMS, "{n} commands");
+    }
+
+    #[test]
+    fn a_bezier_segment_with_many_points_is_bounded() {
+        // One cubicBezTo stuffed with 50 000 points must not make de Casteljau quadratic: the
+        // control polygon is capped, so flattening stays a handful of points and returns at once.
+        let pts = "<a:pt x=\"1\" y=\"1\"/>".repeat(50_000);
+        let sppr = sppr(&format!("<a:cubicBezTo>{pts}</a:cubicBezTo>"));
+        let f = cust_geom(&sppr, 100.0, 100.0).expect("a path");
+        assert!(f.paths.iter().all(|p| p.pts.len() <= 1 + CURVE_STEPS), "{:?}", f.paths.iter().map(|p| p.pts.len()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_conformant_cubic_still_flattens_to_a_curve() {
+        let sppr = sppr("<a:cubicBezTo><a:pt x=\"0\" y=\"100\"/><a:pt x=\"100\" y=\"100\"/><a:pt x=\"100\" y=\"0\"/></a:cubicBezTo>");
+        let f = cust_geom(&sppr, 100.0, 100.0).expect("a path");
+        assert_eq!(f.paths.len(), 1);
+        assert!(f.paths[0].pts.len() >= 2 && f.paths[0].pts.len() <= 1 + CURVE_STEPS);
+    }
 }
