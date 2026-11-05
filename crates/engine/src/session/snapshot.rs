@@ -31,6 +31,7 @@ impl Session {
         self.hf_return = None;
         self.go_back_step = 0;
         self.view.outline.collapsed.clear();
+        self.view.read_page_color = self.prefs.read_page_color;
         // A copy the replaced document kept stays in the recovery list.
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -258,7 +259,7 @@ impl Session {
         }
         self.rev = rev;
         for slot in &mut self.layout {
-            if slot.as_ref().is_some_and(|l| l.0 != rev) {
+            if slot.as_ref().is_some_and(|l| l.0.0 != rev) {
                 *slot = None;
             }
         }
