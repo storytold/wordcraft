@@ -591,7 +591,7 @@ fn insert_table_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
 }
 
 fn numbering_value_dialog(app: &mut WordApp, ui: &mut Ui, value: &mut u32, was: u32) -> bool {
-    let label = ui.label(tl!("Set value to:"));
+    let label = ui.label(tl!("Number this item:"));
     ui.add(egui::DragValue::new(value).range(0..=100_000)).labelled_by(label.id);
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok && *value != was {

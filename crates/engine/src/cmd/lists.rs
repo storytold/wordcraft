@@ -590,16 +590,6 @@ mod tests {
         labels.iter().map(|l| l.map(str::to_string)).collect()
     }
 
-    /// 1., a paragraph, then Numbering on the next one gives 2. (Word continues the list above
-    /// past unnumbered paragraphs); a list of another kind in between starts a new list.
-    #[test]
-    fn numbering_after_a_plain_paragraph_continues_the_list_above() {
-        let mut s = numbered_at(&["One", "Between", "Two", "Also", "Three"], &[(0, "numbered"), (2, "numbered"), (4, "numbered")]);
-        assert_eq!(shown(&mut s), want(&[Some("1."), None, Some("2."), None, Some("3.")]));
-        let mut s = numbered_at(&["One", "Letter", "Two"], &[(0, "numbered"), (1, "lowerLetter"), (2, "numbered")]);
-        assert_eq!(shown(&mut s), want(&[Some("1."), Some("a)"), Some("1.")]));
-    }
-
     /// Set Numbering Value numbers the caret's item at any value, and the rest of the list,
     /// past paragraphs in between, counts on from it; it survives a save to .docx and back.
     #[test]
@@ -622,24 +612,12 @@ mod tests {
         assert!(s.run("para.setNumberingValue", &json!({"value": 3})).is_err());
     }
 
-    /// Review of #5245: across a gap, the plain Numbering button (no kind) continues only a `1.`
-    /// list, not `a)` further up; a heading numbered by its style in between is the
-    /// nearest list, so the numbering after it starts again.
+    /// Review of #5245: a heading numbered by its style has no value of its own to set.
     #[test]
-    fn numbering_across_a_gap_needs_a_matching_list_and_stops_at_a_numbered_heading() {
-        let mut s = numbered_at(&["Letter", "Between", "Plain"], &[(0, "lowerLetter")]);
-        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(2, 0));
-        s.run("para.numbering", &json!({})).unwrap();
-        assert_eq!(shown(&mut s), want(&[Some("a)"), None, Some("1.")]));
-
-        let mut s = numbered_at(&["One", "Heading", "Two"], &[(0, "numbered")]);
-        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(1, 0));
+    fn a_heading_numbered_by_its_style_has_no_value_to_set() {
+        let mut s = numbered_at(&["Heading"], &[]);
         s.run("list.multilevelPreset", &json!({"preset": "headings"})).unwrap();
-        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(2, 0));
-        s.run("para.numbering", &json!({"kind": "numbered"})).unwrap();
-        assert_eq!(shown(&mut s), want(&[Some("1."), Some("1"), Some("1.")]));
-        // The heading's number comes from its style: no value to set there.
-        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(1, 0));
+        assert_eq!(shown(&mut s), want(&[Some("1")]));
         assert_eq!(super::caret_number(&s), None);
     }
 

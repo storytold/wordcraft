@@ -2613,6 +2613,90 @@ fn typing_1_dot_in_a_heading_keeps_the_heading_style() {
     }
 }
 
+/// The labels shown, paragraph by paragraph.
+fn labels(s: &mut Session) -> Vec<Option<String>> {
+    numbers(s).into_iter().map(|x| x.0).collect()
+}
+
+fn want(labels: &[Option<&str>]) -> Vec<Option<String>> {
+    labels.iter().map(|l| l.map(str::to_string)).collect()
+}
+
+/// `1.` `One`, Enter twice to leave the list, `Between`, Enter, `Two`, then Numbering: `Two`
+/// continues the list above as 2. past the plain paragraph, and so does `Three` (#5245).
+#[test]
+fn numbering_after_a_plain_paragraph_continues_the_list_above() {
+    let mut s = typed(
+        "1. One
+
+Between
+Two",
+    );
+    run(&mut s, "para.numbering", json!({}));
+    typ(
+        &mut s,
+        "
+
+Also
+Three",
+    );
+    run(&mut s, "para.numbering", json!({}));
+    assert_eq!(labels(&mut s), want(&[Some("1."), None, Some("2."), None, Some("3.")]));
+}
+
+/// Across a gap the plain Numbering button continues only a 1. 2. 3. list, not an a) list above
+/// it; a heading numbered by its style in between is the nearest list, so the numbering after
+/// it starts again (#5245).
+#[test]
+fn numbering_across_a_gap_needs_a_matching_list_and_stops_at_a_numbered_heading() {
+    let mut s = typed(
+        "a) Letter
+
+Between
+Plain",
+    );
+    run(&mut s, "para.numbering", json!({}));
+    assert_eq!(labels(&mut s), want(&[Some("a)"), None, Some("1.")]));
+
+    let mut s = typed(
+        "1. One
+
+Heading",
+    );
+    run(&mut s, "list.multilevelPreset", json!({"preset": "headings"}));
+    typ(
+        &mut s, "
+Two",
+    );
+    run(&mut s, "para.normal", json!({}));
+    run(&mut s, "para.numbering", json!({"kind": "numbered"}));
+    assert_eq!(labels(&mut s), want(&[Some("1."), Some("1"), Some("1.")]));
+}
+
+/// Restart at 1 on an item past a plain paragraph numbers it 1. and the rest of its list
+/// counts on from there, past paragraphs in between (#5245).
+#[test]
+fn restart_at_1_carries_the_rest_of_the_list() {
+    let mut s = typed(
+        "1. One
+
+Between
+Two",
+    );
+    run(&mut s, "para.numbering", json!({}));
+    typ(
+        &mut s,
+        "
+
+Also
+Three",
+    );
+    run(&mut s, "para.numbering", json!({}));
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [2], "off": 0}}));
+    run(&mut s, "para.restartNumbering", json!({}));
+    assert_eq!(labels(&mut s), want(&[Some("1."), None, Some("1."), None, Some("2.")]));
+}
+
 // Backspace and Delete on selected tables, rows and columns (Word for Mac, #1844).
 
 /// "before", a 3×3 table with cells `a1`…`c3` (column letter, row number), "after"; the caret
