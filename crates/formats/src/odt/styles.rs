@@ -242,6 +242,8 @@ struct StyleInfo {
     cell_padding: [Option<f32>; 4],
     /// `style:column-width` of a table-column style's `style:table-column-properties`, in points.
     column_width: Option<f32>,
+    /// `style:rel-column-width` of the same: its share of the table (`1*`).
+    column_share: Option<f32>,
     /// A table style's `style:table-properties`: `table:align`, and its width (`style:width`,
     /// points, or `style:rel-width`, percent of the text width).
     table_align: Option<Align>,
@@ -627,6 +629,12 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
         "table-column-properties" => {
             if let Some(w) = get(a, "style:column-width").and_then(length) {
                 s.column_width = Some(w);
+            }
+            if let Some(r) = get(a, "style:rel-column-width")
+                .and_then(|v| v.trim().strip_suffix('*')?.trim().parse::<f32>().ok())
+                .filter(|r| r.is_finite() && *r > 0.0)
+            {
+                s.column_share = Some(r);
             }
         }
         "table-cell-properties" => table_cell_properties(a, s),
@@ -1308,6 +1316,11 @@ impl Styles {
     /// Width in points of a table-column style (whole chain).
     pub(super) fn column_width(&self, name: &str) -> Option<f32> {
         self.chain(name).iter().find_map(|(_, s)| s.column_width)
+    }
+
+    /// A table-column style's share of its table (`style:rel-column-width`, whole chain).
+    pub(super) fn column_share(&self, name: &str) -> Option<f32> {
+        self.chain(name).iter().find_map(|(_, s)| s.column_share)
     }
 
     /// A table style's alignment, width (points) and relative width (percent), whole chain.

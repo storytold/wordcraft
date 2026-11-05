@@ -159,3 +159,35 @@ fn a_table_starting_a_page_starts_it() {
     let c = content_of(&crate::odt::tests::export_model(&d).unwrap());
     assert_eq!(c.matches(r#"fo:break-before="page""#).count(), 2, "{c}");
 }
+
+#[test]
+fn columns_stating_only_their_shares_keep_their_proportions() {
+    // LibreOffice's CV template: a table filling the margins whose columns give only
+    // `style:rel-column-width`. They were read as equal.
+    let column = |name: &str, share: &str| {
+        format!(
+            r#"<style:style style:name="{name}" style:family="table-column"><style:table-column-properties style:rel-column-width="{share}"/></style:style>"#
+        )
+    };
+    let table = r#"<table:table><table:table-column table:style-name="A"/><table:table-column table:style-name="B"/><table:table-row><table:table-cell><text:p>a</text:p></table:table-cell><table:table-cell><text:p>b</text:p></table:table-cell></table:table-row></table:table>"#;
+    let grid = |d: &wordcraft_doc::Document| d.body.iter().find_map(|b| b.as_table()).map(|t| t.grid.clone()).unwrap_or_default();
+    let d = doc(&format!("{}{}", column("A", "1000*"), column("B", "3000*")), table);
+    let g = grid(&d);
+    assert_eq!(g.len(), 2, "{g:?}");
+    assert!((g[1] / g[0] - 3.0).abs() < 0.01, "{g:?}");
+    // Rewritten from the model, the proportions stay.
+    let back = import(&crate::odt::tests::export_model(&d).unwrap()).unwrap();
+    let g = grid(&back);
+    assert!((g[1] / g[0] - 3.0).abs() < 0.01, "{g:?}");
+    // A column without a share leaves the equal split, and junk shares are none.
+    for junk in ["0*", "-1*", "NaN*", "1e39*", "abc"] {
+        let d = doc(&format!("{}{}", column("A", "1000*"), column("B", junk)), table);
+        let g = grid(&d);
+        assert_eq!(g.len(), 2, "{junk}: {g:?}");
+        assert!((g[0] - g[1]).abs() < 0.01, "{junk}: {g:?}");
+    }
+    // A width stated beside a share is the width.
+    let stated = r#"<style:style style:name="A" style:family="table-column"><style:table-column-properties style:column-width="2in" style:rel-column-width="1*"/></style:style><style:style style:name="B" style:family="table-column"><style:table-column-properties style:column-width="1in" style:rel-column-width="1*"/></style:style>"#;
+    let g = grid(&doc(stated, table));
+    assert!((g[0] / g[1] - 2.0).abs() < 0.01, "{g:?}");
+}

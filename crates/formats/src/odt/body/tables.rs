@@ -73,14 +73,29 @@ pub(in crate::odt) struct TableB {
     pub(in crate::odt) hcover: usize,
     /// Widths in points of the `table:table-column`s so far, 0 where the style gives none.
     pub(in crate::odt) widths: Vec<f32>,
+    /// Each column's share of the table (`style:rel-column-width`), 0 where the style gives none.
+    pub(in crate::odt) shares: Vec<f32>,
+    /// The table's width, points: what the shares divide.
+    pub(in crate::odt) room: f32,
     /// Its alignment and width, and each row's height so far (see [`crate::model::TableExtra`]).
     pub(in crate::odt) extra: crate::model::TableExtra,
 }
 
+/// `room` points divided by `shares`; empty unless every column has a share.
+fn widths_of_shares(shares: &[f32], room: f32) -> Vec<f32> {
+    let total: f32 = shares.iter().sum();
+    if !room.is_finite() || room <= 0.0 || !total.is_finite() || shares.iter().any(|s| *s <= 0.0) {
+        return Vec::new();
+    }
+    shares.iter().map(|s| s / total * room).collect()
+}
+
 impl TableB {
     pub(in crate::odt) fn finish(self) -> FTable {
-        // A column without a width leaves the whole grid to the equal split.
-        let widths = if self.widths.iter().all(|w| *w > 0.0) { self.widths } else { Vec::new() };
+        // Columns stating only their shares (LibreOffice's tables filling the margins, §20.334)
+        // divide the table's width by them; a column with neither leaves the whole grid to the
+        // equal split.
+        let widths = if self.widths.iter().all(|w| *w > 0.0) { self.widths } else { widths_of_shares(&self.shares, self.room) };
         let mut rows = self.rows;
         share_edges(&mut rows);
         // A table whose cells all say "no line" draws none.
