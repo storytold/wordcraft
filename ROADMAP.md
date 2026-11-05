@@ -753,6 +753,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-20 | Saving to a NAS share mounted by GVFS (`smb://` in the Linux file manager, #3003) works: the share refuses every Unix mode change with "Operation not supported", which used to fail the whole save, so the close prompt's Save never closed. The save now goes on without copying a mode the folder doesn't keep; any other failure still keeps the original. Unit tests; not yet confirmed on a real share |
 | 2026-10-29 | Corporate authors in bibliographies (#4848): a source whose author is an organisation (Word's Corporate Author, `b:Corporate`) keeps it when a Word document opens, instead of losing the author. Citations and bibliography entries write the name as it is in every style ("(World Health Organization, 2021)", never "Organization, W. H."); it gives the source's tag and its place in an author-sorted list, and it saves back as `b:Corporate`. Create Source has a Corporate Author box under Author. |
 | 2026-10-29 | Table Properties follows the selection (#4857): with the whole table (or several rows, columns or cells) selected, the Row, Column and Cell settings apply to every selected row, column and cell, as in Word. Before, they changed the caret's row alone, so unticking Allow row to break across pages with the table selected left the other rows breaking. Allow row to break and Repeat as header row show as mixed when the selected rows differ and change nothing unless clicked. |
+| 2026-11-05 | Khmer text (#4521): a triisap (៊) over អ, ស or ហ with an upper vowel is drawn below the base in fonts that leave it above, so the same text looks the same whichever Khmer font a document uses; fonts that already draw it below are left alone |
 
 Footer page-table height and body wrapping are corrected. Other pagination gaps remain open.
 
@@ -1206,3 +1207,4 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-27 | trivial | Progress log: AutoCorrect Options with no document open (#4585) |
 | 2026-10-28 | trivial | Progress log: RTF metafile pictures are imported (#4259) |
 | 2026-10-28 | trivial | Progress log: Chinese and Japanese text counts a word per character (#4547) |
+| 2026-11-05 | trivial | Progress log: Khmer triisap drawn below the base over អ, ស, ហ in more fonts (#4521) |

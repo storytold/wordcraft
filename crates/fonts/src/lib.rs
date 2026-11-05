@@ -9,6 +9,7 @@
 
 pub mod color;
 mod fontdb;
+mod khmer;
 pub mod math;
 mod script;
 mod ui_fallback;
@@ -225,14 +226,41 @@ fn shape_dir(face: &FontFace, text: &str, features: &[Feature], map: &impl Fn(ch
     let mut out = Vec::with_capacity(text.len());
     let shaped = face.hb().map(|hb| {
         let shaper = face.shaper.shaper(&hb).instance(face.instance.as_ref()).build();
+        // Which Khmer bases this face leaves a triisap above an upper vowel for, probed on first use.
+        let triisap_u = || {
+            face.triisap_u.get_or_init(|| {
+                khmer::probe(face, |s| {
+                    let mut b = UnicodeBuffer::new();
+                    b.push_str(s);
+                    b.guess_segment_properties();
+                    let gb = shaper.shape(b, ShapeOptions::new());
+                    gb.glyph_infos().iter().zip(gb.glyph_positions()).map(|(i, p)| (i.glyph_id, p.x_advance)).collect()
+                })
+            })
+        };
         // One script per shaping call: the shaper picks its script engine (Myanmar, Khmer,
         // Indic, USE reordering…) from the run's script, so "Hi မြန်မာ" in one face must not be
         // shaped as Latin. Runs come in text order; right-to-left callers regroup by cluster.
         for r in script::script_runs(text) {
             let Some(sub) = text.get(r.clone()) else { continue };
             let mut buf = UnicodeBuffer::new();
-            for (i, c) in sub.char_indices() {
-                buf.add(map(c), (r.start + i) as u32);
+            let mut prev = '\0';
+            let mut it = sub.char_indices().peekable();
+            // The mapped next character, once read ahead: `map` sees each character once.
+            let mut ahead = None;
+            while let Some((i, c)) = it.next() {
+                let mut m = ahead.take().unwrap_or_else(|| map(c));
+                if khmer::is_triisap(m)
+                    && let Some(&(_, next)) = it.peek()
+                {
+                    let n = map(next);
+                    ahead = Some(n);
+                    if khmer::takes_u_form(prev, n, triisap_u) {
+                        m = khmer::U_FORM;
+                    }
+                }
+                buf.add(m, (r.start + i) as u32);
+                prev = m;
             }
             buf.guess_segment_properties();
             buf.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
@@ -435,6 +463,19 @@ mod tests {
         let off = shape(&face, "office", &[feature("-liga").unwrap()], |c| c);
         assert!(on.len() <= off.len());
         assert_eq!(off.len(), 6);
+    }
+
+    /// The character map sees each character once, also the one read ahead of a Khmer triisap.
+    #[test]
+    fn each_character_is_mapped_once() {
+        let face = FontDb::global().face(DEFAULT_FAMILY, "Regular");
+        let text = "a\u{17A2}\u{17CA}\u{17B7}b\u{17CA}";
+        let calls = std::cell::Cell::new(0);
+        shape(&face, text, &[], |c| {
+            calls.set(calls.get() + 1);
+            c
+        });
+        assert_eq!(calls.get(), text.chars().count());
     }
 
     #[test]

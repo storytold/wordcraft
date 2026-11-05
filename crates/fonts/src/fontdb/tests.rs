@@ -408,3 +408,100 @@ fn named_instances_and_collection_members_are_capped() {
     // (under 0.1 s on a loaded machine) only backs up "read once", with room for a busy CI.
     assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
 }
+
+/// A system Khmer font that draws a triisap above an upper vowel (Khmer Sangam MN for អ) shapes it
+/// as the U-form, like Khmer OS System, which does so itself. Fonts that already do (Khmer OS
+/// System, Khmer Busra, which dotted-circles a typed ុ + ិ) are left alone. Skipped without the fonts.
+#[test]
+fn khmer_triisap_takes_the_u_form_like_khmer_os_system() {
+    let face = |path: &std::path::Path| {
+        let data = std::fs::read(path).ok()?;
+        super::make_face(super::FontBytes::Owned(data.into()), 0, "Khmer".into(), "Regular".into(), "Khmer".into(), Vec::new())
+    };
+    let gids = |f: &FontFace, t: &str| crate::shape(f, t, &[], |c| c).into_iter().map(|g| g.gid).collect::<Vec<_>>();
+    if let Some(f) = face(std::path::Path::new("/System/Library/Fonts/Supplemental/Khmer Sangam MN.ttf")) {
+        // The probe decides per base: អ is rewritten (a font may already draw the others below, its own way).
+        let _ = gids(&f, "អ៊ិ");
+        let needs = f.triisap_u.get().copied().unwrap_or([false; 3]);
+        assert!(needs[0], "the font leaves the triisap of អ above");
+        for (need, (tri, u)) in needs.into_iter().zip([("អ៊ិ", "អុិ"), ("ស៊ី", "សុី"), ("ហ៊ឹ", "ហុឹ")]) {
+            if need {
+                assert_eq!(gids(&f, tri), gids(&f, u), "{tri}");
+            }
+        }
+        // Other bases keep their triisap, and clusters index the original string.
+        assert_ne!(gids(&f, "ប៊ិ"), gids(&f, "បុិ"));
+        assert!(crate::shape(&f, "អ៊ិ", &[], |c| c).iter().all(|g| g.cluster == 0));
+    }
+    // The user's font folder, read at run time: no home directory (some Windows runners) skips these.
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(std::path::PathBuf::from);
+    for font in ["!KhmerOSSystem.ttf", "Busra-R.ttf"] {
+        if let Some(f) = home.as_ref().and_then(|h| face(&h.join("Library/Fonts").join(font))) {
+            let _ = gids(&f, "អ៊ិ");
+            assert_eq!(f.triisap_u.get().copied(), Some([false; 3]), "{font} already does the U-form");
+        }
+    }
+}
+
+/// A font holding only what shaping Khmer syllables with a triisap needs: glyphs for ប អ ស ហ, the
+/// vowels ិ ី, the vowel U and the triisap (bases 500 wide, marks 0), and no layout tables. Nothing
+/// moves the triisap below its base, so it stays above, as in the fonts the U-form fallback is for.
+#[cfg(not(target_arch = "wasm32"))]
+fn khmer_triisap_font() -> Vec<u8> {
+    let chars = ['\u{1794}', '\u{179F}', '\u{17A0}', '\u{17A2}', '\u{17B7}', '\u{17B8}', '\u{17BB}', '\u{17CA}'];
+    let glyphs = chars.len() as u16 + 1; // glyph 0 is .notdef
+    let be16 = |vals: &[i32]| vals.iter().flat_map(|v| (*v as u16).to_be_bytes()).collect::<Vec<u8>>();
+    let be32 = |vals: &[u32]| vals.iter().flat_map(|v| v.to_be_bytes()).collect::<Vec<u8>>();
+    let mut head = be32(&[0x0001_0000, 0, 0, 0x5F0F_3CF5]);
+    head.extend(be16(&[0, 1000]));
+    head.extend([0u8; 16]); // created, modified
+    head.extend(be16(&[0, 0, 0, 0, 0, 8, 2, 0, 0])); // bounds, macStyle, lowestRecPPEM, direction, loca format, glyph data format
+    let mut hhea = be32(&[0x0001_0000]);
+    hhea.extend(be16(&[800, -200, 0, 500, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, glyphs as i32]));
+    let mut maxp = be32(&[0x0000_5000]);
+    maxp.extend(be16(&[glyphs as i32]));
+    // .notdef and the bases and vowel signs have an advance of 500, the combining marks none.
+    let mut hmtx = Vec::new();
+    for g in 0..glyphs {
+        let mark = g >= 5; // the vowels, U and the triisap
+        hmtx.extend(be16(&[if g == 0 || !mark { 500 } else { 0 }, 0]));
+    }
+    let mut cmap = be16(&[0, 1, 3, 10]);
+    cmap.extend(be32(&[12]));
+    cmap.extend(be16(&[12, 0]));
+    cmap.extend(be32(&[16 + 12 * chars.len() as u32, 0, chars.len() as u32]));
+    let mut sorted = chars.to_vec();
+    sorted.sort();
+    for c in sorted {
+        let gid = 1 + chars.iter().position(|x| *x == c).unwrap_or(0) as u32;
+        cmap.extend(be32(&[c as u32, c as u32, gid]));
+    }
+    mini_font(&[(*b"cmap", cmap), (*b"head", head), (*b"hhea", hhea), (*b"hmtx", hmtx), (*b"maxp", maxp)])
+}
+
+/// The U-form fallback through the real shaping path, with a face that leaves the triisap above
+/// its base: no installed font is needed.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn khmer_triisap_is_shaped_as_the_u_form_for_a_face_that_leaves_it_above() {
+    let face = make_face(
+        FontBytes::Owned(std::sync::Arc::new(khmer_triisap_font())),
+        0,
+        "Khmer Test".into(),
+        "Regular".into(),
+        "Khmer Test".into(),
+        Vec::new(),
+    )
+    .unwrap();
+    let gids = |t: &str| crate::shape(&face, t, &[], |c| c).into_iter().map(|g| g.gid).collect::<Vec<_>>();
+    // The probe finds the triisap above for every base, so each is shaped as the vowel U.
+    assert_eq!(gids("អ៊ិ"), gids("អុិ"));
+    assert_eq!(face.triisap_u.get().copied(), Some([true; 3]));
+    assert_eq!(gids("ស៊ី"), gids("សុី"));
+    assert_eq!(gids("ហ៊ិ"), gids("ហុិ"));
+    // ប keeps its triisap, and so does a triisap with no upper vowel after it.
+    assert_ne!(gids("ប៊ិ"), gids("បុិ"));
+    assert_ne!(gids("អ៊"), gids("អុ"));
+    // The text is untouched: the syllable is still one cluster of the original string.
+    assert!(crate::shape(&face, "អ៊ិ", &[], |c| c).iter().all(|g| g.cluster == 0));
+}

@@ -75,6 +75,9 @@ pub struct FontFace {
     pub instance: Option<harfrust::ShaperInstance>,
     /// Basic Multilingual Plane coverage bitset, built on first use.
     pub(super) bmp: std::sync::OnceLock<Box<[u64]>>,
+    /// Khmer bases (អ ស ហ) whose triisap this face leaves above an upper vowel
+    /// ([`crate::khmer::probe`]), built on first use.
+    pub(crate) triisap_u: std::sync::OnceLock<[bool; 3]>,
     // Some legacy CJK fonts assemble their contours with TrueType instructions.
     pub(super) outline_hinter: std::sync::OnceLock<Option<HintingInstance>>,
     /// Hinted draws so far, those that ran too long, and whether that turned hinting off
