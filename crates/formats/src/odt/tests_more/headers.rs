@@ -336,6 +336,47 @@ fn a_watermark_change_to_a_file_is_saved() {
 }
 
 #[test]
+fn different_odd_and_even_pages_changed_in_a_file_is_saved() {
+    // A file's own page definitions were written back whatever happened to this setting, so the
+    // left pages' header stayed after it was turned off.
+    let ns = crate::odt::tests::NS_T;
+    let file = |left: &str| {
+        let styles = format!(
+            r#"<office:document-styles {ns}><office:automatic-styles><style:page-layout style:name="pm1" style:page-usage="mirrored"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm" fo:margin-bottom="2cm" fo:margin-left="2cm" fo:margin-right="2cm"/><style:header-style><style:header-footer-properties fo:min-height="1cm"/></style:header-style></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>Right head</text:p></style:header>{left}</style:master-page></office:master-styles></office:document-styles>"#
+        );
+        let content = format!(
+            "<office:document-content {ns}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>"
+        );
+        crate::odt::tests::package(&content, Some(&styles))
+    };
+    let styles_of = |d: &Document| crate::odt::tests::entry(&export(d).unwrap(), "styles.xml");
+
+    // On in the file, and nothing changed: the file's own.
+    let both = file("<style:header-left><text:p>Left head</text:p></style:header-left>");
+    let d = import(&both).unwrap();
+    assert!(d.settings.even_odd_headers);
+    let s = styles_of(&d);
+    assert!(s.contains(r#"style:page-usage="mirrored""#) && s.contains("Left head"), "as read: {s}");
+
+    // Turned off.
+    let mut d = import(&both).unwrap();
+    d.settings.even_odd_headers = false;
+    let saved = export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(!s.contains("<style:header-left") && s.contains("Right head"), "off: {s}");
+    assert!(!import(&saved).unwrap().settings.even_odd_headers);
+
+    // Off in the file, and turned on: left pages have their own header, an empty one so far.
+    let mut d = import(&file("")).unwrap();
+    assert!(!d.settings.even_odd_headers);
+    d.settings.even_odd_headers = true;
+    let saved = export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(s.contains("<style:header-left") && s.contains("Right head"), "on: {s}");
+    assert!(import(&saved).unwrap().settings.even_odd_headers);
+}
+
+#[test]
 fn libreoffices_watermark_reads_as_the_watermark() {
     // As LibreOffice's Format › Watermark writes it (observed): turned, half see-through.
     let ns = crate::odt::tests::NS_T;
