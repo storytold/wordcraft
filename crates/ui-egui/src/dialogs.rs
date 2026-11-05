@@ -218,6 +218,8 @@ pub enum Dialog {
     Watermark {
         text: String,
         diagonal: bool,
+        /// Percent, 0 to 100; Semitransparent is 50.
+        transparency: u8,
     },
     /// Home › Font › Phonetic Guide: ruby text over the selected text (`format.phonetic`).
     Phonetic {
@@ -731,7 +733,17 @@ impl Dialog {
             "bookmark" => Dialog::Bookmark { name: bookmark_at_caret(&app.session), by_location: false, hidden: false, deleted: false },
             "wordCount" => Dialog::WordCount { stats: app.session.run("review.wordCount", &json!({})).unwrap_or_default() },
             "zoom" => Dialog::Zoom { percent: (app.session.view.zoom * 100.0).round() },
-            "watermark" => Dialog::Watermark { text: "CONFIDENTIAL".into(), diagonal: true },
+            "watermark" => {
+                // The document's watermark when it has one, else Word's defaults.
+                let wm = app
+                    .session
+                    .doc
+                    .settings
+                    .watermark
+                    .clone()
+                    .unwrap_or_else(|| wordcraft_doc::Watermark { text: "CONFIDENTIAL".into(), ..Default::default() });
+                Dialog::Watermark { transparency: wm.transparency(), diagonal: wm.diagonal, text: wm.text }
+            }
             "phonetic" => {
                 let v = wordcraft_engine::cmd::phonetic::state(&app.session);
                 let f = |k: &str| v.get(k).and_then(Value::as_f64).unwrap_or(0.0) as f32;

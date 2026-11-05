@@ -63,8 +63,8 @@ pub(super) struct Body<'a> {
     /// A watermark found (in a header): see [`Self::start_shape`].
     pub(super) watermark: Option<wordcraft_doc::Watermark>,
     /// The shape being read is a watermark's, if its geometry follows its text: its size, turn,
-    /// colour and see-through, and whether its geometry is fontwork.
-    watermark_shape: Option<((f32, f32), f32, Option<wordcraft_doc::props::Rgb>, bool, bool)>,
+    /// colour and transparency (percent), and whether its geometry is fontwork.
+    watermark_shape: Option<((f32, f32), f32, Option<wordcraft_doc::props::Rgb>, u8, bool)>,
     pub(super) manifest: Option<&'a HashMap<String, String>>,
     containers: Vec<Vec<FBlock>>,
     /// Drawings anchored in the text but outside any paragraph (LibreOffice's page-anchored

@@ -1561,7 +1561,10 @@ fn watermark_roundtrips() {
             diagonal: false,
             semitransparent: false,
             size: None,
+            ..Default::default()
         },
+        // Any transparency, not only Word's two.
+        Watermark { transparency: Some(80), ..Default::default() },
         // A box of its own (not Word's default for the page) is kept.
         Watermark { text: "COPY".into(), size: Some([300.0, 80.0]), ..Default::default() },
     ] {
@@ -1570,6 +1573,26 @@ fn watermark_roundtrips() {
         let r = rt(&d);
         assert_eq!(r.settings.watermark, Some(wm));
         assert_eq!(paras(&r).len(), 1, "the body gains nothing");
+    }
+}
+
+/// #2954: the text watermark's transparency round-trips as `v:fill` `opacity`; Word's
+/// Semitransparent is `.5`, and an opaque watermark has no `v:fill`.
+#[test]
+fn text_watermark_transparency_roundtrips() {
+    for (t, fill) in [(0, None), (25, Some(".75")), (50, Some(".5")), (80, Some(".2")), (100, Some("0"))] {
+        let mut d = doc_with(vec![Paragraph::with_text("Body", CharProps::default())]);
+        let mut wm = Watermark::default();
+        wm.set_transparency(t);
+        d.settings.watermark = Some(wm.clone());
+        let bytes = wordcraft_docx::write(&d).unwrap();
+        let hdr = part_xml(&bytes, "word/header1.xml");
+        match fill {
+            Some(o) => assert!(hdr.contains(&format!(r#"<v:fill opacity="{o}"/>"#)), "{t}: {hdr}"),
+            None => assert!(!hdr.contains("v:fill"), "{t}"),
+        }
+        let r = wordcraft_docx::read(&bytes).unwrap();
+        assert_eq!(r.settings.watermark, Some(wm), "{t}");
     }
 }
 

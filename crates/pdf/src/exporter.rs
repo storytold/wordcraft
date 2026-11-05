@@ -374,7 +374,7 @@ impl Exporter<'_> {
             .collect();
         s.push_transform(&Transform::from_row(c * stretch, sn * stretch, -sn, c, c * dx - sn * dy + cx, sn * dx + c * dy + cy));
         s.set_stroke(None);
-        s.set_fill(Some(fill(wm.color, if wm.semitransparent { 0.5 } else { 1.0 })));
+        s.set_fill(Some(fill(wm.color, wm.opacity())));
         match font {
             Some(font) => {
                 s.draw_glyphs(Point::from_xy(0.0, 0.0), &glyphs, font, &text, size, false);

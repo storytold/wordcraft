@@ -181,9 +181,9 @@ impl Graphic {
         }
     }
 
-    /// A watermark's look from its shape's style: its fill colour, and whether it is see-through.
-    pub(super) fn watermark_look(&self) -> (Option<Rgb>, bool) {
-        (self.fill_color, self.opacity.is_some_and(|o| o < 100.0))
+    /// A watermark's look from its shape's style: its fill colour, and its transparency in percent.
+    pub(super) fn watermark_look(&self) -> (Option<Rgb>, u8) {
+        (self.fill_color, self.opacity.filter(|o| o.is_finite()).map_or(0, |o| (100.0 - o).round().clamp(0.0, 100.0) as u8))
     }
 
     /// This placement with `parent`'s filling what it leaves unsaid.

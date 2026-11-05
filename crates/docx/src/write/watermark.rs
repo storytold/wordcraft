@@ -18,6 +18,18 @@ pub(super) fn text(wm: &Watermark) -> Option<String> {
     (!t.trim().is_empty()).then_some(t)
 }
 
+/// The `v:fill` `opacity` for the text's transparency: Word's `.5` for Semitransparent. None when
+/// the text is opaque.
+fn opacity(wm: &Watermark) -> Option<String> {
+    let t = wm.transparency();
+    if t == 0 {
+        return None;
+    }
+    let o = format!("{:.2}", f32::from(100 - t) / 100.0);
+    let o = o.trim_end_matches('0').trim_end_matches('.');
+    Some(o.strip_prefix("0.").map_or_else(|| o.to_string(), |f| format!(".{f}")))
+}
+
 /// A `w:r` holding the watermark shape (and its shape type), for the first paragraph of header
 /// part number `n`, in its box ([`Watermark::frame`]: its own, or Word's default for the page).
 pub(super) fn run(wm: &Watermark, n: usize, page: &SectionProps) -> Option<String> {
@@ -45,7 +57,7 @@ pub(super) fn run(wm: &Watermark, n: usize, page: &SectionProps) -> Option<Strin
          mso-position-horizontal:center;mso-position-horizontal-relative:margin;\
          mso-position-vertical:center;mso-position-vertical-relative:margin"
     );
-    let fill = if wm.semitransparent { r#"<v:fill opacity=".5"/>"# } else { "" };
+    let fill = opacity(wm).map(|o| format!(r#"<v:fill opacity="{o}"/>"#)).unwrap_or_default();
     Some(format!(
         concat!(
             r#"<w:r><w:rPr><w:noProof/></w:rPr><w:pict>"#,
@@ -63,4 +75,19 @@ pub(super) fn run(wm: &Watermark, n: usize, page: &SectionProps) -> Option<Strin
         tstyle = esc(&format!("font-family:\"{font}\";font-size:1pt")),
         text = esc(&text),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opacity_is_written_like_word() {
+        let mut wm = Watermark::default();
+        assert_eq!(opacity(&wm).as_deref(), Some(".5"));
+        for (t, want) in [(0, None), (25, Some(".75")), (80, Some(".2")), (99, Some(".01")), (100, Some("0"))] {
+            wm.set_transparency(t);
+            assert_eq!(opacity(&wm).as_deref(), want, "{t}");
+        }
+    }
 }

@@ -871,7 +871,7 @@ fn zoom_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
 }
 
 fn watermark_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
-    let Dialog::Watermark { text, diagonal } = d else {
+    let Dialog::Watermark { text, diagonal, transparency } = d else {
         return false;
     };
     ui.horizontal(|ui| {
@@ -879,12 +879,20 @@ fn watermark_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         ui.text_edit_singleline(text);
     });
     ui.horizontal(|ui| {
+        let mut semi = *transparency > 0;
+        if ui.checkbox(&mut semi, tl!("Semitransparent")).changed() {
+            *transparency = if semi { 50 } else { 0 };
+        }
+        ui.label(tl!("Transparency:"));
+        ui.add(egui::DragValue::new(transparency).range(0..=100).suffix(" %"));
+    });
+    ui.horizontal(|ui| {
         ui.radio_value(diagonal, true, tl!("Diagonal"));
         ui.radio_value(diagonal, false, tl!("Horizontal"));
     });
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
-        let _ = app.run("design.watermark", json!({"text": text, "diagonal": *diagonal}));
+        let _ = app.run("design.watermark", json!({"text": text, "diagonal": *diagonal, "transparency": *transparency}));
     }
     ok || cancel
 }

@@ -3,7 +3,7 @@
 use serde_json::{Value, json};
 use std::sync::Arc;
 use wordcraft_doc::props::{Border, BorderStyle, Borders, CharProps, LineSpacing, Rgb, TextColor};
-use wordcraft_doc::{Watermark, styles};
+use wordcraft_doc::styles;
 
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
@@ -71,7 +71,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("design.scaleFontSizes", "Scale Font Sizes", "Design › Document Formatting", scale_font_sizes)
             .params(r#"{"delta": pt (-1638..1638, not 0) | "percent": number (-99..1000, not 0; 10 = +10%)} (exactly one)"#),
         CommandSpec::new("design.watermark", "Watermark", "Design › Page Background", watermark)
-            .params(r#"{"text"?: string, "remove"?: bool, "diagonal"?: bool, "color"?: "RRGGBB"}"#),
+            .params(r#"{"text"?: string, "remove"?: bool, "diagonal"?: bool, "color"?: "RRGGBB", "transparency"?: 0-100 (percent; Word's Semitransparent is 50), "semitransparent"?: bool (50 or 0 percent)}"#),
         CommandSpec::new("design.pageColor", "Page Color", "Design › Page Background", |s, v| {
             s.doc.settings.page_color = p::str(v, "color").and_then(Rgb::parse);
             s.doc.settings.page_picture = None;
@@ -262,7 +262,14 @@ fn watermark(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(c) = p::str(v, "color").and_then(Rgb::parse) {
         wm.color = c;
     }
-    s.doc.settings.watermark = Some(Watermark { ..wm });
+    if let Some(on) = p::bool(v, "semitransparent") {
+        wm.set_transparency(if on { 50 } else { 0 });
+    }
+    // Applied after `semitransparent`, so a percentage wins when both are given.
+    if let Some(t) = p::f32(v, "transparency") {
+        wm.set_transparency(if t.is_finite() { t.clamp(0.0, 100.0).round() as u8 } else { 0 });
+    }
+    s.doc.settings.watermark = Some(wm);
     sel_result(s)
 }
 
@@ -287,4 +294,34 @@ fn page_borders(s: &mut Session, v: &Value) -> CmdResult {
         s.doc.section_mut(block).page_borders = borders;
     }
     sel_result(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use wordcraft_doc::{Document, Watermark};
+
+    use crate::Session;
+
+    fn wm(s: &Session) -> Watermark {
+        s.doc.settings.watermark.clone().unwrap()
+    }
+
+    /// #2954: the text's transparency in percent, kept in step with Semitransparent.
+    #[test]
+    fn text_watermark_transparency() {
+        let mut s = Session::new(Document::new());
+        s.run("design.watermark", &json!({"text": "DRAFT"})).unwrap();
+        assert_eq!((wm(&s).transparency(), wm(&s).semitransparent), (50, true));
+        s.run("design.watermark", &json!({"transparency": 80})).unwrap();
+        assert_eq!((wm(&s).transparency(), wm(&s).semitransparent), (80, true));
+        s.run("design.watermark", &json!({"semitransparent": false})).unwrap();
+        assert_eq!((wm(&s).transparency(), wm(&s).semitransparent), (0, false));
+        s.run("design.watermark", &json!({"transparency": 250.7})).unwrap();
+        assert_eq!(wm(&s).transparency(), 100);
+        s.run("design.watermark", &json!({"transparency": -3})).unwrap();
+        assert_eq!(wm(&s).transparency(), 0);
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(wm(&s).transparency(), 100);
+    }
 }

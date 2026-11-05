@@ -17,6 +17,18 @@ fn tiny_png() -> Vec<u8> {
     out.into_inner()
 }
 
+/// #2954: a text watermark's transparency survives Word 2003 XML (the same VML shape as in DOCX).
+#[test]
+fn text_watermark_transparency_round_trips_through_2003() {
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text("Body", CharProps::default()))];
+    let mut wm = wordcraft_doc::Watermark::default();
+    wm.set_transparency(70);
+    d.settings.watermark = Some(wm.clone());
+    let back = read_xml(&write_wordml2003(&d).expect("write")).expect("read");
+    assert_eq!(back.settings.watermark, Some(wm));
+}
+
 fn paras(doc: &Document) -> Vec<&Paragraph> {
     doc.body.iter().filter_map(|b| b.as_para()).collect()
 }

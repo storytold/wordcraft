@@ -480,7 +480,7 @@ fn draw_watermark(ctx: &mut RenderContext, view: Affine, page: &Page, wm: &wordc
         * Affine::rotate(angle)
         * Affine::translate((-bw / 2.0, bh / 2.0 - descent * bh))
         * Affine::scale_non_uniform(stretch, 1.0);
-    ctx.set_paint(color(opts.ink(wm.color), if wm.semitransparent { 0.35 } else { 0.8 }));
+    ctx.set_paint(color(opts.ink(wm.color), wm.opacity()));
     let db = FontDb::global();
     let mut x = 0.0;
     for g in &glyphs {

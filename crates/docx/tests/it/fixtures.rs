@@ -1381,7 +1381,14 @@ fn vml_textpath_in_header_is_the_watermark() {
     // Horizontal, centred both ways without Word's id, opacity in 65536ths.
     let flat = r##"<v:shape type="#_x0000_t136" style="position:absolute;width:300pt;height:60pt;mso-position-horizontal:center;mso-position-vertical:center" fillcolor="#336699"><v:fill opacity="32768f"/><v:textpath string="ASAP"/></v:shape>"##;
     let wm = read(flat, true).0.expect("watermark");
-    assert_eq!((wm.color, wm.diagonal, wm.semitransparent), (Rgb(0x33, 0x66, 0x99), false, true));
+    assert_eq!((wm.color, wm.diagonal, wm.semitransparent, wm.transparency()), (Rgb(0x33, 0x66, 0x99), false, true, 50));
+
+    // Any opacity is read as a transparency percentage, not only Word's `.5`.
+    for (opacity, want) in [(".25", 75), ("0", 100), ("1", 0), ("2", 0), ("-1", 100)] {
+        let shape = flat.replace(r#"opacity="32768f""#, &format!(r#"opacity="{opacity}""#));
+        let wm = read(&shape, true).0.expect("watermark");
+        assert_eq!(wm.transparency(), want, "{opacity}");
+    }
 
     // Not watermarks: the same shape in the body (WordArt); header WordArt that isn't centred
     // and isn't Word's watermark (a logo); a textpath turned off; a watermark-like shape inside a

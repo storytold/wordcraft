@@ -234,7 +234,12 @@ pub struct Watermark {
     pub font: String,
     pub color: Rgb,
     pub diagonal: bool,
+    /// Word's Semitransparent check box (the text 50 % transparent).
     pub semitransparent: bool,
+    /// The text's transparency in percent when it is neither 0 nor 50 (see
+    /// [`Watermark::transparency`]); `None` follows `semitransparent`, as older documents do.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transparency: Option<u8>,
     /// The shape's box (its `style` width and height, points), which the text is stretched to
     /// fill (`v:textpath fitshape`); `None`: the box Word's Design › Watermark gives
     /// ([`Watermark::frame`]).
@@ -250,12 +255,34 @@ impl Default for Watermark {
             color: Rgb(0xC0, 0xC0, 0xC0),
             diagonal: true,
             semitransparent: true,
+            transparency: None,
             size: None,
         }
     }
 }
 
 impl Watermark {
+    /// The text's transparency in percent: 0 is opaque, 100 invisible, Semitransparent is 50.
+    pub fn transparency(&self) -> u8 {
+        match self.transparency {
+            Some(t) => t.min(100),
+            None if self.semitransparent => 50,
+            None => 0,
+        }
+    }
+
+    /// Set the text's transparency in percent (at most 100). Semitransparent follows it.
+    pub fn set_transparency(&mut self, percent: u8) {
+        let t = percent.min(100);
+        self.semitransparent = t > 0;
+        self.transparency = (t != 0 && t != 50).then_some(t);
+    }
+
+    /// The text's opacity, 0 to 1.
+    pub fn opacity(&self) -> f32 {
+        1.0 - f32::from(self.transparency()) / 100.0
+    }
+
     /// The box the text fills on a page `page_w` × `page_h` (points): its own size, else half the
     /// page diagonal across (half the page width when not diagonal), as high as the text's length
     /// makes it. Centred on the margins and, when diagonal, turned 45° counterclockwise (Word's
@@ -330,5 +357,32 @@ impl Default for Settings {
             remove_date_time: false,
             odf: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod watermark_tests {
+    use super::Watermark;
+
+    #[test]
+    fn transparency_follows_semitransparent() {
+        let mut wm = Watermark::default();
+        assert_eq!((wm.transparency(), wm.opacity()), (50, 0.5));
+        wm.semitransparent = false;
+        assert_eq!(wm.transparency(), 0);
+        wm.set_transparency(80);
+        assert_eq!((wm.semitransparent, wm.transparency, wm.transparency()), (true, Some(80), 80));
+        // Word's two values are stored as the check box alone.
+        wm.set_transparency(50);
+        assert_eq!((wm.semitransparent, wm.transparency), (true, None));
+        wm.set_transparency(0);
+        assert_eq!((wm.semitransparent, wm.transparency), (false, None));
+        wm.set_transparency(255);
+        assert_eq!((wm.transparency(), wm.opacity()), (100, 0.0));
+        // Older documents have no transparency field.
+        let old: Watermark = serde_json::from_str(r#"{"text":"X","semitransparent":false}"#).unwrap();
+        assert_eq!(old.transparency(), 0);
+        let hostile: Watermark = serde_json::from_str(r#"{"transparency":200}"#).unwrap();
+        assert_eq!(hostile.transparency(), 100);
     }
 }

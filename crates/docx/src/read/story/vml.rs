@@ -605,7 +605,7 @@ fn vml_float(shape: &El, style: &str, in_hf: bool) -> Float {
 
 /// Word's text watermark (Design › Watermark): a VML shape in a header whose `v:textpath` draws
 /// its `string` as text (ECMA-376 Part 4, VML `textpath`), in the textpath's `font-family`, filled
-/// with the shape's `fillcolor`, semitransparent when its `v:fill` has an `opacity` below 1, and
+/// with the shape's `fillcolor`, as transparent as its `v:fill` `opacity` says (any value), and
 /// diagonal when the shape is turned. Only Word's watermark shape counts (its `id`), or text
 /// placed absolutely and centred both ways; other header WordArt (a logo or a title) is None.
 fn vml_watermark(shape: &El) -> Option<wordcraft_doc::Watermark> {
@@ -638,7 +638,9 @@ fn vml_watermark(shape: &El) -> Option<wordcraft_doc::Watermark> {
     // The box the text is stretched to (`fitshape`).
     let len = |k: &str| vml_style(style, k).and_then(|v| measure(v, 1.0)).filter(|v| v.is_finite() && *v > 0.0).map(|v| v.min(4000.0));
     let size = len("width").zip(len("height")).map(|(w, h)| [w, h]);
-    Some(wordcraft_doc::Watermark { text, font, color, diagonal: vml_spin(style).deg != 0.0, semitransparent: opacity < 1.0, size })
+    let mut wm = wordcraft_doc::Watermark { text, font, color, diagonal: vml_spin(style).deg != 0.0, size, ..default };
+    wm.set_transparency(((1.0 - opacity) * 100.0).round().clamp(0.0, 100.0) as u8);
+    Some(wm)
 }
 
 /// A VML `opacity`, 0..=1.

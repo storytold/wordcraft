@@ -272,6 +272,15 @@ fn a_watermark_is_a_shape_in_the_header_and_reads_back_as_one() {
     let back = import(&saved).unwrap();
     let wm = back.settings.watermark.clone().expect("the watermark");
     assert_eq!((wm.text.as_str(), wm.diagonal, wm.semitransparent), ("CONFIDENTIAL", true, true));
+    // Any transparency is kept, not only half.
+    for t in [0u8, 30, 50, 80] {
+        let mut other = d.clone();
+        let mut w = wordcraft_doc::Watermark { text: "CONFIDENTIAL".into(), ..Default::default() };
+        w.set_transparency(t);
+        other.settings.watermark = Some(w.clone());
+        let back = import(&export(&other).unwrap()).unwrap();
+        assert_eq!(back.settings.watermark.map(|w| w.transparency()), Some(t), "{t}");
+    }
     // Not a shape in the header too.
     let header = back.last_section.headers.default.and_then(|id| back.parts.get(&id)).unwrap();
     assert!(header.blocks.iter().filter_map(|b| b.as_para()).all(|p| p.objects.is_empty()));
