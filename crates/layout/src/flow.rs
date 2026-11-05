@@ -6,8 +6,8 @@ use super::notes::{DECOR_STORY, NoteBox, para_notes};
 use super::page::{PageBuilder, PageFrame, item_bottom};
 use super::placed::Placed;
 use super::{
-    Arc, Block, Counters, Document, HashMap, InlineObject, Level, LineEnd, Page, ParaLayout, Paragraph, Path, Rect, StoryRef, TextDirection,
-    ViewMode, outline, para,
+    Arc, Block, Counters, Document, HashMap, Level, LineEnd, Page, ParaLayout, Paragraph, Path, Rect, StoryRef, TextDirection, ViewMode, outline,
+    para,
 };
 #[cfg(test)]
 use crate::WRAP_RELAYS;
@@ -756,8 +756,14 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
 /// control boundaries…), or nothing at all: a line of them takes no room after a page break.
 fn only_markers(p: &Paragraph, range: std::ops::Range<usize>) -> bool {
     let Some(text) = p.text.get(range.clone()) else { return false };
-    text.char_indices().all(|(i, c)| c == wordcraft_doc::para::OBJ && p.object_at(range.start + i).is_some_and(InlineObject::is_marker))
+    let mut objects = p.objects_with_offsets().skip_while(|(off, _)| *off < range.start);
+    text.char_indices()
+        .all(|(i, c)| c == wordcraft_doc::para::OBJ && objects.next().is_some_and(|(off, object)| off == range.start + i && object.is_marker()))
 }
+
+#[cfg(test)]
+#[path = "flow_marker_tests.rs"]
+mod marker_tests;
 
 /// The outline of the body for an Outline view pass.
 pub(crate) struct OutlinePass {
