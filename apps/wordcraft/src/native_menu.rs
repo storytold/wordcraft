@@ -120,7 +120,7 @@ pub(crate) const VIEW: &[Entry] = &[
     Sep,
     Cmd("view.darkMode"),
     Cmd("view.split"),
-    Cmd("ui.collapseRibbon"),
+    With("ui.collapseRibbon", "{}", "Collapse Ribbon"),
 ];
 
 pub(crate) const GO: &[Entry] = &[
