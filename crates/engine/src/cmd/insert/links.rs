@@ -135,6 +135,9 @@ fn remove_bookmark(s: &mut Session, name: &str) -> Result<bool, CmdError> {
             }
         }
     }
+    if found {
+        std::sync::Arc::make_mut(&mut s.doc.bookmark_attrs).remove(name);
+    }
     s.clamp_selection();
     Ok(found)
 }

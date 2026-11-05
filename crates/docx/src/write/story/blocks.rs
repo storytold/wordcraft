@@ -113,7 +113,7 @@ impl Writer<'_> {
 
     fn write_bookmarks(&mut self, w: &mut W, marks: &[(String, bool)]) {
         for (name, end) in marks {
-            self.bookmark(w, name, *end);
+            self.bookmark(w, name, *end, true);
         }
     }
 

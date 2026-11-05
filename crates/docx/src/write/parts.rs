@@ -21,6 +21,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     } else {
         doc
     };
+    let mut source_ids = std::collections::HashSet::new();
     let mut wr = Writer {
         eq_number: 0,
         doc,
@@ -28,7 +29,9 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         bookmarks: doc
             .bookmark_attrs
             .iter()
-            .filter(|(_, attrs)| !attrs.id.is_empty())
+            .filter(|(_, attrs)| {
+                !attrs.id.is_empty() && source_ids.insert(attrs.id.trim().parse::<i128>().map_or_else(|_| attrs.id.clone(), |id| id.to_string()))
+            })
             .map(|(name, attrs)| (name.clone(), attrs.id.clone()))
             .collect(),
         // Reserve numeric values, while `bookmarks` retains the original XML spelling.

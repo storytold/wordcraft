@@ -382,3 +382,44 @@ fn pending_bookmarks_keep_their_boundary_when_a_cell_paragraph_is_omitted() {
         }
     }
 }
+
+#[test]
+fn moving_a_column_marker_inline_drops_its_structural_column_bounds() {
+    use wordcraft_doc::{CharProps, StoryRef};
+    let body = table(&format!("{}{}{}", start(401, "MovedColumns", true), row(&cell("text")), end(401)));
+    let mut d = wordcraft_docx::read(&package(&body, "")).unwrap();
+    let path = d.para_paths(StoryRef::Body).into_iter().find(|p| p.cell().is_some()).unwrap();
+    d.para_mut(StoryRef::Body, &path).unwrap().insert_text(0, "prefix ", &CharProps::default()).unwrap();
+    let output = wordcraft_docx::write(&d).unwrap();
+    let actual = markers(&xml(&output, "word/document.xml"));
+    let marker = actual.iter().find(|m| m.2 == "w:bookmarkStart").unwrap();
+    assert_eq!(marker.0, "w:p");
+    assert!(marker.3.iter().all(|(k, _)| k != "w:colFirst" && k != "w:colLast"));
+}
+
+#[test]
+fn duplicate_source_ids_are_reallocated_without_colliding_with_fresh_bookmarks() {
+    use wordcraft_doc::bookmark::BookmarkAttrs;
+    use wordcraft_doc::{CharProps, Document, InlineObject, Pos};
+    let mut d = Document::new();
+    for (name, id) in [("First", "0"), ("Second", "00"), ("Fresh", "")] {
+        d.insert_object(&Pos::body(0, 0), InlineObject::BookmarkEnd { name: name.into() }, &CharProps::default()).unwrap();
+        d.insert_object(&Pos::body(0, 0), InlineObject::BookmarkStart { name: name.into() }, &CharProps::default()).unwrap();
+        if !id.is_empty() {
+            std::sync::Arc::make_mut(&mut d.bookmark_attrs).insert(name.into(), BookmarkAttrs { id: id.into(), ..Default::default() });
+        }
+    }
+    for _ in 0..2 {
+        let output = wordcraft_docx::write(&d).unwrap();
+        let marks = markers(&xml(&output, "word/document.xml"));
+        let ids: Vec<_> = marks
+            .iter()
+            .filter(|m| m.2 == "w:bookmarkStart")
+            .map(|m| m.3.iter().find(|(k, _)| k == "w:id").unwrap().1.parse::<i128>().unwrap())
+            .collect();
+        assert_eq!(ids.len(), 3);
+        assert_eq!(ids.iter().collect::<std::collections::BTreeSet<_>>().len(), 3);
+        d = wordcraft_docx::read(&output).unwrap();
+        assert_eq!(d.bookmarks().len(), 3);
+    }
+}

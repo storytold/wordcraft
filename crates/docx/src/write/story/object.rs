@@ -4,14 +4,14 @@ use super::section::comment_reference_style;
 use super::{CharProps, Fill, InlineObject, NoteKind, PartRels, TextColor, W, Wrap, Writer, emu, n, rpr};
 
 impl Writer<'_> {
-    pub(super) fn bookmark(&mut self, w: &mut W, name: &str, end: bool) {
+    pub(super) fn bookmark(&mut self, w: &mut W, name: &str, end: bool, structural: bool) {
         let id = self.bookmark_id(name);
         if end {
             w.empty("w:bookmarkEnd", &[("w:id", &id)]);
             return;
         }
         let mut attrs = vec![("w:id", id.as_str()), ("w:name", name)];
-        if let Some(source) = self.doc.bookmark_attrs.get(name) {
+        if structural && let Some(source) = self.doc.bookmark_attrs.get(name) {
             if let Some(first) = source.col_first.as_deref() {
                 attrs.push(("w:colFirst", first));
             }
@@ -33,7 +33,7 @@ impl Writer<'_> {
                 {
                     *n -= 1;
                 } else {
-                    self.bookmark(w, name, end);
+                    self.bookmark(w, name, end, false);
                 }
             }
             InlineObject::PermStart { id, group, editor } => {
