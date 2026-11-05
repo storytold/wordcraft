@@ -113,6 +113,9 @@ fn collect_glyph_run(
         if c.style != si {
             break;
         }
+        if k > start && line.shift_at(k) != line.shift_at(start) {
+            break;
+        }
         let cx = x + line.cl_left(k).unwrap_or(0.0);
         let base = ctx.base + line.shift_at(k);
         if matches!(c.kind, ClKind::Text | ClKind::Space) {
