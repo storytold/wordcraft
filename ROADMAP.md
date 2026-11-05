@@ -777,6 +777,7 @@ DOCX direct table band sizes round-trip through JSON and repeated saves; invalid
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-05 | trivial | DOCX direct table band sizes round-trip through JSON and repeated saves, capped at 1000; invalid row-exception band-size tags are not written. Direct stripe geometry remains open. |
+| 2026-11-05 | trivial | PR #4545: eligible cell floats retain in-bounds offsets and touch the outer cell edge only on overflow, ignoring wrap distances for object placement. Front-of-text, turned-cell and outside-cell opt-outs remain. Synthetic geometry controls; native front/behind-text parity remains unqualified. |
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` is preserved with true, false and absent values; OOXML properties follow schema order. Grid layout remains open. |
 | 2026-10-28 | trivial | Per-page ink object lookups, #3614. Drawing order, geometry and saved data retain their behavior; no readiness estimate change |
 | 2026-11-04 | trivial | Progress log: OpenDocument display settings removed (gap 19) |
