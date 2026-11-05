@@ -364,6 +364,63 @@ fn txt_round_trip() {
     assert_eq!(import("txt", &[0x63, 0x61, 0x66, 0xE9, 0x80]).unwrap().unwrap().plain_text(Default::default()), "café€");
 }
 
+fn utf16_with_bom(units: &[u16], le: bool) -> Vec<u8> {
+    let mut bytes = if le { vec![0xFF, 0xFE] } else { vec![0xFE, 0xFF] };
+    bytes.extend(units.iter().flat_map(|u| if le { u.to_le_bytes() } else { u.to_be_bytes() }));
+    bytes
+}
+
+/// An incomplete final code unit is malformed input, not an empty suffix. Replacing it also
+/// keeps automatic UTF-16 decoding consistent with the explicit encoding choice.
+#[test]
+fn utf16_decoding_replaces_truncated_code_units() {
+    for le in [true, false] {
+        for prefix in ["", "Studio café", "Rocket 🚀"] {
+            for tail in 0..=u8::MAX {
+                let mut bytes = utf16_with_bom(&prefix.encode_utf16().collect::<Vec<_>>(), le);
+                bytes.push(tail);
+                let expected = format!("{prefix}\u{FFFD}");
+                assert_eq!(crate::txt::decode(&bytes), expected, "le: {le}, tail: {tail}");
+                let label = if le { "utf-16le" } else { "utf-16be" };
+                assert_eq!(crate::txt::decode_as(&bytes, label).as_deref(), Some(expected.as_str()));
+            }
+        }
+    }
+}
+
+/// Switching byte decoders must keep valid surrogate pairs, replace isolated surrogates,
+/// and preserve a real U+FEFF immediately after the file's byte-order mark.
+#[test]
+fn utf16_decoding_preserves_surrogates_and_a_content_bom() {
+    for le in [true, false] {
+        for (units, expected) in [
+            (&[][..], ""),
+            (&[0xFEFF, 0x0041][..], "\u{FEFF}A"),
+            (&[0xD83D, 0xDE80][..], "🚀"),
+            (&[0xD800][..], "\u{FFFD}"),
+            (&[0xDC00][..], "\u{FFFD}"),
+            (&[0xD800, 0x0041, 0xDC00][..], "\u{FFFD}A\u{FFFD}"),
+        ] {
+            assert_eq!(crate::txt::decode(&utf16_with_bom(units, le)), expected, "le: {le}, units: {units:?}");
+        }
+    }
+}
+
+#[test]
+fn truncated_utf16_is_marked_in_imported_text_and_exported_copies() {
+    for le in [true, false] {
+        let mut bytes = utf16_with_bom(&"Studio café 🚀".encode_utf16().collect::<Vec<_>>(), le);
+        bytes.push(0x41);
+        for ext in ["txt", "md", "tex"] {
+            let doc = import(ext, &bytes).unwrap().unwrap();
+            assert_eq!(doc.plain_text(Default::default()), "Studio café 🚀\u{FFFD}", "{ext}, le: {le}");
+            let copy = export("txt", &doc).unwrap().unwrap();
+            let back = import("txt", &copy).unwrap().unwrap();
+            assert_eq!(back.plain_text(Default::default()), "Studio café 🚀\u{FFFD}", "{ext}, le: {le}");
+        }
+    }
+}
+
 #[test]
 fn txt_export_writes_symbol_font_text_as_unicode() {
     let mut d = Document::from_text("Done J\u{F0FC}");
