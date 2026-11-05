@@ -294,22 +294,30 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     Ok(r)
 }
 
-/// The reply of an open that found hidden text carries the fact and what to do about it: the text
-/// does not show on screen (the layout leaves it out), so an agent reading the file would see
-/// words the human doesn't — tell the human, and `file.inspect` removes it.
+/// The reply of an open that found hidden content carries the fact and what to do about it: the
+/// text does not show on screen (the layout leaves it out), so an agent reading the file would
+/// see words the human doesn't — tell the human; `file.inspect` removes what it can reach, and
+/// says what it can't (inside objects or table styles).
 fn hidden_text_warning(r: &mut Value, doc: &Document) {
-    let (pieces, chars) = crate::cmd::tools::inspect::hidden_text_counts(doc);
-    if pieces == 0 {
+    let (pieces, chars, unsupported) = crate::cmd::tools::inspect::hidden_text_counts(doc);
+    if pieces == 0 && unsupported == 0 {
         return;
     }
     if let Value::Object(m) = r {
-        m.insert("hiddenText".into(), json!({"pieces": pieces, "chars": chars}));
-        m.insert(
-            "warning".into(),
-            json!(format!(
+        let mut warning = if pieces > 0 {
+            m.insert("hiddenText".into(), json!({"pieces": pieces, "chars": chars}));
+            format!(
                 "the document has hidden text ({pieces} pieces, {chars} characters); it does not show on screen — tell the human about it; run file.inspect with {{\"remove\": [\"hidden\"]}} to remove it"
-            )),
-        );
+            )
+        } else {
+            format!(
+                "the document has hidden content ({unsupported} piece(s)) that file.inspect reports but cannot remove (inside objects or table styles); it does not show on screen — tell the human about it"
+            )
+        };
+        if pieces > 0 && unsupported > 0 {
+            warning.push_str(&format!("; {unsupported} further piece(s) inside objects or table styles file.inspect cannot remove"));
+        }
+        m.insert("warning".into(), json!(warning));
     }
 }
 
@@ -547,7 +555,7 @@ pub const MAX_CUSTOM_VALUE: usize = 1024 * 1024;
 
 fn info(s: &mut Session, _: &Value) -> CmdResult {
     let l = s.layout();
-    let (hidden_pieces, _) = crate::cmd::tools::inspect::hidden_text_counts(&s.doc);
+    let (hidden_pieces, _, hidden_unsupported) = crate::cmd::tools::inspect::hidden_text_counts(&s.doc);
     Ok(json!({
         "path": s.path.as_ref().map(|p| p.to_string_lossy().to_string()),
         "dirty": s.dirty,
@@ -558,7 +566,7 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
         "trackChanges": s.doc.settings.track_changes,
         "comments": s.doc.comments.len(),
         "sections": s.doc.sections().len(),
-        "hasHidden": hidden_pieces > 0,
+        "hasHidden": hidden_pieces > 0 || hidden_unsupported > 0,
         "encrypted": s.password.is_some(),
         "layoutMs": l.ms,
     }))

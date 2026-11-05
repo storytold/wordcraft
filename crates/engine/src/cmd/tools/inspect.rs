@@ -203,12 +203,13 @@ fn all_stories(doc: &Document) -> Vec<StoryRef> {
 }
 
 /// How much hidden text the document holds: pieces (the count `file.inspect` reports, always
-/// exact) and the characters they cover. A file that carries hidden text warns on open (`file.open`).
-pub(crate) fn hidden_text_counts(doc: &Document) -> (usize, usize) {
+/// exact) and the characters they cover, plus how many places hold hidden text the inspector
+/// can't remove (inside objects or table styles). A file with either warns on open (`file.open`).
+pub(crate) fn hidden_text_counts(doc: &Document) -> (usize, usize, usize) {
     let hidden = hidden_text(doc);
     // Characters, not the byte offsets the ranges are: a hidden é🙂 is two.
     let chars = hidden.iter().filter_map(|h| doc.para(h.story, &h.path).map(|p| p.text.get(h.range.clone()).unwrap_or("").chars().count())).sum();
-    (hidden.len(), chars)
+    (hidden.len(), chars, unsupported_hidden(doc).len())
 }
 
 /// What the inspector calls a story.

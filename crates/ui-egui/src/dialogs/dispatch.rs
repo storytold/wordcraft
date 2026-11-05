@@ -1635,7 +1635,7 @@ fn inspect_document_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bo
     ui.horizontal(|ui| {
         ui.label(tl!("Document properties"));
         if properties {
-            ui.label(tl!("Creator and last-modified-by are in the document."));
+            ui.label(tl!("Removable document properties are present."));
             if ui.button(tl!("Remove All")).clicked() {
                 remove = Some("properties");
             }

@@ -58,6 +58,9 @@ fn with_doc(mut schema: Value) -> Value {
 
 const DOC_DESC: &str = "Id of the open document to work on (list_documents); the active document when left out. The active document stays active.";
 
+/// The content categories the Document Inspector removes (`inspect_document` with `remove`).
+const REMOVE_CATEGORIES: &[&str] = &["comments", "revisions", "properties", "hidden", "headers"];
+
 fn tool(name: &str, title: &str, desc: &str, schema: Value, ro: bool) -> Value {
     json!({"name": name, "title": title, "description": desc, "inputSchema": schema, "annotations": {"title": title, "readOnlyHint": ro, "openWorldHint": false}})
 }
@@ -307,9 +310,21 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
         "get_text" => wrap(exec(b, "document.text", json!({}), doc)),
         "inspect_document" => match a.get("remove") {
             // With `remove`, the Document Inspector's cleanup (file.inspect) instead of the read.
+            // Through `engine.execute` (both backends address `doc` there): the desktop control
+            // handler runs a direct `file.inspect` on the active document, so a cleanup addressed
+            // to a background document would clean the wrong one and report success.
             // A present value that isn't an array is refused, not read as absent: a caller that
             // sent one meant to clean the document, and a successful read would say otherwise.
-            Some(Value::Array(remove)) if !remove.is_empty() => wrap(b.call("file.inspect", addressed(json!({"remove": remove}), doc))),
+            // The items are checked against the categories the inspector removes: an unknown one
+            // ("hiddenText" for "hidden") is ignored by the inspector but reported as removed,
+            // though the content stays.
+            Some(Value::Array(remove)) if !remove.is_empty() => {
+                if remove.iter().all(|c| REMOVE_CATEGORIES.contains(&c.as_str().unwrap_or(""))) {
+                    wrap(exec(b, "file.inspect", json!({"remove": remove}), doc))
+                } else {
+                    ToolResult::error("`remove` items must be \"comments\", \"revisions\", \"properties\", \"hidden\" or \"headers\"")
+                }
+            }
             Some(Value::Array(_)) => wrap(b.call("document.inspect", addressed(json!({}), doc))),
             Some(_) => {
                 ToolResult::error("`remove` must be an array of categories: [\"comments\", \"revisions\", \"properties\", \"hidden\", \"headers\"]")
@@ -419,9 +434,26 @@ mod tests {
         let r = call_tool(&mut b, "inspect_document", &json!({"remove": ["hidden"], "doc": 3}));
         assert!(!r.is_error, "inspect_document failed: {:?}", r);
         let (method, call) = b.seen.take().expect("the backend was called");
-        assert_eq!(method, "file.inspect");
-        assert_eq!(call["remove"], json!(["hidden"]));
+        // Through `engine.execute`, so both backends address `doc`: a direct `file.inspect`
+        // runs on the active document on the desktop control handler.
+        assert_eq!(method, "engine.execute");
+        assert_eq!(call["command"], json!("file.inspect"));
+        assert_eq!(call["params"]["remove"], json!(["hidden"]));
         assert_eq!(call["doc"], json!(3));
+    }
+
+    /// A `remove` item the inspector doesn't know is refused, not forwarded: the inspector would
+    /// ignore it and report it as removed, though the content stays.
+    #[test]
+    fn inspect_document_refuses_an_unknown_remove_category() {
+        let mut b = Recording { seen: None };
+        let r = call_tool(&mut b, "inspect_document", &json!({"remove": ["hiddenText"]}));
+        assert!(r.is_error, "an unknown category must be refused: {:?}", r);
+        assert!(b.seen.take().is_none(), "the backend is not called");
+        // A mix of known and unknown is refused too.
+        let r = call_tool(&mut b, "inspect_document", &json!({"remove": ["hidden", "comments2"]}));
+        assert!(r.is_error, "{:?}", r);
+        assert!(b.seen.take().is_none(), "the backend is not called");
     }
 
     /// Without `remove` the call reads, as before: the structure command, nothing to remove.

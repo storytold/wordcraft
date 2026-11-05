@@ -11002,6 +11002,51 @@ fn file_open_warns_about_hidden_text_and_the_cleanup_takes_it_out() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// found.properties covers everything the properties removal clears, not just the authors:
+/// a document with only the subject set offers Remove All, and the removal clears it.
+#[test]
+fn file_inspect_reports_properties_when_only_subject_is_set() {
+    let mut s = s();
+    s.doc.core.subject = "Hidden metadata".into();
+    let found = run(&mut s, "file.inspect", json!({}))["found"].clone();
+    assert_eq!(found["properties"], json!(true), "{found}");
+    let out = run(&mut s, "file.inspect", json!({"remove": ["properties"]}));
+    assert_eq!(out["residual"], json!([]), "{out}");
+    assert_eq!(run(&mut s, "file.inspect", json!({}))["found"]["properties"], json!(false));
+    assert_eq!(s.doc.core.subject, "", "the removal cleared the subject");
+}
+
+/// A document whose hidden content is only where the inspector can't remove it (a table style
+/// that hides its header) still warns on open and reports hasHidden: the text is invisible, and
+/// the warning says `file.inspect` cannot remove it.
+#[test]
+fn file_open_warns_when_only_unsupported_hidden_content_is_present() {
+    use wordcraft_doc::styles::{Style, StyleKind, TableStyleParts};
+    let mut doc = s();
+    Arc::make_mut(&mut doc.doc.styles).upsert(Style {
+        id: "HideHeader".into(),
+        name: "Hide Header".into(),
+        kind: StyleKind::Table,
+        table: Some(TableStyleParts { header_chr: hidden_props(), ..Default::default() }),
+        ..Default::default()
+    });
+    let mut table = wordcraft_doc::table::Table::new(2, 2, 200.0);
+    table.props.style = Some("HideHeader".into());
+    doc.doc.body.insert(0, std::sync::Arc::new(wordcraft_doc::Block::Table(table)));
+    assert_eq!(run(&mut doc, "file.info", json!({}))["hasHidden"], json!(true));
+
+    let dir = std::env::temp_dir().join(format!("wordcraft-hidden-unsupported-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("unsupported.docx");
+    run(&mut doc, "file.saveAs", json!({"path": path.to_string_lossy()}));
+    let reply = run(&mut doc, "file.open", json!({"path": path.to_string_lossy()}));
+    let warning = reply["warning"].as_str().unwrap_or_else(|| panic!("no warning: {reply}"));
+    assert!(warning.contains("cannot remove"), "{warning}");
+    assert!(reply.get("hiddenText").is_none(), "no removable pieces, no hiddenText: {reply}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn hidden_props() -> wordcraft_doc::props::CharProps {
     wordcraft_doc::props::CharProps { hidden: Some(true), ..Default::default() }
 }
