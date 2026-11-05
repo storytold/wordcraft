@@ -10,9 +10,10 @@ pub use wordcraft_doc::encoding::cp1252;
 
 use crate::model::{FBlock, ListCounter, from_doc};
 
+/// Decode UTF-16 in little-endian order when `le` is true, or big-endian order otherwise.
+/// Preserve content U+FEFF after the caller strips the file BOM, and replace malformed input
+/// (including an incomplete final code unit) with U+FFFD.
 fn utf16(b: &[u8], le: bool) -> String {
-    // Decode bytes, not just complete pairs: a final lone byte needs a replacement character.
-    // `decode` already consumed the file's BOM; a U+FEFF in the content must stay.
     let enc = if le { encoding_rs::UTF_16LE } else { encoding_rs::UTF_16BE };
     enc.decode_without_bom_handling(b).0.into_owned()
 }

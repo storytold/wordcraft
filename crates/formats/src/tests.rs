@@ -364,6 +364,8 @@ fn txt_round_trip() {
     assert_eq!(import("txt", &[0x63, 0x61, 0x66, 0xE9, 0x80]).unwrap().unwrap().plain_text(Default::default()), "café€");
 }
 
+/// Encode synthetic UTF-16 code units with a matching BOM: little-endian when `le` is true,
+/// big-endian otherwise.
 fn utf16_with_bom(units: &[u16], le: bool) -> Vec<u8> {
     let mut bytes = if le { vec![0xFF, 0xFE] } else { vec![0xFE, 0xFF] };
     bytes.extend(units.iter().flat_map(|u| if le { u.to_le_bytes() } else { u.to_be_bytes() }));
@@ -406,6 +408,8 @@ fn utf16_decoding_preserves_surrogates_and_a_content_bom() {
     }
 }
 
+/// Check that TXT, Markdown and LaTeX imports retain U+FFFD for a truncated UTF-16 suffix
+/// through a plain-text save/reopen in either byte order.
 #[test]
 fn truncated_utf16_is_marked_in_imported_text_and_exported_copies() {
     for le in [true, false] {
