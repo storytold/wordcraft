@@ -367,7 +367,16 @@ impl<'a> Builder<'a> {
                 // A crop of finite fractions that leaves something of the picture.
                 let crop = img.crop.map(|c| if c.is_finite() { c.clamp(0.0, 0.99) } else { 0.0 });
                 let crop = if crop[0] + crop[2] < 0.99 && crop[1] + crop[3] < 0.99 { crop } else { [0.0; 4] };
-                Some(InlineObject::Image { media: key, w, h, alt: img.alt.clone(), float: float.unwrap_or_default(), crop, ole })
+                Some(InlineObject::Image {
+                    media: key,
+                    w,
+                    h,
+                    alt: img.alt.clone(),
+                    float: float.unwrap_or_default(),
+                    crop,
+                    fx: Default::default(),
+                    ole,
+                })
             }
             // Its drawing is made from the chart by the program that opens the document
             // (`wordcraft_engine`'s chart drawing), which has the theme's colours.
