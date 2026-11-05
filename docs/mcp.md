@@ -31,7 +31,7 @@ configured with a JSON file, each with a Copy button. The command by package:
 | tar.gz | `bin/wordcraft-cli mcp` in the unpacked folder |
 | AppImage | `/usr/bin/env APPIMAGE_EXTRACT_AND_RUN=1 /path/to/wordcraft-<ver>-linux-<arch>.AppImage --cli mcp` (below) |
 | Flatpak | `flatpak run --command=wordcraft-cli ai.storyteller.wordcraft mcp`; the sandbox reaches files in Documents and Pictures only |
-| Windows installer | `"C:\Program Files\WordCraft\wordcraft-cli.exe" mcp` (the 32-bit build: `Program Files (x86)`) |
+| Windows installer | `wordcraft-cli.exe mcp` in the install folder: `%LOCALAPPDATA%\Programs\ArtCraft\WordCraft` for your account (the default), `C:\Program Files\ArtCraft\WordCraft` for everyone on the computer (the 32-bit build: `Program Files (x86)`) |
 | Windows zip | `wordcraft-cli.exe mcp` in the unpacked folder |
 | macOS | the app has no CLI inside; download `wordcraft-cli-<ver>-macos-universal.zip` from the releases page |
 
