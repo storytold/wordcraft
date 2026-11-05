@@ -360,7 +360,7 @@ fn controls(tab: &str) -> Vec<Control> {
             c("Show Comments", "view.commentsPane"),
             c("Track Changes", "review.trackChanges"),
             m("Display for Review", "review.markup"),
-            c("Reviewing Pane", "review.changes"),
+            c("Reviewing Pane", "view.reviewingPane"),
             m("Accept", "review.accept"),
             m("Reject", "review.reject"),
             c("Previous", "review.previousChange"),

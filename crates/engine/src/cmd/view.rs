@@ -114,6 +114,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"dock"?: "left" | "right" | "float"}"#)
             .pure(),
         CommandSpec::new("view.commentsPane", "Comments Pane", "Review › Comments", |s, v| toggle(s, v, |x| &mut x.comments_pane)).pure(),
+        CommandSpec::new("view.reviewingPane", "Reviewing Pane", "Review › Tracking", |s, v| toggle(s, v, |x| &mut x.reviewing_pane)).pure(),
         CommandSpec::new("view.accessibilityPane", "Accessibility Pane", "Review › Accessibility", |s, v| {
             toggle(s, v, |x| &mut x.accessibility_pane)
         })
