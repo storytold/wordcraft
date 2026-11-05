@@ -188,6 +188,7 @@ impl Writer<'_> {
         if own != 0 && self.shape_ids.insert(own) { own.to_string() } else { self.next_docpr() }
     }
 
+    /// Reuse a unique imported ID or allocate an unused numeric ID for the bookmark name.
     fn bookmark_id(&mut self, name: &str) -> String {
         if let Some(id) = self.bookmarks.get(name) {
             return id.clone();

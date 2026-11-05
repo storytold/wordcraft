@@ -2,6 +2,7 @@
 use super::{Session, json, run};
 use std::io::{Cursor, Write};
 
+/// Build a synthetic column bookmark around a single-row table.
 fn source() -> wordcraft_doc::Document {
     let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:bookmarkStart w:id="5" w:name="Cols" w:colFirst="0" w:colLast="0"/><w:tr><w:tc><w:p><w:r><w:t>abc</w:t></w:r></w:p></w:tc></w:tr><w:bookmarkEnd w:id="5"/></w:tbl><w:p><w:r><w:t>bodytarget</w:t></w:r></w:p><w:sectPr/></w:body></w:document>"#;
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
@@ -10,6 +11,7 @@ fn source() -> wordcraft_doc::Document {
     wordcraft_docx::read(&zip.finish().unwrap().into_inner()).unwrap()
 }
 
+/// Check cell/body replacement, deletion, save/reopen and undo/redo of an imported column bookmark.
 #[test]
 fn replacing_or_readding_a_column_bookmark_discards_source_placement() {
     for delete_first in [false, true] {
@@ -44,6 +46,7 @@ fn replacing_or_readding_a_column_bookmark_discards_source_placement() {
     }
 }
 
+/// Check that a recreated name cannot inherit metadata left behind by direct marker deletion.
 #[test]
 fn readding_a_name_after_its_markers_were_removed_drops_orphaned_attrs() {
     use wordcraft_doc::StoryRef;

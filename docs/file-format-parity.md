@@ -301,7 +301,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-05 | trivial | PR #5254: preserve structural DOCX bookmarks and source column bounds while the original markers remain; replacing or deleting a bookmark clears its source placement. Synthetic edit, undo/redo and repeated-save controls; native Word and broader corpus acceptance remain open. |
+| 2026-11-05 | trivial | PR #5254: preserve structural DOCX bookmarks and source column bounds while the original markers remain; replacing or deleting a bookmark clears its source placement. Synthetic edit, undo/redo and repeated-save controls; native Word and broader corpus acceptance remain open. Unsupported chunks that produce no blocks retain pending bookmarks in one empty carrier paragraph. |
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` keeps its default and explicit values in schema-ordered repeated saves |
 | 2026-11-04 | trivial | REF context update: 2026-11-04 · #4609 retains the label and template actually rendered by an ancestor list instance; implicitly counted levels remain distinct from explicitly rendered paragraphs. Synthetic instance-override and field-update regressions; no new native Word qualification or readiness change. |
 | 2026-11-04 | trivial | PR #4609: relative REF keeps context already displayed by the own or a needed ancestor label; six synthetic legal-template cases and separate-list context follow the Word for Windows measurements reported by @pakiat in PR discussion. Existing unknown-switch/cache boundaries and readiness estimates unchanged; no new native Word run. |

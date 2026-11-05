@@ -4,6 +4,7 @@ use super::section::comment_reference_style;
 use super::{CharProps, Fill, InlineObject, NoteKind, PartRels, TextColor, W, Wrap, Writer, emu, n, rpr};
 
 impl Writer<'_> {
+    /// Write one bookmark boundary, retaining column bounds only at a matched structural position.
     pub(super) fn bookmark(&mut self, w: &mut W, name: &str, end: bool, structural: bool) {
         let id = self.bookmark_id(name);
         if end {
@@ -22,6 +23,7 @@ impl Writer<'_> {
         w.empty("w:bookmarkStart", &attrs);
     }
 
+    /// Write an inline object while leaving lifted bookmarks to the structural block writer.
     pub(super) fn object(&mut self, w: &mut W, o: &InlineObject, props: &CharProps, rels: &mut PartRels, depth: usize) {
         match o {
             // Written by `para_content` (inline) or `blocks` (around paragraphs).

@@ -164,7 +164,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-05 | trivial | PR #5254: preserve structural DOCX bookmarks and source column bounds while the original markers remain; replacing or deleting a bookmark clears its source placement. Synthetic edit, undo/redo and repeated-save controls; native Word and broader corpus acceptance remain open. |
+| 2026-11-05 | trivial | PR #5254: preserve structural DOCX bookmarks and source column bounds while the original markers remain; replacing or deleting a bookmark clears its source placement. Synthetic edit, undo/redo and repeated-save controls; native Word and broader corpus acceptance remain open. Unsupported chunks that produce no blocks retain pending bookmarks in one empty carrier paragraph. |
 | 2026-11-05 | trivial | DOCX preserves `w:adjustRightInd` with its true default and writes it in schema order; grid layout remains open |
 | 2026-10-28 | trivial | Ink page lookups reuse scanned paragraph prefixes, #3614. Drawing order, geometry and saved data retain their behavior; no readiness estimate change |
 | 2026-11-04 | trivial | #19: ODT settings for what the standard leaves open removed: one choice for each case |

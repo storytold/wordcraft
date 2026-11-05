@@ -19,6 +19,7 @@ fn edge_para(bl: &[std::sync::Arc<Block>], after: bool, depth: usize) -> Option<
     }
 }
 
+/// Return only contiguous marker objects at the requested paragraph edge.
 fn edge_markers(p: &Paragraph, after: bool) -> &[InlineObject] {
     let count = if after { p.text.chars().rev().take_while(|c| *c == OBJ).count() } else { p.text.chars().take_while(|c| *c == OBJ).count() };
     let count = count.min(p.objects.len());
@@ -35,6 +36,7 @@ fn edge_markers(p: &Paragraph, after: bool) -> &[InlineObject] {
 }
 
 impl Writer<'_> {
+    /// Write the required trailing paragraph, including a pending watermark when applicable.
     fn write_trailing_para(&mut self, w: &mut W, depth: usize) {
         // A header with no paragraph of its own before: the watermark goes in this one.
         if depth == 0
@@ -88,6 +90,7 @@ impl Writer<'_> {
         }
     }
 
+    /// Select markers still at their source boundary and suppress their later inline copy.
     fn lift_bookmarks(&mut self, edge: Option<(&Paragraph, u8)>, container: BookmarkContainer, after: bool) -> Vec<(String, bool)> {
         if self.doc.bookmark_attrs.is_empty() {
             return Vec::new();
@@ -111,6 +114,7 @@ impl Writer<'_> {
         out
     }
 
+    /// Emit the structural markers previously matched to their source boundary.
     fn write_bookmarks(&mut self, w: &mut W, marks: &[(String, bool)]) {
         for (name, end) in marks {
             self.bookmark(w, name, *end, true);
@@ -155,6 +159,7 @@ impl Writer<'_> {
         }
     }
 
+    /// Write a table and its row/cell bookmark boundaries in source order.
     fn table(&mut self, w: &mut W, t: &Table, rels: &mut PartRels, depth: usize) {
         let rows: Vec<_> = t.rows.iter().filter(|r| !r.cells.is_empty()).collect();
         if rows.is_empty() {

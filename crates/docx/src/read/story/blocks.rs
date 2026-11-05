@@ -122,10 +122,16 @@ impl Reader<'_> {
 
     /// Markers left over at the end of a story go to its last paragraph (after a final table:
     /// the last paragraph of its last cell, so a bookmark around the table keeps its end).
+    /// An unsupported chunk may leave no block; keep its markers in one empty paragraph.
     pub fn flush_pending(&mut self, sc: &mut StoryCtx, out: &mut Blocks) {
-        self.attach_bookmarks(out, sc.pending.drain(..).map(|(o, _)| o).collect(), BookmarkContainer::Block, true);
+        let marks = sc.pending.drain(..).map(|(o, _)| o).collect::<Vec<_>>();
+        if !marks.is_empty() && out.is_empty() {
+            out.push(para_block(Paragraph::new()));
+        }
+        self.attach_bookmarks(out, marks, BookmarkContainer::Block, true);
     }
 
+    /// Attach markers to an edge paragraph and record their source container and nesting.
     fn attach_bookmarks(&mut self, blocks: &mut Blocks, marks: Vec<InlineObject>, container: BookmarkContainer, after: bool) {
         if marks.is_empty() {
             return;
@@ -156,6 +162,7 @@ impl Reader<'_> {
         }
     }
 
+    /// Record the structural position of one imported bookmark boundary.
     fn bookmark_place(&mut self, o: &InlineObject, place: BookmarkPlace) {
         let (name, end) = match o {
             InlineObject::BookmarkStart { name } => (name, false),
@@ -207,6 +214,7 @@ impl Reader<'_> {
         }
     }
 
+    /// Read a story marker and retain bounded bookmark attributes and identifiers.
     pub(super) fn marker(&mut self, e: &El) -> Option<InlineObject> {
         let id = e.attr("w:id").map(str::trim).unwrap_or("").to_string();
         match e.name.as_str() {
@@ -378,6 +386,7 @@ impl Reader<'_> {
 
     // ---- tables ----
 
+    /// Read bounded physical table rows and cells while preserving their bookmark boundaries.
     fn read_table(&mut self, sc: &mut StoryCtx, t: &El, rels: &Rels, depth: usize) -> Option<Table> {
         let mut table = Table::default();
         if let Some(p) = t.child("w:tblPr") {

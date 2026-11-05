@@ -3,10 +3,12 @@ use std::io::{Cursor, Read, Write};
 
 const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
+/// Build a synthetic package with main and header stories.
 fn package(body: &str, header: &str) -> Vec<u8> {
     package_with_chunk(body, header, None)
 }
 
+/// Build a synthetic package with an optional related alternative-format chunk.
 fn package_with_chunk(body: &str, header: &str, chunk: Option<&[u8]>) -> Vec<u8> {
     let document = format!(
         r#"<w:document xmlns:w="{W}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>{body}<w:sectPr><w:headerReference w:type="default" r:id="header"/></w:sectPr></w:body></w:document>"#
@@ -33,6 +35,7 @@ fn package_with_chunk(body: &str, header: &str, chunk: Option<&[u8]>) -> Vec<u8>
     zip.finish().unwrap().into_inner()
 }
 
+/// Read an XML part from an in-memory output package.
 fn xml(bytes: &[u8], part: &str) -> String {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
     let mut out = String::new();
@@ -40,22 +43,28 @@ fn xml(bytes: &[u8], part: &str) -> String {
     out
 }
 
+/// Make a bookmark start with optional synthetic column bounds.
 fn start(id: u32, name: &str, columns: bool) -> String {
     let columns = if columns { r#" w:colFirst="1" w:colLast="2""# } else { "" };
     format!(r#"<w:bookmarkStart w:id="{id}" w:name="{name}"{columns}/>"#)
 }
+/// Make a matching bookmark end for the synthetic XML fixture.
 fn end(id: u32) -> String {
     format!(r#"<w:bookmarkEnd w:id="{id}"/>"#)
 }
+/// Wrap synthetic text in a paragraph element.
 fn para(text: &str) -> String {
     format!("<w:p><w:r><w:t>{text}</w:t></w:r></w:p>")
 }
+/// Wrap a synthetic paragraph in one table cell.
 fn cell(text: &str) -> String {
     format!("<w:tc>{}</w:tc>", para(text))
 }
+/// Wrap structural fixture content in a three-column table.
 fn table(content: &str) -> String {
     format!(r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/></w:tblGrid>{content}</w:tbl>"#)
 }
+/// Wrap structural fixture content in one table row.
 fn row(content: &str) -> String {
     format!("<w:tr>{content}</w:tr>")
 }
@@ -108,6 +117,7 @@ fn markers(xml: &str) -> Vec<(String, usize, String, Vec<(String, String)>)> {
     result
 }
 
+/// Check source positions, IDs and column bounds through repeated saves.
 #[test]
 fn row_cell_and_paragraph_bookmarks_keep_ids_names_and_column_bounds() {
     let cells = format!(
@@ -136,6 +146,7 @@ fn row_cell_and_paragraph_bookmarks_keep_ids_names_and_column_bounds() {
     }
 }
 
+/// Keep body-level bookmark boundaries outside adjacent tables.
 #[test]
 fn body_bookmarks_between_two_tables_stay_in_the_body() {
     let t = table(&row(&cell("table")));
@@ -150,6 +161,7 @@ fn body_bookmarks_between_two_tables_stay_in_the_body() {
     }
 }
 
+/// Keep structural bookmark positions in a header story through repeated saves.
 #[test]
 fn header_row_table_and_paragraph_bookmarks_round_trip() {
     let row = row(&format!("{}{}{}", start(204, "HeaderRow", true), cell("header cell"), end(204)));
@@ -172,10 +184,12 @@ fn header_row_table_and_paragraph_bookmarks_round_trip() {
     }
 }
 
+/// Build a plain row to distinguish it from the bookmarked header table.
 fn row_without_bookmarks() -> String {
     row(&cell("second table"))
 }
 
+/// Keep newly allocated bookmark IDs distinct from imported and earlier allocated IDs.
 #[test]
 fn newly_created_bookmarks_do_not_reuse_imported_or_allocated_ids() {
     use wordcraft_doc::{CharProps, InlineObject, Pos};
@@ -208,6 +222,7 @@ fn newly_created_bookmarks_do_not_reuse_imported_or_allocated_ids() {
     assert_eq!(actual.iter().filter(|m| m.2 == "w:bookmarkEnd").count(), 4);
 }
 
+/// Reserve numeric identity while retaining the lexical spelling of unique imported IDs.
 #[test]
 fn newly_created_bookmarks_reserve_numeric_values_but_keep_imported_id_spelling() {
     use wordcraft_doc::{CharProps, InlineObject, Pos};
@@ -245,6 +260,7 @@ fn newly_created_bookmarks_reserve_numeric_values_but_keep_imported_id_spelling(
     }
 }
 
+/// Keep moved markers inline and omit removed markers from their old source boundaries.
 #[test]
 fn moved_or_removed_bookmarks_are_not_recreated_at_stale_source_boundaries() {
     use wordcraft_doc::{CharProps, Path, StoryRef};
@@ -267,6 +283,7 @@ fn moved_or_removed_bookmarks_are_not_recreated_at_stale_source_boundaries() {
     assert!(markers(&xml(&output, "word/document.xml")).is_empty());
 }
 
+/// Check ordered structural marker preservation over one thousand synthetic row bookmarks.
 #[test]
 fn many_row_bookmarks_keep_their_order_and_native_objects() {
     let mut begins = String::new();
@@ -282,6 +299,7 @@ fn many_row_bookmarks_keep_their_order_and_native_objects() {
     assert_eq!(markers(&xml(&output, "word/document.xml")), markers(&xml(&input, "word/document.xml")));
 }
 
+/// Keep table and row bookmarks outside nested content-control boundaries.
 #[test]
 fn direct_table_and_row_bookmarks_stay_outside_child_content_controls() {
     let control = |id, content| format!(r#"<w:sdt><w:sdtPr><w:id w:val="{id}"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>"#);
@@ -298,6 +316,7 @@ fn direct_table_and_row_bookmarks_stay_outside_child_content_controls() {
     }
 }
 
+/// Apply the physical cell cap independently of merged columns and bookmark markers.
 #[test]
 fn physical_cell_limit_is_kept_with_horizontal_merges_and_row_bookmarks() {
     let mut cells = String::new();
@@ -311,6 +330,7 @@ fn physical_cell_limit_is_kept_with_horizontal_merges_and_row_bookmarks() {
     assert_eq!(d.bookmarks().len(), 1);
 }
 
+/// Count empty physical rows when applying the table row limit.
 #[test]
 fn physical_row_limit_counts_empty_rows_too() {
     let rows = format!("{}{}", "<w:tr/>".repeat(wordcraft_doc::table::MAX_ROWS), row(&cell("beyond the row limit")));
@@ -318,6 +338,7 @@ fn physical_row_limit_counts_empty_rows_too() {
     assert!(d.body.iter().all(|b| b.as_table().is_none()));
 }
 
+/// Keep markers at their original container when a supported chunk begins with a table.
 #[test]
 fn bookmarks_before_imported_chunks_keep_their_source_container() {
     let empty_first = table(&row(&format!("<w:tc/>{}", cell("Synthetic chunk text"))));
@@ -351,6 +372,7 @@ fn bookmarks_before_imported_chunks_keep_their_source_container() {
     }
 }
 
+/// Treat an omitted cell paragraph like the equivalent explicit empty paragraph.
 #[test]
 fn omitted_cell_paragraph_matches_an_explicit_empty_paragraph() {
     let mut docs = Vec::new();
@@ -364,6 +386,7 @@ fn omitted_cell_paragraph_matches_an_explicit_empty_paragraph() {
     assert_eq!(docs[0], docs[1], "omitted and explicit empty cell paragraphs save identically");
 }
 
+/// Retain pending marker boundaries in cells that omit their paragraph element.
 #[test]
 fn pending_bookmarks_keep_their_boundary_when_a_cell_paragraph_is_omitted() {
     let around =
@@ -383,6 +406,7 @@ fn pending_bookmarks_keep_their_boundary_when_a_cell_paragraph_is_omitted() {
     }
 }
 
+/// Remove structural column bounds when editing moves a marker into paragraph text.
 #[test]
 fn moving_a_column_marker_inline_drops_its_structural_column_bounds() {
     use wordcraft_doc::{CharProps, StoryRef};
@@ -397,6 +421,7 @@ fn moving_a_column_marker_inline_drops_its_structural_column_bounds() {
     assert!(marker.3.iter().all(|(k, _)| k != "w:colFirst" && k != "w:colLast"));
 }
 
+/// Repair duplicate numeric source IDs and retain stable, noncolliding repeated saves.
 #[test]
 fn duplicate_source_ids_are_reallocated_without_colliding_with_fresh_bookmarks() {
     use wordcraft_doc::bookmark::BookmarkAttrs;
@@ -421,5 +446,25 @@ fn duplicate_source_ids_are_reallocated_without_colliding_with_fresh_bookmarks()
         assert_eq!(ids.iter().collect::<std::collections::BTreeSet<_>>().len(), 3);
         d = wordcraft_docx::read(&output).unwrap();
         assert_eq!(d.bookmarks().len(), 3);
+    }
+}
+
+/// Preserve an empty bookmark range when its unsupported chunk produces no body block.
+#[test]
+fn unsupported_chunk_without_an_output_paragraph_keeps_its_bookmarks() {
+    for preceding_text in [false, true] {
+        let before = if preceding_text { para("before") } else { String::new() };
+        let body = format!("{before}{}<w:altChunk r:id=\"chunk\"/>{}", start(501, "UnsupportedChunk", false), end(501));
+        let bytes = package_with_chunk(&body, "", Some(b"synthetic unsupported chunk"));
+        let mut doc = wordcraft_docx::read(&bytes).unwrap();
+        for _ in 0..3 {
+            let names: Vec<_> = doc.bookmarks().into_iter().map(|(name, _)| name).collect();
+            assert_eq!(names, ["UnsupportedChunk"]);
+            assert_eq!(doc.body.len(), 1, "reuse an existing paragraph or create just one empty carrier");
+            let output = wordcraft_docx::write(&doc).unwrap();
+            let written = markers(&xml(&output, "word/document.xml"));
+            assert_eq!(written.len(), 2);
+            doc = wordcraft_docx::read(&output).unwrap();
+        }
     }
 }
