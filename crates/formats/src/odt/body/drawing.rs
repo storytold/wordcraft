@@ -338,13 +338,7 @@ impl Body<'_> {
         }
         let members = g.members.into_iter().map(|m| model::Member { x: fin(m.x) - x0, y: fin(m.y) - y0, ..m }).collect();
         let graphic = self.styles.shape_graphic(g.style.as_deref());
-        let float = crate::odt::frames::float_of(
-            g.anchor.as_deref(),
-            Some(&crate::odt::writer::pt(x0)),
-            Some(&crate::odt::writer::pt(y0)),
-            &graphic,
-            &self.styles.defs.profile,
-        );
+        let float = crate::odt::frames::float_of(g.anchor.as_deref(), Some(&crate::odt::writer::pt(x0)), Some(&crate::odt::writer::pt(y0)), &graphic);
         let float = (float.wrap != wordcraft_doc::para::Wrap::Inline).then(|| Box::new(float));
         let fit = |v: f32| if v.is_finite() { v.clamp(1.0, MAX_LEN) } else { 1.0 };
         self.push_inline(Inline::Group { w: fit(x1 - x0), h: fit(y1 - y0), float, members });
@@ -362,11 +356,11 @@ impl Body<'_> {
         let mut float = if kind.is_open() {
             // A line is placed by its ends.
             let at = |v: Option<f32>| v.map(crate::odt::writer::pt);
-            let mut f = crate::odt::frames::float_of(get(a, "text:anchor-type"), at(x).as_deref(), at(y).as_deref(), &g, &self.styles.defs.profile);
+            let mut f = crate::odt::frames::float_of(get(a, "text:anchor-type"), at(x).as_deref(), at(y).as_deref(), &g);
             f.z = crate::odt::frames::z_of(a);
             f
         } else {
-            crate::odt::frames::place(a, w, h, &g, self.text_size(), &self.styles.defs.profile)
+            crate::odt::frames::place(a, w, h, &g, self.text_size())
         };
         (float.flip_h, float.flip_v) = (flip_h, flip_v);
         self.shape_flip = (false, false);
