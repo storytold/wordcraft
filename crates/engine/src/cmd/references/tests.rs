@@ -746,11 +746,11 @@ fn output_shows_words_error_for_a_reference_to_a_missing_bookmark() {
     assert_eq!(fields(&s).iter().map(|f| f.1.as_str()).collect::<Vec<_>>(), ["stale", "stale"], "the document keeps it");
 }
 
-/// A REF showing the bookmarked paragraph's number (`\r`, `\n`, `\w`), which output doesn't
-/// compute, keeps its stored number when printed or exported rather than show the paragraph's
-/// text; a plain REF to the same bookmark is filled in.
+/// A REF showing the number (`\r`, `\n`, `\w`) of a bookmarked paragraph that has none keeps its
+/// stored result when printed or exported rather than show the paragraph's text; a plain REF to
+/// the same bookmark is filled in.
 #[test]
-fn output_keeps_paragraph_number_references_as_stored() {
+fn output_keeps_number_references_to_an_unnumbered_paragraph_as_stored() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Target heading\nRefs "));
     s.run("select.text", &json!({"text": "Target heading"})).unwrap();
     s.run("insert.bookmark", &json!({"name": "Mark"})).unwrap();

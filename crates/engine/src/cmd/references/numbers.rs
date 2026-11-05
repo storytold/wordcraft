@@ -10,11 +10,29 @@ pub(super) struct ParaNumber {
     /// Relative context is shared only within the same numbering instance.
     list: u32,
     values: Vec<u32>,
-    /// Whether each level has counted a paragraph yet: a level the list never used (an `(a)` item
-    /// with no clause above it in its list) shows no number in a reference.
-    started: Vec<bool>,
     labels: Vec<Option<String>>,
     shows: Vec<Vec<usize>>,
+}
+
+/// The numbered body paragraphs, and where each list stands at any body paragraph.
+#[derive(Debug, Default)]
+pub(super) struct ParaNumbers {
+    numbers: std::collections::HashMap<Path, ParaNumber>,
+    /// Each body paragraph's place in document order.
+    order: std::collections::HashMap<Path, usize>,
+    /// Each list's numbered paragraphs, by their place in document order (ascending).
+    lists: std::collections::HashMap<u32, Vec<(usize, Path)>>,
+}
+
+impl ParaNumbers {
+    /// The last paragraph of `list` at or before the body paragraph `at`: what `REF \r` there
+    /// takes its context from.
+    fn context(&self, list: u32, at: &Path) -> Option<&ParaNumber> {
+        let i = *self.order.get(at)?;
+        let paras = self.lists.get(&list)?;
+        let (_, path) = paras.get(paras.partition_point(|(o, _)| *o <= i).checked_sub(1)?)?;
+        self.numbers.get(path)
+    }
 }
 
 /// Whether the body paragraph at `path` sits in a table cell merged into the one above
@@ -41,10 +59,11 @@ fn in_merged_cell(doc: &wordcraft_doc::Document, path: &Path) -> bool {
 
 /// Every numbered body paragraph's number, by path, walking the lists in document order as the
 /// layout does (cells merged into the one above count nothing). Bullets have no number.
-pub(super) fn para_numbers(doc: &wordcraft_doc::Document) -> std::collections::HashMap<Path, ParaNumber> {
+pub(super) fn para_numbers(doc: &wordcraft_doc::Document) -> ParaNumbers {
     let mut counters = Counters::default();
-    let mut out = std::collections::HashMap::new();
-    for path in doc.para_paths(StoryRef::Body) {
+    let mut out = ParaNumbers::default();
+    for (i, path) in doc.para_paths(StoryRef::Body).into_iter().enumerate() {
+        out.order.insert(path.clone(), i);
         if in_merged_cell(doc, &path) {
             continue;
         }
@@ -56,15 +75,16 @@ pub(super) fn para_numbers(doc: &wordcraft_doc::Document) -> std::collections::H
         }
         let level = usize::from(n.level.min(8));
         let values = counters.values(&doc.numbering, n.num).unwrap_or_default();
-        let started = counters.started(&doc.numbering, n.num).unwrap_or_default();
         let mut num = ParaNumber { list: n.num, ..Default::default() };
         for k in 0..=level {
             num.values.push(values.get(k).copied().unwrap_or(0));
-            num.started.push(started.get(k).copied().unwrap_or(false));
+            // A level above that the list never used shows the number it counted from (its
+            // start), as Word's references do: (a) with no clause above it is 1(a).
             num.labels.push(counters.current_label(&doc.numbering, n.num, k as u8));
             num.shows.push(counters.current_template_levels(&doc.numbering, n.num, k as u8));
         }
-        out.insert(path, num);
+        out.lists.entry(n.num).or_default().push((i, path.clone()));
+        out.numbers.insert(path, num);
     }
     out
 }
@@ -82,32 +102,33 @@ fn ref_part(label: &str) -> &str {
 ///   no label already in the result shows that level: under `%1.` / `%1.%2` / `(%3)`, clause (a)
 ///   of 1.1 is `1.1(a)`, not `1.1.1(a)`.
 /// - `\r` (relative context): like `\w`, but leaving out the leading levels whose counters the
-///   field's own paragraph (`from`) shares with the target, compared level by level within the same list. From inside clause 14, 14(a) is `(a)`; from clause 5 or an unnumbered paragraph it
-///   is `14(a)`. Context already displayed by the own or a needed ancestor label stays.
+///   target's list shows at the field's paragraph (`from`) as well: the counters of the last
+///   paragraph of that list at or before the field, whether the field's own paragraph is in the
+///   list, in another list, or unnumbered. From inside clause 14, or from an unnumbered paragraph
+///   after 14(a), 14(a) is `(a)`; from clause 5, or before the list, it is `14(a)`. Another
+///   numbering instance of the same abstract list is another list here, though it continues the
+///   counters. Context already displayed by the own or a needed ancestor label stays.
 ///
-/// A level above the target that its list never used adds nothing (Word shows `(a)` for an item
-/// whose list has no clause above it, not a made-up `1.1(a)`). `None` when the target paragraph
-/// has no number.
-pub(super) fn ref_number(numbers: &std::collections::HashMap<Path, ParaNumber>, target: &Path, from: Option<&Path>, switch: char) -> Option<String> {
-    let t = numbers.get(target)?;
+/// A level above the target that its list never used shows the number it counted from: Word shows
+/// `1.1(a)` for an `(a)` item whose list has no clause above it. All measured in Word for Windows.
+/// `None` when the target paragraph has no number.
+pub(super) fn ref_number(numbers: &ParaNumbers, target: &Path, from: Option<&Path>, switch: char) -> Option<String> {
+    let t = numbers.numbers.get(target)?;
     let level = t.values.len().checked_sub(1)?;
     let own = t.labels.get(level)?.as_deref()?;
     let mut out = ref_part(own).to_string();
     if switch == 'n' {
         return Some(out);
     }
-    let used = |k: usize| t.started.get(k).copied().unwrap_or(false);
-    let first = match (switch, from.and_then(|p| numbers.get(p))) {
-        ('r', Some(f)) if f.list == t.list => {
-            (0..level).take_while(|&k| !used(k) || (f.values.get(k).is_some() && f.values.get(k) == t.values.get(k))).count()
-        }
+    let first = match (switch, from.and_then(|p| numbers.context(t.list, p))) {
+        ('r', Some(f)) => (0..level).take_while(|&k| f.values.get(k).is_some() && f.values.get(k) == t.values.get(k)).count(),
         _ => 0,
     };
     // Relative context suppresses added ancestors, never text already rendered in a label.
     // Word's measured legal-template cases retain 2.2.2 even when 2 or 2.2 is shared.
     let mut shown = t.shows.get(level).cloned().unwrap_or_default();
     for k in (first..level).rev() {
-        if shown.contains(&k) || !used(k) {
+        if shown.contains(&k) {
             continue;
         }
         if t.labels.get(k).is_some_and(Option::is_some) {

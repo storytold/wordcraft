@@ -45,6 +45,8 @@ fn numbering() -> String {
     for i in 0..schemes.len() {
         out.push_str(&format!(r#"<w:num w:numId="{}"><w:abstractNumId w:val="{i}"/></w:num>"#, i + 1));
     }
+    // A second instance of scheme 4.
+    out.push_str(r#"<w:num w:numId="7"><w:abstractNumId w:val="3"/></w:num>"#);
     out + "</w:numbering>"
 }
 
@@ -104,6 +106,7 @@ fn fields(s: &wordcraft_engine::Session) -> Vec<(String, String)> {
 }
 
 /// Numeric REF switches replace cached values with list labels, while plain REF and position switches retain their behavior.
+/// Every expected result is what Word for Windows shows for this document after F9.
 #[test]
 fn ref_number_switches_show_the_paragraph_number_as_word_does() {
     let body = [
@@ -128,7 +131,8 @@ fn ref_number_switches_show_the_paragraph_number_as_word_does() {
         // 2(c), inside clause 2: relative references drop the shared clause number.
         para(Some((4, 1)), &format!("{}{}{}", text("See "), field(r"REF _RefE \r \h", "STALE"), field(r"REF _RefD \r \h", "STALE"))),
         para(Some((4, 0)), &text("Third")),
-        // 3(a), another clause: the full number. _RefF's list has no clauses above its items.
+        // 3(a), another clause: the full number. _RefF's list has no clauses above its items,
+        // whose levels show the number they start at, and nothing of that list comes before.
         para(Some((4, 1)), &format!("{}{}", field(r"REF _RefE \r \h", "STALE"), field(r"REF _RefF \r \h", "STALE"))),
         // Scheme 5 items in a table whose second row's cell is merged into the first: the empty
         // item in the merged-away cell takes no number, so the next item is (b), not (c).
@@ -142,7 +146,7 @@ fn ref_number_switches_show_the_paragraph_number_as_word_does() {
             para(Some((5, 2)), ""),
         ),
         para(Some((5, 2)), &marked("_RefG", 7, "Target G")),
-        // An unnumbered paragraph.
+        // An unnumbered paragraph: `\r` takes the context of each target's list as it stands here.
         para(
             None,
             &[
@@ -169,10 +173,10 @@ fn ref_number_switches_show_the_paragraph_number_as_word_does() {
         (r"REF _RefE \r \h", "(b)"),
         (r"REF _RefD \r \h", "2"),
         (r"REF _RefE \r \h", "2(b)"),
-        (r"REF _RefF \r \h", "(a)"),
+        (r"REF _RefF \r \h", "1.1(a)"),
         (r"REF _RefA \w \h", "1.1(a)"),
         (r"REF _RefA \n \h", "(a)"),
-        (r"REF _RefA \r \h", "1.1(a)"),
+        (r"REF _RefA \r \h", "(a)"),
         (r"REF _RefB \w \h", "1.1.1"),
         (r"REF _RefC \w \h", "1.1(a)"),
         (r"REF _RefE \r \h", "2(b)"),
@@ -387,18 +391,129 @@ fn relative_refs_keep_the_legal_template_in_the_six_measured_contexts() {
     assert_eq!(got, ["2.2.2", "2.2", "2.2.2", "2.2", "2.2.2", "2.2"]);
 }
 
-/// Equal counter values in another list do not provide shared relative context.
+/// Equal counter values in another list do not provide shared relative context: before any
+/// paragraph of the target's list, the reference is in full.
 #[test]
 fn relative_context_is_not_shared_by_different_lists() {
     let mut s = open(
         &[
-            para(Some((4, 0)), &text("Synthetic target root")),
-            para(Some((4, 1)), &marked("_OtherList", 92, "Synthetic target")),
             para(Some((1, 0)), &text("Synthetic separate root")),
             para(Some((1, 1)), &field(r"REF _OtherList \r", "STALE")),
+            para(Some((4, 0)), &text("Synthetic target root")),
+            para(Some((4, 1)), &marked("_OtherList", 92, "Synthetic target")),
         ]
         .concat(),
     );
     s.run("references.updateFields", &json!({"all":true})).unwrap();
     assert_eq!(fields(&s)[0].1, "1(a)");
+}
+
+/// `\r` outside the target's list takes its context from where that list stands at the field:
+/// its last paragraph at or before it, whether the field's paragraph is unnumbered or numbered in
+/// another list. Measured in Word for Windows: after clause 1's (a), "(a)" from an unnumbered
+/// paragraph, from another list's clause, and between 1. and its (a); "1(a)" once clause 2 has
+/// begun, and before the list.
+#[test]
+fn relative_context_is_where_the_target_list_stands_at_the_field() {
+    let r = |cached| field(r"REF _Ctx \r \h", cached);
+    let mut s = open(
+        &[
+            para(None, &r("before")),
+            para(Some((4, 0)), &text("Synthetic one")),
+            para(None, &r("between")),
+            para(Some((4, 1)), &marked("_Ctx", 93, "Synthetic target")),
+            para(None, &r("after")),
+            para(Some((1, 0)), &r("other list")),
+            para(Some((4, 0)), &r("own list, clause 2")),
+            para(None, &r("end")),
+        ]
+        .concat(),
+    );
+    s.run("references.updateFields", &json!({"all":true})).unwrap();
+    let got: Vec<_> = fields(&s).into_iter().map(|(_, r)| r).collect();
+    assert_eq!(got, ["1(a)", "(a)", "(a)", "(a)", "1(a)", "1(a)"]);
+}
+
+/// Another numbering instance of the same abstract list (numId 7 of scheme 4) continues its
+/// counters but is another list for `\r`, as Word shows it: 2(a) from clause 2 of the first
+/// instance, (a) after the item.
+#[test]
+fn relative_context_is_not_shared_by_another_instance_of_the_abstract_list() {
+    let mut s = open(
+        &[
+            para(Some((4, 0)), &text("Synthetic one")),
+            para(Some((4, 0)), &field(r"REF _Inst \r \h", "STALE")),
+            para(Some((7, 1)), &marked("_Inst", 94, "Synthetic item")),
+            para(None, &field(r"REF _Inst \r \h", "STALE")),
+        ]
+        .concat(),
+    );
+    s.run("references.updateFields", &json!({"all":true})).unwrap();
+    let got: Vec<_> = fields(&s).into_iter().map(|(_, r)| r).collect();
+    assert_eq!(got, ["2(a)", "(a)"]);
+}
+
+/// A level above the target that its list never used shows its start number in `\w`, and in
+/// `\r` with no context, as Word shows it; after the target, `\r` is the item's own label.
+#[test]
+fn unused_levels_above_the_target_show_their_start_number() {
+    let refs = || [field(r"REF _Unused \r \h", "STALE"), field(r"REF _Unused \w \h", "STALE")].concat();
+    let mut s = open(
+        &[
+            para(None, &refs()),
+            para(Some((1, 0)), &text("Synthetic other clause")),
+            para(Some((1, 0)), &refs()),
+            para(Some((4, 1)), &marked("_Unused", 95, "Synthetic item")),
+            para(None, &refs()),
+        ]
+        .concat(),
+    );
+    s.run("references.updateFields", &json!({"all":true})).unwrap();
+    let got: Vec<_> = fields(&s).into_iter().map(|(_, r)| r).collect();
+    assert_eq!(got, ["1(a)", "1(a)", "1(a)", "1(a)", "(a)", "1(a)"]);
+}
+
+/// Printing and exporting compute the paragraph numbers as F9 does, even with "Update fields
+/// before printing" off, while the document keeps its stored results (measured in Word for
+/// Windows with stale stored numbers).
+#[test]
+fn output_computes_paragraph_number_references() {
+    let mut s = open(
+        &[
+            para(Some((4, 0)), &text("Synthetic one")),
+            para(Some((4, 0)), &text("Synthetic two")),
+            para(Some((4, 0)), &marked("_Three", 96, "Synthetic three")),
+            para(Some((4, 1)), &text("Synthetic a")),
+            para(Some((4, 1)), &marked("_SubB", 97, "Synthetic b")),
+            para(
+                None,
+                &[
+                    field(r"REF _Three \n \h", "9"),
+                    field(r"REF _Three \w \h", "9"),
+                    field(r"REF _SubB \r \h", "9"),
+                    field(r"REF _SubB \w \d /", "KEEP DELIMITER"),
+                ]
+                .concat(),
+            ),
+        ]
+        .concat(),
+    );
+    let out = wordcraft_engine::cmd::references::output_fields(&s.doc).expect("the stale numbers change");
+    let results = |d: &wordcraft_doc::Document| -> Vec<String> {
+        let last = d.para_paths(StoryRef::Body).pop().unwrap();
+        d.para(StoryRef::Body, &last)
+            .unwrap()
+            .objects
+            .iter()
+            .filter_map(|o| match o {
+                InlineObject::Field { result, .. } => Some(result.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(results(&out), ["3", "3", "(b)", "KEEP DELIMITER"]);
+    assert_eq!(results(&s.doc), ["9", "9", "9", "KEEP DELIMITER"], "the document keeps them");
+    // F9 gives the same numbers.
+    s.run("references.updateFields", &json!({"all":true})).unwrap();
+    assert_eq!(results(&s.doc), results(&out));
 }

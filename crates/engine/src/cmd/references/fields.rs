@@ -182,7 +182,8 @@ pub const REFERENCE_NOT_FOUND: &str = "Error! Reference source not found.";
 
 /// The fresh results of the body's unlocked REF fields as output shows them: the bookmark's
 /// text, or Word's error when the document lacks the bookmark (measured in Word for Windows);
-/// `\p` ("above" or "below") and the paragraph number switches `\r`, `\n` and `\w` keep the
+/// with `\r`, `\n` or `\w`, the bookmarked body paragraph's number as F9 computes it (Word's
+/// output computes it too, measured in Word for Windows). `\p` ("above" or "below") keeps the
 /// stored result, and so does a REF to a bookmark that ends in a later paragraph: Word shows such
 /// a bookmark's paragraphs as paragraphs of the result, which a field's one-paragraph result
 /// can't hold (measured in Word for Windows). A bookmark in a header, footer, footnote, endnote,
@@ -199,17 +200,27 @@ fn ref_results(doc: &wordcraft_doc::Document, stored: &wordcraft_doc::Document) 
     }
     // A bookmark's text, `None` when it ends in a later paragraph.
     let mut texts: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
+    // Built once, when a paragraph number is asked for.
+    let mut numbers = None;
+    let mut bookmark_paths = None;
     for path in doc.para_paths(StoryRef::Body) {
         let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
         for (k, o) in p.objects.iter().enumerate() {
             let InlineObject::Field { instr, locked: false, .. } = o else { continue };
-            // `\r`, `\n` and `\w` show the bookmarked paragraph's number, which isn't computed
-            // here: those keep their stored result rather than print the paragraph's text.
-            if wordcraft_layout::fields::field_name(instr) != "REF" || ['p', 'r', 'n', 'w'].iter().any(|&sw| has_switch(instr, sw)) {
+            if wordcraft_layout::fields::field_name(instr) != "REF" || has_switch(instr, 'p') {
                 continue;
             }
             let f = FieldCode::parse(instr);
             let target = f.args.first().map(|s| s.split('\\').next().unwrap_or("").trim_matches('"')).unwrap_or("");
+            if let Some(number) = number_switch(instr) {
+                // Never the paragraph's text: a number this can't work out keeps the stored result.
+                let numbers = numbers.get_or_insert_with(|| para_numbers(doc));
+                let paths = bookmark_paths.get_or_insert_with(|| body_bookmark_paths(doc));
+                if let Some(r) = number.and_then(|sw| paths.get(target).and_then(|tp| ref_number(numbers, tp, Some(&path), sw))) {
+                    out.push((StoryRef::Body, path.clone(), k, text_result(instr, r)));
+                }
+                continue;
+            }
             let Some(start) = starts.get(target) else {
                 out.push((StoryRef::Body, path.clone(), k, REFERENCE_NOT_FOUND.to_string()));
                 continue;
@@ -289,6 +300,13 @@ pub fn output_fields(doc: &wordcraft_doc::Document) -> Option<wordcraft_doc::Doc
         apply_results(out.get_or_insert_with(|| doc.clone()), refs).ok()?;
     }
     out
+}
+
+/// For a REF showing a paragraph number, `Some` of its switch (`\w`, `\r` or `\n`), or
+/// `Some(None)` when it has `\d` or `\t` too, which aren't supported; `None` when it shows text.
+fn number_switch(instr: &str) -> Option<Option<char>> {
+    let sw = ['w', 'r', 'n'].into_iter().find(|c| has_switch(instr, *c))?;
+    Some((!has_switch(instr, 'd') && !has_switch(instr, 't')).then_some(sw))
 }
 
 /// Whether `instr` has the one-letter switch `\sw`, also run together with another (`\p\h`).
@@ -378,10 +396,10 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     let r = if name == "REF" {
                         if has_switch(instr, 'p') {
                             None
-                        } else if let Some(sw) = ['w', 'r', 'n'].into_iter().find(|c| has_switch(instr, *c)) {
-                            if has_switch(instr, 'd') || has_switch(instr, 't') {
+                        } else if let Some(number) = number_switch(instr) {
+                            let Some(sw) = number else {
                                 continue; // Preserve cached results for unsupported delimiter/text switches.
-                            }
+                            };
                             let numbers = numbers.get_or_insert_with(|| para_numbers(&s.doc));
                             let from = (story == StoryRef::Body).then_some(&path);
                             let paths = bookmark_paths.get_or_insert_with(|| body_bookmark_paths(&s.doc));
