@@ -220,8 +220,17 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             r.cell(|ui| ui.checkbox(strike, tl!("Strikethrough")));
         });
         t.row(|r| {
+            // Superscript and Subscript exclude each other: the one just ticked wins.
+            let was_sup = *sup;
             r.cell(|ui| ui.checkbox(sup, tl!("Superscript")));
             r.cell(|ui| ui.checkbox(sub, tl!("Subscript")));
+            if *sup && *sub {
+                if was_sup {
+                    *sup = false;
+                } else {
+                    *sub = false;
+                }
+            }
         });
         t.row(|r| {
             r.cell(|ui| ui.checkbox(small_caps, tl!("Small caps")));

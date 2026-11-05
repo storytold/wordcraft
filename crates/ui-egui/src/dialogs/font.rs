@@ -11,6 +11,8 @@ pub(super) fn sample_paper(app: &WordApp) -> wordcraft_doc::Rgb {
     app.session.doc.settings.page_color.unwrap_or(wordcraft_doc::Rgb(255, 255, 255))
 }
 
+const SAMPLE_WIDTH: f32 = 300.0;
+
 /// The sample's character properties: the dialog's fields as the document reads them.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn font_sample_props(
@@ -29,10 +31,10 @@ pub(super) fn font_sample_props(
     let auto = if dark { 255 } else { 0 };
     let ink = wordcraft_doc::Rgb::parse(color).unwrap_or(wordcraft_doc::Rgb(auto, auto, auto));
     // A hidden run is dotted, as Word draws hidden text when it is shown.
-    let line = if hidden {
-        Underline::Dotted
-    } else if underline {
+    let line = if underline {
         Underline::Single
+    } else if hidden {
+        Underline::Dotted
     } else {
         Underline::None
     };
@@ -74,7 +76,8 @@ pub(super) fn font_sample_box(
     } else {
         None
     };
-    let (w, h) = (ui.available_width().clamp(120.0, 400.0), 56.0);
+    // A fixed width: sizing it from the dialog's width would grow the dialog frame by frame.
+    let (w, h) = (SAMPLE_WIDTH, 56.0);
     let ppp = ui.ctx().pixels_per_point();
     let text = tl!("AaBbYyZz");
     let key = format!("fontsample:{text}:{props:?}:{mark:?}:{paper:?}:{display_paper:?}:{dark}:{w}:{ppp}");
