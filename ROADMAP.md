@@ -17,18 +17,17 @@ agent control. This page is the summary; the assessment is
 
 > **Comment command update:** 2026-10-14 · malformed explicit IDs rejected; synthetic refusal, undo/redo and DOCX save/reopen checks (#1690 finding 3). Readiness estimates unchanged.
 
-## Headline numbers (2026-10-27)
+## Headline numbers (2026-11-05)
 
 | Number | Value | Kind |
 | --- | --- | --- |
-| Ribbon/menu catalog coverage | **505 / 520 (97.1%)** | measured (`wordcraft-cli parity` on 2026-10-27 at source commit `4b8b06fe`; same catalog/registry calculation as `cargo xtask parity`; [`docs/parity-checklist.md`](docs/parity-checklist.md)) |
+| Ribbon/menu catalog coverage | **506 / 521 (97.1%)** | measured (`wordcraft-cli parity` on Windows at source commit `60080877ce9f21bc2180b8c0d3f714f5cc887bd3`; output: `live: 506`, `total: 521`, `percent: 97.1`; same catalog/registry calculation as `cargo xtask parity`; [`docs/parity-checklist.md`](docs/parity-checklist.md)) |
 | **Feature breadth** (weighted, incl. dialog options, styles, languages beyond the ribbon) | **~80%** | estimated |
 | **Ready for real work** (full target) | **~60%** (55–63%) | estimated, additive weighted sum over the dimensions |
 | **Mainstream practitioner** | **~55%** | estimated: weekly-work depth × discounts for interaction (×0.93), stability (×0.90), file exchange (×0.90) |
 | **Essentials user** | **~63%** | estimated: core-feature depth × discounts for launch (×0.90), discoverability (×0.95), opening received files (×0.92) |
 | Remaining to **beta** | **~150–230 h** of Opus 5.5 agent wall-clock (gaps #1–#7) | estimated |
 | Remaining to **full parity** with Word desktop | **~750–1,250 h** (70–80% parallelizable) | estimated |
-| Commands / tests / code | 648 commands · 4,611 tests · 23 `proptest!` blocks · ~330,000 lines of Rust | measured (source) |
 | Releases | v0.11.0 (2026-10-25): signed macOS universal DMG, Windows MSI x64/x86/arm64, Linux AppImage/deb/rpm/Flatpak x86_64 + aarch64, FreeBSD, web | measured |
 
 Hours are calibrated from this repo's PRs (equations #191: ~9.7k lines in ~5 h; `.doc` reader
