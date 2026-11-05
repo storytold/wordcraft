@@ -713,6 +713,45 @@ fn output_shows_references_to_bookmarks_outside_the_body() {
     assert_eq!(results, expected);
 }
 
+/// Printed or exported, a locked SEQ keeps its result but still counts, its `\r` too, and a SEQ
+/// in a tracked deletion keeps its result and doesn't count (measured in Word for Windows,
+/// exporting with markup shown and hidden: Del 1, 9, 2; Lock 1, 7, 3; R 7, 6).
+#[test]
+fn output_counts_locked_seq_fields_and_not_deleted_ones() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text(""));
+    let fields_in = ["SEQ Del", "SEQ Del", "SEQ Del", "SEQ Lock", "SEQ Lock", "SEQ Lock", "SEQ R \\r 5", "SEQ R"];
+    for instr in fields_in {
+        s.run("insert.field", &json!({"instr": instr, "result": "9"})).unwrap();
+        s.run("text.insert", &json!({"text": " "})).unwrap();
+    }
+    let top = wordcraft_doc::Path::top(0);
+    let para = s.doc.para_mut(StoryRef::Body, &top).unwrap();
+    for (k, o) in para.objects.iter_mut().enumerate() {
+        if let InlineObject::Field { result, locked, .. } = o {
+            *locked = matches!(k, 4 | 6);
+            *result = if *locked { "7" } else { "9" }.into();
+        }
+    }
+    para.touch();
+    // The second Del field is a tracked deletion.
+    let off = s.doc.para(StoryRef::Body, &top).unwrap().object_offsets()[1];
+    let at = |off| Pos { story: StoryRef::Body, path: top.clone(), off };
+    s.doc.format_range(&at(off), &at(off + '\u{FFFC}'.len_utf8()), &|c| c.del = Some(1)).unwrap();
+    let out = output_fields(&s.doc).expect("the stale results change");
+    let shown: Vec<String> = out
+        .para(StoryRef::Body, &top)
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::Field { result, .. } => Some(result.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(shown, ["1", "9", "2", "1", "7", "3", "7", "6"]);
+    assert!(fields(&s).iter().all(|f| f.1 == "9" || f.1 == "7"), "the document keeps its results");
+}
+
 /// Printed or exported, a REF to a bookmark the document doesn't have shows Word's error
 /// (measured in Word for Windows: "Error! Reference source not found."); the editor and the
 /// document keep the stored result, and a REF showing "above" or "below" (`\p`) keeps it too.
