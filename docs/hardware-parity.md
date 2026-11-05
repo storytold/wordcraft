@@ -30,6 +30,7 @@ File > Print offers 2, 4, 6, 9 or 16 logical pages per physical sheet side and l
 | 2026-11-01 | trivial | N-up and booklet print imposition (#641): integrate current print-job link handling (#4734), preserve markup preview and sheet/copy planning; readiness estimates unchanged. |
 | 2026-10-30 | trivial | Only the PDF sent to the printer leaves out link annotations; Save these pages as PDF (`file.printPdf`) keeps them (#4734) |
 | 2026-10-29 | trivial | A document with links prints: the print job's PDF leaves out link annotations, which the spooler refused to fit to the paper (#4734) |
+| 2026-10-28 | trivial | A window restored to a place no monitor covers opens centred on the primary monitor. The check compared monitor sizes only, so when a monitor was replaced by one of the same size (a dock unplugged, a display rearranged), the window opened off screen and the app looked like it quit at once |
 | 2026-10-15 | trivial | Pen / stylus row: Ink to Shape also makes two-stroke arrows and arrows with a closed triangle head |
 | 2026-10-17 | minor | File › Print's Scale to paper size (#2108): pick Letter, Legal, A4 or any Layout › Size paper and every page is scaled to it and centred, the paper turned to each page's orientation, in the preview, the print job (with the spooler's media) and Save these pages as PDF; the document keeps its page size. `paper` param on `ui.print`/`file.printPdf` |
 | 2026-10-14 | trivial | Pen / stylus row corrected: ink, eraser and Ink to Shape (with arrows) work; pressure and Ink to Math missing |

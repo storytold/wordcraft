@@ -350,7 +350,7 @@ fn styles_xml(
         spacing_props(defaults),
         x(&body_font),
         // Widow and orphan control as Normal has it, said either way (the standard leaves it open
-        // when unsaid: see `OdfProfile::widow_control`).
+        // when unsaid, and readers differ: docs/odf-interpretation.md).
         widows = if normal.widow_control { " fo:widows=\"2\" fo:orphans=\"2\"" } else { " fo:widows=\"0\" fo:orphans=\"0\"" },
         size = pt(size),
         // The document's text colour (a colour, not automatic).
