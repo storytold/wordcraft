@@ -195,6 +195,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 | 2026-11-01 | trivial | A middle or bottom cell of a row split across pages lines up on the first page; no ranked gap changed; readiness estimates unchanged |
 | 2026-11-01 | trivial | Tab leader dots spaced and placed as in Word; no ranked gap changed; readiness estimates unchanged |
 | 2026-10-31 | trivial | A list level above that hasn't counted yet takes its first number at the first deeper item, as measured in Word (10.1–10.4, then 11); not a ranked gap; readiness estimates unchanged |
+| 2026-11-01 | trivial | #3915: preserve guarded whole-line ordinary-tab alignment with current main. Existing controls retained; source checks only, primary qualification pending. |
 | 2026-10-30 | trivial | Only the PDF sent to the printer omits link annotations; File › Print › Save these pages as PDF (`file.printPdf`) keeps them, like Export (#4734); no ranked gap changed; readiness estimates unchanged |
 | 2026-10-29 | trivial | The print job's PDF omits link annotations, which the spooler refused to fit to the paper, so documents with links reach the printer (#4734); physical printer output remains to be validated; no ranked gap changed; readiness estimates unchanged |
 | 2026-10-31 | trivial | Synchronize the existing Proofing pane with main `eecbb8f`; preserve explicit-position lookup, implicit selection, navigation, undo and per-window state; fresh exact-SHA hosted validation pending, readiness unchanged |
