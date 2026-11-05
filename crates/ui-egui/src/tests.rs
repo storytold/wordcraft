@@ -4048,7 +4048,8 @@ fn ctrl_shift_c_and_v_copy_and_paste_formatting_not_text() {
         let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
         h.event(key(egui::Key::C, modifiers));
         h.step();
-        assert!(h.state().session.painter.is_some(), "{modifiers:?}: Copy Formatting picked up the selection's formatting");
+        assert!(h.state().session.copied_format.is_some(), "{modifiers:?}: Copy Formatting picked up the selection's formatting");
+        assert!(h.state().session.painter.is_none(), "{modifiers:?}: Copy Formatting doesn't arm the Format Painter brush");
         assert_eq!(h.state().session.clip_history.len(), clipboard_entries, "{modifiers:?}: Copy Formatting preserved clipboard history");
         assert_eq!(h.state().session.clipboard_text, "plain", "{modifiers:?}: the existing clipboard text was preserved");
         assert!(copied(&h).is_empty(), "{modifiers:?}: no text reached the system clipboard: {:?}", copied(&h));
@@ -4059,8 +4060,18 @@ fn ctrl_shift_c_and_v_copy_and_paste_formatting_not_text() {
         h.event(key(egui::Key::V, modifiers));
         h.step();
         assert_eq!(bold(&mut h), Some(true), "{modifiers:?}: Paste Formatting made the target bold");
-        assert!(h.state().session.painter.is_none(), "{modifiers:?}: the non-sticky painter is used up");
-        assert_eq!(body_text(h.state()), "Bold plain", "{modifiers:?}: pasting formatting left the document text alone");
+        assert!(h.state().session.copied_format.is_some(), "{modifiers:?}: copied formatting stays for the next Paste Formatting");
+        // Pasted again, as in Word: formatting again, never the clipboard's text (#5616).
+        h.state_mut().run("caret.docEnd", json!({})).unwrap();
+        h.state_mut().run("text.insert", json!({"text": " more"})).unwrap();
+        h.state_mut().run("select.text", json!({"text": "more"})).unwrap();
+        // It types on in the pasted bold: make it plain first.
+        h.state_mut().run("format.bold", json!({})).unwrap();
+        assert_eq!(bold(&mut h), Some(false));
+        h.event(key(egui::Key::V, modifiers));
+        h.step();
+        assert_eq!(bold(&mut h), Some(true), "{modifiers:?}: a second Paste Formatting made the next target bold");
+        assert_eq!(body_text(h.state()), "Bold plain more", "{modifiers:?}: the second paste left the text alone");
         assert_eq!(h.state().session.clip_history.len(), clipboard_entries, "{modifiers:?}: Paste Formatting preserved clipboard history");
         assert_eq!(h.state().session.clipboard_text, "plain", "{modifiers:?}: Paste Formatting preserved the clipboard text");
         assert!(copied(&h).is_empty(), "{modifiers:?}: pasting formatting put no text on the system clipboard: {:?}", copied(&h));

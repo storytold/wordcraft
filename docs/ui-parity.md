@@ -94,7 +94,7 @@ Right-click and Shift+F10 keep the compact suggestions menu. The pane is shared 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-04 | trivial | Ctrl/Cmd+Shift+V with no formatting picked up by Ctrl/Cmd+Shift+C pastes the clipboard as Keep Text Only, as in Word for Windows; after Ctrl/Cmd+Shift+C it still pastes the formatting (#1537, #4943) |
+| 2026-11-04 | trivial | Ctrl/Cmd+Shift+V with no formatting picked up by Ctrl/Cmd+Shift+C pastes the clipboard as Keep Text Only, as in Word for Windows; after Ctrl/Cmd+Shift+C it pastes the formatting, again on every press until the next Ctrl/Cmd+Shift+C, and Ctrl/Cmd+Shift+C no longer arms the Format Painter brush (#1537, #4943) |
 | 2026-10-31 | trivial | Dialogs are modal (#3859): while one is open, clicks on the ribbon, File or the page, typing and shortcuts do nothing, as in Word. Find and Replace, Symbol, Mark Index Entry, Cross-reference and Insert Merge Field stay modeless, as in Word for Mac. A press beside a modal dialog shakes it a little, or flashes its border with animation effects off, so it is clear why nothing behind it reacts |
 | 2026-11-03 | trivial | Comments: a long comment's card, balloon and fields stop at ten lines; the fields scroll, and a balloon that isn't selected shows the first ten lines of the comment and of each reply (#3382) |
 | 2026-11-03 | minor | Arabic mirrored interface: title bar, ribbon, panes, File page, dialogs and menus run from the right; document canvas stays independent (#1195); Hebrew UI still open |

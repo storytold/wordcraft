@@ -249,6 +249,7 @@ impl Session {
             author: _,
             initials: _,
             painter: _,
+            copied_format: _,
             status: _,
             last_command: _,
             recording: _,
