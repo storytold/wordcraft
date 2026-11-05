@@ -192,3 +192,8 @@ sync_github_name = true
 
 [people.entropybeater]
 display_name = "entropybeater"
+
+[people.kzyube]
+real_name = "Kzyube Napoles"
+display_name = "Kzyube"
+sync_github_name = true
