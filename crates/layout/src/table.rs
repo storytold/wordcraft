@@ -1182,9 +1182,15 @@ fn split_diagonal_rule(x0: f32, y0: f32, x1: f32, y1: f32, border: Border, split
         let (left_x, right_x) = if y0 <= y1 { (x0, x1) } else { (x1, x0) };
         let at_cut = left_x + (right_x - left_x) * (cut - top) / (bottom - top);
         let continuation_shift = if bottom >= row_height - 0.01 { rest } else { shift };
+        let (continuation_x, continuation_y) = if continuation_shift > cut {
+            let at_zero = left_x + (right_x - left_x) * (continuation_shift - top) / (bottom - top);
+            (at_zero, 0.0)
+        } else {
+            (at_cut, cut - continuation_shift)
+        };
         return (
             vec![Placed::Rule { x0: left_x, y0: top, x1: at_cut, y1: cut, border }],
-            vec![Placed::Rule { x0: at_cut, y0: (cut - continuation_shift).max(0.0), x1: right_x, y1: bottom - continuation_shift, border }],
+            vec![Placed::Rule { x0: continuation_x, y0: continuation_y, x1: right_x, y1: bottom - continuation_shift, border }],
         );
     }
     let mut above = Vec::new();

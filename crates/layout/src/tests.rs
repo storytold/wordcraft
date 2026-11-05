@@ -7670,7 +7670,8 @@ fn a_split_diagonal_rule_uses_the_intersection_at_the_cut() {
         })
         .expect("diagonal continues below cut");
     assert_eq!(first_rule, (10.0, 0.0, 60.0, 100.0));
-    assert_eq!(next_rule.0, 60.0);
+    assert_eq!(next_rule.0, 84.0, "the continuation starts where the shifted line reaches y = 0");
+    assert_eq!(next_rule.1, 0.0);
     assert_eq!(next_rule.2, 110.0);
 }
 

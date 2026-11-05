@@ -776,7 +776,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` is preserved with true, false and absent values; OOXML properties follow schema order. Grid layout remains open. |
-| 2026-11-05 | minor | DOCX cell diagonals round-trip in valid cell-border markup and render across vertically merged cells; exports to other formats and real-world corpus qualification remain open. |
+| 2026-11-05 | minor | DOCX cell diagonals round-trip in valid cell-border markup and render across vertically merged cells and page splits; split-row continuations clip at the shifted line’s y=0 intersection. Whole-table style diagonals are documented as dropped pending Word schema observation; other format exports and real-world corpus qualification remain open. |
 | 2026-10-28 | trivial | Per-page ink object lookups, #3614. Drawing order, geometry and saved data retain their behavior; no readiness estimate change |
 | 2026-10-28 | trivial | Shared MATH construction records reuse variants and assembly data without changing glyph mappings or existing limits (#3630); readiness estimates unchanged |
 | 2026-11-04 | trivial | Progress log: OpenDocument display settings removed (gap 19) |
