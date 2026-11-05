@@ -288,6 +288,54 @@ fn a_watermark_is_a_shape_in_the_header_and_reads_back_as_one() {
 }
 
 #[test]
+fn a_watermark_change_to_a_file_is_saved() {
+    // A file's own page definitions were written back whatever happened to its watermark, so one
+    // added, changed or removed in WordCraft was gone from the saved file.
+    let ns = crate::odt::tests::NS_T;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:automatic-styles><style:page-layout style:name="pm1" style:page-usage="mirrored"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm" fo:margin-bottom="2cm" fo:margin-left="2cm" fo:margin-right="2cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>"#
+    );
+    let content =
+        format!("<office:document-content {ns}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>");
+    let plain = crate::odt::tests::package(&content, Some(&styles));
+    let styles_of = |d: &Document| crate::odt::tests::entry(&export(d).unwrap(), "styles.xml");
+    let shape = "PowerPlusWaterMarkObject";
+
+    // Added.
+    let mut d = import(&plain).unwrap();
+    d.settings.watermark = Some(wordcraft_doc::Watermark { text: "DRAFT".into(), ..Default::default() });
+    let saved = export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(s.contains(shape) && s.contains("DRAFT"), "added: {s}");
+    assert_eq!(import(&saved).unwrap().settings.watermark.map(|w| w.text).as_deref(), Some("DRAFT"));
+
+    // Saved again with nothing changed, it stays as the file has it.
+    let read = import(&saved).unwrap();
+    let again = styles_of(&read);
+    assert_eq!(again.matches(shape).count(), s.matches(shape).count(), "{again}");
+
+    // Changed.
+    let mut d = import(&saved).unwrap();
+    if let Some(w) = d.settings.watermark.as_mut() {
+        w.text = "COPY".into();
+    }
+    let s = styles_of(&d);
+    assert!(s.contains("COPY") && !s.contains("DRAFT"), "changed: {s}");
+
+    // Removed.
+    let mut d = import(&saved).unwrap();
+    d.settings.watermark = None;
+    let s = styles_of(&d);
+    assert!(!s.contains(shape) && !s.contains("DRAFT"), "removed: {s}");
+
+    // One with no text isn't written, so it's no change to the file's page definitions.
+    let mut d = import(&plain).unwrap();
+    d.settings.watermark = Some(wordcraft_doc::Watermark { text: "  ".into(), ..Default::default() });
+    let s = styles_of(&d);
+    assert!(s.contains(r#"style:page-usage="mirrored""#) && !s.contains(shape), "no text: {s}");
+}
+
+#[test]
 fn libreoffices_watermark_reads_as_the_watermark() {
     // As LibreOffice's Format › Watermark writes it (observed): turned, half see-through.
     let ns = crate::odt::tests::NS_T;
