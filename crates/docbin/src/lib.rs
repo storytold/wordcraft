@@ -653,7 +653,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                     && f.depth == 1
                     && f.sep.is_none()
                 {
-                    f.sep = Some(Vec::new());
+                    f.sep = Some(FieldResult::default());
                 }
                 cp = cp.saturating_add(1);
                 continue;
@@ -744,7 +744,28 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
 struct FieldBuild {
     depth: u32,
     instr: String,
-    sep: Option<Vec<(char, CharProps)>>,
+    sep: Option<FieldResult>,
+}
+
+/// A field's cached result: its text and, as runs, the formatting of that text. A run is added
+/// only when the formatting changes, so a result of millions of equally formatted characters
+/// costs one `CharProps`, not one per character (365 bytes each).
+#[derive(Default)]
+struct FieldResult {
+    text: String,
+    /// (byte length in `text`, formatting) in order; adjacent runs differ.
+    runs: Vec<(usize, CharProps)>,
+}
+
+impl FieldResult {
+    fn push(&mut self, c: char, props: CharProps) {
+        let len = c.len_utf8();
+        match self.runs.last_mut() {
+            Some((n, last)) if *last == props => *n += len,
+            _ => self.runs.push((len, props)),
+        }
+        self.text.push(c);
+    }
 }
 
 /// Bytes a clone of `obj` copies: the object itself plus a picture's alt text, a group with all
@@ -769,24 +790,26 @@ fn finish_field(pb: &mut ParaBuild, f: FieldBuild, work: &Work) {
     let result = f.sep.unwrap_or_default();
     if let Some(target) = hyperlink_target(&instr) {
         let cost = target.len() as u64;
-        let mut run: Option<CharProps> = None;
-        for (c, props) in result {
-            if run.as_ref() == Some(&props) {
-                pb.extend(c);
-                continue;
-            }
-            let mut linked = props.clone();
+        let mut chars = result.text.chars();
+        for (len, props) in result.runs {
+            let mut linked = props;
             if work.charge(cost, Cost::LinkTarget) {
                 linked.link = Some(target.clone());
             }
-            pb.push(c, linked);
-            run = Some(props);
+            let mut left = len;
+            let Some(first) = chars.next() else { break };
+            pb.push(first, linked);
+            left = left.saturating_sub(first.len_utf8());
+            while left > 0 {
+                let Some(c) = chars.next() else { break };
+                pb.extend(c);
+                left = left.saturating_sub(c.len_utf8());
+            }
         }
         return;
     }
-    let result_text: String = result.iter().map(|(c, _)| *c).collect();
     pb.push('\u{FFFC}', CharProps::default());
-    pb.objects.push(InlineObject::Field { instr, result: result_text, locked: false, dirty: false, code: false, form: String::new() });
+    pb.objects.push(InlineObject::Field { instr, result: result.text, locked: false, dirty: false, code: false, form: String::new() });
 }
 
 /// `sprmCPicLocation` from a CHPX grpprl: the fc of the picture in the Data stream.
@@ -870,7 +893,7 @@ fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, f
         Some(f) => match f.sep.as_mut() {
             // Inside a field, characters are recorded for the field object instead of shown;
             // `finish_field` emits the visible text (hyperlink runs or one object anchor).
-            Some(result) => result.push((c, props)),
+            Some(result) => result.push(c, props),
             None => f.instr.push(c),
         },
         None => pb.push(c, props),

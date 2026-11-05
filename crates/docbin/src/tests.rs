@@ -2743,7 +2743,8 @@ fn a_long_hyperlink_over_a_long_result_is_one_linked_run() {
     assert_eq!(linked.first().map(|r| r.len), Some(n));
     // One copy of the target for the one run, not one per character (~2.5 s here): counted by
     // what the copies charge to the work budget, which a busy machine can't skew.
-    let result = vec![('y', wordcraft_doc::props::CharProps::default()); n];
+    let mut result = super::FieldResult::default();
+    (0..n).for_each(|_| result.push('y', wordcraft_doc::props::CharProps::default()));
     let f = super::FieldBuild { depth: 1, instr: format!("HYPERLINK \"http://{target}\""), sep: Some(result) };
     let work = super::Work::new(u64::MAX);
     super::finish_field(&mut super::ParaBuild::default(), f, &work);
@@ -2756,7 +2757,8 @@ fn a_long_hyperlink_over_a_long_result_is_one_linked_run() {
 fn hyperlink_target_copies_are_charged_to_the_work_budget() {
     use wordcraft_doc::props::CharProps;
     let bold = CharProps { bold: Some(true), ..Default::default() };
-    let result: Vec<(char, CharProps)> = (0..1000).map(|i| ('a', if i % 2 == 0 { bold.clone() } else { CharProps::default() })).collect();
+    let mut result = super::FieldResult::default();
+    (0..1000).for_each(|i| result.push('a', if i % 2 == 0 { bold.clone() } else { CharProps::default() }));
     let f = super::FieldBuild { depth: 1, instr: format!("HYPERLINK \"{}\"", "u".repeat(100)), sep: Some(result) };
     let mut pb = super::ParaBuild::default();
     let budget = super::Work::new(10_000);
@@ -2829,4 +2831,52 @@ fn prm_grpprls_past_the_work_budget_are_skipped() {
     assert_eq!(second.bold, None);
     assert_eq!(work.left.get(), 1);
     assert_eq!(work.dropped(), [super::Cost::Formatting]);
+}
+
+/// A field's cached result keeps one `CharProps` per formatting run, not one per character
+/// (365 bytes each: 4 million result characters took 1.4 GB).
+#[test]
+fn a_field_result_stores_one_props_per_run() {
+    use wordcraft_doc::props::CharProps;
+    let bold = CharProps { bold: Some(true), ..Default::default() };
+    let mut r = super::FieldResult::default();
+    for _ in 0..200_000 {
+        r.push('x', CharProps::default());
+    }
+    assert_eq!(r.runs.len(), 1);
+    assert_eq!(r.runs.first().map(|(n, _)| *n), Some(200_000));
+    r.push('\u{e9}', bold.clone());
+    r.push('y', bold);
+    r.push('z', CharProps::default());
+    assert_eq!(r.runs.iter().map(|(n, _)| *n).collect::<Vec<_>>(), [200_000, 3, 1], "a two-byte char counts its bytes");
+    assert_eq!(r.text.len(), 200_004);
+}
+
+/// A hyperlink whose result changes formatting, with multi-byte text, keeps every run's text and
+/// links all of it; a plain field keeps its result text whole.
+#[test]
+fn field_results_keep_their_text_and_runs() {
+    use wordcraft_doc::props::CharProps;
+    let bold = CharProps { bold: Some(true), ..Default::default() };
+    let mut result = super::FieldResult::default();
+    for (c, p) in
+        [('a', CharProps::default()), ('\u{e9}', CharProps::default()), ('\u{20ac}', bold.clone()), ('b', bold), ('c', CharProps::default())]
+    {
+        result.push(c, p);
+    }
+    let f = super::FieldBuild { depth: 1, instr: "HYPERLINK \"http://x\"".into(), sep: Some(result) };
+    let mut pb = super::ParaBuild::default();
+    super::finish_field(&mut pb, f, &super::Work::new(u64::MAX));
+    assert_eq!(pb.text, "a\u{e9}\u{20ac}bc");
+    assert_eq!(pb.runs.iter().map(|r| r.len).collect::<Vec<_>>(), [3, 4, 1]);
+    assert!(pb.runs.iter().all(|r| r.props.link.as_deref() == Some("http://x")));
+    let doc = read(&text_doc(&[Piece { compressed: false, text: "\u{13} PAGE \u{14}1\u{e9}2\u{15}\r".into() }], &[], 0)).expect("opens");
+    let p = doc.body.first().and_then(|b| b.as_para()).expect("paragraph");
+    assert!(
+        p.objects
+            .iter()
+            .any(|o| matches!(o, wordcraft_doc::para::InlineObject::Field { instr, result, .. } if instr == "PAGE" && result == "1\u{e9}2")),
+        "{:?}",
+        p.objects
+    );
 }
