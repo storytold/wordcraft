@@ -1297,6 +1297,23 @@ fn a_sideways_scroll_does_not_carry_over_a_change_of_direction() {
     crate::i18n::set_current(crate::i18n::Lang::EN);
 }
 
+/// #5396: a sideways scroll stays with its page, so the next File page opens at its own start.
+#[test]
+fn a_file_page_opens_at_its_start_after_another_page_scrolled_sideways() {
+    for (lang, dx) in [(crate::i18n::Lang::EN, -3000.0), (right_to_left(), 3000.0)] {
+        let lang = Rc::new(Cell::new(lang));
+        let start = narrow_page("new", Rc::clone(&lang)).get_by_label("Blank document").rect();
+        let mut h = narrow_page("home", lang);
+        let opened = h.get_by_label("Blank document").rect();
+        wheel_sideways(&mut h, dx);
+        assert_ne!(h.get_by_label("Blank document").rect(), opened, "the wheel must have scrolled Home");
+        h.state_mut().ui.backstage_page = "new".into();
+        h.run_steps(4);
+        assert_eq!(h.get_by_label("Blank document").rect(), start, "New must open at its start");
+    }
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
 /// #5396: a window wide enough for the page leaves nothing to scroll, right to left too, and a
 /// narrower one opens the page at its start again.
 #[test]

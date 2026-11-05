@@ -189,10 +189,11 @@ pub fn island<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 /// right as it overflowed last frame, and the area keeps its distance from the right end, which
 /// shows the content's start first. A change of overflow shows one frame late, so that frame is
 /// done again. Left-to-right content doesn't overflow on its left, so this is a plain scroll area.
-pub fn scroll_both(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
-    let key = ui.scope_id().with("rtl_scroll_overflow");
+/// `page` names the content, which keeps its own place when another page takes the area.
+pub fn scroll_both(ui: &mut Ui, page: &str, add: impl FnOnce(&mut Ui)) {
+    let key = ui.scope_id().with(("rtl_scroll_overflow", page));
     let (known, offset): (f32, Option<f32>) = ui.data(|d| d.get_temp(key)).unwrap_or_default();
-    let mut area = egui::ScrollArea::both().auto_shrink([false, false]);
+    let mut area = egui::ScrollArea::both().id_salt(page).auto_shrink([false, false]);
     if let Some(offset) = offset {
         area = area.horizontal_scroll_offset(offset);
     }

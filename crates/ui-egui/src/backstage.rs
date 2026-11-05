@@ -184,7 +184,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // Full width, so the bar sits at the window's edge and the wheel works over the whole page (#5282).
         // A page wider than a narrow window scrolls sideways instead of being cut off, with that bar
         // at the bottom of the window rather than under a short page (#5396).
-        crate::rtl::scroll_both(ui, |ui| {
+        let page = app.ui.backstage_page.clone();
+        crate::rtl::scroll_both(ui, &page, |ui| {
             pad.show(ui, |ui| {
                 crate::rtl::root(ui, |ui| match app.ui.backstage_page.as_str() {
                     "home" => home_page(app, ui),
