@@ -1,0 +1,44 @@
+name: hotfix-sync
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  sync:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fluorine-hotfix
+          fetch-depth: 0
+      - name: Merge upstream main and open PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "fluorine-hotfix bot"
+          git config user.email "fluorine@users.noreply.github.com"
+          git remote add upstream https://github.com/storytold/wordcraft.git
+          git fetch -q upstream main
+          git merge --no-edit -m "Merge upstream main" upstream/main
+          for n in $(gh pr list --repo storytold/wordcraft --author fluorine --state open --json number --jq '.[].number'); do
+            [ "$n" = 4460 ] && continue
+            git fetch -q upstream "pull/$n/head"
+            git merge --no-edit -m "Merge PR #$n" FETCH_HEAD
+          done
+          git push origin fluorine-hotfix
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release -p wordcraft
+      - name: Update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          powershell -c "Compress-Archive -Force target/release/wordcraft.exe wordcraft-fluorine-hotfix-windows-x64.zip"
+          sha=$(git rev-parse --short HEAD)
+          gh release upload fluorine-hotfix wordcraft-fluorine-hotfix-windows-x64.zip --clobber
+          gh release edit fluorine-hotfix --notes "Upstream main plus fluorine's open PRs (not 4460). Auto-synced daily. Build at $sha."
