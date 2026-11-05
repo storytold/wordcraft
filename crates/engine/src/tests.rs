@@ -6045,6 +6045,22 @@ fn props_colours_take_hex_strings() {
     }
 }
 
+#[test]
+fn para_set_frame_geometry_keeps_anchor_lock_unless_replaced() {
+    use wordcraft_doc::props::TextFrame;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Framed text"}));
+    let paragraph = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    paragraph.props.frame = Some(TextFrame { anchor_lock: Some(true), ..TextFrame::default() });
+
+    run(&mut s, "para.set", json!({"props": {"frame": {"x": 36.0, "y": 72.0, "w": 108.0}}}));
+    let frame = s.doc.para_at(&Pos::body(0, 0)).unwrap().props.frame.as_ref().unwrap();
+    assert_eq!((frame.x, frame.y, frame.w, frame.anchor_lock), (36.0, 72.0, Some(108.0), Some(true)));
+
+    run(&mut s, "para.set", json!({"props": {"frame": {"x": 54.0, "anchorLock": false}}}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props.frame.as_ref().unwrap().anchor_lock, Some(false));
+}
+
 /// #555: Update Heading 2 to Match Selection (the styles pane's context menu) makes Heading 2
 /// look like the selected text — its paragraph style and direct formatting — so every Heading 2
 /// paragraph changes; the selected paragraph takes Heading 2, and it is one undo step.
@@ -9659,6 +9675,47 @@ fn smart_art_edits_undo_one_step_each() {
     run(&mut s, "picture.size", json!({"width": 200, "height": 120, "lockAspect": false}));
 }
 
+/// An item's own colour survives item edits and layout changes, and a style colour drops it.
+#[test]
+fn smart_art_item_colors_stay_until_a_style_is_picked() {
+    let mut s = s();
+    run(&mut s, "insert.smartArt", json!({"layout": "process"}));
+    let colors = |s: &Session| cmd::smart_art::selected_smart_art(s).unwrap().items.iter().map(|i| i.color.map(|c| c.hex())).collect::<Vec<_>>();
+    assert!(!cmd::smart_art::selected_smart_art(&s).unwrap().has_custom_colors());
+    run(&mut s, "smartArt.itemColor", json!({"index": 1, "color": "FF8800"}));
+    assert_eq!(colors(&s), [None, Some("FF8800".to_string()), None, None]);
+    run(&mut s, "smartArt.items", json!({"items": [{"text": "A"}, {"text": "B", "color": "#ff8800"}]}));
+    run(&mut s, "smartArt.layout", json!({"layout": "cycle"}));
+    run(&mut s, "smartArt.addShape", json!({"after": 0}));
+    assert_eq!(colors(&s), [None, None, Some("FF8800".to_string())]);
+    assert!(s.run("smartArt.itemColor", &json!({"index": 0, "color": "nope"})).is_err());
+    run(&mut s, "smartArt.itemColor", json!({"index": 2}));
+    assert!(!cmd::smart_art::selected_smart_art(&s).unwrap().has_custom_colors());
+    run(&mut s, "smartArt.itemColor", json!({"index": 0, "color": "00FF00"}));
+    run(&mut s, "smartArt.colors", json!({"variant": "accent2"}));
+    assert!(!cmd::smart_art::selected_smart_art(&s).unwrap().has_custom_colors());
+    run(&mut s, "edit.undo", json!({}));
+    assert!(cmd::smart_art::selected_smart_art(&s).unwrap().has_custom_colors(), "undo brings the colours back");
+}
+
+/// A malformed colour must not silently replace a coloured item with its style colour.
+#[test]
+fn smart_art_item_colors_reject_invalid_values_without_changing_the_graphic() {
+    let mut s = s();
+    run(&mut s, "insert.smartArt", json!({"items": [{"text": "Keep", "color": "123456"}]}));
+    let before = cmd::smart_art::selected_smart_art(&s).unwrap();
+    for command in ["insert.smartArt", "smartArt.items"] {
+        for color in [json!("nope"), json!(42), json!(true), json!([]), json!({})] {
+            assert!(s.run(command, &json!({"items": [{"text": "Replace", "color": color}]})).is_err(), "{command}: {color}");
+            assert_eq!(cmd::smart_art::selected_smart_art(&s).unwrap(), before);
+        }
+        run(&mut s, command, json!({"items": [{"text": "Default", "color": null}, {"text": "Omitted"}]}));
+        assert!(!cmd::smart_art::selected_smart_art(&s).unwrap().has_custom_colors());
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(cmd::smart_art::selected_smart_art(&s).unwrap(), before);
+    }
+}
+
 /// #497: hostile SmartArt params are capped or refused, never a panic.
 #[test]
 fn smart_art_hostile_params_are_capped() {
@@ -9680,6 +9737,7 @@ fn smart_art_hostile_params_are_capped() {
         "smartArt.demote",
         "smartArt.layout",
         "smartArt.colors",
+        "smartArt.itemColor",
         "smartArt.reset",
         "smartArt.textPane",
     ] {

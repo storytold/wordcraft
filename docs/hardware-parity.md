@@ -1,6 +1,6 @@
 # Hardware parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-01 · **Change:** trivial (only the PDF sent to the printer has no link annotations; Save these pages as PDF keeps them, #4734); previously trivial (a document with links prints: the print job's PDF has no link annotations, #4734; previously trivial: Pen / stylus row: two-stroke and closed-head arrows; previously trivial: Pen / stylus row: ink, eraser and Ink to Shape incl. arrows landed; previously trivial: a window too big for its screen shrinks to fit when it opens, #1215; previously trivial: 32-bit Windows starts on OpenGL; previously major: first version) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4 and Word for Windows
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-01 · **Change:** trivial (ink page lookup work, #3614); previously trivial (only the PDF sent to the printer has no link annotations; Save these pages as PDF keeps them, #4734); previously trivial (a document with links prints: the print job's PDF has no link annotations, #4734; previously trivial: Pen / stylus row: two-stroke and closed-head arrows; previously trivial: Pen / stylus row: ink, eraser and Ink to Shape incl. arrows landed; previously trivial: a window too big for its screen shrinks to fit when it opens, #1215; previously trivial: 32-bit Windows starts on OpenGL; previously major: first version) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4 and Word for Windows
 
 > **Printing update:** 2026-10-12 · direct desktop printing through craft-print; details below.
 
@@ -21,12 +21,14 @@ pens, microphones (Dictate) and speakers (Read Aloud), and displays.
 | Touch screens and touchpads: pinch zoom, inertial scroll | ✅ | ✅ pinch (#179) | ✅ | ✅ inertial scroll (#252) | ✅ | 85% | 0–1 |
 | Scanners/cameras (Insert from device / Continuity Camera on Mac) | ✅ | ❌ | ❌ | ❌ | ❌ | 0% | 2–4 |
 
+Ink replay, eraser picking, lasso selection and arrow-candidate discovery reuse the paragraph prefixes they have already scanned (#3614). Page item order, stroke geometry and saved data retain their behavior. This narrows the stability work; ink import fidelity, native pen input and broader corpus qualification remain open.
 File > Print offers 2, 4, 6, 9 or 16 logical pages per physical sheet side and left/right-bound booklets (#641). Preview and print PDF share the sheet plan, selected pages, parity, copy padding and markup geometry. Custom-range changes reset the preview to the first sheet; Print Markup invalidates preview layout and textures. Native jobs omit link annotations as required by upstream #4734, while saved print PDFs keep their remapped links. Native printing submits copies to the spooler without multiplying them in the PDF. Ordinary PDF export remains single-page by default. Translations are reviewed separately in craft-i18n#38. Physical-printer qualification and driver-specific options remain unverified.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | trivial | Ink page lookup work, #3614. Drawing order, geometry and saved data retain their behavior; no readiness estimate change |
 | 2026-11-01 | trivial | N-up and booklet print imposition (#641): integrate current print-job link handling (#4734), preserve markup preview and sheet/copy planning; readiness estimates unchanged. |
 | 2026-10-30 | trivial | Only the PDF sent to the printer leaves out link annotations; Save these pages as PDF (`file.printPdf`) keeps them (#4734) |
 | 2026-10-29 | trivial | A document with links prints: the print job's PDF leaves out link annotations, which the spooler refused to fit to the paper (#4734) |
