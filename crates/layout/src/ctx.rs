@@ -335,20 +335,31 @@ impl Ctx<'_> {
             if float.wrap != Wrap::Inline || float.rot != 0.0 {
                 continue;
             }
-            let key = (*id, w.to_bits());
-            let h = match self.fitted.get(&key) {
-                Some(h) => *h,
-                None => {
-                    let h = textbox::fitted_height(self, *id, *w);
-                    self.fitted.insert(key, h);
-                    h
-                }
-            };
-            if let Some(h) = h {
+            if let Some(h) = self.fitted_height(*id, *w) {
                 out.push((k, h));
             }
         }
         out
+    }
+
+    /// The height of text box `id`, `w` wide, when it resizes to fit its text (once per layout).
+    fn fitted_height(&mut self, id: u32, w: f32) -> Option<f32> {
+        let key = (id, w.to_bits());
+        if let Some(h) = self.fitted.get(&key) {
+            return *h;
+        }
+        let h = textbox::fitted_height(self, id, w);
+        self.fitted.insert(key, h);
+        h
+    }
+
+    /// The height floating object `o`, `w` wide and `h` tall, takes: a text box that resizes to
+    /// fit its text is as tall as its text, anything else its own height.
+    pub(crate) fn float_height(&mut self, o: &InlineObject, w: f32, h: f32) -> f32 {
+        match o {
+            InlineObject::Shape { story: Some(id), .. } => self.fitted_height(*id, w).unwrap_or(h),
+            _ => h,
+        }
     }
 
     /// The cache key of `p` laid out with these inputs, and its first automatic equation number
