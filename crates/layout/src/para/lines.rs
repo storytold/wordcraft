@@ -189,18 +189,15 @@ fn style_size(pl: &ParaLayout, cluster: usize) -> f32 {
     pl.clusters.get(cluster).and_then(|c| pl.styles.get(c.style as usize)).map(|s| s.size).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(12.0)
 }
 
-pub(super) fn text_cluster_source<'a>(p: &'a Paragraph, c: &Cluster) -> Option<&'a str> {
+pub(super) fn text_cluster_source<'a>(pl: &'a ParaLayout, p: &'a Paragraph, cluster: usize) -> Option<&'a str> {
+    let c = pl.clusters.get(cluster)?;
     if c.kind != ClKind::Text {
         return None;
     }
-    let text = p.text.get(c.start..c.end)?;
-    if text.chars().eq(std::iter::once(OBJ)) {
-        let object_index = p.text.get(..c.start)?.chars().filter(|ch| *ch == OBJ).count();
-        return match p.objects.get(object_index)? {
-            wordcraft_doc::InlineObject::Field { result, .. } => Some(result.as_str()),
-            _ => None,
-        };
+    if let Ok(i) = pl.shown.binary_search_by_key(&cluster, |(i, _, _)| *i) {
+        return pl.shown.get(i).map(|(_, text, _)| text.as_str());
     }
+    let text = p.text.get(c.start..c.end)?;
     (!text.chars().any(|ch| matches!(ch, OBJ | LINE_BREAK | PAGE_BREAK | COLUMN_BREAK | '\t'))).then_some(text)
 }
 
@@ -234,7 +231,7 @@ fn space_text_neighbors(pl: &ParaLayout, p: &Paragraph, k: usize, c0: usize, c1:
         if c.kind == ClKind::Marker {
             continue;
         }
-        break text_cluster_source(p, c)?;
+        break text_cluster_source(pl, p, left)?;
     };
     let mut right = k;
     let right_text = loop {
@@ -249,7 +246,7 @@ fn space_text_neighbors(pl: &ParaLayout, p: &Paragraph, k: usize, c0: usize, c1:
         if c.kind == ClKind::Marker {
             continue;
         }
-        break text_cluster_source(p, c)?;
+        break text_cluster_source(pl, p, right)?;
     };
     (!left_text.is_empty() && !right_text.is_empty()).then_some((left, right))
 }
@@ -714,7 +711,10 @@ impl<'e> Breaker<'e> {
         let stretch_end = sc.end == LineEnd::Wrap || (sc.end == LineEnd::LineBreak && self.expand_break);
         let line_has_thai = self.has_thai
             && pl.clusters.get(c0..c1).is_some_and(|clusters| {
-                clusters.iter().any(|c| text_cluster_source(self.p, c).is_some_and(|t| t.chars().any(crate::kinsoku::is_thai_text_char)))
+                clusters
+                    .iter()
+                    .enumerate()
+                    .any(|(offset, _)| text_cluster_source(pl, self.p, c0 + offset).is_some_and(|t| t.chars().any(crate::kinsoku::is_thai_text_char)))
             });
         let justify = display.is_none()
             && ((rp.align == Align::Justify && stretch_end && (!line_has_thai || sc.end == LineEnd::Wrap))

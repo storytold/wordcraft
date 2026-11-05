@@ -657,7 +657,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         enclosures,
         auto_space,
     };
-    has_thai |= pl.clusters.iter().any(|c| text_cluster_source(p, c).is_some_and(|text| text.chars().any(crate::kinsoku::is_thai_text_char)));
+    has_thai |= pl.shown.iter().any(|(_, text, _)| text.chars().any(crate::kinsoku::is_thai_text_char));
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&bt.text, |i| bt.to_para(i), &pl, auto, env.doc.settings.hyphenate_caps, &runs);
     // A paragraph whose text and mark are all a deletion the layout leaves out (a deleted
@@ -674,9 +674,12 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             .enumerate()
             .filter_map(|(i, pair)| {
                 let (left, right) = (pair.first()?, pair.get(1)?);
-                let a = text_cluster_source(p, left)?.chars().next_back()?;
-                let b = text_cluster_source(p, right)?.chars().next()?;
+                let a = text_cluster_source(&pl, p, i)?.chars().next_back()?;
+                let b = text_cluster_source(&pl, p, i + 1)?.chars().next()?;
                 if !crate::kinsoku::is_thai_text_char(a) || !crate::kinsoku::is_thai_text_char(b) {
+                    return None;
+                }
+                if p.text.get(left.start..left.end)?.contains(OBJ) || p.text.get(right.start..right.end)?.contains(OBJ) {
                     return None;
                 }
                 let visible = bt.to_visible(left.end)?;
