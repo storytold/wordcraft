@@ -944,6 +944,7 @@ fn dragging_a_large_picture_renders_a_preview_within_the_gpu_texture_limit() {
         float: wordcraft_doc::para::Float { wrap: Wrap::InFrontOfText, x: 100.0, y: 100.0, ..Default::default() },
         crop: [0.0; 4],
         ole: None,
+        fx: Default::default(),
     };
     let (mut app, _) = app_with(picture);
     app.session.doc.media.insert("large-preview-test".into(), Arc::new(bytes));
