@@ -416,7 +416,7 @@ pub fn table_style_preview(ui: &mut Ui, style: Option<&TableStyleProps>, look: T
                             &[px * 3.0, px * 3.0],
                             0.0,
                         )),
-                        BorderStyle::Dotted => painter.extend(egui::Shape::dashed_line(&[from, to], stroke, px, px)),
+                        BorderStyle::Dotted => painter.extend(egui::Shape::dotted_line(&[from, to], color, px * 2.0, px * 0.5)),
                         _ => {
                             painter.line_segment([from, to], stroke);
                         }
@@ -814,6 +814,10 @@ mod tests {
                         && (points[1].y - points[0].y).abs() < 0.01
                     {
                         Some((*points, stroke.width))
+                    } else if let egui::Shape::Circle(dot) = &s.shape
+                        && dot.fill == color
+                    {
+                        Some(([dot.center - vec2(dot.radius, 0.0), dot.center + vec2(dot.radius, 0.0)], dot.radius * 2.0))
                     } else {
                         None
                     }
@@ -843,5 +847,40 @@ mod tests {
                 }
             }
         }
+    }
+    /// Every thin preview dot keeps nondegenerate ink after default 1× endpoint rounding.
+    #[test]
+    fn border_preview_thin_dots_survive_tessellation() {
+        let color = egui::Color32::from_rgb(13, 97, 181);
+        let mut style = TableStyleProps::default();
+        let border = Border { style: BorderStyle::Dotted, width: 0.5, color: Some(Rgb(13, 97, 181)), space: 0.0 };
+        style.parts.borders = Some(Borders { top: Some(border), left: Some(border), ..Default::default() });
+        let ctx = egui::Context::default();
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            table_style_preview(ui, Some(&style), TableLook::default());
+        });
+        let dots = out
+            .shapes
+            .iter()
+            .filter(|s| match &s.shape {
+                egui::Shape::LineSegment { stroke, .. } => stroke.color == color,
+                egui::Shape::Circle(c) => c.fill == color,
+                _ => false,
+            })
+            .collect::<Vec<_>>();
+        assert!(dots.len() > 20, "actual horizontal and vertical preview borders");
+        for (index, dot) in dots.iter().enumerate() {
+            let triangles = ctx.tessellate(vec![(*dot).clone()], 1.0);
+            let ink = triangles.iter().any(|p| {
+                let egui::epaint::Primitive::Mesh(mesh) = &p.primitive else { return false };
+                mesh.indices.chunks_exact(3).any(|ids| {
+                    let [a, b, c] = [mesh.vertices[ids[0] as usize], mesh.vertices[ids[1] as usize], mesh.vertices[ids[2] as usize]];
+                    let area = ((b.pos.x - a.pos.x) * (c.pos.y - a.pos.y) - (b.pos.y - a.pos.y) * (c.pos.x - a.pos.x)).abs();
+                    area > 0.0001 && [a, b, c].iter().any(|v| v.color.a() > 0)
+                })
+            });
+            assert!(ink, "preview dot {index} must retain visible tessellated ink at 1×: {:?}", dot.shape);
+        }
+        out.drop_without_applying_deltas();
     }
 }
