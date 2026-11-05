@@ -46,10 +46,6 @@ struct Recorder<'a> {
     before: &'a [Revision],
     revisions: &'a mut Vec<Revision>,
     rid: Option<u32>,
-    /// Compare Documents leaves list numbering out of its paragraph-format comparison (there is
-    /// no `w:numberingChange` emitter yet), so a numbering-only difference records nothing; the
-    /// editing path keeps numbering, matching `ParaProps::formatting`.
-    ignore_numbering: bool,
     /// Compare Documents adopts the revised paragraph (and so its embedded section) wholesale, so
     /// the revised section's headers and footers would otherwise survive adoption untracked while
     /// [`resolve_section`] preserves the current references across accept/reject — Reject could
@@ -87,8 +83,8 @@ impl Recorder<'_> {
     }
 
     /// As [`change`], but `snap` builds the stored original where `before` carries no earlier
-    /// change: the comparison can ignore properties (list numbering) that the snapshot must keep,
-    /// so rejecting restores them.
+    /// change: a comparison can ignore properties the snapshot must keep, so rejecting restores
+    /// them.
     fn change_keeping<T: Clone + PartialEq>(
         &mut self,
         before: &T,
@@ -143,14 +139,7 @@ impl Recorder<'_> {
             }
         }
         let mark = self.change(&b.mark, &a.mark, CharProps::formatting, |c| &c.fmt_change);
-        // Compare leaves list numbering out of the paragraph-format comparison, pending a
-        // `w:numberingChange` emitter; the editing path keeps it (see the field). The snapshot
-        // still keeps the original numbering, so rejecting restores it.
-        let props = if self.ignore_numbering {
-            self.change_keeping(&b.props, &a.props, compare_para_props, ParaProps::formatting, |p| &p.fmt_change)
-        } else {
-            self.change(&b.props, &a.props, ParaProps::formatting, |p| &p.fmt_change)
-        };
+        let props = self.change(&b.props, &a.props, ParaProps::formatting, |p| &p.fmt_change);
         // The section's properties on the paragraph (`w:sectPrChange`).
         let section = match (b.section.as_deref(), a.section.as_deref()) {
             (Some(bs), Some(x)) => self.change(bs, x, strip_section, |s| &s.fmt_change),
@@ -257,14 +246,6 @@ fn strip_section(s: &SectionProps) -> SectionProps {
     SectionProps { fmt_change: None, headers: Default::default(), footers: Default::default(), ..s.clone() }
 }
 
-/// The properties comparison Compare Documents uses: like [`ParaProps::formatting`], but list
-/// numbering is left out, so a numbering-only difference records nothing pending a
-/// `w:numberingChange` emitter. The snapshot stored in a `w:pPrChange` still keeps the original
-/// numbering (see [`Recorder::change_keeping`]), so rejecting restores it.
-fn compare_para_props(p: &ParaProps) -> ParaProps {
-    ParaProps { numbering: None, ..p.formatting() }
-}
-
 /// Keep the formatting changes the command `id` made to `s.doc` (compared with `before`) as
 /// tracked formatting changes, when Track Changes and Track Formatting are on.
 pub(crate) fn record(s: &mut Session, id: &str, before: &Document) {
@@ -273,7 +254,8 @@ pub(crate) fn record(s: &mut Session, id: &str, before: &Document) {
     }
     let author = s.author.clone();
     let doc = &mut s.doc;
-    let mut r = Recorder { author, date: super::now_iso(), before: &before.revisions, revisions: &mut doc.revisions, rid: None, ignore_numbering: false, keep_section_refs: false };
+    let mut r =
+        Recorder { author, date: super::now_iso(), before: &before.revisions, revisions: &mut doc.revisions, rid: None, keep_section_refs: false };
     r.blocks(&before.body, &mut doc.body, 0);
     for (k, pb) in &before.parts {
         if let Some(pa) = doc.parts.get_mut(k) {
@@ -285,7 +267,7 @@ pub(crate) fn record(s: &mut Session, id: &str, before: &Document) {
 /// Compare Documents: record how paragraph `new` (the revised version, same text) is formatted
 /// differently from `old` as tracked formatting changes by `author`.
 pub(crate) fn compare_formatting(old: &Paragraph, new: &mut Paragraph, revisions: &mut Vec<Revision>, author: &str, date: &str) {
-    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None, ignore_numbering: true, keep_section_refs: true };
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None, keep_section_refs: true };
     r.para(old, new);
 }
 
@@ -296,7 +278,7 @@ pub(crate) fn compare_formatting(old: &Paragraph, new: &mut Paragraph, revisions
 /// row's properties are compared even when another row's cell count differs (only that row's
 /// cells are then skipped).
 pub(crate) fn compare_block(old: &Arc<Block>, new: &mut Arc<Block>, revisions: &mut Vec<Revision>, author: &str, date: &str) {
-    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None, ignore_numbering: true, keep_section_refs: true };
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None, keep_section_refs: true };
     r.block(old, new, 0);
 }
 
@@ -304,7 +286,7 @@ pub(crate) fn compare_block(old: &Arc<Block>, new: &mut Arc<Block>, revisions: &
 /// differently from `old` as a tracked formatting change by `author`. Returns whether the
 /// section's properties differ (the caller takes the revised section then).
 pub(crate) fn compare_section(old: &SectionProps, new: &mut SectionProps, revisions: &mut Vec<Revision>, author: &str, date: &str) -> bool {
-    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None, ignore_numbering: true, keep_section_refs: false };
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None, keep_section_refs: false };
     if let Some(Replacement(w)) = r.change(old, new, strip_section, |s| &s.fmt_change) {
         new.fmt_change = w;
         true

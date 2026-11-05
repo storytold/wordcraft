@@ -449,8 +449,7 @@ fn compare_records_a_paragraph_sections_properties() {
     let doc = |margin: f32| {
         let mut d = Document::from_text("A\nB");
         let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
-        let mut sec = wordcraft_doc::SectionProps::default();
-        sec.margin_left = margin;
+        let sec = wordcraft_doc::SectionProps { margin_left: margin, ..Default::default() };
         p.section = Some(Box::new(sec));
         p.touch();
         d
@@ -493,9 +492,8 @@ fn compare_a_table_whose_text_changed_is_not_property_compared() {
     // Accept keeps the revised text and Reject the original.
     let tables: Vec<&wordcraft_doc::table::Table> = s.doc.body.iter().filter_map(|b| b.as_table()).collect();
     assert_eq!(tables.len(), 2, "the changed-text table is a delete/insert pair, not one matched table");
-    let marked = |t: &wordcraft_doc::table::Table, f: fn(&CharProps) -> bool| {
-        t.rows[0].cells[0].blocks[0].as_para().unwrap().runs.iter().any(|r| f(&r.props))
-    };
+    let marked =
+        |t: &wordcraft_doc::table::Table, f: fn(&CharProps) -> bool| t.rows[0].cells[0].blocks[0].as_para().unwrap().runs.iter().any(|r| f(&r.props));
     assert!(marked(tables[0], |c| c.del.is_some()), "the original table is marked deleted");
     assert!(marked(tables[1], |c| c.ins.is_some()), "the revised table is marked inserted");
     s.run("review.acceptAll", &json!({})).unwrap();
@@ -521,30 +519,61 @@ fn cell_texts(s: &Session) -> Vec<String> {
         .collect()
 }
 
-/// A numbering-only difference must not be recorded as `w:pPrChange`: Word records list changes
-/// as `w:numberingChange`, which Compare's properties comparison leaves out.
+/// A numbering-only difference is a paragraph-format change: recorded as a `w:pPrChange` (whose
+/// stored snapshot keeps the original numbering, so rejecting restores it), exactly as on main,
+/// until a `w:numberingChange` emitter exists.
 #[test]
-fn compare_a_numbering_only_difference_is_not_a_paragraph_formatting_change() {
+fn compare_a_numbering_only_difference_is_a_paragraph_formatting_change() {
     use wordcraft_doc::props::NumRef;
-    // Unit: the compare strip leaves numbering out entirely.
+    // Unit: the paragraph-format comparison keeps numbering, so the difference records a change
+    // whose stored original carries the original (un-numbered) properties.
     let old = Paragraph::with_text("A", CharProps::default());
     let mut new = Paragraph::with_text("A", CharProps::default());
     new.props.numbering = Some(NumRef { num: 1, level: 0 });
     let mut revs = Vec::new();
     crate::cmd::fmt_revisions::compare_formatting(&old, &mut new, &mut revs, "Reviewer", "2026-01-01T00:00:00Z");
-    assert!(new.props.fmt_change.is_none(), "a numbering-only difference must not yield a w:pPrChange");
-    assert!(revs.is_empty(), "numbering alone is no formatting revision");
+    let ch = new.props.fmt_change.as_ref().expect("a numbering-only difference yields a w:pPrChange");
+    assert!(ch.old.numbering.is_none(), "the stored original keeps the original (un-numbered) properties");
+    assert_eq!(revs.iter().filter(|r| r.kind == RevisionKind::Format).count(), 1, "the change records one formatting revision");
 
-    // End to end: a list applied to otherwise identical text isn't a formatting change.
+    // End to end: a list applied to otherwise identical text is a formatting change.
     let mut rev = Session::new(Document::from_text("A"));
     let r = rev.run("list.define", &json!({"levels": [{"format": "decimal", "text": "%1."}], "apply": false})).unwrap();
     let num = r["num"].as_u64().unwrap() as u32;
     rev.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering = Some(NumRef { num, level: 0 });
-    let (s, r) = compare_saved("num", Document::from_text("A"), &rev.doc, json!({}));
+    let (mut s, r) = compare_saved("num", Document::from_text("A"), &rev.doc, json!({}));
     let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
     assert!(p.props.numbering.is_some(), "the revised list survives the comparison");
-    assert!(p.props.fmt_change.is_none(), "a list-only difference is not recorded as w:pPrChange");
-    assert_eq!(r["changes"], 0, "numbering alone is not a formatting change: {r}");
+    assert!(p.props.fmt_change.is_some(), "a list-only difference is recorded as w:pPrChange");
+    assert_eq!(r["changes"], 1, "numbering is a formatting change: {r}");
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p.props.numbering.is_none(), "reject restores the original (un-numbered) paragraph");
+    assert!(p.props.fmt_change.is_none(), "reject drops the change record");
+
+    // End to end, the other way: a list removed records a change and rejecting restores the list.
+    let numbered = |text: &str| {
+        let mut s = Session::new(Document::from_text(text));
+        let r = s.run("list.define", &json!({"levels": [{"format": "decimal", "text": "%1."}], "apply": false})).unwrap();
+        let num = r["num"].as_u64().unwrap() as u32;
+        s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering = Some(NumRef { num, level: 0 });
+        s.doc
+    };
+    let original = numbered("A");
+    let original_num =
+        original.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering.expect("the original paragraph is numbered");
+    let (mut s, r) = compare_saved("numremoved", original, &Document::from_text("A"), json!({}));
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p.props.numbering.is_none(), "the revised (un-numbered) paragraph survives");
+    assert!(p.props.fmt_change.is_some(), "removing a list is recorded as w:pPrChange");
+    let ch = p.props.fmt_change.as_ref().expect("removing a list yields a w:pPrChange");
+    assert_eq!(ch.old.numbering, Some(original_num), "the stored original carries exactly the original numbering");
+    assert_eq!(r["changes"], 1, "removing a list is a formatting change: {r}");
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p.props.numbering.is_some(), "reject restores the original numbering");
+    assert_eq!(p.props.numbering, Some(original_num), "reject restores exactly the original numbering");
+    assert!(p.props.fmt_change.is_none(), "reject drops the change record");
 }
 
 /// A document whose body is `text` and whose final section carries a header with `header`: a
@@ -604,8 +633,7 @@ fn para_section_doc(margin: f32, header: &str) -> (Document, u32) {
     let _ = d.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("unused", CharProps::default()))]);
     let id = d.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text(header, CharProps::default()))]);
     let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
-    let mut sec = wordcraft_doc::SectionProps::default();
-    sec.margin_left = margin;
+    let mut sec = wordcraft_doc::SectionProps { margin_left: margin, ..Default::default() };
     sec.headers.default = Some(id);
     p.section = Some(Box::new(sec));
     p.touch();
@@ -671,14 +699,15 @@ fn compare_block_keeps_a_cell_paragraphs_original_section_references() {
     use wordcraft_doc::table::{Cell, Row, Table};
     let mut original = Document::from_text("x");
     let _ = original.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("unused", CharProps::default()))]);
-    let original_id = original.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Original header.", CharProps::default()))]);
+    let original_id =
+        original.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Original header.", CharProps::default()))]);
     let mut revised = Document::from_text("x");
-    let revised_id = revised.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Revised header.", CharProps::default()))]);
+    let revised_id =
+        revised.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Revised header.", CharProps::default()))]);
     assert_ne!(original_id, revised_id, "the ids must differ, or the test can't see a leaked reference");
     let cell_para = |id: u32, margin: f32| {
         let mut p = Paragraph::with_text("A", CharProps::default());
-        let mut sec = wordcraft_doc::SectionProps::default();
-        sec.margin_left = margin;
+        let mut sec = wordcraft_doc::SectionProps { margin_left: margin, ..Default::default() };
         sec.headers.default = Some(id);
         p.section = Some(Box::new(sec));
         p
@@ -735,7 +764,8 @@ fn revised_cell_section_docx(header: &str) -> Vec<u8> {
     let document = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {NS}><w:body><w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:pPr><w:sectPr><w:headerReference w:type="default" r:id="rIdHdr"/></w:sectPr></w:pPr><w:r><w:t>A</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/></w:body></w:document>"#
     );
-    let header_part = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr {NS}><w:p><w:r><w:t>{header}</w:t></w:r></w:p></w:hdr>"#);
+    let header_part =
+        format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr {NS}><w:p><w:r><w:t>{header}</w:t></w:r></w:p></w:hdr>"#);
     let types = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/></Types>"#;
     let root_rels = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
     let doc_rels = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdHdr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/></Relationships>"#;
@@ -766,7 +796,8 @@ fn compare_a_reference_only_cell_section_change_records_nothing() {
     // document's own header id: a leaked revised reference would point at the unused story.
     let mut original = Document::from_text("x");
     let _ = original.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("unused", CharProps::default()))]);
-    let original_id = original.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Original header.", CharProps::default()))]);
+    let original_id =
+        original.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Original header.", CharProps::default()))]);
     let mut sec = wordcraft_doc::SectionProps::default();
     sec.headers.default = Some(original_id);
     let mut p = Paragraph::with_text("A", CharProps::default());
