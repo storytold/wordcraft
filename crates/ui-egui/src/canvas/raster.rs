@@ -25,6 +25,7 @@ pub(super) struct Raster {
 }
 
 impl Raster {
+    /// Its scale and its size in texels, for tests.
     #[cfg(test)]
     pub(super) fn sized(&self) -> (f32, [usize; 2]) {
         (self.scale, self.tex.size())
@@ -130,10 +131,12 @@ impl Rasterizer {
         self.rendered + self.tiles_rendered
     }
 
+    /// A wheel or pinch zoom is under way: rasters are stretched, not rendered again.
     fn zooming(&self) -> bool {
         self.gesture_age < ZOOM_SETTLE
     }
 
+    /// Whether this frame has rendered for less than [`BUDGET_MS`] so far.
     fn budget_left(&self) -> bool {
         crate::now_ms() - self.t0 < BUDGET_MS
     }
@@ -163,6 +166,7 @@ impl Rasterizer {
         }
     }
 
+    /// A page drawn as one texture at `s` pixels per point, stretched until it is rendered at `s`.
     fn whole(&mut self, app: &mut WordApp, ctx: &egui::Context, job: &PageJob<'_>, s: f32) -> PageDraw {
         let i = job.index;
         let forced = job.hide.is_some();
@@ -189,6 +193,8 @@ impl Rasterizer {
         PageDraw { rect, images: vec![(r.tex.id(), rect)] }
     }
 
+    /// A page drawn as tiles at `s` pixels per point over the view, on its underlay and on any
+    /// tiles left from an earlier zoom.
     fn tiled(&mut self, app: &mut WordApp, ctx: &egui::Context, job: &PageJob<'_>, s: f32) -> PageDraw {
         let i = job.index;
         let forced = job.hide.is_some();
@@ -333,6 +339,7 @@ fn tile_rect(origin: egui::Pos2, id: TileId, tile: usize, k: f32, size: egui::Ve
     Rect::from_min_size(origin + at * k, size * k)
 }
 
+/// Page `page` (or its `area`, in points) rendered at `s` pixels per point, without `hide`.
 fn rasterize(app: &WordApp, page: &Page, area: Option<wordcraft_geom::Rect>, s: f32, dim_body: bool, hide: Option<&Pos>) -> egui::ColorImage {
     let mut opts = page_render_options(app, dim_body);
     // Only on the page it is on: the `Pos` can't match an object of another page.
@@ -344,6 +351,7 @@ fn rasterize(app: &WordApp, page: &Page, area: Option<wordcraft_geom::Rect>, s: 
     page_image(&img)
 }
 
+/// Puts `img` on the GPU under `key`, reusing the texture already there.
 fn upload<K: Eq + Hash>(
     ctx: &egui::Context,
     map: &mut HashMap<K, Raster>,

@@ -909,6 +909,8 @@ fn draw_page_gridlines(app: &WordApp, painter: &egui::Painter, t: &Tokens, page:
     }
 }
 
+/// Draws each page near the view (shadow, paper, raster, header/footer chrome and gridlines) and
+/// returns every page's rect on screen.
 fn paint_pages(pass: PagePaint<'_>) -> Vec<Rect> {
     let PagePaint { app, ui, layout, geo, t, painter, paper, hidden, view, content_origin, grid_story, raster } = pass;
     let mut rects = Vec::with_capacity(geo.rects.len());
