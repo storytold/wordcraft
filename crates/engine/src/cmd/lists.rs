@@ -16,6 +16,7 @@ use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 /// The most levels a list has (Word's nine).
 pub const LEVELS: usize = 9;
 
+/// The list commands: `list.define`, `list.get` and the heading-list presets.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("list.define", "Define New Multilevel List", "Home › Paragraph › Multilevel List", define).params(
@@ -169,6 +170,7 @@ fn default_level(i: usize) -> Level {
     levels_for(ListKind::Numbered).into_iter().nth(i).unwrap_or_default()
 }
 
+/// `list.get`: the levels of list `num` (default: the caret's list) as `list.define` takes them.
 fn get(s: &mut Session, v: &Value) -> CmdResult {
     let num =
         p::u64(v, "num").map(|n| n.min(u32::MAX as u64) as u32).or_else(|| caret_list(s)).ok_or_else(|| CmdError::Failed("not in a list".into()))?;
@@ -176,11 +178,17 @@ fn get(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"num": num, "levels": levels.iter().map(level_json).collect::<Vec<_>>()}))
 }
 
+/// `list.define`: a new multilevel list, or list `num` changed in place, from the given levels.
 fn define(s: &mut Session, v: &Value) -> CmdResult {
     let given = v.get("levels").and_then(Value::as_array).ok_or_else(|| CmdError::Params("`levels` (array) is required".into()))?;
     let target = p::u64(v, "num").map(|n| n.min(u32::MAX as u64) as u32);
     let base = match target {
-        Some(n) => levels_of(s, n).ok_or_else(|| CmdError::Params("no such list".into()))?,
+        // The shared definition (level overrides included), not this list's own start overrides:
+        // a typed "5. " must not become the start of every list sharing the definition.
+        Some(n) => {
+            s.doc.numbering.num(n).ok_or_else(|| CmdError::Params("no such list".into()))?;
+            (0..LEVELS).map(|i| s.doc.numbering.level(n, i as u8).cloned().unwrap_or_else(|| default_level(i))).collect()
+        }
         None => (0..LEVELS).map(default_level).collect(),
     };
     let levels: Vec<Level> = base
@@ -204,6 +212,14 @@ fn define(s: &mut Session, v: &Value) -> CmdResult {
             }
             if let Some(x) = Arc::make_mut(&mut s.doc.numbering).nums.iter_mut().find(|x| x.id == n) {
                 x.level_overrides.clear();
+                // A start given for a level moves this list's own start override with it (it would
+                // otherwise shadow the new definition); a level without a `start` keeps its override.
+                for (i, lv) in given.iter().enumerate().take(LEVELS) {
+                    if lv.is_object() && p::u64(lv, "start").is_some() {
+                        x.start_overrides.retain(|(l, _)| *l as usize != i);
+                        x.start_overrides.push((i as u8, levels[i].start));
+                    }
+                }
             }
             let sharing: Vec<u32> = s.doc.numbering.nums.iter().filter(|x| x.abstract_id == aid).map(|x| x.id).collect();
             touch_lists(s, &sharing)?;

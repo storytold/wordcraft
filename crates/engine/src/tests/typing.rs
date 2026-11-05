@@ -417,6 +417,27 @@ fn a_typed_list_start_shows_in_the_list_levels() {
     assert!(levels[1..].iter().all(|l| l.start == 1));
 }
 
+/// Redefining a typed list in place edits the shared definition: the list's own typed start is not
+/// copied into it, and the list still starts where it was typed.
+#[test]
+fn redefining_a_typed_list_keeps_its_start_out_of_the_shared_definition() {
+    let mut s = typed("5. a");
+    let num = crate::cmd::lists::caret_list(&s).expect("in a list");
+    run(&mut s, "list.define", json!({"num": num, "levels": [{}]}));
+    assert_eq!(s.doc.numbering.level(num, 0).expect("level").start, 1);
+    assert_eq!(crate::cmd::lists::levels_of(&s, num).expect("levels")[0].start, 5);
+}
+
+/// A start given when a typed list is redefined in place replaces the list's own typed start.
+#[test]
+fn redefining_a_typed_list_with_a_start_replaces_its_typed_start() {
+    let mut s = typed("5. a");
+    let num = crate::cmd::lists::caret_list(&s).expect("in a list");
+    run(&mut s, "list.define", json!({"num": num, "levels": [{"start": 7}]}));
+    assert_eq!(s.doc.numbering.level(num, 0).expect("level").start, 7);
+    assert_eq!(crate::cmd::lists::levels_of(&s, num).expect("levels")[0].start, 7);
+}
+
 /// The label is removed by the AutoFormat: with Track Changes on, what this author typed goes
 /// outright, but a label that was already in the paragraph is marked deleted, so Reject All
 /// brings it back.
