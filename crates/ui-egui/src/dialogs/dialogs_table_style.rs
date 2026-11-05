@@ -873,7 +873,7 @@ mod tests {
             let triangles = ctx.tessellate(vec![(*dot).clone()], 1.0);
             let ink = triangles.iter().any(|p| {
                 let egui::epaint::Primitive::Mesh(mesh) = &p.primitive else { return false };
-                mesh.indices.chunks_exact(3).any(|ids| {
+                mesh.indices.as_chunks::<3>().0.iter().any(|ids| {
                     let [a, b, c] = [mesh.vertices[ids[0] as usize], mesh.vertices[ids[1] as usize], mesh.vertices[ids[2] as usize]];
                     let area = ((b.pos.x - a.pos.x) * (c.pos.y - a.pos.y) - (b.pos.y - a.pos.y) * (c.pos.x - a.pos.x)).abs();
                     area > 0.0001 && [a, b, c].iter().any(|v| v.color.a() > 0)
