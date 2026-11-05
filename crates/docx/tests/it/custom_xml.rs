@@ -138,6 +138,7 @@ fn bibliography_part_with_no_usable_sources_is_replaced_when_sources_are_added()
     assert!(bib.contains("<b:Tag>Added</b:Tag>"), "{bib}");
     assert!(!bib.contains("NameList"), "the old empty store's markup is gone: {bib}");
     assert!(out.contains_key("customXml/itemProps1.xml"));
+    assert!(!out.contains_key("customXml/item2.xml"), "the stale store the file carried is not written beside the new one");
     assert!(!out.contains_key("customXml/item3.xml"));
     assert!(text(&out, "_rels/.rels").contains(r#"Target="customXml/item1.xml""#), "the bibliography is related from the package root");
 }
