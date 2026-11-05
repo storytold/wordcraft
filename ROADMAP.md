@@ -139,7 +139,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
-- 2026-11-03: Save As saves a name typed without an extension (`Report`, or `Report v1.2`, whose `.2` isn't a format) with the suggested format's, as Word adds `.docx`, instead of failing; a template keeps `.dotx` and an export its own format. WordCraft's own file browser offers every format for Save As (#5368).
+- 2026-11-03: Save As saves a name typed without an extension (`Report`, or `Report v1.2`, whose `.2` isn't a format) with the suggested format's extension, as Word adds `.docx`, instead of failing; a template keeps `.dotx` and an export its own format. WordCraft's own file browser offers every format for Save As (#5368).
 - 2026-10-28: Ink replay, eraser picking, lasso selection and arrow-candidate discovery reuse the paragraph prefixes they have already scanned (#3614). Page item order, stroke geometry and saved data retain their behavior. This narrows the stability work; ink import fidelity, native pen input and broader corpus qualification remain open.
 
 - 2026-11-04: OpenDocument files have no display settings any more (gap 19): File › Options › Advanced › OpenDocument files, `file.options` `odf`, `WORDCRAFT_ODF`, the LibreOffice style and custom values are gone. WordCraft makes one choice for each case the standard leaves open, the one the default made, and still follows what a file states ([docs/odf-interpretation.md](docs/odf-interpretation.md)).
