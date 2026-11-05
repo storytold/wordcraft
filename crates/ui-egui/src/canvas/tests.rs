@@ -4771,7 +4771,16 @@ fn context_menu_crop_item_activates_crop_mode() {
     use egui_kittest::kittest::Queryable;
     use wordcraft_doc::para::{InlineObject, OBJ};
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
-    let pic = InlineObject::Image { media: "m".into(), w: 200.0, h: 100.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    let pic = InlineObject::Image {
+        media: "m".into(),
+        w: 200.0,
+        h: 100.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
     app.session.doc.insert_object(&Pos::body(0, 0), pic, &Default::default()).unwrap();
     let end = Pos::body(0, OBJ.len_utf8());
     app.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": end})).unwrap();
@@ -4812,6 +4821,7 @@ fn crop_is_disabled_when_cursor_is_adjacent_without_selection() {
         alt: String::new(),
         float: Default::default(),
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     app.session.doc.insert_object(&Pos::body(0, 0), pic, &Default::default()).unwrap();
@@ -4922,4 +4932,59 @@ fn a_long_comment_balloon_paints_only_its_first_ten_rows() {
         );
         assert!(hidden.iter().all(|r| r.min.y >= clip.max.y - 0.5), "the rows after the tenth are cut off: {:?}, clip {clip:?}", hidden.first());
     }
+}
+
+/// #1961 review: what a picture draws must be in its page's fingerprint itself. Reset Picture on
+/// one never edited keeps its media and clears only its corrections and crop, and undo puts them
+/// back; the anchor paragraph's layout pointer also moves then, but only as long as the old
+/// layout isn't freed and its address reused, so this looks at the picture's items alone.
+#[test]
+fn a_pictures_corrections_and_crop_change_its_page_key() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    use wordcraft_doc::picfx::PicFx;
+    let mut d = wordcraft_doc::Document::new();
+    let media = d.add_media(b"not really a png".to_vec(), "png");
+    let float = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+    let mut p = wordcraft_doc::Paragraph::new();
+    let pic = wordcraft_doc::para::InlineObject::Image {
+        media,
+        w: 40.0,
+        h: 20.0,
+        alt: String::new(),
+        float,
+        crop: [0.0; 4],
+        fx: PicFx::new(0, 0, 80_000),
+        ole: None,
+    };
+    p.insert_object(0, pic, &Default::default()).unwrap();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let mut s = wordcraft_engine::Session::new(d);
+    let key = |s: &mut wordcraft_engine::Session| {
+        let layout = s.layout();
+        let items: Vec<Placed> = layout.pages[0].items.iter().filter(|i| matches!(i, Placed::Image { .. })).cloned().collect();
+        assert_eq!(items.len(), 1, "the picture is an item of its page");
+        pages::page_content_key(&Page { items, ..Default::default() })
+    };
+    let faded = key(&mut s);
+    s.run("select.range", &json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 3}})).unwrap();
+    s.run("picture.reset", &json!({})).unwrap();
+    assert_ne!(key(&mut s), faded, "Reset Picture changes only the corrections");
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(key(&mut s), faded, "undo gives back the faded picture");
+    let at = |crop: [f32; 4], fx: PicFx| Page {
+        items: vec![Placed::Image {
+            rect: Default::default(),
+            media: "m".into(),
+            crop,
+            story: StoryRef::Body,
+            path: Default::default(),
+            off: 0,
+            spin: Default::default(),
+            fx,
+        }],
+        ..Default::default()
+    };
+    let plain = pages::page_content_key(&at([0.0; 4], PicFx::default()));
+    assert_ne!(plain, pages::page_content_key(&at([0.1, 0.0, 0.0, 0.0], PicFx::default())), "crop");
+    assert_ne!(plain, pages::page_content_key(&at([0.0; 4], PicFx::new(10_000, 0, 0))), "brightness");
 }
