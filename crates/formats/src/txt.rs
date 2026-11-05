@@ -1,4 +1,6 @@
-//! Plain text: UTF-8 (with or without BOM), UTF-16 LE/BE (BOM or sniffed), else Windows-1252.
+//! Plain text: UTF-8 (with or without BOM), UTF-16 LE/BE (BOM or sniffed), else the legacy
+//! encoding the bytes look like (GBK/GB18030, Big5, Shift_JIS, EUC-KR, Windows code pages…;
+//! #778), Windows-1252 when nothing fits better.
 //! Export writes UTF-8 with CRLF line ends; list paragraphs get their label and a tab, table
 //! cells are separated by tabs.
 
@@ -60,8 +62,8 @@ pub fn is_text(b: &[u8]) -> bool {
     sample.iter().filter(|c| odd(u32::from(**c))).count().saturating_mul(100) <= sample.len()
 }
 
-/// Decode text bytes: BOMs first, then UTF-16 without BOM (by its zero bytes), UTF-8, and
-/// Windows-1252 as the last resort.
+/// Decode text bytes: BOMs first, then UTF-16 without BOM (by its zero bytes), UTF-8, and the
+/// legacy encoding the bytes look like ([`legacy`]) as the last resort.
 pub fn decode(b: &[u8]) -> String {
     if let Some(rest) = b.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
         return String::from_utf8_lossy(rest).into_owned();
@@ -77,8 +79,32 @@ pub fn decode(b: &[u8]) -> String {
     }
     match std::str::from_utf8(b) {
         Ok(s) => s.to_string(),
-        Err(_) => b.iter().map(|c| cp1252(*c)).collect(),
+        Err(_) => legacy(b),
     }
+}
+
+/// Most bytes looked at to guess a legacy encoding.
+const SNIFF: usize = 1 << 20;
+
+/// Bytes that aren't UTF-8 in the legacy encoding they look like (chardetng, the detector
+/// Firefox uses for unlabelled pages): GBK/GB18030 for Simplified Chinese, Big5, Shift_JIS or
+/// EUC-JP, EUC-KR, or a single-byte Windows / ISO code page; Windows-1252 as before when the
+/// guess is a single-byte Western one.
+pub fn legacy(b: &[u8]) -> String {
+    let mut det = chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Deny);
+    det.feed(b.get(..SNIFF).unwrap_or(b), b.len() <= SNIFF);
+    let enc = det.guess(None, chardetng::Utf8Detection::Deny);
+    if enc == encoding_rs::WINDOWS_1252 {
+        return b.iter().map(|c| cp1252(*c)).collect();
+    }
+    enc.decode_without_bom_handling(b).0.into_owned()
+}
+
+/// Decode bytes in a named encoding (a WHATWG label such as `gbk`, `gb18030`, `big5`,
+/// `shift_jis`, `euc-kr`, `utf-16le`, `windows-1251`); `None` when the label isn't known.
+pub fn decode_as(b: &[u8], label: &str) -> Option<String> {
+    let enc = encoding_rs::Encoding::for_label(label.trim().as_bytes())?;
+    Some(enc.decode(b).0.into_owned())
 }
 
 /// A document with one paragraph per line.
@@ -87,6 +113,13 @@ pub fn import(bytes: &[u8]) -> Document {
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
     let clean: String = text.chars().filter(|c| !c.is_control() || matches!(c, '\n' | '\t' | '\u{000C}')).collect();
     Document::from_text(&clean)
+}
+
+/// [`import`] onto `page`: plain text gives no page size (#1381).
+pub fn import_on(bytes: &[u8], page: &wordcraft_doc::SectionProps) -> Document {
+    let mut doc = import(bytes);
+    doc.last_section = page.clone();
+    doc
 }
 
 fn blocks_text(blocks: &[FBlock], out: &mut Vec<String>, lists: &mut ListCounter, depth: usize) {

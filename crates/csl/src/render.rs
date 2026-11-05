@@ -27,7 +27,10 @@ use std::cmp::Ordering;
 
 use wordcraft_doc::Source;
 
-use crate::model::*;
+use crate::model::{
+    AndStyle, Branch, Choose, Condition, Date, DatePart, DatePartName, DateParts, Element, Form, Group, Label, Layout, Match, NameAsSortOrder,
+    NameOptions, Names, Number, Plural, Position, SortDirection, SortField, SortKey, Style, Text, TextSource,
+};
 use crate::terms::TermSet;
 
 /// The most names rendered from one variable (a hostile `author` field can name thousands).

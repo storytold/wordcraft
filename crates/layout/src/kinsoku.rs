@@ -1,21 +1,32 @@
 //! Asian typography line-breaking rules (the paragraph's `kinsoku` and `word_wrap` flags), applied
 //! on top of the Unicode line-break opportunities (UAX #14).
 //!
-//! - Kinsoku on (the default): no line starts with closing East Asian punctuation (、。，）」…)
-//!   and none ends with opening punctuation (（「【…). UAX #14 already forbids most of these
-//!   breaks; the lists make sure of it for the standard Japanese/Chinese sets.
+//! - Kinsoku on (the default): no ordinary break opportunity falls before closing East Asian
+//!   punctuation (、。，）」…), a small kana (っゃゕヶ), the prolonged sound mark (ー ｰ) or an
+//!   iteration mark, and none falls after opening punctuation (（「【…). UAX #14 already forbids
+//!   most of these breaks, and classes the small kana and the prolonged sound mark CJ/NS, whose
+//!   break is only a tailoring choice; the lists make sure of it for the standard Japanese/Chinese
+//!   sets. A line too narrow for any opportunity still takes the emergency break in
+//!   `para::break_lines`, which can put one of these characters at the start of the line.
 //! - Kinsoku off: a line may break between any two East Asian characters, punctuation included.
 //! - Word wrap off: Latin words may break at any character.
+//! - Automatic spacing (`autoSpaceDE`, `autoSpaceDN`): which neighbouring characters get room
+//!   between Asian text and Latin text or digits ([`auto_space`]).
 //!
 //! Only East Asian characters are in the lists, and the extra breaks need letters on both sides,
 //! so text with no East Asian characters breaks exactly as before unless word wrap is off.
 
 use unicode_segmentation::UnicodeSegmentation;
 
-/// East Asian characters a line may not start with: closing brackets and quotes, the
-/// ideographic comma and full stop, fullwidth and halfwidth punctuation, the middle dot,
-/// iteration and sound marks.
-const NO_START: &str = "、。，．・：；？！゛゜ヽヾゝゞ々〻〉》」』】〕〗〙〛〞〟）］｝｠｡｣､･ﾞﾟ％￠";
+/// 行頭禁則: East Asian characters a line may not start with, grouped as JIS X 4051 §4 and
+/// Word's default 禁則処理 do:
+/// - 小書きの仮名 (small kana): hiragana `ぁぃぅぇぉっゃゅょゎゕゖ`, katakana `ァィゥェォッャュョヮヵヶ`,
+///   the katakana phonetic extensions (U+31F0…U+31FF) and the halfwidth small kana `ｧｨｩｪｫｬｭｮｯ`;
+/// - 長音記号 (the prolonged sound mark): `ー` and its halfwidth form `ｰ`;
+/// - 繰り返し記号 (iteration marks, with the sound marks): `゛゜ヽヾゝゞ々〻ﾞﾟ`;
+/// - 閉じ括弧類 and the rest: closing brackets and quotes, the ideographic comma and full stop,
+///   the fullwidth and halfwidth punctuation, the middle dot, `％` and `￠`.
+const NO_START: &str = "ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッャュョヮヵヶㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿｧｨｩｪｫｬｭｮｯーｰ゛゜ヽヾゝゞ々〻ﾞﾟ、。，．・：；？！〉》」』】〕〗〙〛〞〟）］｝｠｡｣､･％￠";
 
 /// East Asian characters a line may not end with: opening brackets and quotes, currency signs.
 const NO_END: &str = "〈《「『【〔〖〘〚〝（［｛｟｢＄￡￥";
@@ -69,9 +80,56 @@ pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool) 
     opps.dedup();
 }
 
+/// Which of two adjacent characters is the Asian one, when the paragraph's automatic spacing puts
+/// room between them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AsianSide {
+    Left,
+    Right,
+}
+
+/// Whether the paragraph's `autoSpaceDE` (Asian and Latin text) or `autoSpaceDN` (Asian text and
+/// digits) spaces `a` from the `b` right after it, and which side is Asian. Asian text is
+/// ideographs, kana and bopomofo, not their punctuation: Word leaves "5、" and "、8" alone. Hangul
+/// is neither Asian nor Latin here, and Latin punctuation such as `%` or `(` is not Latin.
+pub fn auto_space(a: char, b: char, de: bool, dn: bool) -> Option<AsianSide> {
+    let spaced = |other: char| (de && is_latin_letter(other)) || (dn && other.is_ascii_digit());
+    if is_asian_text(a) && spaced(b) {
+        Some(AsianSide::Left)
+    } else if is_asian_text(b) && spaced(a) {
+        Some(AsianSide::Right)
+    } else {
+        None
+    }
+}
+
+fn is_asian_text(c: char) -> bool {
+    is_east_asian(c) && c.is_alphanumeric() && !is_hangul(c)
+}
+
+fn is_latin_letter(c: char) -> bool {
+    c.is_alphabetic() && !is_east_asian(c) && !is_hangul(c)
+}
+
+/// Hangul jamo, compatibility jamo, extended jamo, syllables and halfwidth Hangul.
+fn is_hangul(c: char) -> bool {
+    matches!(c as u32, 0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7FF | 0xFFA0..=0xFFDC)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::apply;
+    use super::{AsianSide, apply, auto_space};
+
+    #[test]
+    fn auto_space_pairs() {
+        assert_eq!(auto_space('院', '9', true, true), Some(AsianSide::Left));
+        assert_eq!(auto_space('A', 'カ', true, true), Some(AsianSide::Right));
+        assert_eq!(auto_space('院', '9', true, false), None);
+        assert_eq!(auto_space('A', '字', false, true), None);
+        for (a, b) in [('5', '、'), ('、', '8'), ('漢', '%'), ('漢', '한'), ('한', 'A'), ('a', 'b'), ('漢', '字'), ('漢', '１')] {
+            assert_eq!(auto_space(a, b, true, true), None, "{a}{b}");
+        }
+    }
 
     /// Where a line may start, as the text from there to the next opportunity.
     fn breaks(text: &str, kinsoku: bool, word_wrap: bool) -> Vec<String> {
@@ -99,5 +157,37 @@ mod tests {
         assert_eq!(breaks(en, true, true), ["w", "(", "5"]);
         let any = breaks("Hello café", true, false);
         assert_eq!(any, ["e", "l", "l", "o", "c", "a", "f", "é"]);
+    }
+
+    #[test]
+    fn kinsoku_no_line_starts_with_a_small_kana_or_the_prolonged_sound_mark() {
+        // A break opportunity sits right before each of these (after a kanji, or after a 、);
+        // JIS X 4051 §4 行頭禁則 drops it, as Word's default 禁則処理 does.
+        let ja = "漢っ、ゃ漢ー漢ッ漢ャ漢ゕ漢ヶ漢ㇺ漢ｯ漢ｬ漢ｰ";
+        let non_starters = ["っ", "ゃ", "ー", "ッ", "ャ", "ゕ", "ヶ", "ㇺ", "ｯ", "ｬ", "ｰ"];
+        let on = breaks(ja, true, true);
+        for c in non_starters {
+            assert!(!on.iter().any(|s| s == c), "kinsoku: no line starts with {c}: {on:?}");
+        }
+        // Kinsoku off: a line may break between any two East Asian characters, these included.
+        let off = breaks(ja, false, true);
+        for c in non_starters {
+            assert!(off.iter().any(|s| s == c), "kinsoku off: a line may start with {c}: {off:?}");
+        }
+        // Text with no East Asian characters breaks exactly as before either way.
+        let en = "Hello wonderful (world), 50%.";
+        assert_eq!(breaks(en, true, true), breaks(en, false, true));
+        assert_eq!(breaks(en, true, true), ["w", "(", "5"]);
+    }
+
+    /// 行頭禁則: the small kana and the prolonged sound mark are CJ/NS in UAX #14, where the break
+    /// before them is forbidden only optionally — so the list itself must hold every one of them.
+    #[test]
+    fn no_start_holds_every_small_kana_and_the_prolonged_sound_mark() {
+        for c in "ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッャュョヮヵヶㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿｧｨｩｪｫｬｭｮｯーｰ".chars()
+        {
+            assert!(super::is_east_asian(c), "U+{:04X} {c} is East Asian text", c as u32);
+            assert!(super::NO_START.contains(c), "NO_START (行頭禁則) must hold U+{:04X} {c}", c as u32);
+        }
     }
 }

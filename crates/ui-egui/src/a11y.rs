@@ -7,7 +7,7 @@
 //! - each body paragraph is a **paragraph**, a **heading** (with its outline level) or a **list
 //!   item** (with its list level, grouped into lists), holding one **text run** per laid-out line
 //!   with its characters' screen positions, so a reader can follow the caret by character, word
-//!   and line and point at text;
+//!   and line and point at text, and a magnifier can keep the caret in view;
 //! - tables are **table → row → cell**, pictures and charts **images** named by their alt text,
 //!   hyperlinks **links** around their text runs; list numbers are **list markers**.
 //!
@@ -44,14 +44,25 @@ pub struct A11yCache {
 struct Key {
     layout: Arc<DocLayout>,
     doc: Id,
+    /// Whether the page shows Insert › Table's preview copy rather than the document: the two
+    /// can otherwise share a layout identity only across the preview's start and end, which must
+    /// rebuild the tree even when the page's rectangles and caret are unchanged.
+    previewing: bool,
     pages: (usize, usize),
     rects: Vec<Rect>,
     sel: (Pos, Pos),
 }
 
 impl Key {
+    /// Compares two AccessKit cache keys: layout identity, document id, table-preview flag, page range,
+    /// page rectangles and selection.
     fn same(&self, o: &Key) -> bool {
-        Arc::ptr_eq(&self.layout, &o.layout) && self.doc == o.doc && self.pages == o.pages && self.rects == o.rects && self.sel == o.sel
+        Arc::ptr_eq(&self.layout, &o.layout)
+            && self.doc == o.doc
+            && self.previewing == o.previewing
+            && self.pages == o.pages
+            && self.rects == o.rects
+            && self.sel == o.sel
     }
 }
 
@@ -62,6 +73,39 @@ pub struct Tree {
     pub nodes: Vec<(Id, Node)>,
     pub top: Vec<NodeId>,
     pub selection: Option<TextSelection>,
+}
+
+/// #2726: AccessKit's contract is that every update's focus is in the node list, and
+/// `accesskit_consumer` treats a breach as fatal: `validate_global` panics on the UI thread,
+/// which closes the window (the Windows adapter reports `Focused ID #… is not in the node list`).
+/// egui can send an update that drops a focused widget's node, and a screen reader's focus
+/// request targets nodes in this document description, which the list carries only while the
+/// layout, the pages on screen and the selection are the same as when it asked. This guard runs
+/// on every update egui produces, before it reaches the adapter: a focus the update does not
+/// carry falls back to the root, so the reader starts from the top of the document instead of
+/// the process dying.
+pub struct FocusGuard;
+
+impl egui::plugin::Plugin for FocusGuard {
+    fn debug_name(&self) -> &'static str {
+        "a11y focus guard"
+    }
+
+    fn output_hook(&mut self, _ctx: &egui::Context, output: &mut egui::FullOutput) {
+        if let Some(update) = &mut output.platform_output.accesskit_update {
+            guard_update(update);
+        }
+    }
+}
+
+/// Point the focus at the root when this update's node list does not contain it.
+fn guard_update(update: &mut egui::accesskit::TreeUpdate) {
+    if update.nodes.iter().any(|(id, _)| *id == update.focus) {
+        return;
+    }
+    if let Some(root) = update.tree.as_ref().map(|t| t.root) {
+        update.focus = root;
+    }
 }
 
 /// The pages to describe: those meeting `view`, and one either side.
@@ -80,10 +124,24 @@ pub fn expose(app: &mut crate::WordApp, ctx: &egui::Context, doc_id: Id, layout:
         return;
     }
     let pages = page_window(rects, view).unwrap_or((0, 0));
-    let sel = (app.session.sel.anchor.clone(), app.session.sel.focus.clone());
-    let key = Key { layout: layout.clone(), doc: doc_id, pages, rects: rects.get(pages.0..pages.1).unwrap_or_default().to_vec(), sel };
+    // The page may show Insert › Table's preview copy while the grid is hovered (#3931): describe
+    // the same document and selection the pages and caret are drawn from, not the real document
+    // that the preview's layout does not belong to.
+    let preview = crate::canvas::preview_sel(app);
+    let sel = preview.map_or_else(|| (app.session.sel.anchor.clone(), app.session.sel.focus.clone()), |sel| (sel.anchor.clone(), sel.focus.clone()));
+    let key = Key {
+        layout: layout.clone(),
+        doc: doc_id,
+        previewing: preview.is_some(),
+        pages,
+        rects: rects.get(pages.0..pages.1).unwrap_or_default().to_vec(),
+        sel,
+    };
     if !app.canvas.a11y.key.as_ref().is_some_and(|k| k.same(&key)) {
-        app.canvas.a11y.tree = build(&app.session.doc, layout, doc_id, rects, pages, (&key.sel.0, &key.sel.1));
+        // Build before writing the cache: the preview document borrows `app`, and the tree is
+        // owned, so the borrow ends with this statement.
+        let tree = build(crate::canvas::page_doc(app), layout, doc_id, rects, pages, (&key.sel.0, &key.sel.1));
+        app.canvas.a11y.tree = tree;
         app.canvas.a11y.key = Some(key);
     }
     let title = app.title_stem();
@@ -365,11 +423,19 @@ impl Builder<'_> {
                     }
                 }
                 lb.run.link = link;
-                let (x0, x1) = (line.cl_left(k).unwrap_or(0.0), line.cl_right(k).unwrap_or(0.0));
-                push_char(&mut lb.run, text, x0.min(x1), (x1 - x0).abs());
+                // A line break ends its line as the paragraph mark does, and takes the same room.
+                let (x, w) = if cl.kind == ClKind::LineBreak {
+                    line.mark_box()
+                } else {
+                    let (x0, x1) = (line.cl_left(k).unwrap_or(0.0), line.cl_right(k).unwrap_or(0.0));
+                    (x0.min(x1), (x1 - x0).abs())
+                };
+                push_char(&mut lb.run, text, x, w);
             }
             if line.end == LineEnd::Para {
-                // The paragraph mark ends the run, as AccessKit expects of a paragraph's end.
+                // The paragraph mark ends the run, as AccessKit expects of a paragraph's end. It
+                // takes the room a selection shows it with: magnifiers keep the caret in view by
+                // the box of the character after it, which on an empty line is this mark (#1119).
                 if lb.run.link.is_some() && !lb.run.lens.is_empty() {
                     self.flush(&mut lb, line, at);
                 }
@@ -378,8 +444,8 @@ impl Builder<'_> {
                 }
                 lb.run.link = None;
                 lb.map.push((para.text_len, lb.seg, lb.run.lens.len()));
-                let x = line.visual_end_x();
-                push_char(&mut lb.run, "\n", x, 0.0);
+                let (x, w) = line.mark_box();
+                push_char(&mut lb.run, "\n", x, w);
             }
             if !lb.run.lens.is_empty() || lb.prev.is_none() {
                 self.flush(&mut lb, line, at);
@@ -427,6 +493,7 @@ impl Builder<'_> {
             Some(url) => {
                 let lid = lb.pid.with(("link", lb.li, lb.seg));
                 let mut l = Node::new(Role::Link);
+                l.set_label(n.value().filter(|text| !text.is_empty()).unwrap_or(url).to_owned());
                 l.set_url(url.clone());
                 l.set_bounds(bounds(r));
                 self.add(lid, Some(lb.pid), l);
@@ -518,6 +585,88 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// What AccessKit is told about `app` after a few frames in `ctx`, with AccessKit on.
+    fn described(app: &mut crate::WordApp, ctx: &egui::Context) -> accesskit::TreeUpdate {
+        ctx.enable_accesskit();
+        let mut update = None;
+        for _ in 0..4 {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                time: Some(ctx.input(|i| i.time) + 0.1),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            });
+            out.textures_delta.clear();
+            update = out.platform_output.accesskit_update.take();
+        }
+        update.expect("AccessKit output")
+    }
+
+    /// What AccessKit is told after a few frames in which Insert › Table's grid hovers `rows` ×
+    /// `cols`: the picker sets the request from the popup after the ribbon draws, and the canvas
+    /// lays out and describes the page from that preview.
+    fn described_with_table_preview(app: &mut crate::WordApp, ctx: &egui::Context, rows: usize, cols: usize) -> accesskit::TreeUpdate {
+        ctx.enable_accesskit();
+        let mut update = None;
+        for _ in 0..4 {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                time: Some(ctx.input(|i| i.time) + 0.1),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                // Set it in every pass, as the grid does while its square is hovered.
+                app.canvas.table_preview = Some((rows, cols));
+                app.logic(ui.ctx());
+                app.ui(ui);
+            });
+            out.textures_delta.clear();
+            update = out.platform_output.accesskit_update.take();
+        }
+        update.expect("AccessKit output")
+    }
+
+    /// #3931 review: the page shows a previewed table while Insert › Table's grid is hovered, so
+    /// the AccessKit tree must describe that page's table, not the real document's block at the
+    /// preview's path. In the preview copy path `[0]` is a 2 × 2 table; in the real document it is
+    /// the paragraph "Lanterns". Describing the real document with the preview layout made the
+    /// table node lose its dimensions (and its cells their text) whenever a screen reader was on.
+    #[test]
+    fn the_preview_table_is_described_from_the_previewed_page() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Lanterns\nKites")), Default::default());
+        let update = described_with_table_preview(&mut app, &egui::Context::default(), 2, 2);
+        let nodes: HashMap<NodeId, &Node> = update.nodes.iter().map(|(id, n)| (*id, n)).collect();
+        let tables: Vec<_> = nodes.iter().filter(|(_, n)| n.role() == Role::Table).map(|(id, _)| *id).collect();
+        assert_eq!(tables.len(), 1, "the previewed page has one table");
+        let table = nodes[&tables[0]];
+        assert_eq!(table.row_count(), Some(2), "the 2 × 2 preview's rows, not the real paragraph at its path");
+        assert_eq!(table.column_count(), Some(2), "the 2 × 2 preview's columns");
+
+        // The preview's caret is in the table; the document's own caret names a paragraph that
+        // the preview layout no longer has at that path, so it must not reach the tree instead.
+        let (_, doc) = nodes.iter().find(|(_, n)| n.role() == Role::Document).expect("a document node");
+        let selection = doc.text_selection().expect("the preview's caret is described");
+        let mut parent = HashMap::new();
+        for (id, n) in &nodes {
+            for c in n.children() {
+                parent.insert(*c, *id);
+            }
+        }
+        let mut at = Some(selection.focus.node);
+        let mut in_table = false;
+        while let Some(id) = at {
+            if id == tables[0] {
+                in_table = true;
+                break;
+            }
+            at = parent.get(&id).copied();
+        }
+        assert!(in_table, "the described caret is the preview's, inside the preview table");
+    }
+
     /// #488: with AccessKit on, the canvas describes the document: a heading with its level, a
     /// paragraph, a list item in a list, a table's rows and cells and a link, with the text in
     /// text runs and the caret at its paragraph and character.
@@ -547,23 +696,7 @@ mod tests {
         let caret = app.session.sel.focus.clone();
         assert!(caret.path.0.len() == 1 && caret.off == 4, "{caret:?}");
 
-        let ctx = egui::Context::default();
-        ctx.enable_accesskit();
-        let mut update = None;
-        for i in 0..4 {
-            let input = egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
-                time: Some(i as f64 * 0.1),
-                ..Default::default()
-            };
-            let mut out = ctx.run_ui(input, |ui| {
-                app.logic(ui.ctx());
-                app.ui(ui);
-            });
-            out.textures_delta.clear();
-            update = out.platform_output.accesskit_update.take();
-        }
-        let update = update.expect("AccessKit output");
+        let update = described(&mut app, &egui::Context::default());
         let nodes: HashMap<NodeId, &Node> = update.nodes.iter().map(|(id, n)| (*id, n)).collect();
 
         // A tree: every node has at most one parent.
@@ -643,6 +776,135 @@ mod tests {
         assert_eq!(run.value(), Some("Read this "));
     }
 
+    /// #1119: a magnifier keeps the caret in view by the box of the character after it (Windows
+    /// Magnifier asks for that box, the caret's own being empty). On an empty line that character
+    /// is the line's end mark — the paragraph mark after Enter, a line break between two Shift+Enter
+    /// breaks — and it takes room where the caret is, so the view follows the caret onto the line.
+    #[test]
+    fn a_magnifier_finds_the_caret_on_an_empty_line() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        let ctx = egui::Context::default();
+        app.run("text.insert", json!({"text": "First line"})).unwrap();
+        app.run("text.newParagraph", json!({})).unwrap();
+        assert_end_mark_at_caret(&mut app, &ctx, "Enter");
+        for cmd in ["text.lineBreak", "text.lineBreak", "caret.left"] {
+            app.run(cmd, json!({})).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        }
+        assert_end_mark_at_caret(&mut app, &ctx, "Shift+Enter");
+    }
+
+    /// The character after the caret is the end mark of the empty line the caret is on, with room,
+    /// starting where the caret is drawn.
+    fn assert_end_mark_at_caret(app: &mut crate::WordApp, ctx: &egui::Context, step: &str) {
+        let update = described(app, ctx);
+        let nodes: HashMap<NodeId, &Node> = update.nodes.iter().map(|(id, n)| (*id, n)).collect();
+        let doc = nodes.values().find(|n| n.role() == Role::Document).expect("a document node");
+        let at = doc.text_selection().expect("the caret").focus;
+        let run = nodes[&at.node];
+        assert_eq!(run.value(), Some("\n"), "{step}: the caret is on an empty line");
+        // The character's box, as AccessKit works it out from the run.
+        let b = run.bounds().expect("the run's bounds");
+        let x0 = b.x0 + f64::from(run.character_positions().expect("positions")[at.character_index]);
+        let w = f64::from(run.character_widths().expect("widths")[at.character_index]);
+        let (caret, height) = crate::canvas::caret_screen(app).expect("the caret on screen");
+        assert!(w > 0.0, "{step}: the end mark takes room");
+        assert!((x0 - f64::from(caret.x)).abs() < 0.5, "{step}: it starts at the caret: {x0} vs {caret:?}");
+        assert!(
+            b.y0 <= f64::from(caret.y) + 0.5 && f64::from(caret.y + height) <= b.y1 + 0.5,
+            "{step}: it is on the caret's line: {b:?} vs caret {caret:?} + {height}"
+        );
+    }
+
+    /// #2726: the Windows adapter's consumer dies on an update whose focus is not in the node
+    /// list (`Focused ID #… is not in the node list`). A drop like that is fatal: `Tree::new`
+    /// panics. The guard moves the focus to the root, and the same update is accepted.
+    #[test]
+    fn a_focus_the_update_does_not_carry_falls_back_to_the_root() {
+        let root = egui::accesskit_root_id().accesskit_id();
+        let lost = egui::Id::unique("run_that_was_dropped").accesskit_id();
+        let make = |focus: accesskit::NodeId| accesskit::TreeUpdate {
+            nodes: vec![
+                (root, {
+                    let mut n = Node::new(Role::Window);
+                    n.push_child(egui::Id::unique("kept").accesskit_id());
+                    n
+                }),
+                (egui::Id::unique("kept").accesskit_id(), Node::new(Role::TextRun)),
+            ],
+            tree: Some(accesskit::TreeInfo::new(root)),
+            tree_id: accesskit::TreeId::ROOT,
+            focus,
+        };
+        // Red without the guard: the raw update breaks the consumer's contract.
+        let raw = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| accesskit_consumer::Tree::new(make(lost), true)));
+        assert!(raw.is_err(), "the update that drops the focused node must break the consumer");
+        let mut fixed = make(lost);
+        guard_update(&mut fixed);
+        assert_eq!(fixed.focus, root);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| accesskit_consumer::Tree::new(fixed, true))).is_ok(),
+            "the guarded update is accepted"
+        );
+    }
+
+    /// Every update the app sends — idle frames, typing, scrolling, selection, dialogs — feeds
+    /// the real Windows consumer without breaking its contract: its focus is in the node list.
+    #[test]
+    fn every_update_the_app_sends_is_valid_for_the_consumer() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("text.insert", json!({"text": "Hello word"})).unwrap();
+        app.run("para.bullets", json!({})).unwrap();
+        app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+        app.run("text.insert", json!({"text": "Cell"})).unwrap();
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut handler = NoopHandler;
+        let mut tree: Option<accesskit_consumer::Tree> = None;
+        for frame in 0..10 {
+            let mut input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                time: Some(frame as f64 * 0.1),
+                ..Default::default()
+            };
+            if frame == 5 {
+                // A screen reader asks to focus a text run deep in the document description.
+                let (doc, _) = app.canvas.widget_id.expect("the canvas widget");
+                input.events.push(egui::Event::AccessKitActionRequest(accesskit::ActionRequest {
+                    action: accesskit::Action::Focus,
+                    target_node: doc.with(("para", [0u32])).with(("run", 0usize, 0usize)).accesskit_id(),
+                    target_tree: accesskit::TreeId::ROOT,
+                    data: None,
+                }));
+            }
+            let mut out = ctx.run_ui(input, |ui| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            });
+            out.textures_delta.clear();
+            let Some(update) = out.platform_output.accesskit_update else { continue };
+            tree = Some(match tree {
+                None => accesskit_consumer::Tree::new(update, true),
+                Some(mut t) => {
+                    t.update_and_process_changes(update, &mut handler);
+                    t
+                }
+            });
+        }
+        let tree = tree.expect("the app sends AccessKit updates");
+        // The consumer's focus is one of its nodes.
+        let focus = tree.state().focus_id_in_tree();
+        assert!(tree.state().has_node(focus), "the consumer's focus is in the node list");
+    }
+
+    struct NoopHandler;
+
+    impl accesskit_consumer::TreeChangeHandler for NoopHandler {
+        fn node_added(&mut self, _node: &accesskit_consumer::NodeRef<'_>) {}
+        fn node_updated(&mut self, _old_node: &accesskit_consumer::NodeRef<'_>, _new_node: &accesskit_consumer::NodeRef<'_>) {}
+        fn focus_moved(&mut self, _old_node: Option<&accesskit_consumer::NodeRef<'_>>, _new_node: Option<&accesskit_consumer::NodeRef<'_>>) {}
+        fn node_removed(&mut self, _node: &accesskit_consumer::NodeRef<'_>) {}
+    }
+
     /// Hostile layouts and junk geometry don't panic and the tree stays bounded.
     #[test]
     fn junk_geometry_is_harmless() {
@@ -651,7 +913,7 @@ mod tests {
         let n = layout.pages.len();
         let rects = vec![Rect::from_min_size(egui::pos2(f32::NAN, 0.0), egui::vec2(f32::INFINITY, 1.0)); n];
         let p = Pos::body(0, 1_000_000);
-        let t = build(&doc, &layout, Id::new("doc"), &rects, (0, n + 5), (&p, &p));
+        let t = build(&doc, &layout, Id::unique("doc"), &rects, (0, n + 5), (&p, &p));
         assert!(!t.nodes.is_empty() && t.nodes.len() <= MAX_NODES);
         assert!(t.selection.is_some(), "an offset past the end lands at the end");
         assert!(page_window(&rects, Rect::NOTHING).is_none());
