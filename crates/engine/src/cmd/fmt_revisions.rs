@@ -242,7 +242,7 @@ pub(crate) fn record(s: &mut Session, id: &str, before: &Document) {
             r.blocks(&pb.blocks, &mut pa.blocks, 0);
         }
     }
-    r.styles(&before.styles.styles, &mut doc.styles.styles);
+    r.styles(&before.styles.styles, &mut std::sync::Arc::make_mut(&mut doc.styles).styles);
 }
 
 /// Record the paragraph formatting a command changed on the paragraph at `path` whose text it also

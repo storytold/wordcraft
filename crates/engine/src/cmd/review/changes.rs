@@ -101,7 +101,7 @@ fn resolve_styles_sel(s: &mut Session, selected: bool, accept: bool) -> Result<b
     if !s.doc.styles.styles.iter().any(|st| st.para_change.is_some() || st.chr_change.is_some()) {
         return Ok(false);
     }
-    for st in &mut s.doc.styles.styles {
+    for st in &mut std::sync::Arc::make_mut(&mut s.doc.styles).styles {
         fmt_revisions::resolve_style(st, accept);
     }
     Ok(true)
@@ -209,8 +209,10 @@ fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
         fmt_revisions::resolve_containers(&mut part.blocks, accept, 0);
     }
     fmt_revisions::resolve_section(&mut s.doc.last_section, accept);
-    for st in &mut s.doc.styles.styles {
-        fmt_revisions::resolve_style(st, accept);
+    if s.doc.styles.styles.iter().any(|st| st.para_change.is_some() || st.chr_change.is_some()) {
+        for st in &mut std::sync::Arc::make_mut(&mut s.doc.styles).styles {
+            fmt_revisions::resolve_style(st, accept);
+        }
     }
     // The note separators are block lists of their own, not stories; they must not keep ids of
     // revisions that are about to be dropped.

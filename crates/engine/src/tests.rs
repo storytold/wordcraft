@@ -3319,7 +3319,7 @@ fn non_property_style_changes_are_not_recorded_as_formatting() {
     let mut s = s();
     run(&mut s, "review.trackChanges", json!({"value": true}));
     let before = s.doc.clone();
-    let st = s.doc.styles.get_mut("Heading1").unwrap();
+    let st = std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Heading1").unwrap();
     st.based_on = Some("Title".into());
     st.next = Some("Heading2".into());
     st.linked = Some("Emphasis".into());
@@ -3363,7 +3363,7 @@ fn tracked_style_change_round_trips_through_docx() {
 fn rejecting_a_reopened_style_change_keeps_style_metadata() {
     use wordcraft_doc::styles::{Style, StyleKind, TableStyleParts};
     let mut s = s();
-    s.doc.styles.upsert(Style {
+    std::sync::Arc::make_mut(&mut s.doc.styles).upsert(Style {
         id: "GridX".into(),
         name: "Grid X".into(),
         kind: StyleKind::Table,

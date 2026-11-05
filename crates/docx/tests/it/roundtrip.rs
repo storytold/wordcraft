@@ -309,7 +309,7 @@ fn styles_and_lists_round_trip() {
 fn tracked_style_definition_change_round_trips() {
     let mut d = Document::new();
     d.revisions.push(Revision { kind: RevisionKind::Format, author: "Ana".into(), date: "2026-10-17T10:00:00Z".into(), move_name: None });
-    d.styles.upsert(Style {
+    std::sync::Arc::make_mut(&mut d.styles).upsert(Style {
         id: "Mine".into(),
         name: "Mine".into(),
         kind: StyleKind::Paragraph,
