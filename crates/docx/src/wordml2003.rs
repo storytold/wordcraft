@@ -1,5 +1,5 @@
 //! Word 2003 XML Document (WordprocessingML 2003, root `w:wordDocument`, from the public Office
-//! 2003 XML Reference Schemas). Import only.
+//! 2003 XML Reference Schemas). Import; the writer is `wordml2003_write`.
 //!
 //! ECMA-376 kept most of the 2003 vocabulary (`w:p`, `w:r`, `w:pPr`, `w:rPr`, `w:tbl`,
 //! `w:sectPr`, `w:styles`…), so the file is opened by rewriting it as the package it corresponds
@@ -33,7 +33,7 @@ const MAX_STORIES: usize = 50_000;
 
 /// Read a Word 2003 XML Document.
 pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
-    crate::read::read_opened(&convert(bytes)?)
+    crate::read::read_opened(&convert(bytes)?, None)
 }
 
 /// Parts the converted package gets relationships for.

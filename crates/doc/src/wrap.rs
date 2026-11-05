@@ -59,8 +59,8 @@ impl WrapPolygon {
 
 /// A shape's outline in unit coordinates (0..1 across a `w` × `h` frame), flattened to straight
 /// lines. `None` for shapes whose outline is their rectangle (rectangles, text boxes, lines,
-/// freeforms).
-pub fn shape_outline(kind: ShapeKind, w: f32, h: f32) -> Option<Vec<(f32, f32)>> {
+/// freeforms). `corner` is a rounded rectangle's (see [`crate::connector::ShapeExtra::corner`]).
+pub fn shape_outline(kind: ShapeKind, w: f32, h: f32, corner: Option<u32>) -> Option<Vec<(f32, f32)>> {
     use std::f32::consts::{FRAC_PI_2, PI, TAU};
     let pos = |v: f32| if v.is_finite() { v.clamp(0.0, 1.0e6) } else { 0.0 };
     let (w, h) = (pos(w), pos(h));
@@ -73,10 +73,12 @@ pub fn shape_outline(kind: ShapeKind, w: f32, h: f32) -> Option<Vec<(f32, f32)>>
         | ShapeKind::StraightConnector
         | ShapeKind::ElbowConnector
         | ShapeKind::CurvedConnector => return None,
-        ShapeKind::Ellipse => (0..48).map(|i| (i as f32) * TAU / 48.0).map(|a| (0.5 + 0.5 * a.cos(), 0.5 + 0.5 * a.sin())).collect(),
+        ShapeKind::Ellipse | ShapeKind::FlowchartOr => {
+            (0..48).map(|i| (i as f32) * TAU / 48.0).map(|a| (0.5 + 0.5 * a.cos(), 0.5 + 0.5 * a.sin())).collect()
+        }
         ShapeKind::RoundedRectangle => {
-            // Corner radius as drawn: 16% of the shorter side.
-            let r = 0.16 * w.min(h);
+            // Corner radius as drawn.
+            let r = crate::connector::corner_radius(corner, w, h);
             let (rx, ry) = if w > 0.0 && h > 0.0 { (r / w, r / h) } else { (0.0, 0.0) };
             let mut pts = Vec::new();
             for (cx, cy, a0) in [(1.0 - rx, 1.0 - ry, 0.0), (rx, 1.0 - ry, FRAC_PI_2), (rx, ry, PI), (1.0 - rx, ry, PI + FRAC_PI_2)] {
@@ -88,12 +90,9 @@ pub fn shape_outline(kind: ShapeKind, w: f32, h: f32) -> Option<Vec<(f32, f32)>>
             pts
         }
         ShapeKind::Triangle => vec![(0.5, 0.0), (1.0, 1.0), (0.0, 1.0)],
+        ShapeKind::RightTriangle => vec![(0.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
         ShapeKind::Diamond => vec![(0.5, 0.0), (1.0, 0.5), (0.5, 1.0), (0.0, 0.5)],
-        ShapeKind::Arrow => {
-            // As drawn: the head is half the height long, the shaft 40% of the height thick.
-            let head = if w > 0.0 { (0.5 * h / w).min(1.0) } else { 0.5 };
-            vec![(0.0, 0.3), (1.0 - head, 0.3), (1.0 - head, 0.0), (1.0, 0.5), (1.0 - head, 1.0), (1.0 - head, 0.7), (0.0, 0.7)]
-        }
+        ShapeKind::Arrow | ShapeKind::ArrowLeft | ShapeKind::ArrowUp | ShapeKind::ArrowDown => arrow_outline(kind, w, h),
         ShapeKind::Star => (0..10)
             .map(|i| {
                 let a = PI * i as f32 / 5.0 - FRAC_PI_2;
@@ -121,6 +120,26 @@ pub fn shape_outline(kind: ShapeKind, w: f32, h: f32) -> Option<Vec<(f32, f32)>>
         }
     };
     Some(pts)
+}
+
+/// A block arrow's outline in unit coordinates (0..1 across a `w` × `h` frame), pointing the way
+/// `kind` says (right for anything but the left, up and down arrows). The head is half the arrow's
+/// thickness long, the shaft 40% of the thickness thick.
+pub fn arrow_outline(kind: ShapeKind, w: f32, h: f32) -> Vec<(f32, f32)> {
+    let vertical = matches!(kind, ShapeKind::ArrowUp | ShapeKind::ArrowDown);
+    let (len, thick) = if vertical { (h, w) } else { (w, h) };
+    let head = if len > 0.0 { (0.5 * thick / len).min(1.0) } else { 0.5 };
+    // Pointing right: `u` runs along the arrow from its tail, `v` across it.
+    let right = [(0.0, 0.3), (1.0 - head, 0.3), (1.0 - head, 0.0), (1.0, 0.5), (1.0 - head, 1.0), (1.0 - head, 0.7), (0.0, 0.7)];
+    right
+        .iter()
+        .map(|&(u, v)| match kind {
+            ShapeKind::ArrowLeft => (1.0 - u, v),
+            ShapeKind::ArrowUp => (v, 1.0 - u),
+            ShapeKind::ArrowDown => (v, u),
+            _ => (u, v),
+        })
+        .collect()
 }
 
 /// Largest side of the grid [`alpha_outline`] looks at.
@@ -211,24 +230,45 @@ mod tests {
         assert!(WrapPolygon::from_unit(false, &[(f32::NAN, 0.0), (0.0, 0.0), (1.0, 0.0), (0.5, 1.0)]).is_some_and(|p| p.points.len() == 3));
     }
 
+    /// #3919: the tip of each block arrow lies on the side it points to.
+    #[test]
+    fn arrow_outlines_point_the_right_way() {
+        let tip = |kind| shape_outline(kind, 100.0, 100.0, None).unwrap()[3];
+        assert_eq!(tip(ShapeKind::Arrow), (1.0, 0.5));
+        assert_eq!(tip(ShapeKind::ArrowLeft), (0.0, 0.5));
+        assert_eq!(tip(ShapeKind::ArrowUp), (0.5, 0.0));
+        assert_eq!(tip(ShapeKind::ArrowDown), (0.5, 1.0));
+    }
+
     #[test]
     fn shape_outlines_stay_in_the_frame() {
         for kind in [
             ShapeKind::Ellipse,
             ShapeKind::RoundedRectangle,
             ShapeKind::Triangle,
+            ShapeKind::RightTriangle,
             ShapeKind::Diamond,
             ShapeKind::Arrow,
+            ShapeKind::ArrowLeft,
+            ShapeKind::ArrowUp,
+            ShapeKind::ArrowDown,
             ShapeKind::Star,
             ShapeKind::Heart,
         ] {
             for (w, h) in [(100.0, 50.0), (0.0, 0.0), (f32::NAN, 10.0)] {
-                let pts = shape_outline(kind, w, h).unwrap();
-                assert!(pts.len() >= 3 && pts.len() <= MAX_DERIVED_POINTS, "{kind:?}");
-                assert!(pts.iter().all(|(x, y)| (-0.001..=1.001).contains(x) && (-0.001..=1.001).contains(y)), "{kind:?}");
+                for corner in [None, Some(0), Some(3_565), Some(u32::MAX)] {
+                    let pts = shape_outline(kind, w, h, corner).unwrap();
+                    assert!(pts.len() >= 3 && pts.len() <= MAX_DERIVED_POINTS, "{kind:?}");
+                    assert!(pts.iter().all(|(x, y)| (-0.001..=1.001).contains(x) && (-0.001..=1.001).contains(y)), "{kind:?}");
+                }
             }
         }
-        assert!(shape_outline(ShapeKind::Rectangle, 10.0, 10.0).is_none());
+        assert!(shape_outline(ShapeKind::Rectangle, 10.0, 10.0, None).is_none());
+        // The end of the bottom-right corner: in the frame's corner when the corner is square,
+        // 16% of the height (8 of 100 wide) in from it by default.
+        let corner_pt = |corner| shape_outline(ShapeKind::RoundedRectangle, 100.0, 50.0, corner).unwrap()[6];
+        assert!(corner_pt(Some(0)).0 > 0.999 && corner_pt(Some(0)).1 > 0.999, "{:?}", corner_pt(Some(0)));
+        assert!((corner_pt(None).0 - 0.92).abs() < 0.001, "{:?}", corner_pt(None));
     }
 
     #[test]

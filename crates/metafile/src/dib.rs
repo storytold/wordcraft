@@ -1,7 +1,7 @@
 //! Device-independent bitmaps. BITMAPINFOHEADER DIBs at 1/4/8/16/24/32 bpp with BI_RGB or BI_BITFIELDS
 //! decode to RGBA8 rows, top-down. Compressed (RLE, JPEG, PNG) and V4/V5-only features are not decoded.
 
-use crate::{MAX_PIXELS, bytes::Bytes};
+use crate::{MAX_BITMAP_SIDE, MAX_PIXELS, bytes::Bytes};
 
 const BI_RGB: u32 = 0;
 const BI_BITFIELDS: u32 = 3;
@@ -11,11 +11,10 @@ const ROP_SRCAND: u32 = 0x0088_00C6;
 const ROP_SRCPAINT: u32 = 0x00EE_0086;
 const ROP_SRCINVERT: u32 = 0x0066_0046;
 
-/// A decoded picture. `bottom_up` records the DIB's native row order, which source rectangles use.
+/// A decoded picture, rows top-down.
 pub(crate) struct Rgba {
     pub w: usize,
     pub h: usize,
-    pub bottom_up: bool,
     pub px: Vec<u8>,
 }
 
@@ -83,10 +82,14 @@ pub(crate) fn info_len(dib: Bytes) -> Option<usize> {
     h.pal_off.checked_add(h.pal_n.checked_mul(4)?)
 }
 
-/// Decodes a DIB given as its info part (header plus masks and palette) and its pixel bits. The
+/// Decodes the part of a DIB that the source rectangle `src` = `[x, y, w, h]` selects and returns it
+/// (top-down) with the part of the destination `dst` that it fills; see [`clip_rect`] for the
+/// coordinates. `info` is the info part (header plus masks and palette) and `bits` the pixel bits. The
 /// 32-bit alpha byte is kept only when `keep_alpha` is set (per-pixel alpha blends); otherwise pixels
-/// are opaque.
-pub(crate) fn decode(info: Bytes, bits: Bytes, keep_alpha: bool) -> Option<Rgba> {
+/// are opaque. Only the clipped rows and columns are decoded, so the work and the memory follow the
+/// crop, not the whole bitmap; the whole bitmap is still validated (size cap, palette, bits length).
+/// None as well when the clipped width or height is over [`MAX_BITMAP_SIDE`], which no renderer draws.
+pub(crate) fn decode_clip(info: Bytes, bits: Bytes, keep_alpha: bool, src: [i64; 4], dst: [f64; 4]) -> Option<(Rgba, [f64; 4])> {
     let hd = Header::read(info)?;
     let pixels = hd.w.checked_mul(hd.h)?;
     if pixels == 0 || pixels > MAX_PIXELS {
@@ -95,48 +98,152 @@ pub(crate) fn decode(info: Bytes, bits: Bytes, keep_alpha: bool) -> Option<Rgba>
     let stride = hd.w.checked_mul(hd.bpp)?.checked_add(31)? / 32 * 4;
     let data = bits.slice(0, stride.checked_mul(hd.h)?)?;
     let pal = info.slice(hd.pal_off, hd.pal_n * 4)?;
-    let mut px = vec![0u8; pixels * 4];
-    for y in 0..hd.h {
-        let src_row = if hd.top_down { y } else { hd.h - 1 - y };
-        let row = src_row * stride;
-        for x in 0..hd.w {
-            let p = pixel(data, row, x, &hd, pal, keep_alpha)?;
-            let o = (y * hd.w + x) * 4;
-            px.get_mut(o..o + 4)?.copy_from_slice(&p);
-        }
+    let (clip, out) = clip_rect(hd.w, hd.h, !hd.top_down, src, dst)?;
+    // The renderers draw no bitmap with a side over the cap (`Item::take_pixels`); decoding one
+    // would only fill the parse's memory budget with pixels nobody draws.
+    let cap = MAX_BITMAP_SIDE as usize;
+    if clip.x1 - clip.x0 > cap || clip.r1 - clip.r0 > cap {
+        return None;
     }
-    Some(Rgba { w: hd.w, h: hd.h, bottom_up: !hd.top_down, px })
+    let (ow, oh) = (clip.x1 - clip.x0, clip.r1 - clip.r0);
+    let mut px = vec![0u8; ow.checked_mul(oh)?.checked_mul(4)?];
+    #[cfg(test)]
+    DECODED.with(|d| d.set(d.get() + ow * oh));
+    // The depth, palette and masks are the same for every pixel: pick the row decoder once.
+    let kind = RowKind::new(&hd, pal, keep_alpha);
+    for (y, line) in (clip.r0..clip.r1).zip(px.chunks_exact_mut(ow * 4)) {
+        let src_row = if hd.top_down { y } else { hd.h - 1 - y };
+        let row = data.get(src_row * stride..(src_row + 1) * stride)?;
+        kind.decode_row(row, clip.x0..clip.x1, line.as_chunks_mut::<4>().0)?;
+    }
+    Some((Rgba { w: ow, h: oh, px }, out))
 }
 
-fn pixel(data: &[u8], row: usize, x: usize, hd: &Header, pal: &[u8], keep_alpha: bool) -> Option<[u8; 4]> {
-    let [m_r, m_g, m_b] = hd.masks;
-    let [r, g, b] = match hd.bpp {
-        1 => {
-            let b = *data.get(row + x / 8)?;
-            palette(pal, usize::from((b >> (7 - x % 8)) & 1))
+#[cfg(test)]
+thread_local! {
+    /// Pixels asked of the decoder on this thread, so the tests can check that the work follows the crop.
+    static DECODED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// One channel of a masked 16/32 bpp pixel, with the shift and scale worked out once per bitmap.
+/// Channels of up to 8 bits (every common 16 bpp layout) go through a table of their values, so a
+/// pixel costs no division.
+#[derive(Clone)]
+struct Channel {
+    mask: u32,
+    shift: u32,
+    max: u64,
+    table: [u8; 256],
+}
+
+impl Channel {
+    fn new(mask: u32) -> Channel {
+        let shift = if mask == 0 { 0 } else { mask.trailing_zeros() };
+        let max = u64::from(mask >> shift);
+        let mut table = [0u8; 256];
+        if mask != 0 && max <= 255 {
+            for (val, t) in table.iter_mut().enumerate().take(max as usize + 1) {
+                *t = ((val as u64 * 255 + max / 2) / max) as u8;
+            }
         }
-        4 => {
-            let b = *data.get(row + x / 2)?;
-            palette(pal, usize::from(if x.is_multiple_of(2) { b >> 4 } else { b & 0x0F }))
+        Channel { mask, shift, max, table }
+    }
+
+    /// The channel of `v` scaled to 8 bits; 0 when the mask is empty.
+    fn get(&self, v: u32) -> u8 {
+        if self.mask == 0 {
+            return 0;
         }
-        8 => palette(pal, usize::from(*data.get(row + x)?)),
-        24 => {
-            let [b, g, r] = data.get(row + x * 3..row + x * 3 + 3)?.try_into().ok()?;
-            [r, g, b]
+        let val = u64::from((v & self.mask) >> self.shift);
+        if self.max <= 255 {
+            return self.table[usize::from(val as u8)];
         }
-        16 => {
-            let o = row + x * 2;
-            let v = u32::from(u16::from_le_bytes(data.get(o..o + 2)?.try_into().ok()?));
-            [field(v, m_r), field(v, m_g), field(v, m_b)]
+        ((val * 255 + self.max / 2) / self.max) as u8
+    }
+}
+
+/// How the pixels of one DIB turn into RGBA, decided once from its header.
+enum RowKind {
+    /// 1, 4 or 8 bpp: `bpp` bits per index into a table of every possible index.
+    Indexed { bpp: usize, table: Box<[[u8; 4]; 256]> },
+    /// 24 bpp: BGR triples.
+    Bgr24,
+    /// 32 bpp with the default masks: BGRA quads, alpha kept or forced opaque.
+    Bgra32 { keep_alpha: bool },
+    /// 16 bpp, or 32 bpp with other masks.
+    Masked { bpp: usize, ch: Box<[Channel; 3]>, keep_alpha: bool },
+}
+
+impl RowKind {
+    fn new(hd: &Header, pal: &[u8], keep_alpha: bool) -> RowKind {
+        match hd.bpp {
+            1 | 4 | 8 => {
+                // An index past the palette reads as black, as in `palette`.
+                let mut table = Box::new([[0u8, 0, 0, 255]; 256]);
+                for (i, t) in table.iter_mut().enumerate().take(1 << hd.bpp) {
+                    let [r, g, b] = palette(pal, i);
+                    *t = [r, g, b, 255];
+                }
+                RowKind::Indexed { bpp: hd.bpp, table }
+            }
+            24 => RowKind::Bgr24,
+            32 if hd.masks == [0xFF_0000, 0xFF00, 0xFF] => RowKind::Bgra32 { keep_alpha },
+            _ => RowKind::Masked { bpp: hd.bpp, ch: Box::new(hd.masks.map(Channel::new)), keep_alpha },
         }
-        _ => {
-            let o = row + x * 4;
-            let v = u32::from_le_bytes(data.get(o..o + 4)?.try_into().ok()?);
-            let a = if keep_alpha { (v >> 24) as u8 } else { 255 };
-            return Some([field(v, m_r), field(v, m_g), field(v, m_b), a]);
+    }
+
+    /// Decodes the columns `cols` of one source row `row` (all of its bytes) into `out`. `None` when
+    /// the row is shorter than the columns need.
+    fn decode_row(&self, row: &[u8], cols: std::ops::Range<usize>, out: &mut [[u8; 4]]) -> Option<()> {
+        match self {
+            RowKind::Indexed { bpp: 8, table } => {
+                for (d, s) in out.iter_mut().zip(row.get(cols)?) {
+                    *d = table[usize::from(*s)];
+                }
+            }
+            RowKind::Indexed { bpp: 4, table } => {
+                for (d, x) in out.iter_mut().zip(cols) {
+                    let b = *row.get(x / 2)?;
+                    *d = table[usize::from(if x.is_multiple_of(2) { b >> 4 } else { b & 0x0F })];
+                }
+            }
+            RowKind::Indexed { table, .. } => {
+                for (d, x) in out.iter_mut().zip(cols) {
+                    let b = *row.get(x / 8)?;
+                    *d = table[usize::from((b >> (7 - x % 8)) & 1)];
+                }
+            }
+            RowKind::Bgr24 => {
+                let src = row.get(cols.start.checked_mul(3)?..cols.end.checked_mul(3)?)?;
+                for (d, s) in out.iter_mut().zip(src.as_chunks::<3>().0) {
+                    *d = [s[2], s[1], s[0], 255];
+                }
+            }
+            RowKind::Bgra32 { keep_alpha } => {
+                let src = row.get(cols.start.checked_mul(4)?..cols.end.checked_mul(4)?)?;
+                for (d, s) in out.iter_mut().zip(src.as_chunks::<4>().0) {
+                    *d = [s[2], s[1], s[0], if *keep_alpha { s[3] } else { 255 }];
+                }
+            }
+            RowKind::Masked { bpp: 16, ch, .. } => {
+                let [r, g, b] = &**ch;
+                let src = row.get(cols.start.checked_mul(2)?..cols.end.checked_mul(2)?)?;
+                for (d, s) in out.iter_mut().zip(src.as_chunks::<2>().0) {
+                    let v = u32::from(u16::from_le_bytes(*s));
+                    *d = [r.get(v), g.get(v), b.get(v), 255];
+                }
+            }
+            RowKind::Masked { ch, keep_alpha, .. } => {
+                let [r, g, b] = &**ch;
+                let src = row.get(cols.start.checked_mul(4)?..cols.end.checked_mul(4)?)?;
+                for (d, s) in out.iter_mut().zip(src.as_chunks::<4>().0) {
+                    let v = u32::from_le_bytes(*s);
+                    *d = [r.get(v), g.get(v), b.get(v), if *keep_alpha { (v >> 24) as u8 } else { 255 }];
+                }
+            }
         }
-    };
-    Some([r, g, b, 255])
+        Some(())
+    }
 }
 
 /// Palette entries are BGRX quads; an index past the table reads as black rather than failing the image.
@@ -144,27 +251,25 @@ fn palette(pal: &[u8], i: usize) -> [u8; 3] {
     pal.get(i * 4..i * 4 + 4).and_then(|c| <[u8; 4]>::try_from(c).ok()).map_or([0, 0, 0], |c| [c[2], c[1], c[0]])
 }
 
-/// Extracts one channel from a masked pixel value and scales it to 8 bits.
-fn field(v: u32, mask: u32) -> u8 {
-    if mask == 0 {
-        return 0;
-    }
-    let shift = mask.trailing_zeros();
-    let max = u64::from(mask >> shift);
-    let val = u64::from((v & mask) >> shift);
-    ((val * 255 + max / 2) / max) as u8
+/// The columns `x0..x1` and top-down rows `r0..r1` of a bitmap that a clipped source rectangle covers.
+struct Clip {
+    x0: usize,
+    x1: usize,
+    r0: usize,
+    r1: usize,
 }
 
-/// Clips a source rectangle `src` = `[x, y, w, h]` to the bitmap and returns the cropped pixels (top-down)
+/// Clips a source rectangle `src` = `[x, y, w, h]` to a `w` x `h` bitmap and returns the covered pixels
 /// with the part of the destination `dst` that they fill. `src` is in DIB pixel coordinates (`y` counted
 /// from the DIB's origin, so bottom-up images count from the bottom); a non-positive source size means the
 /// whole bitmap. Clipping shrinks the destination by the same ratio and shifts it by the clipped-off part,
 /// so the rest of the image keeps its place. A negative destination extent is kept (the caller mirrors).
-pub(crate) fn clip_blit(img: &Rgba, src: [i64; 4], dst: [f64; 4]) -> Option<(Rgba, [f64; 4])> {
-    let (iw, ih) = (img.w as i64, img.h as i64);
+/// `None` when nothing of the bitmap is covered.
+fn clip_rect(w: usize, h: usize, bottom_up: bool, src: [i64; 4], dst: [f64; 4]) -> Option<(Clip, [f64; 4])> {
+    let (iw, ih) = (w as i64, h as i64);
     let [sx, sy, sw, sh] = if src[2] > 0 && src[3] > 0 { src } else { [0, 0, iw, ih] };
     // The request's top row in top-down order.
-    let top = if img.bottom_up { ih.saturating_sub(sy).saturating_sub(sh) } else { sy };
+    let top = if bottom_up { ih.saturating_sub(sy).saturating_sub(sh) } else { sy };
     let (x0, x1) = (sx.max(0), sx.saturating_add(sw).min(iw));
     let (r0, r1) = (top.max(0), top.saturating_add(sh).min(ih));
     if x1 <= x0 || r1 <= r0 {
@@ -172,14 +277,7 @@ pub(crate) fn clip_blit(img: &Rgba, src: [i64; 4], dst: [f64; 4]) -> Option<(Rgb
     }
     let (kx, ky) = (dst[2] / sw as f64, dst[3] / sh as f64);
     let out = [dst[0] + (x0 - sx) as f64 * kx, dst[1] + (r0 - top) as f64 * ky, (x1 - x0) as f64 * kx, (r1 - r0) as f64 * ky];
-    let (x0, x1, r0, r1) = (x0 as usize, x1 as usize, r0 as usize, r1 as usize);
-    let (ow, oh) = (x1 - x0, r1 - r0);
-    let mut px = Vec::with_capacity(ow * oh * 4);
-    for row in r0..r1 {
-        let s = (row * img.w + x0) * 4;
-        px.extend_from_slice(img.px.get(s..s + ow * 4)?);
-    }
-    Some((Rgba { w: ow, h: oh, bottom_up: false, px }, out))
+    Some((Clip { x0: x0 as usize, x1: x1 as usize, r0: r0 as usize, r1: r1 as usize }, out))
 }
 
 /// Applies a blend to decoded pixels before they are drawn. The picture has no destination pixels, so
@@ -255,5 +353,367 @@ fn swap_rows(px: &mut [u8], a: usize, b: usize, len: usize) {
     let Some((head, tail)) = px.split_at_mut_checked(b) else { return };
     if let (Some(top), Some(bottom)) = (head.get_mut(a..a.saturating_add(len)), tail.get_mut(..len)) {
         top.swap_with_slice(bottom);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The pipeline before `decode_clip`: decode the whole bitmap, then copy the clipped part out.
+    fn decode_whole(info: Bytes, bits: Bytes, keep_alpha: bool) -> Option<Rgba> {
+        let hd = Header::read(info)?;
+        let pixels = hd.w.checked_mul(hd.h)?;
+        if pixels == 0 || pixels > MAX_PIXELS {
+            return None;
+        }
+        let stride = hd.w.checked_mul(hd.bpp)?.checked_add(31)? / 32 * 4;
+        let data = bits.slice(0, stride.checked_mul(hd.h)?)?;
+        let pal = info.slice(hd.pal_off, hd.pal_n * 4)?;
+        let mut px = vec![0u8; pixels * 4];
+        for y in 0..hd.h {
+            let src_row = if hd.top_down { y } else { hd.h - 1 - y };
+            let row = src_row * stride;
+            for x in 0..hd.w {
+                let p = pixel(data, row, x, &hd, pal, keep_alpha)?;
+                let o = (y * hd.w + x) * 4;
+                px.get_mut(o..o + 4)?.copy_from_slice(&p);
+            }
+        }
+        Some(Rgba { w: hd.w, h: hd.h, px })
+    }
+
+    fn clip_blit_whole(img: &Rgba, bottom_up: bool, src: [i64; 4], dst: [f64; 4]) -> Option<(Rgba, [f64; 4])> {
+        let (iw, ih) = (img.w as i64, img.h as i64);
+        let [sx, sy, sw, sh] = if src[2] > 0 && src[3] > 0 { src } else { [0, 0, iw, ih] };
+        let top = if bottom_up { ih.saturating_sub(sy).saturating_sub(sh) } else { sy };
+        let (x0, x1) = (sx.max(0), sx.saturating_add(sw).min(iw));
+        let (r0, r1) = (top.max(0), top.saturating_add(sh).min(ih));
+        if x1 <= x0 || r1 <= r0 {
+            return None;
+        }
+        let (kx, ky) = (dst[2] / sw as f64, dst[3] / sh as f64);
+        let out = [dst[0] + (x0 - sx) as f64 * kx, dst[1] + (r0 - top) as f64 * ky, (x1 - x0) as f64 * kx, (r1 - r0) as f64 * ky];
+        let (x0, x1, r0, r1) = (x0 as usize, x1 as usize, r0 as usize, r1 as usize);
+        let (ow, oh) = (x1 - x0, r1 - r0);
+        let mut px = Vec::with_capacity(ow * oh * 4);
+        for row in r0..r1 {
+            let s = (row * img.w + x0) * 4;
+            px.extend_from_slice(img.px.get(s..s + ow * 4)?);
+        }
+        Some((Rgba { w: ow, h: oh, px }, out))
+    }
+
+    /// A BITMAPINFOHEADER DIB with a palette for indexed depths; returns (info, bits).
+    fn make_dib(w: usize, h: i32, bpp: usize, seed: &mut u64) -> (Vec<u8>, Vec<u8>) {
+        let mut rnd = || {
+            *seed ^= *seed << 13;
+            *seed ^= *seed >> 7;
+            *seed ^= *seed << 17;
+            *seed
+        };
+        let mut info = Vec::new();
+        info.extend(40u32.to_le_bytes());
+        info.extend((w as i32).to_le_bytes());
+        info.extend(h.to_le_bytes());
+        info.extend(1u16.to_le_bytes());
+        info.extend((bpp as u16).to_le_bytes());
+        info.extend([0u8; 24]);
+        if bpp <= 8 {
+            for _ in 0..(1usize << bpp) * 4 {
+                info.push(rnd() as u8);
+            }
+        }
+        let stride = (w * bpp).div_ceil(32) * 4;
+        let bits = (0..stride * h.unsigned_abs() as usize).map(|_| rnd() as u8).collect();
+        (info, bits)
+    }
+
+    /// The per-pixel decoder `decode_clip` used before the depth was chosen once per bitmap. Kept as
+    /// the reference the fast decoder must match byte for byte.
+    fn pixel(data: &[u8], row: usize, x: usize, hd: &Header, pal: &[u8], keep_alpha: bool) -> Option<[u8; 4]> {
+        DECODED.with(|d| d.set(d.get() + 1));
+        let [m_r, m_g, m_b] = hd.masks;
+        let [r, g, b] = match hd.bpp {
+            1 => {
+                let b = *data.get(row + x / 8)?;
+                palette(pal, usize::from((b >> (7 - x % 8)) & 1))
+            }
+            4 => {
+                let b = *data.get(row + x / 2)?;
+                palette(pal, usize::from(if x.is_multiple_of(2) { b >> 4 } else { b & 0x0F }))
+            }
+            8 => palette(pal, usize::from(*data.get(row + x)?)),
+            24 => {
+                let [b, g, r] = data.get(row + x * 3..row + x * 3 + 3)?.try_into().ok()?;
+                [r, g, b]
+            }
+            16 => {
+                let o = row + x * 2;
+                let v = u32::from(u16::from_le_bytes(data.get(o..o + 2)?.try_into().ok()?));
+                [field(v, m_r), field(v, m_g), field(v, m_b)]
+            }
+            _ => {
+                let o = row + x * 4;
+                let v = u32::from_le_bytes(data.get(o..o + 4)?.try_into().ok()?);
+                let a = if keep_alpha { (v >> 24) as u8 } else { 255 };
+                return Some([field(v, m_r), field(v, m_g), field(v, m_b), a]);
+            }
+        };
+        Some([r, g, b, 255])
+    }
+
+    /// Extracts one channel from a masked pixel value and scales it to 8 bits.
+    fn field(v: u32, mask: u32) -> u8 {
+        if mask == 0 {
+            return 0;
+        }
+        let shift = mask.trailing_zeros();
+        let max = u64::from(mask >> shift);
+        let val = u64::from((v & mask) >> shift);
+        ((val * 255 + max / 2) / max) as u8
+    }
+
+    /// `decode_clip` as it was: the same clip, then `pixel` for every output pixel.
+    fn decode_clip_reference(info: Bytes, bits: Bytes, keep_alpha: bool, src: [i64; 4], dst: [f64; 4]) -> Option<(Rgba, [f64; 4])> {
+        let hd = Header::read(info)?;
+        let pixels = hd.w.checked_mul(hd.h)?;
+        if pixels == 0 || pixels > MAX_PIXELS {
+            return None;
+        }
+        let stride = hd.w.checked_mul(hd.bpp)?.checked_add(31)? / 32 * 4;
+        let data = bits.slice(0, stride.checked_mul(hd.h)?)?;
+        let pal = info.slice(hd.pal_off, hd.pal_n * 4)?;
+        let (clip, out) = clip_rect(hd.w, hd.h, !hd.top_down, src, dst)?;
+        let (ow, oh) = (clip.x1 - clip.x0, clip.r1 - clip.r0);
+        let mut px = vec![0u8; ow.checked_mul(oh)?.checked_mul(4)?];
+        for (y, line) in (clip.r0..clip.r1).zip(px.chunks_exact_mut(ow * 4)) {
+            let src_row = if hd.top_down { y } else { hd.h - 1 - y };
+            let row = src_row * stride;
+            for (x, dst_px) in (clip.x0..clip.x1).zip(line.as_chunks_mut::<4>().0) {
+                *dst_px = pixel(data, row, x, &hd, pal, keep_alpha)?;
+            }
+        }
+        Some((Rgba { w: ow, h: oh, px }, out))
+    }
+
+    /// A DIB with chosen header fields: `masks` makes it BI_BITFIELDS (inline after a 40 byte
+    /// header, or inside a larger header), `clr_used` limits the palette, and the palette, when the
+    /// depth is indexed, has `pal_entries` entries (fewer than the depth names reads as black).
+    fn make_dib_with(
+        w: usize,
+        h: i32,
+        bpp: usize,
+        masks: Option<([u32; 3], usize)>,
+        clr_used: u32,
+        pal_entries: usize,
+        seed: &mut u64,
+    ) -> (Vec<u8>, Vec<u8>) {
+        let mut rnd = || {
+            *seed ^= *seed << 13;
+            *seed ^= *seed >> 7;
+            *seed ^= *seed << 17;
+            *seed
+        };
+        let size = masks.map_or(40, |(_, s)| s);
+        let mut info = Vec::new();
+        info.extend((size as u32).to_le_bytes());
+        info.extend((w as i32).to_le_bytes());
+        info.extend(h.to_le_bytes());
+        info.extend(1u16.to_le_bytes());
+        info.extend((bpp as u16).to_le_bytes());
+        info.extend(if masks.is_some() { 3u32 } else { 0 }.to_le_bytes());
+        info.extend([0u8; 12]);
+        info.extend(clr_used.to_le_bytes());
+        info.extend([0u8; 4]);
+        info.resize(size.max(40), 0);
+        if let Some((m, _)) = masks {
+            for (i, v) in m.iter().enumerate() {
+                let at = 40 + i * 4;
+                if size == 40 {
+                    info.extend(v.to_le_bytes());
+                } else if let Some(dst) = info.get_mut(at..at + 4) {
+                    dst.copy_from_slice(&v.to_le_bytes());
+                }
+            }
+        }
+        for _ in 0..pal_entries * 4 {
+            info.push(rnd() as u8);
+        }
+        let stride = (w * bpp).div_ceil(32) * 4;
+        let bits = (0..stride * h.unsigned_abs() as usize).map(|_| rnd() as u8).collect();
+        (info, bits)
+    }
+
+    fn assert_same(info: &[u8], bits: &[u8], what: &str) {
+        for keep_alpha in [false, true] {
+            for src in [[0, 0, 0, 0], [3, 1, 20, 3], [-4, -4, 100, 100], [36, 4, 5, 5], [1, 0, 1, 5], [8, 2, 17, 2], [0, 3, 37, 1]] {
+                let dst = [1.0, 2.0, 30.0, 40.0];
+                let old = decode_clip_reference(Bytes(info), Bytes(bits), keep_alpha, src, dst);
+                let new = decode_clip(Bytes(info), Bytes(bits), keep_alpha, src, dst);
+                match (old, new) {
+                    (None, None) => {}
+                    (Some((a, ad)), Some((b, bd))) => {
+                        assert_eq!((a.w, a.h, &a.px), (b.w, b.h, &b.px), "{what} alpha={keep_alpha} {src:?}");
+                        assert_eq!(ad.map(f64::to_bits), bd.map(f64::to_bits), "{what} alpha={keep_alpha} {src:?}");
+                    }
+                    _ => panic!("old and new disagree on None: {what} alpha={keep_alpha} {src:?}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn decode_clip_matches_the_per_pixel_reference_at_every_depth_palette_and_mask() {
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        // Widths that leave padding bits in the row, so a row's last byte is only partly used.
+        for w in [1, 9, 37] {
+            for h in [6, -6] {
+                for bpp in [1usize, 4, 8] {
+                    let n = 1usize << bpp;
+                    // Full palette, clrUsed shorter than the depth (the rest reads black), a
+                    // palette cut short of what clrUsed names, and none at all.
+                    for (clr_used, entries) in [(0, n), (3, 3), (n as u32 + 50, n), (0, 1), (0, 0)] {
+                        let (info, bits) = make_dib_with(w, h, bpp, None, clr_used, entries, &mut seed);
+                        assert_same(&info, &bits, &format!("{bpp} bpp w={w} h={h} clrUsed={clr_used} palette={entries}"));
+                    }
+                }
+                let (info, bits) = make_dib_with(w, h, 24, None, 0, 0, &mut seed);
+                assert_same(&info, &bits, &format!("24 bpp w={w} h={h}"));
+                // A colour table on a deep DIB is carried but unused.
+                let (info, bits) = make_dib_with(w, h, 24, None, 5, 5, &mut seed);
+                assert_same(&info, &bits, &format!("24 bpp with palette w={w} h={h}"));
+                // Masks on depths that ignore them still move the palette and the bits.
+                for bpp in [1usize, 8, 24] {
+                    let n = if bpp == 24 { 0 } else { 1 << bpp };
+                    let (info, bits) = make_dib_with(w, h, bpp, Some(([0xF800, 0x07E0, 0x001F], 40)), 0, n, &mut seed);
+                    assert_same(&info, &bits, &format!("{bpp} bpp with masks w={w} h={h}"));
+                }
+                let masks16: [Option<[u32; 3]>; 5] = [
+                    None,
+                    Some([0xF800, 0x07E0, 0x001F]),
+                    Some([0x7C00, 0x03E0, 0x001F]),
+                    Some([0x0F00, 0x00F0, 0x000F]),
+                    Some([0xF800, 0x0000, 0x001F]),
+                ];
+                let masks32: [Option<[u32; 3]>; 6] = [
+                    None,
+                    Some([0xFF_0000, 0xFF00, 0xFF]),
+                    Some([0xFF, 0xFF00, 0xFF_0000]),
+                    Some([0x3FF0_0000, 0x000F_FC00, 0x0000_03FF]),
+                    Some([0xFFFF_FFFF, 0x0000_FF00, 0]),
+                    Some([0x00FF_FF00, 0x00FF_FF00, 0x0000_00FF]),
+                ];
+                for (bpp, sets) in [(16usize, masks16.as_slice()), (32, masks32.as_slice())] {
+                    for m in sets {
+                        // 40: the masks follow the header; 56 and 108: they are inside it.
+                        for hsize in [40usize, 56, 108] {
+                            let inline = m.map(|m| (m, hsize));
+                            let (info, bits) = make_dib_with(w, h, bpp, inline, 0, 0, &mut seed);
+                            assert_same(&info, &bits, &format!("{bpp} bpp masks={m:x?} header={hsize} w={w} h={h}"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Timing of the per-pixel reference against `decode_clip` on a 40 MP bitmap:
+    /// `cargo test -p wordcraft-metafile --release -- --ignored --nocapture dib_decode_speed`.
+    #[test]
+    #[ignore = "timing only"]
+    fn dib_decode_speed() {
+        let mut seed = 6u64;
+        for bpp in [1usize, 4, 8, 16, 24, 32] {
+            let (info, bits) = make_dib(8000, -5000, bpp, &mut seed);
+            for round in 0..4 {
+                let t = std::time::Instant::now();
+                let a = decode_clip_reference(Bytes(&info), Bytes(&bits), false, [0, 0, 8000, 5000], [0.0, 0.0, 1.0, 1.0]).map(|x| x.0.px);
+                let slow = t.elapsed().as_secs_f64() * 1e3;
+                let t = std::time::Instant::now();
+                let b = decode_clip(Bytes(&info), Bytes(&bits), false, [0, 0, 8000, 5000], [0.0, 0.0, 1.0, 1.0]).map(|x| x.0.px);
+                let fast = t.elapsed().as_secs_f64() * 1e3;
+                assert!(a == b);
+                eprintln!("{bpp:2} bpp round {round}: reference {slow:4.0} ms, decode_clip {fast:4.0} ms");
+            }
+        }
+    }
+
+    #[test]
+    fn decode_clip_matches_decode_then_clip_blit() {
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut cases = 0;
+        for bpp in [1, 4, 8, 16, 24, 32] {
+            for h in [5, -5, 1, -1] {
+                let w = 7;
+                let (info, bits) = make_dib(w, h, bpp, &mut seed);
+                for keep_alpha in [false, true] {
+                    // Source x/y from outside the bitmap on both sides; sizes include zero and negative.
+                    for sx in [-9, -2, 0, 3, 6, 8, 20] {
+                        for sy in [-9, -2, 0, 2, 4, 5, 20] {
+                            for (sw, sh) in [(0, 0), (-3, 4), (4, -2), (1, 1), (3, 2), (7, 5), (30, 30), (2, 9)] {
+                                let src = [sx, sy, sw, sh];
+                                let dst = [10.0, 20.0, 70.0, 50.0];
+                                let old = decode_whole(Bytes(&info), Bytes(&bits), keep_alpha).and_then(|img| clip_blit_whole(&img, h > 0, src, dst));
+                                let new = decode_clip(Bytes(&info), Bytes(&bits), keep_alpha, src, dst);
+                                match (old, new) {
+                                    (None, None) => {}
+                                    (Some((a, ad)), Some((b, bd))) => {
+                                        assert_eq!((a.w, a.h, &a.px), (b.w, b.h, &b.px), "{bpp} bpp h={h} {src:?}");
+                                        assert_eq!(ad.map(f64::to_bits), bd.map(f64::to_bits), "{bpp} bpp h={h} {src:?}");
+                                    }
+                                    _ => panic!("old and new disagree on None: {bpp} bpp h={h} {src:?}"),
+                                }
+                                cases += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(cases > 10_000);
+    }
+
+    #[test]
+    fn decode_clip_rejects_what_decode_rejected() {
+        let mut seed = 7;
+        let (info, bits) = make_dib(7, 5, 24, &mut seed);
+        let short = &bits[..bits.len() - 1];
+        // A short bits buffer fails the whole image even when the crop lies in the rows that exist.
+        assert!(decode_clip(Bytes(&info), Bytes(short), false, [0, 0, 1, 1], [0.0, 0.0, 1.0, 1.0]).is_none());
+        assert!(decode_whole(Bytes(&info), Bytes(short), false).is_none());
+    }
+
+    #[test]
+    fn decode_clip_decodes_only_the_cropped_pixels() {
+        let mut seed = 99;
+        let (info, bits) = make_dib(400, -300, 24, &mut seed);
+        DECODED.with(|d| d.set(0));
+        let (img, _) = decode_clip(Bytes(&info), Bytes(&bits), false, [10, 20, 8, 4], [0.0, 0.0, 8.0, 4.0]).unwrap();
+        assert_eq!((img.w, img.h), (8, 4));
+        assert_eq!(DECODED.with(|d| d.get()), 8 * 4);
+        // The whole-bitmap path decodes all 400 x 300.
+        DECODED.with(|d| d.set(0));
+        decode_whole(Bytes(&info), Bytes(&bits), false).unwrap();
+        assert_eq!(DECODED.with(|d| d.get()), 400 * 300);
+    }
+
+    #[test]
+    fn decode_clip_refuses_a_side_no_renderer_draws() {
+        let cap = MAX_BITMAP_SIDE as usize;
+        let mut seed = 11;
+        // 1 bpp, one row longer than the cap: 5 KB of bits, 120 KB of RGBA.
+        let (info, bits) = make_dib(cap + 1, 1, 1, &mut seed);
+        assert!(decode_clip(Bytes(&info), Bytes(&bits), false, [0, 0, 0, 0], [0.0, 0.0, 1.0, 1.0]).is_none());
+        // The same for the height.
+        let (info, bits) = make_dib(1, cap as i32 + 1, 1, &mut seed);
+        assert!(decode_clip(Bytes(&info), Bytes(&bits), false, [0, 0, 0, 0], [0.0, 0.0, 1.0, 1.0]).is_none());
+        // A crop of the wide bitmap within the cap still decodes, and so does the cap itself.
+        let (info, bits) = make_dib(cap + 1, 1, 1, &mut seed);
+        let (img, _) = decode_clip(Bytes(&info), Bytes(&bits), false, [10, 0, 100, 1], [0.0, 0.0, 1.0, 1.0]).unwrap();
+        assert_eq!((img.w, img.h), (100, 1));
+        let (info, bits) = make_dib(cap, 1, 1, &mut seed);
+        let (img, _) = decode_clip(Bytes(&info), Bytes(&bits), false, [0, 0, 0, 0], [0.0, 0.0, 1.0, 1.0]).unwrap();
+        assert_eq!((img.w, img.h), (cap, 1));
     }
 }

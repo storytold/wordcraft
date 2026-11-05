@@ -5,7 +5,7 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::pseudo;
 use crate::WordApp;
@@ -13,6 +13,17 @@ use crate::WordApp;
 thread_local! {
     // Input time, advanced every frame so tooltips and animations move on.
     static TIME: Cell<f64> = const { Cell::new(0.0) };
+    // Process-wide names (font families, the custom dictionary) seen at any point of the run:
+    // tests running alongside add and remove them, so one may be drawn and gone by the check.
+    static GLOBAL_NAMES: std::cell::RefCell<std::collections::HashSet<String>> = std::cell::RefCell::new(Default::default());
+}
+
+/// Remember the process-wide names drawn this frame could have come from.
+fn note_global_names() {
+    GLOBAL_NAMES.with_borrow_mut(|seen| {
+        seen.extend(wordcraft_fonts::FontDb::global().families());
+        seen.extend(wordcraft_engine::proof::user_dictionary());
+    });
 }
 
 fn texts(shape: &egui::Shape, out: &mut Vec<String>) {
@@ -35,10 +46,12 @@ fn frames(ctx: &egui::Context, app: &mut WordApp, steps: Vec<Vec<egui::Event>>) 
         TIME.set(TIME.get() + 0.1);
         let input =
             egui::RawInput { screen_rect: Some(screen), time: Some(TIME.get()), events: steps.next().unwrap_or_default(), ..Default::default() };
+        note_global_names();
         let mut out = ctx.run_ui(input, |ui| {
             app.logic(ui.ctx());
             app.ui(ui);
         });
+        note_global_names();
         drawn.clear();
         for s in &out.shapes {
             texts(&s.shape, &mut drawn);
@@ -84,6 +97,9 @@ fn ribbon_controls(ctx: &egui::Context) -> Vec<egui::Pos2> {
 fn fresh_app(ctx: &egui::Context) -> WordApp {
     ctx.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), Default::default());
+    // Read Aloud holds each sentence instead of starting the system's speech engine: no sound on
+    // machines that have one, and no worker thread failing at its own pace on machines that don't.
+    app.session.read_aloud.backend = wordcraft_engine::speech::Backend::Hold;
     // Fonts install over the first frames.
     for _ in 0..2 {
         frame(ctx, &mut app);
@@ -99,16 +115,38 @@ fn english_words(text: &str) -> bool {
 
 /// Text that is right to show untranslated: what the author or the machine supplied, not the
 /// interface's own wording.
-struct Exempt {
+struct Exempt<'a> {
     /// The document's text (headings in the Navigation pane, the title in the title bar).
     body: String,
     /// Installed font families and the document's style names (pickers and editable fields).
     names: std::collections::HashSet<String>,
+    /// The Equation tab's UnicodeMath placeholders (math input, not interface wording).
+    math: &'a std::collections::HashSet<String>,
 }
 
-impl Exempt {
-    fn new(app: &WordApp) -> Self {
-        let mut names: std::collections::HashSet<String> = wordcraft_fonts::FontDb::global().families().into_iter().collect();
+/// The Equation tab's temporary UnicodeMath placeholders (while a preview loads). They are math
+/// input, not interface wording; a character the interface fonts lack becomes its linear name
+/// (`┬` → `\below`), so the exact strings are recognized rather than a pattern.
+fn math_placeholders(ctx: &egui::Context) -> std::collections::HashSet<String> {
+    let font = crate::theme::regular(11.0);
+    math_placeholders_with(|c| ctx.fonts_mut(|fonts| fonts.has_glyph(&font, c)))
+}
+
+/// [`math_placeholders`] given which characters the interface fonts cover, so the exact-string
+/// boundary can be tested without depending on the host's fonts.
+fn math_placeholders_with(covered: impl Fn(char) -> bool) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for linear in crate::equation_tab::placeholder_linears() {
+        out.insert(crate::equation_tab::math_placeholder_with(&linear, &covered));
+    }
+    out
+}
+
+impl<'a> Exempt<'a> {
+    fn new(app: &WordApp, math_placeholders: &'a std::collections::HashSet<String>) -> Self {
+        // Installed fonts, and the custom dictionary's words (File › Options › Proofing): the user's own.
+        note_global_names();
+        let mut names: std::collections::HashSet<String> = GLOBAL_NAMES.with_borrow(Clone::clone);
         names.extend(app.session.doc.styles.styles.iter().map(|s| s.name.clone()));
         // Fonts a document asks for, installed or not (Aptos is drawn with a substitute).
         names.extend([wordcraft_doc::styles::BODY_FONT, wordcraft_doc::styles::HEADING_FONT].map(str::to_string));
@@ -126,12 +164,47 @@ impl Exempt {
             names.extend(c.categories.iter().cloned());
             names.extend(c.series.iter().map(|s| s.name.clone()));
         }
+        // About › Language data: the licences' own titles and texts, and the packs' names,
+        // licences and sources (File › Options › Language), as their authors wrote them.
+        for (title, text) in wordcraft_engine::packs::licence_texts() {
+            names.extend([title, text]);
+        }
+        for p in wordcraft_engine::packs::available() {
+            names.extend([format!("{} · {}", p.name, p.locale), p.source_link().to_string(), p.locale, p.name, p.licence, p.url]);
+        }
+        for p in wordcraft_engine::packs::installed() {
+            names.extend([p.name.clone(), p.licence, format!("{} · {}", p.name, p.locale), p.locale]);
+        }
+        // Options › Language › Your languages: each row's language tag, and a pack's own name
+        // beside it, as the index and the document wrote them.
+        let index = wordcraft_engine::packs::available();
+        for row in wordcraft_engine::packs::your_languages(&app.session) {
+            let tag = row.tags.first().cloned().or_else(|| row.pack.as_deref().map(crate::ribbon::tag_for_pack)).unwrap_or_default();
+            if let Some(p) = row.pack.as_deref().and_then(|l| index.iter().find(|p| p.locale == l)) {
+                names.insert(format!("{} · {tag}", p.name));
+            }
+            names.extend(row.tags.iter().cloned());
+            names.insert(tag);
+        }
         for m in crate::credits::MODELS {
             names.extend([m.company, m.model, m.version].map(str::to_string));
         }
-        Exempt { body: app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), names }
+        // The spelling/grammar suggestions popup (#3340): dictionary and grammar-rule words, not
+        // interface text.
+        if let Some(sugg) = app.canvas.context_issue.as_ref().and_then(|i| i.get("suggestions")).and_then(Value::as_array) {
+            names.extend(sugg.iter().filter_map(Value::as_str).map(str::to_string));
+        }
+        // The proofing pane displays document context and dictionary suggestions, not UI wording.
+        if let Some(form) = &app.spelling_review {
+            names.extend(form.content_text());
+        }
+        Exempt { body: app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), names, math: math_placeholders }
     }
 
+    /// Whitelists text that is not interface wording: shortcuts and punctuation, status and Read
+    /// Aloud messages, theme font suffixes, icon lettering and account initials, math symbols and
+    /// equation placeholders, document body and known names, contributor handles, default style
+    /// names and fixed tokens.
     fn allows(&self, app: &WordApp, text: &str) -> bool {
         let plain = pseudo::unmarked(text);
         let plain = plain.trim().trim_end_matches(" —").trim();
@@ -144,37 +217,57 @@ impl Exempt {
         let theme_fonts = plain.strip_prefix(": ").is_some_and(|f| f.split(" / ").count() == 2);
         let icon_lettering = matches!(plain, "Aa" | "ab" | "abc" | "ac" | "cd" | "ab-" | "fx" | "ABC");
         let initials = plain.chars().count() == 2 && plain.chars().all(|c| c.is_ascii_uppercase());
+        // Math tiles fall back to UnicodeMath syntax while their preview loads. These are
+        // language-independent commands, and only names in the real symbol table qualify.
+        let math_symbol = plain.strip_prefix('\\').is_some_and(|name| wordcraft_doc::math_symbols::symbol(name).is_some());
         icon_lettering // drawn inside icons
             || initials // the account button
+            || math_symbol
             || status
             || theme_fonts
             || is_shortcut()
             || self.body.contains(plain)
             || self.names.contains(plain)
+            || self.math.contains(plain) // the Equation tab's `lim\below(n→∞)`-style placeholders
             || plain.starts_with('@') // contributor handles
             || plain.starts_with("Style") || plain.starts_with("Table Style ") // a new style's default name
             || plain.contains('┬') || plain.contains('\u{2061}') // equation input (UnicodeMath), drawn as math
-            || matches!(plain, "WordCraft" | "WordCraft User" | "Discord" | "https://" | "auto" | "I. II. III." | "i. ii. iii.")
+            || matches!(plain, "WordCraft" | "WordCraft User" | "Discord" | "https://" | "auto" | "I. II. III." | "i. ii. iii." | "I, II, III, …" | "i, ii, iii, …")
             || plain == "CONFIDENTIAL" // the watermark dialog's text: document content, kept as typed
             || plain == "Figure 1" // the caption dialog's sample: the label goes into the document as is
     }
 }
 
-/// Lists untranslated interface text per UI state. `cargo test -p wordcraft-ui-egui
-/// untranslated_interface_text -- --nocapture` prints the report.
 #[test]
-#[ignore = "failed once in ~46 runs under heavy machine load (cause not yet found); run on demand with `cargo test -p wordcraft-ui-egui untranslated_interface_text -- --ignored --nocapture`"]
+fn math_placeholders_are_exact_math_input_only() {
+    // CI's interface fonts lack `┬`, so the Equation tab paints the linear fallback. Only those
+    // exact placeholders are math input; the set is not a backslash or "contains ┬" pattern.
+    let set = math_placeholders_with(|c| c.is_ascii() || matches!(c, '∞' | '→'));
+    assert!(set.contains("lim\\below(n→∞)"), "the limit button's fallback");
+    assert!(!set.contains("lim\u{252C}(n→∞)"), "the covered form is not what this font chain paints");
+    assert!(set.contains("\\sum_(i=1)^n"), "the Equation button picture");
+    assert!(set.contains("\\complement"), "a symbol tile's fallback");
+    assert!(!set.contains("Translate"), "ordinary interface wording is not exempt");
+}
+
+/// Fails on interface text drawn without going through the catalog, listed per UI state, and
+/// prints the missing-translation report (`report_catalog_gaps`). `cargo xtask i18n-report` runs it
+/// with `--nocapture`; `cargo xtask test` and `ci` run it that way instead of in the main test run.
+/// It can also run with the other tests: input is synthetic and timed by `TIME`, Read Aloud never
+/// starts a speech thread, and process-wide names other tests change are gathered every frame.
+#[test]
 fn untranslated_interface_text() {
     pseudo::set(true);
+    let ctx = egui::Context::default();
+    let mut app = fresh_app(&ctx);
+    let math_placeholders = math_placeholders(&ctx);
     let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut record = |app: &WordApp, state: &str, drawn: Vec<String>| {
-        let exempt = Exempt::new(app);
+        let exempt = Exempt::new(app, &math_placeholders);
         for t in drawn.into_iter().filter(|t| english_words(t) && !exempt.allows(app, t)) {
             found.entry(t).or_default().push(state.to_string());
         }
     };
-    let ctx = egui::Context::default();
-    let mut app = fresh_app(&ctx);
     let tabs: Vec<&str> = crate::ribbon::TABS.iter().copied().filter(|t| *t != "File").collect();
     for tab in &tabs {
         let _ = app.run("ui.tab", json!({"tab": tab}));
@@ -199,6 +292,7 @@ fn untranslated_interface_text() {
         "goto",
         "insertTable",
         "pageSetup",
+        "pageNumbers",
         "link",
         "bookmark",
         "wordCount",
@@ -213,12 +307,16 @@ fn untranslated_interface_text() {
         "about",
         "contributors",
         "models",
+        "languageData",
         "insertMergeField",
         "findRecipient",
+        "mergeRecords",
+        "printRecords",
         "caption",
         "index",
         "markEntry",
         "toc",
+        "tableOfFigures",
         "sourceManager",
         "createSource",
     ];
@@ -310,15 +408,42 @@ fn untranslated_interface_text() {
         states.dedup();
         report.push_str(&format!("{:?}  [{}]\n", pseudo::unmarked(text), states.join(", ")));
     }
+    report_catalog_gaps(pseudo::looked_up());
     assert!(found.is_empty(), "{} interface texts skip translation (wrap them in tl!):\n{report}", found.len());
-    complete_catalogs_have_every_string_the_interface_looked_up(pseudo::looked_up());
 }
 
-/// Russian, Hungarian, Turkish and Bulgarian cover everything the audit saw translated, plus the equation
-/// gallery's labels (shown in menus the audit doesn't open one by one). Numbered style names go
-/// through a template.
-fn complete_catalogs_have_every_string_the_interface_looked_up(mut keys: std::collections::BTreeSet<String>) {
+/// The missing-translation report (craft-i18n's S3; `cargo xtask i18n-report`, part of `cargo xtask
+/// ci`): the embedded catalogs' problems (the crate's `check_all`), and per language the interface
+/// strings with no translation (the missing bucket, which translators fill in craft-i18n) and those
+/// whose translation is the English itself (kept English, not counted as translated). A missing
+/// translation falls back to English, so the report never fails; without embedded catalogs
+/// (`CRAFT_I18N_DIR` unset) it is skipped. The strings are the ones the audit saw looked up, the
+/// ribbon tabs, every command's label and ribbon location, the File › Home greetings, every reason
+/// a command gives for being off (#2678) and the equation gallery's labels (shown in menus the
+/// audit doesn't open one by one). Numbered style names go through a template.
+fn report_catalog_gaps(mut keys: std::collections::BTreeSet<String>) {
     use wordcraft_engine::math_gallery::{BUILT_INS, STRUCTURES, SYMBOL_SETS};
+    if super::CRAFT_I18N.is_empty() {
+        eprintln!("missing-translation report skipped: built without craft-i18n (set CRAFT_I18N_DIR to a craft-i18n checkout)");
+        return;
+    }
+    let problems = super::I18N.check_all();
+    if !problems.is_empty() {
+        eprintln!("{} catalog rows are skipped (they show in English):\n{problems:#?}", problems.len());
+    }
+    let tabs = crate::ribbon::TABS.iter().chain(&["Table Design", "Table Layout"]);
+    keys.extend(tabs.map(|t| t.to_string()));
+    keys.extend(["Good morning", "Good afternoon", "Good evening"].map(String::from));
+    keys.extend(disabled_reasons());
+    // Reasons the UI itself gives (`widgets.rs::tooltip`), which the engine's checks never reach.
+    keys.insert("Open a document first".to_string());
+    for doc in [wordcraft_doc::Document::new(), wordcraft_engine::sample::sample_document()] {
+        let session = wordcraft_engine::Session::new(doc);
+        for spec in session.registry.all() {
+            keys.extend(std::iter::once(spec.label).chain(spec.location.split(" › ")).filter(|s| !s.is_empty()).map(String::from));
+            keys.extend((spec.enabled)(&session).map(String::from));
+        }
+    }
     keys.extend(BUILT_INS.iter().map(|(_, label, _)| label.to_string()));
     keys.extend(SYMBOL_SETS.iter().map(|(name, _)| name.to_string()));
     for g in STRUCTURES {
@@ -329,7 +454,7 @@ fn complete_catalogs_have_every_string_the_interface_looked_up(mut keys: std::co
         }
     }
     let numbered = |s: &str| ["Heading ", "TOC "].iter().any(|p| s.strip_prefix(p).is_some_and(|n| n.chars().all(|c| c.is_ascii_digit())));
-    // Names that read the same in these languages (citation style names included).
+    // Names that read the same across languages (citation style names included).
     let same = |s: &str| {
         matches!(
             s,
@@ -338,6 +463,8 @@ fn complete_catalogs_have_every_string_the_interface_looked_up(mut keys: std::co
                 | "Unicode"
                 | "I. II. III."
                 | "i. ii. iii."
+                | "I, II, III, …"
+                | "i, ii, iii, …"
                 | "APA"
                 | "Chicago"
                 | "GB/T 7714"
@@ -352,13 +479,366 @@ fn complete_catalogs_have_every_string_the_interface_looked_up(mut keys: std::co
                 | "Turabian"
         )
     };
-    let mut report = String::new();
-    for code in ["ru", "hu", "tr", "bg"] {
-        let lang = super::Lang::from_code(code).unwrap_or(super::Lang::EN);
-        let missing: Vec<&String> = keys.iter().filter(|s| english_words(s) && !super::has(lang, s) && !numbered(s) && !same(s)).collect();
+    // A command called with parameters it can't use (`bad parameters: \`path\` (string) is
+    // required`): the message names JSON parameters for scripts and MCP, so it stays English like
+    // the rest of the engine's errors; the status bar translates only the ones a catalog knows.
+    let script_error = |s: &str| s.starts_with("bad parameters: ");
+    // A pattern of placeholders and figures only (`{paper}   {width} × {height}`) has nothing to
+    // translate: its placeholder names aren't words the interface shows.
+    let words = |s: &str| english_words(&s.split('{').map(|p| p.split_once('}').map_or(p, |(_, rest)| rest)).collect::<String>());
+    for lang in super::Lang::all().filter(|l| *l != super::Lang::EN) {
+        let reported = keys.iter().filter(|s| words(s) && !numbered(s) && !same(s) && !script_error(s));
+        let (kept, missing): (Vec<&String>, Vec<&String>) = reported.filter(|s| super::tr(lang, s) == s.as_str()).partition(|s| super::has(lang, s));
         if !missing.is_empty() {
-            report.push_str(&format!("{} strings have no {code} entry:\n{missing:#?}\n", missing.len()));
+            eprintln!("{} strings have no {} translation:\n{missing:#?}", missing.len(), lang.code());
+        }
+        if !kept.is_empty() {
+            eprintln!("{} strings are kept in English in {}:\n{kept:#?}", kept.len(), lang.code());
         }
     }
-    assert!(report.is_empty(), "{report}");
+}
+
+/// The text from `open` (the first char of `src`) to its matching `close`, skipping string
+/// literals (reasons hold brackets: `(Shift+click)`).
+fn balanced(src: &str, open: char, close: char) -> &str {
+    let (mut depth, mut in_str, mut escaped) = (0usize, false, false);
+    for (i, c) in src.char_indices() {
+        match (in_str, escaped, c) {
+            (true, true, _) => escaped = false,
+            (true, false, '\\') => escaped = true,
+            (true, false, '"') | (false, _, '"') => in_str = !in_str,
+            (false, _, c) if c == open => depth += 1,
+            (false, _, c) if c == close => {
+                depth -= 1;
+                if depth == 0 {
+                    return &src[..i + c.len_utf8()];
+                }
+            }
+            _ => {}
+        }
+    }
+    src
+}
+
+/// The string literals in `code`.
+fn literals(code: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = code;
+    while let Some(start) = rest.find('"') {
+        let body = &rest[start + 1..];
+        let mut escaped = false;
+        let end = body.char_indices().find(|&(_, c)| {
+            let ends = !escaped && c == '"';
+            escaped = !escaped && c == '\\';
+            ends
+        });
+        let Some((end, _)) = end else { break };
+        let after = &body[end + 1..];
+        // `Some("readOnly" | "forms") => …` matches on a value; it isn't shown to anyone.
+        let pattern = after.trim_start().starts_with('|') || rest[..start].trim_end().ends_with('|');
+        if !pattern {
+            out.push(body[..end].replace("\\'", "'").replace("\\\"", "\""));
+        }
+        rest = after;
+    }
+    out
+}
+
+/// Every reason a command gives for being off (its `enabled` check), which ribbon tooltips show
+/// (#1086). Read from the engine's command sources so a new reason can't slip by: the literals in
+/// each `.when(…)` closure and in the checks it names (and the checks those call), with `const`
+/// reasons resolved.
+fn disabled_reasons() -> std::collections::BTreeSet<String> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../engine/src/cmd");
+    let files = crate::rust_sources(&dir);
+    let all: String = files.iter().map(|p| std::fs::read_to_string(p).unwrap()).collect::<Vec<_>>().join("\n");
+    // A named check's bodies (any file's `fn name(…) -> Option<&'static str>`).
+    let checks = |name: &str| -> Vec<&str> {
+        all.match_indices(&format!("fn {name}("))
+            .filter_map(|(i, _)| {
+                let from = &all[i..];
+                let brace = from.find('{')?;
+                from[..brace].contains("-> Option<&'static str>").then(|| balanced(&from[brace..], '{', '}'))
+            })
+            .collect()
+    };
+    let is_ident = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':');
+    let mut bodies: Vec<&str> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+    for (i, _) in all.match_indices(".when(") {
+        let args = balanced(&all[i + ".when".len()..], '(', ')');
+        let inner = args.trim_start_matches('(').trim_end_matches(')').trim();
+        if is_ident(inner) {
+            names.push(inner.rsplit("::").next().unwrap_or(inner).to_string());
+        } else {
+            bodies.push(inner);
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    while let Some(name) = names.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        for body in checks(&name) {
+            bodies.push(body);
+            // The checks this one calls (`has_object(s)`).
+            for (j, _) in body.match_indices("(s)") {
+                let callee = body[..j].rsplit(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).next().unwrap_or("");
+                if !callee.is_empty() {
+                    names.push(callee.to_string());
+                }
+            }
+        }
+    }
+    let mut reasons = std::collections::BTreeSet::new();
+    for body in bodies {
+        // `cfg!(target_arch = "wasm32")` names a target, not a reason.
+        let mut code = body.to_string();
+        while let Some(i) = code.find("cfg!(") {
+            let len = balanced(&code[i + "cfg!".len()..], '(', ')').len();
+            code.replace_range(i..i + "cfg!".len() + len, "");
+        }
+        reasons.extend(literals(&code));
+        // `const FROZEN: &str = "…"` reasons.
+        for word in body.split(|c: char| !(c.is_ascii_uppercase() || c == '_')).filter(|w| w.len() > 2) {
+            if let Some(i) = all.find(&format!("const {word}: &str = ")) {
+                reasons.extend(literals(all[i..].lines().next().unwrap_or("")));
+            }
+        }
+    }
+    reasons
+}
+
+/// One frame at a given window width; returns the left edge of every text drawn.
+fn frame_at(ctx: &egui::Context, app: &mut WordApp, width: f32) -> Vec<(String, f32)> {
+    fn collect(shape: &egui::Shape, out: &mut Vec<(String, f32)>) {
+        match shape {
+            egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.pos.x)),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| collect(s, out)),
+            _ => {}
+        }
+    }
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 900.0));
+    let mut drawn = Vec::new();
+    for _ in 0..4 {
+        TIME.set(TIME.get() + 0.1);
+        let input = egui::RawInput { screen_rect: Some(screen), time: Some(TIME.get()), ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        });
+        drawn.clear();
+        for s in &out.shapes {
+            collect(&s.shape, &mut drawn);
+        }
+        out.textures_delta.clear();
+    }
+    drawn
+}
+
+/// The Arabic interface is mirrored: reading starts at the right. And nothing in it can panic:
+/// every tab (wide, and narrow enough to scroll), File page, dialog, pane, context menu and
+/// ribbon control is laid out right to left. egui's `Grid` asserts against right-to-left parents,
+/// so a grid that is not wrapped in `rtl::grid` fails here.
+#[test]
+fn the_arabic_interface_is_mirrored_and_never_panics() {
+    // Arabic comes from the craft-i18n catalogs: a build without them (English only) has nothing to mirror.
+    let Some(ar) = super::Lang::from_code("ar") else {
+        eprintln!("skipped: built without the craft-i18n Arabic catalog (set CRAFT_I18N_DIR to a checkout)");
+        return;
+    };
+    let start = |ctx: &egui::Context| {
+        let mut app = fresh_app(ctx);
+        app.ui.language = "ar".into();
+        frame(ctx, &mut app);
+        app
+    };
+    let ctx = egui::Context::default();
+    let mut app = start(&ctx);
+    assert!(crate::rtl::on());
+    let x_of = |drawn: &[(String, f32)], english: &str| {
+        let label = super::tr(ar, english);
+        drawn.iter().find(|(t, _)| t == label).map(|(_, x)| *x).unwrap_or_else(|| panic!("{english} is not drawn"))
+    };
+    // Tabs run from the right: File, Home, Insert … and the Share button is at the far left.
+    let drawn = frame_at(&ctx, &mut app, 1600.0);
+    let (file, home, insert, share) = (x_of(&drawn, "File"), x_of(&drawn, "Home"), x_of(&drawn, "Insert"), x_of(&drawn, "Share"));
+    assert!(file > home && home > insert && insert > 800.0, "tabs: {file} {home} {insert}");
+    assert!(share < 200.0, "Share: {share}");
+    // Ribbon groups too: Clipboard is right of Font, which is right of Styles.
+    assert!(x_of(&drawn, "Clipboard") > x_of(&drawn, "Font") && x_of(&drawn, "Font") > x_of(&drawn, "Styles"));
+    // The status bar starts at the right, and a narrow window still shows the ribbon's first group.
+    let page = drawn.iter().find(|(t, _)| t.contains(super::tr(ar, "Editing"))).map(|(_, x)| *x);
+    assert!(page.is_some());
+    let narrow = frame_at(&ctx, &mut app, 700.0);
+    let clipboard = x_of(&narrow, "Clipboard");
+    assert!((350.0..700.0).contains(&clipboard), "the narrow ribbon starts at its right end: {clipboard}");
+    // Side panes swap sides: Navigation is on the right.
+    let _ = app.run("view.navigationPane", json!({"value": true}));
+    let drawn = frame_at(&ctx, &mut app, 1600.0);
+    assert!(x_of(&drawn, "Navigation") > 1300.0);
+    let _ = app.run("view.navigationPane", json!({"value": false}));
+    // English stays as it was.
+    {
+        let ctx = egui::Context::default();
+        let mut app = fresh_app(&ctx);
+        let drawn = frame_at(&ctx, &mut app, 1600.0);
+        let x = |label: &str| drawn.iter().find(|(t, _)| t == label).map(|(_, x)| *x).unwrap();
+        assert!(x("File") < x("Home") && x("Home") < x("Insert") && x("Insert") < 400.0 && x("Share") > 1400.0);
+        assert!(x("Clipboard") < x("Font") && x("Font") < x("Styles"));
+        assert!(x("Cut") < 200.0, "ribbon buttons keep their icon on the left and start at the left");
+        assert!(!crate::rtl::on());
+        super::set_current(ar);
+    }
+    // Everything else: no panic at any width.
+    let tabs: Vec<&str> = crate::ribbon::TABS.iter().copied().filter(|t| *t != "File").collect();
+    for tab in &tabs {
+        let _ = app.run("ui.tab", json!({"tab": tab}));
+        for width in [2560.0, 1100.0, 420.0] {
+            frame_at(&ctx, &mut app, width);
+        }
+    }
+    let _ = app.run("ui.tab", json!({"tab": "Home"}));
+    // Reading Mode's toolbar is mirrored too: its far-side button ("Edit Document") is at the left.
+    let _ = app.run("view.readMode", json!({}));
+    let drawn = frame_at(&ctx, &mut app, 1600.0);
+    let edit = x_of(&drawn, "Edit Document");
+    assert!(edit < 400.0, "Reading Mode: Edit Document at {edit}");
+    let _ = app.run("view.printLayout", json!({}));
+    // File › Print: the settings are on the right and the preview on the left, not over each other.
+    let _ = app.run("ui.backstage", json!({"value": true, "page": "print"}));
+    for width in [1600.0, 1100.0] {
+        let drawn = frame_at(&ctx, &mut app, width);
+        let settings = x_of(&drawn, "Save these pages as PDF…");
+        let indicator = super::tr(ar, "Sheet {page} of {pages}").split('{').next().unwrap_or_default();
+        // (The status bar's page count is drawn under the page too, at the right: take the leftmost.)
+        let preview = drawn.iter().filter(|(t, _)| t.starts_with(indicator)).map(|(_, x)| *x).fold(f32::MAX, f32::min);
+        assert!(preview < f32::MAX, "the preview's page indicator is drawn");
+        assert!(preview + 100.0 < settings, "print page at {width}: settings {settings}, preview {preview}");
+    }
+    for page in ["home", "new", "open", "info", "export", "print", "options"] {
+        let _ = app.run("ui.backstage", json!({"value": true, "page": page}));
+        frame(&ctx, &mut app);
+        frame_at(&ctx, &mut app, 500.0);
+    }
+    let _ = app.run("ui.backstage", json!({"value": false}));
+    // A dialog's columns start at the right too: Go To's list of targets is right of its input.
+    let _ = app.run("ui.dialog", json!({"name": "goto"}));
+    let drawn = frame_at(&ctx, &mut app, 1600.0);
+    let (targets, input) = (x_of(&drawn, "Go to what:"), x_of(&drawn, "Enter page number:"));
+    assert!(targets > input, "Go To: targets {targets}, input {input}");
+    app.dialog = None;
+    let dialogs = [
+        "font",
+        "paragraph",
+        "tabs",
+        "goto",
+        "insertTable",
+        "pageSetup",
+        "link",
+        "bookmark",
+        "wordCount",
+        "zoom",
+        "watermark",
+        "phonetic",
+        "newStyle",
+        "manageStyles",
+        "newTableStyle",
+        "modifyTableStyle",
+        "commands",
+        "icons",
+        "tableProperties",
+        "enclose",
+        "pasteSpecial",
+        "about",
+        "contributors",
+        "models",
+        "insertMergeField",
+        "findRecipient",
+        "fieldCode",
+        "encryptPassword",
+        "defineList",
+        "trackChangesOptions",
+        "customizeKeyboard",
+        "customizeRibbon",
+        "customizeQuickAccess",
+        "noteOptions",
+        "caption",
+        "index",
+        "markEntry",
+        "toc",
+        "sourceManager",
+        "createSource",
+        "lineNumbers",
+        "hyphenation",
+        "language",
+        "envelopes",
+        "labels",
+        "find",
+        "replace",
+        "symbol",
+        "field",
+        "columns",
+        "borders",
+        "pageBorders",
+        "newRecipientList",
+        "editRecipientList",
+        "rules",
+        "matchFields",
+        "dropCap",
+        "dateTime",
+        "crossReference",
+    ];
+    for name in dialogs {
+        let _ = app.run("ui.dialog", json!({"name": name}));
+        frame(&ctx, &mut app);
+        app.dialog = None;
+    }
+    let panes: Vec<String> =
+        app.session.registry.all().iter().map(|c| c.id.to_string()).filter(|id| id.starts_with("view.") && id.ends_with("Pane")).collect();
+    for pane in &panes {
+        let _ = app.run(pane, json!({"value": true}));
+        frame(&ctx, &mut app);
+        frame_at(&ctx, &mut app, 600.0);
+        let _ = app.run(pane, json!({"value": false}));
+    }
+    frames(&ctx, &mut app, click(egui::pos2(1280.0, 520.0), egui::PointerButton::Secondary));
+    frames(&ctx, &mut app, escape());
+    let _ = app.run("insert.table", json!({"rows": 2, "cols": 2}));
+    for tab in ["Table Design", "Table Layout"] {
+        let _ = app.run("ui.tab", json!({"tab": tab}));
+        frame(&ctx, &mut app);
+        frame_at(&ctx, &mut app, 600.0);
+    }
+    let _ = app.run("insert.equation", json!({}));
+    let _ = app.run("ui.tab", json!({"tab": "Equation"}));
+    frame(&ctx, &mut app);
+    // Every ribbon control on every tab, hovered and clicked: its tooltip, menu or dialog.
+    let contextual = ["Table Design", "Table Layout", "Equation"];
+    let open = |tab: &str| {
+        let ctx = egui::Context::default();
+        let mut app = start(&ctx);
+        match tab {
+            "Table Design" | "Table Layout" => drop(app.run("insert.table", json!({"rows": 2, "cols": 2}))),
+            "Equation" => drop(app.run("insert.equation", json!({}))),
+            _ => {}
+        }
+        let _ = app.run("ui.tab", json!({"tab": tab}));
+        frame(&ctx, &mut app);
+        (ctx, app)
+    };
+    for tab in tabs.iter().chain(&contextual) {
+        let (ctx, mut app) = open(tab);
+        for at in ribbon_controls(&ctx) {
+            frames(&ctx, &mut app, vec![vec![egui::Event::PointerMoved(at)]; 2]);
+            frames(&ctx, &mut app, click(at, egui::PointerButton::Primary));
+            frames(&ctx, &mut app, escape());
+            app.dialog = None;
+            app.ui.backstage = false;
+            if app.ui.tab != *tab {
+                (_, app) = open(tab);
+            }
+        }
+    }
+    super::set_current(super::Lang::EN);
 }

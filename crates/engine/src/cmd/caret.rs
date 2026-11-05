@@ -2,6 +2,7 @@
 
 use serde_json::Value;
 use wordcraft_doc::{Pos, StoryRef};
+use wordcraft_layout::ViewMode;
 
 use super::{parse_pos, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
@@ -14,17 +15,24 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("caret.right", "Right", "Navigation", |s, v| lr(s, v, false)).key("Right").params(EXTEND).pure(),
         CommandSpec::new("caret.up", "Up", "Navigation", |s, v| vert(s, v, -1)).key("Up").params(EXTEND).pure(),
         CommandSpec::new("caret.down", "Down", "Navigation", |s, v| vert(s, v, 1)).key("Down").params(EXTEND).pure(),
-        // In a right-to-left paragraph the word to the left is the next one.
+        // In a right-to-left paragraph the word to the left is the next one. On macOS ⌘←/⌘→ go
+        // to the line's start and end, as in Word for Mac and every Mac text field (#954).
         CommandSpec::new("caret.wordLeft", "Word Left", "Navigation", |s, v| mv(s, v, if rtl_para(s) { word_right } else { word_left }))
-            .key("Mod+Left / Alt+Left")
+            .key(super::mac_or("Alt+Left", "Mod+Left / Alt+Left"))
             .params(EXTEND)
             .pure(),
         CommandSpec::new("caret.wordRight", "Word Right", "Navigation", |s, v| mv(s, v, if rtl_para(s) { word_left } else { word_right }))
-            .key("Mod+Right / Alt+Right")
+            .key(super::mac_or("Alt+Right", "Mod+Right / Alt+Right"))
             .params(EXTEND)
             .pure(),
-        CommandSpec::new("caret.home", "Line Start", "Navigation", |s, v| line(s, v, true)).key("Home").params(EXTEND).pure(),
-        CommandSpec::new("caret.end", "Line End", "Navigation", |s, v| line(s, v, false)).key("End").params(EXTEND).pure(),
+        CommandSpec::new("caret.home", "Line Start", "Navigation", |s, v| line(s, v, true))
+            .key(super::mac_or("Home / Mod+Left", "Home"))
+            .params(EXTEND)
+            .pure(),
+        CommandSpec::new("caret.end", "Line End", "Navigation", |s, v| line(s, v, false))
+            .key(super::mac_or("End / Mod+Right", "End"))
+            .params(EXTEND)
+            .pure(),
         CommandSpec::new("caret.paraUp", "Paragraph Up", "Navigation", |s, v| mv(s, v, para_up)).key("Mod+Up / Alt+Up").params(EXTEND).pure(),
         CommandSpec::new("caret.paraDown", "Paragraph Down", "Navigation", |s, v| mv(s, v, para_down))
             .key("Mod+Down / Alt+Down")
@@ -247,16 +255,40 @@ fn line(s: &mut Session, v: &Value, home: bool) -> CmdResult {
     sel_result(s)
 }
 
+/// Page Up (`dir < 0`) / Page Down: the same place on the page before or after, or in the views
+/// that are one long page, the line a printed page's text above or below.
 fn page(s: &mut Session, v: &Value, dir: i32) -> CmdResult {
     let ext = extend(v);
     let l = s.layout();
     let from = s.sel.focus.clone();
+    // Web Layout, Draft and Outline lay the document out as one long page (#5290).
+    if !s.view.read_mode && matches!(s.view.mode, ViewMode::Web | ViewMode::Draft | ViewMode::Outline) {
+        // A selection can end in text a collapsed outline heading hides: page from where it shows.
+        let at = if l.caret_on(&from, s.page_hint).is_none() { super::outline::shown_pos(s, &from, false) } else { None };
+        let at = at.unwrap_or_else(|| from.clone());
+        let Some(c) = l.caret_on(&at, s.page_hint) else { return sel_result(s) };
+        let page_h = l.pages.get(c.page).map_or(0.0, |p| p.h);
+        let y = (c.top + 1.0 + dir as f32 * page_step(s, &at)).min(page_h).max(0.0);
+        let to = l.line_toward(&at, s.page_hint, c.x, y, dir).unwrap_or(from);
+        apply(s, to, ext);
+        return sel_result(s);
+    }
     let Some(c) = l.caret_on(&from, s.page_hint) else { return sel_result(s) };
     let np = if dir < 0 { c.page.saturating_sub(1) } else { (c.page + 1).min(l.pages.len().saturating_sub(1)) };
     let to = l.hit(np, c.x, c.top + 1.0, from.story).unwrap_or(from);
     s.page_hint = np;
     apply(s, to, ext);
     sel_result(s)
+}
+
+/// How far Page Up/Down move in the continuous views: the height of the text area of the
+/// section `at` is in (the first section when `at` isn't in the body), at least an inch.
+fn page_step(s: &Session, at: &Pos) -> f32 {
+    let block = if at.story == StoryRef::Body { at.path.0.first().map_or(0, |&i| i as usize) } else { 0 };
+    let sections = s.doc.sections();
+    let sect = sections.iter().find(|(end, _)| *end >= block).or(sections.last()).map(|(_, p)| *p);
+    let body = sect.map_or(0.0, |p| p.page_h - p.margin_top.abs() - p.margin_bottom.abs());
+    if body.is_finite() { body.max(72.0) } else { 72.0 }
 }
 
 fn set(s: &mut Session, v: &Value) -> CmdResult {
@@ -266,8 +298,9 @@ fn set(s: &mut Session, v: &Value) -> CmdResult {
     } else if let (Some(pg), Some(x), Some(y)) = (p::u64(v, "page"), p::f32(v, "x"), p::f32(v, "y")) {
         let story = super::story_param(s, v);
         let l = s.layout();
-        s.page_hint = pg as usize;
-        l.hit(pg as usize, x, y, story).ok_or_else(|| CmdError::Params("no text on that page".into()))?
+        let page = usize::try_from(pg).unwrap_or(usize::MAX);
+        s.page_hint = page;
+        l.hit(page, x, y, story).ok_or_else(|| CmdError::Params("no text on that page".into()))?
     } else {
         return Err(CmdError::Params("`pos` or `page`/`x`/`y` required".into()));
     };
@@ -277,9 +310,21 @@ fn set(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
-fn select_all(s: &mut Session, _: &Value) -> CmdResult {
+fn select_all(s: &mut Session, v: &Value) -> CmdResult {
+    if s.selects_whole_story() {
+        s.column = None;
+        s.column_mode = false;
+        return sel_result(s);
+    }
+    if !p::bool(v, "whole").unwrap_or(false)
+        && let Some(r) = super::table::grow_select_all(s)
+    {
+        return r;
+    }
     let st = s.sel.focus.story;
     s.sel = Selection { anchor: s.doc.start_of(st), focus: s.doc.end_of(st) };
+    s.column = None;
+    s.column_mode = false;
     sel_result(s)
 }
 
@@ -359,8 +404,33 @@ fn select_sentence(s: &mut Session, _: &Value) -> CmdResult {
     select_unit(s, Unit::Sentence)
 }
 
-fn select_paragraph(s: &mut Session, _: &Value) -> CmdResult {
-    select_unit(s, Unit::Paragraph)
+/// A triple-click (`cell: true`) on the last paragraph of a table cell selects the cell (Word
+/// takes its end mark too, which shades it), so its borders then move on their own
+/// (`table.resizeDrag`). Without `cell` (the ribbon's Select Paragraph) only the paragraph is selected.
+fn select_paragraph(s: &mut Session, v: &Value) -> CmdResult {
+    let r = select_unit(s, Unit::Paragraph);
+    if v.get("cell").and_then(Value::as_bool) != Some(true) {
+        return r;
+    }
+    let (a, b) = (s.sel.anchor.clone(), s.sel.focus.clone());
+    let n = a.path.0.len();
+    if a.story == b.story
+        && a.path.0.len() == b.path.0.len()
+        && let Some(tp) = a.path.0.get(..n.saturating_sub(3))
+        && !tp.is_empty()
+        && a.path.0.get(..n.saturating_sub(1)) == b.path.0.get(..n.saturating_sub(1))
+        && let (Some(&row), Some(&cell)) = (a.path.0.get(n.saturating_sub(3)), a.path.0.get(n.saturating_sub(2)))
+    {
+        let tp = wordcraft_doc::Path(tp.to_vec());
+        let (row, cell) = (row as usize, cell as usize);
+        let last = s.doc.table(a.story, &tp).and_then(|t| t.rows.get(row)?.cells.get(cell)).map(|c| c.blocks.len().saturating_sub(1));
+        let only = last.is_some_and(|l| a.path.0.last().is_some_and(|&i| i as usize == l));
+        let grid = s.doc.table(a.story, &tp).map(|t| super::table::grid_cols(t, row, cell));
+        if let (true, Some(cols)) = (only, grid) {
+            return super::table::select_range(s, a.story, &tp, (row, row), cols);
+        }
+    }
+    r
 }
 
 /// A click in the selection bar (#856): the whole line at `pos` (default: the caret's), its
