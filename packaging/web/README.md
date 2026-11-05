@@ -81,7 +81,7 @@ downloading them. The two sides talk `postMessage` with plain window messages th
 
 | Message | Direction | Fields |
 |---|---|---|
-| `wordcraft:ready` | app → page | `version`: the app is running and listening; send a file now |
+| `wordcraft:ready` | app → page | `version`, `appVersion`: the app is running and listening; send a file now |
 | `wordcraft:open` | page → app | `name`, `bytes` (an `ArrayBuffer` or `Uint8Array`): open like File › Open |
 | `wordcraft:save` | app → page | `name`, `saveAs`, `bytes` (a transferred `ArrayBuffer`): every file the app would otherwise download (Save, Save As, Export as PDF, Export Page as PNG). The page stores it and reports failures itself. `saveAs` says whether the file becomes the document's file: `false` after Save (the page's own file, written under its name) and for exports that are only copies (PDF, Markdown, plain text); `true` after Save As and for exports to a format that keeps everything (.docx, .odt, .rtf), after which the next Save carries that name with `false` |
 | `wordcraft:dirty` | app → page | `dirty`: unsaved changes appeared or went away |
@@ -150,6 +150,8 @@ await init({ module_or_path: "./wordcraft-web-<hash>_bg.wasm" });
   `data-host="page"` turns this mode on only when `?host=parent` is absent: if `?host=parent` is
   present it takes precedence, so a same-origin framed page uses the parent bridge, while an
   unframed or cross-origin page gets no bridge and keeps normal downloads.
+
+The messages and both transports are the shared contract of [`craft-web-host`](https://github.com/storytold/craft-libs/tree/main/crates/web-host) (storytold/craft-libs#420), the same for every Craft app: its README lists every message, including `saved`, with the compatibility notes. In `wordcraft:ready`, `version` is the contract's (`"1"`) and `appVersion` is this app's release. WordCraft reads bytes, so a host sends `bytes`, not a `File`.
 
 ### Trust and limits
 
