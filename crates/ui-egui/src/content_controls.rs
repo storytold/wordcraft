@@ -25,6 +25,18 @@ pub struct ControlUi {
     popup: Option<Popup>,
 }
 
+impl ControlUi {
+    /// Whether a control's list or calendar is open.
+    pub(crate) fn popup_open(&self) -> bool {
+        self.popup.is_some()
+    }
+
+    /// Whether `p` (screen) is on the list/calendar button of the current control.
+    pub(crate) fn on_button(&self, p: egui::Pos2) -> bool {
+        self.button.as_ref().is_some_and(|(b, _)| b.contains(p))
+    }
+}
+
 struct Popup {
     /// Content start of the control it belongs to.
     at: Pos,
@@ -148,7 +160,8 @@ fn date_of(app: &WordApp, at: &Pos) -> Option<(i64, u32, u32)> {
 }
 
 fn today() -> (i64, u32, u32) {
-    let (y, m, d) = wordcraft_engine::cmd::civil_from_days((wordcraft_engine::cmd::now_unix() / 86_400) as i64);
+    // The local day, as Word's date picker shows it (#1707).
+    let (y, m, d, ..) = wordcraft_engine::cmd::local_now();
     (y, m, d)
 }
 
@@ -163,8 +176,9 @@ pub fn popup(app: &mut WordApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let at_json = serde_json::to_value(&at).unwrap_or_default();
     let mut close = false;
-    let area = egui::Area::new(egui::Id::new("content_control_popup"))
+    let area = egui::Area::new(egui::Id::unique("content_control_popup"))
         .order(egui::Order::Foreground)
+        .interactable(!app.modal_open())
         .fixed_pos(pos2(anchor.max.x - 180.0, anchor.max.y + 2.0));
     let shown = area.show(ctx, |ui| {
         egui::Frame::popup(ui.style()).fill(t.menu).show(ui, |ui| {
@@ -223,7 +237,7 @@ fn calendar(ui: &mut Ui, t: &Tokens, month: &mut (i64, u32)) -> Option<u32> {
     // 1970-01-01 was a Thursday: Monday-first column of the 1st.
     let lead = (first + 3).rem_euclid(7) as u32;
     let days = wordcraft_engine::cmd::controls::days_in_month(y, m);
-    egui::Grid::new("cc_calendar").spacing(vec2(2.0, 2.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("cc_calendar").spacing(vec2(2.0, 2.0)), |ui| {
         for cell in 0..(lead + days) {
             if cell < lead {
                 ui.label("");
@@ -240,4 +254,91 @@ fn calendar(ui: &mut Ui, t: &Tokens, month: &mut (i64, u32)) -> Option<u32> {
         }
     });
     picked
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Event, PointerButton};
+
+    fn press(at: egui::Pos2) -> Event {
+        Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() }
+    }
+
+    fn release(at: egui::Pos2) -> Event {
+        Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() }
+    }
+
+    /// A harness showing a drop-down control followed by text, with the caret in the control and
+    /// its list button on screen.
+    fn dropdown_harness() -> egui_kittest::Harness<'static, WordApp> {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("text.insert", json!({"text": "tail text"})).unwrap();
+        app.run("caret.docStart", json!({})).unwrap();
+        app.run("developer.dropDown", json!({"items": ["A", "B"]})).unwrap();
+        app.run("view.commentsPane", json!({"value": false})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        let before = h.state().session.sel.focus.clone();
+        assert!(h.state().session.doc.control_at(&before).is_some(), "the caret starts in the control");
+        h
+    }
+
+    /// #5389: pressing a drop-down's list button opens the list and leaves the caret in the
+    /// control, even when text follows the control and the button hangs over it.
+    #[test]
+    fn pressing_the_list_button_keeps_the_caret_in_the_control() {
+        let mut h = dropdown_harness();
+        let at = h.state().controls.button.as_ref().expect("the list button is shown").0.center();
+        h.event(Event::PointerMoved(at));
+        h.event(press(at));
+        h.step();
+        h.event(release(at));
+        for _ in 0..3 {
+            h.step();
+        }
+        let after = h.state().session.sel.focus.clone();
+        assert!(h.state().session.doc.control_at(&after).is_some(), "the caret stays in the control");
+        assert!(h.state().controls.popup_open(), "the list is open");
+    }
+
+    /// The same click when press and release arrive in one frame: egui has no press origin left
+    /// by then.
+    #[test]
+    fn a_click_that_presses_and_releases_in_one_frame_keeps_the_caret_in_the_control() {
+        let mut h = dropdown_harness();
+        let at = h.state().controls.button.as_ref().expect("the list button is shown").0.center();
+        h.event(Event::PointerMoved(at));
+        h.step();
+        // `Harness::event` runs a frame per event, so both go into the frame's input directly.
+        h.input_mut().events.extend([press(at), release(at)]);
+        h.step();
+        for _ in 0..3 {
+            h.step();
+        }
+        let after = h.state().session.sel.focus.clone();
+        assert!(h.state().session.doc.control_at(&after).is_some(), "the caret stays in the control");
+        assert!(h.state().controls.popup_open(), "the list is open");
+    }
+
+    /// A table tool owns the pointer: a press over the list button starts a stroke.
+    #[test]
+    fn the_draw_table_tool_starts_a_stroke_over_the_list_button() {
+        let mut h = dropdown_harness();
+        h.state_mut().canvas.table_tool = Some(crate::table_pen::TableTool::Draw);
+        let at = h.state().controls.button.as_ref().expect("the list button is shown").0.center();
+        h.event(Event::PointerMoved(at));
+        h.event(press(at));
+        h.step();
+        assert!(h.state().canvas.table_stroke.is_some(), "the stroke started on the button");
+    }
 }
