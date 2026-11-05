@@ -4586,3 +4586,23 @@ fn vml_horizontal_rules_are_read_and_kept() {
     let d = read_body(&body);
     assert_eq!(rules(&d).iter().map(|r| r.0).collect::<Vec<_>>(), [None, None]);
 }
+
+/// A percentage shading pattern (`pct5` … `pct95`, ECMA-376 §17.18.78) shows its pattern colour
+/// over the fill in that share: 5% automatic (black) on no fill is a light grey, 50% red on white
+/// is pink. Patterns were dropped, and a cell or paragraph shaded that way came out white.
+#[test]
+fn percentage_shading_mixes_pattern_and_fill() {
+    use wordcraft_doc::props::Rgb;
+    let body = r#"
+<w:tbl><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>
+ <w:tr><w:tc><w:tcPr><w:shd w:val="pct5" w:color="auto" w:fill="auto"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:shd w:val="pct50" w:color="FF0000" w:fill="FFFFFF"/></w:tcPr><w:p/></w:tc></w:tr>
+</w:tbl>
+<w:p><w:pPr><w:shd w:val="pct20" w:color="auto" w:fill="auto"/></w:pPr></w:p>
+<w:p><w:pPr><w:shd w:val="clear" w:color="auto" w:fill="FFFF00"/></w:pPr></w:p>"#;
+    let d = read_body(body);
+    let Block::Table(t) = &*d.body[0] else { panic!() };
+    let cells: Vec<Option<Rgb>> = t.rows[0].cells.iter().map(|c| c.props.shading).collect();
+    assert_eq!(cells, [Some(Rgb(242, 242, 242)), Some(Rgb(255, 128, 128))]);
+    let paras: Vec<Option<Rgb>> = d.body[1..].iter().filter_map(|b| b.as_para()).map(|p| p.props.shading).collect();
+    assert_eq!(paras, [Some(Rgb(204, 204, 204)), Some(Rgb(255, 255, 0))], "a clear pattern keeps its fill");
+}
