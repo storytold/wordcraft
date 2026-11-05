@@ -3185,6 +3185,74 @@ fn a_section_starting_a_page_flushes_the_page_before_with_its_own_margins() {
 }
 
 #[test]
+fn footnotes_carried_onto_a_filler_page_keep_the_ending_sections_margins() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    // Section one (72 pt margins, 468 pt of text) ends with a footnote too long for its last
+    // page; section two starts on an odd or even page, with 144 pt and 36 pt margins (432 pt of
+    // text). The blank page put in between is section one's: the rest of the note on it and the
+    // continuation separator above it keep section one's margin and width (#5620).
+    let sep = |cont: bool| {
+        let mut p = wordcraft_doc::Paragraph::new();
+        p.props.space_after = Some(0.0);
+        p.insert_object(0, InlineObject::note_separator(cont), &Default::default()).unwrap();
+        Some(vec![wordcraft_doc::para_block(p)])
+    };
+    for (start, custom) in
+        [(SectionStart::OddPage, false), (SectionStart::EvenPage, false), (SectionStart::OddPage, true), (SectionStart::EvenPage, true)]
+    {
+        let tag = format!("{start:?}, document separators: {custom}");
+        // Section one ends on page 1 (odd start) or page 2 (even start): the next is the filler.
+        let even = start == SectionStart::EvenPage;
+        let mut d = Document::from_text(if even { "Intro\nSection one text.\nTwo" } else { "Section one text.\nTwo" });
+        let end = usize::from(even);
+        if even {
+            d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.page_break_before = Some(true);
+        }
+        let id = footnote(&mut d, &Pos::body(end, 5), &"A long footnote that runs on and on. ".repeat(200));
+        d.para_mut(StoryRef::Body, &Path::top(end)).unwrap().section = Some(Box::new(SectionProps::default()));
+        d.last_section.start = start;
+        d.last_section.margin_left = 144.0;
+        d.last_section.margin_right = 36.0;
+        if custom {
+            d.footnote_separators =
+                wordcraft_doc::NoteSeparators { separator: sep(false), continuation_separator: sep(true), continuation_notice: None };
+        }
+        let l = lay(&d);
+        let filler = end + 1;
+        assert_eq!(l.pages.get(filler).map(|p| p.section), Some(0), "{tag}: the blank page is section one's");
+        // The page after it still starts section two with section two's margins.
+        assert_eq!(l.pages.get(filler + 1).map(|p| (p.section, p.body.x)), Some((1, 144.0)), "{tag}: section two's first page");
+        let page = &l.pages[filler];
+        let notes: Vec<(f32, f32)> = page
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Lines { story: StoryRef::Part(n), x, para, l0, l1, .. } if *n == id => {
+                    let lines = para.lines.get(*l0..*l1).unwrap_or(&[]);
+                    let right = lines.iter().flat_map(|ln| (ln.c0..ln.c1).filter_map(|k| ln.cl_right(k))).fold(0.0f32, f32::max);
+                    Some((*x, *x + right))
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!notes.is_empty(), "{tag}: the note continues onto the blank page");
+        for (x, right) in &notes {
+            assert!((x - 72.0).abs() < 0.01, "{tag}: the note sits at section one's margin, not {x}");
+            assert!(*right <= 540.01, "{tag}: the note stays inside section one's text, ends at {right}");
+        }
+        let rules: Vec<(f32, f32)> = page
+            .items
+            .iter()
+            .filter_map(|it| if let Placed::Rule { x0, y0, x1, y1, .. } = it { (y0 == y1).then_some((*x0, x1 - x0)) } else { None })
+            .collect();
+        assert!(
+            matches!(rules.as_slice(), [(x, w)] if (x - 72.0).abs() < 0.01 && (w - 468.0).abs() < 0.01),
+            "{tag}: section one's continuation separator, at its margin and across its text: {rules:?}"
+        );
+    }
+}
+
+#[test]
 fn paragraph_marks_sit_past_text_running_the_other_way() {
     // A left-to-right paragraph ending in Hebrew, and a right-to-left one ending in Latin: the
     // logically last letters are at the wrong edge, but the ¶ still goes past every glyph.

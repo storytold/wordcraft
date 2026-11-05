@@ -259,7 +259,10 @@ fn begin_section_state<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, sec: &Sec<'p
     }
 }
 
-/// The blank page that puts a section on the right side ends the previous section.
+/// The blank page that puts a section on the right side ends the previous section. It is
+/// finished here, with the footnotes continued onto it, under that section's margins and
+/// footnote separators: the page is the previous section's, and the new section's state is
+/// already in place for the page that follows (#5620, as #5289 for the page before the break).
 fn end_previous_section<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<'p>, si: usize, block: usize) {
     let Some((_, prev)) = si.checked_sub(1).and_then(|k| hf.sections.get(k)) else { return };
     pb.sect = prev;
@@ -267,7 +270,15 @@ fn end_previous_section<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLink
     let (ph, pf) = (hf.heads.set(si - 1), hf.feet.set(si - 1));
     let top = body_top_for(ctx, prev, ph.default);
     pb.foot_top = foot_top_for(ctx, prev, pf.default);
+    // `begin_section_state` has laid the separators out for the new section's text width.
+    let doc = ctx.doc;
+    let seps = (!doc.footnote_separators.is_empty())
+        .then(|| std::mem::replace(&mut pb.seps, NoteSeps::new(ctx, &doc.footnote_separators, prev.text_width())));
     pb.new_page(block, top);
+    pb.finish_page();
+    if let Some(seps) = seps {
+        pb.seps = seps;
+    }
 }
 
 /// Start the section on a new page, after the blank one that puts it on the right side if any.
