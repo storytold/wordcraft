@@ -262,8 +262,6 @@ struct StyleInfo {
     columns: Option<Columns>,
     /// The section style's `style:column`s, as [`with_widths`] gives them widths.
     column_specs: Vec<ColumnSpec>,
-    /// Its `style:columns` states its gap (else the profile's, see [`Styles::columns`]).
-    column_gap_stated: bool,
     /// `text:dont-balance-text-columns` of `style:section-properties`, as stated.
     dont_balance: Option<bool>,
     /// Margins, first-line indent and line spacing of `style:paragraph-properties`.
@@ -636,8 +634,7 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
             s.dont_balance = get(a, "text:dont-balance-text-columns").map(|v| v.trim() == "true");
         }
         "columns" if q.starts_with("style:") => {
-            s.columns = Some(columns_of(a, 0.0));
-            s.column_gap_stated = get(a, "fo:column-gap").is_some();
+            s.columns = Some(columns_of(a));
         }
         "column" if q.starts_with("style:") && s.columns.is_some() => {
             if let Some(spec) = column_spec(a).filter(|_| s.column_specs.len() < MAX_COLUMN_SPECS) {
@@ -714,9 +711,9 @@ fn cell_borders_and_padding(a: &Attrs, s: &mut StyleInfo) {
 /// Columns of a `style:columns` element (ODF 1.3 §17.12): count and gap, clamped as the RTF and
 /// DOCX readers do (each column's own width comes from its `style:column`, see [`with_widths`]).
 /// Without `fo:column-gap`, whose default the standard doesn't give (§19.233), the gap is
-/// `default_gap` (the profile's).
-pub(super) fn columns_of(a: &Attrs, default_gap: f32) -> Columns {
-    let mut c = Columns { space: if default_gap.is_finite() { default_gap.clamp(0.0, 1584.0) } else { 0.0 }, ..Columns::default() };
+/// [`Columns::default`]'s half inch, Word's.
+pub(super) fn columns_of(a: &Attrs) -> Columns {
+    let mut c = Columns::default();
     if let Some(n) = get(a, "fo:column-count").and_then(|v| v.trim().parse::<u64>().ok()) {
         c.count = n.clamp(1, 45) as u32;
     }
@@ -1298,10 +1295,7 @@ impl Styles {
     /// Columns of a section style (whole chain).
     /// A section style's columns in a text `tw` points wide (whole chain).
     pub(super) fn columns(&self, name: &str, tw: f32) -> Option<Columns> {
-        self.chain(name).iter().find_map(|(_, s)| {
-            let gap = if s.column_gap_stated { None } else { Some(self.defs.profile.column_gap) };
-            s.columns.clone().map(|c| with_widths(Columns { space: gap.unwrap_or(c.space), ..c }, &s.column_specs, tw))
-        })
+        self.chain(name).iter().find_map(|(_, s)| s.columns.clone().map(|c| with_widths(c, &s.column_specs, tw)))
     }
 
     /// Whether a section style's columns are balanced at its end, when it says (the attribute's
@@ -1309,13 +1303,6 @@ impl Styles {
     /// say the opposite).
     pub(super) fn section_balance(&self, name: &str) -> Option<bool> {
         self.chain(name).iter().find_map(|(_, s)| s.dont_balance).map(|d| !d)
-    }
-
-    /// Styles to be read, filling in what the standard leaves open as `profile` says.
-    pub(super) fn with_profile(profile: &wordcraft_doc::odf_profile::OdfProfile) -> Styles {
-        let mut s = Styles::default();
-        s.defs.profile = profile.clone();
-        s
     }
 
     /// Width in points of a table-column style (whole chain).
