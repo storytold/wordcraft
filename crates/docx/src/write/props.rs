@@ -21,6 +21,7 @@ fn round(v: f32) -> i64 {
     v.round().clamp(-1e9, 1e9) as i64
 }
 
+/// Writes a bounded `w:tblCellSpacing` width while preserving its measurement type.
 fn cell_spacing(w: &mut W, spacing: CellSpacing) {
     let max = match spacing.kind {
         wordcraft_doc::props::CellSpacingKind::Pct => 50_000,
