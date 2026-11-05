@@ -14,7 +14,7 @@ use wordcraft_doc::section::{
 };
 
 use super::drawing_color::adjust_lum;
-use crate::units::{int, line_multiple, measure, on_off, tw, u32_of};
+use crate::units::{int, line_multiple, measure, on_off, tw, tw_i16, tw_u16, u32_of};
 
 /// A text frame (`w:framePr` without a drop cap, ECMA-376 §17.3.1.11), sizes and offsets in
 /// points (clamped), names kept as OOXML writes them.
@@ -376,10 +376,10 @@ impl PropCtx {
                     p.tabs = Some(tabs);
                 }
                 "w:spacing" => {
-                    if let Some(v) = tw(k, "w:before") {
+                    if let Some(v) = tw_u16(k, "w:before") {
                         p.space_before = Some(v.max(0.0));
                     }
-                    if let Some(v) = tw(k, "w:after") {
+                    if let Some(v) = tw_u16(k, "w:after") {
                         p.space_after = Some(v.max(0.0));
                     }
                     // HTML-style automatic spacing; "0" switches an inherited one off.
@@ -402,15 +402,15 @@ impl PropCtx {
                     }
                 }
                 "w:ind" => {
-                    if let Some(v) = tw(k, "w:left").or_else(|| tw(k, "w:start")) {
+                    if let Some(v) = tw_i16(k, "w:left").or_else(|| tw_i16(k, "w:start")) {
                         p.indent_left = Some(v);
                     }
-                    if let Some(v) = tw(k, "w:right").or_else(|| tw(k, "w:end")) {
+                    if let Some(v) = tw_i16(k, "w:right").or_else(|| tw_i16(k, "w:end")) {
                         p.indent_right = Some(v);
                     }
-                    if let Some(v) = tw(k, "w:hanging") {
+                    if let Some(v) = tw_i16(k, "w:hanging") {
                         p.indent_first = Some(-v);
-                    } else if let Some(v) = tw(k, "w:firstLine") {
+                    } else if let Some(v) = tw_i16(k, "w:firstLine") {
                         p.indent_first = Some(v);
                     }
                     // Character units (hundredths of a character), which win when non-zero.
