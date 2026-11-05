@@ -4,19 +4,12 @@ use super::{
     placeholder_of, sectpr, tcpr, trpr,
 };
 
-/// Whether a range of a paragraph shows anything: text, or an object other than a marker or a
-/// field with an empty result.
-fn has_visible_content(p: &Paragraph, range: std::ops::Range<usize>) -> bool {
-    let start = range.start;
-    p.text.get(range).is_some_and(|t| {
-        t.char_indices().any(|(i, c)| {
-            c != wordcraft_doc::para::OBJ
-                || p.object_at(start + i).is_some_and(|o| match o {
-                    InlineObject::Field { result, form, .. } => !result.is_empty() || !form.is_empty(),
-                    o => !o.is_marker(),
-                })
-        })
-    })
+/// The offset of the first thing a paragraph shows: text, or an object other than a marker. A field
+/// counts even with no cached result, since PAGE or DATE fill theirs in when drawn.
+fn first_visible(p: &Paragraph) -> Option<usize> {
+    let text = p.text.char_indices().find(|(_, c)| *c != wordcraft_doc::para::OBJ).map(|(i, _)| i);
+    let object = p.objects_with_offsets().find(|(_, o)| !o.is_marker()).map(|(i, _)| i);
+    text.into_iter().chain(object).min()
 }
 
 impl Reader<'_> {
@@ -35,9 +28,9 @@ impl Reader<'_> {
                         && prev.section.is_none()
                         && prev.text.len() <= 16
                         && p.props.drop_cap.is_none()
-                        // A paragraph with nothing visible has no text to drop into: merging would take
+                        // A paragraph showing nothing has no text to drop into: merging would take
                         // the letter's size away and leave a paragraph too short to drop a letter.
-                        && has_visible_content(&p, 0..p.text.len())
+                        && first_visible(&p).is_some()
                         && let Some(Block::Para(mut first)) = out.pop().map(|b| (*b).clone())
                     {
                         let mut props = p.props.clone();
@@ -56,31 +49,26 @@ impl Reader<'_> {
                         }
                         // The same for the size: the letter carries the enlarged one the file's
                         // writer computed, and the layout enlarges a dropped letter from its own size,
-                        // so keeping it would render the enlargement twice (#3000). A frame at the size
-                        // the text draws a letter (or the text's own, as older saves wrote it) takes the
-                        // text's size; any other maps back to the letter size that draws at it.
+                        // so keeping it would render the enlargement twice (#3000). A frame around the
+                        // size the text draws a letter takes the text's size; any other is a letter
+                        // of its own, mapped back to the size that draws at it.
                         // A leading bookmark or comment anchor is a run of its own: sizes come from the
-                        // first run with visible content, in the text and in the letter's frame alike.
-                        let first_sizes =
-                            |q: &Paragraph| q.run_ranges().find(|(range, _)| has_visible_content(q, range.clone())).map(|(_, props)| props.clone());
-                        let text_props = first_sizes(&p).unwrap_or_default();
+                        // first run showing something, in the text and in the letter's frame alike.
+                        let shown = |q: &Paragraph| {
+                            let at = first_visible(q)?;
+                            q.run_ranges().find(|(range, _)| range.contains(&at)).map(|(_, props)| props.clone())
+                        };
+                        let text_props = shown(&p).unwrap_or_default();
                         let resolved = self.doc.styles.resolve_char_in(p.props.style.as_deref(), None, &text_props);
                         let lines = first.props.drop_cap.unwrap_or(1);
-                        let letter_size = |frame: Option<f32>, text: Option<f32>, text_resolved: f32| match frame {
-                            Some(big)
-                                if ![text_resolved, wordcraft_doc::resolve::drop_cap_size(text_resolved, lines)]
-                                    .iter()
-                                    .any(|s| wordcraft_geom::to_half_points(*s) == wordcraft_geom::to_half_points(big)) =>
-                            {
-                                Some(wordcraft_doc::resolve::drop_cap_letter_size(big, lines))
-                            }
-                            _ => text,
+                        let letter_size = |frame: Option<f32>, text: Option<f32>, text_resolved: f32| {
+                            frame.and_then(|big| wordcraft_doc::resolve::drop_cap_letter_size(big, text_resolved, lines)).or(text)
                         };
                         // Only runs at the letter's enlarged size: a frame run with a size of its own keeps it.
-                        let cap_props = first_sizes(&first);
-                        let cap_sizes = cap_props.as_ref().map(|c| (c.size, c.size_cs));
-                        let new_size = cap_props.as_ref().and_then(|c| letter_size(c.size, text_props.size, resolved.size));
-                        let new_size_cs = cap_props.as_ref().and_then(|c| letter_size(c.size_cs, text_props.size_cs, resolved.size_cs));
+                        let cap = shown(&first);
+                        let cap_sizes = cap.as_ref().map(|c| (c.size, c.size_cs));
+                        let new_size = letter_size(cap.as_ref().and_then(|c| c.size), text_props.size, resolved.size);
+                        let new_size_cs = letter_size(cap.as_ref().and_then(|c| c.size_cs), text_props.size_cs, resolved.size_cs);
                         for r in first.runs.iter_mut().filter(|r| Some((r.props.size, r.props.size_cs)) == cap_sizes) {
                             r.props.size = new_size;
                             r.props.size_cs = new_size_cs;

@@ -22,16 +22,28 @@ pub fn drop_cap_size(size: f32, lines: u8) -> f32 {
     (((lines as f32 - 1.0) * line_h + size * 0.7) / 0.7).min(1000.0).max(size)
 }
 
-/// The letter size [`drop_cap_size`] draws at `big` points, so a size read from a file comes out
-/// the same when drawn and saved. A whole or half point size is preferred when it does. A letter
-/// at the 1000 pt cap has no inverse and stays as it is.
-pub fn drop_cap_letter_size(big: f32, lines: u8) -> f32 {
-    if big >= 1000.0 {
-        return big;
+/// How far a drop cap's saved size can be from [`drop_cap_size`] and still count as the text's
+/// letter. Word sizes the letter from the font and line spacing rather than our formula: a real file's
+/// 3 lines of 12 pt text have a 44 pt letter, where the formula gives 53.14 pt. A letter of its own
+/// within this band reads back at the text's size.
+const DROP_CAP_SIZE_BAND: std::ops::RangeInclusive<f32> = 0.7..=1.3;
+
+/// The size of the letter whose drop cap was saved at `big` points, or `None` when that's the
+/// letter of `text`-point text: around the size the text draws a letter, or the text's own size,
+/// as older saves wrote it. A whole or half point size is preferred if it's saved the same. A letter at
+/// the 1000 pt cap has no inverse and stays as it is. Never below 1 pt, as when reading a size.
+pub fn drop_cap_letter_size(big: f32, text: f32, lines: u8) -> Option<f32> {
+    let half_points = |s: f32| (s * 2.0).round();
+    let lines = lines.max(1);
+    if half_points(big) == half_points(text) || (lines > 1 && DROP_CAP_SIZE_BAND.contains(&(big / drop_cap_size(text, lines)))) {
+        return None;
     }
-    let exact = big * 0.7 / ((lines.max(1) as f32 - 1.0) * 1.2 + 0.7);
-    let half = (exact * 2.0).round() / 2.0;
-    if half > 0.0 && (drop_cap_size(half, lines) * 2.0).round() == (big * 2.0).round() { half } else { exact }
+    if big >= 1000.0 {
+        return Some(big);
+    }
+    let exact = (big * 0.7 / ((lines as f32 - 1.0) * 1.2 + 0.7)).max(1.0);
+    let half = half_points(exact) / 2.0;
+    Some(if half_points(drop_cap_size(half, lines)) == half_points(big) { half } else { exact })
 }
 
 /// Concrete character formatting.

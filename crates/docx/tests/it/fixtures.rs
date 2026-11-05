@@ -3671,11 +3671,11 @@ fn text_frames_read_and_round_trip() {
 }
 
 /// #3000: Word writes the drop cap's letter in its framed paragraph at the enlarged size the
-/// dialog computed for it. The merge maps that size back to the letter size the layout enlarges to
-/// it — keeping the file's size would render the enlargement twice, a letter far taller than the
-/// lines it drops through — so the letter is drawn and saved at the file's size.
+/// dialog computed for it. The merge gives the letter back the text's size — the layout sizes a
+/// dropped letter from the text around it, so keeping the file's size would render the
+/// enlargement twice, a letter twice as tall as the lines it drops through.
 #[test]
-fn a_word_drop_caps_letter_is_drawn_and_saved_at_the_files_size() {
+fn a_word_drop_caps_letter_takes_the_texts_size_back() {
     let body = r#"<w:p><w:r><w:t>Relationship with Myself</w:t></w:r></w:p>
         <w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:hSpace="141" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Lucida Calligraphy" w:hAnsi="Lucida Calligraphy"/><w:sz w:val="88"/><w:szCs w:val="88"/></w:rPr><w:t>B</w:t></w:r></w:p>
         <w:p><w:r><w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr><w:t>efore we start</w:t></w:r></w:p>"#;
@@ -3685,17 +3685,27 @@ fn a_word_drop_caps_letter_is_drawn_and_saved_at_the_files_size() {
     assert_eq!(p[1].text, "Before we start");
     assert_eq!(p[1].props.drop_cap, Some(3));
     assert_eq!(p[1].props.drop_cap_font.as_deref(), Some("Lucida Calligraphy"));
-    let drawn = |s: Option<f32>| wordcraft_doc::resolve::drop_cap_size(s.unwrap(), 3);
-    assert!((drawn(p[1].runs[0].props.size) - 44.0).abs() < 0.01, "{:?}", p[1].runs);
-    assert!((drawn(p[1].runs[0].props.size_cs) - 44.0).abs() < 0.01, "{:?}", p[1].runs);
-    assert_eq!(p[1].runs[1].props.size, Some(12.0), "the text keeps its size");
+    assert_eq!(p[1].runs.len(), 1, "the letter and the text share a run once sized alike");
+    assert_eq!((p[1].runs[0].props.size, p[1].runs[0].props.size_cs), (Some(12.0), Some(12.0)), "the letter keeps the text's size");
+    // Without a size of its own in the text, the letter inherits the paragraph's.
+    let plain = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="2" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="72"/></w:rPr><w:t>D</w:t></w:r></w:p>
+        <w:p><w:r><w:t>rop cap text</w:t></w:r></w:p>"#,
+    );
+    let q = paras(&plain);
+    assert_eq!(q.len(), 1);
+    assert_eq!((q[0].runs[0].props.size, q[0].runs[0].props.size_cs), (None, None));
+    // Saved, the letter carries the size the layout draws it at — Word draws a framed letter at
+    // its run's own `w:sz` — here 3 lines of 12 pt text, (2*14.4 + 8.4)/0.7 = 53.14 pt → 106.
+    // Reading that back gives the document the first read gave: the letter at the text's size.
     let bytes = wordcraft_docx::write(&d).unwrap();
     let xml = text(&unzip(&bytes), "word/document.xml");
-    assert!(xml.contains(r#"<w:sz w:val="88"/><w:szCs w:val="88"/>"#), "the file's size on the letter's run: {xml}");
+    assert!(xml.contains(r#"w:sz w:val="106""#), "the drawn size on the letter's run: {xml}");
     let again = wordcraft_docx::read(&bytes).unwrap();
     let r = paras(&again);
-    assert_eq!((r.len(), r[1].text.as_str()), (2, "Before we start"));
-    assert_eq!(r[1].runs[0].props.size, p[1].runs[0].props.size, "reading it back gives the same letter");
+    assert_eq!((r.len(), r[1].text.as_str(), r[1].runs.len()), (2, "Before we start", 1));
+    assert_eq!((r[1].props.drop_cap, r[1].props.drop_cap_font.as_deref()), (Some(3), Some("Lucida Calligraphy")));
+    assert_eq!((r[1].runs[0].props.size, r[1].runs[0].props.size_cs), (Some(12.0), Some(12.0)));
 }
 
 /// #3000: a frame at the size the text draws a letter takes the text's size, and so does one at
@@ -3713,11 +3723,12 @@ fn a_drop_cap_frame_at_the_texts_sizes_takes_the_texts_size() {
     }
 }
 
-/// #3000: a paragraph holding only a field with a cached result has text to drop into, whichever
-/// way the field is written, so the letter's frame merges into it. An empty result shows nothing.
+/// #3000: a paragraph holding only a field shows something, whichever way the field is written and
+/// even with no cached result (PAGE fills its in when drawn), so the letter's frame merges into it. A
+/// paragraph holding only a bookmark shows nothing.
 #[test]
 fn a_drop_cap_merges_into_a_paragraph_holding_only_a_field() {
-    let frame = r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="106"/></w:rPr><w:t>B</w:t></w:r></w:p>"#;
+    let frame = r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="88"/></w:rPr><w:t>B</w:t></w:r></w:p>"#;
     let simple = r#"<w:p><w:fldSimple w:instr=" MERGEFIELD Name "><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>Name</w:t></w:r></w:fldSimple></w:p>"#;
     let complex = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> MERGEFIELD Name </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>Name</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
     for field in [simple, complex] {
@@ -3728,9 +3739,25 @@ fn a_drop_cap_merges_into_a_paragraph_holding_only_a_field() {
         assert_eq!(p[0].plain_text(), "BName");
         assert_eq!(p[0].runs[0].props.size, Some(12.0), "the letter takes the field's size: {:?}", p[0].runs);
     }
-    let empty = r#"<w:p><w:fldSimple w:instr=" MERGEFIELD Name "/></w:p>"#;
-    let d = read_body(&format!("{frame}{empty}"));
-    assert_eq!(paras(&d).len(), 2, "an empty result has nothing to drop into");
+    let empty_simple = r#"<w:p><w:fldSimple w:instr=" PAGE "/></w:p>"#;
+    let empty_complex = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+    for field in [empty_simple, empty_complex] {
+        let d = read_body(&format!("{frame}{field}"));
+        assert_eq!(paras(&d).len(), 1, "{field}: an empty result is filled in when drawn");
+    }
+    let marker = r#"<w:p><w:bookmarkStart w:id="1" w:name="m"/><w:bookmarkEnd w:id="1"/></w:p>"#;
+    let d = read_body(&format!("{frame}{marker}"));
+    assert_eq!(paras(&d).len(), 2, "a bookmark shows nothing to drop into");
+}
+
+/// #3000: a frame's size far below the text's maps back to no less than the 1 pt a size can read as.
+#[test]
+fn a_drop_caps_tiny_frame_reads_as_at_least_one_point() {
+    let d = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="10" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="2"/></w:rPr><w:t>B</w:t></w:r></w:p>
+        <w:p><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>efore we start</w:t></w:r></w:p>"#,
+    );
+    assert_eq!(paras(&d)[0].runs[0].props.size, Some(1.0));
 }
 
 /// #3000: a bookmark opening the text after a drop cap is a run of its own with no size; the
@@ -3738,7 +3765,7 @@ fn a_drop_cap_merges_into_a_paragraph_holding_only_a_field() {
 #[test]
 fn a_drop_caps_letter_skips_a_leading_bookmark_for_the_texts_size() {
     let d = read_body(
-        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="106"/></w:rPr><w:t>B</w:t></w:r></w:p>
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="88"/></w:rPr><w:t>B</w:t></w:r></w:p>
         <w:p><w:bookmarkStart w:id="1" w:name="start"/><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>efore we start</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>"#,
     );
     let p = paras(&d);
@@ -3750,11 +3777,11 @@ fn a_drop_caps_letter_skips_a_leading_bookmark_for_the_texts_size() {
 }
 
 /// #3000: a run in the drop cap's frame with a size of its own keeps it; only the runs at the
-/// letter's enlarged size take the letter's size.
+/// letter's enlarged size take the text's size back.
 #[test]
 fn a_drop_cap_frames_other_sizes_are_kept() {
     let d = read_body(
-        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="106"/></w:rPr><w:t>B</w:t></w:r><w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t>e</w:t></w:r></w:p>
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="88"/></w:rPr><w:t>B</w:t></w:r><w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t>e</w:t></w:r></w:p>
         <w:p><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>fore we start</w:t></w:r></w:p>"#,
     );
     let p = paras(&d);
@@ -3782,7 +3809,7 @@ fn a_drop_cap_before_an_empty_paragraph_keeps_its_size() {
 #[test]
 fn a_drop_caps_letter_after_a_bookmark_in_its_frame_takes_the_texts_size() {
     let d = read_body(
-        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:bookmarkStart w:id="2" w:name="cap"/><w:r><w:rPr><w:sz w:val="106"/></w:rPr><w:t>B</w:t></w:r><w:bookmarkEnd w:id="2"/></w:p>
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:bookmarkStart w:id="2" w:name="cap"/><w:r><w:rPr><w:sz w:val="88"/></w:rPr><w:t>B</w:t></w:r><w:bookmarkEnd w:id="2"/></w:p>
         <w:p><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>efore we start</w:t></w:r></w:p>"#,
     );
     let p = paras(&d);
