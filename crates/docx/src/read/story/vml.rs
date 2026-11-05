@@ -186,7 +186,10 @@ impl Reader<'_> {
             let id = img.attr("r:id").or_else(|| img.attr("r:pict"))?;
             let media = self.media_for(rels, id)?;
             let alt = shape.attr("alt").or_else(|| img.attr("o:title")).unwrap_or("").to_string();
-            return Some(InlineObject::Image { media, w, h, alt, float, crop: [0.0; 4], ole: None });
+            // Brightness and contrast (Word's picture watermark "Washout" sets them, #1711).
+            let frac = |k: &str| img.attr(k).and_then(crate::units::vml_number);
+            let fx = wordcraft_doc::picfx::PicFx::from_vml(frac("gain").unwrap_or(1.0), frac("blacklevel").unwrap_or(0.0));
+            return Some(InlineObject::Image { media, w, h, alt, float, crop: [0.0; 4], fx, ole: None });
         }
         // The shapetype the shape is drawn from (its `type`, ECMA-376 Part 4 VML), when written in
         // the same picture: what the shape leaves out, it takes from there.
@@ -622,7 +625,16 @@ fn picture_fill_layers(obj: InlineObject, fill: PictureFill, own_frame: bool) ->
         };
         layers.push((0.0, 0.0, under));
     }
-    let picture = InlineObject::Image { media: fill.media, w: pw, h: ph, alt: String::new(), float: upright, crop: [0.0; 4], ole: None };
+    let picture = InlineObject::Image {
+        media: fill.media,
+        w: pw,
+        h: ph,
+        alt: String::new(),
+        float: upright,
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
     layers.push(((w - pw) / 2.0, (h - ph) / 2.0, picture));
     if stroke.is_some() || story.is_some() {
         layers.push((

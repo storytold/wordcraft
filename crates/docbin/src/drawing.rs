@@ -185,7 +185,7 @@ fn leaf(sp: &Sp, w: f32, h: f32, float: Float, b: &Build, pics: &mut Pictures) -
     let p = &sp.props;
     if let Some(pib) = p.pib {
         let media = pics.bse(pib, b.bstore, b.delay)?;
-        return Some(InlineObject::Image { media, w, h, alt: p.alt.clone(), float, crop: p.crop, ole: None });
+        return Some(InlineObject::Image { media, w, h, alt: p.alt.clone(), float, crop: p.crop, fx: Default::default(), ole: None });
     }
     let story = b.stories.get(&sp.spid).copied().filter(|_| sp.textbox || sp.spt == 202);
     let mut kind = match sp.spt {
