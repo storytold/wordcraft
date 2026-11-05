@@ -36,6 +36,8 @@ pub enum Placed {
         path: Path,
         off: usize,
         spin: Spin,
+        /// Brightness, contrast and transparency (see [`wordcraft_doc::picfx`]).
+        fx: wordcraft_doc::picfx::PicFx,
     },
     Shape {
         rect: Rect,
