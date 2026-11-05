@@ -508,7 +508,7 @@ mod bar {
                             objc2_app_kit::NSApplication::sharedApplication(mtm).hide(None);
                         }
                     }
-                    Action::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+                    Action::Minimize => ctx.send_viewport_cmd_to(app.active_viewport(), egui::ViewportCommand::Minimized(true)),
                     Action::Quit => {
                         if app.close_requested() {
                             app.quit_requested = true;
