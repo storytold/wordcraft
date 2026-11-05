@@ -801,6 +801,9 @@ fn save_dialog_lists_one_named_type_per_format() {
     assert_eq!(labels.len(), filters.len(), "labels are distinct");
     // Unknown names fall back to Word's format first.
     assert_eq!(save_filters("no extension")[0].1, vec!["docx".to_string()]);
+    // The OpenDocument template and flat file have their own names.
+    assert!(save_filters("plan.fodt")[0].0.starts_with("Flat OpenDocument Text"));
+    assert!(save_filters("form.ott")[0].0.starts_with("OpenDocument Text Template"));
 }
 
 /// #689: the Save dialog's default extension is the suggested name's own format, so a file

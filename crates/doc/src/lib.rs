@@ -28,6 +28,7 @@ pub mod fill;
 pub mod freeform;
 pub mod graphic;
 pub mod ime_text;
+pub mod kept;
 pub mod legacy_form;
 pub mod line_dash;
 pub mod link;
@@ -39,6 +40,7 @@ pub mod math_linear;
 pub mod math_symbols;
 pub mod numbering;
 pub mod para;
+pub mod picfx;
 pub mod props;
 pub mod resolve;
 pub mod section;
@@ -47,6 +49,7 @@ pub mod styles;
 pub mod symbol_fonts;
 pub mod table;
 pub mod wordart;
+pub mod work;
 pub mod wrap;
 pub mod zip_guard;
 
@@ -84,7 +87,7 @@ pub use error::{DocError, Result};
 pub use parts::{MAX_LINKED_BOXES, MAX_TEXT_BOX_INSET, NoteSeparators, Part, PartKind, PermRange, TEXT_BOX_INSET, TextBody, free_id};
 pub use position::{Path, Pos, StoryRef};
 pub use settings::{
-    COMPAT_MODE_CURRENT, CoreProps, CustomProp, DEFAULT_GRID, DEFAULT_HYPHENATION_ZONE, LEGACY_COMPAT_MODE, PagePicture, Settings, Source,
+    COMPAT_MODE_CURRENT, CoreProps, CustomProp, DEFAULT_GRID, DEFAULT_HYPHENATION_ZONE, LEGACY_COMPAT_MODE, OdfLayout, PagePicture, Settings, Source,
     THEME_COLORS, Watermark, Zoom, ZoomFit,
 };
 pub use text_walk::count_words;
@@ -131,6 +134,10 @@ pub struct Document {
     /// by `==`).
     #[serde(skip)]
     media_index: MediaIndex,
+    /// Markup kept from the file it was opened from, for writing back what isn't edited (see
+    /// [`kept`]); never saved, ignored by `==`.
+    #[serde(skip)]
+    pub kept: kept::Kept,
 }
 
 #[cfg(test)]
