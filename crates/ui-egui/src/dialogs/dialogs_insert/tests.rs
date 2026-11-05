@@ -204,9 +204,9 @@ fn field_dialog_text_format_is_for_text_fields_only() {
 /// quotes, and to (none) when the code has none.
 #[test]
 fn field_dialog_text_format_follows_the_typed_code() {
-    assert_eq!(field::last_text_format(r#"AUTHOR "a \* Lower" \* upper \* Caps \* MERGEFORMAT"#), Some("Caps"));
-    assert_eq!(field::last_text_format(r#"MERGEFIELD "x \* FirstCap""#), None);
-    assert_eq!(field::last_text_format(r"PAGE \* roman"), None);
+    assert_eq!(field::text_formats(r#"AUTHOR "a \* Lower" \* upper \* Caps \* MERGEFORMAT"#), ["Upper", "Caps"]);
+    assert!(field::text_formats(r#"MERGEFIELD "x \* FirstCap""#).is_empty());
+    assert!(field::text_formats(r"PAGE \* roman").is_empty());
     let a = app();
     let mut f = FieldForm::new(&a);
     f.select("SUBJECT");
@@ -226,6 +226,43 @@ fn field_dialog_text_format_follows_the_typed_code() {
     f.code = r"TITLE \* Upper".into();
     f.toggle_codes();
     assert_eq!(f.text_format, "Lower");
+}
+
+/// Hide Codes keeps every capitalization switch of the typed code, in order, so the inserted field
+/// shows what the typed code shows; choosing another Format writes that one switch only.
+#[test]
+fn field_dialog_text_format_keeps_every_typed_case_switch() {
+    use wordcraft_layout::fields::apply_case_switch;
+    let a = app();
+    let mut f = FieldForm::new(&a);
+    f.select("SUBJECT");
+    f.toggle_codes();
+    f.code = r"SUBJECT \* Lower \* Caps".into();
+    let typed = apply_case_switch(&f.code, "WEEKLY REPORT".into());
+    assert_eq!(typed, "Weekly Report");
+    f.toggle_codes();
+    assert_eq!(f.text_format, "Caps");
+    assert_eq!(f.final_code(), r"SUBJECT \* Lower \* Caps \* MERGEFORMAT");
+    assert_eq!(apply_case_switch(&f.final_code(), "WEEKLY REPORT".into()), typed);
+    // Field Codes shows the same switches again.
+    f.toggle_codes();
+    assert_eq!(f.code, r"SUBJECT \* Lower \* Caps \* MERGEFORMAT");
+    f.toggle_codes();
+    // A Format the user chooses replaces the typed switches, and choosing Title case again
+    // does not bring them back.
+    f.choose_text_format("Upper");
+    assert_eq!(f.final_code(), r"SUBJECT \* Upper \* MERGEFORMAT");
+    f.choose_text_format("Caps");
+    assert_eq!(f.final_code(), r"SUBJECT \* Caps \* MERGEFORMAT");
+    f.choose_text_format("");
+    assert_eq!(f.final_code(), r"SUBJECT \* MERGEFORMAT");
+    // Choosing another field forgets them.
+    f.toggle_codes();
+    f.code = r"SUBJECT \* Lower \* Caps".into();
+    f.toggle_codes();
+    f.select("SUBJECT");
+    f.text_format = "Caps".into();
+    assert_eq!(f.final_code(), r"SUBJECT \* Caps \* MERGEFORMAT");
 }
 
 /// The Field dialog lists Word's document information fields, and the counts take a number

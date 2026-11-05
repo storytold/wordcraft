@@ -103,12 +103,12 @@ pub fn takes_text_format(name: &str) -> bool {
     matches!(name, "AUTHOR" | "COMMENTS" | "FILENAME" | "KEYWORDS" | "LASTSAVEDBY" | "SUBJECT" | "TITLE" | "REF" | "STYLEREF" | "MERGEFIELD")
 }
 
-/// The last capitalization switch in a field code, as its [`TEXT_FORMATS`] value, or `None`
-/// without one. Quoted text in the code is not a switch.
-pub fn last_text_format(code: &str) -> Option<&'static str> {
+/// The capitalization switches in a field code, as their [`TEXT_FORMATS`] values, in the order
+/// they appear (layout applies them in that order). Quoted text in the code is not a switch.
+pub fn text_formats(code: &str) -> Vec<&'static str> {
     let mut chars = code.chars().peekable();
     let mut quoted = false;
-    let mut last = None;
+    let mut all = Vec::new();
     while let Some(c) = chars.next() {
         match c {
             '\\' if quoted => {
@@ -123,13 +123,13 @@ pub fn last_text_format(code: &str) -> Option<&'static str> {
                     word.push(c);
                 }
                 if let Some((v, _)) = TEXT_FORMATS.iter().find(|(v, _)| !v.is_empty() && v.eq_ignore_ascii_case(&word)) {
-                    last = Some(*v);
+                    all.push(*v);
                 }
             }
             _ => {}
         }
     }
-    last
+    all
 }
 
 pub fn field_kind(name: &str) -> FieldKind {
@@ -158,6 +158,10 @@ pub struct FieldForm {
     pub number_format: String,
     /// `\*` capitalization value for text fields (empty = none).
     pub text_format: String,
+    /// Every capitalization switch of the code typed in Field Codes, in order. The code keeps them
+    /// all while the Format list shows the last of them.
+    #[serde(skip)]
+    typed_text_formats: Vec<&'static str>,
     /// Bookmark (REF, PAGEREF), sequence name (SEQ), merge field (MERGEFIELD) or style name
     /// (STYLEREF).
     pub target: String,
@@ -190,6 +194,7 @@ impl FieldForm {
             date_format: DATE_FORMATS.first().copied().unwrap_or("M/d/yyyy").to_string(),
             number_format: String::new(),
             text_format: String::new(),
+            typed_text_formats: Vec::new(),
             target: String::new(),
             preserve: true,
             codes: false,
@@ -221,6 +226,7 @@ impl FieldForm {
         self.name = name.to_string();
         self.number_format.clear();
         self.text_format.clear();
+        self.typed_text_formats.clear();
         self.target = match field_kind(name) {
             FieldKind::Bookmark => self.bookmarks.first().cloned().unwrap_or_default(),
             FieldKind::Sequence => "Figure".into(),
@@ -274,7 +280,13 @@ impl FieldForm {
             s.push_str(&format!(" \\* {}", self.number_format));
         }
         if takes_text_format(&self.name) && !self.text_format.is_empty() {
-            s.push_str(&format!(" \\* {}", self.text_format));
+            if self.typed_text_formats.last().is_some_and(|v| *v == self.text_format) {
+                for v in &self.typed_text_formats {
+                    s.push_str(&format!(" \\* {v}"));
+                }
+            } else {
+                s.push_str(&format!(" \\* {}", self.text_format));
+            }
         }
         if self.preserve && field_kind(&self.name) != FieldKind::Toc {
             s.push_str(" \\* MERGEFORMAT");
@@ -287,13 +299,21 @@ impl FieldForm {
         if self.codes { self.code.trim().to_string() } else { self.instruction() }
     }
 
+    /// The Format list: a choice replaces the capitalization switches kept from a typed code.
+    pub fn choose_text_format(&mut self, value: &str) {
+        self.text_format = value.to_string();
+        self.typed_text_formats.clear();
+    }
+
     /// Field Codes / Hide Codes: showing the code starts it from the options; hiding it sets the
-    /// Format list to the code's last capitalization switch when the code is for the chosen field.
+    /// Format list to the code's last capitalization switch when the code is for the chosen field,
+    /// and keeps all of the code's capitalization switches until another Format is chosen.
     pub fn toggle_codes(&mut self) {
         if !self.codes {
             self.code = self.instruction();
         } else if takes_text_format(&self.name) && wordcraft_layout::fields::field_name(&self.code) == self.name {
-            self.text_format = last_text_format(&self.code).unwrap_or_default().to_string();
+            self.typed_text_formats = text_formats(&self.code);
+            self.text_format = self.typed_text_formats.last().copied().unwrap_or_default().to_string();
         }
         self.codes = !self.codes;
     }
@@ -474,7 +494,9 @@ fn field_options(ui: &mut Ui, f: &mut FieldForm, t: &Tokens) {
         let shown = TEXT_FORMATS.iter().find(|(v, _)| *v == f.text_format).map(|(_, l)| *l).unwrap_or("(none)");
         craft_ui::ComboBox::from_id_salt("field_text").selected_text(tl!(shown)).width(200.0).show_ui(ui, |ui| {
             for (v, l) in TEXT_FORMATS {
-                ui.selectable_value(&mut f.text_format, (*v).to_string(), tl!(l));
+                if ui.selectable_label(f.text_format == *v, tl!(l)).clicked() {
+                    f.choose_text_format(v);
+                }
             }
         });
     }
