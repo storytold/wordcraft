@@ -28,9 +28,12 @@ pub fn start() {
             log::error!("missing <canvas id=\"{CANVAS_ID}\">");
             return;
         };
-        // `?host=parent`: a same-origin page framing WordCraft opens documents in it and stores
-        // what it saves (`host`). That page guards leaving it, so this one doesn't.
-        let bridge = if query_param("host").as_deref() == Some("parent") { crate::host::Bridge::new() } else { None };
+        // Host modes (`craft-web-host`): `?host=parent`, a same-origin page framing WordCraft, opens documents in
+        // it and stores what it saves (`host`); unframed there is no parent, so that URL on its
+        // own stays the normal app with downloads. `data-host="page"` on the canvas opts a page
+        // in instead: it runs WordCraft in its own document and talks over DOM `CustomEvent`s
+        // on the canvas (`host`). The host guards leaving the page, so this one doesn't.
+        let bridge = crate::host::Bridge::detect(&canvas);
         let app_bridge = bridge.clone();
         let dirty = Rc::new(Cell::new(false));
         let saves = AsyncSaves::default();
