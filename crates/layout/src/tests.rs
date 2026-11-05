@@ -8,6 +8,7 @@ use wordcraft_doc::{Pos, Table};
 mod autospace;
 mod bidi;
 mod budget;
+mod cell_floats;
 mod complex;
 mod grid;
 mod ligature;
@@ -5842,6 +5843,110 @@ fn floats_in_headers_and_table_cells_are_drawn() {
     let c = shapes(&l.pages[0].items);
     assert_eq!(c.len(), 1, "cell float drawn");
     assert!(c[0].x > 72.0 && c[0].x < 72.0 + 234.0, "inside the first cell: {:?}", c[0]);
+}
+
+/// A float laid out in its cell (`layoutInCell`) whose offset would take it out of the cell is
+/// moved in to the cell's outer side (a letterhead logo anchored left of its header cell). One laid out on the page (`layoutInCell="0"`) keeps its offset.
+#[test]
+fn cell_floats_laid_out_in_the_cell_stay_in_it() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let cell_w = 234.0;
+    let place = |x: f32, outside_cell: bool, wrap: Wrap| {
+        let mut d = Document::from_text("Body text.");
+        let mut t = Table::new(1, 2, 468.0);
+        let mut cp = wordcraft_doc::Paragraph::with_text("cell", Default::default());
+        let f = Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x, dist: 9.0, outside_cell, ..Default::default() };
+        cp.insert_object(0, rect_shape(80.0, 48.0, f), &Default::default()).unwrap();
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(cp)];
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        let c = shapes(&lay(&d).pages[0].items);
+        assert_eq!(c.len(), 1, "cell float drawn");
+        c[0].x
+    };
+    // An offset inside the cell is kept: the cell's text starts 20 pt left of this one.
+    let text_left = place(20.0, false, Wrap::Tight) - 20.0;
+    assert!(text_left > 72.0 && text_left < 72.0 + 12.0, "the cell's text starts past its margin: {text_left}");
+    let cell_left = text_left - 5.4;
+    // Anchored 95 pt left of the column: moved in to the cell's outer left side.
+    let left = place(-95.0, false, Wrap::Tight);
+    assert!((left - cell_left).abs() < 0.5, "pulled in to the left side: {left} vs {text_left}");
+    // Past the right side: moved in to it.
+    let right = place(cell_w + 40.0, false, Wrap::Tight);
+    // (within a point: the cell's border room is not split evenly between its two sides)
+    assert!((right - (cell_left + cell_w - 80.0)).abs() < 1.0, "pulled in to the right side: {right}");
+    // Not laid out in the cell: the offset is kept, off the cell or not.
+    let out = place(-95.0, true, Wrap::Tight);
+    assert!((out - (text_left - 95.0)).abs() < 0.5, "layoutInCell=0 keeps the offset: {out}");
+    // Front-of-text shapes do not wrap and keep their offsets even with layoutInCell on.
+    for offset in [-95.0, cell_w + 40.0] {
+        let front = place(offset, false, Wrap::InFrontOfText);
+        assert!((front - (text_left + offset)).abs() < 0.5, "front-of-text offset preserved: {front}");
+    }
+}
+
+/// Cell confinement uses the finite, nonnegative width that float placement actually draws.
+#[test]
+fn cell_float_bounds_use_the_placed_width() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let place = |width, x, wrap, outside_cell| {
+        let mut d = Document::from_text("Body");
+        let mut t = Table::new(1, 2, 468.0);
+        let mut p = wordcraft_doc::Paragraph::with_text("cell", Default::default());
+        let f = Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x, dist: 9.0, outside_cell, ..Default::default() };
+        p.insert_object(0, rect_shape(width, 48.0, f), &Default::default()).unwrap();
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        let objects = shapes(&lay(&d).pages[0].items);
+        assert_eq!(objects.len(), 1);
+        objects[0]
+    };
+    // Invalid stored widths are placed as zero-width objects; offsets at either side must
+    // match an explicitly zero-width object, rather than inventing extra room in the cell.
+    for offset in [-95.0, 300.0] {
+        let zero = place(0.0, offset, Wrap::Tight, false);
+        for stored in [-100.0, f32::NEG_INFINITY, f32::NAN, f32::INFINITY] {
+            let placed = place(stored, offset, Wrap::Tight, false);
+            assert_eq!(placed.w, 0.0);
+            assert!((placed.x - zero.x).abs() < 0.01, "stored width {stored}, offset {offset}: {placed:?} vs {zero:?}");
+        }
+        // Neither opt-out path gains confinement from the width normalization.
+        for (wrap, outside_cell) in [(Wrap::InFrontOfText, false), (Wrap::Tight, true)] {
+            let zero = place(0.0, offset, wrap, outside_cell);
+            let negative = place(-100.0, offset, wrap, outside_cell);
+            assert_eq!(negative.w, zero.w);
+            assert!((negative.x - zero.x).abs() < 0.01);
+        }
+    }
+}
+
+#[test]
+fn keep_in_cell_bounds() {
+    use super::boxes::keep_in_cell;
+    assert_eq!(keep_in_cell(-95.0, 80.0, 0.0, 234.0), 0.0);
+    assert_eq!(keep_in_cell(300.0, 80.0, 0.0, 234.0), 234.0 - 80.0);
+    assert_eq!(keep_in_cell(20.0, 80.0, 0.0, 234.0), 20.0);
+    // Wider than the cell, or exactly its width: starts at the outer left side.
+    assert_eq!(keep_in_cell(50.0, 300.0, 0.0, 234.0), 0.0);
+    assert_eq!(keep_in_cell(50.0, 234.0, 0.0, 234.0), 0.0);
+    // Nearly full: no clearance is added to the object's position.
+    assert_eq!(keep_in_cell(-95.0, 230.0, 0.0, 234.0), 0.0);
+    assert_eq!(keep_in_cell(300.0, 230.0, 0.0, 234.0), 4.0);
+    // Cell edges include its margins; negative offsets can be wholly inside the cell.
+    assert_eq!(keep_in_cell(-5.0, 80.0, 0.0, 234.0), 0.0);
+    assert_eq!(keep_in_cell(-5.0, 80.0, -4.0, 234.0), -4.0);
+    assert_eq!(keep_in_cell(-5.15, 63.75, -5.4, 448.2), -5.15);
+    assert_eq!(keep_in_cell(395.95, 47.25, -5.4, 448.2), 395.95);
+    // Clamp limits stay finite and ordered even at small scales or with malformed geometry.
+    for width in [0.1_f32, 0.3, 1.0, 234.0] {
+        let object = width * 0.98;
+        for offset in [-width, 0.0, width, f32::NAN, f32::INFINITY] {
+            let x = keep_in_cell(offset, object, 0.0, width);
+            assert!(x.is_finite() && x >= 0.0 && x + object <= width + f32::EPSILON * width.max(1.0));
+        }
+    }
+    assert_eq!(keep_in_cell(10.0, 80.0, 0.0, f32::NAN), 0.0);
+    assert_eq!(keep_in_cell(10.0, f32::NAN, 0.0, 234.0), 0.0);
+    assert_eq!(keep_in_cell(10.0, 80.0, f32::NAN, 234.0), 10.0);
 }
 
 /// Paragraph anchors exclude space-before; line and frameless page/margin anchors retain it.
@@ -13779,4 +13884,30 @@ fn a_table_moved_by_a_page_break_shows_its_new_page_number() {
         })
         .collect();
     assert_eq!(shown, ["2"]);
+}
+
+/// Cell confinement must not change page-vertical placement through the rotated text axis.
+#[test]
+fn turned_cell_float_keeps_its_along_text_offset() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let place = |direction, outside_cell| {
+        let mut doc = Document::from_text("Synthetic body");
+        let mut table = Table::new(1, 2, 468.0);
+        table.rows[0].props.height = Some(100.0);
+        table.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::Exact;
+        table.rows[0].cells[0].props.text_direction = direction;
+        let mut para = Paragraph::with_text("Synthetic cell", Default::default());
+        let float = Float { wrap: Wrap::Tight, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 150.0, outside_cell, ..Default::default() };
+        para.insert_object(0, rect_shape(20.0, 10.0, float), &Default::default()).unwrap();
+        table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(para)];
+        doc.insert_block(StoryRef::Body, &Path::top(1), Block::Table(table)).unwrap();
+        let objects = shapes(&lay(&doc).pages[0].items);
+        assert_eq!(objects.len(), 1);
+        objects[0]
+    };
+    for direction in [TextDirection::Down, TextDirection::Up] {
+        let confined = place(direction, false);
+        let reference = place(direction, true);
+        assert!((confined.y - reference.y).abs() < 0.01, "{direction:?}: {confined:?} vs {reference:?}");
+    }
 }
