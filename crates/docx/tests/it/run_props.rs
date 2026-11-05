@@ -73,6 +73,7 @@ fn run_and_style_snap_to_grid_and_web_hidden_survive_two_saves() {
     }
 }
 
+/// Keeps run and style emphasis values intact across repeated DOCX saves.
 #[test]
 fn run_and_style_emphasis_marks_survive_two_saves() {
     use wordcraft_doc::props::EmphasisMark;
