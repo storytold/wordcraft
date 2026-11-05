@@ -1,0 +1,2422 @@
+# Traditional Chinese (zh-hant, Taiwan vocabulary) interface catalog. Same format and clean-room
+# rules as zh-hans.tsv.
+
+	(no style)	（無樣式）
+	(no suggestions)	（無建議）
+	1.5 Line Spacing	1.5 倍行距
+	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	一款以 Rust 從零開始撰寫的免費開源文書處理軟體。\n屬於 ArtCraft 團隊的 Crafting Apps 系列。
+	About	關於
+	About WordCraft	關於 WordCraft
+	Accept	接受
+	Accept All Changes	接受所有修訂
+	Accept This Change	接受此修訂
+	Accessibility	協助工具
+	Add	新增
+	Add a comment	新增註解
+	Add a Table	新增表格
+	Add Object to Selection	將物件加入選取範圍
+	Add Space Before Paragraph	在段落前新增間距
+	Add space between Asian and Latin text	在亞洲文字與西文之間加入間距
+	Add space between Asian text and numbers	在亞洲文字與數字之間加入間距
+	Add tab stop at:	定位停駐點新增位置：
+	Add Text	新增文字
+	Add to Dictionary	新增至字典
+	Add to Style Gallery	新增至樣式庫
+	Address Block	地址區塊
+	Address:	地址：
+	Address\nBlock	地址區塊
+	Adjust	調整
+	Advanced	進階
+	After:	段落後：
+	Agents	代理程式
+	Align	對齊
+	Align Left	靠左對齊
+	Align Right	靠右對齊
+	Aligned at:	對齊位置：
+	Alignment	對齊方式
+	All Borders	所有框線
+	All Caps	全部大寫
+	All caps	全部大寫
+	All Markup	所有標記
+	Allow hanging punctuation	允許標點溢出邊界
+	Allow Latin text to wrap in the middle of a word	允許西文在單字中間換行
+	Alt Text	替代文字
+	Apply Asian line-breaking rules (kinsoku)	套用亞洲文字的斷行規則（禁則）
+	Apply Character Style	套用字元樣式
+	Apply Style	套用樣式
+	Apply Styles	選擇並套用樣式
+	Arrange	排列
+	Arrange\nAll	全部排列
+	Arrow	箭號
+	Artistic Effects	美術效果
+	As you type	輸入時
+	Asian text font:	亞洲文字字型：
+	Asian Typography	亞洲版式
+	Author	作者
+	AutoCorrect Options	自動校正選項
+	AutoFit	自動調整
+	AutoFit Contents	依內容自動調整
+	AutoFit Window	依視窗自動調整
+	AutoSave writes your changes to the file a moment after you stop typing.	停止輸入片刻後，自動儲存會將變更寫入檔案。
+	Automatic	自動
+	Automatic ({language})	自動（{language}）
+	Automatic follows your system's language. Menus and commands change; your documents don't.	「自動」會跟隨系統語言。功能表與命令會改變，文件內容不會改變。
+	Automatic Table 1 (3 levels)	自動目錄 1（3 階層）
+	Automatic Table 2 (2 levels)	自動目錄 2（2 階層）
+	AutoSave	自動儲存
+	AutoSave documents you have saved in WordCraft	自動儲存在 WordCraft 中儲存過的文件
+	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自動儲存失敗：{error}。重新儲存文件後將恢復自動儲存。
+	Balloons	註解方塊
+	Bottom Margin	下邊界
+	Centimeters	公分
+	Check spelling as you type	輸入時檢查拼字
+	Click a border between two cells to merge them. Esc stops.	按一下兩個儲存格之間的框線以合併它們。按 Esc 結束。
+	Bullet	項目符號
+	By author	依作者
+	Changed lines:	修訂行：
+	Click level to modify:	按一下要修改的層級：
+	Click to switch back to inserting	按一下以切換回插入模式
+	Color only	僅色彩
+	Compress punctuation at the start of a line	壓縮行首標點
+	Continue from previous section	接續前一節
+	Couldn't make WordCraft the default: {error}	無法將 WordCraft 設為預設應用程式：{error}
+	Custom dictionary	自訂字典
+	Dark page (white text on black)	深色頁面（黑底白字）
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	拖出矩形以繪製表格，或拖出穿過儲存格的線條以分割儲存格。按 Esc 結束。
+	Draw Table	繪製表格
+	Define New Multilevel List	定義新的多層次清單
+	Define New Multilevel List…	定義新的多層次清單…
+	Deletions:	刪除內容：
+	Edit Comment	編輯註解
+	Enter formatting for number:	輸入編號的格式：
+	Follow number with:	編號之後：
+	Formatting	格式設定
+	Formatting marks	格式化標記
+	Hidden text	隱藏文字
+	Ignore web and file addresses	忽略網址和檔案路徑
+	Ignore words in capitals	忽略全部大寫的單字
+	Ignore words with numbers	忽略包含數字的單字
+	In the margin	在頁邊
+	Inches	英寸
+	Formatting exceptions	格式例外
+	Include level number from:	包含的層級編號來自：
+	Initials:	縮寫：
+	Ink	筆跡
+	Insertions and Deletions	插入和刪除
+	Insertions:	插入內容：
+	Interface	介面
+	Interface language	介面語言
+	Inside:	內側：
+	Latin text font:	拉丁文字字型：
+	Left border	左框線
+	In Default apps, choose WordCraft for the document types you want it to open.	請在「預設應用程式」中，為要以 WordCraft 開啟的文件類型選擇 WordCraft。
+	Left Margin	左邊界
+	Indents and Spacing	縮排和間距
+	Legal style numbering	正規形式編號
+	Line breaking	斷行
+	Link level to style:	將層級連結到樣式：
+	List Definition	清單定義
+	Mark grammar errors as you type	輸入時標示文法錯誤
+	Measurement units:	度量單位：
+	Millimeters	公釐
+	Mirror indents	對稱縮排
+	More templates →	更多範本 →
+	New comments and tracked changes are recorded under this name and these initials.	新的註解和追蹤修訂會以此名稱和縮寫記錄。
+	New word	新單字
+	No document is open. Create a document or open one first.	沒有開啟的文件。請先新增或開啟文件。
+	No templates match your search.	沒有符合搜尋的範本。
+	No words yet. Add to Dictionary on a misspelled word puts it here.	還沒有單字。對拼字錯誤的單字選擇「新增至字典」會將它放在這裡。
+	Nothing	無
+	Number alignment:	編號對齊方式：
+	Number format	編號格式
+	Number style for this level:	此層級的編號樣式：
+	Only for the selected text	僅針對所選文字
+	Outside border	外側框線
+	Make WordCraft the default for Word documents…	將 WordCraft 設為 Word 文件的預設應用程式…
+	Opens .docx, .doc, .rtf and .odt files and Word templates with WordCraft from now on.	今後以 WordCraft 開啟 .docx、.doc、.rtf、.odt 檔案和 Word 範本。
+	Opens Settings › Default apps, where you choose WordCraft for .docx and the other document types.	開啟「設定 › 預設應用程式」，在其中為 .docx 及其他文件類型選擇 WordCraft。
+	Overtype	取代
+	Overtype (typing replaces the characters after the caret)	取代（輸入的內容會取代插入點後的字元）
+	Page Number Format	頁碼格式
+	Page numbering	頁碼編號
+	Show alignment guides when moving pictures and shapes	移動圖片和圖案時顯示對齊參考線
+	Moved objects snap to the page's edges and centre, the margins and other objects. Hold Alt to move freely.	移動的物件會貼齊頁面的邊緣和中心、邊界以及其他物件。按住 Alt 可自由移動。
+	Page display	頁面顯示
+	Paragraph marks	段落標記
+	Personalize	個人化
+	Picas	派卡
+	Points	點
+	Print the page color	列印頁面色彩
+	Printing	列印
+	Proofing language	校訂語言
+	Recent documents to show:	顯示的最近文件數：
+	Remove	移除
+	Outside:	外側：
+	Reopen	重新開啟
+	Restart list after:	重新開始清單的層級：
+	Right border	右框線
+	Right Margin	右邊界
+	Base text:	基準文字：
+	Distribute letters	字母平均分散
+	Distribute spacing	間距平均分散
+	Offset (pt):	位移（點）：
+	Phonetic Guide	注音標示
+	Right (vertical)	靠右（直書）
+	Ruby text:	注音文字：
+	Save documents	儲存文件
+	Search	搜尋
+	Search for templates	搜尋範本
+	Show all revisions inline	以內嵌方式顯示所有修訂
+	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像「檢視 › 切換模式」一樣以反轉的色彩顯示文件。儲存、列印和 PDF 不受影響。
+	AutoSave saves every change to the file (needs a saved document)	自動儲存會將每次變更寫入檔案（文件需已儲存）
+	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	瀏覽器中無法使用自動儲存：它不能寫入您的檔案。儲存會下載一份複本。
+	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	自動儲存僅適用於 .docx、.odt 和 .rtf 檔案；{name} 無法保留所有格式。另存為 .docx 即可開啟自動儲存。
+	Save the document to turn on AutoSave	儲存文件後即可開啟自動儲存
+	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	儲存文件後即可開啟自動儲存（僅開啟過的檔案在您儲存之前不會被改寫）
+	AutoText	自動圖文集
+	Backspace	退格
+	Banded Columns	帶狀欄
+	Banded Rows	帶狀列
+	Before:	段落前：
+	Bibliography	參考書目
+	Binary assets added	新增二進位資源
+	Binary assets removed	移除二進位資源
+	Blank	空白
+	Blank (Three Columns)	空白（三欄）
+	Blank document	空白文件
+	Blank Page	空白頁
+	Block\nAuthors	封鎖作者
+	Bold	粗體
+	Bookmark	書籤
+	Bookmark name:	書籤名稱：
+	Delete Bookmark	刪除書籤
+	Hidden bookmarks	隱藏書籤
+	Sort by:	排序依據：
+	Border Painter	框線複製
+	Border\nPainter	框線複製
+	Borders	框線
+	Show the mini toolbar when text is selected	選取文字時顯示迷你工具列
+	Spaces	空格
+	Spelling	拼字
+	Spelling and grammar are checked in {language}.	拼字和文法檢查語言：{language}
+	The text at the insertion point is marked Do not check spelling or grammar.	插入點處的文字已標示為：不要檢查拼字或文法
+	{language}: WordCraft doesn't check spelling or grammar in this language yet.	{language}：WordCraft 暫不檢查此語言的拼字和文法
+	Tab characters	定位字元
+	Tab stop position:	定位點位置：
+	Default tab stops:	預設定位點間距：
+	Tab stops to be cleared:	要清除的定位點：
+	All	全部
+	Decimal	小數點對齊
+	Bar	豎線
+	Leader	前置字元
+	Set	設定
+	Page Border	頁面框線設定
+	Apply to:	套用至：
+	These marks show even when Show/Hide ¶ is off.	即使關閉「顯示/隱藏 ¶」，這些標記也會顯示。
+	Title Bar	標題列
+	Typing replaces selected text	輸入的內容取代選取的文字
+	Update fields before printing	列印前更新功能變數
+	Use the Insert key to switch overtype on and off	使用 Insert 鍵切換取代模式
+	Whole document	整份文件
+	This section	本節
+	Selected text	選取的文字
+	Fill	填滿
+	Setting:	設定：
+	3-D	立體
+	Custom	自訂
+	Style:	樣式：
+	Dot dash	點虛線
+	Triple	三線
+	Between	段落之間
+	Borders and Shading	框線及網底
+	Tabs…	定位點…
+	Borders and Shading…	框線及網底…
+	Bottom Border	下框線
+	Bottom of Page	頁面底端
+	Bottom:	下：
+	Box	方框
+	Breaks	分隔設定
+	Bring Forward	上移一層
+	Bullet Library	項目符號庫
+	Bullets	項目符號
+	Calendar	行事曆
+	Cancel	取消
+	Capitalize Each Word	每個單字字首大寫
+	Captions	標號
+	Cell Margins	儲存格邊界
+	Cell Size	儲存格大小
+	Cell\nMargins	儲存格邊界
+	Center	置中
+	Change	變更
+	Change Case	變更大小寫
+	Change List Level	變更清單階層
+	Change Picture	變更圖片
+	Change Shape	變更圖案
+	Changes	變更
+	Character Position	字元位置
+	Character Scale	字元縮放
+	Character Shading	字元網底
+	Character Spacing	字元間距
+	Character Border	字元邊框
+	Characters (no spaces)	字元數（不含空格）
+	Characters (with spaces)	字元數（含空格）
+	Chart	圖表
+	Check Accessibility	檢查協助工具
+	Check Compatibility	檢查相容性
+	Check for Errors	檢查錯誤
+	Check Spelling as You Type	輸入時檢查拼字
+	Check\nAccessibility	檢查協助工具
+	Citation Style	引文樣式
+	Citations & Bibliography	引文與參考書目
+	Clear	清除
+	Clear All Formatting	清除所有格式設定
+	Clipboard	剪貼簿
+	Clipboard Pane	剪貼簿窗格
+	Clipboard Items	剪貼簿項目
+	Paste Clipboard Item	貼上剪貼簿項目
+	Paste All	全部貼上
+	Delete Clipboard Item	刪除剪貼簿項目
+	Clear All	全部清除
+	Click an item to paste it.	按一下項目即可貼上。
+	Nothing collected yet. Items you copy or cut appear here.	尚無內容。複製或剪下的項目會顯示在這裡。
+	(picture or object)	（圖片或物件）
+	Close	關閉
+	Close Header and Footer	關閉頁首及頁尾
+	Collapse Selection	摺疊選取範圍
+	Color	色彩
+	Color:	色彩：
+	Colors	色彩
+	Column	欄
+	Column Break	分欄符號
+	Columns	欄
+	Combine	合併
+	Commands	命令
+	Comment	註解
+	Comments	註解
+	Comments Pane	註解窗格
+	Community\nDiscord	社群\nDiscord
+	Compact	緊密
+	Compare	比較
+	Compress Pictures	壓縮圖片
+	Continuous	接續本頁
+	Convert	轉換
+	Convert Text to Table	文字轉換為表格
+	Convert Text to Table…	文字轉換為表格…
+	Convert to Text	轉換為文字
+	Copy	複製
+	Copy Formatting	複製格式
+	Corrections	校正
+	Count words in text boxes and notes	統計文字方塊、註腳和章節附註中的字數
+	Couldn't download {name}: {error}	無法下載 {name}：{error}
+	Cover Page	封面頁
+	Create	建立
+	Create a Style	建立樣式
+	Create an interactive outline of your document.\n\nIt's a great way to keep track of where you are or quickly move your content around.\n\nTo get started, go to the Home tab and apply Heading styles to the headings in your document.	為文件建立互動式大綱。\n\n用它可以隨時掌握目前位置，或快速移動內容。\n\n若要開始使用，請前往「常用」索引標籤，為文件中的標題套用標題樣式。
+	Create New Style	建立新樣式
+	Crop	裁剪
+	Cross-reference	交互參照
+	Current Position	目前位置
+	Current style: {style}	目前樣式：{style}
+	Custom Margins…	自訂邊界…
+	Custom Watermark	自訂浮水印
+	Custom Watermark…	自訂浮水印…
+	Customize Quick Access Toolbar	自訂快速存取工具列
+	Cut	剪下
+	Dark Mode	深色模式
+	Dashed	虛線
+	Data	資料
+	Date & Time	日期及時間
+	Decrease Font Size	縮小字型大小
+	Decrease Indent	減少縮排
+	Default	預設
+	Define New Bullet	定義新的項目符號
+	Define New Number Format	定義新的編號格式
+	Delete	刪除
+	Delete Cells	刪除儲存格
+	Delete Columns	刪除欄
+	Delete Comment	刪除註解
+	Delete Next Word	刪除下一個單字
+	Delete Previous Word	刪除上一個單字
+	Delete Rows	刪除列
+	Delete Style	刪除樣式
+	Delete Table	刪除表格
+	Design	設計
+	To open Word documents with WordCraft by default: select one in Finder, choose File › Get Info, pick WordCraft under Open with, then click Change All.	若要預設以 WordCraft 開啟 Word 文件：在 Finder 中選取一份文件，選擇「檔案 › 取得資訊」，在「打開檔案的應用程式」中選擇 WordCraft，然後按一下「全部更改」。
+	WordCraft is now the default app for Word documents.	WordCraft 現在是 Word 文件的預設應用程式。
+	development build	開發版本
+	Diagonal	斜向
+	Diamond	菱形
+	Dictate	聽寫
+	Different First Page	首頁不同
+	Different Odd & Even Pages	奇偶頁不同
+	Discord	Discord
+	Discord community	Discord 社群
+	Display	顯示
+	Display for Review	顯示以供檢閱
+	Distribute Columns	平均分配欄寬
+	Distribute Rows	平均分配列高
+	Distributed	分散對齊
+	Do Not Show in TOC	不在目錄中顯示
+	Do you want to save changes to {name}?	是否儲存對 {name} 的變更？
+	Don't Save	不儲存
+	Document End	文件結尾
+	Document Formatting	文件格式設定
+	Document Property	文件摘要資訊
+	Document Start	文件開頭
+	Document Text	文件文字
+	Document Title	文件標題
+	Documents you open will show up here.	開啟過的文件會顯示在這裡。
+	Dot-dash	點虛線
+	Dotted	點線
+	Double	雙線
+	Double Spacing	兩倍行高
+	Double Strikethrough	雙刪除線
+	Double Underline	雙底線
+	Down	下
+	Draft	草稿
+	Draw	繪圖
+	Drawing Tools	繪圖工具
+	Drawing\nCanvas	繪圖畫布
+	Drop Cap	首字放大
+	Edit Footer	編輯頁尾
+	Edit Header	編輯頁首
+	Edit Recipient List	編輯收件者清單
+	Edit\nRecipient List	編輯收件者清單
+	Edited	已編輯
+	Editing	編輯
+	Editing endnote	正在編輯章節附註
+	Editing footnote	正在編輯註腳
+	Editing header/footer	正在編輯頁首/頁尾
+	Editing — edit the document directly	編輯 — 直接編輯文件
+	Editor	編輯器
+	Effects	效果
+	Emboss	浮凸
+	Encrypt with Password	以密碼加密
+	English (United States)	英文（美國）
+	Engrave	陰刻
+	Enter page number:	輸入頁碼：
+	Envelopes	信封
+	Equation	方程式
+	Eraser	橡皮擦
+	Even Page	偶數頁
+	Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel.	每個命令都可供指令碼和 AI 代理程式使用：執行 `wordcraft-cli mcp` 啟動 MCP 伺服器，或以 `--control <port>` 啟動應用程式以開啟 JSON 控制通道。
+	Export	匯出
+	Export a copy to share (PDF, Word document)	匯出副本以共用（PDF、Word 文件）
+	Export Page as PNG	將頁面匯出為 PNG
+	Export PDF	匯出 PDF
+	Exported {path}	已匯出 {path}
+	Extend Selection	擴大選取範圍
+	Extend Selection by Units	按單位擴大選取範圍
+	Field	功能變數
+	File	檔案
+	Find	尋找
+	Find and Replace	尋找及取代
+	Find Next	尋找下一個
+	Find Previous	尋找上一個
+	Find Recipient	尋找收件者
+	Find what:	尋找目標：
+	Finish	完成
+	Finish & Merge	完成與合併
+	Finish &\nMerge	完成與合併
+	First Column	第一欄
+	First commit	首次提交
+	First line:	第一行：
+	Fixed Column Width	固定欄寬
+	Focus	專注
+	Full Screen View	全螢幕檢視
+	Show the ribbon	顯示功能區
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	舊功能表鍵: Alt, {keys}。繼續輸入，或按 Esc 取消。
+	Font	字型
+	Font Color	字型色彩
+	Font color:	字型色彩：
+	Font Dialog	字型對話方塊
+	Font Size	字型大小
+	Font:	字型：
+	Fonts	字型
+	Footer	頁尾
+	Footnote and Endnote	註腳及章節附註
+	Footnotes	註腳
+	Format	格式
+	Format Page Numbers	頁碼格式
+	Format Page Numbers…	頁碼格式…
+	Format Painter	複製格式
+	Formatting at Selection	選取範圍的格式
+	Formula	公式
+	General	一般
+	Go To	移至
+	Go to	移至
+	Go To (⌘⌥G)	移至 (⌘⌥G)
+	Grab bag	隨機展示
+	Greeting Line	問候語
+	Greeting\nLine	問候語
+	Gridlines	格線
+	Group	群組
+	Grow Font 1 Point	字型放大 1 點
+	Hanging Indent	首行凸排
+	Header	頁首
+	Header & Footer	頁首及頁尾
+	Header Row	標題列
+	Header/Footer Position	頁首/頁尾位置
+	Heading 1	標題 1
+	Heading 2	標題 2
+	Heading 3	標題 3
+	Headings	標題
+	Heart	心形
+	Help	說明
+	Hidden	隱藏
+	Highlight Merge Fields	醒目提示合併欄位
+	Highlight\nMerge Fields	醒目提示合併欄位
+	Highlighter	螢光筆
+	Home	常用
+	Horizontal	水平
+	Horizontal Line	水平線
+	Hyphenation	斷字
+	Icons	圖示
+	Ignore All	全部略過
+	Illustrations	圖例
+	Immersive	沉浸式
+	Immersive Reader	沉浸式閱讀程式
+	Immersive\nReader	沉浸式閱讀程式
+	Increase Font Size	放大字型
+	Increase Indent	增加縮排
+	Indent	縮排
+	Indentation	縮排
+	Indents	縮排
+	Index	索引
+	Info	資訊
+	Ink to\nMath	筆跡轉數學公式
+	Ink to\nShape	筆跡轉圖形
+	Ink\nReplay	筆跡重播
+	Insert	插入
+	Insert Above	插入上方列
+	Insert Below	插入下方列
+	Insert Caption	插入標號
+	Insert Caption…	插入標號…
+	Insert Citation	插入引文
+	Insert Endnote	插入章節附註
+	Insert Footnote	插入註腳
+	Insert Hyperlink	插入超連結
+	Insert Index	插入索引
+	Insert Left	插入左方欄
+	Insert Merge Field	插入合併欄位
+	Insert Merge\nField	插入合併欄位
+	Insert Right	插入右方欄
+	Insert Shapes	插入圖案
+	Insert Table	插入表格
+	Insert Table of Authorities	插入引文目錄
+	Insert Table of Figures	插入圖表目錄
+	Insert Table…	插入表格…
+	Insert\nAbove	插入上方列
+	Insert\nCaption	插入標號
+	Insert\nCitation	插入引文
+	Insert\nFootnote	插入註腳
+	Inside Borders	內框線
+	Inspect Document	檢查文件
+	Interface language:	介面語言：
+	Italic	斜體
+	Join the ArtCraft community on Discord	加入 Discord 上的 ArtCraft 社群
+	Join us on Discord: discord.gg/artcraft	在 Discord 上加入我們：discord.gg/artcraft
+	Justify	左右對齊
+	Keep Lines Together	段落中不分頁
+	Keep lines together	段落中不分頁
+	Keep Text Only	只保留文字
+	Keep with Next	與下段同頁
+	Keep with next	與下段同頁
+	Labels	標籤
+	Landscape	橫向
+	Language	語言
+	{language} (no dictionary)	{language}（無字典）
+	No spelling dictionary for {language} is installed, so it isn't checked. WordCraft looks for the Hunspell dictionary {name} in the WORDCRAFT_DICTIONARIES folder and in the usual system locations.	未安裝{language}的拼字字典，因此不會檢查該語言。WordCraft 會在 WORDCRAFT_DICTIONARIES 資料夾和常見的系統位置尋找 Hunspell 字典 {name}。
+	Lasso	套索
+	Last Column	最後一欄
+	Last commit	最近提交
+	Layout	版面配置
+	Layout Summary	版面配置摘要
+	Left	左
+	Left Border	左框線
+	Left:	左：
+	Letter	信函
+	Line	直線
+	Line and Page Breaks	分行與分頁設定
+	Line and Paragraph Spacing	行距與段落間距
+	Line Break	換行符號
+	Line delta	行數變化
+	Line End	行尾
+	Line Numbers	行號
+	Line Spacing	行距
+	Line Spacing Options…	行距選項…
+	Line spacing:	行距：
+	Line Start	行首
+	Lines	行數
+	Lines added	新增行數
+	Lines deleted	刪除行數
+	Link	連結
+	Link to Previous	連結到前一節
+	Links	連結
+	Location: {path}	位置：{path}
+	lowercase	全部小寫
+	Macros	巨集
+	Mailings	郵件
+	Manage Sources	管理來源
+	Many pages	多頁
+	Margins	邊界
+	Mark Citation	標記引文
+	Mark Entry	標記項目
+	Mark\nCitation	標記引文
+	Mark\nEntry	標記項目
+	Markdown (*.md)	Markdown (*.md)
+	Match case	大小寫須相符
+	Match Fields	對應欄位
+	Matrix	矩陣
+	Merge	合併
+	Merge Cells	合併儲存格
+	Merge Formatting	合併格式設定
+	Merged PRs	已合併的 PR
+	Mirrored	左右對稱
+	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	MIT OR Apache-2.0。著作權所有 (c) 2026 ArtCraft 團隊及 WordCraft 貢獻者。
+	Moderate	中等
+	Modify Style	修改樣式
+	Modify…	修改…
+	Move or Resize	移動或調整大小
+	Multilevel List	多層次清單
+	Multilevel List Library	多層次清單庫
+	Article I.	第 I 條
+	Chapter 1	第 1 章
+	Section 1.01	第 1.01 節
+	Multiple Pages	多頁
+	Name (A–Z)	名稱（A–Z）
+	Name:	名稱：
+	Narrow  {size} all	窄  四周 {size}
+	Navigation	導覽
+	Navigation Pane	功能窗格
+	New	新增
+	New Comment	新增註解
+	New from Template	從範本新增
+	New Paragraph	新段落
+	New Style…	新增樣式…
+	New Window	開新視窗
+	New\nComment	新增註解
+	New\nWindow	開新視窗
+	Next	下一個
+	Next Change	下一個變更
+	Next Comment	下一個註解
+	Next Footnote	下一個註腳
+	Next Page	下一頁
+	Next Record	下一筆記錄
+	Next Section	下一節
+	No Border	無框線
+	No Color	無色彩
+	No contributor data was built into this copy.	此版本未內建貢獻者資料。
+	No Markup	無標記
+	No model credits were built into this copy.	此版本未內建模型致謝資訊。
+	No Paragraph Space	無段落間距
+	Nonbreaking Hyphen	不分行連字號
+	Nonbreaking Space	不分行空格
+	None	無
+	Normal  {size} all	一般  四周 {size}
+	Normal Style	內文樣式
+	Not available right now	目前無法使用
+	Not saved	未儲存
+	Not saved yet	尚未儲存
+	Nudge	微移
+	Number of columns:	欄數：
+	Number of rows:	列數：
+	Numbering	編號
+	Object	物件
+	Odd Page	奇數頁
+	Office 2003 Default	Office 2003 預設值
+	OK	確定
+	One	一欄
+	One Page	單頁
+	Only web (http, https) and email (mailto) links can be followed	只能開啟網頁（http、https）和電子郵件（mailto）連結
+	Open	開啟
+	OpenDocument Text (*.odt)	OpenDocument 文字 (*.odt)
+	Optional Hyphen	選擇性連字號
+	Copyright Sign	著作權符號
+	Ellipsis	刪節號
+	Em Dash	長破折號
+	Insert Date Field	插入日期欄位
+	Insert Page Field	插入頁碼欄位
+	Insert Time Field	插入時間欄位
+	Registered Sign	註冊商標符號
+	Reset Character Formatting	重設字元格式
+	Reset Paragraph Formatting	重設段落格式
+	Trademark Sign	商標符號
+	Options	選項
+	Orientation	方向
+	Outline	大綱
+	Outline Level	大綱階層
+	Outside Borders	外框線
+	Oval	橢圓
+	Page	頁面
+	Page Background	頁面背景
+	Page Borders	頁面框線
+	Page Break	分頁符號
+	Page Break Before	段落前分頁
+	Page break before	段落前分頁
+	Page Breaks	分頁符號
+	Page Color	頁面色彩
+	Page Down	下一頁
+	Page image (*.png)	頁面影像 (*.png)
+	Page Movement	翻頁方式
+	Page Number	頁碼
+	Page Setup	版面設定
+	Page Up	上一頁
+	Page Width	頁寬
+	Page width	頁寬
+	Page X of Y	第 X 頁，共 Y 頁
+	Page {page}	第 {page} 頁
+	Page {page} of {pages}	第 {page} 頁，共 {pages} 頁
+	Page\nBorders	頁面框線
+	Page\nColor	頁面色彩
+	Page\nNumber	頁碼
+	Pages	頁面
+	Paragraph	段落
+	Paragraph Details	段落詳細資料
+	Paragraph Down	下移一段
+	Paragraph Settings	段落設定
+	Paragraph Spacing	段落間距
+	Paragraph Up	上移一段
+	Paragraphs	段落數
+	Paste	貼上
+	Paste (⌘V)	貼上 (⌘V)
+	Paste Formatting	貼上格式
+	Paste: Keep Text Only	貼上：只保留文字
+	Paste: Merge Formatting	貼上：合併格式設定
+	PDF document (*.pdf)	PDF 文件 (*.pdf)
+	Pen	畫筆
+	Pencil	鉛筆
+	Picture Border	圖片框線
+	Picture Format	圖片格式
+	Picture Styles	圖片樣式
+	Pictures	圖片
+	Plain text (*.txt)	純文字 (*.txt)
+	Portrait	直向
+	Position	位置
+	Preview Results	預覽結果
+	Preview\nResults	預覽結果
+	Previous	上一個
+	Previous Change	上一個變更
+	Previous Comment	上一個註解
+	Previous Record	上一筆記錄
+	Previous Section	上一節
+	Print	列印
+	Print Layout	整頁模式
+	Print\nLayout	整頁模式
+	Proofing	校訂
+	Proofing Issues	校訂問題
+	Properties	內容
+	Protect	保護
+	Protect Document	保護文件
+	Quick Access Toolbar	快速存取工具列
+	Quick Parts	快速組件
+	Quick Tables	快速表格
+	Read Aloud	大聲朗讀
+	Read Mode	閱讀模式
+	Read\nAloud	大聲朗讀
+	Read\nMode	閱讀模式
+	Recent	最近
+	Record Macro	錄製巨集
+	Recover Unsaved Documents	復原未儲存的文件
+	Rectangle	矩形
+	Redo	取消復原
+	Reduce Hanging Indent	減少首行凸排
+	References	參考資料
+	Reject	拒絕
+	Reject All Changes	拒絕所有變更
+	Reject Change	拒絕變更
+	Relaxed	寬鬆
+	Remove Background	移除背景
+	Remove Footer	移除頁尾
+	Remove Header	移除頁首
+	Remove Hyperlink	移除超連結
+	Remove Space After Paragraph	移除段落後的間距
+	Remove Table of Contents	移除目錄
+	Remove Watermark	移除浮水印
+	Repeat	重複
+	Repeat Header Rows	重複標題列
+	Replace	取代
+	Replace All	全部取代
+	Replace Document Text	取代文件文字
+	Replace with:	取代為：
+	Replay	重播
+	Reply	回覆
+	Report	報告
+	Research	研究
+	Researcher	研究工具
+	Reset Picture	重設圖片
+	Resolve	解決
+	Resolved	已解決
+	Restart at 1	從 1 重新開始
+	Restart Each Page	每頁重新編號
+	Restart Each Section	每節重新編號
+	Restrict Editing	限制編輯
+	Restrict\nEditing	限制編輯
+	Results	結果
+	Reverse the order	反轉順序
+	Review	校閱
+	Reviewing	校閱
+	Reviewing Pane	校閱窗格
+	Reviewing — edits become suggestions	校閱 — 編輯內容會成為修訂建議
+	Rich Text Format (*.rtf)	RTF 格式 (*.rtf)
+	Right	右
+	Right Border	右框線
+	Right-to-Left Text Direction	從右至左文字方向
+	Left-to-Right Text Direction	從左至右文字方向
+	Right:	右：
+	Rotate	旋轉
+	Rounded Rectangle	圓角矩形
+	Rows & Columns	列與欄
+	Ruler	尺規
+	Rules	規則
+	Résumé	履歷
+	Save	儲存
+	Save a copy in another format. Printing goes through a PDF you can print from any viewer.	以其他格式儲存副本。列印時會先產生 PDF，可在任何檢視器中列印。
+	Save As	另存新檔
+	Save as Template	另存為範本
+	Saved	已儲存
+	Search Commands	搜尋命令
+	Search commands and help	搜尋命令和說明
+	Search document	搜尋文件
+	Section Breaks	分節符號
+	Section Properties	節屬性
+	Sections	節數
+	Select	選取
+	Select All	全選
+	Select Cell	選取儲存格
+	Select Line	選取行
+	Select Objects	選取物件
+	Select Paragraph	選取段落
+	Select Range	選取範圍
+	Select Recipients	選取收件者
+	Select Row	選取列
+	Select Sentence	選取句子
+	Select Table	選取表格
+	Select Text	選取文字
+	Select Text with Similar Formatting	選取格式相似的文字
+	Select Word	選取單字
+	Select\nRecipients	選取收件者
+	Selection	選取範圍
+	Selection Pane	選取窗格
+	Send Backward	下移一層
+	Sentence case.	句首字母大寫。
+	Set as Default	設定為預設值
+	Set Caret	設定游標
+	Set Character Formatting	設定字元格式
+	Set Numbering Value	設定編號值
+	Set Paragraph Formatting	設定段落格式
+	Shading	網底
+	Shadow	陰影
+	Shape Fill	圖案填滿
+	Shape Format	圖形格式
+	Shape Outline	圖案外框
+	Shape Styles	圖案樣式
+	Shapes	圖案
+	Share	共用
+	Shift+Tab	Shift+Tab
+	Show	顯示
+	Show all formatting marks	顯示所有格式化標記
+	Show Comments	顯示註解
+	Show Markup	顯示標記
+	Show Notes	顯示附註
+	Show only comments and formatting in balloons	僅在註解方塊中顯示註解和格式設定
+	Show revisions in balloons	在註解方塊中顯示修訂
+	Show rulers	顯示尺規
+	Animation	動畫
+	Animate the caret (it glides and fades)	為游標加上動畫（平滑移動並淡入淡出）
+	On: the caret glides to its new place when you type or use the arrow keys, and its blink fades. Off: it jumps and blinks on and off.	開啟：輸入或使用方向鍵時，游標會平滑移動到新位置，閃爍時淡入淡出。關閉：游標直接跳到新位置，閃爍時直接顯示和隱藏。
+	Show the community button in the title bar	在標題列中顯示社群按鈕
+	Show/Hide ¶	顯示/隱藏 ¶
+	Show\nComments	顯示註解
+	Shrink Font 1 Point	字型縮小 1 點
+	Side to Side	並排
+	Side\nto Side	並排
+	Signature Line	簽名欄
+	Single	單線
+	Single Spacing	單行間距
+	Size	大小
+	Size (pt):	大小（點）：
+	Size:	大小：
+	Small Caps	小型大寫字
+	Small caps	小型大寫字
+	SmartArt	SmartArt
+	Sort	排序
+	Source code: github.com/storytold/wordcraft	原始碼：github.com/storytold/wordcraft
+	Space	空格
+	Space before/after:	段落前/後間距：
+	Spacing	間距
+	Spacing (pt):	間距（點）：
+	Kerning for fonts:	字型的字距調整：
+	Points and above	點及以上
+	Speech	語音
+	Spelling & Grammar	拼字及文法
+	Spelling &\nGrammar	拼字及文法
+	Spelling Suggestions	拼字建議
+	Split	分割
+	Split Cells	分割儲存格
+	Split Table	分割表格
+	Spreadsheet Table	試算表
+	Standard Colors	標準色彩
+	Star	星形
+	Start at:	起始編號：
+	Start Mail Merge	啟動合併列印
+	Start Mail\nMerge	啟動合併列印
+	Statistics	統計資料
+	Status Bar	狀態列
+	Strikethrough	刪除線
+	Studio cover	工作室封面
+	Studio handbook (sample)	工作室手冊（範例）
+	Style	樣式
+	Style based on:	樣式依據：
+	Style Set	樣式集
+	Style: {style}	樣式：{style}
+	Styles	樣式
+	Styles Pane	樣式窗格
+	Subscript	下標
+	Superscript	上標
+	Switch Modes	切換模式
+	Switch\nModes	切換模式
+	Symbol	符號
+	Symbols	符號
+	Synonyms	同義字
+	Tab	定位字元
+	Tab character	定位字元
+	Table	表格
+	Table Column Width	表格欄寬
+	Table Design	表格設計
+	Table Layout	表格版面配置
+	Table of Authorities	引文目錄
+	Table of Contents	目錄
+	Table of\nContents	目錄
+	Table Properties	表格內容
+	Table Properties…	表格內容…
+	Table Row Height	表格列高
+	Table Style Options	表格樣式選項
+	Table Styles	表格樣式
+	Tables	表格
+	Tabs	定位點
+	Tabular List	表格式清單
+	Text	文字
+	Text Box	文字方塊
+	Text Direction	文字方向
+	Text Effects	文字效果
+	Text Effects and Typography	文字效果與印刷樣式
+	Text from File	檔案中的文字
+	Text Highlight Color	文字醒目提示色彩
+	Text indent at:	文字縮排位置：
+	Text to display:	要顯示的文字：
+	Text Wrapping	文繞圖
+	Text:	文字：
+	Text\nBox	文字方塊
+	Text\nDirection	文字方向
+	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	該格式無法保留全部內容，因此文件仍保持開啟。請將其儲存為 Word 文件 (.docx) 後再繼續。
+	The new style takes the formatting of the current paragraph.	新樣式會採用目前段落的格式。
+	Theme Colors	佈景主題色彩
+	Theme Fonts	佈景主題字型
+	Theme List	佈景主題清單
+	Themes	佈景主題
+	Thesaurus	同義字典
+	Thick	粗線
+	Three	三欄
+	Tight	緊密
+	Top Border	上框線
+	Top Margin	上邊界
+	Top of Page	頁面頂端
+	Top:	上：
+	Total Row	合計列
+	Track Changes	追蹤修訂
+	Track Changes Options	追蹤修訂選項
+	Track Changes: On	追蹤修訂：開啟
+	Track formatting	追蹤格式設定
+	Tracking	追蹤
+	Translate	翻譯
+	Transparency	透明度
+	Triangle	三角形
+	Two	二欄
+	Type a command, e.g. "insert table"	輸入命令，例如 "insert table"
+	Type Text	輸入文字
+	Underline	底線
+	Underline Words Only	只在文字下加底線
+	Undo	復原
+	Undo {action}	復原{action}
+	Undo Actions	復原多項動作
+	Undo History	復原記錄
+	Undo 1 Action	復原 1 項動作
+	Undo {n} Actions	復原 {n} 項動作
+	Ungroup	取消群組
+	Up	上
+	Update Field	更新功能變數
+	Update Index	更新索引
+	Update Style to Match Selection	更新樣式以符合選取範圍
+	Update Table	更新目錄
+	Update Table of Figures	更新圖表目錄
+	Update to Match	更新以符合
+	Update to Match Selection	更新以符合選取範圍
+	UPPERCASE	全部大寫
+	User Name	使用者名稱
+	User name:	使用者名稱：
+	Version History	版本歷程記錄
+	Version {version} ({build})	版本 {version}（{build}）
+	Vertical	垂直
+	Vertical Alignment	垂直對齊方式
+	View	檢視
+	View Gridlines	檢視格線
+	View State	檢視狀態
+	Views	檢視
+	Voice	語音
+	Watermark	浮水印
+	Wave	波浪線
+	Web Layout	Web 版面配置
+	Web page (*.html)	網頁 (*.html)
+	Web\nLayout	Web 版面配置
+	Whole page	整頁
+	Whole words	全字拼寫須相符
+	Wide	寬
+	Widow/Orphan Control	遺留字串控制
+	Widow/Orphan control	遺留字串控制
+	Window	視窗
+	Word Count	字數統計
+	Word document (*.docx)	Word 文件 (*.docx)
+	Word XML Document (*.xml)	Word XML 文件 (*.xml)
+	Word 2003 XML Document (*.xml)	Word 2003 XML 文件 (*.xml)
+	Word Left	左移一個單字
+	Word Right	右移一個單字
+	WordArt	文字藝術師
+	WordCraft	WordCraft
+	Words	字數
+	Words only	僅文字
+	Wrap Text	文繞圖
+	Wrap\nText	文繞圖
+	Write & Insert Fields	書寫與插入欄位
+	Write a reply	撰寫回覆
+	Zoom	縮放
+	Zoom In	放大
+	Zoom Out	縮小
+	{group} settings	{group}設定
+	{key}+Click to follow link	按住 {key} 並按一下以追蹤連結
+	Browse…	瀏覽…
+	{words} words	{words} 個字
+	{selected} of {words} words	{selected}/{words} 個字
+	Direction:	方向：
+	Right-to-left	從右至左
+	Left-to-right	從左至右
+# Zotero integration
+	Zotero	Zotero
+	Citations	引文
+	Document	文件
+	Add/Edit\nCitation	新增/編輯\n引文
+	Add\nNote	新增\n筆記
+	Add/Edit\nBibliography	新增/編輯\n參考書目
+	Refresh	重新整理
+	Document\nPreferences	文件\n偏好設定
+	Unlink\nCitations	取消連結\n引文
+	Waiting for Zotero…	正在等候 Zotero…
+	Zotero: done	Zotero：完成
+	Zotero: cancelled	Zotero：已取消
+	Yes	是
+	No	否
+	Move Past Citation	移到引文之後
+	Move Past\nCitation	移到\n引文之後
+	Next Sentence	下一句
+	Previous Sentence	上一句
+	Next sentence	下一句
+	Previous sentence	上一句
+	Play/Pause	播放/暫停
+	Read Aloud Status	朗讀狀態
+	Reading Speed	朗讀速度
+	Skip Citations and Bibliography	略過引文和參考文獻
+	Skip citations & bibliography	略過引文和參考文獻
+	Stop Reading	停止朗讀
+	Don't read Zotero, Mendeley or EndNote citations and bibliographies	不朗讀 Zotero、Mendeley 或 EndNote 的引文和參考文獻
+	Play	播放
+	Pause	暫停
+	Stop	停止
+	Sentence	句
+	Paused	已暫停
+	Finished	已完成
+	Stopped	已停止
+	Speed	速度
+	Normal speed	正常速度
+	Your changes will be lost if you don't save them.	如果不儲存，您的變更將會遺失。
+	Scroll ribbon left	向左捲動功能區
+	Scroll ribbon right	向右捲動功能區
+# Equations.
+	Change Structure	變更結構
+	Change to Display	變更為顯示方程式
+	Change to Inline	變更為行內方程式
+	Conversions	轉換
+	Delete Back in Equation	在方程式中向前刪除
+	Delete in Equation	在方程式中刪除
+	Edit Equation	編輯方程式
+	Enter in Equation	在方程式中按 Enter
+	Equation Gallery	方程式庫
+	Equation Info	方程式資訊
+	Equation Number	方程式編號
+	Input Format	輸入格式
+	Insert Structure	插入結構
+	Insert Symbol	插入符號
+	Justification	對齊方式
+	Leave Equation	結束方程式
+	Move in Equation	在方程式中移動
+	Normal Text	一般文字
+	Set Equation	設定方程式
+	Structure Actions	結構操作
+	Structures	結構
+	Tools	工具
+	Type in Equation	在方程式中輸入
+	Inline	行內
+	Number	編號
+	Close Equation	關閉方程式
+	Insert New Equation	插入新方程式
+	Built-In	內建
+	Professional	二維格式
+	Linear	線性格式
+	Fraction	分數
+	Script	上下標
+	Radical	根式
+	Integral	積分
+	Large\nOperator	大型\n運算子
+	Bracket	括號
+	Function	函數
+	Accent	重音符號
+	Limit and\nLog	極限與\n對數
+	Operator	運算子
+	Equation Options	方程式選項
+	All symbol sets	所有符號集
+	Send the document straight to the system print dialog, or save a copy in another format below.	將文件直接傳送到系統列印對話方塊，或在下方以其他格式儲存副本。
+	Or save a copy in another format:	或以其他格式儲存副本：
+	Opening print dialog…	正在開啟列印對話方塊…
+	Print failed: {error}	列印失敗：{error}
+	Couldn't open {path}: {error}	無法開啟 {path}：{error}
+	Column Selection	矩形選取
+	Style Inspector	樣式檢查器
+	Inspect Styles at Selection	檢查選取範圍的樣式
+	Clear Formatting Level	清除格式層級
+	Characters	字元
+	Direct formatting	直接格式設定
+	Reset to Normal	重設為內文
+	Clear Paragraph Formatting	清除段落格式設定
+	Clear Character Style	清除字元樣式
+	Clear Character Formatting	清除字元格式設定
+	Paste Special	選擇性貼上
+	Paste Special…	選擇性貼上…
+	Paste as:	貼上為：
+	The clipboard is empty.	剪貼簿是空的。
+	Formatted Text	格式化文字
+	Rich Text Format (RTF)	RTF 格式
+	HTML Format	HTML 格式
+	Unformatted Text	純文字
+	Result	結果
+	Keeps the fonts and formatting of the copied text.	保留所複製文字的字型和格式。
+	Reads the clipboard's rich text and keeps its formatting.	讀取剪貼簿中的 RTF 內容並保留其格式。
+	Reads the clipboard's web content and keeps its formatting.	讀取剪貼簿中的網頁內容並保留其格式。
+	Picture	圖片
+	Pastes the clipboard's picture.	貼上剪貼簿中的圖片。
+	Drops all formatting and pastes plain text.	移除所有格式，貼上純文字。
+	Advanced Find	進階尋找
+	Advanced Find…	進階尋找…
+	Go To…	移至…
+	Reading Highlight	醒目提示尋找結果
+	New Table Style	新增表格樣式
+	Modify Table Style	修改表格樣式
+	New Table Style…	新增表格樣式…
+	Modify Table Style…	修改表格樣式…
+	Apply formatting to:	將格式套用至：
+	Whole Table	整個表格
+	Fill color:	填滿色彩：
+	{count} items highlighted	已醒目提示 {count} 個項目
+	{n} pt	{n} 點
+	Not {name}	非{name}
+	Level {n}	第 {n} 階
+	Body Text	本文
+	{n} lines	{n} 行
+	At least {n}	最小行高 {n}
+	Exactly {n}	固定行高 {n}
+	Centered	置中
+	Character spacing	字元間距
+	Don't add space between paragraphs of the same style	相同樣式的段落之間不新增間距
+	Don't hyphenate	不斷字
+	Double strikethrough	雙刪除線
+	Drop cap	首字放大
+	First line	第一行
+	Font color	字型色彩
+	Highlight	醒目提示
+	Justified	左右對齊
+	Left indent	左縮排
+	Line spacing	行距
+	Outline level	大綱階層
+	Raised/lowered	上移/下移
+	Right indent	右縮排
+	Scale	縮放
+	Space after	段落後間距
+	Space before	段落前間距
+	Suppress line numbers	隱藏行號
+	Underline color	底線色彩
+	Letters	信函
+	E-mail Messages	電子郵件
+	Directory	目錄
+	Normal Word Document	一般文件
+	If…Then…Else…	如果…則…否則…
+	If…Then…Else	如果…則…否則
+	Merge Record #	合併記錄編號
+	Skip Record If…	略過記錄條件…
+	Skip Record If	略過記錄條件
+	Equals:	等於：
+	Then insert:	則插入：
+	Otherwise insert:	否則插入：
+	Courtesy Title	稱謂
+	First Name	名字
+	Last Name	姓氏
+	Company	公司
+	Address	地址
+	City	城市
+	State	省/州
+	Postal Code	郵遞區號
+	Country	國家/地區
+	(not matched)	（未對應）
+	Leave a recipient out of the merge when a field has this value.	當某個欄位為此值時，在合併中略過該收件者。
+	Insert one text or another, depending on a field's value.	依據欄位的值插入不同的文字。
+	Select recipients first to match their fields.	請先選取收件者，才能對應其欄位。
+	The recipient-list field that fills each part of an address block and greeting line.	地址區塊和問候語的每個部分所使用的收件者清單欄位。
+	No errors found: every merge field is in the recipient list.	未發現錯誤：所有合併欄位都在收件者清單中。
+	These merge fields aren't in the recipient list:	以下合併欄位不在收件者清單中：
+	Add at least one field.	請至少新增一個欄位。
+	Add Field	新增欄位
+	Every field needs a name.	每個欄位都需要名稱。
+	Field name	欄位名稱
+	Field names must be different.	欄位名稱不可重複。
+	Fields:	欄位：
+	Field:	欄位：
+	Find:	尋找：
+	New Entry	新增項目
+	Recipient List	收件者清單
+	Recipients: {count}	收件者：{count}
+	Remove field	移除欄位
+	Remove recipient	移除收件者
+	Select recipients first to choose from their fields.	請先選取收件者，才能從其欄位中選擇。
+	Type a New List…	輸入新清單…
+	Type at least one recipient.	請至少輸入一位收件者。
+	Type the recipients, or load them from a file.	輸入收件者，或從檔案載入。
+	Use an Existing List…	使用現有清單…
+	Choose the sheet that holds the recipients.	選擇包含收件者的工作表。
+	First row of data contains column headers	資料第一列包含欄標題
+	Interface theme:	介面主題：
+	Interface\nTheme	介面主題
+	Interface Theme	介面主題
+	Light	淺色
+	Dark	深色
+	Use system setting	使用系統設定
+	A file dialog is already open.	已有一個檔案對話方塊開啟中。
+	Height:	高度：
+	Width:	寬度：
+	Row	列
+	Cell	儲存格
+	Preferred width:	慣用寬度：
+	Alignment:	對齊方式：
+	Indent from left:	左側縮排：
+	Specify height:	指定高度：
+	Exactly	固定
+	At least	最小
+	Allow row to break across pages	允許列跨頁中斷
+	Repeat as header row on each page	在每頁重複作為標題列
+	Vertical alignment:	垂直對齊方式：
+	Top	上
+	Bottom	下
+	Alt text	替代文字
+	Alt:	替代文字：
+	W:	寬：
+	H:	高：
+	Reset	重設
+	Reset Crop	重設裁剪
+	Insert a new equation (Alt+=)	插入新方程式 (Alt+=)
+	Leave the equation (Esc)	離開方程式 (Esc)
+	Preview	預覽
+	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+	Draw Ink	繪製筆跡
+	Erase Ink	擦除筆跡
+	Hide Ink	隱藏筆跡
+	Hide\nInk	隱藏\n筆跡
+	Pens	畫筆
+	Thickness	粗細
+
+# Columns, Symbol and Field dialogs (#321).
+	(All)	(全部)
+	(none)	(無)
+	(normal text)	(一般文字)
+	1/4 Em Space	1/4 全形空格
+	A mail merge field	合併列印欄位
+	A numbered sequence (figures, tables…)	編號序列（圖、表…）
+	A table of contents	目錄
+	Categories:	類別：
+	Character	字元
+	Character code:	字元代碼：
+	Col #:	欄號：
+	Copyright	著作權
+	Date and Time	日期和時間
+	Date formats:	日期格式：
+	Description:	描述：
+	Document Information	文件資訊
+	Double Closing Quote	右雙引號
+	Double Opening Quote	左雙引號
+	En Dash	短破折號
+	Em Space	全形空格
+	En Space	半形空格
+	Equal column width	欄寬相等
+	Field Codes	功能變數代碼
+	Field code:	功能變數代碼：
+	Field codes:	功能變數代碼：
+	Field name:	功能變數名稱：
+	Field names:	功能變數名稱清單：
+	Field properties	功能變數屬性
+	Field…	功能變數…
+	Format:	格式：
+	Hide Codes	隱藏代碼
+	Index and Tables	索引和目錄
+	Line between	分隔線
+	Links and References	連結和參照
+	Mail Merge	合併列印
+	More Columns…	其他欄…
+	More Symbols…	其他符號…
+	No-Width Non Break	無寬度不分行
+	No-Width Optional Break	無寬度選擇性分行
+	Paragraph Mark	段落標記
+	Pick a field from the list	請選擇功能變數
+	Preserve formatting during updates	更新時保留格式設定
+	Presets	預設集
+	Recently used symbols:	最近使用的符號：
+	Registered	註冊商標
+	Section Mark	章節符號
+	Sequence name:	序列名稱：
+	Shortcut key:	快速鍵：
+	Single Closing Quote	右單引號
+	Single Opening Quote	左單引號
+	Spacing:	間距：
+	Special Characters	特殊字元
+	Subset:	子集：
+	The time right now	目前的時間
+	When this document was first created	文件的建立日期
+	When this document was most recently printed	文件的上次列印日期
+	When this document was most recently saved	文件的上次儲存日期
+	The document has no bookmarks yet.	文件中還沒有書籤。
+	Who the document properties name as author	文件的作者
+	Name of the file this document is saved as	文件的檔案名稱
+	Title from the document properties	文件的標題
+	How many pages the whole document has	文件的頁數
+	How many pages this section has	本節的頁數
+	Number of the page the field sits on	目前的頁碼
+	Number of the section the field sits in	目前的節號
+	How many words the document holds	文件的字數
+	Page on which a bookmarked passage falls	書籤所在的頁碼
+	Copy of the text a bookmark marks	書籤的文字
+	This field has no options.	此功能變數沒有選項。
+	This font has no characters to show.	此字型沒有可顯示的字元。
+	This point forward	從這裡開始
+	The date it is today	今天的日期
+	Trademark	商標
+	Type the field's name and its switches, for example PAGE \\* roman.	輸入功能變數名稱及其參數，例如 PAGE \\* roman。
+	Width and spacing	寬度和間距
+	from Unicode (hex)	來自 Unicode（十六進位）
+	Shape Effects	圖案效果
+	Glow	光暈
+	Soft Edges	柔化邊緣
+	No Shadow	無陰影
+	No Glow	無光暈
+	No Soft Edges	無柔化邊緣
+	Glow Colors	光暈色彩
+	Weight	粗細
+	Shadow, glow and soft edges	陰影、光暈和柔化邊緣
+	Offset: Bottom Right	位移：右下
+	Offset: Bottom	位移：下
+	Offset: Bottom Left	位移：左下
+	Offset: Right	位移：右
+	Offset: Center	位移：置中
+	Offset: Left	位移：左
+	Offset: Top Right	位移：右上
+	Offset: Top	位移：上
+	Offset: Top Left	位移：左上
+	Manage Styles	管理樣式
+	Show or Hide Style	顯示或隱藏樣式
+	Manage Styles…	管理樣式…
+	Sort order:	排序方式：
+	As Recommended	依建議
+	Alphabetical	依字母順序
+	Font: {font}	字型：{font}
+	{size} pt	{size} 點
+	Color: {color}	色彩：{color}
+	Space before: {pt} pt	段落前間距：{pt} 點
+	Space after: {pt} pt	段落後間距：{pt} 點
+	Based on: {style}	根據：{style}
+	Paragraph style	段落樣式
+	Character style	字元樣式
+	Linked style (paragraph and character)	連結樣式（段落和字元）
+	Table style	表格樣式
+	Built-in style	內建樣式
+	Show in the Styles gallery	在樣式庫中顯示
+	Hide from style lists	從樣式清單中隱藏
+	Built-in styles can't be deleted.	無法刪除內建樣式。
+	Delete Table Style	刪除表格樣式
+	Password	密碼
+	Password:	密碼：
+	Confirm password:	確認密碼：
+	Encrypt with Password…	以密碼加密…
+	Change Password…	變更密碼…
+	Remove Password	移除密碼
+	A password is required to open this document.	開啟此文件需要密碼。
+	Anyone can open this document. Encrypt it with a password to keep it private.	任何人都可以開啟此文件。以密碼加密可保護其隱私。
+	Anyone who opens the document will need this password.	開啟文件的任何人都需要此密碼。
+	{name} is protected with a password.	{name} 受密碼保護。
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	密碼不正確。請檢查密碼（區分大小寫）後再試一次。
+	The document will be saved with a password. Save it to protect it.	文件將以密碼儲存。儲存文件以保護它。
+	The password is removed. Save the document to keep the change.	密碼已移除。儲存文件以保留此變更。
+	The passwords don't match.	兩次輸入的密碼不一致。
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	請妥善保管密碼：沒有密碼，任何人（包括 WordCraft）都無法開啟文件。兩個方塊都留空可移除密碼。
+
+# Interface text routed through translation (#313)
+	Align Top Left	靠上靠左對齊
+	Align Top Center	靠上置中對齊
+	Align Top Right	靠上靠右對齊
+	Align Center Left	垂直置中靠左對齊
+	Align Center	置中對齊
+	Align Center Right	垂直置中靠右對齊
+	Align Bottom Left	靠下靠左對齊
+	Align Bottom Center	靠下置中對齊
+	Align Bottom Right	靠下靠右對齊
+	{contributors} contributors · {commits} commits	{contributors} 位貢獻者 · {commits} 次提交
+	{cols}×{rows} Table	{cols}×{rows} 表格
+	AaBbYyZz	AaBbYyZz 中文
+	pt	點
+	cm	公分
+	mm	公釐
+	pi	派卡
+	Document1	文件1
+	Username	使用者名稱
+	Display name	顯示名稱
+	Real name	真實姓名
+	Name	名稱
+	PRs	PR
+	Commits	提交
+	First	首次
+	Last	最近
+	Model	模型
+	Version	版本
+	% of all commits	佔全部提交的百分比
+	Lines +/−	行數 +/−
+	Craft	工藝
+	Studio	工作室
+	Atelier	畫室
+	Darkroom	暗房
+	Gallery	畫廊
+	Sketchbook	素描本
+	Change Picture…	變更圖片…
+	Font…	字型…
+	Paragraph…	段落…
+	Link…	連結…
+	Size and Crop…	大小和裁剪…
+	Insert Columns to the Left	插入左方欄
+	Insert Columns to the Right	插入右方欄
+	Insert Rows Above	插入上方列
+	Insert Rows Below	插入下方列
+	Mon	週一
+	Tue	週二
+	Wed	週三
+	Sum	合計
+	North	北區
+	South	南區
+	West	西區
+	Total	總計
+
+# Table Layout › Draw (#308)
+	Draw\nTable	繪製\n表格
+	Rotation	旋轉角度
+	Rotation:	旋轉：
+	Rotate Right 90°	向右旋轉 90°
+	Rotate Left 90°	向左旋轉 90°
+	Flip Vertical	垂直翻轉
+	Flip Horizontal	水平翻轉
+	Move Paragraph Up	上移段落
+	Move Paragraph Down	下移段落
+	Promote	升級
+	Demote	降級
+	Go Back	返回上次編輯位置
+	Toggle Unicode Character	切換 Unicode 字元
+	Type Character Code	輸入字元碼
+	Toggle Field Codes	切換功能變數代碼
+	Edit Field Code	編輯功能變數代碼
+	Unlink Fields	取消功能變數連結
+	Lock Fields	鎖定功能變數
+	Unlock Fields	解除鎖定功能變數
+	Next Field	下一個功能變數
+	Previous Field	上一個功能變數
+	Selected Fields	選取的功能變數
+	Edit Field…	編輯功能變數…
+	Formatted	已設定格式
+	Deleted	已刪除
+	Interface size:	介面大小：
+	Auto ({percent}%)	自動 ({percent}%)
+	Makes the ribbon, menus and dialogs larger or smaller. Auto follows your system's display scaling; 100% is one screen pixel per point. Document zoom is separate.	放大或縮小功能區、功能表與對話方塊。「自動」依循系統的顯示縮放；100% 為每點一個螢幕像素。文件縮放另行設定。
+	Resize Table by Dragging	拖曳調整表格大小
+	Print Markup	列印標記
+	Comments beside each page and tracked changes in PDFs, prints and images; a comment list at the end of web pages, Markdown and text.	在 PDF、列印和影像中於每頁旁顯示註解和修訂；在網頁、Markdown 和文字末尾附上註解清單。
+
+# Compare / Combine, AutoCorrect Options and Restrict Editing (#412)
+	1. Formatting restrictions	1. 格式設定限制
+	2. Editing restrictions	2. 編輯限制
+	3. Start enforcement	3. 開始保護
+	<< Less	<< 較少
+	Another file	其他檔案
+	Apply as you type	輸入時套用
+	AutoCorrect	自動校正
+	AutoFormat As You Type	輸入時自動格式設定
+	Automatic bulleted lists	自動項目符號清單
+	Automatic numbered lists	自動編號清單
+	Border lines	框線
+	Capitalize first letter of sentences	句首字母大寫
+	Capitalize first letter of table cells	表格儲存格首字母大寫
+	Correct TWo INitial CApitals	更正前兩個字母連續大寫
+	Correct accidental usage of cAPS LOCK key	更正意外使用 Caps Lock 鍵造成的大小寫錯誤
+	Capitalize names of days	星期名稱首字母大寫
+	Case changes	大小寫變更
+	Character level	字元層級
+	Checked styles are allowed:	勾選的樣式可以使用:
+	Combine Documents	合併文件
+	Compare Documents	比較文件
+	Compared: {changes} changes	已比較: {changes} 處變更
+	Comparing with another file needs the desktop app.	與其他檔案比較需要桌面版應用程式。
+	Comparison settings	比較設定
+	Don't capitalize after:	不在以下內容後大寫:
+	Editing in this document is restricted.	此文件的編輯受到限制。
+	Every change is recorded as a tracked change.	每項變更都會記錄為追蹤修訂。
+	Everyone	所有人
+	Exceptions (optional)	例外狀況 (選用)
+	Exceptions…	例外狀況…
+	Fields	功能變數
+	Filling in forms	填寫表單
+	Find Next Editable Region	尋找下一個可編輯區域
+	Footnotes and endnotes	註腳和章節附註
+	Formatting, case changes, white space and tables are compared; the other settings are kept for later.	會比較格式、大小寫、空白和表格；其他設定留待日後支援。
+	Fractions (1/2) as fraction characters (½)	分數 (1/2) 取代為分數字元 (½)
+	Headers and footers	頁首及頁尾
+	Hyphens (--) as dashes (—)	連字號 (--) 取代為破折號 (—)
+	In equations, typing a name after a backslash replaces it with its symbol.	在方程式中，於反斜線後輸入名稱會取代為對應符號。
+	Internet addresses as links	網際網路位址取代為連結
+	Label changes with:	變更標記為:
+	Limit formatting to a selection of styles	限制格式為選取的樣式
+	Math AutoCorrect	數學自動校正
+	More >>	更多 >>
+	Moves	移動
+	Moved from:	移動自:
+	Moved to:	移動到:
+	New document	新文件
+	No changes (read only)	不允許任何變更 (唯讀)
+	Only allow this kind of editing:	僅允許此類編輯:
+	Only comments can be added, except in regions marked editable.	只能新增註解，標示為可編輯的區域除外。
+	Only form fields can be filled in.	只能填寫表單欄位。
+	Only the allowed styles can be applied.	只能套用允許的樣式。
+	Ordinals (1st) as superscript	序數 (1st) 取代為上標
+	Original document	原始文件
+	This password type isn't supported.	不支援此密碼類型。
+	Replace as you type	輸入時自動取代
+	Replace text as you type	輸入時自動取代文字
+	Replace:	取代:
+	Revised document	修訂的文件
+	Select text, then tick who can still edit it.	選取文字，然後勾選仍可編輯的人。
+	Settings…	設定…
+	Show changes at:	顯示變更的層級:
+	Show changes in:	顯示變更於:
+	Smart quotes instead of straight quotes	以彎引號取代直引號
+	Start Enforcing Protection	開始強制保護
+	Stop Protection	停止保護
+	Text boxes	文字方塊
+	The document is read only, except for regions marked editable.	文件為唯讀，標示為可編輯的區域除外。
+	The password is optional; without it anyone can stop the protection.	密碼為選用；沒有密碼，任何人都能停止保護。
+	This document	此文件
+	Tracked changes	追蹤修訂
+	Type the password to stop the protection.	輸入密碼以停止保護。
+	White space	空白
+	With:	取代為:
+	Word level	字組層級
+	In Line with Text	與文字同行
+	Square	矩形
+	Through	穿透
+	Top and Bottom	上及下
+	Behind Text	文字之後
+	In Front of Text	文字之前
+	Wrap Text Sides	文字繞排側
+	Both Sides	兩側
+	Left Only	僅左側
+	Right Only	僅右側
+	Largest Only	僅較寬的一側
+	Customize Keyboard	自訂鍵盤
+	Choose a command	選擇命令
+	Choose a shortcut	選擇快速鍵
+	All Commands	所有命令
+	Commands:	命令：
+	Keys for this command:	此命令的按鍵：
+	New shortcut:	新快速鍵：
+	Now used by {command}	目前由 {command} 使用
+	Not used by any command	未被任何命令使用
+	Remove every custom shortcut and restore the built-in keys?	要移除所有自訂快速鍵並還原內建按鍵嗎？
+	Assign	指定
+	Reset All…	全部重設…
+	Press a key combination	請按組合鍵
+	Customize	自訂
+	Keyboard shortcuts:	鍵盤快速鍵：
+	Customize…	自訂…
+	Customize Ribbon	自訂功能區
+	Add to Quick Access Toolbar	新增至快速存取工具列
+	Remove from Quick Access Toolbar	從快速存取工具列移除
+	Hide Quick Access Toolbar	隱藏快速存取工具列
+	Show Quick Access Toolbar	顯示快速存取工具列
+	Customize the Ribbon…	自訂功能區…
+	Customize Quick Access Toolbar…	自訂快速存取工具列…
+	More Commands…	其他命令…
+	Ribbon	功能區
+	(Custom)	(自訂)
+	Remove every custom tab and group and show all tabs again?	移除所有自訂索引標籤和群組，並重新顯示所有索引標籤？
+	Put the default commands back on the Quick Access Toolbar?	將快速存取工具列還原為預設命令？
+	Reset…	重設…
+	Add >>	新增 >>
+	<< Remove	<< 移除
+	Pick a custom group (New Group makes one)	請選擇自訂群組（可用「新增群組」建立）
+	Ribbon tabs	功能區索引標籤
+	New Tab	新增索引標籤
+	New Group	新增群組
+	Rename…	重新命名…
+	Ribbon and Quick Access Toolbar:	功能區和快速存取工具列：
+	Add Font…	新增字型…
+	Added Fonts	已新增的字型
+	Remove Added Font	移除已新增的字型
+	Load System Installed Fonts…	載入系統已安裝字型…
+	All system fonts are already available.	所有系統字型已可用。
+	Local font access is not supported by your browser.	您的瀏覽器不支援存取本機字型。
+	Local font access was denied.	本機字型存取遭到拒絕。
+	Loaded {count} system fonts.	已載入 {count} 個系統字型。
+	Recent Colors	最近使用的色彩
+	More Colors…	其他色彩…
+	Standard	標準
+	Current	目前
+	Colors:	色彩:
+	Color model:	色彩模式:
+	Red:	紅色:
+	Green:	綠色:
+	Blue:	藍色:
+	Hue:	色調:
+	Sat:	飽和度:
+	Lum:	亮度:
+	Hex:	十六進位:
+	Accessibility Pane	協助工具窗格
+	Alt Text Pane	替代文字窗格
+	Alt\nText	替代\n文字
+	View Alt Text…	檢視替代文字…
+	Mark as decorative	標示為裝飾用
+	Title:	標題：
+	Errors ({n})	錯誤 ({n})
+	Warnings ({n})	警告 ({n})
+	Tips ({n})	提示 ({n})
+	No accessibility issues found.	找不到協助工具問題。
+	Describe what this object shows, for people who can't see it.	請為看不見的人描述此物件顯示的內容。
+	Decorative objects only add visual interest: screen readers skip them.	裝飾用物件只增添視覺效果：螢幕助讀程式會略過它們。
+	Describe what this table shows, for people who can't see it.	請為看不見的人描述此表格顯示的內容。
+	Select a picture, shape, chart or table to describe it.	選取圖片、圖形、圖表或表格以加入描述。
+	Document Grid	文件格線
+	No grid	無格線
+	Lines only	僅行
+	Lines and characters	行與字元
+	Text snaps to characters	文字貼齊字元格線
+	Characters per line:	每行字數：
+	Lines per page:	每頁行數：
+	Moved from	移動自
+	Moved to	移動到
+	Developer	開發人員
+	Controls	控制項
+	Rich Text Content Control	RTF 文字內容控制項
+	Plain Text Content Control	純文字內容控制項
+	Picture Content Control	圖片內容控制項
+	Building Block Gallery Content Control	建置組塊庫內容控制項
+	Check Box Content Control	核取方塊內容控制項
+	Combo Box Content Control	下拉式方塊內容控制項
+	Drop-Down List Content Control	下拉式清單內容控制項
+	Date Picker Content Control	日期選擇器內容控制項
+	Repeating Section Content Control	重複區段內容控制項
+	Design Mode	設計模式
+	Content Control at Selection	選取範圍的內容控制項
+	Toggle Check Box	切換核取方塊
+	Choose List Item	選擇清單項目
+	Set Date	設定日期
+	Remove Content Control	移除內容控制項
+	Content Control Properties	內容控制項屬性
+	Title	標題
+	Tag	標籤
+	Placeholder text	預留位置文字
+	Can't be deleted	無法刪除
+	Contents can't be edited	無法編輯內容
+	Remove the control once edited	編輯後移除控制項
+	Allow line breaks	允許換行
+	Date format	日期格式
+	Checked symbol	已勾選符號
+	Unchecked symbol	未勾選符號
+	List entries	清單項目
+	Display text	顯示文字
+	Value	值
+	Today	今天
+	Put the caret in a content control first.	請先將游標放在內容控制項中。
+	Right-to-Left Table	從右至左表格
+	Right-to-Left Section	從右至左節
+	Table direction:	表格方向：
+	Section direction:	節方向：
+	Drawing Canvas	繪圖畫布
+	New Drawing Canvas	新增繪圖畫布
+	Fit	調整大小
+	Expand	擴展
+	Scale Drawing	縮放繪圖
+	Canvas Member	畫布成員
+	Arrows	箭頭
+	Communication	通訊
+	Office	辦公
+	People	人物
+	Nature	自然
+	Weather	天氣
+	Technology	科技
+	Transport	交通
+	Icon Color	圖示色彩
+	Search icons	搜尋圖示
+	No icons match your search.	沒有符合搜尋的圖示。
+	Recolor a one-color picture, such as an icon	為圖示等單色圖片重新著色
+	Enclose Characters	圍繞字元
+	Shrink text	縮小文字
+	Enlarge symbol	放大符號
+	Enclosure	圍繞符號
+	Circle	圓形
+	Numerals:	數字：
+	Numerals	數字
+	Arabic	阿拉伯
+	Hindi	印地
+	Context	上下文
+	System	系統
+	Templates	範本
+	Templates and Add-ins	範本與增益集
+	Attach Template	附加範本
+	Detach Template	中斷範本連結
+	Automatically Update Document Styles	自動更新文件樣式
+	Update Styles from Template	從範本更新樣式
+	Organizer	管理器
+	Copy Styles	複製樣式
+	Rename Style	重新命名樣式
+	Document template:	文件範本：
+	Attach…	附加…
+	Automatically update document styles	自動更新文件樣式
+	Organizer…	管理器…
+	Change Chart Type	變更圖表類型
+	Chart Design	圖表設計
+	Type	類型
+	Edit Data	編輯資料
+	Chart Title	圖表標題
+	Chart Layouts	圖表版面配置
+	Add Chart Element	新增圖表項目
+	Legend	圖例
+	Data Labels	資料標籤
+	Above Chart	圖表上方
+	Insert Chart	插入圖表
+	Clustered Column	群組直條圖
+	Stacked Column	堆疊直條圖
+	Clustered Bar	群組橫條圖
+	Stacked Bar	堆疊橫條圖
+	Area	區域圖
+	Pie	圓形圖
+	Doughnut	環圈圖
+	Scatter	散佈圖
+	“{text}” ({row}, {series}) isn't a number.	「{text}」（{row}，{series}）不是數字。
+	Category {n}	類別 {n}
+	Series {n}	數列 {n}
+	Type the categories down the side and a column of values per series.	在左側輸入類別，每個數列輸入一欄數值。
+	Categories	類別
+	Series name	數列名稱
+	Remove series	移除數列
+	Remove row	移除列
+	Add Row	新增列
+	Add Series	新增數列
+	Edit\nData	編輯\n資料
+	Change\nChart Type	變更\n圖表類型
+	Align Text	對齊文字
+	Create Link	建立連結
+	Break Link	中斷連結
+	Rotate all text 90°	將所有文字旋轉 90°
+	Rotate all text 270°	將所有文字旋轉 270°
+	Stacked	堆疊
+	Middle	中間
+	Click the empty text box the text should continue in (Esc cancels)	按一下要接續文字的空白文字方塊（按 Esc 取消）
+	Not linked: click a text box	未連結：請按一下文字方塊
+	Show KeyTips (Alt or F10)	顯示按鍵提示（Alt 或 F10）
+	Location	位置
+	Endnotes	章節附註
+	Below text	文字下方
+	End of section	節的結尾
+	End of document	文件結尾
+	Footnotes to endnotes	註腳轉換為章節附註
+	Endnotes to footnotes	章節附註轉換為註腳
+	Swap footnotes and endnotes	註腳與章節附註互換
+	Custom mark:	自訂標記：
+	Continuous numbering	連續編號
+	Apply	套用
+	Convert Notes	轉換附註
+	Reading	閱讀
+	Reading Column Width	閱讀欄寬
+	Reading Line Spacing	閱讀行距
+	Reading Text Size	閱讀字級
+	English (United Kingdom)	英文（英國）
+	English (Australia)	英文（澳洲）
+	English (Canada)	英文（加拿大）
+	English (India)	英文（印度）
+	English (Ireland)	英文（愛爾蘭）
+	English (New Zealand)	英文（紐西蘭）
+	English (South Africa)	英文（南非）
+	Polish	波蘭文
+	Do Not Check Spelling or Grammar	不檢查拼字及文法
+
+# Built-in file browser when the system file dialog is unavailable (#576)
+	Documents	文件
+	Word document	Word 文件
+	All files	所有檔案
+	Recipient lists	收件者清單
+	The system file dialog isn't available, so WordCraft shows its own. To get the system dialog, install a file chooser portal (such as xdg-desktop-portal-gtk) or zenity.	系統檔案對話方塊無法使用，因此 WordCraft 顯示自己的對話方塊。若要使用系統對話方塊，請安裝檔案選擇器入口（例如 xdg-desktop-portal-gtk）或 zenity。
+	Up one level	上移一層
+	Home folder	個人資料夾
+	{name} wasn't found.	找不到 {name}。
+	{name} already exists. Choose Save again to replace it.	{name} 已存在。再次選擇「儲存」即可取代它。
+	This folder can't be read: {error}	無法讀取此資料夾：{error}
+	Showing the first {count} items.	僅顯示前 {count} 個項目。
+	File name:	檔案名稱:
+	Browse in WordCraft…	在 WordCraft 中瀏覽…
+	Open a file with WordCraft's own browser when the system file dialog doesn't appear.	當系統檔案對話方塊沒有出現時，使用 WordCraft 內建的瀏覽器開啟檔案。
+	Hide White Space	隱藏空白
+	All pages	所有頁面
+	Current page	目前頁面
+	Selected pages	所選頁面
+	Custom range	自訂範圍
+	All pages in the range	範圍內的所有頁面
+	Odd pages only	僅奇數頁
+	Even pages only	僅偶數頁
+	Copies	份數
+	Collate copies	逐份列印
+	Pages like 1-3, 5	頁碼,如 1-3, 5
+	{count} of {total} pages will print	將列印 {total} 頁中的 {count} 頁
+	Save these pages as PDF…	將這些頁面另存為 PDF…
+	The printer, two-sided printing and pages per sheet are chosen in that dialog.	印表機、雙面列印和每張頁數在該對話方塊中選擇。
+	Previous Page	上一頁
+	Print to PDF	列印為 PDF
+	Add Shape	新增圖案
+	Change Colors	變更色彩
+	Change Layout	變更版面配置
+	Create Graphic	建立圖形
+	Edit Items	編輯項目
+	Layouts	版面配置
+	Reset Graphic	重設圖形
+	SmartArt Design	SmartArt 設計
+	SmartArt Styles	SmartArt 樣式
+	Text Pane	文字窗格
+	List	清單
+	Process	流程
+	Cycle	循環
+	Hierarchy	階層
+	Relationship	關聯
+	Pyramid	金字塔圖
+	Basic List	基本清單
+	Basic Process	基本流程
+	Basic Cycle	基本循環
+	Basic Pyramid	基本金字塔圖
+	Basic Radial	基本放射圖
+	Basic Matrix	基本矩陣
+	Basic Venn	基本文氏圖
+	Shows items of equal weight as blocks in rows.	將同等重要的項目顯示為成列排列的區塊。
+	Shows steps in order, left to right, with arrows between them.	依由左至右的順序顯示步驟，步驟之間以箭號連接。
+	Shows steps that repeat, around a circle.	沿圓周顯示重複的步驟。
+	Shows a tree: each item below the item it belongs to.	顯示樹狀結構：每個項目位於其所屬項目的下方。
+	Shows parts that build on each other, largest at the bottom.	顯示層層堆疊的部分，最大的在底部。
+	Shows items around a central idea: the first item is the centre.	圍繞中心概念顯示項目：第一個項目位於中心。
+	Shows parts of a whole as quadrants.	將整體的各部分顯示為象限。
+	Shows overlapping ideas as overlapping circles.	將相互重疊的概念顯示為重疊的圓形。
+	Accent {n}	輔色 {n}
+	Colorful	彩色
+	Insert SmartArt	插入 SmartArt
+	One line per item. Enter adds an item.	每個項目一行。按 Enter 新增項目。
+	Add\nShape	新增\n圖案
+	Change\nColors	變更\n色彩
+	Reset\nGraphic	重設\n圖形
+	Promote to Heading 1	升級至標題 1
+	Demote to Body Text	降級為本文
+	Move Up	上移
+	Move Down	下移
+	Collapse	摺疊
+	Expand or Collapse Heading	展開或摺疊標題
+	Select Heading and Content	選取標題及其內容
+	Show Level	顯示階層
+	Show Level 1	顯示第 1 階
+	Show Level 2	顯示第 2 階
+	Show Level 3	顯示第 3 階
+	Show Level 4	顯示第 4 階
+	Show Level 5	顯示第 5 階
+	Show Level 6	顯示第 6 階
+	Show Level 7	顯示第 7 階
+	Show Level 8	顯示第 8 階
+	Show Level 9	顯示第 9 階
+	Show All Levels	顯示所有階層
+	All Levels	所有階層
+	Show First Line Only	僅顯示首行
+	Show Text Formatting	顯示文字格式設定
+	Close Outline View	關閉大綱模式
+	Outline State	大綱狀態
+	Outlining	大綱
+	Outline Tools	大綱工具
+	Close Outline\nView	關閉\n大綱模式
+	A, B, C, …	A, B, C, …
+	Above the item	項目上方
+	Accessed on	存取日期
+	Add New Source…	新增來源…
+	Add the chapter number	加入章節編號
+	Atmosphere	大氣
+	Below the item	項目下方
+	Book	書籍
+	Book title	書名
+	Caption	標號
+	Caption Numbering	標號編號
+	Caption text	標號文字
+	Caption:	標號：
+	Chapter in a book	書籍章節
+	Chapters begin at:	章節起始於：
+	Collect entries from:	項目來源：
+	Columns:	欄數：
+	Conference	會議
+	Conference paper	會議論文
+	Container Title	載體標題
+	Create Source	建立來源
+	Cross-reference:	交互參照：
+	Custom Table of Contents…	自訂目錄…
+	DOI	DOI
+	Day	日
+	Delete Label	刪除標籤
+	Edit Source	編輯來源
+	Edition	版次
+	Edit…	編輯…
+	Entry marked.	已標記項目。
+	Example: {sample}	範例：{sample}
+	Figure	圖
+	Film	電影
+	Heading styles (levels 1–{n})	標題樣式（階層 1–{n}）
+	Heading {n}	標題 {n}
+	I, II, III, …	I, II, III, …
+	Include page numbers	包含頁碼
+	Indented	縮排式
+	Institution	機構
+	Ionosphere	電離層
+	Issue	期號
+	Journal	期刊
+	Label:	標籤：
+	Last, First; Last, First	姓, 名; 姓, 名
+	Leave the label out of the caption	標號中不含標籤
+	Letter headings	字母標題
+	Levels:	階層：
+	Link entries to their headings	將項目連結到標題
+	Made from the author and year when empty	留空時由作者和年份產生
+	Magazine or newspaper article	雜誌或報紙文章
+	Main entry:	主索引項：
+	Mark	標記
+	Mark All	全部標記
+	Mark Entry…	標記項目…
+	Mark Index Entry	標記索引項目
+	Mesosphere	中氣層
+	Month	月
+	New Label	新增標籤
+	New Label…	新增標籤…
+	New…	新增…
+	No sources yet.	尚無來源。
+	Numbering…	編號…
+	Options…	選項…
+	Other	其他
+	Other styles and their TOC level:	其他樣式及其目錄階層：
+	Outline levels	大綱階層
+	Page number style	頁碼樣式
+	Page numbers at the right margin	頁碼靠右邊界
+	Page title	頁面標題
+	Pages of bookmark:	書籤所在頁：
+	Periodical	期刊名
+	Position:	位置：
+	Publisher	出版者
+	Run-in	接排式
+	See	參見
+	Separator:	分隔符號：
+	Show every bibliography field	顯示所有書目欄位
+	Site name	網站名稱
+	Source Manager	來源管理員
+	Source type:	來源類型：
+	Sources in this document:	此文件中的來源：
+	Styles:	樣式：
+	Subentry:	次索引項：
+	TC entry fields	TC 項目功能變數
+	Tab leader:	定位點前置字元：
+	Table of Contents Options	目錄選項
+	Table of Contents Styles	目錄樣式
+	This page	目前頁面
+	Type:	類型：
+	URL	URL
+	Volume	卷
+	Website	網站
+	Year	年份
+	a, b, c, …	a, b, c, …
+	i, ii, iii, …	i, ii, iii, …
+	{n} entries marked.	已標記 {n} 個項目。
+	Lasso Select	套索選取
+	Move Selected Ink	移動選取的筆跡
+	Delete Selected Ink	刪除選取的筆跡
+	Recolor Selected Ink	變更選取筆跡的色彩
+	Add Pen	新增畫筆
+	Remove Pen	移除畫筆
+	Ink to Shape	筆跡轉圖形
+	Convert to Shapes	轉換為圖案
+	Ink Replay	筆跡重播
+	Add\nPen	新增畫筆
+	Rewind	倒轉
+	Forward	快轉
+	Stroke {n} of {total}	第 {n} 筆，共 {total} 筆
+	Use wildcards	使用萬用字元
+	Special	特殊字元
+	Match prefix	比對字首
+	Match suffix	比對字尾
+	Ignore punctuation characters	忽略標點符號
+	Ignore white-space characters	忽略空白字元
+	Regular expressions	規則運算式
+	Search Options	搜尋選項
+	Tab Character	定位字元符號
+	Any Character	任意字元
+	Any Digit	任意數字
+	Any Letter	任意字母
+	Caret Character	插入號
+	Section Character	章節符號
+	Paragraph Character	段落符號
+	Graphic	圖形
+	Manual Line Break	手動換行
+	Manual Page Break	手動分頁
+	Section Break	分節符號
+	White Space	空白
+	Clipboard Contents	剪貼簿內容
+	Find What Text	找到的文字
+	Find What Expression	找到的運算式
+	Character in Range	範圍內的字元
+	Beginning of Word	單字開頭
+	End of Word	單字結尾
+	Expression	運算式
+	Not	非
+	Num Occurrences	出現次數
+	Previous 1 or More	前一項 1 次以上
+	0 or More Characters	0 個以上字元
+	Move with Text	隨文字移動
+	Fix Position on Page	固定於頁面上的位置
+
+# WordArt and connectors (#416).
+	WordArt Styles	文字藝術師樣式
+	Text Fill	文字填滿
+	Text Outline	文字外框
+	Transform	轉換
+	No Fill	無填滿
+	No Outline	無外框
+	Reflection	反射
+	No Reflection	無反射
+	No Transform	無轉換
+	Connect Shapes	連接圖案
+	Straight Connector	直線接點
+	Straight Arrow Connector	直線箭頭接點
+	Elbow Connector	肘形接點
+	Elbow Arrow Connector	肘形箭頭接點
+	Curved Connector	曲線接點
+	Curved Arrow Connector	曲線箭頭接點
+	Arch Up	上彎弧形
+	Arch Down	下彎弧形
+	Slant Up	向上傾斜
+	Slant Down	向下傾斜
+	Inflate	膨脹
+	Deflate	收縮
+	Chevron Up	向上V形
+	Chevron Down	向下V形
+	Triangle Up	正三角形
+	Triangle Down	倒三角形
+	Solid Accent	實心強調色
+	Light with Outline	淺色加外框
+	Hollow	空心
+	Accent Gradient	強調色漸層
+	Dark with Shadow	深色加陰影
+	Soft Glow	柔和光暈
+	Accent with Reflection	強調色加反射
+	Warm Gradient with Outline	暖色漸層加外框
+	Add line numbering	新增行號
+	Add to Document	新增至文件
+	Address labels	地址標籤
+	Auto	自動
+	Automatically hyphenate document	自動斷字
+	Chinese (Simplified)	中文（簡體）
+	Chinese (Traditional)	中文（繁體）
+	Column:	欄：
+	Count by:	行號間距：
+	Czech	捷克文
+	Danish	丹麥文
+	Delivery address:	收件人地址：
+	Detect language automatically	自動偵測語言
+	Do not check spelling or grammar	不要檢查拼字或文法
+	Dutch	荷蘭文
+	Envelope size:	信封大小：
+	Estonian	愛沙尼亞文
+	Finnish	芬蘭文
+	French (France)	法文（法國）
+	From text:	距本文：
+	Full page of the same label	整頁相同的標籤
+	German (Germany)	德文（德國）
+	Greek	希臘文
+	Hebrew	希伯來文
+	Hyphenate at:	斷字位置：
+	Hyphenate words in CAPS	大寫單字斷字
+	Hyphenation Options…	斷字選項…
+	Hyphenation zone:	斷字區：
+	Italian	義大利文
+	Croatian	克羅埃西亞文
+	Indonesian	印尼文
+	Japanese	日文
+	Korean	韓文
+	Limit consecutive hyphens to:	連續斷字數上限：
+	Line Numbering Options…	行號選項…
+	Manual Hyphenation	手動斷字
+	Manual hyphenation is complete.	手動斷字已完成。
+	Manual…	手動…
+	Mark selected text as:	將選取的文字標示為：
+	New Document	新文件
+	No limit	不限
+	Norwegian (Bokmål)	挪威文（巴克摩）
+	Numbering:	編號：
+	Omit	省略
+	One label per recipient	每位收件人一個標籤
+	Portuguese (Brazil)	葡萄牙文（巴西）
+	Portuguese (Portugal)	葡萄牙文（葡萄牙）
+	Return address labels	寄件人地址標籤
+	Return address:	寄件人地址：
+	Row:	列：
+	Russian	俄文
+	Serbian (Cyrillic)	塞爾維亞文（斯拉夫文）
+	Serbian (Latin)	塞爾維亞文（拉丁文）
+	Set As Default	設為預設值
+	Shipping labels	寄送標籤
+	Single label	單一標籤
+	Spanish (Mexico)	西班牙文（墨西哥）
+	Spanish (Spain)	西班牙文（西班牙）
+	Swedish	瑞典文
+	Turkish	土耳其文
+	Ukrainian	烏克蘭文
+	{language} is now the document's default language.	{language} 現在是此文件的預設語言。
+	Visual effects	視覺效果
+	Animation effects:	動畫效果：
+	On	開
+	Off	關
+	Smooth scrolling and zooming, and menus and buttons that fade in. Off shows every change at once.	平滑捲動與縮放，以及功能表與按鈕的淡入效果。選擇「關」後，所有變更會立即顯示。
+	Your system has animation effects turned on.	系統已開啟動畫效果。
+	Your system has animation effects turned off.	系統已關閉動畫效果。
+	Your system doesn't report an animation setting, so animation effects stay on.	系統未提供動畫設定，因此動畫效果保持開啟。
+	Select Column	選取欄
+	Select Table Cells by Clicking	按一下選取表格儲存格
+	Insert Row or Column by Clicking	按一下插入列或欄
+	Move Table by Dragging	拖曳移動表格
+	AutoFit Column by Double-Clicking	按兩下自動調整欄寬
+	Region:	地區：
+	Automatic ({region})	自動（{region}）
+	Odd Banded Rows	奇數帶狀列
+	Even Banded Rows	偶數帶狀列
+	Odd Banded Columns	奇數帶狀欄
+	Even Banded Columns	偶數帶狀欄
+	Top Left Cell	左上儲存格
+	Top Right Cell	右上儲存格
+	Bottom Left Cell	左下儲存格
+	Bottom Right Cell	右下儲存格
+	Inside Horizontal Border	內部水平框線
+	Inside Vertical Border	內部垂直框線
+	Text of the nearest paragraph with a given style (running headers)	具有指定樣式的最近段落文字（書眉）
+	Style name:	樣式名稱：
+# Mail merge: filter and sort recipients (#778)
+	Filter Recipients	篩選收件者
+	Sort Recipients	排序收件者
+	Filter and Sort	篩選與排序
+	And	且
+	Or	或
+	Comparison	比較
+	Compare to	比較值
+	Add Condition	新增條件
+	Remove condition	移除條件
+	Sort by	排序依據
+	Then by	次要依據
+	Ascending	遞增
+	Descending	遞減
+	Equal to	等於
+	Not equal to	不等於
+	Less than	小於
+	Greater than	大於
+	Less than or equal	小於或等於
+	Greater than or equal	大於或等於
+	Is blank	空白
+	Is not blank	非空白
+	Contains	包含
+	Does not contain	不包含
+	{count} of {total} recipients will be merged.	將合併 {total} 位收件者中的 {count} 位。
+	Find in list:	在清單中尋找：
+	Any field	任意欄位
+	Matches: {count}	相符項目：{count}
+	Show only records that will be merged	僅顯示將要合併的記錄
+	Take the last match on the page	取本頁最後一個相符項目
+	Show its list number	顯示其清單編號
+	Show its number relative to this field	顯示相對於此欄位的編號
+	Show its number with all higher levels	顯示含所有上層層級的編號
+	Number only, without the label's words	只要編號，不要標籤中的文字
+	Add whether it is above or below	註明位於上方還是下方
+	Start-up	啟動
+	Show the Start screen when WordCraft starts	啟動 WordCraft 時顯示開始畫面
+	On: WordCraft opens on File › Home, with a blank document, the templates and your recent documents. Off: it opens a blank document.	開：WordCraft 開啟時顯示「檔案 › 常用」，其中有空白文件、範本和最近使用的文件。關：直接開啟空白文件。
+	Copy to	複製到
+
+# Document naming and account controls.
+	Rename Document	重新命名文件
+	Document name	文件名稱
+	Rename	重新命名
+	Account	帳戶
+	Privacy Options	隱私權選項
+	Trust Center	信任中心
+	Privacy for this document	此文件的隱私
+	Remove my name from comments, changes and file properties when saving	儲存時從註解、修訂和檔案內容中移除我的名稱
+	Leave out the date and time of comments and tracked changes when saving	儲存時不包含註解和追蹤修訂的日期與時間
+	The document you are editing keeps the names and dates; only the saved file leaves them out.	正在編輯的文件會保留名稱和日期；只有儲存的檔案不包含它們。
+	Privacy Settings	目前的隱私設定
+	Waiting for the save to finish…	正在等待儲存完成…
+	Saving {name} was cancelled, so it is still open and nothing was lost.	已取消儲存 {name}，文件仍保持開啟，沒有遺失任何內容。
+	Paper	紙張
+	Paper size:	紙張大小：
+	Custom size	自訂大小
+	More Paper Sizes…	其他紙張大小…
+	The margins don't fit on a page this size; make the margins smaller first.	邊界放不進此大小的頁面；請先縮小邊界。
+	Full Screen	全螢幕
+	Full\nScreen	全螢幕
+	Use the browser's full screen (F11)	請使用瀏覽器的全螢幕模式 (F11)
+
+# #1128: size labels (Mailings, Layout › Size), status-bar messages, Reading Mode and Go To
+	{name}   {height} × {width} in	{name}   {height} × {width} 英寸
+	{name}   {height} × {width} mm	{name}   {height} × {width} 公釐
+	{width} × {height} mm	{width} × {height} 公釐
+	{kind}, {columns} × {rows}, {size} ({paper})	{kind}，{columns} × {rows}，{size}（{paper}）
+	Researcher needs an online service; WordCraft keeps your documents offline.	研究工具需要連線；WordCraft 會將您的文件保留在本機。
+	These settings will be used for new documents.	這些設定將用於新文件。
+	can't split at the first row	無法在第一列處分割表格
+	select two or more cells to merge	請選取兩個以上的儲存格進行合併
+	there is no ink to replay	沒有可重播的筆跡
+	there's no citation after the caret	插入點之後沒有引文
+	this item is already at the top level	此項目已位於最高層級
+	Envelope #10	10 號信封
+	Envelope DL	DL 信封
+	Reading Mode	閱讀模式
+	Column width	欄寬
+	Text size	文字大小
+	Edit Document	編輯文件
+	Go to what:	移至目標：
+	Type +2 or -1 to move from the page you are on.	輸入 +2 或 -1 可從目前頁面向後或向前移動。
+	Suggested	建議
+	Set Proofing Language…	設定校訂語言…
+	Language Preferences…	語言喜好設定…
+	Printer	印表機
+	Select a printer	選取印表機
+	Refresh printers	重新整理印表機
+	Two-sided printing	雙面列印
+	Printer default	印表機預設值
+	One-sided	單面
+	Two-sided: long edge	雙面：長邊
+	Two-sided: short edge	雙面：短邊
+	Grayscale	灰階
+	Finding printers…	正在尋找印表機…
+	No printers found. Configure a system printer or export a PDF.	找不到印表機。請在系統中設定印表機或匯出 PDF。
+	Printer discovery failed.	尋找印表機失敗。
+	Submitting print job…	正在提交列印工作…
+	Print job submitted.	列印工作已提交。
+	Print job submitted: {receipt}	列印工作已提交：{receipt}
+	Print job submitted: spooled {count} sheet(s)	列印工作已傳送：已將 {count} 張紙送入背景處理
+	Print failed: the printing worker stopped.	列印失敗：列印工作執行緒已停止。
+	Print settings	列印設定
+	Submit print job	提交列印工作
+
+# Dictionaries folder (#1063)
+	Dictionaries	字典
+	Dictionaries folder:	字典資料夾：
+	Not set: the system's usual places	未設定：系統的一般位置
+	Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.	此資料夾中的 Hunspell .aff 與 .dic 檔案 (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) 優先於系統中的檔案。
+	{language}: {file}	{language}：{file}
+	{language}: no dictionary found	{language}：找不到字典
+
+# Backstage › Recover (#586)
+	Recover	復原
+
+# Page Setup › Mirror margins (#1239)
+	Mirror margins	左右對稱邊界
+
+# Insert Hyperlink › Place in This Document (#1370)
+	Existing File or Web Page	現有的檔案或網頁
+	Link to:	連結至:
+	Place in This Document	這份文件中的位置
+	Border Styles	框線樣式
+	Border\nStyles	框線\n樣式
+	Click a table border to paint it with the chosen border style. Esc stops.	按一下表格框線，以選取的框線樣式繪製。按 Esc 結束。
+# Table Layout › Sort dialog (#1205)
+	Column {n}	欄 {n}
+	Header row	有標題列
+	No header row	無標題列
+	My list has	清單包含
+# Table Layout › Formula dialog (#1210)
+	Formula:	公式：
+	Paste function:	貼上函數：
+# Reading Mode column widths (#1040)
+	Narrow	窄
+	Medium	中等
+	Dot-dot-dash	雙點虛線
+	More Underlines…	其他底線…
+	Underline Color	底線色彩
+# Split Cells and Convert Text to Table (#2592)
+	Merge cells before split	分割前合併儲存格
+	Table size	表格大小
+	AutoFit behavior	自動調整行為
+	Initial column width:	初始欄寬：
+	AutoFit to contents	依內容自動調整
+	AutoFit to window	依視窗自動調整
+	Separate text at	分隔文字於
+	Commas	逗號
+	Other:	其他：
+	The number must be between 1 and {max}.	數字必須介於 1 和 {max} 之間。
+	The measurement must be between {min} and {max}.	度量值必須介於 {min} 和 {max} 之間。
+	Recently Used Fonts	最近使用的字型
+	All Fonts	所有字型
+	Spike	收集區
+	Insert Spike	插入收集區
+# Add Font status (#1789)
+	Added 1 font	已新增 1 個字型
+	Added {n} fonts	已新增 {n} 個字型
+	{added}; {count} couldn't be read: {names}	{added}；{count} 個無法讀取：{names}
+	{names} and {n} more	{names} 等另外 {n} 個
+	{added}; {n} skipped (limit {max})	{added}；已略過 {n} 個（上限 {max}）
+
+# Drop Cap menu and Drop Cap Options (#2601)
+	Dropped	下沉
+	In margin	懸掛
+	Drop Cap Options…	首字放大選項…
+	Lines to drop:	放大行數：
+	Distance from text:	與本文距離：
+	Distance from text	與本文距離
+
+# Picture Format › Size: the Size dialog, sizes typed in any unit (#2573)
+	Lock aspect ratio	鎖定長寬比
+	Relative to original picture size	相對於原始圖片大小
+	Original size	原始大小
+	{width} × {height} pixels	{width} × {height} 像素
+	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	可用任何單位輸入大小，例如 5 cm 或 300 px。另一邊隨之調整，圖片保持原有比例。
+
+	Import…	匯入…
+
+# Personal templates (#2852)
+	Personal	個人
+	Personal Templates	個人範本
+	Templates you save in your templates folder show up here.	儲存到範本資料夾的範本會顯示在這裡。
+	Save as Word Template…	另存為 Word 範本…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	將 .dotx 範本儲存到你的範本資料夾。它會顯示在「檔案 › 新增」的「個人」下。
+	File locations	檔案位置
+	User templates:	使用者範本：
+	Not set	未設定
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	「檔案 › 新增」會在「個人」下列出此處的 .dotx 和 .dotm 範本；「另存為 Word 範本」從這裡開始。
+	Format Shape Pane	設定圖形格式窗格
+	Format Shape	設定圖形格式
+	Format Shape…	設定圖形格式…
+	No fill	無填滿
+	Solid fill	實心填滿
+	Gradient fill	漸層填滿
+	Preset gradients	預設漸層
+	Radial	放射狀
+	Rectangular	矩形
+	Path	路徑
+	Direction	方向
+	Angle	角度
+	Gradient stops	漸層停駐點
+	Add gradient stop	新增漸層停駐點
+	Remove gradient stop	移除漸層停駐點
+	Rotate with shape	隨圖形旋轉
+	Gradient	漸層
+	No Gradient	無漸層
+	Light Variations	淺色變化
+	Dark Variations	深色變化
+	More Gradients…	其他漸層…
+	Select a shape, text box or drawing canvas to format its fill.	請選取圖形、文字方塊或繪圖畫布以設定其填滿格式。
+	Linear Right	線性 向右
+	Linear Diagonal - Top Left to Bottom Right	線性對角 - 左上到右下
+	Linear Down	線性 向下
+	Linear Diagonal - Top Right to Bottom Left	線性對角 - 右上到左下
+	Linear Left	線性 向左
+	Linear Diagonal - Bottom Right to Top Left	線性對角 - 右下到左上
+	Linear Up	線性 向上
+	Linear Diagonal - Bottom Left to Top Right	線性對角 - 左下到右上
+	From Top Left Corner	從左上角
+	From Top Right Corner	從右上角
+	From Bottom Left Corner	從左下角
+	From Bottom Right Corner	從右下角
+	From Center	從中央
+	Soft	柔和
+	Lit from Top	頂部照亮
+	Deep	深沉
+	Lit from Bottom	底部照亮
+	Center Glow	中央光暈
+# File › Home greeting
+	Good morning	早安
+	Good afternoon	午安
+	Good evening	晚安
+	More tabs	更多索引標籤
+# #3013: Insert Table of Figures
+	Include label and number	包含標籤和編號
+	First Record	第一筆記錄
+	Last Record	最後一筆記錄
+	Go to Record	移至記錄
+	Edit Individual Documents…	編輯個別文件…
+	Print Documents…	列印文件…
+	Print Documents	列印文件
+	Current record	目前記錄
+	From:	從：
+	To:	到：
+	Enter a number.	請輸入數字。
+# Why a ribbon control is off (#2678)
+	a drawing canvas can't be ungrouped	繪圖畫布無法取消群組
+	a drawing canvas can't go inside a text box	繪圖畫布不能放在文字方塊內
+	charts and diagrams can't be moved or resized yet	圖表和圖形暫時無法移動或調整大小
+	no equation at the caret	游標處沒有方程式
+	not editing an equation	未在編輯方程式
+	nothing is selected	未選取任何內容
+	only in Outline view	僅在大綱檢視中可用
+	select a SmartArt graphic first	請先選取 SmartArt 圖形
+	select a chart first	請先選取圖表
+	select a connector first	請先選取連接線
+	select a drawing canvas first	請先選取繪圖畫布
+	select a floating picture or shape first	請先選取浮動的圖片或圖案
+	select a group first	請先選取群組
+	select a picture first	請先選取圖片
+	select a picture or shape first	請先選取圖片或圖案
+	select a shape first	請先選取圖案
+	select a text box first	請先選取文字方塊
+	select a text box linked to another first	請先選取已連結到另一個文字方塊的文字方塊
+	select recipients first	請先選取收件者
+	select two or more pictures or shapes first (Shift+click)	請先選取兩個以上的圖片或圖案 (Shift+按一下)
+	text boxes can't go inside a text box	文字方塊不能放在文字方塊內
+	the Clipboard pane is empty	剪貼簿窗格是空的
+	the cursor isn't in a table	游標不在表格中
+	there is nothing to undo	沒有可復原的動作
+	this SmartArt was made in another program: WordCraft shows it but can't edit it	此 SmartArt 由其他程式建立: WordCraft 可以顯示但無法編輯
+	this chart was made in another program: WordCraft shows it but can't edit it	此圖表由其他程式建立: WordCraft 可以顯示但無法編輯
+	this text box is already linked: break the link first	此文字方塊已連結: 請先中斷連結
+	leave the equation first	請先離開公式
+	the Spike is empty	收集區是空的
+# More reasons a ribbon control is off (#2678)
+	a group holding Word ink can't be ungrouped yet	包含 Word 筆跡的群組暫時無法取消群組
+	drop caps can't go in a table	首字放大不能放在表格中
+	the document is protected	文件受保護
+	the paragraph is empty	段落是空的
+	the paragraph starts with a space	段落以空格開頭
+	Open a document first	請先開啟文件

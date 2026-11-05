@@ -85,6 +85,8 @@ pub struct Session {
     pub initials: String,
     /// Format painter: copied formatting waiting to be applied (and whether it stays on).
     pub painter: Option<(CharProps, wordcraft_doc::props::ParaProps, bool)>,
+    /// Border Styles: the pen table borders are drawn with (not part of the document).
+    pub border_pen: crate::cmd::border_pen::BorderPen,
     /// Last message for the status bar / agents.
     pub status: String,
     /// Headers/footers `insert.createHeader`/`insert.createFooter` made for a page that had none
