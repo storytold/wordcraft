@@ -591,7 +591,7 @@ fn insert_table_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
 
 /// A margin's number box, in the unit the interface measures in.
 fn margin(value: &mut f32) -> egui::DragValue<'_> {
-    egui::DragValue::new(value).speed(3.6 / crate::options::unit().pt_per_unit()).measure(crate::options::unit()).max_decimals(2)
+    egui::DragValue::new(value).speed(3.6 / crate::options::unit().pt_per_unit()).measure(crate::options::unit()).max_decimals(2).clip_text(true)
 }
 
 fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
@@ -649,9 +649,9 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     crate::rtl::Table::new("ps_grid").columns(4).show(ui, |t| {
         t.row(|r| {
             let chars_label = r.cell(|ui| ui.add_enabled(grid.0 >= 2, egui::Label::new(tl!("Characters per line:"))));
-            r.cell(|ui| ui.add_enabled(grid.0 >= 2, egui::DragValue::new(&mut grid.2).range(1..=1000)).labelled_by(chars_label.id));
+            r.cell(|ui| ui.add_enabled(grid.0 >= 2, egui::DragValue::new(&mut grid.2).range(1..=1000).clip_text(true)).labelled_by(chars_label.id));
             let lines_label = r.cell(|ui| ui.add_enabled(grid.0 >= 1, egui::Label::new(tl!("Lines per page:"))));
-            r.cell(|ui| ui.add_enabled(grid.0 >= 1, egui::DragValue::new(&mut grid.1).range(1..=1000)).labelled_by(lines_label.id));
+            r.cell(|ui| ui.add_enabled(grid.0 >= 1, egui::DragValue::new(&mut grid.1).range(1..=1000).clip_text(true)).labelled_by(lines_label.id));
         });
     });
     ui.horizontal(|ui| {
