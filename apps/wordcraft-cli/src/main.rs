@@ -430,7 +430,12 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
         "convert" => {
             validate_options("convert", &rest, CONVERT_OPTIONS)?;
             // `--format wordml2003` (or `flatopc`) picks the kind of `.xml` file; its value isn't a path.
-            let format = arg_value(&rest, "--format");
+            let format = match find_option_arg(&rest, "--format") {
+                OptionArg::Absent => None,
+                OptionArg::Duplicate => return Err("convert: duplicate --format option".into()),
+                OptionArg::MissingValue => return Err("convert: --format requires a value".into()),
+                OptionArg::Value(value) => Some(value),
+            };
             let paths = positionals(&rest, CONVERT_OPTIONS);
             let (i, o) = (paths.first().ok_or_else(missing_argument)?.to_string(), paths.get(1).ok_or_else(missing_argument)?.to_string());
             let markup = rest.iter().any(|a| a == "--markup");
