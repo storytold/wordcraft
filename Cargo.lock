@@ -1158,6 +1158,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-web-host"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=2e2312ddaf21bc3d85cd3395d0955c7d239306f6#2e2312ddaf21bc3d85cd3395d0955c7d239306f6"
+dependencies = [
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "craft-window"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0#92d392cff132eaf53e13afff77f38b5c11b73aa0"
@@ -6815,6 +6824,7 @@ dependencies = [
  "wordcraft-engine",
  "wordcraft-fonts",
  "wordcraft-ui-egui",
+ "x11rb",
  "zbus",
 ]
 
@@ -7086,6 +7096,7 @@ dependencies = [
 name = "wordcraft-web"
 version = "0.15.1"
 dependencies = [
+ "craft-web-host",
  "eframe",
  "egui",
  "js-sys",
