@@ -22,6 +22,8 @@ pub const OPEN_EXTS: &[&str] = &[
     "mhtml",
     "rtf",
     "odt",
+    "ott",
+    "fodt",
     "tex",
     "latex",
     "ltx",
@@ -30,7 +32,8 @@ pub const OPEN_EXTS: &[&str] = &[
     "json",
 ];
 /// Formats WordCraft saves (Save As).
-pub const SAVE_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "pdf", "txt", "md", "html", "rtf", "odt", "tex", "png", "json", "xml"];
+pub const SAVE_EXTS: &[&str] =
+    &["docx", "docm", "dotx", "dotm", "pdf", "txt", "md", "html", "rtf", "odt", "ott", "fodt", "tex", "png", "json", "xml"];
 
 /// Magic number for ZIP package signatures (used by .docx/.docm/.dotx/.dotm).
 const ZIP_SIG: &[u8] = b"PK\x03\x04";
@@ -129,9 +132,25 @@ pub(crate) fn canonical(_path: &std::path::Path) -> Option<std::path::PathBuf> {
     None
 }
 
-/// Can files with this extension be saved with a password (Word's packages)?
+/// Can files with this extension be saved with a password (Word's packages, ODT)?
 pub fn can_encrypt(name: &str) -> bool {
-    is_word_package(&ext_of(name))
+    let ext = ext_of(name);
+    is_word_package(&ext) || ext == "odt" || ext == "ott"
+}
+
+/// Open a password-protected ODT package (ODF 1.3 Part 2 §3.4). The errors for a missing or
+/// wrong password are the `.docx` reader's texts, so [`needs_password`] and [`wrong_password`]
+/// recognise them.
+fn open_encrypted_odt(bytes: &[u8], password: Option<&str>, page: &wordcraft_doc::SectionProps) -> Result<Document, String> {
+    let pw = password.ok_or_else(|| format!("ODT: {}", wordcraft_docx::PASSWORD_REQUIRED))?;
+    let plain = wordcraft_formats::odt::decrypt(bytes, pw).map_err(|e| match e {
+        wordcraft_formats::odt::CryptError::WrongPassword => format!("ODT: {}", wordcraft_docx::WRONG_PASSWORD),
+        other => other.to_string(),
+    })?;
+    match crate::io_ext::open("odt", &plain, page) {
+        Some(r) => r,
+        None => Err("ODT: no reader".into()),
+    }
 }
 
 /// Finish a document just read from a file: never leave it empty, and bring its unlocked
@@ -204,6 +223,11 @@ fn read_bytes(name: &str, bytes: &[u8], password: Option<&str>, page: &wordcraft
     let ext = ext_of(name);
     if matches!(ext.as_str(), "docx" | "docm" | "dotx" | "dotm" | "doc" | "dot") && wordcraft_docx::is_encrypted(bytes) {
         let mut doc = read_docx(bytes, password).map_err(|e| e.to_string())?;
+        opened(&mut doc);
+        return Ok((doc, true));
+    }
+    if (ext == "odt" || ext == "ott") && wordcraft_formats::odt::is_encrypted(bytes) {
+        let mut doc = open_encrypted_odt(bytes, password, page)?;
         opened(&mut doc);
         return Ok((doc, true));
     }
@@ -440,6 +464,7 @@ pub fn save_bytes_opts(name: &str, doc: &Document, opts: &ExportOptions) -> Resu
 pub fn save_bytes_with(name: &str, doc: &Document, password: Option<&str>, opts: &ExportOptions) -> Result<Vec<u8>, String> {
     let bytes = save_bytes_opts(name, doc, opts)?;
     match password {
+        Some(pw) if matches!(ext_of(name).as_str(), "odt" | "ott") => wordcraft_formats::odt::encrypt(&bytes, pw),
         Some(pw) if can_encrypt(name) => wordcraft_docx::encrypt(&bytes, pw).map_err(|e| e.to_string()),
         _ => Ok(bytes),
     }
