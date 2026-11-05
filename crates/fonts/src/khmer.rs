@@ -11,8 +11,6 @@ use crate::FontFace;
 
 const TRIISAP: char = '\u{17CA}';
 const SIGN_U: char = '\u{17BB}';
-/// Invisible subscript marker: the consonant after it is a subscript.
-const COENG: char = '\u{17D2}';
 /// The consonants whose triisap goes below when an upper vowel follows: អ ស ហ.
 const BASES: [char; 3] = ['\u{17A2}', '\u{179F}', '\u{17A0}'];
 /// A base whose triisap stays above: ប.
@@ -29,13 +27,11 @@ pub(crate) fn is_triisap(c: char) -> bool {
     c == TRIISAP
 }
 
-/// Is a triisap after `prev` (itself after `before`) and before `next` drawn as U+17BB (vowel sign
-/// U) instead? It is when `prev` is a base in `needs` and an upper vowel follows. A subscript base
-/// (`before` is the coeng) is left to the font: the probe only checks plain bases. `needs` (the
-/// face's per-base flags) is only asked for once the characters fit, so a face is probed on its
-/// first such triisap.
-pub(crate) fn takes_u_form<'a>(before: char, prev: char, next: char, needs: impl FnOnce() -> &'a [bool; 3]) -> bool {
-    if !is_upper_vowel(next) || before == COENG {
+/// Is a triisap after `prev` and before `next` drawn as U+17BB (vowel sign U) instead? It is when
+/// `prev` is a base in `needs` and an upper vowel follows. `needs` (the face's per-base flags) is
+/// only asked for once the characters fit, so a face is probed on its first such triisap.
+pub(crate) fn takes_u_form<'a>(prev: char, next: char, needs: impl FnOnce() -> &'a [bool; 3]) -> bool {
+    if !is_upper_vowel(next) {
         return false;
     }
     let Some(k) = BASES.iter().position(|b| *b == prev) else { return false };
@@ -92,10 +88,9 @@ mod tests {
         let cs: Vec<char> = s.chars().collect();
         (0..cs.len())
             .map(|i| {
-                let before = if i > 1 { cs[i - 2] } else { '\0' };
                 let prev = if i > 0 { cs[i - 1] } else { '\0' };
                 match cs.get(i + 1) {
-                    Some(&next) if is_triisap(cs[i]) && takes_u_form(before, prev, next, || &needs) => U_FORM,
+                    Some(&next) if is_triisap(cs[i]) && takes_u_form(prev, next, || &needs) => U_FORM,
                     _ => cs[i],
                 }
             })
@@ -118,9 +113,6 @@ mod tests {
         assert_eq!(run("ប៊ិ", [true; 3]), "ប៊ិ");
         assert_eq!(run("អ៊", [true; 3]), "អ៊");
         assert_eq!(run("៊ិ", [true; 3]), "៊ិ");
-        // A subscript base is left to the font.
-        assert_eq!(run("ក្អ៊ិ", [true; 3]), "ក្អ៊ិ");
-        assert_eq!(run("ក្ស៊ី", [true; 3]), "ក្ស៊ី");
     }
 
     /// A face for `probe_with`: the glyph for a character is its code point (0 for `missing`, 40 for
