@@ -270,7 +270,8 @@ can be used without committing Word output.
 | 2026-10-14 | trivial | Tables: nesting stops at 24 levels, the depth .docx keeps (#1596); Tables row updated, no percentage change |
 | 2026-10-12 | minor | Italian proofing: it-IT spelling, accent-first suggestions and conservative grammar; Proofing row updated, 42% → 44% |
 | 2026-10-12 | trivial | The 62 open issues and ~45 open PRs cited as evidence are dated 2026-10-10 (the measurement pass); not re-counted (197 issues were open on 2026-10-12) |
-| 2026-10-13 | trivial | References: BibTeX/RIS/CSL-JSON source libraries import (`references.importSources`, Manage Sources ▸ Import…, #1058) and bibliography sources round-trip in DOCX in Word's customXml layout (#169); Ecosystem row wording; no percentage change || 2026-10-11 | trivial | Tables: Ctrl, Alt, left-edge and selected-cells border drags (#711); Tables row updated, no percentage change |
+| 2026-10-13 | trivial | References: BibTeX/RIS/CSL-JSON source libraries import (`references.importSources`, Manage Sources ▸ Import…, #1058) and bibliography sources round-trip in DOCX in Word's customXml layout (#169); Ecosystem row wording; no percentage change |
+| 2026-10-11 | trivial | Tables: Ctrl, Alt, left-edge and selected-cells border drags (#711); Tables row updated, no percentage change |
 | 2026-10-11 | trivial | Tables: column and row markers on the rulers (#700); Tables row updated, no percentage change |
 | 2026-10-11 | trivial | Tables: the table context menu, its items following the selection as in Word (Delete Cells, Rows, Columns or Table, Merge and Split Cells, Distribute, AutoFit, Text Direction, Insert Caption…, Table Properties…); Tables row updated, no percentage change |
 | 2026-10-11 | trivial | Tables: ordinary drags, Shift+arrows and Shift+click over cells select whole cells, as in Word; Tables row updated, no percentage change |
