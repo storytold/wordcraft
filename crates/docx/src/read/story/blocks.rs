@@ -37,6 +37,19 @@ impl Reader<'_> {
                         props.drop_cap = first.props.drop_cap;
                         props.drop_cap_margin = first.props.drop_cap_margin;
                         props.drop_cap_distance = first.props.drop_cap_distance;
+                        // The first character is the one a drop cap drops, in the layout and when saving,
+                        // so a bookmark or comment anchor opening the frame moves behind the letter.
+                        if let Some(at) = first_visible(&first).filter(|at| *at > 0)
+                            && let Some(len) =
+                                first.text.get(at..).and_then(|t| t.chars().next()).filter(|c| *c != wordcraft_doc::para::OBJ).map(char::len_utf8)
+                            && let Ok(mut letter) = first.split_off(at)
+                            && let Ok(rest) = letter.split_off(len)
+                        {
+                            letter.mark = first.mark.clone();
+                            letter.append(std::mem::take(&mut first));
+                            letter.append(rest);
+                            first = letter;
+                        }
                         // A letter in a font of its own: the drop cap's font, the letter itself
                         // in the text's (so taking the drop cap away gives the letter its font back).
                         let cap_font = first.runs.first().and_then(|r| r.props.font.clone());

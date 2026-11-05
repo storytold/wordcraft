@@ -3816,6 +3816,17 @@ fn a_drop_caps_letter_after_a_bookmark_in_its_frame_takes_the_texts_size() {
     assert_eq!(p.len(), 1);
     let letter = p[0].run_ranges().find(|(range, _)| p[0].text.get(range.clone()) == Some("B")).map(|(_, props)| props.size);
     assert_eq!(letter, Some(Some(12.0)), "the letter takes the text's size, not its enlarged one: {:?}", p[0].runs);
+    // The letter comes first, where the layout and the writer look for it, and the bookmark is kept.
+    assert!(p[0].text.starts_with('B'), "{:?}", p[0].text);
+    assert_eq!(p[0].plain_text(), "Before we start");
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = text(&unzip(&bytes), "word/document.xml");
+    assert!(xml.contains(r#"w:dropCap="drop""#), "saved as a framed drop cap: {xml}");
+    assert!(xml.contains(r#"w:name="cap""#), "the bookmark survives: {xml}");
+    let again = wordcraft_docx::read(&bytes).unwrap();
+    let r = paras(&again);
+    assert_eq!((r.len(), r[0].props.drop_cap, r[0].plain_text().as_str()), (1, Some(3), "Before we start"));
+    assert_eq!(r[0].run_ranges().next().map(|(_, props)| props.size), Some(Some(12.0)), "and keeps its size: {:?}", r[0].runs);
 }
 
 /// #2360: a `w:framePr` in the document defaults, the sizeless top-left one Apple Pages writes,
