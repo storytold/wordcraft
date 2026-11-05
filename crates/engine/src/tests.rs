@@ -6116,6 +6116,22 @@ fn props_colours_take_hex_strings() {
     }
 }
 
+#[test]
+fn para_set_frame_geometry_keeps_anchor_lock_unless_replaced() {
+    use wordcraft_doc::props::TextFrame;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Framed text"}));
+    let paragraph = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    paragraph.props.frame = Some(TextFrame { anchor_lock: Some(true), ..TextFrame::default() });
+
+    run(&mut s, "para.set", json!({"props": {"frame": {"x": 36.0, "y": 72.0, "w": 108.0}}}));
+    let frame = s.doc.para_at(&Pos::body(0, 0)).unwrap().props.frame.as_ref().unwrap();
+    assert_eq!((frame.x, frame.y, frame.w, frame.anchor_lock), (36.0, 72.0, Some(108.0), Some(true)));
+
+    run(&mut s, "para.set", json!({"props": {"frame": {"x": 54.0, "anchorLock": false}}}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props.frame.as_ref().unwrap().anchor_lock, Some(false));
+}
+
 /// #555: Update Heading 2 to Match Selection (the styles pane's context menu) makes Heading 2
 /// look like the selected text — its paragraph style and direct formatting — so every Heading 2
 /// paragraph changes; the selected paragraph takes Heading 2, and it is one undo step.
