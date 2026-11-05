@@ -4,7 +4,6 @@ use super::styles::{Styles, column_sep, columns_of};
 use super::xml::{Attrs, Ev, events, get, length, local};
 use super::{Columns, Cursor, Document, FBlock, Flow, HashMap, Meta, Para, Read, SectionProps, model, page_parts};
 use std::sync::Arc;
-use wordcraft_doc::odf_profile::OdfProfile;
 
 pub(super) fn read_entry(z: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
     let f = z.by_name(name).ok()?;
@@ -422,7 +421,7 @@ pub fn parse(bytes: &[u8]) -> Result<Flow, String> {
 
 /// [`parse`], with the last section's properties (the others are on the paragraphs that end them).
 fn parse_full(bytes: &[u8]) -> Result<(Flow, SectionProps), String> {
-    parse_tracked(bytes, default_paper(), &OdfProfile::default()).map(|p| (p.flow, p.last))
+    parse_tracked(bytes, default_paper()).map(|p| (p.flow, p.last))
 }
 
 /// The paragraphs kept as read that their links tie together (see `model::Group`), in `blocks`:
@@ -706,7 +705,7 @@ fn default_paper() -> (f32, f32) {
 
 /// [`parse_full`], plus what the document holds outside the flow. A page layout that states no
 /// size (§20.215 `fo:page-width` is optional) is `paper` (width, height) in size.
-fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Result<Parsed, String> {
+fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
     wordcraft_doc::zip_guard::check(bytes, crate::MAX_ZIP_ENTRIES).map_err(|e| format!("ODT: {e}"))?;
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("ODT: not a valid package ({e})"))?;
     if let Some(mt) = read_entry(&mut z, "mimetype") {
@@ -725,34 +724,24 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Resul
         None if styles_xml.is_some() => EMPTY_CONTENT.as_bytes().to_vec(),
         None => return Err("ODT: content.xml is missing".into()),
     };
-    let profile = profile.effective();
-    let mut styles = Styles::with_profile(&profile);
+    let mut styles = Styles::default();
     let mut pages = Pages::default();
     if let Some(s) = &styles_xml {
         styles.read(s, false);
-        pages = read_pages(s, paper, &profile);
+        pages = read_pages(s, paper);
     }
-    // No page layout at all (no styles.xml, or no master page): the default paper, with the
-    // profile's margins.
+    // No page layout at all (no styles.xml, or no master page).
     if pages.first.is_none() {
-        pages.first = Some(SectionProps {
-            page_w: paper.0,
-            page_h: paper.1,
-            margin_top: profile.page_margin,
-            margin_bottom: profile.page_margin,
-            margin_left: profile.page_margin,
-            margin_right: profile.page_margin,
-            ..SectionProps::default()
-        });
+        pages.first = Some(unstated_page(paper));
     }
     styles.read(&content, true);
     let settings = read_entry(&mut z, "settings.xml");
     // Where tab stops are measured from: as the document's settings say (LibreOffice's own), else
-    // the profile's choice (the standard ties it only to indexes, §19.512.3).
-    styles.tabs_from_indent = settings.as_deref().and_then(|s| setting(s, "TabsRelativeToIndent")).unwrap_or(profile.tabs_from_indent);
+    // the margin, as Word (the standard ties it only to indexes, §19.512.3).
+    styles.tabs_from_indent = settings.as_deref().and_then(|s| setting(s, "TabsRelativeToIndent")).unwrap_or(false);
     // How the space between two paragraphs adds up: as LibreOffice's `AddParaTableSpacing` says
-    // (false: the larger of the two, as Word), else the profile's choice (the standard doesn't say).
-    let sum_spacing = settings.as_deref().and_then(|s| setting(s, "AddParaTableSpacing")).unwrap_or(profile.sum_paragraph_spacing);
+    // (false: the larger of the two, as Word), else the larger (the standard doesn't say).
+    let sum_spacing = settings.as_deref().and_then(|s| setting(s, "AddParaTableSpacing")).unwrap_or(false);
     let meta_xml = read_entry(&mut z, "meta.xml");
     let meta = meta_xml.as_deref().map(read_meta).unwrap_or_default();
     let changes = meta_xml.as_deref().map(read_changes).unwrap_or_default();
@@ -887,12 +876,6 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
 /// [`import`], with `page` the default page (the user's region's): a page layout that states no
 /// size is `page`'s size, as LibreOffice makes it its default paper's.
 pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> {
-    import_with(bytes, page, &OdfProfile::default())
-}
-
-/// [`import_on`], filling in what the standard leaves open as `profile` says (see
-/// [`wordcraft_doc::odf_profile`]).
-pub fn import_with(bytes: &[u8], page: &SectionProps, profile: &OdfProfile) -> Result<Document, String> {
     model::begin_import();
     let Parsed {
         flow,
@@ -927,7 +910,7 @@ pub fn import_with(bytes: &[u8], page: &SectionProps, profile: &OdfProfile) -> R
         kept_defs,
         kept_files,
         section_masters,
-    } = parse_tracked(bytes, (page.page_w, page.page_h), profile)?;
+    } = parse_tracked(bytes, (page.page_w, page.page_h))?;
     let mut doc = model::to_doc(&flow);
     kept.store(&mut doc);
     // Elements can't hold a NUL: it parts them.
@@ -953,8 +936,8 @@ pub fn import_with(bytes: &[u8], page: &SectionProps, profile: &OdfProfile) -> R
         doc.settings.default_tab = t;
     }
     doc.settings.page_color = page_doc.page_color;
-    // Laid out with the standard's rules, and the profile's choices made as it is laid out.
-    doc.settings.odf = Some(wordcraft_doc::odf_profile::OdfLayout { tabs_from_indent, ..profile.layout() });
+    // Laid out with the standard's rules, its tab stops measured as the file says.
+    doc.settings.odf = Some(wordcraft_doc::OdfLayout { tabs_from_indent });
     doc.settings.sum_paragraph_spacing = sum_spacing;
     // The page background picture (Design › Page Color › Fill Effects › Picture).
     if let Some((bytes, fill)) = page_image
@@ -972,8 +955,8 @@ pub fn import_with(bytes: &[u8], page: &SectionProps, profile: &OdfProfile) -> R
     let d = &mut Arc::make_mut(&mut doc.styles).default_para;
     (d.space_before, d.space_after, d.line_spacing) = (spacing.before, spacing.after, spacing.line);
     (d.indent_left, d.indent_right, d.indent_first) = (spacing.left, spacing.right, spacing.first);
-    // Unstated, as the profile says (`widowControl`).
-    d.widow_control = Some(widows.unwrap_or(profile.widow_control));
+    // Unstated: on, XSL's initial value of 2 lines (§20.312 and §20.244 refer to it), and Word's.
+    d.widow_control = Some(widows.unwrap_or(true));
     for (kind, look) in &looks {
         apply_look(&mut doc, *kind, look);
     }
@@ -1080,23 +1063,24 @@ fn line_numbering(a: &Attrs) -> Option<wordcraft_doc::section::LineNumbering> {
 /// §16.6–16.7): its minimum height and its spacing from the text, in points.
 #[derive(Clone, Copy, Default)]
 struct Band {
-    /// Its height (`fo:min-height`), when stated: the standard gives no default (the profile's
-    /// [`OdfProfile::header_min_height`]).
+    /// Its height (`fo:min-height`), when stated: the standard gives no default (see
+    /// [`Band::room`]).
     height: Option<f32>,
     spacing: f32,
     /// Content taller than the band takes its spacing first (§20.264 `style:dynamic-spacing`,
-    /// as Word does), instead of keeping it below; `None` when unstated (the profile's
-    /// [`OdfProfile::dynamic_spacing`]).
+    /// as Word does), instead of keeping it below; `None` when unstated (§20.264 has no default;
+    /// see [`Band::room`]).
     dynamic: Option<bool>,
 }
 
 impl Band {
     /// Where the text starts below the band's start (the page margin), and the gap kept below
-    /// content taller than the band, as `profile` reads what the standard leaves open.
-    fn room(&self, profile: &OdfProfile) -> (f32, f32) {
-        let height = self.height.unwrap_or(profile.header_min_height);
-        let room = if profile.header_height_includes_spacing { height.max(self.spacing) } else { height + self.spacing };
-        let gap = if self.dynamic.unwrap_or(profile.dynamic_spacing) { 0.0 } else { self.spacing };
+    /// content taller than the band. What the standard leaves open: the spacing comes after the
+    /// height, an unstated height is none (as tall as its text), and unstated dynamic spacing is
+    /// off (on, with no height stated, it would always drop the spacing the file states).
+    fn room(&self) -> (f32, f32) {
+        let room = self.height.unwrap_or(0.0) + self.spacing;
+        let gap = if self.dynamic.unwrap_or(false) { 0.0 } else { self.spacing };
         (room, gap)
     }
 }
@@ -1113,7 +1097,22 @@ struct Layout {
     footer: Band,
 }
 
-fn read_pages(xml: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Pages {
+/// A page stating nothing, `paper` (width, height) in size: no margins (§20.206–20.209 refer to
+/// XSL's margins, whose initial value is 0; whether it comes with the reference the standard
+/// doesn't say).
+fn unstated_page(paper: (f32, f32)) -> SectionProps {
+    SectionProps {
+        page_w: paper.0,
+        page_h: paper.1,
+        margin_top: 0.0,
+        margin_bottom: 0.0,
+        margin_left: 0.0,
+        margin_right: 0.0,
+        ..SectionProps::default()
+    }
+}
+
+fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
     let mut layouts: HashMap<String, Layout> = HashMap::new();
     let mut cur: Option<String> = None;
     // Inside a layout's footer style (else its header style).
@@ -1176,7 +1175,7 @@ fn read_pages(xml: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Pages {
             }
             "columns" if q.starts_with("style:") => {
                 if let Some(l) = cur.as_ref().and_then(|n| layouts.get_mut(n)) {
-                    l.columns = Some(columns_of(&a, profile.column_gap));
+                    l.columns = Some(columns_of(&a));
                 }
             }
             "column" if q.starts_with("style:") => {
@@ -1225,17 +1224,8 @@ fn read_pages(xml: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Pages {
     let mut pages = Pages { doc, next: nexts, ..Default::default() };
     for (name, layout, header, footer) in masters {
         let Some(Layout { attrs: a, columns: cols, column_specs, header: hb, footer: fb, image }) = layouts.get(&layout) else { continue };
-        // What a layout leaves unsaid: the default paper, and the profile's margins (§20.206–20.209
-        // refer to XSL's margins; whether XSL's initial 0 comes with them the standard doesn't say).
-        let mut sec = SectionProps {
-            page_w: paper.0,
-            page_h: paper.1,
-            margin_top: profile.page_margin,
-            margin_bottom: profile.page_margin,
-            margin_left: profile.page_margin,
-            margin_right: profile.page_margin,
-            ..SectionProps::default()
-        };
+        // What a layout leaves unsaid: the default paper, and no margins.
+        let mut sec = unstated_page(paper);
         apply_layout(a, &mut sec);
         sec.line_numbers.clone_from(&lines);
         if pages.first.is_none() {
@@ -1245,17 +1235,17 @@ fn read_pages(xml: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Pages {
         // ODF starts a header at the page margin and the text after the header's band; Word
         // measures the header's distance and the text's margin from the edge. How the band's
         // height and spacing add up, and what an unstated height or spacing rule is, the
-        // standard leaves open: the profile's (see `Band::room`).
+        // standard leaves open (see `Band::room`).
         let limit = sec.page_w.max(sec.page_h);
         if header {
-            let (room, gap) = hb.room(profile);
+            let (room, gap) = hb.room();
             sec.header = sec.margin_top;
             sec.margin_top = (sec.margin_top + room).min(limit);
             // Content taller than the band pushes the text down, the spacing below it kept or not.
             sec.header_gap = gap;
         }
         if footer {
-            let (room, gap) = fb.room(profile);
+            let (room, gap) = fb.room();
             sec.footer = sec.margin_bottom;
             sec.margin_bottom = (sec.margin_bottom + room).min(limit);
             sec.footer_gap = gap;
@@ -1300,7 +1290,7 @@ fn first_pages(pages: &mut Pages) {
 /// Replace `sec` with the page setup of the first master page in `styles.xml`, if any.
 #[cfg(test)]
 pub(super) fn apply_page_layout(xml: &[u8], sec: &mut SectionProps) {
-    if let Some(first) = read_pages(xml, default_paper(), &OdfProfile::default()).first {
+    if let Some(first) = read_pages(xml, default_paper()).first {
         *sec = first;
     }
 }
