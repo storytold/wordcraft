@@ -774,7 +774,7 @@ Section page-numbering settings preserve `w:chapStyle` values across the full un
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-05 | trivial | PR #4558: keep dashSmallGap distinct through DOC/DOCX/RTF import and document/PDF output; ODT degrades it to dashed rather than solid. Border preview patterns and synthetic round trips are covered; existing Word Mac observations are narrow and other platforms remain unqualified. |
+| 2026-11-05 | trivial | PR #4558: keep dashSmallGap distinct through DOC/DOCX/RTF import and document/PDF output; ODT degrades it to dashed rather than solid. Border preview patterns and synthetic round trips are covered; existing Word Mac observations are narrow and other platforms remain unqualified. Dotted table previews now use equal one-stroke-width on/off segments at every tested width. |
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` is preserved with true, false and absent values; OOXML properties follow schema order. Grid layout remains open. |
 | 2026-10-28 | trivial | Per-page ink object lookups, #3614. Drawing order, geometry and saved data retain their behavior; no readiness estimate change |
 | 2026-11-04 | trivial | Progress log: OpenDocument display settings removed (gap 19) |

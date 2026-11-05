@@ -416,7 +416,7 @@ pub fn table_style_preview(ui: &mut Ui, style: Option<&TableStyleProps>, look: T
                             &[px * 3.0, px * 3.0],
                             0.0,
                         )),
-                        BorderStyle::Dotted => painter.extend(egui::Shape::dashed_line(&[from, to], stroke, 3.0, 2.0)),
+                        BorderStyle::Dotted => painter.extend(egui::Shape::dashed_line(&[from, to], stroke, px, px)),
                         _ => {
                             painter.line_segment([from, to], stroke);
                         }
@@ -793,7 +793,7 @@ mod tests {
         assert!(after.iter().all(|y| (y - top).abs() > 0.01), "the header row's top edge is gone: {after:?}");
         assert!(after.len() < before.len());
     }
-    /// Painted table borders retain their scaled dash/gap arrays; dotted previews keep their legacy pattern.
+    /// Painted table borders retain their document dash/gap ratios at each stroke width.
     #[test]
     fn border_preview_table_patterns_match_document_strokes() {
         let color = egui::Color32::from_rgb(13, 97, 181);
@@ -827,7 +827,7 @@ mod tests {
                 (BorderStyle::Dashed, [4.0, 4.0, 4.0, 4.0]),
                 (BorderStyle::DashSmallGap, [4.0, 1.0, 4.0, 1.0]),
                 (BorderStyle::DotDash, [7.0, 3.0, 3.0, 3.0]),
-                (BorderStyle::Dotted, [3.0, 2.0, 3.0, 2.0]),
+                (BorderStyle::Dotted, [1.0, 1.0, 1.0, 1.0]),
             ] {
                 let segments = paint(kind, width);
                 assert!(segments.len() > 2);
@@ -837,7 +837,7 @@ mod tests {
                     segments[1].0[1].x - segments[1].0[0].x,
                     segments[2].0[0].x - segments[1].0[1].x,
                 ];
-                let unit = if kind == BorderStyle::Dotted { 1.0 } else { segments[0].1 };
+                let unit = segments[0].1;
                 for (actual, ratio) in actual.into_iter().zip(ratios) {
                     assert!((actual - ratio * unit).abs() < 0.01, "{kind:?}, width {width}: expected {}, got {actual}", ratio * unit);
                 }
