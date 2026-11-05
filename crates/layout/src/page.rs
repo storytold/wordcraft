@@ -296,10 +296,18 @@ impl PageBuilder<'_> {
         self.page_items_start = self.pages.last().map_or(0, |p| p.items.len());
         true
     }
-    pub(crate) fn new_page(&mut self, first_block: usize, body_top: f32) {
+    /// Finish the current page: the lines between its columns, its vertical alignment and its
+    /// footnotes, placed with the section state in effect (margins, gutter, separators).
+    /// `new_page` starts with this; after it has run, `new_page` finds nothing left to finish.
+    pub(crate) fn finish_page(&mut self) {
         self.close_column_lines();
         self.apply_valign();
+        // The page is aligned once: finishing it again before it is left moves nothing twice.
+        self.page_valign = wordcraft_doc::section::PageVAlign::Top;
         self.flush_notes();
+    }
+    pub(crate) fn new_page(&mut self, first_block: usize, body_top: f32) {
+        self.finish_page();
         self.beneath = self.sect_beneath;
         self.excl.clear();
         // Floats placed above their anchors further down this page are known from its start.
