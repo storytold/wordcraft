@@ -35,7 +35,9 @@ sync_github_name = false
 real_name = "Saeed Azarehgar"
 
 [people.vangel76]
-sync_github_name = true
+real_name = "Valentin Klein"
+display_name = "vangel76"
+sync_github_name = false
 
 [people.dkhlapov]
 real_name = "Dmitrii Khlapov"
@@ -193,3 +195,6 @@ real_name = "Nathan Wells"
 
 [people.entropybeater]
 display_name = "entropybeater"
+
+[people.helenkwok]
+real_name = "Helen Kwok"
