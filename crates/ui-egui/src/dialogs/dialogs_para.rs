@@ -895,7 +895,7 @@ mod tests {
         let mut border = Border::single(0.5);
         border.shadow = Some(true);
         border.frame = Some(false);
-        app.session.doc.styles.get_mut("Normal").expect("built-in Normal style").para.borders =
+        std::sync::Arc::make_mut(&mut app.session.doc.styles).get_mut("Normal").expect("built-in Normal style").para.borders =
             Some(Borders { top: Some(border), ..Default::default() });
 
         let Some(mut form) = BordersForm::read(&app, 0) else { panic!("Borders dialog opens") };
@@ -913,7 +913,7 @@ mod tests {
         let mut border = Border::single(0.5);
         border.shadow = Some(true);
         border.frame = Some(false);
-        app.session.doc.styles.get_mut("Emphasis").expect("built-in character style").chr.border = Some(border);
+        std::sync::Arc::make_mut(&mut app.session.doc.styles).get_mut("Emphasis").expect("built-in character style").chr.border = Some(border);
         let _ = app.run("para.borders", json!({"sides": {"top": {"style": "single"}}}));
         let _ = app.run("select.text", json!({"text": "Border flags"}));
         let _ = app.run("format.set", json!({"props": {"style": "Emphasis"}}));
