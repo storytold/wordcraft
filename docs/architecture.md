@@ -1,6 +1,6 @@
 # WordCraft architecture
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-02 · **Change:** trivial (craft-proof's row says what a build without the Language data keeps: English spelling from an installed Hunspell English or the built-in list, rule hyphenation for Bulgarian, Turkish and Russian; previously minor: proofing moved out: `wordcraft-proof` is craft-libs' `craft-proof`, its Language data craft-i18n's `language-data/` embedded from `CRAFT_I18N_DIR`; previously major: crate and layer inventory, source counts, proofing languages and module boundaries re-measured from this checkout; previously minor: new L5 crate `assistant`: GeenioAI's agent loop over the MCP tools; previously minor: `proof` is per language: English and Polish; previously major: first committed version; `plan/architecture.md` is local-only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-05 · **Change:** trivial (`fantastico`'s row: GeenioAI's requests are jobs of the Craft AI layer's FANTASTICO adapter, no `fantastico-sdk`; previously trivial: craft-proof's row says what a build without the Language data keeps: English spelling from an installed Hunspell English or the built-in list, rule hyphenation for Bulgarian, Turkish and Russian; previously minor: proofing moved out: `wordcraft-proof` is craft-libs' `craft-proof`, its Language data craft-i18n's `language-data/` embedded from `CRAFT_I18N_DIR`; previously major: crate and layer inventory, source counts, proofing languages and module boundaries re-measured from this checkout; previously minor: new L5 crate `assistant`: GeenioAI's agent loop over the MCP tools; previously minor: `proof` is per language: English and Polish; previously major: first committed version; `plan/architecture.md` is local-only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 How WordCraft is built today. The longer design notes in
 `plan/architecture.md` are gitignored and local to the original author's machine; this file is the
@@ -34,7 +34,7 @@ and 21 workspace packages (2026-11-03).
 | L4 | [`engine`](../crates/engine/src) | 72,851 | `Session` and editing state; command registry in `cmd/`; file dispatch in `io`; catalog, keymap, recovery, ribbon model, speech and view state |
 | L5 | [`mcp`](../crates/mcp/src) | 1,822 | MCP server exposing commands as tools; headless or bridged to the running app |
 | L5 | [`zotero`](../crates/zotero/src) | 2,372 | Zotero word-processor integration protocol answered against a `Session` |
-| L5 | [`fantastico`](../crates/fantastico/src) | 396 | GeenioAI's model endpoint on a FANTASTICO account, with streaming replies (native only: a blocking HTTP transport under `fantastico-sdk`; `Class::Native`, left out of the wasm check) |
+| L5 | [`fantastico`](../crates/fantastico/src) | 327 | GeenioAI's model endpoint on a FANTASTICO account: its chat requests as jobs of the Craft AI layer's `craft-ai-fantastico` adapter, streamed back (native only; `Class::Native`, left out of the wasm check) |
 | L5 | [`assistant`](../crates/assistant/src) | 865 | GeenioAI's agent loop over the MCP tools (`get_text`, `type_text`, `execute`…) against any backend; the model comes from the host as a `Provider`, no network code ([assistant.md](assistant.md)) |
 | L6 | [`ui-egui`](../crates/ui-egui/src) | 81,759 | Front end: ribbon, keytips, mini-toolbar, Backstage, canvas, rulers, panes, dialogs, i18n, themes, control channel and headless `ui_shot` example |
 | apps | [`wordcraft`](../apps/wordcraft/src) | 3,740 | Desktop app (eframe + wgpu; logging, window geometry and file associations; GeenioAI's FANTASTICO host and key store) |
@@ -73,6 +73,7 @@ and 21 workspace packages (2026-11-03).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | trivial | `fantastico` re-counted (327 lines): GeenioAI's requests are jobs of `craft-ai-fantastico`, with no `fantastico-sdk` |
 | 2026-11-02 | trivial | craft-proof's row: without the Language data English spelling falls back to an installed Hunspell English or the built-in Moby list, and only pattern hyphenation is off (#5202 review) |
 | 2026-11-01 | minor | `proof` left the workspace: it is `craft-proof` in storytold/craft-libs (with its history), and the spelling and hyphenation data is craft-i18n's `language-data/` (`CRAFT_I18N_DIR`); `assets/spelling` and `assets/hyphenation` are gone |
 | 2026-10-28 | major | Recounted workspace crates, layers and Rust source lines; refreshed proofing languages and documented current engine/layout module boundaries and source links |

@@ -8,7 +8,7 @@
 //! reads it back, to read the account's credit. Requests go through the layer
 //! (`craft-ai-client`), which checks the user's agreement before anything is sent and records
 //! each job; the `craft-ai-fantastico` adapter carries GeenioAI's conversation and streams the
-//! replies.
+//! replies, and reads the account and its credit.
 //!
 //! A key stored by an older WordCraft in `<settings dir>/assistant/fantastico.key` moves into the
 //! keychain the first time the assistant needs it, and the file is then removed.
@@ -18,17 +18,17 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use craft_ai_client::{AiClient, ConnectionManager, ProviderFactory};
-use craft_ai_core::job::{Event, JobState};
 use craft_ai_core::{
-    AiError, AppId, Billing, CapabilityId, Connection, ConnectionDraft, ConnectionId, ConsentLedger, ErrorKind, InputRole, ModelId, Payload, Request,
-    Role, RoleId,
+    AiError, AppId, Billing, Connection, ConnectionDraft, ConnectionId, ConsentLedger, ErrorKind, ModelId, Payload, Request, Role, RoleId,
+    SecretString,
 };
+use craft_ai_fantastico::{AccountInfo, Balance, FantasticoConfig, FantasticoProvider, UreqWire, Wire};
 use craft_ai_native::secrets::{EnvStore, KeychainStore, LayeredStore, SecretStore, secret_for};
 use craft_ai_native::shared::SharedStore;
 use craft_ai_native::{ConsentFile, HistoryFile};
-use fantastico_sdk::{Fantastico, Options};
 use serde_json::Value;
 use wordcraft_assistant::{Delta, Provider};
+use wordcraft_fantastico::{TITLE, follow};
 use wordcraft_ui_egui::assistant::{Account, AssistantEvent, AssistantHost, Consent, ModelInfo, Service};
 
 /// The app, as the layer's store and consent records name it.
@@ -43,30 +43,22 @@ const LABEL: &str = "FANTASTICO";
 const SITE: &str = "https://artcraft.fantastico.cc";
 /// The largest key file of an older WordCraft read back (a key is under a hundred bytes).
 const MAX_KEY_BYTES: u64 = 4096;
-/// How often a running reply is polled for its next pieces.
-const POLL: Duration = Duration::from_millis(25);
-/// The longest one model call may take before it is cancelled.
-const CALL_TIMEOUT: Duration = Duration::from_secs(600);
 /// How long `has_key`'s answer is reused: the pane asks every frame.
 const HAS_KEY_TTL: Duration = Duration::from_secs(2);
 
-fn options() -> Options {
-    Options { title: "WordCraft".into(), referer: "https://github.com/storytold/wordcraft".into(), ..Options::default() }
-}
-
 fn chat_role() -> Result<Role, AiError> {
-    let invalid = |e: craft_ai_core::ids::IdError| AiError::new(ErrorKind::Internal, e.to_string());
+    let internal = |e: String| AiError::new(ErrorKind::Internal, e);
     Ok(Role {
-        id: RoleId::new(ROLE).map_err(invalid)?,
+        id: RoleId::new(ROLE).map_err(|e| internal(e.to_string()))?,
         label: "GeenioAI".into(),
-        capability: CapabilityId::parse("text.complete").map_err(|e| AiError::new(ErrorKind::Internal, e.to_string()))?,
-        inputs: vec![InputRole::parse(craft_ai_fantastico::TURN).map_err(invalid)?],
+        capability: wordcraft_fantastico::capability().map_err(internal)?,
+        inputs: vec![wordcraft_fantastico::turn().map_err(internal)?],
     })
 }
 
 /// The adapter registered under its name, naming WordCraft in the provider's usage reports.
 fn with_fantastico(mut factory: ProviderFactory) -> ProviderFactory {
-    factory.register(craft_ai_fantastico::PROVIDER_NAME, craft_ai_fantastico::build_titled("WordCraft"));
+    factory.register(craft_ai_fantastico::PROVIDER_NAME, craft_ai_fantastico::build_titled(TITLE));
     factory
 }
 
@@ -80,6 +72,8 @@ struct Layer {
     consent_file: Option<ConsentFile>,
     ledger: Mutex<ConsentLedger>,
     role: Role,
+    /// The HTTP stack the account and its credit are read through.
+    wire: Arc<dyn Wire>,
 }
 
 impl Layer {
@@ -90,10 +84,11 @@ impl Layer {
         factory: ProviderFactory,
         probes: ProviderFactory,
         consent_file: Option<ConsentFile>,
+        wire: Arc<dyn Wire>,
     ) -> Result<Self, AiError> {
         let client = AiClient::new(app, shared.clone(), secrets.clone()).with_factory(factory);
         let manager = ConnectionManager::new(shared.clone(), secrets.clone()).with_probe_factory(probes);
-        Ok(Self { client, manager, shared, secrets, consent_file, ledger: Mutex::default(), role: chat_role()? })
+        Ok(Self { client, manager, shared, secrets, consent_file, ledger: Mutex::default(), role: chat_role()?, wire })
     }
 
     /// The FANTASTICO connection GeenioAI uses: the one its tool is bound to, else the first one.
@@ -121,8 +116,14 @@ impl Layer {
         }
     }
 
-    fn account_client(&self, connection: &Connection) -> Result<Fantastico, String> {
-        Fantastico::new(self.key(connection)?, options()).map_err(|e| e.message)
+    /// The adapter on `connection`'s key, to read the account and its credit (nothing is minted).
+    fn account_client(&self, connection: &Connection) -> Result<FantasticoProvider, String> {
+        let config = craft_ai_fantastico::config_for(connection, Some(SecretString::new(self.key(connection)?))).map_err(|e| e.message)?;
+        self.account_for(config)
+    }
+
+    fn account_for(&self, config: FantasticoConfig) -> Result<FantasticoProvider, String> {
+        FantasticoProvider::with_wire(config.with_title(TITLE), self.wire.clone()).map_err(|e| e.message)
     }
 
     /// Store `key` on a new connection, or on `existing`, with the models the account offers.
@@ -141,8 +142,11 @@ impl Layer {
             }
         };
         draft.key = key.to_string();
+        let tested = draft.endpoint.clone();
         let report = self.manager.test_draft(&draft).map_err(|e| e.message)?;
-        draft.set_models(report.models);
+        if !draft.set_models(&tested, report.models) {
+            return Err("The account's address changed while it was checked".into());
+        }
         let saved = self.manager.save(&draft).map_err(|e| e.to_string())?;
         if let Some(w) = saved.warning {
             log::warn!("GeenioAI: {w}");
@@ -177,7 +181,7 @@ impl Layer {
             return Ok(());
         }
         let connection = self.connection()?.ok_or("No account key is set")?;
-        let suggested = self.account_client(&connection).ok().and_then(|c| c.config().ok()).and_then(|c| c.model);
+        let suggested = self.account_client(&connection).ok().and_then(|c| c.account().ok()).and_then(|a| a.model);
         let first = connection.models.first().map(|m| m.id.as_str().to_string());
         let model = suggested.or(first).ok_or("The account offers no models")?;
         self.bind(&connection.id, &model)
@@ -203,9 +207,8 @@ impl Layer {
     /// A request of the kind every turn is (text turns, tool definitions), for the agreement:
     /// agreeing to it covers them all.
     fn sample_plan(&self) -> Result<craft_ai_client::Plan, String> {
-        let turn = InputRole::parse(craft_ai_fantastico::TURN).map_err(|e| e.to_string())?;
         let request = Request::new(self.role.capability.clone())
-            .with_input(turn, Payload::text(r#"{"role":"user","content":""}"#))
+            .with_input(wordcraft_fantastico::turn()?, Payload::text(r#"{"role":"user","content":""}"#))
             .with_param("tools", Value::Array(Vec::new()));
         self.client.plan(&self.role, request).map_err(|e| e.message)
     }
@@ -213,59 +216,20 @@ impl Layer {
     /// One model call: the conversation in, the whole reply out, its text to `on_delta` as it
     /// arrives.
     fn call(&self, request: &Value, stream: bool, on_delta: &mut (dyn FnMut(Delta<'_>) + Send)) -> Result<Value, String> {
-        let model = request.get("model").and_then(Value::as_str).filter(|m| !m.trim().is_empty()).ok_or("The request names no model")?;
-        self.ensure_bound(model.trim())?;
-        let messages = request.get("messages").and_then(Value::as_array).ok_or("The request has no messages")?;
-        let turn = InputRole::parse(craft_ai_fantastico::TURN).map_err(|e| e.to_string())?;
-        let mut req = Request::new(self.role.capability.clone());
-        for m in messages {
-            req = req.with_input(turn.clone(), Payload::text(m.to_string()));
-        }
-        if let Some(tools) = request.get("tools") {
-            req = req.with_param("tools", tools.clone());
-        }
-        if stream {
-            req = req.streaming();
-        }
+        self.ensure_bound(wordcraft_fantastico::model_of(request)?)?;
+        let req = wordcraft_fantastico::request(self.role.capability.clone(), request, stream)?;
         let plan = self.client.plan(&self.role, req).map_err(|e| e.message)?;
         let job = self.client.start(&plan, &self.load_ledger()).map_err(|e| match e.kind {
             ErrorKind::ConsentRequired => "Nothing was sent: GeenioAI needs your agreement first.".to_string(),
             _ => e.message,
         })?;
-        let deadline = Instant::now() + CALL_TIMEOUT;
-        let (mut started, mut reply) = (false, None);
-        loop {
-            let snap = job.poll().map_err(|e| e.message)?;
-            for event in snap.events {
-                match event {
-                    Event::TextDelta { text } => {
-                        if !started {
-                            on_delta(Delta::Start);
-                            started = true;
-                        }
-                        on_delta(Delta::Text(&text));
-                    }
-                    Event::Output(o) if o.label.as_deref() == Some(craft_ai_fantastico::COMPLETION) => {
-                        if let Payload::Inline { data, .. } = o.payload {
-                            reply = serde_json::from_slice::<Value>(&data).ok();
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            match snap.state {
-                JobState::Succeeded => break,
-                JobState::Failed { error } => return Err(error.message),
-                JobState::Cancelled => return Err("The request was cancelled".into()),
-                JobState::Queued | JobState::Running { .. } => {}
-            }
-            if Instant::now() > deadline {
+        follow(
+            || job.poll(),
+            || {
                 let _ = job.cancel();
-                return Err("FANTASTICO did not answer in time".into());
-            }
-            std::thread::sleep(POLL);
-        }
-        reply.ok_or_else(|| "FANTASTICO sent an incomplete reply".to_string())
+            },
+            on_delta,
+        )
     }
 }
 
@@ -298,9 +262,16 @@ impl LayerHost {
         let shared = SharedStore::at_default_location().map_err(|e| AiError::from(e).message)?;
         let secrets: Arc<dyn SecretStore> = Arc::new(LayeredStore::new(vec![Box::new(EnvStore::new()), Box::new(KeychainStore::new())]));
         let consent_file = ConsentFile::at_default_location(&app);
-        let mut layer =
-            Layer::new(app, shared, secrets, with_fantastico(ProviderFactory::standard()), with_fantastico(ProviderFactory::probing()), consent_file)
-                .map_err(|e| e.message)?;
+        let mut layer = Layer::new(
+            app,
+            shared,
+            secrets,
+            with_fantastico(ProviderFactory::standard()),
+            with_fantastico(ProviderFactory::probing()),
+            consent_file,
+            Arc::new(UreqWire::default()),
+        )
+        .map_err(|e| e.message)?;
         if let Some(history) = HistoryFile::at_default_location() {
             layer.client = layer.client.with_history(history);
         }
@@ -317,28 +288,28 @@ impl LayerHost {
 
     /// Check `key` with the account service before anything is stored: a mistyped key is never
     /// kept. Returns the trimmed key and its account.
-    fn verify(key: &str) -> Result<(String, Account), String> {
+    fn verify(&self, key: &str) -> Result<(String, Account), String> {
         let key = key.trim().to_string();
         if !key.starts_with("ck-fant-") {
             return Err("This is not an account key: an account key starts with ck-fant-".into());
         }
-        let client = Fantastico::new(key.clone(), options()).map_err(|e| e.message)?;
-        let config = client.config().map_err(|e| match e.code.as_str() {
-            "INVALID_CONTO_KEY" => "FANTASTICO does not recognise this key".to_string(),
-            "NETWORK_ERROR" => "FANTASTICO cannot be reached: check the internet connection".to_string(),
+        let config = FantasticoConfig::new(SecretString::new(key.clone())).with_base_url(ENDPOINT);
+        let info = self.layer.account_for(config)?.account().map_err(|e| match e.kind {
+            ErrorKind::Auth => "FANTASTICO does not recognise this key".to_string(),
+            ErrorKind::Network => "FANTASTICO cannot be reached: check the internet connection".to_string(),
             _ => e.message,
         })?;
-        Ok((key, Self::account_of(config)))
+        Ok((key, Self::account_of(info)))
     }
 
-    fn account_of(config: fantastico_sdk::EdgeConfig) -> Account {
-        Account { conto_id: config.account_id, model: config.model.unwrap_or_default(), remaining_usd: config.balance.as_ref().map(Self::credit) }
+    fn account_of(info: AccountInfo) -> Account {
+        Account { conto_id: info.account_id, model: info.model.unwrap_or_default(), remaining_usd: info.balance.as_ref().map(Self::credit) }
     }
 
     /// The credit as the user should see it: what is left including the unspent reservations
     /// of live keys (`totalRemaining`, worked out by the account service), so a block set aside
     /// by a key doesn't read as spent. An older server only says what is spendable right now.
-    fn credit(b: &fantastico_sdk::Balance) -> f64 {
+    fn credit(b: &Balance) -> f64 {
         b.total_remaining_usd.filter(|t| t.is_finite()).unwrap_or(b.remaining_usd)
     }
 
@@ -411,7 +382,7 @@ impl AssistantHost for LayerHost {
         if self.layer.connection()?.is_some() {
             return Err("A key is already set on this computer".into());
         }
-        let (key, account) = Self::verify(&key)?;
+        let (key, account) = self.verify(&key)?;
         let id = self.layer.save_key(&key, None)?;
         self.drop_legacy();
         if let Err(e) = self.layer.bind(&id, &account.model) {
@@ -422,7 +393,7 @@ impl AssistantHost for LayerHost {
     }
 
     fn change_key(&self, key: String) -> Result<Account, String> {
-        let (key, account) = Self::verify(&key)?;
+        let (key, account) = self.verify(&key)?;
         // The checked new key replaces whatever was there, an older key file included.
         let existing = self.layer.connection()?;
         let id = self.layer.save_key(&key, existing.as_ref())?;
@@ -456,8 +427,8 @@ impl AssistantHost for LayerHost {
 
     fn account(&self) -> Option<Account> {
         let connection = self.connection().ok()?;
-        let config = self.layer.account_client(&connection).ok()?.config().ok()?;
-        Some(Self::account_of(config))
+        let info = self.layer.account_client(&connection).ok()?.account().ok()?;
+        Some(Self::account_of(info))
     }
 
     /// The conversation's endpoint, and the account's suggested model (the model the tool is
@@ -465,7 +436,7 @@ impl AssistantHost for LayerHost {
     fn provider(&self) -> Result<(Box<dyn Provider + Send>, String), String> {
         let connection = self.connection()?;
         self.layer.ensure_some_binding()?;
-        let suggested = self.layer.account_client(&connection).ok().and_then(|c| c.config().ok()).and_then(|c| c.model);
+        let suggested = self.layer.account_client(&connection).ok().and_then(|c| c.account().ok()).and_then(|a| a.model);
         // `ensure_some_binding` just made sure the tool is bound to a model.
         let model = suggested.or_else(|| self.layer.bound().map(|(_, m)| m.as_str().to_string())).ok_or("The account offers no models")?;
         Ok((Box::new(LayerProvider { layer: self.layer.clone() }), model))

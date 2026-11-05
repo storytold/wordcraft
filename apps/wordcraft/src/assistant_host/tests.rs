@@ -5,15 +5,14 @@ use std::io::Cursor;
 use std::sync::Mutex;
 
 use craft_ai_core::SecretString;
-use craft_ai_fantastico::{FantasticoConfig, FantasticoProvider, Wire, WireResponse};
+use craft_ai_fantastico::{HttpRequest, Method, WireResponse};
 use craft_ai_native::secrets::MemoryStore;
-use fantastico_sdk::{HttpRequest, Method};
 use serde_json::json;
 
 use super::*;
 
 const BASE: &str = "https://fantastico.cc/api";
-/// The model call, wherever the SDK sends it.
+/// The model call, wherever the account service says to send it.
 const CHAT: &str = "/chat/completions";
 const MODEL: &str = "anthropic/claude-sonnet-5";
 
@@ -43,6 +42,21 @@ impl Wire for Fake {
                 {"id": "flux/image", "architecture": {"output_modalities": ["image"]}}
             ]});
             return Ok(reply("application/json", models.to_string()));
+        }
+        let balance = json!({"remainingUsd": 4.0, "totalRemainingUsd": 5.5});
+        if req.url == format!("{BASE}/edge/config") {
+            if req.header("Authorization") != Some("Bearer ck-fant-test-key") {
+                return Ok(WireResponse {
+                    status: 401,
+                    headers: vec![("Content-Type".into(), "application/json".into())],
+                    body: Box::new(Cursor::new(json!({"message": "unknown key", "type": "INVALID_CONTO_KEY"}).to_string())),
+                });
+            }
+            let config = json!({"contoId": "conto-7", "status": "active", "model": MODEL, "balance": balance});
+            return Ok(reply("application/json", config.to_string()));
+        }
+        if req.url == format!("{BASE}/edge/balance") {
+            return Ok(reply("application/json", balance.to_string()));
         }
         if req.url.starts_with(BASE) || !req.url.ends_with(CHAT) {
             return Err(format!("unexpected request to {}", req.url));
@@ -108,6 +122,7 @@ fn setup(name: &str) -> Setup {
         factory(ProviderFactory::standard(), &fake),
         factory(ProviderFactory::probing(), &fake),
         Some(ConsentFile::new(dir.join("consent.json"))),
+        fake.clone() as Arc<dyn Wire>,
     )
     .unwrap();
     Setup { host: LayerHost::with_layer(layer, &dir), fake, secrets, dir }
@@ -261,6 +276,26 @@ fn connect_refuses_a_second_key_and_a_wrong_one_before_any_request() {
     connected(&s);
     assert!(s.host.connect("ck-fant-another".into()).unwrap_err().contains("already set"));
     assert_eq!(s.host.service().key_prefix, "ck-fant-");
+}
+
+/// The key is checked with the account service before it is stored; the account, its suggested
+/// model and its credit are read with it, and nothing is minted for that.
+#[test]
+fn connect_checks_the_key_and_reads_the_account_and_its_credit() {
+    let s = setup("account");
+    let e = s.host.connect("ck-fant-mistyped".into()).unwrap_err();
+    assert!(e.contains("does not recognise"), "{e}");
+    assert!(s.host.layer.connection().unwrap().is_none(), "a refused key is not kept");
+    let account = s.host.connect("  ck-fant-test-key ".into()).unwrap();
+    assert_eq!((account.conto_id.as_str(), account.model.as_str()), ("conto-7", MODEL));
+    // The total, with the unspent reservations, is what the user reads.
+    assert_eq!(account.remaining_usd, Some(5.5));
+    assert_eq!(s.host.layer.bound().map(|(_, m)| m.as_str().to_string()).as_deref(), Some(MODEL));
+    assert_eq!(s.host.account().map(|a| a.conto_id), Some("conto-7".into()));
+    assert_eq!(s.host.balance(), Some(5.5));
+    let (_, model) = s.host.provider().unwrap();
+    assert_eq!(model, MODEL, "the account's suggestion");
+    assert!(s.fake.bodies.lock().unwrap().is_empty(), "no model was called");
 }
 
 /// The tools GeenioAI sends ride in the request's parameters, which the layer caps at 64 KiB.

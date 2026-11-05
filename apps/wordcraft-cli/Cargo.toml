@@ -22,6 +22,5 @@ wordcraft-zotero = { workspace = true }
 # `ask`: GeenioAI, the AI assistant, on a document, through a FANTASTICO account.
 wordcraft-assistant = { workspace = true }
 wordcraft-fantastico = { workspace = true }
-fantastico-sdk = { workspace = true }
 serde_json = { workspace = true }
 sys-locale = "0.3"

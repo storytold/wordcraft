@@ -1,6 +1,6 @@
 [package]
 name = "wordcraft-fantastico"
-description = "GeenioAI's model endpoint: a FANTASTICO account as a streaming `Provider` (native only)"
+description = "GeenioAI's model endpoint: the Craft AI layer's FANTASTICO adapter as a streaming `Provider` (native only)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,8 +10,6 @@ workspace = true
 
 [dependencies]
 wordcraft-assistant = { workspace = true }
-fantastico-sdk = { workspace = true }
-# The streaming transport: the same blocking HTTP stack the SDK's own transport uses.
-ureq = { version = "3", default-features = false, features = ["rustls"] }
+craft-ai-core = { workspace = true }
+craft-ai-fantastico = { workspace = true }
 serde_json = { workspace = true }
-log = { workspace = true }

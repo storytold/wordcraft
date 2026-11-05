@@ -1103,7 +1103,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-artcraft"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-ai-integrations?rev=ea85917afe35afcd48a6d19a27daca0621c74db2#ea85917afe35afcd48a6d19a27daca0621c74db2"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=850eccabbc21fc7418797d7e4a3d4e1ccdc92f27#850eccabbc21fc7418797d7e4a3d4e1ccdc92f27"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
@@ -1115,7 +1115,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-bfl"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-ai-integrations?rev=ea85917afe35afcd48a6d19a27daca0621c74db2#ea85917afe35afcd48a6d19a27daca0621c74db2"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=850eccabbc21fc7418797d7e4a3d4e1ccdc92f27#850eccabbc21fc7418797d7e4a3d4e1ccdc92f27"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
@@ -1126,8 +1126,9 @@ dependencies = [
 [[package]]
 name = "craft-ai-client"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-ai-integrations?rev=ea85917afe35afcd48a6d19a27daca0621c74db2#ea85917afe35afcd48a6d19a27daca0621c74db2"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=850eccabbc21fc7418797d7e4a3d4e1ccdc92f27#850eccabbc21fc7418797d7e4a3d4e1ccdc92f27"
 dependencies = [
+ "chrono",
  "craft-ai-artcraft",
  "craft-ai-bfl",
  "craft-ai-comfy-env",
@@ -1135,6 +1136,7 @@ dependencies = [
  "craft-ai-core",
  "craft-ai-declarative",
  "craft-ai-engine",
+ "craft-ai-fantastico",
  "craft-ai-features",
  "craft-ai-media",
  "craft-ai-native",
@@ -1147,7 +1149,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-comfy-env"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-ai-integrations?rev=ea85917afe35afcd48a6d19a27daca0621c74db2#ea85917afe35afcd48a6d19a27daca0621c74db2"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=850eccabbc21fc7418797d7e4a3d4e1ccdc92f27#850eccabbc21fc7418797d7e4a3d4e1ccdc92f27"
 dependencies = [
  "craft-ai-core",
  "craft-ai-features",
@@ -1169,14 +1171,14 @@ dependencies = [
 [[package]]
 name = "craft-ai-comfyui"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-ai-integrations?rev=ea85917afe35afcd48a6d19a27daca0621c74db2#ea85917afe35afcd48a6d19a27daca0621c74db2"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=850eccabbc21fc7418797d7e4a3d4e1ccdc92f27#850eccabbc21fc7418797d7e4a3d4e1ccdc92f27"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "craft-ai-core",
  "craft-ai-http",
  "craft-ai-media",
  "craft-ai-native",
- "png 0.17.16",
+ "png",
  "serde",
  "serde_json",
  "tempfile",
@@ -1187,8 +1189,9 @@ dependencies = [
 [[package]]
 name = "craft-ai-core"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-ai-integrations?rev=ea85917afe35afcd48a6d19a27daca0621c74db2#ea85917afe35afcd48a6d19a27daca0621c74db2"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=850eccabbc21fc7418797d7e4a3d4e1ccdc92f27#850eccabbc21fc7418797d7e4a3d4e1ccdc92f27"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
 ]
@@ -1196,7 +1199,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-declarative"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-ai-integrations?rev=ea85917afe35afcd48a6d19a27daca0621c74db2#ea85917afe35afcd48a6d19a27daca0621c74db2"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=850eccabbc21fc7418797d7e4a3d4e1ccdc92f27#850eccabbc21fc7418797d7e4a3d4e1ccdc92f27"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
@@ -1208,7 +1211,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-engine"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-ai-integrations?rev=ea85917afe35afcd48a6d19a27daca0621c74db2#ea85917afe35afcd48a6d19a27daca0621c74db2"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=850eccabbc21fc7418797d7e4a3d4e1ccdc92f27#850eccabbc21fc7418797d7e4a3d4e1ccdc92f27"
 dependencies = [
  "craft-ai-core",
  "craft-ai-features",
@@ -1217,11 +1220,10 @@ dependencies = [
 [[package]]
 name = "craft-ai-fantastico"
 version = "0.1.0"
-source = "git+https://github.com/Byte42-it/craft-ai-fantastico?rev=24f907ace58bb87a2d54a08303973b37e2c6801f#24f907ace58bb87a2d54a08303973b37e2c6801f"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=850eccabbc21fc7418797d7e4a3d4e1ccdc92f27#850eccabbc21fc7418797d7e4a3d4e1ccdc92f27"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
- "fantastico-sdk",
  "serde_json",
  "ureq",
 ]
@@ -1229,7 +1231,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-features"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-ai-integrations?rev=ea85917afe35afcd48a6d19a27daca0621c74db2#ea85917afe35afcd48a6d19a27daca0621c74db2"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=850eccabbc21fc7418797d7e4a3d4e1ccdc92f27#850eccabbc21fc7418797d7e4a3d4e1ccdc92f27"
 dependencies = [
  "craft-ai-core",
  "serde",
@@ -1239,7 +1241,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-http"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-ai-integrations?rev=ea85917afe35afcd48a6d19a27daca0621c74db2#ea85917afe35afcd48a6d19a27daca0621c74db2"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=850eccabbc21fc7418797d7e4a3d4e1ccdc92f27#850eccabbc21fc7418797d7e4a3d4e1ccdc92f27"
 dependencies = [
  "craft-ai-core",
  "ureq",
@@ -1248,7 +1250,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-media"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-ai-integrations?rev=ea85917afe35afcd48a6d19a27daca0621c74db2#ea85917afe35afcd48a6d19a27daca0621c74db2"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=850eccabbc21fc7418797d7e4a3d4e1ccdc92f27#850eccabbc21fc7418797d7e4a3d4e1ccdc92f27"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
@@ -1260,7 +1262,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-native"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-ai-integrations?rev=ea85917afe35afcd48a6d19a27daca0621c74db2#ea85917afe35afcd48a6d19a27daca0621c74db2"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=850eccabbc21fc7418797d7e4a3d4e1ccdc92f27#850eccabbc21fc7418797d7e4a3d4e1ccdc92f27"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -1275,7 +1277,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-openai"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-ai-integrations?rev=ea85917afe35afcd48a6d19a27daca0621c74db2#ea85917afe35afcd48a6d19a27daca0621c74db2"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=850eccabbc21fc7418797d7e4a3d4e1ccdc92f27#850eccabbc21fc7418797d7e4a3d4e1ccdc92f27"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
@@ -1287,7 +1289,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-sam3"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-ai-integrations?rev=ea85917afe35afcd48a6d19a27daca0621c74db2#ea85917afe35afcd48a6d19a27daca0621c74db2"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=850eccabbc21fc7418797d7e4a3d4e1ccdc92f27#850eccabbc21fc7418797d7e4a3d4e1ccdc92f27"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
@@ -1298,7 +1300,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-seedance"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-ai-integrations?rev=ea85917afe35afcd48a6d19a27daca0621c74db2#ea85917afe35afcd48a6d19a27daca0621c74db2"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=850eccabbc21fc7418797d7e4a3d4e1ccdc92f27#850eccabbc21fc7418797d7e4a3d4e1ccdc92f27"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
@@ -1309,7 +1311,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-vertex"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-ai-integrations?rev=ea85917afe35afcd48a6d19a27daca0621c74db2#ea85917afe35afcd48a6d19a27daca0621c74db2"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=850eccabbc21fc7418797d7e4a3d4e1ccdc92f27#850eccabbc21fc7418797d7e4a3d4e1ccdc92f27"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
@@ -2053,16 +2055,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fantastico-sdk"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76044968b184c817d8d1aa67f5f827cda2972eb366d19606222df021fa1265be"
-dependencies = [
- "serde_json",
- "ureq",
-]
-
-[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2473,7 +2465,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "log",
  "peniko",
- "png 0.18.1",
+ "png",
  "skrifa 0.44.0",
  "smallvec",
  "vello_common",
@@ -3128,7 +3120,7 @@ dependencies = [
  "image-webp",
  "moxcms",
  "num-traits",
- "png 0.18.1",
+ "png",
  "tiff",
  "zune-core",
  "zune-jpeg",
@@ -3351,7 +3343,7 @@ dependencies = [
  "imagesize",
  "indexmap",
  "pdf-writer",
- "png 0.18.1",
+ "png",
  "rustc-hash 2.1.3",
  "siphasher",
  "skrifa 0.42.1",
@@ -4414,19 +4406,6 @@ dependencies = [
  "quick-xml 0.42.0",
  "serde",
  "time",
-]
-
-[[package]]
-name = "png"
-version = "0.17.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82151a2fc869e011c153adc57cf2789ccb8d9906ce52c0b39a6b5697749d7526"
-dependencies = [
- "bitflags 1.3.2",
- "crc32fast",
- "fdeflate",
- "flate2",
- "miniz_oxide 0.8.9",
 ]
 
 [[package]]
@@ -6482,7 +6461,7 @@ dependencies = [
  "guillotiere",
  "log",
  "peniko",
- "png 0.18.1",
+ "png",
  "smallvec",
  "thiserror 2.0.21",
 ]
@@ -6498,7 +6477,7 @@ dependencies = [
  "glifo",
  "hashbrown 0.17.1",
  "ordered-channel",
- "png 0.18.1",
+ "png",
  "rayon",
  "thread_local",
  "vello_common",
@@ -7378,7 +7357,6 @@ dependencies = [
  "dispatch2",
  "eframe",
  "egui",
- "fantastico-sdk",
  "fmv-macos-events",
  "getrandom 0.3.4",
  "log",
@@ -7397,6 +7375,7 @@ dependencies = [
  "wordcraft-control-key",
  "wordcraft-doc",
  "wordcraft-engine",
+ "wordcraft-fantastico",
  "wordcraft-fonts",
  "wordcraft-ui-egui",
  "zbus",
@@ -7417,7 +7396,6 @@ dependencies = [
 name = "wordcraft-cli"
 version = "0.15.1"
 dependencies = [
- "fantastico-sdk",
  "serde_json",
  "sys-locale",
  "wordcraft-assistant",
@@ -7525,10 +7503,9 @@ dependencies = [
 name = "wordcraft-fantastico"
 version = "0.15.1"
 dependencies = [
- "fantastico-sdk",
- "log",
+ "craft-ai-core",
+ "craft-ai-fantastico",
  "serde_json",
- "ureq",
  "wordcraft-assistant",
 ]
 

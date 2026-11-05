@@ -62,8 +62,9 @@ USAGE:
                                               (draft, rewrite, summarize…) with WordCraft's commands,
                                               through a FANTASTICO account:
                                                 $FANTASTICO_KEY   the account key (ck-fant-…) or
-                                                                  project key (sk-fant-…); get one, or
-                                                                  top up, at https://artcraft.fantastico.cc
+                                                                  project key (sk-fant-…, with --model);
+                                                                  get one, or top up, at
+                                                                  https://artcraft.fantastico.cc
                                               --yes lets it start a new document, open and save files
                                               without asking; --save writes the result (format from
                                               the extension); the reply goes to stdout. The assistant
@@ -742,18 +743,14 @@ fn ask(rest: &[String], open: &dyn Fn(&str, Option<&str>) -> Result<Session, Str
     validate_options("ask", &rest, ASK_OPTIONS)?;
     let a = parse_ask_args(&rest)?;
     let key = std::env::var("FANTASTICO_KEY").ok().filter(|v| !v.trim().is_empty()).ok_or("ask needs a FANTASTICO key in $FANTASTICO_KEY")?;
-    let opts = fantastico_sdk::Options {
-        title: "WordCraft".into(),
-        referer: "https://github.com/storytold/wordcraft".into(),
-        ..fantastico_sdk::Options::default()
-    };
-    let mut provider = wordcraft_fantastico::Streaming::new(key, opts).map_err(|e| e.message)?;
-    // The account suggests a model; without one (a project key, or an account that names
-    // none) the request leaves it empty and the model the key was minted for answers.
-    let model = match (&a.model, provider.client().surface()) {
-        (Some(m), _) => m.clone(),
-        (None, fantastico_sdk::Surface::Edge) => provider.client().config().map_err(|e| e.message)?.model.unwrap_or_default(),
-        (None, fantastico_sdk::Surface::Runtime) => String::new(),
+    let mut provider = wordcraft_fantastico::Direct::new(&key)?;
+    // Without --model, the account suggests one; a project key has no account to ask.
+    let model = match &a.model {
+        Some(m) => m.clone(),
+        None if key.trim().starts_with("sk-fant-") => return Err("ask with a project key (sk-fant-…) needs --model".into()),
+        None => {
+            provider.account()?.model.filter(|m| !m.trim().is_empty()).ok_or("the FANTASTICO account suggests no model: name one with --model")?
+        }
     };
     let mut s = match (&a.file, &a.template) {
         (Some(f), _) => open(f, password_from(&rest)?.as_deref())?,

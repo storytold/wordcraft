@@ -48,8 +48,14 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 log = "0.4"
 # All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
-# The AI Assistant's model endpoint: a FANTASTICO account (desktop app and CLI only).
-fantastico-sdk = "0.2"
+# GeenioAI on the shared Craft AI layer (desktop app and CLI only). One revision for every crate,
+# so the adapter and the app share the layer's types. The FANTASTICO adapter (`craft-ai-fantastico`)
+# is storytold/craft-ai-integrations#65, not merged yet: pinned to its head, which GitHub serves
+# from the storytold repository; move to main's merge commit once it lands.
+craft-ai-core = { git = "https://github.com/storytold/craft-ai-integrations", rev = "850eccabbc21fc7418797d7e4a3d4e1ccdc92f27" }
+craft-ai-client = { git = "https://github.com/storytold/craft-ai-integrations", rev = "850eccabbc21fc7418797d7e4a3d4e1ccdc92f27" }
+craft-ai-native = { git = "https://github.com/storytold/craft-ai-integrations", rev = "850eccabbc21fc7418797d7e4a3d4e1ccdc92f27" }
+craft-ai-fantastico = { git = "https://github.com/storytold/craft-ai-integrations", rev = "850eccabbc21fc7418797d7e4a3d4e1ccdc92f27" }
 proptest = "1"
 rayon = "1"
 unicode-bidi = "0.3"
