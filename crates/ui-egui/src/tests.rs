@@ -4981,6 +4981,7 @@ fn turning_autosave_on_covers_a_file_only_opened_here() {
     let mut b = app();
     b.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
     assert_eq!(b.autosave_block(), Some(AutoSaveBlock::NotSavedHere));
+    assert_eq!(b.autosave_switch_block(), None, "the switch lifts it itself");
     b.run("text.insert", json!({"text": "Opened "})).unwrap();
     b.autosave_tick(now_ms() + 10_000.0);
     assert!(b.session.dirty, "opening alone never rewrites the file");
@@ -5008,8 +5009,11 @@ fn the_autosave_switch_refuses_a_document_opened_from_bytes() {
     let data = wordcraft_engine::cmd::insert::base64_encode(&on_disk);
     b.execute("file.open", json!({"path": path.to_string_lossy(), "data": data})).unwrap();
     assert_eq!(b.autosave_block(), Some(AutoSaveBlock::NotSavedHere));
+    assert_eq!(b.autosave_switch_block(), Some(AutoSaveBlock::NotSavedHere), "the switch shows the block");
     assert!(b.run("file.autosave", json!({"value": true})).is_err());
-    assert!(b.run("file.autosave", json!({})).is_err(), "the switch refuses too");
+    b.status_msg = None;
+    let err = b.run("file.autosave", json!({})).unwrap_err();
+    assert!(b.status_msg.as_ref().is_some_and(|(m, _)| *m == err), "the status bar says why: {:?}", b.status_msg);
     b.run("text.insert", json!({"text": "Bytes "})).unwrap();
     b.autosave_tick(now_ms() + 10_000.0);
     assert!(b.session.dirty);

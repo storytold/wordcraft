@@ -394,6 +394,12 @@ impl WordApp {
         self.autosave && self.autosave_block().is_none()
     }
 
+    /// What the AutoSave switch can't lift: [`Self::autosave_block`], less a file read from disk
+    /// here, which the switch turns on (#3307). A document opened from bytes stays blocked.
+    pub fn autosave_switch_block(&self) -> Option<AutoSaveBlock> {
+        self.autosave_block().filter(|b| *b != AutoSaveBlock::NotSavedHere || self.read_from != self.session.path)
+    }
+
     /// `file.autosave` (the AutoSave switch, and scripts): `value` turns AutoSave on or off;
     /// without it, it toggles what the switch shows. Turning it on for a document AutoSave can't
     /// cover is an error that says why, instead of a switch that is on but saves nothing (#196).
@@ -405,8 +411,8 @@ impl WordApp {
             Some(Value::Bool(on)) => *on,
             Some(_) => return Err("`value` must be true or false".into()),
         };
-        if on && let Some(block) = self.autosave_block() {
-            if block != AutoSaveBlock::NotSavedHere || self.read_from != self.session.path {
+        if on && self.autosave_block().is_some() {
+            if let Some(block) = self.autosave_switch_block() {
                 return Err(block.reason());
             }
             self.autosave_path = self.session.path.clone();
