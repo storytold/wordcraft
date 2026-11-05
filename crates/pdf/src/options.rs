@@ -50,6 +50,10 @@ pub struct PdfOptions {
     /// How [`export`] shows digits (the Numeral setting; callers resolve `System`, see
     /// [`NumeralMode::resolve`]). [`export_layout`] keeps the layout it is given.
     pub numeral: NumeralMode,
+    /// What [`export`] shows for a page reference to a bookmark the document doesn't have, in the
+    /// interface language (`None`: Word's English "Error! Bookmark not defined."). [`export_layout`]
+    /// keeps the layout it is given.
+    pub bookmark_error: Option<std::sync::Arc<str>>,
 }
 
 impl Default for PdfOptions {
@@ -69,6 +73,7 @@ impl Default for PdfOptions {
             links: true,
             paper: None,
             numeral: NumeralMode::Arabic,
+            bookmark_error: None,
         }
     }
 }

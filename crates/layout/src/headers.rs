@@ -235,23 +235,83 @@ pub(crate) fn headers_footers_refer_to_pages(doc: &Document) -> bool {
     })
 }
 
-/// Where each bookmark in the body starts: the number and number format of the page it is placed
-/// on (with two of the same name, the first in the document).
+/// Whether a story laid out with the body (the body itself, text boxes, footnotes and endnotes)
+/// shows an unlocked `PAGEREF` field, which output resolves from the paginated document
+/// ([`crate::LayoutOptions::output_page_refs`]); a locked one keeps its result, so it needs no
+/// extra pass. Headers and footers are filled in after pagination and need none either.
+pub(crate) fn flow_refers_to_pages(doc: &Document) -> bool {
+    use wordcraft_doc::PartKind;
+    let refers = |story: StoryRef| {
+        doc.para_paths(story).iter().filter_map(|path| doc.para(story, path)).any(|p| {
+            p.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, locked, .. } if !*locked && fields::field_name(instr) == "PAGEREF"))
+        })
+    };
+    refers(StoryRef::Body)
+        || doc
+            .parts
+            .iter()
+            .filter(|(_, part)| matches!(part.kind, PartKind::TextBox | PartKind::Footnote | PartKind::Endnote))
+            .any(|(id, _)| refers(StoryRef::Part(*id)))
+}
+
+/// The names of all the document's bookmarks, in any story: a `PAGEREF` to one of them that
+/// [`bookmark_pages`] can't place keeps its result rather than showing Word's error.
+pub(crate) fn bookmark_names(doc: &Document) -> HashSet<String> {
+    let mut names = HashSet::new();
+    let stories = std::iter::once(StoryRef::Body).chain(doc.parts.keys().map(|id| StoryRef::Part(*id)));
+    for story in stories {
+        for path in doc.para_paths(story) {
+            let Some(p) = doc.para(story, &path) else { continue };
+            for o in &p.objects {
+                if let InlineObject::BookmarkStart { name } = o {
+                    names.insert(name.clone());
+                }
+            }
+        }
+    }
+    names
+}
+
+/// Where each bookmark in the body, a footnote or an endnote, or in a text box anchored in one of
+/// them, starts: the number and number format of the page it is placed on (with two of the same
+/// name, the first found). A bookmark in a text box is on the page of the box's anchor (measured
+/// in Word for Windows); one in a note, on the page that shows that part of the note.
 pub(crate) fn bookmark_pages(doc: &Document, pages: &[Page], sections: &[(usize, &SectionProps)]) -> fields::BookmarkPages {
+    use wordcraft_doc::PartKind;
     // Each paragraph's bookmarks: name, offset, and its line in the paragraph layout last looked
     // up (the pieces of a paragraph usually share one).
-    let mut wanted: HashMap<Path, Vec<(String, usize, Option<(usize, usize)>)>> = HashMap::new();
+    let mut wanted: Wanted = HashMap::new();
     let mut seen = HashSet::new();
-    for path in doc.para_paths(StoryRef::Body) {
-        let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
-        if !p.objects.iter().any(|o| matches!(o, InlineObject::BookmarkStart { .. })) {
-            continue;
+    let mut stories = vec![StoryRef::Body];
+    let mut notes: Vec<u32> =
+        doc.parts.iter().filter(|(_, part)| matches!(part.kind, PartKind::Footnote | PartKind::Endnote)).map(|(id, _)| *id).collect();
+    notes.sort_unstable();
+    stories.extend(notes.into_iter().map(StoryRef::Part));
+    for &story in &stories {
+        for path in doc.para_paths(story) {
+            let Some(p) = doc.para(story, &path) else { continue };
+            if !p.objects.iter().any(|o| matches!(o, InlineObject::BookmarkStart { .. })) {
+                continue;
+            }
+            for (off, o) in p.object_offsets().into_iter().zip(&p.objects) {
+                if let InlineObject::BookmarkStart { name } = o
+                    && seen.insert(name.as_str())
+                {
+                    wanted.entry(story).or_default().entry(path.clone()).or_default().push((name.clone(), off, None));
+                }
+            }
         }
-        for (off, o) in p.object_offsets().into_iter().zip(&p.objects) {
-            if let InlineObject::BookmarkStart { name } = o
-                && seen.insert(name.as_str())
-            {
-                wanted.entry(path.clone()).or_default().push((name.clone(), off, None));
+    }
+    if doc.parts.values().any(|part| part.kind == PartKind::TextBox) {
+        let mut boxes = HashSet::new();
+        for &story in &stories {
+            for path in doc.para_paths(story) {
+                let Some(p) = doc.para(story, &path) else { continue };
+                for (off, o) in p.object_offsets().into_iter().zip(&p.objects) {
+                    for id in o.text_boxes() {
+                        box_bookmarks(doc, id, (story, &path, off), &mut boxes, &mut seen, &mut wanted);
+                    }
+                }
             }
         }
     }
@@ -262,8 +322,9 @@ pub(crate) fn bookmark_pages(doc: &Document, pages: &[Page], sections: &[(usize,
         }
         let format = sections.get(page.section).map(|(_, s)| s.page_num_format).unwrap_or_default();
         for it in &page.items {
-            let Placed::Lines { story: StoryRef::Body, path, para, l0, l1, .. } = it else { continue };
-            let Some(marks) = wanted.get_mut(path) else { continue };
+            let Placed::Lines { story, path, para, l0, l1, .. } = it else { continue };
+            let Some(paras) = wanted.get_mut(story) else { continue };
+            let Some(marks) = paras.get_mut(path) else { continue };
             let layout = Arc::as_ptr(para) as usize;
             marks.retain_mut(|(name, off, line)| {
                 let li = match *line {
@@ -281,21 +342,57 @@ pub(crate) fn bookmark_pages(doc: &Document, pages: &[Page], sections: &[(usize,
                 false
             });
             if marks.is_empty() {
-                wanted.remove(path);
+                paras.remove(path);
+                if paras.is_empty() {
+                    wanted.remove(story);
+                }
             }
         }
     }
     out
 }
 
-/// A key for caches standing for `marks` (0 for none).
-pub(crate) fn marks_key(marks: &fields::BookmarkPages) -> u64 {
-    if marks.is_empty() {
-        return 0;
+/// The bookmarks [`bookmark_pages`] looks for, by story and paragraph: name, offset, and the line
+/// in the paragraph layout last looked up.
+type Wanted = HashMap<StoryRef, HashMap<Path, Vec<(String, usize, Option<(usize, usize)>)>>>;
+
+/// Add the bookmarks of text box `id`, and of the boxes inside it, to `wanted` at `anchor` (the
+/// story, paragraph and offset of the outermost box). A box shown twice, or inside itself, counts
+/// once.
+fn box_bookmarks<'d>(
+    doc: &'d Document,
+    id: u32,
+    anchor: (StoryRef, &Path, usize),
+    boxes: &mut HashSet<u32>,
+    seen: &mut HashSet<&'d str>,
+    wanted: &mut Wanted,
+) {
+    if !boxes.insert(id) {
+        return;
     }
+    let story = StoryRef::Part(id);
+    for path in doc.para_paths(story) {
+        let Some(p) = doc.para(story, &path) else { continue };
+        for o in &p.objects {
+            if let InlineObject::BookmarkStart { name } = o
+                && seen.insert(name.as_str())
+            {
+                wanted.entry(anchor.0).or_default().entry(anchor.1.clone()).or_default().push((name.clone(), anchor.2, None));
+            }
+            for inner in o.text_boxes() {
+                box_bookmarks(doc, inner, anchor, boxes, seen, wanted);
+            }
+        }
+    }
+}
+
+/// A key for caches standing for `marks`: 0 while the pages aren't known (`None`), something else
+/// once they are, even with no bookmarks (output then shows missing ones as errors).
+pub(crate) fn marks_key(marks: Option<&fields::BookmarkPages>) -> u64 {
+    let Some(marks) = marks else { return 0 };
     let mut v: Vec<_> = marks.iter().collect();
     v.sort_by(|a, b| a.0.cmp(b.0));
-    hash_of(&v)
+    hash_of(&v).max(1)
 }
 
 pub(crate) fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &SectionProps)], totals: &Totals) {

@@ -746,6 +746,34 @@ fn output_shows_words_error_for_a_reference_to_a_missing_bookmark() {
     assert_eq!(fields(&s).iter().map(|f| f.1.as_str()).collect::<Vec<_>>(), ["stale", "stale"], "the document keeps it");
 }
 
+/// Word prints a REF's missing-bookmark error in its interface language: output takes the text
+/// the shell sets ([`crate::set_reference_error`]), and a REF to a bookmark the document has
+/// still shows the bookmark's text.
+#[test]
+fn a_missing_references_error_is_in_the_interface_language() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Target"));
+    s.run("select.text", &json!({"text": "Target"})).unwrap();
+    s.run("insert.bookmark", &json!({"name": "Here"})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    for instr in ["REF NoSuchMark \\h", "REF Here \\h"] {
+        s.run("text.insert", &json!({"text": " "})).unwrap();
+        s.run("insert.field", &json!({"instr": instr, "result": "stale"})).unwrap();
+    }
+    let french = "Erreur ! Source du renvoi introuvable.";
+    let out = output_fields_with(&s.doc, french).expect("both results change");
+    let shown: Vec<String> = out
+        .para(StoryRef::Body, &wordcraft_doc::Path::top(0))
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::Field { result, .. } => Some(result.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(shown, [french, "Target"]);
+}
+
 /// A REF showing the bookmarked paragraph's number (`\r`, `\n`, `\w`), which output doesn't
 /// compute, keeps its stored number when printed or exported rather than show the paragraph's
 /// text; a plain REF to the same bookmark is filled in.

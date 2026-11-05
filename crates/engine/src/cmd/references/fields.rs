@@ -188,8 +188,9 @@ pub const REFERENCE_NOT_FOUND: &str = "Error! Reference source not found.";
 /// comment or text box is found too, and a REF to it shows that text as `stored` holds it, its
 /// own fields not yet refreshed, as Word's output does (measured in Word for Windows). The
 /// document's bookmarks are looked up once, and each bookmark's text read once, however many
-/// fields refer to it.
-fn ref_results(doc: &wordcraft_doc::Document, stored: &wordcraft_doc::Document) -> Vec<FieldResult> {
+/// fields refer to it. `error` is what a REF to a missing bookmark shows ([`REFERENCE_NOT_FOUND`]
+/// in English).
+fn ref_results(doc: &wordcraft_doc::Document, stored: &wordcraft_doc::Document, error: &str) -> Vec<FieldResult> {
     let mut out = Vec::new();
     let mut starts: std::collections::HashMap<String, Pos> = std::collections::HashMap::new();
     for (name, start) in doc.bookmarks().into_iter().chain(part_bookmarks(doc)) {
@@ -210,7 +211,7 @@ fn ref_results(doc: &wordcraft_doc::Document, stored: &wordcraft_doc::Document) 
             let f = FieldCode::parse(instr);
             let target = f.args.first().map(|s| s.split('\\').next().unwrap_or("").trim_matches('"')).unwrap_or("");
             let Some(start) = starts.get(target) else {
-                out.push((StoryRef::Body, path.clone(), k, REFERENCE_NOT_FOUND.to_string()));
+                out.push((StoryRef::Body, path.clone(), k, error.to_string()));
                 continue;
             };
             let text = texts.entry(target.to_string()).or_insert_with(|| {
@@ -271,7 +272,15 @@ fn changed(doc: &wordcraft_doc::Document, mut results: Vec<FieldResult>) -> Vec<
 /// formulas keep their stored results (measured with Word for Windows, printing and exporting
 /// fields whose stored results were wrong). The document itself keeps its stored results.
 /// `None` when every such field already shows its fresh result, so nothing is copied then.
+/// A `REF` to a missing bookmark shows Word's error in the interface language
+/// ([`crate::set_reference_error`]).
 pub fn output_fields(doc: &wordcraft_doc::Document) -> Option<wordcraft_doc::Document> {
+    let error = crate::locale::reference_error();
+    output_fields_with(doc, error.as_deref().unwrap_or(REFERENCE_NOT_FOUND))
+}
+
+/// [`output_fields`], with `ref_error` for a `REF` to a missing bookmark.
+pub(crate) fn output_fields_with(doc: &wordcraft_doc::Document, ref_error: &str) -> Option<wordcraft_doc::Document> {
     // Numbers first, then the fields that read them: a STYLEREF to a heading holding a SEQ field,
     // and a REF to a bookmarked caption, show the new number.
     let seq = changed(doc, seq_results(doc));
@@ -283,7 +292,7 @@ pub fn output_fields(doc: &wordcraft_doc::Document) -> Option<wordcraft_doc::Doc
     if !styles.is_empty() {
         apply_results(out.get_or_insert_with(|| doc.clone()), styles).ok()?;
     }
-    let refs = changed(out.as_ref().unwrap_or(doc), ref_results(out.as_ref().unwrap_or(doc), doc));
+    let refs = changed(out.as_ref().unwrap_or(doc), ref_results(out.as_ref().unwrap_or(doc), doc, ref_error));
     if !refs.is_empty() {
         apply_results(out.get_or_insert_with(|| doc.clone()), refs).ok()?;
     }
