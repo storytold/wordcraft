@@ -85,6 +85,8 @@ impl ParagraphTextDirection {
             Self::LrV => "lrV",
         }
     }
+}
+
 /// Vertical alignment of characters of different sizes on a line (`w:textAlignment`,
 /// ECMA-376 §17.3.1.39).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
