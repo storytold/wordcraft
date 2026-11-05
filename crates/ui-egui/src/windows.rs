@@ -467,7 +467,7 @@ impl WordApp {
         let shown = self.windows.shown;
         let target_key = target_doc
             .and_then(|doc| self.windows.open.iter().find(|w| w.doc == doc && w.key != shown).map(|w| w.key))
-            .or_else(|| self.windows.recent_keys().into_iter().find(|&k| k != shown && self.windows.open.iter().any(|w| w.key == *k)));
+            .or_else(|| self.windows.recent_keys().into_iter().find(|&k| k != shown && self.windows.open.iter().any(|w| w.key == k)));
         let Some(other_key) = target_key else {
             self.status("Open another document in a window to view side by side".to_string());
             return;
