@@ -321,6 +321,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-11-01 | trivial | N-up and booklet print imposition (#641): integrate current print-job link handling (#4734), preserve markup preview and sheet/copy planning; readiness estimates unchanged. |
 | 2026-11-01 | trivial | Printing (#641): pin booklet page order and blank left/right slots for every count from five through nine pages and both bindings; integrate current main. Readiness estimates unchanged. |
 | 2026-10-22 | Compare results opened as new or revised untitled documents start without the previous document's version snapshots. A comparison or mailing result rejected by protection keeps the snapshots and save target with the original document. |
+| 2026-10-23 | Explicit SAVEDATE uses valid UTC Modified metadata instead of today; default PDF conversion keeps its cache. |
 | 2026-10-20 | The Document Inspector's removals are refused while the document tracks changes: they delete straight from the document, so the text would go with no revision to show for it and the revision trail would be broken behind the user's back |
 | 2026-10-20 | A version snapshot belongs to the document it was taken from: the snapshots went with the document, so a restore can only ever bring back a version of the document that is open |
 | 2026-10-22 | Restrict Editing: the CLI's `--author` uses the same protection check as `file.setAuthor`, and File › Options disables the User name field while the document is protected. |
@@ -797,6 +798,7 @@ Section page-numbering settings preserve `w:chapStyle` values across the full un
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
+| 2026-10-23 | trivial | Explicit SAVEDATE updates use valid UTC Modified metadata; unsupported timestamps and calendars retain cache. Default PDF conversion is unchanged. |
 | 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
 | 2026-11-02 | trivial | Progress log: alternative format chunks and MHT open |
 | 2026-11-01 | trivial | Progress log: columns for selected text draw their line between (#5178) |

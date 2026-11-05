@@ -278,6 +278,10 @@ Original binary fixtures and actual WordApp/Session file I/O cover Save, toolbar
 
 Imported text fields use the first nonempty cached result run's formatting on their paragraph span, including character styles. Empty results retain begin-marker formatting. Synthetic fixtures cover simple and complex fields, default inheritance and repeated saves. Mixed-format results remain represented by one span; field refresh policy is unchanged.
 
+## Explicit SAVEDATE updates
+
+An explicit field update formats `docProps/core.xml` Modified metadata for SAVEDATE, including its date picture and capitalization switches. UTC `Z` timestamps with optional fractional seconds are supported. Missing, invalid or other-offset timestamps, unsupported calendar switches and locked fields retain cached text. Without a picture, the existing `M/d/yyyy` default remains. Opening and ordinary PDF conversion keep SAVEDATE cached. Local timezone and locale inference remain unsupported.
+
 ## Markdown inline code
 
 Inline code exports each LF, CR or CRLF line ending as one space, following [CommonMark code-span normalization](https://spec.commonmark.org/0.31.2/#code-spans). This keeps a following heading, list marker or HTML tag inside the code span, including code in lists and table cells (#3738). Leading and trailing spaces and backtick fences are preserved; fenced code blocks keep their line breaks. Synthetic export/reimport tests cover these cases.
@@ -423,6 +427,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 | 2026-11-02 | minor | `w:altChunk` content (MHT, HTML, RTF, text, nested documents) brought in on open, where it stands; `.mht`/`.mhtml` open; HTML reads `style` element rules, paragraph margins, indents and line height, cell widths and borders, and an opened page takes Word's web-page defaults. Insert › Text from File keeps the file's pictures and lists |
 | 2026-11-02 | trivial | DOCX: a VML horizontal rule (`v:rect o:hr`, a web page's `<hr>` pasted into Word) is drawn across its line as Word draws it — the whole width inside the paragraph's indents, or `o:hrpct` of it, or its own width, placed by `o:hralign` — instead of as a 1 pt dot; in a table cell it follows the column; it saves back as the same VML rule |
 | 2026-11-02 | trivial | Soft edges on a see-through solid fill fade from the fill's own opacity, not from fully opaque, in the raster, PDF and caret-background paths; opaque fills draw as before (#1600). Synthetic raster/PDF tests; no new Word comparison |
+| 2026-10-23 | trivial | Explicit SAVEDATE updates use valid UTC Modified metadata; unsupported timestamps and calendars retain cache. Default PDF conversion is unchanged. |
 | 2026-11-01 | trivial | Preserve table rows and cells inside selected alternate-content branches (#5219); readiness estimates unchanged. |
 | 2026-11-01 | trivial | Arrowheads keep their kind, width and length (DrawingML `a:headEnd`/`a:tailEnd` `type`/`w`/`len`, VML `startarrow`/`endarrow` with `…arrowwidth`/`…arrowlength`), read and written back, and are drawn 2, 3 or 5 times the line's width long and wide (small, medium, large), a line under 2 points as a 2-point one, as measured in Word for Windows; every kind is still drawn as a triangle |
 | 2026-10-31 | trivial | .doc import: text naming no font takes the stylesheet's standard fonts (rgftcStandardChpStsh, ftcBi), not the font table's first entry; runs' East Asian and complex-script fonts are read (#5066) |

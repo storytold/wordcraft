@@ -133,6 +133,10 @@ The Language dialog reads effective character formatting, including document def
 
 Footer page-table height and body wrapping are corrected. Other pagination gaps remain open.
 
+## Explicit SAVEDATE updates
+
+An explicit field update formats `docProps/core.xml` Modified metadata for SAVEDATE, including its date picture and capitalization switches. UTC `Z` timestamps with optional fractional seconds are supported. Missing, invalid or other-offset timestamps, unsupported calendar switches and locked fields retain cached text. Without a picture, the existing `M/d/yyyy` default remains. Opening and ordinary PDF conversion keep SAVEDATE cached. Local timezone and locale inference remain unsupported.
+
 Small follow-ups from the 2026-10-25 field, table and AutoFormat batch (#4232):
 
 - Convert Table to Text has no "Convert nested tables" check box; nested tables always stay tables, which is Word's default (#4155).
@@ -186,6 +190,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 | 2026-11-01 | trivial | Gap 8's evidence names craft-proof (storytold/craft-libs `crates/proof`) and craft-i18n `language-data/` instead of WordCraft's removed `crates/proof` (#5202). No ranked gap changed. |
 | 2026-11-02 | trivial | #26 narrowed: MHT opens and `w:altChunk` content is brought in on open; saving MHT remains |
 | 2026-11-01 | trivial | Preserve table rows and cells inside selected alternate-content branches (#5219); readiness estimates unchanged. || 2026-11-01 | trivial | Arrowheads keep their kind, width and length (DrawingML `a:headEnd`/`a:tailEnd` `type`/`w`/`len`, VML `startarrow`/`endarrow` with `…arrowwidth`/`…arrowlength`), read and written back, and are drawn 2, 3 or 5 times the line's width long and wide (small, medium, large), a line under 2 points as a 2-point one, as measured in Word for Windows; every kind is still drawn as a triangle; no ranked gap changed; readiness estimates unchanged |
+| 2026-10-23 | trivial | Explicit SAVEDATE updates use valid UTC Modified metadata; unsupported timestamps and calendars retain cache. Default PDF conversion is unchanged. |
 | 2026-10-31 | trivial | The .doc reader's default font is the stylesheet's standard font, not the font table's first entry (#5066); no ranked gap changed; readiness estimates unchanged |
 | 2026-11-01 | trivial | A middle or bottom cell of a row split across pages lines up on the first page; no ranked gap changed; readiness estimates unchanged |
 | 2026-11-01 | trivial | Tab leader dots spaced and placed as in Word; no ranked gap changed; readiness estimates unchanged |
