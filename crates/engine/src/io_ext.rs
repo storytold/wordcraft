@@ -14,10 +14,36 @@ pub fn open(ext: &str, bytes: &[u8], page: &wordcraft_doc::SectionProps) -> Opti
         other => wordcraft_formats::import_on(other, bytes, page).map(|r| {
             r.map(|mut doc| {
                 crate::io::fit_pictures(&mut doc);
+                draw_charts(&mut doc);
                 doc
             })
         }),
     }
+}
+
+/// Draw the charts a reader left undrawn (ODT charts come as their chart model alone): in the
+/// document's theme colours, at their size.
+fn draw_charts(doc: &mut Document) {
+    use wordcraft_doc::para::InlineObject;
+    /// Groups nest at most this deep here (the readers flatten deeper ones).
+    const DEPTH: usize = 16;
+    fn undrawn(o: &InlineObject, depth: usize) -> bool {
+        match o {
+            InlineObject::Graphic { graphic, .. } => graphic.chart.is_some() && graphic.items.is_empty(),
+            InlineObject::Group { children, .. } if depth < DEPTH => children.iter().any(|c| undrawn(&c.obj, depth + 1)),
+            _ => false,
+        }
+    }
+    fn draw(o: &mut InlineObject, theme: &[wordcraft_doc::Rgb], depth: usize) {
+        match o {
+            InlineObject::Group { children, .. } if depth < DEPTH => children.iter_mut().for_each(|c| draw(&mut c.obj, theme, depth + 1)),
+            o if undrawn(o, depth) => crate::cmd::chart::redraw(o, theme),
+            _ => {}
+        }
+    }
+    let theme = doc.settings.theme_colors.clone();
+    // (Drawing them doesn't change the document: markup kept as read for them still is.)
+    doc.fill_objects(&|o| undrawn(o, 0), &mut |o| draw(o, &theme, 0));
 }
 
 /// Save to a format other than plain text / JSON.
@@ -31,6 +57,9 @@ pub fn save(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Optio
         "xml" => Some(wordcraft_docx::write_flat(doc).map_err(|e| e.to_string())),
         "png" => Some(render_png(doc, 0, 2.0, opts)),
         "pdf" => {
+            // Output shows the fields Word fills in as it prints (see `output_fields`).
+            let out = crate::cmd::references::output_fields(doc);
+            let doc = out.as_ref().unwrap_or(doc);
             let pdf = wordcraft_pdf::PdfOptions {
                 include_markup: opts.markup,
                 comments: opts.markup && opts.comments,
@@ -46,6 +75,8 @@ pub fn save(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Optio
 /// Render page `page` as PNG at `scale` px/pt. With Print Markup's comments the page has its
 /// markup area with the comments in balloons (page images always show tracked changes).
 pub fn render_png(doc: &Document, page: usize, scale: f32, opts: &crate::io::ExportOptions) -> Result<Vec<u8>, String> {
+    let out = crate::cmd::references::output_fields(doc);
+    let doc = out.as_ref().unwrap_or(doc);
     let lo = wordcraft_layout::LayoutOptions { comment_balloons: opts.markup && opts.comments, numeral: opts.numeral, ..Default::default() };
     let l = wordcraft_layout::layout(doc, &mut wordcraft_layout::LayoutCache::new(), &lo);
     let p = l.pages.get(page).ok_or_else(|| format!("no page {}", page + 1))?;

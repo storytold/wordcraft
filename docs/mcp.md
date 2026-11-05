@@ -119,13 +119,13 @@ the suite's font store (see [installing languages](spelling-dictionaries.md#lang
 
 | Command | Params | Returns |
 |---|---|---|
-| `proof.packs` | `{"refresh"?: bool}` (fetch the pinned index again) | `{"packs": [{"locale", "name", "size", "licence", "class", "source" (upstream), "archive", "spelling", "hyphenation", "installed"}], "installed": [...], "installing": [{"locale", "done", "total"}], "refreshing", "errors": {locale: message}, "network", "available"}` |
+| `proof.packs` | `{"refresh"?: bool}` (fetch the pinned index again) | `{"packs": [{"locale", "name", "size", "licence", "class", "source" (upstream), "archive", "spelling", "hyphenation", "installed"}], "languages": [{"tags", "pack", "installed", "size", "proofing" (built_in, installed, own_dictionary, system_dictionary, install, grammar_built_in, not_available), "default"}] (Options › Language › Your languages), "installed": [...], "installing": [{"locale", "done", "total"}], "refreshing", "errors": {locale: message}, "network", "available"}` |
 | `proof.installPack` | `{"locale": "nl"}` | `{"locale", "name", "licence", "installed": true}` (`"already": true` when it was); with `--connect`, `{"locale", "started": true}` |
 | `proof.removePack` | `{"locale": "nl"}` | `{"locale", "installed": false}` |
 
 None opens anything. Downloading is the font store's single consent setting: an agent can install
-only while the person has turned it on in the app (File › Options › Language: Install or Show
-available languages), and can never turn it on itself; otherwise `proof.installPack` fails with
+only while the person has turned it on in the app (File › Options › Language: Install or Add a
+language…), and can never turn it on itself; otherwise `proof.installPack` fails with
 *downloading is turned off*. `refresh` likewise needs it on. Every archive is checked against the
 sha256 in the pinned index before it is unpacked. With `--connect` the commands act on the running
 app's packs, and an install or a `refresh` runs in the background so the window keeps working: the
@@ -134,7 +134,7 @@ command returns `"started": true` at once, and `proof.packs` shows it under `ins
 pack's install ends. Headless, they act on the same font store folder and return when done. The
 web build has no packs.
 
-A click or key sent with `click`/`key` on Install, Show available languages or Refresh never turns
+A click or key sent with `click`/`key` on Add a language…, Install or Refresh never turns
 downloading on either: only the person's own click does; the app shows why instead.
 
 Installing reads the pinned index of craft-i18n's language-packs-2 release (75 languages). For
