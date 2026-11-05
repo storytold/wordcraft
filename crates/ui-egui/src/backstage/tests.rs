@@ -1253,33 +1253,25 @@ fn a_right_to_left_file_page_takes_the_wheel_right_after_it_opens() {
     crate::i18n::set_current(crate::i18n::Lang::EN);
 }
 
-/// #5396: the issue's own example. The Language packs list is wider than a narrow window, inside a
-/// scroll area of its own, and its far column can be reached in either direction.
+/// #5396: the issue's own example. Options > Language's description of the interface language is
+/// wider than a narrow window, and its far end can be reached in either direction.
 #[test]
-fn the_language_packs_list_reaches_its_far_end_in_either_direction() {
-    use wordcraft_engine::packs::{self, Backend, FixedBackend};
-    struct Reset;
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            packs::set_backend(None);
-        }
-    }
-    let _g = crate::language_packs::tests::BACKEND_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let _reset = Reset;
-    packs::set_backend(Some(std::sync::Arc::new(FixedBackend::sample()) as std::sync::Arc<dyn Backend>));
-    for (lang, dx, far) in [(crate::i18n::Lang::EN, -3000.0, "Source"), (right_to_left(), 3000.0, "Language")] {
+fn the_language_pane_reaches_its_far_end_in_either_direction() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT;
+    for (lang, dx) in [(crate::i18n::Lang::EN, -3000.0), (right_to_left(), 3000.0)] {
         let mut h = narrow_page("options", Rc::new(Cell::new(lang)));
         h.state_mut().ui.options_pane = "language".into();
         h.run_steps(4);
-        // The column's heading: "Source" is a link in every row as well, "Language" a pane too.
-        let heading = |h: &egui_kittest::Harness<'static, WordApp>| {
-            h.query_all_by_label(far).map(|n| n.rect()).find(|r| r.height() < 20.0).expect("the column's heading")
+        let description = |h: &egui_kittest::Harness<'static, WordApp>| {
+            let mut labels = h.query_all_by_role(Role::Label);
+            labels.find(|n| n.accesskit_node().value().is_some_and(|v| v.starts_with("Automatic follows"))).expect("the description").rect()
         };
-        let before = heading(&h);
-        assert!(before.left() < 8.0 || before.right() > 752.0, "{far} must start out past the window: {before:?}");
+        let before = description(&h);
+        assert!(before.left() < 8.0 || before.right() > 752.0, "it must start out past the window: {before:?}");
         wheel_sideways(&mut h, dx);
-        let after = heading(&h);
-        assert!(after.left() >= 8.0 && after.right() <= 752.0, "{far} must scroll into view: {after:?}");
+        let after = description(&h);
+        assert!(after.left() >= 8.0 && after.right() <= 752.0, "it must scroll into view: {after:?}");
     }
     crate::i18n::set_current(crate::i18n::Lang::EN);
 }
@@ -1327,7 +1319,7 @@ fn a_narrow_print_page_shows_its_settings_alone() {
     for lang in [crate::i18n::Lang::EN, right_to_left()] {
         for width in [760.0, 850.0] {
             let h = page_at("print", width, Rc::new(Cell::new(lang)));
-            assert!(h.query_by_label("Next Page").is_none(), "at {width}: there is no room for the preview");
+            assert!(h.query_by_label("Next sheet").is_none(), "at {width}: there is no room for the preview");
             let save = h.get_by_label("Save these pages as PDF…").rect();
             assert!(save.left() >= 8.0 && save.right() <= width - 8.0, "at {width}: the settings must fit: {save:?}");
         }
@@ -1350,8 +1342,8 @@ fn a_print_preview_keeps_its_whole_bar_at_any_width_it_shows() {
             h.state_mut().ui.print.preview = 120;
             h.run_steps(4);
             let mut bar: Vec<_> =
-                ["Previous Page", "Next Page", "Zoom Out", "Zoom In", "One Page"].into_iter().map(|name| h.get_by_label(name).rect()).collect();
-            let page = h.query_all_by_role(Role::Label).find(|n| n.accesskit_node().value().is_some_and(|v| v.starts_with("Page 121")));
+                ["Previous sheet", "Next sheet", "Zoom Out", "Zoom In", "One Page"].into_iter().map(|name| h.get_by_label(name).rect()).collect();
+            let page = h.query_all_by_role(Role::Label).find(|n| n.accesskit_node().value().is_some_and(|v| v.starts_with("Sheet 121")));
             bar.push(page.expect("the page indicator").rect());
             for (i, r) in bar.iter().enumerate() {
                 assert!(r.left() >= 8.0 && r.right() <= width - 8.0 && r.bottom() <= 492.0, "at {width}: {r:?} must fit");
