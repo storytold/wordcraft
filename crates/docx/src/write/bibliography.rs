@@ -121,10 +121,16 @@ pub(super) fn bibliography_xml(doc: &Document) -> Vec<u8> {
         w.open("b:Source", &[]);
         w.leaf("b:Tag", &[], &src.tag);
         w.leaf("b:SourceType", &[], to_source_type(&src.kind));
-        // Author & Editor
-        if !src.author.is_empty() || !src.editor.is_empty() {
+        // Author & Editor. A role holds a name list or a corporate name, not both (ECMA-376
+        // `CT_NameOrCorporateType`), so a corporate author takes the author's place (#4848).
+        let corporate = src.corporate.trim();
+        if !src.author.is_empty() || !corporate.is_empty() || !src.editor.is_empty() {
             w.open("b:Author", &[]);
-            if !src.author.is_empty() {
+            if !corporate.is_empty() {
+                w.open("b:Author", &[]);
+                w.leaf("b:Corporate", &[], corporate);
+                w.close("b:Author");
+            } else if !src.author.is_empty() {
                 w.open("b:Author", &[]);
                 write_name_list(&mut w, &src.author);
                 w.close("b:Author");
