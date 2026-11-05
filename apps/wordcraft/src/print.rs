@@ -3,11 +3,16 @@ use wordcraft_ui_egui::printing::{Discover, Duplex, Printer, Settings, Submit};
 
 /// Returns a discovery callback that enumerates spooler printers on a named worker thread and
 /// sends the list through a channel, keeping spooler calls off the UI thread.
+///
+/// The Print panel needs only names and the default, so the list comes from
+/// `craft_print::printer_queues`, which asks no printer driver anything: on Windows a networked
+/// printer in power save can hold a driver's capability query for a long time, and the list must
+/// not wait on it (#5710). Submission still checks the job's options with the driver.
 pub fn discover() -> Discover {
     Box::new(|| {
         let (sender, receiver) = std::sync::mpsc::channel();
         let _ = std::thread::Builder::new().name("print-discovery".into()).spawn(move || {
-            let printers = craft_print::printers()
+            let printers = craft_print::printer_queues()
                 .into_iter()
                 .map(|printer| Printer { name: printer.name, label: printer.description, default: printer.default })
                 .collect();

@@ -1,6 +1,6 @@
 # Hardware parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-01 · **Change:** trivial (Linux Read Aloud: a sentence a screen reader cuts off is said again); previously trivial (ink page lookup work, #3614); previously trivial (only the PDF sent to the printer has no link annotations; Save these pages as PDF keeps them, #4734); previously trivial (a document with links prints: the print job's PDF has no link annotations, #4734; previously trivial: Pen / stylus row: two-stroke and closed-head arrows; previously trivial: Pen / stylus row: ink, eraser and Ink to Shape incl. arrows landed; previously trivial: a window too big for its screen shrinks to fit when it opens, #1215; previously trivial: 32-bit Windows starts on OpenGL; previously major: first version) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4 and Word for Windows
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-06 · **Change:** trivial (the printer list no longer waits on printer drivers, #5710); previously trivial (Linux Read Aloud: a sentence a screen reader cuts off is said again); previously trivial (ink page lookup work, #3614); previously trivial (only the PDF sent to the printer has no link annotations; Save these pages as PDF keeps them, #4734); previously trivial (a document with links prints: the print job's PDF has no link annotations, #4734; previously trivial: Pen / stylus row: two-stroke and closed-head arrows; previously trivial: Pen / stylus row: ink, eraser and Ink to Shape incl. arrows landed; previously trivial: a window too big for its screen shrinks to fit when it opens, #1215; previously trivial: 32-bit Windows starts on OpenGL; previously major: first version) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4 and Word for Windows
 
 > **Printing update:** 2026-10-12 · direct desktop printing through craft-print; details below.
 
@@ -28,6 +28,7 @@ File > Print offers 2, 4, 6, 9 or 16 logical pages per physical sheet side and l
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | trivial | On Windows the Print panel lists printers without asking their drivers anything, so a networked printer in power save no longer keeps the list empty with Refresh unavailable (#5710; likely also the long "Finding printers" waits of #5645 and #5413): discovery uses craft-print's `printer_queues` (storytold/craft-libs#618), and printing still checks the job's options with the driver; physical sleeping-printer output remains to be confirmed by the reporter |
 | 2026-10-28 | trivial | Ink page lookup work, #3614. Drawing order, geometry and saved data retain their behavior; no readiness estimate change |
 | 2026-11-01 | trivial | N-up and booklet print imposition (#641): integrate current print-job link handling (#4734), preserve markup preview and sheet/copy planning; readiness estimates unchanged. |
 | 2026-10-30 | trivial | Only the PDF sent to the printer leaves out link annotations; Save these pages as PDF (`file.printPdf`) keeps them (#4734) |
