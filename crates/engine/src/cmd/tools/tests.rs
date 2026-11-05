@@ -276,6 +276,11 @@ fn compare_shows_each_documents_own_pictures() {
     let mut want = vec![(a.clone(), true), (b.clone(), false), (c.clone(), false)];
     want.sort();
     assert_eq!(pictures(&s.doc), want, "the revised pictures show their own bytes, the original's is deleted");
+    let path = std::env::temp_dir().join(format!("wc-5571-pictures-out-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &s.doc).unwrap();
+    let back = crate::io::open_path(&path);
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(pictures(&back.unwrap()), want, "the saved result keeps each picture's bytes and deletion state");
     s.run("review.acceptAll", &json!({})).unwrap();
     let mut kept = vec![(b, false), (c, false)];
     kept.sort();
@@ -518,6 +523,53 @@ fn compare_never_bookmarks_a_name_twice() {
     assert_eq!(names.len(), 2, "{names:?}");
 }
 
+#[test]
+fn compare_deleted_bookmark_names_avoid_text_box_bookmarks() {
+    // Both documents have a text box (in the kept first paragraph) holding a live bookmark
+    // `x_1`. The original bookmarks `x` in a paragraph the comparison deletes whole; the
+    // revised one bookmarks `x` in its inserted paragraph. The deleted `x` needs a name of
+    // its own: `x_1` is taken by the box, so it must become `x_2`, not collide with the box.
+    let with_box = |text: &str| {
+        let mut s = Session::new(Document::from_text(text));
+        s.run("caret.set", &json!({"pos": Pos::body(0, 0)})).unwrap();
+        let id = s.run("insert.textBox", &json!({"text": "Boxed "})).unwrap()["story"].as_u64().unwrap() as u32;
+        let p = s.doc.para_mut(StoryRef::Part(id), &Pos::body(0, 0).path).unwrap();
+        p.insert_object(0, InlineObject::BookmarkStart { name: "x_1".into() }, &CharProps::default()).unwrap();
+        let at = p.len();
+        p.insert_object(at, InlineObject::BookmarkEnd { name: "x_1".into() }, &CharProps::default()).unwrap();
+        s
+    };
+    let mut orig = with_box("A.\nGone para.\nB.");
+    orig.run("caret.set", &json!({"pos": Pos::body(1, 0)})).unwrap();
+    orig.run("insert.bookmark", &json!({"name": "x"})).unwrap();
+    let mut rev = with_box("A.\nB.\nFresh para.");
+    rev.run("caret.set", &json!({"pos": Pos::body(2, 0)})).unwrap();
+    rev.run("insert.bookmark", &json!({"name": "x"})).unwrap();
+    let s = compare_files("bookmark-box", &orig.doc, &rev.doc);
+    let starts: Vec<(String, bool)> = objects_in(&s.doc, StoryRef::Body)
+        .into_iter()
+        .filter_map(|(o, del)| match o {
+            InlineObject::BookmarkStart { name } => Some((name, del)),
+            _ => None,
+        })
+        .collect();
+    assert!(starts.contains(&("x".to_string(), false)), "the revised bookmark keeps its name: {starts:?}");
+    assert!(starts.contains(&("x_2".to_string(), true)), "the deleted bookmark is renamed past the box's x_1: {starts:?}");
+    let mut all: Vec<String> = starts.iter().map(|(n, _)| n.clone()).collect();
+    for (o, _) in objects_in(&s.doc, StoryRef::Body) {
+        for id in o.text_boxes() {
+            for (inner, del) in objects_in(&s.doc, StoryRef::Part(id)) {
+                if let InlineObject::BookmarkStart { name } = inner {
+                    assert!(!del, "the box's bookmark stays live");
+                    all.push(name);
+                }
+            }
+        }
+    }
+    assert!(all.contains(&"x_1".to_string()), "the box's bookmark is still there: {all:?}");
+    assert_eq!(all.iter().collect::<BTreeSet<_>>().len(), all.len(), "no bookmark name is used twice: {all:?}");
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn compare_relinks_what_text_box_stories_refer_to() {
@@ -547,8 +599,9 @@ fn compare_relinks_what_text_box_stories_refer_to() {
             }
         }
     }
-    assert!(shown.contains(&(b.clone(), false)), "the revised box shows its own picture");
-    assert!(!shown.contains(&(a, false)), "the original's picture shows only as deleted, if at all");
+    assert!(shown.contains(&(b.clone(), false)), "the revised box shows its own picture: {shown:?}");
+    assert!(shown.contains(&(a.clone(), true)), "the original's picture is kept, marked deleted: {shown:?}");
+    assert!(!shown.contains(&(a, false)), "the original's picture never shows as live: {shown:?}");
 }
 
 #[test]

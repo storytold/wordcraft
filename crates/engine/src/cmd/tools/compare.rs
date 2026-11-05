@@ -276,19 +276,24 @@ const MAX_BOOKMARK_NAME: usize = 40;
 /// names of their own, so no name is bookmarked twice. The revised one keeps the name: fields
 /// and links naming it go to the text the comparison accepts.
 fn unique_deleted_bookmarks(doc: &mut Document, del: u32) {
-    let paths = doc.para_paths(StoryRef::Body);
+    // Body and text-box stories share one bookmark namespace in the saved output, so a
+    // fresh name must avoid the bookmarks of both, and a rename must reach both.
+    let mut stories = vec![StoryRef::Body];
+    stories.extend(doc.parts.iter().filter(|(_, part)| part.kind == PartKind::TextBox).map(|(id, _)| StoryRef::Part(*id)));
     let mut live = BTreeSet::new();
     let mut taken = BTreeSet::new();
     let mut deleted = false;
-    for path in &paths {
-        let Some(p) = doc.para(StoryRef::Body, path) else { continue };
-        for (off, o) in p.objects_with_offsets() {
-            if let InlineObject::BookmarkStart { name } | InlineObject::BookmarkEnd { name } = o {
-                taken.insert(name.clone());
-                if p.props_of_char(off).del == Some(del) {
-                    deleted = true;
-                } else if matches!(o, InlineObject::BookmarkStart { .. }) {
-                    live.insert(name.clone());
+    for story in &stories {
+        for path in doc.para_paths(*story) {
+            let Some(p) = doc.para(*story, &path) else { continue };
+            for (off, o) in p.objects_with_offsets() {
+                if let InlineObject::BookmarkStart { name } | InlineObject::BookmarkEnd { name } = o {
+                    taken.insert(name.clone());
+                    if p.props_of_char(off).del == Some(del) {
+                        deleted = true;
+                    } else if matches!(o, InlineObject::BookmarkStart { .. }) {
+                        live.insert(name.clone());
+                    }
                 }
             }
         }
@@ -297,29 +302,31 @@ fn unique_deleted_bookmarks(doc: &mut Document, del: u32) {
         return;
     }
     let mut renamed: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
-    for path in &paths {
-        let Ok(p) = doc.para_mut(StoryRef::Body, path) else { continue };
-        let dels: Vec<bool> = p.object_offsets().into_iter().map(|off| p.props_of_char(off).del == Some(del)).collect();
-        let mut changed = false;
-        for (o, deleted) in p.objects.iter_mut().zip(dels) {
-            let (InlineObject::BookmarkStart { name } | InlineObject::BookmarkEnd { name }) = o else { continue };
-            if !deleted || !live.contains(name.as_str()) {
-                continue;
-            }
-            let fresh = match renamed.get(name.as_str()) {
-                Some(f) => f.clone(),
-                None => {
-                    let Some(f) = fresh_bookmark_name(name, &taken) else { continue };
-                    taken.insert(f.clone());
-                    renamed.insert(name.clone(), f.clone());
-                    f
+    for story in &stories {
+        for path in doc.para_paths(*story) {
+            let Ok(p) = doc.para_mut(*story, &path) else { continue };
+            let dels: Vec<bool> = p.object_offsets().into_iter().map(|off| p.props_of_char(off).del == Some(del)).collect();
+            let mut changed = false;
+            for (o, deleted) in p.objects.iter_mut().zip(dels) {
+                let (InlineObject::BookmarkStart { name } | InlineObject::BookmarkEnd { name }) = o else { continue };
+                if !deleted || !live.contains(name.as_str()) {
+                    continue;
                 }
-            };
-            *name = fresh;
-            changed = true;
-        }
-        if changed {
-            p.touch();
+                let fresh = match renamed.get(name.as_str()) {
+                    Some(f) => f.clone(),
+                    None => {
+                        let Some(f) = fresh_bookmark_name(name, &taken) else { continue };
+                        taken.insert(f.clone());
+                        renamed.insert(name.clone(), f.clone());
+                        f
+                    }
+                };
+                *name = fresh;
+                changed = true;
+            }
+            if changed {
+                p.touch();
+            }
         }
     }
 }
@@ -477,14 +484,20 @@ enum Tok<'a> {
 #[derive(PartialEq)]
 enum Key {
     Text(String),
-    Obj(Box<InlineObject>, Vec<String>),
+    Obj(Box<InlineObject>, Vec<String>, Vec<Vec<u8>>),
 }
 
 /// Both documents' objects are in the result by the time they're compared (the revised one's
 /// adopted, with ids of their own), so the ids of the stories, notes, comments and editable
 /// ranges they refer to differ even when they're the same: they compare by what those show.
 fn obj_key(doc: &Document, o: &InlineObject) -> Key {
-    let mut texts: Vec<String> = o.text_boxes().into_iter().map(|id| doc.plain_text(StoryRef::Part(id))).collect();
+    let mut texts: Vec<String> = Vec::new();
+    let mut media: Vec<Vec<u8>> = Vec::new();
+    let mut seen: BTreeSet<u32> = BTreeSet::new();
+    for id in o.text_boxes() {
+        texts.push(doc.plain_text(StoryRef::Part(id)));
+        story_media(doc, id, &mut seen, &mut media);
+    }
     let mut o = o.clone();
     for story in o.text_box_slots() {
         *story = None;
@@ -492,19 +505,59 @@ fn obj_key(doc: &Document, o: &InlineObject) -> Key {
     match &mut o {
         InlineObject::NoteRef { id, .. } => {
             texts.push(doc.plain_text(StoryRef::Part(*id)));
+            story_media(doc, *id, &mut seen, &mut media);
             *id = 0;
         }
         InlineObject::CommentStart { id } | InlineObject::CommentEnd { id } => {
             if let Some(c) = doc.comments.get(id) {
                 texts.push(c.author.clone());
                 texts.push(doc.plain_text(StoryRef::Part(c.part)));
+                story_media(doc, c.part, &mut seen, &mut media);
             }
             *id = 0;
         }
         InlineObject::PermStart { id, .. } | InlineObject::PermEnd { id } => *id = 0,
         _ => {}
     }
-    Key::Obj(Box::new(o), texts)
+    Key::Obj(Box::new(o), texts, media)
+}
+
+/// The bytes of the pictures a story shows, in the order they appear. Plain text cannot
+/// see them, so two stories that read alike but show different pictures would compare as
+/// the same and the original's picture would be lost. A story's paragraph paths already
+/// walk its nested tables; group members and text boxes nested in the story are followed
+/// too, each story once (a story cannot contain itself, but a hostile file could cycle).
+fn story_media(doc: &Document, part: u32, seen: &mut BTreeSet<u32>, out: &mut Vec<Vec<u8>>) {
+    if !seen.insert(part) {
+        return;
+    }
+    for path in doc.para_paths(StoryRef::Part(part)) {
+        let Some(p) = doc.para(StoryRef::Part(part), &path) else { continue };
+        for (_, o) in p.objects_with_offsets() {
+            object_media(doc, o, seen, out);
+        }
+    }
+}
+
+/// One object's contribution to [`story_media`]: a picture's bytes, a group's members,
+/// and the pictures of any text box the object anchors.
+fn object_media(doc: &Document, o: &InlineObject, seen: &mut BTreeSet<u32>, out: &mut Vec<Vec<u8>>) {
+    match o {
+        InlineObject::Image { media, .. } => {
+            if let Some(bytes) = doc.media.get(media) {
+                out.push(bytes.as_ref().clone());
+            }
+        }
+        InlineObject::Group { children, .. } => {
+            for c in children {
+                object_media(doc, &c.obj, seen, out);
+            }
+        }
+        _ => {}
+    }
+    for id in o.text_boxes() {
+        story_media(doc, id, seen, out);
+    }
 }
 
 /// Whether two paragraphs hold the same objects, as compared.
