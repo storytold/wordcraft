@@ -758,6 +758,8 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 
 Footer page-table height and body wrapping are corrected. Other pagination gaps remain open.
 
+Section page-numbering settings preserve `w:chapStyle` values across the full unsigned-byte range.
+
 ## Revision history
 
 > 2026-11-03 · Arabic dialogs read right to left (rtl::Table); recorded in the progress log, readiness unchanged.
