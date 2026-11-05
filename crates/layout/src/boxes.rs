@@ -502,9 +502,7 @@ fn box_float_table_rect(
     // Cleared downwards it would leave the page again. Word (observed) keeps such a table where
     // the page edge put it and moves it right, beside the table it met; it does not stack them up
     // or let one run off the bottom. It doesn't bring the table back onto the page across.
-    if let Some(fr) =
-        frame.filter(|_| f.v_rel != Anchor::Page && f.v_rel != Anchor::Margin).filter(|fr| r.bottom() + fr.origin.1 > fr.sect.page_h + 0.01)
-    {
+    if f.v_rel != Anchor::Page && f.v_rel != Anchor::Margin && frame.is_some_and(|fr| r.bottom() + fr.origin.1 > fr.sect.page_h + 0.01) {
         let [dl, dt, dr, db] = f.dist_from_text();
         let mut beside = Rect::new(clamped.x, clamped.y, clamped.w, clamped.h);
         for _ in 0..64 {
