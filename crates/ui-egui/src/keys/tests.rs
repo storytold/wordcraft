@@ -133,6 +133,21 @@ fn only_plain_paste_releases_paste_a_clipboard_picture() {
     assert!(!is_paste_special_release(Key::V, m(true, true, true)) && !is_paste_special_release(Key::V, m(true, false, false)));
 }
 
+/// #1537: a browser sends Mod+Shift+V as a paste event; it pastes text only, in the destination's
+/// formatting, though the clipboard also holds bold HTML. Plain Mod+V keeps the HTML's bold.
+#[test]
+fn a_mod_shift_paste_event_keeps_text_only() {
+    for (modifiers, bold) in [(Modifiers::COMMAND | Modifiers::SHIFT, false), (Modifiers::COMMAND, true)] {
+        let services = crate::Services { clipboard_html: Some(Box::new(|| Some("<p><b>external</b></p>".into()))), ..Default::default() };
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+        let ctx = egui::Context::default();
+        mods_frame(&ctx, &mut a, modifiers, vec![egui::Event::Paste("external".into())]);
+        assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "external", "{modifiers:?}");
+        let state = a.session.run("format.state", &json!({})).unwrap();
+        assert_eq!(state.get("bold").and_then(serde_json::Value::as_bool) == Some(true), bold, "{modifiers:?}: {state}");
+    }
+}
+
 /// An empty document whose clipboard holds a 4 × 4 picture.
 fn picture_app() -> WordApp {
     use crate::paste_picture::ClipboardPicture;
