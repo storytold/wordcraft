@@ -84,8 +84,8 @@ requests are never flipped.
 Language packs (see [MCP](mcp.md#language-packs)) are commands like any other: `proof.packs`,
 `proof.installPack {"locale": "nl"}` and `proof.removePack {"locale": "nl"}`. Through the control
 channel they act on the running app's packs, and install only while its downloading setting is on;
-they never turn it on, and neither does a `ui.click` or `ui.key` on the app's Install, Show
-available languages or Refresh buttons. An install or a refresh runs in the background
+they never turn it on, and neither does a `ui.click` or `ui.key` on the app's Install, Add a
+language… or Refresh buttons. An install or a refresh runs in the background
 (`"started": true`); `proof.packs` reports its progress, then the result.
 `ui.dialog {"name": "languageData"}` opens About › Language data.
 
@@ -195,3 +195,16 @@ Dispatch these through `engine.execute` (also available through the UI command r
 Folder reveal requires an existing Recent entry and a supported host service. Desktop file-manager
 launch and waiting happen on a worker; later launch errors are logged. Programmatic clear is immediate;
 the Recent menu asks for confirmation. Save copies do not refresh the source document's Recent entry.
+### Physical print sheet layout
+
+`ui.printSubmit`, `ui.print` and `file.printPdf` accept `pagesPerSheet`: the integer
+1 (default), 2, 4, 6, 9 or 16, or `"booklet"` / `"bookletReverse"` for left/right binding.
+These settings change only the print PDF, leaving document Page Setup unchanged.
+Selection/range/parity are applied first. N-up fills cells in row order; booklet mode
+pads the selected pages to a multiple of four and pairs outer/inner pages. Copies
+repeat complete sheet plans, preserving blank slots at copy boundaries. Native copies
+remain a spooler setting. Two-up and booklet sheets are landscape. Use duplex on the
+short edge for folded booklets; this does not configure a printer's duplex capability.
+The preview shows physical sheet sides, before copies, using the same sheet plan.
+Explicit `paper` chooses the physical sheet; otherwise the first selected page supplies
+its size. Independent Page Setup multiple-page modes (#2414) are not required.
