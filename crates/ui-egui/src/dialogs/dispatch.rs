@@ -482,7 +482,10 @@ fn find_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         if replace_mode {
             if ui.button(tl!("Replace All")).clicked() {
                 match app.run("edit.replaceAll", opts.clone()) {
-                    Ok(r) => *message = format!("All done. We made {} replacements.", r["replaced"]),
+                    Ok(r) => {
+                        let count = |k: &str| r[k].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(0);
+                        *message = wordcraft_engine::cmd::edit::replace_all_message(count("replaced"), count("skippedInFields"));
+                    }
                     Err(e) => *message = e,
                 }
             }

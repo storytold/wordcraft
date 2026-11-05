@@ -330,23 +330,6 @@ impl InlineObject {
             })
             .collect()
     }
-    /// The text a field shows as its result, as layout draws it: a legacy drop-down's selected
-    /// entry, otherwise the cached result. Find reads it in the field's place, as Word does
-    /// (#5552). `None` for other objects, a field showing its code (View › Field Codes `codes`,
-    /// toggled per field by Shift+F9), a check box or an empty result.
-    pub fn shown_result(&self, codes: bool) -> Option<std::borrow::Cow<'_, str>> {
-        use crate::legacy_form::LegacyForm;
-        let InlineObject::Field { result, code, .. } = self else { return None };
-        if codes != *code {
-            return None;
-        }
-        let shown: Option<std::borrow::Cow<'_, str>> = match self.legacy_form() {
-            Some(LegacyForm::CheckBox { .. }) => return None,
-            Some(f @ LegacyForm::DropDown { .. }) => f.shown_text().map(|t| t.to_string().into()),
-            _ => None,
-        };
-        shown.or(Some(result.as_str().into())).filter(|r| !r.is_empty())
-    }
     /// A legacy form field's definition (`FORMCHECKBOX`, `FORMTEXT`, `FORMDROPDOWN`), read from
     /// the `w:ffData` it keeps; `None` for anything else.
     pub fn legacy_form(&self) -> Option<crate::legacy_form::LegacyForm> {

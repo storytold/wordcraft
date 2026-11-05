@@ -507,6 +507,7 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
         find_pattern::resolve_names(find_pattern::parse_replace(&f.replace, &opts), &index)
     });
     let paths = s.doc.para_paths(story);
+    let show = super::fields::FieldShow::of(s, story);
     // Paragraphs read as one text: consecutive siblings when the pattern spans paragraphs.
     let mut chunks: Vec<std::ops::Range<usize>> = Vec::new();
     for i in 0..paths.len() {
@@ -530,6 +531,14 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
                 cuts.push(hay.len());
                 continue;
             };
+            // The fields that show text, with their offsets, in one walk of the paragraph: looking
+            // each object up by its offset would count the objects before it every time.
+            let fields: Vec<(usize, String)> = if p.objects.is_empty() {
+                Vec::new()
+            } else {
+                p.objects_with_offsets().filter_map(|(off, o)| show.text(o).map(|t| (off, t))).collect()
+            };
+            let mut next_field = 0;
             let mut expect = 0;
             for (r, ch) in p.run_ranges() {
                 let Some(t) = p.text.get(r.clone()).filter(|_| ch.del.is_none()) else { continue };
@@ -539,14 +548,17 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
                 if r.start != expect {
                     cuts.push(hay.len());
                 }
-                // Plain text up to each field showing a result, then the result for the field.
+                // Plain text up to each field that shows text, then that text for the field (fields
+                // in skipped deleted runs are passed over).
                 let mut at = r.start;
-                for (k, _) in t.match_indices(wordcraft_doc::para::OBJ) {
-                    let off = r.start + k;
-                    let Some(res) = p.object_at(off).and_then(|o| o.shown_result(s.view.field_codes)) else { continue };
-                    push_text(&mut segs, &mut hay, i, at, p.text.get(at..off).unwrap_or(""));
-                    segs.push(Seg { hay: hay.len(), para: i, raw: off, len: res.len(), mark: false, field: true });
-                    hay.push_str(&res);
+                while let Some((off, res)) = fields.get(next_field).filter(|(off, _)| *off < r.end) {
+                    next_field += 1;
+                    if *off < r.start {
+                        continue;
+                    }
+                    push_text(&mut segs, &mut hay, i, at, p.text.get(at..*off).unwrap_or(""));
+                    segs.push(Seg { hay: hay.len(), para: i, raw: *off, len: res.len(), mark: false, field: true });
+                    hay.push_str(res);
                     at = off + wordcraft_doc::para::OBJ.len_utf8();
                 }
                 push_text(&mut segs, &mut hay, i, at, p.text.get(at..r.end).unwrap_or(""));
@@ -805,8 +817,18 @@ fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
             }
         }
     }
-    s.status = format!("All done. We made {n} replacements.");
+    s.status = replace_all_message(n, in_fields.len());
     Ok(json!({"replaced": n, "skippedInFields": in_fields.len()}))
+}
+
+/// What Replace All reports: how many matches it replaced and, when some were in fields' text,
+/// that those were left alone, so a count that Find gave isn't left unexplained (#5552).
+pub fn replace_all_message(replaced: usize, skipped_in_fields: usize) -> String {
+    match skipped_in_fields {
+        0 => format!("All done. We made {replaced} replacements."),
+        1 => format!("All done. We made {replaced} replacements. 1 match is in a field and was left as it is."),
+        k => format!("All done. We made {replaced} replacements. {k} matches are in fields and were left as they are."),
+    }
 }
 
 fn goto(s: &mut Session, v: &Value) -> CmdResult {

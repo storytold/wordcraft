@@ -52,6 +52,8 @@ chrono = { workspace = true, features = ["clock"] }
 libc = { workspace = true }
 
 [dev-dependencies]
+# Counts the characters object lookups walk, for Find's linear-time test.
+wordcraft-doc = { workspace = true, features = ["test-support"] }
 encoding_rs = { workspace = true }
 zip = { workspace = true }
 cfb = { workspace = true }

@@ -66,13 +66,142 @@ fn find_matches_citation_results() {
     assert_eq!(run(&mut s, "edit.find", json!({"text": "[1]]"}))["count"], 0);
 }
 
+/// While field codes show (View › Field Codes, Alt+F9), Find matches the code in braces the page
+/// shows, as Word does, not the hidden result; Replace leaves those matches alone too.
 #[test]
-fn find_skips_results_while_field_codes_show() {
+fn find_matches_field_codes_while_they_show() {
     let mut s = cited();
-    s.view.field_codes = true;
+    run(&mut s, "view.fieldCodes", json!({"value": true}));
     assert_eq!(run(&mut s, "edit.find", json!({"text": "[1]"}))["count"], 0);
-    s.view.field_codes = false;
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "{ CITATION"}))["count"], 2);
+    let r = run(&mut s, "edit.replaceAll", json!({"text": "CITATION", "with": "X"}));
+    assert_eq!((r["replaced"].as_u64(), r["skippedInFields"].as_u64()), (Some(0), Some(2)), "{r}");
+    assert_eq!(field_count(&s), 2);
+    run(&mut s, "view.fieldCodes", json!({"value": false}));
     assert_eq!(run(&mut s, "edit.find", json!({"text": "[1]"}))["count"], 2);
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "CITATION"}))["count"], 0);
+}
+
+/// #5560 review: Alt+F9 changes what Find matches without changing the document, so Reading
+/// Highlight and the Navigation pane's results are searched again rather than kept from before.
+#[test]
+fn showing_field_codes_searches_highlights_and_results_again() {
+    let mut s = cited();
+    run(&mut s, "edit.advancedFind", json!({"text": "[1]", "highlight": true}));
+    assert_eq!((s.find_highlights().len(), s.find.results.len()), (2, 2));
+    run(&mut s, "view.fieldCodes", json!({}));
+    assert_eq!((s.find_highlights().len(), s.find.results.len()), (0, 0));
+    run(&mut s, "view.fieldCodes", json!({}));
+    assert_eq!((s.find_highlights().len(), s.find.results.len()), (2, 2));
+}
+
+fn simple(instr: &str, result: &str) -> InlineObject {
+    InlineObject::Field { instr: instr.into(), result: result.into(), locked: false, dirty: false, code: false, form: String::new() }
+}
+
+/// #5560 review: Find reads each field as layout draws it, not as its saved result: ASK and SET
+/// show nothing, TITLE, AUTHOR and FILENAME with no result show the document's, PAGEREF and
+/// STYLEREF in the body show their result. Fields whose number depends on the page they land on
+/// aren't matched at all, rather than on a number the page may not show; nor is an EQ overstrike.
+/// Every text Find matches is exactly a text layout drew for the field.
+#[test]
+fn find_reads_each_field_as_layout_draws_it() {
+    // (code, saved result, what Find matches)
+    let kinds: &[(&str, &str, Option<&str>)] = &[
+        ("CITATION Smi20 \\l 1033", "[7]", Some("[7]")),
+        ("REF _Ref2 \\h", "Table 2", Some("Table 2")),
+        ("SEQ Figure \\* ARABIC", "3", Some("3")),
+        ("SET Code \"COD\"", "COD", None),
+        ("ASK Name \"Who?\"", "Ada", None),
+        ("TITLE", "", Some("Field Notes")),
+        ("TITLE", "Saved title", Some("Saved title")),
+        ("AUTHOR", "", Some("Rees Hart")),
+        ("FILENAME", "", Some("FILENAME")),
+        ("PAGE", "4", None),
+        ("NUMPAGES", "9", None),
+        ("SECTIONPAGES", "8", None),
+        ("SECTION", "6", None),
+        ("PAGEREF _Ref1 \\h", "12", Some("12")),
+        ("STYLEREF \"Heading 1\"", "Methods", Some("Methods")),
+        ("EQ \\o(a,b)", "", None),
+    ];
+    let mut d = wordcraft_doc::Document::from_text(&vec!["at "; kinds.len()].join("\n"));
+    d.core.title = "Field Notes".into();
+    d.core.creator = "Rees Hart".into();
+    for (i, (code, result, _)) in kinds.iter().enumerate() {
+        d.insert_object(&Pos::body(i, 3), simple(code, result), &Default::default()).unwrap();
+    }
+    let mut s = Session::new(d);
+    let filename = s.resolved_filenames().0;
+    let l = s.layout();
+    let drawn: Vec<String> = l
+        .pages
+        .iter()
+        .flat_map(|pg| pg.items.iter())
+        .filter_map(
+            |it| if let wordcraft_layout::Placed::Lines { para, .. } = it { Some(para.shown.iter().map(|(_, t, _)| t.clone())) } else { None },
+        )
+        .flatten()
+        .collect();
+    for (code, result, finds) in kinds {
+        let finds = finds.map(|f| if f == "FILENAME" { filename.as_str() } else { f });
+        match finds {
+            Some(text) => {
+                assert!(drawn.iter().any(|t| t == text), "{code}: layout draws {text:?} (drawn: {drawn:?})");
+                let r = run(&mut s, "edit.find", json!({"text": text, "matchCase": true}));
+                assert_eq!(r["count"], 1, "{code}: Find {text:?}: {r}");
+            }
+            None if !result.is_empty() => {
+                assert_eq!(run(&mut s, "edit.find", json!({"text": result, "matchCase": true}))["count"], 0, "{code}: {result:?} isn't shown");
+            }
+            None => {}
+        }
+    }
+}
+
+/// Headers and footers work out PAGEREF and STYLEREF from the pages, so there Find leaves them out
+/// as it does page numbers; the body and notes show (and match) their result.
+#[test]
+fn page_worked_fields_in_headers_are_not_matched() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("x"));
+    let header = run(&mut s, "insert.header", json!({"text": "h"}))["story"].as_u64().unwrap() as u32;
+    s.sel = crate::Selection::caret(Pos::body(0, 0));
+    run(&mut s, "references.footnote", json!({"text": "n"}));
+    let note = s.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(id, _)| *id).unwrap();
+    for code in ["PAGEREF _Ref1 \\h", "STYLEREF \"Heading 1\""] {
+        let o = simple(code, "12");
+        let read = |story| crate::cmd::fields::FieldShow::of(&s, story).text(&o);
+        assert_eq!(read(StoryRef::Part(header)), None, "{code}");
+        assert_eq!(read(StoryRef::Body).as_deref(), Some("12"), "{code}");
+        assert_eq!(read(StoryRef::Part(note)).as_deref(), Some("12"), "{code}");
+    }
+}
+
+/// #5560 review: Find looks up a paragraph's fields in one walk of it, so a long paragraph of
+/// objects costs about 8x the steps for 8x the objects, not 64x (each lookup by offset counted the
+/// objects before it again, #3614).
+#[test]
+fn find_walks_a_paragraph_of_objects_once() {
+    let make = |n: usize| {
+        let mut d = wordcraft_doc::Document::from_text(&"word ".repeat(n));
+        for i in (0..n).rev() {
+            let o = if i % 2 == 0 { simple("CITATION Smi20", "[7]") } else { InlineObject::BookmarkStart { name: format!("b{i}") } };
+            d.insert_object(&Pos::body(0, i * 5), o, &Default::default()).unwrap();
+        }
+        let mut s = Session::new(d);
+        s.find.query = "[7]word".into();
+        s
+    };
+    let (small, big) = (make(500), make(4000));
+    let count = |s: &Session| {
+        let mut n = 0;
+        let steps = wordcraft_doc::work::count(|| n = crate::cmd::edit::search(s, StoryRef::Body).unwrap().len());
+        (n, steps)
+    };
+    let ((ns, s1), (nb, s8)) = (count(&small), count(&big));
+    assert_eq!((ns, nb), (250, 2000));
+    let ratio = s8 as f64 / s1.max(1) as f64;
+    assert!(s1 > 0 && ratio <= 12.0, "8x the objects took {ratio:.1}x the steps ({s1} to {s8})");
 }
 
 #[test]
@@ -80,6 +209,8 @@ fn replace_leaves_matches_in_fields() {
     let mut s = cited();
     let r = run(&mut s, "edit.replaceAll", json!({"text": "[1]", "with": "[2]"}));
     assert_eq!((r["replaced"].as_u64(), r["skippedInFields"].as_u64()), (Some(0), Some(2)), "{r}");
+    // The message says why Find's two matches gave no replacements.
+    assert_eq!(s.status, "All done. We made 0 replacements. 2 matches are in fields and were left as they are.");
     let r = run(&mut s, "edit.replaceAll", json!({"text": "again", "with": "twice"}));
     assert_eq!((r["replaced"].as_u64(), r["skippedInFields"].as_u64()), (Some(1), Some(0)), "{r}");
     assert_eq!(s.doc.plain_text(StoryRef::Body), "See [1] and [1] twice.");

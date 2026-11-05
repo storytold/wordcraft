@@ -108,11 +108,12 @@ impl Session {
         if !self.find.highlight {
             return &[];
         }
-        if self.find.highlights.as_ref().is_none_or(|(r, _)| *r != self.rev) {
+        let fields = crate::cmd::fields::FieldShow::of(self, StoryRef::Body).key();
+        if self.find.highlights.as_ref().is_none_or(|(r, f, _)| *r != self.rev || *f != fields) {
             let found = crate::cmd::edit::search(self, StoryRef::Body).unwrap_or_default();
-            self.find.highlights = Some((self.rev, found));
+            self.find.highlights = Some((self.rev, fields, found));
         }
-        self.find.highlights.as_ref().map(|(_, v)| v.as_slice()).unwrap_or(&[])
+        self.find.highlights.as_ref().map(|(.., v)| v.as_slice()).unwrap_or(&[])
     }
 
     /// Whether the markup area beside the page can show balloons: markup shown in Print Layout
