@@ -81,8 +81,7 @@ pub fn list(doc: &Document) -> Vec<ZField> {
     let mut seen = std::collections::HashSet::new();
     for path in doc.para_paths(StoryRef::Body) {
         let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
-        // The k-th object marker holds the k-th object.
-        for (off, obj) in p.object_offsets().into_iter().zip(&p.objects) {
+        for (off, obj) in p.objects_with_offsets() {
             if let InlineObject::NoteRef { kind, id, custom } = obj {
                 let n = match kind {
                     NoteKind::Footnote => &mut foot,

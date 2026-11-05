@@ -139,6 +139,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-03: Code cleanup: the Zotero field list pairs a paragraph's objects with their offsets through `Paragraph::objects_with_offsets()`, the shared helper, instead of by hand; the PDF exporter's copy of the clipped-cell index had already gone with #3866. No behaviour change. (#3906)
 - 2026-11-04: OpenDocument files have no display settings any more (gap 19): File › Options › Advanced › OpenDocument files, `file.options` `odf`, `WORDCRAFT_ODF`, the LibreOffice style and custom values are gone. WordCraft makes one choice for each case the standard leaves open, the one the default made, and still follows what a file states ([docs/odf-interpretation.md](docs/odf-interpretation.md)).
 - 2026-10-31: Dialogs are modal, as in Word (#3859): while one is open, the ribbon, File, the page and the panes of its document window take no clicks, and typing and shortcuts (Ctrl+O…) do nothing until it closes; WordCraft's own Open/Save As window is modal too. A press beside a modal dialog shakes it a little, so it is clear why nothing behind it reacts (Word beeps); with animation effects off, its border flashes instead. Find and Replace, Symbol, Mark Index Entry, Cross-reference and Insert Merge Field stay modeless, as in Word for Mac 16.114.1 (checked on a newer build than the 16.113.4 the parity target names).
 - 2026-11-04: OpenDocument files are shown in one of two styles (gap 19): Microsoft Word style, the default, or LibreOffice style (File › Options › Advanced › OpenDocument files; `file.options` `{"odf": {"preset": "word"}}` or `"libreoffice"`; `WORDCRAFT_ODF=word` or `WORDCRAFT_ODF=libreoffice`). Custom stays for one's own value per case; `wordcraft`, the earlier id of Word's style, is still taken.
@@ -1206,3 +1207,4 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-27 | trivial | Progress log: AutoCorrect Options with no document open (#4585) |
 | 2026-10-28 | trivial | Progress log: RTF metafile pictures are imported (#4259) |
 | 2026-10-28 | trivial | Progress log: Chinese and Japanese text counts a word per character (#4547) |
+| 2026-11-03 | trivial | Progress log: Zotero field list uses the shared object-offset helper (#3906) |
