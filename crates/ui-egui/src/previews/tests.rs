@@ -381,3 +381,104 @@ fn font_menu_entries_take_the_theme_text_colour() {
         assert_eq!(images, 1, "{theme:?}: the entry draws its rendered name");
     }
 }
+
+/// Original table-style fixtures; each id is distinct even when its preview looks the same.
+fn table_preview_app(count: usize) -> (WordApp, Vec<String>) {
+    let mut doc = Document::new();
+    let ids: Vec<_> = (0..count).map(|n| format!("VisibleTable{n}")).collect();
+    for id in &ids {
+        doc.styles.upsert(wordcraft_doc::styles::Style {
+            id: id.clone(),
+            name: id.clone(),
+            kind: wordcraft_doc::StyleKind::Table,
+            based_on: Some("TableGrid".into()),
+            ..Default::default()
+        });
+    }
+    (WordApp::new(wordcraft_engine::Session::new(doc), crate::Services::default()), ids)
+}
+
+/// The same horizontal clipping and tile path as Table Design; returns intersecting ids,
+/// texture uploads and the texture ids actually painted in the frame.
+fn table_preview_frame(ctx: &egui::Context, app: &mut WordApp, ids: &[String], offset: f32) -> (Vec<String>, usize, Vec<egui::TextureId>) {
+    let mut visible = Vec::new();
+    let out = ctx.run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(500.0, 150.0))), ..Default::default() }, |ui| {
+        egui::ScrollArea::horizontal().max_width(420.0).horizontal_scroll_offset(offset).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                for id in ids {
+                    let response = table_style_tile(ui, app, id);
+                    if ui.is_rect_visible(response.rect) {
+                        visible.push(id.clone());
+                    }
+                }
+            });
+        });
+    });
+    let uploads = out.textures_delta.set.len();
+    let painted = out
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Mesh(m) if m.texture_id != egui::TextureId::default() => Some(m.texture_id),
+            _ => None,
+        })
+        .collect();
+    out.drop_without_applying_deltas();
+    (visible, uploads, painted)
+}
+
+/// More than 400 styles used to keep wiping the texture cache and rasterising on every frame.
+#[test]
+fn table_style_gallery_leaves_clipped_previews_unrendered() {
+    let (mut app, ids) = table_preview_app(450);
+    let before = serde_json::to_value(&app.session.doc).unwrap();
+    let revision = app.session.rev();
+    let ctx = egui::Context::default();
+    let mut settled_uploads = 0;
+    let mut visible = Vec::new();
+    for frame in 0..65 {
+        let (shown, uploads, painted) = table_preview_frame(&ctx, &mut app, &ids, 0.0);
+        if frame >= 5 {
+            settled_uploads += uploads;
+            assert_eq!(painted.len(), shown.len(), "each visible tile paints a preview after warmup");
+        }
+        visible = shown;
+    }
+    eprintln!("450 table styles: {} visible, {} cached, {settled_uploads} uploads after warmup", visible.len(), app.previews.tex.len());
+    assert!(!visible.is_empty() && visible.len() < 10);
+    assert_eq!(settled_uploads, 0, "an unchanged clipped gallery must settle");
+    assert_eq!(app.previews.tex.len(), visible.len(), "clipped tiles do not consume preview cache space");
+    for id in visible {
+        assert!(app.previews.tex.keys().any(|key| key.starts_with(&format!("tstyle:{id}:"))));
+    }
+    assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+    assert_eq!(app.session.rev(), revision);
+}
+
+/// Scrolling brings new tiles into view, including a tile clipped across the viewport edge.
+#[test]
+fn table_style_gallery_renders_newly_visible_and_partial_tiles() {
+    let (mut app, ids) = table_preview_app(450);
+    let ctx = egui::Context::default();
+    ctx.set_pixels_per_point(2.0);
+    let (initial, _, _) = table_preview_frame(&ctx, &mut app, &ids, 0.0);
+    table_preview_frame(&ctx, &mut app, &ids, 0.0);
+    let cached = app.previews.tex.len();
+    let mut visible = Vec::new();
+    for _ in 0..3 {
+        visible = table_preview_frame(&ctx, &mut app, &ids, 66.0 * 400.0 + 29.0).0;
+    }
+    assert!(!visible.is_empty() && visible.iter().all(|id| !initial.contains(id)));
+    assert!(visible.len() > 6, "partial edge tiles are included");
+    for id in &visible {
+        assert!(app.previews.tex.keys().any(|key| key.starts_with(&format!("tstyle:{id}:"))), "{id} became visible");
+    }
+    assert_eq!(app.previews.tex.len(), cached + visible.len());
+    let (_, uploads, painted) = table_preview_frame(&ctx, &mut app, &ids, 66.0 * 400.0 + 29.0);
+    assert_eq!(uploads, 0, "the scrolled gallery settles too");
+    assert_eq!(painted.len(), visible.len(), "new and partially clipped tiles paint their previews");
+    for id in &visible {
+        let texture = app.previews.tex.iter().find(|(key, _)| key.starts_with(&format!("tstyle:{id}:"))).unwrap().1;
+        assert!(painted.contains(&texture.id()), "{id} is painted with its cached preview");
+    }
+}
