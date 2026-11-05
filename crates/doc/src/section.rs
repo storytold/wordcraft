@@ -115,6 +115,40 @@ pub enum NumFormat {
     DollarText,
 }
 
+/// Chapter separator for page numbers (`w:chapSep`, ECMA-376 §17.18.12).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChapterSep {
+    Hyphen,
+    Period,
+    Colon,
+    EmDash,
+    EnDash,
+}
+
+impl ChapterSep {
+    pub fn from_ooxml(value: &str) -> Option<Self> {
+        match value {
+            "hyphen" => Some(Self::Hyphen),
+            "period" => Some(Self::Period),
+            "colon" => Some(Self::Colon),
+            "emDash" => Some(Self::EmDash),
+            "enDash" => Some(Self::EnDash),
+            _ => None,
+        }
+    }
+
+    pub const fn ooxml(self) -> &'static str {
+        match self {
+            Self::Hyphen => "hyphen",
+            Self::Period => "period",
+            Self::Colon => "colon",
+            Self::EmDash => "emDash",
+            Self::EnDash => "enDash",
+        }
+    }
+}
+
 impl NumFormat {
     /// Every format, in the order ST_NumberFormat lists them (which is also the order of the
     /// binary .doc number format codes up to 0x27).
@@ -733,6 +767,13 @@ pub struct SectionProps {
     /// Distance from the page edge to the header / footer.
     pub header: f32,
     pub footer: f32,
+    /// The space kept between a header and the body, and between the body and a footer, points
+    /// (ODF's header and footer spacing; Word keeps none). The margin already holds the band and
+    /// its spacing, so it only moves the body once content and spacing reach past the margin.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub header_gap: f32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub footer_gap: f32,
     pub gutter: f32,
     /// Mirror margins (inside/outside) — set from the document settings.
     pub columns: Columns,
@@ -742,6 +783,9 @@ pub struct SectionProps {
     pub title_page: bool,
     pub page_num_start: Option<u32>,
     pub page_num_format: NumFormat,
+    /// Chapter heading level and separator in `w:pgNumType`.
+    pub chapter_style: Option<u8>,
+    pub chapter_sep: Option<ChapterSep>,
     /// The file carries a `w:pgNumType` element that sets nothing else (no start, decimal
     /// format), so saving writes it back rather than dropping it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -772,6 +816,18 @@ pub struct SectionProps {
     pub footnote_pr: NoteProps,
     #[serde(skip_serializing_if = "NoteProps::is_empty")]
     pub endnote_pr: NoteProps,
+    /// First-page and other-page printer trays (`w:paperSrc`).
+    pub paper_src_first: Option<u16>,
+    pub paper_src_other: Option<u16>,
+    /// Section-specific suppression of endnotes (`w:noEndnote`).
+    pub no_endnote: Option<bool>,
+    /// Independent footnote column count (`w15:footnoteColumns`).
+    pub footnote_columns: Option<u32>,
+    /// Whether its columns end balanced (an ODF section's `text:dont-balance-text-columns`):
+    /// `None` is Word's rule, balanced when a continuous section follows; `Some(true)` also at
+    /// the end of the document, `Some(false)` never.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub balance_columns: Option<bool>,
 }
 
 impl Default for SectionProps {
@@ -788,6 +844,8 @@ impl Default for SectionProps {
             margin_right: 72.0,
             header: 36.0,
             footer: 36.0,
+            header_gap: 0.0,
+            footer_gap: 0.0,
             gutter: 0.0,
             columns: Columns::default(),
             headers: HeaderSet::default(),
@@ -795,6 +853,8 @@ impl Default for SectionProps {
             title_page: false,
             page_num_start: None,
             page_num_format: NumFormat::Decimal,
+            chapter_style: None,
+            chapter_sep: None,
             page_num_set: false,
             line_numbers: None,
             valign: PageVAlign::Top,
@@ -807,8 +867,17 @@ impl Default for SectionProps {
             doc_grid: None,
             footnote_pr: NoteProps::default(),
             endnote_pr: NoteProps::default(),
+            paper_src_first: None,
+            paper_src_other: None,
+            no_endnote: None,
+            footnote_columns: None,
+            balance_columns: None,
         }
     }
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
 }
 
 fn is_horizontal(d: &crate::props::TextDirection) -> bool {
