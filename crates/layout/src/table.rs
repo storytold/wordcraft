@@ -1124,39 +1124,10 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
                     a.extend(above.map(cell_at));
                     b.extend(below.map(cell_at));
                 }
-                Placed::Rule { x0, y0, x1, y1, border } => {
-                    if (y0 - y1).abs() < 0.01 {
-                        // Horizontal: the top edge stays, the bottom edge moves; both fragments close.
-                        if *y0 <= 0.01 {
-                            a.push(it.clone());
-                            b.push(Placed::Rule { x0: *x0, y0: 0.0, x1: *x1, y1: 0.0, border: *border });
-                        } else if *y0 >= row.height - 0.01 {
-                            a.push(Placed::Rule { x0: *x0, y0: cut, x1: *x1, y1: cut, border: *border });
-                            b.push(Placed::Rule { x0: *x0, y0: y0 - rest, x1: *x1, y1: y1 - rest, border: *border });
-                        } else if *y0 <= cut {
-                            a.push(it.clone());
-                        } else {
-                            b.push(Placed::Rule { x0: *x0, y0: y0 - shift, x1: *x1, y1: y1 - shift, border: *border });
-                        }
-                    } else {
-                        let (t, bt) = (y0.min(*y1), y0.max(*y1));
-                        if t < cut && bt > cut {
-                            let (left_x, right_x) = if y0 <= y1 { (*x0, *x1) } else { (*x1, *x0) };
-                            let at_cut = left_x + (right_x - left_x) * (cut - t) / (bt - t);
-                            a.push(Placed::Rule { x0: left_x, y0: t, x1: at_cut, y1: cut, border: *border });
-                            let shift = geo_shift(bt, shift);
-                            b.push(Placed::Rule { x0: at_cut, y0: (cut - shift).max(0.0), x1: right_x, y1: bt - shift, border: *border });
-                        } else {
-                            if t < cut {
-                                let x_cut = if y0 <= y1 { *x1 } else { *x0 };
-                                a.push(Placed::Rule { x0: *x0, y0: *y0, x1: x_cut, y1: bt.min(cut), border: *border });
-                            }
-                            if bt > cut {
-                                let shift = geo_shift(bt, shift);
-                                b.push(Placed::Rule { x0: *x0, y0: (t - shift).max(0.0), x1: *x1, y1: bt - shift, border: *border });
-                            }
-                        }
-                    }
+                Placed::Rule { .. } => {
+                    let (above, below) = split_rule(it, row.height, cut, rest, shift);
+                    a.extend(above);
+                    b.extend(below);
                 }
             }
         }
@@ -1167,6 +1138,66 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
         RowLayout { height: cut, items: a, bottom: row.bottom, edge: 0.0, cells: Vec::new() },
         RowLayout { height, items: b, bottom: row.bottom, edge: row.edge, cells: parts },
     ))
+}
+
+fn split_rule(it: &Placed, row_height: f32, cut: f32, rest: f32, shift: f32) -> (Vec<Placed>, Vec<Placed>) {
+    let Placed::Rule { x0, y0, x1, y1, border } = it else { return (Vec::new(), Vec::new()) };
+    if (y0 - y1).abs() < 0.01 {
+        return split_horizontal_rule(it, row_height, cut, rest, shift);
+    }
+    split_diagonal_rule(*x0, *y0, *x1, *y1, *border, row_height, cut, rest, shift)
+}
+
+fn split_horizontal_rule(it: &Placed, row_height: f32, cut: f32, rest: f32, shift: f32) -> (Vec<Placed>, Vec<Placed>) {
+    let Placed::Rule { x0, y0, x1, y1, border } = it else { return (Vec::new(), Vec::new()) };
+    if *y0 <= 0.01 {
+        return (vec![it.clone()], vec![Placed::Rule { x0: *x0, y0: 0.0, x1: *x1, y1: 0.0, border: *border }]);
+    }
+    if *y0 >= row_height - 0.01 {
+        return (
+            vec![Placed::Rule { x0: *x0, y0: cut, x1: *x1, y1: cut, border: *border }],
+            vec![Placed::Rule { x0: *x0, y0: y0 - rest, x1: *x1, y1: y1 - rest, border: *border }],
+        );
+    }
+    if *y0 <= cut {
+        (vec![it.clone()], Vec::new())
+    } else {
+        (Vec::new(), vec![Placed::Rule { x0: *x0, y0: y0 - shift, x1: *x1, y1: y1 - shift, border: *border }])
+    }
+}
+
+fn split_diagonal_rule(
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    border: Border,
+    row_height: f32,
+    cut: f32,
+    rest: f32,
+    shift: f32,
+) -> (Vec<Placed>, Vec<Placed>) {
+    let (top, bottom) = (y0.min(y1), y0.max(y1));
+    if top < cut && bottom > cut {
+        let (left_x, right_x) = if y0 <= y1 { (x0, x1) } else { (x1, x0) };
+        let at_cut = left_x + (right_x - left_x) * (cut - top) / (bottom - top);
+        let continuation_shift = if bottom >= row_height - 0.01 { rest } else { shift };
+        return (
+            vec![Placed::Rule { x0: left_x, y0: top, x1: at_cut, y1: cut, border }],
+            vec![Placed::Rule { x0: at_cut, y0: (cut - continuation_shift).max(0.0), x1: right_x, y1: bottom - continuation_shift, border }],
+        );
+    }
+    let mut above = Vec::new();
+    let mut below = Vec::new();
+    if top < cut {
+        let x_cut = if y0 <= y1 { x1 } else { x0 };
+        above.push(Placed::Rule { x0, y0, x1: x_cut, y1: bottom.min(cut), border });
+    }
+    if bottom > cut {
+        let continuation_shift = if bottom >= row_height - 0.01 { rest } else { shift };
+        below.push(Placed::Rule { x0, y0: (top - continuation_shift).max(0.0), x1, y1: bottom - continuation_shift, border });
+    }
+    (above, below)
 }
 
 type CellItems<'a> = Vec<std::borrow::Cow<'a, [Placed]>>;
