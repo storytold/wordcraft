@@ -501,6 +501,42 @@ fn new_window_shows_the_document_twice_each_with_its_own_caret_and_zoom() {
     assert_eq!(a.session.documents().len(), 1);
 }
 
+/// A menu Paste waiting for its text through egui (the system clipboard out of reach, #5217)
+/// belongs to the window it was chosen in: with another window on the same document brought
+/// forward before the text comes, it is cancelled rather than pasted at that window's caret. A
+/// menu Paste in a window of its own doesn't wait at all (egui would answer in that window's
+/// input, which the main window's hook doesn't see), as before.
+#[test]
+fn a_waiting_menu_paste_stays_with_its_window() {
+    let ctx = backend();
+    let services = Services { clipboard_text: Some(Box::new(|| None)), clipboard_unreachable: Some(Box::new(|| true)), ..Default::default() };
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+    a.run("text.insert", json!({"text": "Hello"})).unwrap();
+    frames(&ctx, &mut a, 2);
+    a.run("view.newWindow", json!({})).unwrap();
+    frames(&ctx, &mut a, 3);
+    let b = a.active_viewport();
+    assert_ne!(b, ViewportId::ROOT);
+    // In the second window: no waiting, the paste fails as it did.
+    assert!(a.run("edit.paste", json!({})).is_err());
+    assert!(a.pending_paste.is_none());
+
+    focus(ViewportId::ROOT);
+    frames(&ctx, &mut a, 2);
+    assert_eq!(a.active_viewport(), ViewportId::ROOT);
+    assert_eq!(a.run("edit.paste", json!({})).unwrap(), json!({"pending": "paste"}));
+    frames(&ctx, &mut a, 3);
+    assert!(sent(ViewportId::ROOT, &ViewportCommand::RequestPaste), "the main window asks egui");
+    // Window B, same document, comes forward; then the text arrives.
+    focus(b);
+    frames(&ctx, &mut a, 2);
+    EVENTS.with(|e| e.borrow_mut().entry(ViewportId::ROOT).or_default().push(egui::Event::Paste(" there".into())));
+    frames(&ctx, &mut a, 2);
+    assert!(a.pending_paste.is_none());
+    assert_eq!(text(&a), "Hello", "not pasted at the other window's caret");
+    assert_eq!(a.status_msg.as_ref().map(|(m, _)| m.as_str()), Some(crate::system_clipboard::CANCELLED));
+}
+
 /// Closing one of two windows on a document asks nothing, even with unsaved changes, and the
 /// other window goes back to the plain name; closing the last one asks. Quitting with a
 /// document in two windows asks once.

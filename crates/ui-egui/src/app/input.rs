@@ -8,6 +8,9 @@ impl WordApp {
     /// logic ticks, so offering it again would duplicate input. The step stays queued until a
     /// final (not discarded) UI pass acknowledges it, and a press/release pair stays intact.
     pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // The text a menu or ribbon Paste asked egui for, taken before the page's focus rules
+        // see it: the page isn't focused yet as the menu closes (#1368).
+        crate::system_clipboard::claim(self, &mut raw.events);
         // Capture the surface from the raw input itself. `InputState::viewport_rect` and the
         // last painted screen rect are stale in a hidden `run_logic` tick; RawInput is the host's
         // current answer, including minimized/occluded and a Wayland `inner_rect: None`.
