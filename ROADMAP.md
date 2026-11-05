@@ -786,6 +786,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | trivial | PR #4545: eligible cell floats retain in-bounds offsets and touch the outer cell edge only on overflow, ignoring wrap distances for object placement. Front-of-text, turned-cell and outside-cell opt-outs remain. Synthetic geometry controls; native front/behind-text parity remains unqualified. |
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` is preserved with true, false and absent values; OOXML properties follow schema order. Grid layout remains open. |
 | 2026-11-04 | trivial | KM25: merge current main and retain both documentation histories; resolve Markdown conflicts only. Readiness unchanged. |
 | 2026-11-04 | minor | KM22: record per-file SBBIC/Nathan Wells authorship, preserve SIL/SEAlang notices through companion pins, and gate data embedding pending inherited-source evidence and maintainer sign-off. Readiness unchanged. |
