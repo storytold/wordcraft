@@ -312,27 +312,27 @@ pub fn parse(bytes: &[u8]) -> Result<El, DocxError> {
     parse_ns(bytes, &[])
 }
 
-/// [`parse`], with the number of elements it built: the caller charges it against a
-/// package-wide budget (see [`MAX_ELEMENTS_TOTAL`]).
-pub fn parse_counted(bytes: &[u8]) -> Result<(El, usize), DocxError> {
-    parse_with(bytes, &[], false)
+/// [`parse`], with the number of elements it built, stopping early at `max` elements: the caller
+/// charges the count against a package-wide budget (see [`MAX_ELEMENTS_TOTAL`]), and a part over
+/// what is left of it is refused before the whole per-part tree is built.
+pub fn parse_counted(bytes: &[u8], max: usize) -> Result<(El, usize), DocxError> {
+    parse_with(bytes, &[], false, max)
 }
 
-/// [`parse`] with the number of elements it built, for a part whose loss would be silent data
-/// loss (the main document): a mismatched end tag or an element left open at the end of the data
-/// is an error, not a cue to stop reading. The caller charges the count against a package-wide
-/// budget (see [`MAX_ELEMENTS_TOTAL`]).
-pub fn parse_strict_counted(bytes: &[u8]) -> Result<(El, usize), DocxError> {
-    parse_with(bytes, &[], true)
+/// [`parse_counted`], strict, for a part whose loss would be silent data loss (the main
+/// document): a mismatched end tag or an element left open at the end of the data is an error,
+/// not a cue to stop reading.
+pub fn parse_strict_counted(bytes: &[u8], max: usize) -> Result<(El, usize), DocxError> {
+    parse_with(bytes, &[], true, max)
 }
 
 /// [`parse`] with `extra` namespaces (prefix, URI) mapped to canonical prefixes first, so a
 /// related vocabulary (WordprocessingML 2003) reads with the prefixes the reader knows.
 pub fn parse_ns(bytes: &[u8], extra: &[(&'static str, &str)]) -> Result<El, DocxError> {
-    parse_with(bytes, extra, false).map(|(e, _)| e)
+    parse_with(bytes, extra, false, MAX_ELEMENTS).map(|(e, _)| e)
 }
 
-fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Result<(El, usize), DocxError> {
+fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool, max: usize) -> Result<(El, usize), DocxError> {
     // UTF-16 (with a BOM) is transcoded to UTF-8; a UTF-8 BOM is stripped.
     let transcoded = utf16_to_utf8(bytes);
     let bytes = match &transcoded {
@@ -364,8 +364,8 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
                     return Err(DocxError::Xml("more than one root element".into()));
                 }
                 count += 1;
-                if count > MAX_ELEMENTS {
-                    return Err(DocxError::Limit("too many XML elements".into()));
+                if count > max {
+                    return Err(DocxError::Limit(format!("over the XML element budget: {max} elements")));
                 }
                 let local = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
                 let name = match el_prefix {
@@ -593,12 +593,13 @@ mod tests {
     fn strict_parsing_rejects_a_dropped_entity_and_trailing_markup() {
         let bad = [&b"<w:t>before &unknown; after</w:t>"[..], b"<a></a><b></b>", b"<a></a><b>"];
         for xml in bad {
-            assert!(parse_strict_counted(xml).is_err(), "{}", String::from_utf8_lossy(xml));
+            assert!(parse_strict_counted(xml, MAX_ELEMENTS).is_err(), "{}", String::from_utf8_lossy(xml));
         }
         assert!(
             parse_strict_counted(
                 b"<a>x &amp; y</a>
-"
+",
+                MAX_ELEMENTS
             )
             .is_ok()
         );

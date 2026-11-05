@@ -348,7 +348,10 @@ impl Package {
     pub fn xml_strict(&self, name: &str) -> Result<Option<El>, DocxError> {
         match self.get(name) {
             Some(b) => {
-                let (el, count) = xml::parse_strict_counted(b)?;
+                // The parser stops at the remaining budget or the per-part cap, whichever is less:
+                // a part over what is left of the package's budget is refused before the whole
+                // per-part tree is built.
+                let (el, count) = xml::parse_strict_counted(b, self.budget.get().min(xml::MAX_ELEMENTS))?;
                 self.charge(count)?;
                 Ok(Some(el))
             }
@@ -359,7 +362,7 @@ impl Package {
     pub fn xml(&self, name: &str) -> Result<Option<El>, DocxError> {
         match self.get(name) {
             Some(b) => {
-                let (el, count) = xml::parse_counted(b)?;
+                let (el, count) = xml::parse_counted(b, self.budget.get().min(xml::MAX_ELEMENTS))?;
                 self.charge(count)?;
                 Ok(Some(el))
             }
@@ -716,12 +719,12 @@ mod tests {
         let read = || crate::read::read_opened(&pkg, None);
         let (first, warned) = crate::test_log::warnings(read);
         assert!(first.is_ok(), "{:?}", first.err());
-        let refused: Vec<_> = warned.iter().filter(|w| w.contains("numbering") && w.contains("XML elements")).collect();
+        let refused: Vec<_> = warned.iter().filter(|w| w.contains("numbering") && w.contains("XML element")).collect();
         assert_eq!(refused.len(), 1, "{warned:?}");
         // The budget is per read: a second read starts it over and behaves the same.
         let (second, warned) = crate::test_log::warnings(read);
         assert!(second.is_ok(), "{:?}", second.err());
-        assert_eq!(warned.iter().filter(|w| w.contains("numbering") && w.contains("XML elements")).count(), 1, "{warned:?}");
+        assert_eq!(warned.iter().filter(|w| w.contains("numbering") && w.contains("XML element")).count(), 1, "{warned:?}");
     }
 
     /// The main document part itself is strict: over the budget it is an error, not a
@@ -733,5 +736,20 @@ mod tests {
         let z = zip_of(&[("word/document.xml", document.into_bytes())]);
         let pkg = Package::open_limited_within(&z, MAX_PART, MAX_TOTAL, 10).unwrap();
         assert!(matches!(crate::read::read_opened(&pkg, None), Err(DocxError::Limit(_))));
+    }
+
+    /// A part over what is left of the package's budget is refused while parsing, not after the
+    /// whole per-part tree is built: the parser stops at the remaining budget or the per-part
+    /// cap, whichever is less, so the file pays for at most what is left of the budget.
+    #[test]
+    fn a_part_over_the_remaining_budget_is_refused_while_parsing() {
+        let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
+        let document = format!(r#"<w:document {ns}>{}</w:document>"#, "<a/>".repeat(200));
+        let z = zip_of(&[("word/document.xml", document.into_bytes())]);
+        // 200 elements: inside the per-part cap, over the package's 100 budget. The parse
+        // refuses at the budget, so the error is the parse's, not the charge's.
+        let pkg = Package::open_limited_within(&z, MAX_PART, MAX_TOTAL, 100).unwrap();
+        let e = crate::read::read_opened(&pkg, None).expect_err("refused");
+        assert!(e.to_string().contains("over the XML element budget"), "{e}");
     }
 }
