@@ -796,6 +796,39 @@ fn ms_equation_fallback_picture_is_not_imported_too() {
 }
 
 #[test]
+fn ms_equation_para_reads_as_one_display_equation_per_o_math() {
+    // As the DOCX reader: `a=bc=d` is no equation of the file's, and the fallback still goes.
+    let html = r#"<p><!--[if gte msEquation 12]><m:oMathPara><m:oMathParaPr><m:jc m:val="center"/></m:oMathParaPr><m:oMath><m:r><m:t>a=b</m:t></m:r></m:oMath><m:oMath><m:r><m:t>c=d</m:t></m:r></m:oMath></m:oMathPara><![endif]--><![if !msEquation]>gone<![endif]></p>"#;
+    assert_eq!(inline_marks(&parse(html)), ["[[a=b]][[c=d]]"]);
+}
+
+#[test]
+fn ms_equation_fallback_stays_when_the_equations_are_not_all_read() {
+    const FALLBACK: &str = "<![if !msEquation]>kept<![endif]>";
+    let q = "<m:oMath><m:r><m:t>q</m:t></m:r></m:oMath>";
+    let page = |math: &str| format!("<p><!--[if gte msEquation 12]>{math}<![endif]-->{FALLBACK}</p>");
+    // One of several reads as nothing.
+    assert_eq!(inline_marks(&parse(&page(&format!("{q}<m:oMath></m:oMath>")))), ["[q]kept"]);
+    let para = format!("<m:oMathPara>{q}<m:oMath></m:oMath></m:oMathPara>");
+    assert_eq!(inline_marks(&parse(&page(&para))), ["[[q]]kept"]);
+    // More equations than one comment brings in.
+    let many = q.repeat(crate::omml::MAX_EQUATIONS + 1);
+    let marks = inline_marks(&parse(&page(&many)));
+    assert_eq!(marks, [format!("{}kept", "[q]".repeat(crate::omml::MAX_EQUATIONS))]);
+    // As many as it can, in one `m:oMathPara`.
+    let many = format!("<m:oMathPara>{}</m:oMathPara>", q.repeat(crate::omml::MAX_EQUATIONS + 1));
+    let marks = inline_marks(&parse(&page(&many)));
+    assert_eq!(marks, [format!("{}kept", "[[q]]".repeat(crate::omml::MAX_EQUATIONS))]);
+    // Exactly the cap is all of them.
+    let all = inline_marks(&parse(&page(&q.repeat(crate::omml::MAX_EQUATIONS))));
+    assert_eq!(all, ["[q]".repeat(crate::omml::MAX_EQUATIONS)]);
+    // An equation too long to read whole.
+    let long = format!("<m:oMath><m:r><m:t>q</m:t></m:r>{}</m:oMath>", "<m:r></m:r>".repeat(crate::mathml::MAX_NODES));
+    let marks = inline_marks(&parse(&page(&long)));
+    assert!(marks.first().is_some_and(|m| m.ends_with("]kept")), "{marks:?}");
+}
+
+#[test]
 fn other_comments_and_hostile_ms_equation_comments_stay_harmless() {
     assert_eq!(inline_marks(&parse("<p>a<!-- [if gte msEquation 12] not math -->b</p>")), ["ab"]);
     assert_eq!(inline_marks(&parse("<p>a<!--[if gte mso 9]><xml><w:WordDocument/></xml><![endif]-->b</p>")), ["ab"]);

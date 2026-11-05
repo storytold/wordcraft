@@ -11,19 +11,52 @@ use wordcraft_doc::math::{Arg, ColJc, FracKind, LimLoc, MAX_DEPTH, MNode, MRun, 
 
 use crate::mathml::{El, Item, MAX_NODES, local};
 
-/// The linear format of an `m:oMath` or `m:oMathPara` element, and whether it is a display
-/// equation (`m:oMathPara`). `None` when it holds nothing.
-pub fn read(e: &El) -> Option<(String, bool)> {
-    let display = name(e) == "omathpara";
+/// Most equations one comment brings in.
+pub const MAX_EQUATIONS: usize = 256;
+
+/// What the `m:oMath` and `m:oMathPara` elements of one comment read as.
+#[derive(Debug)]
+pub struct Equations {
+    /// Each equation's linear format, and whether it is a display equation (`m:oMathPara`).
+    pub equations: Vec<(String, bool)>,
+    /// Whether everything was read: no equation reached a cap or read as nothing.
+    pub complete: bool,
+}
+
+/// The equations of `elements`, with one display equation per `m:oMath` of an `m:oMathPara`, as
+/// the DOCX reader makes them.
+pub fn read(elements: &[El]) -> Equations {
+    let mut equations = Vec::new();
+    let mut complete = true;
+    for e in elements {
+        let display = name(e) == "omathpara";
+        let parts: Vec<&El> = if display { children(e, "omath").collect() } else { Vec::new() };
+        let parts = if parts.is_empty() { vec![e] } else { parts };
+        let mut budget = MAX_NODES;
+        for part in parts {
+            if equations.len() == MAX_EQUATIONS {
+                return Equations { equations, complete: false };
+            }
+            match read_one(part, &mut budget) {
+                Some(linear) => equations.push((linear, display)),
+                None => complete = false,
+            }
+        }
+        complete &= budget > 0;
+    }
+    Equations { equations, complete }
+}
+
+/// The linear format of one equation. `None` when it holds nothing.
+fn read_one(e: &El, budget: &mut usize) -> Option<String> {
     // Structure without a character in it (a cut-off `m:f`) is no equation.
     if e.text().trim().is_empty() {
         return None;
     }
-    let mut budget = MAX_NODES;
-    let nodes = merge_runs(arg(e, 0, &mut budget));
+    let nodes = merge_runs(arg(e, 0, budget));
     let linear: String = to_linear(&nodes).chars().filter(|c| !c.is_control()).collect();
     let linear = linear.trim().to_string();
-    (!linear.is_empty()).then_some((linear, display))
+    (!linear.is_empty()).then_some(linear)
 }
 
 /// The element's local name, lowercase.
@@ -235,8 +268,7 @@ mod tests {
 
     /// The OMML in `xml` read through the HTML reader's tree, as the importer does.
     fn lin(xml: &str) -> Option<(String, bool)> {
-        let doc = crate::html::parse_office_math(xml);
-        doc.first().and_then(read)
+        crate::html::parse_office_math(xml).0.first().and_then(|e| read(std::slice::from_ref(e)).equations.into_iter().next())
     }
 
     #[test]
