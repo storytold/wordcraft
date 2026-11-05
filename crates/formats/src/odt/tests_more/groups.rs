@@ -130,6 +130,7 @@ fn a_diagram_is_saved_as_a_group_of_its_drawing() {
                 bold: false,
                 align: TextAlign::Center,
                 font: None,
+                angle: 0.0,
             },
             GraphicItem::Shape { rect: [90.0, 9.0, 18.0, 18.0], kind: ShapeKind::Arrow, fill: Some(blue), stroke: None, stroke_width: 0.0 },
         ],

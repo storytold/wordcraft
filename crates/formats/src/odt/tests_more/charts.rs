@@ -57,8 +57,8 @@ fn spec(chart: &str) -> Option<ChartSpec> {
 
 fn north_south() -> Vec<ChartSeries> {
     vec![
-        ChartSeries { name: "North".into(), values: vec![Some(10.0), Some(14.0), Some(8.0), Some(16.0)] },
-        ChartSeries { name: "South".into(), values: vec![Some(12.0), None, Some(11.0), Some(13.0)] },
+        ChartSeries { name: "North".into(), values: vec![Some(10.0), Some(14.0), Some(8.0), Some(16.0)], ..Default::default() },
+        ChartSeries { name: "South".into(), values: vec![Some(12.0), None, Some(11.0), Some(13.0)], ..Default::default() },
     ]
 }
 
@@ -78,6 +78,7 @@ fn a_column_chart_reads_its_data_title_and_legend() {
             title: Some("Sales by quarter".into()),
             legend: Some(LegendPos::Right),
             data_labels: false,
+            ..Default::default()
         }
     );
     // The frame's size, in points.
@@ -135,7 +136,7 @@ fn line_area_pie_doughnut_and_scatter_classes() {
     let s = spec(&chart_xml("chart:scatter", "", "", "", scatter)).unwrap();
     assert_eq!(s.kind, ChartType::Scatter);
     assert_eq!(s.categories, vec!["10", "14", "8", "16"]);
-    assert_eq!(s.series, vec![ChartSeries { name: "South".into(), values: vec![Some(12.0), None, Some(11.0), Some(13.0)] }]);
+    assert_eq!(s.series, vec![ChartSeries { name: "South".into(), values: vec![Some(12.0), None, Some(11.0), Some(13.0)], ..Default::default() }]);
 }
 
 #[test]
