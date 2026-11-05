@@ -513,7 +513,7 @@ pub(crate) fn about_tab(ui: &mut Ui) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::atomic::Ordering;
 
     use serde_json::{Value, json};
@@ -584,7 +584,7 @@ mod tests {
     }
 
     /// Tests that set the process-wide pack backend take turns.
-    static BACKEND_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(crate) static BACKEND_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Characters a pack index or a server's answer could use to hide, reorder or break text.
     fn hostile(c: char) -> bool {

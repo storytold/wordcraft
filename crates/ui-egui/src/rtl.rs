@@ -11,7 +11,7 @@
 //! to right inside, because everything here follows the enclosing layout rather than the language.
 //! The document itself is never mirrored: its direction belongs to the document.
 
-use egui::{Align, Align2, InnerResponse, Layout, Rect, Ui, UiBuilder, pos2};
+use egui::{Align, Align2, InnerResponse, Layout, Rect, Ui, UiBuilder, pos2, vec2};
 
 use craft_ui::direction::{self, Direction};
 
@@ -175,6 +175,38 @@ pub fn island<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
         ui.ctx().request_repaint();
     }
     shown.inner
+}
+
+/// A scroll area in both directions that fills `ui`, for content wider than it. Right-to-left
+/// content runs from the right, so what doesn't fit lands left of the area, where no scroll offset
+/// reaches: egui's offsets only move content further left. So the content is set as far to the
+/// right as it overflowed last frame, and the area keeps its distance from the right end, which
+/// shows the content's start first. A change of overflow shows one frame late, so that frame is
+/// done again. Left-to-right content doesn't overflow on its left, so this is a plain scroll area.
+pub fn scroll_both(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    let key = ui.scope_id().with("rtl_scroll_overflow");
+    let (known, offset): (f32, Option<f32>) = ui.data(|d| d.get_temp(key)).unwrap_or_default();
+    let mut area = egui::ScrollArea::both().auto_shrink([false, false]);
+    if let Some(offset) = offset {
+        area = area.horizontal_scroll_offset(offset);
+    }
+    let shown = area.show(ui, |ui| {
+        let room = ui.max_rect().translate(vec2(known, 0.0));
+        let page = ui.scope_builder(UiBuilder::new().max_rect(room), add);
+        room.left() - page.response.rect.left()
+    });
+    let now = shown.inner.max(0.0);
+    if !now.is_finite() {
+        return;
+    }
+    if (now - known).abs() > 0.5 {
+        let end = (shown.content_size.x - shown.inner_rect.width()).max(0.0);
+        let offset = (shown.state.clamped_offset().x + now - known).clamp(0.0, end);
+        ui.data_mut(|d| d.insert_temp(key, (now, Some(offset))));
+        ui.ctx().request_discard("right-to-left overflow changed");
+    } else if offset.is_some() {
+        ui.data_mut(|d| d.insert_temp(key, (known, None::<f32>)));
+    }
 }
 
 /// `grid.show(ui, add)`. egui's `Grid` cannot be laid out from the right (it places cells from a
