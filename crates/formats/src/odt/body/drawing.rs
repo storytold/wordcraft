@@ -388,14 +388,22 @@ impl Body<'_> {
 /// A picture from a package's bytes: a raster image, or a Windows metafile (WMF, EMF: LibreOffice
 /// keeps clip art and logos so), sized `w` × `h` (points) when the frame says.
 pub(in crate::odt) fn picture(data: Vec<u8>, w: Option<f32>, h: Option<f32>, alt: &str) -> Option<model::Img> {
-    if wordcraft_metafile::is_metafile(&data) {
+    let mut img = if wordcraft_metafile::is_metafile(&data) {
         // An EMF starts with its header record, type 1.
         let ext = if data.get(..4) == Some(&[1, 0, 0, 0]) { "emf" } else { "wmf" };
         // Its own size, when the frame gives none: a placeable WMF's or an EMF's frame, points.
         let natural = if w.is_some() && h.is_some() { None } else { metafile_size(&data) };
-        return Some(model::sized_img(std::sync::Arc::new(data), ext, natural, w, h, alt));
+        model::sized_img(std::sync::Arc::new(data), ext, natural, w, h, alt)
+    } else {
+        make_img(data, w, h, alt)?
+    };
+    // A size the frame states is the file's, however large (a picture across a whole page): only
+    // a picture with none is shrunk to a column.
+    let stated = |v: Option<f32>| v.filter(|v| v.is_finite() && *v > 0.0).map(|v| v.clamp(1.0, 1584.0));
+    if let (Some(w), Some(h)) = (stated(w), stated(h)) {
+        (img.w, img.h) = (w, h);
     }
-    make_img(data, w, h, alt)
+    Some(img)
 }
 
 /// A metafile's own size, points, from its header: a placeable WMF's bounding box in its units

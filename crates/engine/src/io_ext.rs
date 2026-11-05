@@ -10,10 +10,14 @@ pub fn open(ext: &str, bytes: &[u8], page: &wordcraft_doc::SectionProps) -> Opti
         "doc" | "dot" => Some(wordcraft_docbin::read(bytes).map_err(|e| e.to_string())),
         // Word XML Document (Flat OPC) or Word 2003 XML, told apart by the root element.
         "xml" => Some(wordcraft_docx::read_xml(bytes).map_err(|e| e.to_string())),
-        // HTML, Markdown, ODT, RTF…: pictures fit the text width (see `io::fit_pictures`).
+        // HTML, Markdown, RTF…: pictures fit the text width (see `io::fit_pictures`). Not an
+        // OpenDocument file's: it says how big they are, and one wider than the text is meant to
+        // be. Changing it would take its paragraph off being written as read.
         other => wordcraft_formats::import_on(other, bytes, page).map(|r| {
             r.map(|mut doc| {
-                crate::io::fit_pictures(&mut doc);
+                if !matches!(other, "odt" | "ott" | "fodt") {
+                    crate::io::fit_pictures(&mut doc);
+                }
                 draw_charts(&mut doc);
                 doc
             })
