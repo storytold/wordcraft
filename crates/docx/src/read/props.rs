@@ -429,8 +429,6 @@ impl PropCtx {
                 }
                 "w:jc" => p.align = k.attr("w:val").map(align),
                 "w:outlineLvl" => p.outline_level = k.attr("w:val").and_then(u32_of).map(|v| v.min(9) as u8),
-                // §17.3.1.39: an unknown token is left unset, so the line keeps its automatic alignment.
-                "w:textAlignment" => p.text_alignment = k.attr("w:val").and_then(TextAlignment::from_ooxml),
                 "w:rPr" => mark = self.rpr(k),
                 _ => {}
             }

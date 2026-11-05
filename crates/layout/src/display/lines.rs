@@ -503,10 +503,11 @@ fn draw_label_and_hyphen(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         && let Some(style) = ctx.pl.styles.get(style_index as usize)
     {
         let hx = ctx.x + ctx.line.hyphen_x(advance);
+        let shift = ctx.line.c1.checked_sub(1).map_or(0.0, |k| ctx.line.shift_at(k));
         out.push(Draw::Glyphs {
             face: style.face,
             size: style.size,
-            glyphs: vec![(glyph, hx, ctx.base - style.shift)],
+            glyphs: vec![(glyph, hx, ctx.base + shift - style.shift)],
             color: ctx.ink(&style.rc.color, None),
             alpha: ctx.alpha,
             synth_bold: style.synth_bold,
@@ -701,7 +702,8 @@ fn tab_leaders(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         let Some(ch) = leader.char() else { continue };
         let gid = style.face.glyph_for(ch);
         let advance = leader_pitch(style.face.advance(gid) as f32, style.face.upem as f32, style.size);
-        let glyphs = leader_xs(ctx.x + left, ctx.x + right, advance).into_iter().map(|gx| (gid, gx, ctx.base)).collect();
+        let y = ctx.base + ctx.line.shift_at(*k);
+        let glyphs = leader_xs(ctx.x + left, ctx.x + right, advance).into_iter().map(|gx| (gid, gx, y)).collect();
         out.push(Draw::Glyphs {
             face: style.face,
             size: style.size,

@@ -156,7 +156,7 @@ pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, l
         let mut sc = bk.begin_line(pl);
         sc.scan(&mut bk, pl);
         if sc.skip {
-            bk.skip_row(&sc);
+            bk.skip_row(pl, &sc);
             continue;
         }
         let end = bk.close_line(pl, sc);
@@ -312,13 +312,17 @@ impl<'e> Breaker<'e> {
 
     /// The first word doesn't fit the span beside a floating object: try the row's next span,
     /// or the next row.
-    fn skip_row(&mut self, sc: &Scan) {
+    fn skip_row(&mut self, pl: &ParaLayout, sc: &Scan) {
         self.skipped += 1;
         if !self.row_rest.is_empty() {
             return;
         }
         self.top = if self.lines.len() > self.row_first {
-            self.top + even_row(self.lines.get_mut(self.row_first..).unwrap_or_default())
+            self.top + even_row(
+                self.lines.get_mut(self.row_first..).unwrap_or_default(),
+                self.rp.text_alignment,
+                pl.drop_cap.map_or(0, |d| d.0),
+            )
         } else {
             // Nothing on this row: go below the first object that ends, as when no span is wide enough.
             self.exclusions
@@ -559,9 +563,8 @@ impl<'e> Breaker<'e> {
                 if c0 + k < dropped {
                     return 0.0;
                 }
-                let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h > 0.0 {
-                    let math = pl.maths.iter().any(|(oi, _)| c.kind == ClKind::Object(*oi));
-                    (c.obj_h, if math { c.obj_d } else { 0.0 })
+                let (a, d) = if matches!(c.kind, ClKind::Object(_)) && (c.obj_h > 0.0 || c.obj_d > 0.0) {
+                    (c.obj_h, c.obj_d)
                 } else {
                     let (a, d) = st.line_extent();
                     (a.max(c.obj_h + st.shift), d)
@@ -628,7 +631,11 @@ impl<'e> Breaker<'e> {
             self.row_rest.clear();
         }
         if self.row_rest.is_empty() {
-            self.top += even_row(self.lines.get_mut(self.row_first..).unwrap_or_default());
+            self.top += even_row(
+                self.lines.get_mut(self.row_first..).unwrap_or_default(),
+                self.rp.text_alignment,
+                pl.drop_cap.map_or(0, |d| d.0),
+            );
         }
         if self.i >= self.n {
             // A paragraph ending with a line break gets an empty last line.
