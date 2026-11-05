@@ -1,9 +1,12 @@
 //! Regression tests for #3749 Stage 0: formatting-preserving compare.
 //!
-//! `word_diff` now carries source byte ranges through tokenization, so every output segment takes
-//! its `CharProps` from the run it came from — the original run for Same/Del, the revised run for
-//! Ins — instead of stamping the original paragraph's first run on everything. It also keeps the
-//! original paragraph mark, and the original `ParaProps` when the revised side has none.
+//! `word_diff` carries source byte ranges through tokenization, so every output segment takes its
+//! `CharProps` from the run it came from instead of stamping the original paragraph's first run on
+//! everything. The revised side decides which run each segment follows: when the revised side is a
+//! real document, Same/Ins take the revised run and Del takes the original run; when it is plain
+//! text (with no runs of its own), Same/Del take the original run and Ins takes the (default)
+//! revised run. The paragraph mark and `ParaProps` follow the revised side for a document, and fall
+//! back to the original's for plain text.
 //!
 //! The ins/del segmentation for text-only paragraphs is unchanged: the goldens below were captured
 //! from the pre-fix binary (`review.compare` over a plain original and a plain revised text, word
@@ -164,37 +167,17 @@ fn deleted_segment_keeps_formatting_so_reject_restores_it() {
 fn text_only_segmentation_matches_pre_fix_golden() {
     // (original, revised, level, expected (text, ins, del) runs)
     let cases: &[(&str, &str, &str, &[(&str, bool, bool)])] = &[
-        (
-            "The dog sat.",
-            "The cat sat.",
-            "word",
-            &[("The ", false, false), ("dog ", false, true), ("cat ", true, false), ("sat.", false, false)],
-        ),
+        ("The dog sat.", "The cat sat.", "word", &[("The ", false, false), ("dog ", false, true), ("cat ", true, false), ("sat.", false, false)]),
         ("a cat ran", "a dog ran", "word", &[("a ", false, false), ("cat ", false, true), ("dog ", true, false), ("ran", false, false)]),
         ("colour", "color", "word", &[("colour", false, true), ("color", true, false)]),
         (
             "zawarta w dniu 01.09.2026 pomiędzy:",
             "zawarta w dniu 19.10.2026 pomiędzy:",
             "word",
-            &[
-                ("zawarta w dniu ", false, false),
-                ("01.09.2026 ", false, true),
-                ("19.10.2026 ", true, false),
-                ("pomiędzy:", false, false),
-            ],
+            &[("zawarta w dniu ", false, false), ("01.09.2026 ", false, true), ("19.10.2026 ", true, false), ("pomiędzy:", false, false)],
         ),
-        (
-            "The dog sat.",
-            "The cat sat.",
-            "character",
-            &[("The ", false, false), ("dog", false, true), ("cat", true, false), (" sat.", false, false)],
-        ),
-        (
-            "a cat ran",
-            "a dog ran",
-            "character",
-            &[("a ", false, false), ("cat", false, true), ("dog", true, false), (" ran", false, false)],
-        ),
+        ("The dog sat.", "The cat sat.", "character", &[("The ", false, false), ("dog", false, true), ("cat", true, false), (" sat.", false, false)]),
+        ("a cat ran", "a dog ran", "character", &[("a ", false, false), ("cat", false, true), ("dog", true, false), (" ran", false, false)]),
         ("colour", "color", "character", &[("colo", false, false), ("u", false, true), ("r", false, false)]),
         (
             "zawarta w dniu 01.09.2026 pomiędzy:",
@@ -270,4 +253,97 @@ fn accepting_removes_the_deleted_picture_and_rejecting_restores_it() {
     let mut rejected = compared_with_picture();
     rejected.run("review.rejectAll", &json!({})).unwrap();
     assert_eq!(rejected.doc.body[0].as_para().unwrap().objects.len(), 1, "rejecting the deletion restores the picture");
+}
+
+// --- document revised side: unchanged tokens follow the revised formatting (#3749) --------------
+
+#[test]
+fn unchanged_word_takes_the_revised_formatting_document_path() {
+    let rev = Session::new(Document::from_text("Read the manual now."));
+    let path = std::env::temp_dir().join(format!("wc-compare-s0-rev-bold-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev.doc).unwrap();
+
+    let mut s = Session::new(Document::from_text("Read the manual today."));
+    s.run("select.text", &json!({"text": "manual"})).unwrap();
+    s.run("format.bold", &json!({})).unwrap();
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let p = s.doc.body[0].as_para().unwrap();
+    let (_, manual) = run_with(p, "manual");
+    assert_ne!(manual.bold, Some(true), "the unchanged word takes the revised side's formatting, not the original's bold");
+    let (_, today) = run_with(p, "today.");
+    assert!(today.del.is_some(), "the removed word is deleted");
+    let (_, now) = run_with(p, "now.");
+    assert!(now.ins.is_some(), "the added word is inserted");
+
+    s.run("review.acceptAll", &json!({})).unwrap();
+    let p = s.doc.body[0].as_para().unwrap();
+    assert_eq!(p.plain_text(), "Read the manual now.");
+    let (_, manual) = run_with(p, "manual");
+    assert_ne!(manual.bold, Some(true), "accepting leaves the revised (unbolded) formatting");
+}
+
+#[test]
+fn paragraph_style_change_is_not_masked_document_path() {
+    let rev = Session::new(Document::from_text("Introduction to X"));
+    let path = std::env::temp_dir().join(format!("wc-compare-s0-style-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev.doc).unwrap();
+
+    let mut s = Session::new(Document::from_text("Introduction"));
+    s.run("para.style", &json!({"style": "Heading1"})).unwrap();
+    s.run("review.compare", &json!({"path": path.to_string_lossy(), "level": "character"})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let p = s.doc.body[0].as_para().unwrap();
+    assert_ne!(p.props.style.as_deref(), Some("Heading1"), "the revised paragraph's empty properties win, so the style change isn't masked");
+    assert!(p.run_ranges().any(|(_, c)| c.ins.is_some()), "the text was diffed, not wholesale replaced");
+    let (_, intro) = run_with(p, "Introduction");
+    assert!(intro.ins.is_none() && intro.del.is_none(), "the unchanged text survives unmarked");
+    let (_, added) = run_with(p, " to X");
+    assert!(added.ins.is_some(), "only the added text is insertion-marked");
+}
+
+#[test]
+fn unchanged_word_gains_the_revised_formatting_document_path() {
+    let mut rev = Session::new(Document::from_text("Read the manual now."));
+    rev.run("select.text", &json!({"text": "manual"})).unwrap();
+    rev.run("format.bold", &json!({})).unwrap();
+    let path = std::env::temp_dir().join(format!("wc-compare-s0-rev-gains-bold-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev.doc).unwrap();
+
+    let mut s = Session::new(Document::from_text("Read the manual today."));
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let p = s.doc.body[0].as_para().unwrap();
+    let (_, manual) = run_with(p, "manual");
+    assert_eq!(manual.bold, Some(true), "the unchanged word takes the revised side's bold");
+    let (_, today) = run_with(p, "today.");
+    assert!(today.del.is_some(), "the removed word is deleted");
+    let (_, now) = run_with(p, "now.");
+    assert!(now.ins.is_some(), "the added word is inserted");
+
+    s.run("review.acceptAll", &json!({})).unwrap();
+    let p = s.doc.body[0].as_para().unwrap();
+    assert_eq!(p.plain_text(), "Read the manual now.");
+    let (_, manual) = run_with(p, "manual");
+    assert_eq!(manual.bold, Some(true), "accepting leaves the revised (bolded) formatting");
+}
+
+#[test]
+fn removed_hyperlink_on_an_unchanged_word_follows_the_revised_side_document_path() {
+    let rev = Session::new(Document::from_text("Read the manual now."));
+    let path = std::env::temp_dir().join(format!("wc-compare-s0-link-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev.doc).unwrap();
+
+    let mut s = Session::new(Document::from_text("Read the manual today."));
+    s.run("select.text", &json!({"text": "manual"})).unwrap();
+    s.run("insert.link", &json!({"url": "https://example.com"})).unwrap();
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let p = s.doc.body[0].as_para().unwrap();
+    let (_, manual) = run_with(p, "manual");
+    assert_eq!(manual.link, None, "the unchanged word takes the revised side's run, which dropped the link");
 }

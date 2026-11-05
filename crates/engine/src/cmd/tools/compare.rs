@@ -34,6 +34,7 @@ struct DiffCtx<'a> {
     opts: &'a CompareOptions,
     budget: &'a mut u64,
     char_fallbacks: &'a mut usize,
+    plain_revised: bool,
 }
 
 /// Changed paragraphs longer than this (in characters) are compared word by word even at
@@ -48,10 +49,12 @@ const MAX_CHAR_DIFF: usize = 2000;
 /// [`MAX_CHAR_DIFF`] characters, it falls back to word-level diff for that paragraph, surfaces the
 /// fallback count in `"characterFallback"`, and includes `"level"` in `"notHonoured"`.
 pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
-    let revised = if let Some(t) = p::str(v, "text") {
-        Document::from_text(t)
+    // A revised side given as plain text carries no real runs or properties; one opened from a
+    // path does. The diff takes the revised formatting only in the latter case.
+    let (revised, plain_revised) = if let Some(t) = p::str(v, "text") {
+        (Document::from_text(t), true)
     } else if let Some(path) = p::str(v, "path") {
-        crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?
+        (crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?, false)
     } else {
         return Err(CmdError::Params("`path` or `text` of the revised document is required".into()));
     };
@@ -97,7 +100,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let mut budget = MAX_COMPARE_CELLS;
     let mut char_fallbacks = 0usize;
     let ops = lcs_ops(&old.iter().map(key).collect::<Vec<_>>(), &new.iter().map(key).collect::<Vec<_>>(), &mut budget);
-    let mut ctx = DiffCtx { ins, del, opts: &opts, budget: &mut budget, char_fallbacks: &mut char_fallbacks };
+    let mut ctx = DiffCtx { ins, del, opts: &opts, budget: &mut budget, char_fallbacks: &mut char_fallbacks, plain_revised };
     let mut out: Vec<Arc<Block>> = Vec::new();
     let (mut i, mut j) = (0usize, 0usize);
     let mut changes = 0usize;
@@ -428,7 +431,7 @@ fn same_objects(doc: &Document, a: &Paragraph, b: &Paragraph) -> bool {
 /// formatting. An object's flattened text (or a broken marker's placeholder) maps to the marker's
 /// own range, which is the nearest formatting the object has.
 fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
-    fn push<'a>(v: &mut Vec<Tok<'a>>, cur: &mut String, start: usize, end: usize, c: char, characters: bool) {
+    fn push(v: &mut Vec<Tok<'_>>, cur: &mut String, start: usize, end: usize, c: char, characters: bool) {
         cur.push(c);
         if characters || c == ' ' {
             v.push(Tok::Text(std::mem::take(cur), start..end));
@@ -480,10 +483,14 @@ fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
 }
 
 /// The formatting of the source run a token came from: the run holding the token's first byte,
-/// with the revision metadata stripped. `ins`, `del` and `fmt_change` belong to the diff being
-/// built, not to the source, so a source's own marks never leak onto the output; the hyperlink is
-/// kept, because Reject restores it on a deleted run (at token granularity: the link is taken from
-/// the token's first byte, so a token that starts unlinked can lose a mid-token link).
+/// with the revision metadata stripped. `ins`, `del` and `fmt_change` are indices into the
+/// *source* document's own revision table, and the rebuilt paragraph lives in the result document,
+/// whose table is a different one, so a source mark can never be carried across; `word_diff`
+/// stamps the compare's own `ins`/`del` on the segments it marks. The consequence is plain: a
+/// pre-existing pending revision inside a changed paragraph (say another author's deletion) is
+/// superseded by the compare result rather than preserved. The hyperlink is kept, because Reject
+/// restores it on a deleted run (at token granularity: the link is taken from the token's first
+/// byte, so a token that starts unlinked can lose a mid-token link).
 fn source_props(p: &Paragraph, t: &Tok<'_>) -> CharProps {
     let off = match t {
         Tok::Text(_, range) | Tok::Obj(_, range) => range.start,
@@ -493,10 +500,11 @@ fn source_props(p: &Paragraph, t: &Tok<'_>) -> CharProps {
 }
 
 /// The props of an output token: those of the source run it came from, or — never expected, since
-/// [`tokens`] and [`lcs_ops`] consume both sides in step — the original's first run. A miss is
-/// loud in debug builds; release behaviour (the fallback) is unchanged.
+/// [`tokens`] and [`lcs_ops`] consume both sides in step — the given fallback. A miss is loud.
 fn output_props(p: &Paragraph, t: Option<&Tok<'_>>, fallback: &CharProps) -> CharProps {
-    debug_assert!(t.is_some(), "compare: a token range lookup missed; `tokens` and `lcs_ops` are out of step");
+    if t.is_none() {
+        log::warn!("compare: a token range lookup missed; `tokens` and `lcs_ops` are out of step");
+    }
     t.map(|t| source_props(p, t)).unwrap_or_else(|| fallback.clone())
 }
 
@@ -541,6 +549,7 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
     } else {
         false
     };
+    let plain_revised = ctx.plain_revised;
     let (ta, tb) = (tokens(a, chars), tokens(b, chars));
     let key = |t: &Tok<'_>| match t {
         Tok::Text(t, _) => Key::Text(ctx.opts.key(t)),
@@ -552,23 +561,33 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
     // a short interior match need folding back into its surrounding edit.
     let ops = if chars { collapse_noise_matches(&ops) } else { ops };
     let mut p = Paragraph::new();
-    // The revised paragraph's own properties when it has any; when it has none, keep the
-    // original's instead of the empty default the rebuild would otherwise carry. The fallback
-    // drops the original's revision bookkeeping (`fmt_change`, `num_change`), like `source_props`
-    // does for runs, so pre-existing revision state never leaks into the rebuilt paragraph.
-    p.props = if b.props.is_empty() { a.props.formatting() } else { b.props.clone() };
-    // The paragraph mark (the formatting typing into the paragraph's end would get) is the
-    // original's, so an empty changed paragraph doesn't lose it. Its own revision bookkeeping
-    // (`ins`, `del`, `fmt_change`) is cleared for the same reason.
-    p.mark = CharProps { ins: None, del: None, fmt_change: None, ..a.mark.clone() };
+    // The revised paragraph's properties are used with its revision bookkeeping stripped, like runs
+    // (`source_props`) and the mark, because `fmt_change`/`num_change` are indices into the revised
+    // document's own revision table and are meaningless in the result document. A plain-text
+    // revised side, which carries no paragraph properties of its own, falls back to the original's,
+    // stripped the same way, so pre-existing revision state never leaks into the rebuilt paragraph.
+    p.props = if plain_revised && b.props.is_empty() { a.props.formatting() } else { b.props.formatting() };
+    // The paragraph mark (the formatting typing into the paragraph's end would get) is the revised
+    // paragraph's when it comes from a document, and the original's when the revised side is plain
+    // text and has no mark of its own. Its own revision bookkeeping (`ins`, `del`, `fmt_change`)
+    // is cleared because those indices belong to another document's revision table.
+    p.mark = if plain_revised {
+        CharProps { ins: None, del: None, fmt_change: None, ..a.mark.clone() }
+    } else {
+        CharProps { ins: None, del: None, fmt_change: None, ..b.mark.clone() }
+    };
     let fallback = a.runs.first().map(|r| CharProps { ins: None, del: None, fmt_change: None, ..r.props.clone() }).unwrap_or_default();
+    let fallback_b = b.runs.first().map(|r| CharProps { ins: None, del: None, fmt_change: None, ..r.props.clone() }).unwrap_or_default();
     let (mut i, mut j) = (0, 0);
     for op in ops {
         match op {
             Op::Same => {
                 // Equal as compared (perhaps up to case or spacing): the revised text, but the
-                // formatting of the original run it stands for.
-                let props = output_props(a, ta.get(i), &fallback);
+                // formatting of the run it stands for. For a document revised side that is the
+                // revised run, as issue #3749 prescribes ("Copy unchanged tokens from the revised
+                // paragraph with their own properties"); a plain-text revised side has no runs to
+                // speak of, so the original run's formatting is kept instead.
+                let props = if plain_revised { output_props(a, ta.get(i), &fallback) } else { output_props(b, tb.get(j), &fallback_b) };
                 put(&mut p, tb.get(j), &props);
                 i += 1;
                 j += 1;
