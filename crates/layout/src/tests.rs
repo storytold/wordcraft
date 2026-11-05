@@ -816,6 +816,23 @@ fn long_word_beside_a_float(n: usize) -> Document {
 
 /// A word with no break opportunity in it: measuring the word for every line it takes scanned
 /// the whole paragraph each time, so the layout was quadratic in the word's length.
+/// A float in a paragraph that runs over many pages: each later piece of the paragraph (one per
+/// page) worked out which of its objects are left out by walking the whole paragraph, though it
+/// has nothing of its own to draw, so the layout was quadratic in the paragraph's length. Counts
+/// the characters the paragraph's object lookups walk (`wordcraft_doc::work`), not a timing.
+#[test]
+fn a_long_paragraph_holding_a_float_walks_its_text_a_bounded_number_of_times() {
+    let n = 50_000;
+    let opts = LayoutOptions::default();
+    let (small, big) = (long_word_beside_a_float(n), long_word_beside_a_float(SCALE * n));
+    let lay = |d: &Document| drop(std::hint::black_box(layout(d, &mut LayoutCache::new(), &opts)));
+    let (s, b) = (wordcraft_doc::work::count(|| lay(&small)), wordcraft_doc::work::count(|| lay(&big)));
+    let ratio = b as f64 / s.max(1) as f64;
+    eprintln!("object lookups beside a float: {s} steps for n, {b} for {SCALE}n, ratio {ratio:.1}");
+    assert!(s > 0, "no steps counted, so the walk this test watches no longer counts them (wordcraft_doc::work)");
+    assert!(ratio <= 1.5 * SCALE as f64, "{SCALE}x the paragraph took {ratio:.1}x the steps ({s} → {b}): not linear");
+}
+
 #[test]
 fn a_long_unbreakable_word_lays_out_in_linear_time() {
     let (t1, tk, ratio) = layout_time_ratio(long_word_beside_a_float, 50_000, &LayoutOptions::default());

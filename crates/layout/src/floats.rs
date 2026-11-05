@@ -459,8 +459,12 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
     // before it, as the writer gives it the next order up on save.
     let mut z_top = 0u32;
     let Some(fl) = pl.lines.get(l0) else { return (Vec::new(), Vec::new()) };
-    // Objects left out of the layout (hidden, or deleted in the final text) aren't placed.
-    let left_out = left_out_objects(ctx.doc, p, at.table_chr, ctx.opts.show_hidden, ctx.hide_deleted);
+    // Objects left out of the layout (hidden, or deleted in the final text) aren't placed. Worked
+    // out for the first object this piece would draw, not up front: it walks the whole paragraph,
+    // and each later piece of a long paragraph (one per page) paid that walk, with nothing of its
+    // own to draw, so laying out a long paragraph holding a float was quadratic.
+    let (doc, show_hidden, hide_deleted) = (ctx.doc, ctx.opts.show_hidden, ctx.hide_deleted);
+    let mut left_out = None;
     // A floating object belongs to its paragraph, not to its line: Word puts it on the page the
     // paragraph starts on (a cover page is a paragraph holding a page break and then the text
     // box with the title; the box stays on the cover). So the paragraph's first piece places
@@ -476,13 +480,13 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
         for k in line.c0..line.c1 {
             let Some(c) = pl.clusters.get(k) else { continue };
             let para::ClKind::Object(oi) = c.kind else { continue };
-            if left_out(oi) {
-                continue;
-            }
             let Some(obj) = p.objects.get(oi) else { continue };
             let Some((w, h, float)) = obj.frame() else { continue };
             let floating = float.wrap != Wrap::Inline;
             if if floating { !first } else { !in_piece } {
+                continue;
+            }
+            if left_out.get_or_insert_with(|| left_out_objects(doc, p, at.table_chr, show_hidden, hide_deleted))(oi) {
                 continue;
             }
             let pinned = at.pinned.and_then(|m| m.get(&oi)).copied().filter(|_| floating);
