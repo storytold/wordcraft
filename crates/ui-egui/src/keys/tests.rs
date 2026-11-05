@@ -148,6 +148,28 @@ fn a_mod_shift_paste_event_keeps_text_only() {
     }
 }
 
+/// #5616: a browser sends Mod+Shift+V as its key and then a paste event. After Mod+Shift+C the
+/// key pastes the formatting and the paste event that follows doesn't replace the text; a later
+/// Mod+V still pastes.
+#[test]
+fn a_paste_event_after_mod_shift_v_pasted_formatting_is_ignored() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "source target"})).unwrap();
+    a.run("select.text", json!({"text": "source"})).unwrap();
+    a.run("format.bold", json!({})).unwrap();
+    a.run("edit.copyFormat", json!({})).unwrap();
+    a.run("select.text", json!({"text": "target"})).unwrap();
+    let ctx = egui::Context::default();
+    let chord = Modifiers::COMMAND | Modifiers::SHIFT;
+    mods_frame(&ctx, &mut a, chord, vec![key_event(Key::V, true, chord), egui::Event::Paste("clipboard text".into())]);
+    let body = |a: &WordApp| a.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert_eq!(body(&a), "source target", "the paste event didn't replace the formatted text");
+    let bold = a.session.run("format.state", &json!({})).unwrap().get("bold").and_then(serde_json::Value::as_bool);
+    assert_eq!(bold, Some(true), "the key pasted the formatting");
+    mods_frame(&ctx, &mut a, Modifiers::COMMAND, vec![key_event(Key::V, true, Modifiers::COMMAND), egui::Event::Paste("pasted".into())]);
+    assert_eq!(body(&a), "source pasted", "the next Mod+V pastes");
+}
+
 /// An empty document whose clipboard holds a 4 × 4 picture.
 fn picture_app() -> WordApp {
     use crate::paste_picture::ClipboardPicture;

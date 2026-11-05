@@ -132,14 +132,18 @@ pub(super) fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
         if m.alt && !crate::widgets::enabled(app, spec.id) {
             return false;
         }
-        // Mod+Shift+V pastes the formatting Mod+Shift+C picked up; with none picked up it pastes
-        // the clipboard as text only, as Word for Windows does (#1537, #4943).
-        let id = if spec.id == "edit.pasteFormat" && app.session.painter.is_none() {
-            // On the web the browser's paste event that follows carries the text: paste once, there.
-            if cfg!(target_arch = "wasm32") {
+        // Mod+Shift+V pastes the formatting Mod+Shift+C (or the Format Painter) picked up; with
+        // none picked up it pastes the clipboard as text only, as Word for Windows does (#1537,
+        // #4943). Another key bound to Paste Formatting only pastes formatting.
+        let id = if spec.id == "edit.pasteFormat" {
+            let formatting = app.session.painter.is_some() || app.session.copied_format.is_some();
+            // A browser sends a paste event after the key (the desktop doesn't): after pasting
+            // formatting it's ignored; with none, it pastes the text there, once.
+            app.canvas.ignore_next_paste = formatting;
+            if !formatting && cfg!(target_arch = "wasm32") {
                 return true;
             }
-            "edit.pasteText"
+            if !formatting && key == Key::V && m.command && m.shift && !m.alt { "edit.pasteText" } else { spec.id }
         } else {
             spec.id
         };

@@ -13472,3 +13472,21 @@ fn resolving_away_an_empty_paragraph_with_a_section_break_keeps_the_next_paragra
         assert_eq!(s.doc.last_section.margin_left, 72.0, "{cmd}: the following section's setup stays");
     }
 }
+
+/// #5616: Copy Formatting's formatting stays for every Paste Formatting, as in Word; it doesn't
+/// arm the one-shot Format Painter brush.
+#[test]
+fn copied_formatting_pastes_again_and_again() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Bold one two"}));
+    run(&mut s, "select.text", json!({"text": "Bold"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "edit.copyFormat", json!({}));
+    assert!(s.painter.is_none());
+    for word in ["one", "two"] {
+        run(&mut s, "select.text", json!({"text": word}));
+        run(&mut s, "edit.pasteFormat", json!({}));
+        assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true), "{word}");
+    }
+    assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body), "Bold one two");
+}
