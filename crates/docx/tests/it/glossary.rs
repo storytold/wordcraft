@@ -349,10 +349,7 @@ fn a_windows_1252_kept_glossary_is_scrubbed_without_losing_extensions() {
             "word/document.xml",
             format!(r#"<w:document xmlns:w="{W}"><w:body><w:p><w:r><w:t>Body</w:t></w:r></w:p></w:body></w:document>"#).into_bytes(),
         ),
-        (
-            "word/_rels/document.xml.rels",
-            rels(&[("rId7", GLOSSARY_REL, "glossary/document.xml")]).into_bytes(),
-        ),
+        ("word/_rels/document.xml.rels", rels(&[("rId7", GLOSSARY_REL, "glossary/document.xml")]).into_bytes()),
         ("[Content_Types].xml", content_types(&[("/word/glossary/document.xml", GLOSSARY_CT)]).into_bytes()),
         ("word/glossary/document.xml", glossary.into_owned()),
     ]);
