@@ -966,6 +966,31 @@ fn table_styles() -> Vec<Style> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resolve::ResolvedPara;
+
+    #[test]
+    fn adjust_right_indent_inherits_and_can_be_overridden() {
+        let resolved = StyleSheet::empty().resolve_para(&ParaProps::default());
+        assert!(resolved.adjust_right_indent);
+
+        let mut older_json = serde_json::to_value(&resolved).unwrap();
+        older_json.as_object_mut().unwrap().remove("adjustRightIndent");
+        assert!(serde_json::from_value::<ResolvedPara>(older_json).unwrap().adjust_right_indent);
+
+        let mut s = StyleSheet::empty();
+        s.styles.push(Style {
+            id: "Normal".into(),
+            name: "Normal".into(),
+            para: ParaProps { adjust_right_indent: Some(true), ..Default::default() },
+            ..Default::default()
+        });
+        assert!(s.resolve_para(&ParaProps::default()).adjust_right_indent);
+        assert!(!s.resolve_para(&ParaProps { adjust_right_indent: Some(false), ..Default::default() }).adjust_right_indent);
+
+        let json = serde_json::to_value(ParaProps { adjust_right_indent: Some(false), ..Default::default() }).unwrap();
+        assert_eq!(json["adjustRightIndent"], false);
+        assert_eq!(serde_json::from_value::<ParaProps>(json).unwrap().adjust_right_indent, Some(false));
+    }
 
     #[test]
     fn builtins_present() {
