@@ -251,11 +251,22 @@ fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens) {
 
     row(ui, app, &|ui, app| {
         let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
+        let warning = app.font_box_warning(&font);
         let font = app.previews.font_shown(&font);
         let fams = app.previews.families();
         let recent: Vec<String> = app.ui.recent_fonts.iter().map(|f| app.previews.font_shown(f)).collect();
         let prev = app.previews.font_preview_fn();
-        if let Some(f) = widgets::font_combo_with_recent(ui, "mini_font", COMBO_FONT_W, &font, &fams, &recent, Some(&*prev)) {
+        let options = widgets::FontComboOptions {
+            id: "mini_font",
+            width: COMBO_FONT_W,
+            current: &font,
+            items: &fams,
+            recent: &recent,
+            preview: Some(&*prev),
+            tip: tl!("Font"),
+            shown_as: warning.as_deref(),
+        };
+        if let Some(f) = widgets::font_combo_with_recent_hint(ui, options) {
             let _ = if f == crate::widgets::ADD_FONT {
                 app.run("font.add", json!({}))
             } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
@@ -354,7 +365,7 @@ pub(crate) fn highlight_button_appearance(name: &str) -> (&'static str, Option<e
 /// No Color too, becomes the split button's colour, as in Word: after No Color a click on the
 /// button removes highlighting (#2105).
 pub(crate) fn highlight_menu(ui: &mut egui::Ui, app: &mut WordApp) {
-    egui::Grid::new("mini_hl").spacing(Vec2::new(3.0, 3.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("mini_hl").spacing(Vec2::new(3.0, 3.0)), |ui| {
         for (i, h) in wordcraft_doc::props::Highlight::ALL.iter().enumerate().skip(1) {
             let Some(c) = h.rgb() else { continue };
             let (r, resp) = ui.allocate_exact_size(Vec2::new(18.0, 18.0), Sense::click());
