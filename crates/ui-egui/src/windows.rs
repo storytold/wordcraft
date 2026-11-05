@@ -92,8 +92,10 @@ pub struct Windows {
     driven: bool,
     /// View Side by Side: the two window keys being compared (left, right).
     pub(crate) side_by_side: Option<(u64, u64)>,
-    /// Synchronous Scrolling source scroll offset (x, y) from the last drawn paired window.
-    pub(crate) sync_scroll_offset: Option<egui::Vec2>,
+    /// Synchronous Scrolling: last observed scroll offset per paired window key.
+    sync_scroll_seen: std::collections::HashMap<u64, egui::Vec2>,
+    /// Synchronous Scrolling: the window that last changed scroll, and the offset to apply.
+    sync_scroll_from: Option<(u64, egui::Vec2)>,
 }
 
 impl Windows {
@@ -118,7 +120,8 @@ impl Windows {
             input_plugin: false,
             driven: false,
             side_by_side: None,
-            sync_scroll_offset: None,
+            sync_scroll_seen: std::collections::HashMap::new(),
+            sync_scroll_from: None,
         }
     }
 
@@ -425,11 +428,53 @@ impl WordApp {
                 self.session.view.sync_scroll = value;
                 if !value {
                     self.windows.side_by_side = None;
-                    self.windows.sync_scroll_offset = None;
+                    self.windows.sync_scroll_seen.clear();
+                    self.windows.sync_scroll_from = None;
                 }
             }
             _ => {}
         }
+    }
+
+    fn paired_sync_window(&self, key: u64) -> Option<u64> {
+        if !self.session.view.sync_scroll {
+            return None;
+        }
+        let (a, b) = self.windows.side_by_side?;
+        if key == a {
+            Some(b)
+        } else if key == b {
+            Some(a)
+        } else {
+            None
+        }
+    }
+
+    fn apply_sync_scroll_before_draw(&mut self, key: u64) {
+        if self.paired_sync_window(key).is_none() {
+            return;
+        }
+        if let Some((from, offset)) = self.windows.sync_scroll_from {
+            if from != key {
+                let cur = self.canvas.scroll_offset;
+                if (cur.y - offset.y).abs() > 0.5 || (cur.x - offset.x).abs() > 0.5 {
+                    self.canvas.scroll_request = Some(offset);
+                    self.windows.sync_scroll_seen.insert(key, offset);
+                }
+            }
+        }
+    }
+
+    fn capture_sync_scroll_after_draw(&mut self, key: u64) {
+        if self.paired_sync_window(key).is_none() {
+            return;
+        }
+        let offset = self.canvas.scroll_offset;
+        let prev = self.windows.sync_scroll_seen.get(&key).copied().unwrap_or(egui::Vec2::ZERO);
+        if (offset.x - prev.x).abs() > 0.5 || (offset.y - prev.y).abs() > 0.5 {
+            self.windows.sync_scroll_from = Some((key, offset));
+        }
+        self.windows.sync_scroll_seen.insert(key, offset);
     }
 
     fn arrange_all_windows(&mut self) {
@@ -459,7 +504,8 @@ impl WordApp {
         if self.windows.side_by_side.is_some() {
             self.windows.side_by_side = None;
             self.session.view.sync_scroll = false;
-            self.windows.sync_scroll_offset = None;
+            self.windows.sync_scroll_seen.clear();
+            self.windows.sync_scroll_from = None;
             self.status("Side by side: off".to_string());
             return;
         }
@@ -486,6 +532,8 @@ impl WordApp {
         }
         self.windows.side_by_side = Some((shown, other_key));
         self.session.view.sync_scroll = true;
+        self.windows.sync_scroll_seen.clear();
+        self.windows.sync_scroll_from = None;
         self.status("Side by side".to_string());
     }
 
@@ -751,7 +799,9 @@ impl WordApp {
         if self.windows.shown != key {
             return;
         }
+        self.apply_sync_scroll_before_draw(key);
         self.window_ui(ui);
+        self.capture_sync_scroll_after_draw(key);
         // Drawing can close the window or bring another forward: the fields then hold another
         // window's state.
         if self.windows.shown != key {
