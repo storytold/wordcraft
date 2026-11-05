@@ -58,6 +58,7 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::Templates { form } => crate::dialogs_templates::templates(app, ui, form),
         Dialog::Organizer { form } => crate::dialogs_templates::organizer(app, ui, form),
         Dialog::CustomProperties(form) => custom_properties(app, ui, form),
+        Dialog::InspectDocument { .. } => inspect_document_dialog(app, ui, d),
         Dialog::Layout(d) => crate::dialogs_layout::body(app, ui, d),
         Dialog::FindRecipient { .. } => find_recipient_dialog(app, ui, d),
         Dialog::MergeRecords { .. } => merge_records_dialog(app, ui, d),
@@ -1593,6 +1594,104 @@ fn check_errors_dialog(ui: &mut Ui, d: &mut Dialog) -> bool {
     }
     ui.add_space(4.0);
     ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Recipients: {count}"), &[("count", &records.to_string())])).weak());
+    let (ok, cancel) = buttons(ui, tl!("Close"));
+    ok || cancel
+}
+
+/// File › Info › Inspect Document: what the inspector found, with the Document Inspector's
+/// Remove All per category, as Word's Check for Issues dialog. Remove All runs one `file.inspect`
+/// command; the counts are read afresh after it, so they follow what the removal took out.
+fn inspect_document_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
+    let Dialog::InspectDocument { report, message } = d else {
+        return false;
+    };
+    let found = report.get("found").cloned().unwrap_or(json!({}));
+    let count = |k: &str| found.get(k).and_then(Value::as_u64).unwrap_or(0);
+    if let Some(m) = message {
+        ui.label(egui::RichText::new(m.clone()).weak());
+        ui.add_space(6.0);
+    }
+    ui.label(tl!("Inspect the document for content you may want to remove before sharing it:"));
+    ui.add_space(8.0);
+    let mut remove = None;
+    let none = || tl!("None").to_string();
+    let comments = count("comments");
+    ui.horizontal(|ui| {
+        ui.label(tl!("Comments"));
+        ui.label(if comments > 0 { comments.to_string() } else { none() });
+        if comments > 0 && ui.button(tl!("Remove All")).clicked() {
+            remove = Some("comments");
+        }
+    });
+    let revisions = count("revisions");
+    ui.horizontal(|ui| {
+        ui.label(tl!("Revisions"));
+        ui.label(if revisions > 0 { revisions.to_string() } else { none() });
+        if revisions > 0 && ui.button(tl!("Remove All")).clicked() {
+            remove = Some("revisions");
+        }
+    });
+    let properties = found.get("properties").and_then(Value::as_bool).unwrap_or(false);
+    ui.horizontal(|ui| {
+        ui.label(tl!("Document properties"));
+        if properties {
+            ui.label(tl!("Creator and last-modified-by are in the document."));
+            if ui.button(tl!("Remove All")).clicked() {
+                remove = Some("properties");
+            }
+        } else {
+            ui.label(none());
+        }
+    });
+    if found.get("hiddenText").and_then(Value::as_bool).unwrap_or(false) {
+        let pieces = found.get("hiddenCount").and_then(Value::as_u64).unwrap_or(0);
+        ui.horizontal(|ui| {
+            ui.label(tl!("Hidden text"));
+            ui.label(crate::i18n::fmt(tl!("{count} piece(s)"), &[("count", &pieces.to_string())]));
+            if ui.button(tl!("Remove All")).clicked() {
+                remove = Some("hidden");
+            }
+        });
+        if found.get("truncated").and_then(Value::as_bool).unwrap_or(false) {
+            ui.label(egui::RichText::new(tl!("The list of pieces is cut; the count is exact.")).weak());
+        }
+    } else {
+        ui.horizontal(|ui| {
+            ui.label(tl!("Hidden text"));
+            ui.label(none());
+        });
+    }
+    // Shown whatever the removable hidden-text branch says: hidden text the inspector can't
+    // reach is a finding of its own, and it stays after a removal took the removable out.
+    if !found.get("unsupported").and_then(Value::as_array).unwrap_or(&Vec::new()).is_empty() {
+        ui.label(egui::RichText::new(tl!("Some hidden text is inside objects or table styles the inspector can't remove.")).weak());
+    }
+    let headers = count("headers");
+    ui.horizontal(|ui| {
+        ui.label(tl!("Headers and footers"));
+        ui.label(if headers > 0 { headers.to_string() } else { none() });
+        if headers > 0 && ui.button(tl!("Remove All")).clicked() {
+            remove = Some("headers");
+        }
+    });
+    if let Some(key) = remove {
+        match app.run("file.inspect", json!({"remove": [key]})) {
+            Ok(out) => {
+                let residual = out.get("residual").and_then(Value::as_array).map(|a| a.len()).unwrap_or(0);
+                *message = Some(if residual > 0 {
+                    crate::i18n::fmt(
+                        tl!("Removed, but {count} piece(s) a removal couldn't reach remain in objects kept from the source file or table styles."),
+                        &[("count", &residual.to_string())],
+                    )
+                } else {
+                    tl!("Removed.").to_string()
+                });
+            }
+            Err(e) => *message = Some(e),
+        }
+        // The report is read afresh, so the counts follow what the removal took out.
+        *report = app.session.run("file.inspect", &json!({})).unwrap_or_default();
+    }
     let (ok, cancel) = buttons(ui, tl!("Close"));
     ok || cancel
 }

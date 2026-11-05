@@ -248,9 +248,9 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         && let Some(id) = s.find_open(std::path::Path::new(path))
     {
         s.activate(id)?;
-        return Ok(
-            json!({"path": s.path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": s.password.is_some(), "alreadyOpen": true, "id": id}),
-        );
+        let mut r = json!({"path": s.path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": s.password.is_some(), "alreadyOpen": true, "id": id});
+        hidden_text_warning(&mut r, &s.doc);
+        return Ok(r);
     }
     let password = p::str(v, "password");
     let (mut doc, encrypted) = if let Some(data) = p::str(v, "data") {
@@ -289,9 +289,28 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     if encrypted {
         s.password = password.map(crate::io::Password::new);
     }
-    Ok(
-        json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()}),
-    )
+    let mut r = json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()});
+    hidden_text_warning(&mut r, &s.doc);
+    Ok(r)
+}
+
+/// The reply of an open that found hidden text carries the fact and what to do about it: the text
+/// does not show on screen (the layout leaves it out), so an agent reading the file would see
+/// words the human doesn't — tell the human, and `file.inspect` removes it.
+fn hidden_text_warning(r: &mut Value, doc: &Document) {
+    let (pieces, chars) = crate::cmd::tools::inspect::hidden_text_counts(doc);
+    if pieces == 0 {
+        return;
+    }
+    if let Value::Object(m) = r {
+        m.insert("hiddenText".into(), json!({"pieces": pieces, "chars": chars}));
+        m.insert(
+            "warning".into(),
+            json!(format!(
+                "the document has hidden text ({pieces} pieces, {chars} characters); it does not show on screen — tell the human about it; run file.inspect with {{\"remove\": [\"hidden\"]}} to remove it"
+            )),
+        );
+    }
 }
 
 /// Close a document with no window to ask about it (agents, headless sessions).
@@ -528,6 +547,7 @@ pub const MAX_CUSTOM_VALUE: usize = 1024 * 1024;
 
 fn info(s: &mut Session, _: &Value) -> CmdResult {
     let l = s.layout();
+    let (hidden_pieces, _) = crate::cmd::tools::inspect::hidden_text_counts(&s.doc);
     Ok(json!({
         "path": s.path.as_ref().map(|p| p.to_string_lossy().to_string()),
         "dirty": s.dirty,
@@ -538,6 +558,7 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
         "trackChanges": s.doc.settings.track_changes,
         "comments": s.doc.comments.len(),
         "sections": s.doc.sections().len(),
+        "hasHidden": hidden_pieces > 0,
         "encrypted": s.password.is_some(),
         "layoutMs": l.ms,
     }))

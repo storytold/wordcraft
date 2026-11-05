@@ -100,16 +100,19 @@ window); in the browser, the one the window shows. Commands work on it unless to
 - `file.new` opens another document in a new window, focused, and makes it active. `file.open`
   does the same with a file; it replaces a blank document nobody has used yet in that document's
   window, and a file that is already open becomes active again and its window comes to the front
-  (`"alreadyOpen": true`). Its result carries the document's `id`.
+  (`"alreadyOpen": true`). Its result carries the document's `id`. A file that carries hidden text
+  warns on open: the result carries `hiddenText` (pieces and characters) and a `warning` telling
+  the agent to inform the human; `file.inspect` with `{"remove": ["hidden"]}` removes it, and
+  `file.info` reports `hasHidden`.
 - `view.switchWindows` lists the open documents (`{"documents": [{"id", "title", "path",
   "dirty", "active"}]}`); with `{"id": n}` it makes that document active and brings its window to
   the front.
 - `file.closeDocument {"id"?, "force"?}` closes a document; its window closes with it unless it
   is the last window.
-- `engine.execute`, `document.inspect` and `ui.render` take `doc`, the id of the document to work
-  on, next to their other params. The command runs on that document and the active window stays
-  active. A dialog or page the command opens (Save As, Print) opens in that document's window,
-  which comes to the front:
+- `engine.execute`, `document.inspect`, `file.inspect` and `ui.render` take `doc`, the id of the
+  document to work on, next to their other params. The command runs on that document and the
+  active window stays active. A dialog or page the command opens (Save As, Print) opens in that
+  document's window, which comes to the front:
 
 ```json
 {"id": 2, "key": "…", "method": "engine.execute", "params": {"command": "text.insert", "params": {"text": "Hello"}, "doc": 3}}

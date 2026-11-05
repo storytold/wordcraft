@@ -19,7 +19,14 @@ pub(super) fn inspect_doc(s: &mut Session, v: &Value) -> CmdResult {
     let report = json!({
         "comments": s.doc.comments.len(),
         "revisions": s.doc.para_paths(StoryRef::Body).iter().filter(|p| s.doc.para(StoryRef::Body, p).is_some_and(|x| x.runs.iter().any(|r| r.props.ins.is_some() || r.props.del.is_some()))).count(),
-        "properties": !s.doc.core.creator.is_empty() || !s.doc.core.last_modified_by.is_empty(),
+        // Everything the properties removal clears, not just the authors: subject, keywords,
+        // description and category go too.
+        "properties": !s.doc.core.subject.is_empty()
+            || !s.doc.core.creator.is_empty()
+            || !s.doc.core.keywords.is_empty()
+            || !s.doc.core.description.is_empty()
+            || !s.doc.core.category.is_empty()
+            || !s.doc.core.last_modified_by.is_empty(),
         "hiddenText": !hidden.is_empty(),
         "hiddenCount": hidden.len(),
         "hidden": hidden.iter().take(MAX_HIDDEN_LISTED).map(|h| h.report(&s.doc)).collect::<Vec<_>>(),
@@ -193,6 +200,15 @@ impl Hidden {
 /// Every story of the document: the body, then headers, footers, notes, comments and text boxes.
 fn all_stories(doc: &Document) -> Vec<StoryRef> {
     std::iter::once(StoryRef::Body).chain(doc.parts.keys().map(|k| StoryRef::Part(*k))).collect()
+}
+
+/// How much hidden text the document holds: pieces (the count `file.inspect` reports, always
+/// exact) and the characters they cover. A file that carries hidden text warns on open (`file.open`).
+pub(crate) fn hidden_text_counts(doc: &Document) -> (usize, usize) {
+    let hidden = hidden_text(doc);
+    // Characters, not the byte offsets the ranges are: a hidden é🙂 is two.
+    let chars = hidden.iter().filter_map(|h| doc.para(h.story, &h.path).map(|p| p.text.get(h.range.clone()).unwrap_or("").chars().count())).sum();
+    (hidden.len(), chars)
 }
 
 /// What the inspector calls a story.

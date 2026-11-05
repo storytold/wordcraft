@@ -205,6 +205,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Templates { .. } => "Templates and Add-ins",
         Dialog::Organizer { .. } => "Organizer",
         Dialog::CustomProperties { .. } => "Custom Document Properties",
+        Dialog::InspectDocument { .. } => "Inspect Document",
         Dialog::Layout(d) => d.title(),
     };
     let id = egui::Id::unique(("dialog", title));

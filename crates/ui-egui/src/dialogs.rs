@@ -479,6 +479,13 @@ pub enum Dialog {
     /// File › Info › Properties › Advanced Properties › Custom: the document's custom
     /// properties (#2982).
     CustomProperties(Box<CustomPropertiesForm>),
+    /// File › Info › Check for Issues › Inspect Document: what the inspector found, with the
+    /// Document Inspector's Remove All per category (comments, revisions, properties, hidden
+    /// text, headers), as Word's.
+    InspectDocument {
+        report: Value,
+        message: Option<String>,
+    },
 }
 
 impl Dialog {
@@ -554,6 +561,7 @@ impl Dialog {
             Dialog::Templates { .. } => "templates",
             Dialog::Organizer { .. } => "organizer",
             Dialog::CustomProperties(..) => "customProperties",
+            Dialog::InspectDocument { .. } => "inspectDocument",
             Dialog::Layout(d) => d.name(),
         }
     }
@@ -839,6 +847,11 @@ impl Dialog {
             "templates" => Dialog::Templates { form: Box::new(crate::dialogs_templates::TemplatesForm::read(app)) },
             "organizer" => Dialog::Organizer { form: Box::new(crate::dialogs_templates::OrganizerForm::read(app, None)) },
             "customProperties" => Dialog::CustomProperties(Box::new(CustomPropertiesForm::read(app))),
+            "inspectDocument" => {
+                // Word's Document Inspector: the last Inspect's report, Remove All per category.
+                let report = app.session.run("file.inspect", &json!({})).unwrap_or_default();
+                Dialog::InspectDocument { report, message: None }
+            }
             "controlProperties" => match crate::dialogs_controls::ControlForm::read(app) {
                 Some(form) => Dialog::Control { form: Box::new(form) },
                 None => {
