@@ -459,6 +459,95 @@ fn text_mapping_handles_ligatures_and_extras() {
 }
 
 #[test]
+fn thai_pdf_uses_the_same_glyph_positions_and_line_breaks_as_layout() {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+    };
+    use kurbo::{Affine, Point};
+    use wordcraft_doc::props::Align;
+    use wordcraft_doc::{Pos, StoryRef};
+    use wordcraft_layout::display::{DisplayOptions, Draw, page_display};
+    use wordcraft_layout::{LineEnd, Placed};
+
+    if wordcraft_fonts::FontDb::global().fallback_for('\u{0E19}', 0).is_none() {
+        eprintln!("skipped: no Thai font installed");
+        return;
+    }
+
+    struct Positions(Vec<(f64, f64)>);
+    impl Device<'_> for Positions {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &kurbo::BezPath, _: Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, transform: Affine, glyph_transform: Affine, _: &Paint<'_>, mode: &GlyphDrawMode) {
+            if !matches!(mode, GlyphDrawMode::Stroke(_)) {
+                let p = transform * glyph_transform * Point::ORIGIN;
+                self.0.push((p.x, p.y));
+            }
+        }
+        fn draw_image(&mut self, _: Image<'_, '_>, _: Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+
+    let text = "\u{0E20}\u{0E32}\u{0E29}\u{0E32}\u{0E44}\u{0E17}\u{0E22}".repeat(100);
+    let mut d = Document::from_text(&text);
+    d.last_section.page_w = 595.276;
+    d.last_section.page_h = 841.89;
+    d.last_section.margin_top = 72.0;
+    d.last_section.margin_bottom = 72.0;
+    d.last_section.margin_left = 72.0;
+    d.last_section.margin_right = 72.0;
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+        p.align = Some(Align::ThaiDistribute);
+        p.word_wrap = Some(false);
+    })
+    .unwrap();
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| c.size = Some(20.0)).unwrap();
+    let lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let (para, line0) = lay.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Lines { story: StoryRef::Body, path, para, l0, .. } if path.0 == [0] => Some((para.as_ref(), *l0)),
+            _ => None,
+        })
+        .unwrap();
+    let first_line = para.lines.get(line0).unwrap();
+    assert_eq!(first_line.end, LineEnd::Wrap, "the first line has an actual wrap boundary");
+    let bytes = export_layout(&d, &lay, &PdfOptions::default()).unwrap();
+    let pdf = hayro_syntax::Pdf::new(bytes.clone()).expect("the exported PDF opens");
+    let pdf_pages = pdf.pages();
+    assert_eq!(pdf_pages.len(), lay.pages.len());
+    let extracted = extract_text(&bytes).concat();
+    assert_eq!(extracted.chars().filter(|c| !c.is_whitespace()).collect::<String>(), text);
+    let cache = InterpreterCache::new();
+    for (page_no, (pdf_page, layout_page)) in pdf_pages.iter().zip(&lay.pages).enumerate() {
+        let expected: Vec<_> = page_display(&d, layout_page, &DisplayOptions::default())
+            .iter()
+            .flat_map(|draw| match draw {
+                Draw::Glyphs { glyphs, text, .. } if text.chars().any(|c| matches!(u32::from(c), 0x0E00..=0x0E7F)) => {
+                    glyphs.iter().map(|(_, x, y)| (*x as f64, *y as f64)).collect::<Vec<_>>()
+                }
+                _ => Vec::new(),
+            })
+            .collect();
+        assert!(!expected.is_empty(), "page {page_no} has displayed Thai glyphs");
+        let mut ctx = Context::new(Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+        let mut positions = Positions(Vec::new());
+        hayro_interpret::interpret_page(pdf_page, &mut ctx, &mut positions);
+        assert_eq!(positions.0.len(), expected.len(), "PDF page {page_no} has one position per displayed Thai glyph");
+        for (pdf, screen) in positions.0.iter().zip(&expected) {
+            assert!((pdf.0 - screen.0).abs() < 0.05, "PDF glyph x={} vs shared display-list x={}", pdf.0, screen.0);
+            assert!((pdf.1 + screen.1 - layout_page.h as f64).abs() < 0.05, "PDF glyph y={} vs shared display-list y={}", pdf.1, screen.1);
+        }
+    }
+}
+
+#[test]
 fn shapes_have_paths() {
     let r = Rect::new(0.0, 0.0, 10.0, 10.0);
     for k in [

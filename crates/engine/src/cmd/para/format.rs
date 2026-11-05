@@ -29,6 +29,9 @@ pub fn fmt(s: &mut Session, f: &dyn Fn(&mut ParaProps)) -> CmdResult {
 /// `a` is the alignment as seen on the page (the buttons): in a right-to-left paragraph
 /// Align Left is its end edge.
 pub(super) fn align(s: &mut Session, a: Align) -> CmdResult {
+    if a == Align::Distribute {
+        return distribute(s);
+    }
     let r = cur(s);
     // Clicking the active alignment again returns to the start edge (Word).
     let logical = a.visual(r.bidi);
@@ -38,6 +41,34 @@ pub(super) fn align(s: &mut Session, a: Align) -> CmdResult {
         let rtl = p.bidi.unwrap_or(focus_rtl);
         p.align = Some(target.map_or(Align::Left, |a| a.visual(rtl)));
     })
+}
+
+/// Choose and store a distributed alignment separately for each selected paragraph.
+fn distribute(s: &mut Session) -> CmdResult {
+    let story = s.sel.focus.story;
+    let targets: Vec<(wordcraft_doc::Path, Align)> = crate::cmd::selected_paths(s)
+        .into_iter()
+        .filter_map(|path| {
+            let para = s.doc.para(story, &path)?;
+            let resolved = s.doc.styles.resolve_para(&para.props);
+            let target = if paragraph_has_thai_letter(&para.text) { Align::ThaiDistribute } else { Align::Distribute };
+            Some((path, target.visual(resolved.bidi)))
+        })
+        .collect();
+    let all_active = !targets.is_empty()
+        && targets.iter().all(|(path, _)| {
+            s.doc.para(story, path).is_some_and(|p| matches!(s.doc.styles.resolve_para(&p.props).align, Align::Distribute | Align::ThaiDistribute))
+        });
+    for (path, target) in targets {
+        let para = s.doc.para_mut(story, &path)?;
+        para.props.align = Some(if all_active { Align::Left } else { target });
+        para.touch();
+    }
+    sel_result(s)
+}
+
+fn paragraph_has_thai_letter(text: &str) -> bool {
+    text.chars().any(|c| matches!(c, '\u{0E01}'..='\u{0E2E}' | '\u{0E30}' | '\u{0E32}'..='\u{0E33}' | '\u{0E40}'..='\u{0E45}'))
 }
 
 /// Set the alignment as seen on the page in every selected paragraph, in its own direction.
@@ -114,6 +145,7 @@ pub(super) fn set_props(s: &mut Session, v: &Value) -> CmdResult {
         Some("right") => Some(Align::Right),
         Some("justify" | "both") => Some(Align::Justify),
         Some("distribute") => Some(Align::Distribute),
+        Some("thaiDistribute") => Some(Align::ThaiDistribute),
         Some(x) => return Err(CmdError::Params(format!("unknown alignment `{x}`"))),
     };
     let indent = |k: &str| p::f32(&page, k).map(|x| x.clamp(-1584.0, 1584.0));

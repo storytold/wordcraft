@@ -14,6 +14,49 @@
 
 use unicode_segmentation::UnicodeSegmentation;
 
+fn is_thai(c: char) -> bool {
+    matches!(u32::from(c), 0x0E00..=0x0E7F)
+}
+
+fn is_thai_prefix_vowel(c: char) -> bool {
+    matches!(u32::from(c), 0x0E40..=0x0E44)
+}
+
+fn is_thai_consonant(c: char) -> bool {
+    matches!(u32::from(c), 0x0E01..=0x0E2E)
+}
+
+pub(crate) fn is_thai_text_char(c: char) -> bool {
+    is_thai(c) && !matches!(c, '\u{0E2F}' | '\u{0E3F}' | '\u{0E46}' | '\u{0E4F}' | '\u{0E5A}' | '\u{0E5B}')
+}
+
+pub(crate) fn thai_text_runs(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut runs = Vec::new();
+    let mut start = None;
+    for (i, c) in text.char_indices() {
+        if is_thai_text_char(c) {
+            start.get_or_insert(i);
+        } else if let Some(from) = start.take() {
+            runs.push(from..i);
+        }
+    }
+    if let Some(from) = start {
+        runs.push(from..text.len());
+    }
+    runs
+}
+
+/// Whether `off` is safe for line wrapping in the whole paragraph. Thai preposed vowels are
+/// encoded before their consonant and must stay with it; grapheme and shaping clusters stay whole.
+pub(crate) fn is_safe_line_break(text: &str, off: usize) -> bool {
+    if !wordcraft_doc::cluster::is_cluster_boundary(text, off) {
+        return false;
+    }
+    let prev = text.get(..off).and_then(|t| t.chars().next_back());
+    let next = text.get(off..).and_then(|t| t.chars().next());
+    !matches!((prev, next), (Some(p), Some(n)) if is_thai_prefix_vowel(p) && is_thai_consonant(n))
+}
+
 /// East Asian characters a line may not start with: closing brackets and quotes, the
 /// ideographic comma and full stop, fullwidth and halfwidth punctuation, the middle dot,
 /// iteration and sound marks.

@@ -36,6 +36,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn alignment_json_names_keep_old_values_and_add_thai_distribution() {
+        for (alignment, json) in [
+            (Align::Left, "\"left\""),
+            (Align::Center, "\"center\""),
+            (Align::Right, "\"right\""),
+            (Align::Justify, "\"justify\""),
+            (Align::Distribute, "\"distribute\""),
+            (Align::ThaiDistribute, "\"thaiDistribute\""),
+        ] {
+            assert_eq!(serde_json::to_string(&alignment).unwrap(), json);
+            assert_eq!(serde_json::from_str::<Align>(json).unwrap(), alignment);
+        }
+    }
+
+    #[test]
     fn rgb_hex() {
         assert_eq!(Rgb(255, 0, 16).hex(), "FF0010");
         assert_eq!(Rgb::parse("#FF0010"), Some(Rgb(255, 0, 16)));
