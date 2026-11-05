@@ -3837,3 +3837,66 @@ fn issues_1281_1045_english_dialects_proof_typed_text() {
     let words: Vec<&str> = issues.as_array().unwrap().iter().filter(|i| i["kind"] == "spelling").filter_map(|i| i["text"].as_str()).collect();
     assert_eq!(words, ["21th"]);
 }
+
+/// Where the first paragraph's list label starts (points from the page's text edge), and where its text starts.
+fn label_and_text_x(s: &mut Session) -> (f32, f32) {
+    let l = s.layout();
+    l.pages
+        .iter()
+        .flat_map(|p| &p.items)
+        .find_map(|i| {
+            if let wordcraft_layout::Placed::Lines { para, l0: 0, .. } = i {
+                // The text starts where the first cluster is placed, after the label's suffix or tab stop.
+                para.label.as_ref().and_then(|lb| para.lines.first().and_then(|line| line.xs.first().map(|&x| (lb.x, x))))
+            } else {
+                None
+            }
+        })
+        .expect("a list label")
+}
+
+/// #4287: changing a list item's level (Change List Level, Tab, Shift+Tab) puts it at the new level's
+/// indent, also when it carried a direct indent (a ruler drag, a pasted block, a Word file's `w:ind`).
+#[test]
+fn changing_a_list_level_drops_a_direct_indent() {
+    // The reference: a fresh list item moved to level 2 with no direct indent in the way.
+    let fresh = |command: &str, params: serde_json::Value| {
+        let mut s = s();
+        typ(&mut s, "Item");
+        run(&mut s, "para.numbering", json!({"kind": "upperLetter"}));
+        run(&mut s, command, params);
+        label_and_text_x(&mut s)
+    };
+    let dragged = |command: &str, params: serde_json::Value| {
+        let mut s = s();
+        typ(&mut s, "Item");
+        run(&mut s, "para.numbering", json!({"kind": "upperLetter"}));
+        // The ruler's left-indent marker dragged to a custom place.
+        run(&mut s, "para.indents", json!({"left": 120.0, "firstLine": -6.0}));
+        run(&mut s, command, params);
+        label_and_text_x(&mut s)
+    };
+    for (command, params) in [("para.listLevel", json!({"level": 1})), ("para.indent", json!({}))] {
+        assert_eq!(dragged(command, params.clone()), fresh(command, params), "{command}");
+    }
+    // Back out (Shift+Tab) from level 2 to 1 as well.
+    let back = |drag: bool| {
+        let mut s = s();
+        typ(&mut s, "Item");
+        run(&mut s, "para.numbering", json!({"kind": "upperLetter"}));
+        run(&mut s, "para.listLevel", json!({"level": 1}));
+        if drag {
+            run(&mut s, "para.indents", json!({"left": 200.0, "firstLine": -30.0}));
+        }
+        run(&mut s, "para.outdent", json!({}));
+        label_and_text_x(&mut s)
+    };
+    assert_eq!(back(true), back(false), "para.outdent");
+    // A ruler drag with no level change sticks.
+    let mut s = s();
+    typ(&mut s, "Item");
+    run(&mut s, "para.numbering", json!({"kind": "upperLetter"}));
+    let before = label_and_text_x(&mut s);
+    run(&mut s, "para.indents", json!({"left": 120.0, "firstLine": -6.0}));
+    assert_ne!(label_and_text_x(&mut s), before, "the drag moves the item");
+}
