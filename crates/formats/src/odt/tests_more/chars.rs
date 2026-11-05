@@ -284,3 +284,24 @@ fn objects_in_hidden_text_are_kept() {
     assert!(p.text.contains("Hidden"), "{:?}", p.text);
     assert!(p.objects.iter().any(|o| matches!(o, wordcraft_doc::para::InlineObject::BookmarkStart { name } if name == "Secret")), "{:?}", p.objects);
 }
+
+#[test]
+fn a_headings_text_of_another_size_keeps_it() {
+    // Only the size its style gives goes with the style: a smaller word in a heading came back
+    // from a save at the heading's size.
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:default-outline-level="1"><style:text-properties fo:font-size="16pt"/></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties fo:font-size="10pt"/></style:style></office:automatic-styles><office:body><office:text><text:h text:style-name="Heading_20_1" text:outline-level="1">big<text:span text:style-name="T1">small</text:span></text:h></office:text></office:body></office:document-content>"#
+    );
+    let check = |d: &Document, what: &str| {
+        let p = d.body[0].as_para().unwrap();
+        let size = |run: usize| d.styles.resolve_char(p.props.style.as_deref(), &p.runs[run].props).size;
+        assert_eq!((size(0), size(1)), (16.0, 10.0), "{what}");
+    };
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    check(&d, "read");
+    assert_eq!(d.body[0].as_para().unwrap().runs[0].props.size, None, "the style's stays the style's");
+    check(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap(), "written from the model");
+}

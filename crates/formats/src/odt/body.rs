@@ -1020,13 +1020,17 @@ impl Body<'_> {
             p.kind = Kind::Normal;
         }
         if matches!(p.kind, Kind::Code | Kind::Heading(_) | Kind::Title) {
+            // The style says the size of its text: text of another size keeps its own.
+            let style_size = self.fmt.last().and_then(|f| f.size);
             for i in &mut p.inlines {
                 if let Inline::Text(_, f) = i {
                     if p.kind == Kind::Code {
                         f.code = false;
                         f.font = None;
                     }
-                    f.size = None;
+                    if f.size == style_size {
+                        f.size = None;
+                    }
                 }
             }
         }
