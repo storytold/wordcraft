@@ -159,3 +159,21 @@ fn a_table_starting_a_page_starts_it() {
     let c = content_of(&crate::odt::tests::export_model(&d).unwrap());
     assert_eq!(c.matches(r#"fo:break-before="page""#).count(), 2, "{c}");
 }
+
+#[test]
+fn a_tables_and_rows_background_show_behind_their_cells() {
+    // Table Properties › Background: it was dropped, on screen and in LibreOffice after a save.
+    let styles = r##"<style:style style:name="T" style:family="table"><style:table-properties fo:background-color="#ddffdd"/></style:style><style:style style:name="R" style:family="table-row"><style:table-row-properties fo:background-color="#ffdddd"/></style:style><style:style style:name="C" style:family="table-cell"><style:table-cell-properties fo:background-color="#ddddff"/></style:style>"##;
+    let table = r#"<table:table table:style-name="T"><table:table-row><table:table-cell><text:p>table</text:p></table:table-cell><table:table-cell table:style-name="C"><text:p>cell</text:p></table:table-cell></table:table-row><table:table-row table:style-name="R"><table:table-cell><text:p>row</text:p></table:table-cell><table:table-cell table:style-name="C"><text:p>cell</text:p></table:table-cell></table:table-row></table:table>"#;
+    let colours = |d: &wordcraft_doc::Document| {
+        d.body
+            .iter()
+            .find_map(|b| b.as_table())
+            .map(|t| t.rows.iter().flat_map(|r| r.cells.iter().map(|c| c.props.shading.map(|s| s.hex().to_ascii_lowercase()))).collect::<Vec<_>>())
+            .unwrap_or_default()
+    };
+    let want = |t: &str, r: &str, c: &str| vec![Some(t.to_string()), Some(c.to_string()), Some(r.to_string()), Some(c.to_string())];
+    let d = doc(styles, table);
+    assert_eq!(colours(&d), want("ddffdd", "ffdddd", "ddddff"));
+    assert_eq!(colours(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()), want("ddffdd", "ffdddd", "ddddff"));
+}

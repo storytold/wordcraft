@@ -252,6 +252,9 @@ struct StyleInfo {
     /// A table-row style's `style:table-row-properties`: its height (`style:row-height`, exact)
     /// or least height (`style:min-row-height`), points.
     row_height: Option<(f32, bool)>,
+    /// `fo:background-color` of a table or table-row style (§20.175): what shows behind cells
+    /// with none of their own.
+    table_background: Option<Rgb>,
     /// `style:master-page-name` of a paragraph or table style: its paragraphs (tables) start a
     /// page of that master page. Empty: explicitly none, which stops the lookup up the chain.
     master_page: Option<String>,
@@ -597,6 +600,7 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
                 s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
             }
             // §20.300 `table:align`: `margins` fills the text width, as no alignment does.
+            s.table_background = get(a, "fo:background-color").and_then(model::parse_color).or(s.table_background);
             s.table_align = match get(a, "table:align").map(str::trim) {
                 Some("left") => Some(Align::Left),
                 Some("center") => Some(Align::Center),
@@ -618,6 +622,7 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
             }
         }
         "table-row-properties" => {
+            s.table_background = get(a, "fo:background-color").and_then(model::parse_color).or(s.table_background);
             if let Some(h) = get(a, "style:row-height").and_then(length).filter(|h| h.is_finite() && *h > 0.0) {
                 s.row_height = Some((h.min(MAX_LEN), true));
             } else if let Some(h) = get(a, "style:min-row-height").and_then(length).filter(|h| h.is_finite() && *h > 0.0) {
@@ -1343,6 +1348,11 @@ impl Styles {
         self.chain(name).iter().find_map(|(_, s)| s.cell_picture.clone())
     }
 
+    pub(super) fn table_background(&self, name: &str) -> Option<Rgb> {
+        self.chain(name).iter().find_map(|(_, s)| s.table_background)
+    }
+
+    /// Background of a table-cell style (whole chain).
     pub(super) fn cell_background(&self, name: &str) -> Option<Rgb> {
         self.chain(name).iter().find_map(|(_, s)| s.cell_background)
     }

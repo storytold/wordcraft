@@ -1293,7 +1293,10 @@ impl Body<'_> {
                 self.end_para();
                 let span = get(a, "table:number-columns-spanned").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1).clamp(1, 63);
                 let rows = get(a, "table:number-rows-spanned").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1).clamp(1, 1000);
-                let shading = get(a, "table:style-name").and_then(|s| self.styles.cell_background(s));
+                // WordCraft's tables have their backgrounds on their cells: a row's or table's on
+                // those with none of their own, as it shows behind them.
+                let behind = self.tables.last().and_then(|t| t.row_background.or(t.background));
+                let shading = get(a, "table:style-name").and_then(|s| self.styles.cell_background(s)).or(behind);
                 let valign = get(a, "table:style-name").and_then(|s| self.styles.cell_valign(s));
                 let borders = get(a, "table:style-name").and_then(|s| self.styles.cell_borders(s));
                 let margins = get(a, "table:style-name").and_then(|s| self.styles.cell_padding(s));
@@ -1373,13 +1376,16 @@ impl Body<'_> {
         // far past the margins): Word's fixed layout.
         let space = get(a, "table:style-name").map(|s| self.styles.table_space(s)).unwrap_or_default();
         let extra = model::TableExtra { align, width: None, width_pct, heights: Vec::new(), fixed: true, space, header_rows: 0 };
-        self.tables.push(TableB { rows: Vec::new(), row: Vec::new(), hcover: 0, widths: Vec::new(), extra });
+        let background = get(a, "table:style-name").and_then(|s| self.styles.table_background(s));
+        self.tables.push(TableB { rows: Vec::new(), row: Vec::new(), hcover: 0, widths: Vec::new(), extra, background, row_background: None });
     }
 
     /// A table row (`table:table-row`) begins: its height, kept as rows are (see the row's end).
     fn start_row(&mut self, a: &Attrs) {
         let height = get(a, "table:style-name").and_then(|s| self.styles.row_height(s));
+        let background = get(a, "table:style-name").and_then(|s| self.styles.table_background(s));
         if let Some(t) = self.tables.last_mut() {
+            t.row_background = background;
             t.row.clear();
             t.hcover = 0;
             if t.extra.heights.len() < wordcraft_doc::table::MAX_ROWS {
