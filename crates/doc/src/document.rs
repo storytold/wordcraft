@@ -213,7 +213,9 @@ impl Document {
         if !parent.len().is_multiple_of(3) {
             return None;
         }
+        crate::work::steps(1);
         for ch in parent.chunks(3) {
+            crate::work::steps(1);
             let [b, r, c] = ch else { return None };
             let Block::Table(t) = &**bl.get(*b as usize)? else { return None };
             bl = &t.rows.get(*r as usize)?.cells.get(*c as usize)?.blocks;
