@@ -240,7 +240,22 @@ impl Writer {
                     o.push_str(&format!("\\textit{{[{}]}}", escape_text(&alt)));
                 }
                 Inline::Anchor(name) => o.push_str(&format!("\\hypertarget{{{}}}{{}}", escape_url(name))),
-                Inline::Figure(_) => {}
+                Inline::Figure(_)
+                | Inline::Chart(_)
+                | Inline::Note { .. }
+                | Inline::Comment { .. }
+                | Inline::CommentEnd(_)
+                | Inline::Shape { .. }
+                | Inline::Group { .. }
+                | Inline::FieldStart(_)
+                | Inline::FieldEnd
+                | Inline::AnchorEnd(_) => {}
+                // ASK and SET show nothing (see `model::shows_nothing`).
+                Inline::Field { instr, .. } if model::shows_nothing(instr) => {}
+                Inline::Field { result, fmt, .. } | Inline::Control { text: result, fmt, .. } => {
+                    let s = self.span(result, fmt);
+                    push_apart(&mut o, &s);
+                }
                 // LaTeX keeps no ruby (no package): its base text, in the run's formatting.
                 Inline::Ruby { base, fmt, .. } => {
                     let s = self.span(base, fmt);
@@ -430,6 +445,8 @@ pub fn escape_text(s: &str) -> String {
             '>' => o.push_str("\\textgreater{}"),
             '|' => o.push_str("\\textbar{}"),
             '\u{A0}' => o.push('~'),
+            // TeX collapses a run of spaces into one; a control space keeps each further one.
+            ' ' if prev == ' ' => o.push_str("\\ "),
             // An opening bracket here would become an optional item or line-break argument.
             '[' if !line_has_text => o.push_str("{[}"),
             // Keep TeX from joining `--`, ``` `` ``` and `''` into dashes and quotes.
