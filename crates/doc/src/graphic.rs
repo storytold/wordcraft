@@ -80,7 +80,8 @@ pub enum GraphicKind {
     #[default]
     Chart,
     Diagram,
-    /// Word's native InkML, kept opaque; displayed as its fallback picture when available.
+    /// Word's native InkML: supported strokes are drawn as vectors, otherwise as its fallback
+    /// picture. The original part is kept unchanged for saving.
     Ink,
 }
 

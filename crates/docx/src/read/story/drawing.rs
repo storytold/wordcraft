@@ -47,10 +47,23 @@ impl Reader<'_> {
                     *e = (*e - p).clamp(0.0, 1584.0);
                 }
             }
-            // The renderer's existing missing-picture box marks ink without a usable preview.
-            // InkML stays opaque: no approximation of its strokes or conversion to freeforms.
-            let items = vec![GraphicItem::Image { rect: [0.0, 0.0, w, h], media: String::new() }];
-            let graphic = Arc::new(Graphic { kind: GraphicKind::Ink, items, w, h, source: Some(source), ..Default::default() });
+            let inner = group_xfrm(Some(content));
+            let ordinary_frame =
+                content.child("w14:xfrm").is_none() || (inner.off == (0.0, 0.0) && (inner.ext.0 - w).abs() < 0.01 && (inner.ext.1 - h).abs() < 0.01);
+            let mut graphic = if ordinary_frame {
+                self.ink_graphic(&part, source)
+            } else {
+                // Nonstandard inner placement needs its own coordinate mapping, not a fit to
+                // the outer frame. Keep the preview until that mapping is supported.
+                Arc::new(Graphic { kind: GraphicKind::Ink, source: Some(source), ..Default::default() })
+            };
+            crate::read::ink::fit_frame(Arc::make_mut(&mut graphic), w, h);
+            if graphic.items.is_empty() {
+                let g = Arc::make_mut(&mut graphic);
+                g.items = vec![GraphicItem::Image { rect: [0.0, 0.0, w, h], media: String::new() }];
+                g.w = w;
+                g.h = h;
+            }
             return Some(InlineObject::Graphic { w, h, alt, float, graphic });
         }
         let graphic_kind = if uri.ends_with("/chart") {
@@ -131,7 +144,9 @@ impl Reader<'_> {
         let Some(mut object) = self.read_drawing(sc, drawing, rels) else { return preview };
         if let InlineObject::Graphic { w, h, graphic, .. } = &mut object {
             let graphic = Arc::make_mut(graphic);
-            if let Some(InlineObject::Image { media, .. }) = preview {
+            if matches!(graphic.items.first(), Some(GraphicItem::Image { .. }))
+                && let Some(InlineObject::Image { media, .. }) = preview
+            {
                 graphic.items = vec![GraphicItem::Image { rect: [0.0, 0.0, *w, *h], media }];
             }
             if let Some(fallback) = fallback {
@@ -173,23 +188,22 @@ impl Reader<'_> {
     /// `alternate` when it has a picture fallback): what to write back (the whole alternate when
     /// it can be kept, else the ink alone) and its fallback picture (a `Document::media` key).
     /// `None` when the ink's part is missing or isn't InkML.
-    fn ink_member(&mut self, content: &El, alternate: Option<&El>, rels: &Rels) -> Option<(Arc<Embedded>, Option<String>)> {
-        let InlineObject::Graphic { graphic, .. } = self.read_ink_content_part(content, rels)? else { return None };
-        let mut source = graphic.source.clone()?;
+    fn ink_member(&mut self, content: &El, alternate: Option<&El>, rels: &Rels) -> Option<(Arc<Graphic>, Option<String>)> {
+        let InlineObject::Graphic { mut graphic, .. } = self.read_ink_content_part(content, rels)? else { return None };
         let mut preview = None;
         let choice = alternate.and_then(children_of_choice).filter(|c| c.name == "mc:Choice");
         if let (Some(choice), Some(fallback)) = (choice, alternate.and_then(|a| a.child("mc:Fallback"))) {
             let kept = El { name: "mc:AlternateContent".into(), attrs: Vec::new(), kids: vec![Node::El(choice.clone()), Node::El(fallback.clone())] };
             // A malformed or over-budget fallback must not discard a valid native part.
             if let Some(whole) = self.keep_embedded(&kept, rels, &[]) {
-                source = whole;
+                Arc::make_mut(&mut graphic).source = Some(whole);
                 preview = match fallback.child("pic:pic").and_then(|p| self.read_pic(p, rels, 0.0, 0.0, String::new(), Float::default())) {
                     Some(InlineObject::Image { media, .. }) => Some(media),
                     _ => None,
                 };
             }
         }
-        Some((source, preview))
+        Some((graphic, preview))
     }
 
     pub(super) fn read_ink_content_part(&mut self, content: &El, rels: &Rels) -> Option<InlineObject> {
@@ -199,8 +213,27 @@ impl Reader<'_> {
             return None;
         }
         let source = self.keep_embedded(content, rels, &[])?;
-        let graphic = Arc::new(Graphic { kind: GraphicKind::Ink, source: Some(source), ..Default::default() });
-        Some(InlineObject::Graphic { w: 0.0, h: 0.0, alt: String::new(), float: Float::default(), graphic })
+        let graphic = self.ink_graphic(&part, source);
+        Some(InlineObject::Graphic { w: graphic.w, h: graphic.h, alt: String::new(), float: Float::default(), graphic })
+    }
+
+    fn ink_graphic(&mut self, part: &str, source: Arc<Embedded>) -> Arc<Graphic> {
+        // Cache successes and failures by part, not by frame or relationship id. The original
+        // markup still belongs to each placement, and copied geometry shares the file's budget.
+        let key = (GraphicKind::Ink, part.to_string(), 0, 0);
+        let cached = self.graphics.entry(key).or_insert_with(|| {
+            let graphic = self.pkg.get_shared(part).and_then(|bytes| crate::read::ink::read(bytes, &mut self.chunks.graphic));
+            Arc::new(graphic.unwrap_or_else(|| Graphic { kind: GraphicKind::Ink, ..Default::default() }))
+        });
+        let cost = graphic_work(&cached.items);
+        let mut graphic = if cost <= self.chunks.graphic {
+            self.chunks.graphic -= cost;
+            (**cached).clone()
+        } else {
+            Graphic { kind: GraphicKind::Ink, ..Default::default() }
+        };
+        graphic.source = Some(source);
+        Arc::new(graphic)
     }
 
     /// The chart or SmartArt diagram in an `a:graphicData`, as items in points from its top-left
@@ -385,12 +418,16 @@ impl Reader<'_> {
             };
             let (alt, meta) = nv_alt(nv);
             let float = Float { alt: meta, hidden: nv.is_some_and(|p| on_off_attr(p, "hidden")), ..Float::default() };
-            let obj = if let Some((source, preview)) = ink {
+            let obj = if let Some((mut graphic, preview)) = ink {
                 let mut float = float;
                 float.set_spin(xfrm_spin(e.child("w14:xfrm")));
-                // As drawing-level ink: its fallback picture, else the missing-picture box.
-                let items = vec![GraphicItem::Image { rect: [0.0, 0.0, w, h], media: preview.unwrap_or_default() }];
-                let graphic = Arc::new(Graphic { kind: GraphicKind::Ink, items, w, h, source: Some(source), ..Default::default() });
+                crate::read::ink::fit_frame(Arc::make_mut(&mut graphic), w, h);
+                if graphic.items.is_empty() {
+                    let g = Arc::make_mut(&mut graphic);
+                    g.items = vec![GraphicItem::Image { rect: [0.0, 0.0, w, h], media: preview.unwrap_or_default() }];
+                    g.w = w;
+                    g.h = h;
+                }
                 Some(InlineObject::Graphic { w, h, alt: alt.clone(), float, graphic })
             } else if e.name == "pic:pic" {
                 self.read_pic(e, rels, w, h, alt.clone(), float)

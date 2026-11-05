@@ -9,45 +9,76 @@ use wordcraft_doc::connector::ArrowStyle;
 pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32) -> Vec<Draw> {
     let (sx, sy) = (scale_of(rect.w, g.w), scale_of(rect.h, g.h));
     let k = (sx + sy) / 2.0;
-    let inside = |r: &[f32; 4]| Rect::new(rect.x + r[0] * sx, rect.y + r[1] * sy, r[2] * sx, r[3] * sy);
     let mut out = Vec::with_capacity(g.items.len());
     for it in &g.items {
-        match it {
-            GraphicItem::Shape { rect: r, kind, fill, stroke, stroke_width } => out.push(Draw::Shape {
-                rect: inside(r),
-                kind: *kind,
-                fill: fill.map(Paint::solid),
-                stroke: *stroke,
-                stroke_width: stroke_width * k,
-                effects: Default::default(),
-                corner: None,
-                dash: Vec::new(),
-                cap: Default::default(),
-            }),
-            GraphicItem::Path { segs, fill, stroke, stroke_width } => {
-                let segs = page_segs(segs, |x, y| (rect.x + x * sx, rect.y + y * sy));
-                out.push(Draw::Path {
+        if let Some(draw) = graphic_geometry(it, rect, sx, sy, alpha, g.kind == GraphicKind::Ink) {
+            out.push(draw);
+        } else if let GraphicItem::Text { rect: r, .. } = it {
+            let inside = Rect::new(rect.x + r[0] * sx, rect.y + r[1] * sy, r[2] * sx, r[3] * sy);
+            out.extend(text_glyphs(doc, inside, it, alpha, k));
+        }
+    }
+    out
+}
+
+fn graphic_geometry(it: &GraphicItem, rect: Rect, sx: f32, sy: f32, alpha: f32, ink: bool) -> Option<Draw> {
+    let inside = |r: &[f32; 4]| Rect::new(rect.x + r[0] * sx, rect.y + r[1] * sy, r[2] * sx, r[3] * sy);
+    let k = (sx + sy) / 2.0;
+    Some(match it {
+        GraphicItem::Shape { rect: r, kind, fill, stroke, stroke_width } => Draw::Shape {
+            rect: inside(r),
+            kind: *kind,
+            fill: fill.map(Paint::solid),
+            stroke: *stroke,
+            stroke_width: stroke_width * k,
+            effects: Default::default(),
+            corner: None,
+            dash: Vec::new(),
+            cap: Default::default(),
+        },
+        GraphicItem::Path { segs, fill, stroke, stroke_width } => {
+            let segs = page_segs(segs, |x, y| (rect.x + x * sx, rect.y + y * sy));
+            if ink
+                && fill.is_none()
+                && let Some(color) = stroke
+                && let Some(pts) = ink_points(&segs)
+            {
+                // Reuse the ink pipeline so both output backends use round joins as well as
+                // round caps. Ordinary graphic paths retain their own outline behavior.
+                Draw::Ink { pts, color: *color, width: stroke_width * k, alpha }
+            } else {
+                Draw::Path {
                     segs,
                     fill: fill.map(Paint::solid),
                     stroke: *stroke,
                     stroke_width: stroke_width * k,
                     dash: Vec::new(),
                     cap: Default::default(),
-                })
+                }
             }
-            GraphicItem::Text { rect: r, .. } => out.extend(text_glyphs(doc, inside(r), it, alpha, k)),
-            GraphicItem::Image { rect: r, media } => out.push(Draw::Image {
-                rect: inside(r),
-                media: media.clone(),
-                crop: [0.0; 4],
-                alpha,
-                alt: String::new(),
-                fx: Default::default(),
-                decorative: false,
-            }),
         }
-    }
-    out
+        GraphicItem::Image { rect: r, media } => Draw::Image {
+            rect: inside(r),
+            media: media.clone(),
+            crop: [0.0; 4],
+            alpha,
+            alt: String::new(),
+            fx: Default::default(),
+            decorative: false,
+        },
+        GraphicItem::Text { .. } => return None,
+    })
+}
+
+fn ink_points(segs: &[PathSeg]) -> Option<Vec<(f32, f32)>> {
+    segs.iter()
+        .enumerate()
+        .map(|(i, seg)| match *seg {
+            PathSeg::Move(x, y) if i == 0 => Some((x, y)),
+            PathSeg::Line(x, y) if i > 0 => Some((x, y)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Scale from the size `built` points a graphic's items were made for to `len` points; 1 when
@@ -445,25 +476,9 @@ pub(super) fn object_draws(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32
                 None => spun(own, rect, members, out),
             }
         }
-        // Native ink in a group (kept opaque): drawn as drawing-level ink is, from its pictures.
-        InlineObject::Graphic { graphic, .. } if graphic.kind == GraphicKind::Ink => {
+        InlineObject::Graphic { graphic, .. } if graphic.kind == GraphicKind::Ink && !opts.hide_ink => {
             let (sx, sy) = (scale_of(rect.w, graphic.w), scale_of(rect.h, graphic.h));
-            let items = graphic
-                .items
-                .iter()
-                .filter_map(|it| match it {
-                    GraphicItem::Image { rect: r, media } => Some(Draw::Image {
-                        rect: Rect::new(rect.x + r[0] * sx, rect.y + r[1] * sy, r[2] * sx, r[3] * sy),
-                        media: media.clone(),
-                        crop: [0.0; 4],
-                        alpha,
-                        alt: String::new(),
-                        fx: Default::default(),
-                        decorative: false,
-                    }),
-                    _ => None,
-                })
-                .collect();
+            let items = graphic.items.iter().filter_map(|it| graphic_geometry(it, rect, sx, sy, alpha, true)).collect();
             spun(own, rect, items, out)
         }
         _ => {}
