@@ -733,7 +733,7 @@ impl<'a> Parser<'a> {
         let level = self.lists.len().saturating_sub(1).min(8) as u8;
         self.para = Para::default();
         if let Some(&ordered) = self.lists.last() {
-            self.para.list = Some(ListInfo { ordered, level, start: 1 });
+            self.para.list = Some(ListInfo { ordered, level, start: 1, ..Default::default() });
         }
         let label = self.opt_arg();
         if let Some(l) = label {

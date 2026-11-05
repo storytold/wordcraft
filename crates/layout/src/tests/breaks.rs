@@ -219,7 +219,7 @@ fn numbered(items: &[Item], next: SectionStart, listed: &[usize]) -> (usize, Vec
 /// [`numbered`] with a list of `kind`.
 fn in_list(kind: wordcraft_doc::ListKind, items: &[Item], next: SectionStart, listed: &[usize]) -> (usize, Vec<(usize, String)>, Option<f32>) {
     let mut d = doc(items, next);
-    let id = d.numbering.add_list(kind);
+    let id = Arc::make_mut(&mut d.numbering).add_list(kind);
     for &i in listed {
         d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 });
     }
@@ -310,7 +310,7 @@ fn after_items(kind: wordcraft_doc::ListKind, before: f32, rest: &[Item], listed
     let mut items = vec![Text("Intro"), Text("Fill"), Text("AAA"), Text("AAB")];
     items.extend_from_slice(rest);
     let mut d = doc(&items, next);
-    let id = d.numbering.add_list(kind);
+    let id = Arc::make_mut(&mut d.numbering).add_list(kind);
     let note = d.add_part(wordcraft_doc::PartKind::Footnote, vec![para_block(Paragraph::with_text("Note", Default::default()))]);
     d.insert_object(
         &Pos::body(0, 5),
@@ -327,7 +327,7 @@ fn after_items(kind: wordcraft_doc::ListKind, before: f32, rest: &[Item], listed
     for &i in listed {
         d.para_mut(StoryRef::Body, &Path::top(4 + i)).unwrap().props.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 });
     }
-    for level in d.numbering.abstracts.iter_mut().flat_map(|a| a.levels.iter_mut()) {
+    for level in Arc::make_mut(&mut d.numbering).abstracts.iter_mut().flat_map(|a| a.levels.iter_mut()) {
         level.chr.font = Some(FONT.into());
     }
     let last = d.body.len() - 1;
