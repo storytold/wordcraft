@@ -786,3 +786,34 @@ fn lone_table_open_markers_mixed_tables_and_paired() {
     assert!(res1.controls.open.is_empty());
     assert_eq!(res1.controls.close, 0);
 }
+
+#[test]
+fn relink_table_remaps_row_cell_ins_del_and_exceptions_fmt_change() {
+    use crate::props::{PropChange, TableProps};
+    use crate::{Revision, RevisionKind};
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Alice".into(), date: String::new(), move_name: None });
+
+    let mut other = Document::new();
+    other.revisions.push(Revision { kind: RevisionKind::Insert, author: "Bob".into(), date: String::new(), move_name: None });
+    let mut t = Table::new(1, 1, 200.0);
+    t.rows[0].props.ins = Some(0);
+    t.rows[0].props.del = Some(99);
+    t.rows[0].props.exceptions = Some(Box::new(TableProps {
+        width: Some(180.0),
+        fmt_change: Some(Box::new(PropChange { rev: 0, old: TableProps { width: Some(120.0), ..Default::default() } })),
+        ..Default::default()
+    }));
+    t.rows[0].cells[0].props.del = Some(0);
+    t.rows[0].cells[0].props.ins = Some(99);
+    other.body = vec![Arc::new(Block::Table(t))];
+
+    let frag = d.adopt_with(other, false);
+    let tbl = frag.blocks.iter().find_map(|b| b.as_table()).expect("adopted table");
+    assert_eq!(tbl.rows[0].props.ins, Some(1));
+    assert_eq!(tbl.rows[0].props.del, None);
+    assert_eq!(tbl.rows[0].props.exceptions.as_ref().and_then(|e| e.fmt_change.as_ref()).map(|c| c.rev), Some(1));
+    assert_eq!(tbl.rows[0].cells[0].props.del, Some(1));
+    assert_eq!(tbl.rows[0].cells[0].props.ins, None);
+    assert_eq!(d.revisions[1].author, "Bob");
+}

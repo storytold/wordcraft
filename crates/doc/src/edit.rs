@@ -426,8 +426,19 @@ impl Relink<'_> {
                         self.style(&mut c.old.style);
                     }
                     for row in t.rows.iter_mut() {
+                        row.props.ins = row.props.ins.and_then(|r| self.rev_id(r));
+                        row.props.del = row.props.del.and_then(|r| self.rev_id(r));
                         self.shift_change(&mut row.props.fmt_change);
+                        if let Some(ex) = row.props.exceptions.as_deref_mut() {
+                            self.style(&mut ex.style);
+                            self.shift_change(&mut ex.fmt_change);
+                            if let Some(c) = ex.fmt_change.as_mut() {
+                                self.style(&mut c.old.style);
+                            }
+                        }
                         for cell in row.cells.iter_mut() {
+                            cell.props.ins = cell.props.ins.and_then(|r| self.rev_id(r));
+                            cell.props.del = cell.props.del.and_then(|r| self.rev_id(r));
                             self.shift_change(&mut cell.props.fmt_change);
                             todo.extend(cell.blocks.iter_mut().map(Arc::make_mut));
                         }

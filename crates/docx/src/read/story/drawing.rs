@@ -270,7 +270,7 @@ impl Reader<'_> {
                 if let Some(v) = sr.attr(n).and_then(int)
                     && let Some(slot) = crop.get_mut(i)
                 {
-                    *slot = (v.clamp(-100_000, 100_000) as f32 / 100_000.0).clamp(-1.0, 1.0);
+                    *slot = (v.clamp(-100_000_000, 100_000_000) as f32 / 100_000.0).clamp(-1000.0, 1000.0);
                 }
             }
         }
@@ -725,15 +725,23 @@ fn effect_list(l: &El, theme: &[Rgb]) -> ShapeEffects {
     ShapeEffects { shadow, glow, soft_edge }.sanitized()
 }
 
-/// The colour inside an effect and its transparency, percent (from `a:alpha`, opaque when absent).
+/// The colour inside an effect and its transparency, percent (from `a:alpha`, `a:alphaMod`,
+/// `a:alphaOff`; opaque when absent).
 fn effect_color(e: &El, theme: &[Rgb]) -> (Option<Rgb>, f32) {
     let Some(c) = e.els().find(|c| matches!(c.name.as_str(), "a:srgbClr" | "a:prstClr" | "a:sysClr" | "a:schemeClr" | "a:scrgbClr" | "a:hslClr"))
     else {
         return (None, 0.0);
     };
     let rgb = crate::read::drawing_color::color(c, theme);
-    // `a:alpha`: opacity in 1000ths of a percent.
-    let opacity = c.child("a:alpha").and_then(|a| a.attr("val")).and_then(int).map(|v| v.clamp(0, 100_000) as f32 / 1000.0).unwrap_or(100.0);
+    // `a:alpha`, `a:alphaMod` and `a:alphaOff`: opacity in 1000ths of a percent.
+    let mut opacity = c.child("a:alpha").and_then(|a| a.attr("val")).and_then(int).map(|v| v.clamp(0, 100_000) as f32 / 1000.0).unwrap_or(100.0);
+    if let Some(m) = c.child("a:alphaMod").and_then(|a| a.attr("val")).and_then(int) {
+        opacity *= m.max(0) as f32 / 100_000.0;
+    }
+    if let Some(o) = c.child("a:alphaOff").and_then(|a| a.attr("val")).and_then(int) {
+        opacity += o as f32 / 1000.0;
+    }
+    let opacity = opacity.clamp(0.0, 100.0);
     (rgb, 100.0 - opacity)
 }
 

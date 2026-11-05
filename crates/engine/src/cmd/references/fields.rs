@@ -79,20 +79,9 @@ fn unlocked_field_instr(o: &InlineObject) -> Option<&str> {
     }
 }
 
-fn apply_field_update(para: &mut Paragraph, k: usize, r: String, clear_dirty: bool) {
+fn range_field_result_span(para: &Paragraph, k: usize) -> Option<(usize, usize, usize)> {
     let offs = para.object_offsets();
-    match para.objects.get_mut(k) {
-        Some(InlineObject::Field { result, dirty, .. }) => {
-            *result = r;
-            if clear_dirty {
-                *dirty = false;
-            }
-            return;
-        }
-        Some(InlineObject::FieldStart { .. }) => {}
-        _ => return,
-    }
-    let Some(&start_off) = offs.get(k) else { return };
+    let &start_off = offs.get(k)?;
     let mut depth = 1usize;
     let mut end_idx = None;
     for (idx, obj) in para.objects.iter().enumerate().skip(k + 1) {
@@ -108,15 +97,32 @@ fn apply_field_update(para: &mut Paragraph, k: usize, r: String, clear_dirty: bo
             _ => {}
         }
     }
-    let Some(end_k) = end_idx else { return };
-    if end_k != k + 1 {
-        return;
-    }
-    let Some(&end_off) = offs.get(end_k) else { return };
+    let end_k = end_idx.filter(|&end_k| end_k == k + 1)?;
+    let &end_off = offs.get(end_k)?;
     let content_start = start_off + wordcraft_doc::para::OBJ.len_utf8();
     if content_start > end_off {
-        return;
+        return None;
     }
+    // Never overwrite a range field whose result holds tracked insertions or deletions.
+    if para.run_ranges().any(|(rng, p)| rng.end > content_start && rng.start < end_off && (p.ins.is_some() || p.del.is_some())) {
+        return None;
+    }
+    Some((start_off, content_start, end_off))
+}
+
+fn apply_field_update(para: &mut Paragraph, k: usize, r: String, clear_dirty: bool) {
+    match para.objects.get_mut(k) {
+        Some(InlineObject::Field { result, dirty, .. }) => {
+            *result = r;
+            if clear_dirty {
+                *dirty = false;
+            }
+            return;
+        }
+        Some(InlineObject::FieldStart { .. }) => {}
+        _ => return,
+    }
+    let Some((start_off, content_start, end_off)) = range_field_result_span(para, k) else { return };
     let mut props = para
         .run_ranges()
         .find(|(rng, p)| rng.end > content_start && rng.start < end_off && p.del.is_none())
@@ -319,7 +325,14 @@ fn apply_results(doc: &mut wordcraft_doc::Document, results: Vec<FieldResult>) -
 /// `results` less those its fields already show.
 fn changed(doc: &wordcraft_doc::Document, mut results: Vec<FieldResult>) -> Vec<FieldResult> {
     results.retain(|(story, path, k, r)| {
-        !matches!(doc.para(*story, path).and_then(|p| p.objects.get(*k)), Some(InlineObject::Field { result, .. }) if result == r)
+        let Some(p) = doc.para(*story, path) else { return false };
+        match p.objects.get(*k) {
+            Some(InlineObject::Field { result, .. }) => result != r,
+            Some(InlineObject::FieldStart { .. }) => {
+                range_field_result_span(p, *k).and_then(|(_, cs, eo)| p.text.get(cs..eo)).is_some_and(|cur| cur != r)
+            }
+            _ => false,
+        }
     });
     results
 }

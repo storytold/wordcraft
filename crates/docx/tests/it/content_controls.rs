@@ -378,3 +378,33 @@ fn field_result_rpr_change_and_table_revisions_round_trip() {
     assert!(xml.contains("<w:tblPrExChange "), "{xml}");
     assert!(xml.contains("<w:cellIns "), "{xml}");
 }
+
+#[test]
+fn range_toc_without_control_stays_unwrapped_and_section_break_toc_control_hands_over() {
+    let style = |s: &str, inner: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="{s}"/></w:pPr>{inner}</w:p>"#);
+    let begin = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#;
+    // A range TOC that was never in a content control (with FieldEnd in its own paragraph) must
+    // not gain a Table of Contents w:sdt on save.
+    let bare = format!(
+        "{}{}{}<w:p><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>{}",
+        style("TOCHeading", &t("Contents")),
+        style("TOC1", &format!("{begin}{}", t("Chapter One\t1"))),
+        style("TOC2", &t("Section\t2")),
+        p(&t("Chapter One")),
+    );
+    let d_bare = read(&package(&bare)).unwrap();
+    let xml_bare = document_xml(&write(&d_bare).unwrap());
+    assert_eq!(xml_bare.matches("<w:sdt>").count(), 0, "{xml_bare}");
+
+    // #3889: a Table of Contents control opening on an empty paragraph that ends a section above
+    // the entries hands its control over on read so Update Table reuses the section-break paragraph.
+    let sect_toc = format!(
+        r#"<w:p><w:pPr><w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:pPr></w:p>{}{}<w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#,
+        style("TOC1", &format!("{begin}{}", t("Chapter One\t1"))),
+        style("TOC2", &t("Section\t2")),
+    );
+    let pr = r#"<w:id w:val="-1234567"/><w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj>"#;
+    let d_sect = read(&package(&format!("{}{}", sdt(pr, &sect_toc), p(&t("Chapter One"))))).unwrap();
+    assert!(controls(&d_sect).is_empty());
+    assert!(d_sect.body[0].as_para().unwrap().section.is_some());
+}

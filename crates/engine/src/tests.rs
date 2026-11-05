@@ -12511,3 +12511,105 @@ fn page_down_extends_a_selection_that_ends_in_collapsed_outline_text() {
     assert!(s.sel.focus.path.0[0] > 6, "Page Down extends the selection a page on: {:?}", s.sel.focus);
     assert!(s.layout().caret(&s.sel.focus).is_some(), "to a place the outline shows");
 }
+
+#[test]
+fn range_field_update_and_tracked_changes_preserved_on_open() {
+    use wordcraft_doc::para::InlineObject;
+    use wordcraft_doc::props::CharProps;
+    use wordcraft_doc::{Revision, RevisionKind};
+
+    let mut p = wordcraft_doc::Paragraph::new();
+    p.insert_object(0, InlineObject::BookmarkStart { name: "bm".into() }, &CharProps::default()).unwrap();
+    p.insert_text(p.len(), "Updated", &CharProps::default()).unwrap();
+    p.insert_object(p.len(), InlineObject::BookmarkEnd { name: "bm".into() }, &CharProps::default()).unwrap();
+    p.insert_object(
+        p.len(),
+        InlineObject::FieldStart { instr: " REF bm ".into(), locked: false, dirty: true, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    p.insert_text(p.len(), "Stale", &CharProps::default()).unwrap();
+    p.insert_object(p.len(), InlineObject::FieldEnd, &CharProps::default()).unwrap();
+
+    let mut d = wordcraft_doc::Document::new();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let mut s = Session::new(d);
+    run(&mut s, "references.updateFields", json!({"all": true}));
+    let para = s.doc.body[0].as_para().unwrap();
+    assert_eq!(para.plain_text(), "UpdatedUpdated");
+    assert!(matches!(&para.objects[2], InlineObject::FieldStart { dirty: false, .. }));
+
+    // Range DATE field with tracked insertion and deletion in its result: refresh_date_fields on
+    // open (and fields.updateAll) must not wipe the tracked revisions.
+    let mut dp = wordcraft_doc::Paragraph::new();
+    dp.insert_object(
+        0,
+        InlineObject::FieldStart { instr: r#" DATE \@ "yyyy" "#.into(), locked: false, dirty: true, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    dp.insert_text(dp.len(), "2025", &CharProps { ins: Some(0), ..Default::default() }).unwrap();
+    dp.insert_text(dp.len(), "2024", &CharProps { del: Some(1), ..Default::default() }).unwrap();
+    dp.insert_object(dp.len(), InlineObject::FieldEnd, &CharProps::default()).unwrap();
+
+    let mut d2 = wordcraft_doc::Document::new();
+    d2.revisions.push(Revision { kind: RevisionKind::Insert, author: "Alice".into(), date: String::new(), move_name: None });
+    d2.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: String::new(), move_name: None });
+    d2.body = vec![wordcraft_doc::para_block(dp)];
+    crate::cmd::references::refresh_date_fields(&mut d2);
+    let mut s2 = Session::new(d2);
+    run(&mut s2, "references.updateFields", json!({"all": true}));
+    let para2 = s2.doc.body[0].as_para().unwrap();
+    assert!(para2.run_ranges().any(|(rng, p)| p.ins == Some(0) && &para2.text[rng] == "2025"));
+    assert!(para2.run_ranges().any(|(rng, p)| p.del == Some(1) && &para2.text[rng] == "2024"));
+}
+
+#[test]
+fn review_changes_and_accept_reject_cover_row_cell_ins_del_and_tbl_pr_ex_change() {
+    use wordcraft_doc::props::{PropChange, TableProps};
+    use wordcraft_doc::{Revision, RevisionKind, Table};
+
+    let mut d = wordcraft_doc::Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Format, author: "Alice".into(), date: String::new(), move_name: None });
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: String::new(), move_name: None });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Carol".into(), date: String::new(), move_name: None });
+
+    let mut t = Table::new(2, 2, 200.0);
+    t.rows[0].props.exceptions = Some(Box::new(TableProps {
+        width: Some(180.0),
+        fmt_change: Some(Box::new(PropChange { rev: 0, old: TableProps { width: Some(120.0), ..Default::default() } })),
+        ..Default::default()
+    }));
+    t.rows[0].cells[1].props.del = Some(1);
+    t.rows[1].props.ins = Some(2);
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+
+    assert!(crate::cmd::review::has_format_changes(&d));
+    assert!(crate::cmd::review::has_deletions(&d));
+
+    let mut s = Session::new(d);
+    let listed = s.run("review.changes", &json!({})).unwrap();
+    let arr = listed.as_array().unwrap();
+    assert_eq!(arr.len(), 3, "{arr:?}");
+    assert_eq!(arr[0]["kind"], "format");
+    assert_eq!(arr[1]["kind"], "delete");
+    assert_eq!(arr[2]["kind"], "insert");
+
+    // Reject row 0's tblPrExChange at (0, 0).
+    s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 0, 0]), off: 0 });
+    run(&mut s, "review.reject", json!({}));
+    assert!(!crate::cmd::review::has_format_changes(&s.doc));
+    let tbl = s.doc.body[0].as_table().unwrap();
+    assert_eq!(tbl.rows[0].props.exceptions.as_ref().and_then(|e| e.width), Some(120.0));
+
+    // Accept cell (0, 1)'s deletion -> removes cell 1 from row 0.
+    s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 1, 0]), off: 0 });
+    run(&mut s, "review.accept", json!({}));
+    assert!(!crate::cmd::review::has_deletions(&s.doc));
+    assert_eq!(s.doc.body[0].as_table().unwrap().rows[0].cells.len(), 1);
+
+    // Reject row 1's insertion -> removes row 1 from the table.
+    s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 1, 0, 0]), off: 0 });
+    run(&mut s, "review.reject", json!({}));
+    assert_eq!(s.doc.body[0].as_table().unwrap().rows.len(), 1);
+}
