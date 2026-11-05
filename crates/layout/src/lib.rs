@@ -43,6 +43,7 @@ pub use table::{autofit_widths, cell_margins, measure_table_columns};
 mod boxes;
 mod cache;
 mod ctx;
+mod float_before;
 mod floats;
 mod flow;
 mod headers;

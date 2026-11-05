@@ -1,6 +1,7 @@
 use super::boxes::{BoxInput, BoxLayout, Edges, joined, layout_box, push_para};
 use super::cache::has_page_number_fields;
 use super::ctx::Ctx;
+use super::float_before::PlacedFloat;
 use super::floats::{FloatAnchor, ObjFrame, ObjectPlacement, anchor_floats, body_wraps, continued_exclusions, place_objects};
 use super::notes::{DECOR_STORY, NoteBox, para_notes};
 use super::page::{PageBuilder, PageFrame, item_bottom};
@@ -13,8 +14,9 @@ use super::{
 use crate::WRAP_RELAYS;
 
 /// A closing mark before a continuous section takes no room after content. An otherwise empty
-/// section starting a new page retains its paragraph line.
-pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) {
+/// section starting a new page retains its paragraph line. Its floating objects that text wraps
+/// around, when it has any, are returned (see [`super::float_before`]).
+pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) -> Option<PlacedFloat> {
     if !pb.web && ctx.quiet_marks.binary_search(&block).is_ok() {
         let follows_section = block.checked_sub(1).and_then(|i| ctx.doc.body.get(i)).and_then(|b| b.as_para()).is_some_and(|p| p.section.is_some());
         let section = pb.sect_idx;
@@ -28,14 +30,13 @@ pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, blo
             && pb.at_top()
             && own_page
         {
-            place_para_in_flow(ctx, pb, p, block, body_top);
-            return;
+            return place_para_in_flow(ctx, pb, p, block, body_top);
         }
         // Its (empty) line stays where the text ended, even at the bottom of a full column.
         let (y, prev, bottom, content_bottom, at) = (pb.y, pb.prev.clone(), pb.bottom, pb.content_bottom, (pb.pages.len(), pb.col));
         let drawn = pb.page().map_or(0, |page| page.items.len());
         pb.bottom = f32::MAX / 4.0;
-        place_para_in_flow(ctx, pb, p, block, body_top);
+        let placed = place_para_in_flow(ctx, pb, p, block, body_top);
         pb.bottom = bottom;
         if (pb.pages.len(), pb.col) == at {
             (pb.y, pb.prev, pb.content_bottom) = (y, prev, content_bottom);
@@ -43,7 +44,7 @@ pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, blo
                 strip_mark(page, drawn, true);
             }
         }
-        return;
+        return placed;
     }
     if !pb.web && ctx.stacked_marks.binary_search(&block).is_ok() {
         // A run of empty continuous-section marks uses each remaining line, but never starts a
@@ -51,7 +52,7 @@ pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, blo
         let (y, prev, bottom, content_bottom, at) = (pb.y, pb.prev.clone(), pb.bottom, pb.content_bottom, (pb.pages.len(), pb.col));
         let drawn = pb.page().map_or(0, |page| page.items.len());
         pb.bottom = f32::MAX / 4.0;
-        place_para_in_flow(ctx, pb, p, block, body_top);
+        let placed = place_para_in_flow(ctx, pb, p, block, body_top);
         if pb.pages.len() == at.0 {
             pb.bottom = bottom;
         }
@@ -63,9 +64,9 @@ pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, blo
                 strip_mark(page, drawn, false);
             }
         }
-        return;
+        return placed;
     }
-    place_para_in_flow(ctx, pb, p, block, body_top);
+    place_para_in_flow(ctx, pb, p, block, body_top)
 }
 
 /// Remove the list label from a mark's lines; optionally keep its other drawing items.
@@ -151,10 +152,16 @@ struct Flow<'a> {
     label: Option<(String, Level)>,
     /// Where it was expected to start; floats anchored here are placed again if it starts elsewhere.
     guess: f32,
-    excl_mark: usize,
+    /// (`pages.len()`, `excl.len()`) when it started: the wrap areas kept (see [`anchor_floats`]).
+    excl_mark: (usize, usize),
     /// Where its automatic equation numbers start: each layout of it again counts from here.
     eq_start: u32,
     float_rects: HashMap<usize, Rect>,
+    /// The page the floating objects were placed on (by index).
+    float_page: usize,
+    /// The floats as its first piece placed them, when a later piece was laid out again for
+    /// another column: they stay there (with their page).
+    placed_first: Option<(usize, HashMap<usize, Rect>)>,
     pl: Arc<ParaLayout>,
     rel: Vec<para::Exclusion>,
     /// The page its fields were laid out for, and the width.
@@ -181,7 +188,7 @@ impl<'a> Flow<'a> {
         // the paragraph then starts somewhere else (another column or page, or contextual spacing
         // drops its space before), they are placed again there.
         let space_before = ctx.doc.styles.resolve_para(&p.props).space_before;
-        let excl_mark = pb.excl.len();
+        let excl_mark = (pb.pages.len(), pb.excl.len());
         let guess = pb.y + space_before;
         let label = ctx.next_label(p);
         let eq_start = ctx.eq_count;
@@ -197,6 +204,8 @@ impl<'a> Flow<'a> {
             excl_mark,
             eq_start,
             float_rects,
+            float_page: pb.pages.len().saturating_sub(1),
+            placed_first: None,
             pl,
             rel,
             laid_page: pb.number,
@@ -223,6 +232,7 @@ impl<'a> Flow<'a> {
             )
         });
         (self.float_rects, self.pl, self.rel) = (rects, pl, rel);
+        self.float_page = pb.pages.len().saturating_sub(1);
         (self.laid_page, self.laid_width) = (pb.number, pb.col_w());
     }
 
@@ -576,7 +586,9 @@ impl<'a> Flow<'a> {
             again(ctx, eq_start, |ctx| anchor_floats(ctx, pb, FloatAnchor { p, block, y0, before: 0.0, excl_mark, label, place: false }))
         });
         if let Some(k) = relaid.lines.iter().position(|l| l.start == resume) {
-            (self.float_rects, self.pl, self.rel) = (rects, relaid, relaid_rel);
+            let first = std::mem::replace(&mut self.float_rects, rects);
+            self.placed_first.get_or_insert((self.float_page, first));
+            (self.pl, self.rel) = (relaid, relaid_rel);
             (self.laid_page, self.laid_width) = (pb.number, pb.col_w());
             self.anchor_y = y0;
             self.l0 = k;
@@ -709,7 +721,7 @@ fn add_items(pb: &mut PageBuilder, behind: Vec<Placed>, items: Vec<Placed>) {
     }
 }
 
-fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) {
+fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) -> Option<PlacedFloat> {
     let mut f = Flow::new(ctx, pb, p, (block, body_top));
     let spot = |pb: &PageBuilder| (pb.pages.len(), pb.col);
     let placed_at = spot(pb);
@@ -750,6 +762,8 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         f.after_lines(ctx, pb, forced, mark_with_break);
     }
     f.finish(pb, rooms);
+    let (float_page, float_rects) = f.placed_first.take().unwrap_or((f.float_page, f.float_rects));
+    PlacedFloat::of_para(ctx, p, block, float_page, &float_rects)
 }
 
 /// Whether `range` of `p`'s text holds nothing but zero-width markers (bookmarks, field and
