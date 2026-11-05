@@ -373,6 +373,7 @@ fn write_text_flow(w: &mut W, p: &ParaProps) {
     toggle(w, "w:autoSpaceDE", p.auto_space_de);
     toggle(w, "w:autoSpaceDN", p.auto_space_dn);
     toggle(w, "w:bidi", p.bidi);
+    toggle(w, "w:adjustRightInd", p.adjust_right_indent);
     toggle(w, "w:snapToGrid", p.snap_to_grid);
 }
 
