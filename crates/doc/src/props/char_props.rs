@@ -614,6 +614,17 @@ impl CharProps {
     }
     /// Just the formatting: without the link, revision marks and tracked formatting change.
     pub fn formatting(&self) -> CharProps {
-        CharProps { break_clear: None, link: None, ins: None, del: None, fmt_change: None, ..self.clone() }
+        CharProps { link: None, ins: None, del: None, fmt_change: None, ..self.clone() }
+    }
+}
+
+#[cfg(test)]
+mod formatting_tests {
+    use super::{BreakClear, CharProps};
+
+    #[test]
+    fn formatting_keeps_break_clear() {
+        let props = CharProps { break_clear: Some(BreakClear::Left), ..Default::default() };
+        assert_eq!(props.formatting().break_clear, Some(BreakClear::Left));
     }
 }
