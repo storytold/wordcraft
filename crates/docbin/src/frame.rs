@@ -194,7 +194,7 @@ pub(crate) fn decode(raw_styles: &[crate::stsh::RawStyle], istd: u16, direct: &[
 pub(crate) fn extract(paras: Vec<ParaOut>, sects: &[Section], sheet: &StyleSheet, doc: &mut Document) -> Vec<ParaOut> {
     // Effective frame per paragraph, tables stamped whole.
     let mut frames: Vec<Option<FrameInfo>> = paras.iter().map(|p| p.frame.clone()).collect();
-    let in_table = |p: &ParaOut| p.row.in_table || p.row.ttp || p.row.cell_mark;
+    let in_table = |p: &ParaOut| p.row.as_ref().is_some_and(|r| r.in_table || r.ttp || r.cell_mark);
     let mut i = 0;
     while i < paras.len() {
         if !in_table(&paras[i]) {
@@ -255,7 +255,7 @@ fn flush_group(
         out.append(group);
         return;
     };
-    let in_table = |p: &ParaOut| p.row.in_table || p.row.ttp || p.row.cell_mark;
+    let in_table = |p: &ParaOut| p.row.as_ref().is_some_and(|r| r.in_table || r.ttp || r.cell_mark);
     if group.is_empty() || doc.parts.len() >= crate::MAX_PARTS {
         out.append(group);
         return;
@@ -356,7 +356,7 @@ fn flush_group(
     anchor.mark.size = Some(1.0);
     anchor.objects = objects;
     anchor.section = section;
-    out.push(ParaOut { para: anchor, end_cp, row: table::RowInfo::default(), frame: None });
+    out.push(ParaOut { para: anchor, end_cp, row: None, frame: None });
 }
 
 /// The width of the text column of the section covering CP `end_cp` (points). Sections are

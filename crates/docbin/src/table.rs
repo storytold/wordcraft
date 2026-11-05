@@ -88,6 +88,11 @@ pub(crate) struct RowInfo {
 
 /// Read the table context out of a paragraph mark's PAPX grpprl.
 impl RowInfo {
+    /// Does the mark belong to a table: inside one, ending a row, or ending a cell?
+    pub(crate) fn is_table(&self) -> bool {
+        self.in_table || self.ttp || self.cell_mark
+    }
+
     /// The row height from `sprmTDyaRowHeight`, for tests.
     #[cfg(test)]
     pub(crate) fn height(&self) -> Option<f32> {
@@ -274,8 +279,8 @@ pub(crate) struct ParaOut {
     pub(crate) para: Paragraph,
     /// CP just past the terminating mark.
     pub(crate) end_cp: u32,
-    /// Table context from the mark's PAPX (empty default = not in a table).
-    pub(crate) row: RowInfo,
+    /// Table context from the mark's PAPX; `None` for a paragraph outside a table.
+    pub(crate) row: Option<Box<RowInfo>>,
     /// The paragraph's text-frame properties ([`crate::frame`]), when it is framed.
     pub(crate) frame: Option<crate::frame::FrameInfo>,
 }
@@ -413,9 +418,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
     }
 
     for p in paras {
-        let mut info = p.row;
-        let is_table = info.in_table || info.ttp || info.cell_mark;
-        if !is_table {
+        let Some(mut info) = p.row else {
             if open {
                 flush_table(&mut out, &mut rows, &mut row_edges, &mut cells, &mut cell, &props, depth_seen > 1);
                 // Table props are per-table (first row carrying the sprm wins within the
@@ -429,7 +432,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             }
             out.push(para_block(p.para));
             continue;
-        }
+        };
         if !open {
             open = true;
         }
