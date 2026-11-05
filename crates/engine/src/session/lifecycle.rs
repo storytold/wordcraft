@@ -75,6 +75,8 @@ impl Session {
             merge,
             math,
             password,
+            macros_enabled,
+            location_label,
             #[cfg(not(target_arch = "wasm32"))]
             recovery_slot,
             also_selected,
@@ -131,6 +133,8 @@ impl Session {
             ime_state_exhausted: false,
             pending_ime_application_change: false,
             ime_origin: false,
+            depth: 0,
+            collab: Default::default(),
             cache,
             layout,
             typing,
@@ -156,6 +160,8 @@ impl Session {
             editing_lang: None,
             read_aloud: Default::default(),
             password,
+            macros_enabled,
+            location_label,
             #[cfg(not(target_arch = "wasm32"))]
             recovery: None,
             #[cfg(not(target_arch = "wasm32"))]

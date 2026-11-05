@@ -59,6 +59,15 @@ pub struct Prefs {
     /// in Word). A damaged saved value reads as the defaults.
     #[serde(deserialize_with = "crate::cmd::tools::lenient_autocorrect")]
     pub autocorrect: crate::cmd::tools::AutoCorrectPrefs,
+    /// Add-ins the user turned off (File › Options › Add-ins): listed, but not run.
+    pub disabled_plugins: Vec<String>,
+    /// Which documents' macros may run: `disable`, `prompt` (once enabled for the document) or
+    /// `enable` (Developer › Macro Security).
+    pub macro_security: String,
+    /// Live sessions: this person's stable id (made on first use) and colour (`#RRGGBB`); their
+    /// name is the author name.
+    pub collab_user_id: String,
+    pub collab_color: String,
 }
 
 impl Default for Prefs {
@@ -84,6 +93,10 @@ impl Default for Prefs {
             detect_language: true,
             default_language: None,
             autocorrect: Default::default(),
+            disabled_plugins: Vec::new(),
+            macro_security: "prompt".into(),
+            collab_user_id: String::new(),
+            collab_color: String::new(),
         }
     }
 }

@@ -20,6 +20,11 @@ use crate::CmdError;
 /// another document, even across sessions.
 static NEXT_DOCUMENT_ID: AtomicU64 = AtomicU64::new(1);
 
+/// A document's id as add-ins see it (plugin protocol 2.2): `doc-3`.
+pub fn plugin_document_id(id: u64) -> String {
+    format!("doc-{id}")
+}
+
 pub(super) fn next_document_id() -> u64 {
     NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed)
 }
@@ -77,6 +82,8 @@ pub struct DocState {
     pub(super) merge: crate::cmd::mailings::MergeState,
     pub(super) math: Option<MathEdit>,
     pub(super) password: Option<crate::io::Password>,
+    pub(super) macros_enabled: bool,
+    pub(super) location_label: Option<String>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) recovery_slot: crate::recovery::Slot,
     pub(super) also_selected: Vec<Pos>,
@@ -131,6 +138,8 @@ impl DocState {
             merge: Default::default(),
             math: None,
             password: None,
+            macros_enabled: false,
+            location_label: None,
             #[cfg(not(target_arch = "wasm32"))]
             recovery_slot: Default::default(),
             also_selected: Vec::new(),
@@ -231,6 +240,8 @@ impl Session {
             merge: _,
             math: _,
             password: _,
+            macros_enabled: _,
+            location_label: _,
             #[cfg(not(target_arch = "wasm32"))]
                 recovery_slot: _,
             also_selected: _,
@@ -239,7 +250,10 @@ impl Session {
             widened: _,
             edit_marks: _,
             go_back_step: _,
-            // Shared by every open document.
+            // Shared by every open document. A live session is about one document: activating
+            // another ends it (`collab::after_command`).
+            collab: _,
+            depth: _,
             user_dict_path: _,
             clipboard: _,
             clipboard_text: _,
@@ -320,6 +334,8 @@ impl Session {
             merge,
             math,
             password,
+            macros_enabled,
+            location_label,
             #[cfg(not(target_arch = "wasm32"))]
             recovery_slot,
             also_selected,
@@ -367,6 +383,8 @@ impl Session {
         swap(&mut self.merge, merge);
         swap(&mut self.math, math);
         swap(&mut self.password, password);
+        swap(&mut self.macros_enabled, macros_enabled);
+        swap(&mut self.location_label, location_label);
         #[cfg(not(target_arch = "wasm32"))]
         swap(&mut self.recovery_slot, recovery_slot);
         swap(&mut self.also_selected, also_selected);
@@ -517,10 +535,19 @@ impl Session {
     /// active document; what a window does then is the front end's choice. An id that isn't
     /// open is an error.
     pub fn close_document(&mut self, id: u64) -> Result<(), CmdError> {
+        // Add-ins that listen hear that the document's file closed (protocol 1.2's documentClosed,
+        // with the document's own id, 2.2).
+        let closed = self.documents().into_iter().find(|d| d.id == id).and_then(|d| d.path);
+        let notify = |path: Option<PathBuf>| {
+            if let Some(path) = path {
+                crate::cmd::plugins::notify(wordcraft_plugin::DocumentEvent::Closed, &path, &plugin_document_id(id));
+            }
+        };
         if id != self.document_id {
             if !self.remove_parked(id) {
                 return Err(unknown(id));
             }
+            notify(closed);
             return Ok(());
         }
         let at = self.order.iter().position(|d| *d == id);
@@ -543,6 +570,7 @@ impl Session {
             }
         }
         self.stop_reading_elsewhere();
+        notify(closed);
         Ok(())
     }
 

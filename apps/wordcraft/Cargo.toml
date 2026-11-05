@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 wordcraft-doc = { workspace = true }
 wordcraft-engine = { workspace = true }
+wordcraft-plugin = { workspace = true }
 wordcraft-proof = { workspace = true }
 # Fonts the user added (#582) load from the settings folder at start-up.
 wordcraft-fonts = { workspace = true }
@@ -48,6 +49,11 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 # Closing the window must quit through NSApplication rather than by dropping the NSWindow
 # inside the AppKit run loop (see `schedule_macos_terminate`).
 dispatch2 = "0.3"
+
+# Office add-ins' task panes (`office_web.rs`): the system web view (WKWebView, WebView2). Linux
+# and FreeBSD need WebKitGTK 4.1 for it, which the packages don't carry yet.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+wry = { version = "=0.57.0", default-features = false }
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 winit = { version = "0.30", default-features = false, features = ["x11"] }

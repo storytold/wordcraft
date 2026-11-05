@@ -16,6 +16,8 @@ impl Session {
         self.doc = doc;
         self.doc.ensure_nonempty();
         self.password = None;
+        self.macros_enabled = false;
+        self.location_label = None;
         self.file_name = None;
         // The old document's equation is gone: its editing session cannot carry over.
         self.math = None;
@@ -149,6 +151,13 @@ impl Session {
             math_normal_text: _,
             // The save password, like the file path: not an edit to the document.
             password: _,
+            // The user's Enable Content: a decision about the document, not an edit to it.
+            macros_enabled: _,
+            // Like the file path: where the document is, not part of it.
+            location_label: _,
+            // A live session is where the document is shared, not part of it.
+            collab: _,
+            depth: _,
             #[cfg(not(target_arch = "wasm32"))]
                 recovery: _,
             #[cfg(not(target_arch = "wasm32"))]
@@ -207,7 +216,9 @@ impl Session {
         }
         self.undo_evicted = evicted;
         self.autocap = None;
+        let chat = self.doc.chat.clone();
         self.doc = doc;
+        self.doc.chat = chat;
         self.sel = sel;
         self.also_selected.clear();
         self.history.truncate(history_len);

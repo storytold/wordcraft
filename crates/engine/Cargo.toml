@@ -23,6 +23,8 @@ wordcraft-render = { workspace = true }
 wordcraft-proof = { workspace = true }
 wordcraft-docx = { workspace = true }
 wordcraft-docbin = { workspace = true }
+wordcraft-plugin = { workspace = true }
+wordcraft-collab = { workspace = true }
 wordcraft-pdf = { workspace = true }
 wordcraft-formats = { workspace = true }
 serde = { workspace = true }
@@ -55,3 +57,33 @@ libc = { workspace = true }
 encoding_rs = { workspace = true }
 zip = { workspace = true }
 cfb = { workspace = true }
+
+# Runs without libtest: the test binary doubles as the plugin process it starts.
+[[test]]
+name = "plugins"
+harness = false
+
+# The same: the test binary is also the macro add-in its ribbon buttons call.
+[[test]]
+name = "ribbon_buttons"
+harness = false
+
+# Runs without libtest: the test binary doubles as the co-editing transport it starts.
+[[test]]
+name = "collab_push"
+harness = false
+
+# Runs without libtest: the test binary doubles as the two WordCraft peers it starts.
+[[test]]
+name = "collab_loopback"
+harness = false
+
+# Runs without libtest: the test binary doubles as the add-ins whose requirements it checks.
+[[test]]
+name = "plugin_requires"
+harness = false
+
+# Runs without libtest: the test binary doubles as the protocol 2.2 add-in it starts.
+[[test]]
+name = "plugin_protocol_22"
+harness = false

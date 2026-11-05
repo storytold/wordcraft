@@ -4,11 +4,13 @@ pub mod accessibility;
 pub mod canvas;
 pub mod caret;
 pub mod chart;
+pub mod chat;
 pub mod citations;
 pub mod column;
 pub mod connectors;
 pub mod controls;
 pub mod design;
+pub mod developer_vba;
 pub mod draw;
 pub mod edit;
 pub mod equation;
@@ -26,6 +28,7 @@ pub mod lists;
 pub mod mailings;
 pub mod moves;
 pub mod objects;
+pub mod office;
 pub mod options;
 pub mod outline;
 pub mod packs;
@@ -33,6 +36,7 @@ pub mod page;
 pub mod para;
 pub mod paste;
 pub mod phonetic;
+pub mod plugins;
 pub mod protect;
 pub mod references;
 pub mod review;
@@ -73,6 +77,7 @@ pub fn registry() -> Registry {
     v.extend(lists::specs());
     v.extend(inspector::specs());
     v.extend(view::specs());
+    v.extend(chat::specs());
     v.extend(outline::specs());
     v.extend(insert::specs());
     v.extend(equation::specs());
@@ -106,6 +111,10 @@ pub fn registry() -> Registry {
     v.extend(protect::specs());
     v.extend(speech::specs());
     v.extend(controls::specs());
+    v.extend(plugins::specs());
+    v.extend(office::specs());
+    v.extend(developer_vba::specs());
+    v.extend(crate::collab::specs());
     Registry::new(v)
 }
 
@@ -540,6 +549,19 @@ pub fn now_unix() -> u64 {
         let ms = js_sys::Date::now();
         // Clamp a NaN or pre-epoch clock to 0 rather than fail.
         if ms.is_finite() && ms > 0.0 { (ms / 1000.0) as u64 } else { 0 }
+    }
+}
+
+/// Milliseconds since the Unix epoch: the system clock, or the browser's on the web.
+pub fn now_ms() -> i64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| i64::try_from(d.as_millis()).unwrap_or(0)).unwrap_or(0)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let ms = js_sys::Date::now();
+        if ms.is_finite() && ms > 0.0 { ms as i64 } else { 0 }
     }
 }
 

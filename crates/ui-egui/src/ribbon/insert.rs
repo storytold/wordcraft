@@ -101,6 +101,9 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
             small(ui, app, "chart", Some("Chart"), "Chart", crate::widgets::ButtonAction::new("insert.chart", json!({}), false));
         });
     });
+    group(ui, "Add-ins", None, app, |ui, app| {
+        big(ui, app, "addins", "Get\nAdd-ins", "ui.dialog", json!({"name": "addIns"}), false);
+    });
     group(ui, "Links", None, app, |ui, app| {
         stack(ui, |ui| {
             small(ui, app, "link", Some("Link"), "Link", crate::widgets::ButtonAction::new("ui.dialog", json!({"name": "link"}), false));

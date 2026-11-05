@@ -1,0 +1,25 @@
+[package]
+name = "wordcraft-collab"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WordCraft co-editing (plugin protocol 2): the document as a Yjs document (schema 1), end-to-end encryption, awareness"
+
+[lints]
+workspace = true
+
+[dependencies]
+wordcraft-doc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+base64 = { workspace = true }
+yrs = { version = "0.28", features = ["sync"] }
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+getrandom = { workspace = true }
+
+# The browser's `crypto.getRandomValues`: the web build joins rooms too (craft-live).
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { workspace = true, features = ["wasm_js"] }

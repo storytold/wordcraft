@@ -35,6 +35,8 @@ impl Class {
 pub const TABLE: &[(&str, Class)] = &[
     ("geom", Class::Layer(0)),
     ("control-key", Class::Standalone),
+    // Office.js for add-ins' task panes (wasm, loaded by the desktop app's web views).
+    ("office-js", Class::Standalone),
     ("doc", Class::Layer(1)),
     ("fonts", Class::Layer(1)),
     ("metafile", Class::Layer(1)),
@@ -42,8 +44,11 @@ pub const TABLE: &[(&str, Class)] = &[
     ("docx", Class::Layer(2)),
     ("docbin", Class::Layer(2)),
     ("formats", Class::Layer(2)),
+    // Co-editing (plugin protocol 2): the document as a Yjs document; no I/O, wasm-safe.
+    ("collab", Class::Layer(2)),
     ("render", Class::Layer(3)),
     ("pdf", Class::Layer(3)),
+    ("plugin", Class::Layer(3)),
     ("engine", Class::Layer(4)),
     ("mcp", Class::Layer(5)),
     ("zotero", Class::Layer(5)),

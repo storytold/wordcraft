@@ -38,6 +38,46 @@ impl Session {
         self.join_anchor = true;
     }
 
+    /// Runs `f` (which runs commands of its own) as one undo step named `label`: the steps the
+    /// commands inside make are folded into one, recorded only if the document changed. If `f`
+    /// fails, the document, the selection and the undo history go back to how they were.
+    pub fn one_step<T, E>(&mut self, label: &str, f: impl FnOnce(&mut Session) -> Result<T, E>) -> Result<T, E> {
+        let before = (self.doc.clone(), self.sel.clone(), self.history.clone(), self.redo.clone(), self.typing_open, self.undo_evicted);
+        let (rev, dirty) = (self.rev, self.dirty);
+        self.typing_open = false;
+        let r = f(self);
+        let (doc, sel, history, redo, typing, evicted) = before;
+        match &r {
+            Ok(_) => {
+                let changed = self.rev != rev;
+                self.history = history;
+                self.undo_evicted = evicted;
+                self.typing_open = false;
+                if changed {
+                    self.redo.clear();
+                    self.push_undo(label, doc, sel);
+                } else {
+                    self.redo = redo;
+                    self.typing_open = typing;
+                }
+            }
+            Err(_) => {
+                // The chat isn't rolled back (its changes may have been shared already).
+                let chat = self.doc.chat.clone();
+                self.doc = doc;
+                self.doc.chat = chat;
+                self.sel = sel;
+                self.history = history;
+                self.redo = redo;
+                self.typing_open = typing;
+                self.undo_evicted = evicted;
+                // Caches follow the document back; it's as saved as it was.
+                self.rev = self.rev.wrapping_add(1);
+                self.dirty = dirty;
+            }
+        }
+        r
+    }
     /// Make the next mutating command part of the previous undo step instead of a new one, so a
     /// drag that runs a command every frame is a single Undo. Call it on every frame of the drag
     /// except the first; it is consumed by the next `run`.
@@ -114,10 +154,16 @@ impl Session {
     }
 
     pub fn can_undo(&self) -> bool {
+        if let Some(can) = crate::collab::room_undo(self, false) {
+            return can;
+        }
         !self.history.is_empty()
     }
 
     pub fn can_redo(&self) -> bool {
+        if let Some(can) = crate::collab::room_undo(self, true) {
+            return can;
+        }
         !self.redo.is_empty()
     }
 
@@ -191,6 +237,8 @@ impl Session {
             pending: std::mem::replace(&mut self.pending, u.pending),
             column: std::mem::replace(&mut self.column, u.column),
         };
+        // The chat isn't part of undo: it stays as it is now.
+        self.doc.chat = cur.doc.chat.clone();
         self.redo.push(Arc::new(cur));
         // Undo swaps the whole body back: a composition belongs to the text it showed.
         self.note_body_replaced();
@@ -217,6 +265,7 @@ impl Session {
             pending: std::mem::replace(&mut self.pending, u.pending),
             column: std::mem::replace(&mut self.column, u.column),
         };
+        self.doc.chat = cur.doc.chat.clone();
         self.history.push(Arc::new(cur));
         self.note_body_replaced();
         self.refresh_math_session();

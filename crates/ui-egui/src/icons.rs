@@ -73,23 +73,38 @@ impl Pen<'_> {
 
 /// Paint icon `name` into `r`. `c` is the line colour; the accent comes from the theme.
 pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
+    draw(p, r, name, c, accent);
+}
+
+/// [`paint`], but a name the set doesn't have gets icon `fallback` instead of a letter tile (the
+/// items of an add-in's dialog: a generic file icon).
+pub fn paint_or(p: &Painter, r: Rect, name: &str, fallback: &str, c: Color32, accent: Color32) {
+    let mut probe = p.clone();
+    probe.set_invisible();
+    let known = draw(&probe, r, name, c, accent);
+    paint(p, r, if known { name } else { fallback }, c, accent);
+}
+
+/// Paints icon `name`; false when the set has no such icon and the letter tile was drawn.
+fn draw(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) -> bool {
     let pen = Pen { p, r, c, a: accent, w: 1.25 };
     if let Some(kind) = name.strip_prefix("shape.")
         && shape(&pen, kind)
     {
-        return;
+        return true;
     }
     if paint_clipboard_to_insert(&pen, name)
         || paint_draw_to_review(&pen, name)
         || paint_view_and_tables(&pen, name)
         || paint_file_and_tools(&pen, name)
     {
-        return;
+        return true;
     }
     // Fallback: a rounded tile with the first letter.
     p.rect_stroke(r.shrink(r.width() * 0.12), 3.0, Stroke::new(1.0, c), egui::StrokeKind::Middle);
     let ch = name.chars().next().map(|x| x.to_ascii_uppercase().to_string()).unwrap_or_default();
     p.text(r.center(), egui::Align2::CENTER_CENTER, ch, FontId::proportional(r.height() * 0.45), accent);
+    false
 }
 
 /// Icons of one section of the set; false when `name` is not one of them.
@@ -1258,6 +1273,11 @@ fn paint_view_and_tables(pen: &Pen, name: &str) -> bool {
             pen.line(&[(10.0, 3.0), (10.0, 12.0)]);
             pen.line(&[(6.5, 6.5), (10.0, 3.0), (13.5, 6.5)]);
             pen.line(&[(5.0, 9.0), (3.5, 9.0), (3.5, 17.0), (16.5, 17.0), (16.5, 9.0), (15.0, 9.0)]);
+        }
+        // Two speech bubbles: the document chat.
+        "chat" => {
+            pen.closed(&[(2.5, 3.0), (13.0, 3.0), (13.0, 10.5), (7.0, 10.5), (4.5, 13.0), (4.5, 10.5), (2.5, 10.5)], c);
+            pen.line_c(&[(15.0, 7.0), (17.5, 7.0), (17.5, 14.0), (15.5, 14.0), (15.5, 16.5), (13.0, 14.0), (8.5, 14.0), (8.5, 12.5)], a);
         }
         "user" => {
             pen.fcircle(10.0, 7.0, 3.5, a);

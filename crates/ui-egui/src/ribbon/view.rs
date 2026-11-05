@@ -43,6 +43,11 @@ pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
             if ui.checkbox(&mut w, tl!("Hide White Space")).changed() {
                 let _ = app.run("view.hideWhiteSpace", json!({"value": w}));
             }
+            // The document chat's panel (also from the title bar's chat button).
+            let mut c = v.chat_pane;
+            if ui.checkbox(&mut c, tl!("Chat")).changed() {
+                let _ = app.run("view.chat", json!({"value": c}));
+            }
         });
     });
     group(ui, "Zoom", None, app, |ui, app| {

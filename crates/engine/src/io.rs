@@ -3,6 +3,8 @@
 use wordcraft_doc::Document;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod rooms;
+#[cfg(not(target_arch = "wasm32"))]
 mod safe_save;
 
 /// Formats WordCraft opens.
@@ -45,6 +47,20 @@ const OLE_SIG: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 fn ext_of(name: &str) -> String {
     let file = name.rsplit(['/', '\\']).next().unwrap_or(name);
     file.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()).unwrap_or_default()
+}
+
+/// Where a document with macros goes instead of `path`: a .docx can't hold them, so it becomes a
+/// .docm (a .dotx template, a .dotm), Word's macro-enabled formats. `None` when `path` is fine.
+pub fn macro_enabled_path(doc: &wordcraft_doc::Document, path: &std::path::Path) -> Option<std::path::PathBuf> {
+    if !wordcraft_docx::has_macros(doc) {
+        return None;
+    }
+    let ext = path.extension().and_then(|e| e.to_str())?;
+    let flavor = wordcraft_docx::Flavor::from_ext(ext).filter(|f| !f.macros())?;
+    let to = flavor.with_macros().1;
+    // The same case as the name had (NOTES.DOCX → NOTES.DOCM).
+    let to = if ext.chars().all(|c| c.is_ascii_uppercase()) { to.to_ascii_uppercase() } else { to.to_string() };
+    Some(path.with_extension(to))
 }
 
 /// Is `ext` one of Word's package formats (.docx/.docm/.dotx/.dotm), which save without loss?
@@ -608,6 +624,19 @@ impl LocalImages {
         crate::file_access::check_read(&path.to_string_lossy()).ok()?;
         path.starts_with(dir).then_some(path)
     }
+}
+
+/// What is at `path`: `Some(true)` a regular file, `Some(false)` something else (a folder), `None`
+/// nothing (or nothing readable). For checks before opening, such as an add-in's `open`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn is_regular_file(path: &std::path::Path) -> Option<bool> {
+    std::fs::metadata(path).ok().map(|m| m.is_file())
+}
+
+/// The browser has no local files.
+#[cfg(target_arch = "wasm32")]
+pub fn is_regular_file(_path: &std::path::Path) -> Option<bool> {
+    None
 }
 
 /// Up to `limit + 1` bytes of the regular file at `path` (more than `limit` means too large), or

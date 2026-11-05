@@ -1,0 +1,33 @@
+[package]
+name = "wordcraft-plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WordCraft plugin host: out-of-process plugins over JSON-RPC (commands, ribbon and menu items, macros, Office add-in manifests), installed from folders or GitHub"
+
+[lints]
+workspace = true
+
+[dependencies]
+wordcraft-collab = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+zip = { workspace = true }
+quick-xml = { workspace = true }
+
+# Installing plugins from GitHub (desktop and CLI; the web build can't run plugins).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = { version = "2.12.1", default-features = false, features = ["tls"] }
+
+[dev-dependencies]
+# Checks that the host blocks Office add-ins against the requirement sets WordCraft's Office.js
+# reports (a dev-dependency only: the standalone task-pane library depends on nothing here).
+wordcraft-office-js = { path = "../office-js" }
+
+# A reference plugin written in Rust; the tests drive it as a real child process.
+[[bin]]
+name = "wordcraft-example-plugin"
+path = "src/bin/example_plugin.rs"
+test = false
+doc = false

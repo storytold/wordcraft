@@ -259,6 +259,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
             PartRels::default(),
         );
     }
+    push_modelled_parts(doc, &mut entries, &mut overrides, &mut root);
     entries.insert(0, ("_rels/.rels".into(), root.xml()));
 
     // Content types.
@@ -446,6 +447,30 @@ fn write_comments(
         rels.add(rt::COMMENTS_EX, "commentsExtended.xml", false);
         push_part(entries, overrides, "word/commentsExtended.xml", w.into_bytes(), &format!("{CT_WML}commentsExtended+xml"), PartRels::default());
         write_comment_ids(doc, comment_paras, entries, overrides, rels);
+    }
+}
+
+/// The parts written from the model rather than kept: the document's ribbon and its chat.
+fn push_modelled_parts(doc: &Document, entries: &mut Vec<(String, Vec<u8>)>, overrides: &mut Vec<(String, String)>, root: &mut PartRels) {
+    // The document's ribbon, unless the file kept a richer one of its own (both would clash).
+    if let Some(r) = doc.ribbon.as_ref().filter(|r| !r.is_empty() && !crate::custom_ui::has_kept_ribbon(doc)) {
+        let part = crate::custom_ui::PART_CUSTOM_UI14;
+        if entries.iter().any(|(n, _)| n.eq_ignore_ascii_case(part)) {
+            log::warn!("docx: {part} is taken by a kept part; the document's ribbon is left out");
+        } else {
+            push_part(entries, overrides, part, crate::custom_ui::write(r).into_bytes(), "application/xml", PartRels::default());
+            root.add(crate::custom_ui::REL_CUSTOM_UI14, part, false);
+        }
+    }
+    // The document chat (craft-collab `docs/chat.md`); an empty chat writes no part.
+    if !doc.chat.is_empty() {
+        let part = wordcraft_doc::chat::PART_NAME;
+        if entries.iter().any(|(n, _)| n.eq_ignore_ascii_case(part)) {
+            log::warn!("docx: {part} is taken by a kept part; the chat is left out");
+        } else {
+            root.add(wordcraft_doc::chat::RELATIONSHIP, part, false);
+            push_part(entries, overrides, part, doc.chat.to_part_bytes(), wordcraft_doc::chat::CONTENT_TYPE, PartRels::default());
+        }
     }
 }
 

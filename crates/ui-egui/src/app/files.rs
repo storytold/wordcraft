@@ -184,6 +184,21 @@ impl WordApp {
         saved
     }
 
+    /// The app is quitting: add-ins that listen hear that the open documents close (protocol
+    /// 1.2's documentClosed), waiting at most 5 s for them. Once; best effort.
+    pub fn closing(&mut self) {
+        if std::mem::replace(&mut self.closing_told, true) {
+            return;
+        }
+        let paths: Vec<_> = self.session.documents().into_iter().filter_map(|d| d.path.map(|p| (p, d.id))).collect();
+        for (path, id) in &paths {
+            wordcraft_engine::cmd::plugins::notify(wordcraft_plugin::DocumentEvent::Closed, path, &wordcraft_engine::plugin_document_id(*id));
+        }
+        if !paths.is_empty() {
+            wordcraft_plugin::wait_for_events(wordcraft_plugin::DocumentEvent::Closed.timeout());
+        }
+    }
+
     /// The window's close button (or the system) asked to quit. Returns true to let the window
     /// close; with unsaved changes it asks first and returns false.
     pub fn close_requested(&mut self) -> bool {
@@ -412,7 +427,8 @@ impl WordApp {
     pub(crate) fn autosave_tick(&mut self, now: f64) {
         if self.autosaves() && self.session.dirty && now - self.last_autosave > 2500.0 && now - self.canvas.caret_visible_since > 1500.0 {
             self.last_autosave = now;
-            if let Err(e) = self.session.run("file.save", &json!({})) {
+            // AutoSave's writes aren't saves add-ins hear of (`autosave`).
+            if let Err(e) = self.session.run("file.save", &json!({"autosave": true})) {
                 log::warn!("AutoSave failed: {e}");
                 self.autosave_path = None;
                 self.status(i18n::fmt(tl!("AutoSave failed: {error}. Save the document to turn AutoSave back on."), &[("error", &e.to_string())]));

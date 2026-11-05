@@ -12,7 +12,7 @@ use crate::{CmdError, ImeEditOutcome, Registry};
 
 mod documents;
 mod views;
-pub use documents::{DocInfo, DocState};
+pub use documents::{DocInfo, DocState, plugin_document_id};
 use documents::{document_id_mark, next_document_id, untitled_name};
 pub use views::WindowView;
 mod history;
@@ -207,6 +207,16 @@ pub struct Session {
     /// Password, `file.encrypt`); `None` saves them unencrypted. Kept from a password-protected
     /// file that was opened, cleared when the document is replaced.
     pub password: Option<crate::io::Password>,
+    /// The user let this document's macros run (Enable Content), until another document opens.
+    pub macros_enabled: bool,
+    /// Where the document came from, in words, when an add-in opened it (`file.open`'s `label`,
+    /// protocol 1.2: "Nextcloud · Documents/Budget.docx"); shown as its location.
+    pub location_label: Option<String>,
+    /// Live sessions (plugin protocol 2): this document's room, if it is shared.
+    pub collab: crate::collab::Collab,
+    /// Commands running inside commands (a plugin command's steps): a live session shares the
+    /// outermost one's effect as one change.
+    pub(crate) depth: u32,
     /// The recovery worker every open document's copy is kept through (desktop hosts only).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) recovery: Option<crate::recovery::Recovery>,

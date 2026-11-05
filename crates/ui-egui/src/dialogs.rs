@@ -34,7 +34,9 @@ use bookmarks::bookmark_at_caret;
 #[cfg(test)]
 use bookmarks::bookmark_names;
 pub use chrome::show;
-pub(crate) use chrome::{block_behind, buttons, cancel_key_pressed, color_menu, forget_nudge, ok_cancel_responses, release_keyboard};
+pub(crate) use chrome::{
+    block_behind, buttons, cancel_key_pressed, color_menu, count_dialog_frame, forget_nudge, ok_cancel_responses, place_dialog, release_keyboard,
+};
 pub use find::{FindExtra, FindTab, GoToWhat};
 #[cfg(test)]
 use find::{command_matches, goto_page, swallow_shortcut_text};
@@ -443,6 +445,8 @@ pub enum Dialog {
     },
     /// Compare / Combine Documents and AutoCorrect Options ([`crate::dialogs_review`], #412).
     Review(Box<crate::dialogs_review::ReviewDialog>),
+    /// Developer › Code: Macros, Visual Basic, Macro Security ([`crate::dialogs_developer`]).
+    Developer(Box<crate::dialogs_developer::DevDialog>),
     /// Tools › Customize Keyboard (#368).
     CustomizeKeyboard {
         form: Box<crate::dialogs_keyboard::KeyboardForm>,
@@ -479,6 +483,13 @@ pub enum Dialog {
     /// File › Info › Properties › Advanced Properties › Custom: the document's custom
     /// properties (#2982).
     CustomProperties(Box<CustomPropertiesForm>),
+    /// Insert › Add-ins › Get Add-ins, Developer › Add-ins: the loaded add-ins, their commands,
+    /// installing and loading more.
+    AddIns,
+    /// An add-in's own dialog (protocol 1.2): a list, a form or a message.
+    Plugin(Box<crate::plugin_dialog::PluginDialog>),
+    /// Share: start or join a live session (drawn by `collab_ui::show_dialog`).
+    Share(Box<crate::collab_ui::ShareDialog>),
 }
 
 impl Dialog {
@@ -546,12 +557,16 @@ impl Dialog {
             Dialog::DefineList { .. } => "defineList",
             Dialog::TrackOptions { .. } => "trackChangesOptions",
             Dialog::Review(d) => d.name(),
+            Dialog::Developer(d) => d.name(),
             Dialog::CustomizeKeyboard { .. } => "customizeKeyboard",
             Dialog::CustomizeRibbon { .. } => "customizeRibbon",
             Dialog::Control { .. } => "controlProperties",
             Dialog::Enclose { .. } => "enclose",
             Dialog::NoteOptions { .. } => "noteOptions",
             Dialog::Templates { .. } => "templates",
+            Dialog::AddIns => "addIns",
+            Dialog::Plugin(_) => "pluginDialog",
+            Dialog::Share(_) => "collabShare",
             Dialog::Organizer { .. } => "organizer",
             Dialog::CustomProperties(..) => "customProperties",
             Dialog::Layout(d) => d.name(),
@@ -575,6 +590,9 @@ impl Dialog {
     }
 
     pub fn open(name: &str, app: &mut WordApp) -> Option<Dialog> {
+        if name == "collabShare" {
+            return Some(Dialog::Share(Box::new(crate::collab_ui::ShareDialog::new(app, false))));
+        }
         if let Some(d) = crate::dialogs_insert::open(name, app) {
             return Some(Dialog::Insert(Box::new(d)));
         }
@@ -583,6 +601,9 @@ impl Dialog {
         }
         if let Some(d) = crate::dialogs_layout::open(name, app) {
             return Some(Dialog::Layout(Box::new(d)));
+        }
+        if let Some(d) = crate::dialogs_developer::open(name, app) {
+            return Some(Dialog::Developer(Box::new(d)));
         }
         if matches!(name, "compare" | "combine" | "autoCorrect" | "restrictEditing") {
             return crate::dialogs_review::open(name, app).map(|d| Dialog::Review(Box::new(d)));
@@ -837,6 +858,7 @@ impl Dialog {
             }
             "noteOptions" => Dialog::NoteOptions { form: Box::new(crate::dialogs_notes::NoteForm::read(app)) },
             "templates" => Dialog::Templates { form: Box::new(crate::dialogs_templates::TemplatesForm::read(app)) },
+            "addIns" => Dialog::AddIns,
             "organizer" => Dialog::Organizer { form: Box::new(crate::dialogs_templates::OrganizerForm::read(app, None)) },
             "customProperties" => Dialog::CustomProperties(Box::new(CustomPropertiesForm::read(app))),
             "controlProperties" => match crate::dialogs_controls::ControlForm::read(app) {
@@ -894,6 +916,7 @@ impl Dialog {
 
 pub mod dialogs_chart;
 pub mod dialogs_controls;
+pub mod dialogs_developer;
 pub mod dialogs_insert;
 pub mod dialogs_keyboard;
 pub mod dialogs_layout;

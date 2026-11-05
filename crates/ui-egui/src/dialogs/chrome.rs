@@ -48,7 +48,7 @@ const DIALOG_CENTRED_FRAMES: u8 = 2;
 /// the bottom edge and the tab strip stays under the mouse (#507). It is no longer anchored after
 /// that, so dragging the title bar moves it (#732). egui keeps it on screen if it grows past the
 /// bottom.
-fn place_dialog<'a>(ctx: &egui::Context, id: egui::Id, w: egui::Window<'a>) -> egui::Window<'a> {
+pub(crate) fn place_dialog<'a>(ctx: &egui::Context, id: egui::Id, w: egui::Window<'a>) -> egui::Window<'a> {
     let w = w.pivot(egui::Align2::CENTER_TOP);
     match ctx.data(|d| d.get_temp::<(egui::Id, u8)>(dialog_top_key())) {
         Some((open, frames)) if open == id && frames >= DIALOG_CENTRED_FRAMES => w,
@@ -57,7 +57,7 @@ fn place_dialog<'a>(ctx: &egui::Context, id: egui::Id, w: egui::Window<'a>) -> e
 }
 
 /// After a frame of a dialog: counts the frames it has been centred for.
-fn count_dialog_frame(ctx: &egui::Context, id: egui::Id) {
+pub(crate) fn count_dialog_frame(ctx: &egui::Context, id: egui::Id) {
     let frames = match ctx.data(|d| d.get_temp::<(egui::Id, u8)>(dialog_top_key())) {
         Some((open, frames)) if open == id => frames,
         _ => 0,
@@ -145,6 +145,15 @@ pub(crate) fn release_keyboard(app: &WordApp, ctx: &egui::Context) {
 /// its body, keeps it open when it stays, and gives the Save Changes prompt the AccessKit
 /// alert-dialog role.
 pub fn show(app: &mut WordApp, ctx: &egui::Context) {
+    // An add-in's dialog has its own title and words, shown as given.
+    if matches!(app.dialog, Some(Dialog::Plugin(_))) {
+        crate::plugin_dialog::show(app, ctx);
+        return;
+    }
+    if matches!(app.dialog, Some(Dialog::Share(_))) {
+        crate::collab_ui::show_dialog(app, ctx);
+        return;
+    }
     let Some(mut d) = app.dialog.take() else {
         ctx.data_mut(|d| d.remove::<(egui::Id, u8)>(dialog_top_key()));
         return;
@@ -197,6 +206,10 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::DefineList { .. } => "Define New Multilevel List",
         Dialog::TrackOptions { .. } => "Track Changes Options",
         Dialog::Review(d) => d.title(),
+        Dialog::Developer(d) => d.title(),
+        // Drawn by `plugin_dialog::show` (above): its title is the add-in's.
+        Dialog::Plugin(_) => "Add-in",
+        Dialog::Share(_) => "Live Session",
         Dialog::CustomizeKeyboard { .. } => "Customize Keyboard",
         Dialog::CustomizeRibbon { .. } => "Customize Ribbon",
         Dialog::Control { .. } => "Content Control Properties",
@@ -204,6 +217,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::NoteOptions { .. } => "Footnote and Endnote",
         Dialog::Templates { .. } => "Templates and Add-ins",
         Dialog::Organizer { .. } => "Organizer",
+        Dialog::AddIns => "Add-ins",
         Dialog::CustomProperties { .. } => "Custom Document Properties",
         Dialog::Layout(d) => d.title(),
     };

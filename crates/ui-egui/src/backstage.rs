@@ -263,7 +263,9 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
         }
         "save" => {
             let r = app.run("file.save", json!({}));
-            if r.is_ok_and(|v| v.get("saved").and_then(serde_json::Value::as_bool) == Some(true) || v.get("downloaded").is_some()) {
+            if r.is_ok_and(|v| {
+                v.get("saved").and_then(serde_json::Value::as_bool) == Some(true) || v.get("downloaded").is_some() || v.get("host").is_some()
+            }) {
                 app.ui.backstage = false;
                 app.canvas.want_focus = true;
             } else {
@@ -788,7 +790,10 @@ fn info_statistics(ui: &mut Ui, info: &serde_json::Value) {
     // A path reads left to right whatever its folders are called, so it is a label of its own
     // beside the words around it (one right-to-left line would swap its folders), and a long
     // one is cut short, the whole path on hover, rather than wrapped to strand its last part.
-    let shown = crate::i18n::isolate_path(path);
+    let file = crate::i18n::isolate_path(path);
+    // An add-in's words for where the document came from (Nextcloud…), the file on hover.
+    let label = info.get("location").and_then(|v| v.as_str()).filter(|l| !l.is_empty());
+    let shown = label.map_or_else(|| file.clone(), str::to_string);
     let template = tl!("Location: {path}");
     let (before, after) = template.split_once("{path}").unwrap_or((template, ""));
     // The columns start left to right, so the row's own direction is set: the words before the
@@ -801,7 +806,7 @@ fn info_statistics(ui: &mut Ui, info: &serde_json::Value) {
         let font = egui::TextStyle::Body.resolve(ui.style());
         let room = ui.available_width() - if after.trim().is_empty() { 0.0 } else { 40.0 };
         let fitted = crate::theme::fit_text(ui.painter(), &shown, &font, 0.0, ui.visuals().text_color(), room);
-        ui.label(fitted).on_hover_text(&shown);
+        ui.label(fitted).on_hover_text(if label.is_some() { &file } else { &shown });
         if !after.trim().is_empty() {
             ui.label(after.trim_start());
         }

@@ -1,6 +1,6 @@
 # WordCraft architecture
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-02 · **Change:** trivial (craft-proof's row says what a build without the Language data keeps: English spelling from an installed Hunspell English or the built-in list, rule hyphenation for Bulgarian, Turkish and Russian; previously minor: proofing moved out: `wordcraft-proof` is craft-libs' `craft-proof`, its Language data craft-i18n's `language-data/` embedded from `CRAFT_I18N_DIR`; previously major: crate and layer inventory, source counts, proofing languages and module boundaries re-measured from this checkout; previously minor: `proof` is per language: English and Polish; previously major: first committed version; `plan/architecture.md` is local-only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-04 · **Change:** minor (`collab` crate: live sessions, plugin protocol 2; previously minor: `plugin` crate: add-ins; previously trivial: craft-proof's row says what a build without the Language data keeps: English spelling from an installed Hunspell English or the built-in list, rule hyphenation for Bulgarian, Turkish and Russian; previously minor: proofing moved out: `wordcraft-proof` is craft-libs' `craft-proof`, its Language data craft-i18n's `language-data/` embedded from `CRAFT_I18N_DIR`; previously major: crate and layer inventory, source counts, proofing languages and module boundaries re-measured from this checkout; previously minor: `proof` is per language: English and Polish; previously major: first committed version; `plan/architecture.md` is local-only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 How WordCraft is built today. The longer design notes in
 `plan/architecture.md` are gitignored and local to the original author's machine; this file is the
@@ -27,7 +27,9 @@ crate name links to its source tree.
 | L2 | [`docx`](../crates/docx/src) | 37,376 | OOXML WordprocessingML reader/writer (Transitional and Strict), OMML, custom properties and preserved VBA parts |
 | L2 | [`formats`](../crates/formats/src) | 23,058 | TXT, Markdown, HTML, RTF, ODT and LaTeX import/export through the shared document model |
 | L2 | [`layout`](../crates/layout/src) | 35,990 | Paragraph line layout (`para`), page/section flow and table layout, then display-list generation (`display`); hit testing maps points to document positions. `para` owns shaping, breaks, tabs and line geometry; page flow composes paragraphs, tables, headers/footers, notes and floats. |
+| L2 | [`collab`](../crates/collab/src) | 3,208 | Live sessions (plugin protocol 2, [collab.md](collab.md)): the document as a Yjs document (schema 1 on `yrs`: stories as XML, text with formatting attributes), one transaction per command by diffing, remote changes read back incrementally, per-user undo, relative positions, awareness, AES-256-GCM; no I/O, wasm-safe |
 | L3 | [`pdf`](../crates/pdf/src) | 4,513 | krilla PDF export: font subsets, selectable text, links, outline and tagging |
+| L3 | [`plugin`](../crates/plugin/src) | 1,376 | Add-in host ([plugins.md](plugins.md)): `plugin.json` manifests, out-of-process add-ins over JSON-RPC on stdio (timeouts, restart, failure limit), install from GitHub (`ureq`, release zip per platform or source), the reference add-in `wordcraft-example-plugin` |
 | L3 | [`render`](../crates/render/src) | 4,499 | vello_cpu rasterizer: pages and thumbnails from the display list; PNG/JPEG |
 | L4 | [`engine`](../crates/engine/src) | 72,851 | `Session` and editing state; command registry in `cmd/`; file dispatch in `io`; catalog, keymap, recovery, ribbon model, speech and view state |
 | L5 | [`mcp`](../crates/mcp/src) | 1,822 | MCP server exposing commands as tools; headless or bridged to the running app |
@@ -52,6 +54,14 @@ crate name links to its source tree.
 4. **Draw:** the UI paints pages through `render` (CPU raster, cached per page, pixel-aligned) on
    an egui/wgpu canvas; PDF export walks the same display list through `pdf`.
 5. **Save:** `engine::io` picks a writer by extension.
+6. **Add-ins:** `plugins.run` sends an add-in the selection and the caret's paragraph and runs the
+   engine commands it answers with, inside its own `Session::run`, so they are one undo step and a
+   failure restores the document. Add-ins are separate processes started on first use (`plugin`).
+7. **Live sessions:** after each top-level command the engine's room hands the document to
+   `collab`'s replica, which writes the change into the shared Yjs document as one transaction and
+   sends it through the transport add-in; between frames `Session::collab_poll` applies what the
+   transport pushed and puts the refreshed document (only changed paragraphs read again) and the
+   selection (kept as relative positions) back ([collab.md](collab.md)).
 
 ## Testing and gates
 
@@ -69,6 +79,8 @@ crate name links to its source tree.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | `collab` (L2): live sessions (plugin protocol 2); `plugin` reads add-ins' output all the time (the push channel); `engine` has the room, `collab.*` and per-user undo |
+| 2026-11-04 | minor | `plugin` (L3): out-of-process add-ins; `plugins.run` runs their answers as one undo step |
 | 2026-11-02 | trivial | craft-proof's row: without the Language data English spelling falls back to an installed Hunspell English or the built-in Moby list, and only pattern hyphenation is off (#5202 review) |
 | 2026-11-01 | minor | `proof` left the workspace: it is `craft-proof` in storytold/craft-libs (with its history), and the spelling and hyphenation data is craft-i18n's `language-data/` (`CRAFT_I18N_DIR`); `assets/spelling` and `assets/hyphenation` are gone |
 | 2026-10-28 | major | Recounted workspace crates, layers and Rust source lines; refreshed proofing languages and documented current engine/layout module boundaries and source links |
