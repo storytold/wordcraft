@@ -443,7 +443,7 @@ fn drop_target(g: &SmartArtSpec, rows: &[Rect], src: usize, y: f32, dx: f32) -> 
         row_slot = block.start;
         block.start
     } else {
-        row_slot.saturating_sub(block.len())
+        if row_slot < block.start { row_slot } else { row_slot.saturating_sub(block.len()) }
     };
     let before = g.items.iter().enumerate().filter(|(j, _)| !block.contains(j)).map(|(_, it)| it.level).nth(slot.wrapping_sub(1));
     let most = before.map_or(0, |l| l.saturating_add(1)).min(wordcraft_doc::smart_art::MAX_LEVEL);
@@ -672,6 +672,13 @@ mod drag_tests {
         let g = SmartArtSpec::sample(SmartArtLayout::Hierarchy);
         let (slot, row_slot, level) = drop_target(&g, &rows(6), 1, 500.0, -16.0);
         assert_eq!((slot, row_slot, level), (4, 6, 0));
+    }
+
+    #[test]
+    fn dropping_above_a_block_keeps_the_row_slot() {
+        let g = SmartArtSpec::sample(SmartArtLayout::Hierarchy);
+        let (slot, row_slot, level) = drop_target(&g, &rows(6), 3, 35.0, 0.0);
+        assert_eq!((slot, row_slot, level), (2, 2, 1));
     }
 
     #[test]
