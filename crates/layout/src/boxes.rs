@@ -153,7 +153,8 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
     let (tx, ty) = match t.props.float {
         Some(float) => {
             let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(ctx, t) } else { 0.0 };
-            let (rect, area) = box_float_table_rect(frame, width, *y, &layout, &float, legacy, float_tables);
+            let in_footer = matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Footer));
+            let (rect, area) = box_float_table_rect(frame, width, *y, &layout, &float, (legacy, in_footer), float_tables);
             exclusions.push((area, false, None, WrapText::BothSides, true));
             float_tables.push(area);
             table_areas.push(area);
@@ -448,7 +449,7 @@ fn box_float_table_rect(
     y: f32,
     tl: &table::TableLayout,
     f: &TableFloat,
-    legacy: f32,
+    (legacy, in_footer): (f32, bool),
     float_tables: &[Rect],
 ) -> (Rect, Rect) {
     let h = tl.rows.iter().map(|r| r.height).sum::<f32>().clamp(0.0, 100_000.0);
@@ -485,7 +486,35 @@ fn box_float_table_rect(
     // Nor is there an area to align in: the table starts where the text is.
     let v_align = if frame.is_none() && matches!(f.v_rel, Anchor::Page | Anchor::Margin) { None } else { f.v_align };
     let x = align_in(h_area, f.x, w, PageFrame::h_align(frame.as_ref(), f.h_align)) - if f.h_align.is_none() { legacy } else { 0.0 };
-    let r = clear_of_float_tables(Rect::new(x, align_in(v_area, y_off, h, v_align), w, h), f, legacy, h_area.0, float_tables);
+    let mut r = Rect::new(x, align_in(v_area, y_off, h, v_align), w, h);
+    // A header or footer has no next page to move to: a table placed by an offset from its
+    // paragraph that runs off the page (converters write page offsets that way) stays on it.
+    // Done before clearing the other tables, so they are cleared from where it ends up.
+    if let Some(fr) = frame.filter(|_| f.v_rel != Anchor::Page && f.v_rel != Anchor::Margin) {
+        r.y = r.y.min(fr.sect.page_h - fr.origin.1 - h).max(-fr.origin.1);
+    }
+    // Likewise across, for one placed from its column (and so for a page-wide table that
+    // starts at a column offset). `mirror_even_pages` moves it by `shift` afterwards.
+    if let Some(fr) = frame.filter(|_| f.h_rel != Anchor::Page && f.h_rel != Anchor::Margin) {
+        let shift = fr.sides().2;
+        r.x = r.x.min(fr.sect.page_w - fr.origin.0 - w - shift).max(-fr.origin.0 - shift);
+    }
+    let clamped = r;
+    let mut r = clear_of_float_tables(r, f, legacy, h_area.0, float_tables);
+    // Cleared downwards it would leave the page again. Word (observed) keeps such a table where
+    // the page edge put it and, in a footer, moves it right, beside the table it met; it does not stack them up
+    // or let one run off the bottom. It doesn't bring the table back onto the page across.
+    if f.v_rel != Anchor::Page && f.v_rel != Anchor::Margin && frame.is_some_and(|fr| r.bottom() + fr.origin.1 > fr.sect.page_h + 0.01) {
+        let [dl, dt, dr, db] = f.dist_from_text();
+        let mut beside = Rect::new(clamped.x, clamped.y, clamped.w, clamped.h);
+        // (In a header Word lays them over each other, observed, so only a footer moves aside.)
+        for _ in 0..if in_footer { 64 } else { 0 } {
+            let area = beside.inset(-dl, -dt, -dr, -db);
+            let Some(right) = float_tables.iter().filter(|o| !f.overlap && o.intersects(&area)).map(|o| o.right()).reduce(f32::max) else { break };
+            beside.x = right + dl + 0.01;
+        }
+        r = beside;
+    }
     let [dl, dt, dr, db] = f.dist_from_text();
     (r, r.inset(-dl, -dt, -dr, -db))
 }
