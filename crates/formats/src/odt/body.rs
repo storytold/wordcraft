@@ -1432,7 +1432,13 @@ impl Body<'_> {
                     && fr.6.as_ref().is_none_or(|o| o.replacement.is_none())
                 {
                     let path = href.trim_start_matches("./");
-                    fr.2 = (self.zip)(path);
+                    // A frame may offer one picture in several formats, in order of preference
+                    // (LibreOffice writes its own `.svm` metafile before a PNG): the first
+                    // WordCraft can read. An object's replacement is kept whatever it is.
+                    let data = (self.zip)(path).filter(|d| fr.6.is_some() || drawing::readable_picture(d));
+                    if data.is_some() {
+                        fr.2 = data;
+                    }
                     if let Some(o) = &mut fr.6 {
                         o.replacement = fr.2.clone().map(std::sync::Arc::new);
                     }
