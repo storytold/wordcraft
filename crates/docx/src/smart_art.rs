@@ -1126,7 +1126,7 @@ pub(crate) fn spec_of(data: &El) -> Option<SmartArtSpec> {
                 p.child("dgm:spPr").and_then(|s| s.child("a:solidFill")).and_then(|f| f.child("a:srgbClr")).and_then(|c| Rgb::parse(c.attr("val")?));
             let opacity = color.and_then(|_| {
                 let a = p.child("dgm:spPr")?.child("a:solidFill")?.child("a:srgbClr")?.child("a:alpha")?;
-                u8::try_from(a.attr("val")?.parse::<u32>().ok()? / 1000).ok()
+                u8::try_from((a.attr("val")?.parse::<u32>().ok()? / 1000).min(100)).ok()
             });
             Some(SmartArtItem { text, level: (*l)?, color, opacity })
         })
@@ -1285,5 +1285,23 @@ mod opacity_tests {
         let items = smart_art_items(&spec, &[], 400.0, 250.0);
         let GraphicItem::Shape { alpha, .. } = &items[0] else { panic!("shape first") };
         assert!((alpha - 0.12).abs() < 0.01, "{alpha}");
+    }
+    #[test]
+    fn opacity_of_0_50_and_100_survives_and_hostile_values_are_clamped() {
+        for pct in [0u8, 50, 100] {
+            let mut spec = SmartArtSpec::sample(SmartArtLayout::Venn);
+            spec.items[0].color = Some(Rgb(1, 2, 3));
+            spec.items[0].opacity = Some(pct);
+            let items = smart_art_items(&spec, &[], 400.0, 250.0);
+            let GraphicItem::Shape { alpha, .. } = &items[0] else { panic!("shape first") };
+            assert!((alpha - f32::from(pct) / 100.0).abs() < 0.01, "{pct}: {alpha}");
+        }
+        let mut spec = SmartArtSpec::sample(SmartArtLayout::Venn);
+        spec.items[0].color = Some(Rgb(1, 2, 3));
+        spec.items[0].opacity = Some(250);
+        spec.items[1].opacity = Some(40);
+        spec.sanitize();
+        assert_eq!(spec.items[0].opacity, Some(100), "above 100 is clamped");
+        assert_eq!(spec.items[1].opacity, None, "no colour, no opacity");
     }
 }

@@ -259,6 +259,7 @@ impl SmartArtSpec {
         let mut prev: Option<u8> = None;
         for it in &mut self.items {
             it.text = clean_text(&it.text);
+            it.opacity = it.opacity.filter(|_| it.color.is_some()).map(|o| o.min(100));
             let most = prev.map_or(0, |p| p.saturating_add(1)).min(MAX_LEVEL);
             it.level = it.level.min(most);
             prev = Some(it.level);

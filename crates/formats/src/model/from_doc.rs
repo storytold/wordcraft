@@ -164,8 +164,7 @@ pub fn is_custom_style(doc: &Document, id: &str) -> bool {
 }
 
 /// Whether `doc`'s tab stops are measured from each paragraph's indent (an ODF document whose
-/// file says so, or that was opened with a profile saying so): [`Para::extra`]'s tab stops then
-/// are too.
+/// file says so): [`Para::extra`]'s tab stops then are too.
 pub fn tabs_from_indent(doc: &Document) -> bool {
     doc.settings.odf.is_some_and(|o| o.tabs_from_indent)
 }
@@ -494,6 +493,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
         let hidden = props.hidden.unwrap_or(false) || props.del.is_some();
         // Formats that keep hidden text get it, marked hidden.
         let hidden_text = (props.hidden.unwrap_or(false) && !opts.chars) || (props.del.is_some() && !tracked);
+        let hidden_obj = (props.hidden.unwrap_or(false) && !opts.chars) || props.del.is_some();
         let mut f = run_fmt(doc, props, in_code, opts);
         if tracked {
             (f.ins, f.del) = rev_marks(doc, props);
@@ -541,8 +541,9 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
             let obj = p.objects.get(k);
             k += 1;
             control.interrupt(obj, &mut out, &f);
-            // Hidden text, or a hidden drawing: not in the copy.
-            if hidden || obj.and_then(InlineObject::frame).is_some_and(|(_, _, f)| f.hidden) {
+            // Hidden text a format leaves out, a deleted object, or a hidden drawing: not in the
+            // copy (a format keeping hidden text keeps its objects too, as it keeps the text).
+            if hidden_obj || obj.and_then(InlineObject::frame).is_some_and(|(_, _, f)| f.hidden) {
                 continue;
             }
             let from = out.inlines.len();
@@ -714,10 +715,12 @@ fn graphic_group(
         .filter_map(|item| match item {
             GraphicItem::Shape { rect, kind, fill, stroke, stroke_width, alpha } if finite(rect) => {
                 let look = BoxLook {
-                    fill: fill.map(|color| wordcraft_doc::fill::Fill::Solid {
-                        color,
-                        transparency: (1.0 - if alpha.is_finite() { alpha.clamp(0.0, 1.0) } else { 1.0 }) * 100.0,
-                    }).filter(|_| *kind != ShapeKind::Line),
+                    fill: fill
+                        .map(|color| wordcraft_doc::fill::Fill::Solid {
+                            color,
+                            transparency: (1.0 - if alpha.is_finite() { alpha.clamp(0.0, 1.0) } else { 1.0 }) * 100.0,
+                        })
+                        .filter(|_| *kind != ShapeKind::Line),
                     line: stroke.filter(|_| stroke_width.is_finite() && *stroke_width > 0.0).map(|c| (c, stroke_width.min(12.0))),
                     ..plain.clone()
                 };
@@ -1149,7 +1152,9 @@ pub fn from_doc_tracked(doc: &Document) -> Flow {
 
 /// [`from_doc`] keeping what `opts` asks for.
 pub fn from_doc_with(doc: &Document, opts: FlowOpts) -> Flow {
-    flow_of(doc, opts)
+    // Paragraphs kept as read are checked against the document's comments and page setup:
+    // worked out once for the whole document, not once per paragraph.
+    wordcraft_doc::kept::while_writing(doc, || flow_of(doc, opts))
 }
 
 /// `blocks` of `doc` (a header, footer or note) as flow blocks, keeping what `opts` asks for.
