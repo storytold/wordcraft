@@ -139,9 +139,23 @@ pub(super) fn borders(s: &mut Session, v: &Value) -> CmdResult {
     let b = Border { style, width, color, space: if kind == "left" || kind == "right" { 4.0 } else { 1.0 }, ..Default::default() };
     if kind == "horizontalLine" {
         // A paragraph with a bottom border, like Word's Horizontal Line.
-        return fmt(s, &|p| p.borders = Some(Borders { bottom: Some(Border { width: 1.5, ..b }), ..Default::default() }));
+        let styles = s.doc.styles.clone();
+        let no_explicit_flags = Value::Null;
+        return fmt(s, &|p| {
+            let mut style_props = p.clone();
+            style_props.borders = None;
+            let inherited = styles.resolve_para(&style_props).borders.unwrap_or_default();
+            let mut updated = Borders { bottom: Some(Border { width: 1.5, ..b }), ..Default::default() };
+            preserve_unspecified_border_flags_with_style(&mut updated, p.borders.unwrap_or_default(), inherited, &no_explicit_flags);
+            p.borders = Some(updated);
+        });
     }
+    let styles = s.doc.styles.clone();
+    let no_explicit_flags = Value::Null;
     fmt(s, &|p| {
+        let mut style_props = p.clone();
+        style_props.borders = None;
+        let inherited = styles.resolve_para(&style_props).borders.unwrap_or_default();
         let mut cur = p.borders.unwrap_or_default();
         match kind {
             "none" => cur = Borders::default(),
@@ -159,6 +173,7 @@ pub(super) fn borders(s: &mut Session, v: &Value) -> CmdResult {
             "right" => cur.right = if cur.right.is_some_and(|x| x.is_visible()) { None } else { Some(b) },
             _ => {}
         }
+        preserve_unspecified_border_flags_with_style(&mut cur, p.borders.unwrap_or_default(), inherited, &no_explicit_flags);
         p.borders = if cur.any_visible() { Some(cur) } else { Some(Borders::default()) };
     })
 }

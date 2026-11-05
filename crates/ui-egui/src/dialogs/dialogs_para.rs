@@ -504,9 +504,6 @@ pub struct BordersForm {
     pub para: LineForm,
     /// Borders apply to the selected text (a character border) instead of the paragraphs.
     pub to_text: bool,
-    /// Shadow and frame belong to the character border, not the paragraph border.
-    #[serde(skip)]
-    text_border: Option<Border>,
     pub page: LineForm,
     /// Page borders apply to the whole document instead of this section.
     pub whole_doc: bool,
@@ -521,14 +518,11 @@ impl BordersForm {
     pub fn read(app: &WordApp, tab: u8) -> Option<BordersForm> {
         let s = &app.session;
         let rp = s.doc.para_at(&s.sel.focus).map(|p| s.doc.styles.resolve_para(&p.props))?;
-        let text_border =
-            s.doc.para_at(&s.sel.focus).and_then(|p| s.doc.styles.resolve_char(p.props.style.as_deref(), p.props_at(s.sel.focus.off)).border);
         let sect = wordcraft_engine::cmd::page::sect(s);
         let mut f = BordersForm {
             tab: tab.min(2),
             para: LineForm::read(rp.borders.as_ref()),
             to_text: false,
-            text_border,
             page: LineForm::read(sect.page_borders.as_ref()),
             whole_doc: true,
             fill: rp.shading.map(Rgb::hex).unwrap_or_default(),
@@ -551,9 +545,7 @@ impl BordersForm {
                     Some(i) => self.para.border(i),
                     None => Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0, ..Default::default() },
                 };
-                border.shadow = self.text_border.and_then(|b| b.shadow);
-                border.frame = self.text_border.and_then(|b| b.frame);
-                out.push(("format.set", json!({"props": {"border": border}})));
+                out.push(("format.set", json!({"props": {"border": border}, "preserveBorderFlags": true})));
             } else {
                 out.push(("para.borders", json!({"sides": self.para.sides_param()})));
             }
