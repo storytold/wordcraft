@@ -46,6 +46,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
                 let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
+                let warning = app.font_box_warning(&font);
                 let font = app.previews.font_shown(&font);
                 let fams = app.previews.families();
                 let recent: Vec<String> = app.ui.recent_fonts.iter().map(|f| app.previews.font_shown(f)).collect();
@@ -60,6 +61,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                         recent: &recent,
                         preview: Some(&*prev),
                         tip: tl!("Font"),
+                        shown_as: warning.as_deref(),
                     },
                 ) {
                     let _ = if f == crate::widgets::ADD_FONT {
@@ -286,13 +288,14 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                         mi(ui, app, "Line Spacing Options…", "para.dialog", json!({}));
                     },
                 );
+                let sw = wordcraft_doc::Rgb::parse(&app.canvas.last_shading).map(crate::theme::c32);
                 split(
                     ui,
                     app,
-                    "shading",
+                    "shadingNoBar",
                     "Shading",
                     crate::widgets::ButtonAction::new("para.shading", json!({"color": app.canvas.last_shading.clone()}), false),
-                    None,
+                    sw,
                     |ui, app| {
                         mi(ui, app, "No Color", "para.shading", json!({"color": null}));
                         let theme = app.session.doc.settings.theme_colors.clone();

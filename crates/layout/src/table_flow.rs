@@ -2,7 +2,7 @@ use super::boxes::{BoxInput, clear_of_float_tables, layout_box};
 use super::ctx::{Ctx, with_pct_base};
 use super::floats::{WrapArea, align_in, body_wraps};
 use super::flow::again;
-use super::headers::{MAX_HEADER_ITEMS, header_table_areas};
+use super::headers::{header_items_cap, header_table_areas, placed_cost};
 use super::notes::table_notes;
 use super::page::{PageBuilder, PageFrame, page_frame};
 use super::placed::Placed;
@@ -51,7 +51,7 @@ pub(crate) fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapAre
             let story = StoryRef::Part(id);
             let h = layout_box(ctx, BoxInput::other(story, &blocks, sect.text_width(), 0, None)).height;
             let y = sect.page_h - sect.footer - h;
-            let frame = PageFrame { sect, origin: (x, y), number: page.number, mirror: ctx.mirror };
+            let frame = PageFrame { sect, margin_top: None, origin: (x, y), number: page.number, mirror: ctx.mirror };
             let mut areas = layout_box(ctx, BoxInput::other(story, &blocks, sect.text_width(), 0, Some(frame))).page_table_wraps;
             for (rect, ..) in &mut areas {
                 rect.x += x;
@@ -104,11 +104,19 @@ fn row_can_start(row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, p
     if row.props.height_rule == HeightRule::AtLeast && row.props.height.is_some_and(|h| h > room + 0.01 && h <= page_height + 0.01) {
         return false;
     }
-    table::split_row(laid, room).is_some()
+    table::split_row_keeping_cells(laid, room).is_some()
 }
 
 pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, block: usize, body_top: f32) {
     pb.prev = None;
+    // A page break before the first row's paragraph moves the whole table to a new page, as
+    // Word does (and as an ODT table starting a page opens). Before the table is laid out, so
+    // its cells' fields (PAGE) are those of the page it lands on.
+    let first = t.rows.first().and_then(|r| r.cells.first()).and_then(|c| c.blocks.first()).and_then(|b| b.as_para());
+    if t.props.float.is_none() && !pb.at_top() && !pb.web && first.is_some_and(|p| ctx.doc.styles.resolve_para(&p.props).page_break_before) {
+        pb.new_page(block, body_top);
+        ctx.fields.page = pb.number;
+    }
     let width = pb.col_w();
     let mut tl = table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1);
     if let Some(f) = t.props.float.filter(|_| !pb.web) {
@@ -124,13 +132,21 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         // own left edge.
         tl.x = float_table_x(pb, tl.width, &f, legacy, ctx.mirror) - pb.col_x();
     }
+    // Its own space above (ODT), not at the top of a page.
+    if let Some(s) = t.props.space_before.filter(|s| s.is_finite() && *s > 0.0 && !pb.at_top()) {
+        pb.y += s.min(MAX_TABLE_SPACE);
+    }
     // A table in the text flow starts below the floating objects in its way.
     below_floats(ctx, pb, pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width);
     let header_rows: Vec<usize> = (0..t.rows.len()).take_while(|r| t.rows.get(*r).is_some_and(|row| row.props.header)).collect();
-    // Items repeated so far, and what one more repeat of the header rows costs (see
-    // `MAX_HEADER_ITEMS`).
-    let mut header_repeats = 0usize;
-    let header_cost = header_rows.iter().filter_map(|i| tl.rows.get(*i)).map(|r| r.items.len().max(1)).fold(0, usize::saturating_add);
+    // What one more repeat of the header rows costs (see `MAX_HEADER_ITEMS`; the items repeated
+    // so far are counted in the whole layout).
+    let header_cap = header_items_cap();
+    let header_cost = header_rows
+        .iter()
+        .filter_map(|i| tl.rows.get(*i))
+        .map(|r| r.items.iter().map(|it| placed_cost(it, header_cap)).fold(0, usize::saturating_add).max(1))
+        .fold(0, usize::saturating_add);
     // Resolve kept chains once; nested paragraphs cannot keep their enclosing row.
     let mut kept: Vec<(usize, f32)> = (0..tl.rows.len()).map(|i| (i, 0.0)).collect();
     for i in (0..tl.rows.len().saturating_sub(1)).rev() {
@@ -171,7 +187,8 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     {
         let room = pb.bottom - pb.y - tl.rows.iter().take(first).map(|r| r.height).sum::<f32>();
         let splittable = !t.rows.get(first).is_some_and(|r| r.props.cant_split);
-        if row.height + row.edge > room + 0.01 && (short_of_min(first, room) || !(splittable && table::split_row(row, room).is_some())) {
+        if row.height + row.edge > room + 0.01 && (short_of_min(first, room) || !(splittable && table::split_row_keeping_cells(row, room).is_some()))
+        {
             pb.advance(block, body_top);
         }
     }
@@ -179,7 +196,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     let table_at_top = pb.at_top();
     for (ri, row) in tl.rows.iter().enumerate() {
         // Word never splits a row of an exact height: it moves on whole.
-        let splittable = !header_rows.contains(&ri)
+        let splittable = ri >= header_rows.len()
             && !t
                 .rows
                 .get(ri)
@@ -215,8 +232,15 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
             // An at-least row with less room than its minimum moves on whole, unless nothing
             // is above it on this page (moving on would gain nothing).
             let room = pb.bottom - pb.y;
-            let moves_on = rest.is_none() && !pb.at_top() && !fresh && !under_top_headers && short_of_min(ri, room);
-            let split = if splittable && !moves_on && !defer_kept { table::split_row(cur, room) } else { None };
+            // Its first part on a page that already holds something leaves no cell empty
+            // (#4272): moving on can give the cell room there.
+            let first_part = rest.is_none() && !pb.at_top() && !fresh && !under_top_headers;
+            let moves_on = first_part && short_of_min(ri, room);
+            let split = match (splittable && !moves_on && !defer_kept, first_part) {
+                (false, _) => None,
+                (true, true) => table::split_row_keeping_cells(cur, room),
+                (true, false) => table::split_row(cur, room),
+            };
             match split {
                 Some((a, b)) => {
                     place(pb, &a);
@@ -229,9 +253,9 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                 None => {}
             }
             pb.advance(block, body_top);
-            // Repeat header rows, up to this table's cap.
-            if !header_rows.contains(&ri) && header_repeats.saturating_add(header_cost) <= MAX_HEADER_ITEMS {
-                header_repeats += header_cost;
+            // Repeat header rows, up to the layout's cap.
+            if ri >= header_rows.len() && ctx.header_repeats.saturating_add(header_cost) <= header_cap {
+                ctx.header_repeats = ctx.header_repeats.saturating_add(header_cost);
                 for h in header_rows.iter().filter_map(|hr| tl.rows.get(*hr)) {
                     place(pb, h);
                 }
@@ -242,7 +266,15 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         place(pb, last);
         table_notes(ctx, pb, &last.items);
     }
+    // Its own space below (ODT).
+    if let Some(s) = t.props.space_after.filter(|s| s.is_finite() && *s > 0.0) {
+        pb.y += s.min(MAX_TABLE_SPACE);
+    }
 }
+
+/// The most space a table's own space above or below can add, points (22 inches, Word's
+/// largest paragraph spacing).
+const MAX_TABLE_SPACE: f32 = 1584.0;
 
 /// Place floating table `tl` (`w:tblpPr`): at its own position, which takes no room in the text
 /// flow; the text after it wraps around it.
