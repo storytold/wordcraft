@@ -967,6 +967,61 @@ fn replace_all_with_regex_groups_from_the_dialog() {
     }
 }
 
+#[test]
+fn replace_all_in_selection_from_the_dialog_is_scoped_and_undoable() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = app_with("cat cat cat cat");
+    app.session.sel = wordcraft_engine::Selection { anchor: Pos::body(0, 4), focus: Pos::body(0, 11) };
+    let before = app.session.doc.clone();
+    app.run("ui.dialog", json!({"name": "replace"})).unwrap();
+    let Some(Dialog::Find { query, replace, .. }) = app.dialog.as_mut() else { panic!("Replace dialog") };
+    *query = "cat".into();
+    *replace = "kitten".into();
+    let mut h = app_harness(app);
+    h.run_steps(3);
+    assert!(!h.get_by_label("Replace All in Selection").accesskit_node().is_disabled());
+    h.get_by_label("Replace All in Selection").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "cat kitten kitten cat");
+    assert!(matches!(&h.state().dialog, Some(Dialog::Find { message, .. }) if message == "All done. We made 2 replacements."));
+    assert!(h.get_by_label("Replace All in Selection").accesskit_node().is_disabled(), "a collapsed selection never falls back to the story");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().session.doc, before);
+    assert!(!h.get_by_label("Replace All in Selection").accesskit_node().is_disabled(), "Undo restores the selected range too");
+}
+
+#[test]
+fn replace_all_in_selection_follows_the_current_selection_in_the_modeless_dialog() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = app_with("cat cat cat");
+    app.run("ui.dialog", json!({"name": "replace"})).unwrap();
+    let Some(Dialog::Find { query, replace, .. }) = app.dialog.as_mut() else { panic!("Replace dialog") };
+    *query = "cat".into();
+    *replace = "fox".into();
+    let mut h = app_harness(app);
+    h.run_steps(3);
+    assert!(h.get_by_label("Replace All in Selection").accesskit_node().is_disabled());
+    h.state_mut().session.sel = wordcraft_engine::Selection { anchor: Pos::body(0, 8), focus: Pos::body(0, 11) };
+    h.run_steps(3);
+    h.get_by_label("Replace All in Selection").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "cat cat fox");
+}
+
+#[test]
+fn replace_all_in_selection_is_disabled_for_read_only_documents() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = app_with("cat cat cat");
+    app.session.sel = wordcraft_engine::Selection { anchor: Pos::body(0, 4), focus: Pos::body(0, 7) };
+    app.run("review.restrict", json!({"mode": "readOnly"})).unwrap();
+    app.run("ui.dialog", json!({"name": "replace"})).unwrap();
+    let mut h = app_harness(app);
+    h.run_steps(3);
+    assert!(h.get_by_label("Replace All in Selection").accesskit_node().is_disabled());
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "cat cat cat");
+}
+
 fn app_harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
     egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {

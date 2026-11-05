@@ -37,6 +37,14 @@ fn has_sel(s: &Session) -> Option<&'static str> {
     if s.sel.is_collapsed() && s.cell_range().is_none() { Some("nothing is selected") } else { None }
 }
 
+fn has_replace_selection(s: &Session) -> Option<&'static str> {
+    match s.column_segments() {
+        Some(segments) if !segments.iter().any(|(a, b)| a != b) => Some("nothing is selected"),
+        Some(_) => None,
+        None => has_text_sel(s),
+    }
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("edit.undo", "Undo", "Quick Access Toolbar", |s, _| {
@@ -132,7 +140,8 @@ pub fn specs() -> Vec<CommandSpec> {
         .key(super::mac_or("Mod+Shift+G / Mod+PageUp", "Mod+PageUp"))
         .params(r#"{"text"?: string, "matchCase"?: bool, "wholeWord"?: bool, "regex"?: bool}"#)
         .pure(),
-        CommandSpec::new("edit.replace", "Replace", "Home › Editing", replace).params(r#"{"text": string, "with": string, …options of edit.replaceAll}"#),
+        CommandSpec::new("edit.replace", "Replace", "Home › Editing", replace)
+            .params(r#"{"text": string, "with": string (replacement codes and groups as in edit.replaceAll), …options of edit.find} (replaces the selected match, then finds the next)"#),
         // Ctrl+H, Home › Replace: the Find and Replace dialog on its Replace tab (#712). Opening
         // it changes nothing, so it is its own command and never marks the document edited.
         CommandSpec::new("edit.findReplace", "Find and Replace", "Home › Editing", |s, v| {
@@ -148,7 +157,10 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"tab"?: "find|replace|goto" (default replace)}"#)
         .pure(),
         CommandSpec::new("edit.replaceAll", "Replace All", "Home › Editing › Replace", replace_all)
-            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards; with regex also $1 ${n} ${name} $0 $$ \\1 \\n (paragraph mark) \\t), …options of edit.find}"#),
+            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards; with regex also $1 ${n} ${name} $0 $$ \\1 \\n (paragraph mark) \\t), "in"?: "story|selection" (default story: the caret's story; selection requires selected text), …options of edit.find}"#),
+        CommandSpec::new("edit.replaceAllInSelection", "Replace All in Selection", "Home › Editing › Replace", replace_all_in_selection)
+            .params(r#"{"text": string, "with": string, …search and replacement options of edit.replaceAll} (always limited to the current selection)"#)
+            .when(has_replace_selection),
         CommandSpec::new("edit.goto", "Go To", "Home › Editing › Find", goto)
             .key("Mod+Alt+G / F5")
             .params(r#"{"page"?: n, "pageBy"?: int (pages forward, negative back, from the caret's page), "bookmark"?: string (selects its text), "paragraph"?: n}; none opens Find and Replace on its Go To tab"#)
@@ -458,6 +470,54 @@ struct Seg {
     mark: bool,
 }
 
+/// The selection ranges touching a chunk, without scanning every range for every paragraph.
+fn chunk_ranges<'a>(ranges: &'a [(Pos, Pos)], paths: &[Path]) -> &'a [(Pos, Pos)] {
+    let (Some(first), Some(last)) = (paths.first(), paths.last()) else { return &[] };
+    let start = ranges.partition_point(|(_, b)| b.path < *first);
+    let end = ranges.partition_point(|(a, _)| a.path <= *last);
+    ranges.get(start..end).unwrap_or_default()
+}
+
+/// A document position as an offset in the live search text. Positions in deleted text map to
+/// the next live stretch; positions outside the chunk map to its start or end.
+fn hay_offset(pos: &Pos, paths: &[Path], segs: &[Seg], len: usize) -> usize {
+    let para = paths.partition_point(|path| *path < pos.path);
+    let k = segs.partition_point(|sg| sg.para < para || (sg.para == para && sg.raw + sg.len <= pos.off));
+    segs.get(k).map_or(len, |sg| sg.hay + if sg.para == para { pos.off.saturating_sub(sg.raw).min(sg.len) } else { 0 })
+}
+
+/// Intersect selected stretches with the live-text cuts. Constrain the regex input before
+/// matching, so an earlier or greedy match outside the selection cannot consume selected text.
+fn search_spans<'a>(
+    within: Option<&'a [(Pos, Pos)]>,
+    paths: &'a [Path],
+    segs: &'a [Seg],
+    cuts: &'a [usize],
+    len: usize,
+) -> impl Iterator<Item = std::ops::Range<usize>> + 'a {
+    let ranges = within
+        .into_iter()
+        .flatten()
+        .map(move |(a, b)| hay_offset(a, paths, segs, len)..hay_offset(b, paths, segs, len))
+        .chain(within.is_none().then_some(0..len));
+    ranges.flat_map(move |range| {
+        let first_cut = cuts.partition_point(|cut| *cut <= range.start);
+        cuts.get(first_cut..)
+            .unwrap_or_default()
+            .iter()
+            .scan(range.start, move |from, &cut| {
+                if *from >= range.end {
+                    return None;
+                }
+                let end = cut.min(range.end);
+                let span = *from..end;
+                *from = end;
+                Some(span)
+            })
+            .filter(|span| !span.is_empty())
+    })
+}
+
 /// All matches of the find state in the current story. Text marked deleted by
 /// Track Changes is no longer part of the document, so the search reads each
 /// paragraph without it: a match lies within one stretch of live text, and word
@@ -485,6 +545,12 @@ fn find_opts(f: &crate::session::FindState) -> find_pattern::Opts {
 /// wildcard groups). A pattern that can match a paragraph mark (`^p`) reads runs of sibling
 /// paragraphs as one text with a mark between them; otherwise each paragraph is read alone.
 pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Result<Vec<Found>, CmdError> {
+    search_full_within(s, story, with_rep, None)
+}
+
+/// Only fully contained matches count toward the result limit when a selection is supplied.
+/// Search the original paragraph text so word boundaries and anchors keep their context.
+fn search_full_within(s: &Session, story: StoryRef, with_rep: bool, within: Option<&[(Pos, Pos)]>) -> Result<Vec<Found>, CmdError> {
     use regex_automata::{Input, meta, util::syntax};
     let f = &s.find;
     if f.query.is_empty() {
@@ -515,6 +581,10 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
     let mut out = Vec::new();
     let mut caps = re.create_captures();
     for chunk in chunks {
+        let within = within.map(|ranges| chunk_ranges(ranges, paths.get(chunk.clone()).unwrap_or_default()));
+        if within.is_some_and(<[(Pos, Pos)]>::is_empty) {
+            continue;
+        }
         let mut hay = String::new();
         let mut segs: Vec<Seg> = Vec::new();
         // Where the live text breaks (tracked-deleted text, or a paragraph edge when not spanning).
@@ -562,13 +632,8 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
             Some(Pos { story, path: paths.get(sg.para)?.clone(), off: sg.raw + (x - sg.hay) })
         };
         cuts.push(hay.len());
-        let mut from = 0;
-        for cut in cuts {
-            if cut <= from {
-                continue;
-            }
-            let mut input = Input::new(&hay).range(from..cut);
-            from = cut;
+        for span in search_spans(within, &paths, &segs, &cuts, hay.len()) {
+            let mut input = Input::new(&hay).range(span);
             loop {
                 re.search_captures(&input, &mut caps);
                 let Some(m) = caps.get_match() else { break };
@@ -734,14 +799,58 @@ fn replace(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"remaining": search(s, story)?.len()}))
 }
 
-/// Every match replaced, last first so earlier positions stay valid (one undo step). A `\r` in
-/// the replacement (`^p`) splits the paragraph.
+/// The selected stretches, ordered and merged, never the bounding rectangle of a column or
+/// table-cell selection. Invalid endpoints fail closed rather than widening the edit's scope.
+fn replacement_ranges(s: &Session) -> Result<Vec<(Pos, Pos)>, CmdError> {
+    let mut ranges = s.column_segments().map_or_else(|| vec![s.sel.ordered()], <[(Pos, Pos)]>::to_vec);
+    let story = s.sel.focus.story;
+    for (a, b) in &mut ranges {
+        if a > b {
+            std::mem::swap(a, b);
+        }
+        if a.story != story || b.story != story || s.doc.clamp(a) != *a || s.doc.clamp(b) != *b {
+            return Err(CmdError::Params("select valid text in a single story".into()));
+        }
+    }
+    ranges.retain(|(a, b)| a != b);
+    if ranges.is_empty() {
+        return Err(CmdError::Params("`in: selection` needs a selection".into()));
+    }
+    ranges.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+    let mut merged: Vec<(Pos, Pos)> = Vec::new();
+    for (a, b) in ranges {
+        match merged.last_mut() {
+            Some((_, end)) if *end >= a => *end = (*end).clone().max(b),
+            _ => merged.push((a, b)),
+        }
+    }
+    Ok(merged)
+}
+
 fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
+    let selection = match v.get("in") {
+        None => false,
+        Some(Value::String(scope)) if scope == "story" => false,
+        Some(Value::String(scope)) if scope == "selection" => true,
+        Some(_) => return Err(CmdError::Params("`in` is story or selection".into())),
+    };
+    replace_all_within(s, v, selection)
+}
+
+fn replace_all_in_selection(s: &mut Session, v: &Value) -> CmdResult {
+    replace_all_within(s, v, true)
+}
+
+/// Every match replaced, last first so earlier positions stay valid (one undo step). A `\r` in
+/// the replacement (`^p`) splits the paragraph. Scope is captured before finding or editing.
+fn replace_all_within(s: &mut Session, v: &Value, selection: bool) -> CmdResult {
+    let ranges = if selection { Some(replacement_ranges(s)?) } else { None };
     need_query(s, v)?;
     read_opts(s, v);
     let story = s.sel.focus.story;
-    let results = search_full(s, story, true)?;
+    let results = search_full_within(s, story, true, ranges.as_deref())?;
     let n = results.len();
+    let first = results.first().filter(|_| selection).map(|f| f.a.clone());
     super::controls::check_deletions(s, story, results.iter().map(|f| (&f.a, &f.b)))?;
     for Found { a, b, rep } in results.into_iter().rev() {
         let with = rep.unwrap_or_default();
@@ -762,6 +871,14 @@ fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
                 at = s.doc.insert_text(&at, part, &props)?;
             }
         }
+    }
+    if let Some(at) = first {
+        // Replacements can split/join paragraphs or change byte lengths. Do not keep stale
+        // column ranges around for the next edit; Undo restores the original selection.
+        s.sel = Selection::caret(s.doc.clamp(&at));
+        s.column = None;
+        s.goal_x = None;
+        s.pending = None;
     }
     s.status = format!("All done. We made {n} replacements.");
     Ok(json!({"replaced": n}))
