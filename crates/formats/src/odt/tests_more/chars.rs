@@ -284,3 +284,31 @@ fn objects_in_hidden_text_are_kept() {
     assert!(p.text.contains("Hidden"), "{:?}", p.text);
     assert!(p.objects.iter().any(|o| matches!(o, wordcraft_doc::para::InlineObject::BookmarkStart { name } if name == "Secret")), "{:?}", p.objects);
 }
+
+#[test]
+fn a_size_is_every_scripts_size() {
+    // Chinese text set to 24 pt stayed at the default size in LibreOffice: only the Latin size was
+    // written.
+    let mut d = Document::new();
+    let mut p = Paragraph::with_text("漢字", CharProps { size: Some(24.0), ..Default::default() });
+    p.props = Default::default();
+    d.body = vec![para_block(p)];
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let c = crate::odt::tests::content_of(&saved);
+    assert!(c.contains(r#"fo:font-size="24pt" style:font-size-asian="24pt" style:font-size-complex="24pt""#), "{c}");
+    let styles = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(
+        styles.contains(r#"fo:font-size="12pt" style:font-size-asian="12pt" style:font-size-complex="12pt""#)
+            || styles.contains("style:font-size-asian"),
+        "{styles}"
+    );
+    // Read back it is one size: a later change takes the complex-script text along.
+    let back = import(&saved).unwrap();
+    assert_eq!(back.body[0].as_para().unwrap().runs[0].props.size_cs, None);
+    // A complex-script size of its own stays its own, written once.
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text("x", CharProps { size: Some(24.0), size_cs: Some(30.0), ..Default::default() }))];
+    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    assert_eq!(c.matches("style:font-size-complex").count(), 1, "{c}");
+    assert!(c.contains(r#"style:font-size-complex="30pt""#), "{c}");
+}

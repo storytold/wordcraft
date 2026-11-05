@@ -69,6 +69,9 @@ impl FmtDelta {
                     *b = None;
                 }
             }
+            // A complex-script size the same as the text's is no size of its own (what WordCraft
+            // writes for every script): a later change of size takes it along.
+            x.size_cs = x.size_cs.filter(|s| Some(*s) != f.size);
             x.spacing = x.spacing.filter(|s| *s != 0.0);
             x.scale = x.scale.filter(|s| *s != 100.0);
             f.extra = (x != wordcraft_doc::props::CharProps::default()).then(|| Box::new(x));

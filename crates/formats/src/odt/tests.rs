@@ -1269,7 +1269,7 @@ fn the_default_styles_font_size_is_the_documents() {
     let s = entry(&crate::odt::tests::export_model(&d).unwrap(), "styles.xml");
     assert!(
         s.contains(r#"<style:text-properties fo:font-family="'Liberation Serif'" fo:font-size="11pt""#)
-            || s.contains(r#"fo:font-size="11pt" style:letter-kerning"#),
+            || s.contains(r#"fo:font-size="11pt" style:font-size-asian="11pt""#),
         "{s}"
     );
     let back = import(&crate::odt::tests::export_model(&d).unwrap()).unwrap();
