@@ -1001,11 +1001,39 @@ fn emf_with_1bpp_bitmap(w: i32, h: i32) -> Vec<u8> {
 fn a_metafile_with_a_huge_bitmap_is_parsed_once() {
     // 8000 x 5000 is 160 MB of RGBA, past the 128 MB cache, from a 5 MB file.
     let mut d = Document::new();
-    let key = d.add_media(emf_with_1bpp_bitmap(8000, 5000), "emf");
-    let first = vector_for(&d, &key).expect("the metafile reads");
-    let again = vector_for(&d, &key).expect("the metafile reads");
+    // A key of its own: the vector cache is global and tests running in threads share `image1.emf`.
+    let key = "huge-parsed-once.emf";
+    d.media.insert(key.to_string(), Arc::new(emf_with_1bpp_bitmap(8000, 5000)));
+    let first = vector_for(&d, key).expect("the metafile reads");
+    let again = vector_for(&d, key).expect("the metafile reads");
     assert!(Arc::ptr_eq(&first, &again), "the second repaint reuses the parsed picture");
-    assert!(first.bytes() <= CACHE_BYTES / 2, "{} bytes", first.bytes());
+    assert!(first.bytes() <= CACHE_BYTES / 8, "{} bytes", first.bytes());
+}
+
+/// Several huge metafiles on screen together (zoomed-out pages, thumbnails) sit side by side in the
+/// cache instead of clearing it, so a small metafile drawn with them stays a hit.
+#[test]
+fn huge_metafiles_do_not_push_a_small_one_out_of_the_cache() {
+    let mut d = Document::new();
+    let small = "evict-small.emf";
+    d.media.insert(small.to_string(), Arc::new(emf_with_1bpp_bitmap(64, 64)));
+    let huge: Vec<String> = (0..4).map(|n| format!("evict-huge-{n}.emf")).collect();
+    for (n, k) in huge.iter().enumerate() {
+        // Distinct bytes per file (the width differs; 8000 x 5000 is the most pixels a metafile decodes), so each is its own cache entry.
+        d.media.insert(k.clone(), Arc::new(emf_with_1bpp_bitmap(8000 - n as i32, 5000)));
+    }
+    let small_first = vector_for(&d, small).expect("the small metafile reads");
+    for round in 0..2 {
+        for k in &huge {
+            assert!(vector_for(&d, k).is_some(), "round {round}");
+        }
+    }
+    let kept: Vec<_> = huge.iter().map(|k| vector_for(&d, k).unwrap()).collect();
+    let again: Vec<_> = huge.iter().map(|k| vector_for(&d, k).unwrap()).collect();
+    for (a, b) in kept.iter().zip(&again) {
+        assert!(Arc::ptr_eq(a, b), "a huge metafile is parsed once while four are drawn together");
+    }
+    assert!(Arc::ptr_eq(&small_first, &vector_for(&d, small).unwrap()), "the small metafile is still cached");
 }
 
 /// Time of three repaints of a picture with a 160 MB bitmap:
@@ -1031,11 +1059,11 @@ fn bitmaps_are_shrunk_in_proportion_only_when_the_picture_is_past_the_cache() {
     let kept = fit_cache(vec![pm(1000, 1000), None, pm(2000, 2000)], 1_000_000);
     assert_eq!(kept.iter().flatten().map(|p| (p.width(), p.height())).collect::<Vec<_>>(), [(1000, 1000), (2000, 2000)]);
     assert!(kept[1].is_none(), "a path item keeps its place in the list");
-    // A 144 MB and a 36 MB bitmap: both shrink, the big one more.
+    // A 144 MB and a 36 MB bitmap: both shrink by the same factor.
     let fit = fit_cache(vec![pm(6000, 6000), pm(3000, 3000)], 4_000_000);
-    assert!(bytes(&fit) + 4_000_000 <= CACHE_BYTES / 2, "{} bytes", bytes(&fit));
+    assert!(bytes(&fit) + 4_000_000 <= CACHE_BYTES / 8, "{} bytes", bytes(&fit));
     let (a, b) = (fit[0].as_ref().unwrap(), fit[1].as_ref().unwrap());
-    assert_eq!((a.width(), b.width()), (3000, 1500), "each bitmap keeps its share of the pixels that fit");
+    assert_eq!((a.width(), b.width()), (1500, 750), "each bitmap keeps its share of the pixels that fit");
     assert!(a.data().iter().all(|p| (p.r, p.g, p.b, p.a) == (1, 2, 3, 255)), "flat stays flat");
 }
 

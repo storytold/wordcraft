@@ -217,17 +217,21 @@ fn build_vector(bytes: &[u8]) -> Option<Vector> {
 /// The bitmaps of a metafile at a size its whole picture is kept in the cache. When geometry and
 /// bitmaps together are past the cache budget (a metafile with a 6000 x 6000 bitmap is 144 MB), the
 /// cache would refuse the picture and every repaint would parse and decode the file again, so the
-/// bitmaps are box-averaged down to half the budget between them, in proportion to their size, as
-/// large raster pictures are (#3665). Pictures within the budget keep their full resolution.
+/// bitmaps are box-averaged down to an eighth of the budget between them, in proportion to their
+/// size, as large raster pictures are (#3665, which uses half). An eighth because the cache starts
+/// over when full: several huge pictures on screen together must fit side by side, and not clear
+/// the small ones with them. Pictures within the budget keep their full resolution. Printing
+/// (`render_page`) draws the shrunk bitmaps too, as it does large raster pictures; PDF export parses
+/// the metafile itself and is unaffected.
 pub(crate) fn fit_cache(mut pixmaps: Vec<Option<Pixmap>>, geometry: usize) -> Vec<Option<Pixmap>> {
     let bytes = |p: &Pixmap| usize::from(p.width()) * usize::from(p.height()) * 4;
     let total: usize = pixmaps.iter().flatten().map(bytes).sum();
     if total.saturating_add(geometry) <= CACHE_BYTES {
         return pixmaps;
     }
-    // With no room (the geometry alone is half the budget) nothing shrinks and the picture stays
+    // With no room (the geometry alone is an eighth of the budget) nothing shrinks and the picture stays
     // uncached, as before.
-    let room = (CACHE_BYTES / 2).saturating_sub(geometry) / 4;
+    let room = (CACHE_BYTES / 8).saturating_sub(geometry) / 4;
     for pm in pixmaps.iter_mut().flatten() {
         // This bitmap's share of the pixels that fit.
         let share = (room as u128 * bytes(pm) as u128 / total.max(1) as u128) as u64;
