@@ -847,6 +847,14 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             if let Some(e) = b.right.filter(Border::is_visible) {
                 items.push(Placed::Rule { x0: x1, y0, x1, y1, border: e });
             }
+            if c.vmerge != VMerge::Continue {
+                if let Some(e) = b.tl2br.filter(Border::is_visible) {
+                    items.push(Placed::Rule { x0, y0, x1, y1: span_h, border: e });
+                }
+                if let Some(e) = b.tr2bl.filter(Border::is_visible) {
+                    items.push(Placed::Rule { x0: x1, y0, x1: x0, y1: span_h, border: e });
+                }
+            }
             items.push(Placed::Cell {
                 rect: Rect::new(c.x, 0.0, c.w, if c.vmerge == VMerge::Continue { rh } else { span_h }),
                 covered: c.vmerge == VMerge::Continue,
@@ -1132,12 +1140,21 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
                         }
                     } else {
                         let (t, bt) = (y0.min(*y1), y0.max(*y1));
-                        if t < cut {
-                            a.push(Placed::Rule { x0: *x0, y0: t, x1: *x1, y1: bt.min(cut), border: *border });
-                        }
-                        if bt > cut {
+                        if t < cut && bt > cut {
+                            let (left_x, right_x) = if y0 <= y1 { (*x0, *x1) } else { (*x1, *x0) };
+                            let at_cut = left_x + (right_x - left_x) * (cut - t) / (bt - t);
+                            a.push(Placed::Rule { x0: left_x, y0: t, x1: at_cut, y1: cut, border: *border });
                             let shift = geo_shift(bt, shift);
-                            b.push(Placed::Rule { x0: *x0, y0: (t - shift).max(0.0), x1: *x1, y1: bt - shift, border: *border });
+                            b.push(Placed::Rule { x0: at_cut, y0: (cut - shift).max(0.0), x1: right_x, y1: bt - shift, border: *border });
+                        } else {
+                            if t < cut {
+                                let x_cut = if y0 <= y1 { *x1 } else { *x0 };
+                                a.push(Placed::Rule { x0: *x0, y0: *y0, x1: x_cut, y1: bt.min(cut), border: *border });
+                            }
+                            if bt > cut {
+                                let shift = geo_shift(bt, shift);
+                                b.push(Placed::Rule { x0: *x0, y0: (t - shift).max(0.0), x1: *x1, y1: bt - shift, border: *border });
+                            }
                         }
                     }
                 }

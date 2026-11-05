@@ -242,6 +242,10 @@ pub struct Borders {
 }
 
 impl Borders {
+    pub fn diagonals(&self) -> Option<Borders> {
+        let diagonals = Borders { tl2br: self.tl2br, tr2bl: self.tr2bl, ..Borders::default() };
+        (diagonals != Borders::default()).then_some(diagonals)
+    }
     pub fn all(b: Border) -> Borders {
         Borders { top: Some(b), left: Some(b), bottom: Some(b), right: Some(b), between: Some(b), inside_v: Some(b), ..Default::default() }
     }
@@ -249,7 +253,7 @@ impl Borders {
         Borders { top: Some(b), left: Some(b), bottom: Some(b), right: Some(b), between: None, inside_v: None, ..Default::default() }
     }
     pub fn any_visible(&self) -> bool {
-        [self.top, self.left, self.bottom, self.right, self.between, self.inside_v, self.tl2br, self.tr2bl].iter().flatten().any(Border::is_visible)
+        [self.top, self.left, self.bottom, self.right, self.between, self.inside_v].iter().flatten().any(Border::is_visible)
     }
     /// A side is drawn, or a paragraph side without a line holds padding (ODF's, which keeps
     /// its room in LibreOffice's layout).

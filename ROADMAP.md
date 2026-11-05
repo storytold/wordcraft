@@ -775,6 +775,7 @@ Section page-numbering settings preserve `w:chapStyle` values across the full un
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` is preserved with true, false and absent values; OOXML properties follow schema order. Grid layout remains open. |
+| 2026-11-05 | minor | DOCX cell diagonals round-trip in valid cell-border markup and render across vertically merged cells; exports to other formats and real-world corpus qualification remain open. |
 | 2026-10-28 | trivial | Per-page ink object lookups, #3614. Drawing order, geometry and saved data retain their behavior; no readiness estimate change |
 | 2026-11-04 | trivial | Progress log: OpenDocument display settings removed (gap 19) |
 | 2026-10-31 | trivial | Progress log: dialogs are modal except the five Word keeps modeless; a press beside one shakes it (#3859) |

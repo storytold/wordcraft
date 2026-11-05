@@ -496,6 +496,14 @@ impl PropCtx {
 
     /// `w:pBdr`, `w:tblBorders`, `w:tcBorders`, `w:pgBorders`.
     pub fn borders(&self, e: &El) -> Borders {
+        self.borders_with_diagonals(e, false)
+    }
+
+    pub fn cell_borders(&self, e: &El) -> Borders {
+        self.borders_with_diagonals(e, true)
+    }
+
+    fn borders_with_diagonals(&self, e: &El, cell: bool) -> Borders {
         let mut b = Borders::default();
         for k in e.els() {
             match k.local() {
@@ -505,8 +513,8 @@ impl PropCtx {
                 "right" | "end" => b.right = Some(self.border(k)),
                 "between" | "insideH" => b.between = Some(self.border(k)),
                 "insideV" => b.inside_v = Some(self.border(k)),
-                "tl2br" => b.tl2br = Some(self.border(k)),
-                "tr2bl" => b.tr2bl = Some(self.border(k)),
+                "tl2br" if cell => b.tl2br = Some(self.border(k)),
+                "tr2bl" if cell => b.tr2bl = Some(self.border(k)),
                 _ => {}
             }
         }
@@ -651,7 +659,7 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
             "w:gridSpan" => c.span = k.attr("w:val").and_then(u32_of).unwrap_or(1).clamp(1, 63),
             "w:hMerge" => hcont = k.attr("w:val") != Some("restart"),
             "w:vMerge" => c.vmerge = if k.attr("w:val") == Some("restart") { VMerge::Restart } else { VMerge::Continue },
-            "w:tcBorders" => c.borders = Some(pc.borders(k)),
+            "w:tcBorders" => c.borders = Some(pc.cell_borders(k)),
             "w:shd" => c.shading = pc.shd_fill(k),
             "w:noWrap" => c.no_wrap = on_off(k),
             "w:hideMark" => c.hide_mark = on_off(k),

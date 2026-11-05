@@ -121,8 +121,19 @@ fn style_xml(w: &mut W, st: &Style, flagged: &[StyleKind]) {
             if let Some(n) = t.col_band_size {
                 w.val("w:tblStyleColBandSize", &n.min(1000).to_string());
             }
-            if let Some(b) = &t.borders {
-                props::borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
+            if let Some(b) = t.borders {
+                let sides = wordcraft_doc::props::Borders {
+                    top: b.top,
+                    left: b.left,
+                    bottom: b.bottom,
+                    right: b.right,
+                    between: b.between,
+                    inside_v: b.inside_v,
+                    ..wordcraft_doc::props::Borders::default()
+                };
+                if sides != wordcraft_doc::props::Borders::default() {
+                    props::borders(w, "w:tblBorders", &sides, Some("w:insideH"), &[]);
+                }
             }
             if let Some(m) = &t.cell_margins {
                 props::margins(w, "w:tblCellMar", m);
@@ -137,7 +148,7 @@ fn style_xml(w: &mut W, st: &Style, flagged: &[StyleKind]) {
             let ppr = ParaProps { align: f.align, ..ParaProps::default() };
             let has_rpr = props::has_rpr(&f.chr);
             // The whole table's borders are its table borders (`w:tblPr` above).
-            let borders = f.borders.filter(|_| part != TablePart::WholeTable);
+            let borders = if part == TablePart::WholeTable { f.borders.and_then(|b| b.diagonals()) } else { f.borders };
             let has_tc = f.fill.is_some() || borders.is_some() || f.v_align.is_some();
             if !has_rpr && !has_tc && f.align.is_none() {
                 continue;
