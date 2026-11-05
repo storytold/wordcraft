@@ -159,3 +159,34 @@ fn a_file_a_kept_definition_names_is_written_with_it() {
     let m = crate::odt::tests::entry(&saved, "META-INF/manifest.xml");
     assert!(m.contains(r#"manifest:full-path="Pictures/paper.png""#), "{m}");
 }
+
+#[test]
+fn the_files_font_declarations_are_kept() {
+    // A reader without a font picks its substitute by how the file declares it. WordCraft's own
+    // guess at a font's kind replaced the file's, and a document came back from a save with no
+    // edits 13 pages shorter in LibreOffice on a computer without its font.
+    let ns = NS_T;
+    let face = r#"<style:font-face style:name="Odd Roman" svg:font-family="&apos;Odd Roman&apos;" style:font-family-generic="roman"/>"#;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:font-face-decls>{face}</office:font-face-decls><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="Odd Roman" fo:font-size="12pt"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}><office:font-face-decls>{face}</office:font-face-decls><office:automatic-styles><style:style style:name="P1" style:family="paragraph"><style:text-properties style:font-name="Odd Roman"/></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">Text</text:p></office:text></office:body></office:document-content>"#
+    );
+    let check = |saved: &[u8], what: &str| {
+        for part in [styles_of(saved), content_of(saved)] {
+            assert!(part.contains(face), "{what}: {part}");
+            assert_eq!(part.matches(r#"<style:font-face style:name="Odd Roman""#).count(), 1, "{what}: declared once: {part}");
+        }
+    };
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    check(&export(&d).unwrap(), "no edits");
+    // Text edited, written from the model: still the file's declaration.
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.text.push('!');
+        if let Some(r) = p.runs.last_mut() {
+            r.len += 1;
+        }
+    }
+    check(&export(&d).unwrap(), "an edit");
+}

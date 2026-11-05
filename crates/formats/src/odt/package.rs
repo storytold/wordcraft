@@ -900,6 +900,11 @@ fn with_kept_defs(
     };
     add(&mut content, "</office:automatic-styles>", auto);
     add(&mut styles, "</office:styles>", common);
+    // A font the file declares is declared as the file does: a reader without the font picks its
+    // substitute by this, and a different one would reflow every page.
+    let faces: Vec<&str> = defs.iter().filter(|(k, _)| k.starts_with("font:")).map(|(_, d)| &**d).collect();
+    with_file_faces(&mut content, &faces);
+    with_file_faces(&mut styles, &faces);
     for (xml, before) in [(&mut content, "<office:automatic-styles"), (&mut styles, "<office:styles")] {
         // No declarations yet: the element they go in, where it belongs (before the styles).
         if !fonts.is_empty()
@@ -911,6 +916,19 @@ fn with_kept_defs(
         add(xml, "</office:font-face-decls>", fonts);
     }
     (content, styles)
+}
+
+/// `xml` (a part WordCraft wrote) with each font it declares that `faces` declare too (the file's
+/// own `style:font-face` elements) as `faces` has it.
+fn with_file_faces(xml: &mut String, faces: &[&str]) {
+    for face in faces {
+        let Some(name) = face.split("style:name=\"").nth(1).and_then(|r| r.split('"').next()) else { continue };
+        let ours = format!("<style:font-face style:name=\"{name}\"");
+        let Some(at) = xml.find(&ours) else { continue };
+        // WordCraft's own declarations are empty elements.
+        let Some(end) = xml.get(at..).and_then(|r| r.find("/>")).map(|e| at + e + 2) else { continue };
+        xml.replace_range(at..end, face);
+    }
 }
 
 /// An OpenDocument text document's media type, and a template's (ODF 1.3 Part 2 §3.3, Appendix C).
