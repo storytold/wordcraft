@@ -10,7 +10,7 @@ pub(super) fn table_design(app: &mut WordApp, ui: &mut Ui) {
     let look = app.session.sel.focus.path.cell().and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp).map(|t| t.props.look));
     group(ui, "Table Style Options", None, app, |ui, app| {
         let Some(l) = look else { return };
-        egui::Grid::new("look").show(ui, |ui| {
+        crate::rtl::grid(ui, egui::Grid::new("look"), |ui| {
             for (row, items) in [
                 [("Header Row", "headerRow", l.header_row), ("First Column", "firstColumn", l.first_column)],
                 [("Total Row", "totalRow", l.total_row), ("Last Column", "lastColumn", l.last_column)],
@@ -42,14 +42,16 @@ pub(super) fn table_design(app: &mut WordApp, ui: &mut Ui) {
             .map(|s| (s.builtin, s.id.clone(), crate::i18n::style_name(s)))
             .collect();
         styles.sort_by_key(|(builtin, _, _)| *builtin);
-        egui::ScrollArea::horizontal().max_width(420.0).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                for (_, id, name) in styles {
-                    if crate::previews::table_style_tile(ui, app, &id).on_hover_text(name).clicked() {
-                        let _ = app.run("table.style", json!({"style": id}));
+        crate::rtl::island(ui, |ui| {
+            egui::ScrollArea::horizontal().max_width(420.0).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (_, id, name) in styles {
+                        if crate::previews::table_style_tile(ui, app, &id).on_hover_text(name).clicked() {
+                            let _ = app.run("table.style", json!({"style": id}));
+                        }
                     }
-                }
-            });
+                });
+            })
         });
         stack(ui, |ui| {
             let current = look.and_then(|_| {
@@ -209,6 +211,20 @@ fn line_sample(p: &egui::Painter, r: Rect, style: BorderStyle, width: f32, c: eg
         BorderStyle::Dotted => dashes(&[1.5], &[2.0]),
         BorderStyle::Dashed => dashes(&[6.0], &[3.0]),
         BorderStyle::DotDash => dashes(&[6.0, 1.5], &[3.0, 3.0]),
+        // The compound lines (thin and thick lines side by side, the gap as named).
+        BorderStyle::ThinThickSmallGap | BorderStyle::ThinThickMediumGap | BorderStyle::ThinThickLargeGap => {
+            seg(-1.5, width);
+            seg(1.5, width * 2.0);
+        }
+        BorderStyle::ThickThinSmallGap | BorderStyle::ThickThinMediumGap | BorderStyle::ThickThinLargeGap => {
+            seg(-1.5, width * 2.0);
+            seg(1.5, width);
+        }
+        BorderStyle::ThinThickThinSmallGap | BorderStyle::ThinThickThinMediumGap | BorderStyle::ThinThickThinLargeGap => {
+            seg(-3.0, width);
+            seg(0.0, width * 2.0);
+            seg(3.0, width);
+        }
         BorderStyle::Wave => {
             let n = ((x1 - x0) / 3.0).max(2.0) as usize;
             let pts: Vec<egui::Pos2> = (0..=n).map(|i| pos2(x0 + (x1 - x0) * i as f32 / n as f32, y + if i % 2 == 0 { -1.5 } else { 1.5 })).collect();
@@ -421,7 +437,7 @@ pub(super) fn table_layout(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Alignment", None, app, |ui, app| {
-        egui::Grid::new("cellalign").spacing(vec2(1.0, 1.0)).show(ui, |ui| {
+        crate::rtl::grid(ui, egui::Grid::new("cellalign").spacing(vec2(1.0, 1.0)), |ui| {
             for row in [
                 [("topLeft", "Align Top Left"), ("topCenter", "Align Top Center"), ("topRight", "Align Top Right")],
                 [("centerLeft", "Align Center Left"), ("center", "Align Center"), ("centerRight", "Align Center Right")],

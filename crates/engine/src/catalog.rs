@@ -70,6 +70,7 @@ Home|Font|Character Shading|format.shading
 Home|Font|Font Dialog|format.fontDialog
 Home|Font|Double Strikethrough|format.doubleStrikethrough
 Home|Font|Small Caps|format.smallCaps
+Home|Font|Emphasis Mark|format.emphasisMark
 Home|Font|All Caps|format.allCaps
 Home|Font|Hidden|format.hidden
 Home|Font|Emboss|format.emboss

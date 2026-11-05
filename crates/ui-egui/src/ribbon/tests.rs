@@ -2,6 +2,21 @@ use super::arrange::group_menu_command;
 use super::*;
 use wordcraft_engine::Session;
 
+/// #2601: Dropped / In margin send just the position and `keep`, so every selected paragraph keeps
+/// its own lines, distance and font; None sends only the position.
+#[test]
+fn drop_cap_menu_keeps_the_options() {
+    use super::insert::drop_cap_payload;
+    assert_eq!(drop_cap_payload("dropped"), json!({"position": "dropped", "keep": true}));
+    assert_eq!(drop_cap_payload("margin"), json!({"position": "margin", "keep": true}));
+    assert_eq!(drop_cap_payload("none"), json!({"position": "none"}), "None takes it all away");
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Once")), crate::Services::default());
+    app.run("insert.dropCap", json!({"position": "dropped", "lines": 5, "distance": 7.0, "font": "Liberation Mono"})).unwrap();
+    app.run("insert.dropCap", drop_cap_payload("margin")).unwrap();
+    let state = wordcraft_engine::cmd::insert::drop_cap_state(&app.session);
+    assert_eq!((state.position, state.lines, state.distance, state.font.as_deref()), ("margin", 5, 7.0, Some("Liberation Mono")));
+}
+
 /// #4349: Insert › Shapes offers the basic shapes as a grid of drawn tiles, each named for
 /// screen readers and by its tooltip; a click inserts that shape.
 #[test]
@@ -229,6 +244,111 @@ fn page_setup_menus_mark_the_current_setting() {
     assert_eq!(first_words, ["Narrow", "Landscape", "A4", "Right"], "{checked:?}");
 }
 
+/// The Language menu's built-in short list, as `language_checks` takes it.
+fn short() -> Vec<(String, String)> {
+    PROOFING_LANGUAGES.iter().map(|(t, n)| ((*t).to_string(), (*n).to_string())).collect()
+}
+
+/// Check marks with only `tag` checked.
+fn listed_only(tag: &str) -> Vec<bool> {
+    PROOFING_LANGUAGES.iter().map(|(t, _)| *t == tag).collect()
+}
+
+/// CP4.3: the menu's check marks are worked out one way (the tag, or the same proofing language
+/// named alike), not by a case per language: a bare or ISO 639-2 tag checks its language, and a
+/// region WordCraft proofs like another (New Zealand like the UK) doesn't check that one.
+#[test]
+fn language_menu_checks_by_tag_or_proofing_language() {
+    for (current, tag) in [
+        ("pl", "pl-PL"),
+        ("pt", "pt-BR"),
+        ("it", "it-IT"),
+        ("hr", "hr-HR"),
+        ("tr", "tr-TR"),
+        ("ces", "cs-CZ"),
+        ("in", "id-ID"),
+        ("es", "es-ES"),
+        ("en", "en-US"),
+        ("RU-ru", "ru-RU"),
+    ] {
+        let c = language_checks(current, &short());
+        assert_eq!((c.extra, c.listed), (None, listed_only(tag)), "{current}");
+    }
+    let c = language_checks("en-NZ", &short());
+    assert_eq!(c.extra.as_deref(), Some("English (New Zealand)"));
+    assert!(!c.listed.contains(&true), "English (New Zealand) doesn't check English (United Kingdom)");
+    // A pack language in the list (once installed) is checked for its bare tag too.
+    let mut entries = short();
+    entries.push(("bg-BG".into(), "Bulgarian".into()));
+    let c = language_checks("bg", &entries);
+    assert_eq!((c.extra, c.listed.last().copied()), (None, Some(true)));
+    // CP4.3 review: a bare pack-language tag checks the regioned row of the same pack, however
+    // the packs are known (`nl` and `nl-NL` are both the `nl` pack's), and shows no second Dutch.
+    entries.push(("nl-NL".into(), "Dutch".into()));
+    for current in ["nl", "NL-nl"] {
+        let c = language_checks(current, &entries);
+        assert_eq!((c.extra, c.listed.last().copied()), (None, Some(true)), "{current}");
+    }
+    let c = language_checks("nl-BE", &entries);
+    assert_eq!((c.extra.as_deref(), c.listed.last().copied()), (Some("Dutch (Belgium)"), Some(false)));
+    assert!(super::language::same_language("sv", "sv-SE") && !super::language::same_language("sv-FI", "sv-SE"));
+    // Nothing set (mixed selection): nothing checked, nothing above.
+    let c = language_checks("", &entries);
+    assert_eq!((c.extra, c.listed.contains(&true)), (None, false));
+}
+
+/// CP4.3 review: rows are matched by tag, never by the name shown. Serbian in Latin and in
+/// Cyrillic letters of Bosnia show under the same name but are two languages, so neither checks
+/// the other's row; a name that is translated or different doesn't matter to the match.
+#[test]
+fn rows_are_matched_by_tag_not_by_display_name() {
+    use super::language::same_language;
+    assert_eq!(language_name(Some("sr-Latn-BA")), language_name(Some("sr-Cyrl-BA")), "same display name");
+    assert!(!same_language("sr-Latn-BA", "sr-Cyrl-BA"));
+    let entries = vec![("sr-Latn-BA".to_string(), "Serbian".to_string()), ("sr-Cyrl-BA".to_string(), "Serbian".to_string())];
+    assert_eq!(language_checks("sr-Cyrl-BA", &entries).listed, [false, true]);
+    // A variant on an otherwise equal tag is the row without it, unless a pack or the lists name
+    // the variant (Valencian is not Catalan); a language WordCraft has nothing for keeps its regions apart.
+    assert!(same_language("de-DE-1996", "de-DE") && same_language("de-DE", "de-DE-1996"));
+    assert!(!same_language("ca-ES-valencia", "ca-ES"));
+    assert!(!same_language("xx", "xx-AA"), "xx vs xx-AA");
+    assert!(same_language("xx-AA", "XX_aa"), "xx-AA vs XX_aa");
+    assert_eq!(language_checks("de-DE-1996", &[("de-DE".to_string(), "German (Germany)".to_string())]).listed, [true]);
+    // Two unknown languages never merge, though neither has a name but its tag.
+    assert!(!same_language("xx", "yy") && !same_language("xx-AA", "yy-AA"));
+    // The row's name can be anything (translated): the tag decides.
+    let renamed = vec![("pl-PL".to_string(), "Polski".to_string())];
+    assert_eq!(language_checks("pl", &renamed).listed, [true]);
+    assert_eq!(language_checks("PL_pl", &renamed).listed, [true]);
+    assert_eq!(language_checks("pt", &[("pt-PT".to_string(), "Portuguese (Brazil)".to_string())]).listed, [false]);
+}
+
+/// CP4.3 review: a name built from a language and a region (`Swedish (Finland)`) has no catalog row
+/// of its own, so the language, the region and the `{language} ({region})` template are looked up
+/// separately and joined. English stays as `language_name` builds it.
+#[test]
+fn a_language_and_region_name_is_translated_in_parts() {
+    use super::language::display_name_with;
+    let fake = |s: &str| -> String {
+        match s {
+            "Swedish" => "X".into(),
+            "Finland" => "Y".into(),
+            "{language} ({region})" => "{language} \u{2013} {region}".into(),
+            other => other.to_string(),
+        }
+    };
+    assert_eq!(display_name_with(Some("sv-FI"), &fake), "X \u{2013} Y");
+    // A whole name is looked up as it is; the template isn't used for it.
+    assert_eq!(display_name_with(Some("sv-SE"), &fake), "X");
+    // Without a catalogue (English) the name is byte-identical to the English name.
+    for tag in ["sv-FI", "es-CU", "fr-CA", "de-CH", "pt-AO", "en-SG", "sr-Latn-BA", "pl-PL", "nl", "xx-YY", "xx", "ca-valencia"] {
+        assert_eq!(super::language::display_name(Some(tag)), language_name(Some(tag)), "{tag}");
+    }
+    assert_eq!(language_name(Some("sv-FI")), "Swedish (Finland)");
+    // Matching never uses a translated name: Finnish Swedish and Swedish of Sweden stay two rows.
+    assert!(!super::language::same_language("sv-FI", "sv-SE"));
+}
+
 /// #860 review: a tag the language list doesn't have shows by language and region, not as
 /// the tag; Portuguese (Angola) isn't Brazil's, and no name shows twice in the menu.
 #[test]
@@ -240,17 +360,16 @@ fn other_regions_show_by_name_once() {
     assert_eq!(language_name(Some("sr-Latn-BA")), "Serbian (Bosnia and Herzegovina)");
     assert_eq!(language_name(Some("en-ZZ")), "English (ZZ)");
     assert_eq!(language_name(Some("xx-YY")), "xx-YY");
-    let exact = |cur: &'static str| move |t: &str| t.eq_ignore_ascii_case(cur);
     for tag in ["fr-CA", "pt-AO", "en-SG"] {
-        let c = language_checks(tag, exact(tag));
+        let c = language_checks(tag, &short());
         let name = c.extra.expect("shown above the list");
         assert!(!PROOFING_LANGUAGES.iter().any(|(_, n)| *n == name), "{name} is listed once");
         assert!(!c.listed.contains(&true), "{tag}: nothing in the list checked");
     }
     // A tag named like a list entry checks that entry instead of showing it again.
-    let c = language_checks("PT-br-x-test", |_| false);
+    let c = language_checks("PT-br-x-test", &short());
     assert_eq!(c.extra, None);
-    assert_eq!(c.listed, PROOFING_LANGUAGES.map(|(t, _)| t == "pt-BR"));
+    assert_eq!(c.listed, listed_only("pt-BR"));
 }
 
 /// The Englishes WordCraft proofs differently are in the menu, checked by their tags, and
@@ -262,8 +381,8 @@ fn english_dialects_are_in_the_language_menu() {
     {
         assert!(PROOFING_LANGUAGES.contains(&(tag, name)), "{tag}");
         assert_eq!(language_name(Some(tag)), name);
-        let c = language_checks(&tag.to_ascii_lowercase(), |t| t.eq_ignore_ascii_case(tag));
-        assert_eq!((c.extra, c.listed), (None, PROOFING_LANGUAGES.map(|(t, _)| t == tag)), "{tag}");
+        let c = language_checks(&tag.to_ascii_lowercase(), &short());
+        assert_eq!((c.extra, c.listed), (None, listed_only(tag)), "{tag}");
     }
     for (tag, name) in
         [("en-NZ", "English (New Zealand)"), ("en-IE", "English (Ireland)"), ("en-ZA", "English (South Africa)"), ("en-IN", "English (India)")]
@@ -292,12 +411,12 @@ fn spanish_varieties_are_in_the_language_menu() {
         assert!(PROOFING_LANGUAGES.contains(&(tag, name)), "{tag}");
         assert!(crate::dialogs_layout::LANGUAGES.contains(&(tag, name)), "{tag}");
         assert_eq!(language_name(Some(tag)), name);
-        let c = language_checks(&tag.to_ascii_lowercase(), |t| t.eq_ignore_ascii_case(tag));
-        assert_eq!((c.extra, c.listed), (None, PROOFING_LANGUAGES.map(|(t, _)| t == tag)), "{tag}");
+        let c = language_checks(&tag.to_ascii_lowercase(), &short());
+        assert_eq!((c.extra, c.listed), (None, listed_only(tag)), "{tag}");
     }
     assert_eq!(language_name(Some("es")), "Spanish (Spain)");
     assert_eq!(language_name(Some("es-AR")), "Spanish (Argentina)");
-    let c = language_checks("es-AR", |t| t.eq_ignore_ascii_case("es-AR"));
+    let c = language_checks("es-AR", &short());
     assert_eq!(c.extra.as_deref(), Some("Spanish (Argentina)"));
     assert!(!c.listed.contains(&true));
 }

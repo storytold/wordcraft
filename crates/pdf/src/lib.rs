@@ -22,6 +22,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod imposition;
+
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU16;
 use std::sync::Arc;
@@ -61,6 +63,8 @@ mod paint;
 mod picture;
 mod tags;
 
+#[cfg(test)]
+use export::Fit;
 pub use export::{export, export_layout};
 #[cfg(test)]
 use exporter::Exporter;
