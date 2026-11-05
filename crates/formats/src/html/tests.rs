@@ -921,3 +921,19 @@ fn ms_equation_fallback_ends_at_its_own_endif() {
     let other = r#"<p>a<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q</m:t></m:r></m:oMath><![endif]--><![if !msEquation]>b</p><p>c<![if !vml]>d<![endif]>e</p>"#;
     assert_eq!(inline_marks(&parse(other)), ["a[q]b", "cde"]);
 }
+
+#[test]
+fn many_unclosed_ms_equation_fallbacks_import_quickly() {
+    // Each unclosed fallback opener searched the rest of the page for its end, so a page of
+    // equations each followed by one took quadratic time: about a minute here, now well under a
+    // second.
+    let one = "<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q</m:t></m:r></m:oMath><![endif]--><![if !msEquation]>";
+    let html = format!("<p>a{}b</p>", one.repeat(40_000));
+    let t = std::time::Instant::now();
+    let f = parse(&html);
+    assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+    let marks = inline_marks(&f);
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0].matches("[q]").count(), 40_000);
+    assert!(marks[0].starts_with("a[q]") && marks[0].ends_with("[q]b"), "{}", marks[0].get(..40).unwrap_or(""));
+}

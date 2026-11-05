@@ -30,7 +30,7 @@ pub(super) fn parse_in(s: &str, images: ImageLoader, page: bool) -> Flow {
     };
     // The lexer's offsets (a style element's text is cut out by them) are into the normalized text.
     let s: &str = &normalized;
-    let mut lx = Lexer { s, pos: 0 };
+    let mut lx = Lexer::new(s);
     let mut b = Builder::new(images, page);
     let mut fields = Fields::default();
     let mut guard = 0usize;
@@ -102,7 +102,7 @@ pub(super) fn parse_in(s: &str, images: ImageLoader, page: bool) -> Flow {
 pub(crate) fn parse_office_math(markup: &str) -> Vec<crate::mathml::El> {
     /// Most equations one comment brings in.
     const MAX_EQUATIONS: usize = 256;
-    let mut lx = Lexer { s: markup, pos: 0 };
+    let mut lx = Lexer::new(markup);
     let mut out = Vec::new();
     while out.len() < MAX_EQUATIONS
         && let Some(t) = lx.next()

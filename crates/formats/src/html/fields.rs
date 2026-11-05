@@ -113,7 +113,7 @@ impl Fields {
     /// Read one comment's markup, counting tokens into `count`; the markup of a `supportFields`
     /// comment opened inside it, when there is one, is handed back to be read next.
     fn comment_part(&mut self, markup: &str, b: &mut Builder, count: &mut usize) -> Option<String> {
-        let mut lx = Lexer { s: markup, pos: 0 };
+        let mut lx = Lexer::new(markup);
         // White space the comment's source lays out around a mark (`\n<span …field-separator…>\n`)
         // is not the result's: it is dropped after a mark and held until content follows.
         let mut after_mark = true;
