@@ -72,19 +72,20 @@ pub(super) fn parse_in(s: &str, images: ImageLoader, page: bool) -> Flow {
             }
             Tok::End(name) => b.end(&name),
             Tok::OfficeMath(markup) => {
-                // The fallback picture goes only when the equation took its place (or in the
-                // head, where neither is content): an equation that reads as nothing keeps it.
+                // The fallback picture goes only when the equations took its place (or in the
+                // head, where neither is content): one that reads as nothing, or a cap that
+                // cuts them short, keeps it.
                 let in_head = b.in_head();
-                let mut imported = false;
+                let mut replaced = in_head;
                 if !in_head {
-                    for el in parse_office_math(&markup) {
-                        if let Some((linear, display)) = crate::omml::read(&el) {
-                            b.start_para().inlines.push(Inline::Equation { linear, display });
-                            imported = true;
-                        }
+                    let (elements, all_found) = parse_office_math(&markup);
+                    let read = crate::omml::read(&elements);
+                    replaced = all_found && read.complete && !read.equations.is_empty();
+                    for (linear, display) in read.equations {
+                        b.start_para().inlines.push(Inline::Equation { linear, display });
                     }
                 }
-                if imported || in_head {
+                if replaced {
                     skip_math_fallback(&mut lx);
                 }
             }
@@ -98,22 +99,21 @@ pub(super) fn parse_in(s: &str, images: ImageLoader, page: bool) -> Flow {
 }
 
 /// The `m:oMathPara` and `m:oMath` elements (outermost only) in the markup of an
-/// `msEquation` conditional comment (#5582), read as trees.
-pub(crate) fn parse_office_math(markup: &str) -> Vec<crate::mathml::El> {
-    /// Most equations one comment brings in.
-    const MAX_EQUATIONS: usize = 256;
+/// `msEquation` conditional comment (#5582), read as trees, and whether that was all of them.
+pub(crate) fn parse_office_math(markup: &str) -> (Vec<crate::mathml::El>, bool) {
     let mut lx = Lexer::new(markup);
     let mut out = Vec::new();
-    while out.len() < MAX_EQUATIONS
-        && let Some(t) = lx.next()
-    {
+    while let Some(t) = lx.next() {
         if let Tok::Start { name, attrs, self_close: false } = t
             && matches!(crate::mathml::local(&name), "omath" | "omathpara")
         {
+            if out.len() == crate::omml::MAX_EQUATIONS {
+                return (out, false);
+            }
             out.push(read_math(&mut lx, name, attrs));
         }
     }
-    out
+    (out, true)
 }
 
 /// Collapse white space inside ruby markup as body text does (HTML's white space only: an
