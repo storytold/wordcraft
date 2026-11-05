@@ -78,6 +78,7 @@ fn a_column_chart_reads_its_data_title_and_legend() {
             title: Some("Sales by quarter".into()),
             legend: Some(LegendPos::Right),
             data_labels: false,
+            val_axis: wordcraft_doc::chart::value_axis(),
             ..Default::default()
         }
     );
@@ -250,7 +251,15 @@ fn every_chart_type_is_saved_as_a_chart_object_and_reads_back() {
         let bytes = crate::odt::export(&doc_with(spec.clone(), false)).unwrap();
         let back = reread(&bytes);
         assert_eq!(back.len(), 1, "{kind:?}");
-        assert_eq!(*back[0].spec, spec.clone().sanitized(), "{kind:?}");
+        // ODF keeps no series or axis formatting here: only the data, the title and the legend
+        // come back; the value axis has the gridlines every chart had before axes were formattable.
+        let mut expected = spec.clone().sanitized();
+        for s in &mut expected.series {
+            *s = ChartSeries { name: std::mem::take(&mut s.name), values: std::mem::take(&mut s.values), ..Default::default() };
+        }
+        expected.cat_axis = Default::default();
+        expected.val_axis = if kind.is_round() { Default::default() } else { wordcraft_doc::chart::value_axis() };
+        assert_eq!(*back[0].spec, expected, "{kind:?}");
         assert_eq!((back[0].w, back[0].h, back[0].alt.as_str()), (300.0, 180.0, "Sales chart"), "{kind:?}");
         // The package lists the chart object.
         let z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
