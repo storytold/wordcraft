@@ -99,11 +99,16 @@ pub(crate) fn available(app: &WordApp) -> bool {
         && crate::ink::cursor(app).is_none()
 }
 
+/// Which tables the pointer reaches on `page`: a header's and footer's while one is edited (#5558).
+pub(crate) fn reach(app: &WordApp, layout: &DocLayout, page: usize) -> table_resize::Reach {
+    table_resize::Reach::of(layout, &app.session.doc, app.session.sel.focus.story, page)
+}
+
 /// The border or handle under screen point `p`, if any.
 fn target_at(app: &WordApp, layout: &DocLayout, rects: &[Rect], scale: f32, p: Pos2) -> Option<(usize, f32, f32, ResizeTarget)> {
     let (page, x, y) = crate::canvas::page_at(rects, layout, scale, p)?;
     let sc = page_scale(rects, layout, scale, page)?;
-    let t = table_resize::resize_target_in(layout, &app.session.doc, page, x, y, REACH_PX / sc, app.session.sel.focus.story)?;
+    let t = table_resize::resize_target_in(layout, &app.session.doc, page, x, y, REACH_PX / sc, reach(app, layout, page))?;
     Some((page, x, y, t))
 }
 
@@ -167,7 +172,7 @@ pub(crate) fn grab(app: &mut WordApp, layout: &DocLayout, page: usize, x: f32, y
     if !available(app) {
         return;
     }
-    if let Some(mut target) = table_resize::resize_target_in(layout, &app.session.doc, page, x, y, 1.0, app.session.sel.focus.story) {
+    if let Some(mut target) = table_resize::resize_target_in(layout, &app.session.doc, page, x, y, 1.0, reach(app, layout, page)) {
         target.limit_to_selection(&app.session, y);
         app.canvas.table_resize = Some(ResizeDrag { page, from: (x, y), to: (x, y), target, ruler: true });
     }
@@ -277,7 +282,7 @@ pub fn paint(app: &WordApp, painter: &egui::Painter, t: &Tokens, layout: &DocLay
     let Some(p) = painter.ctx().input(|i| i.pointer.hover_pos()) else { return };
     let Some((page, x, y)) = crate::canvas::page_at(rects, layout, scale, p) else { return };
     let Some(sc) = page_scale(rects, layout, scale, page) else { return };
-    let Some(tg) = table_resize::table_under_in(layout, &app.session.doc, page, x, y, REACH_PX / sc, app.session.sel.focus.story) else { return };
+    let Some(tg) = table_resize::table_under_in(layout, &app.session.doc, page, x, y, REACH_PX / sc, reach(app, layout, page)) else { return };
     let h = tg.handle();
     if let (Some(a), Some(b)) = (s(page, h.x, h.y), s(page, h.right(), h.bottom())) {
         let r = Rect::from_two_pos(a, b);

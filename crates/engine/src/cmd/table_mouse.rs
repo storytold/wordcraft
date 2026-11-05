@@ -16,7 +16,7 @@ use wordcraft_doc::{Document, Path, Pos, StoryRef, Table};
 use wordcraft_geom::{Point, Rect};
 use wordcraft_layout::{DocLayout, Placed};
 
-use super::table_resize::{self, CellBox, Edge, REACH, ResizeTarget};
+use super::table_resize::{self, CellBox, Edge, REACH, Reach, ResizeTarget};
 use super::{sel_result, table};
 use crate::{CellRange, CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
@@ -205,11 +205,12 @@ pub fn target_at(l: &DocLayout, doc: &Document, story: StoryRef, page: usize, x:
         return None;
     }
     let reach = clean_reach(reach);
-    if table_resize::resize_target_in(l, doc, page, x, y, reach, story).is_some() {
+    let tables = Reach::of(l, doc, story, page);
+    if table_resize::resize_target_in(l, doc, page, x, y, reach, tables).is_some() {
         return None;
     }
-    let boxes = table_resize::cell_boxes_in(l, page, story);
-    table_resize::tables_on_in(l, doc, page, story)
+    let boxes = table_resize::cell_boxes_in(l, page, tables);
+    table_resize::tables_on_in(l, doc, page, tables)
         .into_iter()
         .filter(|g| g.story == story)
         .filter_map(|geom| {
@@ -226,7 +227,7 @@ pub fn handle_table(l: &DocLayout, doc: &Document, story: StoryRef, page: usize,
         return None;
     }
     let pad = clean_reach(reach) / 2.0;
-    table_resize::tables_on_in(l, doc, page, story)
+    table_resize::tables_on_in(l, doc, page, Reach::of(l, doc, story, page))
         .into_iter()
         .filter(|g| {
             let h = handle(g);
@@ -253,7 +254,9 @@ pub fn caret_handles(l: &DocLayout, doc: &Document, story: StoryRef, table: &Pat
         return (None, None);
     }
     // The table's geometry on this page that the pointer handles are drawn and grabbed from.
-    let Some(g) = table_resize::tables_on_in(l, doc, page, story).into_iter().find(|g| g.story == story && g.table == *table) else {
+    let Some(g) =
+        table_resize::tables_on_in(l, doc, page, Reach::of(l, doc, story, page)).into_iter().find(|g| g.story == story && g.table == *table)
+    else {
         return (None, None);
     };
     (first.then(|| handle(&g)), last.then(|| g.handle()))
@@ -565,10 +568,12 @@ fn move_drag(s: &mut Session, v: &Value) -> CmdResult {
 fn fit_column(s: &mut Session, v: &Value) -> CmdResult {
     let (page, x, y, reach) = point(v)?;
     let l = s.layout();
-    let Some((target, line)) = table_resize::resize_target_in(&l, &s.doc, page, x, y, reach, s.sel.focus.story).and_then(|t| match t.edge {
-        Edge::Column(line) => Some((t, line)),
-        _ => None,
-    }) else {
+    let Some((target, line)) = table_resize::resize_target_in(&l, &s.doc, page, x, y, reach, Reach::of(&l, &s.doc, s.sel.focus.story, page))
+        .and_then(|t| match t.edge {
+            Edge::Column(line) => Some((t, line)),
+            _ => None,
+        })
+    else {
         return Err(CmdError::Failed("there's no column border there".into()));
     };
     let t = s.doc.table(target.story, &target.table).ok_or_else(|| CmdError::Failed("there's no table there".into()))?;
@@ -595,7 +600,7 @@ fn room_right(l: &DocLayout, doc: &Document, page: usize, target: &ResizeTarget)
     let margin = l.pages.get(page).map_or(target.right(), |pg| pg.body.right());
     let Some((outer, row, cell)) = target.table.cell() else { return margin };
     let Some(t) = doc.table(target.story, &outer) else { return margin };
-    let boxes = table_resize::cell_boxes_in(l, page, target.story);
+    let boxes = table_resize::story_cell_boxes(l, page, target.story);
     let Some(b) = boxes.iter().find(|b| b.story == target.story && b.table == outer && b.row == row && b.cell == cell) else {
         return margin;
     };

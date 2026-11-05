@@ -143,7 +143,7 @@ pub fn paint(app: &WordApp, painter: &egui::Painter, t: &Tokens, layout: &DocLay
     let hover = painter.ctx().input(|i| i.pointer.hover_pos());
     match (tool, app.canvas.table_stroke) {
         (TableTool::Draw, Some(st)) => {
-            match table_draw::stroke_in(layout, st.page, app.session.sel.focus.story, st.from.0, st.from.1, st.to.0, st.to.1) {
+            match table_draw::stroke_in(layout, st.page, crate::table_resize::reach(app, layout, st.page), st.from.0, st.from.1, st.to.0, st.to.1) {
                 Some(Kind::Rect(r)) => {
                     if let (Some(a), Some(b)) = (to_screen(st.page, r.x, r.y), to_screen(st.page, r.right(), r.bottom())) {
                         painter.rect_stroke(Rect::from_two_pos(a, b), 0.0, ink, egui::StrokeKind::Middle);
@@ -170,7 +170,7 @@ pub fn paint(app: &WordApp, painter: &egui::Painter, t: &Tokens, layout: &DocLay
         (TableTool::Erase, _) => {
             if let Some(p) = hover
                 && let Some((page, x, y)) = crate::canvas::page_at(pages, layout, scale, p)
-                && let Some(e) = table_draw::erase_target_in(layout, page, app.session.sel.focus.story, x, y)
+                && let Some(e) = table_draw::erase_target_in(layout, page, crate::table_resize::reach(app, layout, page), x, y)
                 && let (Some(a), Some(b)) = (to_screen(page, e.from.0, e.from.1), to_screen(page, e.to.0, e.to.1))
             {
                 painter.line_segment([a, b], Stroke::new(3.0, t.red));
