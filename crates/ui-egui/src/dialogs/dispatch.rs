@@ -1153,6 +1153,9 @@ fn about_dialog(ui: &mut Ui, d: &mut Dialog) -> bool {
         2 => crate::credits::models_ui(ui),
         3 => crate::language_packs::about_tab(ui),
         _ => {
+            let (logo_r, _) = ui.allocate_exact_size(vec2(52.0, 52.0), egui::Sense::hover());
+            crate::icons::wordcraft_logo(ui.painter(), logo_r);
+            ui.add_space(4.0);
             ui.label(egui::RichText::new(tl!("WordCraft")).font(semibold(22.0)));
             let build = option_env!("WORDCRAFT_BUILD_SHA").map(|s| s.get(..8).unwrap_or(s)).unwrap_or(tl!("development build"));
             ui.label(crate::i18n::fmt(tl!("Version {version} ({build})"), &[("version", env!("CARGO_PKG_VERSION")), ("build", build)]));
