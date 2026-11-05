@@ -45,6 +45,7 @@ fn text_frame(k: &El) -> wordcraft_doc::props::TextFrame {
         h_anchor: word("w:hAnchor", &["text", "margin", "page"], "page"),
         v_anchor: word("w:vAnchor", &["text", "margin", "page"], "page"),
         wrap: word("w:wrap", &["around", "auto", "notBeside", "none", "tight", "through"], "auto"),
+        anchor_lock: k.attr("w:anchorLock").map(|v| !matches!(v.trim(), "0" | "false" | "off" | "False" | "FALSE")),
         h_space: len("w:hSpace").unwrap_or(0.0).max(0.0),
         v_space: len("w:vSpace").unwrap_or(0.0).max(0.0),
     }
@@ -345,6 +346,7 @@ impl PropCtx {
                 "w:widowControl" => p.widow_control = Some(on_off(k)),
                 "w:contextualSpacing" => p.contextual_spacing = Some(on_off(k)),
                 "w:mirrorIndents" => p.mirror_indents = Some(on_off(k)),
+                "w:adjustRightInd" => p.adjust_right_indent = Some(on_off(k)),
                 "w:suppressAutoHyphens" => p.suppress_hyphens = Some(on_off(k)),
                 "w:suppressLineNumbers" => p.suppress_line_numbers = Some(on_off(k)),
                 "w:bidi" => p.bidi = Some(on_off(k)),
