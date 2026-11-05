@@ -53,7 +53,9 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     toggle(w, "w:emboss", c.emboss);
     toggle(w, "w:imprint", c.engrave);
     toggle(w, "w:noProof", c.no_proof);
+    toggle(w, "w:snapToGrid", c.snap_to_grid);
     toggle(w, "w:vanish", c.hidden);
+    toggle(w, "w:webHidden", c.web_hidden);
     match c.color {
         Some(TextColor::Auto) => w.val("w:color", "auto"),
         Some(TextColor::Rgb(rgb)) => w.val("w:color", &rgb.hex()),
@@ -106,6 +108,10 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     }
     toggle(w, "w:rtl", c.rtl);
     toggle(w, "w:cs", c.cs);
+    // Emphasis mark (§17.3.2.12), after `w:cs` and before `w:lang`.
+    if let Some(m) = c.emphasis {
+        w.val("w:em", m.ooxml());
+    }
     let mut lang_attrs: Vec<(&str, &str)> = Vec::with_capacity(3);
     if let Some(l) = &c.lang {
         lang_attrs.push(("w:val", l));

@@ -22,7 +22,7 @@ pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u
 
 /// Fingerprint of a page's laid-out content. A layout never changes once made, so this is
 /// taken once per page and layout ([`PageKeys`]), not every frame.
-fn page_content_key(page: &Page) -> u64 {
+pub(super) fn page_content_key(page: &Page) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (page.w.to_bits(), page.h.to_bits()).hash(&mut h);
     for list in [&page.items, &page.header, &page.footer] {
@@ -34,7 +34,7 @@ fn page_content_key(page: &Page) -> u64 {
                 }
                 Placed::Fill { rect, color } => format!("{rect:?}{color:?}").hash(&mut h),
                 Placed::Rule { x0, y0, x1, y1, border } => format!("{x0}{y0}{x1}{y1}{border:?}").hash(&mut h),
-                Placed::Image { rect, media, spin, .. } => format!("{rect:?}{media}{spin:?}").hash(&mut h),
+                Placed::Image { rect, media, crop, spin, fx, .. } => format!("{rect:?}{media}{crop:?}{spin:?}{fx:?}").hash(&mut h),
                 Placed::Shape { rect, kind, fill, stroke, stroke_width, effects, freeform, spin, extra, .. } => {
                     format!("{rect:?}{kind:?}{fill:?}{stroke:?}{stroke_width}{effects:?}{spin:?}{extra:?}").hash(&mut h);
                     freeform.as_ref().map(|f| std::sync::Arc::as_ptr(f) as usize).hash(&mut h);
@@ -221,6 +221,14 @@ pub(crate) fn preview_sel(app: &WordApp) -> Option<&wordcraft_engine::Selection>
     app.canvas.table_preview_layout.as_ref().map(|(_, _, sel, _)| sel)
 }
 
+/// Whether the pages are drawn dark: View › Switch Modes, or in Read Mode the Page color's
+/// Inverse (Switch Modes is ignored there). Drawing over the pages (ink, drag previews) follows it.
+pub(crate) fn dark_page(app: &WordApp) -> bool {
+    use wordcraft_engine::cmd::view::ReadPageColor;
+    let v = &app.session.view;
+    if v.read_mode { v.read_page_color == ReadPageColor::Inverse } else { v.dark_mode }
+}
+
 /// Render options for this view's page rasters: marks, markup, dark page, header/body dimming.
 pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_render::RenderOptions {
     let mut opts = screen_render_options();
@@ -231,14 +239,13 @@ pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_re
     // Ink Replay draws the ink itself, stroke by stroke, over pages without it.
     opts.display.hide_ink = app.session.view.hide_ink || app.session.view.draw.replay;
     opts.display.revisions = app.session.prefs.markup.clone();
-    opts.dark = app.session.view.dark_mode;
+    opts.dark = dark_page(app);
     opts.dark_paper = wordcraft_render::DARK_PAPER;
-    // In Read Mode the Page color sets the paper and the dark page, and Switch Modes is ignored.
+    // In Read Mode the Page color sets the paper.
     if app.session.view.read_mode {
         use wordcraft_engine::cmd::view::ReadPageColor;
         let color = app.session.view.read_page_color;
         opts.read_paper = Some(if color == ReadPageColor::Sepia { wordcraft_render::SEPIA_PAPER } else { wordcraft_doc::props::Rgb::WHITE });
-        opts.dark = color == ReadPageColor::Inverse;
     }
     opts.display.dim_header = !dim_body;
     opts.display.dim_body = dim_body;
