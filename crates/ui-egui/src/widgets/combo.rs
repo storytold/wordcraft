@@ -62,7 +62,7 @@ pub fn combo(
     items: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: false, tip: "" })
+    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: false, tip: "", shown_as: None })
 }
 
 /// [`combo`] whose field and arrow show the hover hint `tip` (already translated).
@@ -75,7 +75,7 @@ pub fn combo_hint(
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
     tip: &str,
 ) -> Option<String> {
-    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: false, tip })
+    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: false, tip, shown_as: None })
 }
 
 /// What [`font_combo`] returns when its list's last entry, Add Font…, is chosen (#582): the
@@ -99,7 +99,7 @@ pub fn font_combo(
     items: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: true, tip: tl!("Font") })
+    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: true, tip: tl!("Font"), shown_as: None })
 }
 
 /// [`font_combo`] with the `recent` families (most recent first) in a Recently Used Fonts
@@ -116,10 +116,12 @@ pub fn font_combo_with_recent(
     recent: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, ComboOptions { id, width, current, items, recent, preview, search: true, tip: tl!("Font") })
+    combo_impl(ui, ComboOptions { id, width, current, items, recent, preview, search: true, tip: tl!("Font"), shown_as: None })
 }
 
-/// [`font_combo_with_recent`] with a hover hint `tip` (already translated).
+/// [`font_combo_with_recent`] with a hover hint `tip` (already translated). With `shown_as`
+/// (the families drawn instead of a `current` font that isn't installed) the box carries a
+/// warning mark saying so.
 pub struct FontComboOptions<'a> {
     pub id: &'a str,
     pub width: f32,
@@ -128,6 +130,7 @@ pub struct FontComboOptions<'a> {
     pub recent: &'a [String],
     pub preview: Option<&'a dyn Fn(&mut Ui, &str) -> Response>,
     pub tip: &'a str,
+    pub shown_as: Option<&'a str>,
 }
 
 pub fn font_combo_with_recent_hint(ui: &mut Ui, options: FontComboOptions<'_>) -> Option<String> {
@@ -142,7 +145,18 @@ pub fn font_combo_with_recent_hint(ui: &mut Ui, options: FontComboOptions<'_>) -
             recent: options.recent,
             preview: options.preview,
             tip: options.tip,
+            shown_as: options.shown_as,
         },
+    )
+}
+
+/// The hover note for a font that isn't installed, `shown_as` drawn instead.
+fn missing_font_tip(font: &str, shown_as: &str) -> String {
+    crate::i18n::fmt(
+        tl!(
+            "{font} isn't installed on this computer, so its text is shown in {shown}. Line breaks and page count can differ from where the document was made. If you have the font file, add it with Add Font… at the end of this list."
+        ),
+        &[("font", font), ("shown", shown_as)],
     )
 }
 
@@ -155,6 +169,19 @@ struct ComboOptions<'a> {
     preview: Option<&'a dyn Fn(&mut Ui, &str) -> Response>,
     search: bool,
     tip: &'a str,
+    /// See [`FontComboOptions::shown_as`].
+    shown_as: Option<&'a str>,
+}
+
+/// The arrow's box next to a combo's field: its corner radii and the rectangle it paints, reaching
+/// one border width under the field on the side the two meet (the field is left of the arrow in a
+/// left-to-right row, right of it in a right-to-left one).
+fn arrow_box_shape(rtl: bool, arrow: Rect, r: CornerRadius) -> (CornerRadius, Rect) {
+    if rtl {
+        (CornerRadius { nw: r.nw, sw: r.sw, ne: 0, se: 0 }, Rect::from_min_max(arrow.min, pos2(arrow.max.x + ARROW_BORDER, arrow.max.y)))
+    } else {
+        (CornerRadius { nw: 0, sw: 0, ne: r.ne, se: r.se }, Rect::from_min_max(pos2(arrow.min.x - ARROW_BORDER, arrow.min.y), arrow.max))
+    }
 }
 
 /// Indices of the `items` matching `query`, ignoring case: exact matches, then the names starting
@@ -204,11 +231,23 @@ struct ComboSearch {
     view_h: f32,
 }
 
+/// The warning mark at the right end of the field `resp` when its font `current` isn't installed
+/// and is drawn in `shown_as`, with its note as the field's description (the note is a hover
+/// hint: a screen reader reads it here). Returns the note, for the field's hover.
+fn missing_font_mark(ui: &Ui, resp: &egui::Response, current: &str, shown_as: Option<&str>, t: &Tokens) -> Vec<String> {
+    let Some(shown) = shown_as else { return Vec::new() };
+    let r = Rect::from_center_size(pos2(resp.rect.right() - 9.0, resp.rect.center().y), vec2(12.0, 12.0));
+    icons::paint(ui.painter(), r, "fontMissing", t.icon, t.accent);
+    let note = missing_font_tip(current, shown);
+    ui.ctx().accesskit_node_builder(resp.id, |n| n.set_description(note.as_str()));
+    vec![note]
+}
+
 /// Draws an editable or searchable combo box: keeps temporary text and search state, supports
 /// keyboard selection, popup rows with recent and preview sections, an arrow and hint, and
 /// returns the chosen or committed text.
 fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
-    let ComboOptions { id, width, current, items, recent, preview, search, tip } = options;
+    let ComboOptions { id, width, current, items, recent, preview, search, tip, shown_as } = options;
     let mut out = None;
     let edit_id = ui.scope_id().with(("combo_text", id));
     let te_id = ui.scope_id().with(("combo_edit", id));
@@ -220,12 +259,16 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
         // The field and its arrow share one outline: rounded on the outside, square where they
-        // meet. The field's frame takes the widget visuals' radius in every state.
+        // meet. The field's frame takes the widget visuals' radius in every state. In a row that
+        // runs right to left the arrow comes after the field on its left, so the corners and the
+        // arrow's underlap are the mirror image.
+        let rtl = ui.layout().prefer_right_to_left();
         let r = ui.visuals().widgets.inactive.corner_radius;
         let w = &mut ui.visuals_mut().widgets;
         for v in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
-            v.corner_radius.ne = 0;
-            v.corner_radius.se = 0;
+            let (a, b) = if rtl { (&mut v.corner_radius.nw, &mut v.corner_radius.sw) } else { (&mut v.corner_radius.ne, &mut v.corner_radius.se) };
+            *a = 0;
+            *b = 0;
         }
         // Up/Down move the list's highlight: take them before the text field moves its cursor.
         let mut step = 0i32;
@@ -239,7 +282,15 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
                 }
             });
         }
-        let te = egui::TextEdit::singleline(&mut text).id(te_id).desired_width(width - 16.0).font(regular(12.0)).margin(vec2(4.0, 3.0));
+        // A font that isn't installed: room at the field's right end for the warning mark.
+        let mark = shown_as.filter(|_| !current.is_empty());
+        let right = if mark.is_some() { 18 } else { 4 };
+        let te = egui::TextEdit::singleline(&mut text).id(te_id).desired_width(width - 16.0).font(regular(12.0)).margin(egui::Margin {
+            left: 4,
+            right,
+            top: 3,
+            bottom: 3,
+        });
         // The arrow's box is painted here, under the field, once its size is known.
         let arrow_bg = ui.painter().add(egui::Shape::Noop);
         let resp = ui.add(te);
@@ -248,6 +299,7 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
         if !tip.is_empty() {
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, ui.is_enabled(), tip));
         }
+        let notes = missing_font_mark(ui, &resp, current, mark, &t);
         keytip_badge(ui, resp.rect, "combo", id);
         focused = resp.has_focus();
         let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -306,8 +358,7 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
         }
         // It reaches one border width under the field, so the field's right border is the only line
         // between them: two borders side by side read as a double-width divider.
-        let ar_radius = CornerRadius { nw: 0, sw: 0, ne: r.ne, se: r.se };
-        let under = Rect::from_min_max(pos2(ar.min.x - ARROW_BORDER, ar.min.y), ar.max);
+        let (ar_radius, under) = arrow_box_shape(rtl, ar, r);
         let fill = if aresp.hovered() { t.hover } else { t.input };
         let arrow_box = egui::epaint::RectShape::new(under, ar_radius, fill, Stroke::new(ARROW_BORDER, t.input_border), egui::StrokeKind::Inside);
         ui.painter().set(arrow_bg, arrow_box);
@@ -315,8 +366,8 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
         // A field only focused by Tab, with nothing typed, still gets its (delayed) keyboard hint.
         let typing = focused && text != current;
         if !tip.is_empty() && !typing && !s.open {
-            show_hint(&resp, tip, &[]);
-            show_hint(&aresp, tip, &[]);
+            show_hint(&resp, tip, &notes);
+            show_hint(&aresp, tip, &notes);
         }
         icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(DROPDOWN, DROPDOWN)), "dropdown", t.icon, t.accent);
         // The list drops from the box's left edge, as in Word, not from the arrow (#535).
@@ -600,5 +651,26 @@ pub fn drawn_state(ui: &Ui, resp: &Response, framed: bool) -> DrawnState {
             text: t.text,
             expansion: 0.0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The arrow's box fuses with its field on the side they meet: in a left-to-right row the
+    /// arrow is right of the field (rounded on the right, painted one border under the field's
+    /// right edge), in a right-to-left row it is left of it (rounded on the left, under the
+    /// field's left edge).
+    #[test]
+    fn the_arrow_box_is_rounded_away_from_its_field() {
+        let arrow = Rect::from_min_max(pos2(100.0, 0.0), pos2(116.0, 20.0));
+        let r = CornerRadius::same(4);
+        let (ltr, under) = arrow_box_shape(false, arrow, r);
+        assert_eq!((ltr.nw, ltr.sw, ltr.ne, ltr.se), (0, 0, 4, 4));
+        assert_eq!((under.min.x, under.max.x), (100.0 - ARROW_BORDER, 116.0));
+        let (rtl, under) = arrow_box_shape(true, arrow, r);
+        assert_eq!((rtl.nw, rtl.sw, rtl.ne, rtl.se), (4, 4, 0, 0));
+        assert_eq!((under.min.x, under.max.x), (100.0, 116.0 + ARROW_BORDER));
     }
 }

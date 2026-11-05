@@ -317,7 +317,8 @@ impl<'a> Conv<'a> {
 
     /// A DrawingML picture as a `w:pict` (inline, at its extent); any other drawing is dropped.
     fn picture(&mut self, drawing: &El, rels: &Rels) -> Vec<Node> {
-        let Some(id) = drawing.find("a:blip").and_then(|b| b.attr("r:embed")) else { return Vec::new() };
+        let Some(blip) = drawing.find("a:blip") else { return Vec::new() };
+        let Some(id) = blip.attr("r:embed") else { return Vec::new() };
         let Some(target) = rels.by_id(id).filter(|r| !r.external).map(|r| r.target.clone()) else { return Vec::new() };
         let Some(src) = self.bin_for(&target) else { return Vec::new() };
         let pt = |k: &str| {
@@ -329,7 +330,19 @@ impl<'a> Conv<'a> {
         let shape_id = format!("_x0000_i{}", self.next_shape);
         self.next_shape = self.next_shape.saturating_add(1);
         let mut kids: Vec<Node> = std::mem::take(&mut self.bins).into_iter().map(Node::El).collect();
-        kids.push(Node::El(self.shape_frame(&shape_id, &style, &src, &alt)));
+        let mut shape = self.shape_frame(&shape_id, &style, &src, &alt);
+        // Brightness and contrast as VML `gain` and `blacklevel` (16.16 fixed point, #1711).
+        // `v:imagedata` has no opacity, so a picture's transparency (`a:alphaModFix`) is dropped.
+        let fx = crate::units::blip_fx(blip);
+        if fx.changes_pixels()
+            && let Some(Node::El(data)) = shape.kids.iter_mut().find(|k| matches!(k, Node::El(e) if e.name == "v:imagedata"))
+        {
+            let (gain, black) = fx.to_vml();
+            let fixed = |v: f64| format!("{}f", (v * 65_536.0).round().clamp(-1.0e12, 1.0e12) as i64);
+            data.attrs.push(("gain".into(), fixed(gain)));
+            data.attrs.push(("blacklevel".into(), fixed(black)));
+        }
+        kids.push(Node::El(shape));
         vec![Node::El(plain("w:pict", kids))]
     }
 

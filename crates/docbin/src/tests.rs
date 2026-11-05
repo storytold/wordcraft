@@ -1019,6 +1019,32 @@ fn two_sections_box_the_first() {
 }
 
 #[test]
+fn sections_ending_off_a_paragraph_mark_attach_nowhere() {
+    // Hostile section ends that miss every paragraph mark are skipped; the one that ends a
+    // paragraph still boxes it. Paragraphs are found by their end, not scanned per section.
+    let mut sections: Vec<(u32, Vec<u8>)> = (1..6).map(|cp| (cp, Vec::new())).collect();
+    sections.push((6, grpprl(&[(0x300A, &[0x01])])));
+    sections.push((12, Vec::new()));
+    let spec = StructSpec {
+        text: "first\rsecond\r",
+        header_stories: vec![],
+        sections,
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, Vec::new()), (6, 0, Vec::new())],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let paras: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).collect();
+    assert!(paras.first().and_then(|p| p.section.as_ref()).expect("first paragraph boxed").title_page);
+    assert_eq!(paras.iter().filter(|p| p.section.is_some()).count(), 1, "the missing ends attach nowhere");
+}
+
+#[test]
 fn header_story_becomes_part() {
     let spec = StructSpec {
         text: "body\r",
@@ -1181,6 +1207,53 @@ fn table_merges_borders_shading() {
     let top = b.top.expect("top border");
     assert_eq!(top.style, wordcraft_doc::props::BorderStyle::Single);
     assert_eq!(top.width, 0.5);
+}
+
+/// Table borders read the BrcType byte as paragraph borders do; a nil Brc80 is no border.
+#[test]
+fn table_borders_read_border_types_as_paragraphs_do() {
+    use wordcraft_doc::props::BorderStyle as S;
+    let text = "a\u{7}\u{7}tail\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01]), (0x6649, &[1, 0, 0, 0])]);
+    let row_end = {
+        let mut v = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01]), (0x6649, &[1, 0, 0, 0])]), t_def_edges(&[0, 2880])].concat();
+        v.extend_from_slice(&0xD605u16.to_le_bytes());
+        v.push(0x18);
+        // Dotted, triple, double wave, nil, 3-D emboss 255/8 pt wide, all zero.
+        for brc in [[8, 0x06, 1, 0], [8, 0x0A, 1, 0], [8, 0x15, 1, 0], [0xFF; 4], [0xFF, 0x18, 1, 0], [0, 0, 0, 0]] {
+            v.extend_from_slice(&brc);
+        }
+        v
+    };
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, in_tbl), (2, 0, row_end), (3, 0, grpprl(&[(0x6424, &[0xFF, 0x01, 1, 0])]))],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    let b = tbl.props.borders.expect("table borders");
+    let seen = [b.top, b.left, b.bottom, b.right, b.between, b.inside_v].map(|s| s.map(|s| (s.style, s.is_visible(), s.width)));
+    let want = [
+        (S::Dotted, true, 1.0),
+        (S::Triple, true, 1.0),
+        (S::Wave, true, 1.0),
+        (S::None, false, 0.0),
+        (S::Single, true, 12.0),
+        (S::None, false, 0.25),
+    ];
+    assert_eq!(seen, want.map(Some));
+    // A paragraph border is at most 12 points too, as a table border and a DOCX `w:sz` are.
+    let tail = doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == "tail").expect("tail paragraph");
+    assert_eq!(tail.props.borders.and_then(|b| b.top).map(|t| t.width), Some(12.0));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1441,6 +1514,16 @@ fn hyperlink_target_sublocation_and_quotes() {
 fn hyperlink_target_needs_the_whole_field_name() {
     assert_eq!(super::hyperlink_target(r#"HYPERLINKS "x""#), None);
     assert_eq!(super::hyperlink_target(r#"HYPERLINK	"http://example.com""#), Some("http://example.com".into()));
+}
+
+/// A bare `\m` or `\n` keeps the address after it; escapes, an empty address and `%22` read as in DOCX.
+#[test]
+fn hyperlink_target_keeps_the_address_after_a_bare_switch() {
+    assert_eq!(super::hyperlink_target(r#"HYPERLINK \m "http://example.com""#), Some("http://example.com".into()));
+    assert_eq!(super::hyperlink_target(r#"HYPERLINK \n "http://example.com""#), Some("http://example.com".into()));
+    assert_eq!(super::hyperlink_target(r#"HYPERLINK "C:\\Docs\\f.doc""#), Some(r"C:\Docs\f.doc".into()));
+    assert_eq!(super::hyperlink_target(r#"HYPERLINK "" \l "bm""#), Some("#bm".into()));
+    assert_eq!(super::hyperlink_target(r#"HYPERLINK "http://example.com/a%22b""#), Some("http://example.com/a%22b".into()));
 }
 
 #[test]
@@ -2376,6 +2459,23 @@ fn second_table_gets_its_own_grid() {
 }
 
 #[test]
+fn repeated_cell_sprms_keep_one_override_per_cell() {
+    // A PAPX repeating cell-range sprms (shared by every paragraph mark that names it) keeps one
+    // slot per cell, the last value winning, instead of a copy per repetition.
+    let mut sprms = Vec::new();
+    for w in 0..200u16 {
+        let [w0, w1] = (w * 20).to_le_bytes();
+        sprms.push(sprm_cb(0xD635, &[0, 63, 3, w0, w1]));
+        sprms.push(sprm_cb(0xD62C, &[0, 255, 1]));
+        sprms.push([0x24, 0x56, 0, 2].to_vec());
+    }
+    let row = crate::table::decode(&sprms.concat());
+    assert_eq!(row.width_of(0), Some(199.0), "the last width wins");
+    assert_eq!(row.width_of(62), Some(199.0));
+    assert!(row.overrides() <= 63 + 255 + 63, "{}", row.overrides());
+}
+
+#[test]
 fn sprm_t_cell_width_twips_and_percentage() {
     // [MS-DOC] §2.9.290 sprmTCellWidth (0xD635):
     // cb (1 byte), itcFirst (1 byte), itcLim (1 byte), ftsWidth (1 byte), wWidth (2 bytes).
@@ -2439,17 +2539,21 @@ fn symbol_runs_read_the_character_and_font_from_sprm_c_symbol() {
 }
 
 /// Paragraph borders around a block are read from both storage forms: the Word 97 Brc80
-/// (palette colour) and the Word 2000+ BrcOperand (cb + Brc with a full colour).
+/// (palette colour) and the Word 2000+ BrcOperand (cb + Brc with a full colour). A thick
+/// border (type 0x02) stays thick in both, as tables read it too.
 #[test]
 fn paragraph_borders_read_from_both_forms() {
+    use wordcraft_doc::props::BorderStyle as S;
     let b80 = [8u8, 0x01, 0x06, 0x01]; // 1 pt single line, palette red (6), 1 pt from the text
+    let thick80 = [8u8, 0x02, 0x06, 0x01];
     let brc = [8u8, 0xFF, 0x00, 0x00, 0x00, 8, 0x01, 0x02, 0x00]; // cb 8, red COLORREF, 1 pt single, space 2
+    let thick = [8u8, 0xFF, 0x00, 0x00, 0x00, 8, 0x02, 0x02, 0x00];
     let text = "boxed\r\r";
     let spec = StructSpec {
         text,
         papx_entries: vec![
-            (0, 0, grpprl(&[(0x6424, &b80), (0x6425, &b80), (0x6426, &b80), (0x6427, &b80), (0x6428, &b80)])),
-            (6, 0, grpprl(&[(0xC64E, &brc)])),
+            (0, 0, grpprl(&[(0x6424, &b80), (0x6425, &thick80), (0x6426, &b80), (0x6427, &b80), (0x6428, &b80)])),
+            (6, 0, grpprl(&[(0xC64E, &brc), (0xC64F, &thick)])),
         ],
         ..structured_spec(text, text.chars().count() as u32)
     };
@@ -2457,13 +2561,16 @@ fn paragraph_borders_read_from_both_forms() {
     let p0 = doc.body.first().and_then(|b| b.as_para()).expect("first paragraph");
     let b = p0.props.borders.expect("borders");
     let top = b.top.expect("top border");
-    assert_eq!((top.style, top.width, top.space), (wordcraft_doc::props::BorderStyle::Single, 1.0, 1.0));
+    assert_eq!((top.style, top.width, top.space), (S::Single, 1.0, 1.0));
     assert_eq!(top.color, Some(wordcraft_doc::Rgb(0xFF, 0, 0)));
-    assert!(b.left.is_some() && b.bottom.is_some() && b.right.is_some() && b.between.is_some());
+    assert_eq!(b.left.map(|l| (l.style, l.width)), Some((S::Thick, 1.0)), "Brc80 thick");
+    assert!(b.bottom.is_some() && b.right.is_some() && b.between.is_some());
     let p1 = doc.body.get(1).and_then(|b| b.as_para()).expect("second paragraph");
-    let top = p1.props.borders.expect("borders").top.expect("top border");
-    assert_eq!((top.style, top.width, top.space), (wordcraft_doc::props::BorderStyle::Single, 1.0, 2.0));
+    let b = p1.props.borders.expect("borders");
+    let top = b.top.expect("top border");
+    assert_eq!((top.style, top.width, top.space), (S::Single, 1.0, 2.0));
     assert_eq!(top.color, Some(wordcraft_doc::Rgb(0xFF, 0, 0)));
+    assert_eq!(b.left.map(|l| (l.style, l.width)), Some((S::Thick, 1.0)), "BrcOperand thick");
 }
 
 /// #3642: a small compound file whose DIFAT names one FAT sector thousands of times made `cfb`

@@ -56,9 +56,10 @@ pub fn notes(doc: &Document) -> Vec<Note> {
     let mut open: Vec<u32> = Vec::new();
     for path in doc.para_paths(StoryRef::Body) {
         let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
-        for (off, c) in p.text.char_indices() {
+        let mut objects = p.objects.iter();
+        for c in p.text.chars() {
             if c == OBJ {
-                match p.object_at(off) {
+                match objects.next() {
                     Some(InlineObject::CommentStart { id }) => {
                         if seen.insert(*id) {
                             order.push(*id);
@@ -198,3 +199,6 @@ fn text(notes: &[Note]) -> String {
     }
     s
 }
+
+#[cfg(test)]
+mod tests;
