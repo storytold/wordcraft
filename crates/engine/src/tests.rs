@@ -12429,3 +12429,180 @@ fn page_down_extends_a_selection_that_ends_in_collapsed_outline_text() {
     assert!(s.sel.focus.path.0[0] > 6, "Page Down extends the selection a page on: {:?}", s.sel.focus);
     assert!(s.layout().caret(&s.sel.focus).is_some(), "to a place the outline shows");
 }
+
+/// #5558: a table in the header is edited like one in the body (typing in its cells, Table
+/// Layout's rows and columns), and a table copied from the body is pasted into the header as a
+/// table, not as its text.
+#[test]
+fn a_header_table_is_edited_and_a_copied_table_pastes_into_the_header() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Body"}));
+    let id = run(&mut s, "insert.header", json!({"text": "Head"}))["story"].as_u64().unwrap() as u32;
+    let hf = StoryRef::Part(id);
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    assert_eq!(s.sel.focus.story, hf, "the caret stays in the header");
+    assert!(s.sel.focus.path.cell().is_some(), "the caret is in the new table: {:?}", s.sel.focus);
+    run(&mut s, "text.insert", json!({"text": "Cell"}));
+    run(&mut s, "table.insertRowBelow", json!({}));
+    run(&mut s, "table.insertColumnRight", json!({}));
+    let tables = |s: &Session| {
+        s.doc
+            .story(hf)
+            .map(|b| b.iter().filter_map(|b| b.as_table().map(|t| (t.rows.len(), t.rows[0].cells.len()))).collect::<Vec<_>>())
+            .unwrap_or_default()
+    };
+    assert_eq!(tables(&s), vec![(3, 3)]);
+    assert!(s.doc.plain_text(hf).contains("Cell"));
+    // Its column border drags, as a body table's does: the border is in the page's header.
+    let first = s.layout().pages[0].header.iter().find_map(|it| match it {
+        wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, story, .. } if *story == hf => Some(*rect),
+        _ => None,
+    });
+    let first = first.expect("the header's table is laid out");
+    let grid = |s: &Session| s.doc.story(hf).and_then(|b| b.iter().find_map(|b| b.as_table().map(|t| t.grid.clone()))).unwrap_or_default();
+    let before = grid(&s);
+    let (x, y) = (first.right(), first.y + first.h / 2.0);
+    run(&mut s, "table.resizeDrag", json!({"page": 0, "x": x, "y": y, "toX": x + 30.0, "toY": y}));
+    let after = grid(&s);
+    assert!(after[0] > before[0] + 20.0, "the header table's first column widened: {before:?} → {after:?}");
+    // While the body is edited, the dimmed header's table doesn't take the pointer.
+    assert!(crate::cmd::table_resize::resize_target_in(&s.layout(), &s.doc, 0, x, y, 4.0, crate::cmd::table_resize::Reach::Body).is_none());
+    // The Draw Table pen splits the header table's cell it crosses, as in the body.
+    let first = s.layout().pages[0].header.iter().find_map(|it| match it {
+        wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, story, .. } if *story == hf => Some(*rect),
+        _ => None,
+    });
+    let first = first.expect("the header's table is still laid out");
+    let mid = first.x + first.w / 2.0;
+    run(&mut s, "table.draw", json!({"page": 0, "x0": mid, "y0": first.y + 1.0, "x1": mid, "y1": first.bottom() - 1.0}));
+    assert_eq!(grid(&s).len(), 4, "the pen split a column of the header's table");
+    // A table copied from the body pastes into the header as a table.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 4)}));
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    run(&mut s, "text.insert", json!({"text": "Copied"}));
+    run(&mut s, "table.selectTable", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    // The end of the header's "Head" paragraph, after its table.
+    let head = s.doc.story(hf).map_or(0, |b| b.len().saturating_sub(1));
+    let at = Pos { story: hf, path: wordcraft_doc::Path::top(head), off: 4 };
+    assert_eq!(s.doc.para_at(&at).map(|p| p.text.as_str()), Some("Head"));
+    run(&mut s, "caret.set", json!({"pos": at}));
+    run(&mut s, "edit.paste", json!({}));
+    let mut found = tables(&s);
+    found.sort();
+    assert_eq!(found, vec![(1, 2), (3, 4)], "{:?}", s.doc.story(hf));
+    assert!(s.doc.plain_text(hf).contains("Copied"));
+}
+
+/// #5558 review: a body text box and a footnote share the body's editing. With the caret in
+/// one, the body's table still takes the pointer (border drags, the pen) and the dimmed header's
+/// doesn't; with the caret in the footer, the footer's table takes it and the body's doesn't.
+#[test]
+fn body_tables_keep_the_pointer_from_a_text_box_or_a_note_and_a_footer_table_takes_it() {
+    use crate::cmd::table_resize::{Reach, resize_target_in};
+    use wordcraft_layout::Placed;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Body"}));
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let head = run(&mut s, "insert.header", json!({"text": "Head"}))["story"].as_u64().unwrap() as u32;
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    let foot = run(&mut s, "insert.footer", json!({"text": "Foot"}))["story"].as_u64().unwrap() as u32;
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    run(&mut s, "insert.closeHeader", json!({}));
+    // The middle of the right border of `story`'s first cell on page 1.
+    let border = |s: &mut Session, story: StoryRef| {
+        let l = s.layout();
+        let pg = &l.pages[0];
+        let r = pg.items.iter().chain(&pg.header).chain(&pg.footer).find_map(|it| match it {
+            Placed::Cell { rect, row: 0, cell: 0, story: st, .. } if *st == story => Some(*rect),
+            _ => None,
+        });
+        let r = r.unwrap_or_else(|| panic!("{story:?}'s table is laid out"));
+        (r.right(), r.y + r.h / 2.0, r)
+    };
+    let grabbed = |s: &mut Session, (x, y): (f32, f32)| {
+        let l = s.layout();
+        let reach = Reach::of(&l, &s.doc, s.sel.focus.story, 0);
+        resize_target_in(&l, &s.doc, 0, x, y, 4.0, reach).map(|t| t.story)
+    };
+    let grid = |s: &Session, story: StoryRef| {
+        s.doc.story(story).and_then(|b| b.iter().find_map(|b| b.as_table().map(|t| t.grid.clone()))).unwrap_or_default()
+    };
+
+    // A text box in the body (the borders are measured once it is in).
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    let boxed = run(&mut s, "insert.textBox", json!({"text": "in box"}))["story"].as_u64().unwrap() as u32;
+    assert_eq!(s.sel.focus.story, StoryRef::Part(boxed));
+    let (bx, by, _) = border(&mut s, StoryRef::Body);
+    let (hx, hy, _) = border(&mut s, StoryRef::Part(head));
+    assert_eq!(grabbed(&mut s, (bx, by)), Some(StoryRef::Body), "the body's table, from a body text box");
+    assert_eq!(grabbed(&mut s, (hx, hy)), None, "not the dimmed header's");
+    let before = grid(&s, StoryRef::Body);
+    run(&mut s, "table.resizeDrag", json!({"page": 0, "x": bx, "y": by, "toX": bx + 20.0, "toY": by}));
+    assert!(grid(&s, StoryRef::Body)[0] > before[0] + 10.0, "the drag widened the body's column");
+
+    // A footnote.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 4)}));
+    run(&mut s, "references.footnote", json!({"text": "note"}));
+    let note = s.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(id, _)| *id).expect("the footnote's story");
+    run(&mut s, "caret.set", json!({"pos": Pos { story: StoryRef::Part(note), path: wordcraft_doc::Path::top(0), off: 0 }}));
+    let (bx, by, _) = border(&mut s, StoryRef::Body);
+    assert_eq!(grabbed(&mut s, (bx, by)), Some(StoryRef::Body), "the body's table, from a footnote");
+    assert_eq!(grabbed(&mut s, (hx, hy)), None);
+    // The pen still splits the body's cell it crosses instead of drawing a new table.
+    let (_, _, cell) = border(&mut s, StoryRef::Body);
+    let mid = cell.x + cell.w / 2.0;
+    let cols = grid(&s, StoryRef::Body).len();
+    run(&mut s, "table.draw", json!({"page": 0, "x0": mid, "y0": cell.y + 1.0, "x1": mid, "y1": cell.bottom() - 1.0}));
+    assert_eq!(grid(&s, StoryRef::Body).len(), cols + 1, "the pen split a body column");
+
+    // The footer, while it is edited: its table, not the body's.
+    run(&mut s, "caret.set", json!({"pos": Pos { story: StoryRef::Part(foot), path: wordcraft_doc::Path::top(0), off: 0 }}));
+    let (bx, by, _) = border(&mut s, StoryRef::Body);
+    let (fx, fy, _) = border(&mut s, StoryRef::Part(foot));
+    assert_eq!(grabbed(&mut s, (fx, fy)), Some(StoryRef::Part(foot)), "the footer's table, while the footer is edited");
+    assert_eq!(grabbed(&mut s, (bx, by)), None, "not the dimmed body's");
+    let before = grid(&s, StoryRef::Part(foot));
+    run(&mut s, "table.resizeDrag", json!({"page": 0, "x": fx, "y": fy, "toX": fx + 20.0, "toY": fy}));
+    assert!(grid(&s, StoryRef::Part(foot))[0] > before[0] + 10.0, "the drag widened the footer's column");
+}
+
+/// #5558 review: `table.eraser` and `table.draw` with a `story` work on that story's tables only:
+/// a border of another story's table drawn there (a table in a body text box, among the body's
+/// items) is left alone; the named story's own is erased.
+#[test]
+fn the_eraser_and_the_pen_keep_to_the_story_they_are_given() {
+    use wordcraft_layout::Placed;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Body"}));
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    // A text box in the body with a table of its own.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    let boxed = StoryRef::Part(run(&mut s, "insert.textBox", json!({"text": "Box"}))["story"].as_u64().unwrap() as u32);
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    let first = |s: &mut Session, story: StoryRef| {
+        let l = s.layout();
+        let r = l.pages[0].items.iter().find_map(|it| match it {
+            Placed::Cell { rect, row: 0, cell: 0, story: st, .. } if *st == story => Some(*rect),
+            _ => None,
+        });
+        r.unwrap_or_else(|| panic!("{story:?}'s table is laid out"))
+    };
+    let cols = |s: &Session, story: StoryRef| {
+        s.doc.story(story).and_then(|b| b.iter().find_map(|b| b.as_table().map(|t| t.rows[0].cells.len()))).unwrap_or(0)
+    };
+    let body = serde_json::to_value(StoryRef::Body).unwrap();
+    // Named the body: the text box's table, though drawn among the body's items, is left alone.
+    let b = first(&mut s, boxed);
+    let erase = json!({"page": 0, "x": b.right(), "y": b.y + b.h / 2.0, "story": body.clone()});
+    assert!(s.run("table.eraser", &erase).is_err(), "no body border there");
+    let mid = b.x + b.w / 2.0;
+    let line = json!({"page": 0, "x0": mid, "y0": b.y + 1.0, "x1": mid, "y1": b.bottom() - 1.0, "story": body.clone()});
+    assert!(s.run("table.draw", &line).is_err(), "no body table to split there");
+    assert_eq!(cols(&s, boxed), 2, "the text box's table is as it was");
+    // The body's own border is erased.
+    let t = first(&mut s, StoryRef::Body);
+    run(&mut s, "table.eraser", json!({"page": 0, "x": t.right(), "y": t.y + t.h / 2.0, "story": body}));
+    assert_eq!(cols(&s, StoryRef::Body), 1, "the body table's two cells merged");
+}

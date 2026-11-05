@@ -7320,3 +7320,108 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
     h.step();
     assert!(h.state().session.view.read_mode && shown(&h, "Focus"), "Immersive Reader keeps the status bar");
 }
+
+/// #5558: while the header is edited, its table is edited like one in the body: a click puts
+/// the caret in the cell under it, typing goes there, and a column border drags to a new width.
+#[test]
+fn a_table_in_the_header_is_clicked_typed_in_and_resized() {
+    let ctx = egui::Context::default();
+    let mut a = app();
+    a.run("text.insert", json!({"text": "Body text"})).unwrap();
+    a.run("insert.header", json!({"text": "Head"})).unwrap();
+    a.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    a.run("insert.closeHeader", json!({})).unwrap();
+    a.run("caret.docStart", json!({})).unwrap();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 900.0));
+    let mut t = 0.0;
+    let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        t += 1.0 / 60.0;
+        let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
+        ctx.run_ui(input, |ui| {
+            a.logic(ui.ctx());
+            a.ui(ui);
+        })
+        .drop_without_applying_deltas();
+    };
+    let btn = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    for _ in 0..20 {
+        frame(&mut a, Vec::new());
+    }
+    a.run("insert.editHeader", json!({"page": 0})).unwrap();
+    for _ in 0..20 {
+        frame(&mut a, Vec::new());
+    }
+    let hf = a.session.sel.focus.story;
+    assert_ne!(hf, wordcraft_doc::StoryRef::Body, "editing the header");
+    let cells = |a: &mut WordApp| {
+        let l = a.session.layout();
+        let mut v: Vec<(usize, usize, wordcraft_geom::Rect)> = l.pages[0]
+            .header
+            .iter()
+            .filter_map(|it| match it {
+                wordcraft_layout::Placed::Cell { rect, row, cell, story, .. } if *story == hf => Some((*row, *cell, *rect)),
+                _ => None,
+            })
+            .collect();
+        v.sort_by_key(|c| (c.0, c.1));
+        v
+    };
+    let cs = cells(&mut a);
+    assert_eq!(cs.len(), 4, "the header's table is laid out: {cs:?}");
+    // A click in the second row's second cell puts the caret there.
+    let r = cs[3].2;
+    let at = canvas::page_to_screen(&mut a, 0, r.x + r.w / 2.0, r.y + r.h / 2.0).expect("on screen");
+    frame(&mut a, vec![egui::Event::PointerMoved(at)]);
+    frame(&mut a, vec![btn(at, true)]);
+    frame(&mut a, vec![btn(at, false)]);
+    for _ in 0..10 {
+        frame(&mut a, Vec::new());
+    }
+    let focus = a.session.sel.focus.clone();
+    assert_eq!(focus.story, hf);
+    assert_eq!(focus.path.cell().map(|(_, r, c)| (r, c)), Some((1, 1)), "the caret is in the clicked cell: {focus:?}");
+    frame(&mut a, vec![egui::Event::Text("X".into())]);
+    frame(&mut a, Vec::new());
+    assert!(a.session.doc.plain_text(hf).contains('X'), "typing goes into the cell");
+    // Dragging the border between the columns moves it.
+    let width = |a: &WordApp| {
+        let blocks = a.session.doc.story(hf).expect("the header");
+        blocks.iter().find_map(|b| b.as_table().map(|t| t.grid.clone())).expect("its table")
+    };
+    let before = width(&a);
+    let border = cs[0].2.right();
+    let y = cs[0].2.y + cs[0].2.h / 2.0;
+    let from = canvas::page_to_screen(&mut a, 0, border, y).expect("on screen");
+    let to = from + egui::vec2(60.0, 0.0);
+    frame(&mut a, vec![egui::Event::PointerMoved(from)]);
+    frame(&mut a, vec![btn(from, true)]);
+    for i in 1..=6 {
+        frame(&mut a, vec![egui::Event::PointerMoved(from + egui::vec2(10.0 * i as f32, 0.0))]);
+    }
+    frame(&mut a, vec![btn(to, false)]);
+    for _ in 0..5 {
+        frame(&mut a, Vec::new());
+    }
+    let after = width(&a);
+    assert!(after[0] > before[0] + 10.0, "the first column widened: {before:?} → {after:?}");
+    assert_eq!(a.session.sel.focus.story, hf, "still editing the header");
+    // A table copied from the body, pasted with Ctrl+V at the end of the header's text, is a
+    // table there too.
+    a.run("insert.closeHeader", json!({})).unwrap();
+    a.run("caret.docEnd", json!({})).unwrap();
+    a.run("insert.table", json!({"rows": 1, "cols": 3})).unwrap();
+    a.run("text.insert", json!({"text": "Copied"})).unwrap();
+    a.run("table.selectTable", json!({})).unwrap();
+    let copied = a.run("edit.copy", json!({})).unwrap()["text"].as_str().unwrap_or_default().to_string();
+    a.run("insert.editHeader", json!({"page": 0})).unwrap();
+    let blocks = a.session.doc.story(hf).map_or(0, |b| b.len());
+    let head = wordcraft_doc::Pos { story: hf, path: wordcraft_doc::Path::top(blocks.saturating_sub(1)), off: 4 };
+    a.run("caret.set", json!({"pos": head})).unwrap();
+    frame(&mut a, vec![egui::Event::Paste(copied)]);
+    for _ in 0..5 {
+        frame(&mut a, Vec::new());
+    }
+    let tables: Vec<usize> = a.session.doc.story(hf).expect("the header").iter().filter_map(|b| b.as_table().map(|t| t.cols())).collect();
+    assert_eq!(tables, vec![2, 3], "the pasted table is a table in the header");
+    assert_eq!(cells(&mut a).len(), 4 + 3, "and is drawn there");
+}
