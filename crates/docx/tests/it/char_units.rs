@@ -80,3 +80,32 @@ fn automatic_spacing_reads_and_round_trips() {
     let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     assert_eq!(props(&again)[..3], p[..3]);
 }
+
+#[test]
+fn adjust_right_indent_is_preserved() {
+    let body = r#"<w:p><w:pPr><w:adjustRightInd w:val="0"/><w:snapToGrid w:val="0"/><w:spacing w:after="120"/><w:ind w:right="120"/></w:pPr><w:r><w:t>false</w:t></w:r></w:p>
+        <w:p><w:pPr><w:adjustRightInd w:val="1"/></w:pPr><w:r><w:t>true</w:t></w:r></w:p>
+        <w:p><w:r><w:t>absent</w:t></w:r></w:p>"#;
+    let mut d = wordcraft_docx::read(&docx(body)).unwrap();
+    assert_eq!(props(&d).iter().map(|p| p.adjust_right_indent).collect::<Vec<_>>(), [Some(false), Some(true), None]);
+    for _ in 0..2 {
+        let out = wordcraft_docx::write(&d).unwrap();
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(out.clone())).unwrap();
+        let mut xml = String::new();
+        z.by_name("word/document.xml").unwrap().read_to_string(&mut xml).unwrap();
+        assert!(xml.contains(r#"<w:adjustRightInd w:val="0""#), "explicit false was lost: {xml}");
+        assert!(xml.contains("<w:adjustRightInd/>"), "explicit true was lost: {xml}");
+        let tags = ["<w:adjustRightInd", "<w:snapToGrid", "<w:spacing", "<w:ind"];
+        let pprs = xml.split("<w:pPr>").skip(1).filter_map(|rest| rest.split("</w:pPr>").next()).collect::<Vec<_>>();
+        let first = pprs.first().expect("paragraph properties must be present");
+        for &tag in &tags {
+            assert!(first.contains(tag), "{tag} missing: {xml}");
+        }
+        for ppr in pprs {
+            let order = tags.iter().filter_map(|tag| ppr.find(*tag)).collect::<Vec<_>>();
+            assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "paragraph properties are out of schema order: {xml}");
+        }
+        d = wordcraft_docx::read(&out).unwrap();
+        assert_eq!(props(&d).iter().map(|p| p.adjust_right_indent).collect::<Vec<_>>(), [Some(false), Some(true), None]);
+    }
+}
