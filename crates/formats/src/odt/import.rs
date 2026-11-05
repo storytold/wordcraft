@@ -727,14 +727,14 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
     let mut styles = Styles::default();
     let mut pages = Pages::default();
     if let Some(s) = &styles_xml {
-        styles.read(s, false);
+        styles.read(s, false)?;
         pages = read_pages(s, paper);
     }
     // No page layout at all (no styles.xml, or no master page).
     if pages.first.is_none() {
         pages.first = Some(unstated_page(paper));
     }
-    styles.read(&content, true);
+    styles.read(&content, true)?;
     let settings = read_entry(&mut z, "settings.xml");
     // Where tab stops are measured from: as the document's settings say (LibreOffice's own), else
     // the margin, as Word (the standard ties it only to indexes, §19.512.3).
