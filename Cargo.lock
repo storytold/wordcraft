@@ -6846,6 +6846,7 @@ dependencies = [
  "wordcraft-engine",
  "wordcraft-fonts",
  "wordcraft-ui-egui",
+ "x11rb",
  "zbus",
 ]
 
