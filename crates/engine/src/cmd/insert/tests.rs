@@ -45,6 +45,136 @@ fn tiffs_with_jpeg_strips_are_refused() {
     assert_eq!(s.doc.media.len(), 1);
 }
 
+/// A small PNG with its header changed to declare the requested size. The pixel data stays
+/// tiny: insertion must reject an oversized header before anything decodes it (#5637).
+fn png_with_declared_size(width: u32, height: u32, sixteen_bit: bool) -> Vec<u8> {
+    let img = if sixteen_bit {
+        image::DynamicImage::ImageRgba16(image::ImageBuffer::new(1, 1))
+    } else {
+        image::DynamicImage::ImageRgba8(image::RgbaImage::new(1, 1))
+    };
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    png[16..20].copy_from_slice(&width.to_be_bytes());
+    png[20..24].copy_from_slice(&height.to_be_bytes());
+    let mut crc = u32::MAX;
+    for &byte in &png[12..29] {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 { 0xEDB8_8320 ^ (crc >> 1) } else { crc >> 1 };
+        }
+    }
+    png[29..33].copy_from_slice(&(!crc).to_be_bytes());
+    png
+}
+
+fn assert_oversized_picture_refused(s: &mut Session, command: &str, png: &[u8], width: u32, height: u32) {
+    let doc = serde_json::to_value(&s.doc).unwrap();
+    let sel = s.sel.clone();
+    let undo = s.undo_labels();
+    let redo = s.redo_label().map(str::to_string);
+    let dirty = s.dirty;
+    let e = s.run(command, &json!({"data": base64_encode(png), "width": 4})).unwrap_err().to_string();
+    assert!(e.contains("too large to display") && e.contains("resize"), "{e}");
+    assert!(e.contains(&format!("{width} × {height}")), "the error names the pixel dimensions: {e}");
+    assert_eq!(serde_json::to_value(&s.doc).unwrap(), doc, "no text or media is replaced");
+    assert_eq!(s.sel, sel);
+    assert_eq!(s.undo_labels(), undo);
+    assert_eq!(s.redo_label(), redo.as_deref());
+    assert_eq!(s.dirty, dirty);
+}
+
+/// Checking the boundary allocates no large pixel buffers. RGB/RGBA8 needs eight bytes per
+/// pixel at peak, while RGBA16 needs twelve; either pixmap side must also fit `u16` (#5637).
+#[test]
+fn picture_size_preflight_keeps_displayable_boundary_sizes() {
+    for (width, height, sixteen_bit, fits) in [
+        (8192, 8192, false, true),
+        (8193, 8193, false, false),
+        (6688, 6688, true, true),
+        (6689, 6689, true, false),
+        (65535, 1, false, true),
+        (1, 65535, false, true),
+        (65536, 1, false, false),
+        (1, 65536, false, false),
+    ] {
+        let png = png_with_declared_size(width, height, sixteen_bit);
+        let p = wordcraft_geom::picture::probe(&png).unwrap();
+        assert_eq!(check_picture_size(&p).is_ok(), fits, "{width} × {height}, sixteen_bit: {sixteen_bit}");
+    }
+}
+
+/// A progressive JPEG holds its coefficients beside the decoded pixels: a size that fits
+/// with the ordinary eight bytes per pixel can still be too large to display (#5637).
+#[test]
+fn picture_size_preflight_counts_progressive_jpeg_buffers() {
+    let mut original = Vec::new();
+    image::RgbImage::new(1, 1).write_to(&mut std::io::Cursor::new(&mut original), image::ImageFormat::Jpeg).unwrap();
+    for (side, progressive, fits) in [(8000u16, false, true), (8000, true, false), (8333, false, false)] {
+        let mut jpeg = original.clone();
+        let sof = jpeg.windows(2).position(|m| m == [0xFF, 0xC0]).unwrap();
+        jpeg[sof + 5..sof + 7].copy_from_slice(&side.to_be_bytes());
+        jpeg[sof + 7..sof + 9].copy_from_slice(&side.to_be_bytes());
+        for component in 0..usize::from(jpeg[sof + 9]) {
+            jpeg[sof + 11 + 3 * component] = 0x11; // Three full-resolution components.
+        }
+        if progressive {
+            jpeg[sof + 1] = 0xC2;
+            let sos = jpeg.windows(2).position(|m| m == [0xFF, 0xDA]).unwrap();
+            let components = usize::from(jpeg[sos + 4]);
+            jpeg[sos + 6 + 2 * components] = 0; // A progressive DC-only first scan.
+        }
+        let p = wordcraft_geom::picture::probe(&jpeg).unwrap();
+        assert_eq!(check_picture_size(&p).is_ok(), fits, "{side} × {side}, progressive: {progressive}");
+        if !fits {
+            let mut s = Session::new(wordcraft_doc::Document::new());
+            assert_oversized_picture_refused(&mut s, "insert.picture", &jpeg, u32::from(side), u32::from(side));
+        }
+    }
+}
+
+/// #5637: shrinking a picture's display width cannot shrink its decode peak. Refuse before
+/// replacing selected text or adding media, in the body and in a header alike.
+#[test]
+fn oversized_pictures_are_refused_before_insertion() {
+    for header in [false, true] {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        if header {
+            s.run("insert.editHeader", &json!({})).unwrap();
+        }
+        s.run("text.insert", &json!({"text": "Keep this text"})).unwrap();
+        s.run("select.text", &json!({"text": "this text"})).unwrap();
+        s.run("format.bold", &json!({})).unwrap();
+        s.run("edit.undo", &json!({})).unwrap();
+        s.dirty = false;
+        for (width, height, sixteen_bit) in [(8333, 8333, false), (7000, 7000, true), (65536, 1, false), (1, 65536, false)] {
+            let png = png_with_declared_size(width, height, sixteen_bit);
+            let p = wordcraft_geom::picture::probe(&png).unwrap();
+            assert_eq!((p.width, p.height), (width, height), "the header is readable");
+            assert_oversized_picture_refused(&mut s, "insert.picture", &png, width, height);
+        }
+    }
+}
+
+/// Change Picture must apply the same limits as insertion, leaving the old picture and redo
+/// history intact when a replacement cannot be displayed (#5637).
+#[test]
+fn oversized_picture_replacements_keep_the_original() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let small = png_with_declared_size(1, 1, false);
+    s.run("insert.picture", &json!({"data": base64_encode(&small)})).unwrap();
+    s.run("picture.crop", &json!({"left": 0.1})).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    s.dirty = false;
+    for (width, height, sixteen_bit) in [(8333, 8333, false), (7000, 7000, true), (65536, 1, false), (1, 65536, false)] {
+        let png = png_with_declared_size(width, height, sixteen_bit);
+        assert_oversized_picture_refused(&mut s, "picture.change", &png, width, height);
+    }
+    s.run("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.doc.media.len(), 1, "the original image remains the only media");
+    assert!(s.doc.media.values().any(|bytes| bytes.as_slice() == small));
+}
+
 /// Closing the header or footer (Esc, the ribbon) puts the caret back where it was in the
 /// body, not on page 1 (#3331).
 #[test]
