@@ -88,6 +88,8 @@ struct Shaped<'a> {
     runs: Vec<ProofRun>,
     /// How far into the shown text ([`Cx::shown`]) the runs so far have come.
     shown_at: usize,
+    /// Where in the shown text a letter's context may begin: past the drop cap, once one is drawn.
+    shown_floor: usize,
 }
 
 fn is_special(c: char) -> bool {
@@ -191,6 +193,7 @@ impl<'a> Shaped<'a> {
             bare: Vec::new(),
             runs: Vec::new(),
             shown_at: 0,
+            shown_floor: 0,
         }
     }
 
@@ -241,8 +244,14 @@ impl<'a> Shaped<'a> {
 
     /// A run shown: its text, with the breaks and objects in it as clusters of their own.
     fn visible_run(&mut self, cx: &Cx, (rc, props): (&Arc<ResolvedChar>, &CharProps), range: &std::ops::Range<usize>, text: &str) {
+        let shown_start = self.shown_at;
         let around = self.next_shown(cx, text.len());
         let mut seg = self.drop_cap_letter(cx, rc, text, range.start);
+        if seg > 0 {
+            // A drop cap is drawn apart from its word: nothing after it joins it, in this run or
+            // in the runs after it (the letter can be formatted on its own).
+            self.shown_floor = shown_start.saturating_add(seg);
+        }
         // The first piece continues what came before the run. After a drop cap or a break nothing
         // joins: that letter is drawn apart, and a break is no letter. The same goes for the end.
         let mut before = if seg == 0 { around.before } else { "" };
@@ -264,12 +273,13 @@ impl<'a> Shaped<'a> {
         }
     }
 
-    /// The text shown on either side of the next `len` bytes shown, and moves past them.
+    /// The text shown on either side of the next `len` bytes shown, and moves past them. What
+    /// comes before starts after a drop cap ([`Shaped::shown_floor`]).
     fn next_shown<'c>(&mut self, cx: &'c Cx, len: usize) -> ShapeContext<'c> {
         let Some(shown) = &cx.shown else { return ShapeContext::default() };
         let start = self.shown_at;
         self.shown_at = start.saturating_add(len);
-        ShapeContext { before: shown.get(..start).unwrap_or(""), after: shown.get(self.shown_at..).unwrap_or("") }
+        ShapeContext { before: shown.get(self.shown_floor.min(start)..start).unwrap_or(""), after: shown.get(self.shown_at..).unwrap_or("") }
     }
 
     /// Drop cap: the first character, sized so its capital spans `lines` lines. Returns how much

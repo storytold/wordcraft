@@ -743,12 +743,15 @@ fn letters_stay_apart_where_nothing_joins_them() {
     let got = letters(&lay(&formatted("xب", &[(0, 1)], &red)));
     assert_eq!(got.last(), beh, "after a Latin letter: {got:?}");
 
+    // The drop cap in the word's run, and formatted on its own (a run of its own).
     let two = letters(&lay(&doc_of(&[("بب", true)])));
-    let mut d = doc_of(&[("ببب", true)]);
-    let at = Pos::body(0, 0);
-    d.format_paragraphs(&at, &at, &|p: &mut ParaProps| p.drop_cap = Some(2)).unwrap();
-    let got = letters(&lay(&d));
-    assert_eq!(got.get(got.len().saturating_sub(2)..), two.get(..), "the letters after a drop cap start a word: {got:?} {two:?}");
+    for mut d in [doc_of(&[("ببب", true)]), formatted("ببب", &[(0, BEH)], &red)] {
+        let at = Pos::body(0, 0);
+        d.format_paragraphs(&at, &at, &|p: &mut ParaProps| p.drop_cap = Some(2)).unwrap();
+        let runs = d.para_at(&at).unwrap().runs.len();
+        let got = letters(&lay(&d));
+        assert_eq!(got.get(got.len().saturating_sub(2)..), two.get(..), "{runs} run(s): the letters after a drop cap start a word: {got:?} {two:?}");
+    }
 }
 
 #[test]
