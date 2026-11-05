@@ -123,6 +123,7 @@ async fn read_all(launches: Rc<RefCell<Launches>>, inbox: Inbox, ctx: egui::Cont
     }
 }
 
+/// Whether the app has taken every file handed to it, so the next launched file may be read.
 fn inbox_empty(inbox: &Inbox) -> bool {
     inbox.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
 }

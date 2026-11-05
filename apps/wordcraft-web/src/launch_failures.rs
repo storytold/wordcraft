@@ -15,6 +15,7 @@ pub(crate) struct Failures {
 }
 
 impl Failures {
+    /// Count a file that couldn't be read; the first failure's reason is kept for a lone report.
     pub(crate) fn add(&mut self, name: String, error: String) {
         if self.count == 0 {
             self.first_error = error;
@@ -25,6 +26,7 @@ impl Failures {
         }
     }
 
+    /// The status line, or `None` when every file was read.
     pub(crate) fn report(self) -> Option<String> {
         match (self.count, self.names.first()) {
             (0, _) | (_, None) => None,

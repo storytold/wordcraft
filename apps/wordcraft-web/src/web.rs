@@ -18,6 +18,8 @@ mod launch;
 const CANVAS_ID: &str = "wordcraft_canvas";
 const LOADING_ID: &str = "wordcraft_loading";
 
+/// Start the app on the page's canvas: preferences, the unsaved-changes guard, the host bridge
+/// or (standalone) files the system launches the app with, then the eframe runner.
 pub fn start() {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
     wasm_bindgen_futures::spawn_local(async {
