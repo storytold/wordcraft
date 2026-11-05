@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use wordcraft_doc::para::cap_alt;
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, FitText, HeightRule, Highlight, LineSpacing, NumRef,
-    ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign, VMerge,
-    VertAlign,
+    ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextAlignment, TextColor, TextDirection, Underline,
+    VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{
     Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, NotePos, NoteProps, NoteRestart, NumFormat,
@@ -351,6 +351,7 @@ impl PropCtx {
                 "w:autoSpaceDE" => p.auto_space_de = Some(on_off(k)),
                 "w:autoSpaceDN" => p.auto_space_dn = Some(on_off(k)),
                 "w:snapToGrid" => p.snap_to_grid = Some(on_off(k)),
+                "w:textAlignment" => p.text_alignment = k.attr("w:val").and_then(TextAlignment::from_ooxml),
                 "w:framePr" => {
                     if let Some(kind @ ("drop" | "margin")) = k.attr("w:dropCap") {
                         p.drop_cap = Some(k.attr("w:lines").and_then(u32_of).unwrap_or(3).clamp(1, 10) as u8);
