@@ -497,7 +497,24 @@ fn box_float_table_rect(
         let shift = fr.sides().2;
         r.x = r.x.min(fr.sect.page_w - fr.origin.0 - w - shift).max(-fr.origin.0 - shift);
     }
-    let r = clear_of_float_tables(r, f, legacy, h_area.0, float_tables);
+    let clamped = r;
+    let mut r = clear_of_float_tables(r, f, legacy, h_area.0, float_tables);
+    // Cleared downwards it would leave the page again: stack it above the tables in its way when
+    // there is room for that.
+    if let Some(fr) =
+        frame.filter(|_| f.v_rel != Anchor::Page && f.v_rel != Anchor::Margin).filter(|fr| r.bottom() + fr.origin.1 > fr.sect.page_h + 0.01)
+    {
+        let [dl, dt, dr, db] = f.dist_from_text();
+        let mut up = clamped;
+        for _ in 0..64 {
+            let area = up.inset(-dl, -dt, -dr, -db);
+            let Some(above) = float_tables.iter().filter(|o| !f.overlap && o.intersects(&area)).map(|o| o.y).reduce(f32::min) else { break };
+            up.y = above - db - h;
+        }
+        if up.y + fr.origin.1 >= 0.0 && !float_tables.iter().any(|o| !f.overlap && o.intersects(&up.inset(-dl, -dt, -dr, -db))) {
+            r = up;
+        }
+    }
     let [dl, dt, dr, db] = f.dist_from_text();
     (r, r.inset(-dl, -dt, -dr, -db))
 }

@@ -7272,6 +7272,7 @@ fn footer_tables_that_may_not_overlap_stay_apart_after_staying_on_the_page() {
     let cells: Vec<_> = l.pages[0].footer.iter().filter_map(|it| if let Placed::Cell { rect, .. } = it { Some(*rect) } else { None }).collect();
     assert_eq!(cells.len(), 2, "two tables: {cells:?}");
     assert!(!cells[0].intersects(&cells[1]), "the tables overlap: {cells:?}");
+    assert!(cells.iter().all(|c| c.y >= -0.01 && c.bottom() <= l.pages[0].h + 0.01), "a table is off the page ({}): {cells:?}", l.pages[0].h);
 }
 
 #[test]
