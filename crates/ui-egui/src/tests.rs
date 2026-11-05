@@ -560,6 +560,29 @@ fn alignment_guides_are_a_ui_command_and_survive_a_restart() {
     assert!(old.alignment_guides, "older settings leave it on");
 }
 
+#[test]
+fn reading_page_color_restores_for_new_documents_and_windows() {
+    use wordcraft_engine::cmd::view::ReadPageColor;
+    let mut a = app();
+    a.run("view.readMode", json!({})).unwrap();
+    a.run("view.readPageColor", json!({"value": "sepia"})).unwrap();
+    let saved = serde_json::to_string(&a.prefs()).unwrap();
+    let mut b = app();
+    b.apply_prefs(serde_json::from_str(&saved).unwrap());
+    assert_eq!(b.session.view.read_page_color, ReadPageColor::Sepia);
+    b.run("view.readMode", json!({})).unwrap();
+    assert_eq!(b.session.view.read_page_color, ReadPageColor::Sepia);
+    b.run("file.new", json!({})).unwrap();
+    b.run("view.readMode", json!({})).unwrap();
+    assert_eq!(b.session.view.read_page_color, ReadPageColor::Sepia);
+    let first_window = b.windows.shown();
+    b.new_window();
+    assert_eq!(b.session.view.read_page_color, ReadPageColor::Sepia);
+    b.run("view.readPageColor", json!({"value": "inverse"})).unwrap();
+    assert!(b.enter_window(first_window));
+    assert_eq!(b.session.view.read_page_color, ReadPageColor::Inverse);
+}
+
 /// File › Options › Advanced › Animation: the caret's animation is a UI command, kept between
 /// runs.
 #[test]
@@ -3421,6 +3444,57 @@ fn the_print_button_shows_only_with_a_print_hook() {
     }
 }
 
+/// Return on the Print page prints, as in Word, where ⌘P opens on Print as the default
+/// button; the document isn't typed into.
+#[test]
+fn return_on_the_print_page_prints() {
+    let printed = std::rc::Rc::new(std::cell::Cell::new(0));
+    let mut a = app();
+    let seen = printed.clone();
+    a.services.print = Some(Box::new(move |_| {
+        seen.set(seen.get() + 1);
+        Ok(())
+    }));
+    let before = body_text(&a);
+    a.run("file.print", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert_eq!(printed.get(), 0);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(printed.get(), 1, "Return printed once");
+    assert_eq!(body_text(h.state()), before, "the document is unchanged");
+    // Held down, Return repeats (egui marks a press of a key already down as a repeat): one job.
+    let enter = |pressed| egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+    for _ in 0..4 {
+        h.event(enter(true));
+        h.run_steps(1);
+    }
+    h.event(enter(false));
+    h.run_steps(1);
+    assert_eq!(printed.get(), 2, "a held Return prints once");
+    // The built-in file browser over the page takes Return for itself, even with nothing in it
+    // focused: Return there saves or opens, and prints nothing.
+    let _ = h.state_mut().run("ui.fileBrowser", json!({"purpose": "document"}));
+    h.run_steps(4);
+    assert!(h.state().file_browser.open.is_some(), "the browser opened");
+    h.ctx.memory_mut(|m| {
+        if let Some(id) = m.focused() {
+            m.surrender_focus(id);
+        }
+    });
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(printed.get(), 2, "Return in the file browser prints nothing");
+}
+
 /// #2958: the Print button leads the settings, above the printer and the settings it prints
 /// with (as in Word), and it wears the accent the app gives a dialog's primary button, so the
 /// page's one action is found first and reads as one rather than as another setting.
@@ -3509,7 +3583,7 @@ fn the_print_preview_fills_the_pane_zooms_and_scrolls_both_ways() {
     let page = |h: &egui_kittest::Harness<'_, WordApp>| h.get(By::new().role(Role::Image)).rect();
     let fit = page(&h);
     assert!(fit.height() > 650.0, "the page fills the pane's height: {fit:?}");
-    assert!(h.query(By::new().role(Role::Label).label("Page 1 of 1")).is_some(), "the page indicator stays");
+    assert!(h.query(By::new().role(Role::Label).label("Sheet 1 of 1")).is_some(), "the sheet indicator stays");
 
     for _ in 0..5 {
         h.get_by_label("Zoom In").click();
@@ -3739,7 +3813,11 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     h.step();
     h.step();
     assert!(egui::Popup::is_any_open(&h.ctx), "the language menu opened");
-    let elsewhere = egui::pos2(lang.max.x + 40.0, lang.center().y);
+    // Bare status bar: past the language item, and past the missing-fonts item after it when the
+    // document's fonts aren't installed (Aptos Display for Heading 1, on most machines without
+    // Office), however many there are.
+    let right = h.query_by_label_contains(" not installed").map_or(lang.max.x, |n| n.rect().max.x);
+    let elsewhere = egui::pos2(right + 40.0, lang.center().y);
     for pressed in [true, false] {
         h.hover_at(elsewhere);
         h.event(egui::Event::PointerButton { pos: elsewhere, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
@@ -5227,6 +5305,9 @@ fn check_spelling_survives_restart() {
     // Settings saved before #1792 have no key: spelling stays on.
     second.apply_prefs(serde_json::from_str("{}").unwrap());
     assert!(second.session.view.proofing);
+    let conflicting = serde_json::from_value(json!({"checkSpelling": true, "editing": {"checkSpelling": false}})).unwrap();
+    second.apply_prefs(conflicting);
+    assert!(second.session.prefs.check_spelling, "the live spelling setting and its saved copy agree");
 }
 
 #[test]
@@ -6774,6 +6855,28 @@ fn a_drop_before_font_warm_up_is_not_lost() {
     .drop_without_applying_deltas();
     assert_eq!(app.fonts_frames, 1, "the UI returned for font warm-up");
     assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end_matches(['\r', '\n']), "dropped text");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// #3859: a file dropped while a modal dialog is open does nothing: it would insert a picture or
+/// open a document behind the dialog, and an opened document closed the dialog.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_drop_behind_a_modal_dialog_does_nothing() {
+    let (mut app, ctx) = (app(), egui::Context::default());
+    app.dialog = dialogs::Dialog::open("font", &mut app);
+    let path = std::env::temp_dir().join(format!("wordcraft-drop-modal-{}.txt", std::process::id()));
+    std::fs::write(&path, b"dropped text").expect("write the dropped document");
+    let mut raw = shot_raw(egui::vec2(640.0, 480.0), false);
+    raw.dropped_files.push(std::sync::Arc::new(DroppedText(path.clone())));
+    app.raw_input_hook(&ctx, &mut raw);
+    ctx.run_ui(raw, |ui| {
+        app.logic(ui.ctx());
+        app.ui(ui);
+    })
+    .drop_without_applying_deltas();
+    assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "", "nothing opened behind the dialog");
+    assert!(matches!(app.dialog, Some(dialogs::Dialog::Font { .. })), "the dialog stays");
     let _ = std::fs::remove_file(&path);
 }
 

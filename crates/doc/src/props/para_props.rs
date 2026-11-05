@@ -107,6 +107,18 @@ pub enum BorderStyle {
     Triple,
     DotDash,
     Wave,
+    /// The compound lines of thin and thick strokes (`thinThickSmallGap` to
+    /// `thinThickThinLargeGap`), kept so a file writes back the line it read; drawn as a single
+    /// line of the border's width.
+    ThinThickSmallGap,
+    ThickThinSmallGap,
+    ThinThickThinSmallGap,
+    ThinThickMediumGap,
+    ThickThinMediumGap,
+    ThinThickThinMediumGap,
+    ThinThickLargeGap,
+    ThickThinLargeGap,
+    ThinThickThinLargeGap,
 }
 
 impl BorderStyle {
@@ -121,6 +133,15 @@ impl BorderStyle {
             BorderStyle::Triple => "triple",
             BorderStyle::DotDash => "dotDash",
             BorderStyle::Wave => "wave",
+            BorderStyle::ThinThickSmallGap => "thinThickSmallGap",
+            BorderStyle::ThickThinSmallGap => "thickThinSmallGap",
+            BorderStyle::ThinThickThinSmallGap => "thinThickThinSmallGap",
+            BorderStyle::ThinThickMediumGap => "thinThickMediumGap",
+            BorderStyle::ThickThinMediumGap => "thickThinMediumGap",
+            BorderStyle::ThinThickThinMediumGap => "thinThickThinMediumGap",
+            BorderStyle::ThinThickLargeGap => "thinThickLargeGap",
+            BorderStyle::ThickThinLargeGap => "thickThinLargeGap",
+            BorderStyle::ThinThickThinLargeGap => "thinThickThinLargeGap",
         }
     }
     pub fn from_ooxml(s: &str) -> BorderStyle {
@@ -133,6 +154,15 @@ impl BorderStyle {
             "triple" => BorderStyle::Triple,
             "dotDash" | "dotDotDash" => BorderStyle::DotDash,
             "wave" | "doubleWave" => BorderStyle::Wave,
+            "thinThickSmallGap" => BorderStyle::ThinThickSmallGap,
+            "thickThinSmallGap" => BorderStyle::ThickThinSmallGap,
+            "thinThickThinSmallGap" => BorderStyle::ThinThickThinSmallGap,
+            "thinThickMediumGap" => BorderStyle::ThinThickMediumGap,
+            "thickThinMediumGap" => BorderStyle::ThickThinMediumGap,
+            "thinThickThinMediumGap" => BorderStyle::ThinThickThinMediumGap,
+            "thinThickLargeGap" => BorderStyle::ThinThickLargeGap,
+            "thickThinLargeGap" => BorderStyle::ThickThinLargeGap,
+            "thinThickThinLargeGap" => BorderStyle::ThinThickThinLargeGap,
             _ => BorderStyle::Single,
         }
     }
@@ -182,6 +212,11 @@ impl Borders {
     }
     pub fn any_visible(&self) -> bool {
         [self.top, self.left, self.bottom, self.right, self.between, self.inside_v].iter().flatten().any(Border::is_visible)
+    }
+    /// A side is drawn, or a paragraph side without a line holds padding (ODF's, which keeps
+    /// its room in LibreOffice's layout).
+    pub fn takes_room(&self) -> bool {
+        self.any_visible() || [self.top, self.left, self.bottom, self.right].iter().flatten().any(|b| b.space.is_finite() && b.space > 0.0)
     }
     /// Apply every `Some` side of `patch` on top of `self`.
     pub fn overlay(&mut self, patch: &Borders) {
