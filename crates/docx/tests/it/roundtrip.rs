@@ -210,6 +210,7 @@ fn every_para_prop_round_trips() {
             h_anchor: "margin".into(),
             v_anchor: "text".into(),
             wrap: "around".into(),
+            anchor_lock: Some(true),
             h_space: 9.0,
             v_space: 0.0,
         }),

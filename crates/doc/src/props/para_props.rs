@@ -305,6 +305,9 @@ pub struct TextFrame {
     pub v_anchor: String,
     /// `around`, `auto`, `notBeside`, `none`, `tight` or `through`.
     pub wrap: String,
+    /// Whether the frame stays fixed to its page anchor when its paragraph moves.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor_lock: Option<bool>,
     /// Distance from the text left and right, and above and below.
     pub h_space: f32,
     pub v_space: f32,
