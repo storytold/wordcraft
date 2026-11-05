@@ -1,3 +1,5 @@
+use wordcraft_geom::picture::Refusal;
+
 use super::{Affine, Arc, Document, FontDb, HashMap, Item, Mutex, Page, Picture, Pixmap, PlacedItem, RenderContext, Seg, Shape, Weak, kurbo, peniko};
 
 /// Upper bound on the bytes the two decoded-media caches keep together (about 256 MB), half each;
@@ -49,8 +51,11 @@ pub(crate) fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-fn images() -> &'static Mutex<MediaCache<Option<Arc<Pixmap>>>> {
-    static C: std::sync::OnceLock<Mutex<MediaCache<Option<Arc<Pixmap>>>>> = std::sync::OnceLock::new();
+/// A decoded picture, or why it isn't drawn.
+pub(crate) type Decoded = Result<Arc<Pixmap>, Refusal>;
+
+fn images() -> &'static Mutex<MediaCache<Decoded>> {
+    static C: std::sync::OnceLock<Mutex<MediaCache<Decoded>>> = std::sync::OnceLock::new();
     C.get_or_init(|| Mutex::new(MediaCache { map: HashMap::new(), bytes: 0 }))
 }
 
@@ -73,11 +78,17 @@ pub fn decode_pixmap(bytes: &[u8]) -> Option<Pixmap> {
 /// [`decode_pixmap`] with a picture's brightness and contrast applied (#1711, #1766), under the
 /// same decode limits.
 pub fn decode_pixmap_fx(bytes: &[u8], fx: wordcraft_doc::picfx::PicFx) -> Option<Pixmap> {
+    decode_pixmap_checked(bytes, fx).ok()
+}
+
+/// [`decode_pixmap_fx`], with why a picture isn't decoded (#5637).
+fn decode_pixmap_checked(bytes: &[u8], fx: wordcraft_doc::picfx::PicFx) -> Result<Pixmap, Refusal> {
     // The shared probe also charges what the decoder holds beside its output (#3644).
-    if !wordcraft_geom::picture::probe(bytes).is_ok_and(|p| p.fits(wordcraft_geom::MAX_DECODED_BYTES)) {
-        return None;
+    let probe = wordcraft_geom::picture::probe(bytes)?;
+    if !probe.fits(wordcraft_geom::MAX_DECODED_BYTES) {
+        return Err(Refusal::TooLarge { width: probe.width, height: probe.height });
     }
-    decode_pixmap_within(bytes, fx, wordcraft_geom::MAX_DECODED_BYTES)
+    decode_pixmap_within(bytes, fx, wordcraft_geom::MAX_DECODED_BYTES).ok_or_else(|| Refusal::Broken("it could not be decoded".into()))
 }
 
 /// [`decode_pixmap_fx`] with an explicit RGBA byte budget (a small one in tests).
@@ -315,7 +326,7 @@ pub(crate) fn draw_page_picture(ctx: &mut RenderContext, doc: &Document, page: &
     let Some(pic) = &doc.settings.page_picture else { return };
     let Some(bytes) = doc.media.get(&pic.media) else { return };
     let Some((nw, nh)) = wordcraft_geom::picture::background_size(bytes).map(|(w, h)| (f64::from(w), f64::from(h))) else { return };
-    let Some(pm) = pixmap_for(doc, &pic.media, wordcraft_doc::picfx::PicFx::default()) else { return };
+    let Ok(pm) = pixmap_for(doc, &pic.media, wordcraft_doc::picfx::PicFx::default()) else { return };
     let (pw, ph) = (pm.width().max(1) as f64, pm.height().max(1) as f64);
     let (w, h) = (page.w as f64, (page.h as f64).min(1e6));
     if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
@@ -349,8 +360,8 @@ pub(crate) fn draw_page_picture(ctx: &mut RenderContext, doc: &Document, page: &
     ctx.reset_paint_transform();
 }
 
-pub(crate) fn pixmap_for(doc: &Document, key: &str, fx: wordcraft_doc::picfx::PicFx) -> Option<Arc<Pixmap>> {
-    let bytes = doc.media.get(key)?;
+pub(crate) fn pixmap_for(doc: &Document, key: &str, fx: wordcraft_doc::picfx::PicFx) -> Decoded {
+    let Some(bytes) = doc.media.get(key) else { return Err(Refusal::NotAPicture) };
     // Corrected pixels are cached apart from the picture's own (the same picture can be shown
     // both ways).
     let fx = fx.clamped();
@@ -359,7 +370,7 @@ pub(crate) fn pixmap_for(doc: &Document, key: &str, fx: wordcraft_doc::picfx::Pi
     if let Some(v) = lock(images()).get(&cache_key, bytes) {
         return v;
     }
-    let pm = decode_pixmap_fx(bytes, fx).map(|p| Arc::new(cacheable(p)));
+    let pm = decode_pixmap_checked(bytes, fx).map(|p| Arc::new(cacheable(p)));
     let size = pm.as_ref().map_or(0, |p| p.width() as usize * p.height() as usize * 4);
     lock(images()).insert(&cache_key, bytes, pm.clone(), size);
     pm

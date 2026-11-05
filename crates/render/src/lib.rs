@@ -851,11 +851,18 @@ fn draw_image(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
         draw_vector(ctx, &v, &r, crop, *alpha, view);
         return;
     }
-    let Some(pm) = pixmap_for(doc, media, *fx) else {
-        ctx.set_transform(view);
-        ctx.set_paint(color(fr.opts.ink(Rgb(0xD0, 0xD0, 0xD0)), 1.0));
-        ctx.fill_rect(&r);
-        return;
+    let pm = match pixmap_for(doc, media, *fx) {
+        Ok(pm) => pm,
+        Err(refusal) => {
+            ctx.set_transform(view);
+            ctx.set_paint(color(fr.opts.ink(Rgb(0xD0, 0xD0, 0xD0)), 1.0));
+            ctx.fill_rect(&r);
+            // Say why when the picture is fine but too large to decode (#5637).
+            if let wordcraft_geom::picture::Refusal::TooLarge { width, height } = refusal {
+                draw_box_label(ctx, fr, view, &r, &too_large_label(width, height));
+            }
+            return;
+        }
     };
     let (pw, ph) = (pm.width().max(1) as f64, pm.height().max(1) as f64);
     let [cl, ct, vis_w, vis_h] = wordcraft_metafile::crop_window(*crop);
@@ -890,6 +897,82 @@ const MAX_PATH_PIXELS: f64 = 1_048_576.0;
 fn path_extent_ok(view: Affine, path: &kurbo::BezPath) -> bool {
     let b = view.transform_rect_bbox(path.bounding_box());
     path.is_finite() && [b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite() && v.abs() <= MAX_PATH_PIXELS)
+}
+
+/// A label's lines, shaped once: each glyph with its face, and each line's width at 1 pt.
+struct BoxLabel {
+    lines: Vec<(Vec<(wordcraft_fonts::FaceRef, u32)>, f64)>,
+    widest: f64,
+}
+
+/// Shapes `lines` in the UI face (with fallbacks).
+fn shape_box_label(lines: &[&str]) -> BoxLabel {
+    let face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
+    let db = FontDb::global();
+    let lines: Vec<_> = lines
+        .iter()
+        .map(|line| {
+            let glyphs: Vec<_> = line
+                .chars()
+                .map(|ch| {
+                    let f = if face.glyph_for(ch) == 0 {
+                        db.fallback_for(ch, face.id()).map_or(face, |f| wordcraft_fonts::FaceRef::of(&f))
+                    } else {
+                        face
+                    };
+                    (f, f.glyph_for(ch))
+                })
+                .collect();
+            let width = glyphs.iter().map(|(f, gid)| f.advance(*gid) / f.upem.max(1.0)).sum();
+            (glyphs, width)
+        })
+        .collect();
+    let widest = lines.iter().map(|(_, w)| *w).fold(0.0, f64::max);
+    BoxLabel { lines, widest }
+}
+
+/// The message in the box of a picture too large to decode, shaped once per picture size (pages
+/// are redrawn often).
+fn too_large_label(width: u32, height: u32) -> Arc<BoxLabel> {
+    static C: std::sync::OnceLock<Mutex<HashMap<(u32, u32), Arc<BoxLabel>>>> = std::sync::OnceLock::new();
+    let cache = C.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(l) = lock(cache).get(&(width, height)) {
+        return l.clone();
+    }
+    let size = format!("{width} × {height} pixels");
+    let label = Arc::new(shape_box_label(&["Picture too large to display", &size, "Resize it to show it"]));
+    let mut c = lock(cache);
+    // A handful of refused pictures at most; start over rather than grow without bound.
+    if c.len() >= 64 {
+        c.clear();
+    }
+    c.insert((width, height), label.clone());
+    label
+}
+
+/// Writes `label` centred in the box `r` (drawn under `view`), at most 10 pt and shrunk to fit;
+/// nothing when even 3 pt text wouldn't fit.
+fn draw_box_label(ctx: &mut RenderContext, fr: &Frame, view: Affine, r: &kurbo::Rect, label: &BoxLabel) {
+    let db = FontDb::global();
+    let pad = 4.0;
+    let n = label.lines.len() as f64;
+    let size = 10.0f64.min((r.width() - 2.0 * pad) / label.widest.max(1e-9)).min((r.height() - 2.0 * pad) / (1.2 * n).max(1e-9));
+    if !(size.is_finite() && size >= 3.0) {
+        return;
+    }
+    ctx.set_paint(color(fr.opts.ink(Rgb(0x50, 0x50, 0x50)), 1.0));
+    let top = r.center().y - 1.2 * size * n / 2.0;
+    for (i, (glyphs, w)) in label.lines.iter().enumerate() {
+        let baseline = top + 1.2 * size * (i as f64 + 0.8);
+        let mut x = r.center().x - w * size / 2.0;
+        for (f, gid) in glyphs {
+            let k = size / f.upem.max(1.0);
+            ctx.set_transform(view * Affine::translate((x, baseline)) * Affine::scale(k));
+            ctx.fill_path(&db.outline(f, *gid));
+            x += f.advance(*gid) * k;
+        }
+    }
+    ctx.set_transform(view);
 }
 
 fn draw_path(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
