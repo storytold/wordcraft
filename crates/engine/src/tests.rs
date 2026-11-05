@@ -10952,6 +10952,55 @@ fn inspect_document_hidden_text_in_every_story_and_from_styles() {
     assert!(reopened.contains("keep-endnote-2") && reopened.contains("keep-cell-4"), "{reopened}");
 }
 
+/// `file.open` warns about hidden text (the fact and what to do about it: an agent reading the
+/// file would see words the human doesn't see on screen), `file.info` reports it, and the
+/// Document Inspector's cleanup (also offered through MCP) takes it out.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn file_open_warns_about_hidden_text_and_the_cleanup_takes_it_out() {
+    use wordcraft_doc::props::CharProps;
+    use wordcraft_doc::{Paragraph, para_block};
+    // A document without hidden text reports none.
+    assert_eq!(run(&mut s(), "file.info", json!({}))["hasHidden"], json!(false));
+    let mut doc = s();
+    doc.doc.body =
+        vec![para_block(Paragraph::with_text("keep-visible ", CharProps::default())), para_block(Paragraph::with_text("hide-me", hidden_props()))];
+    assert_eq!(run(&mut doc, "file.info", json!({}))["hasHidden"], json!(true));
+
+    let dir = std::env::temp_dir().join(format!("wordcraft-hidden-open-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("hidden.docx");
+    run(&mut doc, "file.saveAs", json!({"path": path.to_string_lossy()}));
+
+    // The reply warns: the fact, the counts, tell the human, and what removes it.
+    let mut t = s();
+    let reply = run(&mut t, "file.open", json!({"path": path.to_string_lossy()}));
+    let hidden = reply.get("hiddenText").unwrap_or_else(|| panic!("no hiddenText: {reply}"));
+    assert_eq!(hidden["pieces"], json!(1), "{reply}");
+    assert_eq!(hidden["chars"], json!(7), "{reply}");
+    let warning = reply["warning"].as_str().unwrap_or_else(|| panic!("no warning: {reply}"));
+    assert!(warning.contains("hidden text") && warning.contains("tell the human") && warning.contains("file.inspect"), "{warning}");
+    // An already open document warns again.
+    let again = run(&mut t, "file.open", json!({"path": path.to_string_lossy()}));
+    assert_eq!(again["alreadyOpen"], json!(true));
+    assert!(again.get("hiddenText").is_some(), "{again}");
+    // A document without hidden text doesn't warn.
+    let mut c = s();
+    run(&mut c, "text.insert", json!({"text": "plain words"}));
+    let clean = dir.join("clean.docx");
+    run(&mut c, "file.saveAs", json!({"path": clean.to_string_lossy()}));
+    let reply = run(&mut t, "file.open", json!({"path": clean.to_string_lossy()}));
+    assert!(reply.get("hiddenText").is_none(), "{reply}");
+    assert!(reply.get("warning").is_none(), "{reply}");
+    // The cleanup takes the hidden text out; file.info stops reporting it.
+    run(&mut t, "file.open", json!({"path": path.to_string_lossy()}));
+    let out = run(&mut t, "file.inspect", json!({"remove": ["hidden"]}));
+    assert_eq!(out["residual"], json!([]), "{out}");
+    assert_eq!(run(&mut t, "file.info", json!({}))["hasHidden"], json!(false));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn hidden_props() -> wordcraft_doc::props::CharProps {
     wordcraft_doc::props::CharProps { hidden: Some(true), ..Default::default() }
 }

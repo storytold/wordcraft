@@ -159,7 +159,11 @@ test source in File › Options › Language and on the bar's Install.
   one-line control refuses; at most 10,000 lines — the cap is `text.insert`'s own, so a
   control-channel or CLI call is held to it too) |
 | `select_text` | select the n-th occurrence of some text |
-| `get_text` / `inspect_document` | read the document back (verify without screenshots) |
+| `get_text` / `inspect_document` | read the document back (verify without screenshots). `inspect_document`
+  with `remove` cleans the document instead (the Document Inspector): `["comments", "revisions",
+  "properties", "hidden", "headers"]` — `"hidden"` takes hidden text out, whole hidden paragraphs
+  with their marks, as the Word Document Inspector does; removals are refused while the document
+  tracks changes. The reply's `residual` lists what a removal couldn't reach |
 | `render_page` | a page as PNG |
 | `parity` | feature coverage |
 | `screenshot`, `click`, `key`, `ui_inspect` | app only (`--connect`) |
@@ -170,6 +174,11 @@ test source in File › Options › Language and on the bar's Install.
 document beside the ones already open and make it the active one; their reply carries its `id`.
 `open_document` replaces a blank document nobody has used, and a file that is already open becomes
 active again (`alreadyOpen`). `list_documents` lists the open documents with their ids.
+
+A file that carries hidden text warns on open: the reply carries `hiddenText` (the pieces and the
+characters they cover) and a `warning` telling the agent to inform the human — the text does not
+show on screen (the layout leaves it out), so an agent reading the file would see words the human
+doesn't. `inspect_document` with `"remove": ["hidden"]` removes it; `file.info` reports `hasHidden`.
 
 Tools work on the active document. `execute`, `batch`, `type_text`, `select_text`, `get_text`,
 `inspect_document`, `render_page` and `save_document` also take `doc`, the id of another open

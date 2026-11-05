@@ -133,6 +133,49 @@ fn the_bookmark_dialog_says_when_there_are_no_bookmarks() {
     assert!(texts.iter().any(|t| t.contains("The document has no bookmarks yet.")), "placeholder shown");
 }
 
+/// Inspect Document (File › Info › Check for Issues): Remove All for hidden text takes it out and
+/// the counts are read afresh; the document's visible text stays.
+#[test]
+fn inspect_document_removes_hidden_text() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = app_with("Alpha beta");
+    let _ = app.run("select.text", json!({"text": "beta"}));
+    let _ = app.run("format.hidden", json!({}));
+    assert_eq!(app.session.selected_text(), "beta");
+    app.dialog = Dialog::open("inspectDocument", &mut app);
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(
+        matches!(&h.state().dialog, Some(Dialog::InspectDocument { report, .. }) if report["found"]["hiddenText"] == json!(true)),
+        "the report shows hidden text"
+    );
+    // Remove All runs one file.inspect command; the report follows what it took out.
+    let dialog = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Inspect Document")))).expect("the dialog is open");
+    h.query_all_by_label("Remove All").find(|n| dialog.contains(n.rect().center())).expect("Remove All").click();
+    for _ in 0..3 {
+        h.step();
+    }
+    let body = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(!body.contains("beta"), "hidden text gone:\n{body}");
+    assert!(body.contains("Alpha"), "visible text stays:\n{body}");
+    assert!(
+        matches!(&h.state().dialog, Some(Dialog::InspectDocument { report, message, .. })
+            if report["found"]["hiddenText"] == json!(false) && message.as_deref().is_some_and(|m| m.contains("Removed"))),
+        "the report and the message follow the removal"
+    );
+    let _ = h.state_mut().run("edit.undo", json!({}));
+    assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("beta"), "one undo brings it back");
+}
+
 /// Find, Replace and Go To are one dialog with three tabs (#712).
 #[test]
 fn find_replace_and_go_to_are_one_dialog() {

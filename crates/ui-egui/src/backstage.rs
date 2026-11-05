@@ -759,6 +759,16 @@ fn info_properties(app: &mut WordApp, ui: &mut Ui, info: &serde_json::Value) {
     {
         let _ = app.run("ui.dialog", json!({"name": "customProperties"}));
     }
+    // Check for Issues › Inspect Document, as Word's: the Document Inspector finds comments,
+    // tracked changes, hidden text and other content you may want to remove before sharing.
+    ui.add_space(6.0);
+    if ui
+        .button(egui::RichText::new(tl!("Check for Issues…")).font(medium(13.5)))
+        .on_hover_text(tl!("Find comments, tracked changes, hidden text and other content you may want to remove before sharing the document."))
+        .clicked()
+    {
+        let _ = app.run("ui.dialog", json!({"name": "inspectDocument"}));
+    }
     // Protect Document › Encrypt with Password (#55).
     ui.add_space(18.0);
     ui.label(egui::RichText::new(tl!("Protect Document")).font(semibold(15.0)));

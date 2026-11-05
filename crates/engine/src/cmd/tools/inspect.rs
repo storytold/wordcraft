@@ -195,6 +195,14 @@ fn all_stories(doc: &Document) -> Vec<StoryRef> {
     std::iter::once(StoryRef::Body).chain(doc.parts.keys().map(|k| StoryRef::Part(*k))).collect()
 }
 
+/// How much hidden text the document holds: pieces (the count `file.inspect` reports, always
+/// exact) and the characters they cover. A file that carries hidden text warns on open (`file.open`).
+pub(crate) fn hidden_text_counts(doc: &Document) -> (usize, usize) {
+    let hidden = hidden_text(doc);
+    let chars = hidden.iter().map(|h| h.range.end - h.range.start).sum();
+    (hidden.len(), chars)
+}
+
 /// What the inspector calls a story.
 fn story_kind(doc: &Document, st: StoryRef) -> &'static str {
     use wordcraft_doc::PartKind;
