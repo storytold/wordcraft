@@ -1582,6 +1582,43 @@ fn a_retyped_link_text_is_tracked() {
 }
 
 #[test]
+fn a_link_keeps_a_selection_it_cannot_retype() {
+    use wordcraft_doc::props::CharProps;
+    use wordcraft_doc::{InlineObject, Path};
+    let url = "https://example.org/";
+    // A second retyped link keeps its own selection's formatting: the first one's left no
+    // formatting pending for it.
+    let mut s = typed("go see kiln and vat now");
+    run(&mut s, "select.text", json!({"text": "kiln"}));
+    run(&mut s, "insert.link", json!({"url": url, "text": "Oven"}));
+    run(&mut s, "select.text", json!({"text": "vat"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "insert.link", json!({"url": url, "text": "Tub"}));
+    let p = s.doc.body.iter().find_map(|b| b.as_para()).unwrap();
+    assert!(p.run_ranges().any(|(r, c)| &p.text[r] == "Tub" && c.bold == Some(true) && c.link.is_some()), "{:?}", p.text);
+    // A selection holding a manual line break keeps both lines.
+    let mut s = typed("one");
+    run(&mut s, "text.lineBreak", json!({}));
+    typ(&mut s, "two");
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "insert.link", json!({"url": url, "text": "both"}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "one\ntwo");
+    // A selection in a field's result is only linked; the field's next update owns that text.
+    let mut doc = wordcraft_doc::Document::from_text("See ");
+    let c = CharProps::default();
+    let p = doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    let start = p.len();
+    p.insert_object(start, InlineObject::FieldStart { instr: "ADDIN ZOTERO_ITEM CSL_CITATION {}".into(), locked: false, dirty: false }, &c).unwrap();
+    let n = p.insert_text(p.len(), "(Smith 2020)", &c).unwrap();
+    p.insert_object(start + 3 + n, InlineObject::FieldEnd, &c).unwrap();
+    let mut s = Session::new(doc);
+    run(&mut s, "select.text", json!({"text": "Smith"}));
+    run(&mut s, "insert.link", json!({"url": url, "text": "Jones"}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "See (Smith 2020)");
+    assert_eq!(s.doc.field_ranges(StoryRef::Body).len(), 1);
+}
+
+#[test]
 fn typing_then_selecting_then_typing_are_two_undo_steps() {
     // #419: a selection that moves the insertion point ends the typing group, like a caret move.
     let mut s = typed("alpha");

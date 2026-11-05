@@ -486,6 +486,9 @@ fn select_text(s: &mut Session, v: &Value) -> CmdResult {
             if count == n {
                 s.sel =
                     Selection { anchor: Pos { story, path: path.clone(), off: i }, focus: Pos { story, path: path.clone(), off: i + needle.len() } };
+                // Formatting picked for the old caret doesn't carry over (as `select.word`): what
+                // replaces the selection takes its formatting.
+                s.pending = None;
                 return sel_result(s);
             }
         }
