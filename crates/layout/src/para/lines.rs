@@ -194,6 +194,13 @@ pub(super) fn text_cluster_source<'a>(p: &'a Paragraph, c: &Cluster) -> Option<&
         return None;
     }
     let text = p.text.get(c.start..c.end)?;
+    if text.chars().eq(std::iter::once(OBJ)) {
+        let object_index = p.text.get(..c.start)?.chars().filter(|ch| *ch == OBJ).count();
+        return match p.objects.get(object_index)? {
+            wordcraft_doc::InlineObject::Field { result, .. } => Some(result.as_str()),
+            _ => None,
+        };
+    }
     (!text.chars().any(|ch| matches!(ch, OBJ | LINE_BREAK | PAGE_BREAK | COLUMN_BREAK | '\t'))).then_some(text)
 }
 

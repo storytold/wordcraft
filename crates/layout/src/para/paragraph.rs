@@ -625,7 +625,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut skip = sh.left.clone();
     skip.extend(sh.bare.iter().cloned());
     let bt = BreakText::new(&p.text, skip);
-    let has_thai = !crate::kinsoku::thai_text_runs(&bt.text).is_empty();
+    let mut has_thai = !crate::kinsoku::thai_text_runs(&bt.text).is_empty();
     mark_break_opportunities(&mut sh.b.clusters, &bt, &rp);
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
@@ -657,6 +657,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         enclosures,
         auto_space,
     };
+    has_thai |= pl.clusters.iter().any(|c| text_cluster_source(p, c).is_some_and(|text| text.chars().any(crate::kinsoku::is_thai_text_char)));
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&bt.text, |i| bt.to_para(i), &pl, auto, env.doc.settings.hyphenate_caps, &runs);
     // A paragraph whose text and mark are all a deletion the layout leaves out (a deleted
