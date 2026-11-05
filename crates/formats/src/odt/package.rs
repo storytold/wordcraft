@@ -254,9 +254,7 @@ fn page_parts(doc: &Document, sec: &SectionProps, w: &mut Writer) -> PageParts {
     let wm = doc.settings.watermark.as_ref().filter(|w| !w.text.trim().is_empty());
     let area = (sec.page_w - sec.margin_left - sec.margin_right, sec.page_h - sec.margin_top - sec.margin_bottom);
     for (set, name) in [(&sec.headers, "header"), (&sec.footers, "footer")] {
-        let wanted =
-            set.default.is_some() || (even && set.even.is_some()) || (sec.title_page && set.first.is_some()) || (name == "header" && wm.is_some());
-        if !wanted {
+        if !band_wanted(doc, sec, set, name == "header") {
             continue;
         }
         for (id, el, on) in
@@ -312,6 +310,101 @@ fn with_watermark(body: &str, shape: &str) -> String {
         }
     }
     format!("<text:p>{shape}</text:p>{body}")
+}
+
+/// The `style:page-layout` named `name` for section `sec`, with a header band and a footer band
+/// (`bands`) or not.
+fn page_layout_xml(doc: &Document, sec: &SectionProps, (header, footer): (bool, bool), name: &str) -> String {
+    // A page of several columns carries them in its layout.
+    let cols = if sec.columns.count > 1 { columns_xml(&sec.columns) } else { String::new() };
+    // Word measures the header from the page edge and the text from the page edge; ODF
+    // starts the header at the page margin and the text after the header's height. So with
+    // a header the page margin is the header's distance, and the header is tall enough to
+    // reach the text (it grows with its content, as Word's pushes the text down).
+    let (top, header_h) = if header { (sec.header, (sec.margin_top - sec.header).max(0.0)) } else { (sec.margin_top, 0.0) };
+    let (bottom, footer_h) = if footer { (sec.footer, (sec.margin_bottom - sec.footer).max(0.0)) } else { (sec.margin_bottom, 0.0) };
+    // A page border is at ODF's margin, the text (or header, footer) inside its padding.
+    let (borders, [top, bottom, left, right]) = page_borders(sec.page_borders, [top, bottom, sec.margin_left, sec.margin_right]);
+    // The text starts after the band's height and then its spacing (see the reader), which
+    // content taller than the band keeps below it.
+    let gap = |g: f32, h: f32| if g.is_finite() { g.clamp(0.0, h) } else { 0.0 };
+    // Spacing kept below a taller header says so, as the standard leaves the default open.
+    let keeps = |g: f32| if g.is_finite() && g > 0.0 { " style:dynamic-spacing=\"false\"" } else { "" };
+    let header = if header {
+        format!(
+            "<style:header-style><style:header-footer-properties fo:min-height=\"{}\" fo:margin-bottom=\"{}\"{}/></style:header-style>",
+            pt(header_h - gap(sec.header_gap, header_h)),
+            pt(gap(sec.header_gap, header_h)),
+            keeps(sec.header_gap)
+        )
+    } else {
+        String::new()
+    };
+    let footer = if footer {
+        format!(
+            "<style:footer-style><style:header-footer-properties fo:min-height=\"{}\" fo:margin-top=\"{}\"{}/></style:footer-style>",
+            pt(footer_h - gap(sec.footer_gap, footer_h)),
+            pt(gap(sec.footer_gap, footer_h)),
+            keeps(sec.footer_gap)
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "<style:page-layout style:name=\"{}\"><style:page-layout-properties fo:page-width=\"{}\" fo:page-height=\"{}\" fo:margin-top=\"{}\" fo:margin-bottom=\"{}\" fo:margin-left=\"{}\" fo:margin-right=\"{}\" style:print-orientation=\"{}\"{}>{cols}</style:page-layout-properties>{header}{footer}</style:page-layout>",
+        name,
+        pt(sec.page_w),
+        pt(sec.page_h),
+        pt(top),
+        pt(bottom),
+        pt(left),
+        pt(right),
+        if sec.page_w > sec.page_h { "landscape" } else { "portrait" },
+        page_look(doc, sec) + &borders
+    )
+}
+
+/// Whether section `sec` has a header and a footer (see [`page_parts`]).
+fn bands(doc: &Document, sec: &SectionProps) -> (bool, bool) {
+    (band_wanted(doc, sec, &sec.headers, true), band_wanted(doc, sec, &sec.footers, false))
+}
+
+/// Whether section `sec` has the band (header or footer) `set` holds.
+fn band_wanted(doc: &Document, sec: &SectionProps, set: &wordcraft_doc::section::HeaderSet, header: bool) -> bool {
+    let even = doc.settings.even_odd_headers;
+    let wm = doc.settings.watermark.as_ref().filter(|w| !w.text.trim().is_empty());
+    set.default.is_some() || (even && set.even.is_some()) || (sec.title_page && set.first.is_some()) || (header && wm.is_some())
+}
+
+/// What WordCraft would write for each of `doc`'s sections' page layouts, in order.
+pub(super) fn page_layouts(doc: &Document) -> Vec<String> {
+    wordcraft_doc::kept::doc_sections(doc).into_iter().map(|sec| page_layout_xml(doc, sec, bands(doc, sec), "layout")).collect()
+}
+
+/// How the file's own page layouts change for `doc`'s page setup, by their keys, when the file's
+/// own page definitions can stay: `doc`'s are as read but for measurements a page layout says,
+/// and no page layout would have to differ between sections sharing it. `None` otherwise.
+fn page_patches(doc: &Document, k: &wordcraft_doc::kept::KeptXml) -> Option<std::collections::BTreeMap<String, String>> {
+    if k.pages_as_read(doc) {
+        return Some(Default::default());
+    }
+    if !k.pages_shape_as_read(doc) {
+        return None;
+    }
+    let now = page_layouts(doc);
+    let sections = wordcraft_doc::kept::doc_sections(doc);
+    if now.len() != k.page_layouts.len() || now.len() != k.section_masters.len() {
+        return None;
+    }
+    let changes: Vec<super::kept::PageChange<'_>> = sections
+        .iter()
+        .enumerate()
+        .filter(|(i, sec)| *i == 0 || sec.start != SectionStart::Continuous)
+        .filter_map(|(i, _)| {
+            Some(super::kept::PageChange { master: k.section_masters.get(i)?.as_deref(), then: k.page_layouts.get(i)?, now: now.get(i)? })
+        })
+        .collect();
+    super::kept::page_layout_patches(&k.defs, &k.order, &changes)
 }
 
 /// `styles.xml` of `doc`: the default style/// `styles.xml` of `doc`: the default style from the document defaults (Normal's spacing, the
@@ -380,53 +473,8 @@ fn styles_xml(
     let none = PageParts::default();
     for (i, (_, sec)) in pages.iter().enumerate() {
         let pp = parts.get(i).unwrap_or(&none);
-        // A page of several columns carries them in its layout.
-        let cols = if sec.columns.count > 1 { columns_xml(&sec.columns) } else { String::new() };
-        // Word measures the header from the page edge and the text from the page edge; ODF
-        // starts the header at the page margin and the text after the header's height. So with
-        // a header the page margin is the header's distance, and the header is tall enough to
-        // reach the text (it grows with its content, as Word's pushes the text down).
-        let (top, header_h) = if pp.header { (sec.header, (sec.margin_top - sec.header).max(0.0)) } else { (sec.margin_top, 0.0) };
-        let (bottom, footer_h) = if pp.footer { (sec.footer, (sec.margin_bottom - sec.footer).max(0.0)) } else { (sec.margin_bottom, 0.0) };
-        // A page border is at ODF's margin, the text (or header, footer) inside its padding.
-        let (borders, [top, bottom, left, right]) = page_borders(sec.page_borders, [top, bottom, sec.margin_left, sec.margin_right]);
-        // The band's height takes in its spacing (see the reader), which content taller than
-        // the band keeps below it.
-        let gap = |g: f32, h: f32| if g.is_finite() { g.clamp(0.0, h) } else { 0.0 };
-        // Spacing kept below a taller header says so, as the standard leaves the default open.
-        let keeps = |g: f32| if g.is_finite() && g > 0.0 { " style:dynamic-spacing=\"false\"" } else { "" };
-        let header = if pp.header {
-            format!(
-                "<style:header-style><style:header-footer-properties fo:min-height=\"{}\" fo:margin-bottom=\"{}\"{}/></style:header-style>",
-                pt(header_h),
-                pt(gap(sec.header_gap, header_h)),
-                keeps(sec.header_gap)
-            )
-        } else {
-            String::new()
-        };
-        let footer = if pp.footer {
-            format!(
-                "<style:footer-style><style:header-footer-properties fo:min-height=\"{}\" fo:margin-top=\"{}\"{}/></style:footer-style>",
-                pt(footer_h),
-                pt(gap(sec.footer_gap, footer_h)),
-                keeps(sec.footer_gap)
-            )
-        } else {
-            String::new()
-        };
-        s.push_str(&format!(
-            "<style:page-layout style:name=\"{pm}{}\"><style:page-layout-properties fo:page-width=\"{}\" fo:page-height=\"{}\" fo:margin-top=\"{}\" fo:margin-bottom=\"{}\" fo:margin-left=\"{}\" fo:margin-right=\"{}\" style:print-orientation=\"{}\"{}>{cols}</style:page-layout-properties>{header}{footer}</style:page-layout>",
-            i + 1,
-            pt(sec.page_w),
-            pt(sec.page_h),
-            pt(top),
-            pt(bottom),
-            pt(left),
-            pt(right),
-            if sec.page_w > sec.page_h { "landscape" } else { "portrait" },
-            page_look(doc, sec) + &borders
-        ));
+        let name = format!("{pm}{}", i + 1);
+        s.push_str(&page_layout_xml(doc, sec, (pp.header, pp.footer), &name));
     }
     s.push_str("</office:automatic-styles><office:master-styles>");
     for (i, (name, _)) in pages.iter().enumerate() {
@@ -945,7 +993,9 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     w.reserved = std::sync::Arc::new(kept.map(|k| k.files.keys().cloned().collect()).unwrap_or_default());
     w.groups_whole = whole_groups(&flow.blocks);
     // The file's master pages are written as read: what was kept may start them.
-    w.kept_pages = kept.is_some_and(|k| k.pages_as_read(doc));
+    // The file's own page definitions stay, with what a change of page setup changes in them.
+    let patches = kept.and_then(|k| page_patches(doc, k));
+    w.kept_pages = patches.is_some();
     w.accents.clone_from(&accents);
     w.conn_kinds = conn_kinds(&flow.blocks);
     w.sources = doc.sources.iter().map(|s| (s.tag.clone(), s.clone())).collect();
@@ -965,7 +1015,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         if new_page {
             // The file's own master page while its pages are as read.
             let own = kept
-                .filter(|kx| kx.pages_as_read(doc) && kx.section_masters.len() == sections.len())
+                .filter(|kx| patches.is_some() && kx.section_masters.len() == sections.len())
                 .and_then(|kx| kx.section_masters.get(k).cloned().flatten());
             let name = match &own {
                 Some(m) => m.clone(),
@@ -1154,8 +1204,8 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     // Style definitions as read while nobody changed them: the file's own `office:styles`.
     let styles = styles_as_read(doc, kept, styles, &mut w.kept_used);
     // Page setup as read while nobody changed it: the file's own page layouts and master pages.
-    let styles = match kept.filter(|k| k.pages_as_read(doc)) {
-        Some(k) => super::kept::with_pages_as_read(&styles, &k.defs, &k.order),
+    let styles = match kept.zip(patches.as_ref()) {
+        Some((k, patches)) => super::kept::with_pages_as_read(&styles, &k.defs, &k.order, patches),
         None => styles,
     };
     let (content, styles) = with_kept_defs(content, styles, &w.kept_used, &w.kept_defs);

@@ -233,3 +233,227 @@ fn a_page_borders_padding_keeps_the_text_where_it_was() {
     }
     assert_eq!(s.page_borders.and_then(|b| b.left).map(|b| (b.width, b.space)), Some((3.0, 24.0)));
 }
+
+/// A file with what WordCraft doesn't model of a page: how its pages are used, the footnote line,
+/// a header's background.
+fn page_file(extra_layouts: &str, masters: &str, body: &str) -> Vec<u8> {
+    let ns = crate::odt::tests::NS_T;
+    let styles = format!(
+        r##"<office:document-styles {ns}><office:automatic-styles><style:page-layout style:name="pm1" style:page-usage="mirrored"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm" fo:margin-bottom="2cm" fo:margin-left="3cm" fo:margin-right="2cm" style:print-orientation="portrait"><style:footnote-sep style:width="0.05cm" style:color="#ff0000"/></style:page-layout-properties><style:header-style><style:header-footer-properties fo:min-height="1cm" fo:margin-bottom="0.5cm" fo:background-color="#eeffee" style:dynamic-spacing="false"/></style:header-style></style:page-layout>{extra_layouts}</office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>Kopf</text:p></style:header></style:master-page>{masters}</office:master-styles></office:document-styles>"##
+    );
+    let content = format!("<office:document-content {ns}><office:body><office:text>{body}</office:text></office:body></office:document-content>");
+    crate::odt::tests::package(&content, Some(&styles))
+}
+
+#[test]
+fn a_page_setup_change_leaves_the_rest_of_the_files_page_definitions() {
+    // Changing one margin wrote every page layout and master page from the model, so a header's
+    // background and the footnote line were gone in LibreOffice.
+    let bytes = page_file("", "", "<text:p>x</text:p>");
+    let mut d = crate::odt::import(&bytes).unwrap();
+    d.last_section.margin_left = 100.0;
+    let saved = crate::odt::export(&d).unwrap();
+    let s = crate::odt::tests::styles_of(&saved);
+    assert!(s.contains(r#"style:page-layout style:name="pm1" style:page-usage="mirrored""#), "the file's layout: {s}");
+    assert!(s.contains(r##"style:color="#ff0000""##) && s.contains(r##"fo:background-color="#eeffee""##), "what WordCraft doesn't model: {s}");
+    assert!(s.contains(r#"fo:margin-left="100pt""#) && !s.contains(r#"fo:margin-left="3cm""#), "the change: {s}");
+    assert!(s.contains(r#"fo:page-width="21cm""#) && s.contains(r#"fo:margin-right="2cm""#), "the rest, in the file's units: {s}");
+    assert!(
+        s.contains("<text:p>Kopf</text:p>") && s.contains(r#"style:master-page style:name="Standard" style:page-layout-name="pm1""#),
+        "its header: {s}"
+    );
+    assert_eq!(crate::odt::import(&saved).unwrap().last_section.margin_left, 100.0);
+    // Size and orientation.
+    let mut d = crate::odt::import(&bytes).unwrap();
+    let (w, h) = (d.last_section.page_h, d.last_section.page_w);
+    (d.last_section.page_w, d.last_section.page_h) = (w, h);
+    let s = crate::odt::tests::styles_of(&crate::odt::export(&d).unwrap());
+    assert!(s.contains(r#"style:print-orientation="landscape""#) && s.contains(r##"style:color="#ff0000""##), "{s}");
+    // Columns, in the place the schema gives them, before the footnote line.
+    let mut d = crate::odt::import(&bytes).unwrap();
+    d.last_section.columns.count = 2;
+    let saved = crate::odt::export(&d).unwrap();
+    let s = crate::odt::tests::styles_of(&saved);
+    assert!(s.find("<style:columns").is_some_and(|c| s.find("<style:footnote-sep").is_some_and(|f| c < f)), "{s}");
+    assert_eq!(crate::odt::import(&saved).unwrap().last_section.columns.count, 2);
+    // Changed back, nothing is left of the change.
+    let mut d = crate::odt::import(&bytes).unwrap();
+    let was = d.last_section.margin_left;
+    d.last_section.margin_left = 50.0;
+    d.last_section.margin_left = was;
+    assert!(crate::odt::tests::styles_of(&crate::odt::export(&d).unwrap()).contains(r#"fo:margin-left="3cm""#));
+}
+
+#[test]
+fn a_first_pages_change_goes_on_to_the_pages_after_it() {
+    // WordCraft reads a first page style and the pages after it as one section.
+    let second = r#"<style:page-layout style:name="pm2"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-left="3cm"/></style:page-layout>"#;
+    let first = r#"<style:master-page style:name="First" style:page-layout-name="pm2" style:next-style-name="Standard"/>"#;
+    let bytes = page_file(second, first, "<text:p>x</text:p>");
+    let mut d = crate::odt::import(&bytes).unwrap();
+    d.last_section.margin_left = 100.0;
+    let s = crate::odt::tests::styles_of(&crate::odt::export(&d).unwrap());
+    assert!(s.contains(r#"fo:margin-left="100pt""#) && s.contains(r##"style:color="#ff0000""##), "{s}");
+}
+
+#[test]
+fn a_first_pages_header_measure_stays_off_later_pages_without_one() {
+    // A first page with a header, and later pages with none: a top margin change moves the first
+    // page's header band, and gives the later pages' layout no header measurements.
+    let ns = crate::odt::tests::NS_T;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:automatic-styles><style:page-layout style:name="later"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm" fo:margin-bottom="2cm" fo:margin-left="2cm" fo:margin-right="2cm"/><style:header-style/><style:footer-style/></style:page-layout><style:page-layout style:name="first"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="3cm" fo:margin-bottom="2cm" fo:margin-left="2cm" fo:margin-right="2cm"/><style:header-style><style:header-footer-properties fo:min-height="3cm" fo:margin-bottom="0.4cm"/></style:header-style><style:footer-style/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="later"/><style:master-page style:name="First" style:page-layout-name="first" style:next-style-name="Standard"><style:header><text:p>Kopf</text:p></style:header></style:master-page></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:master-page-name="First"/></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">x</text:p></office:text></office:body></office:document-content>"#
+    );
+    let bytes = crate::odt::tests::package(&content, Some(&styles));
+    let mut d = crate::odt::import(&bytes).unwrap();
+    assert!(d.last_section.margin_top > 150.0, "the header's reach is the top margin: {}", d.last_section.margin_top);
+    d.last_section.margin_top = 150.0;
+    let s = crate::odt::tests::styles_of(&crate::odt::export(&d).unwrap());
+    let later = s.split(r#"style:name="later""#).nth(1).and_then(|r| r.split("</style:page-layout>").next()).unwrap();
+    assert!(later.contains("<style:header-style/>") && later.contains(r#"fo:margin-top="2cm""#), "later pages: {later}");
+    let first = s.split(r#"style:name="first""#).nth(1).and_then(|r| r.split("</style:page-layout>").next()).unwrap();
+    assert!(first.contains(r#"fo:margin-top="3cm""#) && !first.contains(r#"fo:min-height="3cm""#), "first page: {first}");
+}
+
+#[test]
+fn later_pages_header_keeps_its_distance_when_the_first_page_has_none() {
+    // A first page with no header, and later pages with one: the later pages' top margin measures
+    // to the header, not the text, so the first page's new text margin isn't theirs.
+    let ns = crate::odt::tests::NS_T;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:automatic-styles><style:page-layout style:name="later"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="1cm" fo:margin-bottom="2cm" fo:margin-left="2cm" fo:margin-right="2cm"/><style:header-style><style:header-footer-properties fo:min-height="1cm"/></style:header-style></style:page-layout><style:page-layout style:name="first"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm" fo:margin-bottom="2cm" fo:margin-left="2cm" fo:margin-right="2cm"/><style:header-style/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="later"><style:header><text:p>Kopf</text:p></style:header></style:master-page><style:master-page style:name="First" style:page-layout-name="first" style:next-style-name="Standard"/></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:master-page-name="First"/></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">x</text:p></office:text></office:body></office:document-content>"#
+    );
+    let bytes = crate::odt::tests::package(&content, Some(&styles));
+    let mut d = crate::odt::import(&bytes).unwrap();
+    d.last_section.margin_top = 100.0;
+    let saved = crate::odt::export(&d).unwrap();
+    let s = crate::odt::tests::styles_of(&saved);
+    let later = s.split(r#"style:name="later""#).nth(1).and_then(|r| r.split("</style:page-layout>").next()).unwrap();
+    assert!(later.contains(r#"fo:margin-top="1cm""#) && later.contains(r#"fo:min-height="71.65pt""#), "later pages: {later}");
+    let first = s.split(r#"style:name="first""#).nth(1).and_then(|r| r.split("</style:page-layout>").next()).unwrap();
+    assert!(first.contains(r#"fo:margin-top="100pt""#) && first.contains("<style:header-style/>"), "first page: {first}");
+    // Reopened, the change is still there.
+    let back = crate::odt::import(&saved).unwrap();
+    assert!((back.last_section.margin_top - 100.0).abs() < 0.01, "{}", back.last_section.margin_top);
+}
+
+#[test]
+fn a_bands_spacing_counts_once_when_the_page_setup_changes() {
+    // The band's height and its spacing together reach the text. Written as the height alone,
+    // with the spacing again after it, each save moved the text down by the spacing.
+    let ns = crate::odt::tests::NS_T;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="1cm" fo:margin-bottom="1cm" fo:margin-left="2cm" fo:margin-right="2cm"/><style:header-style><style:header-footer-properties fo:min-height="1cm" fo:margin-bottom="1cm"/></style:header-style><style:footer-style><style:header-footer-properties fo:min-height="1cm" fo:margin-top="0.5cm"/></style:footer-style></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>Kopf</text:p></style:header><style:footer><text:p>Fuss</text:p></style:footer></style:master-page></office:master-styles></office:document-styles>"#
+    );
+    let content =
+        format!("<office:document-content {ns}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>");
+    let bytes = crate::odt::tests::package(&content, Some(&styles));
+    // The file's page layout, changed.
+    let mut d = crate::odt::import(&bytes).unwrap();
+    let was = d.last_section.margin_top;
+    d.last_section.margin_top = 150.0;
+    d.last_section.margin_bottom = 120.0;
+    let saved = crate::odt::export(&d).unwrap();
+    let s = crate::odt::tests::styles_of(&saved);
+    assert!(s.contains(r#"fo:margin-bottom="1cm""#) && s.contains(r#"fo:margin-top="0.5cm""#), "the spacing stays: {s}");
+    let back = crate::odt::import(&saved).unwrap();
+    assert!((back.last_section.margin_top - 150.0).abs() < 0.02, "{}", back.last_section.margin_top);
+    assert!((back.last_section.margin_bottom - 120.0).abs() < 0.02, "{}", back.last_section.margin_bottom);
+    // Less room than the spacing takes it from the spacing.
+    let mut d = crate::odt::import(&bytes).unwrap();
+    d.last_section.margin_top = d.last_section.header + 10.0;
+    let back = crate::odt::import(&crate::odt::export(&d).unwrap()).unwrap();
+    assert!((back.last_section.margin_top - (back.last_section.header + 10.0)).abs() < 0.02, "{}", back.last_section.margin_top);
+    // WordCraft's own page layout, written whole when the kind of page changes.
+    let mut d = crate::odt::import(&bytes).unwrap();
+    d.last_section.page_num_start = Some(5);
+    let back = crate::odt::import(&crate::odt::export(&d).unwrap()).unwrap();
+    assert!((back.last_section.margin_top - was).abs() < 0.02, "{} after {was}", back.last_section.margin_top);
+    let again = crate::odt::import(&crate::odt::export(&back).unwrap()).unwrap();
+    assert!((again.last_section.margin_top - was).abs() < 0.02, "{} after {was}", again.last_section.margin_top);
+}
+
+#[test]
+fn a_fixed_height_band_stays_one() {
+    let ns = crate::odt::tests::NS_T;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="1cm" fo:margin-bottom="1cm" fo:margin-left="2cm" fo:margin-right="2cm"/><style:header-style><style:header-footer-properties svg:height="1cm"/></style:header-style></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>Kopf</text:p></style:header></style:master-page></office:master-styles></office:document-styles>"#
+    );
+    let content =
+        format!("<office:document-content {ns}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>");
+    let bytes = crate::odt::tests::package(&content, Some(&styles));
+    let mut d = crate::odt::import(&bytes).unwrap();
+    d.last_section.margin_top = 100.0;
+    let saved = crate::odt::export(&d).unwrap();
+    let s = crate::odt::tests::styles_of(&saved);
+    let layout = s.split(r#"style:name="pm1""#).nth(1).and_then(|r| r.split("</style:page-layout>").next()).unwrap();
+    assert!(layout.contains(r#"svg:height="71.65pt""#) && !layout.contains("fo:min-height"), "{layout}");
+    assert!((crate::odt::import(&saved).unwrap().last_section.margin_top - 100.0).abs() < 0.02);
+}
+
+#[test]
+fn later_pages_with_their_own_margin_keep_it() {
+    // A first page set apart: what it changes isn't what the later pages say.
+    let ns = crate::odt::tests::NS_T;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:automatic-styles><style:page-layout style:name="later"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm" fo:margin-bottom="2cm" fo:margin-left="2cm" fo:margin-right="2cm"/></style:page-layout><style:page-layout style:name="first"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="5cm" fo:margin-bottom="2cm" fo:margin-left="4cm" fo:margin-right="2cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="later"/><style:master-page style:name="First" style:page-layout-name="first" style:next-style-name="Standard"/></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:master-page-name="First"/></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">x</text:p></office:text></office:body></office:document-content>"#
+    );
+    let bytes = crate::odt::tests::package(&content, Some(&styles));
+    let mut d = crate::odt::import(&bytes).unwrap();
+    d.last_section.margin_top = 100.0;
+    d.last_section.margin_left = 90.0;
+    d.last_section.margin_right = 80.0;
+    let s = crate::odt::tests::styles_of(&crate::odt::export(&d).unwrap());
+    let layout = |name: &str| {
+        let key = format!(r#"style:name="{name}""#);
+        s.split(key.as_str()).nth(1).and_then(|r| r.split("</style:page-layout>").next()).unwrap().to_string()
+    };
+    let (first, later) = (layout("first"), layout("later"));
+    assert!(first.contains(r#"fo:margin-top="100pt""#) && first.contains(r#"fo:margin-left="90pt""#), "{first}");
+    assert!(later.contains(r#"fo:margin-top="2cm""#) && later.contains(r#"fo:margin-left="2cm""#), "{later}");
+    // Where both said the same, the change is the later pages' too.
+    assert!(first.contains(r#"fo:margin-right="80pt""#) && later.contains(r#"fo:margin-right="80pt""#), "{first} {later}");
+}
+
+#[test]
+fn sections_sharing_a_page_layout_can_still_differ() {
+    // One section changed: the page layout they share can't say both, so each gets its own.
+    let style = r#"<office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:master-page-name="Standard"/></office:automatic-styles>"#;
+    let ns = crate::odt::tests::NS_T;
+    let content = format!(
+        r#"<office:document-content {ns}>{style}<office:body><office:text><text:p>one</text:p><text:p text:style-name="P1">two</text:p></office:text></office:body></office:document-content>"#
+    );
+    let styles = r##"<office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-left="3cm" fo:margin-right="2cm" fo:margin-top="2cm" fo:margin-bottom="2cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles>"##;
+    let bytes = crate::odt::tests::package(&content, Some(&format!("<office:document-styles {ns}>{styles}</office:document-styles>")));
+    let mut d = crate::odt::import(&bytes).unwrap();
+    assert!(d.body.iter().filter_map(|b| b.as_para()).any(|p| p.section.is_some()), "two sections");
+    d.last_section.margin_left = 100.0;
+    let back = crate::odt::import(&crate::odt::export(&d).unwrap()).unwrap();
+    assert_eq!(back.last_section.margin_left, 100.0);
+    let first = back.body.iter().filter_map(|b| b.as_para()).find_map(|p| p.section.as_ref()).map(|s| s.margin_left);
+    assert!(first.is_some_and(|m| (m - 3.0 * 72.0 / 2.54).abs() < 0.1), "{first:?}");
+}
+
+#[test]
+fn hostile_page_definitions_do_not_stop_a_page_setup_change() {
+    let layouts =
+        r#"<style:page-layout style:name="odd"><style:page-layout-properties fo:margin-left='1in' fo:margin-left2="x" a="b"/></style:page-layout>"#;
+    let masters = r#"<style:master-page style:name="A" style:page-layout-name="odd" style:next-style-name="B"/><style:master-page style:name="B" style:page-layout-name="odd" style:next-style-name="A"/><style:master-page style:name="C" style:page-layout-name="none" style:next-style-name="C"/>"#;
+    let bytes = page_file(layouts, masters, "<text:p>x</text:p>");
+    let mut d = crate::odt::import(&bytes).unwrap();
+    d.last_section.margin_left = f32::NAN;
+    let _ = crate::odt::export(&d).unwrap();
+    d.last_section.margin_left = 1e30;
+    d.last_section.page_w = -5.0;
+    let saved = crate::odt::export(&d).unwrap();
+    assert!(crate::odt::import(&saved).is_ok());
+}
