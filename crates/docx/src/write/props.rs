@@ -124,6 +124,10 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     if let Some(m) = c.emphasis {
         w.val("w:em", m.ooxml());
     }
+    rpr_language_and_effects(w, c);
+}
+
+fn rpr_language_and_effects(w: &mut W, c: &CharProps) {
     let mut lang_attrs: Vec<(&str, &str)> = Vec::with_capacity(3);
     if let Some(l) = &c.lang {
         lang_attrs.push(("w:val", l));
