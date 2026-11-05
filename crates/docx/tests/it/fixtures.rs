@@ -2140,6 +2140,18 @@ fn themed_docx(body: &str, styles: &str, settings: Option<&str>) -> Document {
     wordcraft_docx::read(&docx(body, &doc_rels, &extra)).unwrap()
 }
 
+/// A percentage pattern mixes its theme colours (`w:themeColor`, `w:themeFill`), not the
+/// fixed ones Word writes next to them.
+#[test]
+fn percentage_shading_mixes_theme_colours() {
+    let body = r#"<w:p><w:pPr><w:shd w:val="pct50" w:color="000000" w:themeColor="accent1" w:fill="FFFFFF"/></w:pPr></w:p>
+<w:p><w:pPr><w:shd w:val="pct50" w:color="FFFFFF" w:fill="000000" w:themeFill="accent2"/></w:pPr></w:p>"#;
+    let d = themed_docx(body, "", None);
+    let shading: Vec<Option<Rgb>> = paras(&d).iter().map(|p| p.props.shading).collect();
+    // accent1 4472C4 half over white; white half over accent2 ED7D31.
+    assert_eq!(shading, [Some(Rgb(162, 185, 226)), Some(Rgb(246, 190, 152))]);
+}
+
 /// Within one step per channel: Word's tint and shade round differently from ours in the last bit.
 fn near(c: Option<TextColor>, want: Rgb) -> bool {
     matches!(c, Some(TextColor::Rgb(Rgb(r, g, b))) if r.abs_diff(want.0) <= 1 && g.abs_diff(want.1) <= 1 && b.abs_diff(want.2) <= 1)

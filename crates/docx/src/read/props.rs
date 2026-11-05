@@ -212,6 +212,12 @@ impl PropCtx {
         if e.attr("w:val") == Some("nil") {
             return None;
         }
+        // A percentage pattern mixes its colours, theme ones first.
+        if let Some(n) = shd_pct(e) {
+            let fg = self.theme_color(e, "w:themeColor", "w:themeTint", "w:themeShade").or_else(|| e.attr("w:color").and_then(Rgb::parse));
+            let bg = self.theme_color(e, "w:themeFill", "w:themeFillTint", "w:themeFillShade").or_else(|| e.attr("w:fill").and_then(Rgb::parse));
+            return Some(pct_mix(fg, bg, n));
+        }
         if let Some(c) = self.theme_color(e, "w:themeFill", "w:themeFillTint", "w:themeFillShade") {
             return Some(c);
         }
@@ -469,17 +475,25 @@ pub(crate) fn tab_leader(v: &str) -> TabLeader {
     }
 }
 
+/// A percentage pattern's share (`pct5` … `pct95`, ECMA-376 §17.18.78), 1–100.
+fn shd_pct(e: &El) -> Option<u16> {
+    e.attr("w:val").and_then(|v| v.strip_prefix("pct")).and_then(|n| n.parse::<u16>().ok()).filter(|n| (1..=100).contains(n))
+}
+
+/// A percentage pattern as one colour: its pattern colour (automatic: black) over the fill
+/// (automatic: white) in that share, so `pct5` on no fill is a light grey.
+fn pct_mix(fg: Option<Rgb>, bg: Option<Rgb>, n: u16) -> Rgb {
+    let (fg, bg) = (fg.unwrap_or(Rgb(0, 0, 0)), bg.unwrap_or(Rgb(255, 255, 255)));
+    let n = n.min(100);
+    let mix = |f: u8, b: u8| ((u16::from(f) * n + u16::from(b) * (100 - n) + 50) / 100).min(255) as u8;
+    Rgb(mix(fg.0, bg.0), mix(fg.1, bg.1), mix(fg.2, bg.2))
+}
+
 /// `w:shd/@w:fill` (a solid fill colour; `auto` = none), ignoring theme fills ([`PropCtx::shd_fill`]).
 fn shd_fill(e: &El) -> Option<Rgb> {
     let fill = e.attr("w:fill").and_then(Rgb::parse);
-    // A percentage pattern (`pct5` … `pct95`, ECMA-376 §17.18.78) shows its pattern colour
-    // (automatic: black) over the fill (automatic: white) in that share: `pct5` on no fill is a
-    // light grey. One colour holds it, the two mixed.
-    if let Some(n) = e.attr("w:val").and_then(|v| v.strip_prefix("pct")).and_then(|n| n.parse::<u16>().ok()).filter(|n| (1..=100).contains(n)) {
-        let fg = e.attr("w:color").and_then(Rgb::parse).unwrap_or(Rgb(0, 0, 0));
-        let bg = fill.unwrap_or(Rgb(255, 255, 255));
-        let mix = |f: u8, b: u8| ((u16::from(f) * n + u16::from(b) * (100 - n) + 50) / 100).min(255) as u8;
-        return Some(Rgb(mix(fg.0, bg.0), mix(fg.1, bg.1), mix(fg.2, bg.2)));
+    if let Some(n) = shd_pct(e) {
+        return Some(pct_mix(e.attr("w:color").and_then(Rgb::parse), fill, n));
     }
     if fill.is_some() {
         return fill;
