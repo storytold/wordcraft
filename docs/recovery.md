@@ -6,20 +6,34 @@ unless a document was explicitly created or opened before the startup scan compl
 In particular, a window launched for New/Open keeps the requested document visible;
 older copies remain available through File › Recover. Recovery uses the regular interface
 palette so its labels and buttons stay readable in light and dark themes.
-Restore opens an unsaved document with no file path. Save As chooses where to keep it.
-Recovery never writes to the original document. AutoSave's permission to write to an earlier
-file is cleared on restore.
+Restore opens the copy as another unsaved document with no file path, beside the open
+documents. It replaces only an untouched blank document, so it never replaces work and asks
+nothing. Save As chooses where to keep it. Recovery never writes to the original document.
+The restored document has no AutoSave permission to write to an earlier file, and keeps its
+copy in the record it came from.
 
-Continue without restoring leaves copies available. Discard asks for confirmation and deletes
-the selected copy, including its retained generation. It does not delete the editing document.
-After discarding that document's copy, another copy is made only after a further edit.
-A successful save removes that document's recovery copy on the next worker cycle while it
-remains open. Copies left after switching documents can still be explicitly discarded.
+File › Recover lists copies from earlier runs: crashed sessions, documents replaced in this
+one, and copies whose deletion failed. The copies the open documents keep are not listed;
+they are not lost. Continue without restoring leaves copies available. Discard asks for
+confirmation and deletes the selected copy, including its retained generation.
 
 Documents with a password do not get plaintext recovery copies. Applying a password waits for
 any pending snapshot, removes the current document's recovery generations, and fails if cleanup
 fails. Encrypted recovery is not implemented. Documents opened with a password keep recovery
 disabled for that session. Removing the password allows future recovery again.
+
+## Several open documents
+
+Every dirty open document keeps its own copy, whether it is shown or not. A crash with several
+unsaved documents leaves a copy of each, and the next start lists them all.
+
+| Event | That document's copy |
+|---|---|
+| Save | Deleted on the next worker cycle |
+| Close without saving (Don't Save, `file.closeDocument`) | Deleted on the next worker cycle |
+| Don't Save when quitting | Deleted before the app exits |
+| Clean exit | Waits for the worker, then deletes the copies of documents saved, closed or protected since their last copy; dirty documents keep theirs |
+| Crash | Kept |
 
 ## Storage and timing
 
@@ -28,9 +42,11 @@ separate profile for isolated runs, including preferences, logs and control keys
 `WORDCRAFT_NO_PREFS` disables recovery as well as preferences. Headless engine/CLI sessions
 and the browser do not create recovery files implicitly.
 
-The desktop host checks for a dirty document every frame but snapshots at most once per ten
-seconds, and only when its revision changes. It clones the shared document model for a bounded
-worker queue. Encoding, file I/O, full-document validation and discovery run on the worker.
+One worker thread and one store serve every open document, so a record is locked once per
+process. Every frame the desktop host compares each open document's revision and timer without
+making it active, and queues at most one job. A document is snapshotted at most once per ten
+seconds, and only when its revision changes. Only a document whose copy is due is cloned (the
+shared document model) for the worker. Encoding, file I/O, full-document validation and discovery run on the worker.
 An unchanged document does not schedule repeated recovery repaints. The most recent edits can
 be lost if a crash happens before the next snapshot or while its write is still pending.
 
@@ -68,9 +84,10 @@ interval, English fallback for new labels, and no cloud, version-history or brow
 
 `file.recover={}` reads cached `{enabled,busy,documents,error}`. Each document has `id`, `name`
 and `savedAt`. `{"refresh":true}`, `{"restore":"id"}` and `{"discard":"id"}` queue worker
-operations. Poll until `busy` is false; inspect `error` for failure. A restore is cancelled if the
-document id or revision changes while it loads. Programmatic restores do not open dialogs;
-user restores over dirty work use the existing Save Changes prompt.
+operations, and accept only listed ids. Poll until `busy` is false; inspect `error` for failure.
+A restore asked for in an untouched blank document replaces it once that document is active,
+and is cancelled if the document changes or closes while the copy loads. Restores never open
+dialogs.
 `ui.recoveryDiscard={"id":"id"}` opens confirmation; `{"answer":"discard"}` or
 `{"answer":"cancel"}` answers it.
 

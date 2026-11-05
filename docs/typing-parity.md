@@ -1,10 +1,10 @@
 # Typing parity with Word
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** trivial (`*Bold* and _italic_ as real formatting` in AutoFormat As You Type; previously trivial: highlight target includes selected paragraph marks, #4085; previously trivial: full-target highlight check beyond 10,000 runs, #4085; previously trivial: queued IME replacements are rejected before mutation after their marked composition loses its body/equation target; previously trivial: the transactional equation delete proves its commit with the engine revision; previously trivial: a refused byte-counted equation deletion drops only the immediately adjacent stale replacement, so a later direct commit still applies; previously trivial: a tracked own-insertion shifts the rest of a two-sided IME deletion; previously trivial: AutoCorrect/AutoFormat classification compares the actual paragraph; previously trivial: a replaced body starts a new input-method context and interrupts the composition; a quote the engine leaves as typed is the input method's own change; equation `DeleteSurrounding` erases counted characters; previously trivial: AutoCorrect finds the word after a no-break space or an ideographic space; previously trivial: a command that changes nothing is not an edit: no undo step, no unsaved changes, no relayout, and the redo stack survives it; previously trivial: while an input method composes, the caret and its candidate window sit at the input method's cursor inside the composition; previously trivial: Ctrl+Tab types a tab in a table cell, #3137; previously trivial: List AutoFormat triggers in front of an already-written paragraph, not only a fresh empty one, checked in Word for Windows, #3352; previously trivial: AltGr types its characters without opening KeyTips on Linux, #2388; previously trivial: Delete on whole selected cells leaves one empty paragraph in each, with the cell's last paragraph's formatting; nested tables go too, #2802; previously trivial: Bullets and Numbering toggle off style-inherited lists at their effective level, including basedOn chains and numbered ListParagraph styles; other paragraphs and list definitions stay unchanged (related to #3459); previously trivial: a text box that keeps the keyboard no longer resets the input method every frame, #2986; previously trivial: a slash opening a word travels whole to the next line, #2963; previously trivial: typing over a selection takes the first selected character's formatting, also when the selection was made right to left, #2879; previously trivial: Turkish and Azerbaijani case mapping in AutoCorrect, #1923; previously trivial: smart quotes in Hebrew pinned: logical order, ” in acronyms as in Word, #1670; previously trivial: Backspace on a selected table, rows or columns deletes them, Delete clears them, #1844; previously trivial: typed text takes its direction from its own letters, #1543; previously trivial: an input method's request to erase text around the caret is honoured, so web typing in Cyrillic and other non-Latin text no longer repeats, #1480; previously trivial: `-->` AutoCorrect replacement, #2223; previously trivial: a heading-list preset keeps Heading styles and makes other paragraphs Heading 1, as in Word, #1793; previously trivial: numbered headings: a heading-linked Multilevel List numbers new headings by their style; numbering keeps a heading a heading, #1793; previously trivial: reversing an automatic capital adds an exception, #1857; previously trivial: smart quotes open after guillemets and low quotes and nest; previously trivial: Enter on an empty list item numbered by its paragraph style moves it up a level, #2143; previously trivial: Backspace after a section break and Delete before it remove the break, also on the last paragraph, #2127; previously trivial: a table inserted in right-to-left text is right to left, so Tab moves left, #2634; previously trivial: Shift+Delete cuts the selection on every platform, #1669; previously trivial: Select All then Delete removes a table the document starts with, #1198; previously trivial: Alt+numpad character codes, #961; previously trivial: Down and Up from a line start beside a table go into it, #1007; previously trivial: sample-text formulas on Enter, #1067; previously trivial: Track Changes: Accept All after a tracked delete from a paragraph end keeps the next paragraph; Reject All after typing into an empty paragraph keeps it (#864); previously minor: Correct TWo INitial CApitals, cAPS LOCK and table-cell capitals, #544; previously trivial: complex-script caret and Backspace, #604; Move Paragraph Up/Down, Promote/Demote, Go Back and Alt+X keys, #343; the body IME deletion maps signed placeholder growth/shrink, keeps control markers outside the range and scopes its undo join to the matching replacement) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-01 · **Change:** minor (English spelling by dialect from SCOWL 2026, CP2; previously trivial: a tracked heading or border-line AutoFormat replaces another author's formatting change; previously trivial: Relative font-size commands preserve mixed sizes in the selection (#4903); existing button steps and one-point shortcuts are unchanged; readiness estimates unchanged); previously trivial (highlight at a caret leaves the word alone, #4086); previously trivial (Arabic Backspace removes one combining mark and keeps its base letter (#4757); previously trivial: tests and notes for the border-line, table, tab-indent and wide-space rules; previously trivial: `*Bold* and _italic_ as real formatting` in AutoFormat As You Type; previously trivial: highlight target includes selected paragraph marks, #4085; previously trivial: full-target highlight check beyond 10,000 runs, #4085; previously trivial: queued IME replacements are rejected before mutation after their marked composition loses its body/equation target; previously trivial: the transactional equation delete proves its commit with the engine revision; previously trivial: a refused byte-counted equation deletion drops only the immediately adjacent stale replacement, so a later direct commit still applies; previously trivial: a tracked own-insertion shifts the rest of a two-sided IME deletion; previously trivial: AutoCorrect/AutoFormat classification compares the actual paragraph; previously trivial: a replaced body starts a new input-method context and interrupts the composition; a quote the engine leaves as typed is the input method's own change; equation `DeleteSurrounding` erases counted characters; previously trivial: AutoCorrect finds the word after a no-break space or an ideographic space; previously trivial: a command that changes nothing is not an edit: no undo step, no unsaved changes, no relayout, and the redo stack survives it; previously trivial: while an input method composes, the caret and its candidate window sit at the input method's cursor inside the composition; previously trivial: Ctrl+Tab types a tab in a table cell, #3137; previously trivial: List AutoFormat triggers in front of an already-written paragraph, not only a fresh empty one, checked in Word for Windows, #3352; previously trivial: AltGr types its characters without opening KeyTips on Linux, #2388; previously trivial: Delete on whole selected cells leaves one empty paragraph in each, with the cell's last paragraph's formatting; nested tables go too, #2802; previously trivial: Bullets and Numbering toggle off style-inherited lists at their effective level, including basedOn chains and numbered ListParagraph styles; other paragraphs and list definitions stay unchanged (related to #3459); previously trivial: a text box that keeps the keyboard no longer resets the input method every frame, #2986; previously trivial: a slash opening a word travels whole to the next line, #2963; previously trivial: typing over a selection takes the first selected character's formatting, also when the selection was made right to left, #2879; previously trivial: Turkish and Azerbaijani case mapping in AutoCorrect, #1923; previously trivial: smart quotes in Hebrew pinned: logical order, ” in acronyms as in Word, #1670; previously trivial: Backspace on a selected table, rows or columns deletes them, Delete clears them, #1844; previously trivial: typed text takes its direction from its own letters, #1543; previously trivial: an input method's request to erase text around the caret is honoured, so web typing in Cyrillic and other non-Latin text no longer repeats, #1480; previously trivial: `-->` AutoCorrect replacement, #2223; previously trivial: a heading-list preset keeps Heading styles and makes other paragraphs Heading 1, as in Word, #1793; previously trivial: numbered headings: a heading-linked Multilevel List numbers new headings by their style; numbering keeps a heading a heading, #1793; previously trivial: reversing an automatic capital adds an exception, #1857; previously trivial: smart quotes open after guillemets and low quotes and nest; previously trivial: Enter on an empty list item numbered by its paragraph style moves it up a level, #2143; previously trivial: Backspace after a section break and Delete before it remove the break, also on the last paragraph, #2127; previously trivial: a table inserted in right-to-left text is right to left, so Tab moves left, #2634; previously trivial: Shift+Delete cuts the selection on every platform, #1669; previously trivial: Select All then Delete removes a table the document starts with, #1198; previously trivial: Alt+numpad character codes, #961; previously trivial: Down and Up from a line start beside a table go into it, #1007; previously trivial: sample-text formulas on Enter, #1067; previously trivial: Track Changes: Accept All after a tracked delete from a paragraph end keeps the next paragraph; Reject All after typing into an empty paragraph keeps it (#864); previously minor: Correct TWo INitial CApitals, cAPS LOCK and table-cell capitals, #544; previously trivial: complex-script caret and Backspace, #604; Move Paragraph Up/Down, Promote/Demote, Go Back and Alt+X keys, #343; the body IME deletion maps signed placeholder growth/shrink, keeps control markers outside the range and scopes its undo join to the matching replacement) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 What Word does when you type, observed black-box (same keystrokes typed into Word and
 WordCraft, results read back paragraph by paragraph) and pinned by tests in
-`crates/engine/src/tests_typing.rs`. When typing behaviour changes, change it here and in the
+`crates/engine/src/tests/typing.rs`. When typing behaviour changes, change it here and in the
 tests together. Line breaking and pagination are in [`layout-parity.md`](layout-parity.md); the
 overall picture is in [`target-app-parity.md`](target-app-parity.md).
 
@@ -20,8 +20,9 @@ The highlight decision checks the complete target, including mixed colours after
 formatting-state queries retain their existing sampling limit. Fully selected paragraph marks
 (including whole cells and empty paragraphs) participate in that decision; partial text
 columns ignore marks outside the selected range. Palette state is outside document undo; the formatting itself is undoable.
-The existing selection/word/pending-caret targeting is unchanged (the separate request #4086
-is not addressed).
+Highlighting formats the selection only: with a caret, even inside a word, it sets the
+colour for what is typed next and leaves the word alone, as in Word (#4086; Bold and other
+character formats still take the word at the caret).
 
 Regressions: `highlight_shortcut_toggles_the_last_colour` and
 `highlight_toggle_handles_mixed_inherited_and_pending_formatting`. Synthetic command/key
@@ -81,6 +82,7 @@ Bullets and Numbering decide whether to toggle off from the selected paragraphs'
 | type, select some of it, type over it | two undo steps: the first ⌘Z brings the selected text back (still selected), the second removes the typing. Uninterrupted typing stays one step | `typing_then_selecting_then_typing_are_two_undo_steps` |
 | ⌘B with nothing selected, ⌘Z, type | the text isn't bold (Undo takes the waiting caret formatting back too); ⌘Y brings it back | `undoing_bold_at_the_caret_turns_bold_typing_off_again` |
 | ⌫ at the start of the document, or typing nothing | nothing happens: no undo step is added, the document is not marked edited, and the redo stack survives ³ | `backspace_at_the_start_of_the_document_is_not_an_edit`, `a_command_that_changes_nothing_is_not_an_edit`, `a_no_op_command_keeps_the_redo_stack` |
+| ⌫ right after a floating shape's anchor at the paragraph start (In Front of Text, Square…) | joins the paragraph above and keeps the shape; the anchor is not a character to delete (checked in Word for Windows, #4592) | `backspace_after_a_floating_shape_anchor_joins_paragraphs_and_keeps_the_shape` |
 
 ³ Not re-observed side by side in Word for this change: Word's undo list does not grow when a
 key changes nothing, and the document is not marked edited. The gap was found by the read-only
@@ -110,9 +112,9 @@ formatting of the text before the cursor. Not yet compared side by side in Word.
 | Backspace / Delete with a whole table selected (Select Table, or every cell dragged over) | Backspace removes the table, like Delete Table (one undo step; with tracking on its text is marked deleted and the structure stays); the caret goes to the paragraph after it. Delete clears the cells and keeps the table (each cell as below). A nested table goes on its own and leaves the cell's paragraph; a table that was the only block leaves one empty paragraph | `backspace_with_the_whole_table_selected_removes_the_table`, `delete_with_the_whole_table_selected_clears_the_cells_and_keeps_the_table`, `backspace_on_a_selected_nested_table_removes_only_it`, `backspace_on_a_selected_table_that_is_the_only_block_leaves_an_empty_paragraph`, `tracked_backspace_on_a_selected_table_marks_its_text_deleted_like_delete_table` |
 | Backspace / Delete with a table and the paragraph before or after it selected | both remove the table, whatever end the selection starts in; the text around joins. Any table the selection covers whole goes, at any nesting level | `delete_or_backspace_with_the_table_and_the_paragraph_after_selected_removes_the_table`, `delete_or_backspace_with_the_paragraph_before_and_the_table_selected_removes_the_table` |
 | Backspace / Delete with whole rows or columns selected | Backspace deletes the rows or columns (Delete Rows / Delete Columns); Delete clears their cells. One selected cell is just that cell, also in a one-row or one-column table: Backspace clears it. A cleared cell is left with one empty paragraph, however many it had, with the formatting of its last paragraph (whose mark ends the cell); a table nested in it goes too (checked against Word 2019 for Windows, #2802). With Track Changes on, Delete still marks the cells' text deleted as before. **Differs:** in a 1×1 table, Select Cell then Backspace removes the table (WordCraft has no end-of-row mark to tell the cell from the whole table; the end-of-row caret position is still missing, #1844) | `backspace_deletes_selected_rows_and_delete_clears_them`, `backspace_deletes_selected_columns_and_delete_clears_them`, `backspace_on_one_selected_cell_of_a_one_row_or_one_column_table_clears_it`, `delete_on_whole_cells_leaves_one_empty_paragraph_in_each`; `delete_range` edge cases: `edit::tests::a_range_ending_at_the_end_of_a_cell_that_isnt_the_last_keeps_the_table` and five more (other tables, nested tables, story ends, headers and footnotes, content controls, nesting past the paragraph walk) |
-| Table Layout › Delete Table / Rows / Columns / Cells (tracking on) | like Word deleting a selected table: the cells' text is marked deleted and the table structure stays (WordCraft has no tracked row or column deletion, `w:trPr/w:del`, so rows and columns keep their cells too, where Word's Accept removes the rows); text you inserted yourself is just removed; Reject All restores the text. A table, row or column with no text at all (empty, or its deletion already accepted) is removed as with tracking off; one whose text is all already marked deleted is left alone with a message (accept or reject first). Delete Columns leaves a merged cell that also spans a kept column alone (it narrows, keeping its text). A content control locked against deletion, or content locked against editing, refuses the delete with tracking on or off | `tests_revision_checks::tracked_table_delete_marks_the_text_deleted_and_reject_all_restores_it`, `tracked_row_column_and_cell_deletes_mark_their_text_deleted`, `tracked_table_delete_over_tracked_insertions_rejects_back_to_the_original`, `table_deletes_refuse_a_control_locked_against_deletion`, `tracked_delete_table_removes_a_table_with_no_live_text`, `delete_columns_leaves_a_merged_cell_that_keeps_a_column_alone`, `tracked_row_and_column_deletes_over_tracked_changes_reject_back_to_the_original` |
-| Change Case (Shift+F3, Home › Aa) (tracking on) | Word shows no insertion or deletion markup (checked with Formatting markup set to none, so Word may record it as a hidden formatting revision). **Differs:** WordCraft records the changed letters as a tracked deletion of the old and insertion of the new, since case isn't a run property a formatting revision could hold; Reject All restores the old case, Accept All keeps the new. Your own tracked insertion is rewritten in place; already-deleted text is left alone and doesn't count (with tracking off too), so changing case again (or Shift+F3) works from the visible text. Refused in content locked against editing | `tests_revision_checks::tracked_change_case_rejects_back_to_the_original_case`, `tracked_change_case_of_own_insertion_stays_an_insertion`, `tracked_change_case_twice_reads_only_the_live_text`, `tracked_change_case_handles_sharp_s_and_mixed_formatting`, `change_case_refuses_content_locked_against_editing` |
-| Unlink Fields (Ctrl+Shift+F9) (tracking on) | not tracked, like Word: the field's result stays as ordinary text. Refused in content locked against editing | `tests_revision_checks::tracked_unlink_keeps_the_result_as_plain_text`, `unlink_refuses_a_field_in_content_locked_against_editing` |
+| Table Layout › Delete Table / Rows / Columns / Cells (tracking on) | like Word deleting a selected table: the cells' text is marked deleted and the table structure stays (WordCraft has no tracked row or column deletion, `w:trPr/w:del`, so rows and columns keep their cells too, where Word's Accept removes the rows); text you inserted yourself is just removed; Reject All restores the text. A table, row or column with no text at all (empty, or its deletion already accepted) is removed as with tracking off; one whose text is all already marked deleted is left alone with a message (accept or reject first). Delete Columns leaves a merged cell that also spans a kept column alone (it narrows, keeping its text). A content control locked against deletion, or content locked against editing, refuses the delete with tracking on or off | `tests::revision_checks::tracked_table_delete_marks_the_text_deleted_and_reject_all_restores_it`, `tracked_row_column_and_cell_deletes_mark_their_text_deleted`, `tracked_table_delete_over_tracked_insertions_rejects_back_to_the_original`, `table_deletes_refuse_a_control_locked_against_deletion`, `tracked_delete_table_removes_a_table_with_no_live_text`, `delete_columns_leaves_a_merged_cell_that_keeps_a_column_alone`, `tracked_row_and_column_deletes_over_tracked_changes_reject_back_to_the_original` |
+| Change Case (Shift+F3, Home › Aa) (tracking on) | Word shows no insertion or deletion markup (checked with Formatting markup set to none, so Word may record it as a hidden formatting revision). **Differs:** WordCraft records the changed letters as a tracked deletion of the old and insertion of the new, since case isn't a run property a formatting revision could hold; Reject All restores the old case, Accept All keeps the new. Your own tracked insertion is rewritten in place; already-deleted text is left alone and doesn't count (with tracking off too), so changing case again (or Shift+F3) works from the visible text. Refused in content locked against editing | `tests::revision_checks::tracked_change_case_rejects_back_to_the_original_case`, `tracked_change_case_of_own_insertion_stays_an_insertion`, `tracked_change_case_twice_reads_only_the_live_text`, `tracked_change_case_handles_sharp_s_and_mixed_formatting`, `change_case_refuses_content_locked_against_editing` |
+| Unlink Fields (Ctrl+Shift+F9) (tracking on) | not tracked, like Word: the field's result stays as ordinary text. Refused in content locked against editing | `tests::revision_checks::tracked_unlink_keeps_the_result_as_plain_text`, `unlink_refuses_a_field_in_content_locked_against_editing` |
 
 > **Three-column preset update:** 2026-10-15 · `blankThree` headers/footers start the caret in the first of three table cells (#2197). `text.tab` reaches the next cell and `text.insert` edits it through the existing command path. `crates/engine/tests/it/three_column_headers.rs` checks cell navigation, independent formatting, preset/text undo/redo and repeated DOCX save/reopen.
 
@@ -133,7 +135,7 @@ Windows/Linux keys are given first, macOS second.
 | Shift+F5 | Go Back: the caret cycles through the last four places edited, most recent first | `shift_f5_goes_back_through_the_last_edits` |
 | Alt+X (no macOS default) | the hex code before the caret (up to six digits, `U+` optional) or the selected code becomes its character; otherwise the character before the caret becomes its code (`é` ↔ `00E9`); one undo step | `alt_x_toggles_between_a_character_and_its_code` |
 | Shift+Backspace / Shift+Delete | Shift+Backspace erases like Backspace (#707). Shift+Delete cuts the selection to the clipboard and does nothing without one (Word for Windows, observed 2026-10-14). Windows delivers Shift+Delete as a Cut; macOS and Linux deliver the key, which did nothing (#1669) | `shift_delete_cuts_the_selection_and_shift_backspace_erases` |
-| Alt+numpad code (Windows and Linux; not macOS) | hold Alt, type a decimal code, release Alt: the character appears at the caret as typed text (one undo step). With a leading 0 the code is the ANSI code page — Windows-1252 by default (`0233` → é, `0128` → €); without one, 1–255 is the OEM code page — 437 by default and in US English (`233` → Θ, `1` → ☺, `7` → •), 850 for Western European locales and English outside the US (`155` → ø; `233` is Ú there, per the CP850 mapping file — é is `130` in both). On Windows the system locale picks both pages (`text.typeCode` `ansi`/`oem`): Central European 1250/852 (Polish `0185` and `165` → ą), Cyrillic 1251/866, Greek 1253/737, Turkish 1254/857, and for codes up to 255 the character Windows composes itself replaces ours (it knows every code page, double-byte ones too); Linux keeps 1252 and 437/850. Above 255, with or without the 0, the Unicode character with that decimal value (`8364` → €). Control characters, 0, unassigned bytes and values past Unicode type nothing; auto-repeat of a held digit adds nothing, and switching windows drops a half-typed code. Word counts only keypad digits; egui reports keypad and top-row digits alike, so top-row digits with Alt alone compose codes too. An Alt code never opens KeyTips | `alt_numpad_codes_map_like_word_on_windows`, `alt_numpad_code_types_one_character`, ui-egui `alt_numpad_code_types_its_character_without_keytips` |
+| Alt+numpad code (Windows and Linux; not macOS) | hold Alt, type a decimal code, release Alt: the character appears at the caret as typed text (one undo step). With a leading 0 the code is the ANSI code page — Windows-1252 by default (`0233` → é, `0128` → €); without one, 1–255 is the OEM code page — 437 by default and in US English (`233` → Θ, `1` → ☺, `7` → •), 850 for Western European locales and English outside the US (`155` → ø; `233` is Ú there, per the CP850 mapping file — é is `130` in both). On Windows the system locale picks both pages (`text.typeCode` `ansi`/`oem`): Central European 1250/852 (Polish `0185` and `165` → ą), Cyrillic 1251/866, Greek 1253/737, Turkish 1254/857, and for codes up to 255 the character Windows composes itself replaces ours (it knows every code page, double-byte ones too); Linux keeps 1252 and 437/850. Above 255, with or without the 0, the Unicode character with that decimal value (`8364` → €). Control characters, 0, unassigned bytes and values past Unicode type nothing; auto-repeat of a held digit adds nothing, and switching windows drops a half-typed code. Word counts only keypad digits; egui reports keypad and top-row digits alike, so top-row digits with Alt alone compose codes too. An Alt code never opens KeyTips. A text box (Find what, a dialog's field, the ribbon's boxes) takes the same codes: its character, not the digits (#4403) | `alt_numpad_codes_map_like_word_on_windows`, `alt_numpad_code_types_one_character`, ui-egui `alt_numpad_code_types_its_character_without_keytips`, `alt_code_types_its_character_in_a_text_box` |
 | AltGr (Right Alt on Polish, German, Czech… layouts) | AltGr+letter types the layout's character (AltGr+S → ś, AltGr+L → ł) and a bare AltGr tap does nothing; neither opens KeyTips. On Linux AltGr is the Right Alt key with Level 3 Shift, not Alt, so its modifiers event no longer reads as Alt let go (#2388); on Windows it is Ctrl+Alt. Right Alt on a layout without AltGr (US) is Alt and opens KeyTips like Left Alt | ui-egui `altgr_types_its_characters_without_keytips` |
 | Shift+Right (⇧→) at the end of a cell's text | the whole cell is selected first (its end-of-cell mark); the next Shift+Right selects the next cell with it. In an empty cell the first press selects the cell | `shift_right_at_the_end_of_a_cell_selects_the_cell_first` |
 
@@ -144,8 +146,8 @@ at paragraph start without creating a list. It respects AutoCorrect preferences,
 entries and undo. The existing `-> ` paragraph-start arrow bullet is unchanged.
 
 Applied when a word is finished by a space, punctuation **or Enter** (`enter_finishes_a_word_for_autocorrect`).
-The word starts after the last white-space character before it, also when that is a no-break space or an
-ideographic space (`autocorrect_finds_the_word_after_a_wide_space`):
+The word starts after the last white-space character before it, also when that is a no-break space, a narrow
+no-break space, a figure space or an ideographic space (`autocorrect_finds_the_word_after_a_wide_space`):
 
 - First letter of a sentence (paragraph or list item start, after `. ! ?`) is capitalised; not
   after abbreviations (`e.g.`, `Dr.`, …) or initials (`J.`), and not for mixed-case words
@@ -226,27 +228,47 @@ ideographic space (`autocorrect_finds_the_word_after_a_wide_space`):
 - With Track Changes on, the border-line and table AutoFormats below mark the characters
   deleted, so Reject All brings them back; characters the same author inserted are removed.
   The border is a tracked formatting change, at the top of a story too
-  (`a_tracked_border_line_is_a_deletion_and_a_formatting_change`); the table is inserted
+  (`a_tracked_border_line_is_a_deletion_and_a_formatting_change`), and at the top it replaces
+  another author's earlier formatting change on the paragraph
+  (`a_tracked_border_line_at_the_top_supersedes_another_authors_formatting`); the table is inserted
   untracked, as Insert › Table inserts one
   (`a_tracked_table_line_keeps_its_characters_as_a_deletion`). A line holding a tracked
   deletion stays as it is, so Enter after the deleted characters is a plain Enter. This is
   WordCraft's own rule.
+- With formatting left out of the Track Changes markup, the border at the top of a story is not
+  a formatting change and Reject All keeps it
+  (`a_border_line_at_the_top_with_formatting_markup_off_is_not_a_formatting_change`); the
+  author's own earlier formatting change on that paragraph stays the one change, holding the
+  formatting from before it (`a_border_line_at_the_top_keeps_the_authors_own_earlier_formatting_change`).
+  Reject All keeps the table of a `+---+` line. The border-line and table AutoFormats delete
+  their characters as Backspace does, tracked or not, so where a content control's lock refuses
+  Backspace, Enter is refused too and the line stays as it is
+  (`a_border_line_the_content_control_locks_refuse_to_delete_stays_as_backspace_leaves_it`).
 - Enter after `---` `===` `***` `___` `~~~` `###` → a bottom border on the paragraph above
   (single, double, dotted, thick, wave, triple) (`border_line_autoformat`). ⌘Z right after brings the
   characters back and removes the border; the Enter stays (one undo step) ¹
   (`undo_right_after_a_border_line_brings_the_characters_back`).
-- Built-in Heading styles (`tools.autocorrect {"headingStyles": true}`, off by default): Enter
+- Built-in Heading styles (`tools.autocorrect {"headingStyles": true}`, off by default,
+  `built_in_heading_styles_are_off_by_default`): Enter
   twice after a line of five or fewer words that does not end with punctuation makes the line
   Heading 1; one or two tabs before it make it Heading 2 or 3, and the tabs are removed ¹
   (`two_enters_after_a_short_line_make_it_a_heading`). The rest is WordCraft's own rule: the
   line is a Normal paragraph of the main text (not in a list, a table, a header or a text box)
-  and ends in a letter or digit; the caret stays in the empty paragraph after the heading; ⌘Z
+  with no outline level, and ends in a letter or digit
+  (`a_line_that_is_not_a_short_line_of_body_text_stays_as_it_is`); the caret stays in the
+  empty paragraph after the heading; ⌘Z
   right after brings back the tabs and the Normal style, and the second Enter stays
   (`undo_right_after_a_heading_autoformat_keeps_the_enter`); with Track Changes on, the tabs are
   marked deleted (or removed, when the same author inserted them) and the style change is a
   tracked formatting change, and a line holding a tracked deletion stays as it is
-  (`a_tracked_heading_autoformat_can_be_rejected`); a heading style locked by formatting
-  restrictions is not applied (`a_locked_heading_style_is_not_applied_as_you_type`).
+  (`a_tracked_heading_autoformat_can_be_rejected`); the formatting change is this author's and
+  replaces another author's earlier formatting change on the line, so rejecting it brings back
+  the line as that author left it
+  (`a_tracked_heading_autoformat_supersedes_another_authors_formatting`); a heading style
+  locked by formatting restrictions is not applied
+  (`a_locked_heading_style_is_not_applied_as_you_type`); in a read-only document, Enter in an
+  editable region right after a protected short line breaks the paragraph and leaves that line
+  as it is (`enter_in_an_editable_region_after_a_protected_short_line_breaks_the_paragraph`).
 - `+---+------+` Enter (plus signs around runs of hyphens, the whole paragraph) → a one-row
   table across the text width, each column as wide as its share of the hyphens; the caret goes
   into the first cell. ⌘Z right after brings the characters back. More than 63 columns stay
@@ -259,7 +281,10 @@ ideographic space (`autocorrect_finds_the_word_after_a_wide_space`):
   paragraph's own left indent one tab stop at a time. An empty paragraph and Tab inside a line
   still take a tab character. While formatting is limited to the document's styles, Tab and
   Backspace work as with the option off ¹ (`tab_and_backspace_at_a_paragraph_start_set_its_indents`,
-  `tab_before_a_later_line_of_a_paragraph_indents_the_whole_paragraph`).
+  `tab_before_a_later_line_of_a_paragraph_indents_the_whole_paragraph`). In a table cell Tab
+  still moves to the next cell (`with_tab_indents_on_tab_in_a_table_cell_moves_to_the_next_cell`).
+  With the option off, Backspace at the start of a paragraph with its own left indent joins it to
+  the paragraph before (`with_tab_indents_off_backspace_before_an_indented_paragraph_joins_it`).
 - Smileys `:)` `:-)` `:(` `:-(` `:|` → ☺ ☹ 😐, also straight after a word (`ok:)` → `ok☺`) ¹
   (`smileys_are_replaced_inside_words_too`).
 
@@ -290,6 +315,19 @@ ideographic space (`autocorrect_finds_the_word_after_a_wide_space`):
 
 ¹ From Word's documented AutoFormat and AutoCorrect options; not yet keystroke-compared with
 Word.
+## English spelling by dialect (SCOWL, CP2)
+
+Typed text is checked against the SCOWL 2026 dictionary of the document's English, with our
+American/British policy on top (see `docs/localization-parity.md`, Languages).
+
+| Typed (document language) | Result | Test |
+|---|---|---|
+| `The judgement on the defence licence put the programme in the catalogue.` (en-GB) | nothing marked (#40) | `issue_40_british_spellings_are_right_in_en_gb` |
+| `organised and organized` (en-GB); `The color of the center.` (en-GB) | both right; `color` → `colour`, `center` → `centre` | same |
+| `My desktop email has downloads, a smartphone and a website.` (en-US) | nothing marked (#520); `desktpo`, `recieved` marked | `issue_520_common_words_are_right` |
+| `We organize the colour in the centre.` (en-CA); `analyse`, `theatre` (en-AU, en-NZ, en-IN) | nothing marked; `organise` → `organize` in en-CA, `analyze` → `analyse` in en-AU (#1281, #1045) | `issues_1281_1045_english_dialects_proof_typed_text` |
+| `The 21st and 112th times, not the 21th.` with Ignore words that contain numbers off | only `21th` marked | same |
+
 ## Spelling as you type (#1552)
 
 Word draws no red squiggle under the word being typed. The squiggle comes when the word ends
@@ -317,6 +355,12 @@ The exemption is a layout input (`LayoutOptions::typing_word`, filtered in
 the caret's paragraph, and drops it once the caret is anywhere else or the word changed under it
 (`crates/engine/src/session.rs`), so a caret move without an edit lays only that paragraph out
 again.
+
+With File › Options › Proofing › Ignore web and file addresses on (the default), a web or e-mail
+address is not marked, also when the space before it is a no-break space, a narrow no-break space
+(U+202F), a figure space (U+2007) or an ideographic space. With the option off, the words in the
+address are checked (`address_after_a_wide_space_is_an_internet_token`, in craft-libs'
+`crates/proof/src/lib.rs`).
 
 ## Editing options (File › Options › Advanced)
 
@@ -356,6 +400,15 @@ again.
   `layout::tests::a_word_after_a_slash_wraps_whole`, also in a fixed table cell and not after a no-break space).
 
 ## Complex scripts
+
+- Arabic Backspace removes the last stored nonspacing mark, including harakat and Quranic marks,
+  without deleting its base letter (#4757). Multiple marks are removed in stored order, with no
+  normalization or decomposition. Left/Right and forward Delete keep whole-cluster behavior;
+  Latin accents, emoji and the existing Brahmic policy retain their behavior. Original synthetic
+  command regressions cover deletion, replacement, Undo/Redo and controls
+  (`arabic_backspace_removes_one_mark_and_keeps_the_base`,
+  `arabic_backspace_uses_stored_mark_order_but_delete_keeps_the_cluster`). Native keyboard and
+  Microsoft Word behavior have not been observed for this change.
 
 - Myanmar, Khmer and the Indic scripts are typed in memory order (consonant, medials, then
   vowel signs such as ေ, which is drawn before its consonant); the caret steps over whole
@@ -474,6 +527,9 @@ again.
 - Moving paragraphs with Track Changes on isn't recorded as a tracked move; whole table rows
   don't move yet (a selection across cells is refused). Go Back's places aren't mapped through
   later edits (they are clamped to the document).
+- A no-break space typed after a word (`text.nbsp`, Mod+Shift+Space) does not finish the word for
+  AutoCorrect: only a space, punctuation or Enter does, so `teh` stays `teh`. What Word does here
+  has not been compared.
 - Not yet compared: keystroke-by-keystroke comparison of Correct TWo INitial CApitals, cAPS LOCK
   and table-cell capitals (implemented from Word's AutoCorrect options; Word's exception list
   not compared); the rows marked ¹ above.
@@ -488,10 +544,34 @@ again.
   them short, read the document back to verify, and ask first. Screenshots of Word's window only,
   under `plan/word/screenshots/`.
 
+## Relative font-size changes
+
+Increase/Decrease Font Size and the one-point shortcuts transform each selected
+run from its own resolved size, including paragraph and character style inheritance
+(#4903). The existing button steps are unchanged: 20 pt and 10 pt become 22 pt and
+10.5 pt with Increase Font Size; Grow Font 1 Point makes them 21 pt and 11 pt.
+Both commands continue to set normal and complex-script sizes explicitly. Whole-body
+selections visit the selected paragraph paths once, without repeated prefix scans.
+
+Partial selections leave surrounding text and paragraph marks alone; fully selected
+paragraphs include their marks. Column pieces, selected cells, text-box frames and
+the existing word-at-caret/pending-typing targets retain their behavior. Each
+command is one Undo step and still obeys editing protection and the 1–1638 pt
+limits. Original-fixture engine and Linux CLI/headless UI save/reopen checks cover
+this correction; native Windows interaction and Microsoft Word remain untested.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | trivial | Alt+numpad codes type their character in text boxes too (Find what, dialog fields), not the digits or nothing (#4403) |
+| 2026-11-01 | minor | English spelling by dialect from SCOWL 2026: typed British, Canadian and Australian text, modern words and ordinals pinned (#40, #520, #1281, #1045; CP2) |
+| 2026-10-29 | trivial | Relative font-size commands preserve mixed sizes in the selection (#4903); existing button steps and one-point shortcuts are unchanged; readiness estimates unchanged |
+| 2026-10-28 | trivial | Highlighting at a caret leaves the word alone and sets the colour for what is typed next (#4086). |
+| 2026-10-28 | trivial | Arabic Backspace removes one combining mark and keeps its base letter (#4757); stored mark order, caret/forward-Delete and other-script behavior retained; original synthetic command/history/protection/save-reopen checks, no native Word comparison; readiness estimates unchanged |
+| 2026-10-27 | trivial | Backspace after a floating shape's anchor at a paragraph start joins paragraphs and keeps the shape (#4592) |
+| 2026-10-25 | trivial | AutoFormat: a tracked heading, and a tracked border line at the top of a story, replace another author's formatting change on the paragraph instead of keeping it |
+| 2026-10-25 | trivial | Tests and notes: border lines with formatting markup off, after the author's own formatting change and in a locked content control; Reject All keeps a `+---+` table; Tab in a table cell with tab indents on; Backspace before an indented paragraph with them off; narrow no-break and figure spaces before an AutoCorrect word; a no-break space typed after a word listed as a known gap |
 | 2026-10-25 | trivial | Highlight decisions include fully selected paragraph marks in whole cells and ordinary ranges, including empty paragraphs; partial text columns exclude unselected marks (#4085). |
 | 2026-10-25 | trivial | Highlight toggle checks the full target beyond 10,000 runs without collecting resolved formatting; mixed and inherited tails and Undo/Redo covered (#4085). |
 | 2026-10-24 | trivial | Input methods: reject queued old-composition replacements before mutation after body/equation target replacement (new regression validation pending); equation `DeleteSurrounding` is one transactional command whose checked revision proves a receipt; a caret-only step in a mixed request refuses the whole deletion, and an over-cap request clears the painted pre-edit and the previous replacement join; a refused byte-counted equation deletion drops only the immediately adjacent stale replacement, never a later direct commit; a tracked own-insertion shifts the following range; a body deletion maps signed placeholder growth/shrink, keeps control markers outside the range and scopes its replacement undo join to the matching `text.insert`; refusals clear the painted pre-edit and joins; AutoCorrect/AutoFormat classification compares the paragraph as typed; equation replacement interrupts the composition |
@@ -551,7 +631,7 @@ again.
 | 2026-10-11 | minor | Names of days capitalised; AutoCorrect Options (user entries, deleted built-ins, exceptions, every AutoCorrect/AutoFormat switch) change typing (#412) |
 | 2026-10-11 | minor | Editing keys: Move Paragraph Up/Down, Promote/Demote, Go Back (Shift+F5), Alt+X (#343) |
 | 2026-10-11 | minor | Hyperlinks: text typed at either end of a link or after Enter stays outside it (#413) |
-| 2026-10-10 | trivial | Status line, revision history and cross-links added (progress-docs standard) |
+| 2026-10-10 | trivial | Status line, revision history and cross-links added |
 | 2026-10-10 | minor | Track Changes rows: tracked Enter, Backspace and Delete on paragraph marks (#244) |
 | 2026-10-10 | major | First version: lists, AutoCorrect and AutoFormat as you type, observed against Word (#204) |
 | 2026-10-15 | trivial | Text direction: typed and inserted text takes its direction from its own letters, not the caret's run; spaces typed into reopened Hebrew draw in the Latin font until reopened (#1543) |

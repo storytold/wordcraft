@@ -13,6 +13,7 @@ kurbo = { workspace = true }
 skrifa = { workspace = true }
 harfrust = { workspace = true }
 wuff = { workspace = true }
+brotli-decompressor = { workspace = true }
 unicode-bidi = { workspace = true }
 unicode-script = { workspace = true }
 log = { workspace = true }
