@@ -78,7 +78,7 @@ fn run_and_style_emphasis_marks_survive_two_saves() {
     use wordcraft_doc::props::EmphasisMark;
 
     let styles = r#"
-        <w:style w:type="character" w:styleId="Dot"><w:rPr><w:em/></w:rPr></w:style>
+        <w:style w:type="character" w:styleId="Dot"><w:rPr><w:em w:val="dot"/></w:rPr></w:style>
         <w:style w:type="character" w:styleId="Comma"><w:rPr><w:em w:val="comma"/></w:rPr></w:style>
         <w:style w:type="character" w:styleId="Circle"><w:rPr><w:em w:val="circle"/></w:rPr></w:style>
         <w:style w:type="character" w:styleId="UnderDot"><w:rPr><w:em w:val="underDot"/></w:rPr></w:style>
