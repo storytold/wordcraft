@@ -368,8 +368,10 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
 
 /// Whether to force winit's X11 backend (XWayland on a Wayland desktop). `var` reads the
 /// environment. A Wayland session (`WAYLAND_DISPLAY` or `WAYLAND_SOCKET`, either of which winit
-/// connects with) stays native unless `WORDCRAFT_X11` asks for X11 (#2939); `WORDCRAFT_WAYLAND`
-/// keeps meaning native Wayland. Like winit, an empty display variable counts as unset.
+/// connects with) stays native unless `WORDCRAFT_X11` asks for X11 (#2939) or the desktop is
+/// GNOME, which draws no window frames for native Wayland clients: winit's own grey frame would
+/// stack above WordCraft's title bar (#78) until that is fixed. `WORDCRAFT_WAYLAND` keeps meaning
+/// native Wayland. Like winit, an empty display variable counts as unset.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn use_x11(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
     let present = |k: &str| var(k).is_some_and(|v| !v.is_empty());
@@ -377,7 +379,8 @@ fn use_x11(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
     if set("WORDCRAFT_WAYLAND") || !present("DISPLAY") {
         return false;
     }
-    set("WORDCRAFT_X11") || !(present("WAYLAND_DISPLAY") || present("WAYLAND_SOCKET"))
+    let gnome = var("XDG_CURRENT_DESKTOP").is_some_and(|d| d.to_string_lossy().split(':').any(|part| part.eq_ignore_ascii_case("GNOME")));
+    set("WORDCRAFT_X11") || gnome || !(present("WAYLAND_DISPLAY") || present("WAYLAND_SOCKET"))
 }
 
 /// Parses the command line, installs logging and the panic hook, restores preferences and window
@@ -476,7 +479,8 @@ fn main() -> eframe::Result {
     #[cfg(all(unix, not(target_os = "macos")))]
     // On a Wayland session the window stays native: through XWayland it flickered black and white
     // and lagged behind its size while being resized (#2939). File drops work natively through
-    // the winit fork's wl_data_device support; WORDCRAFT_X11=1 still runs through XWayland.
+    // the winit fork's wl_data_device support; WORDCRAFT_X11=1 still runs through XWayland, and
+    // GNOME does by default (its frames are missing natively, #78).
     // Without a Wayland session, X11 is used whenever there is a display.
     if use_x11(|k| std::env::var_os(k)) {
         options.event_loop_builder = Some(Box::new(|b| {
@@ -692,6 +696,17 @@ mod backend_tests {
         assert!(!use_x11(env(&[("DISPLAY", ":0"), ("WAYLAND_SOCKET", "3")])));
         assert!(use_x11(env(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-1"), ("WORDCRAFT_X11", "1")])));
         assert!(!use_x11(env(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-1"), ("WORDCRAFT_X11", "1"), ("WORDCRAFT_WAYLAND", "1")])));
+    }
+
+    #[test]
+    fn gnome_keeps_xwayland_until_native_frames_work_there() {
+        let gnome = &[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-1"), ("XDG_CURRENT_DESKTOP", "ubuntu:GNOME")];
+        assert!(use_x11(env(gnome)));
+        assert!(use_x11(env(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-1"), ("XDG_CURRENT_DESKTOP", "GNOME")])));
+        // Asking for native Wayland wins, and other desktops (or none) stay native.
+        assert!(!use_x11(env(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-1"), ("XDG_CURRENT_DESKTOP", "GNOME"), ("WORDCRAFT_WAYLAND", "1")])));
+        assert!(!use_x11(env(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-1"), ("XDG_CURRENT_DESKTOP", "KDE")])));
+        assert!(!use_x11(env(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-1"), ("XDG_CURRENT_DESKTOP", "X-GNOME-Classic")])));
     }
 
     #[test]

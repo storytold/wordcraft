@@ -300,12 +300,16 @@ RISC-V (riscv64): `wordcraft-<ver>-linux-riscv64.tar.gz`, a tarball cross-compil
 (Ubuntu 24.04, Debian 13 and newer).
 
 **Wayland:** on a Wayland desktop the app runs natively. Through XWayland the window
-flickered while being resized (#2939). To run through XWayland anyway, start the app with
-`WORDCRAFT_X11=1`:
+flickered while being resized (#2939). On GNOME it still runs through XWayland, because GNOME
+draws no window frames for native Wayland apps (#78). To choose the other way, start the app with
+`WORDCRAFT_X11=1` (XWayland, also a fallback if your input method misbehaves natively) or
+`WORDCRAFT_WAYLAND=1` (native):
 
 ```sh
 WORDCRAFT_X11=1 wordcraft
 ```
+
+Natively the window manager places the window, so the saved window position is not restored.
 
 **Arch Linux (AUR).** Community members maintain three AUR packages; the project doesn't publish
 to the AUR itself. Install one of them:
