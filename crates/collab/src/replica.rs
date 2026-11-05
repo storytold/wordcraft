@@ -182,7 +182,7 @@ pub fn canonical(doc: &Document) -> Json {
         }
         json!({"text": p.text, "runs": runs, "props": p.props, "mark": p.mark, "objects": p.objects, "section": p.section})
     }
-    let mut numbering = doc.numbering.clone();
+    let mut numbering = (*doc.numbering).clone();
     numbering.abstracts.sort_by_key(|a| a.id);
     numbering.nums.sort_by_key(|n| n.id);
     let parts: BTreeMap<String, Json> = doc
@@ -1040,7 +1040,7 @@ fn read_styles<T: ReadTxn>(txn: &T, d: &mut Document) {
     if r.len(txn) == 0 {
         return;
     }
-    let mut sheet = d.styles.clone();
+    let mut sheet = (*d.styles).clone();
     if let Some(Json::Object(def)) = out_json(r.get(txn, STYLE_DEFAULTS)) {
         if let Some(v) = def.get("defaultChr") {
             sheet.default_chr = from_json(v.clone()).unwrap_or_default();
@@ -1075,7 +1075,7 @@ fn read_styles<T: ReadTxn>(txn: &T, d: &mut Document) {
     }
     styles.extend(by_id.into_values());
     sheet.styles = styles;
-    d.styles = sheet;
+    d.styles = Arc::new(sheet);
 }
 
 /// The `numbering` root into `d`, unless it is empty.
@@ -1100,8 +1100,9 @@ fn read_numbering<T: ReadTxn>(txn: &T, d: &mut Document) {
     }
     abstracts.sort_by_key(|a| a.id);
     nums.sort_by_key(|n| n.id);
-    d.numbering.abstracts = abstracts;
-    d.numbering.nums = nums;
+    let numbering = Arc::make_mut(&mut d.numbering);
+    numbering.abstracts = abstracts;
+    numbering.nums = nums;
 }
 
 // ---------------------------------------------------------------- writing the shared document

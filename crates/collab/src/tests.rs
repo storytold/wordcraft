@@ -107,9 +107,9 @@ fn stories_comments_styles_and_lists_travel() {
         let id = d.next_comment_id().unwrap();
         d.comments.insert(id, Comment { author: who.into(), part, ..Default::default() });
         d.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text(who, CharProps::default()))]);
-        d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+        std::sync::Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     }
-    a.styles.default_chr.size = Some(13.0);
+    std::sync::Arc::make_mut(&mut a.styles).default_chr.size = Some(13.0);
     let ua = ra.commit(&a, false).unwrap();
     let ub = rb.commit(&b, false).unwrap();
     a = deliver(ub, &mut ra, &a);
