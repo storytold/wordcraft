@@ -7246,3 +7246,48 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
     h.step();
     assert!(h.state().session.view.read_mode && shown(&h, "Focus"), "Immersive Reader keeps the status bar");
 }
+
+#[test]
+fn recent_host_save_as_records_the_confirmed_document() {
+    let (mut app, _) = host_app(false);
+    host_open(&mut app, "original.docx");
+    app.execute("file.saveAs", json!({"path": "renamed.docx"})).unwrap();
+    assert_eq!(app.ui.recent.first().map(|r| r.path.as_str()), Some("renamed.docx"));
+    let before = serde_json::to_value(app.prefs()).unwrap();
+    app.execute("file.saveAs", json!({"path": "copy.txt"})).unwrap();
+    assert_eq!(serde_json::to_value(app.prefs()).unwrap()["recentMetadata"], before["recentMetadata"]);
+    assert_eq!(serde_json::to_value(app.prefs()).unwrap()["recent"], before["recent"]);
+}
+
+#[test]
+fn recent_copy_export_does_not_reorder_or_refresh_the_source() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    let root = std::env::temp_dir().join(format!("wordcraft-recent-copy-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let source = root.join("source.docx");
+    app.run("file.saveAs", json!({"path": source})).unwrap();
+    app.ui.recent.insert(0, RecentDocument { path: "other.docx".into(), last_opened: String::new(), modified: String::new() });
+    let before = serde_json::to_value(app.prefs()).unwrap();
+    app.run("file.saveAs", json!({"path": root.join("copy.txt")})).unwrap();
+    let after = serde_json::to_value(app.prefs()).unwrap();
+    assert_eq!(after["recent"], before["recent"]);
+    assert_eq!(after["recentMetadata"], before["recentMetadata"]);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn recent_async_host_save_waits_for_success() {
+    for success in [false, true] {
+        let (mut app, saves, last) = web_picker_app();
+        let (hook, seen) = (saves.clone(), last.clone());
+        app.services.host_save = Some(Box::new(move |_, _, _| {
+            seen.set(hook.start());
+            Ok(())
+        }));
+        app.execute("file.saveAs", json!({"path": "confirmed.docx"})).unwrap();
+        assert!(app.ui.recent.is_empty());
+        saves.finish(last.get(), if success { async_saves::SaveOutcome::Saved } else { async_saves::SaveOutcome::Cancelled });
+        app.settle_async_saves();
+        assert_eq!(app.ui.recent.first().map(|r| r.path.as_str()), success.then_some("confirmed.docx"));
+    }
+}

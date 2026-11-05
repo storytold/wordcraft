@@ -53,9 +53,8 @@ pub(crate) fn local_display_date(iso: &str) -> Option<String> {
     let year = parts.next()?;
     let month = parts.next()?;
     let day = parts.next()?;
-    let locale = sys_locale::get_locale().unwrap_or_default();
-    let region = locale_region(&locale);
-    Some(match region.as_str() {
+    let region = device_region();
+    Some(match region {
         "us" | "ph" => format!("{month}/{day}/{year}"),
         "cn" | "jp" | "tw" => format!("{year}/{month}/{day}"),
         "kr" => format!("{year}. {month}. {day}."),
@@ -75,9 +74,8 @@ pub(crate) fn local_display_datetime(iso: &str) -> Option<String> {
     let seconds = local.rem_euclid(86_400);
     let hour = seconds / 3_600;
     let minute = seconds / 60 % 60;
-    let locale = sys_locale::get_locale().unwrap_or_default();
-    let region = locale_region(&locale);
-    let time = if matches!(region.as_str(), "us" | "ph") {
+    let region = device_region();
+    let time = if matches!(region, "us" | "ph") {
         let suffix = if hour < 12 { "AM" } else { "PM" };
         let display_hour = match hour % 12 {
             0 => 12,
@@ -88,6 +86,12 @@ pub(crate) fn local_display_datetime(iso: &str) -> Option<String> {
         format!("{hour:02}:{minute:02}")
     };
     Some(format!("{} {time}", local_display_date(iso)?))
+}
+
+/// The device region is stable during an app session; avoid querying the OS while painting.
+fn device_region() -> &'static str {
+    static REGION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    REGION.get_or_init(|| locale_region(&sys_locale::get_locale().unwrap_or_default()))
 }
 
 /// Find the locale's region, skipping the language and optional script subtags. A singleton

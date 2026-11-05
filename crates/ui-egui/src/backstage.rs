@@ -1,6 +1,6 @@
 //! File tab (Backstage): Home/New, Open, Info, Save As, Print, Export, Close, Options, About.
 
-use egui::{Align2, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::json;
 
 use crate::theme::{Tokens, fit_text, medium, regular, semibold};
@@ -579,13 +579,29 @@ fn personal_error_id() -> egui::Id {
 /// Draws the Recent documents table and stores an open failure in this page's temporary state.
 fn open_list(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    let heading = ui.label(egui::RichText::new(tl!("Recent")).font(semibold(16.0)));
-    heading.context_menu(|ui| {
+    ui.menu_button(egui::RichText::new(tl!("Recent")).font(semibold(16.0)), |ui| {
         if ui.button(tl!("Clear Recent")).clicked() {
-            let _ = app.run("ui.recentClear", json!({}));
+            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("recent_clear_confirm"), true));
             ui.close();
         }
     });
+    let confirm_id = egui::Id::unique("recent_clear_confirm");
+    if ui.ctx().data(|d| d.get_temp::<bool>(confirm_id)).unwrap_or(false) {
+        let mut close = false;
+        let modal = egui::Modal::new(confirm_id).show(ui.ctx(), |ui| {
+            ui.label(tl!("Clear Recent"));
+            ui.horizontal(|ui| {
+                if ui.button(tl!("Clear")).clicked() {
+                    let _ = app.run("ui.recentClear", json!({}));
+                    close = true;
+                }
+                close |= ui.button(tl!("Cancel")).clicked();
+            });
+        });
+        if close || modal.should_close() {
+            ui.ctx().data_mut(|d| d.remove::<bool>(confirm_id));
+        }
+    }
     let error = ui.ctx().data(|d| d.get_temp::<String>(open_error_id())).unwrap_or_default();
     if !error.is_empty() {
         ui.label(egui::RichText::new(error).color(ui.visuals().error_fg_color));
@@ -593,21 +609,21 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
     }
     let shown = app.ui.recent.iter().take(app.ui.recent_shown()).cloned().collect::<Vec<_>>();
     if shown.is_empty() {
-        ui.label(egui::RichText::new(tl!("You haven't opened any documents recently. Click Open to browse for a document.")).color(t.text_dim));
+        ui.label(egui::RichText::new(tl!("Documents you open will show up here.")).color(t.text_dim));
         return;
     }
     let file_name = |p: &str| std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.to_string());
     let names = shown.iter().map(|r| file_name(&r.path)).collect::<Vec<_>>();
     recent_header(ui);
-    for i in 0..shown.len() {
-        recent_row(app, ui, &shown[i], &names[i], &t);
+    for (entry, name) in shown.iter().zip(&names) {
+        recent_row(app, ui, entry, name, &t);
     }
 }
 
 /// The Recent table's responsive column widths: a narrow icon column, a flexible name column,
 /// and two fixed date columns. The same geometry is used by the header and every row.
 fn recent_columns(width: f32) -> (f32, f32, f32, f32) {
-    // Keep the logo near the left edge while reserving a wider cell after it for visual breathing
+    // Keep the logo near the leading edge while reserving a wider cell after it for visual breathing
     // room before the document name.
     let icon = 52.0;
     let gap = 12.0;
@@ -616,27 +632,43 @@ fn recent_columns(width: f32) -> (f32, f32, f32, f32) {
     (icon, name, date, gap)
 }
 
+/// A bounded column measured from the interface's reading edge.
+fn recent_cell(row: Rect, rtl: bool, inset: f32, width: f32) -> Rect {
+    let inset = inset.clamp(0.0, row.width().max(0.0));
+    let width = width.clamp(0.0, (row.width() - inset).max(0.0));
+    Rect::from_min_size(pos2(crate::rtl::lead_left(rtl, row, inset, width), row.min.y), vec2(width, row.height()))
+}
+
 /// Draw the column headings using real labels so their names are available to accessibility
 /// clients as well as visually aligning with the rows below.
 fn recent_header(ui: &mut Ui) {
     let width = ui.available_width().min(900.0);
     let (icon, name, date, gap) = recent_columns(width);
     let (r, _) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
+    let rtl = crate::rtl::on();
     let cells = [
-        ("Name", Rect::from_min_size(pos2(r.min.x + icon, r.min.y), vec2(name, r.height()))),
-        ("Last opened", Rect::from_min_size(pos2(r.min.x + icon + name + gap, r.min.y), vec2(date, r.height()))),
-        ("Last edited", Rect::from_min_size(pos2(r.min.x + icon + name + gap + date + gap, r.min.y), vec2(date, r.height()))),
+        (tl!("Name"), recent_cell(r, rtl, icon, name)),
+        (tl!("Last opened"), recent_cell(r, rtl, icon + name + gap, date)),
+        (tl!("Last edited"), recent_cell(r, rtl, icon + name + gap + date + gap, date)),
     ];
     for (index, (label, cell)) in cells.into_iter().enumerate() {
         let response = ui.interact(cell, ui.scope_id().with(("recent_header", index)), Sense::hover());
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, tl!(label)));
-        ui.painter().text(cell.left_center(), Align2::LEFT_CENTER, tl!(label), semibold(12.0), Tokens::get(ui.ctx()).text);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, label));
+        ui.painter().text(
+            pos2(crate::rtl::lead_x(rtl, cell, 0.0), cell.center().y),
+            crate::rtl::lead_center(rtl),
+            label,
+            semibold(12.0),
+            Tokens::get(ui.ctx()).text,
+        );
     }
 }
 
 /// Draw one Recent entry and its context menu. The entry is cloned by the caller so removing it
 /// from the persisted list cannot invalidate the rows still being painted this frame.
 fn recent_row(app: &mut WordApp, ui: &mut Ui, entry: &RecentDocument, name: &str, t: &Tokens) {
+    let rtl = crate::rtl::on();
+    let side = crate::rtl::lead_center(rtl);
     let path = entry.path.clone();
     let opened = crate::local_time::local_display_datetime(&entry.last_opened).unwrap_or_else(|| tl!("Unknown").to_string());
     let edited = crate::local_time::local_display_datetime(&entry.modified).unwrap_or_else(|| tl!("Unknown").to_string());
@@ -656,38 +688,45 @@ fn recent_row(app: &mut WordApp, ui: &mut Ui, entry: &RecentDocument, name: &str
     if let Some(texture) = wordcraft_logo(ui.ctx()) {
         ui.painter().image(
             texture.id(),
-            Rect::from_center_size(pos2(r.min.x + 18.0, r.center().y), vec2(24.0, 24.0)),
+            Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 18.0), r.center().y), vec2(24.0, 24.0)),
             Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
             egui::Color32::WHITE,
         );
     } else {
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 18.0, r.center().y), vec2(22.0, 22.0)), "printLayout", t.icon, t.accent);
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 18.0), r.center().y), vec2(22.0, 22.0)),
+            "printLayout",
+            t.icon,
+            t.accent,
+        );
     }
-    let name_x = r.min.x + icon;
-    let opened_x = name_x + name_width + gap;
-    let edited_x = opened_x + date + gap;
+    let name_rect = recent_cell(r, rtl, icon, name_width);
+    let name_x = crate::rtl::lead_x(rtl, name_rect, 0.0);
     let name_y = r.center().y - 9.0;
     let path_y = r.center().y + 9.0;
-    let name_rect = Rect::from_min_size(pos2(name_x, r.min.y), vec2(name_width, r.height()));
     let name_painter = ui.painter().with_clip_rect(name_rect);
     let name_shown = fit_text(&name_painter, &crate::i18n::isolate(name), &medium(13.0), 0.0, t.text, name_width);
     let location_shown = fit_text(&name_painter, &crate::i18n::isolate_path(&path), &regular(11.0), 0.0, t.text_dim, name_width);
-    name_painter.text(pos2(name_x, name_y), Align2::LEFT_CENTER, name_shown, medium(13.0), t.text);
-    name_painter.text(pos2(name_x, path_y), Align2::LEFT_CENTER, location_shown, regular(11.0), t.text_dim);
-    let opened_rect = Rect::from_min_size(pos2(opened_x, r.min.y), vec2(date, r.height()));
-    let edited_rect = Rect::from_min_size(pos2(edited_x, r.min.y), vec2(date, r.height()));
+    name_painter.text(pos2(name_x, name_y), side, name_shown, medium(13.0), t.text);
+    name_painter.text(pos2(name_x, path_y), side, location_shown, regular(11.0), t.text_dim);
+    let opened_rect = recent_cell(r, rtl, icon + name_width + gap, date);
+    let edited_rect = recent_cell(r, rtl, icon + name_width + gap + date + gap, date);
     let opened_painter = ui.painter().with_clip_rect(opened_rect);
     let edited_painter = ui.painter().with_clip_rect(edited_rect);
     let opened_shown = fit_text(&opened_painter, &opened, &regular(11.0), 0.0, t.text_dim, date);
     let edited_shown = fit_text(&edited_painter, &edited, &regular(11.0), 0.0, t.text_dim, date);
-    opened_painter.text(opened_rect.left_center(), Align2::LEFT_CENTER, opened_shown, regular(11.0), t.text_dim);
-    edited_painter.text(edited_rect.left_center(), Align2::LEFT_CENTER, edited_shown, regular(11.0), t.text_dim);
+    opened_painter.text(pos2(crate::rtl::lead_x(rtl, opened_rect, 0.0), r.center().y), side, opened_shown, regular(11.0), t.text_dim);
+    edited_painter.text(pos2(crate::rtl::lead_x(rtl, edited_rect, 0.0), r.center().y), side, edited_shown, regular(11.0), t.text_dim);
     if resp.clicked() {
         let failed = open_recent(app, &path).err();
         ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));
     }
     let mut remove = false;
-    resp.context_menu(|ui| {
+    let from_keys = resp.has_focus() && ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::F10));
+    let popup = egui::Popup::context_menu(&resp).at_position(pos2(crate::rtl::lead_x(rtl, resp.rect, 0.0), resp.rect.bottom()));
+    let popup = if from_keys { popup.open_memory(egui::SetOpenCommand::Bool(true)) } else { popup };
+    popup.show(|ui| {
         if ui.button(tl!("Open")).clicked() {
             let failed = open_recent(app, &path).err();
             ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));

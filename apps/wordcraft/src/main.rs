@@ -294,7 +294,8 @@ fn show_in_folder(path: &std::path::Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let mut command = {
         let mut command = std::process::Command::new("explorer.exe");
-        command.arg(format!("/select,{}", path.display()));
+        use std::os::windows::process::CommandExt;
+        command.raw_arg(format!("/select,\"{}\"", path.display()));
         command
     };
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -304,16 +305,15 @@ fn show_in_folder(path: &std::path::Path) -> Result<(), String> {
         command.arg(folder);
         command
     };
-    let status = command.status().map_err(|error| format!("couldn't show the file in its folder: {error}"))?;
-    #[cfg(target_os = "windows")]
-    {
-        // Explorer can successfully launch the folder window while returning a non-zero
-        // process status. The launch itself is the meaningful result on Windows.
-        let _ = status;
-        Ok(())
-    }
-    #[cfg(not(target_os = "windows"))]
-    if status.success() { Ok(()) } else { Err(format!("couldn't show the file in its folder ({status})")) }
+    // Start and reap the file manager on a worker: even launch/mount resolution can block.
+    std::thread::Builder::new()
+        .name("recent-folder".into())
+        .spawn(move || match command.status() {
+            Ok(status) => log::debug!("show in folder exited: {status}"),
+            Err(error) => log::warn!("couldn't show the file in its folder: {error}"),
+        })
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 /// Window, Dock and taskbar icon.

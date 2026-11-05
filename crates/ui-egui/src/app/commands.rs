@@ -193,6 +193,9 @@ impl WordApp {
                 self.saves_in_flight.push(SaveInFlight { ticket, name: name.clone(), document, marked_saved });
                 return Ok(json!({"downloaded": name, "bytes": bytes.len(), "pendingSave": ticket}));
             }
+            if marked_saved && self.services.host_save.is_some() {
+                self.refresh_recent_after_file(id);
+            }
             return Ok(json!({"downloaded": name, "bytes": bytes.len()}));
         }
         let document = self.session.document_id();
@@ -362,6 +365,32 @@ impl WordApp {
         r
     }
 
+    /// Update only Recent after a confirmed write/open; browser saves share this path without
+    /// running unrelated command post-processing.
+    pub(super) fn refresh_recent_after_file(&mut self, id: &str) {
+        if let Some(path) = self.session.path.as_ref() {
+            let p = path.to_string_lossy().to_string();
+            let modified = recent_modified_date(path);
+            let opened = self.ui.recent.iter().find(|r| r.path == p).map(|r| r.last_opened.clone()).unwrap_or_default();
+            self.ui.recent.retain(|r| r.path != p);
+            self.ui.recent.insert(
+                0,
+                RecentDocument {
+                    path: p,
+                    last_opened: if id == "file.open" || opened.is_empty() { wordcraft_engine::cmd::now_iso() } else { opened },
+                    modified,
+                },
+            );
+            if let Some(entry) = self.ui.recent.first() {
+                self.ui
+                    .recent_metadata
+                    .insert(entry.path.clone(), RecentMetadata { last_opened: entry.last_opened.clone(), modified: entry.modified.clone() });
+            }
+            self.ui.recent.truncate(MAX_RECENT);
+            self.ui.recent_metadata.retain(|path, _| self.ui.recent.iter().any(|entry| &entry.path == path));
+        }
+    }
+
     fn after_command(&mut self, id: &str, result: &Result<Value, String>) {
         let succeeded = result.is_ok();
         options::sync(self);
@@ -416,37 +445,17 @@ impl WordApp {
         let completed_file_operation = match id {
             // A successful command with no path only opened the file picker.
             "file.open" => result.as_ref().ok().and_then(|value| value.get("path")).and_then(Value::as_str).is_some(),
-            // Native Save As reports `saved`; a web download reports `downloaded`. A pending
-            // browser save is not complete yet and must not refresh Recent.
+            // A copy export does not write the current document. Browser saves refresh
+            // Recent separately, only after the host confirms completion.
             "file.save" | "file.saveAs" => result.as_ref().ok().is_some_and(|value| {
                 value.get("pendingSave").is_none()
-                    && (value.get("saved").and_then(Value::as_bool) == Some(true) || value.get("downloaded").and_then(Value::as_str).is_some())
+                    && value.get("saved").and_then(Value::as_bool) == Some(true)
+                    && value.get("path").and_then(Value::as_str).is_some_and(|path| self.session.path.as_deref() == Some(std::path::Path::new(path)))
             }),
             _ => succeeded,
         };
-        if completed_file_operation
-            && matches!(id, "file.open" | "file.save" | "file.saveAs" | "file.rename")
-            && let Some(path) = self.session.path.as_ref()
-        {
-            let p = path.to_string_lossy().to_string();
-            let modified = recent_modified_date(path);
-            let opened = self.ui.recent.iter().find(|r| r.path == p).map(|r| r.last_opened.clone()).unwrap_or_default();
-            self.ui.recent.retain(|r| r.path != p);
-            self.ui.recent.insert(
-                0,
-                RecentDocument {
-                    path: p,
-                    last_opened: if id == "file.open" || opened.is_empty() { wordcraft_engine::cmd::now_iso() } else { opened },
-                    modified,
-                },
-            );
-            if let Some(entry) = self.ui.recent.first() {
-                self.ui
-                    .recent_metadata
-                    .insert(entry.path.clone(), RecentMetadata { last_opened: entry.last_opened.clone(), modified: entry.modified.clone() });
-            }
-            self.ui.recent.truncate(MAX_RECENT);
-            self.ui.recent_metadata.retain(|path, _| self.ui.recent.iter().any(|entry| &entry.path == path));
+        if completed_file_operation && matches!(id, "file.open" | "file.save" | "file.saveAs" | "file.rename") {
+            self.refresh_recent_after_file(id);
         }
         if !self.session.status.is_empty() {
             // Engine messages are English; the catalog translates the ones it knows.
@@ -634,6 +643,9 @@ impl WordApp {
                 let Some(path) = s("path") else {
                     return Some(Err("`path` is required".into()));
                 };
+                if !self.ui.recent.iter().any(|entry| entry.path == path) {
+                    return Some(Err("the file is not in Recent".into()));
+                }
                 let Some(show_in_folder) = self.services.show_in_folder.as_ref() else {
                     return Some(Err("showing files in a folder is unavailable here".into()));
                 };

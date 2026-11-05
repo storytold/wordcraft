@@ -181,3 +181,17 @@ and their parameter documentation. Search is case-insensitive across IDs, labels
 and parameter descriptions. Listing commands never discovers printers, submits a job or opens
 a dialog. Settings inspection is always available; submission becomes enabled when the native
 printer is ready, or when the browser host provides its print flow.
+
+## Recent document actions (#2716)
+
+Dispatch these through `engine.execute` (also available through the UI command registry):
+
+| Command | Parameters | Result |
+|---|---|---|
+| `ui.recentRemove` | `{"path":"/full/document.docx"}` | `{"removed":true}` if present; never deletes the file |
+| `ui.recentClear` | `{}` | `{"cleared":true}`; clears paths and metadata, never files |
+| `ui.recentShowInFolder` | `{"path":"/full/document.docx"}` | `{"shown":true}` means the host accepted the request |
+
+Folder reveal requires an existing Recent entry and a supported host service. Desktop file-manager
+launch and waiting happen on a worker; later launch errors are logged. Programmatic clear is immediate;
+the Recent menu asks for confirmation. Save copies do not refresh the source document's Recent entry.

@@ -592,12 +592,15 @@ fn recent_documents_are_listed_in_one_table() {
     assert!(h.query_all_by_label_contains("today.docx").next().is_some());
     assert!(h.query_all_by_label_contains("legacy.docx").next().is_some());
     assert!(h.query_all_by_label_contains("older.docx").next().is_some());
-    h.get_by_label("Recent").click_secondary();
+    h.get_by_label("Recent").click();
     h.run_steps(2);
     assert!(h.query_by_label("Clear Recent").is_some());
     h.get_by_label("Clear Recent").click();
     h.run_steps(2);
-    assert!(h.state().ui.recent.is_empty(), "the Recent heading context menu clears the persisted list");
+    assert!(!h.state().ui.recent.is_empty(), "clearing requires confirmation");
+    h.get_by_label("Clear").click();
+    h.run_steps(2);
+    assert!(h.state().ui.recent.is_empty(), "the Recent menu clears the persisted list after confirmation");
 }
 
 #[test]
@@ -606,7 +609,7 @@ fn empty_recent_list_explains_how_to_open_a_document() {
     app.ui.backstage = true;
     app.ui.backstage_page = "home".into();
     let h = a11y_harness(app);
-    assert!(h.query_by_label("You haven't opened any documents recently. Click Open to browse for a document.").is_some());
+    assert!(h.query_by_label("Documents you open will show up here.").is_some());
     assert!(h.query_by_label("Name").is_none());
 }
 
@@ -635,6 +638,9 @@ fn recent_show_in_folder_uses_the_host_service() {
             ..Default::default()
         },
     );
+    app.ui.recent.push(RecentDocument { path: "/tmp/report.docx".into(), last_opened: String::new(), modified: String::new() });
+    assert!(app.run("ui.recentShowInFolder", json!({"path": "/tmp/unlisted.docx"})).is_err());
+    assert!(shown.borrow().is_none());
     assert_eq!(app.run("ui.recentShowInFolder", json!({"path": "/tmp/report.docx"})).unwrap(), json!({"shown": true}));
     assert_eq!(shown.borrow().as_deref(), Some(std::path::Path::new("/tmp/report.docx")));
 }
@@ -1158,4 +1164,46 @@ fn backstage_save_as_sidebar_opens_save_as_page() {
     h.get_by_label("Save As").click();
     h.run_steps(4);
     assert_eq!(h.state().ui.backstage_page, "saveAs");
+}
+
+#[test]
+fn recent_columns_mirror_without_changing_widths() {
+    let row = egui::Rect::from_min_size(egui::pos2(50.0, 20.0), egui::vec2(700.0, 56.0));
+    for (inset, width) in [(52.0, 384.0), (448.0, 120.0), (580.0, 120.0)] {
+        let left = super::recent_cell(row, false, inset, width);
+        let right = super::recent_cell(row, true, inset, width);
+        assert_eq!(left.width(), right.width());
+        assert_eq!(left.min.x - row.min.x, row.max.x - right.max.x);
+        assert!(row.contains_rect(left) && row.contains_rect(right));
+    }
+}
+
+#[test]
+fn recent_cells_stay_bounded_in_tiny_windows() {
+    for width in [0.0, 30.0, 100.0, 320.0, 700.0] {
+        let row = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(width, 56.0));
+        let (icon, name, date, gap) = super::recent_columns(width);
+        for rtl in [false, true] {
+            for (inset, size) in [(icon, name), (icon + name + gap, date), (icon + name + gap + date + gap, date)] {
+                let cell = super::recent_cell(row, rtl, inset, size);
+                assert!(cell.width() >= 0.0 && row.contains_rect(cell));
+            }
+        }
+    }
+}
+
+#[test]
+fn recent_row_actions_open_from_the_keyboard() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    app.ui.recent.push(RecentDocument { path: "/tmp/keyboard.docx".into(), last_opened: String::new(), modified: String::new() });
+    app.ui.backstage = true;
+    app.ui.backstage_page = "open".into();
+    let mut h = a11y_harness(app);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "keyboard.docx, /tmp/keyboard.docx, Last opened: Unknown, Last edited: Unknown").focus();
+    h.run_steps(2);
+    h.event(egui::Event::Key { key: egui::Key::F10, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::SHIFT });
+    h.run_steps(2);
+    h.get_by_label("Remove from Recent").click();
+    h.run_steps(2);
+    assert!(h.state().ui.recent.is_empty());
 }
