@@ -8,15 +8,16 @@ use wordcraft_doc::para::OBJ;
 pub(super) const COMPARE_PARAMS: &str = r#"{"path"?: string (revised document), "text"?: string (revised text), "original"?: string (original document; default: this one), "author"?: string (label changes with), "caseChanges"?: bool, "whiteSpace"?: bool, "formatting"?: bool (default true: differences count), "level"?: "word|character", "showIn"?: "original|revised|new" (revised/new: an untitled document), "moves"|"comments"|"tables"|"headersFooters"|"footnotes"|"textBoxes"|"fields"?: bool (accepted; not honoured yet except tables, always compared)}"#;
 
 /// What Compare / Combine compares (the More >> settings of Word's dialog).
-struct CompareOptions {
+#[derive(Clone, Copy, Debug)]
+pub(super) struct CompareOptions {
     /// Differences only in letter case count as changes.
-    case: bool,
+    pub case: bool,
     /// Differences only in white space count as changes.
-    white_space: bool,
+    pub white_space: bool,
     /// Formatting differences become tracked formatting changes.
-    formatting: bool,
+    pub formatting: bool,
     /// Changed paragraphs are compared character by character (else word by word).
-    characters: bool,
+    pub characters: bool,
 }
 
 impl CompareOptions {
@@ -25,6 +26,30 @@ impl CompareOptions {
         let t = if self.white_space { t.to_string() } else { t.split_whitespace().collect::<Vec<_>>().join(" ") };
         if self.case { t } else { t.to_lowercase() }
     }
+
+    pub(super) fn from_params(v: &Value) -> Self {
+        let level = p::str(v, "level").unwrap_or("word");
+        Self {
+            case: p::bool(v, "caseChanges").unwrap_or(true),
+            white_space: p::bool(v, "whiteSpace").unwrap_or(true),
+            formatting: p::bool(v, "formatting").unwrap_or(true),
+            characters: matches!(level, "character" | "char"),
+        }
+    }
+}
+
+pub(super) fn not_honoured_options(v: &Value) -> Vec<&'static str> {
+    ["moves", "comments", "headersFooters", "footnotes", "textBoxes", "fields"].into_iter().filter(|k| v.get(*k).is_some()).collect()
+}
+
+pub(super) struct CompareRun {
+    pub revised: Document,
+    pub show_in: String,
+    pub original_loaded: bool,
+    pub opts: CompareOptions,
+    pub author: String,
+    pub not_honoured: Vec<&'static str>,
+    pub clear_versions_on_untitled: bool,
 }
 
 /// Changed paragraphs longer than this (in characters) are compared word by word even at
@@ -47,6 +72,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     if !matches!(show_in, "original" | "revised" | "new") {
         return Err(CmdError::Params("`showIn` is \"original\", \"revised\" or \"new\"".into()));
     }
+    let original_loaded = p::str(v, "original").is_some();
     if let Some(path) = p::str(v, "original") {
         let doc = crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?;
         s.doc = doc;
@@ -54,16 +80,23 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         s.note_body_replaced();
         s.math = None;
     }
-    let level = p::str(v, "level").unwrap_or("word");
-    let opts = CompareOptions {
-        case: p::bool(v, "caseChanges").unwrap_or(true),
-        white_space: p::bool(v, "whiteSpace").unwrap_or(true),
-        formatting: p::bool(v, "formatting").unwrap_or(true),
-        characters: matches!(level, "character" | "char"),
-    };
-    let not_honoured: Vec<&str> =
-        ["moves", "comments", "headersFooters", "footnotes", "textBoxes", "fields"].into_iter().filter(|k| v.get(*k).is_some()).collect();
+    let opts = CompareOptions::from_params(v);
+    let not_honoured = not_honoured_options(v);
     let author = p::str(v, "author").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).unwrap_or_else(|| s.author.clone());
+    compare_loaded(
+        s,
+        CompareRun { revised, show_in: show_in.to_string(), original_loaded, opts, author, not_honoured, clear_versions_on_untitled: true },
+    )
+}
+
+/// Compare `s.doc` (the original) against `revised`, replacing `s.doc` with the result.
+/// When `clear_versions_on_untitled` is true, an untitled compare result clears saved versions,
+/// preserving the historical `review.compare`/`review.combine` behavior.
+pub(super) fn compare_loaded(s: &mut Session, run: CompareRun) -> CmdResult {
+    let CompareRun { revised, show_in, original_loaded, opts, author, not_honoured, clear_versions_on_untitled } = run;
+    if !matches!(show_in.as_str(), "original" | "revised" | "new") {
+        return Err(CmdError::Params("`showIn` is \"original\", \"revised\" or \"new\"".into()));
+    }
     let date = crate::cmd::now_iso();
     let old: Vec<Arc<Block>> = s.doc.body.clone();
     let new: Vec<Arc<Block>> = if revised.parts.values().any(|p| p.kind == wordcraft_doc::PartKind::TextBox) {
@@ -154,16 +187,80 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     s.doc.ensure_nonempty();
     s.note_body_replaced();
     s.math = None;
-    if show_in != "original" || p::str(v, "original").is_some() {
+    if show_in != "original" || original_loaded {
         // The result is a new, untitled document: saving it never overwrites either file.
         s.path = None;
         s.file_name = None;
-        // Version snapshots belong to the document they were taken from, including when
-        // Compare creates an untitled result from the current document.
-        s.clear_versions();
+        // Version snapshots belong to the document they were taken from. Compare/Combine clear
+        // them for untitled results; version-to-version compare can preserve them explicitly.
+        if clear_versions_on_untitled {
+            s.clear_versions();
+        }
     }
     s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
     Ok(json!({"changes": changes, "author": author, "notHonoured": not_honoured}))
+}
+
+/// Compare saved document versions. `version` is the original snapshot index; `other` is another
+/// snapshot index or `"current"` (default) for the live document. The result defaults to a new
+/// untitled document and preserves version snapshots unless `preserveVersions` is false.
+pub(super) fn compare_versions(s: &mut Session, v: &Value) -> CmdResult {
+    let version = if v.get("version").is_some_and(|x| !x.is_null()) {
+        let i = p::u64(v, "version").ok_or_else(|| CmdError::Params("version (non-negative integer) is required".into()))?;
+        usize::try_from(i).map_err(|_| CmdError::Params("no such version".into()))?
+    } else {
+        return Err(CmdError::Params("`version` is required".into()));
+    };
+    let original = s.versions.get(version).map(|(_, _, d)| d.clone()).ok_or_else(|| CmdError::Params("no such version".into()))?;
+    let revised = match v.get("other") {
+        None | Some(Value::Null) => s.doc.clone(),
+        Some(Value::String(name)) if name == "current" => s.doc.clone(),
+        Some(Value::String(_)) => return Err(CmdError::Params("`other` is a version index or \"current\"".into())),
+        Some(other) => {
+            let i = other
+                .as_u64()
+                .or_else(|| other.as_i64().and_then(|i| u64::try_from(i).ok()))
+                .ok_or_else(|| CmdError::Params("`other` is a version index or \"current\"".into()))?;
+            let i = usize::try_from(i).map_err(|_| CmdError::Params("no such version".into()))?;
+            s.versions.get(i).map(|(_, _, d)| d.clone()).ok_or_else(|| CmdError::Params("no such version".into()))?
+        }
+    };
+    let show_in = p::str(v, "showIn").unwrap_or("new");
+    if !matches!(show_in, "original" | "revised" | "new") {
+        return Err(CmdError::Params("`showIn` is \"original\", \"revised\" or \"new\"".into()));
+    }
+    // Comparing into the live document replaces content; a protected document must be stopped
+    // first, the same as restoring a version.
+    if show_in == "original" {
+        crate::cmd::protect::check_version_restore(s)?;
+    }
+    let opts = CompareOptions::from_params(v);
+    let not_honoured = not_honoured_options(v);
+    let author = p::str(v, "author").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).unwrap_or_else(|| s.author.clone());
+    let preserve_versions = p::bool(v, "preserveVersions").unwrap_or(true);
+    s.checkpoint("Compare Versions");
+    s.doc = original;
+    s.doc.ensure_nonempty();
+    s.note_body_replaced();
+    s.math = None;
+    let mut result = compare_loaded(
+        s,
+        CompareRun {
+            revised,
+            show_in: show_in.to_string(),
+            original_loaded: true,
+            opts,
+            author,
+            not_honoured,
+            clear_versions_on_untitled: !preserve_versions,
+        },
+    )?;
+    if let Value::Object(map) = &mut result {
+        map.insert("version".into(), json!(version));
+        map.insert("other".into(), v.get("other").cloned().unwrap_or_else(|| json!("current")));
+        map.insert("preserveVersions".into(), json!(preserve_versions));
+    }
+    Ok(result)
 }
 
 /// A block's text (a table's cells in order), for matching blocks.
