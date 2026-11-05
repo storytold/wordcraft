@@ -3300,6 +3300,48 @@ fn footnotes_carried_onto_a_filler_page_keep_the_ending_sections_footnote_placem
 }
 
 #[test]
+fn filler_page_separators_take_the_ending_sections_field_context() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    // The continuation separator on the blank page is the ending section's: SECTION
+    // and SECTIONPAGES fields in it count that section, not the following one —
+    // whose field context is already installed when the filler page is finished.
+    // Section two runs to three pages; section one has two (its text page and the
+    // filler, which is section one's page), so both counts differ by section.
+    let body = format!("Section one text.\n{}", "Three pages of section two text. ".repeat(450));
+    let mut d = Document::from_text(&body);
+    footnote(&mut d, &Pos::body(0, 5), &"A long footnote that runs on and on. ".repeat(100));
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(SectionProps::default()));
+    d.last_section.start = SectionStart::OddPage;
+    let field = |instr: &str| InlineObject::Field {
+        instr: instr.into(),
+        result: String::new(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    let mut cont = wordcraft_doc::Paragraph::new();
+    cont.props.space_after = Some(0.0);
+    cont.insert_object(0, field("SECTIONPAGES"), &Default::default()).unwrap();
+    cont.insert_object(0, field("SECTION"), &Default::default()).unwrap();
+    d.footnote_separators = wordcraft_doc::NoteSeparators {
+        separator: None,
+        continuation_separator: Some(vec![wordcraft_doc::para_block(cont)]),
+        continuation_notice: None,
+    };
+    let l = lay(&d);
+    assert_eq!(l.pages.get(1).map(|p| p.section), Some(0), "the blank page is section one's");
+    let text: String = flat(display::page_display(&d, &l.pages[1], &Default::default()))
+        .iter()
+        .filter_map(|i| if let display::Draw::Glyphs { text, .. } = i { Some(text.as_str()) } else { None })
+        .collect();
+    assert!(
+        text.starts_with("12"),
+        "the filler's separator counts the ending section (its number 1, then its 2 pages including the filler): {text:?}"
+    );
+}
+
+#[test]
 fn paragraph_marks_sit_past_text_running_the_other_way() {
     // A left-to-right paragraph ending in Hebrew, and a right-to-left one ending in Latin: the
     // logically last letters are at the wrong edge, but the ¶ still goes past every glyph.
