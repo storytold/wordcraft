@@ -3151,6 +3151,7 @@ fn direct_native_ink_content_part_survives_unrelated_edit_and_two_saves() {
     }
 }
 
+/// Native ink and its alternate picture survive saving even when the producer renames prefixes.
 #[test]
 fn native_ink_keeps_alternate_content_and_preview_with_renamed_prefixes() {
     for alias in [false, true] {
@@ -3415,6 +3416,7 @@ fn native_ink_in_a_group_or_canvas_survives_unrelated_edit_and_two_saves() {
     }
 }
 
+/// A grouped native-ink member draws its strokes and retains its original picture fallback.
 #[test]
 fn native_ink_in_a_group_draws_strokes_and_keeps_its_fallback_picture() {
     let d = wordcraft_docx::read(&nested_ink_docx(false, &ink_member(914400, true), true)).unwrap();

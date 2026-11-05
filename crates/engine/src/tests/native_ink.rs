@@ -1,3 +1,5 @@
+//! End-to-end checks that imported InkML is visible, hideable, and safely editable/exportable.
+
 use std::io::{Cursor, Write};
 
 use wordcraft_doc::props::Rgb;
@@ -5,9 +7,12 @@ use wordcraft_layout::display::{DisplayOptions, Draw, page_display};
 
 use super::{Session, json, run};
 
+/// Minimal InkML package part used in the native screen/PDF integration fixtures.
 const INK: &str = r##"<ink xmlns="http://www.w3.org/2003/InkML"><brush><brushProperty name="color" value="#2563EB"/><brushProperty name="width" value="4" units="pt"/></brush><trace>0 0, 50 0, 50 25</trace></ink>"##;
+/// Expected brush colour used to identify the fixture's stroke in display lists and pixels.
 const BLUE: Rgb = Rgb(0x25, 0x63, 0xEB);
 
+/// Create a tiny standards-shaped DOCX with native ink in the requested placement.
 fn document(placement: &str) -> Vec<u8> {
     let content = if matches!(placement, "group" | "canvas") {
         r#"<w14:contentPart r:id="ink"><w14:xfrm><a:off x="254000" y="254000"/><a:ext cx="1371600" cy="736600"/></w14:xfrm></w14:contentPart>"#
@@ -56,6 +61,7 @@ fn document(placement: &str) -> Vec<u8> {
     zip.finish().unwrap().into_inner()
 }
 
+/// Count the fixture's blue native-ink strokes through nested figure, clip, and rotation draws.
 fn strokes(draws: &[Draw]) -> usize {
     draws
         .iter()
@@ -71,10 +77,12 @@ fn strokes(draws: &[Draw]) -> usize {
         .sum()
 }
 
+/// Count pixels whose rendered colour is the fixture's distinctive blue pen.
 fn blue_pixels(image: &wordcraft_render::Rendered) -> usize {
     image.pixels.as_chunks::<4>().0.iter().filter(|p| p[2] > 170 && p[0] < 100 && p[1] < 150).count()
 }
 
+/// Verify screen, Hide Ink, PDF vector, cap, and join behavior for every supported placement.
 #[test]
 fn native_ink_opens_renders_hides_and_exports_as_pdf_vectors() {
     for placement in ["inline", "floating", "group", "canvas", "direct"] {
@@ -99,6 +107,7 @@ fn native_ink_opens_renders_hides_and_exports_as_pdf_vectors() {
     }
 }
 
+/// Editing history and successive DOCX saves must preserve ink data and its visible group stroke.
 #[test]
 fn native_ink_survives_edit_undo_redo_and_repeated_docx_saves() {
     let doc = crate::io::open_bytes("ink.docx", &document("group")).unwrap();

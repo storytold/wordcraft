@@ -184,10 +184,12 @@ impl Reader<'_> {
         Some(InlineObject::Graphic { w, h, alt, float, graphic })
     }
 
-    /// A group or canvas member that is native ink (`content`, a `w14:contentPart`, inside
-    /// `alternate` when it has a picture fallback): what to write back (the whole alternate when
-    /// it can be kept, else the ink alone) and its fallback picture (a `Document::media` key).
-    /// `None` when the ink's part is missing or isn't InkML.
+    /// Decode a group/canvas native-ink member and its optional picture fallback.
+    ///
+    /// The returned graphic holds supported vectors, or no items if InkML needs the fallback.
+    /// Its saved source is the complete alternate-content element when it can be preserved, and
+    /// otherwise the native ink element alone. `None` means its related part is missing, malformed
+    /// as a package part, or not declared to have the InkML content type.
     fn ink_member(&mut self, content: &El, alternate: Option<&El>, rels: &Rels) -> Option<(Arc<Graphic>, Option<String>)> {
         let InlineObject::Graphic { mut graphic, .. } = self.read_ink_content_part(content, rels)? else { return None };
         let mut preview = None;
@@ -206,6 +208,10 @@ impl Reader<'_> {
         Some((graphic, preview))
     }
 
+    /// Read a direct InkML `w14:contentPart`, retaining its part and decoding supported strokes.
+    ///
+    /// Returns `None` when the relationship, InkML content type, or preserved source cannot be
+    /// read. An unreadable InkML payload remains a graphic with no vectors for fallback handling.
     pub(super) fn read_ink_content_part(&mut self, content: &El, rels: &Rels) -> Option<InlineObject> {
         let part = crate::read::part_of(rels, content.attr("r:id")?, INK_REL)?;
         let pkg = self.pkg;
@@ -217,6 +223,10 @@ impl Reader<'_> {
         Some(InlineObject::Graphic { w: graphic.w, h: graphic.h, alt: String::new(), float: Float::default(), graphic })
     }
 
+    /// Reuse a part's decoded InkML vectors within the shared graphic-work budget.
+    ///
+    /// Cache entries omit placement-specific source markup; each returned graphic carries its own
+    /// source. A cached vector is charged again when copied, so repeated placements stay bounded.
     fn ink_graphic(&mut self, part: &str, source: Arc<Embedded>) -> Arc<Graphic> {
         // Cache successes and failures by part, not by frame or relationship id. The original
         // markup still belongs to each placement, and copied geometry shares the file's budget.

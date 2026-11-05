@@ -3,9 +3,11 @@ use super::paint::{Paint, paint_for};
 use super::{BezPath, Document, Draw, FaceRef, Graphic, GraphicItem, GraphicKind, InlineObject, PathSeg, Rect, Rgb, ShapeKind, Spin, TextAlign};
 use wordcraft_doc::connector::ArrowStyle;
 
-/// The draws of a chart or diagram's items inside `rect` (page coordinates). The items were built
-/// for the size `g.w` × `g.h` (0: `rect`'s own size), so they are scaled to `rect`; strokes and text
-/// by the mean of the two scales.
+/// Build page-coordinate draws for a chart, diagram, or native InkML graphic inside `rect`.
+///
+/// The items were built for `g.w` × `g.h` (zero means the frame's own size) and are scaled to the
+/// target rectangle. Stroke widths and text sizes use the mean of its X and Y scales. Native ink
+/// paths enter the round-cap-and-join ink pipeline shared by screen and PDF rendering.
 pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32) -> Vec<Draw> {
     let (sx, sy) = (scale_of(rect.w, g.w), scale_of(rect.h, g.h));
     let k = (sx + sy) / 2.0;
@@ -21,6 +23,10 @@ pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32)
     out
 }
 
+/// Map a non-text graphic item from its local coordinates into its page-coordinate draw.
+///
+/// When `ink` is true, circular-pen paths with valid move/line segments become ink draws so both
+/// renderers apply native ink caps and joins. Text is returned as `None` for shaped separately.
 fn graphic_geometry(it: &GraphicItem, rect: Rect, sx: f32, sy: f32, alpha: f32, ink: bool) -> Option<Draw> {
     let inside = |r: &[f32; 4]| Rect::new(rect.x + r[0] * sx, rect.y + r[1] * sy, r[2] * sx, r[3] * sy);
     let k = (sx + sy) / 2.0;
@@ -70,6 +76,7 @@ fn graphic_geometry(it: &GraphicItem, rect: Rect, sx: f32, sy: f32, alpha: f32, 
     })
 }
 
+/// Convert a single uninterrupted move/line path into the point list accepted by `Draw::Ink`.
 fn ink_points(segs: &[PathSeg]) -> Option<Vec<(f32, f32)>> {
     segs.iter()
         .enumerate()

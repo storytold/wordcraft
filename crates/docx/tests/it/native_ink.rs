@@ -1,6 +1,9 @@
+//! Integration regressions for native ink decoding, fallbacks, package preservation, and budgets.
+
 use super::*;
 use wordcraft_doc::graphic::{Graphic, GraphicItem, PathSeg};
 
+/// Replace the fixture package's InkML part without changing its DOCX drawing or relationships.
 fn replace_ink(bytes: &[u8], ink: &str) -> Vec<u8> {
     let mut files = unzip(bytes);
     files.insert("word/ink/ink1.xml".into(), ink.as_bytes().to_vec());
@@ -8,12 +11,14 @@ fn replace_ink(bytes: &[u8], ink: &str) -> Vec<u8> {
     zip(&entries)
 }
 
+/// Get the ink graphic from a fixture, selecting its group/canvas member when requested.
 fn ink_graphic(d: &Document, grouped: bool) -> std::sync::Arc<Graphic> {
     let obj = if grouped { group_children(d)[1].obj.clone() } else { graphics(d)[0].clone() };
     let InlineObject::Graphic { graphic, .. } = obj else { panic!("expected ink") };
     graphic
 }
 
+/// Build drawing-level, group, and canvas fixtures with or without a bitmap fallback.
 fn frames(fallback: bool) -> Vec<(Vec<u8>, bool)> {
     vec![
         (ink_docx(fallback, true), false),
@@ -22,6 +27,7 @@ fn frames(fallback: bool) -> Vec<(Vec<u8>, bool)> {
     ]
 }
 
+/// Check vector decoding and original InkML preservation across placement and format round trips.
 #[test]
 fn native_ink_strokes_render_in_all_frames_and_survive_json_and_two_docx_saves() {
     for fallback in [false, true] {
@@ -44,6 +50,7 @@ fn native_ink_strokes_render_in_all_frames_and_survive_json_and_two_docx_saves()
     }
 }
 
+/// Unsupported visual ink semantics use their picture while preserving bytes across repeated saves.
 #[test]
 fn native_ink_unsupported_features_keep_the_preview_and_original_bytes() {
     let variants = [
@@ -68,6 +75,7 @@ fn native_ink_unsupported_features_keep_the_preview_and_original_bytes() {
     }
 }
 
+/// An unsupported ink part without a picture fallback retains the visible placeholder.
 #[test]
 fn native_ink_without_a_preview_keeps_a_placeholder_when_it_cannot_be_drawn() {
     for (bytes, grouped) in frames(false) {
@@ -78,6 +86,7 @@ fn native_ink_without_a_preview_keeps_a_placeholder_when_it_cannot_be_drawn() {
     }
 }
 
+/// A direct run-level ink part derives its graphic frame from the decoded stroke bounds.
 #[test]
 fn direct_native_ink_has_intrinsic_dimensions_and_visible_strokes() {
     let bytes = docx(
@@ -96,6 +105,7 @@ fn direct_native_ink_has_intrinsic_dimensions_and_visible_strokes() {
     }
 }
 
+/// Keep inner-offset or resized ink on its preview; continue drawing a supported rotated frame.
 #[test]
 fn native_ink_inner_placement_uses_the_preview_but_pure_rotation_keeps_vectors() {
     for (from, to, vectors) in [
@@ -117,6 +127,7 @@ fn native_ink_inner_placement_uses_the_preview_but_pure_rotation_keeps_vectors()
     }
 }
 
+/// Repeated references charge both first-time decoding and copied vector geometry to the work cap.
 #[test]
 fn native_ink_decoding_and_copying_share_the_document_graphic_budget() {
     let mut files = unzip(&ink_docx(false, false));

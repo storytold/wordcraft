@@ -1,3 +1,9 @@
+//! Bounded decoding of the visually simple subset of Word's native InkML strokes.
+//!
+//! The original InkML remains opaque in the document model for lossless saves; this module only
+//! builds disposable drawing items. Unsupported visual semantics, invalid input and exhausted
+//! work return `None`, allowing the DOCX reader to keep its picture fallback instead.
+
 use std::collections::HashMap;
 
 use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, PathSeg};
@@ -6,13 +12,24 @@ use wordcraft_doc::props::Rgb;
 
 use crate::xml::El;
 
+/// Maximum InkML part size that the vector preview decoder will parse (2 MiB).
 const MAX_BYTES: usize = 2 * 1024 * 1024;
+/// Maximum XML elements indexed from one InkML part.
 const MAX_NODES: usize = 8192;
+/// Maximum nesting or chained reference depth accepted in InkML.
 const MAX_DEPTH: usize = 16;
+/// Maximum regular trace channels supported per format.
 const MAX_CHANNELS: usize = 16;
+/// Maximum coordinate samples decoded from one InkML part.
 const MAX_POINTS: usize = 100_000;
+/// Maximum absolute channel value accepted before unit conversion.
 const MAX_VALUE: f64 = 1_000_000_000.0;
 
+/// Decode supported strokes from InkML, charging parsing and geometry work to the shared budget.
+///
+/// Returns `None` for malformed packages, unsupported visual semantics, excessive sizes, or
+/// exhausted work; callers can then display the original picture fallback. Success contains
+/// vector items in the drawing's intrinsic point coordinates, but never replaces the saved XML.
 pub(super) fn read(bytes: &[u8], work: &mut usize) -> Option<Graphic> {
     if bytes.len() > MAX_BYTES {
         return None;
@@ -29,6 +46,10 @@ pub(super) fn read(bytes: &[u8], work: &mut usize) -> Option<Graphic> {
     drawing(reader.strokes)
 }
 
+/// Scale decoded vector geometry from its InkML bounds into the frame dimensions in points.
+///
+/// Both coordinates and pen widths scale with the frame; picture items and empty graphics need
+/// no adjustment. The caller supplies already validated, nonnegative frame dimensions.
 pub(super) fn fit_frame(graphic: &mut Graphic, w: f32, h: f32) {
     if graphic.w <= 0.0 || graphic.h <= 0.0 {
         return;
@@ -60,12 +81,14 @@ pub(super) fn fit_frame(graphic: &mut Graphic, w: f32, h: f32) {
     graphic.h = h;
 }
 
+/// Debit `amount` from the reader's shared allowance, returning `None` if it was exhausted.
 fn spend(work: &mut usize, amount: usize) -> Option<()> {
     let enough = *work >= amount;
     *work = work.saturating_sub(amount);
     enough.then_some(())
 }
 
+/// Index bounded, uniquely identified XML elements so local InkML references resolve in constant time.
 fn index<'a>(el: &'a El, ids: &mut HashMap<&'a str, &'a El>, nodes: &mut usize, depth: usize, work: &mut usize) -> Option<()> {
     spend(work, 1)?;
     *nodes += 1;
@@ -83,48 +106,72 @@ fn index<'a>(el: &'a El, ids: &mut HashMap<&'a str, &'a El>, nodes: &mut usize, 
     Some(())
 }
 
+/// Channel positions and unit conversion for the subset of an InkML trace format we draw.
 #[derive(Clone)]
 struct Format {
+    /// Number of regular channels that must be decoded for each sample.
     channels: usize,
+    /// Zero-based channel index for the horizontal coordinate.
     x: usize,
+    /// Zero-based channel index for the vertical coordinate.
     y: usize,
+    /// Conversion factors from the X and Y units into document points.
     scale: [f64; 2],
 }
 
 impl Default for Format {
+    /// Use InkML's default point-like X/Y canvas.
     fn default() -> Self {
         Self { channels: 2, x: 0, y: 1, scale: [1.0; 2] }
     }
 }
 
+/// The supported visual properties inherited by an InkML trace.
 #[derive(Clone, Default)]
 struct Brush {
+    /// Brush colour, or black when the InkML document leaves it unspecified.
     color: Option<Rgb>,
+    /// Circular pen diameter in points, or the renderer's one-point default.
     width: Option<f64>,
+    /// Explicit tip height, if present; only circles whose height matches `width` are drawn.
     height: Option<f64>,
 }
 
+/// Resolved trace-format and brush properties inherited by descendant traces.
 #[derive(Clone, Default)]
 struct Context {
+    /// Coordinate channels and their point conversion.
     format: Format,
+    /// Visual pen properties for a trace using this context.
     brush: Brush,
 }
 
+/// One decoded pen-down trace, before placement in a drawing frame.
 struct Stroke {
+    /// Samples as finite X/Y values in the source InkML canvas.
     points: Vec<[f64; 2]>,
+    /// Opaque pen colour.
     color: Rgb,
+    /// Pen width in points.
     width: f32,
 }
 
+/// Stateful InkML walker with a part-local reference table and document-wide work allowance.
 struct InkReader<'a, 'w> {
+    /// Unique XML IDs retained for local context, brush, and format references.
     ids: HashMap<&'a str, &'a El>,
+    /// Remaining DOCX graphic-work budget shared with other embedded graphics.
     work: &'w mut usize,
+    /// Supported pen-down traces accumulated for the final vector graphic.
     strokes: Vec<Stroke>,
+    /// Total coordinate samples consumed from the current InkML part.
     points: usize,
+    /// Stream defaults in effect for an explicit `#DefaultContext` reference.
     default_context: Context,
 }
 
 impl<'a> InkReader<'a, '_> {
+    /// Resolve a fragment-only URI to an indexed element of the expected InkML kind.
     fn resolve(&mut self, reference: &str, name: &str) -> Option<&'a El> {
         spend(self.work, 1)?;
         let id = reference.strip_prefix('#')?;
@@ -132,6 +179,7 @@ impl<'a> InkReader<'a, '_> {
         (el.name == name).then_some(el)
     }
 
+    /// Read a brush's supported properties, recursively resolving its optional inherited brush.
     fn brush(&mut self, el: &El, depth: usize) -> Option<Brush> {
         spend(self.work, 1)?;
         if depth > MAX_DEPTH {
@@ -175,6 +223,7 @@ impl<'a> InkReader<'a, '_> {
         Some(brush)
     }
 
+    /// Resolve inherited, referenced, and directly specified properties for one context element.
     fn context(&mut self, el: &El, inherited: Context, depth: usize) -> Option<Context> {
         spend(self.work, el.kids.len().saturating_add(el.attrs.len()).saturating_mul(12).max(1))?;
         if depth > MAX_DEPTH {
@@ -224,6 +273,7 @@ impl<'a> InkReader<'a, '_> {
         Some(ctx)
     }
 
+    /// Visit supported stream elements in document order and decode their traces recursively.
     fn walk(&mut self, el: &El, mut ctx: Context, depth: usize) -> Option<()> {
         if depth > MAX_DEPTH {
             return None;
@@ -253,6 +303,7 @@ impl<'a> InkReader<'a, '_> {
         Some(())
     }
 
+    /// Decode one simple pen-down trace using its resolved channels and circular-pen properties.
     fn trace(&mut self, el: &El, ctx: &Context) -> Option<()> {
         if el.attr("continuation").is_some() || el.attr("priorRef").is_some() || el.els().next().is_some() {
             return None;
@@ -299,10 +350,12 @@ impl<'a> InkReader<'a, '_> {
     }
 }
 
+/// Get the trace format declared inside an InkML input source.
 fn source_format(el: &El) -> Option<Format> {
     trace_format(el.child("ink:traceFormat")?)
 }
 
+/// Read ordered regular channels, accepting supported X/Y axes and optional nonvisual channels.
 fn trace_format(el: &El) -> Option<Format> {
     let mut format = Format { channels: 0, ..Default::default() };
     let (mut x, mut y) = (None, None);
@@ -338,6 +391,7 @@ fn trace_format(el: &El) -> Option<Format> {
     Some(format)
 }
 
+/// Convert a supported InkML physical unit into points; absent units mean one point per unit.
 fn unit(value: Option<&str>) -> Option<f64> {
     match value {
         None | Some("em" | "pt") => Some(1.0),
@@ -350,10 +404,12 @@ fn unit(value: Option<&str>) -> Option<f64> {
     }
 }
 
+/// Whether a decoded coordinate or channel value is finite and within the parser's safe range.
 fn bounded(value: f64) -> bool {
     value.is_finite() && value.abs() <= MAX_VALUE
 }
 
+/// Parse a bounded decimal/exponent channel number, rejecting long and nonfinite values.
 fn number(value: &str) -> Option<f64> {
     if value.len() > 64 {
         return None;
@@ -362,15 +418,21 @@ fn number(value: &str) -> Option<f64> {
     bounded(value).then_some(value)
 }
 
+/// Accumulated explicit, first-difference, and second-difference state for one channel.
 #[derive(Clone, Default)]
 struct ChannelState {
+    /// Reconstructed absolute value at the current sample.
     value: Option<f64>,
+    /// Reconstructed first difference used for second-difference samples.
     delta: Option<f64>,
+    /// Last encoded value, reused when a `*` wildcard occurs.
     last: Option<f64>,
+    /// Active encoding order: 0 explicit, 1 first difference, 2 second difference.
     order: u8,
 }
 
 impl ChannelState {
+    /// Consume one trace token and update this channel's reconstructed value.
     fn next(&mut self, tokens: &mut Tokens<'_>) -> Option<()> {
         tokens.space();
         let prefix = match tokens.0.as_bytes().first()? {
@@ -418,19 +480,23 @@ impl ChannelState {
     }
 }
 
+/// Cursor over a trace's compact comma-separated sample data.
 struct Tokens<'a>(&'a str);
 
 impl Tokens<'_> {
+    /// Skip the XML whitespace allowed between trace values.
     fn space(&mut self) {
         self.0 = self.0.trim_start_matches([' ', '\t', '\r', '\n']);
     }
 
+    /// Consume consecutive ASCII decimal digits and return their count.
     fn digits(&mut self) -> usize {
         let len = self.0.bytes().take_while(u8::is_ascii_digit).count();
         self.0 = self.0.get(len..).unwrap_or("");
         len
     }
 
+    /// Parse one signed InkML decimal, exponent, or hexadecimal token from the cursor.
     fn number(&mut self) -> Option<f64> {
         self.space();
         let sign = if let Some(rest) = self.0.strip_prefix('-') {
@@ -471,6 +537,7 @@ impl Tokens<'_> {
     }
 }
 
+/// Build bounded vector items, centring the strokes in their intrinsic graphic bounds.
 fn drawing(strokes: Vec<Stroke>) -> Option<Graphic> {
     let (mut left, mut top, mut right, mut bottom) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     for stroke in &strokes {

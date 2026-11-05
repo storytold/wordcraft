@@ -1,10 +1,14 @@
+//! Unit coverage for the supported InkML subset and its hostile-input/resource limits.
+
 use super::*;
 
+/// Wrap InkML body markup with the real namespace and decode it under a fresh ample work budget.
 fn ink(body: &str) -> Option<Graphic> {
     let xml = format!(r#"<ink xmlns="http://www.w3.org/2003/InkML">{body}</ink>"#);
     read(xml.as_bytes(), &mut 2_000_000)
 }
 
+/// Extract vector strokes for compact geometry, colour, and pen-width assertions.
 fn paths(graphic: &Graphic) -> Vec<(&[PathSeg], Rgb, f32)> {
     graphic
         .items
@@ -16,6 +20,7 @@ fn paths(graphic: &Graphic) -> Vec<(&[PathSeg], Rgb, f32)> {
         .collect()
 }
 
+/// Equivalent explicit, first-difference, second-difference, and repeated-value data draw alike.
 #[test]
 fn absolute_differential_and_second_differential_traces_agree() {
     let absolute = ink("<trace>0 0, 10 20, 25 35, 45 45, 65 55</trace>").unwrap();
@@ -30,6 +35,7 @@ fn absolute_differential_and_second_differential_traces_agree() {
     assert_eq!((absolute.w, absolute.h), (66.0, 56.0));
 }
 
+/// Accept InkML's compact signed, fractional, hexadecimal, and exponent-valued tokens.
 #[test]
 fn compact_numbers_hex_exponents_trailing_comma_and_cdata() {
     let expected = ink("<trace>0.5 -2, 16 20, 3.25 -4.5</trace>").unwrap();
@@ -37,6 +43,7 @@ fn compact_numbers_hex_exponents_trailing_comma_and_cdata() {
     assert_eq!(compact, expected);
 }
 
+/// Resolve chained contexts and brushes, reordered axes, negative orientation, and physical units.
 #[test]
 fn context_and_brush_references_reordered_channels_and_units() {
     let graphic = ink(r##"
@@ -58,6 +65,7 @@ fn context_and_brush_references_reordered_channels_and_units() {
     );
 }
 
+/// Inherit local sources and nested group brushes without joining separate traces or pen-up data.
 #[test]
 fn inline_ink_source_and_nested_groups_keep_separate_strokes() {
     let graphic = ink(r##"
@@ -75,12 +83,14 @@ fn inline_ink_source_and_nested_groups_keep_separate_strokes() {
     assert_eq!((graphic.w, graphic.h), (31.0, 11.0));
 }
 
+/// Resolve an explicit default-context reference using the InkML stream's current properties.
 #[test]
 fn default_context_reference_uses_the_current_stream_defaults() {
     let graphic = ink(r##"<brush><brushProperty name="color" value="#FF0000"/></brush><traceGroup brushRef="#DefaultBrush"><trace contextRef="#DefaultContext">0 0, 10 10</trace></traceGroup>"##).unwrap();
     assert_eq!(paths(&graphic)[0].1, Rgb(255, 0, 0));
 }
 
+/// Subtract the source-space origin in f64 so nearby large coordinates remain distinct.
 #[test]
 fn subtract_large_origins_before_converting_coordinates_to_f32() {
     let graphic = ink("<trace>999999998 999999998, 999999999 999999999</trace>").unwrap();
@@ -88,6 +98,7 @@ fn subtract_large_origins_before_converting_coordinates_to_f32() {
     assert_eq!(paths(&graphic)[0].0, [PathSeg::Move(0.5, 0.5), PathSeg::Line(1.5, 1.5)]);
 }
 
+/// Represent a single-point pen tap as a visible filled dot in the correct brush colour.
 #[test]
 fn tap_is_a_visible_filled_circle() {
     let graphic = ink("<trace>123 -456</trace>").unwrap();
@@ -97,6 +108,7 @@ fn tap_is_a_visible_filled_circle() {
     );
 }
 
+/// Match the InkML namespace independent of its prefix and refuse lookalikes or broken markup.
 #[test]
 fn namespace_aliases_work_but_lookalikes_and_malformed_xml_do_not() {
     let expected = ink("<trace>0 0, 1 1</trace>").unwrap();
@@ -112,6 +124,7 @@ fn namespace_aliases_work_but_lookalikes_and_malformed_xml_do_not() {
     }
 }
 
+/// Refuse the complete vector preview rather than partially drawing unsupported visual semantics.
 #[test]
 fn unsupported_visual_semantics_refuse_the_whole_preview() {
     for body in [
@@ -133,6 +146,7 @@ fn unsupported_visual_semantics_refuse_the_whole_preview() {
     }
 }
 
+/// Invalid tokens, duplicate IDs, missing references, and cyclic references fail without a preview.
 #[test]
 fn malformed_coordinates_and_reference_cycles_are_bounded() {
     for value in [
@@ -163,6 +177,7 @@ fn malformed_coordinates_and_reference_cycles_are_bounded() {
     }
 }
 
+/// Enforce byte, element, nesting, sample, and shared work budgets without partial output.
 #[test]
 fn byte_node_depth_point_and_shared_work_limits_refuse_partial_drawings() {
     let mut work = usize::MAX;
@@ -182,6 +197,7 @@ fn byte_node_depth_point_and_shared_work_limits_refuse_partial_drawings() {
     assert!(read(xml, &mut (spent - 1)).is_none());
 }
 
+/// Large but accepted coordinates are rescaled to finite drawing bounds and stroke widths.
 #[test]
 fn very_large_finite_coordinates_fit_a_bounded_graphic() {
     let graphic = ink("<trace>-1000000000 -1000000000, 1000000000 1000000000</trace>").unwrap();
@@ -196,6 +212,7 @@ fn very_large_finite_coordinates_fit_a_bounded_graphic() {
 }
 
 proptest::proptest! {
+    /// Arbitrary short XML-escaped trace content never panics or bypasses the decode boundary.
     #[test]
     fn arbitrary_trace_text_never_panics(text in ".{0,2048}") {
         let _ = ink(&format!("<trace>{}</trace>", crate::xml::esc(&text)));
