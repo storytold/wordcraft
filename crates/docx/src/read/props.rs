@@ -475,17 +475,23 @@ pub(crate) fn tab_leader(v: &str) -> TabLeader {
     }
 }
 
-/// A percentage pattern's share (`pct5` … `pct95`, ECMA-376 §17.18.78), 1–100.
+/// A percentage pattern's share in tenths of a percent (`pct5` … `pct95`, ECMA-376 §17.18.78):
+/// `pct12`, `pct37`, `pct62` and `pct87` are 12.5%, 37.5%, 62.5% and 87.5%.
 fn shd_pct(e: &El) -> Option<u16> {
-    e.attr("w:val").and_then(|v| v.strip_prefix("pct")).and_then(|n| n.parse::<u16>().ok()).filter(|n| (1..=100).contains(n))
+    let n = e.attr("w:val")?.strip_prefix("pct")?.parse::<u16>().ok()?;
+    match n {
+        12 | 37 | 62 | 87 => Some(n * 10 + 5),
+        5 | 10 | 15 | 20 | 25 | 30 | 35 | 40 | 45 | 50 | 55 | 60 | 65 | 70 | 75 | 80 | 85 | 90 | 95 => Some(n * 10),
+        _ => None,
+    }
 }
 
-/// A percentage pattern as one colour: its pattern colour (automatic: black) over the fill
+/// (automatic: white) in that share (tenths of a percent), so `pct5` on no fill is a light grey.
 /// (automatic: white) in that share, so `pct5` on no fill is a light grey.
 fn pct_mix(fg: Option<Rgb>, bg: Option<Rgb>, n: u16) -> Rgb {
     let (fg, bg) = (fg.unwrap_or(Rgb(0, 0, 0)), bg.unwrap_or(Rgb(255, 255, 255)));
-    let n = n.min(100);
-    let mix = |f: u8, b: u8| ((u16::from(f) * n + u16::from(b) * (100 - n) + 50) / 100).min(255) as u8;
+    let n = u32::from(n.min(1000));
+    let mix = |f: u8, b: u8| ((u32::from(f) * n + u32::from(b) * (1000 - n) + 500) / 1000).min(255) as u8;
     Rgb(mix(fg.0, bg.0), mix(fg.1, bg.1), mix(fg.2, bg.2))
 }
 

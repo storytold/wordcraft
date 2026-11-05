@@ -4610,11 +4610,18 @@ fn percentage_shading_mixes_pattern_and_fill() {
  <w:tr><w:tc><w:tcPr><w:shd w:val="pct5" w:color="auto" w:fill="auto"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:shd w:val="pct50" w:color="FF0000" w:fill="FFFFFF"/></w:tcPr><w:p/></w:tc></w:tr>
 </w:tbl>
 <w:p><w:pPr><w:shd w:val="pct20" w:color="auto" w:fill="auto"/></w:pPr></w:p>
-<w:p><w:pPr><w:shd w:val="clear" w:color="auto" w:fill="FFFF00"/></w:pPr></w:p>"#;
+<w:p><w:pPr><w:shd w:val="clear" w:color="auto" w:fill="FFFF00"/></w:pPr></w:p>
+<w:p><w:pPr><w:shd w:val="pct12" w:color="auto" w:fill="auto"/></w:pPr></w:p>
+<w:p><w:pPr><w:shd w:val="pct87" w:color="auto" w:fill="auto"/></w:pPr></w:p>"#;
     let d = read_body(body);
     let Block::Table(t) = &*d.body[0] else { panic!() };
     let cells: Vec<Option<Rgb>> = t.rows[0].cells.iter().map(|c| c.props.shading).collect();
     assert_eq!(cells, [Some(Rgb(242, 242, 242)), Some(Rgb(255, 128, 128))]);
     let paras: Vec<Option<Rgb>> = d.body[1..].iter().filter_map(|b| b.as_para()).map(|p| p.props.shading).collect();
-    assert_eq!(paras, [Some(Rgb(204, 204, 204)), Some(Rgb(255, 255, 0))], "a clear pattern keeps its fill");
+    // pct12 and pct87 are 12.5% and 87.5% (255 × 0.875 = 223.1, × 0.125 = 31.9).
+    assert_eq!(
+        paras,
+        [Some(Rgb(204, 204, 204)), Some(Rgb(255, 255, 0)), Some(Rgb(223, 223, 223)), Some(Rgb(32, 32, 32))],
+        "a clear pattern keeps its fill; half-percent patterns keep their half"
+    );
 }
