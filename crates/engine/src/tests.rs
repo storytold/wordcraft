@@ -1326,6 +1326,7 @@ fn copying_paragraphs_inside_a_table_cell_adds_no_spacing() {
     run(&mut s, "text.insert", json!({"text": "One"}));
     run(&mut s, "text.newParagraph", json!({}));
     run(&mut s, "text.insert", json!({"text": "Two"}));
+    run(&mut s, "para.indents", json!({"left": -36, "firstLine": 18}));
     run(&mut s, "caret.up", json!({"extend": true}));
     for _ in 0..3 {
         run(&mut s, "caret.left", json!({"extend": true}));
@@ -1333,6 +1334,50 @@ fn copying_paragraphs_inside_a_table_cell_adds_no_spacing() {
     let r = run(&mut s, "edit.copy", json!({}));
     let html = r["html"].as_str().unwrap_or_default().to_string();
     assert!(html.contains("One") && html.contains("Two"), "{html}");
+    assert!(!html.contains("margin-") && !html.contains("text-indent"), "{html}");
+}
+
+/// #5537: Select All from a table at the top of the document runs into the body: the body's
+/// paragraphs keep their spacing, only the cell's stay bare.
+#[test]
+fn copying_from_a_cell_into_the_body_keeps_the_bodys_spacing() {
+    let mut s = normal_with_space_after();
+    run(&mut s, "document.setText", json!({"text": "One"}));
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    run(&mut s, "text.insert", json!({"text": "Cell"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    let (cell, body) = html.split_once("Cell").unwrap_or_default();
+    assert!(!cell.contains("margin-") && !body.contains("Cell"), "{html}");
+    assert!(body.contains("margin-top:4pt") && body.contains("margin-bottom:10pt") && body.contains("One"), "{html}");
+}
+
+/// #5537: a column selection copies one paragraph per line, so a paragraph's spacing doesn't fit
+/// those rows, and the rows it takes from a table between its corners get the table's rule too.
+#[test]
+fn copying_a_column_selection_adds_no_spacing() {
+    let mut s = normal_with_space_after();
+    run(
+        &mut s,
+        "document.setText",
+        json!({"text": "One
+Two"}),
+    );
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "caret.right", json!({}));
+    run(&mut s, "caret.right", json!({}));
+    run(&mut s, "caret.right", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    run(&mut s, "text.insert", json!({"text": "Cell"}));
+    let end = s.doc.body.len() - 1;
+    run(&mut s, "select.column", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(end, 3)}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    assert!(html.contains("One") && html.contains("Ce"), "{html}");
     assert!(!html.contains("margin-") && !html.contains("text-indent"), "{html}");
 }
 
@@ -1398,6 +1443,27 @@ fn copying_a_heading_numbered_by_its_style_keeps_its_spacing() {
     let html = r["html"].as_str().unwrap_or_default().to_string();
     assert!(html.contains("<h1") && html.contains("margin-bottom:9pt"), "{html}");
     assert!(!html.contains("margin-left") && !html.contains("text-indent"), "{html}");
+}
+
+/// #5537: a copy holds no lists, so a heading numbered directly goes out as a heading too.
+#[test]
+fn copying_a_heading_numbered_directly_keeps_its_spacing() {
+    let mut s = s();
+    let num = std::sync::Arc::make_mut(&mut s.doc.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+    if let Some(h) = std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Heading1") {
+        h.para.space_after = Some(9.0);
+    }
+    run(&mut s, "document.setText", json!({"text": "One"}));
+    run(&mut s, "para.style", json!({"style": "Heading1"}));
+    if let Some(p) = s.doc.body.first_mut().map(std::sync::Arc::make_mut)
+        && let wordcraft_doc::Block::Para(p) = p
+    {
+        p.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    }
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    assert!(html.contains("<h1") && html.contains("margin-bottom:9pt"), "{html}");
 }
 
 /// #5537: other programs have no page margin to hang a negative indent into, on either side or

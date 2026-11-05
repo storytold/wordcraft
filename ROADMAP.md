@@ -139,7 +139,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
-- 2026-11-04: Copied plain paragraphs and headings keep their space before and after and their indents in other programs: the clipboard's HTML writes their spacing as the document shows it, their style's included, so a paste into a mail client is laid out as in WordCraft (#5537). List items, quotes, code and table cells get none, as before, and right-to-left paragraphs get no indents.
+- 2026-11-04: Copied plain paragraphs and headings keep their space before and after and their indents in other programs: the clipboard's HTML writes their spacing as the document shows it, their style's included, so a paste into a mail client is laid out as in WordCraft (#5537). List items, quotes, code, table cells and column selections get none, as before, and right-to-left paragraphs get no indents.
 - 2026-10-28: Ink replay, eraser picking, lasso selection and arrow-candidate discovery reuse the paragraph prefixes they have already scanned (#3614). Page item order, stroke geometry and saved data retain their behavior. This narrows the stability work; ink import fidelity, native pen input and broader corpus qualification remain open.
 
 - 2026-11-04: OpenDocument files have no display settings any more (gap 19): File › Options › Advanced › OpenDocument files, `file.options` `odf`, `WORDCRAFT_ODF`, the LibreOffice style and custom values are gone. WordCraft makes one choice for each case the standard leaves open, the one the default made, and still follows what a file states ([docs/odf-interpretation.md](docs/odf-interpretation.md)).

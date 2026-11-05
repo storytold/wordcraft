@@ -195,35 +195,50 @@ fn copy_with(s: &mut Session, whole: Option<&Path>) -> CmdResult {
     s.clipboard_text = f.clipboard_text();
     s.clip_history.push(&f, &s.clipboard_text);
     s.clipboard = Some(f);
-    Ok(copy_result(s))
+    let bare = from_cells(s, &a, &b);
+    Ok(copy_result(s, &bare))
+}
+
+/// For each block a copy of `a..b` gives, whether it is a paragraph taken out of a table cell.
+fn from_cells(s: &Session, a: &Pos, b: &Pos) -> Vec<bool> {
+    if a.path.parent() == b.path.parent() {
+        return vec![a.path.0.len() > 1; b.path.last().saturating_sub(a.path.last()).saturating_add(1)];
+    }
+    s.doc.paths_between(a, b).iter().map(|p| p.0.len() > 1).collect()
 }
 
 /// The copy as a document whose top-level paragraphs carry, as their own formatting, the space
 /// before and after and the indents they have in the source document (`styles`): the copy holds
 /// only the built-in styles, so its HTML would otherwise lose what the source's styles give (#5537).
-/// A selection touching a table cell (`in_cell`) adds nothing: layout resolves a cell's paragraphs
-/// with the table style, which the flattened copy no longer knows.
-fn with_source_spacing(f: &Fragment, styles: &wordcraft_doc::StyleSheet, in_cell: bool) -> wordcraft_doc::Document {
+/// Paragraphs marked in `bare` go out with none of this: layout resolves a cell's paragraphs with
+/// the table style, which the flattened copy no longer knows, and a column selection's rows are
+/// lines rather than paragraphs.
+fn with_source_spacing(f: &Fragment, styles: &wordcraft_doc::StyleSheet, bare: &[bool]) -> wordcraft_doc::Document {
     let mut d = f.to_document();
-    if in_cell {
-        return d;
-    }
+    let is_bare = |i: usize| bare.get(i).copied().unwrap_or(false);
     let names: Vec<Option<String>> = d
         .body
         .iter()
-        .map(|b| match &**b {
-            wordcraft_doc::Block::Para(p) => Some(styles.resolve_para(&p.props).style),
-            wordcraft_doc::Block::Table(_) => None,
+        .enumerate()
+        .map(|(i, b)| match &**b {
+            wordcraft_doc::Block::Para(p) if !is_bare(i) => Some(styles.resolve_para(&p.props).style),
+            _ => None,
         })
         .collect();
     for (i, b) in d.body.iter_mut().enumerate() {
         if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+            if is_bare(i) {
+                let pp = &mut p.props;
+                (pp.space_before, pp.space_after) = (None, None);
+                (pp.indent_left, pp.indent_right, pp.indent_first) = (None, None, None);
+                continue;
+            }
             let r = styles.resolve_para(&p.props);
             // A list item's indents come from its list, which the copy doesn't hold, and its
-            // style's spacing is contextual: it gets none, as before. A heading numbered through
-            // its style goes out as a heading, so it keeps its spacing, but not those indents.
+            // style's spacing is contextual: it gets none, as before. A numbered heading goes out
+            // as a heading, so it keeps its spacing, but not those indents.
             let list = r.numbering.is_some();
-            let heading = r.outline_level.is_some() && p.props.numbering.is_none();
+            let heading = r.outline_level.is_some();
             // Contextual spacing drops a paragraph's own space towards a neighbour of its style,
             // as layout does; at the ends of the copy no neighbour takes it away.
             // Automatic spacing resolves to the 14 pt it is laid out with.
@@ -247,12 +262,10 @@ fn with_source_spacing(f: &Fragment, styles: &wordcraft_doc::StyleSheet, in_cell
 
 /// What Copy and Cut return: the clipboard's text, and the copy as HTML (equations as MathML,
 /// #816) for the host to put on the system clipboard too, so other programs keep the formatting;
-/// and for a copy of one equation alone, its MathML (#1297).
-pub(crate) fn copy_result(s: &mut Session) -> Value {
-    let (a, b) = s.sel.ordered();
-    let in_cell = a.path.0.len() > 1 || b.path.0.len() > 1;
+/// and for a copy of one equation alone, its MathML (#1297). `bare`: see `with_source_spacing`.
+pub(crate) fn copy_result(s: &mut Session, bare: &[bool]) -> Value {
     s.clipboard_html = match &s.clipboard {
-        Some(f) => wordcraft_formats::html::export_fragment(&with_source_spacing(f, &s.doc.styles, in_cell)),
+        Some(f) => wordcraft_formats::html::export_fragment(&with_source_spacing(f, &s.doc.styles, bare)),
         None => String::new(),
     };
     let mut r = json!({"text": s.clipboard_text});

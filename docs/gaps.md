@@ -118,8 +118,8 @@ The same gaps grouped the way the parity documents are, for agents working in on
 - **UI/UX gaps:** #7, #18, #24; context menus for objects (the table's landed; it still lacks Border Styles); Linux title bar theming (#78); File ›
   still missing: the Paste Options button after a paste, and RTF on macOS and X11. Copy puts
   HTML beside the text on the clipboard, so other programs keep the formatting (#1523), the spacing and indents
-  of plain paragraphs and headings included (#5537: not for list items, quotes, code or table
-  cells, no indents for right-to-left paragraphs), with
+  of plain paragraphs and headings included (#5537: not for list items, quotes, code, table
+  cells or column selections, no indents for right-to-left paragraphs), with
   equations as MathML (#816), and a lone equation also in the MathML clipboard formats on
   Windows and macOS (#1297; pasting into Word/LibreOffice not yet verified); RTF on the
   clipboard is not written yet.
