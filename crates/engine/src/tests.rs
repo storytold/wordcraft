@@ -4626,8 +4626,8 @@ fn hostile_junk() -> [serde_json::Value; 8] {
     ]
 }
 
-/// The commands that reach outside the session (files): `hostile_file_params_never_panic` runs
-/// them, held to a folder of its own, and `hostile_params_never_panic` every other one.
+/// `file.*`, `insert.picture` and `insert.textFromFile`: `hostile_file_params_never_panic` runs
+/// them, held to a folder of its own, and `hostile_params_never_panic` every other command.
 fn reaches_files(id: &str) -> bool {
     id.starts_with("file.") || id == "insert.picture" || id == "insert.textFromFile"
 }
@@ -4693,8 +4693,8 @@ fn hostile_file_params_never_panic() {
     paths.push(format!("{}/../outside/new.docx", input.to_string_lossy()));
     paths.extend(["hostile-relative.docx", "hostile-relative", "", "\0", "a\0b.docx"].map(String::from));
 
-    // Every path alone; each of these also with every other kind of junk param. The numbers stay
-    // in range for time's sake: huge ones are #3720.
+    // Every path alone; each of these also with every other kind of junk param. The numbers that
+    // cost time (`copies`, `scale`) stay small: huge ones are #3720.
     let mut params: Vec<serde_json::Value> = hostile_junk().into();
     params.extend(paths.iter().map(|p| json!({"path": p})));
     for name in [
@@ -4721,6 +4721,8 @@ fn hostile_file_params_never_panic() {
     }
 
     let before = contents(&input);
+    let working_dir = std::path::Path::new(".");
+    let working_dir_before = contents(working_dir);
     let roots = crate::file_access::AutomationRoots::new(Some(&input), Some(&output)).unwrap();
     let confined = |s: &mut Session, id: &str, v: &serde_json::Value| crate::file_access::confine(roots.as_ref(), || s.run(id, v));
     for spec in reg.all() {
@@ -4728,7 +4730,7 @@ fn hostile_file_params_never_panic() {
             continue;
         }
         for v in &params {
-            let mut s = s();
+            let mut s = Session::new(crate::sample::sample_document());
             let r = confined(&mut s, spec.id, v);
             assert!(!caught_panic(&reg, &r), "{} panicked on {v}: {r:?}", spec.id);
             s.clamp_selection();
@@ -4738,8 +4740,8 @@ fn hostile_file_params_never_panic() {
 
     assert_eq!(contents(&input), before, "the read root is only read");
     assert_eq!(contents(&outside), Default::default(), "nothing outside the write root");
-    let strays = std::fs::read_dir(".").unwrap().map(|e| e.unwrap().file_name()).filter(|n| n.to_string_lossy().starts_with("hostile-relative"));
-    assert_eq!(strays.collect::<Vec<_>>(), Vec::<std::ffi::OsString>::new(), "nothing in the working directory");
+    // Every name counts: an empty path comes out as `.pdf` or `.dotx` here.
+    assert_eq!(contents(working_dir), working_dir_before, "nothing in the working directory");
 
     // The junk above met the files, not a closed door: usable files work through the same roots...
     let mut s = s();
