@@ -7245,6 +7245,10 @@ fn a_footer_table_offset_past_the_page_stays_on_the_page() {
 /// A document whose footer holds floating tables (`floats`: one `TableFloat` each, 40 pt wide
 /// cells), anchored to the paragraph and the column.
 fn footer_with_floating_tables(floats: &[wordcraft_doc::props::TableFloat], pages: usize, row_h: Option<f32>) -> Document {
+    floating_tables_in_part(wordcraft_doc::PartKind::Footer, floats, pages, row_h)
+}
+
+fn floating_tables_in_part(kind: wordcraft_doc::PartKind, floats: &[wordcraft_doc::props::TableFloat], pages: usize, row_h: Option<f32>) -> Document {
     let mut d = Document::from_text(&vec!["Body"; pages].join("\n"));
     if pages > 1 {
         d.format_paragraphs(&Pos::body(1, 0), &Pos::body(pages - 1, 0), &|p| p.page_break_before = Some(true)).unwrap();
@@ -7260,8 +7264,12 @@ fn footer_with_floating_tables(floats: &[wordcraft_doc::props::TableFloat], page
         t.props.float = Some(*f);
         blocks.push(std::sync::Arc::new(wordcraft_doc::Block::Table(t)));
     }
-    let id = d.add_part(wordcraft_doc::PartKind::Footer, blocks);
-    d.last_section.footers.default = Some(id);
+    let id = d.add_part(kind, blocks);
+    if kind == wordcraft_doc::PartKind::Footer {
+        d.last_section.footers.default = Some(id);
+    } else {
+        d.last_section.headers.default = Some(id);
+    }
     d
 }
 
@@ -7297,6 +7305,22 @@ fn footer_tables_that_may_not_overlap_sit_side_by_side_at_the_page_edge() {
     let l = lay(&footer_with_floating_tables(&[g, g, g], 1, Some(150.0)));
     let c: Vec<_> = l.pages[0].footer.iter().filter_map(|it| if let Placed::Cell { rect, .. } = it { Some(*rect) } else { None }).collect();
     assert!(c.iter().all(|r| (r.x - c[0].x).abs() < 0.01 && (r.y - c[0].y).abs() < 0.01), "one place: {c:?}");
+}
+
+#[test]
+fn header_tables_that_may_not_overlap_share_the_place_the_page_edge_gives_them() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    // Word, unlike in a footer, lays the second over the first.
+    let f = TableFloat { h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 300.0, y: 1000.0, overlap: false, ..Default::default() };
+    let l = lay(&floating_tables_in_part(wordcraft_doc::PartKind::Header, &[f, f], 1, Some(75.0)));
+    let h = l.pages[0].h;
+    let c: Vec<_> = l.pages[0].header.iter().filter_map(|it| if let Placed::Cell { rect, .. } = it { Some(*rect) } else { None }).collect();
+    assert_eq!(c.len(), 2, "two tables: {c:?}");
+    assert!(
+        c.iter().all(|r| r.bottom() <= h + 0.01 && (r.x - c[0].x).abs() < 0.01 && (r.y - c[0].y).abs() < 0.01),
+        "one place on the page ({h}): {c:?}"
+    );
 }
 
 #[test]

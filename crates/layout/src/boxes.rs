@@ -153,7 +153,8 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
     let (tx, ty) = match t.props.float {
         Some(float) => {
             let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(ctx, t) } else { 0.0 };
-            let (rect, area) = box_float_table_rect(frame, width, *y, &layout, &float, legacy, float_tables);
+            let in_footer = matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Footer));
+            let (rect, area) = box_float_table_rect(frame, width, *y, &layout, &float, (legacy, in_footer), float_tables);
             exclusions.push((area, false, None, WrapText::BothSides, true));
             float_tables.push(area);
             table_areas.push(area);
@@ -447,7 +448,7 @@ fn box_float_table_rect(
     y: f32,
     tl: &table::TableLayout,
     f: &TableFloat,
-    legacy: f32,
+    (legacy, in_footer): (f32, bool),
     float_tables: &[Rect],
 ) -> (Rect, Rect) {
     let h = tl.rows.iter().map(|r| r.height).sum::<f32>().clamp(0.0, 100_000.0);
@@ -500,12 +501,13 @@ fn box_float_table_rect(
     let clamped = r;
     let mut r = clear_of_float_tables(r, f, legacy, h_area.0, float_tables);
     // Cleared downwards it would leave the page again. Word (observed) keeps such a table where
-    // the page edge put it and moves it right, beside the table it met; it does not stack them up
+    // the page edge put it and, in a footer, moves it right, beside the table it met; it does not stack them up
     // or let one run off the bottom. It doesn't bring the table back onto the page across.
     if f.v_rel != Anchor::Page && f.v_rel != Anchor::Margin && frame.is_some_and(|fr| r.bottom() + fr.origin.1 > fr.sect.page_h + 0.01) {
         let [dl, dt, dr, db] = f.dist_from_text();
         let mut beside = Rect::new(clamped.x, clamped.y, clamped.w, clamped.h);
-        for _ in 0..64 {
+        // (In a header Word lays them over each other, observed, so only a footer moves aside.)
+        for _ in 0..if in_footer { 64 } else { 0 } {
             let area = beside.inset(-dl, -dt, -dr, -db);
             let Some(right) = float_tables.iter().filter(|o| !f.overlap && o.intersects(&area)).map(|o| o.right()).reduce(f32::max) else { break };
             beside.x = right + dl + 0.01;
