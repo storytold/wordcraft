@@ -827,7 +827,7 @@ fn formatting_revisions_read_as_the_spec_writes_them() {
 fn list_item_with_a_formatting_change_keeps_its_list_on_reject() {
     use model::{FmtChange, ListInfo};
     // A numbered item Alice centred (it was left-aligned), and a second plain item.
-    let li = Some(ListInfo { ordered: true, level: 0, start: 1 });
+    let li = Some(ListInfo { ordered: true, level: 0, start: 1, ..Default::default() });
     let mark = RevMark { author: "Alice".into(), date: "2024-03-15T10:30:00Z".into(), id: None };
     let old = Para { list: li, align: Some(Align::Left), ..Default::default() };
     let mut item = Para { list: li, align: Some(Align::Center), fmt_change: Some(Box::new(FmtChange { mark, old })), ..Default::default() };
@@ -857,7 +857,7 @@ fn paragraph_that_was_a_list_item_gets_its_old_list_back_on_reject() {
     use model::{FmtChange, ListInfo};
     // Alice took the paragraph out of a numbered list: it is no list item now, but was one.
     let mark = RevMark { author: "Alice".into(), date: "2024-03-15T10:30:00Z".into(), id: None };
-    let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1 }), ..Default::default() };
+    let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1, ..Default::default() }), ..Default::default() };
     let mut item = Para { fmt_change: Some(Box::new(FmtChange { mark, old })), ..Default::default() };
     item.push_text("Item", &Fmt::default());
     let flow = Flow { blocks: vec![FBlock::Para(item)], meta: Meta::default() };
@@ -873,9 +873,9 @@ fn paragraph_that_was_a_list_item_gets_its_old_list_back_on_reject() {
 fn numbered_item_made_bulleted_gets_its_numbered_list_back_on_reject() {
     use model::{FmtChange, ListInfo};
     let mark = RevMark { author: "Alice".into(), date: "2024-03-15T10:30:00Z".into(), id: None };
-    let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1 }), ..Default::default() };
+    let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1, ..Default::default() }), ..Default::default() };
     let mut item = Para {
-        list: Some(ListInfo { ordered: false, level: 0, start: 1 }),
+        list: Some(ListInfo { ordered: false, level: 0, start: 1, ..Default::default() }),
         fmt_change: Some(Box::new(FmtChange { mark, old })),
         ..Default::default()
     };
@@ -1671,4 +1671,35 @@ fn rtf_backslash_space_and_special_breaks() {
     let doc = import(rtf).unwrap();
     let p = doc.body.first().unwrap().as_para().unwrap();
     assert_eq!(p.text, "A\u{00A0}B\u{00A0}C\u{200B}D\nE\u{000C}F");
+}
+
+#[test]
+fn compound_borders_round_trip() {
+    use wordcraft_doc::props::BorderStyle;
+    let lines = [
+        ("brdrtnthsg", BorderStyle::ThinThickSmallGap),
+        ("brdrthtnsg", BorderStyle::ThickThinSmallGap),
+        ("brdrtnthtnsg", BorderStyle::ThinThickThinSmallGap),
+        ("brdrtnthmg", BorderStyle::ThinThickMediumGap),
+        ("brdrthtnmg", BorderStyle::ThickThinMediumGap),
+        ("brdrtnthtnmg", BorderStyle::ThinThickThinMediumGap),
+        ("brdrtnthlg", BorderStyle::ThinThickLargeGap),
+        ("brdrthtnlg", BorderStyle::ThickThinLargeGap),
+        ("brdrtnthtnlg", BorderStyle::ThinThickThinLargeGap),
+    ];
+    let body: String = lines.iter().map(|(w, _)| format!("\\pard\\brdrt\\{w}\\brdrw30 {w}\\par\n")).collect();
+    let rtf = format!("{{\\rtf1\\ansi\n{body}}}");
+    let tops = |d: &wordcraft_doc::Document| -> Vec<Option<BorderStyle>> {
+        d.body
+            .iter()
+            .filter_map(|b| b.as_para())
+            .filter(|p| !p.plain_text().is_empty())
+            .map(|p| p.props.borders.and_then(|b| b.top).map(|t| t.style))
+            .collect()
+    };
+    let want: Vec<Option<BorderStyle>> = lines.iter().map(|(_, s)| Some(*s)).collect();
+    let d = import(rtf.as_bytes()).unwrap();
+    assert_eq!(tops(&d), want);
+    let back = import(export(&d).as_bytes()).unwrap();
+    assert_eq!(tops(&back), want);
 }
