@@ -470,7 +470,8 @@ impl Document {
     /// [`IdSpace::default`]).
     pub fn set_id_space(&mut self, space: IdSpace) {
         self.id_space = space;
-        self.numbering.id_space = space;
+        // Copy-on-write: a numbering shared with an undo snapshot is copied first.
+        Arc::make_mut(&mut self.numbering).id_space = space;
     }
 
     /// Count words like Word's status bar ([`crate::count_words`], plus generated numbered-list labels).

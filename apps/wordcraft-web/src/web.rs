@@ -38,10 +38,19 @@ pub fn start() {
         let live = if bridge.is_none() { live_mode() } else { None };
         let dirty = Rc::new(Cell::new(false));
         let saves = AsyncSaves::default();
-        // Inside craft-live the room keeps every edit it has: the page asks before closing only
-        // while edits wait for the connection ([`LiveShell::step`] sets `unsent`).
+        // Inside craft-live the room keeps every edit it has: while the document is in the room,
+        // the page asks before closing only while edits wait for the connection. Outside the room
+        // (before it starts, after it ends) unsaved changes count as usual. [`LiveShell::step`]
+        // sets both flags.
         let unsent = Rc::new(Cell::new(false));
-        let guarded = if live.is_some() { unsent.clone() } else { dirty.clone() };
+        let in_room = Rc::new(Cell::new(false));
+        let guarded: Box<dyn Fn() -> bool> = if live.is_some() {
+            let (unsent, in_room, dirty) = (unsent.clone(), in_room.clone(), dirty.clone());
+            Box::new(move || unsent.get() || (dirty.get() && !in_room.get()))
+        } else {
+            let dirty = dirty.clone();
+            Box::new(move || dirty.get())
+        };
         if bridge.is_none()
             && let Err(e) = guard_unload(guarded, saves.clone())
         {
@@ -92,7 +101,7 @@ pub fn start() {
                                 HostRequest::Close => wordcraft_web::live::Event::Close,
                             })
                         }));
-                        LiveShell { io: live_io::LiveIo::new(events), live: None, config, started: false, unsent }
+                        LiveShell { io: live_io::LiveIo::new(events), live: None, config, started: false, unsent, in_room }
                     });
                     // Pasted pictures wait apart from dropped files: the app inserts one only when the page is the edit target (#1349).
                     app.services.pasted = Some(pasted);
@@ -173,11 +182,18 @@ struct LiveShell {
     started: bool,
     /// Edits wait for the connection: the leave-page guard asks.
     unsent: Rc<Cell<bool>>,
+    /// The document is in a live room: its unsaved changes are the room's, not the guard's.
+    in_room: Rc<Cell<bool>>,
 }
 
 impl LiveShell {
     /// Feeds what happened to the session and carries out what it asks.
     fn step(&mut self, app: &mut WordApp, events: Vec<wordcraft_web::live::Event>) {
+        self.run(app, events);
+        self.in_room.set(app.session.active_room().is_some());
+    }
+
+    fn run(&mut self, app: &mut WordApp, events: Vec<wordcraft_web::live::Event>) {
         use wordcraft_web::live::{Config, Event, Live, Phase};
         let now = js_sys::Date::now().max(0.0) as u64;
         if self.live.is_none() {
@@ -517,11 +533,11 @@ fn animations_enabled() -> Box<dyn Fn() -> Option<bool>> {
 /// Closing, reloading or leaving the tab with unsaved changes asks first. Browsers show their own
 /// confirmation (a page can only ask for it), so there is no Save button: Cancel, then File › Save.
 /// `dirty`: unsaved changes, or in craft-live mode edits not sent to the room yet.
-fn guard_unload(dirty: Rc<Cell<bool>>, saves: AsyncSaves) -> Result<(), String> {
+fn guard_unload(dirty: Box<dyn Fn() -> bool>, saves: AsyncSaves) -> Result<(), String> {
     let window = web_sys::window().ok_or("no window")?;
     let on_unload = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::BeforeUnloadEvent)>::new(move |e: web_sys::BeforeUnloadEvent| {
         // A save still in the browser's picker hasn't written anything yet.
-        if dirty.get() || saves.pending() > 0 {
+        if dirty() || saves.pending() > 0 {
             e.prevent_default();
             // Older browsers ask only when `returnValue` is set.
             e.set_return_value("unsaved changes");
