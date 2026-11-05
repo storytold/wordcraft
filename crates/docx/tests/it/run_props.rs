@@ -80,9 +80,10 @@ fn conditional_table_flags_survive_two_saves_in_all_property_locations() {
         <w:style w:type="paragraph" w:styleId="ParaFlags"><w:pPr><w:cnfStyle w:val="010000000000" w:lastRow="0"/></w:pPr></w:style>
     "#;
     let body = r#"
-        <w:p><w:pPr><w:pStyle w:val="ParaFlags"/><w:cnfStyle w:firstColumn="0"/><w:outlineLvl w:val="2"/></w:pPr>
+        <w:p><w:pPr><w:pStyle w:val="ParaFlags"/><w:outlineLvl w:val="2"/></w:pPr>
           <w:r><w:rPr><w:rStyle w:val="RunFlags"/><w:cnfStyle w:val="000100000000" w:lastColumn="0"/></w:rPr><w:t>flags</w:t></w:r>
         </w:p>
+        <w:p><w:pPr><w:outlineLvl w:val="2"/><w:cnfStyle w:val="101010101010" w:firstRow="1" w:lastRow="0"/></w:pPr><w:r><w:t>direct flags</w:t></w:r></w:p>
         <w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid>
           <w:tr><w:trPr><w:cnfStyle w:val="000010000000" w:evenVBand="1"/></w:trPr>
             <w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/><w:cnfStyle w:val="000001000000" w:firstRowLastColumn="0"/></w:tcPr>
@@ -92,8 +93,12 @@ fn conditional_table_flags_survive_two_saves_in_all_property_locations() {
         </w:tbl>
     "#;
     let mut doc = wordcraft_docx::read(&docx(body, styles)).unwrap();
-    let paragraph = doc.body.iter().find_map(|b| b.as_para()).unwrap();
-    assert_eq!(paragraph.props.cnf_style.as_ref().and_then(|c| c.first_column), Some(false));
+    let mut paragraphs = doc.body.iter().filter_map(|b| b.as_para());
+    let paragraph = paragraphs.next().unwrap();
+    let direct_paragraph = paragraphs.next().unwrap();
+    assert_eq!(paragraph.props.cnf_style, None);
+    assert_eq!(direct_paragraph.props.cnf_style.as_ref().and_then(|c| c.first_row), Some(true));
+    assert_eq!(direct_paragraph.props.cnf_style.as_ref().and_then(|c| c.last_row), Some(false));
     assert_eq!(paragraph.runs[0].props.style.as_deref(), Some("RunFlags"));
     assert_eq!(paragraph.runs[0].props.cnf_style.as_ref().and_then(|c| c.last_column), Some(false));
     assert_eq!(doc.styles.get("RunFlags").unwrap().chr.cnf_style.as_ref().and_then(|c| c.first_row), Some(true));
@@ -113,10 +118,19 @@ fn conditional_table_flags_survive_two_saves_in_all_property_locations() {
         assert!(style_xml.contains(r#"w:cnfStyle w:val="100000000000" w:firstRow="1" w:oddVBand="0""#), "pass {pass}: {style_xml}");
         assert!(style_xml.contains(r#"w:cnfStyle w:val="010000000000" w:lastRow="0""#), "pass {pass}: {style_xml}");
         let document_xml = part(&out, "word/document.xml");
-        let ppr = document_xml.split_once("<w:pPr>").unwrap().1.split_once("</w:pPr>").unwrap().0;
-        assert!(ppr.find("w:outlineLvl").unwrap() < ppr.find("w:cnfStyle").unwrap(), "pass {pass}: {ppr}");
+        let direct_ppr = document_xml
+            .split("<w:p>")
+            .find(|paragraph| paragraph.contains("direct flags"))
+            .unwrap()
+            .split_once("<w:pPr>")
+            .unwrap()
+            .1
+            .split_once("</w:pPr>")
+            .unwrap()
+            .0;
+        assert!(direct_ppr.find("w:outlineLvl").unwrap() < direct_ppr.find("w:cnfStyle").unwrap(), "pass {pass}: {direct_ppr}");
+        assert!(direct_ppr.contains(r#"w:cnfStyle w:val="101010101010" w:firstRow="1" w:lastRow="0""#), "pass {pass}: {direct_ppr}");
         for flag in [
-            r#"w:cnfStyle w:firstColumn="0""#,
             r#"w:cnfStyle w:val="000100000000" w:lastColumn="0""#,
             r#"w:cnfStyle w:val="000010000000" w:evenVBand="1""#,
             r#"w:cnfStyle w:val="000001000000" w:firstRowLastColumn="0""#,
@@ -124,5 +138,8 @@ fn conditional_table_flags_survive_two_saves_in_all_property_locations() {
             assert!(document_xml.contains(flag), "pass {pass}: missing {flag} in {document_xml}");
         }
         doc = wordcraft_docx::read(&out).unwrap();
+        let direct_paragraph = doc.body.iter().filter_map(|b| b.as_para()).nth(1).unwrap();
+        assert_eq!(direct_paragraph.props.cnf_style.as_ref().and_then(|c| c.first_row), Some(true), "pass {pass}");
+        assert_eq!(direct_paragraph.props.cnf_style.as_ref().and_then(|c| c.last_row), Some(false), "pass {pass}");
     }
 }
