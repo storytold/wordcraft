@@ -651,11 +651,11 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
         match remove_cue(resp.hovered() || resp.has_focus(), xresp.hovered() || xresp.has_focus()) {
             RemoveCue::Hidden => {}
             RemoveCue::Dim => {
-                ui.painter().text(xr.center(), Align2::CENTER_CENTER, "×", medium(15.0), t.text_dim);
+                ui.painter().text(xr.center(), egui::Align2::CENTER_CENTER, "×", medium(15.0), t.text_dim);
             }
             RemoveCue::Strong => {
                 ui.painter().rect_filled(xr, 4.0, t.hover);
-                ui.painter().text(xr.center(), Align2::CENTER_CENTER, "×", medium(15.0), t.text);
+                ui.painter().text(xr.center(), egui::Align2::CENTER_CENTER, "×", medium(15.0), t.text);
             }
         }
         if resp.clicked() {
