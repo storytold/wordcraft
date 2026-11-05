@@ -1085,6 +1085,11 @@ fn heavy_geometry_still_leaves_the_bitmaps_a_cacheable_size() {
     let mut c: MediaCache<u8> = MediaCache { map: Default::default(), bytes: 0 };
     c.insert("heavy", &src, 7, size + geometry);
     assert_eq!(c.get("heavy", &src), Some(7));
+    // Just under and just over the eighth: both shrink the bitmap to a positive size, none to nothing.
+    for g in [CACHE_BYTES / 8 - 1, CACHE_BYTES / 8, CACHE_BYTES / 8 + 1] {
+        let size = bytes(&fit_cache(vec![pm(6000, 6000)], g));
+        assert!(size > 0 && size < 6000 * 6000 * 4 && size + g <= CACHE_BYTES / 4, "geometry {g}: {size} bytes");
+    }
     // Geometry that takes the whole budget leaves nothing to shrink to: the bitmap stays as it is.
     let full = fit_cache(vec![pm(6000, 6000)], CACHE_BYTES);
     assert_eq!(bytes(&full), 6000 * 6000 * 4);

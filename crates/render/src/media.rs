@@ -183,11 +183,12 @@ fn geometry_bytes(pic: &Picture) -> usize {
     pic.items
         .iter()
         .map(|it| {
-            slot + match it {
-                Item::Path { segs, .. } => segs.len() * std::mem::size_of::<Seg>(),
-                Item::Bitmap { .. } => std::mem::size_of::<Item>(),
-                Item::Text(t) => t.text.len() + t.dx.len() * 4,
-            }
+            slot + std::mem::size_of::<Item>()
+                + match it {
+                    Item::Path { segs, .. } => segs.len() * std::mem::size_of::<Seg>(),
+                    Item::Bitmap { .. } => 0,
+                    Item::Text(t) => t.text.len() + t.dx.len() * 4,
+                }
         })
         .sum()
 }
@@ -229,8 +230,8 @@ fn build_vector(bytes: &[u8]) -> Option<Vector> {
 /// bitmaps are box-averaged down to an eighth of the budget between them, in proportion to their
 /// size, as large raster pictures are (#3665, which uses half). An eighth because the cache starts
 /// over when full: several huge pictures on screen together must fit side by side, and not clear
-/// the small ones with them. Geometry that is itself an eighth or more leaves the bitmaps what is
-/// left of the whole budget instead. A picture that still cannot fit after shrinking stays uncached,
+/// the small ones with them. Geometry that is itself an eighth or more still leaves the bitmaps a
+/// sixteenth, as long as the whole budget has room for it. A picture that still cannot fit after shrinking stays uncached,
 /// as before. Pictures within the budget keep their full resolution. Printing (`render_page`) draws
 /// the shrunk bitmaps too, as it does large raster pictures; PDF export parses the metafile itself
 /// and is unaffected.
@@ -241,9 +242,11 @@ pub(crate) fn fit_cache(mut pixmaps: Vec<Option<Pixmap>>, geometry: usize) -> Ve
     if total.saturating_add(fixed).saturating_add(geometry) <= CACHE_BYTES {
         return pixmaps;
     }
+    // The bitmaps get what is left of an eighth, but never less than a sixteenth (so the allowance does
+    // not drop to nothing as geometry reaches the eighth) and never more than the whole budget leaves.
     let target = CACHE_BYTES / 8;
-    let budget = if geometry < target { target } else { CACHE_BYTES };
-    let room = budget.saturating_sub(geometry).saturating_sub(fixed) / 4;
+    let allowance = target.saturating_sub(geometry).max(target / 2).min(CACHE_BYTES.saturating_sub(geometry));
+    let room = allowance.saturating_sub(fixed) / 4;
     for pm in pixmaps.iter_mut().flatten() {
         // This bitmap's share of the pixels that fit.
         let share = (room as u128 * pixels(pm) as u128 / total.max(1) as u128) as u64;
