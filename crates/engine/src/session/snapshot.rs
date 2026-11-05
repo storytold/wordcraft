@@ -1,6 +1,6 @@
 use super::doc_state::{MAX_UNDO, Selection, doc_bib_style};
 use super::snapshot_types::{EditSnapshot, SNAPSHOT_HEAD};
-use super::*;
+use super::{Document, Session, StoryRef, next_document_id};
 
 impl Session {
     /// Replace the document (open/new).
@@ -31,6 +31,7 @@ impl Session {
         self.hf_return = None;
         self.go_back_step = 0;
         self.view.outline.collapsed.clear();
+        self.view.read_page_color = self.prefs.read_page_color;
         // A copy the replaced document kept stays in the recovery list.
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -258,7 +259,7 @@ impl Session {
         }
         self.rev = rev;
         for slot in &mut self.layout {
-            if slot.as_ref().is_some_and(|l| l.0 != rev) {
+            if slot.as_ref().is_some_and(|l| l.0.0 != rev) {
                 *slot = None;
             }
         }

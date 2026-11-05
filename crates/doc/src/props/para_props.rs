@@ -1,6 +1,6 @@
 use super::char_props::{NumChange, PropChange};
 use super::color::Rgb;
-use super::*;
+use super::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -22,6 +22,40 @@ impl Align {
             Align::Left if rtl => Align::Right,
             Align::Right if rtl => Align::Left,
             a => a,
+        }
+    }
+}
+
+/// Vertical alignment of characters of different sizes on a line (`w:textAlignment`,
+/// ECMA-376 §17.3.1.39).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextAlignment {
+    Auto,
+    Top,
+    Center,
+    Baseline,
+    Bottom,
+}
+
+impl TextAlignment {
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            TextAlignment::Auto => "auto",
+            TextAlignment::Top => "top",
+            TextAlignment::Center => "center",
+            TextAlignment::Baseline => "baseline",
+            TextAlignment::Bottom => "bottom",
+        }
+    }
+    pub fn from_ooxml(s: &str) -> Option<TextAlignment> {
+        match s {
+            "auto" => Some(TextAlignment::Auto),
+            "top" => Some(TextAlignment::Top),
+            "center" => Some(TextAlignment::Center),
+            "baseline" => Some(TextAlignment::Baseline),
+            "bottom" => Some(TextAlignment::Bottom),
+            _ => None,
         }
     }
 }
@@ -107,6 +141,18 @@ pub enum BorderStyle {
     Triple,
     DotDash,
     Wave,
+    /// The compound lines of thin and thick strokes (`thinThickSmallGap` to
+    /// `thinThickThinLargeGap`), kept so a file writes back the line it read; drawn as a single
+    /// line of the border's width.
+    ThinThickSmallGap,
+    ThickThinSmallGap,
+    ThinThickThinSmallGap,
+    ThinThickMediumGap,
+    ThickThinMediumGap,
+    ThinThickThinMediumGap,
+    ThinThickLargeGap,
+    ThickThinLargeGap,
+    ThinThickThinLargeGap,
 }
 
 impl BorderStyle {
@@ -121,6 +167,15 @@ impl BorderStyle {
             BorderStyle::Triple => "triple",
             BorderStyle::DotDash => "dotDash",
             BorderStyle::Wave => "wave",
+            BorderStyle::ThinThickSmallGap => "thinThickSmallGap",
+            BorderStyle::ThickThinSmallGap => "thickThinSmallGap",
+            BorderStyle::ThinThickThinSmallGap => "thinThickThinSmallGap",
+            BorderStyle::ThinThickMediumGap => "thinThickMediumGap",
+            BorderStyle::ThickThinMediumGap => "thickThinMediumGap",
+            BorderStyle::ThinThickThinMediumGap => "thinThickThinMediumGap",
+            BorderStyle::ThinThickLargeGap => "thinThickLargeGap",
+            BorderStyle::ThickThinLargeGap => "thickThinLargeGap",
+            BorderStyle::ThinThickThinLargeGap => "thinThickThinLargeGap",
         }
     }
     pub fn from_ooxml(s: &str) -> BorderStyle {
@@ -133,6 +188,15 @@ impl BorderStyle {
             "triple" => BorderStyle::Triple,
             "dotDash" | "dotDotDash" => BorderStyle::DotDash,
             "wave" | "doubleWave" => BorderStyle::Wave,
+            "thinThickSmallGap" => BorderStyle::ThinThickSmallGap,
+            "thickThinSmallGap" => BorderStyle::ThickThinSmallGap,
+            "thinThickThinSmallGap" => BorderStyle::ThinThickThinSmallGap,
+            "thinThickMediumGap" => BorderStyle::ThinThickMediumGap,
+            "thickThinMediumGap" => BorderStyle::ThickThinMediumGap,
+            "thinThickThinMediumGap" => BorderStyle::ThinThickThinMediumGap,
+            "thinThickLargeGap" => BorderStyle::ThinThickLargeGap,
+            "thickThinLargeGap" => BorderStyle::ThickThinLargeGap,
+            "thinThickThinLargeGap" => BorderStyle::ThinThickThinLargeGap,
             _ => BorderStyle::Single,
         }
     }
@@ -182,6 +246,11 @@ impl Borders {
     }
     pub fn any_visible(&self) -> bool {
         [self.top, self.left, self.bottom, self.right, self.between, self.inside_v].iter().flatten().any(Border::is_visible)
+    }
+    /// A side is drawn, or a paragraph side without a line holds padding (ODF's, which keeps
+    /// its room in LibreOffice's layout).
+    pub fn takes_room(&self) -> bool {
+        self.any_visible() || [self.top, self.left, self.bottom, self.right].iter().flatten().any(|b| b.space.is_finite() && b.space > 0.0)
     }
     /// Apply every `Some` side of `patch` on top of `self`.
     pub fn overlay(&mut self, patch: &Borders) {
@@ -363,14 +432,31 @@ pub struct ParaProps {
     /// `w:snapToGrid`: lines snap to the section's document grid. Unset = on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snap_to_grid: Option<bool>,
+    /// `w:textAlignment`: how characters of different sizes line up on a line. Kept for the
+    /// file (not laid out yet); Word sizes a line by it, so dropping it changes Word's pages.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_alignment: Option<TextAlignment>,
 }
 
 impl ParaProps {
     pub fn overlay(&mut self, patch: &ParaProps) {
-        overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars, space_before, space_after, space_before_auto, space_after_auto, line_spacing,
-            contextual_spacing, mirror_indents, keep_next, keep_lines, page_break_before, widow_control, outline_level, numbering, tabs, shading, borders,
-            suppress_hyphens, suppress_line_numbers, bidi, drop_cap, drop_cap_margin, drop_cap_distance, drop_cap_font, frame, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn,
-            snap_to_grid);
+        self.overlay_layout(patch);
+        self.overlay_pagination(patch);
+        self.overlay_script_layout(patch);
+    }
+
+    fn overlay_layout(&mut self, patch: &ParaProps) {
+        overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars,
+            space_before, space_after, space_before_auto, space_after_auto, line_spacing, contextual_spacing, mirror_indents, tabs, shading, borders);
+    }
+
+    fn overlay_pagination(&mut self, patch: &ParaProps) {
+        overlay_fields!(self, patch; keep_next, keep_lines, page_break_before, widow_control, outline_level, numbering, suppress_hyphens, suppress_line_numbers,
+            drop_cap, drop_cap_margin, drop_cap_distance, drop_cap_font, frame, snap_to_grid);
+    }
+
+    fn overlay_script_layout(&mut self, patch: &ParaProps) {
+        overlay_fields!(self, patch; bidi, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn, text_alignment);
     }
     pub fn overlaid(mut self, patch: &ParaProps) -> ParaProps {
         self.overlay(patch);

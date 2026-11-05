@@ -1,4 +1,4 @@
-use super::*;
+use super::{Deserialize, Rgb, Serialize, math, section, styles};
 
 /// A bibliography source.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -10,6 +10,10 @@ pub struct Source {
     pub kind: String,
     /// "Last, First; Last, First"
     pub author: String,
+    /// A corporate author ("World Health Organization"): written as it is, never split into
+    /// names, and in place of `author` when set (Create Source › Corporate Author, `b:Corporate`,
+    /// #4848).
+    pub corporate: String,
     pub title: String,
     pub year: String,
     pub publisher: String,
@@ -39,6 +43,13 @@ pub struct CustomProp {
     /// the property's XML content kept verbatim (vectors, blobs).
     pub kind: String,
     pub value: String,
+    /// Bookmark associated with this property (`linkTarget`), retained without evaluating it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_target: Option<String>,
+    /// Declared in an ODF document as a user field (§7.4.7 `text:user-field-decl`) rather than
+    /// a document property: written back as one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub odf_user_field: bool,
 }
 
 /// Document properties (File › Info).
@@ -155,6 +166,23 @@ pub struct Settings {
     /// comments and tracked changes are saved without `w:date`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub remove_date_time: bool,
+    /// The document was opened from ODF: the standard's rules that differ from Word's apply as
+    /// it is laid out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub odf: Option<OdfLayout>,
+}
+
+/// A document opened from ODF, for the layout: rules of the standard that differ from Word's (a
+/// paragraph's padding takes room on a side without a border, XSL's box model) apply, and what
+/// the file says about laying it out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct OdfLayout {
+    /// Tab stops are measured from the paragraph's left indent, default ones too (LibreOffice's
+    /// `TabsRelativeToIndent` in the file; from the margin when it doesn't say). The document's
+    /// explicit stops are held from the margin either way; the default ones are counted from the
+    /// indent.
+    pub tabs_from_indent: bool,
 }
 
 /// A saved zoom: a percentage, or a fit mode (the percentage it last came to).
@@ -300,6 +328,7 @@ impl Default for Settings {
             zoom: None,
             remove_personal_info: false,
             remove_date_time: false,
+            odf: None,
         }
     }
 }

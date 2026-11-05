@@ -1,5 +1,5 @@
 #[cfg(not(target_arch = "wasm32"))]
-mod sysfonts;
+pub(crate) mod sysfonts;
 
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
@@ -98,12 +98,14 @@ const THAI_RUN: &str = "[D] น้ำ ค่ำ ปั้น ฝั่ง ปู
 #[test]
 fn a_thai_run_with_latin_falls_back_to_one_face() {
     let db = FontDb::global();
-    if db.fallback_for('น', 0).is_none() {
-        eprintln!("skipped: no Thai font installed");
+    let chars: Vec<char> = THAI_RUN.chars().filter(|c| !c.is_whitespace()).collect();
+    // Needs a Thai font with Latin letters and digits (Tahoma, Leelawadee UI, Thonburi, the
+    // TLWG fonts…): Noto Sans Thai alone has none, so no face covers the run.
+    if !chars.iter().all(|c| crate::word::resolve("TH Sarabun New", false, false).face.covers(*c)) {
+        eprintln!("skipped: no Thai font with Latin letters installed");
         return;
     }
     let latin = db.face(FALLBACK_FAMILY, "Regular");
-    let chars: Vec<char> = THAI_RUN.chars().filter(|c| !c.is_whitespace()).collect();
     let f = db.fallback_for_run(&chars, latin.id(), false, false).expect("one face covers the run");
     assert_ne!(f.id, latin.id);
     for c in &chars {
@@ -243,15 +245,24 @@ fn postscript_names_select_faces() {
 /// A variable font holding just `name` and `fvar` tables: family "Var Test", one `wght` axis
 /// and `instances` named instances, each with its own style name.
 fn variable_font(instances: u16) -> Vec<u8> {
-    let mut names: Vec<(u16, String)> = vec![(1, "Var Test".into()), (2, "Regular".into())];
-    names.extend((0..instances).map(|i| (256 + i, format!("Style {i}"))));
+    variable_font_named("Var Test", &[], instances)
+}
+
+/// [`variable_font`] with family `family`, and family names in other languages `local`
+/// (Windows language ids).
+fn variable_font_named(family: &str, local: &[(u16, &str)], instances: u16) -> Vec<u8> {
+    let mut names: Vec<(u16, u16, String)> = vec![(0x409, 1, family.into()), (0x409, 2, "Regular".into())];
+    names.extend(local.iter().map(|(lang, n)| (*lang, 1, n.to_string())));
+    names.extend((0..instances).map(|i| (0x409, 256 + i, format!("Style {i}"))));
+    // Records sorted by language, then name id.
+    names.sort_by_key(|(lang, id, _)| (*lang, *id));
     let mut name = vec![0, 0];
     name.extend_from_slice(&(names.len() as u16).to_be_bytes());
     name.extend_from_slice(&(6 + 12 * names.len() as u16).to_be_bytes());
     let mut strings = Vec::new();
-    for (id, text) in &names {
+    for (lang, id, text) in &names {
         let utf16: Vec<u8> = text.encode_utf16().flat_map(u16::to_be_bytes).collect();
-        for v in [3, 1, 0x409, *id, utf16.len() as u16, strings.len() as u16] {
+        for v in [3, 1, *lang, *id, utf16.len() as u16, strings.len() as u16] {
             name.extend_from_slice(&v.to_be_bytes());
         }
         strings.extend(utf16);
@@ -353,6 +364,27 @@ fn the_draw_that_turns_hinting_off_is_redrawn_unhinted_for_the_outline_cache() {
     // And what the cache keeps is that outline.
     let db = FontDb::with_font_dirs(vec![]);
     assert_eq!(db.outline(&face, gid).elements(), tripping.path.elements());
+}
+
+#[test]
+fn long_names_are_cut_before_faces_copy_them() {
+    // A name record can hold 64K characters, and every named instance copies the family and its
+    // localized names: the names are cut when read, so the copies stay small.
+    let long = "W".repeat(14_000);
+    let local = "Ж".repeat(14_000);
+    let font = variable_font_named(&long, &[(0x419, &local)], 32);
+    let faces = font_faces(&skrifa::FontRef::new(&font).unwrap(), 0);
+    assert_eq!(faces.len(), 32);
+    for f in &faces {
+        assert_eq!(f.family.chars().count(), MAX_NAME_CHARS);
+        assert!(f.legacy.chars().count() <= MAX_NAME_CHARS + " Style 31".len(), "{}", f.legacy.len());
+        assert_eq!(f.local.len(), 1);
+        assert_eq!(f.local[0].name.chars().count(), MAX_NAME_CHARS);
+        assert_eq!(f.local[0].english, f.family);
+    }
+    // Short names are kept whole.
+    let faces = font_faces(&skrifa::FontRef::new(&variable_font_named("Var Test", &[(0x419, "Вар Тест")], 2)).unwrap(), 0);
+    assert_eq!((faces[0].family.as_str(), faces[0].local[0].name.as_str()), ("Var Test", "Вар Тест"));
 }
 
 #[test]
