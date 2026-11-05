@@ -99,28 +99,29 @@ fn recent_harness(recent: &[String], size: egui::Vec2) -> egui_kittest::Harness<
     h
 }
 
+/// Collects every text shape, including those nested in shape lists.
+fn collect_text<'a>(s: &'a egui::Shape, out: &mut Vec<&'a egui::epaint::TextShape>) {
+    match s {
+        egui::Shape::Text(ts) => out.push(ts),
+        egui::Shape::Vec(v) => {
+            for child in v {
+                collect_text(child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Returns the painted bounds and clip rect of the Recent entry's name and path texts, and
 /// whether each ends with an ellipsis.
 fn recent_text_bounds(h: &egui_kittest::Harness<'_, WordApp>) -> Vec<(String, egui::Rect, egui::Rect, bool)> {
-    /// Collects every text shape, including those nested in shape lists.
-    fn collect_text<'a>(s: &'a egui::Shape, out: &mut Vec<&'a egui::epaint::TextShape>) {
-        match s {
-            egui::Shape::Text(ts) => out.push(ts),
-            egui::Shape::Vec(v) => {
-                for child in v {
-                    collect_text(child, out);
-                }
-            }
-            _ => {}
-        }
-    }
     let mut found = Vec::new();
     for cs in &h.output().shapes {
         let mut texts = Vec::new();
         collect_text(&cs.shape, &mut texts);
         for ts in texts {
             let text = ts.galley.text();
-            if text.starts_with("C:/Users/Someone") || text.starts_with("AVeryLongDocumentName") {
+            if text.contains("C:/Users/Someone") || text.contains("AVeryLongDocumentName") {
                 let ellipsis = ts.galley.rows.first().and_then(|row| row.glyphs.last()).is_some_and(|g| g.chr == '\u{2026}');
                 found.push((text.to_owned(), ts.visual_bounding_rect(), cs.clip_rect, ellipsis));
             }
@@ -209,6 +210,124 @@ fn recent_rows_describe_their_full_path_without_hover_or_focus() {
     for (name, path) in ["one.docx", "two.docx"].iter().zip(&paths) {
         let described = h.get_by_label(name).accesskit_node().description();
         assert_eq!(described.as_deref(), Some(crate::i18n::isolate_path(path).as_str()), "{name} must describe its full path");
+    }
+}
+
+/// A right-to-left language for the Recent tests. `rtl` goes by its code, so it needs no Arabic font.
+fn recent_right_to_left() -> crate::i18n::Lang {
+    crate::i18n::fixture_lang("ar", "\tHome\tHome\n")
+}
+
+/// The Recent list alone with one `path`, in `lang`, in a window 1000 wide. `start` points on the
+/// side its rows start from and `end` points on the other side are out of view, as on a page
+/// scrolled sideways or wider than the window.
+fn recent_list_cut(path: &str, lang: crate::i18n::Lang, start: f32, end: f32) -> egui_kittest::Harness<'static, WordApp> {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.recent = vec![path.to_string()];
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 500.0)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            crate::i18n::set_current(lang);
+            crate::rtl::sync(&ctx);
+            let mut clip = ui.clip_rect();
+            let (left, right) = if crate::rtl::on() { (end, start) } else { (start, end) };
+            clip.min.x += left;
+            clip.max.x -= right;
+            ui.set_clip_rect(clip);
+            super::open_list(app, ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h
+}
+
+/// #5212: text runs from its row's start, so a row whose start is out of view has as much room
+/// for its text as before. Only the far end stops at the visible edge.
+#[test]
+fn recent_text_keeps_its_room_when_its_row_starts_out_of_view() {
+    let name = format!("{}.docx", "AVeryLongDocumentName".repeat(8));
+    let path = format!("C:/Users/Someone/{name}");
+    for lang in [crate::i18n::Lang::EN, recent_right_to_left()] {
+        let widths = |cut| recent_text_bounds(&recent_list_cut(&path, lang, cut, 0.0)).iter().map(|t| t.1.width().round()).collect::<Vec<_>>();
+        let whole = widths(0.0);
+        assert_eq!(whole.len(), 2, "both lines must be painted: {whole:?}");
+        assert_eq!(widths(500.0), whole, "the cut must not take room from the text");
+    }
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+/// #5212: a row running past the visible area stops its text there, in either direction, with
+/// its ellipsis in view.
+#[test]
+fn recent_text_stops_at_the_visible_edge_in_either_direction() {
+    let name = format!("{}.docx", "AVeryLongDocumentName".repeat(8));
+    let path = format!("C:/Users/Someone/{name}");
+    for lang in [crate::i18n::Lang::EN, recent_right_to_left()] {
+        let texts = recent_text_bounds(&recent_list_cut(&path, lang, 0.0, 400.0));
+        assert_eq!(texts.len(), 2, "both lines must be painted");
+        for (text, bounds, clip, ellipsis) in &texts {
+            assert!(
+                bounds.left() >= clip.left() - 0.5 && bounds.right() <= clip.right() + 0.5,
+                "{text} must end inside the visible area: {bounds:?} in {clip:?}"
+            );
+            assert!(ellipsis, "{text} must end in an ellipsis");
+        }
+    }
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+/// #5212: multibyte text is cut between its characters and stays in its row, starting at the
+/// side the row starts from, in either direction.
+#[test]
+fn recent_shortens_multibyte_text_in_either_direction() {
+    let name = format!("AVeryLongDocumentName{}.docx", "\u{fc}\u{20ac}".repeat(120));
+    let path = format!("C:/Users/Someone/{name}");
+    for lang in [crate::i18n::Lang::EN, recent_right_to_left()] {
+        let h = recent_list_cut(&path, lang, 0.0, 0.0);
+        let row = h.get_by_label(&name).rect();
+        let texts = recent_text_bounds(&h);
+        assert_eq!(texts.len(), 2, "both lines must be painted");
+        for (text, bounds, _, ellipsis) in &texts {
+            let lead = if lang.rtl() { row.right() - bounds.right() } else { bounds.left() - row.left() };
+            assert!((lead - 40.0).abs() < 1.0, "{text} must start at its row's start: {bounds:?} in {row:?}");
+            assert!(bounds.left() >= row.left() - 0.5 && bounds.right() <= row.right() + 0.5, "{text} must stay in its row: {bounds:?} in {row:?}");
+            assert!(ellipsis, "{text} must end in an ellipsis");
+        }
+    }
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+/// #5212: a right-to-left name runs from the right, so it is cut on its left, and its ellipsis
+/// belongs there, not beside the name's first letters.
+#[test]
+fn recent_puts_the_ellipsis_at_the_end_of_a_right_to_left_name() {
+    let name = format!("{}.docx", "\u{5d0}\u{5d1}\u{5d2} ".repeat(120));
+    let h = recent_list_cut(&format!("/docs/{name}"), recent_right_to_left(), 0.0, 0.0);
+    let output = h.output();
+    let mut texts = Vec::new();
+    for clipped in &output.shapes {
+        collect_text(&clipped.shape, &mut texts);
+    }
+    let shown = texts.iter().find(|t| t.galley.text().contains('\u{5d0}')).expect("the name");
+    let glyphs = &shown.galley.rows[0].glyphs;
+    let ellipsis = glyphs.iter().find(|g| g.chr == '\u{2026}').expect("an ellipsis");
+    let left = glyphs.iter().filter(|g| g.size().x > 0.0).map(|g| g.pos.x).fold(f32::MAX, f32::min);
+    assert!(ellipsis.pos.x <= left + 0.5, "the ellipsis must be the leftmost glyph: {} against {left}", ellipsis.pos.x);
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+/// #5212: two files with one name speak their path in the label, so it isn't read twice.
+#[test]
+fn recent_rows_with_one_name_speak_their_path_once() {
+    use egui_kittest::kittest::NodeT;
+    let dir = std::env::temp_dir().join("wordcraft-5212-twins");
+    let paths = ["one", "two"].map(|d| dir.join(d).join("same.docx").to_string_lossy().to_string());
+    let h = recent_harness(&paths, egui::vec2(1440.0, 900.0));
+    for path in &paths {
+        let label = format!("same.docx, {path}");
+        assert_eq!(h.get_by_label(&label).accesskit_node().description(), None, "{label} must not repeat its path");
     }
 }
 

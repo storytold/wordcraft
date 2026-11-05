@@ -594,13 +594,18 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
     let file_name = |p: &str| std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.to_string());
     let names = shown.iter().map(|p| file_name(p)).collect::<Vec<_>>();
     let (mut focused, mut hovered) = (None, None);
+    use egui::epaint::text::TextDirection;
     for (p, name) in shown.iter().zip(&names) {
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(700.0), 40.0), Sense::click());
         // Two documents with the same file name are told apart by their path, as on screen.
-        let spoken = if names.iter().filter(|n| *n == name).count() > 1 { format!("{name}, {p}") } else { name.clone() };
+        let twin = names.iter().filter(|n| *n == name).count() > 1;
+        let spoken = if twin { format!("{name}, {p}") } else { name.clone() };
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &spoken));
-        // Only one row shows its path as a tooltip, so every row gives a screen reader the path itself.
-        ui.ctx().accesskit_node_builder(resp.id, |node| node.set_description(crate::i18n::isolate_path(p)));
+        // Only one row shows its path as a tooltip, so every row gives a screen reader the path
+        // itself, unless its label already says it.
+        if !twin {
+            ui.ctx().accesskit_node_builder(resp.id, |node| node.set_description(crate::i18n::isolate_path(p)));
+        }
         if resp.has_focus() {
             focused = Some((resp.clone(), p));
         }
@@ -620,18 +625,24 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
         );
         let side = crate::rtl::lead_center(rtl);
         // A wide row on Home can push the row past the visible area at small window sizes, so the
-        // text stops at the visible edge and its ellipsis stays in view.
+        // text stops at the visible edge and its ellipsis stays in view. Only its far end does: it
+        // starts at the row's start, in view or not.
         let clip = ui.clip_rect();
-        let text_w = (r.max.x.min(clip.max.x) - r.min.x.max(clip.min.x) - 48.0).max(0.0);
-        let fit = |text: String, font: egui::FontId, color: egui::Color32, y: f32| {
+        let room = if rtl { r.max.x - r.min.x.max(clip.min.x) } else { r.max.x.min(clip.max.x) - r.min.x };
+        let text_w = (room - 48.0).max(0.0);
+        let fit = |text: String, direction: TextDirection, font: egui::FontId, color: egui::Color32, y: f32| {
             let mut job = egui::text::LayoutJob::simple_singleline(text, font, color);
+            job.direction = direction;
             job.wrap = egui::text::TextWrapping::truncate_at_width(text_w);
             let g = ui.painter().layout_job(job);
             let at = side.anchor_size(pos2(crate::rtl::lead_x(rtl, r, 40.0), y), g.size()).min;
             ui.painter().galley(at, g, color);
         };
-        fit(crate::i18n::isolate(name), medium(13.0), t.text, r.min.y + 13.0);
-        fit(crate::i18n::isolate_path(p), regular(11.0), t.text_dim, r.min.y + 29.0);
+        // An isolate hides a right-to-left name's direction from its line, which would put the
+        // ellipsis beside the name's first letters.
+        let direction = if wordcraft_doc::bidi::first_strong_is_rtl(name) { TextDirection::RightToLeft } else { TextDirection::Auto };
+        fit(crate::i18n::isolate(name), direction, medium(13.0), t.text, r.min.y + 13.0);
+        fit(crate::i18n::isolate_path(p), TextDirection::Auto, regular(11.0), t.text_dim, r.min.y + 29.0);
         if resp.clicked() {
             let failed = open_recent(app, p).err();
             ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));
