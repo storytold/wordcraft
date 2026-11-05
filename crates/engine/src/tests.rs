@@ -8859,17 +8859,21 @@ fn next_footnote_skips_endnotes() {
 
 /// Tests that install a test dictionary wait for the dictionaries-folder test, which changes the
 /// folder and then reads what each language reports: an install in between reports no file.
-static DICTIONARIES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// Tests that touch the global proofing slots (dictionary installs, language packs) take a
+/// turn on this lock: an install/remove while a dictionary test asserts reloads its slot, and
+/// the scheduling a new test shifts is enough to trip it.
+pub(crate) static DICTIONARIES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-fn dictionaries_turn() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn dictionaries_turn() -> std::sync::MutexGuard<'static, ()> {
     DICTIONARIES.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// A tiny synthetic Polish Hunspell dictionary (written for these tests). Real dictionaries are
 /// installed on the system, never bundled; every Polish test installs this same one.
-fn polish_test_dictionary() {
-    let _turn = dictionaries_turn();
+fn polish_test_dictionary() -> std::sync::MutexGuard<'static, ()> {
+    let turn = dictionaries_turn();
     wordcraft_proof::pl::install_dictionary(POLISH_TEST_AFF, POLISH_TEST_DIC).unwrap();
+    turn
 }
 
 const POLISH_TEST_AFF: &str = "SET UTF-8\nTRY aioeznrwcyszżtkpdmłjlubąęgh\nMAP 2\nMAP oó\nMAP zż\nREP 2\nREP ż rz\nREP rz ż\n";
@@ -8877,9 +8881,10 @@ const POLISH_TEST_DIC: &str = "12\npłynie\nrzeka\na\nto\nwiem\nże\ntak\nw\nog�
 
 /// A tiny synthetic Portuguese Hunspell dictionary (written for these tests). Real dictionaries
 /// are installed on the system, never bundled; every Portuguese test installs this same one.
-fn portuguese_test_dictionary() {
-    let _turn = dictionaries_turn();
+fn portuguese_test_dictionary() -> std::sync::MutexGuard<'static, ()> {
+    let turn = dictionaries_turn();
     wordcraft_proof::pt::install_dictionary(PORTUGUESE_TEST_AFF, PORTUGUESE_TEST_DIC).unwrap();
+    turn
 }
 
 const PORTUGUESE_TEST_AFF: &str =
@@ -8954,7 +8959,7 @@ fn dictionaries_folder_option_is_saved_searched_and_reported() {
 /// grammar, suggestions come from it, and a suggestion fixes the text.
 #[test]
 fn portuguese_proofing_through_the_review_commands() {
-    portuguese_test_dictionary();
+    let _turn = portuguese_test_dictionary();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Saudade coraçao, e ele ele disse."}));
     // English by default: the Portuguese words are English misspellings.
@@ -8985,9 +8990,10 @@ fn portuguese_proofing_through_the_review_commands() {
     assert_eq!(left.as_array().unwrap().len(), 1, "{left}");
 }
 
-fn indonesian_test_dictionary() {
-    let _turn = dictionaries_turn();
+fn indonesian_test_dictionary() -> std::sync::MutexGuard<'static, ()> {
+    let turn = dictionaries_turn();
     wordcraft_proof::id::install_dictionary(INDONESIAN_TEST_AFF, INDONESIAN_TEST_DIC).unwrap();
+    turn
 }
 
 // Hand-written synthetic fixture (no system dictionary data).
@@ -8998,7 +9004,7 @@ const INDONESIAN_TEST_DIC: &str = "8\nrumah\nsekolah\nanak\nbermain\ndi\nmakan/A
 /// Dictionary.
 #[test]
 fn indonesian_proofing_through_the_review_commands() {
-    indonesian_test_dictionary();
+    let _turn = indonesian_test_dictionary();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Saya di sekolha, anak anak bermain."}));
     run(&mut s, "select.all", json!({}));
@@ -9165,19 +9171,20 @@ const SPANISH_TEST_AFF: &str =
 const SPANISH_TEST_DIC: &str = "10\nesto\nes\nuna\nprueba/S\ndel\ncorrector\ntambién\nhabéis\nvenido\ndecir\n";
 const URUGUAYAN_TEST_DIC: &str = "10\nesto\nes\nuna\nprueba/S\ndel\ncorrector\ntambién\ntener\nvenir\ndecir\n";
 
-fn spanish_test_dictionaries() {
+fn spanish_test_dictionaries() -> std::sync::MutexGuard<'static, ()> {
     use wordcraft_proof::ProofLang;
-    let _turn = dictionaries_turn();
+    let turn = dictionaries_turn();
     for (lang, dic) in [(ProofLang::Es, SPANISH_TEST_DIC), (ProofLang::EsUy, URUGUAYAN_TEST_DIC)] {
         wordcraft_proof::es::install_dictionary(lang, SPANISH_TEST_AFF, dic).unwrap();
     }
+    turn
 }
 
 /// #3553: Spanish proofing through the same commands as Review, F7, Change and Add to
 /// Dictionary: `prueva` and `corector` are flagged with `prueba` and `corrector` offered.
 #[test]
 fn spanish_proofing_through_the_review_commands() {
-    spanish_test_dictionaries();
+    let _turn = spanish_test_dictionaries();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "esto es una prueva del corector. Habéis venido?"}));
     run(&mut s, "select.all", json!({}));
@@ -9208,7 +9215,7 @@ fn spanish_proofing_through_the_review_commands() {
 /// bytes.
 #[test]
 fn add_and_ignore_all_accept_both_normalization_forms() {
-    spanish_test_dictionaries();
+    let _turn = spanish_test_dictionaries();
     let mut s = s();
     let text = "esto zqanade\u{301}do y zqignora\u{301}do";
     run(&mut s, "document.setText", json!({"text": text}));
@@ -9237,7 +9244,7 @@ fn add_and_ignore_all_accept_both_normalization_forms() {
 /// Uruguayan Spanish accepts the `vos` forms, imperatives included, that Spain's flags.
 #[test]
 fn uruguayan_spanish_accepts_vos_forms() {
-    spanish_test_dictionaries();
+    let _turn = spanish_test_dictionaries();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Vení, decime qué tenés."}));
     run(&mut s, "select.all", json!({}));
@@ -9256,6 +9263,7 @@ fn uruguayan_spanish_accepts_vos_forms() {
 /// Czech proofing through the same commands as Review, F7, Change and Add to Dictionary.
 #[test]
 fn czech_proofing_through_the_review_commands() {
+    let _turn = dictionaries_turn();
     czech_test_dict::install();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Město pocitac, škola škola."}));
@@ -9295,9 +9303,10 @@ fn czech_proofing_through_the_review_commands() {
 const ITALIAN_TEST_AFF: &str = "SET UTF-8\nTRY aeiortnsclcaffèéè\nMAP 2\nMAP aà\nMAP eéè\nREP 1\nREP caffe caffè\n";
 const ITALIAN_TEST_DIC: &str = "6\ncasa\ncaffè\nroma\ndisse\ne\nper\n";
 
-fn italian_test_dictionary() {
-    let _turn = dictionaries_turn();
+fn italian_test_dictionary() -> std::sync::MutexGuard<'static, ()> {
+    let turn = dictionaries_turn();
     wordcraft_proof::it::install_dictionary(ITALIAN_TEST_AFF, ITALIAN_TEST_DIC).unwrap();
+    turn
 }
 
 /// Review › Language and the proofing commands work in Italian end to end: the language makes
@@ -9305,7 +9314,7 @@ fn italian_test_dictionary() {
 /// suggestions come from it, and a suggestion fixes the text.
 #[test]
 fn italian_proofing_through_the_review_commands() {
-    italian_test_dictionary();
+    let _turn = italian_test_dictionary();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Casa caffe, e roma roma disse."}));
     // English by default: the Italian words are English misspellings.
@@ -9338,7 +9347,7 @@ fn italian_proofing_through_the_review_commands() {
 
 #[test]
 fn polish_proofing_through_the_review_commands() {
-    polish_test_dictionary();
+    let _turn = polish_test_dictionary();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Płynie żeka, a wogóle to wiem że tak."}));
     // English by default: the Polish words are English misspellings.
@@ -9405,7 +9414,7 @@ fn turkish_proofing_through_the_review_commands() {
 /// no parameters keep the old meaning (US English), and `default` needs a language.
 #[test]
 fn review_language_validates_tags_and_marks_text_unchecked() {
-    polish_test_dictionary();
+    let _turn = polish_test_dictionary();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Hello wrold"}));
     run(&mut s, "select.all", json!({}));
@@ -9433,7 +9442,7 @@ fn review_language_validates_tags_and_marks_text_unchecked() {
 /// a document with changes never does, and templates stay English.
 #[test]
 fn new_documents_follow_the_editing_language() {
-    polish_test_dictionary();
+    let _turn = polish_test_dictionary();
     let mut s = s();
     s.set_editing_language(Some("pl-PL"));
     assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("pl-PL"), "the untouched blank document switches");
@@ -9539,7 +9548,7 @@ fn rejected_default_proofing_language_does_not_survive_a_restart() {
 /// English run (`w:lang`) come back, and so does the proofing.
 #[test]
 fn proofing_languages_survive_a_docx_round_trip() {
-    polish_test_dictionary();
+    let _turn = polish_test_dictionary();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Płynie żeka. Hello wrold."}));
     run(&mut s, "select.all", json!({}));

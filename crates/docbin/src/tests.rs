@@ -2827,6 +2827,38 @@ fn framed_paragraphs_become_floating_parts() {
 }
 
 #[test]
+fn frame_anchor_objects_are_not_duplicated_into_the_story() {
+    // A note reference on the framed first paragraph moves to the anchor (one NoteRef in the
+    // body, none inside the story); a picture stays in the story and off the anchor.
+    // "F\u{2}" — a note reference character on the framed paragraph, CP 1.
+    static TEXT: &str = "F\u{2}\rplain\r";
+    let ccp = TEXT.chars().count() as u32;
+    let mut spec = structured_spec(TEXT, ccp);
+    spec.papx_entries = vec![(0, 0, frame_props(1135)), (3, 0, Vec::new())];
+    spec.note_stories = vec!["Note\r"];
+    spec.extra_pairs = vec![(2, plc(&[1, ccp], &1u16.to_le_bytes())), (3, plc(&[0, 5], &[]))];
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let body_objs: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.clone()).collect();
+    let story = doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| {
+            p.objects.iter().filter_map(|o| match o {
+                InlineObject::Shape { story, .. } => *story,
+                _ => None,
+            })
+        })
+        .next();
+    let note_in_body = body_objs.iter().filter(|o| matches!(o, InlineObject::NoteRef { .. })).count();
+    let Some(story) = story else { panic!("no frame part: {body_objs:?}") };
+    let part_objs: Vec<_> = doc.parts[&story].blocks.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.clone()).collect();
+    let note_in_story = part_objs.iter().filter(|o| matches!(o, InlineObject::NoteRef { .. })).count();
+    assert_eq!(note_in_body, 1, "the note reference lives on the anchor");
+    assert_eq!(note_in_story, 0, "the story keeps no copy of it");
+}
+
+#[test]
 fn framed_table_joins_frame() {
     // A framed paragraph, then a table whose row-end mark carries the same frame sprms (the
     // cell-content mark carries none): the whole table joins the paragraph's frame.

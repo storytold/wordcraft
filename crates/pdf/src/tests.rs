@@ -1382,8 +1382,12 @@ fn label_emf_records(align: u32, escapement: i32, at: (i32, i32)) -> Vec<Vec<u8>
     string.extend([0u8, 0]);
     let mut font = le32(&[1, -20, 0, escapement]);
     font.extend(vec![0u8; 16]);
-    font.extend("Arial".chars().flat_map(|c| (c as u16).to_le_bytes()));
-    font.extend([0u8, 0]);
+    // The full 64-byte face-name field (32 UTF-16 units), zero-padded: a shorter record
+    // would rely on the parser filling the missing tail.
+    let mut face: Vec<u8> = "Arial".chars().flat_map(|c| (c as u16).to_le_bytes()).collect();
+    face.extend([0u8, 0]);
+    face.resize(64, 0);
+    font.extend(face);
     let rec = |typ: u32, payload: &[u8]| {
         let mut v = typ.to_le_bytes().to_vec();
         v.extend(((8 + payload.len()) as u32).to_le_bytes());

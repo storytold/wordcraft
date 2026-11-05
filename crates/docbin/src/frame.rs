@@ -215,11 +215,20 @@ pub(crate) fn extract(paras: Vec<ParaOut>, sects: &[Section], sheet: &StyleSheet
     let mut out: Vec<ParaOut> = Vec::with_capacity(paras.len());
     let mut group: Vec<ParaOut> = Vec::new();
     let mut cur: Option<FrameInfo> = None;
-    for (idx, p) in paras.into_iter().enumerate() {
+    for (idx, mut p) in paras.into_iter().enumerate() {
         let f = frames[idx].clone();
         if f.as_ref() != cur.as_ref() {
             flush_group(&mut group, cur.take(), &mut out, sects, sheet, doc);
             cur = f;
+        }
+        // A section break ends the group: the boundary belongs to the body flow, and the
+        // paragraph that carries it into a text-box story would put the same break in both.
+        if p.para.section.is_some() && !group.is_empty() {
+            let sect = p.para.section.take();
+            flush_group(&mut group, cur.take(), &mut out, sects, sheet, doc);
+            p.para.section = sect;
+            out.push(p);
+            continue;
         }
         if cur.is_some() {
             group.push(p);
@@ -258,11 +267,11 @@ fn flush_group(
     // The first paragraph's CP and a section break anywhere in the group, before the group
     // is assembled into the part's story.
     let end_cp = group[0].end_cp;
-    let first_objects: Vec<InlineObject> = group[0]
+    let keeps: Vec<bool> = group[0]
         .para
         .objects
         .iter()
-        .filter(|o| {
+        .map(|o| {
             matches!(
                 o,
                 InlineObject::BookmarkStart { .. }
@@ -276,9 +285,26 @@ fn flush_group(
                     | InlineObject::PermEnd { .. }
             ) || matches!(o, InlineObject::Field { result, .. } if result.is_empty())
         })
-        .cloned()
         .collect();
+    // The kept objects move to the anchor (below), out of the story's first paragraph: left
+    // in place they would appear in both — a NoteRef referenced twice, a bookmark pair opened
+    // on the anchor and inside the story. The story keeps what shows.
+    let mut first_objects: Vec<InlineObject> = Vec::new();
+    let mut story_objects: Vec<InlineObject> = Vec::new();
+    for (k, o) in group[0].para.objects.iter().enumerate() {
+        if keeps[k] {
+            first_objects.push(o.clone());
+        } else {
+            story_objects.push(o.clone());
+        }
+    }
+    group[0].para.objects = story_objects;
     let section = group.iter().rev().find_map(|p| p.para.section.clone());
+    // The section break belongs to the anchor alone now: a `section` left on a grouped
+    // paragraph would ride into the text-box story as a second copy of the same break.
+    for p in group.iter_mut() {
+        p.para.section = None;
+    }
     let blocks = table::assemble(std::mem::take(group));
     let story = doc.add_part(PartKind::TextBox, blocks);
     let (float, w, h) = f.geometry();
