@@ -274,8 +274,13 @@ fn end_previous_section<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLink
     let doc = ctx.doc;
     let seps = (!doc.footnote_separators.is_empty())
         .then(|| std::mem::replace(&mut pb.seps, NoteSeps::new(ctx, &doc.footnote_separators, prev.text_width())));
+    // The filler is the previous section's page for footnote placement too: a note
+    // continued onto it sits where that section puts its footnotes, not where the new
+    // section (whose state is already in place) puts its own.
+    let beneath = std::mem::replace(&mut pb.sect_beneath, doc.note_options(prev, false).pos == wordcraft_doc::section::NotePos::BeneathText);
     pb.new_page(block, top);
     pb.finish_page();
+    pb.sect_beneath = beneath;
     if let Some(seps) = seps {
         pb.seps = seps;
     }

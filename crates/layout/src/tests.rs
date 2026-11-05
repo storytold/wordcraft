@@ -3217,11 +3217,29 @@ fn footnotes_carried_onto_a_filler_page_keep_the_ending_sections_margins() {
             d.footnote_separators =
                 wordcraft_doc::NoteSeparators { separator: sep(false), continuation_separator: sep(true), continuation_notice: None };
         }
+        // A footnote of the following section, long enough to continue past its first page:
+        // its continuation separator must be restored to that section's own width.
+        let following = if custom {
+            Some(footnote(&mut d, &Pos::body(end + 1, 0), &"A long section-two footnote that runs on and on. ".repeat(200)))
+        } else {
+            None
+        };
         let l = lay(&d);
         let filler = end + 1;
         assert_eq!(l.pages.get(filler).map(|p| p.section), Some(0), "{tag}: the blank page is section one's");
         // The page after it still starts section two with section two's margins.
         assert_eq!(l.pages.get(filler + 1).map(|p| (p.section, p.body.x)), Some((1, 144.0)), "{tag}: section two's first page");
+        if let Some(following) = following {
+            let pieces = note_pieces(&l, following);
+            assert_eq!(pieces.first().map(|p| p.0), Some(filler + 1), "{tag}: section-two note starts on section two's page");
+            let continuation_page = pieces.iter().find_map(|p| (p.0 > filler + 1).then_some(p.0)).expect("section-two note continues");
+            let rules: Vec<f32> = l.pages[continuation_page]
+                .items
+                .iter()
+                .filter_map(|it| if let Placed::Rule { x0, y0, x1, y1, .. } = it { (y0 == y1).then_some(x1 - x0) } else { None })
+                .collect();
+            assert!(rules.iter().any(|w| (w - 432.0).abs() < 0.01), "{tag}: section-two continuation separator: {rules:?}");
+        }
         let page = &l.pages[filler];
         let notes: Vec<(f32, f32)> = page
             .items
@@ -3250,6 +3268,28 @@ fn footnotes_carried_onto_a_filler_page_keep_the_ending_sections_margins() {
             "{tag}: section one's continuation separator, at its margin and across its text: {rules:?}"
         );
     }
+}
+
+#[test]
+fn footnotes_carried_onto_a_filler_page_keep_the_ending_sections_footnote_placement() {
+    use wordcraft_doc::section::{NotePos, NoteProps, SectionProps, SectionStart};
+    // Section one puts its footnotes beneath the text; section two (the default) puts
+    // them at the page bottom. The short rest of a note carried onto the blank page
+    // that puts section two on an odd page is section one's: it sits beneath that
+    // page's text, at its top, not down at the bottom where section two's placement
+    // would put it.
+    let mut d = Document::from_text("Section one text.\nTwo");
+    let id = footnote(&mut d, &Pos::body(0, 5), &"A long footnote that runs on and on. ".repeat(100));
+    let first = SectionProps { footnote_pr: NoteProps { pos: Some(NotePos::BeneathText), ..Default::default() }, ..Default::default() };
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(first));
+    d.last_section.start = SectionStart::OddPage;
+    d.last_section.margin_left = 144.0;
+    d.last_section.margin_right = 36.0;
+    let l = lay(&d);
+    let pieces = note_pieces(&l, id);
+    assert_eq!(pieces.len(), 2, "the note starts on section one's page and its rest carries onto the filler: {pieces:?}");
+    assert_eq!(pieces[1].0, 1, "the rest is on the filler page: {pieces:?}");
+    assert!(pieces[1].3 < 200.0, "the rest sits beneath the filler page's text (top {}), not at its bottom", pieces[1].3);
 }
 
 #[test]
