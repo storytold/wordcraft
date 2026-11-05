@@ -569,6 +569,7 @@ fn a_header_row_holding_a_canvas_repeats_within_the_budget() {
         ch_h: 40.0,
         children: (0..800).map(|_| GroupChild { x: 1.0, y: 1.0, obj: member.clone() }).collect(),
         canvas: Some(CanvasStyle { fill: None, stroke: None, stroke_width: 0.0 }),
+        picture_fill: false,
     };
     let mut t = Table::new(2001, 1, 468.0);
     t.rows[0].props.header = true;

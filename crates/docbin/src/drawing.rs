@@ -242,7 +242,7 @@ fn group(sp: &Sp, members: &[Node], w: f32, h: f32, float: Float, b: &Build, pic
     if children.is_empty() {
         return None;
     }
-    Some(InlineObject::Group { w, h, float, ch_w, ch_h, children, canvas: None })
+    Some(InlineObject::Group { w, h, float, ch_w, ch_h, children, canvas: None, picture_fill: false })
 }
 
 fn members_into(nodes: &[Node], t: (f32, f32, f32, f32), depth: usize, b: &Build, pics: &mut Pictures, out: &mut Vec<GroupChild>) {

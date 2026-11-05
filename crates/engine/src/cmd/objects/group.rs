@@ -1,5 +1,7 @@
 use super::arrange::{MAX_OFFSET, move_object, unalign};
-use super::select::{FROZEN, INK_GROUP, holds_ink, min_size, movable_story, object_ref, object_selection, picked_objects, selected, shown_members};
+use super::select::{
+    FROZEN, INK_GROUP, PICTURE_FILL_GROUP, holds_ink, min_size, movable_story, object_ref, object_selection, picked_objects, selected, shown_members,
+};
 use super::{CmdError, CmdResult, Float, InlineObject, Pos, Selection, Session, Spin, Value, Wrap, json, sel_result};
 
 /// Add objects to the selection (Shift+click): the first one is selected if no object is yet;
@@ -119,7 +121,7 @@ pub(super) fn group(s: &mut Session, _: &Value) -> CmdResult {
     // The group takes the first member's placement; its members keep their own alt text.
     let mut float = found.first().and_then(|(o, _)| o.frame()).map(|(_, _, f)| Float { alt: Default::default(), ..f.clone() }).unwrap_or_default();
     float.set_spin(Spin::default());
-    let grouped = InlineObject::Group { w, h, float, ch_w: w, ch_h: h, children, canvas: None };
+    let grouped = InlineObject::Group { w, h, float, ch_w: w, ch_h: h, children, canvas: None, picture_fill: false };
     // Take the members out, last first so the earlier positions hold, and put the group where
     // the first one was.
     let len = wordcraft_doc::para::OBJ.len_utf8();
@@ -145,6 +147,9 @@ pub(super) fn ungroup(s: &mut Session, _: &Value) -> CmdResult {
     let InlineObject::Group { w, h, float, .. } = &obj else { return Err(CmdError::Disabled("select a group first".into())) };
     if holds_ink(&obj) {
         return Err(CmdError::Disabled(INK_GROUP.into()));
+    }
+    if matches!(obj, InlineObject::Group { picture_fill: true, .. }) {
+        return Err(CmdError::Disabled(PICTURE_FILL_GROUP.into()));
     }
     // Its offsets, explicit: the members are placed from the same anchor.
     let pos = if float.wrap == Wrap::Inline {

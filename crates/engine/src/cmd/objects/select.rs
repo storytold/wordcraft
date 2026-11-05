@@ -60,10 +60,16 @@ pub(super) fn holds_ink(o: &InlineObject) -> bool {
     matches!(o, InlineObject::Group { children, .. } if children.iter().any(|c| matches!(&c.obj, InlineObject::Graphic { graphic, .. } if graphic.kind == GraphicKind::Ink)))
 }
 
+/// A VML rectangle or text box filled with a picture is read as a group of its layers, but it is
+/// one shape, as Word has it: there is nothing to ungroup (its text box, on its own over the
+/// picture, would no longer take clicks inside it).
+pub(super) const PICTURE_FILL_GROUP: &str = "a shape filled with a picture is one shape: it can't be ungrouped";
+
 pub(super) fn has_group(s: &Session) -> Option<&'static str> {
     match selected(s) {
         Some((_, o)) if o.is_canvas() => Some("a drawing canvas can't be ungrouped"),
         Some((_, o)) if holds_ink(&o) => Some(INK_GROUP),
+        Some((_, InlineObject::Group { picture_fill: true, .. })) => Some(PICTURE_FILL_GROUP),
         Some((_, InlineObject::Group { .. })) => None,
         _ => Some("select a group first"),
     }

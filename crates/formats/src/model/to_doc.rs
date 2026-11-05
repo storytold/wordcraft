@@ -479,6 +479,7 @@ impl<'a> Builder<'a> {
                     ch_h: h,
                     children,
                     canvas: None,
+                    picture_fill: false,
                 })
             }
             _ => None,
