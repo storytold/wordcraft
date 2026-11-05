@@ -23,6 +23,7 @@ mod picture;
 mod references;
 mod review;
 mod shape;
+mod tab_motion;
 mod table;
 mod tabs;
 mod underline;
@@ -235,6 +236,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             egui::Layout::left_to_right(egui::Align::Center)
                         };
                         ui.with_layout(tabs_layout, |ui| {
+                            // The active tab's underline, drawn after the tabs so it can glide across them.
+                            let mut active_underline = None;
+                            // The tab active as the strip is drawn: a click on one tab changes `app.ui.tab`
+                            // part-way through, and the tabs after it mustn't see the new one, or a click on
+                            // a tab left of the active one leaves no tab active for a frame and the underline
+                            // can't glide from it.
+                            let active_tab = app.ui.tab.clone();
                             // The tabs that don't fit go into a » menu at the end of the strip (#897, #2026).
                             for (i, ((tab, custom), _)) in tabs.iter().zip(&plan.fits).enumerate().filter(|(_, (_, fits))| **fits) {
                                 let (tab, custom) = (tab.as_str(), *custom);
@@ -250,10 +258,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                     // Every tab: they only place the legacy keys' hint (#1697).
                                     crate::keytips::record_tab(r, tab, "", &mut app.keytip_rects);
                                 }
-                                let active = app.ui.tab == tab && !app.ui.backstage;
+                                let active = active_tab == tab && !app.ui.backstage;
                                 resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, shown));
-                                if resp.hovered() && !active {
-                                    ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
+                                if let Some(fill) = tab_motion::hover(ui, resp.id, resp.hovered() && !active, t.hover) {
+                                    ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, fill);
                                 }
                                 let color = if contextual || active { t.accent_text } else { t.text };
                                 if cut {
@@ -281,7 +289,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 let resp = if cut { resp.on_hover_text(shown) } else { resp };
                                 if active {
                                     let u = Rect::from_center_size(pos2(r.center().x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
-                                    ui.painter().rect_filled(u, 2.0, t.accent);
+                                    active_underline = Some((tab, u));
                                 }
                                 if resp.clicked() {
                                     let _ = app.run("ui.tab", json!({"tab": tab}));
@@ -290,6 +298,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                     let _ = app.run("ui.collapseRibbon", json!({}));
                                 }
                                 resp.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
+                            }
+                            if let Some(u) = tab_motion::underline(ui, active_underline) {
+                                ui.painter().rect_filled(u, 2.0, t.accent);
                             }
                             let left_out: Vec<(&str, &str)> = tabs
                                 .iter()
@@ -300,8 +311,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 .collect();
                             if !left_out.is_empty() {
                                 let (r, resp) = ui.allocate_exact_size(vec2(MORE_TABS_W, 30.0), Sense::click());
-                                if resp.hovered() {
-                                    ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
+                                if let Some(fill) = tab_motion::hover(ui, resp.id, resp.hovered(), t.hover) {
+                                    ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, fill);
                                 }
                                 // The active tab is in the menu: the button says so.
                                 let holds_active = left_out.iter().any(|(tab, _)| *tab == app.ui.tab);
