@@ -137,14 +137,32 @@ fn defer(app: &mut WordApp, id: &str, params: &Value) -> Option<Result<Value, St
 /// page's own handling: the page only reads typing while it has the keyboard focus, which it
 /// doesn't have yet as the menu closes, and with it the event would paste a second time. Only
 /// a Paste that has asked egui claims one; any other paste event is Ctrl+V's own.
+///
+/// A key, a click or typing before the text comes ends the wait instead: the person has moved on
+/// (egui-winit drops the request when the focus moves, as a click in a search box does), and a
+/// Ctrl+V of theirs after it is meant for wherever they are now, not for the document.
 pub(crate) fn claim(app: &mut WordApp, events: &mut Vec<egui::Event>) {
-    let Some(p) = app.pending_paste.as_mut().filter(|p| p.since.is_some() && p.text.is_none()) else {
+    let Some(p) = app.pending_paste.as_mut().filter(|p| p.text.is_none()) else {
         return;
     };
-    if let Some(i) = events.iter().position(|e| matches!(e, egui::Event::Paste(_)))
-        && let egui::Event::Paste(t) = events.remove(i)
-    {
-        p.text = Some(t);
+    for (i, e) in events.iter().enumerate() {
+        match e {
+            egui::Event::Paste(_) if p.since.is_some() => {
+                if let egui::Event::Paste(t) = events.remove(i) {
+                    p.text = Some(t);
+                }
+                return;
+            }
+            egui::Event::Paste(_)
+            | egui::Event::Key { pressed: true, .. }
+            | egui::Event::PointerButton { pressed: true, .. }
+            | egui::Event::Text(_) => {
+                log::debug!("{}: other input came first; the paste is cancelled", p.id);
+                app.pending_paste = None;
+                return;
+            }
+            _ => {}
+        }
     }
 }
 
@@ -472,6 +490,9 @@ mod tests {
         assert!(!asked, "not while the menu is closing");
         let (asked, left) = frame(&mut a, &ctx, 0.01, vec![paste("ctrl+v")]);
         assert!(!asked && left.len() == 1, "a paste before egui is asked is Ctrl+V's");
+        assert!(a.pending_paste.is_none(), "and replaces the menu's, which stops waiting");
+        menu_paste(&mut a, &ctx, "edit.paste").0.unwrap();
+        assert!(!frame(&mut a, &ctx, 0.01, vec![]).0);
         assert!(!frame(&mut a, &ctx, 0.02, vec![]).0);
         assert!(frame(&mut a, &ctx, 0.03, vec![]).0, "asked once the menu has closed");
         assert_eq!(first_para(&a), "", "nothing is pasted before the text comes");
@@ -524,6 +545,35 @@ mod tests {
         assert!(left.is_empty(), "claimed, not left to the page");
         assert_eq!(first_para(&a), "slow");
         assert!(a.status_msg.is_none(), "no 'no text' message before it");
+    }
+
+    /// Input before the text comes (a click in a search box, a key) ends the wait: a Ctrl+V the
+    /// person makes after it is theirs, for wherever they are now, and stays in the events.
+    /// Moving the pointer or letting go of the menu's click doesn't count.
+    #[test]
+    fn other_input_before_the_text_ends_the_wait() {
+        let click = |pressed| egui::Event::PointerButton {
+            pos: egui::pos2(10.0, 10.0),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        let key = egui::Event::Key { key: egui::Key::A, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::default() };
+        for interrupt in [click(true), key, egui::Event::Text("a".into())] {
+            let mut a = app(unreachable());
+            let ctx = egui::Context::default();
+            menu_paste(&mut a, &ctx, "edit.paste").0.unwrap();
+            frame(&mut a, &ctx, 0.01, vec![click(false), egui::Event::PointerMoved(egui::pos2(5.0, 5.0))]);
+            for t in [0.02, 0.03] {
+                frame(&mut a, &ctx, t, vec![]);
+            }
+            assert!(a.pending_paste.as_ref().is_some_and(|p| p.since.is_some()), "a release and a move don't end it");
+            let (_, left) = frame(&mut a, &ctx, 0.2, vec![interrupt.clone(), paste("for the search box")]);
+            assert!(a.pending_paste.is_none(), "{interrupt:?} ends the wait");
+            assert_eq!(left.len(), 2, "the later paste is left where the person is: {interrupt:?}");
+            assert_eq!(first_para(&a), "");
+            assert!(a.status_msg.is_none(), "no 'no text' message later");
+        }
     }
 
     /// Keep Text Only and Merge Formatting wait the same way and run as themselves.
