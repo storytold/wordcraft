@@ -10,12 +10,7 @@ pub enum Align {
     Center,
     Right,
     Justify,
-    /// Distributed alignment across a paragraph's character boundaries, as encoded by OOXML
-    /// `w:jc w:val="distribute"`.
     Distribute,
-    /// Thai distributed alignment, preserved independently from regular distributed alignment
-    /// (`w:jc w:val="thaiDistribute"`).
-    ThaiDistribute,
 }
 
 impl Align {

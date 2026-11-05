@@ -3,7 +3,7 @@ use super::builder::{Builder, left_out, overstrike};
 use super::chars::caps_char;
 use super::grid::{auto_space, snap_chars};
 use super::justify::hyphenation_points;
-use super::lines::{break_lines, text_cluster_source};
+use super::lines::break_lines;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, ParaEnv, RubyLayout, undrawable_bullet};
 use super::proof::{ProofRun, is_list_item, proof_issues};
 use super::{
@@ -636,25 +636,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let gone = mark_left_out && (p.text.is_empty() || left.first() == Some(&(0..p.text.len())));
     pl.left_out = left;
     keep_graphemes_whole(&mut pl);
-    let thai_justify_after: Vec<usize> = if has_thai {
-        pl.clusters
-            .windows(2)
-            .enumerate()
-            .filter_map(|(i, pair)| {
-                let (left, right) = (pair.first()?, pair.get(1)?);
-                let a = text_cluster_source(p, left)?.chars().next_back()?;
-                let b = text_cluster_source(p, right)?.chars().next()?;
-                if !crate::kinsoku::is_thai_text_char(a) || !crate::kinsoku::is_thai_text_char(b) {
-                    return None;
-                }
-                let visible = bt.to_visible(left.end)?;
-                crate::kinsoku::is_safe_line_break(&bt.text, visible).then_some(i)
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-    break_lines(&mut pl, p, env, mark_style, env.label.as_ref().map(|(_, l)| l), has_thai, &thai_justify_after);
+    break_lines(&mut pl, env, mark_style, env.label.as_ref().map(|(_, l)| l), has_thai);
     if gone {
         collapse(&mut pl);
     }

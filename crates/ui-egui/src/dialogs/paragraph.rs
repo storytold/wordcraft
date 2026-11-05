@@ -6,12 +6,11 @@ pub(super) fn paragraph_dialog(rp: &wordcraft_doc::resolve::ResolvedPara, tab: u
         wordcraft_doc::props::LineSpacing::Multiple(m) => m,
         _ => 1.0,
     };
-    let align = rp.align.visual(rp.bidi);
     let (vl, vr) = rp.visual_indents();
     let unit = crate::options::unit().pt_per_unit();
     Dialog::Paragraph {
         rtl: rp.bidi,
-        align: if align == wordcraft_doc::props::Align::ThaiDistribute { "thaiDistribute".into() } else { format!("{align:?}").to_lowercase() },
+        align: format!("{:?}", rp.align.visual(rp.bidi)).to_lowercase(),
         left: vl / unit,
         right: vr / unit,
         first: rp.indent_first / unit,

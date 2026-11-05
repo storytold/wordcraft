@@ -363,7 +363,7 @@ mod label_spacing_tests {
             (st.ascent, st.descent) = if i == label_style as usize { label_metrics } else { text_metrics };
         }
         let mark_style = pl.clusters[0].style;
-        break_lines(&mut pl, &p, &env, mark_style, Some(&level), false, &[]);
+        break_lines(&mut pl, &env, mark_style, Some(&level), false);
         pl.lines
     }
 

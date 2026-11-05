@@ -192,7 +192,6 @@ fn describe(prop: &str, v: &Value) -> String {
             "right" => "Right",
             "justify" => "Justified",
             "distribute" => "Distributed",
-            "thaiDistribute" => "Thai Distributed",
             _ => "Left",
         })
         .to_string(),
@@ -233,10 +232,4 @@ fn camel_words(s: &str) -> String {
         }
     }
     out
-}
-
-#[cfg(test)]
-#[test]
-fn inspector_names_thai_distributed_alignment() {
-    assert_eq!(describe("align", &serde_json::json!("thaiDistribute")), "Alignment: Thai Distributed");
 }
