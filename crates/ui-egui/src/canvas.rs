@@ -222,6 +222,9 @@ pub struct CanvasState {
     pub(crate) v_pressed: bool,
     /// The modifiers last held with Mod, for a Mod+V whose Mod is released before V.
     pub(crate) paste_mods: Option<egui::Modifiers>,
+    /// On the web, Mod+Shift+V pasted formatting from its key press: the browser's paste event
+    /// that follows is the same keystroke and pastes nothing (#5616). Any other key press clears it.
+    pub(crate) ignore_next_paste: bool,
     /// Draw Table or Eraser is on (`table_pen`): presses draw instead of moving the caret.
     pub table_tool: Option<crate::table_pen::TableTool>,
     /// The Draw Table stroke (or eraser press) in progress.
@@ -403,6 +406,7 @@ impl Default for CanvasState {
             pasted: false,
             v_pressed: false,
             paste_mods: None,
+            ignore_next_paste: false,
             swallow_text: false,
             ime_join_text: None,
             ime_reset: false,

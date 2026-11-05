@@ -158,6 +158,9 @@ fn stale_composition(app: &mut WordApp, e: &egui::Event, b: &mut Batch) -> bool 
 fn note_key_state(app: &mut WordApp, e: &egui::Event) {
     // Which presses reached the canvas, and the modifiers held with Mod, in event order: Mod
     // can go down and up within one frame, leaving the frame's modifiers without it.
+    if matches!(e, egui::Event::Key { pressed: true, key, .. } if !is_modifier_key(*key)) || matches!(e, egui::Event::WindowFocused(_)) {
+        app.canvas.ignore_next_paste = false;
+    }
     match &e {
         egui::Event::ModifiersChanged(m) if m.command => app.canvas.paste_mods = Some(*m),
         egui::Event::Key { key: Key::V | Key::Paste, pressed: true, .. } => app.canvas.v_pressed = true,
@@ -508,8 +511,12 @@ fn handle_event(app: &mut WordApp, ctx: &egui::Context, e: egui::Event) {
         }
         egui::Event::Ime(egui::ImeEvent::Commit(text)) => ime_commit(app, text),
         egui::Event::Paste(t) => {
+            if std::mem::take(&mut app.canvas.ignore_next_paste) {
+                return;
+            }
             // Mod+Alt+V arrives as a paste too (the shell reads the clipboard): Paste Special.
-            let m = ctx.input(|i| i.modifiers);
+            // The modifiers held with Mod in event order: Shift may be up by the frame's end.
+            let m = app.canvas.paste_mods.unwrap_or_else(|| ctx.input(|i| i.modifiers));
             // A browser sends Mod+Shift+V as a paste too: Keep Text Only, as the key does on the
             // desktop (#1537). (egui-winit sends that chord as a key, and Shift+Insert has no Mod.)
             let id = match (m.alt, m.shift) {
