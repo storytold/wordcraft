@@ -2959,6 +2959,44 @@ fn sections_land_on_the_side_their_break_and_numbering_ask_for() {
 }
 
 #[test]
+fn a_section_starting_a_page_flushes_the_page_before_with_its_own_margins() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    // Section one ends its last page with a footnote pending; section two starts a new page
+    // with a wider left margin. The footnotes on the page before keep section one's margin,
+    // whichever way the new page starts (#5289).
+    let note_x = |start: SectionStart| {
+        let mut d = Document::from_text("Section one text.\nTwo");
+        let note = wordcraft_doc::Paragraph::with_text("The note text.", Default::default());
+        let id = d.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(note)]);
+        d.insert_object(
+            &Pos::body(0, 5),
+            InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() },
+            &Default::default(),
+        )
+        .unwrap();
+        d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section = Some(Box::new(SectionProps::default()));
+        d.last_section.start = start;
+        d.last_section.margin_left = 144.0;
+        let l = lay(&d);
+        let x = l
+            .pages
+            .iter()
+            .flat_map(|p| p.items.iter())
+            .find_map(|it| match it {
+                Placed::Lines { story: StoryRef::Part(n), x, .. } if *n == id => Some(*x),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("the footnote is placed ({start:?})"));
+        (x, l.pages.len())
+    };
+    for start in [SectionStart::NextPage, SectionStart::EvenPage, SectionStart::OddPage] {
+        let (x, pages) = note_x(start);
+        assert!((x - 72.0).abs() < 0.01, "{start:?}: the footnote sits at section one's margin, not {x}");
+        assert!(pages >= 2, "{start:?}: the section starts a page");
+    }
+}
+
+#[test]
 fn paragraph_marks_sit_past_text_running_the_other_way() {
     // A left-to-right paragraph ending in Hebrew, and a right-to-left one ending in Latin: the
     // logically last letters are at the wrong edge, but the ¶ still goes past every glyph.
@@ -4390,6 +4428,46 @@ fn drop_cap_options_place_the_letter() {
     assert_eq!(cap_style.as_deref(), Some("Liberation Mono"));
     let text_style = font.clusters.get(1).and_then(|c| font.styles.get(c.style as usize)).map(|s| s.rc.font.clone());
     assert_ne!(text_style.as_deref(), Some("Liberation Mono"), "only the letter");
+}
+
+/// #2601: the letter's own font applies to complex-script and East Asian first letters too. In
+/// margin, the letter sits in the left margin for any alignment or first-line indent: its right
+/// edge is the distance left of the text column (of the first line's start, if that hangs further
+/// left), never beside centred text or inside the column.
+#[test]
+fn drop_cap_font_covers_scripts_and_alignment_keeps_the_gap() {
+    use wordcraft_doc::props::Align;
+    let font = drop_cap_layout(|p| p.drop_cap_font = Some("Liberation Mono".into()));
+    let rc = font.clusters.first().and_then(|c| font.styles.get(c.style as usize)).map(|s| s.rc.clone());
+    let Some(rc) = rc else { panic!("no style") };
+    assert_eq!(rc.font_cs, "Liberation Mono");
+    assert_eq!(rc.font_ea.as_deref(), Some("Liberation Mono"));
+
+    // (alignment, left indent, first-line indent, the column's edge the letter hangs from)
+    let cases = [
+        (Align::Left, 0.0, 0.0, 0.0),
+        (Align::Center, 0.0, 0.0, 0.0),
+        (Align::Right, 0.0, 0.0, 0.0),
+        (Align::Left, 0.0, 36.0, 0.0),
+        (Align::Center, 18.0, 36.0, 18.0),
+        (Align::Left, 36.0, -36.0, 0.0),
+    ];
+    for (align, left, first, edge) in cases {
+        let pl = drop_cap_layout(|p| {
+            p.align = Some(align);
+            p.indent_left = Some(left);
+            p.indent_first = Some(first);
+            p.drop_cap_margin = Some(true);
+            p.drop_cap_distance = Some(9.0);
+        });
+        let text_x = pl.lines.first().and_then(|l| l.xs.first().copied()).unwrap_or(f32::NAN);
+        let letter_right = text_x + pl.glyphs.first().map(|g| g.dx).unwrap_or(f32::NAN) + pl.drop_cap_w;
+        assert!(
+            (letter_right - (edge - 9.0)).abs() < 0.5,
+            "{align:?}, indents {left}/{first}: letter's right edge {letter_right}, expected {} (text at {text_x})",
+            edge - 9.0
+        );
+    }
 }
 
 #[test]
