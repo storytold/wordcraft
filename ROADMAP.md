@@ -634,6 +634,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-15 | The web app keeps its preferences between visits (#2132): theme (dark mode), interface size, editing options and the rest of what the desktop app saves in `ui.json` are kept in the browser's `localStorage`, written as soon as they change |
 | 2026-10-17 | Saving into a folder that refuses a temporary file (macOS privacy protection, read-only folders, #2138) never overwrites an existing document in place: it is left untouched and the error says to use Save As to another folder or allow WordCraft access to the folder (System Settings › Privacy & Security › Files and Folders on macOS). A new file is created directly. Unit tests on Linux; not yet confirmed on a Mac |
 | 2026-10-20 | Saving to a NAS share mounted by GVFS (`smb://` in the Linux file manager, #3003) works: the share refuses every Unix mode change with "Operation not supported", which used to fail the whole save, so the close prompt's Save never closed. The save now goes on without copying a mode the folder doesn't keep; any other failure still keeps the original. Unit tests; not yet confirmed on a real share |
+| 2026-11-05 | Khmer text (#4521): a triisap (៊) over អ, ស or ហ with an upper vowel is drawn below the base in fonts that leave it above, so the same text looks the same whichever Khmer font a document uses; fonts that already draw it below are left alone |
 
 Footer page-table height and body wrapping are corrected. Other pagination gaps remain open.
 
@@ -1004,3 +1005,4 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-23 | trivial | Progress log: justified lines ending in a manual line break reach the margin (#3924) |
 | 2026-10-23 | trivial | Progress log: "NaN" in the Font dialog's Size box no longer closes the app (#3663) |
 | 2026-10-23 | trivial | Progress log: a table cell span from a `.json` file no longer overflows (#3637) |
+| 2026-11-05 | trivial | Progress log: Khmer triisap drawn below the base over អ, ស, ហ in more fonts (#4521) |

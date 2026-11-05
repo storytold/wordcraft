@@ -227,18 +227,18 @@ fn shape_dir(face: &FontFace, text: &str, features: &[Feature], map: &impl Fn(ch
         for r in script::script_runs(text) {
             let Some(sub) = text.get(r.clone()) else { continue };
             let mut buf = UnicodeBuffer::new();
-            let mut prev = '\0';
+            let (mut before, mut prev) = ('\0', '\0');
             let mut it = sub.char_indices().peekable();
             while let Some((i, c)) = it.next() {
                 let mut m = map(c);
                 if khmer::is_triisap(m)
                     && let Some(&(_, next)) = it.peek()
-                    && khmer::takes_u_form(prev, map(next), triisap_u)
+                    && khmer::takes_u_form(before, prev, map(next), triisap_u)
                 {
                     m = khmer::U_FORM;
                 }
                 buf.add(m, (r.start + i) as u32);
-                prev = m;
+                (before, prev) = (prev, m);
             }
             buf.guess_segment_properties();
             buf.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
