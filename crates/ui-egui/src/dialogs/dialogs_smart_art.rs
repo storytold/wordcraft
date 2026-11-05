@@ -454,6 +454,21 @@ fn drop_target(g: &SmartArtSpec, rows: &[Rect], src: usize, y: f32, dx: f32) -> 
     (slot, row_slot, level)
 }
 
+/// The focused row index after moving the block `src..end` to `slot`.
+fn moved_focus_index(focused: Option<usize>, src: usize, end: usize, slot: usize) -> Option<usize> {
+    let len = end.saturating_sub(src);
+    focused.map(|i| {
+        if (src..end).contains(&i) {
+            slot + (i - src)
+        } else if i < src {
+            if slot <= i { i + len } else { i }
+        } else {
+            let after_remove = i - len;
+            if slot <= after_remove { i } else { after_remove }
+        }
+    })
+}
+
 /// The grip at the left of an item's row: drag it to move the item (with the items under it) up or
 /// down, and sideways to change its level.
 fn grip(ui: &mut Ui, t: &Tokens) -> egui::Response {
@@ -539,7 +554,13 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
             if dropped {
                 ui.data_mut(|d| d.remove_temp::<(usize, f32)>(drag_id));
                 app.smart_art_typing = None;
-                let _ = app.run("smartArt.moveItem", json!({"index": src, "slot": slot, "level": level}));
+                let end = g.descendants(src).end;
+                let len = end.saturating_sub(src);
+                let destination = slot.min(g.items.len().saturating_sub(len));
+                let focused = app.smart_art_item;
+                if app.run("smartArt.moveItem", json!({"index": src, "slot": destination, "level": level})).is_ok() {
+                    app.smart_art_item = moved_focus_index(focused, src, end, destination);
+                }
             }
         }
     });
@@ -667,6 +688,16 @@ mod drag_tests {
 
     fn rows(n: usize) -> Vec<Rect> {
         (0..n).map(|i| Rect::from_min_size(pos2(0.0, i as f32 * 20.0), vec2(100.0, 20.0))).collect()
+    }
+
+    #[test]
+    fn moving_a_block_remaps_the_focused_item() {
+        assert_eq!(moved_focus_index(Some(4), 3, 6, 1), Some(2));
+        assert_eq!(moved_focus_index(Some(1), 3, 6, 1), Some(4));
+        assert_eq!(moved_focus_index(Some(1), 3, 6, 2), Some(1));
+        assert_eq!(moved_focus_index(Some(7), 3, 6, 4), Some(7));
+        assert_eq!(moved_focus_index(Some(7), 3, 6, 5), Some(4));
+        assert_eq!(moved_focus_index(None, 3, 6, 1), None);
     }
 
     #[test]
