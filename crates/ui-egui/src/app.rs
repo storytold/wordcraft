@@ -134,6 +134,7 @@ impl WordApp {
             applied_animations: None,
             frame_ms: 0.0,
             quit_requested: false,
+            open_queue: Default::default(),
             autosave: true,
             zotero: zotero::ZoteroLink::default(),
             ctx: None,
@@ -414,6 +415,11 @@ impl WordApp {
             self.windows_ui(ui);
         } else {
             self.window_ui(ui);
+        }
+        // In the frame a prompt closes, or the next file would wait for the next input.
+        if !self.open_queue.is_empty() && self.dialog.is_none() {
+            self.open_next_in_turn();
+            ui.ctx().request_repaint();
         }
     }
 
