@@ -92,6 +92,7 @@ pub use settings::{
     THEME_COLORS, Watermark, Zoom, ZoomFit,
 };
 pub(crate) use text_walk::{PARA_WALK_DEPTH, walk_between};
+pub use text_walk::{count_chars, count_chars_no_spaces};
 pub use word_count::count_words;
 
 /// A document.
