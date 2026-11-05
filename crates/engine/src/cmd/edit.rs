@@ -195,12 +195,16 @@ fn copy_with(s: &mut Session, whole: Option<&Path>) -> CmdResult {
     s.clipboard_text = f.clipboard_text();
     s.clip_history.push(&f, &s.clipboard_text);
     s.clipboard = Some(f);
-    let bare = from_cells(s, &a, &b);
+    let bare = bare_blocks(s, &a, &b);
     Ok(copy_result(s, &bare))
 }
 
-/// For each block a copy of `a..b` gives, whether it is a paragraph taken out of a table cell.
-fn from_cells(s: &Session, a: &Pos, b: &Pos) -> Vec<bool> {
+/// For each block a copy of `a..b` gives, whether it goes out bare (`with_source_spacing`): a
+/// paragraph taken out of a table cell, or a piece of one paragraph.
+fn bare_blocks(s: &Session, a: &Pos, b: &Pos) -> Vec<bool> {
+    if a.path == b.path && (a.off > 0 || b.off < s.doc.para(a.story, &a.path).map_or(0, |p| p.len())) {
+        return vec![true];
+    }
     if a.path.parent() == b.path.parent() {
         return vec![a.path.0.len() > 1; b.path.last().saturating_sub(a.path.last()).saturating_add(1)];
     }
@@ -211,8 +215,8 @@ fn from_cells(s: &Session, a: &Pos, b: &Pos) -> Vec<bool> {
 /// before and after and the indents they have in the source document (`styles`): the copy holds
 /// only the built-in styles, so its HTML would otherwise lose what the source's styles give (#5537).
 /// Paragraphs marked in `bare` go out with none of this: layout resolves a cell's paragraphs with
-/// the table style, which the flattened copy no longer knows, and a column selection's rows are
-/// lines rather than paragraphs.
+/// the table style, which the flattened copy no longer knows, a column selection's rows are lines
+/// rather than paragraphs, and a piece of a paragraph is inline text, as in Word.
 fn with_source_spacing(f: &Fragment, styles: &wordcraft_doc::StyleSheet, bare: &[bool]) -> wordcraft_doc::Document {
     let mut d = f.to_document();
     let is_bare = |i: usize| bare.get(i).copied().unwrap_or(false);
@@ -247,14 +251,19 @@ fn with_source_spacing(f: &Fragment, styles: &wordcraft_doc::StyleSheet, bare: &
             // A right-to-left paragraph's indents would land on the wrong side in an HTML
             // paragraph without a direction, so they are left out.
             let ind = |v: f32| (!list && !r.bidi).then_some(v);
+            // A paragraph that switches its style's list off keeps only indents of its own, as
+            // in layout.
+            let off = p.props.numbering.is_some_and(|n| n.num == 0);
+            let own = |set: Option<f32>, v: f32| if off && set.is_none() { 0.0 } else { v };
             // Other programs have no page margin for a negative indent to hang into.
-            let left = r.indent_left.max(0.0);
+            let left = own(p.props.indent_left, r.indent_left).max(0.0);
+            let first = own(p.props.indent_first, r.indent_first).max(-left);
             let pp = &mut p.props;
             pp.space_before = space(r.space_before, beside(i.checked_sub(1)));
             pp.space_after = space(r.space_after, beside(i.checked_add(1)));
             pp.indent_left = ind(left);
             pp.indent_right = ind(r.indent_right.max(0.0));
-            pp.indent_first = ind(r.indent_first.max(-left));
+            pp.indent_first = ind(first);
         }
     }
     d

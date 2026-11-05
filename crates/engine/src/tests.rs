@@ -1381,6 +1381,97 @@ Two"}),
     assert!(!html.contains("margin-") && !html.contains("text-indent"), "{html}");
 }
 
+/// #5537: a piece of one paragraph is inline text, as in Word, so it takes neither the paragraph's
+/// spacing nor its indents along.
+#[test]
+fn copying_a_piece_of_a_paragraph_adds_no_spacing() {
+    let mut s = normal_with_space_after();
+    run(&mut s, "document.setText", json!({"text": "Some words"}));
+    run(&mut s, "para.indents", json!({"left": 36, "firstLine": 18}));
+    run(&mut s, "caret.docEnd", json!({}));
+    for _ in 0..5 {
+        run(&mut s, "caret.left", json!({"extend": true}));
+    }
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    assert!(html.contains("words") && !html.contains("Some"), "{html}");
+    assert!(!html.contains("margin-") && !html.contains("text-indent"), "{html}");
+
+    run(&mut s, "caret.docStart", json!({}));
+    for _ in 0..4 {
+        run(&mut s, "caret.right", json!({"extend": true}));
+    }
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    assert!(html.contains("Some") && !html.contains("words"), "{html}");
+    assert!(!html.contains("margin-") && !html.contains("text-indent"), "{html}");
+}
+
+/// #5537: a paragraph that switches its style's list off shows at the margin, as layout puts it,
+/// unless it sets an indent of its own.
+#[test]
+fn copying_a_paragraph_that_switches_its_list_off_drops_the_styles_indents() {
+    let mut s = normal_with_space_after();
+    if let Some(n) = std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Normal") {
+        n.para.indent_left = Some(36.0);
+        n.para.indent_first = Some(18.0);
+    }
+    run(&mut s, "document.setText", json!({"text": "One"}));
+    if let Some(wordcraft_doc::Block::Para(p)) = s.doc.body.first_mut().map(std::sync::Arc::make_mut) {
+        p.props.numbering = Some(wordcraft_doc::props::NumRef { num: 0, level: 0 });
+    }
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    assert!(html.contains("margin-left:0pt") && !html.contains("text-indent"), "{html}");
+
+    run(&mut s, "para.indents", json!({"left": 18}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    assert!(html.contains("margin-left:18pt"), "{html}");
+}
+
+/// #5537: the issue's document, on the clipboard and pasted into another window, which only has
+/// the HTML: 12 pt after each paragraph, a left indent, a first-line indent, a centred paragraph.
+#[test]
+fn the_issues_paragraphs_survive_a_paste_into_another_window() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "One\nTwo\nThree\nFour\nFive"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.spacing", json!({"after": 12}));
+    run(&mut s, "caret.set", json!({"pos": Pos::body(2, 0)}));
+    run(&mut s, "para.indents", json!({"left": 36}));
+    run(&mut s, "caret.set", json!({"pos": Pos::body(3, 0)}));
+    run(&mut s, "para.indents", json!({"firstLine": 36}));
+    run(&mut s, "caret.set", json!({"pos": Pos::body(4, 0)}));
+    run(&mut s, "para.align", json!({"value": "center"}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    let five = html.split("<p").last().unwrap_or_default();
+    assert!(five.contains("text-align:center") && five.contains("margin-bottom:12pt"), "{html}");
+
+    let mut other = Session::new(wordcraft_doc::Document::new());
+    run(&mut other, "edit.paste", json!({"text": r["text"], "html": html}));
+    let props: Vec<_> = other
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| match &**b {
+            wordcraft_doc::Block::Para(p) if !p.text.is_empty() => {
+                Some((p.props.space_after, p.props.indent_left.unwrap_or(0.0), p.props.indent_first))
+            }
+            _ => None,
+        })
+        .collect();
+    let after = Some(12.0);
+    assert_eq!(props[0], (after, 0.0, None));
+    assert_eq!(props[2], (after, 36.0, None));
+    assert_eq!(props[3], (after, 0.0, Some(36.0)));
+    assert_eq!(props[4], (after, 0.0, None));
+}
+
 /// A session whose Normal style gives 4 pt before and 10 pt after, contextually.
 fn normal_with_contextual_spacing() -> Session {
     let mut s = normal_with_space_after();
