@@ -898,6 +898,28 @@ fn styles_and_lists() {
 }
 
 #[test]
+fn typed_numbers_start_a_list_at_that_number() {
+    // "1. " starts a list every time it is typed, not just the first, and "2. ", "3. " … start
+    // one at the number typed instead of going back to 1.
+    let mut s = s();
+    let numbering_of = |s: &Session, i: usize| s.doc.para_at(&Pos::body(i, 0)).unwrap().props.numbering;
+    let start_of = |s: &Session, num: u32| s.doc.numbering.num(num).and_then(|n| n.start_overrides.iter().find(|(l, _)| *l == 0).map(|(_, v)| *v));
+    for (i, n) in [1u32, 1, 2, 7].into_iter().enumerate() {
+        if i > 0 {
+            run(&mut s, "text.newParagraph", json!({}));
+            run(&mut s, "text.newParagraph", json!({})); // empty item ends the list
+        }
+        run(&mut s, "text.insert", json!({"text": format!("{n}.")}));
+        run(&mut s, "text.insert", json!({"text": " "}));
+        run(&mut s, "text.insert", json!({"text": "item"}));
+        let para = i; // the second Enter leaves the list in the same (empty) paragraph
+        let num = numbering_of(&s, para).filter(|r| r.num != 0).unwrap_or_else(|| panic!("\"{n}. \" typed as paragraph {para} should start a list")).num;
+        assert_eq!(start_of(&s, num), (n != 1).then_some(n), "list started by \"{n}. \"");
+        assert_eq!(s.doc.para_at(&Pos::body(para, 0)).unwrap().text, "item");
+    }
+}
+
+#[test]
 fn applying_a_heading_clears_list_numbering() {
     // Applying a heading (or Title/Normal) to a numbered paragraph removes its direct list
     // numbering. A dead `&& id == "Normal"` term used to let only Normal clear it, so headings
