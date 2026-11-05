@@ -32,6 +32,52 @@ impl Fragment {
         d.body = self.blocks.iter().cloned().map(Arc::new).collect();
         d
     }
+    /// The fragment as the body of a new document, carrying only the media entries (images) that
+    /// the fragment's blocks and text-box parts actually reference from `src`. Used when exporting
+    /// a copy to HTML for the system clipboard so that `<img>` tags contain a `data:` URI instead
+    /// of being dropped silently when the key is absent from the temporary document.
+    pub fn to_document_with_media(&self, src: &Document) -> Document {
+        let mut d = self.to_document();
+        let copy_keys = |blocks: &[Block], d: &mut Document| {
+            for b in blocks {
+                each_para(b, 0, &mut |p| {
+                    for o in &p.objects {
+                        if let InlineObject::Image { media: key, .. } = o
+                            && let Some(data) = src.media.get(key)
+                        {
+                            d.media.insert(key.clone(), data.clone());
+                        }
+                    }
+                });
+            }
+        };
+        let main: Vec<Block> = self.blocks.clone();
+        copy_keys(&main, &mut d);
+        // Also carry media referenced inside text-box stories that travel with this fragment.
+        for part in self.parts.values() {
+            let part_blocks: Vec<Block> = part.blocks.iter().map(|b| (**b).clone()).collect();
+            copy_keys(&part_blocks, &mut d);
+        }
+        d
+    }
+    /// Whether any of this fragment's `InlineObject::Image` entries reference a key that is not
+    /// present in `doc`'s media store. Used by the paste path to detect a cross-document paste
+    /// where the internal clipboard belongs to a different `Session` and its keys are invalid here.
+    pub fn has_missing_media(&self, doc: &Document) -> bool {
+        let mut missing = false;
+        for b in &self.blocks {
+            each_para(b, 0, &mut |p| {
+                for o in &p.objects {
+                    if let InlineObject::Image { media: key, .. } = o
+                        && !doc.media.contains_key(key)
+                    {
+                        missing = true;
+                    }
+                }
+            });
+        }
+        missing
+    }
     /// Whether the fragment holds an equation (in tables too), which a copy also puts on the
     /// system clipboard as MathML (#816).
     pub fn has_equation(&self) -> bool {

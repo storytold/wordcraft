@@ -5,6 +5,50 @@ fn doc(lines: &[&str]) -> Document {
     Document::from_text(&lines.join("\n"))
 }
 
+/// Minimal 1-pixel PNG bytes, enough for [`Document::add_media`] and image size detection.
+fn tiny_png() -> Vec<u8> {
+    vec![
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF,
+        0xC0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xE2, 0x21, 0xBC, 0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ]
+}
+
+fn image_para(key: &str, w: f32, h: f32) -> Block {
+    let mut p = Paragraph::new();
+    p.text.push(crate::para::OBJ);
+    p.objects.push(InlineObject::Image { media: key.to_string(), w, h, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None });
+    Block::Para(p)
+}
+
+/// `to_document_with_media` copies the referenced media bytes from the source document so
+/// the temporary document used for HTML export has them — fixing cross-document paste.
+#[test]
+fn to_document_with_media_carries_referenced_images() {
+    let mut src = Document::new();
+    let key = src.add_media(tiny_png(), "png");
+    let body = vec![Arc::new(image_para(&key, 72.0, 36.0))];
+    src.body = body;
+    let frag = src.copy_range(&Pos::body(0, 0), &Pos::body(0, 1));
+    assert!(frag.to_document().media.is_empty(), "to_document() must not carry media");
+    let rich = frag.to_document_with_media(&src);
+    assert_eq!(rich.media.len(), 1, "one image should be in the export doc");
+    assert!(rich.media.contains_key(&key), "the image key must be present");
+}
+
+/// `has_missing_media` returns true when a fragment's Image key is absent from a document,
+/// detecting the cross-session case so paste_content falls through to the HTML import path.
+#[test]
+fn has_missing_media_detects_cross_session_keys() {
+    let mut src = Document::new();
+    let key = src.add_media(tiny_png(), "png");
+    src.body = vec![Arc::new(image_para(&key, 72.0, 36.0))];
+    let frag = src.copy_range(&Pos::body(0, 0), &Pos::body(0, 1));
+    assert!(!frag.has_missing_media(&src));
+    let other = Document::new();
+    assert!(frag.has_missing_media(&other));
+}
+
 /// Paths between two positions are those of all the story's paragraphs between them.
 #[test]
 fn paths_between_matches_every_path_filtered() {
