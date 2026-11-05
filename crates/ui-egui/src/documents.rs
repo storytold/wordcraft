@@ -22,6 +22,24 @@ pub(crate) struct Parked {
 }
 
 impl WordApp {
+    /// Open `paths` in order, each after the dialog the one before it left open (a password box,
+    /// which the next open would replace, or drop by replacing the window's document) has closed.
+    pub fn open_in_turn(&mut self, paths: impl IntoIterator<Item = String>) {
+        self.open_queue.extend(paths);
+        self.open_next_in_turn();
+    }
+
+    /// Open the waiting files until one leaves a dialog open.
+    pub(crate) fn open_next_in_turn(&mut self) {
+        while self.dialog.is_none()
+            && let Some(path) = self.open_queue.pop_front()
+        {
+            if let Err(e) = self.run("file.open", json!({"path": path})) {
+                self.report_open_failure(&path, &e);
+            }
+        }
+    }
+
     /// Replace the document the window opened with before anything else happens (the first blank
     /// document, made again on the region File › Options chose): the session's document is
     /// swapped and the window follows it at once. Replacing it with `session.set_document`

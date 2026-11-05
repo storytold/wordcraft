@@ -43,7 +43,9 @@ pub(crate) fn take() -> Vec<String> {
 }
 
 fn save_in(dir: &Path, paths: &[PathBuf], written: u64) {
-    // `file.open` takes its path as text; a name that isn't valid Unicode stays in Recent.
+    // Absolute: the new copy may start in another folder. `file.open` takes its path as text; a
+    // name that isn't valid Unicode stays in Recent.
+    let paths: Vec<PathBuf> = paths.iter().filter_map(|p| std::path::absolute(p).ok()).collect();
     let paths: Vec<&str> = paths.iter().filter_map(|p| p.to_str()).take(MAX_PATHS).collect();
     if paths.is_empty() {
         return;
@@ -105,6 +107,16 @@ mod tests {
         assert_eq!(back, [a.to_str().unwrap(), b.to_str().unwrap()]);
         assert!(!dir.join(FILE).exists(), "the list is used once");
         assert!(take_from(&dir, 1060).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_relative_path_is_recorded_absolute() {
+        let dir = temp("relative");
+        save_in(&dir, &[PathBuf::from("Bericht.docx")], 10);
+        let list: Value = serde_json::from_slice(&std::fs::read(dir.join(FILE)).unwrap()).unwrap();
+        let saved = list["paths"][0].as_str().unwrap();
+        assert!(Path::new(saved).is_absolute() && saved.ends_with("Bericht.docx"), "{saved}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

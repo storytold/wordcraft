@@ -606,11 +606,7 @@ fn main() -> eframe::Result {
             if reopened.is_empty() && files.is_empty() && other_files.is_empty() && !sample && control_port.is_none() {
                 app.start_screen();
             }
-            for f in reopened.into_iter().chain(files) {
-                if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
-                    app.report_open_failure(&f, &e);
-                }
-            }
+            app.open_in_turn(reopened.into_iter().chain(files));
             for f in other_files {
                 open_non_unicode(&mut app, &f);
             }

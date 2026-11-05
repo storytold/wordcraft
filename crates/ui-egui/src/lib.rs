@@ -676,6 +676,8 @@ pub struct WordApp {
     awaiting_save: Option<AwaitingSave>,
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
     file_dialog: Option<file_dialogs::PendingDialog>,
+    /// The files waiting their turn to open ([`WordApp::open_in_turn`]).
+    open_queue: std::collections::VecDeque<String>,
     /// The built-in file browser, when it is open, and the folder it showed last (#576).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) file_browser: file_browser::State,

@@ -2849,6 +2849,48 @@ fn a_command_line_file_still_asks_for_its_password_after_the_startup_document_is
     assert!(body_text(&a).contains("Locked away"), "{}", body_text(&a));
 }
 
+/// Files opened in turn wait for a password prompt instead of replacing it: each locked file
+/// gets its own, and what follows it still opens once the prompt is answered or cancelled.
+#[test]
+fn files_opened_in_turn_wait_for_each_password_prompt() {
+    let dir = scratch("password-queue");
+    let file = |name: &str, password: Option<&str>| {
+        let path = dir.join(name);
+        let mut s = Session::new(wordcraft_doc::Document::from_text(name));
+        let mut params = json!({"path": path.to_string_lossy()});
+        if let Some(p) = password {
+            params["password"] = json!(p);
+        }
+        s.run("file.save", &params).unwrap();
+        path.to_string_lossy().to_string()
+    };
+    let (one, two, plain) = (file("one.docx", Some("sesame")), file("two.docx", Some("tahini")), file("plain.docx", None));
+    let asked = |a: &WordApp| match &a.dialog {
+        Some(crate::dialogs::Dialog::Password { params, .. }) => params["path"].as_str().map(str::to_string),
+        _ => None,
+    };
+
+    let mut a = app();
+    let blank = a.session.blank_document();
+    a.replace_startup_document(blank);
+    a.open_in_turn([one.clone(), two.clone(), plain]);
+    assert_eq!(asked(&a), Some(one.clone()), "the second file doesn't replace the first's prompt");
+    a.open_next_in_turn();
+    assert_eq!(asked(&a), Some(one.clone()), "the rest wait while it is open");
+
+    // The right password: the prompt closes and the next file asks for its own.
+    a.dialog = None;
+    a.run("file.open", json!({"path": one, "password": "sesame"})).unwrap();
+    a.open_next_in_turn();
+    assert_eq!(asked(&a), Some(two), "the next locked file asks in its turn");
+
+    // Cancelled: the last file still opens.
+    a.dialog = None;
+    a.open_next_in_turn();
+    assert!(a.dialog.is_none());
+    assert!(body_text(&a).contains("plain.docx"), "{}", body_text(&a));
+}
+
 /// #55: a password-protected document asks for its password (after Save Changes) instead of
 /// opening blank; scripts get the error instead of a dialog; Encrypt with Password asks for one.
 #[test]
