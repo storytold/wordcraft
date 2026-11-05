@@ -708,6 +708,11 @@ fn scrub_private(bytes: &[u8], names: bool, dates: bool) -> Option<Vec<u8>> {
     const WML: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     const WML_STRICT: &str = "http://purl.oclc.org/ooxml/wordprocessingml/main";
     const W15: &str = "http://schemas.microsoft.com/office/word/2012/wordml";
+    // BOM-less UTF-16 and other wide encodings can look like UTF-8 with NULs. Keep
+    // them on the safe model-reconstruction path instead of relying on parser failure.
+    if !bytes.starts_with(&[0xFF, 0xFE]) && !bytes.starts_with(&[0xFE, 0xFF]) && bytes.contains(&0) {
+        return None;
+    }
     let decoded = decode_xml(bytes)?;
     let rewritten = utf8_declaration(&decoded)?;
     let bytes = rewritten.as_bytes();
@@ -777,29 +782,28 @@ fn decode_xml(bytes: &[u8]) -> Option<String> {
         return Some(text);
     }
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(bytes);
-    if let Ok(text) = std::str::from_utf8(bytes) {
-        return Some(text.to_owned());
-    }
     let prefix = bytes.get(..bytes.len().min(256))?;
-    let declaration_end = prefix.windows(2).position(|pair| pair == b"?>")? + 2;
-    let declaration = std::str::from_utf8(prefix.get(..declaration_end)?).ok()?;
-    let tail = declaration.strip_prefix("<?xml")?;
-    if !tail.starts_with(char::is_whitespace) {
-        return None;
+    if let Some(declaration_end) = prefix.windows(2).position(|pair| pair == b"?>").map(|end| end + 2)
+        && let Some(declaration) = prefix.get(..declaration_end).and_then(|value| std::str::from_utf8(value).ok())
+        && let Some(tail) = declaration.strip_prefix("<?xml")
+        && tail.starts_with(char::is_whitespace)
+        && let Some(end) = declaration.find("?>")
+    {
+        let declaration = &declaration[..end];
+        if let Some(start) = declaration.find("encoding") {
+            let after_equals = declaration[start + "encoding".len()..].trim_start().strip_prefix('=')?.trim_start();
+            let quote = after_equals.chars().next()?;
+            if !matches!(quote, '\'' | '"') {
+                return None;
+            }
+            let label_end = after_equals[quote.len_utf8()..].find(quote)? + quote.len_utf8();
+            let label = &after_equals[quote.len_utf8()..label_end];
+            let encoding = encoding_rs::Encoding::for_label(label.as_bytes())?;
+            let (decoded, had_errors) = encoding.decode_without_bom_handling(bytes);
+            return (!had_errors).then(|| decoded.into_owned());
+        }
     }
-    let end = declaration.find("?>")?;
-    let declaration = &declaration[..end];
-    let start = declaration.find("encoding")? + "encoding".len();
-    let after_equals = declaration[start..].trim_start().strip_prefix('=')?.trim_start();
-    let quote = after_equals.chars().next()?;
-    if !matches!(quote, '\'' | '"') {
-        return None;
-    }
-    let label_end = after_equals[quote.len_utf8()..].find(quote)? + quote.len_utf8();
-    let label = &after_equals[quote.len_utf8()..label_end];
-    let encoding = encoding_rs::Encoding::for_label(label.as_bytes())?;
-    let (decoded, had_errors) = encoding.decode_without_bom_handling(bytes);
-    (!had_errors).then(|| decoded.into_owned())
+    std::str::from_utf8(bytes).ok().map(str::to_owned)
 }
 
 /// Rewrites an XML declaration's encoding after a part has been transcoded to UTF-8.
@@ -918,6 +922,20 @@ mod tests {
         assert!(scrubbed.contains("encoding=\"UTF-8\""), "{scrubbed}");
         assert!(!scrubbed.contains("Private Name"), "{scrubbed}");
         assert!(scrubbed.contains("café"), "{scrubbed}");
+    }
+
+    #[test]
+    fn declared_windows_1252_is_used_when_bytes_are_also_valid_utf8() {
+        let xml = b"<?xml version=\"1.0\" encoding=\"windows-1252\"?><root><keep>\xc3\xa9</keep></root>";
+        let decoded = decode_xml(xml).expect("declared Windows-1252 XML decodes");
+        assert!(decoded.contains("Ã©"), "{decoded}");
+        assert!(!decoded.contains("é</keep>"), "{decoded}");
+    }
+
+    #[test]
+    fn bomless_utf16_glossary_uses_model_fallback() {
+        let xml: Vec<u8> = "<root><keep>opaque</keep></root>".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert!(scrub_private(&xml, true, false).is_none());
     }
 
     #[test]
