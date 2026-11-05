@@ -505,7 +505,7 @@ fn box_float_table_rect(
         frame.filter(|_| f.v_rel != Anchor::Page && f.v_rel != Anchor::Margin).filter(|fr| r.bottom() + fr.origin.1 > fr.sect.page_h + 0.01)
     {
         let [dl, dt, dr, db] = f.dist_from_text();
-        let mut up = clamped;
+        let mut up = Rect::new(r.x, clamped.y, clamped.w, clamped.h);
         for _ in 0..64 {
             let area = up.inset(-dl, -dt, -dr, -db);
             let Some(above) = float_tables.iter().filter(|o| !f.overlap && o.intersects(&area)).map(|o| o.y).reduce(f32::min) else { break };
