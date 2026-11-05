@@ -352,15 +352,13 @@ fn proofing(app: &mut WordApp, ui: &mut Ui) {
     ui.add_space(8.0);
     section(ui, "Custom dictionary");
     custom_dictionary(app, ui);
-    ui.add_space(8.0);
-    section(ui, "Dictionaries");
-    dictionaries(app, ui);
 }
 
 /// Where the spelling dictionaries come from (#1063): a folder searched before the system's
-/// usual places, saved with the settings, and the dictionary each language found. An app started
-/// from Finder or the Dock doesn't see `WORDCRAFT_DICTIONARIES`, so this is how it finds a
-/// dictionary kept in a folder of the user's own.
+/// usual places, saved with the settings. An app started from Finder or the Dock doesn't see
+/// `WORDCRAFT_DICTIONARIES`, so this is how it finds a dictionary kept in a folder of the user's
+/// own. Each language's status ("Your own dictionary") is in Your languages above, and the file
+/// each language found is under Dictionary files.
 fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
     let saved = app.session.prefs.dictionaries_folder.clone().unwrap_or_default();
     let id = egui::Id::unique("options_dictionaries_folder");
@@ -388,6 +386,15 @@ fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
     });
     ui.data_mut(|d| d.insert_temp(id, folder));
     note(ui, "Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.");
+    note(ui, "An installed Language pack is used after this folder.");
+    ui.add_space(6.0);
+    ui.label(RichText::new(tl!("Dictionary files")).strong());
+    dictionary_files(ui);
+}
+
+/// The dictionary each language found (#1063): its file, "no dictionary found", or why the file
+/// couldn't be read, looked up again after the folder changes.
+fn dictionary_files(ui: &mut Ui) {
     // The dictionary each language found, looked up again after the folder changes.
     let found_id = egui::Id::unique("options_dictionaries_found");
     let generation = wordcraft_engine::proof::dictionary_generation();
@@ -534,7 +541,11 @@ fn language(app: &mut WordApp, ui: &mut Ui) {
     };
     ui.label(RichText::new(text).small().weak());
     ui.add_space(8.0);
-    crate::language_packs::options_section(app, ui);
+    crate::language_packs::your_languages_section(app, ui);
+    ui.add_space(8.0);
+    section(ui, "Dictionaries");
+    dictionaries(app, ui);
+    crate::language_packs::add_language_window(app, &ui.ctx().clone());
 }
 
 /// Draws Accessibility options: the animation setting and Read Aloud speed and skip-citations.
