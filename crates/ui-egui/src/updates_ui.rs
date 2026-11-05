@@ -53,6 +53,13 @@ impl WordApp {
     }
 }
 
+/// Whether the check at start is due: the desktop app asks for it, unless File › Options turned it
+/// off. Read each frame, so the saved setting counts however late it loads.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn startup_check_due(app: &WordApp) -> bool {
+    app.updates_rt.startup_check && app.ui.update_check
+}
+
 pub(crate) fn check(app: &mut WordApp) {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -72,11 +79,12 @@ pub(crate) fn check(app: &mut WordApp) {
 pub(crate) fn tick(app: &mut WordApp, ctx: &egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let at_start = startup_check_due(app);
         let rt = &mut app.updates_rt;
         rt.repaint = Some(ctx.clone());
         if std::mem::take(&mut rt.check_requested) {
             rt.updater.check_now(ctx);
-        } else if rt.startup_check {
+        } else if at_start {
             rt.updater.check_at_start(ctx);
         }
         rt.updater.tick(ctx);
