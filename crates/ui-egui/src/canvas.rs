@@ -196,7 +196,7 @@ pub struct CanvasState {
     pub(crate) auto_scroll: crate::autoscroll::AutoScroll,
     /// The scroll offset and its maximum at the end of last frame.
     pub(crate) scroll_offset: egui::Vec2,
-    scroll_max: egui::Vec2,
+    pub(crate) scroll_max: egui::Vec2,
     /// Explicit scroll position to apply on the next frame (reading navigation buttons/keys, a
     /// window moving into another viewport).
     pub(crate) scroll_request: Option<egui::Vec2>,

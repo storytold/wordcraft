@@ -94,8 +94,17 @@ pub struct Windows {
     pub(crate) side_by_side: Option<(u64, u64)>,
     /// Synchronous Scrolling: last observed scroll offset per paired window key.
     sync_scroll_seen: std::collections::HashMap<u64, egui::Vec2>,
-    /// Synchronous Scrolling: the window that last changed scroll, and the offset to apply.
-    sync_scroll_from: Option<(u64, egui::Vec2)>,
+    /// Synchronous Scrolling: the window that last changed scroll, offset, and scrollable size.
+    sync_scroll_from: Option<(u64, egui::Vec2, egui::Vec2)>,
+}
+
+fn sync_scroll_axis(leader_offset: f32, leader_max: f32, my_max: f32) -> f32 {
+    if leader_max.is_finite() && leader_max > 1.0 && my_max.is_finite() && my_max > 1.0 {
+        let ratio = (leader_offset / leader_max).clamp(0.0, 1.0);
+        (ratio * my_max).clamp(0.0, my_max)
+    } else {
+        leader_offset.clamp(0.0, my_max.max(0.0))
+    }
 }
 
 impl Windows {
@@ -451,17 +460,17 @@ impl WordApp {
     }
 
     fn apply_sync_scroll_before_draw(&mut self, key: u64) {
-        if self.paired_sync_window(key).is_none() {
+        let Some(_other) = self.paired_sync_window(key) else { return };
+        let Some((from, leader_offset, leader_max)) = self.windows.sync_scroll_from else { return };
+        if from == key {
             return;
         }
-        if let Some((from, offset)) = self.windows.sync_scroll_from {
-            if from != key {
-                let cur = self.canvas.scroll_offset;
-                if (cur.y - offset.y).abs() > 0.5 || (cur.x - offset.x).abs() > 0.5 {
-                    self.canvas.scroll_request = Some(offset);
-                    self.windows.sync_scroll_seen.insert(key, offset);
-                }
-            }
+        let my_max = self.canvas.scroll_max;
+        let target = egui::vec2(sync_scroll_axis(leader_offset.x, leader_max.x, my_max.x), sync_scroll_axis(leader_offset.y, leader_max.y, my_max.y));
+        let cur = self.canvas.scroll_offset;
+        if (cur.y - target.y).abs() > 0.5 || (cur.x - target.x).abs() > 0.5 {
+            self.canvas.scroll_request = Some(target);
+            self.windows.sync_scroll_seen.insert(key, target);
         }
     }
 
@@ -470,9 +479,10 @@ impl WordApp {
             return;
         }
         let offset = self.canvas.scroll_offset;
+        let max = self.canvas.scroll_max;
         let prev = self.windows.sync_scroll_seen.get(&key).copied().unwrap_or(egui::Vec2::ZERO);
         if (offset.x - prev.x).abs() > 0.5 || (offset.y - prev.y).abs() > 0.5 {
-            self.windows.sync_scroll_from = Some((key, offset));
+            self.windows.sync_scroll_from = Some((key, offset, max));
         }
         self.windows.sync_scroll_seen.insert(key, offset);
     }
