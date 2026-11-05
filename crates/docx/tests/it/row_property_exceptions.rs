@@ -108,6 +108,19 @@ fn table_cell_spacing_survives_table_and_row_exception_roundtrips() {
 }
 
 #[test]
+fn row_cell_spacing_accepts_whitespace_around_auto_width() {
+    use wordcraft_doc::props::{CellSpacing, CellSpacingKind};
+
+    let body = format!(
+        r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid>{}</w:tbl><w:p/>"#,
+        row(r#"<w:tblPrEx><w:tblCellSpacing w:w=" 0 " w:type="auto"/></w:tblPrEx>"#, "A")
+    );
+    let document = wordcraft_docx::read(&docx(&body)).unwrap();
+    let table = document.body.iter().find_map(|block| block.as_table()).unwrap();
+    assert_eq!(table.rows[0].props.exceptions.as_ref().unwrap().cell_spacing, Some(CellSpacing { width: 0, kind: CellSpacingKind::Auto }));
+}
+
+#[test]
 fn table_cell_spacing_preserves_supported_types_and_bounds_hostile_widths() {
     use wordcraft_doc::props::{CellSpacing, CellSpacingKind};
 

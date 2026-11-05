@@ -532,7 +532,7 @@ fn cell_spacing(e: &El) -> Option<wordcraft_doc::props::CellSpacing> {
             let points = measure(value, 20.0).filter(|points| *points >= 0.0)?;
             (points * 20.0).round().clamp(0.0, 31_680.0) as u32
         }
-        (CellSpacingKind::Auto | CellSpacingKind::Nil, Some(value)) => value.parse::<u32>().ok()?,
+        (CellSpacingKind::Auto | CellSpacingKind::Nil, Some(value)) => value.trim().parse::<u32>().ok()?,
     };
     let max = match kind {
         CellSpacingKind::Pct => 50_000,
