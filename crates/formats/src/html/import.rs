@@ -60,12 +60,7 @@ pub(super) fn parse_in(s: &str, images: ImageLoader, page: bool) -> Flow {
                     }
                     continue;
                 }
-                if matches!(name.as_str(), "script" | "style" | "noscript" | "template" | "textarea") && !self_close {
-                    let from = lx.pos;
-                    let to = lx.skip_past_end_tag(&name);
-                    if name == "style" {
-                        parse_sheet(s.get(from..to).unwrap_or(""), &mut b.sheet);
-                    }
+                if skip_raw_text(&name, self_close, &mut lx, &mut b) {
                     continue;
                 }
                 b.start(&name, &attrs, self_close);
@@ -96,6 +91,20 @@ pub(super) fn parse_in(s: &str, images: ImageLoader, page: bool) -> Flow {
     let mut flow = b.finish();
     fields.finish(&mut flow);
     flow
+}
+
+/// Skip the content of a raw-text element that was just opened, reading a style sheet into `b`.
+/// Whether `name` was one.
+pub(super) fn skip_raw_text(name: &str, self_close: bool, lx: &mut Lexer, b: &mut Builder) -> bool {
+    if self_close || !matches!(name, "script" | "style" | "noscript" | "template" | "textarea") {
+        return false;
+    }
+    let from = lx.pos;
+    let to = lx.skip_past_end_tag(name);
+    if name == "style" {
+        parse_sheet(lx.s.get(from..to).unwrap_or(""), &mut b.sheet);
+    }
+    true
 }
 
 /// The `m:oMathPara` and `m:oMath` elements (outermost only) in the markup of an

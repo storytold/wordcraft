@@ -7,6 +7,7 @@
 
 use super::Inline;
 use super::builder::{Builder, decls};
+use super::import::skip_raw_text;
 use super::lexer::{Lexer, Tok};
 
 /// Most fields open at once (nested); deeper ones are read as their result.
@@ -41,6 +42,9 @@ enum Mark {
 #[derive(Default)]
 pub(super) struct Fields {
     open: Vec<State>,
+    /// Inside a `supportFields` comment, the only place a code's text can be: browsers show what
+    /// is outside one, so there it is the page's text.
+    in_comment: bool,
 }
 
 /// The field mark a start tag is (`mso-element:field-begin|field-separator|field-end` in its
@@ -56,6 +60,11 @@ fn mark(attrs: &[(String, String)]) -> Option<Mark> {
     }
 }
 
+/// Whether `text` is white space only.
+fn is_blank(text: &str) -> bool {
+    text.chars().all(|c| c.is_ascii_whitespace())
+}
+
 /// A field code as Word reads it from HTML: white space collapsed, trimmed.
 fn clean_code(code: &str) -> String {
     code.split_ascii_whitespace().collect::<Vec<_>>().join(" ")
@@ -67,27 +76,36 @@ impl Fields {
     pub(super) fn take(&mut self, t: Tok, lx: &mut Lexer, b: &mut Builder) -> Option<Tok> {
         match t {
             Tok::Text(text) => {
-                if let Some(code) = self.code() {
-                    if code.len().saturating_add(text.len()) <= MAX_CODE {
-                        code.push_str(&text);
+                if self.in_comment {
+                    if let Some(code) = self.code() {
+                        if code.len().saturating_add(text.len()) <= MAX_CODE {
+                            code.push_str(&text);
+                        }
+                        return None;
                     }
-                    return None;
+                } else if self.code().is_some() {
+                    // White space between the comments a code spans; any other text is the
+                    // page's, so the code it follows was never going to go on.
+                    if is_blank(&text) {
+                        return None;
+                    }
+                    self.abandon_code(b);
                 }
                 Some(Tok::Text(text))
             }
             Tok::Start { name, attrs, self_close } => {
                 let Some(m) = mark(&attrs) else { return Some(Tok::Start { name, attrs, self_close }) };
-                // The mark's own element is empty: its end tag must not close an enclosing span.
-                if !self_close {
-                    lx.skip_past_end_tag(&name);
-                }
                 if !b.in_head() {
                     self.mark(m, b);
                 }
-                None
+                // An empty mark's end tag must not close an enclosing span. An element with
+                // content (or a void one, which has no end tag) stays in the page.
+                if self_close || lx.skip_end_tag_here(&name) { None } else { Some(Tok::Start { name, attrs, self_close }) }
             }
             Tok::SupportFields(markup) => {
+                self.in_comment = true;
                 self.comment(&markup, b);
+                self.in_comment = false;
                 None
             }
             t => Some(t),
@@ -126,9 +144,11 @@ impl Fields {
                 return Some(next);
             }
             let is_mark = matches!(&t, Tok::Start { attrs, .. } if mark(attrs).is_some());
+            // A space with no line break in a result is the result's, not the source's layout.
             if let Tok::Text(text) = &t
                 && self.code().is_none()
-                && text.chars().all(|c| c.is_ascii_whitespace())
+                && is_blank(text)
+                && (text.contains(['\n', '\r']) || !matches!(self.open.last(), Some(State::Result)))
             {
                 if !after_mark && held.len() < 64 {
                     held.push_str(text);
@@ -149,7 +169,9 @@ impl Fields {
                 Some(Tok::Text(t)) => b.text(&t),
                 Some(Tok::Start { name, attrs, self_close }) => {
                     b.close_head_for_start(&name);
-                    b.start(&name, &attrs, self_close);
+                    if !skip_raw_text(&name, self_close, &mut lx, b) {
+                        b.start(&name, &attrs, self_close);
+                    }
                 }
                 Some(Tok::End(name)) => b.end(&name),
                 _ => {}
@@ -164,6 +186,15 @@ impl Fields {
             State::Code(c) => Some(c),
             _ => None,
         })
+    }
+
+    /// Close the fields from the outermost one still in its code: page text came instead of the
+    /// rest of it.
+    fn abandon_code(&mut self, b: &mut Builder) {
+        let Some(at) = self.open.iter().position(|s| matches!(s, State::Code(_))) else { return };
+        for s in self.open.split_off(at).into_iter().rev() {
+            close(s, b);
+        }
     }
 
     /// Act on field mark `m`: open a field, start its result, or close it.

@@ -931,13 +931,53 @@ fn support_fields_edge_cases_stay_balanced() {
 }
 
 #[test]
+fn field_marks_never_take_page_text() {
+    // A field that never gets past its begin mark leaves the page as it was: only a comment
+    // holds a code's text.
+    let lone = "<!--[if supportFields]><span style='mso-element:field-begin'></span><![endif]--><p>Para 1</p><p>Para 2</p>";
+    assert_eq!(inline_marks(&parse(lone)), ["Para 1", "Para 2"]);
+    let coded = "<p><!--[if supportFields]><span style='mso-element:field-begin'></span>PAGE<![endif]-->text</p><p>more</p>";
+    assert_eq!(inline_marks(&parse(coded)), ["{PAGE|}text", "more"]);
+    // A code can span comments (Word puts other comments between them).
+    let spanned = r"<p><!--[if supportFields]><span style='mso-element:field-begin'></span>PAGE <![endif]--> <!--[if gte mso 9]><xml></xml><![endif]--><!--[if supportFields]>\* ARABIC<span style='mso-element:field-separator'></span><![endif]-->1<!--[if supportFields]><span style='mso-element:field-end'></span><![endif]--></p>";
+    assert_eq!(inline_marks(&parse(spanned)), [r"{PAGE \* ARABIC|1}"]);
+    // A mark on an element with no end tag, or with content, doesn't skip the page after it.
+    let void = r#"<p>a<br style="mso-element:field-end">b</p><p>c</p>"#;
+    let marks = inline_marks(&parse(void));
+    assert_eq!(marks.last().map(String::as_str), Some("c"));
+    assert!(marks.concat().contains('b'), "{marks:?}");
+    let content = "<p><span style='mso-element:field-separator'>Smith 2020</span> after</p>";
+    assert_eq!(inline_marks(&parse(content)), ["Smith 2020 after"]);
+    // The mark's own end tag is skipped through white space, and closes nothing else.
+    let spaced = "<p><b>x<span style='mso-element:field-end'> </span >y</b></p>";
+    let f = parse(spaced);
+    assert_eq!(inline_marks(&f), ["xy"]);
+}
+
+#[test]
+fn support_fields_comments_read_raw_text_as_the_page_does() {
+    let f = parse("<p>a<!--[if supportFields]><style>p{color:#ff0000}</style><script>hidden()</script><![endif]-->b</p>");
+    assert_eq!(inline_marks(&f), ["ab"]);
+}
+
+#[test]
+fn support_fields_result_keeps_its_own_spaces() {
+    let mark = |m: &str| format!("<span style='mso-element:field-{m}'></span>");
+    let one = |r: &str| format!("<p>a<!--[if supportFields]>{}F{}{r}{}<![endif]-->b</p>", mark("begin"), mark("separator"), mark("end"));
+    assert_eq!(inline_marks(&parse(&one(" "))), ["a{F| }b"]);
+    assert_eq!(inline_marks(&parse(&one("<b>x</b> <b>y</b>"))), ["a{F|x y}b"]);
+    // Line breaks around a mark are the source's layout.
+    assert_eq!(inline_marks(&parse(&one("\n<b>x</b>\n"))), ["a{F|x}b"]);
+}
+
+#[test]
 fn nested_support_fields_openers_dont_exhaust_the_stack() {
     // Comments don't nest: each opener inside runs to the end, and is read on in a loop.
     let deep = format!("<p>a<!--{}x-->b</p>", "[if supportFields]><span style='mso-element:field-begin'></span>F<!--".repeat(200_000));
     let marks = inline_marks(&parse(&deep));
     let opens = marks.iter().map(|m| m.matches('{').count()).sum::<usize>();
     assert_eq!(opens, marks.iter().map(|m| m.matches('}').count()).sum::<usize>());
-    // A field never separated takes the text after it as code (as Word's split form reads), and
+    // A field never separated keeps the code its comment holds, and
     // only the first openers are read.
     assert!(marks.concat().matches('F').count() <= 17, "{marks:?}");
     // One nested opener: what follows it is still read.

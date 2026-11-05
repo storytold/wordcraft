@@ -51,6 +51,22 @@ impl<'a> Lexer<'a> {
         found.map(|k| start + k).unwrap_or(self.s.len())
     }
 
+    /// Skip the end tag of `tag` (ASCII case-insensitive) when it comes next, past white space
+    /// only; whether it did.
+    pub(super) fn skip_end_tag_here(&mut self, tag: &str) -> bool {
+        let rest = self.rest();
+        let ws = rest.len() - rest.trim_start().len();
+        let after = rest.as_bytes().get(ws..).unwrap_or(&[]);
+        let end = 2usize.saturating_add(tag.len());
+        let named = after.get(..2) == Some(b"</".as_slice()) && after.get(2..end).is_some_and(|n| n.eq_ignore_ascii_case(tag.as_bytes()));
+        if !named || !after.get(end).is_some_and(|c| c.is_ascii_whitespace() || *c == b'>') {
+            return false;
+        }
+        self.pos += ws + end;
+        self.skip_past(">");
+        true
+    }
+
     /// Skip past the next matching end tag `</tag...>` (ASCII case-insensitive), or to the end.
     /// Skip past the end tag of raw text element `tag`; returns where that end tag starts (the
     /// end of the input when there is none).
