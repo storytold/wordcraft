@@ -13,8 +13,18 @@ pub fn icon_button(ui: &mut Ui, icon: &str, tip: &str) -> Response {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
     let st = drawn_state(ui, &resp, false);
-    ui.painter().rect_filled(r, CornerRadius::same(4), st.fill);
-    icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.icon, t.accent);
+    let down = resp.is_pointer_button_down_on();
+    let p = if ui.style().animation_time > 0.0 {
+        ui.ctx().animate_bool_responsive(resp.id.with("ib_press"), down)
+    } else if down {
+        1.0
+    } else {
+        0.0
+    };
+    let dy = 0.75 * p;
+    let draw_r = if p > 0.001 { r.shrink(0.5 * p).translate(vec2(0.0, dy)) } else { r };
+    ui.painter().rect_filled(draw_r, CornerRadius::same(4), st.fill);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.center().y + dy), vec2(14.0, 14.0)), icon, t.icon, t.accent);
     resp.on_hover_text(tip)
 }
 
@@ -61,24 +71,33 @@ fn icon_text_button_with(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), text));
     let st = drawn_state(ui, &resp, true);
-    let r = r.expand(st.expansion);
-    ui.painter().rect(r, ui.visuals().widgets.inactive.corner_radius, st.fill, st.stroke, egui::StrokeKind::Inside);
+    let down = resp.is_pointer_button_down_on();
+    let p = if ui.style().animation_time > 0.0 {
+        ui.ctx().animate_bool_responsive(resp.id.with("itb_press"), down)
+    } else if down {
+        1.0
+    } else {
+        0.0
+    };
+    let dy = 0.75 * p;
+    let draw_r = if p > 0.001 { r.shrink(0.5 * p).translate(vec2(0.0, dy)) } else { r.expand(st.expansion) };
+    ui.painter().rect(draw_r, ui.visuals().widgets.inactive.corner_radius, st.fill, st.stroke, egui::StrokeKind::Inside);
     // By language, not by layout: these buttons also sit in far-side clusters, which fill from
     // the other end.
     let rtl = crate::rtl::on();
     icons::paint(
         ui.painter(),
-        Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, pad.x + icon_w / 2.0), r.center().y), vec2(icon_w, icon_w)),
+        Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, pad.x + icon_w / 2.0), r.center().y + dy), vec2(icon_w, icon_w)),
         icon,
         t.icon,
         t.accent,
     );
     let text_x = crate::rtl::lead_left(rtl, r, pad.x + icon_w + if show_text { 4.0 } else { 0.0 }, text_w);
     if show_text {
-        ui.painter().galley(pos2(text_x, r.center().y - galley.size().y / 2.0), galley, st.text);
+        ui.painter().galley(pos2(text_x, r.center().y - galley.size().y / 2.0 + dy), galley, st.text);
     }
     if marker {
-        let c = pos2(if rtl { text_x - 4.0 - DROPDOWN / 2.0 } else { text_x + text_w + 4.0 + DROPDOWN / 2.0 }, r.center().y);
+        let c = pos2(if rtl { text_x - 4.0 - DROPDOWN / 2.0 } else { text_x + text_w + 4.0 + DROPDOWN / 2.0 }, r.center().y + dy);
         icons::paint(ui.painter(), Rect::from_center_size(c, vec2(DROPDOWN, DROPDOWN)), "dropdown", st.text, st.text);
     }
     resp

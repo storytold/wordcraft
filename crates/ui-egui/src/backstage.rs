@@ -64,6 +64,54 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     if !has_document && !works_without_document(&app.ui.backstage_page) {
         app.ui.backstage_page = "home".into();
     }
+
+    let current_time = ui.input(|i| i.time);
+    let current_frame = ui.ctx().cumulative_frame_nr();
+
+    // 1. Entrance animation when Backstage opens:
+    let frame_key = egui::Id::unique("backstage_last_frame");
+    let open_time_key = egui::Id::unique("backstage_open_time");
+    let last_frame = ui.data(|d| d.get_temp::<u64>(frame_key)).unwrap_or(0);
+    ui.data_mut(|d| d.insert_temp(frame_key, current_frame));
+
+    let mut open_time = ui.data(|d| d.get_temp::<f64>(open_time_key)).unwrap_or(0.0);
+    if current_frame > last_frame.saturating_add(1) {
+        open_time = current_time;
+        ui.data_mut(|d| d.insert_temp(open_time_key, open_time));
+    }
+    let enter_elapsed = (current_time - open_time) as f32;
+    let enter_dur = 0.22_f32;
+    let enter_progress = if ui.style().animation_time > 0.0 && enter_elapsed < enter_dur && enter_elapsed >= 0.0 {
+        ui.ctx().request_repaint();
+        (enter_elapsed / enter_dur).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let enter_t = 1.0 - (1.0 - enter_progress).powi(3);
+    let rtl = crate::rtl::on();
+    let sidebar_slide_x = if rtl { (1.0 - enter_t) * 20.0 } else { (1.0 - enter_t) * -20.0 };
+
+    // 2. Page transition animation when switching Backstage pages:
+    let page_key = egui::Id::unique("backstage_page_transition");
+    let (last_page, change_time) = ui.data(|d| d.get_temp::<(String, f64)>(page_key)).unwrap_or_default();
+    let now_page = app.ui.backstage_page.clone();
+    let change_time = if last_page != now_page {
+        ui.data_mut(|d| d.insert_temp(page_key, (now_page, current_time)));
+        current_time
+    } else {
+        change_time
+    };
+    let page_elapsed = (current_time - change_time) as f32;
+    let page_dur = 0.20_f32;
+    let page_progress = if ui.style().animation_time > 0.0 && page_elapsed < page_dur && page_elapsed >= 0.0 {
+        ui.ctx().request_repaint();
+        (page_elapsed / page_dur).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let page_t = 1.0 - (1.0 - page_progress).powi(3);
+    let page_offset_y = (1.0 - page_t) * 16.0;
+
     let mac = app.integrated_titlebar;
     crate::rtl::start_panel("backstage_nav")
         .exact_size(200.0)
@@ -72,7 +120,6 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         .frame(egui::Frame::NONE.fill(t.nav).inner_margin(egui::Margin { left: 0, right: 0, top: if mac { 0 } else { 12 }, bottom: 12 }))
         .show(ui, |ui| {
             // Right to left the navigation is on the right, away from the macOS traffic lights.
-            let rtl = crate::rtl::on();
             let back = if mac {
                 // macOS (#222): the Backstage covers the title bar, so its top band is the title
                 // bar: the back button sits beside the traffic lights, centred with them and as far
@@ -88,29 +135,41 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     back_chevron_c(band.min.x, band.center().y, app.session.view.full_screen, app.mac_titlebar.content_left)
                 };
                 let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, band.height())), ui.scope_id().with("backstage_back"), Sense::click());
+                let back_hover = ui.ctx().animate_bool_responsive(resp.id.with("hover"), resp.hovered());
+                let back_press = ui.ctx().animate_bool_responsive(resp.id.with("press"), resp.is_pointer_button_down_on());
+                let back_dy = back_press * 0.75;
+                if back_hover > 0.001 {
+                    ui.painter().circle_filled(pos2(c.x, c.y + back_dy), 14.0, egui::Color32::from_white_alpha((36.0 * back_hover) as u8));
+                }
                 icons::paint(
                     ui.painter(),
-                    Rect::from_center_size(c, vec2(18.0, 18.0)),
+                    Rect::from_center_size(pos2(c.x, c.y + back_dy), vec2(18.0, 18.0)),
                     if rtl { "chevronRight" } else { "chevronLeft" },
                     egui::Color32::WHITE,
                     egui::Color32::WHITE,
                 );
-                resp
+                resp.on_hover_cursor(egui::CursorIcon::PointingHand)
             } else {
                 // The hit area is scoped to the chevron, not the whole 200px-wide row (#3041):
                 // the row reads as plain sidebar background next to it, so clicking there must
                 // not also close the File page, same as the macOS chevron fix (#2972) below.
                 let (r, _) = ui.allocate_exact_size(vec2(200.0, 40.0), Sense::hover());
-                let c = pos2(crate::rtl::lead_x(rtl, r, 26.0), r.center().y);
+                let c = pos2(crate::rtl::lead_x(rtl, r, 26.0) + sidebar_slide_x, r.center().y);
                 let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, r.height())), ui.scope_id().with("backstage_back"), Sense::click());
+                let back_hover = ui.ctx().animate_bool_responsive(resp.id.with("hover"), resp.hovered());
+                let back_press = ui.ctx().animate_bool_responsive(resp.id.with("press"), resp.is_pointer_button_down_on());
+                let back_dy = back_press * 0.75;
+                if back_hover > 0.001 {
+                    ui.painter().circle_filled(pos2(c.x, c.y + back_dy), 14.0, egui::Color32::from_white_alpha((36.0 * back_hover) as u8));
+                }
                 icons::paint(
                     ui.painter(),
-                    Rect::from_center_size(c, vec2(18.0, 18.0)),
+                    Rect::from_center_size(pos2(c.x, c.y + back_dy), vec2(18.0, 18.0)),
                     if rtl { "chevronRight" } else { "chevronLeft" },
                     egui::Color32::WHITE,
                     egui::Color32::WHITE,
                 );
-                resp
+                resp.on_hover_cursor(egui::CursorIcon::PointingHand)
             };
             // Escape in the built-in file browser closes only the browser.
             if back.clicked() || (!app.file_dialog_open() && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
@@ -124,21 +183,33 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 let (r, resp) = ui.add_enabled_ui(on, |ui| ui.allocate_exact_size(vec2(200.0, 38.0), Sense::click())).inner;
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tl!(label)));
                 let active = app.ui.backstage_page == id;
-                if active {
-                    ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(46));
-                } else if on && resp.hovered() {
-                    ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
+                let hover_t = ui.ctx().animate_bool_responsive(resp.id.with("hover"), on && resp.hovered() && !active);
+                let active_t = ui.ctx().animate_bool_responsive(resp.id.with("active"), active);
+                let press_t = ui.ctx().animate_bool_responsive(resp.id.with("press"), on && resp.is_pointer_button_down_on());
+                let dy = press_t * 0.75;
+
+                let bg_alpha = ((46.0 * active_t + 26.0 * hover_t).min(60.0)) as u8;
+                if bg_alpha > 0 {
+                    ui.painter().rect_filled(r.translate(vec2(0.0, dy * 0.5)), 0.0, egui::Color32::from_white_alpha(bg_alpha));
+                }
+                if active_t > 0.01 {
+                    let bar_w = 3.5;
+                    let bar_r = Rect::from_min_max(
+                        pos2(if rtl { r.max.x - bar_w } else { r.min.x }, r.min.y + 4.0),
+                        pos2(if rtl { r.max.x } else { r.min.x + bar_w }, r.max.y - 4.0),
+                    );
+                    ui.painter().rect_filled(bar_r.translate(vec2(0.0, dy * 0.5)), 1.5, egui::Color32::from_white_alpha((220.0 * active_t) as u8));
                 }
                 let ink = if on { egui::Color32::WHITE } else { egui::Color32::from_white_alpha(110) };
                 icons::paint(
                     ui.painter(),
-                    Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 31.0), r.center().y), vec2(18.0, 18.0)),
+                    Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 31.0) + sidebar_slide_x, r.center().y + dy), vec2(18.0, 18.0)),
                     icon,
                     ink,
                     ink,
                 );
                 ui.painter().text(
-                    pos2(crate::rtl::lead_x(rtl, r, 52.0), r.center().y),
+                    pos2(crate::rtl::lead_x(rtl, r, 52.0) + sidebar_slide_x, r.center().y + dy),
                     crate::rtl::lead_center(rtl),
                     tl!(label),
                     if active { semibold(14.0) } else { medium(14.0) },
@@ -174,6 +245,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             });
         });
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(40, 30))).show(ui, |ui| {
+        if page_offset_y > 0.1 {
+            ui.add_space(page_offset_y);
+        }
         // The Print page fills the pane and scrolls its settings and its preview itself (#1156).
         if app.ui.backstage_page == "print" {
             crate::rtl::root(ui, |ui| export_page(app, ui));

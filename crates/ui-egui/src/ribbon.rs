@@ -176,19 +176,21 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             let (share_size, share_text) =
                                 if plan.buttons < 2 { (((share_w + 36.0).max(74.0), 24.0), true) } else { ((30.0, 24.0), false) };
                             let (r, resp) = ui.allocate_exact_size(vec2(share_size.0, share_size.1), Sense::click());
-                            ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.accent_text } else { t.accent });
+                            let press_t = ui.ctx().animate_bool_responsive(resp.id.with("press"), resp.is_pointer_button_down_on());
+                            let dy = press_t * 0.75;
+                            ui.painter().rect_filled(r.shrink(press_t * 0.5).translate(vec2(0.0, dy * 0.5)), 4.0, if resp.hovered() { t.accent_text } else { t.accent });
                             let rtl = crate::rtl::on();
                             let icon_x = if share_text { crate::rtl::lead_x(rtl, r, 14.0) } else { r.center().x };
                             icons::paint(
                                 ui.painter(),
-                                Rect::from_center_size(pos2(icon_x, r.center().y), vec2(14.0, 14.0)),
+                                Rect::from_center_size(pos2(icon_x, r.center().y + dy), vec2(14.0, 14.0)),
                                 "share",
                                 t.on_accent,
                                 t.on_accent,
                             );
                             if share_text {
                                 ui.painter().text(
-                                    pos2(crate::rtl::lead_x(rtl, r, 26.0), r.center().y),
+                                    pos2(crate::rtl::lead_x(rtl, r, 26.0), r.center().y + dy),
                                     crate::rtl::lead_center(rtl),
                                     share,
                                     medium(12.0),
@@ -250,10 +252,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                     // Every tab: they only place the legacy keys' hint (#1697).
                                     crate::keytips::record_tab(r, tab, "", &mut app.keytip_rects);
                                 }
-                                let active = app.ui.tab == tab && !app.ui.backstage;
+                                let is_file = tab == "File";
+                                let active = if is_file { app.ui.backstage } else { app.ui.tab == tab && !app.ui.backstage };
                                 resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, shown));
-                                if resp.hovered() && !active {
-                                    ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
+                                let hover_t = ui.ctx().animate_bool_responsive(resp.id.with("tab_hover"), resp.hovered() && !active);
+                                let press_t = ui.ctx().animate_bool_responsive(resp.id.with("tab_press"), resp.is_pointer_button_down_on());
+                                let dy = press_t * 0.75;
+                                if hover_t > 0.001 {
+                                    ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)).translate(vec2(0.0, dy * 0.5)), 4.0, t.hover.gamma_multiply(hover_t));
                                 }
                                 let color = if contextual || active { t.accent_text } else { t.text };
                                 if cut {
@@ -268,10 +274,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                         overflow_character: Some('…'),
                                     };
                                     let galley = ui.painter().layout_job(job);
-                                    ui.painter().galley(r.center() - galley.size() / 2.0, galley, color);
+                                    ui.painter().galley(r.center() - galley.size() / 2.0 + vec2(0.0, dy), galley, color);
                                 } else {
                                     ui.painter().text(
-                                        r.center(),
+                                        r.center() + vec2(0.0, dy),
                                         Align2::CENTER_CENTER,
                                         shown,
                                         if active { semibold(12.5) } else { medium(12.5) },
@@ -279,9 +285,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                     );
                                 }
                                 let resp = if cut { resp.on_hover_text(shown) } else { resp };
-                                if active {
-                                    let u = Rect::from_center_size(pos2(r.center().x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
-                                    ui.painter().rect_filled(u, 2.0, t.accent);
+                                let active_t = ui.ctx().animate_bool_responsive(resp.id.with("tab_active"), active);
+                                if active_t > 0.001 {
+                                    let u_w = (w - 16.0) * (0.6 + 0.4 * active_t);
+                                    let u = Rect::from_center_size(pos2(r.center().x, r.max.y - 2.0 + dy * 0.5), vec2(u_w, 3.0));
+                                    ui.painter().rect_filled(u, 2.0, t.accent.gamma_multiply(active_t));
                                 }
                                 if resp.clicked() {
                                     let _ = app.run("ui.tab", json!({"tab": tab}));
@@ -300,13 +308,16 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 .collect();
                             if !left_out.is_empty() {
                                 let (r, resp) = ui.allocate_exact_size(vec2(MORE_TABS_W, 30.0), Sense::click());
-                                if resp.hovered() {
-                                    ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
+                                let hover_t = ui.ctx().animate_bool_responsive(resp.id.with("hover"), resp.hovered());
+                                let press_t = ui.ctx().animate_bool_responsive(resp.id.with("press"), resp.is_pointer_button_down_on());
+                                let dy = press_t * 0.75;
+                                if hover_t > 0.001 {
+                                    ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)).translate(vec2(0.0, dy * 0.5)), 4.0, t.hover.gamma_multiply(hover_t));
                                 }
                                 // The active tab is in the menu: the button says so.
                                 let holds_active = left_out.iter().any(|(tab, _)| *tab == app.ui.tab);
                                 ui.painter().text(
-                                    r.center(),
+                                    r.center() + vec2(0.0, dy),
                                     Align2::CENTER_CENTER,
                                     "»",
                                     medium(12.5),
