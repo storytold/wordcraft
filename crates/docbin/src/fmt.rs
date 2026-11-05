@@ -118,7 +118,8 @@ fn brc_style(t: u8) -> BorderStyle {
         0x02 => BorderStyle::Thick,
         0x03 => BorderStyle::Double,
         0x06 => BorderStyle::Dotted,
-        0x07 | 0x16 => BorderStyle::Dashed,
+        0x07 => BorderStyle::Dashed,
+        0x16 => BorderStyle::DashSmallGap,
         0x08 | 0x09 => BorderStyle::DotDash,
         0x0A => BorderStyle::Triple,
         0x14 | 0x15 => BorderStyle::Wave,
@@ -568,5 +569,21 @@ fn apply_chain_para(para: &mut ParaProps, grpprl: &[u8]) {
         if prl.sgc() == 1 {
             apply_para(para, &prl);
         }
+    }
+}
+
+#[cfg(test)]
+mod border_regressions {
+    use super::*;
+
+    #[test]
+    fn legacy_small_gap_border_retains_its_distinct_style() {
+        assert_eq!(brc80(&[8, 0x16, 0, 0]).unwrap().style, BorderStyle::DashSmallGap);
+        assert_eq!(brc80(&[8, 0x07, 0, 0]).unwrap().style, BorderStyle::Dashed);
+        let mut bytes = [0u8; 9];
+        bytes[0] = 8;
+        bytes[5] = 8;
+        bytes[6] = 0x16;
+        assert_eq!(brc(&bytes).unwrap().style, BorderStyle::DashSmallGap);
     }
 }

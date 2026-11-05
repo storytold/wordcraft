@@ -243,7 +243,7 @@ those aren't given; `styles.modify` sets only what it is given.
 
 A **Border** is `{"style": …, "width": pt, "color": colour | null, "space": pt}` (`space` is
 the distance from the text). Missing fields are `none`, 0, no colour and 0, so a border needs a
-`width` above 0 to show. `style` is one of `none`, `single`, `double`, `dotted`, `dashed`,
+`width` above 0 to show. `style` is one of `none`, `single`, `double`, `dotted`, `dashed`, `dashSmallGap`,
 `thick`, `triple`, `dotDash`, `wave`.
 
 ### ParaProps
