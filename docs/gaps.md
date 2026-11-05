@@ -165,6 +165,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 | 2026-10-28 | trivial | Ink page lookups reuse scanned paragraph prefixes, #3614. Drawing order, geometry and saved data retain their behavior; no readiness estimate change |
 | 2026-11-04 | trivial | #19: ODT settings for what the standard leaves open removed: one choice for each case |
 | 2026-11-04 | trivial | #19: ODT element audit; files from other applications checked |
+| 2026-11-04 | trivial | PR #4609: relative REF keeps context already displayed by the own or a needed ancestor label; six synthetic legal-template cases and separate-list context follow the Word for Windows measurements reported by @pakiat in PR discussion. Existing unknown-switch/cache boundaries and readiness estimates unchanged; no new native Word run. |
 | 2026-11-01 | trivial | #19 narrowed: ODT read and written nearly whole on this branch (styles, tables, notes, comments, tracked changes including formatting, fields, indexes and marks, drawings, charts, embedded objects, forms, ruby, password protection, flat ODT), checked against LibreOffice; what's left listed; estimate 18–27 h → 10–16 h |
 | 2026-11-01 | trivial | #10 narrowed: text in a turned text box is drawn turned with it on screen and in PNG and PDF (upside down when flipped across, never mirrored); editing it still goes by its upright text; estimate unchanged |
 | 2026-10-29 | trivial | Print Markup balloon anchor discovery no longer repeats paragraph-prefix scans (#3614); readiness estimates unchanged |
@@ -420,6 +421,8 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 | 2026-10-29 | trivial | #15 narrowed: a Word bibliography source with a corporate author keeps it (read, saved, cited and listed whole), and Create Source has the Corporate Author box (#4848) |
 | 2026-10-29 | trivial | Table Properties: row, column and cell settings apply to the selected rows, columns and cells, not only the caret's (#4857); no gap entry tracked it |
 | 2026-10-28 | trivial | Gap 19 narrowed: RTF reads and writes WMF and EMF pictures, chosen by their bytes (#4259); ranking unchanged |
+| 2026-10-27 | trivial | 2026-10-27 · #4533 review: numeric REF updates lazily index body bookmarks once per update, retaining the first body bookmark for duplicate names. Unsupported switches and ordinary REF/PAGEREF behavior are unchanged; a synthetic 64-reference regression covers repeated updates and duplicate names. Estimates unchanged. |
+| 2026-10-27 | trivial | 2026-10-27 · #4533: numeric REF fields use paragraph list numbers for no/full/relative context, reusing bounded numbering. Shared context already embedded in a level label is removed; merged-away cells do not count. Unsupported separator/text/position switches and ambiguous contexts or delimiter-free joins retain cached results. Synthetic OOXML regressions; no native Word or real-document validation, estimates unchanged. |
 
 ## Layout validation fonts
 
