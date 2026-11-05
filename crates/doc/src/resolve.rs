@@ -153,6 +153,10 @@ impl ResolvedChar {
 }
 
 /// Concrete paragraph formatting.
+fn default_adjust_right_indent() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedPara {
@@ -173,6 +177,9 @@ pub struct ResolvedPara {
     pub contextual_spacing: bool,
     /// Left/right indents are inside/outside: they swap on even pages.
     pub mirror_indents: bool,
+    /// Automatically adjust the right indent for the document grid when enabled; keep the specified right indent when disabled.
+    #[serde(default = "default_adjust_right_indent")]
+    pub adjust_right_indent: bool,
     pub keep_next: bool,
     pub keep_lines: bool,
     pub page_break_before: bool,
@@ -264,6 +271,7 @@ impl ResolvedPara {
             },
             contextual_spacing: p.contextual_spacing.unwrap_or(false),
             mirror_indents: p.mirror_indents.unwrap_or(false),
+            adjust_right_indent: p.adjust_right_indent.unwrap_or(true),
             keep_next: p.keep_next.unwrap_or(false),
             keep_lines: p.keep_lines.unwrap_or(false),
             page_break_before: p.page_break_before.unwrap_or(false),
