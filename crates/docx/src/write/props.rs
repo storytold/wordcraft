@@ -326,6 +326,9 @@ fn write_frame(w: &mut W, p: &ParaProps, framed: bool) {
             a.push(("w:vSpace", &vs));
         }
         a.push(("w:wrap", &f.wrap));
+        if let Some(anchor_lock) = f.anchor_lock {
+            a.push(("w:anchorLock", if anchor_lock { "1" } else { "0" }));
+        }
         a.push(("w:vAnchor", &f.v_anchor));
         a.push(("w:hAnchor", &f.h_anchor));
         match &f.x_align {
@@ -373,6 +376,7 @@ fn write_text_flow(w: &mut W, p: &ParaProps) {
     toggle(w, "w:autoSpaceDE", p.auto_space_de);
     toggle(w, "w:autoSpaceDN", p.auto_space_dn);
     toggle(w, "w:bidi", p.bidi);
+    toggle(w, "w:adjustRightInd", p.adjust_right_indent);
     toggle(w, "w:snapToGrid", p.snap_to_grid);
 }
 
