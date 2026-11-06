@@ -105,11 +105,7 @@ pub fn note_options(app: &mut WordApp, ui: &mut Ui, f: &mut NoteForm) -> bool {
                     }
                 })
             });
-            if let Some(to) = convert
-                && let Err(e) = app.run("references.convertNotes", json!({ "to": to }))
-            {
-                app.status(e);
-            }
+            ui.end_row();
         });
         if let Some(to) = convert
             && let Err(e) = app.run("references.convertNotes", json!({ "to": to }))
