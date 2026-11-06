@@ -1380,7 +1380,7 @@ impl Body<'_> {
     /// A table row (`table:table-row`) begins: its height, kept as rows are (see the row's end).
     fn start_row(&mut self, a: &Attrs) {
         let height = get(a, "table:style-name").and_then(|s| self.styles.row_height(s));
-        let keep = get(a, "table:style-name").is_some_and(|s| self.styles.row_keep(s));
+        let keep = self.styles.row_keep(get(a, "table:style-name"));
         if let Some(t) = self.tables.last_mut() {
             t.row.clear();
             t.hcover = 0;

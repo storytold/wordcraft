@@ -184,3 +184,23 @@ fn a_row_that_keeps_together_says_so() {
     assert!(content_of(&saved).contains(r#"fo:keep-together="always""#));
     assert_eq!(shape(&import(&saved).unwrap()), [(true, None), (false, None), (true, Some(72.0))]);
 }
+
+/// A row whose style says nothing of it, or a row with no style, follows the default style; one
+/// that says otherwise doesn't.
+#[test]
+fn a_rows_keep_together_defaults_to_the_default_style() {
+    let styles = r#"<office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"><office:styles><style:default-style style:family="table-row"><style:table-row-properties fo:keep-together="always"/></style:default-style></office:styles></office:document-styles>"#;
+    let row = |s: &str| format!(r#"<table:table-row{s}><table:table-cell><text:p>x</text:p></table:table-cell></table:table-row>"#);
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="H" style:family="table-row"><style:table-row-properties style:min-row-height="1in"/></style:style><style:style style:name="F" style:family="table-row"><style:table-row-properties fo:keep-together="auto"/></style:style></office:automatic-styles><office:body><office:text><table:table>{}{}{}</table:table></office:text></office:body></office:document-content>"#,
+        row(""),
+        row(r#" table:style-name="H""#),
+        row(r#" table:style-name="F""#)
+    );
+    let keeps = |d: &wordcraft_doc::Document| {
+        d.body.iter().find_map(|b| b.as_table()).map(|t| t.rows.iter().map(|r| r.props.cant_split).collect::<Vec<_>>()).unwrap_or_default()
+    };
+    let d = import(&package(&content, Some(styles))).unwrap();
+    assert_eq!(keeps(&d), [true, true, false]);
+    assert_eq!(keeps(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()), [true, true, false]);
+}

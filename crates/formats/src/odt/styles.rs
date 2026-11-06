@@ -1048,6 +1048,8 @@ pub(super) struct Styles {
     default_color: Option<wordcraft_doc::props::Rgb>,
     /// `style:default-style` for graphics: what every drawing shape's style falls back on.
     default_graphic: super::frames::Graphic,
+    /// `style:default-style` for table rows: `fo:keep-together`, for a row whose style doesn't say.
+    default_row_keep: Option<bool>,
     /// The named dashes and gradients graphic styles use.
     pub(super) defs: super::strokes::Defs,
     /// Date and time styles (`number:date-style`, `number:time-style`) as Word pictures.
@@ -1060,6 +1062,7 @@ impl Styles {
         let mut cur: Option<(String, StyleInfo)> = None;
         let mut in_default = false;
         let mut in_graphic_default = false;
+        let mut in_row_default = false;
         let mut dates = DateStyles::default();
         let mut list: Option<(String, Vec<ListLevel>)> = None;
         // The list or outline level being read.
@@ -1088,8 +1091,12 @@ impl Styles {
                 "default-style" if q.starts_with("style:") => {
                     in_default = get(&a, "style:family") == Some("paragraph");
                     in_graphic_default = get(&a, "style:family") == Some("graphic");
+                    in_row_default = get(&a, "style:family") == Some("table-row");
                 }
                 "graphic-properties" if in_graphic_default && cur.is_none() => self.default_graphic = super::frames::Graphic::read(&a),
+                "table-row-properties" if in_row_default && cur.is_none() => {
+                    self.default_row_keep = get(&a, "fo:keep-together").map(|k| k.trim() == "always")
+                }
                 "text-properties" if in_default && cur.is_none() => {
                     self.default_font = default_font(&a, &self.faces);
                     if let Some(sz) = get(&a, "fo:font-size").and_then(length).filter(|v| v.is_finite() && *v >= 1.0) {
@@ -1156,7 +1163,7 @@ impl Styles {
             },
             Ev::End(q) => match local(&q) {
                 "automatic-styles" => in_auto = false,
-                "default-style" if q.starts_with("style:") => (in_default, in_graphic_default) = (false, false),
+                "default-style" if q.starts_with("style:") => (in_default, in_graphic_default, in_row_default) = (false, false, false),
                 "style" if q.starts_with("style:") => {
                     if let Some((n, s)) = cur.take()
                         && self.map.len() < 100_000
@@ -1342,9 +1349,10 @@ impl Styles {
         self.chain(name).iter().find_map(|(_, s)| s.row_height)
     }
 
-    /// Whether a table-row style keeps its row from breaking across pages (whole chain).
-    pub(super) fn row_keep(&self, name: &str) -> bool {
-        self.chain(name).iter().find_map(|(_, s)| s.row_keep).unwrap_or(false)
+    /// Whether a table row doesn't break across pages: its style says (whole chain), else the
+    /// default style.
+    pub(super) fn row_keep(&self, name: Option<&str>) -> bool {
+        name.and_then(|n| self.chain(n).iter().find_map(|(_, s)| s.row_keep)).or(self.default_row_keep).unwrap_or(false)
     }
 
     /// Background colour of a table-cell style (whole chain).
