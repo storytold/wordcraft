@@ -22,22 +22,46 @@ pub fn discover() -> Discover {
     })
 }
 
+/// A submission worker and how to stop its job: `true` when it will never be sent, `false` when
+/// it was already being sent.
+struct Job {
+    worker: std::thread::JoinHandle<()>,
+    cancel: Box<dyn Fn() -> bool + Send>,
+}
+
 // Keep submission workers reachable until normal app shutdown; dropping a JoinHandle would
 // let process exit end an in-process Windows job or the CUPS hand-off before the spooler has it.
-static JOBS: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>> = std::sync::Mutex::new(Vec::new());
+static JOBS: std::sync::Mutex<Vec<Job>> = std::sync::Mutex::new(Vec::new());
 
+fn jobs() -> std::sync::MutexGuard<'static, Vec<Job>> {
+    JOBS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Waits for the jobs already being sent, so the spooler has them before the process exits. A
+/// job still waiting (on a sleeping printer's driver, say: #5710) is cancelled instead, so it is
+/// never sent and quitting doesn't wait on the driver.
 pub fn finish_pending_jobs() {
-    let workers = std::mem::take(&mut *JOBS.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-    for worker in workers {
-        if worker.join().is_err() {
+    let pending = std::mem::take(&mut *jobs());
+    for job in pending {
+        if !job.worker.is_finished() && (job.cancel)() {
+            continue;
+        }
+        if job.worker.join().is_err() {
             log::error!("the print worker stopped unexpectedly during shutdown");
         }
     }
 }
 
+/// The Print page's Cancel: stops every job not yet being sent. `true` when none will be sent.
+pub fn cancel() -> Box<dyn Fn() -> bool> {
+    Box::new(|| jobs().iter().filter(|job| !job.worker.is_finished()).fold(true, |all, job| (job.cancel)() && all))
+}
+
 pub fn submit() -> Submit {
     Box::new(|bytes, settings: Settings, collate, options| {
         let (sender, receiver) = std::sync::mpsc::channel();
+        let cancel = craft_print::Cancel::new();
+        let token = cancel.clone();
         let worker = std::thread::Builder::new().name("print-submit".into()).spawn(move || {
             let job = craft_print::Job {
                 printer: Some(settings.printer),
@@ -53,12 +77,13 @@ pub fn submit() -> Submit {
                 title: "WordCraft document".into(),
                 options,
             };
-            let _ = sender.send(craft_print::submit(&bytes, &job).map_err(|error| error.to_string()));
+            let sent = craft_print::submit_cancellable(&bytes, &job, &mut |_, _| {}, &token);
+            let _ = sender.send(sent.map_err(|error| error.to_string()));
         });
         if let Ok(worker) = worker {
-            let mut jobs = JOBS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            jobs.retain(|job| !job.is_finished());
-            jobs.push(worker);
+            let mut jobs = jobs();
+            jobs.retain(|job| !job.worker.is_finished());
+            jobs.push(Job { worker, cancel: Box::new(move || cancel.cancel()) });
         }
         receiver
     })
@@ -67,20 +92,52 @@ pub fn submit() -> Submit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn shutdown_waits_for_pending_submission_workers() {
+    /// A worker that waits until released, then reports that it finished.
+    fn worker() -> (std::thread::JoinHandle<()>, std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>) {
         let (release, wait) = std::sync::mpsc::channel();
         let (completed, completion) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || {
-            wait.recv().unwrap();
-            completed.send(()).unwrap();
+            let _ = wait.recv();
+            let _ = completed.send(());
         });
-        JOBS.lock().unwrap().push(worker);
-        let shutdown = std::thread::spawn(finish_pending_jobs);
-        assert!(completion.try_recv().is_err(), "the print worker is still pending");
-        release.send(()).unwrap();
-        shutdown.join().unwrap();
-        completion.recv().unwrap();
-        assert!(JOBS.lock().unwrap().is_empty(), "workers were joined before shutdown returned");
+        (worker, release, completion)
+    }
+
+    /// Shutdown waits for a job already being sent, so the spooler has it before the process
+    /// exits, but not for one still waiting on a driver (a sleeping printer, #5710): that one is
+    /// cancelled, so it is never sent, and quitting doesn't hang on it. The two share the one
+    /// test because JOBS is global.
+    #[test]
+    fn shutdown_waits_for_jobs_being_sent_and_cancels_the_rest() {
+        let (sending, release_sending, sent) = worker();
+        let (stuck, release_stuck, _) = worker();
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let asked = cancelled.clone();
+        *JOBS.lock().unwrap() = vec![
+            Job { worker: sending, cancel: Box::new(|| false) },
+            Job {
+                worker: stuck,
+                cancel: Box::new(move || {
+                    asked.store(true, std::sync::atomic::Ordering::SeqCst);
+                    true
+                }),
+            },
+        ];
+        // Cancel from the Print page: the job being sent can't be stopped, so not all are.
+        assert!(!cancel()(), "a job already being sent completes");
+        let (finished, shutdown) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            finish_pending_jobs();
+            let _ = finished.send(());
+        });
+        let wait = std::time::Duration::from_millis(200);
+        assert!(shutdown.recv_timeout(wait).is_err(), "shutdown waits for the job being sent");
+        release_sending.send(()).unwrap();
+        assert!(shutdown.recv_timeout(std::time::Duration::from_secs(10)).is_ok(), "shutdown doesn't wait for the stuck job");
+        sent.recv().unwrap();
+        assert!(cancelled.load(std::sync::atomic::Ordering::SeqCst), "the waiting job was cancelled");
+        assert!(JOBS.lock().unwrap().is_empty(), "shutdown took every job");
+        // The stuck worker was left behind without blocking shutdown; let it end.
+        release_stuck.send(()).unwrap();
     }
 }

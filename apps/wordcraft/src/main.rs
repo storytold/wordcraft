@@ -337,6 +337,7 @@ fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
         file_dialog: Some(file_dialog),
         printers: Some(print::discover()),
         print_native: Some(print::submit()),
+        cancel_print: Some(print::cancel()),
         clipboard_picture: Some(Box::new(clipboard::picture)),
         make_default_app: default_apps::hook(),
         // Personal templates live in `Templates` in the settings folder (#2852), made on first save.
