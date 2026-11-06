@@ -22,6 +22,8 @@ wordcraft-control-key = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "clipboard", "wayland", "x11", "links"] }
 egui = { workspace = true }
 serde_json = { workspace = true }
+serde = { workspace = true }
+tempfile = "3"
 log = { workspace = true }
 chrono = { workspace = true }
 

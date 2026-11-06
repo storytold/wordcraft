@@ -1,4 +1,7 @@
 //! Desktop spooler adapter. Discovery and submission never run on the UI thread.
+#[cfg(any(windows, test))]
+pub(crate) mod isolated;
+
 use wordcraft_ui_egui::printing::{Discover, Duplex, Printer, Settings, Submit};
 
 /// Returns a discovery callback that enumerates spooler printers on a named worker thread and
@@ -27,6 +30,8 @@ pub fn discover() -> Discover {
 struct Job {
     worker: std::thread::JoinHandle<()>,
     cancel: Box<dyn Fn() -> bool + Send>,
+    // Acknowledged helper cancellation permits joining it to reap the process and its input PDF.
+    isolated: bool,
 }
 
 // Keep submission workers reachable until normal app shutdown; dropping a JoinHandle would
@@ -43,8 +48,14 @@ fn jobs() -> std::sync::MutexGuard<'static, Vec<Job>> {
 pub fn finish_pending_jobs() {
     let pending = std::mem::take(&mut *jobs());
     // Cancel them all first: a job left waiting while another is joined could start sending.
-    let sending: Vec<_> = pending.into_iter().filter(|job| !(job.cancel)()).collect();
-    for job in sending {
+    let finishing: Vec<_> = pending
+        .into_iter()
+        .filter(|job| {
+            let cancelled = (job.cancel)();
+            job.isolated || !cancelled
+        })
+        .collect();
+    for job in finishing {
         if job.worker.join().is_err() {
             log::error!("the print worker stopped unexpectedly during shutdown");
         }
@@ -61,7 +72,10 @@ pub fn cancel() -> Box<dyn Fn() -> bool> {
 pub fn submit() -> Submit {
     Box::new(|bytes, settings: Settings, collate, options| {
         let (sender, receiver) = std::sync::mpsc::channel();
+        #[cfg(not(windows))]
         let cancel = craft_print::Cancel::new();
+        #[cfg(windows)]
+        let cancel = isolated::Submission::new();
         let token = cancel.clone();
         let worker = std::thread::Builder::new().name("print-submit".into()).spawn(move || {
             let job = craft_print::Job {
@@ -78,13 +92,16 @@ pub fn submit() -> Submit {
                 title: "WordCraft document".into(),
                 options,
             };
-            let sent = craft_print::submit_cancellable(&bytes, &job, &mut |_, _| {}, &token);
-            let _ = sender.send(sent.map_err(|error| error.to_string()));
+            #[cfg(not(windows))]
+            let sent = craft_print::submit_cancellable(&bytes, &job, &mut |_, _| {}, &token).map_err(|error| error.to_string());
+            #[cfg(windows)]
+            let sent = token.submit(&bytes, &job);
+            let _ = sender.send(sent);
         });
         if let Ok(worker) = worker {
             let mut jobs = jobs();
             jobs.retain(|job| !job.worker.is_finished());
-            jobs.push(Job { worker, cancel: Box::new(move || cancel.cancel()) });
+            jobs.push(Job { worker, cancel: Box::new(move || cancel.cancel()), isolated: cfg!(windows) });
         }
         receiver
     })
@@ -128,7 +145,8 @@ mod tests {
         let (stop_stuck, cancelled) = asked(true);
         // The job being sent comes first, so a one-at-a-time shutdown would join it before
         // cancelling the waiting one.
-        *JOBS.lock().unwrap() = vec![Job { worker: sending, cancel: stop_sending }, Job { worker: stuck, cancel: stop_stuck }];
+        *JOBS.lock().unwrap() =
+            vec![Job { worker: sending, cancel: stop_sending, isolated: false }, Job { worker: stuck, cancel: stop_stuck, isolated: false }];
         // Cancel from the Print page asks the latest job only.
         assert!(cancel()(), "the latest job was still waiting: never sent");
         assert!(!sending_asked.load(std::sync::atomic::Ordering::SeqCst), "an earlier job isn't the one being submitted");
@@ -149,7 +167,7 @@ mod tests {
         let (done, release_done, finished) = worker();
         release_done.send(()).unwrap();
         finished.recv().unwrap();
-        *JOBS.lock().unwrap() = vec![Job { worker: done, cancel: Box::new(|| false) }];
+        *JOBS.lock().unwrap() = vec![Job { worker: done, cancel: Box::new(|| false), isolated: false }];
         assert!(!cancel()(), "a sent job isn't reported as cancelled");
         JOBS.lock().unwrap().clear();
         // The stuck worker was left behind without blocking shutdown; let it end.
