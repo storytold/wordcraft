@@ -96,6 +96,9 @@ fn open(path: &Path, password: Option<&str>) -> Result<Session, String> {
     }
     let mut s = session(doc);
     s.path = Some(path.into());
+    if !s.doc.skipped_parts.is_empty() {
+        s.damaged_source = Some((path.into(), s.doc.skipped_parts.clone()));
+    }
     if encrypted {
         s.password = password.map(wordcraft_engine::io::Password::new);
     }
@@ -562,6 +565,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let print = rest.iter().any(|a| a == "--print");
             for (n, (id, params)) in script.iter().flat_map(|c| c.commands.iter()).enumerate() {
                 let r = s.run(id, params).map_err(|e| format!("command {} ({id}): {e}", n + 1))?;
+                ensure_command_save_completed(id, &r, params, &s)?;
                 if print {
                     write_stdout(|o| writeln!(o, "{id}: {r}"))?;
                 }
@@ -575,6 +579,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                         None => (spec.clone(), json!({})),
                     };
                     let r = s.run(&id, &params).map_err(|e| format!("{id}: {e}"))?;
+                    ensure_command_save_completed(&id, &r, &params, &s)?;
                     if print {
                         write_stdout(|o| writeln!(o, "{id}: {r}"))?;
                     }
@@ -691,7 +696,8 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                     Some((id, p)) => (id.to_string(), serde_json::from_str::<Value>(p).map_err(|e| format!("{id}: bad JSON params: {e}"))?),
                     None => (spec.clone(), json!({})),
                 };
-                s.run(&id, &params).map_err(|e| format!("{id}: {e}"))?;
+                let result = s.run(&id, &params).map_err(|e| format!("{id}: {e}"))?;
+                ensure_command_save_completed(&id, &result, &params, &s)?;
             }
             let mut opts = wordcraft_zotero::client::Options::default();
             if let Some(p) = arg_value(&rest, "--port") {
@@ -738,6 +744,20 @@ fn ensure_save_completed(result: &Value, path: &str) -> Result<(), Failure> {
         return Err(format!("refusing to replace damaged source {path}; review skipped parts and confirm the save explicitly").into());
     }
     Ok(())
+}
+
+/// Treat a refused save command as a failed CLI operation, even inside a script or `--cmd` list.
+fn ensure_command_save_completed(id: &str, result: &Value, params: &Value, session: &Session) -> Result<(), Failure> {
+    if !matches!(id, "file.save" | "file.saveAs") {
+        return Ok(());
+    }
+    let path = params
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| session.path.as_ref().map(|path| path.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "current document".into());
+    ensure_save_completed(result, &path)
 }
 
 /// At most 400 characters of `s`, for traces.

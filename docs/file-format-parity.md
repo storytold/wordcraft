@@ -143,7 +143,7 @@ Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elemen
 | `w:fitText` | ❌ | ❌ | East Asian layout |
 | Glossary document (building blocks) | ✅ | ✅ | `w:docPart` entries (name, style, gallery, category, types, behaviours, description, guid, body) are read into `Document::glossary` and offered by Insert › Quick Parts and AutoText; `save` with `"in": "document"` stores one in the file. An untouched glossary is written back byte for byte with its own parts (styles, settings, fonts…); an edited one, or one whose parts weren't kept, is written from the model as `word/glossary1.xml` with copies of the document's styles and numbering. The glossary's own styles, settings and fonts, text boxes inside entries, and the notes and comments of a selection saved into the document don't survive an edit. Tests: `crates/docx/tests/it/glossary.rs` |
 | Sub-documents | ❌ | ❌ | |
-| Hostile input | ✅ | — | `malformed.rs`, capped allocations, never-crash standard. Failed zip entries count against the size limit, case variants of a part name are one part, embedded fonts and charts are written within budgets, and Flat OPC inlines kept XML only when it is one well-formed element (2026-10-22) |
+| Hostile input | ✅ | — | `malformed.rs`, capped allocations, never-crash standard. Failed zip entries count against the size limit, case variants of a part name are one part, embedded fonts and charts are written within budgets, and Flat OPC inlines kept XML only when it is one well-formed element (2026-10-22). Damaged DOCX parts are named when skipped; overwriting their source requires confirmation in the GUI, engine commands, and CLI (`--save`, `--cmd`, scripts; #3724) |
 | `w:altChunk`, sub-documents | ❌ | ❌ | |
 | Hostile input | ✅ | — | `malformed.rs`, capped allocations, never-crash standard |
 | Document paragraph defaults (`w:pPrDefault`) | ✅ | ✅ | Omission and explicit empty defaults remain distinct across repeated saves; nonempty defaults and later default-spacing edits are written |
@@ -328,6 +328,7 @@ CSL and library import are separate work.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | trivial | #3724: skipped damaged DOCX parts are named; replacement of the damaged source requires confirmation. CLI --save, --cmd and script refusals now return an error instead of reporting success; regression coverage checks that the original remains unchanged |
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` keeps its default and explicit values in schema-ordered repeated saves |
 | 2026-11-04 | trivial | REF context update: 2026-11-04 · #4609 retains the label and template actually rendered by an ancestor list instance; implicitly counted levels remain distinct from explicitly rendered paragraphs. Synthetic instance-override and field-update regressions; no new native Word qualification or readiness change. |
 | 2026-11-04 | trivial | PR #4609: relative REF keeps context already displayed by the own or a needed ancestor label; six synthetic legal-template cases and separate-list context follow the Word for Windows measurements reported by @pakiat in PR discussion. Existing unknown-switch/cache boundaries and readiness estimates unchanged; no new native Word run. |
