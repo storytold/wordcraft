@@ -8,6 +8,7 @@ use wordcraft_layout::display::{DisplayOptions, Draw, page_display};
 use super::{Session, json, run};
 
 mod completion;
+mod inverse;
 
 /// Minimal InkML package part used in the native screen/PDF integration fixtures.
 const INK: &str = r##"<ink xmlns="http://www.w3.org/2003/InkML"><brush><brushProperty name="color" value="#2563EB"/><brushProperty name="width" value="4" units="pt"/></brush><trace>0 0, 50 0, 50 25</trace></ink>"##;

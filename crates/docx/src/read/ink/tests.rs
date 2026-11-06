@@ -5,6 +5,7 @@ use wordcraft_doc::para::ShapeKind;
 
 mod advanced;
 mod completion;
+mod inverse;
 
 /// Wrap InkML body markup with the real namespace and decode it under a fresh ample work budget.
 fn ink(body: &str) -> Option<Graphic> {

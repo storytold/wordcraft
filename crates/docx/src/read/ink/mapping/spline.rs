@@ -59,6 +59,50 @@ impl Spline {
         Some(Self { x, y, second })
     }
 
+    pub(super) fn component(&self, index: usize, work: &mut usize) -> Option<Self> {
+        spend(work, self.x.len().saturating_mul(3))?;
+        Some(Self { x: self.x.clone(), y: vec![self.y.get(index)?.clone()], second: vec![self.second.get(index)?.clone()] })
+    }
+
+    pub(super) fn inverse_domain(&self, relative: bool, work: &mut usize) -> Option<(Vec<f64>, Vec<f64>)> {
+        let [y] = self.y.as_slice() else {
+            return None;
+        };
+        let [d] = self.second.as_slice() else {
+            return None;
+        };
+        if y.len() != self.x.len() || d.len() != y.len() {
+            return None;
+        }
+        spend(work, y.len().saturating_mul(64))?;
+        let values: Vec<_> = y.iter().zip(&self.x).map(|(y, x)| y + if relative { *x } else { 0.0 }).collect();
+        if !values.iter().all(|v| bounded(*v)) {
+            return None;
+        }
+        let direction = if values.first()? < values.last()? { 1.0 } else { -1.0 };
+        for i in 1..self.x.len() {
+            let h = self.x.get(i)? - self.x.get(i - 1)?;
+            let (a, b) = (*d.get(i - 1)?, *d.get(i)?);
+            let delta = values.get(i)? - values.get(i - 1)?;
+            if delta * direction <= 0.0 {
+                return None;
+            }
+            let quadratic = h * (b - a) * 0.5;
+            let linear = h * a;
+            let constant = delta / h - h * (2.0 * a + b) / 6.0;
+            let derivative = |t: f64| (quadratic * t * t + linear * t + constant) * direction;
+            let vertex = -linear / (2.0 * quadratic);
+            if ![quadratic, linear, constant].iter().all(|v| v.is_finite())
+                || derivative(0.0) < 0.0
+                || derivative(1.0) < 0.0
+                || ((0.0..1.0).contains(&vertex) && derivative(vertex) < 0.0)
+            {
+                return None;
+            }
+        }
+        Some((self.x.clone(), values))
+    }
+
     /// Interpolate in the declared domain; endpoint knots are returned exactly.
     pub fn at(&self, value: f64, work: &mut usize) -> Option<Vec<f64>> {
         spend(work, self.y.len().saturating_mul(16).saturating_add(self.x.len().ilog2() as usize + 1))?;

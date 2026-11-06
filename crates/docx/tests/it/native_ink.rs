@@ -58,6 +58,8 @@ fn native_ink_unsupported_features_keep_the_preview_and_original_bytes() {
         INK_XML.replace("</brush>", r#"<brushProperty name="rasterOp" value="unsupported"/></brush>"#),
         INK_XML.replace("</context>", "<canvasTransform/></context>"),
         "<not-ink>broken".to_string(),
+        r#"<ink xmlns="http://www.w3.org/2003/InkML"><context><canvasTransform><mapping type="unknown"/><mapping type="product"><mapping type="mathml" xmlns:m="http://www.w3.org/1998/Math/MathML"><bind source="X" variable="x"/><bind target="X"/><m:math><m:apply><m:root/><m:ci>x</m:ci></m:apply></m:math></mapping><mapping type="affine"><bind source="Y" column="1"/><bind target="Y" column="1"/><affine>1 0</affine></mapping></mapping></canvasTransform></context><trace>0 0,1 1</trace><trace>-1e-100 0,2 2</trace></ink>"#.to_string(),
+        r#"<ink xmlns="http://www.w3.org/2003/InkML"><traceFormat><channel name="X" type="integer"/><channel name="Y" type="integer"/></traceFormat><context><canvas><traceFormat><channel name="X" type="integer"/><channel name="Y" type="integer"/></traceFormat></canvas><canvasTransform><mapping type="unknown"/><mapping type="affine"><affine>0.5 0 0,0 1 0</affine></mapping></canvasTransform></context><trace>0 0,1 1</trace></ink>"#.to_string(),
     ];
     for ink in variants {
         for (bytes, grouped) in frames(true) {
@@ -87,6 +89,8 @@ fn advanced_native_ink_roundtrips_json_and_all_drawing_frames() {
         r##"<brush><brushProperty name="color" value="#ffff00"/><brushProperty name="rasterOp" value="maskPen"/></brush><trace>0 0,10 10</trace>"##,
         r##"<context><canvasTransform><mapping type="unknown"/><mapping type="affine"><affine>2 0 0,0 3 0</affine></mapping></canvasTransform></context><trace>0 0,10 10</trace>"##,
         r##"<definitions><traceGroup xml:id="g"><trace xml:id="a" continuation="begin">0 0,10 10</trace><trace continuation="end" priorRef="#a">20 10,30 0</trace></traceGroup></definitions><traceView traceDataRef="#g" from="1:2" to="2:1"/>"##,
+        r#"<context><canvasTransform><mapping type="unknown"/><mapping type="product"><mapping type="mathml" xmlns:m="http://www.w3.org/1998/Math/MathML"><bind source="X" variable="x"/><bind target="X"/><m:math><m:apply><m:exp/><m:ci>x</m:ci></m:apply></m:math></mapping><mapping type="affine"><bind source="Y" column="1"/><bind target="Y" column="1"/><affine>1 0</affine></mapping></mapping></canvasTransform></context><trace>1 0,2.718281828459045 1</trace>"#,
+        r#"<context><canvasTransform><mapping type="unknown"/><mapping type="product"><mapping type="table"><bind source="X" column="1"/><bind target="X" column="2"/><table interpolation="cubic" apply="relative">0 0,1 2,2 8,3 18</table></mapping><mapping type="affine"><bind source="Y" column="1"/><bind target="Y" column="1"/><affine>1 0</affine></mapping></mapping></canvasTransform></context><trace>0 0,2 1,21 3</trace>"#,
     ];
     for body in variants {
         let ink = format!(r#"<ink xmlns="http://www.w3.org/2003/InkML">{body}</ink>"#);

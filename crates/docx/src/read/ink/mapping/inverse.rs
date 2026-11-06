@@ -1,4 +1,7 @@
-use super::{El, Format, HashMap, MAX_CHANNELS, MAX_DEPTH, Mapping, Table, bounded, spend};
+use super::{El, Format, HashMap, MAX_CHANNELS, MAX_DEPTH, Mapping, Sample, Table, bounded, spend};
+
+pub(super) mod curve;
+pub(super) mod formula;
 
 impl Mapping {
     pub(in crate::read::ink) fn transform(el: &El, source: &Format, target: &Format, ids: &HashMap<&str, &El>, work: &mut usize) -> Option<Self> {
@@ -12,10 +15,14 @@ impl Mapping {
         if definition.attr("type").unwrap_or("unknown") != "unknown" {
             return Self::read(forward, source, target, ids, work, 0);
         }
-        Self::read(reverse?, target, source, ids, work, 0)?.inverse(work)
+        let forward = Self::read(reverse?, target, source, ids, work, 0)?;
+        forward.exact_integer_outputs(target, source, work)?;
+        let backward = forward.inverse(target, work)?;
+        spend(work, target.channels.len())?;
+        Some(Self::CheckedInverse { forward: Box::new(forward), backward: Box::new(backward), format: target.clone() })
     }
 
-    fn inverse(&self, work: &mut usize) -> Option<Self> {
+    fn inverse(&self, format: &Format, work: &mut usize) -> Option<Self> {
         spend(work, 1)?;
         let inverse = match self {
             Self::Identity(pairs) => Self::Identity(pairs.iter().map(|&(a, b)| (b, a)).collect()),
@@ -31,7 +38,7 @@ impl Mapping {
                     sources.dedup();
                     rows.sort_by_key(|r| r.0);
                     let targets: Vec<_> = rows.iter().map(|r| r.0).collect();
-                    if sources.len() != targets.len() || sources.len() > MAX_CHANNELS {
+                    if sources.len() > targets.len() || sources.len() > MAX_CHANNELS {
                         return None;
                     }
                     let mut matrix = Vec::new();
@@ -45,11 +52,12 @@ impl Mapping {
                     }
                     Self::Affine { sources: targets, targets: sources, rows: invert(&matrix, work)? }
                 } else {
-                    Self::Product(maps.iter().map(|m| m.inverse(work)).collect::<Option<Vec<_>>>()?)
+                    Self::Product(maps.iter().map(|m| m.inverse(format, work)).collect::<Option<Vec<_>>>()?)
                 }
             }
-            Self::Table(table) => Self::Table(table.inverse(work)?),
-            Self::Formula { .. } => return None,
+            Self::Table(table) => table.inverse(work)?,
+            Self::Formula { target, expression } => Self::InverseFormula(formula::inverse(expression, *target, format, work)?),
+            Self::InverseCurve(_) | Self::InverseFormula(_) | Self::CheckedInverse { .. } => return None,
         };
         let mut targets = Vec::new();
         inverse.targets(&mut targets);
@@ -59,6 +67,62 @@ impl Mapping {
         }
         Some(inverse)
     }
+
+    fn exact_integer_outputs(&self, source: &Format, target: &Format, work: &mut usize) -> Option<()> {
+        spend(work, source.channels.len().saturating_mul(target.channels.len()).max(1))?;
+        let integer = |i: usize| target.channels.get(i).is_none_or(|c| c.integer);
+        let discrete = |i: usize| source.channels.get(i).is_some_and(|c| c.integer || c.boolean);
+        match self {
+            Self::Identity(pairs) => (!pairs.iter().any(|(a, b)| integer(*b) && !discrete(*a))).then_some(()),
+            Self::Affine { sources, targets, rows } => {
+                for (&target, row) in targets.iter().zip(rows) {
+                    if integer(target)
+                        && (row.last()?.fract() != 0.0 || sources.iter().zip(row).any(|(&i, &v)| v != 0.0 && (!discrete(i) || v.fract() != 0.0)))
+                    {
+                        return None;
+                    }
+                }
+                Some(())
+            }
+            Self::Product(maps) => maps.iter().try_for_each(|m| m.exact_integer_outputs(source, target, work)),
+            Self::Formula { target, expression } => {
+                if !integer(*target) {
+                    return Some(());
+                }
+                let form = formula::linear(expression, work)?;
+                (form.constant.fract() == 0.0 && form.terms.iter().enumerate().all(|(i, &v)| v == 0.0 || discrete(i) && v.fract() == 0.0))
+                    .then_some(())
+            }
+            Self::Table(t) => (!t.targets.iter().any(|(i, _)| integer(*i))).then_some(()),
+            _ => None,
+        }
+    }
+}
+
+pub(super) fn check(forward: &Mapping, format: &Format, input: &Sample, output: &mut Sample, work: &mut usize) -> Option<()> {
+    spend(work, input.len().saturating_add(output.len()))?;
+    for (channel, value) in format.channels.iter().zip(output.iter_mut()) {
+        if let Some(v) = value {
+            if channel.integer {
+                *v = v.round();
+            }
+            if !channel.accepts(*v) {
+                return None;
+            }
+        }
+    }
+    let mut recovered = vec![None; input.len()];
+    forward.apply(output, &mut recovered, work)?;
+    for (expected, actual) in input.iter().zip(recovered) {
+        if let (Some(expected), Some(actual)) = (expected, actual) {
+            let expected = *expected;
+            let tolerance = 128.0 * f64::EPSILON * expected.abs().max(actual.abs()).max(1.0);
+            if (expected - actual).abs() > tolerance {
+                return None;
+            }
+        }
+    }
+    Some(())
 }
 
 fn effective<'a>(mut el: &'a El, ids: &HashMap<&str, &'a El>, work: &mut usize) -> Option<&'a El> {
@@ -92,26 +156,32 @@ fn affine_rows(mapping: &Mapping, rows: &mut Vec<AffineRow>, work: &mut usize) -
                 affine_rows(map, rows, work)?;
             }
         }
+        Mapping::Formula { target, expression } => {
+            let form = formula::linear(expression, work)?;
+            let terms = form.terms.iter().enumerate().filter_map(|(i, &v)| (v != 0.0).then_some((i, v))).collect();
+            rows.push((*target, terms, form.constant));
+        }
         _ => return None,
     }
     (rows.len() <= MAX_CHANNELS).then_some(())
 }
 
 fn invert(rows: &[Vec<f64>], work: &mut usize) -> Option<Vec<Vec<f64>>> {
-    let n = rows.len();
-    if n == 0 || n > MAX_CHANNELS || rows.iter().any(|r| r.len() != n + 1) {
+    let m = rows.len();
+    let n = rows.first()?.len().checked_sub(1)?;
+    if n == 0 || n > MAX_CHANNELS || m < n || m > MAX_CHANNELS || rows.iter().any(|r| r.len() != n + 1) {
         return None;
     }
-    spend(work, n.saturating_mul(n).saturating_mul(n + 1).saturating_mul(4))?;
-    let mut matrix = Vec::with_capacity(n);
+    spend(work, m.saturating_mul(n).saturating_mul(n + m).saturating_mul(4))?;
+    let mut matrix = Vec::with_capacity(m);
     for (i, row) in rows.iter().enumerate() {
         let mut r = row.get(..n)?.to_vec();
-        r.resize(n * 2, 0.0);
+        r.resize(n + m, 0.0);
         *r.get_mut(n + i)? = 1.0;
         matrix.push(r);
     }
     for i in 0..n {
-        let pivot = (i..n).max_by(|&a, &b| {
+        let pivot = (i..m).max_by(|&a, &b| {
             matrix
                 .get(a)
                 .and_then(|r| r.get(i))
@@ -147,6 +217,7 @@ fn invert(rows: &[Vec<f64>], work: &mut usize) -> Option<Vec<Vec<f64>>> {
     }
     matrix
         .iter()
+        .take(n)
         .map(|row| {
             let mut inverse = row.get(n..)?.to_vec();
             let offset: f64 = inverse.iter().zip(rows).map(|(a, r)| Some(a * r.last()?)).sum::<Option<f64>>()?;
@@ -160,18 +231,49 @@ fn invert(rows: &[Vec<f64>], work: &mut usize) -> Option<Vec<Vec<f64>>> {
 }
 
 impl Table {
-    fn inverse(&self, work: &mut usize) -> Option<Self> {
+    fn inverse(&self, work: &mut usize) -> Option<Mapping> {
+        for target in 0..self.targets.len() {
+            spend(work, 1)?;
+            if let Some(mapping) = self.inverse_axis(target, work) {
+                return Some(mapping);
+            }
+            if *work == 0 {
+                return None;
+            }
+        }
+        None
+    }
+
+    fn inverse_axis(&self, axis: usize, work: &mut usize) -> Option<Mapping> {
         let [(source, xcol, _)] = self.sources.as_slice() else {
             return None;
         };
-        let [(target, ycol)] = self.targets.as_slice() else {
+        let (target, ycol) = self.targets.get(axis)?;
+        if self.rows.len() < 2 {
             return None;
+        }
+        let relative = match self.relative.get(axis)? {
+            None => false,
+            Some(i) if i == source => true,
+            _ => return None,
         };
-        if self.interpolation != "linear" || self.relative.iter().any(Option::is_some) || self.rows.len() < 2 {
+        if let Some(spline) = &self.spline {
+            let spline = spline.component(axis, work)?;
+            return Some(Mapping::InverseCurve(curve::Curve::new(spline, *target, *source, relative, work)?));
+        }
+        if self.interpolation != "linear" {
             return None;
         }
         spend(work, self.rows.len().saturating_mul(16))?;
-        let mut rows: Vec<Vec<f64>> = self.rows.iter().map(|r| Some(vec![*r.get(*xcol)?, *r.get(*ycol)?])).collect::<Option<_>>()?;
+        let mut rows: Vec<Vec<f64>> = self
+            .rows
+            .iter()
+            .map(|r| {
+                let x = *r.get(*xcol)?;
+                let y = *r.get(*ycol)? + if relative { x } else { 0.0 };
+                bounded(y).then_some(vec![x, y])
+            })
+            .collect::<Option<_>>()?;
         rows.sort_by(|a, b| a.first().copied().unwrap_or(0.0).total_cmp(&b.first().copied().unwrap_or(0.0)));
         let mut direction = None;
         for pair in rows.windows(2) {
@@ -186,13 +288,13 @@ impl Table {
         }
         rows.sort_by(|a, b| a.first().copied().unwrap_or(0.0).total_cmp(&b.first().copied().unwrap_or(0.0)));
         let knots = rows.iter().map(|r| r.first().copied()).collect::<Option<_>>()?;
-        Some(Self {
+        Some(Mapping::Table(Self {
             sources: vec![(*target, 0, knots)],
             targets: vec![(*source, 1)],
             relative: vec![None],
             rows,
             interpolation: "linear".into(),
             spline: None,
-        })
+        }))
     }
 }

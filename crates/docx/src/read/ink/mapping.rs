@@ -13,13 +13,27 @@ pub(super) enum Mapping {
     /// Direct copies into named destination channels.
     Identity(Vec<(usize, usize)>),
     /// A row per destination: source coefficients followed by a constant.
-    Affine { sources: Vec<usize>, targets: Vec<usize>, rows: Vec<Vec<f64>> },
+    Affine {
+        sources: Vec<usize>,
+        targets: Vec<usize>,
+        rows: Vec<Vec<f64>>,
+    },
     /// Independent maps of the same input; overlapping output channels are invalid.
     Product(Vec<Mapping>),
     /// One scalar Content MathML expression assigned to a destination.
-    Formula { target: usize, expression: Expr },
+    Formula {
+        target: usize,
+        expression: Expr,
+    },
     /// A rectangular lookup grid with source/target column bindings.
     Table(Table),
+    InverseCurve(inverse::curve::Curve),
+    InverseFormula(inverse::formula::Scalar),
+    CheckedInverse {
+        forward: Box<Mapping>,
+        backward: Box<Mapping>,
+        format: Format,
+    },
 }
 
 impl Mapping {
@@ -133,6 +147,9 @@ impl Mapping {
             }
             Self::Formula { target, .. } => out.push(*target),
             Self::Table(table) => out.extend(table.targets.iter().map(|p| p.0)),
+            Self::InverseCurve(curve) => out.push(curve.target),
+            Self::InverseFormula(scalar) => out.push(scalar.target),
+            Self::CheckedInverse { backward, .. } => backward.targets(out),
         }
     }
 
@@ -173,6 +190,12 @@ impl Mapping {
             }
             Self::Formula { target, expression } => put(output, *target, expression.eval(input, work)?)?,
             Self::Table(table) => table.apply(input, output, work)?,
+            Self::InverseCurve(curve) => put(output, curve.target, curve.at(input.get(curve.source).copied().flatten()?, work)?)?,
+            Self::InverseFormula(scalar) => put(output, scalar.target, scalar.at(input, work)?)?,
+            Self::CheckedInverse { forward, backward, format } => {
+                backward.apply(input, output, work)?;
+                inverse::check(forward, format, input, output, work)?;
+            }
         }
         Some(())
     }
