@@ -320,6 +320,56 @@ impl FontFace {
         use skrifa::raw::TableProvider;
         self.skrifa().is_some_and(|f| f.gsub().is_ok())
     }
+    /// Does the face's GSUB table include `feature` for `script`?
+    /// Pass 4-byte OpenType tag slices, e.g. `b"thai"` and `b"blws"`.
+    pub fn has_gsub_feature(&self, script: &[u8; 4], feature: &[u8; 4]) -> bool {
+        use skrifa::Tag;
+        use skrifa::raw::TableProvider;
+        let Some(f) = self.skrifa() else { return false };
+        let Ok(gsub) = f.gsub() else { return false };
+        let script_tag = Tag::new(script);
+        let feature_tag = Tag::new(feature);
+        let Ok(script_list) = gsub.script_list() else { return false };
+        let Ok(feature_list) = gsub.feature_list() else { return false };
+        for script_rec in script_list.script_records() {
+            if script_rec.script_tag() != script_tag {
+                continue;
+            }
+            let Ok(script_tbl) = script_rec.script(script_list.offset_data()) else { continue };
+            // Check default LangSys
+            if script_tbl
+                .default_lang_sys()
+                .and_then(|r| r.ok())
+                .is_some_and(|lang| {
+                    lang.feature_indices()
+                        .iter()
+                        .filter_map(|i| feature_list.feature_records().get(i.get() as usize))
+                        .any(|fr| fr.feature_tag() == feature_tag)
+                })
+            {
+                return true;
+            }
+            // Check all language systems
+            for lang_rec in script_tbl.lang_sys_records() {
+                let Ok(lang) = lang_rec.lang_sys(script_tbl.offset_data()) else { continue };
+                if lang
+                    .feature_indices()
+                    .iter()
+                    .filter_map(|i| feature_list.feature_records().get(i.get() as usize))
+                    .any(|fr| fr.feature_tag() == feature_tag)
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    /// Does the face carry an Apple AAT `morx` table?
+    /// Thonburi, Sathu and other Apple Thai system fonts use `morx` instead of GSUB.
+    pub fn has_morx(&self) -> bool {
+        use skrifa::raw::TableProvider;
+        self.skrifa().is_some_and(|f| f.morx().is_ok())
+    }
     /// Units per em.
     pub fn units_per_em(&self) -> f64 {
         self.upem

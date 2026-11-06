@@ -1,9 +1,41 @@
 use super::enter_tab::insert_paragraphs;
 use super::{
     Block, Border, BorderStyle, CmdError, CmdResult, ListKind, NumRef, OBJ, Path, Pos, Selection, Session, StoryRef, Table, Value, delete_selection,
-    p, sel_result, split_para, type_text_effect,
+    p, sel_result, split_para, type_text, type_text_effect,
 };
 use std::sync::Arc;
+
+/// Return the Thai input action for `ch` at the current caret position, or `None` if the
+/// character is non-Thai and needs no special handling (plain consonants, ASCII, etc.).
+fn thai_tcb_action(s: &Session, ch: char) -> Option<wordcraft_doc::thai_input::ThaiInputAction> {
+    use wordcraft_doc::thai_input::{ThaiCharClass, current_tcb, thai_char_class, thai_input_action};
+    match thai_char_class(ch) {
+        ThaiCharClass::UpperVowel
+        | ThaiCharClass::LowerVowel
+        | ThaiCharClass::Tone
+        | ThaiCharClass::Diacritic
+        | ThaiCharClass::LeadingVowel
+        | ThaiCharClass::PaliMark   // Nikhahit (◌ํ): vowel upgrade + sara_am compose
+        | ThaiCharClass::Karan      // ์ thanthakhat
+        | ThaiCharClass::SaraAm     // ำ
+        => {}
+        // SARA_AA (า U+0E32) can combine with a preceding NIKHAHIT into SARA_AM.
+        ThaiCharClass::Other if ch == '\u{0E32}' => {}
+        _ => return None,
+    }
+    let focus = &s.sel.focus;
+    let para = s.doc.para_at(focus)?;
+    let tcb = current_tcb(&para.text, focus.off);
+    // Character immediately before the caret (may be outside the TCB, e.g. a leading vowel).
+    let prev_char = para.text.get(..focus.off).and_then(|s| s.char_indices().next_back());
+    let action = thai_input_action(&tcb, ch, prev_char);
+    // Return None for Accept on plain consonants / other pass-through so the caller just
+    // falls through to the normal insert path — only return Some when action matters.
+    match action {
+        wordcraft_doc::thai_input::ThaiInputAction::Accept => None,
+        other => Some(other),
+    }
+}
 
 /// Smart quotes and AutoFormat-as-you-type (lists from "* " / "1. ", dashes).
 fn autoformat(s: &mut Session, text: &str) -> Option<String> {
@@ -68,8 +100,120 @@ pub(super) fn insert(s: &mut Session, v: &Value) -> CmdResult {
     }
     typing_options(s, text);
     let smart_quote = if raw { None } else { autoformat(s, text) };
+    let text_to_type = smart_quote.as_deref().unwrap_or(text);
     let was_collapsed = s.sel.is_collapsed();
-    let effect = type_text_effect(s, smart_quote.as_deref().unwrap_or(text))?;
+    // Multi-character all-Thai-combining input: macOS sends some keys as a 2-char event,
+    // e.g. the Nikhahit (ํ) key delivers ิ (sara_i U+0E34) + ํ (U+0E4D).  The count==1
+    // guard below would skip sequence checking for both; instead, process each char in
+    // sequence so vowel-upgrade rules (ิ+ํ → ึ) fire correctly between characters.
+    if !raw
+        && s.sel.is_collapsed()
+        && !s.doc.settings.track_changes
+        && text_to_type.chars().count() > 1
+        && {
+            use wordcraft_doc::thai_input::{ThaiCharClass, thai_char_class};
+            text_to_type.chars().all(|c| {
+                matches!(
+                    thai_char_class(c),
+                    ThaiCharClass::UpperVowel
+                        | ThaiCharClass::LowerVowel
+                        | ThaiCharClass::Tone
+                        | ThaiCharClass::Diacritic
+                        | ThaiCharClass::Karan
+                        | ThaiCharClass::PaliMark
+                        | ThaiCharClass::SaraAm
+                )
+            })
+        }
+    {
+        for ch in text_to_type.chars().collect::<Vec<_>>() {
+            let v = serde_json::json!({ "text": ch.to_string() });
+            insert(s, &v)?;
+        }
+        return sel_result(s);
+    }
+    // Thai input sequence checking: a single Thai combining character (vowel, tone, diacritic)
+    // may replace an existing character in the current TCB rather than append.
+    // Skip when the selection is not collapsed or when Track Changes is on.
+    if !raw
+        && s.sel.is_collapsed()
+        && !s.doc.settings.track_changes
+        && text_to_type.chars().count() == 1
+        && let Some(ch) = text_to_type.chars().next()
+        && let Some(action) = thai_tcb_action(s, ch)
+    {
+        match action {
+            wordcraft_doc::thai_input::ThaiInputAction::Reject => {
+                return sel_result(s);
+            }
+            wordcraft_doc::thai_input::ThaiInputAction::Replace { slot_offset, slot_bytes, cons_swap, replacement } => {
+                let original_off = s.sel.focus.off;
+                if let Some(wordcraft_doc::thai_input::ConsSwap { offset: co, old_bytes: cb, new_char: nc }) = cons_swap {
+                    let a = Pos { off: co, ..s.sel.focus.clone() };
+                    let b = Pos { off: co + cb, ..s.sel.focus.clone() };
+                    s.sel = Selection { anchor: a, focus: b };
+                    type_text(s, &nc.to_string())?;
+                }
+                let a = Pos { off: slot_offset, ..s.sel.focus.clone() };
+                let b = Pos { off: slot_offset + slot_bytes, ..s.sel.focus.clone() };
+                s.sel = Selection { anchor: a, focus: b };
+                let insert_str;
+                let insert_text: &str = if let Some(rc) = replacement {
+                    insert_str = rc.to_string();
+                    &insert_str
+                } else {
+                    text_to_type
+                };
+                let insert_len = insert_text.len();
+                type_text(s, insert_text)?;
+                let new_off = original_off.saturating_sub(slot_bytes).saturating_add(insert_len);
+                let pos = Pos { off: new_off, ..s.sel.focus.clone() };
+                s.sel = Selection { anchor: pos.clone(), focus: pos };
+                s.set_ime_edit_outcome(crate::ImeEditOutcome {
+                    classified: true, content_changed: true, state_changed: true,
+                    transformed: false, selection_changed: false,
+                });
+                return sel_result(s);
+            }
+            wordcraft_doc::thai_input::ThaiInputAction::DeleteThenAppend { slot_offset, slot_bytes, cons_swap, replacement } => {
+                let original_off = s.sel.focus.off;
+                if let Some(wordcraft_doc::thai_input::ConsSwap { offset: co, old_bytes: cb, new_char: nc }) = cons_swap {
+                    let a = Pos { off: co, ..s.sel.focus.clone() };
+                    let b = Pos { off: co + cb, ..s.sel.focus.clone() };
+                    s.sel = Selection { anchor: a, focus: b };
+                    type_text(s, &nc.to_string())?;
+                }
+                if slot_bytes > 0 {
+                    let a = Pos { off: slot_offset, ..s.sel.focus.clone() };
+                    let b = Pos { off: slot_offset + slot_bytes, ..s.sel.focus.clone() };
+                    s.sel = Selection { anchor: a, focus: b };
+                    delete_selection(s)?;
+                }
+                let insert_off = original_off.saturating_sub(slot_bytes);
+                let pos = Pos { off: insert_off, ..s.sel.focus.clone() };
+                s.sel = Selection { anchor: pos.clone(), focus: pos };
+                let insert_str;
+                let insert_text: &str = if let Some(rc) = replacement {
+                    insert_str = rc.to_string();
+                    &insert_str
+                } else {
+                    text_to_type
+                };
+                let insert_len = insert_text.len();
+                type_text(s, insert_text)?;
+                let new_off = insert_off.saturating_add(insert_len);
+                let pos = Pos { off: new_off, ..s.sel.focus.clone() };
+                s.sel = Selection { anchor: pos.clone(), focus: pos };
+                s.set_ime_edit_outcome(crate::ImeEditOutcome {
+                    classified: true, content_changed: true, state_changed: true,
+                    transformed: false, selection_changed: false,
+                });
+                return sel_result(s);
+            }
+            wordcraft_doc::thai_input::ThaiInputAction::Accept => {}
+        }
+    }
+    let effect = type_text_effect(s, text_to_type)?;
     let mut outcome = crate::ImeEditOutcome {
         classified: true,
         content_changed: effect.content_changed,
