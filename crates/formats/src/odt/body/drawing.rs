@@ -388,6 +388,9 @@ impl Body<'_> {
 /// A picture from a package's bytes: a raster image, or a Windows metafile (WMF, EMF: LibreOffice
 /// keeps clip art and logos so), sized `w` × `h` (points) when the frame says.
 pub(in crate::odt) fn picture(data: Vec<u8>, w: Option<f32>, h: Option<f32>, alt: &str) -> Option<model::Img> {
+    // What the frame states, if it could be a size (far past any page, kept from overflowing).
+    let stated = |v: Option<f32>| v.filter(|v| v.is_finite() && *v > 0.0).map(|v| v.min(1e6));
+    let (w, h) = (stated(w), stated(h));
     let mut img = if wordcraft_metafile::is_metafile(&data) {
         // An EMF starts with its header record, type 1.
         let ext = if data.get(..4) == Some(&[1, 0, 0, 0]) { "emf" } else { "wmf" };
@@ -398,11 +401,21 @@ pub(in crate::odt) fn picture(data: Vec<u8>, w: Option<f32>, h: Option<f32>, alt
         make_img(data, w, h, alt)?
     };
     // A size the frame states is the file's, however large (a picture across a whole page): only
-    // a picture with none is shrunk to a column.
-    let stated = |v: Option<f32>| v.filter(|v| v.is_finite() && *v > 0.0).map(|v| v.clamp(1.0, 1584.0));
-    if let (Some(w), Some(h)) = (stated(w), stated(h)) {
-        (img.w, img.h) = (w, h);
-    }
+    // a picture with none is shrunk to a column. Stated on one side, the other follows the
+    // picture's proportions.
+    let (w, h) = match (w, h) {
+        (Some(w), Some(h)) => (w, h),
+        (Some(w), None) => (w, w * img.h / img.w),
+        (None, Some(h)) => (h * img.w / img.h, h),
+        (None, None) => return Some(img),
+    };
+    // Past what a document holds, it shrinks in proportion.
+    let (w, h) = match w.max(h) {
+        most if most <= 1584.0 => (w, h),
+        _ if w >= h => (1584.0, h * 1584.0 / w),
+        _ => (w * 1584.0 / h, 1584.0),
+    };
+    (img.w, img.h) = (w.max(1.0), h.max(1.0));
     Some(img)
 }
 
