@@ -1,10 +1,67 @@
 use super::select::{all_objects, edit_obj, picked_objects, selected, selected_all};
-use super::{CmdError, CmdResult, InlineObject, Pos, Rgb, Session, StoryRef, TextBody, Value, json, p};
+use super::{CmdError, CmdResult, InlineObject, Pos, Rgb, Selection, Session, StoryRef, TextBody, VAlign, Value, json, p};
 
 pub(super) const NO_TEXT_BOX: &str = "select a text box first";
 
 pub(super) fn has_text_box(s: &Session) -> Option<&'static str> {
     if text_box_target(s).is_some() { None } else { Some(NO_TEXT_BOX) }
+}
+
+/// Whether the object can hold text: a shape that isn't a line or connector.
+fn holds_text(o: &InlineObject) -> bool {
+    matches!(o, InlineObject::Shape { kind, .. } if !kind.is_open())
+}
+
+/// `shape.editText` (double-click a shape): the caret goes to the end of the shape's text. A shape
+/// without text gets an empty text story, centred both ways as Word does for shapes.
+pub(super) fn edit_shape_text(s: &mut Session, v: &Value) -> CmdResult {
+    // A pure command doesn't restore the selection when it fails.
+    let sel = s.sel.clone();
+    let r = enter_shape_text(s, v);
+    if r.is_err() {
+        s.sel = sel;
+    }
+    r
+}
+
+fn enter_shape_text(s: &mut Session, v: &Value) -> CmdResult {
+    if let Some(at) = v.get("pos") {
+        let pos = super::super::parse_pos(at).ok_or_else(|| CmdError::Params("`pos`: no object there".into()))?;
+        let end = Pos { off: pos.off.saturating_add(wordcraft_doc::para::OBJ.len_utf8()), ..pos.clone() };
+        s.sel = Selection { anchor: pos, focus: end };
+    }
+    let (pos, obj) = selected(s).filter(|(_, o)| holds_text(o)).ok_or_else(|| CmdError::Disabled("select a shape or text box first".into()))?;
+    let existing = match obj {
+        InlineObject::Shape { story: Some(id), .. } if is_text_box(s, id) => Some(id),
+        _ => None,
+    };
+    let id = match existing {
+        // A box linked from another shows (and edits) the first box's story.
+        Some(id) => s.doc.text_box_chain(id).and_then(|c| c.first().copied()).unwrap_or(id),
+        None => {
+            // Only existing text is a mere caret move: a new story is an edit, so a protected
+            // document gets the same say it has over mutating commands.
+            if super::super::protect::check_before(s, "shape.editText", v)? {
+                return Err(CmdError::Disabled("shape.editText: only the editable regions of this protected document can change".into()));
+            }
+            s.checkpoint("Edit Text");
+            let mut para = wordcraft_doc::Paragraph::new();
+            para.props.align = Some(wordcraft_doc::props::Align::Center);
+            let id = s.doc.try_add_part(wordcraft_doc::PartKind::TextBox, vec![wordcraft_doc::para_block(para)])?;
+            if let Some(part) = s.doc.parts.get_mut(&id) {
+                part.body.anchor = VAlign::Center;
+            }
+            edit_obj(s, &pos, |o| {
+                if let InlineObject::Shape { story, .. } = o {
+                    *story = Some(id);
+                }
+            })?;
+            s.touch();
+            id
+        }
+    };
+    s.sel = Selection::caret(s.doc.end_of(StoryRef::Part(id)));
+    Ok(json!({"story": id}))
 }
 
 fn is_text_box(s: &Session, id: u32) -> bool {
