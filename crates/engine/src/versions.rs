@@ -5,16 +5,20 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 
+#[cfg(not(target_arch = "wasm32"))]
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::Session;
+#[cfg(not(target_arch = "wasm32"))]
 use wordcraft_doc::Document;
 
 pub(crate) const DEFAULT_CAP: usize = 50;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_BYTES: u64 = 256 << 20;
 
+/// One persisted version snapshot. Desktop-only: the web loads and saves through the browser.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Entry {
     label: String,
@@ -22,6 +26,7 @@ struct Entry {
     document: Document,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Serialize, Deserialize)]
 struct Sidecar {
     version: u32,
