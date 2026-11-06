@@ -530,3 +530,21 @@ fn a_long_combo_list_builds_only_the_rows_in_view() {
     })
     .drop_without_applying_deltas();
 }
+
+#[test]
+fn big_toggle_reports_accessible_label_and_selected_state() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(200.0, 100.0))
+        .with_context_setup(|ctx| ctx.set_fonts(crate::theme::font_definitions(false, false)))
+        .build_ui_state(
+            |ui, app: &mut WordApp| {
+                big_toggle(ui, app, "link", "Link to\nPrevious", "view.fullScreen", true);
+            },
+            app,
+        );
+    h.run_steps(2);
+    let node = h.get_by_role_and_label(egui::accesskit::Role::Button, "Link to Previous");
+    assert!(node.accesskit_node().toggled().is_some() || node.accesskit_node().is_selected().is_some());
+}

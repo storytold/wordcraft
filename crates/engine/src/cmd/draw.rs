@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use wordcraft_doc::freeform::{FreePath, Freeform, InkTool, MAX_INK_PER_PAGE, MAX_POINTS};
 use wordcraft_doc::para::{Anchor, Float, InlineObject, OBJ, ShapeKind, Wrap};
 use wordcraft_doc::props::Rgb;
-use wordcraft_doc::{CharProps, Pos, StoryRef};
+use wordcraft_doc::{Block, CharProps, PartKind, Pos, StoryRef};
 use wordcraft_geom::Rect;
 use wordcraft_layout::{DocLayout, Placed};
 
@@ -255,6 +255,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("draw.convertInk", "Convert to Shapes", "Draw › Convert", convert_selection),
         CommandSpec::new("draw.replay", "Ink Replay", "Draw › Replay", replay)
+            .when(can_replay)
             .params(r#"{"value"?: bool}  (starts or stops Ink Replay; returns the strokes in the order they were drawn)"#)
             .pure(),
         CommandSpec::new("review.hideInk", "Hide Ink", "Review › Ink", |s, v| {
@@ -926,6 +927,94 @@ fn replay(s: &mut Session, v: &Value) -> CmdResult {
         })
         .collect();
     Ok(json!({"replaying": on, "strokes": list}))
+}
+
+/// Whether document part `id` of kind `kind` is placed on pages in the current view.
+fn is_part_placed(s: &Session, id: u32, kind: PartKind) -> bool {
+    let reflow = s.view.read_mode
+        || matches!(s.view.mode, wordcraft_layout::ViewMode::Web | wordcraft_layout::ViewMode::Draft | wordcraft_layout::ViewMode::Outline);
+    match kind {
+        PartKind::Endnote => {
+            if reflow {
+                return false;
+            }
+            let mut referenced = false;
+            s.doc.objects_in_reading_order(&mut |o| {
+                if let InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Endnote, id: note_id, .. } = o
+                    && *note_id == id
+                {
+                    referenced = true;
+                }
+            });
+            referenced
+        }
+        PartKind::Footnote => {
+            if reflow {
+                return false;
+            }
+            let mut referenced = false;
+            s.doc.objects_in_reading_order(&mut |o| {
+                if let InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id: note_id, .. } = o
+                    && *note_id == id
+                {
+                    referenced = true;
+                }
+            });
+            referenced
+        }
+        PartKind::Header | PartKind::Footer => {
+            if reflow {
+                return false;
+            }
+            s.doc.sections().iter().any(|(_, sec)| {
+                sec.headers.default == Some(id)
+                    || sec.headers.first == Some(id)
+                    || sec.headers.even == Some(id)
+                    || sec.footers.default == Some(id)
+                    || sec.footers.first == Some(id)
+                    || sec.footers.even == Some(id)
+            })
+        }
+        PartKind::TextBox => true,
+        PartKind::Comment => false,
+    }
+}
+
+/// Whether the session has any ink strokes in the document or placed on pages.
+pub fn has_ink(s: &Session) -> bool {
+    if s.current_layout().is_some_and(|layout| (0..layout.pages.len()).any(|page| !ink_on(s, &layout, page).is_empty())) {
+        return true;
+    }
+    let mut found = false;
+    s.doc.objects_in_reading_order(&mut |o| {
+        if o.ink().is_some() {
+            found = true;
+        }
+    });
+    if found {
+        return true;
+    }
+    s.doc.parts.iter().any(|(id, part)| is_part_placed(s, *id, part.kind) && blocks_have_ink(&part.blocks))
+}
+
+fn blocks_have_ink(blocks: &[Arc<Block>]) -> bool {
+    blocks.iter().any(|b| match b.as_ref() {
+        Block::Para(p) => p.objects.iter().any(|o| o.ink().is_some()),
+        Block::Table(t) => t.rows.iter().any(|r| r.cells.iter().any(|c| blocks_have_ink(&c.blocks))),
+    })
+}
+
+/// Whether Ink Replay can be started or stopped: enabled when ink exists or replay is active.
+fn can_replay(s: &Session) -> Option<&'static str> {
+    if s.view.draw.replay {
+        None
+    } else if s.view.hide_ink {
+        Some("ink is hidden")
+    } else if has_ink(s) {
+        None
+    } else {
+        Some("there is no ink to replay")
+    }
 }
 
 #[cfg(test)]
