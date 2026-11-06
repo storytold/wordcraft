@@ -128,10 +128,9 @@ impl Brush {
         if !self.ignore_pressure && format.index("F").is_some() {
             // Pressure response is not specified by InkML; use a documented linear response
             // only when a range/percentage allows unambiguous normalization.
-            if let Some(force) = format.fraction(values, "F") {
-                width *= force;
-                height *= force;
-            }
+            let force = format.fraction(values, "F")?;
+            width *= force;
+            height *= force;
         }
         if !width.is_finite() || !height.is_finite() || !(0.0..=100_000.0).contains(&width) || !(0.0..=100_000.0).contains(&height) {
             return None;
@@ -237,10 +236,14 @@ pub(super) fn drawing(strokes: Vec<Stroke>, work: &mut usize) -> Option<Graphic>
             && first.width == first.height
             && first.alpha == 1.0
             && first.width > 0.0
-            && stroke
-                .points
-                .iter()
-                .all(|p| p.width == first.width && p.height == first.height && p.color == first.color && p.alpha == first.alpha && !p.mask_pen);
+            && stroke.points.iter().all(|p| {
+                p.tip == first.tip
+                    && p.width == first.width
+                    && p.height == first.height
+                    && p.color == first.color
+                    && p.alpha == first.alpha
+                    && !p.mask_pen
+            });
         if simple {
             spend(work, stroke.points.len())?;
             geometries.push(Geometry {

@@ -74,7 +74,9 @@ fn force_defaults_to_percentage_and_explicit_physical_units_keep_range_normaliza
     let invalid = format!("{body}<trace>0 0 4 1.01</trace>");
     assert!(ink(&invalid).is_none());
     let uncalibrated = r#"<traceFormat><channel name="X" units="pt"/><channel name="Y" units="pt"/><channel name="F" units="N"/></traceFormat><trace>0 0 50,10 0 100</trace>"#;
-    assert_eq!(ink(uncalibrated), ink("<trace>0 0,10 0</trace>"));
+    assert!(ink(uncalibrated).is_none());
+    let ignored = format!(r#"<brush><brushProperty name="ignorePressure" value="true"/></brush>{uncalibrated}"#);
+    assert_eq!(ink(&ignored), ink("<trace>0 0,10 0</trace>"));
 }
 
 #[test]

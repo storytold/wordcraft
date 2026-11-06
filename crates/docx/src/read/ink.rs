@@ -84,9 +84,15 @@ pub(super) fn fit_frame(graphic: &mut Graphic, w: f32, h: f32) {
                 *stroke_width = (*stroke_width * ((sx + sy) / 2.0)).min(crate::units::MAX_LEN_PT);
             }
             GraphicItem::InkOutline { segs, .. } => scale_segments(segs, sx, sy),
-            GraphicItem::Shape { rect, .. } => {
-                for (v, scale) in rect.iter_mut().zip([sx, sy, sx, sy]) {
-                    *v *= scale;
+            GraphicItem::Shape { rect, kind, fill, stroke, .. } => {
+                let [x, y, width, height] = *rect;
+                if *kind == wordcraft_doc::para::ShapeKind::Ellipse && fill.is_some() && stroke.is_none() && width == height {
+                    let size = (width * ((sx + sy) / 2.0)).min(crate::units::MAX_LEN_PT);
+                    *rect = [(x + width / 2.0) * sx - size / 2.0, (y + height / 2.0) * sy - size / 2.0, size, size];
+                } else {
+                    for (v, scale) in rect.iter_mut().zip([sx, sy, sx, sy]) {
+                        *v *= scale;
+                    }
                 }
             }
             _ => {}
@@ -455,8 +461,9 @@ impl<'a> InkReader<'a, '_> {
             return None;
         }
         let default_down = match el.attr("type") {
-            None | Some("penDown") => true,
-            Some("penUp" | "indeterminate") => false,
+            None | Some("penDown") => Some(true),
+            Some("penUp") => Some(false),
+            Some("indeterminate") => None,
             _ => return None,
         };
         let mut tail = self.prior(el, range)?;
@@ -471,12 +478,12 @@ impl<'a> InkReader<'a, '_> {
             let resolved = projection.apply(values, self.work)?;
             let down = if visual.index("S").is_some() {
                 match visual.value(&resolved, "S") {
-                    Some(0.0) | None => false,
+                    Some(0.0) => false,
                     Some(1.0) => true,
                     _ => return None,
                 }
             } else {
-                default_down
+                default_down?
             };
             if !down {
                 tail = None;
@@ -488,7 +495,13 @@ impl<'a> InkReader<'a, '_> {
             }
             let point = ctx.brush.point(visual, &resolved, xy)?;
             match tail {
-                Some(i) => self.strokes.get_mut(i)?.points.push(point),
+                Some(i) => {
+                    let stroke = self.strokes.get_mut(i)?;
+                    if stroke.curve != ctx.brush.curve {
+                        return None;
+                    }
+                    stroke.points.push(point);
+                }
                 None => {
                     tail = Some(self.strokes.len());
                     self.strokes.push(Stroke { points: vec![point], curve: ctx.brush.curve });

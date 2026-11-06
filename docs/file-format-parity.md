@@ -319,7 +319,7 @@ WordCraft freeform shapes.
 |---|---|
 | XML | Dedicated bounded UTF-8/BOM-marked UTF-16 reader; XML 1.0/1.1 literal/attribute newline normalization and character rules; scoped namespaces, qualified/normalized XML IDs, duplicate expanded-attribute rejection and opaque annotation metadata; DTD dependencies and unresolved base-URI references retain the fallback |
 | Trace data | Decimal/exponent/hex tokens, explicit/first-/second-difference samples, `*`, typed numeric/boolean channels, sparse intermittent values/defaults and `?`; custom nonvisual channels are consumed without interpretation |
-| Contact and continuity | `S` overrides trace contact state; pen-up/unknown-contact samples break runs; begin/middle/end continuations connect their independently decoded fragments; forks and invalid prior references are refused |
+| Contact and continuity | `S` overrides trace contact state; known pen-up samples break runs, while unknown contact retains the whole fallback; begin/middle/end continuations connect their independently decoded fragments; forks, invalid prior references and mid-run curve-fitting changes are refused |
 | Contexts | Local brushes, sources and contexts, inheritance and child-over-reference precedence, declaration-time stream contexts and isolated definition defaults |
 | Units and sources | Reserved-channel defaults (millimeters for declared lengths, percent for force, degrees for rotation), dimension-checked compound physical units, nominal `em`/`ex`, explicit percentage length/angle ranges, and `dev` length/rotation channels calibrated from physical or inverse-unit source resolutions |
 | Canvases | Local canvas formats and bounds; forward identity, affine, product and scalar Content MathML mappings; mapped visual channels override source channels |
@@ -327,7 +327,7 @@ WordCraft freeform shapes.
 | Tables | Complete numerical tensor grids, absolute/relative outputs, floor/middle/ceiling/linear interpolation; univariate natural cubic splines with at least four knots; boolean tensor grids use exact lookup and prohibit interpolation attributes |
 | Inverse maps | Identity and full-column-rank affine systems, including rectangular systems, coupled products and affine MathML expressions; independent scalar operation chains; monotone univariate linear/natural-cubic tables; finite boolean/bounded-integer domains, including logical formulas, nonmonotone/step tables and jointly observed quantized outputs; mixed continuous/discrete products are partitioned by input dependencies; other observed outputs are checked |
 | Views | Local definition-backed trace/group/view references with nested, one-based inclusive selections; cropped continuation fragments join only across retained adjacent boundaries, with view-local state; views of already-present traces act as annotations rather than painting their opacity twice |
-| Brushes | Ellipse, rectangle and drop nibs, OR rotation, BW/BH/W, packed RGB and range-normalized RGB/CMYK channels, transparency/A, normalized pressure, `ignorePressure`, curve fitting, `copyPen`, `noOperation`, and `maskPen` when each RGB pen component is 0 or 255 |
+| Brushes | Ellipse, rectangle and drop nibs (including tip changes within continuations), OR rotation, BW/BH/W, packed RGB and range-normalized RGB/CMYK channels, transparency/A, normalized pressure, `ignorePressure`, curve fitting, `copyPen`, `noOperation`, and `maskPen` when each RGB pen component is 0 or 255 |
 | Output | Screen/PDF vectors, inline/floating/direct/group/canvas placement and Hide Ink; inner DrawingML offsets/extents and rotation about the inner frame, including resizing; JSON, edit/undo/redo and repeated DOCX preservation |
 
 XML is decoded without replacement characters or truncated UTF-16 code units. Namespace names
@@ -352,17 +352,24 @@ Rendering choices where the standard leaves the application latitude: the implic
 trace format and default canvas use point-sized nominal `em`; `ex` uses half a point. Unitless
 brush dimensions also use application points. Integer brush transparency uses 0–255, while `%`
 uses 0–1 fractions. Pressure uses a linear response only with an explicit channel range or `%` units
-(including the default unit for `F`);
-uncalibrated force and time do not alter the pen. Curve fitting uses bounded Catmull–Rom samples;
-curved nibs use a 24-vertex approximation. Color/opacity changes are sample-stepped. Compound
-outlines composite once per continuous paint run within a stroke; separate strokes retain their
-separate opacity. The renderers retain their normal antialiasing policy. Circular constant-width
-centerlines retain the existing mean-scale stroke fitting; outlined nibs scale in both axes.
-Percentage length channels map 0–1 through their explicit min/max range in application points;
-percentage rotation ranges use degrees. A missing range is not guessed. Binary-component mask
-pens use Multiply blending: for these pen colors it equals bitwise AND against any background,
-with transparency/coverage applied once per paint run. Nonbinary mask colors keep their fallback
-rather than substituting an inaccurate multiply approximation.
+(including the default unit for `F`); missing or uncalibrated pressure retains the fallback unless
+`ignorePressure` is set. Time does not alter the pen. Curve fitting uses bounded Catmull–Rom
+samples; a change of fitting policy within a connected run retains the fallback. Curved nibs use a
+24-vertex approximation. Color/opacity changes are sample-stepped. Compound outlines composite once
+per continuous paint run within a stroke; separate strokes retain their separate opacity. The
+renderers retain their normal antialiasing policy. Circular constant-width centerlines and taps use
+the same mean-scale stroke fitting; outlined nibs scale in both axes. Positive finite stroke widths
+below one million points are drawn without the former 0.25–200 point clamp; invalid or larger
+render-time widths are not drawn. Percentage length channels map 0–1 through their explicit min/max
+range in application points; percentage rotation ranges use degrees. A missing range is not guessed.
+Binary-component mask pens use Multiply blending on light pages and PDF: for these pen colors it
+equals bitwise AND against the backdrop, with transparency/coverage applied once per paint run.
+Screen dark mode uses complementary binary colors and Screen blending so the mask remains visible
+against a dark page; this is a display adaptation, not a native Word fidelity claim. Canvas clipping
+is non-isolated so a mask blends with the backdrop rather than an empty clip layer. Dimmed
+header/body layers remain isolated opacity groups, so their masks do not necessarily interact with
+the page backdrop as an undimmed mask does. Nonbinary mask colors keep their fallback rather than
+substituting an inaccurate multiply approximation.
 
 Scalar inverse chains cover affine arithmetic, reciprocals, exponentials, fixed-base logarithms,
 constant powers/degrees, sign-constrained absolute values, principal arc functions and explicitly
@@ -416,6 +423,8 @@ check that finite table inverses never choose among colliding preimages. Earlier
 visual comparison are explicitly deferred**; gaps #2/#12 and readiness estimates stay open.
 
 ## Revision history
+
+> 2026-11-06 · InkML review fixes retain fallbacks for unknown contact, missing pressure and incompatible continuation curve settings; preserve mixed nib tips, tap/line fitting and extreme stroke widths; and correct dark-page mask blending, including clipped canvases. Synthetic regression evidence only; Word qualification remains deferred.
 
 > 2026-11-06 · Dedicated bounded InkML XML parsing adds strict UTF-8/UTF-16, XML 1.0/1.1 normalization, namespace/XML-ID identity, opaque metadata and fail-closed DTD/base-URI dependencies. Synthetic all-placement screen/PDF and repeated-save controls; full XML/InkML conformance and Word qualification remain open.
 

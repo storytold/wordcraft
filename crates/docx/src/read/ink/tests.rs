@@ -8,6 +8,7 @@ mod completion;
 mod defaults;
 mod discrete;
 mod inverse;
+mod review;
 mod xml;
 
 /// Wrap InkML body markup with the real namespace and decode it under a fresh ample work budget.
@@ -59,7 +60,7 @@ fn context_and_brush_references_reordered_channels_and_units() {
           <traceFormat xml:id="format"><channel name="T"/><channel name="Y" units="in" orientation="-ve"/><channel name="X" units="cm"/><channel name="F" units="dev"/></traceFormat>
           <context xml:id="parent" traceFormatRef="#format" brushRef="#pen"/>
           <context xml:id="child" contextRef="#parent"/>
-          <brush xml:id="base"><brushProperty name="color" value="#2563EB"/><brushProperty name="width" value="0.1" units="in"/></brush>
+          <brush xml:id="base"><brushProperty name="color" value="#2563EB"/><brushProperty name="width" value="0.1" units="in"/><brushProperty name="ignorePressure" value="true"/></brush>
           <brush xml:id="pen" brushRef="#base"><brushProperty name="color" value="#FF0000"/></brush>
         </definitions>
         <trace contextRef="#child">0 1 0 100, 1 0 2.54 200</trace>

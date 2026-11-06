@@ -11,6 +11,7 @@ mod completion;
 mod defaults;
 mod discrete;
 mod inverse;
+mod review;
 mod xml;
 
 /// Minimal InkML package part used in the native screen/PDF integration fixtures.

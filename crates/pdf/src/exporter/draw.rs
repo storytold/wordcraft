@@ -78,6 +78,9 @@ impl Exporter<'_> {
                 s.pop();
             }
             Draw::Ink { pts, color, width, alpha } => {
+                if !width.is_finite() || *width <= 0.0 || *width >= 1_000_000.0 {
+                    return;
+                }
                 let mut pb = PathBuilder::new();
                 let mut used = 0usize;
                 let mut last = (0.0, 0.0);
@@ -98,7 +101,7 @@ impl Exporter<'_> {
                 s.set_fill(None);
                 s.set_stroke(Some(Stroke {
                     paint: rgb::Color::new(color.0, color.1, color.2).into(),
-                    width: if width.is_finite() { width.clamp(0.25, 200.0) } else { 1.0 },
+                    width: *width,
                     opacity: norm(*alpha),
                     line_cap: LineCap::Round,
                     line_join: LineJoin::Round,

@@ -44,17 +44,26 @@ fn graphic_geometry(it: &GraphicItem, rect: Rect, sx: f32, sy: f32, alpha: f32, 
     let inside = |r: &[f32; 4]| Rect::new(rect.x + r[0] * sx, rect.y + r[1] * sy, r[2] * sx, r[3] * sy);
     let k = (sx + sy) / 2.0;
     Some(match it {
-        GraphicItem::Shape { rect: r, kind, fill, stroke, stroke_width } => Draw::Shape {
-            rect: inside(r),
-            kind: *kind,
-            fill: fill.map(Paint::solid),
-            stroke: *stroke,
-            stroke_width: stroke_width * k,
-            effects: Default::default(),
-            corner: None,
-            dash: Vec::new(),
-            cap: Default::default(),
-        },
+        GraphicItem::Shape { rect: r, kind, fill, stroke, stroke_width } => {
+            let [x, y, width, height] = *r;
+            let frame = if ink && *kind == ShapeKind::Ellipse && fill.is_some() && stroke.is_none() && width == height {
+                let size = width * k;
+                Rect::new(rect.x + (x + width / 2.0) * sx - size / 2.0, rect.y + (y + height / 2.0) * sy - size / 2.0, size, size)
+            } else {
+                inside(r)
+            };
+            Draw::Shape {
+                rect: frame,
+                kind: *kind,
+                fill: fill.map(Paint::solid),
+                stroke: *stroke,
+                stroke_width: stroke_width * k,
+                effects: Default::default(),
+                corner: None,
+                dash: Vec::new(),
+                cap: Default::default(),
+            }
+        }
         GraphicItem::Path { segs, fill, stroke, stroke_width } => {
             let segs = page_segs(segs, |x, y| (rect.x + x * sx, rect.y + y * sy));
             if ink
