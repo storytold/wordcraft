@@ -111,8 +111,15 @@ fn a_thai_run_with_latin_falls_back_to_one_face() {
     for c in &chars {
         assert!(f.covers(*c), "{} covers {c}", f.family);
     }
-    // A Thai font with OpenType tables, as the per-character fallback prefers.
-    assert!(f.has_layout_tables(), "{} shapes Thai", f.family);
+    // A Thai font with OpenType tables, as the per-character fallback prefers — promised only
+    // where the machine holds one: macOS 27's only Thai-Latin system font is Thonburi, whose
+    // Thai is Apple AAT (`morx`) with no GSUB at all, so nothing there can be preferred and the
+    // picker's best effort is Thonburi.
+    if db.read_faces().iter().any(|g| g.has_layout_tables() && chars.iter().all(|c| g.covers(*c))) {
+        assert!(f.has_layout_tables(), "{} shapes Thai", f.family);
+    } else {
+        eprintln!("skipped: no Thai font with OpenType tables installed");
+    }
     // Without system fonts and without craft-fonts' Thai face (built in since craft-fonts
     // 3d9ab3a1) no bundled face covers Thai: the caller keeps the per-character path.
     let bundled = FontDb::with_font_dirs(Vec::new());
