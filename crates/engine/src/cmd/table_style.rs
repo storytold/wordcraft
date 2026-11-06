@@ -52,7 +52,7 @@ macro_rules! style_params {
             $head,
             r#", "basedOn"?: string, "<part>"?: Part for each part name (wholeTable, headerRow|firstRow, lastRow|totalRow, firstColumn|firstCol, lastColumn|lastCol, bandedRows|band1Horz, band2Horz, bandedColumns|band1Vert, band2Vert, nwCell, neCell, swCell, seCell), "part"?: part name (the Part fields then sit at the top level), "parts"?: [Part & {"part": name}], "bandSize"?: n (rows per band), "para"?: ParaProps, "apply"?: bool}"#,
             r#" where Part = {"fill"?: "RRGGBB" | null, "font"?: string | null (null or "": inherited), "size"?: pt, "bold"?: bool, "italic"?: bool, "underline"?: bool | "single" | "double" | "thick" | "words" | "dotted" | "dash" | "wave" | "none", "color"?: "RRGGBB" | null, "align"?: "left" | "center" | "right" | "justify" | null, "vAlign"?: "top" | "center" | "bottom" | null, "cellAlign"?: "topLeft" | "topCenter" | "topRight" | "centerLeft" | "center" | "centerRight" | "bottomLeft" | "bottomCenter" | "bottomRight" | null (both alignments), "borders"?: bool | null (true: single lines on every edge, false: none, null: inherit) | Edges | [Edges], "borderColor"?: "RRGGBB", "borderWidth"?: pt}"#,
-            r#" and Edges = {"edges"?: "all" | "none" | "outside" | "inside" | "top" | "bottom" | "left" | "right" | "insideH" | "insideV" (default all), "style"?: "single" | "double" | "dotted" | "dashed" | "dotDash" | "thick" | "triple" | "wave" | "none", "width"?: pt, "color"?: "RRGGBB" | null}"#
+            r#" and Edges = {"edges"?: "all" | "none" | "outside" | "inside" | "top" | "bottom" | "left" | "right" | "insideH" | "insideV" (default all), "style"?: "single" | "double" | "dotted" | "dashed" | "dashSmallGap" | "dotDash" | "thick" | "triple" | "wave" | "none", "width"?: pt, "color"?: "RRGGBB" | null}"#
         )
     };
 }
@@ -360,12 +360,13 @@ fn color_param(r: &Value, k: &str) -> Result<Option<Rgb>, CmdError> {
 const NO_LINE: Border = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 };
 
 /// The border styles by param name.
-const LINE_STYLES: [(&str, BorderStyle); 9] = [
+const LINE_STYLES: [(&str, BorderStyle); 10] = [
     ("none", BorderStyle::None),
     ("single", BorderStyle::Single),
     ("double", BorderStyle::Double),
     ("dotted", BorderStyle::Dotted),
     ("dashed", BorderStyle::Dashed),
+    ("dashSmallGap", BorderStyle::DashSmallGap),
     ("dotDash", BorderStyle::DotDash),
     ("thick", BorderStyle::Thick),
     ("triple", BorderStyle::Triple),
