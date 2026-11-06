@@ -3,7 +3,8 @@
 //! while what stays visible keeps its scale and its place on the page, and dragging back out
 //! restores what was cropped away (never past the source's edge). The cropped-away part shows
 //! around the picture under a dark dim. Esc, Enter, a click outside the picture or Crop again
-//! leave crop mode and keep the crop. A drop is one `picture.crop` with the crop and the new size,
+//! leave crop mode and keep the crop. Dragging inside the picture moves it under its frame (the
+//! frame stays; what shows of the source slides, never past its edges), as in Word. A drop is one `picture.crop` with the crop and the new size,
 //! so one undo step. Only unturned pictures: a turned one stays out of crop mode (status message).
 //!
 //! While dragging nothing is laid out: the preview is the picture's own source pixels, the part
@@ -103,6 +104,31 @@ pub fn cropped_on_screen((w, h): (f32, f32), crop: [f32; 4], (flip_h, flip_v): (
     Cropped { crop: [l, t, r, b], w: w2, h: h2, dx: mx, dy: my }
 }
 
+/// The `handle` of a drag inside the picture: it moves the source under the frame.
+const PAN: Handle = Handle { x: 0, y: 0 };
+
+/// Drag the source of a `w`×`h` point picture cropped `crop` by (`dx`, `dy`) screen points under its
+/// frame: the frame and its size stay, the crop of each pair of opposite sides shifts, never past
+/// the source's edges.
+pub fn panned_on_screen((w, h): (f32, f32), crop: [f32; 4], (flip_h, flip_v): (bool, bool), (dx, dy): (f32, f32)) -> Cropped {
+    let fin = |x: f32| if x.is_finite() { x } else { 0.0 };
+    let crop = crop.map(|c| fin(c).clamp(0.0, MAX_SIDE));
+    let (w, h, dx, dy) = (fin(w), fin(h), fin(dx), fin(dy));
+    if w <= 0.0 || h <= 0.0 {
+        return Cropped { crop, w, h, dx: 0.0, dy: 0.0 };
+    }
+    let [sl, st, sr, sb] = on_screen(crop, flip_h, flip_v);
+    // Moving the source right by `d` shows less of its left side cut and more of its right.
+    let shift = |len: f32, lo: f32, hi: f32, d: f32| {
+        let full = len / (1.0 - lo - hi).max(0.05);
+        let s = (d / full).clamp(-hi, lo);
+        (lo - s, hi + s)
+    };
+    let (l, r) = shift(w, sl, sr, dx);
+    let (t, b) = shift(h, st, sb, dy);
+    Cropped { crop: on_screen([l, t, r, b], flip_h, flip_v), w, h, dx: 0.0, dy: 0.0 }
+}
+
 /// The crop as it shows on screen: (left, top, right, bottom) of the displayed picture.
 fn on_screen(crop: [f32; 4], flip_h: bool, flip_v: bool) -> [f32; 4] {
     let [l, t, r, b] = crop;
@@ -138,6 +164,10 @@ impl CropDrag {
         }
         self.moved = true;
         let d = (at - self.press) / scale.max(0.01);
+        if self.handle == PAN {
+            self.now = panned_on_screen((self.w, self.h), self.crop, (self.flip_h, self.flip_v), (d.x, d.y));
+            return;
+        }
         self.now = cropped_on_screen((self.w, self.h), self.crop, (self.flip_h, self.flip_v), self.handle, (d.x, d.y));
     }
 }
@@ -259,7 +289,10 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         return Some(true);
     }
     if f.contains(at) {
-        return Some(true); // inside the picture: crop mode stays on
+        // Inside the picture: a drag moves it under the frame; a click leaves crop mode on.
+        let now = Cropped { crop, w, h, dx: 0.0, dy: 0.0 };
+        app.canvas.crop_drag = Some(CropDrag { pos, handle: PAN, flip_h, flip_v, page, start: rect, w, h, crop, press: at, moved: false, now });
+        return Some(true);
     }
     // Outside: crop mode ends with the crop kept, and the press goes on as usual.
     leave(app);
@@ -269,13 +302,13 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
 /// The cursor over a crop handle (or while dragging one).
 pub fn cursor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<egui::CursorIcon> {
     if let Some(d) = &app.canvas.crop_drag {
-        return Some(d.handle.cursor());
+        return Some(if d.handle == PAN { egui::CursorIcon::Move } else { d.handle.cursor() });
     }
     let (page, rect) = laid_out(app, layout)?;
     let f = screen(pages, scale, page, rect)?;
     match frame::handle_at(f, 0.0, at) {
         Some(h) => Some(h.cursor()),
-        None if f.contains(at) => Some(egui::CursorIcon::Default),
+        None if f.contains(at) => Some(egui::CursorIcon::Move),
         None => None,
     }
 }
@@ -472,6 +505,20 @@ mod tests {
 
     /// Flipped, the handle on the screen's left is on the source's right: dragging it trims the
     /// side under it (as in Word), and the frame's left edge follows.
+    #[test]
+    fn dragging_inside_slides_the_source_under_the_frame() {
+        // 100 pt shown of a 200 pt wide source, cut 25 % each side: 20 pt right shows 10 % less
+        // of the left cut away, 10 % more of the right; the frame stays.
+        let p = panned_on_screen((100.0, 50.0), [0.25, 0.0, 0.25, 0.0], (false, false), (20.0, 5.0));
+        assert!(close(p, Cropped { crop: [0.15, 0.0, 0.35, 0.0], w: 100.0, h: 50.0, dx: 0.0, dy: 0.0 }), "{p:?}");
+        // Never past the source's edge.
+        let p = panned_on_screen((100.0, 50.0), [0.25, 0.0, 0.25, 0.0], (false, false), (500.0, 0.0));
+        assert!(close(p, Cropped { crop: [0.0, 0.0, 0.5, 0.0], w: 100.0, h: 50.0, dx: 0.0, dy: 0.0 }), "{p:?}");
+        // Flipped left to right, the source moves the other way under the frame.
+        let p = panned_on_screen((100.0, 50.0), [0.25, 0.0, 0.25, 0.0], (true, false), (20.0, 0.0));
+        assert!(close(p, Cropped { crop: [0.35, 0.0, 0.15, 0.0], w: 100.0, h: 50.0, dx: 0.0, dy: 0.0 }), "{p:?}");
+    }
+
     #[test]
     fn flipped_pictures_trim_the_side_under_the_handle() {
         let c = |crop, w, h, dx, dy| Cropped { crop, w, h, dx, dy };
