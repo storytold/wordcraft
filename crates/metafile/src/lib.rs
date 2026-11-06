@@ -15,6 +15,7 @@ mod dib;
 mod emf;
 mod geom;
 mod place;
+mod size;
 mod wmf;
 
 #[cfg(test)]
@@ -24,6 +25,7 @@ use bytes::Bytes;
 use canvas::{Raw, RawText};
 use geom::{Op, P};
 pub use place::{MAX_BITMAP_SIDE, PlacedItem, TextLayout, crop_window};
+pub use size::size;
 
 /// Items kept from one file. Past the cap the parse stops and keeps what it has.
 pub(crate) const MAX_ITEMS: usize = 200_000;

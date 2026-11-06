@@ -5,7 +5,7 @@ use serde_json::json;
 use wordcraft_doc::{PartKind, StoryRef};
 
 use crate::theme::{Tokens, TypeRung, fit_text, medium, paint_text, regular, semibold, text_width};
-use crate::{WordApp, icons};
+use crate::{StatusCount, StatusCounts, WordApp, icons};
 
 /// Why the caret's language isn't spell-checked (dictionary unreadable or missing), if it isn't.
 pub(crate) fn dictionary_problem(lang: &str, unreadable: &Option<(std::path::PathBuf, String)>, missing: Option<&str>) -> Option<String> {
@@ -595,30 +595,61 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     } else {
                         l.caret_on(&app.session.sel.focus, app.session.page_hint).map(|c| c.page + 1).unwrap_or(1)
                     };
-                    let st = |ui: &mut Ui, s: &str| {
+                    // A status item: its text, after an icon when it has one (one click target).
+                    let st_icon = |ui: &mut Ui, icon: Option<&str>, s: &str| {
                         let font = TypeRung::Caption.regular();
                         let track = TypeRung::Caption.tracking();
                         let w = text_width(ui.painter(), s, &font, track, t.text_dim);
-                        let (r, resp) = ui.allocate_exact_size(vec2(w + 1.0, TypeRung::Caption.line_height()), Sense::click());
-                        paint_text(ui.painter(), pos2(r.min.x, r.min.y), Align2::LEFT_TOP, s, &font, track, t.text_dim);
+                        let lead = if icon.is_some() { 17.0 } else { 0.0 };
+                        let (r, resp) = ui.allocate_exact_size(vec2(lead + w + 1.0, TypeRung::Caption.line_height()), Sense::click());
+                        if let Some(icon) = icon {
+                            let ir = Rect::from_min_size(pos2(crate::rtl::lead_left(rtl, r, 0.0, 13.0), r.center().y - 6.5), vec2(13.0, 13.0));
+                            icons::paint(ui.painter(), ir, icon, t.icon, t.accent);
+                            paint_text(
+                                ui.painter(),
+                                pos2(crate::rtl::lead_x(rtl, r, lead), r.min.y),
+                                crate::rtl::lead_top(rtl),
+                                s,
+                                &font,
+                                track,
+                                t.text_dim,
+                            );
+                        } else {
+                            paint_text(ui.painter(), pos2(r.min.x, r.min.y), Align2::LEFT_TOP, s, &font, track, t.text_dim);
+                        }
                         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, s));
                         resp
                     };
+                    let st = |ui: &mut Ui, s: &str| st_icon(ui, None, s);
                     if st(ui, &crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &page.to_string()), ("pages", &l.pages.len().to_string())]))
                         .on_hover_text(tl!("Go To (⌘⌥G)"))
                         .clicked()
                     {
                         let _ = app.run("ui.dialog", json!({"name": "goto"}));
                     }
-                    let words = app.cached_word_count();
+                    // The live count: words (the default, as Word's status bar counts), characters
+                    // with spaces, or characters without spaces — whichever the person chose (#2797).
+                    let unit = app.ui.status_count;
+                    let counts = app.cached_status_counts();
                     // A selected picture/shape/text box isn't a text selection: show the total.
                     let wtxt = if app.session.sel.is_collapsed() || crate::objects::selected(app).is_some() {
-                        crate::i18n::fmt(tl!("{words} words"), &[("words", &words.to_string())])
+                        status_count_text(unit, counts.in_unit(unit), None)
                     } else {
-                        let sw = wordcraft_doc::count_words(&app.session.selected_text());
-                        crate::i18n::fmt(tl!("{selected} of {words} words"), &[("selected", &sw.to_string()), ("words", &words.to_string())])
+                        let selected = crate::count_in_unit(&app.session.selected_text(), unit);
+                        status_count_text(unit, counts.in_unit(unit), Some(selected))
                     };
-                    if st(ui, &wtxt).clicked() {
+                    let counted = st(ui, &wtxt);
+                    // Right-click, as Word's status bar offers: choose what the count shows (#2797).
+                    counted.context_menu(|ui| {
+                        ui.set_min_width(180.0);
+                        for c in crate::StatusCount::ALL {
+                            if ui.selectable_label(app.ui.status_count == c, tl!(c.label())).clicked() {
+                                let _ = app.run("ui.statusCount", json!({"value": c.code()}));
+                                ui.close();
+                            }
+                        }
+                    });
+                    if counted.clicked() {
                         let _ = app.run("ui.dialog", json!({"name": "wordCount"}));
                     }
                     if app.session.sel.focus.story != StoryRef::Body && !crate::canvas::in_text_box(app) {
@@ -648,6 +679,31 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     });
                     if app.session.doc.settings.track_changes {
                         st(ui, tl!("Track Changes: On"));
+                    }
+                    // Fonts the document uses that aren't installed: they're drawn in other fonts, so
+                    // the text can wrap and paginate unlike where the document was made.
+                    let missing = app.cached_missing_fonts(&l).0;
+                    let count = missing.iter().filter(|f| !f.metric_compatible).count();
+                    if count > 0 {
+                        let label = crate::i18n::tn(count as u64, "{n} font not installed", "{n} fonts not installed");
+                        let resp = st_icon(ui, Some("fontMissing"), &label).on_hover_text(tl!("Shown in substitute fonts. Click for details."));
+                        crate::rtl::menu(&resp).show(|ui| {
+                            ui.set_min_width(260.0);
+                            ui.label(egui::RichText::new(tl!("Not installed — shown as")).strong());
+                            // A hostile file can name thousands of fonts: list the first few.
+                            const SHOWN: usize = 20;
+                            for f in missing.iter().filter(|f| !f.metric_compatible).take(SHOWN) {
+                                ui.label(format!("{} → {}", f.font, f.shown_as.join(", ")));
+                            }
+                            if count > SHOWN {
+                                ui.label(crate::i18n::tn((count - SHOWN) as u64, "…and {n} more", "…and {n} more"));
+                            }
+                            ui.separator();
+                            if ui.button(tl!("Add Font…")).clicked() {
+                                let _ = app.run("font.add", json!({}));
+                                ui.close();
+                            }
+                        });
                     }
                     if app.session.prefs.overtype && st(ui, tl!("Overtype")).on_hover_text(tl!("Click to switch back to inserting")).clicked() {
                         let _ = app.run("text.overtype", json!({"value": false}));
@@ -793,15 +849,111 @@ fn small_icon(ui: &mut Ui, icon: &str, tip: &str) -> bool {
     resp.on_hover_text(tip).clicked()
 }
 
+/// [`WordApp::cached_missing_fonts`]: the list, and the warnings by font key.
+pub type MissingFontsCache =
+    (std::sync::Arc<Vec<wordcraft_engine::cmd::font::MissingFont>>, std::sync::Arc<std::collections::HashMap<String, String>>);
+
+/// [`WordApp::missing_fonts`]: the layout the list was read from, and the list.
+pub type MissingFontsMemo = (std::sync::Weak<wordcraft_layout::DocLayout>, MissingFontsCache);
+
 impl WordApp {
-    /// Word count, recomputed only when the document changes.
-    pub fn cached_word_count(&mut self) -> usize {
-        // The count option changes the count without a document change.
-        let key = self.session.rev().wrapping_mul(2) | u64::from(self.session.prefs.count_notes);
-        if self.word_count.0 != key {
-            self.word_count = (key, self.session.word_count());
+    /// [`wordcraft_engine::cmd::font::missing_fonts`] for `layout`, and the font box's warnings
+    /// by [`font_key`](wordcraft_engine::cmd::font::font_key) (the layout-changing ones, with the
+    /// faces drawn instead), read again only when the document is laid out again (adding or
+    /// removing a font lays it out again).
+    pub fn cached_missing_fonts(&mut self, layout: &std::sync::Arc<wordcraft_layout::DocLayout>) -> MissingFontsCache {
+        if !self.missing_fonts.0.upgrade().is_some_and(|seen| std::sync::Arc::ptr_eq(&seen, layout)) {
+            let found = wordcraft_engine::cmd::font::missing_fonts(&self.session.doc, layout);
+            let warnings = found
+                .iter()
+                .filter(|f| !f.metric_compatible)
+                .map(|f| (wordcraft_engine::cmd::font::font_key(&f.font), f.shown_as.join(", ")))
+                .collect();
+            self.missing_fonts = (std::sync::Arc::downgrade(layout), (std::sync::Arc::new(found), std::sync::Arc::new(warnings)));
         }
-        self.word_count.1
+        self.missing_fonts.1.clone()
+    }
+
+    /// The font box's warning for `font` (a stored name): the faces its text is drawn in
+    /// instead, when the status bar lists it as missing and changing the layout. Read from the
+    /// same list as the status bar, so the two never disagree. At a collapsed caret, where the
+    /// box shows the font typing will use (an empty paragraph's, or one just picked at the end
+    /// of a line), the substitute layout will draw it in is named instead.
+    pub fn font_box_warning(&mut self, font: &str) -> Option<String> {
+        let ahead = self.session.sel.is_collapsed();
+        self.font_box_warning_or(font, ahead, |doc| wordcraft_engine::cmd::font::shown_as(doc, font))
+    }
+
+    /// The Font dialog's font box's warning for `font`, the font OK applies: from the status
+    /// bar's list, else the substitute layout will draw it in, whatever is selected, as no text
+    /// may show the font yet.
+    pub fn font_dialog_warning(&mut self, font: &str) -> Option<String> {
+        self.font_box_warning_or(font, true, |doc| wordcraft_engine::cmd::font::shown_as(doc, font))
+    }
+
+    /// The Font dialog's Asian text font box's warning for `font_ea` (the Latin text font being
+    /// `font`): the face layout draws Chinese, Japanese and Korean text in when `font_ea` is
+    /// missing (the run's font or a fallback face). Not from the status bar's list, which is by
+    /// font name: a font also used for Latin text is listed with the faces that text is drawn
+    /// in. Whatever is selected: selected Latin text shows no East Asian font, but text typed or
+    /// pasted into it would be in it.
+    pub fn east_asian_font_box_warning(&mut self, font_ea: &str, font: &str) -> Option<String> {
+        let shown = wordcraft_engine::cmd::font::east_asian_shown_as(&self.session.doc, font_ea, font)?;
+        wordcraft_engine::cmd::font::warns(font_ea, &shown).then_some(shown)
+    }
+
+    /// The font box's warning for `font`: from the status bar's list, else, when the box shows
+    /// a font to come (`ahead`), the family `unshown` says its text will be drawn in.
+    fn font_box_warning_or(&mut self, font: &str, ahead: bool, unshown: impl FnOnce(&wordcraft_doc::Document) -> Option<String>) -> Option<String> {
+        let layout = self.session.layout();
+        let key = wordcraft_engine::cmd::font::font_key(font);
+        if let Some(w) = self.cached_missing_fonts(&layout).1.get(&key) {
+            return Some(w.clone());
+        }
+        // A font to come (typing at a collapsed caret, or what the Font dialog applies) may be in
+        // no shown text yet, so the list can't have it: name the family it will be drawn in. A
+        // ribbon box over a selection shows the selected text's font, which the list covers.
+        let shown = ahead.then(|| unshown(&self.session.doc)).flatten()?;
+        wordcraft_engine::cmd::font::warns(font, &shown).then_some(shown)
+    }
+
+    /// The document's counts, recomputed only when the document (or the count option) changes:
+    /// words as the status bar and the Word Count dialog count them, and characters with and
+    /// without spaces as the dialog does (#2797).
+    pub fn cached_status_counts(&mut self) -> StatusCounts {
+        // The count option changes the counts without a document change.
+        let key = self.session.rev().wrapping_mul(2) | u64::from(self.session.prefs.count_notes);
+        if self.status_counts.0 != key {
+            let text = self.session.counted_text();
+            self.status_counts = (
+                key,
+                StatusCounts {
+                    words: self.session.word_count(),
+                    chars: wordcraft_doc::count_chars(&text),
+                    chars_no_spaces: wordcraft_doc::count_chars_no_spaces(&text),
+                },
+            );
+        }
+        self.status_counts.1
+    }
+}
+
+/// The status bar's count line (#2797): the whole document's `total`, or "selected of total" when
+/// part of it is selected, worded as the Word Count dialog words the same counts.
+pub(crate) fn status_count_text(unit: StatusCount, total: usize, selected: Option<usize>) -> String {
+    match (unit, selected) {
+        (StatusCount::Words, None) => crate::i18n::fmt(tl!("{words} words"), &[("words", &total.to_string())]),
+        (StatusCount::Words, Some(n)) => {
+            crate::i18n::fmt(tl!("{selected} of {words} words"), &[("selected", &n.to_string()), ("words", &total.to_string())])
+        }
+        (StatusCount::Characters, None) => crate::i18n::fmt(tl!("{chars} characters"), &[("chars", &total.to_string())]),
+        (StatusCount::Characters, Some(n)) => {
+            crate::i18n::fmt(tl!("{selected} of {chars} characters"), &[("selected", &n.to_string()), ("chars", &total.to_string())])
+        }
+        (StatusCount::CharactersNoSpaces, None) => crate::i18n::fmt(tl!("{chars} characters (no spaces)"), &[("chars", &total.to_string())]),
+        (StatusCount::CharactersNoSpaces, Some(n)) => {
+            crate::i18n::fmt(tl!("{selected} of {chars} characters (no spaces)"), &[("selected", &n.to_string()), ("chars", &total.to_string())])
+        }
     }
 }
 
