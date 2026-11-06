@@ -485,7 +485,7 @@ fn base_of(raw: &[crate::stsh::RawStyle], istd: usize) -> Option<usize> {
 
 /// Style `istd` and its ancestors, root first and `istd` last. Cycles and chains deeper than
 /// [`MAX_STYLE_DEPTH`] are cut.
-fn style_chain(raw: &[crate::stsh::RawStyle], istd: usize) -> Vec<usize> {
+pub(crate) fn style_chain(raw: &[crate::stsh::RawStyle], istd: usize) -> Vec<usize> {
     let mut chain = vec![istd];
     let mut cur = istd;
     while chain.len() < MAX_STYLE_DEPTH {

@@ -1,6 +1,8 @@
 //! Tables: the table sprms (sgc 5) carried by a row-end (TTP) mark's grpprl, and the
 //! assembly of cell-ended paragraphs into [`Table`] blocks ([MS-DOC] §2.6.3, §2.4.3).
 
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::sync::Arc;
 
 use wordcraft_doc::Rgb;
@@ -45,8 +47,9 @@ const T_SET_SHD: u16 = 0xD62D;
 const T_CANT_SPLIT: u16 = 0x3466;
 const T_CELL_WIDTH: u16 = 0xD635;
 
-/// Most grid columns we build from a `sprmTDefTable` (the model's own cap is 63; one more
-/// edge is fine but merged rows can sum spans slightly over, so clamp when assembling).
+/// Most grid columns we build from a `sprmTDefTable` (the model's own cap is 63; the union
+/// grid is merged down to it, and merged rows can sum spans slightly over, so clamp when
+/// assembling).
 const MAX_COLS: usize = 63;
 
 /// What a paragraph mark says about its table context, from its PAPX.
@@ -69,6 +72,8 @@ pub(crate) struct RowInfo {
     align: Option<Align>,
     indent: Option<f32>,
     borders: Option<Borders>,
+    /// Cell side margin (points) from `sprmTDxaGapHalf`; feeds `TableProps.cell_margins`.
+    gap: Option<f32>,
     /// Horizontal merges: (itcFirst, itcLim) cell-index ranges.
     merges: Vec<(u8, u8)>,
     /// Per-cell overrides keyed by (pre-merge) cell index.
@@ -161,7 +166,13 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
                 };
             }
             T_DXA_LEFT => dxa_left = s16(&prl),
-            T_DXA_GAP_HALF => gap_half = s16(&prl),
+            T_DXA_GAP_HALF => {
+                let v = s16(&prl);
+                gap_half = v;
+                // Half the inter-cell gap is the cell side margin ([MS-DOC] §2.6.3);
+                // same 1:1 mapping as OOXML `w:tblCellMar` (`w:left` = dxaGapHalf).
+                r.gap = v.map(|tw| (tw as f32 / 20.0).clamp(0.0, 1584.0));
+            }
             T_TABLE_BORDERS_80 => r.borders = table_borders(prl.operand),
             T_MERGE => {
                 // Rows apply only the first MAX_COLS merges.
@@ -270,6 +281,8 @@ pub(crate) struct ParaOut {
     pub(crate) end_cp: u32,
     /// Table context from the mark's PAPX; `None` for a paragraph outside a table.
     pub(crate) row: Option<Box<RowInfo>>,
+    /// The paragraph's text-frame properties ([`crate::frame`]), when it is framed.
+    pub(crate) frame: Option<crate::frame::FrameInfo>,
 }
 
 /// Group consecutive in-table paragraphs into [`Table`] blocks; the rest pass through.
@@ -278,9 +291,9 @@ pub(crate) struct ParaOut {
 pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
     let mut out: Blocks = Vec::new();
     let mut rows: Vec<Row> = Vec::new();
+    let mut row_edges: Vec<Vec<f32>> = Vec::new();
     let mut cells: Vec<Cell> = Vec::new();
     let mut cell: Blocks = Vec::new();
-    let mut grid: Vec<f32> = Vec::new();
     let mut props = TableProps::default();
     let mut open = false;
     let mut depth_seen = 0u32;
@@ -328,6 +341,17 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
                 }
             }
         }
+        // Widths from this row's own edges: cell spans reconstruct the pre-merge column
+        // indices, so a merged cell spans the columns its marks covered. Cells past the
+        // row's edges (or rows without any) keep `None` for the flush-time grid fallback.
+        let mut col = 0usize;
+        for c in cells.iter_mut() {
+            let span = (c.props.span.max(1)) as usize;
+            if c.props.width.is_none() {
+                c.props.width = edge_width(&info.edges, col, span);
+            }
+            col += span;
+        }
         Row {
             props: RowProps {
                 height: info.height,
@@ -340,20 +364,40 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             controls: Default::default(),
         }
     }
-    fn flush_table(out: &mut Blocks, rows: &mut Vec<Row>, cells: &mut Vec<Cell>, cell: &mut Blocks, grid: &[f32], props: &TableProps, nested: bool) {
+    fn flush_table(
+        out: &mut Blocks,
+        rows: &mut Vec<Row>,
+        row_edges: &mut Vec<Vec<f32>>,
+        cells: &mut Vec<Cell>,
+        cell: &mut Blocks,
+        props: &TableProps,
+        nested: bool,
+    ) {
         if !cells.is_empty() || !cell.is_empty() {
+            // A stray trailing row (no TTP of its own): no edges of its own.
             flush_cell(cells, cell);
-            // A stray trailing row (no TTP of its own): size its cells from the grid.
-            let mut stray = build_row(std::mem::take(cells), &RowInfo::default());
-            for (i, c) in stray.cells.iter_mut().enumerate() {
+            row_edges.push(Vec::new());
+            rows.push(build_row(std::mem::take(cells), &RowInfo::default()));
+        }
+        // One grid from every row's edges, computed before anything can return so the
+        // accumulator never leaks into the next table. `row_edges` stays parallel to
+        // `rows` (stray rows pushed an empty set).
+        let row_edges = std::mem::take(row_edges);
+        let mut all: Vec<f32> = row_edges.concat();
+        let union = union_edges(&mut all);
+        let grid: Vec<f32> = union.windows(2).map(|w| (w[1] - w[0]).max(0.0)).collect();
+        if rows.is_empty() {
+            return;
+        }
+        // Fit each row onto the grid, then size any cell its own row couldn't (stray
+        // rows, more marks than edges) from the union grid's columns.
+        for (r, es) in rows.iter_mut().zip(row_edges.iter()) {
+            assign_spans(r, es, &union);
+            for (i, c) in r.cells.iter_mut().enumerate() {
                 if c.props.width.is_none() && c.props.span == 1 {
                     c.props.width = grid.get(i).copied();
                 }
             }
-            rows.push(stray);
-        }
-        if rows.is_empty() {
-            return;
         }
         if nested {
             // Unclosed or nested deeper than we model: keep the text, drop the table shape.
@@ -363,21 +407,20 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
                 }
             }
         } else {
-            out.push(Arc::new(Block::Table(Table {
-                props: props.clone(),
-                grid: grid.to_vec(),
-                rows: std::mem::take(rows),
-                controls: Default::default(),
-            })));
+            // A grid built from `sprmTDefTable` edges is edge-defined: Word lays the table
+            // out at those widths (OOXML `w:tblLayout w:type="fixed"`), so layout must not
+            // autofit them away. Tables without edges keep the autofit default.
+            let mut table_props = props.clone();
+            table_props.fixed |= !grid.is_empty();
+            out.push(Arc::new(Block::Table(Table { props: table_props, grid, rows: std::mem::take(rows), controls: Default::default() })));
         }
         rows.clear();
     }
 
     for p in paras {
-        let Some(info) = p.row else {
+        let Some(mut info) = p.row else {
             if open {
-                flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
-                grid.clear();
+                flush_table(&mut out, &mut rows, &mut row_edges, &mut cells, &mut cell, &props, depth_seen > 1);
                 // Table props are per-table (first row carrying the sprm wins within the
                 // table): reset the accumulator so one table's borders, align, indent and
                 // cell margins never leak into the next (the repro's first table wrote
@@ -394,10 +437,6 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             open = true;
         }
         depth_seen = depth_seen.max(info.depth);
-        if grid.is_empty() {
-            // Column widths from the table's first `sprmTDefTable`.
-            grid = info.edges.windows(2).take(MAX_COLS).map(|w| (w[1] - w[0]).max(0.0)).collect();
-        }
         if info.borders.is_some() && props.borders.is_none() {
             props.borders = info.borders;
         }
@@ -406,6 +445,9 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
         }
         if props.indent.is_none() {
             props.indent = info.indent;
+        }
+        if props.cell_margins.is_none() {
+            props.cell_margins = info.gap.map(|g| [0.0, g, 0.0, g]);
         }
         if info.cell_mark {
             // A row-end (TTP) mark terminates the row. Word writes rows as N content
@@ -428,15 +470,17 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
                 flush_cell(&mut cells, &mut cell);
             }
             if info.ttp {
+                // The row's own edges feed the table grid and its cell spans.
                 let row = build_row(std::mem::take(&mut cells), &info);
                 rows.push(row);
+                row_edges.push(std::mem::take(&mut info.edges));
             }
         } else {
             cell.push(para_block(p.para));
         }
     }
     if open {
-        flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
+        flush_table(&mut out, &mut rows, &mut row_edges, &mut cells, &mut cell, &props, depth_seen > 1);
     }
     out
 }
@@ -458,6 +502,130 @@ fn def_table_edges(operand: &[u8]) -> Vec<f32> {
         }
     }
     edges
+}
+
+/// A gap between two union edges, ordered by [`f32::total_cmp`] so it can key a binary
+/// heap (`f32` itself is neither `Ord` nor `Eq`).
+#[derive(Clone, Copy)]
+struct Gap(f32);
+
+impl PartialEq for Gap {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.total_cmp(&other.0) == std::cmp::Ordering::Equal
+    }
+}
+
+impl Eq for Gap {}
+
+impl Ord for Gap {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+impl PartialOrd for Gap {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// The width (points) of the `span` columns from `col` in a row's edges, or `None` when the
+/// edges don't reach that far. Edges are file data and may be unsorted or negative, so each
+/// column clamps instead of ever going below zero.
+fn edge_width(edges: &[f32], col: usize, span: usize) -> Option<f32> {
+    let last = col.checked_add(span)?;
+    if edges.len() <= last {
+        return None;
+    }
+    let mut w = 0.0;
+    for k in col..last {
+        w += (edges[k + 1] - edges[k]).max(0.0);
+    }
+    Some(w.clamp(0.0, 1584.0))
+}
+
+/// One grid from every row's edges: sorted and de-duplicated, then the closest adjacent
+/// edges merged (the boundary between them dropped) until at most `MAX_COLS` columns
+/// remain. Returns the kept edge positions, ascending; consumes the accumulator. Callers
+/// derive the column widths (and cell spans over the grid) from the positions.
+///
+/// Edges are i16 twips, so after de-duplication there are at most 65 536 of them; the
+/// merge therefore runs through a revalidating binary heap (closest-current gap first)
+/// instead of repeated linear scans, keeping a hostile table that claims thousands of
+/// distinct boundaries at `n log n`.
+fn union_edges(all: &mut Vec<f32>) -> Vec<f32> {
+    let mut edges = std::mem::take(all);
+    if edges.len() < 2 {
+        return Vec::new();
+    }
+    edges.sort_by(f32::total_cmp);
+    edges.dedup();
+    // Doubly linked list of alive edges; edge 0 (the origin) is never queued for removal,
+    // so its `prev` slot is never read.
+    let n = edges.len();
+    let mut prev: Vec<usize> = (0..n).map(|i| i.saturating_sub(1)).collect();
+    let mut next: Vec<usize> = (1..n).chain([usize::MAX]).collect();
+    let mut alive = vec![true; n];
+    // Gap of edge i to its current previous alive edge, smallest first (index breaks ties).
+    let mut gaps: BinaryHeap<Reverse<(Gap, usize)>> = (1..n).map(|i| Reverse((Gap(edges[i] - edges[i - 1]), i))).collect();
+    let mut count = n;
+    while count > MAX_COLS + 1 {
+        let Some(Reverse((Gap(g), i))) = gaps.pop() else { break };
+        if !alive[i] {
+            continue;
+        }
+        // Neighbours may have merged since this gap was queued: revalidate, or requeue the
+        // grown gap (each index's gap only ever grows, so this terminates).
+        let p = prev[i];
+        let cur = edges[i] - edges[p];
+        if cur != g {
+            gaps.push(Reverse((Gap(cur), i)));
+            continue;
+        }
+        alive[i] = false;
+        count -= 1;
+        let nx = next[i];
+        if nx != usize::MAX {
+            prev[nx] = p;
+            next[p] = nx;
+            gaps.push(Reverse((Gap(edges[nx] - edges[p]), nx)));
+        } else {
+            next[p] = usize::MAX;
+        }
+    }
+    let kept: Vec<usize> = (0..n).filter(|&i| alive[i]).collect();
+    kept.iter().map(|&i| edges[i]).collect()
+}
+
+/// Fit a row's cells onto the union grid: a cell whose own edges cover several union
+/// columns takes that span, so its content lays out across them instead of wrapping inside
+/// the first narrow one (a coarse banner row above fine-grained data rows). Cells already
+/// carrying a `sprmTMerge` span (> 1) keep it; rows without edges of their own are
+/// untouched. Cell spans reconstruct the row's pre-merge column indices, exactly as in
+/// `build_row`'s width pass.
+fn assign_spans(row: &mut Row, row_edges: &[f32], union_edges: &[f32]) {
+    if row_edges.len() < 2 || union_edges.len() < 2 {
+        return;
+    }
+    // First union edge at or after a position: a row edge is normally a union edge (the
+    // union is built from them), so this is an exact index; cap-merged-away edges fall to
+    // the nearest survivor.
+    let col_of = |pos: f32| union_edges.partition_point(|&e| e < pos);
+    let last_col = union_edges.len() - 1;
+    let mut col = 0usize; // the row column at the cell's start
+    for c in row.cells.iter_mut() {
+        let span = (c.props.span.max(1)) as usize;
+        if c.props.span > 1 || col + 1 >= row_edges.len() {
+            // Merge spans win; cells past the row's edges keep span 1 for the width
+            // fallback.
+            col += span;
+            continue;
+        }
+        let start = col_of(row_edges[col]);
+        let end = col_of(row_edges[col + 1]).min(last_col);
+        c.props.span = end.saturating_sub(start).max(1) as u32;
+        col += span;
+    }
 }
 
 /// Table borders from `sprmTTableBorders80`: cb (0x18) then six Brc80s in the order top,
