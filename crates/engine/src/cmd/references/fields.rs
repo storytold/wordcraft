@@ -182,10 +182,11 @@ pub const REFERENCE_NOT_FOUND: &str = "Error! Reference source not found.";
 
 /// The fresh results of the body's unlocked REF fields as output shows them: the bookmark's
 /// text, or Word's error when the document lacks the bookmark (measured in Word for Windows);
-/// with `\r`, `\n`, `\w` or `\p`, the bookmarked body paragraph's number and where it is, as F9
-/// computes them (Word's output computes them too, measured in Word for Windows; such a REF to a
-/// bookmark outside the body keeps its stored result). A REF to a bookmark that ends in a later
-/// paragraph keeps its stored result too: Word shows such
+/// with `\r`, `\n` or `\w`, the number of the body paragraph the bookmark starts in, and with `\p`
+/// "above" or "below" (after the number with a number switch), as F9 computes them (Word's output
+/// computes them too, measured in Word for Windows; such a REF to a bookmark outside the body
+/// keeps its stored result, see [`ref_paragraph_result`] for the others). A REF showing the
+/// bookmark's text keeps its stored result when the bookmark ends in a later paragraph: Word shows such
 /// a bookmark's paragraphs as paragraphs of the result, which a field's one-paragraph result
 /// can't hold (measured in Word for Windows). A bookmark in a header, footer, footnote, endnote,
 /// comment or text box is found too, and a REF to it shows that text as `stored` holds it, its
