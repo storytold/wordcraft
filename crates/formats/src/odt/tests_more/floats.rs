@@ -393,3 +393,36 @@ fn a_frame_anchored_to_a_page_stays_on_that_page() {
         assert!(!c.contains("anchor-page-number"), "{junk}: {c}");
     }
 }
+
+/// A page number only says something on a page anchor. On another LibreOffice ignores it, so it
+/// doesn't make a drawing anchored to a page when saved.
+#[test]
+fn a_page_number_on_another_anchor_is_no_page_anchor() {
+    let saved = |styles: &str, body: &str| {
+        let content = format!(
+            r#"<office:document-content {NS_T} {NS_D}><office:automatic-styles>{styles}</office:automatic-styles><office:body><office:text>{body}</office:text></office:body></office:document-content>"#
+        );
+        crate::odt::tests::content_of(&crate::odt::tests::export_model(&import(&crate::odt::tests::package(&content, None)).unwrap()).unwrap())
+    };
+    let frame = |attrs: &str| {
+        format!(
+            r#"<text:p>One<draw:frame {attrs} svg:x="5cm" svg:y="5cm" svg:width="4cm" svg:height="2cm"><draw:text-box><text:p>On it</text:p></draw:text-box></draw:frame></text:p>"#
+        )
+    };
+    for anchor in ["paragraph", "char"] {
+        let c = saved("", &frame(&format!(r#"text:anchor-type="{anchor}" text:anchor-page-number="3""#)));
+        assert!(!c.contains(r#"text:anchor-type="page""#) && !c.contains("anchor-page-number"), "{anchor}: {c}");
+    }
+    let c = saved(
+        "",
+        r#"<text:p>One<draw:line text:anchor-type="paragraph" text:anchor-page-number="3" svg:x1="1cm" svg:y1="1cm" svg:x2="3cm" svg:y2="3cm"/></text:p>"#,
+    );
+    assert!(!c.contains(r#"text:anchor-type="page""#) && !c.contains("anchor-page-number"), "a line: {c}");
+    // An anchor its style gives counts as one the frame states.
+    let by_style = r#"<style:style style:name="fr" style:family="graphic"><style:graphic-properties text:anchor-type="page"/></style:style>"#;
+    let c = saved(by_style, &frame(r#"draw:style-name="fr" text:anchor-page-number="3""#));
+    assert!(c.contains(r#"text:anchor-type="page" text:anchor-page-number="3""#), "{c}");
+    let by_style = r#"<style:style style:name="fr" style:family="graphic"><style:graphic-properties text:anchor-type="paragraph"/></style:style>"#;
+    let c = saved(by_style, &frame(r#"draw:style-name="fr" text:anchor-page-number="3""#));
+    assert!(!c.contains("anchor-page-number"), "{c}");
+}

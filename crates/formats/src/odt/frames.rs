@@ -417,16 +417,21 @@ pub(super) fn place(a: &Attrs, w: f32, h: f32, g: &Graphic, size: f32) -> Float 
         f.rot = rot;
     }
     f.z = z_of(a);
-    f.page = page_of(a);
+    f.page = page_of(get(a, "text:anchor-type"), get(a, "text:anchor-page-number"), g);
     if f.wrap == Wrap::Inline {
         f.y = inline_raise(g, y.as_deref().and_then(length), h, size);
     }
     f
 }
 
-/// The page a drawing anchored to a page is on (§19.872 `text:anchor-page-number`), 0 when none.
-pub(super) fn page_of(a: &Attrs) -> u32 {
-    get(a, "text:anchor-page-number").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0).min(MAX_ANCHOR_PAGE)
+/// The page a drawing anchored as `anchor` (or as its style says) is on: `number`, its
+/// `text:anchor-page-number` (§19.872). 0 when it states none, or isn't anchored to a page, where
+/// LibreOffice ignores the number.
+pub(super) fn page_of(anchor: Option<&str>, number: Option<&str>, g: &Graphic) -> u32 {
+    if anchor.or(g.anchor.as_deref()).map(str::trim) != Some("page") {
+        return 0;
+    }
+    number.and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0).min(MAX_ANCHOR_PAGE)
 }
 
 /// Highest anchor page kept.
