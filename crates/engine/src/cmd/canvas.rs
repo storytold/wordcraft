@@ -332,8 +332,10 @@ fn copy_member(s: &mut Session, pos: &Pos, index: usize) -> CmdResult {
     }
     s.clipboard_text = f.clipboard_text();
     s.clip_history.push(&f, &s.clipboard_text);
+    // The member's holder paragraph is made up, so there is no source spacing to carry over.
+    let bare = vec![true; f.blocks.len()];
     s.clipboard = Some(f);
-    Ok(super::edit::copy_result(s))
+    Ok(super::edit::copy_result(s, &bare))
 }
 
 /// Take member `index` out of the canvas at `pos`; the canvas stays selected.
