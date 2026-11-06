@@ -1010,3 +1010,26 @@ fn many_unclosed_ms_equation_fallbacks_import_quickly() {
     assert_eq!(marks[0].matches("[q]").count(), 40_000);
     assert!(marks[0].starts_with("a[q]") && marks[0].ends_with("[q]b"), "{}", marks[0].get(..40).unwrap_or(""));
 }
+
+#[test]
+fn an_unclosed_field_result_ends_with_its_paragraph() {
+    // No field-end: updating the field must not replace the paragraphs after it.
+    let html = "<p>a<!--[if supportFields]><span style='mso-element:field-begin'></span>DATE<span style='mso-element:field-separator'></span><![endif]-->today</p><p>next</p><p>last</p>";
+    assert_eq!(inline_marks(&parse(html)), ["a{DATE|today}", "next", "last"]);
+    // Nested in one paragraph, and a closed field spanning paragraphs stays whole.
+    let begin = |c: &str| format!("<span style='mso-element:field-begin'></span>{c}<span style='mso-element:field-separator'></span>");
+    let nested = format!("<p><!--[if supportFields]>{}{}<![endif]-->x</p><p>y</p>", begin("A"), begin("B"));
+    assert_eq!(inline_marks(&parse(&nested)), ["{A|{B|x}}", "y"]);
+    let whole = format!(
+        "<p><!--[if supportFields]>{}<![endif]-->x</p><p>y<!--[if supportFields]><span style='mso-element:field-end'></span><![endif]--></p>",
+        begin("BIBLIOGRAPHY")
+    );
+    assert_eq!(inline_marks(&parse(&whole)), ["{BIBLIOGRAPHY|x", "y}"]);
+}
+
+#[test]
+fn a_field_codes_data_keeps_its_spaces() {
+    // Only the source's line breaks go: a double space can be data in a citation's JSON.
+    let html = "<p><!--[if supportFields]><span style='mso-element:field-begin'></span>\nADDIN ZOTERO_ITEM\n  CSL_CITATION {&quot;t&quot;:&quot;a  b&quot;}\n<span style='mso-element:field-separator'></span>r<span style='mso-element:field-end'></span><![endif]--></p>";
+    assert_eq!(inline_marks(&parse(html)), ["{ADDIN ZOTERO_ITEM CSL_CITATION {\"t\":\"a  b\"}|r}"]);
+}

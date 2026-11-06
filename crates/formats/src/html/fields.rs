@@ -65,9 +65,28 @@ fn is_blank(text: &str) -> bool {
     text.chars().all(|c| c.is_ascii_whitespace())
 }
 
-/// A field code as Word reads it from HTML: white space collapsed, trimmed.
+/// A field code without the layout of the HTML source: the lines it was broken into joined by a
+/// space, trimmed. Spaces within a line stay: they can be data (a string in a citation's JSON).
 fn clean_code(code: &str) -> String {
-    code.split_ascii_whitespace().collect::<Vec<_>>().join(" ")
+    code.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ")
+}
+
+/// The top-level paragraphs holding a field start with no end after it, outermost first.
+fn open_starts(flow: &super::Flow) -> Vec<usize> {
+    let mut starts = Vec::new();
+    for (i, b) in flow.blocks.iter().enumerate() {
+        let super::FBlock::Para(p) = b else { continue };
+        for inline in &p.inlines {
+            match inline {
+                Inline::FieldStart(_) => starts.push(i),
+                Inline::FieldEnd => {
+                    starts.pop();
+                }
+                _ => {}
+            }
+        }
+    }
+    starts
 }
 
 impl Fields {
@@ -233,20 +252,31 @@ impl Fields {
         }
     }
 
-    /// Close the fields the page leaves open, at the end of its last paragraph (a new one only
-    /// when the page ends in a table or has none).
+    /// Close the fields the page leaves open. A result ends with the paragraph it starts in, so
+    /// updating the field (Zotero's Refresh, a bibliography) can't replace the rest of the page;
+    /// anything else ends the last paragraph (a new one when the page ends in a table or has none).
     pub(super) fn finish(&mut self, flow: &mut super::Flow) {
         let mut tail = Vec::new();
+        let mut results = 0usize;
         while let Some(s) = self.open.pop() {
             match s {
                 State::Code(code) if !clean_code(&code).is_empty() => {
                     tail.push(Inline::FieldStart(clean_code(&code)));
                     tail.push(Inline::FieldEnd);
                 }
-                State::Result => tail.push(Inline::FieldEnd),
+                State::Result => results += 1,
                 State::Code(_) | State::InCode | State::Ignored => {}
             }
         }
+        let starts = open_starts(flow);
+        for at in starts.iter().rev().take(results) {
+            if let Some(super::FBlock::Para(p)) = flow.blocks.get_mut(*at) {
+                p.inlines.push(Inline::FieldEnd);
+                results -= 1;
+            }
+        }
+        // A result that started in a table cell.
+        tail.extend(std::iter::repeat_n(Inline::FieldEnd, results));
         if tail.is_empty() {
             return;
         }
