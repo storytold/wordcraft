@@ -15,10 +15,15 @@ fn utf16(b: &[u8], le: bool) -> String {
     String::from_utf16_lossy(&units)
 }
 
+fn utf32(b: &[u8], le: bool) -> String {
+    let units: Vec<u32> = b.as_chunks::<4>().0.iter().map(|c| if le { u32::from_le_bytes(*c) } else { u32::from_be_bytes(*c) }).collect();
+    units.into_iter().map(|u| char::from_u32(u).unwrap_or('\u{FFFD}')).collect()
+}
+
 /// UTF-16 without a BOM, told by its zero bytes: `Some(true)` little-endian, `Some(false)`
 /// big-endian.
 fn unmarked_utf16(b: &[u8]) -> Option<bool> {
-    if b.len() < 4 || !b.len().is_multiple_of(2) {
+    if b.len() < 4 {
         return None;
     }
     let sample = b.get(..b.len().min(512))?;
@@ -41,7 +46,12 @@ fn unmarked_utf16(b: &[u8]) -> Option<bool> {
 /// other control characters in its first 64 KB. PDFs are refused by their signature (they
 /// start as text). An empty file is text.
 pub fn is_text(b: &[u8]) -> bool {
-    if b.starts_with(&[0xEF, 0xBB, 0xBF]) || b.starts_with(&[0xFF, 0xFE]) || b.starts_with(&[0xFE, 0xFF]) {
+    if b.starts_with(&[0xEF, 0xBB, 0xBF])
+        || b.starts_with(&[0xFF, 0xFE, 0x00, 0x00])
+        || b.starts_with(&[0x00, 0x00, 0xFE, 0xFF])
+        || b.starts_with(&[0xFF, 0xFE])
+        || b.starts_with(&[0xFE, 0xFF])
+    {
         return true;
     }
     if b.starts_with(b"%PDF-") {
@@ -67,6 +77,12 @@ pub fn is_text(b: &[u8]) -> bool {
 pub fn decode(b: &[u8]) -> String {
     if let Some(rest) = b.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
         return String::from_utf8_lossy(rest).into_owned();
+    }
+    if let Some(rest) = b.strip_prefix(&[0xFF, 0xFE, 0x00, 0x00]) {
+        return utf32(rest, true);
+    }
+    if let Some(rest) = b.strip_prefix(&[0x00, 0x00, 0xFE, 0xFF]) {
+        return utf32(rest, false);
     }
     if let Some(rest) = b.strip_prefix(&[0xFF, 0xFE]) {
         return utf16(rest, true);
@@ -166,3 +182,31 @@ pub fn export(doc: &Document) -> Vec<u8> {
     blocks_text(&flow.blocks, &mut lines, &mut ListCounter::default(), 0);
     lines.join("\r\n").into_bytes()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn utf32_bom_decoding() {
+        // UTF-32 LE: BOM 0xFF, 0xFE, 0x00, 0x00 followed by "Hi" (0x48, 0, 0, 0, 0x69, 0, 0, 0)
+        let le_bytes = [0xFF, 0xFE, 0x00, 0x00, 0x48, 0x00, 0x00, 0x00, 0x69, 0x00, 0x00, 0x00];
+        assert!(is_text(&le_bytes));
+        assert_eq!(decode(&le_bytes), "Hi");
+
+        // UTF-32 BE: BOM 0x00, 0x00, 0xFE, 0xFF followed by "Hi" (0, 0, 0, 0x48, 0, 0, 0, 0x69)
+        let be_bytes = [0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, 0x48, 0x00, 0x00, 0x00, 0x69];
+        assert!(is_text(&be_bytes));
+        assert_eq!(decode(&be_bytes), "Hi");
+    }
+
+    #[test]
+    fn unmarked_utf16_with_odd_trailing_byte() {
+        // "Hello" in UTF-16 LE: H(0x48, 0) e(0x65, 0) l(0x6c, 0) l(0x6c, 0) o(0x6f, 0) + 1 stray byte
+        let mut bytes = vec![0x48, 0x00, 0x65, 0x00, 0x6C, 0x00, 0x6C, 0x00, 0x6F, 0x00];
+        bytes.push(0x20); // odd length 11
+        assert_eq!(unmarked_utf16(&bytes), Some(true));
+        assert_eq!(decode(&bytes), "Hello");
+    }
+}
+
