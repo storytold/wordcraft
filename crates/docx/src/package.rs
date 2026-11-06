@@ -763,6 +763,25 @@ mod tests {
         // the effective limit for this parse (the remaining budget), not the whole budget.
         let pkg = Package::open_limited_within(&z, MAX_PART, MAX_TOTAL, 100).unwrap();
         let e = crate::read::read_opened(&pkg, None).expect_err("refused");
-        assert!(e.to_string().contains("over the XML element budget for this parse: at most 100 elements"), "{e}");
+        assert_eq!(e, DocxError::Limit("over the XML element budget for this parse: at most 100 elements".into()));
+    }
+
+    /// A part parsed earlier shrinks what is left of the budget: the next part is refused while
+    /// parsing at the remaining, not at the whole budget, and the error names the effective limit
+    /// for this parse (the remaining), not the package's budget.
+    #[test]
+    fn an_earlier_part_reduces_the_remaining_budget_the_next_part_names_it() {
+        let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
+        let styles = format!(r#"<w:styles {ns}>{}</w:styles>"#, "<a/>".repeat(60));
+        let settings = format!(r#"<w:settings {ns}>{}</w:settings>"#, "<a/>".repeat(60));
+        let z = zip_of(&[("word/styles.xml", styles.into_bytes()), ("word/settings.xml", settings.into_bytes())]);
+        // 100 elements of budget. The styles part parses (the main-part path: `xml_strict`) and
+        // charges its 61 elements, leaving 39.
+        let pkg = Package::open_limited_within(&z, MAX_PART, MAX_TOTAL, 100).unwrap();
+        pkg.xml_strict("word/styles.xml").unwrap();
+        // The settings part needs 61 elements, over the 39 left and under the per-part cap: the
+        // parse refuses at the remaining, so the error names 39, not the package's 100 budget.
+        let e = pkg.xml("word/settings.xml").expect_err("refused");
+        assert_eq!(e, DocxError::Limit("over the XML element budget for this parse: at most 39 elements".into()));
     }
 }
