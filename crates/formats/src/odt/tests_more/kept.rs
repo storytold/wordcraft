@@ -220,3 +220,20 @@ fn changing_one_style_leaves_the_files_other_definitions_alone() {
     let d = crate::odt::import(&bytes).unwrap();
     as_read(&crate::odt::export(&d).unwrap());
 }
+
+/// A style deleted in WordCraft stays deleted: the file's own definition doesn't come back with
+/// the definitions that stay as read.
+#[test]
+fn a_deleted_style_stays_deleted() {
+    use std::sync::Arc;
+    let mut d = crate::odt::import(&file_with_definitions()).unwrap();
+    assert!(d.styles.get("Eigen").is_some());
+    Arc::make_mut(&mut d.styles).remove("Eigen");
+    d.restyle("Eigen", None);
+    let saved = crate::odt::export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(!s.contains(r#"style:name="Eigen""#), "{s}");
+    assert!(s.contains(r#"draw:gradient draw:name="Sunset""#) && s.contains(r#"fo:margin-bottom="7pt""#), "the rest stays: {s}");
+    assert!(!crate::odt::tests::entry(&saved, "content.xml").contains("Eigen"));
+    assert!(crate::odt::import(&saved).unwrap().styles.get("Eigen").is_none());
+}
