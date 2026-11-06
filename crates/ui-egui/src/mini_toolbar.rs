@@ -152,6 +152,10 @@ pub fn track_dismissal(app: &mut WordApp, ctx: &egui::Context, viewport: Rect) {
     if ctx.layer_id_at(p).is_some_and(|l| l.order >= Order::Foreground) {
         return;
     }
+    // Nor does a press in a dialog, which is no press in the document even over it.
+    if app.dialog.is_some() {
+        return;
+    }
     app.canvas.mini_dismissed = if viewport.contains(p) {
         // A press in the document starts a new selection, which gets the bar again even when it
         // covers the same text.
@@ -159,6 +163,12 @@ pub fn track_dismissal(app: &mut WordApp, ctx: &egui::Context, viewport: Rect) {
     } else {
         Some(app.session.sel.clone())
     };
+}
+
+/// Keeps the bar away from the current selection: one made from outside the document, to show
+/// a Find result or a checker's issue, is not text picked to format (#5017).
+pub fn put_away(app: &mut WordApp) {
+    app.canvas.mini_dismissed = Some(app.session.sel.clone());
 }
 
 /// Show the bar: `selection` is the screen rect of the selection's first line, `viewport` the
