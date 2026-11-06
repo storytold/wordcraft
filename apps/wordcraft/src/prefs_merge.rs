@@ -1,0 +1,233 @@
+//! Several WordCraft processes share one `ui.json` (opening a file from the file manager starts
+//! another). Each reads it at start-up and writes it at exit, so without a merge the process that
+//! exits last writes back what it loaded and loses the others' changes (#3773).
+//!
+//! The policy: at exit, re-read `ui.json` and write it with only what this process changed since
+//! it loaded its preferences. Every other setting keeps what the file holds now. Recent lists
+//! (documents, symbols, colours, fonts) are merged instead: the entries this process added or used
+//! again first, then the file's, without duplicates and without the entries this process removed.
+
+use serde_json::Value;
+use wordcraft_ui_egui::{MAX_RECENT, MAX_RECENT_FONTS, colors, dialogs_insert};
+
+/// Whether two entries of a recent list are the same entry.
+type Same = fn(&Value, &Value) -> bool;
+
+/// The `ui.json` lists, most recent first, that take entries from both processes, how many
+/// entries each keeps, and when two of its entries are the same one.
+const RECENT_LISTS: [(&str, usize, Same); 4] = [
+    ("recent", MAX_RECENT, same_entry),
+    ("recentSymbols", dialogs_insert::RECENT_SYMBOLS, same_entry),
+    ("recentColors", colors::RECENT_MAX, same_entry),
+    ("recentFonts", MAX_RECENT_FONTS, same_font),
+];
+
+/// Entries saved alike (colours are saved normalised, `colors::push_recent`).
+fn same_entry(a: &Value, b: &Value) -> bool {
+    a == b
+}
+
+/// Font names ignoring case, as `push_recent_font` compares them.
+fn same_font(a: &Value, b: &Value) -> bool {
+    match (a.as_str(), b.as_str()) {
+        (Some(a), Some(b)) => a.to_lowercase() == b.to_lowercase(),
+        _ => a == b,
+    }
+}
+
+/// The preferences to write: `ours` (this process's, now), with every value it left as it was in
+/// `base` (what it loaded) taken from `disk` (what `ui.json` holds now). Only the settings `ours`
+/// has are written, as before: one this version no longer writes (read once to migrate) is dropped.
+pub fn merge(base: &Value, ours: Value, disk: &Value) -> Value {
+    match ours {
+        Value::Object(ours) => Value::Object(
+            ours.into_iter()
+                .map(|(k, v)| {
+                    let recent = RECENT_LISTS.iter().find(|(name, ..)| *name == k).map(|(_, cap, same)| (*cap, *same));
+                    let merged = merge_value(base.get(&k), v, disk.get(&k), recent);
+                    (k, merged)
+                })
+                .collect(),
+        ),
+        ours => ours,
+    }
+}
+
+/// One setting. `recent` is the limit and entry identity of the recent list it is, if it is one.
+fn merge_value(base: Option<&Value>, ours: Value, disk: Option<&Value>, recent: Option<(usize, Same)>) -> Value {
+    if base == Some(&ours) {
+        // Unchanged here: whatever the file holds now, if it has this setting.
+        return disk.cloned().unwrap_or(ours);
+    }
+    match (ours, base, disk, recent) {
+        // A group of settings (editing options, keyboard customisations): each entry on its own.
+        // Entries the other process added are kept, entries this one removed stay removed.
+        (Value::Object(mut ours), Some(Value::Object(base)), Some(Value::Object(disk)), _) => {
+            for (k, v) in disk {
+                if !base.contains_key(k) && !ours.contains_key(k) {
+                    ours.insert(k.clone(), v.clone());
+                }
+            }
+            Value::Object(
+                ours.into_iter()
+                    .map(|(k, v)| {
+                        let merged = merge_value(base.get(&k), v, disk.get(&k), None);
+                        (k, merged)
+                    })
+                    .collect(),
+            )
+        }
+        (Value::Array(ours), Some(Value::Array(base)), Some(Value::Array(disk)), Some((cap, same))) => {
+            Value::Array(merge_recent(base, ours, disk, cap, same))
+        }
+        (ours, ..) => ours,
+    }
+}
+
+/// The entries this process put at the front of `ours` ([`touched_len`]), then `disk`'s, leaving
+/// out what this process removed (in `base` but no longer in `ours`), without duplicates and at
+/// most `cap` entries. Entries are told apart by `same`.
+fn merge_recent(base: &[Value], ours: Vec<Value>, disk: &[Value], cap: usize, same: Same) -> Vec<Value> {
+    let has = |list: &[Value], v: &Value| list.iter().any(|x| same(x, v));
+    let removed = |v: &Value| has(base, v) && !has(&ours, v);
+    let touched = &ours[..touched_len(base, &ours, same)];
+    let mut merged: Vec<Value> = Vec::new();
+    for v in touched.iter().cloned().chain(disk.iter().filter(|v| !removed(v)).cloned()) {
+        if merged.len() == cap {
+            break;
+        }
+        if !has(&merged, &v) {
+            merged.push(v);
+        }
+    }
+    merged
+}
+
+/// How many of `ours`'s first entries this process added or used again. Each use moves an entry
+/// to the front of a recent list, so what it left alone is a tail of `ours` in `base`'s order: the
+/// longest such tail is untouched, and everything before it (new entries, and entries that moved
+/// ahead of one loaded before them) was touched. A use that leaves the order as it was loaded
+/// (the first entry used again) can't be told from no use, and merges as none.
+fn touched_len(base: &[Value], ours: &[Value], same: Same) -> usize {
+    let mut end = base.len();
+    for (i, v) in ours.iter().enumerate().rev() {
+        match base[..end].iter().rposition(|b| same(b, v)) {
+            Some(at) => end = at,
+            None => return i + 1,
+        }
+    }
+    0
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::merge;
+
+    #[test]
+    fn two_processes_keep_each_others_changes() {
+        // #3773: A and B both start from the same file.
+        let loaded =
+            json!({"theme": "light", "author": "Ann", "recent": ["a.docx", "b.docx"], "editing": {"smartQuotes": true, "autoCapitalize": true}});
+        // B changes the theme and opens c.docx, then exits first.
+        let b = json!({"theme": "dark", "author": "Ann", "recent": ["c.docx", "a.docx", "b.docx"], "editing": {"smartQuotes": false, "autoCapitalize": true}});
+        let after_b = merge(&loaded, b, &loaded);
+        // A changes the author name and opens d.docx, then exits.
+        let a = json!({"theme": "light", "author": "Bo", "recent": ["d.docx", "a.docx", "b.docx"], "editing": {"smartQuotes": true, "autoCapitalize": false}});
+        let after_a = merge(&loaded, a, &after_b);
+        assert_eq!(
+            after_a,
+            json!({"theme": "dark", "author": "Bo", "recent": ["d.docx", "c.docx", "a.docx", "b.docx"], "editing": {"smartQuotes": false, "autoCapitalize": false}})
+        );
+    }
+
+    #[test]
+    fn a_process_that_changed_nothing_writes_the_file_back_as_it_is() {
+        let loaded = json!({"theme": "light", "recent": ["a.docx"]});
+        let disk = json!({"theme": "dark", "recent": ["b.docx", "a.docx"]});
+        assert_eq!(merge(&loaded, loaded.clone(), &disk), disk);
+    }
+
+    #[test]
+    fn this_process_wins_a_setting_both_changed() {
+        let loaded = json!({"theme": "light"});
+        assert_eq!(merge(&loaded, json!({"theme": "system"}), &json!({"theme": "dark"})), json!({"theme": "system"}));
+    }
+
+    #[test]
+    fn a_recent_entry_removed_here_stays_removed() {
+        let loaded = json!({"recent": ["a.docx", "b.docx"]});
+        let ours = json!({"recent": ["b.docx"]});
+        let disk = json!({"recent": ["c.docx", "a.docx", "b.docx"]});
+        assert_eq!(merge(&loaded, ours, &disk), json!({"recent": ["c.docx", "b.docx"]}));
+        // Clear Recent clears what the other process had added too only if it was loaded here.
+        assert_eq!(merge(&loaded, json!({"recent": []}), &json!({"recent": ["c.docx", "a.docx", "b.docx"]})), json!({"recent": ["c.docx"]}));
+    }
+
+    #[test]
+    fn a_recent_entry_used_again_here_moves_to_the_front() {
+        // Applying a font already in Recently Used Fonts moves it to the front without adding one.
+        let loaded = json!({"recentFonts": ["A", "B"]});
+        assert_eq!(merge(&loaded, json!({"recentFonts": ["B", "A"]}), &loaded), json!({"recentFonts": ["B", "A"]}));
+        // Here C was used again, D opened and A removed; the other process used B again and added E.
+        let loaded = json!({"recent": ["a.docx", "b.docx", "c.docx"]});
+        let ours = json!({"recent": ["d.docx", "c.docx", "b.docx"]});
+        let disk = json!({"recent": ["e.docx", "b.docx", "a.docx", "c.docx"]});
+        assert_eq!(merge(&loaded, ours, &disk), json!({"recent": ["d.docx", "c.docx", "e.docx", "b.docx"]}));
+        // Entries this process only kept, in the order it loaded them, don't override the file's order.
+        let loaded = json!({"recentSymbols": ["x", "y", "z"]});
+        let ours = json!({"recentSymbols": ["w", "x", "z"]});
+        let disk = json!({"recentSymbols": ["z", "x", "y"]});
+        assert_eq!(merge(&loaded, ours, &disk), json!({"recentSymbols": ["w", "z", "x"]}));
+    }
+
+    #[test]
+    fn recent_fonts_are_one_entry_whatever_their_case() {
+        // Recently Used Fonts ignores case (`push_recent_font`): Arial applied here as `arial` and
+        // there as `ARIAL` is one entry, and doesn't push a distinct font out of the ten.
+        let loaded = json!({"recentFonts": ["A", "B", "C", "D", "E", "F", "G", "H", "I", "Arial"]});
+        let ours = json!({"recentFonts": ["arial", "A", "B", "C", "D", "E", "F", "G", "H", "I"]});
+        let disk = json!({"recentFonts": ["ARIAL", "A", "B", "C", "D", "E", "F", "G", "H", "I"]});
+        assert_eq!(merge(&loaded, ours, &disk), json!({"recentFonts": ["arial", "A", "B", "C", "D", "E", "F", "G", "H", "I"]}));
+        // Other lists compare their entries as saved.
+        let loaded = json!({"recent": ["a.docx"]});
+        assert_eq!(merge(&loaded, json!({"recent": ["A.docx", "a.docx"]}), &loaded), json!({"recent": ["A.docx", "a.docx"]}));
+    }
+
+    #[test]
+    fn merged_recent_lists_keep_their_limit() {
+        // Recently Used Fonts keeps ten.
+        let loaded = json!({"recentFonts": ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]});
+        let ours = json!({"recentFonts": ["X", "A", "B", "C", "D", "E", "F", "G", "H", "I"]});
+        let disk = json!({"recentFonts": ["Y", "A", "B", "C", "D", "E", "F", "G", "H", "I"]});
+        assert_eq!(merge(&loaded, ours, &disk), json!({"recentFonts": ["X", "Y", "A", "B", "C", "D", "E", "F", "G", "H"]}));
+    }
+
+    #[test]
+    fn entries_of_a_group_merge_one_by_one() {
+        // B added a shortcut for Bold; A changed Italic's and removed Underline's.
+        let loaded = json!({"keyboard": {"format.italic": "Mod+I", "format.underline": "Mod+U"}});
+        let disk = json!({"keyboard": {"format.italic": "Mod+I", "format.underline": "Mod+U", "format.bold": "Mod+B"}});
+        let ours = json!({"keyboard": {"format.italic": "Mod+Shift+I"}});
+        assert_eq!(merge(&loaded, ours, &disk), json!({"keyboard": {"format.italic": "Mod+Shift+I", "format.bold": "Mod+B"}}));
+    }
+
+    #[test]
+    fn only_keys_this_version_writes_are_kept() {
+        // A legacy key read once to migrate, and junk, are not written back.
+        let loaded = json!({"theme": "light"});
+        let disk = json!({"theme": "light", "dark": true, "junk": 1});
+        assert_eq!(merge(&loaded, json!({"theme": "light"}), &disk), json!({"theme": "light"}));
+    }
+
+    #[test]
+    fn a_file_another_process_damaged_gives_way_to_ours() {
+        let loaded = json!({"theme": "light", "recent": ["a.docx"]});
+        let ours = json!({"theme": "dark", "recent": ["a.docx"]});
+        // Not an object: everything comes from this process.
+        assert_eq!(merge(&loaded, ours.clone(), &json!("garbage")), ours);
+        // A list replaced by something else keeps ours.
+        assert_eq!(merge(&loaded, json!({"recent": ["b.docx", "a.docx"]}), &json!({"recent": 3})), json!({"recent": ["b.docx", "a.docx"]}));
+    }
+}
