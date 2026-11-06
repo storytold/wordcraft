@@ -7412,6 +7412,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wordcraft-collab-client"
+version = "0.15.1"
+dependencies = [
+ "serde_json",
+ "wordcraft-collab",
+ "wordcraft-collab-doc",
+ "wordcraft-doc",
+]
+
+[[package]]
 name = "wordcraft-collab-doc"
 version = "0.15.1"
 dependencies = [
