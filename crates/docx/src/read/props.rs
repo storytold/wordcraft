@@ -487,24 +487,40 @@ fn shd_fill(e: &El) -> Option<Rgb> {
 impl PropCtx {
     /// One border (`CT_Border`); its theme colour supersedes `w:color`, as for text.
     pub fn border(&self, e: &El) -> Border {
+        self.border_or(e, 0.5)
+    }
+
+    /// One border, `missing` points wide when it gives no `w:sz`.
+    fn border_or(&self, e: &El, missing: f32) -> Border {
         let style = BorderStyle::from_ooxml(e.attr("w:val").unwrap_or("single"));
-        let width = e.attr("w:sz").and_then(|v| measure(v, 8.0)).unwrap_or(0.5).clamp(0.0, 12.0);
+        let width = e.attr("w:sz").and_then(|v| measure(v, 8.0)).unwrap_or(missing).clamp(0.0, 12.0);
         let color = self.theme_color(e, "w:themeColor", "w:themeTint", "w:themeShade").or_else(|| e.attr("w:color").and_then(Rgb::parse));
         let space = e.attr("w:space").and_then(|v| measure(v, 1.0)).unwrap_or(0.0).clamp(0.0, 31.0);
         Border { style, width, color, space }
     }
 
-    /// `w:pBdr`, `w:tblBorders`, `w:tcBorders`, `w:pgBorders`.
+    /// `w:pBdr`, `w:pgBorders`.
     pub fn borders(&self, e: &El) -> Borders {
+        self.borders_or(e, 0.5)
+    }
+
+    /// `w:tblBorders`, `w:tcBorders`. A table or cell border without `w:sz` is width 0, as
+    /// `w:sz="0"`: measured in Word for Mac, it draws a hairline and takes no room, where reading
+    /// it as ½ pt (and saving `w:sz="4"`) made every row below a pandoc table header ½ pt lower.
+    pub fn table_borders(&self, e: &El) -> Borders {
+        self.borders_or(e, 0.0)
+    }
+
+    fn borders_or(&self, e: &El, missing: f32) -> Borders {
         let mut b = Borders::default();
         for k in e.els() {
             match k.local() {
-                "top" => b.top = Some(self.border(k)),
-                "left" | "start" => b.left = Some(self.border(k)),
-                "bottom" => b.bottom = Some(self.border(k)),
-                "right" | "end" => b.right = Some(self.border(k)),
-                "between" | "insideH" => b.between = Some(self.border(k)),
-                "insideV" => b.inside_v = Some(self.border(k)),
+                "top" => b.top = Some(self.border_or(k, missing)),
+                "left" | "start" => b.left = Some(self.border_or(k, missing)),
+                "bottom" => b.bottom = Some(self.border_or(k, missing)),
+                "right" | "end" => b.right = Some(self.border_or(k, missing)),
+                "between" | "insideH" => b.between = Some(self.border_or(k, missing)),
+                "insideV" => b.inside_v = Some(self.border_or(k, missing)),
                 _ => {}
             }
         }
@@ -543,7 +559,7 @@ impl PropCtx {
                 }
                 "w:jc" => t.align = k.attr("w:val").map(align),
                 "w:tblInd" => t.indent = tw(k, "w:w"),
-                "w:tblBorders" => t.borders = Some(self.borders(k)),
+                "w:tblBorders" => t.borders = Some(self.table_borders(k)),
                 "w:shd" => t.shading = self.shd_fill(k),
                 "w:tblLayout" => t.fixed = k.attr("w:type") == Some("fixed"),
                 "w:bidiVisual" => t.bidi_visual = on_off(k),
@@ -649,7 +665,7 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
             "w:gridSpan" => c.span = k.attr("w:val").and_then(u32_of).unwrap_or(1).clamp(1, 63),
             "w:hMerge" => hcont = k.attr("w:val") != Some("restart"),
             "w:vMerge" => c.vmerge = if k.attr("w:val") == Some("restart") { VMerge::Restart } else { VMerge::Continue },
-            "w:tcBorders" => c.borders = Some(pc.borders(k)),
+            "w:tcBorders" => c.borders = Some(pc.table_borders(k)),
             "w:shd" => c.shading = pc.shd_fill(k),
             "w:noWrap" => c.no_wrap = on_off(k),
             "w:hideMark" => c.hide_mark = on_off(k),

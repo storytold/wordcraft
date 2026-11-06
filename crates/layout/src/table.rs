@@ -834,21 +834,22 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             let b = c.borders;
             let (x0, x1, y0, y1) = (c.x, c.x + c.w, 0.0, rh);
             // Horizontal edges run on over half of each visible vertical edge, so the corners
-            // close the way Word draws them instead of leaving a notch at thick borders.
+            // close the way Word draws them instead of leaving a notch at thick borders. A width-0
+            // edge is drawn too (a hairline, as Word does) but takes no room.
             let half = |o: Option<Border>| o.filter(Border::is_visible).map_or(0.0, |e| e.width / 2.0);
             let (hx0, hx1) = (x0 - half(b.left), x1 + half(b.right));
             let top_vis = c.vmerge != VMerge::Continue;
-            if top_vis && let Some(e) = b.top.filter(Border::is_visible) {
+            if top_vis && let Some(e) = b.top.filter(Border::is_drawn) {
                 items.push(Placed::Rule { x0: hx0, y0, x1: hx1, y1: y0, border: e });
             }
             let last_of_merge = c.vmerge == VMerge::None || !cont.get(ri + 1).is_some_and(|v| v.contains(&c.g));
-            if last_of_merge && let Some(e) = b.bottom.filter(Border::is_visible) {
+            if last_of_merge && let Some(e) = b.bottom.filter(Border::is_drawn) {
                 items.push(Placed::Rule { x0: hx0, y0: y1, x1: hx1, y1, border: e });
             }
-            if let Some(e) = b.left.filter(Border::is_visible) {
+            if let Some(e) = b.left.filter(Border::is_drawn) {
                 items.push(Placed::Rule { x0, y0, x1: x0, y1, border: e });
             }
-            if let Some(e) = b.right.filter(Border::is_visible) {
+            if let Some(e) = b.right.filter(Border::is_drawn) {
                 items.push(Placed::Rule { x0: x1, y0, x1, y1, border: e });
             }
             items.push(Placed::Cell {
