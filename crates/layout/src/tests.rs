@@ -5447,7 +5447,8 @@ fn multiple_line_spacing_adds_its_leading_below_the_text() {
             );
         }
     }
-    // Exact spacing still keeps the descent below the baseline.
+    // Exact spacing puts the baseline four fifths of the way down the line (Word for Mac), not
+    // the descent above its bottom.
     let mut d = Document::from_text("Exact");
     if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
         p.props.line_spacing = Some(LineSpacing::Exactly(30.0));
@@ -5455,7 +5456,7 @@ fn multiple_line_spacing_adds_its_leading_below_the_text() {
     let l = lay(&d);
     let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
     let line = &para.lines[0];
-    assert!((line.top + line.height - line.baseline - para.styles[0].descent).abs() < 0.01);
+    assert!((line.baseline - line.top - 24.0).abs() < 0.01, "{}", line.baseline - line.top);
 }
 
 #[test]
@@ -13741,6 +13742,39 @@ fn lowered_pictures_and_check_boxes_take_words_line_heights() {
 /// picture the text's descent goes below it too (Word, measured with Aptos, Arial and Times New
 /// Roman at 10 and 20 pt: a 30 pt picture alone or after spaces takes 30 pt at single spacing,
 /// after a word 30 pt plus the descent).
+#[test]
+fn an_exact_line_puts_its_baseline_four_fifths_down() {
+    use wordcraft_doc::props::LineSpacing;
+    // Word for Mac puts an exactly spaced line's baseline 0.8 of the line's height below its
+    // top, whatever the font and its size (Georgia, Arial, Times New Roman and Verdana at 10 to
+    // 22pt, exact 6 to 40pt); not the line's height less the font's descent.
+    let offset = |size: f32, exact: f32, picture_h: Option<f32>| {
+        let mut d = Document::from_text("Hxg words");
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+            p.props.line_spacing = Some(LineSpacing::Exactly(exact));
+            for r in &mut p.runs {
+                r.props.size = Some(size);
+            }
+            if let Some(h) = picture_h {
+                p.insert_object(0, picture(60.0, h, Default::default()), &Default::default()).unwrap();
+            }
+        }
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        para.lines[0].baseline - para.lines[0].top
+    };
+    for size in [11.0, 22.0] {
+        for exact in [8.0, 13.0, 20.0, 40.0] {
+            let got = offset(size, exact, None);
+            assert!((got - 0.8 * exact).abs() < 0.01, "{size}pt text, exactly {exact}pt: baseline {got} below the top");
+        }
+    }
+    // A picture taller than the line beside the text doesn't move the baseline (Word for Mac: a
+    // 50pt picture and text in a 30pt exact line, baseline 24pt down).
+    let got = offset(11.0, 30.0, Some(50.0));
+    assert!((got - 24.0).abs() < 0.01, "{got}");
+}
+
 #[test]
 fn a_line_of_only_pictures_takes_no_descent() {
     use wordcraft_doc::props::LineSpacing;
