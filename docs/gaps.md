@@ -444,8 +444,8 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 
 ## Layout validation fonts
 
+Four geometry-dependent regression controls request Source Sans 3 explicitly. Platform-installed substitutes otherwise change their expected line counts. Assertions remain unchanged; renderer font metrics and substitution gaps remain open.
+
 ### Thai alignment — 2026-11-06
 
 Stored Thai Distributed and capped Thai justification are implemented with synthetic layout coverage. See [Thai alignment](thai-alignment.md). Direct Word comparison remains unverified; readiness estimates are unchanged.
-
-Four geometry-dependent regression controls request Source Sans 3 explicitly. Platform-installed substitutes otherwise change their expected line counts. Assertions remain unchanged; renderer font metrics and substitution gaps remain open.

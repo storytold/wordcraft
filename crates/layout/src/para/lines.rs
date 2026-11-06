@@ -181,7 +181,13 @@ fn capped_equal_spacing(slack: f32, caps: &[f32]) -> Vec<f32> {
                 remaining = (remaining - room).max(0.0);
             }
         }
-        active.retain(|i| !saturated.contains(i));
+        let mut full = vec![false; caps.len()];
+        for i in &saturated {
+            if let Some(f) = full.get_mut(*i) {
+                *f = true;
+            }
+        }
+        active.retain(|i| !full.get(*i).copied().unwrap_or(false));
     }
     added
 }
