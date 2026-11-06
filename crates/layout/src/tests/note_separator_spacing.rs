@@ -197,3 +197,55 @@ fn separator_keeps_after_space_before_a_trailing_floating_table() {
     assert!((a.0 - b.0 - 12.0).abs() < 0.01, "the gap before the floating table stays reserved: {a:?}, {b:?}");
     assert!((a.1 - b.1).abs() < 0.01, "the note stays clear of the complete separator area");
 }
+
+/// Build a separator with a flow-wrapping shape below its line, inside or beyond its after-space.
+fn separator_with_wrapping_shape(height: f32) -> (DocLayout, u32) {
+    use wordcraft_doc::para::{Anchor, Float};
+    let mut doc = pagination_fixture_document("SYNTHETIC BODY");
+    let id = footnote(&mut doc, &Pos::body(0, 0), "SYNTHETIC NOTE");
+    let note = doc.para_mut(StoryRef::Part(id), &Path::top(0)).unwrap();
+    note.props.line_spacing = Some(LineSpacing::Exactly(14.0));
+    note.props.space_after = Some(0.0);
+    let mut p = Paragraph::new();
+    p.props = ParaProps { line_spacing: Some(LineSpacing::Exactly(14.0)), space_before: Some(0.0), space_after: Some(48.0), ..Default::default() };
+    p.insert_object(0, InlineObject::note_separator(false), &Default::default()).unwrap();
+    let mut shape = page_shape(200.0, 4.0, 40.0, height);
+    if let InlineObject::Shape { float, .. } = &mut shape {
+        *float = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 200.0, y: 4.0, dist: 0.0, ..Default::default() };
+    }
+    p.insert_object(0, shape, &Default::default()).unwrap();
+    doc.footnote_separators.separator = Some(vec![para_block(p)]);
+    (lay(&doc), id)
+}
+
+/// Trimming a covered wrapping shape's paragraph gap must not pull the note into the shape.
+#[test]
+fn separator_wrapping_object_covered_by_after_space_stays_clear_of_notes() {
+    let (layout, id) = separator_with_wrapping_shape(30.0);
+    let bottom = layout.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Placed::Object { story, rect, wrap: Wrap::Square, .. } if *story == DECOR_STORY => Some(rect.bottom()),
+            _ => None,
+        })
+        .unwrap();
+    let note = layout.caret(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 }).unwrap().top;
+    assert!(note >= bottom - 0.01, "note {note} overlaps separator shape ending at {bottom}");
+}
+
+/// A shape beyond the original separator height does not acquire a new full-height reservation.
+#[test]
+fn separator_keeps_the_prior_limit_for_an_overflowing_wrapping_object() {
+    let (layout, id) = separator_with_wrapping_shape(100.0);
+    let bottom = layout.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Placed::Object { story, rect, wrap: Wrap::Square, .. } if *story == DECOR_STORY => Some(rect.bottom()),
+            _ => None,
+        })
+        .unwrap();
+    let note = layout.caret(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 }).unwrap().top;
+    assert!(note < bottom - 1.0, "the prior separator reservation must not grow to the full shape extent: {note}, {bottom}");
+}
