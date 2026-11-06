@@ -4827,6 +4827,31 @@ fn paragraph_style_and_direct_formatting_beat_table_style() {
     assert_eq!(cell_para(&lay(&d), 2, 0).rp.space_after, 10.0, "Normal");
 }
 
+/// A table without its own indent takes its style's (`w:tblStyle/w:tblPr/w:tblInd`); its own wins.
+#[test]
+fn table_style_indent_applies_without_a_table_indent() {
+    use wordcraft_doc::styles::TableStyleParts;
+    let first_cell_x = |style_indent: Option<f32>, own: Option<f32>| {
+        let mut d = styled_table_doc(Some("Indented"), 2);
+        Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
+            id: "Indented".into(),
+            name: "Indented".into(),
+            kind: wordcraft_doc::StyleKind::Table,
+            table: Some(TableStyleParts { indent: style_indent, ..Default::default() }),
+            ..Default::default()
+        });
+        if let Some(Block::Table(t)) = d.body.get_mut(1).map(Arc::make_mut) {
+            t.props.indent = own;
+        }
+        let l = lay(&d);
+        l.pages[0].items.iter().find_map(|i| if let Placed::Cell { rect, row: 0, cell: 0, .. } = i { Some(rect.x) } else { None }).unwrap()
+    };
+    let base = first_cell_x(None, None);
+    assert!((first_cell_x(Some(0.0), None) - base).abs() < 0.01);
+    assert!((first_cell_x(Some(36.0), None) - base - 36.0).abs() < 0.01);
+    assert!((first_cell_x(Some(36.0), Some(18.0)) - base - 18.0).abs() < 0.01, "the table's own indent wins");
+}
+
 /// A table style based on another keeps the base style's borders and cell text formatting, and
 /// adds its own run formatting and conditional formats.
 #[test]
