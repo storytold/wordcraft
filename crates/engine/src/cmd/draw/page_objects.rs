@@ -33,6 +33,7 @@ impl<'a> PageObjects<'a> {
             // Start after the last scanned marker, not at the paragraph's start. In particular,
             // a lone object near the start never scans a long text suffix it doesn't need.
             for (off, c) in p.text.get(cached.scanned..end)?.char_indices() {
+                wordcraft_doc::work::steps(1);
                 if c == OBJ {
                     if let Some(object) = p.objects.get(cached.ordinal) {
                         cached.objects.push((cached.scanned + off, object));
