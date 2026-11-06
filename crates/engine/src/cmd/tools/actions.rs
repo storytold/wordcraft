@@ -99,7 +99,7 @@ fn set_document_props(s: &mut Session, f: &dyn Fn(&mut CharProps)) -> Result<(),
 
 /// [`set_document_props`] for a block list outside any story (depth-limited like `para_paths`).
 fn format_blocks(blocks: &mut wordcraft_doc::Blocks, f: &dyn Fn(&mut CharProps), depth: usize) {
-    if depth > 32 {
+    if depth > wordcraft_doc::PARA_WALK_DEPTH {
         return;
     }
     for blk in blocks.iter_mut() {

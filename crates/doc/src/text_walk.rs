@@ -48,7 +48,7 @@ pub fn count_chars_no_spaces(s: &str) -> usize {
 }
 
 /// How deep in nested tables [`Document::para_paths`] goes: cells below this are skipped.
-pub(crate) const PARA_WALK_DEPTH: usize = 16;
+pub const PARA_WALK_DEPTH: usize = 16;
 
 /// The note and text box stories an object shows, for `Document::reachable`.
 pub(crate) fn notes_and_boxes(o: &InlineObject) -> Vec<(u32, &'static [PartKind])> {
