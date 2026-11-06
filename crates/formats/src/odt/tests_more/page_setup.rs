@@ -457,3 +457,38 @@ fn hostile_page_definitions_do_not_stop_a_page_setup_change() {
     let saved = crate::odt::export(&d).unwrap();
     assert!(crate::odt::import(&saved).is_ok());
 }
+
+/// A margin changed in the same save as the watermark or odd and even pages: the margin alone could
+/// stay a change to the file's page layouts, but those two aren't in them, and would be lost.
+#[test]
+fn a_margin_changed_with_the_watermark_or_odd_and_even_pages_keeps_them() {
+    let file = |left: &str| {
+        let styles = format!(
+            r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pm1" style:page-usage="mirrored"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm" fo:margin-bottom="2cm" fo:margin-left="2cm" fo:margin-right="2cm"/><style:header-style><style:header-footer-properties fo:min-height="1cm"/></style:header-style></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>Right head</text:p></style:header>{left}</style:master-page></office:master-styles></office:document-styles>"#
+        );
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>"#
+        );
+        package(&content, Some(&styles))
+    };
+    let mut d = import(&file("")).unwrap();
+    d.last_section.margin_left += 30.0;
+    d.settings.watermark = Some(wordcraft_doc::Watermark { text: "DRAFT".into(), ..Default::default() });
+    let saved = export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(s.contains("PowerPlusWaterMarkObject") && s.contains("DRAFT"), "the watermark: {s}");
+    let back = import(&saved).unwrap();
+    assert_eq!(back.settings.watermark.map(|w| w.text).as_deref(), Some("DRAFT"));
+    assert!((back.last_section.margin_left - d.last_section.margin_left).abs() < 0.5, "the margin: {s}");
+
+    let mut d = import(&file("<style:header-left><text:p>Left head</text:p></style:header-left>")).unwrap();
+    assert!(d.settings.even_odd_headers);
+    d.last_section.margin_left += 30.0;
+    d.settings.even_odd_headers = false;
+    let saved = export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(!s.contains("<style:header-left"), "the left pages' header: {s}");
+    let back = import(&saved).unwrap();
+    assert!(!back.settings.even_odd_headers);
+    assert!((back.last_section.margin_left - d.last_section.margin_left).abs() < 0.5, "the margin: {s}");
+}

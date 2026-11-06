@@ -493,8 +493,9 @@ fn family_fingerprint(doc: &crate::Document, root: u32, replies: &HashMap<u32, V
 }
 
 /// What `doc`'s page setup is: each section's setup (where it starts, its size, margins,
-/// columns, headers and footers), the headers' and footers' content, the page colour and
-/// picture, and the notes' numbering.
+/// columns, headers and footers), the headers' and footers' content, whether odd and even pages
+/// differ, the page colour and picture, the watermark (one with no text isn't written), and the
+/// notes' numbering.
 pub fn pages_fingerprint(doc: &crate::Document) -> u64 {
     pages_print(doc, &doc_sections(doc))
 }
@@ -543,8 +544,10 @@ fn pages_print(doc: &crate::Document, sections: &[&crate::SectionProps]) -> u64 
     match serde_json::to_vec(&(
         sections,
         parts,
+        s.even_odd_headers,
         &s.page_color,
         &s.page_picture,
+        s.watermark.as_ref().filter(|w| !w.text.trim().is_empty()),
         (&s.footnote_format, &s.endnote_format, &s.footnote_pr, &s.endnote_pr),
         (&doc.footnote_separators, &doc.endnote_separators),
     )) {

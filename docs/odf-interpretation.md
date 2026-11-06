@@ -80,8 +80,8 @@ a save that doesn't touch it:
 - its page layouts and master pages, and each section starts with the master page it started
   with. A change to margins, paper size, columns or page borders changes just those values in the
   page layout that says them, so the rest stays (a header's background, the footnote line); only
-  a change to what a page is made of (a header added or removed, a new section) or to the page
-  colour writes them from the model;
+  a change to what a page is made of (a header added or removed, a new section), to the page
+  colour, the watermark or odd and even pages writes them from the model;
 - named sections around unedited paragraphs, the document properties WordCraft doesn't model,
   the declarations opening the text and the document's scripts.
 
