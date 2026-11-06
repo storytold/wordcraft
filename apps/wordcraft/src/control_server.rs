@@ -284,6 +284,29 @@ mod tests {
         (port, rx)
     }
 
+    /// A client that authenticates but never reads cannot retain a listener slot forever.
+    #[test]
+    fn authenticated_client_that_never_reads_is_disconnected_after_idle_timeout() {
+        let (port, _rx, hub) = boot_agents(Duration::from_millis(200));
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        writeln!(stream, "{}", json!({"id":0,"method":"auth","key":KEY})).unwrap();
+        writeln!(stream, "{}", json!({"id":1,"method":"agent.listen","params":{"timeoutMs":0,"agent":"Never reads"}})).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut registered = false;
+        while Instant::now() < deadline {
+            if hub.agents().is_empty() {
+                if registered {
+                    return;
+                }
+            } else {
+                registered = true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(registered, "the authenticated long-poll connection was registered");
+        assert!(hub.agents().is_empty(), "idle authenticated clients release their slot even when no reply was read");
+    }
+
     fn answer(rx: &Receiver<ControlRequest>) -> ControlRequest {
         let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
         let _ = req.reply.send(json!({"ok": true, "result": {}}));

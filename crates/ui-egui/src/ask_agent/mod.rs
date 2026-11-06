@@ -23,6 +23,7 @@ const MAX_TURNS: usize = 128;
 pub enum Unavailable {
     NoControlChannel,
     NoAgent,
+    InvalidLauncher,
 }
 
 impl Unavailable {
@@ -30,6 +31,7 @@ impl Unavailable {
         match self {
             Self::NoControlChannel => tl!("Start WordCraft with --control to let an agent connect").to_string(),
             Self::NoAgent => tl!("No agent is listening: ask your agent to wait for requests").to_string(),
+            Self::InvalidLauncher => tl!("The configured agent launcher must be an absolute executable path").to_string(),
         }
     }
 }
@@ -42,7 +44,6 @@ pub struct Open {
     document: u64,
     revision: u64,
     asked: String,
-    target: Option<Pos>,
     selection: Value,
     edited_from: Option<usize>,
     undo_token: Option<UndoToken>,
@@ -64,11 +65,16 @@ pub struct AskAgent {
 impl AskAgent {
     pub fn unavailable(&self) -> Option<Unavailable> {
         let Some(hub) = &self.hub else { return Some(Unavailable::NoControlChannel) };
-        #[cfg(not(target_arch = "wasm32"))]
-        if launcher::available(LAUNCH_VARIABLE) {
+        if !hub.agents().is_empty() {
             return None;
         }
-        hub.agents().is_empty().then_some(Unavailable::NoAgent)
+        #[cfg(not(target_arch = "wasm32"))]
+        match launcher::available(LAUNCH_VARIABLE) {
+            Ok(true) => return None,
+            Err(_) => return Some(Unavailable::InvalidLauncher),
+            Ok(false) => {}
+        }
+        Some(Unavailable::NoAgent)
     }
 }
 
@@ -90,10 +96,28 @@ fn range(selection: &Value) -> Option<(Pos, Pos)> {
     Some(if a <= b { (a, b) } else { (b, a) })
 }
 
+/// Plain-text extraction hides inline objects; inspect the actual selected structure instead.
+fn ordinary_text(session: &Session) -> bool {
+    if session.column.is_some() || session.cell_range().is_some() || !session.also_selected.is_empty() {
+        return false;
+    }
+    let (start, end) = session.sel.ordered();
+    if start.path.cell() != end.path.cell() {
+        return false;
+    }
+    session.doc.copy_range(&start, &end).blocks.iter().all(|block| {
+        block.as_para().is_some_and(|para| {
+            para.objects
+                .iter()
+                .all(|object| matches!(object, wordcraft_doc::InlineObject::CommentStart { .. } | wordcraft_doc::InlineObject::CommentEnd { .. }))
+        })
+    })
+}
+
 /// Only native commands whose complete effect is confined to the selected text are accepted.
 /// Whole-document commands, undo/redo, macros and document replacement are not selection edits.
 fn within_selection(session: &Session, command: &str, selection: &Value) -> bool {
-    if session.column.is_some() {
+    if !ordinary_text(session) {
         return false;
     }
     let Some((a, b)) = range(selection) else { return false };
@@ -104,11 +128,39 @@ fn within_selection(session: &Session, command: &str, selection: &Value) -> bool
     match command {
         // Replacing the complete target, or appending at its end, has a well-defined rebased
         // interval. Arbitrary partial structural replacements require a separate app adapter.
-        "text.insert" => (a == c && b == d) || (c == d && d == b),
-        "format.bold" | "format.italic" | "format.underline" | "format.strike" | "format.font" | "format.size" | "format.color"
-        | "format.highlight" | "format.clear" => true,
+        "text.insert" => {
+            // Content-control placeholders and field boundaries may redirect ordinary typing.
+            // This text adapter deliberately requires the native insertion point to stay put.
+            ((a == c && b == d) || (c == d && d == b))
+                && !(c == d && matches!(session.doc.settings.protection.as_deref(), Some("readOnly" | "comments")))
+                && session.doc.control_at(&c).is_none()
+                && session.doc.control_at(&d).is_none()
+                && session.doc.typing_pos(&c) == c
+                && session.doc.past_field_ends(&c) == c
+        }
+        "format.bold"
+        | "format.italic"
+        | "format.underline"
+        | "format.strikethrough"
+        | "format.font"
+        | "format.size"
+        | "format.color"
+        | "format.highlight" => c < d,
         _ => false,
     }
+}
+
+/// Scoped typing cannot AutoCorrect a neighboring word or widen the target into paragraphs.
+pub(crate) fn command_params(app: &WordApp, command: &str, mut params: Value) -> Result<Value, String> {
+    if app.ask_agent.agent_turn && command == "text.insert" {
+        if params.get("paragraphs").and_then(Value::as_bool) == Some(true) {
+            return Err("OUTSIDE_SELECTION: structural paragraph creation needs an explicit structural scope".into());
+        }
+        if let Some(object) = params.as_object_mut() {
+            object.insert("raw".into(), json!(true));
+        }
+    }
+    Ok(params)
 }
 
 /// Every mutating control command goes through the same owner, document and geometry checks.
@@ -119,7 +171,7 @@ pub fn as_agent(
     p: &Value,
     run: impl FnOnce(&mut WordApp) -> Result<Value, String>,
 ) -> Result<Value, String> {
-    let mutates = app.session.registry.get(command).is_some_and(|command| command.mutates)
+    let mutates = app.session.registry.get(command).is_none_or(|command| command.mutates)
         || command.starts_with("file.")
         || matches!(command, "edit.undo" | "edit.undoTo" | "edit.redo");
     let (Some(conn), Some(hub), true) = (conn, app.ask_agent.hub.clone(), mutates) else { return run(app) };
@@ -147,10 +199,15 @@ pub fn as_agent(
     }
     let name = hub.snapshot(id).and_then(|snapshot| snapshot.agent).unwrap_or_default();
     let author = std::mem::replace(&mut app.session.author, format!("Agent ({name})"));
+    let typing = (app.session.prefs.overtype, app.session.prefs.typing_replaces_selection);
+    app.session.prefs.overtype = false;
+    app.session.prefs.typing_replaces_selection = true;
     app.ask_agent.agent_turn = true;
     let result = run(app);
     app.ask_agent.agent_turn = false;
     app.session.author = author;
+    (app.session.prefs.overtype, app.session.prefs.typing_replaces_selection) = typing;
+    app.session.cancel_undo_join();
     let after = current(&app.session);
     if result.is_ok() && after != before {
         let rebased = if command == "text.insert" {
@@ -259,9 +316,11 @@ pub fn held(app: &WordApp, command: &str) -> Option<String> {
 
 fn ask(app: &mut WordApp, instruction: String) -> Result<(), String> {
     let Some(hub) = app.ask_agent.hub.clone() else { return Err(Unavailable::NoControlChannel.shown()) };
+    if !ordinary_text(&app.session) {
+        return Err("OUTSIDE_SELECTION: Ask Agent requires an ordinary text selection, not whole cells or objects".into());
+    }
     let target = current(&app.session);
     let selection = captured_selection(&app.session);
-    let start = app.session.sel.ordered().0;
     let document = json!({"title": app.title_stem(), "saved": !app.session.dirty, "language": app.ui.language});
     let Some(open) = &mut app.ask_agent.open else { return Err("NO_REQUEST: open Ask Agent first".into()) };
     if open.document != app.session.document_id() {
@@ -283,7 +342,6 @@ fn ask(app: &mut WordApp, instruction: String) -> Result<(), String> {
     let id = hub.ask(request).map_err(|error| error.to_string())?;
     open.id = Some(id);
     open.asked = instruction;
-    open.target.get_or_insert(start);
     open.selection = selection;
     open.revision = target.revision;
     open.commented = false;
@@ -301,21 +359,41 @@ fn ask(app: &mut WordApp, instruction: String) -> Result<(), String> {
 /// Close every prior request, including failed ones, before replacing its id.
 fn send(app: &mut WordApp, text: String) -> Result<(), String> {
     let snapshot = app.ask_agent.hub.as_ref().and_then(|hub| app.ask_agent.open.as_ref().and_then(|open| open.id).and_then(|id| hub.snapshot(id)));
-    if let Some(snapshot) = snapshot.as_ref().filter(|snapshot| snapshot.status == Status::Answered) {
+    let completed =
+        snapshot.as_ref().is_some_and(|snapshot| snapshot.status == Status::Answered || (snapshot.status == Status::Failed && can_undo(app)));
+    // A replacement leaves a caret at the target's end. A follow-up still refers to the text
+    // just produced unless the person deliberately selected or moved somewhere else.
+    let carry = app
+        .ask_agent
+        .open
+        .as_ref()
+        .and_then(|open| range(&open.selection))
+        .is_some_and(|(_, end)| completed && app.session.sel.is_collapsed() && app.session.sel.focus == end);
+    if let Some(snapshot) = snapshot.as_ref().filter(|_| completed) {
         comment_once(app, snapshot);
+        if app.ask_agent.open.as_ref().is_some_and(|open| !open.commented) {
+            return Err("NOTE_NOT_SAVED: the agent's note could not be retained; use Undo or retry".into());
+        }
     }
     if let (Some(hub), Some(open)) = (&app.ask_agent.hub, &mut app.ask_agent.open) {
         if open.turns.len() >= MAX_TURNS {
             return Err("LIMIT_EXCEEDED: start a new Ask Agent conversation".into());
         }
-        if let Some(snapshot) = snapshot.filter(|snapshot| snapshot.status == Status::Answered) {
+        if let Some(snapshot) = snapshot.filter(|_| completed) {
             open.turns.push(Turn { instruction: std::mem::take(&mut open.asked), answer: snapshot.review_text() });
         }
         if let Some(id) = open.id.take() {
             hub.close(id);
         }
     }
-    ask(app, text)
+    let selection = app.session.sel.clone();
+    if let Some((anchor, focus)) = carry.then(|| app.ask_agent.open.as_ref().and_then(|open| range(&open.selection))).flatten() {
+        app.session.sel.anchor = anchor;
+        app.session.sel.focus = focus;
+    }
+    let result = ask(app, text);
+    app.session.sel = selection;
+    result
 }
 
 fn open_at_caret(app: &mut WordApp) {
@@ -329,7 +407,6 @@ fn open_at_caret(app: &mut WordApp) {
         document: app.session.document_id(),
         revision: app.session.rev(),
         asked: String::new(),
-        target: None,
         selection: Value::Null,
         edited_from: None,
         undo_token: None,
@@ -367,6 +444,20 @@ pub fn typing_resumed(app: &mut WordApp) {
     if app.ask_agent.open.as_ref().is_some_and(|open| open.id.is_none()) {
         close(app);
     }
+}
+
+/// Keep means retain the native edits and their review note; a refused note stays recoverable.
+fn keep(app: &mut WordApp) -> Result<(), String> {
+    let edited = app.ask_agent.open.as_ref().is_some_and(|open| open.edited_from.is_some());
+    let snapshot = app.ask_agent.hub.as_ref().and_then(|hub| app.ask_agent.open.as_ref().and_then(|open| open.id).and_then(|id| hub.snapshot(id)));
+    if let Some(snapshot) = snapshot.filter(|snapshot| snapshot.status == Status::Answered || (snapshot.status == Status::Failed && edited)) {
+        comment_once(app, &snapshot);
+        if app.ask_agent.open.as_ref().is_some_and(|open| !open.commented) {
+            return Err("NOTE_NOT_SAVED: the agent's note could not be retained; use Undo or retry".into());
+        }
+    }
+    close(app);
+    Ok(())
 }
 
 fn can_undo(app: &WordApp) -> bool {
@@ -416,7 +507,12 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context, _viewport: Rect) {
             }
             close(app);
         }
-        Some(ui::Action::Keep | ui::Action::Close) => close(app),
+        Some(ui::Action::Keep) => {
+            if let Err(error) = keep(app) {
+                app.status(error);
+            }
+        }
+        Some(ui::Action::Close) => close(app),
         None => {}
     }
 }
@@ -429,7 +525,7 @@ fn comment_once(app: &mut WordApp, snapshot: &Snapshot) {
     };
     let Some(name) = &snapshot.agent else { return };
     let (target, from, join, asked) =
-        (open.target.clone(), open.edited_from, open.undo_token.is_some() && open.undo_token == app.session.undo_token(), open.asked.clone());
+        (range(&open.selection), open.edited_from, open.undo_token.is_some() && open.undo_token == app.session.undo_token(), open.asked.clone());
     if open.undo_token.is_some() && !join {
         return;
     }
@@ -441,15 +537,24 @@ fn comment_once(app: &mut WordApp, snapshot: &Snapshot) {
     let revision = app.session.rev();
     let author = std::mem::replace(&mut app.session.author, format!("Agent ({name})"));
     let selection = app.session.sel.clone();
-    if let Some(at) = target {
-        (app.session.sel.anchor, app.session.sel.focus) = (at.clone(), at);
+    if let Some((anchor, focus)) = target {
+        (app.session.sel.anchor, app.session.sel.focus) = (anchor, focus);
     }
     let text = format!("You: {asked}\n\nAgent: {}", snapshot.review_text());
     let result = app.session.run("review.newComment", &json!({"text":text}));
     app.session.sel = selection;
     app.session.author = author;
+    // Native comments insert two inline markers. Read their real positions and move every
+    // captured position past the start marker but before the end marker. Restoring raw offsets
+    // would truncate the next request and leave the person's caret inside the rewritten text.
+    if let Ok(value) = &result {
+        if let Some(id) = value.get("id").and_then(Value::as_u64).and_then(|id| u32::try_from(id).ok()) {
+            rebase_comment(app, id);
+        }
+    }
+    app.session.cancel_undo_join();
     if let Some(open) = &mut app.ask_agent.open {
-        open.commented = true;
+        open.commented = result.is_ok();
         if result.is_ok() {
             if from.is_none() && token != app.session.undo_token() {
                 open.edited_from = Some(depth);
@@ -458,6 +563,47 @@ fn comment_once(app: &mut WordApp, snapshot: &Snapshot) {
                 open.undo_token = app.session.undo_token();
             }
             open.revision = app.session.rev();
+        }
+    }
+}
+
+/// Rebase from the markers the native command actually inserted, including caret word anchors.
+fn rebase_comment(app: &mut WordApp, id: u32) {
+    let Some(open) = app.ask_agent.open.as_ref() else { return };
+    let Some((range_start, _)) = range(&open.selection) else { return };
+    let story = range_start.story;
+    let (mut start, mut end) = (None, None);
+    for path in app.session.doc.para_paths(story) {
+        let Some(para) = app.session.doc.para(story, &path) else { continue };
+        for off in para.object_offsets() {
+            let position = Pos { story, path: path.clone(), off };
+            match para.object_at(off) {
+                Some(wordcraft_doc::InlineObject::CommentStart { id: found }) if *found == id => start = Some(position),
+                Some(wordcraft_doc::InlineObject::CommentEnd { id: found }) if *found == id => end = Some(position),
+                _ => {}
+            }
+        }
+    }
+    let (Some(start), Some(mut end)) = (start, end) else { return };
+    let width = wordcraft_doc::para::OBJ.len_utf8();
+    if start.path == end.path {
+        end.off = end.off.saturating_sub(width);
+    }
+    let map = |position: &mut Pos| {
+        if position.story != story {
+            return;
+        }
+        let shift =
+            usize::from(position.path == start.path && position.off >= start.off) + usize::from(position.path == end.path && position.off > end.off);
+        position.off = position.off.saturating_add(shift * width);
+    };
+    map(&mut app.session.sel.anchor);
+    map(&mut app.session.sel.focus);
+    if let Some(open) = &mut app.ask_agent.open {
+        if let Some((mut anchor, mut focus)) = range(&open.selection) {
+            map(&mut anchor);
+            map(&mut focus);
+            open.selection = json!({"anchor":anchor,"focus":focus,"text":""});
         }
     }
 }

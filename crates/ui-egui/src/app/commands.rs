@@ -113,6 +113,7 @@ impl WordApp {
     /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
     /// UI-level commands (`ui.*`) are handled here, the rest by the engine.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let params = ask_agent::command_params(self, id, params)?;
         self.clear_command_targets(id);
         if let Some(error) = self.document_required_error(id) {
             return Err(error);

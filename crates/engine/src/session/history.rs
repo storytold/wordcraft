@@ -64,6 +64,11 @@ impl Session {
         self.join_next = true;
     }
 
+    /// Drop a scoped join when a front-end refuses a command before the engine consumes it.
+    pub fn cancel_undo_join(&mut self) {
+        self.join_next = false;
+    }
+
     /// Make the next equation typing command (`equation.type` or `equation.backspace`) join the
     /// previous equation deletion's undo step. Unlike [`Self::join_next_undo`], the promise is
     /// not generic: any other command consumes and discards it, so unrelated edits get their own

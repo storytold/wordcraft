@@ -13,21 +13,26 @@ pub struct Launcher {
 
 /// An explicit absolute executable, or an opt-in launcher beside the app executable.
 fn configured(variable: &str) -> Result<Option<PathBuf>, String> {
-    if let Some(path) = std::env::var_os(variable).filter(|path| !path.is_empty()) {
-        let path = PathBuf::from(path);
+    let provided = std::env::var_os(variable).filter(|path| !path.is_empty()).map(PathBuf::from);
+    configured_from(variable, provided, std::env::current_exe().ok())
+}
+
+/// Pure resolution lets tests check opt-in behavior without mutating process-global environment.
+fn configured_from(variable: &str, provided: Option<PathBuf>, executable: Option<PathBuf>) -> Result<Option<PathBuf>, String> {
+    if let Some(path) = provided {
         if !path.is_absolute() || !path.is_file() {
             return Err(format!("{variable} must name an absolute launcher file"));
         }
         return Ok(Some(path));
     }
     let name = if cfg!(windows) { "launch.cmd" } else { "launch" };
-    let path = std::env::current_exe().ok().and_then(|path| path.parent().map(|parent| parent.join("agent").join(name)));
+    let path = executable.and_then(|path| path.parent().map(|parent| parent.join("agent").join(name)));
     Ok(path.filter(|path| path.is_file()))
 }
 
 /// Missing configuration is the default and never starts a process.
-pub fn available(variable: &str) -> bool {
-    configured(variable).ok().flatten().is_some()
+pub fn available(variable: &str) -> Result<bool, String> {
+    configured(variable).map(|program| program.is_some())
 }
 
 impl Launcher {
@@ -62,3 +67,7 @@ impl Launcher {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "tests/launcher.rs"]
+mod tests;

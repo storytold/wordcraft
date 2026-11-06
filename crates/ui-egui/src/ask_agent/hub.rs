@@ -162,6 +162,9 @@ impl Snapshot {
         {
             parts.push(answer.clone());
         }
+        if let Some(error) = &self.error {
+            parts.push(format!("Error: {error}"));
+        }
         if let Some(comment) = &self.comment {
             parts.push(comment.clone());
         }

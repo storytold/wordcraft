@@ -187,7 +187,20 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value, connection: O
 pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     if req.connection.is_some()
-        && matches!(req.method.as_str(), "ui.click" | "ui.drag" | "ui.clickText" | "ui.key" | "ui.text")
+        && matches!(
+            req.method.as_str(),
+            "ui.click"
+                | "ui.drag"
+                | "ui.clickText"
+                | "ui.key"
+                | "ui.text"
+                | "ui.press"
+                | "ui.release"
+                | "ui.move"
+                | "ui.wheel"
+                | "ui.resize"
+                | "ui.focus"
+        )
         && let Err(error) = crate::ask_agent::guard_input(app)
     {
         return err(error);

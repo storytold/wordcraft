@@ -348,7 +348,9 @@ fn stale_or_oversized_proposals_do_not_survive_as_review_notes() {
     assert!(hub.snapshot(id).unwrap().proposal.is_none());
     let reply = Reply { proposal: Some("123"), ..Reply::default() };
     assert_eq!(hub.reply(1, id, reply, Some(&target(2))).unwrap_err().code, STALE_REQUEST);
-    assert!(hub.snapshot(id).unwrap().review_text().is_empty());
+    let snapshot = hub.snapshot(id).unwrap();
+    assert!(snapshot.proposal.is_none() && snapshot.answer.is_none() && snapshot.comment.is_none());
+    assert!(!snapshot.review_text().contains("123"), "a stale payload is never retained as a review note");
 }
 
 #[test]

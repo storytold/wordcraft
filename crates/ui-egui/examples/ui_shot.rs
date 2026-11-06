@@ -14,6 +14,10 @@
 //! folder rather than the person's, or in `"storeDir"` given on the same line (with
 //! `CRAFT_LANGUAGE_PACK_INDEX` for a local pack index).
 
+//! `{"demoAgent":true}` enables a synthetic local Ask Agent fixture, without a model or network.
+//! `{"agentListen":true}` claims its request; control lines can set `"connection":7` to exercise
+//! the normal ownership checks. These fixture identities never bypass production authentication.
+
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{ControlRequest, Services, WordApp};
 
@@ -51,6 +55,11 @@ fn main() {
         None => {}
     }
     let mut app = WordApp::new(Session::new(doc), Services::default()).with_control(rx);
+    if lines.iter().any(|line| line.get("demoAgent") == Some(&serde_json::Value::Bool(true))) {
+        let hub = wordcraft_ui_egui::ask_agent::AgentHub::default();
+        let _ = hub.listen(7, Some("Demo agent"), std::time::Duration::ZERO, || true).expect("register demo agent");
+        app.ask_agent.hub = Some(hub);
+    }
     app.integrated_titlebar = true;
     if lines.first().is_some_and(|l| l.get("startScreen").is_some()) {
         app.start_screen();
@@ -90,8 +99,13 @@ fn main() {
                 step(&mut harness);
                 std::thread::sleep(std::time::Duration::from_millis(16));
             }
+        } else if l.get("agentListen") == Some(&serde_json::Value::Bool(true)) {
+            let hub = harness.state_mut().ask_agent.hub.clone().expect("enable demoAgent first");
+            let request = hub.listen(7, Some("Demo agent"), std::time::Duration::ZERO, || true).expect("demo listen");
+            println!("demo agent request: {:?}", request.map(|request| request.id));
         } else if let Some(m) = l.get("method").and_then(|v| v.as_str()) {
-            let (req, reply) = ControlRequest::new(m, l.get("params").cloned().unwrap_or_default());
+            let (mut req, reply) = ControlRequest::new(m, l.get("params").cloned().unwrap_or_default());
+            req.connection = l.get("connection").and_then(|connection| connection.as_u64());
             tx.send(req).expect("send");
             for _ in 0..60 {
                 step(&mut harness);

@@ -198,8 +198,12 @@ person's external agent may keep its own history according to its own settings.
 A mutating command is associated with the claimed request using **`request`**, not `request_id`.
 Ownership alone grants no document-wide permission: WordCraft checks the captured document,
 current content revision, actual selection and supported selection-scoped command. Text insertion
-replaces the captured selection or appends at its end; supported character-format commands stay
-within it. Whole-document operations, macros and arbitrary structural replacements are refused.
+replaces the captured selection or appends at its end; supported character-format commands require a nonempty range within it. Whole-cell, block and object
+selections, whole-document operations, macros and arbitrary structural replacements are refused.
+Agent text insertion is literal (`raw`), temporarily disables overtype and always replaces the
+selected text; the person's typing preferences are restored afterwards. This prevents AutoCorrect,
+word-wide formatting or overtype from changing text outside the requested interval. Creating
+paragraph structure (`paragraphs: true`), clearing paragraph formatting and typing into content controls, redirected field boundaries or protected exception boundaries require a separate structural-scope adapter and are refused.
 An inactive addressed document cannot bypass these checks; make the request's document active first.
 Synthetic UI input is refused while a request is open, so it cannot click the person's Keep/Undo.
 
@@ -214,6 +218,10 @@ Proposals and format metadata are **literal review text**, never commands or mar
 reply is supported and labeled "Proposal (not applied)". Keep retains native tool edits already made
 and the saved response note; it never executes a proposal. Responses have bounded text, proposals,
 notes and total size (the common `craft-ask-agent` contract proposed in storytold/craft-libs#142).
+A failed request may already have made native edits: Keep retains those edits and the failure note,
+while Undo uses the same document/version/checkpoint guard. Retrying carries the rebased text and
+failure history. If the document refuses the review note, Keep leaves the conversation open and
+reports the refusal, so the person can recover or undo the edits.
 
 ### Optional personal launcher
 
