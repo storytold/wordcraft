@@ -77,7 +77,7 @@ fn run_fallback_is_cached_per_char_set() {
         let cache = db.run_fallbacks.read().unwrap();
         assert_eq!(cache.faces, db.read_faces().len());
         assert_eq!(cache.map.len(), 1);
-        assert!(cache.map.contains_key(&(vec!['分', '类'], latin.id(), false, false)));
+        assert!(cache.map.contains_key(&(vec!['分', '类'], latin.id(), false, false, false)));
     }
     // Long hostile runs keep the cache bounded.
     let many: Vec<char> = (0x4E00u32..0x4E00 + 50_000).filter_map(char::from_u32).collect();

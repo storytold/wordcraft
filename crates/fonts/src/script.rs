@@ -86,8 +86,45 @@ pub fn script_fallbacks(c: char) -> &'static [&'static str] {
         Script::Thai => &["Leelawadee UI", "Leelawadee", "Tahoma", "Thonburi", "Noto Sans Thai", "Noto Serif Thai"],
         Script::Lao => &["Leelawadee UI", "Lao UI", "Noto Sans Lao", "Noto Serif Lao", "Lao Sangam MN"],
         Script::Tamil | Script::Telugu | Script::Kannada | Script::Malayalam | Script::Gujarati | Script::Gurmukhi | Script::Oriya => &["Nirmala UI"],
+        Script::Hiragana | Script::Katakana => JAPANESE_FALLBACKS,
         _ => &[],
     }
+}
+
+/// Families made for Japanese, preferred in this order for Japanese text the document's font
+/// lacks: a run with kana in it, or one in Japanese (`w:lang w:eastAsia`). Chinese fonts map kana
+/// and the ideographs Japanese shares with Chinese too, but draw some of those in their Chinese
+/// forms; a font loaded first for them (PingFang on macOS, Microsoft YaHei on Windows) drew
+/// Japanese text. The platforms' own Gothic (sans) faces first, then the open ones, then Mincho.
+pub const JAPANESE_FALLBACKS: &[&str] = &[
+    "Hiragino Kaku Gothic ProN",
+    "Hiragino Sans",
+    "Yu Gothic",
+    "Meiryo",
+    "MS Gothic",
+    "Noto Sans CJK JP",
+    "Noto Sans JP",
+    "Source Han Sans JP",
+    "IPAexGothic",
+    "IPAGothic",
+    "TakaoGothic",
+    "Hiragino Mincho ProN",
+    "Yu Mincho",
+    "MS Mincho",
+    "Noto Serif CJK JP",
+    "IPAexMincho",
+];
+
+/// Kana (Hiragana and Katakana, with their extensions and halfwidth forms): only Japanese is
+/// written with them.
+pub fn is_kana(c: char) -> bool {
+    matches!(c.script(), Script::Hiragana | Script::Katakana)
+}
+
+/// Whether `family` is made for Japanese: one of [`JAPANESE_FALLBACKS`], or a Japanese family of
+/// craft-fonts.
+pub fn is_japanese_family(family: &str) -> bool {
+    JAPANESE_FALLBACKS.iter().any(|n| family.eq_ignore_ascii_case(n)) || crate::japanese_fonts().any(|f| family.eq_ignore_ascii_case(f.family))
 }
 
 /// The platforms' colour emoji fonts. Emoji prefer them over the monochrome symbol fonts that
