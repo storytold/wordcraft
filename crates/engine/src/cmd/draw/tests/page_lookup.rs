@@ -91,42 +91,16 @@ fn page_ink_lookup_work_does_not_multiply_with_paragraph_objects() {
         let items = (0..n).map(|i| placed(StoryRef::Body, Path::top(0), i * OBJ.len_utf8(), 50.0)).collect();
         (Session::new(d), DocLayout { pages: vec![Page { items, ..Default::default() }], ..Default::default() })
     }
-    // Scheduling delays do not count. Without an advancing Linux thread CPU clock, the
-    // semantic assertions still run and only the scaling check is skipped.
-    fn ran() -> Option<u64> {
-        std::fs::read_to_string("/proc/thread-self/schedstat").ok()?.split_whitespace().next()?.parse().ok()
-    }
-    fn cost(mut f: impl FnMut()) -> Option<f64> {
-        let before = ran()?;
-        for _ in 0..32 {
-            f();
-        }
-        let elapsed = ran()?.checked_sub(before)?;
-        (elapsed > 0).then_some(elapsed as f64 / 32.0)
-    }
     let (small, a) = fixture(250);
     let (big, b) = fixture(2000);
     assert_eq!(ink_on(&small, &a, 0).len(), 250);
     assert_eq!(ink_on(&big, &b, 0).len(), 2000);
-    let mut t1 = f64::INFINITY;
-    let mut t8 = f64::INFINITY;
-    for _ in 0..5 {
-        let Some(small_cost) = cost(|| {
-            for _ in 0..8 {
-                std::hint::black_box(ink_on(&small, &a, 0));
-            }
-        }) else {
-            return;
-        };
-        let Some(big_cost) = cost(|| {
-            std::hint::black_box(ink_on(&big, &b, 0));
-        }) else {
-            return;
-        };
-        t1 = t1.min(small_cost / 8.0);
-        t8 = t8.min(big_cost);
-    }
-    let ratio = t8 / t1;
-    eprintln!("page ink CPU ratio={ratio:.2} for 8x objects");
-    assert!(ratio < 24.0, "page ink lookup repeats paragraph-prefix work: {ratio:.2}x CPU for 8x objects");
+    // The characters the object lookups walk (`wordcraft_doc::work`), not a timing: about 8x for
+    // 8x the objects when each paragraph is scanned once, about 64x when every lookup rescans it.
+    let s1 = wordcraft_doc::work::count(|| drop(std::hint::black_box(ink_on(&small, &a, 0))));
+    let s8 = wordcraft_doc::work::count(|| drop(std::hint::black_box(ink_on(&big, &b, 0))));
+    let ratio = s8 as f64 / s1.max(1) as f64;
+    eprintln!("page ink steps: {s1} -> {s8}, {ratio:.1}x for 8x objects");
+    assert!(s1 > 0, "no steps counted, so the walk this test watches no longer counts them (wordcraft_doc::work)");
+    assert!(ratio <= 12.0, "page ink lookup repeats paragraph-prefix work: {ratio:.1}x the steps for 8x objects ({s1} -> {s8})");
 }

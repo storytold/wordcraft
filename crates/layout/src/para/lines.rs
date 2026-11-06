@@ -42,8 +42,6 @@ struct Breaker<'e> {
     rtl_para: bool,
     /// The document grid's line pitch, for paragraphs that snap to it.
     grid: Option<Grid>,
-    /// Opened from ODF: picture-only lines keep the text descent.
-    odf: bool,
     bidi: bool,
     est_h: f32,
     table_h: f32,
@@ -111,7 +109,7 @@ fn has_content(pl: &ParaLayout, c0: usize, j: usize) -> bool {
 /// control's start, a bookmark) and floating objects' anchors take no room and don't count (Word:
 /// a picture a little wider than the line, after an anchor, stays on the first line rather than
 /// leaving the anchor a line of its own).
-fn takes_room(c: &Cluster) -> bool {
+pub(crate) fn takes_room(c: &Cluster) -> bool {
     c.kind != ClKind::Marker && !(matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0)
 }
 
@@ -198,7 +196,6 @@ impl<'e> Breaker<'e> {
             widths: word_widths(&pl.clusters, &pl.hyph_after),
             rtl_para: rp.bidi,
             grid: Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid),
-            odf: settings.odf.is_some(),
             bidi: rp.bidi || !pl.bidi_levels.is_empty(),
             est_h,
             // Exact spacing fixes the table-contact boundary even when the mark has other metrics.
@@ -410,7 +407,7 @@ impl<'e> Breaker<'e> {
     /// tallest picture on it (which sits on the baseline).
     fn extents(&self, pl: &ParaLayout, (c0, c1): (usize, usize)) -> Extents {
         let rp = &self.rp;
-        let mut ex = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0 };
+        let mut ex = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0, obj_desc: 0.0, text: false };
         let mut any = false;
         let dropped = pl.drop_cap.map_or(0, |d| d.0);
         for (k, c) in pl.clusters.get(c0..c1).into_iter().flatten().enumerate() {
@@ -423,17 +420,27 @@ impl<'e> Breaker<'e> {
                 continue;
             }
             let Some(st) = pl.styles.get(c.style as usize) else { continue };
+            let object = if let ClKind::Object(o) = c.kind { Some(o) } else { None };
+            let math = object.is_some_and(|o| pl.maths.iter().any(|(k, _)| *k == o));
+            let check_box = object.is_some_and(|o| pl.check_boxes.contains(&o));
             // A picture sits on the baseline of its run (raised or lowered by its position):
             // the line keeps that font's ascent and descent, and grows to fit it.
-            let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h + c.obj_d > 0.0 {
-                if pl.maths.iter().any(|(k, _)| c.kind == ClKind::Object(*k)) {
+            let (a, d) = if check_box {
+                // Word sizes a line by a legacy check box as by text of the box's size (measured
+                // with Arial at 10 and 20 pt: a 20 pt box's line is 23 pt, times the spacing).
+                let (a, d) = st.line_extent();
+                let k = if st.ascent > 0.0 { c.obj_h / st.ascent } else { 1.0 };
+                (a * k, d * k)
+            } else if object.is_some() && c.obj_h + c.obj_d > 0.0 {
+                if math {
                     // Exact spacing keeps the run's baseline; tall math may overflow the
                     // fixed line box without moving adjacent text up by its denominator.
                     if matches!(rp.line_spacing, LineSpacing::Exactly(_)) { (st.ascent, st.descent) } else { (c.obj_h, c.obj_d) }
                 } else {
                     ex.obj_asc = ex.obj_asc.max(c.obj_h);
-                    // A lowered picture reaches below the baseline: the line's descent grows.
-                    (st.ascent, st.descent.max(c.obj_d))
+                    // A lowered picture reaches below the baseline.
+                    ex.obj_desc = ex.obj_desc.max(c.obj_d);
+                    (st.ascent, st.descent)
                 }
             } else {
                 // `obj_h` is set on text clusters only under ruby text, which the line grows to fit.
@@ -443,6 +450,9 @@ impl<'e> Breaker<'e> {
             ex.asc = ex.asc.max(a);
             ex.desc = ex.desc.max(d);
             any = true;
+            // Text needs its descent below the line; so do inline math (an object with its own
+            // descent) and a check box. A line break ending the line is no text.
+            ex.text |= math || check_box || !matches!(c.kind, ClKind::Object(_) | ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak);
         }
         if (!any || (ex.asc == 0.0 && ex.desc == 0.0))
             && let Some(st) = pl.styles.get(self.mark_style as usize)
@@ -456,24 +466,43 @@ impl<'e> Breaker<'e> {
     /// The line's height, baseline and text extent.
     fn measure(&self, pl: &ParaLayout, range: (usize, usize)) -> Measure {
         let rp = &self.rp;
-        let Extents { mut asc, mut desc, obj_asc } = self.extents(pl, range);
-        let label_here = pl.label.is_some() && (self.first || (self.lines.len() == 1 && self.lines[0].end == LineEnd::PageBreak));
-        let picture_only = !self.odf
-            && matches!(rp.line_spacing, LineSpacing::Multiple(m) if m >= 1.0)
-            && self.grid.is_none()
-            && obj_asc > asc
-            && !label_here
-            && picture_clusters_only(pl, range.0, range.1);
-        let text_natural = asc + desc;
+        let Extents { mut asc, mut desc, obj_asc, obj_desc, text } = self.extents(pl, range);
+        let mut text_natural = asc + desc;
+        let font_desc = desc;
+        desc = desc.max(obj_desc);
         let (text_asc, text_desc) = (asc.max(obj_asc), desc);
-        let text_pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
+        // With multiple spacing a line of only pictures (and spaces) is as tall as they reach,
+        // raised or lowered, and never less than its font's height, a list label's font counting
+        // too: they end at its bottom, and the spacing adds its share of the font's height. Beside
+        // text they take the text's ascent and descent too, each only where it reaches further.
+        // Word, measured with Arial at 10 and 20 pt, single, 1.15 and 1.5 spacing: a 30 pt picture
+        // alone takes 30, 30 + 0.15 and 30 + 0.5 times the font's height, lowered 10 or 30 pt or
+        // not; raised 10 pt, 10 more; a 6 pt one, the font's height; beside text and lowered
+        // 10 pt, 30. Not on a line lowered further than the picture's height, which layout limits
+        // to that height where Word's line keeps growing.
+        let spacing = if let LineSpacing::Multiple(m) = rp.line_spacing { Some(m) } else { None };
+        let pictures_alone = !text && obj_asc + obj_desc > 0.0 && spacing.is_some();
+        let below = if pictures_alone { obj_desc } else { desc };
+        let text_pictures = if pictures_alone {
+            obj_asc + obj_desc
+        } else if obj_asc > asc || obj_desc > font_desc {
+            asc.max(obj_asc) + desc
+        } else {
+            0.0
+        };
         let mut label_extra = 0.0;
-        if label_here && let Some(lab) = &pl.label {
+        if self.first && let Some(lab) = &pl.label {
             if !matches!(rp.line_spacing, LineSpacing::Exactly(_)) {
                 // Automatic/minimum spacing keeps text descent. Only the label's ascent
                 // overflow adds room, unscaled by the automatic spacing multiplier.
                 label_extra = (lab.ascent - asc).max(0.0);
                 asc = asc.max(lab.ascent);
+                if pictures_alone {
+                    let styles = lab.runs.iter().filter_map(|r| pl.styles.get(r.style as usize));
+                    let (a, d) = styles.fold((asc, font_desc), |(a, d), st| (a.max(st.ascent), d.max(st.descent)));
+                    text_natural = a + d;
+                    label_extra = 0.0;
+                }
             } else {
                 for st in lab.runs.iter().filter_map(|r| pl.styles.get(r.style as usize)) {
                     asc = asc.max(st.ascent);
@@ -481,10 +510,7 @@ impl<'e> Breaker<'e> {
                 }
             }
         }
-        // Keep the picture floor independent of list-label metrics and line-spacing multipliers.
-        // shortcut: Word leaves less than a full descent below a line of only pictures (0.5pt to
-        // 1.9pt in docxide-pdf's header fixtures case121/case123, where the descent is 3.3pt), and
-        // no rule tried so far (none, only the text's descent) matched both; it needs Word probes.
+        // Keep the picture floor independent of list-label metrics.
         let natural = asc + desc;
         let pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
         // Document grid: the line takes whole line pitches, its text centred in them.
@@ -492,19 +518,17 @@ impl<'e> Breaker<'e> {
         let (height, centred) = match (rp.line_spacing, grid) {
             (LineSpacing::Multiple(m), Some(g)) => ((g.snap_height(natural) * m).max(g.snap_height(pictures)), true),
             (LineSpacing::AtLeast(v), Some(g)) => (g.snap_height(natural.max(pictures)).max(v), true),
-            (LineSpacing::Multiple(m), None) => {
-                let floor = if picture_only { obj_asc + text_natural * (m - 1.0).max(0.0) } else { text_pictures };
-                ((text_natural * m + label_extra).max(floor), false)
-            }
+            (LineSpacing::Multiple(m), None) => ((text_natural * m + label_extra).max(text_pictures + (m - 1.0).max(0.0) * text_natural), false),
             (LineSpacing::AtLeast(v), None) => (natural.max(text_pictures).max(v), false),
             (LineSpacing::Exactly(v), _) => (v, false),
         };
         let baseline = if centred {
             let up = asc.max(obj_asc);
             self.top + ((height - up - desc) / 2.0).max(0.0) + up
+        } else if let Some(m) = spacing.filter(|_| pictures_alone) {
+            self.top + (text_natural * m.min(1.0) - text_pictures).max(0.0) + obj_asc
         } else {
-            let cap = if picture_only { height } else { height - desc };
-            self.top + baseline_offset(rp.line_spacing, asc, height, desc).max(obj_asc.min(cap))
+            self.top + baseline_offset(rp.line_spacing, asc, height, below).max(obj_asc.min(height - below))
         };
         Measure { height, baseline, text_asc, text_desc }
     }
@@ -527,8 +551,7 @@ impl<'e> Breaker<'e> {
             _ => 0.0,
         };
         if shift > 0.0 && slack > 0.0 {
-            // Ordinary tabs move with paragraph alignment; positional tabs, labels and RTL text
-            // keep their measured start edge.
+            // Ordinary tabs move with paragraph alignment; positional tabs keep their anchors.
             let whole_line = display.is_none() && pl.label.is_none() && !self.rtl_para && !pl.ptabs.iter().any(|(ci, ..)| *ci >= c0 && *ci < c1);
             let shift_from = if whole_line { c0 } else { align_from };
             for v in sc.xs.iter_mut().skip(shift_from - c0) {
@@ -705,6 +728,10 @@ struct Extents {
     asc: f32,
     desc: f32,
     obj_asc: f32,
+    /// How far its lowest picture reaches below the baseline.
+    obj_desc: f32,
+    /// Whether the line holds text besides its pictures (spaces and tabs don't count).
+    text: bool,
 }
 
 /// A line's height and baseline, and the extent of its text.
@@ -1062,17 +1089,6 @@ fn baseline_offset(spacing: LineSpacing, asc: f32, height: f32, desc: f32) -> f3
 /// The spans of a row at `top` (about `h` tall) between `lo` and `hi` that text can use around
 /// the exclusions, left to right (Square wrapping uses both sides of an object). `Err(y)`: none
 /// here, try again at `y` (below what's in the way).
-fn picture_clusters_only(pl: &ParaLayout, c0: usize, c1: usize) -> bool {
-    pl.clusters.get(c0..c1).is_some_and(|cs| {
-        cs.iter().enumerate().all(|(i, c)| match c.kind {
-            ClKind::Object(_) => c.picture || (c.adv == 0.0 && c.obj_h == 0.0),
-            ClKind::Space | ClKind::Tab | ClKind::Marker => true,
-            ClKind::LineBreak => i + 1 == cs.len() && c.adv == 0.0 && c.obj_h == 0.0 && c.obj_d == 0.0 && c.g0 == c.g1,
-            _ => false,
-        })
-    })
-}
-
 fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, table_h: f32, lo: f32, hi: f32) -> Result<VecDeque<(f32, f32)>, f32> {
     let here: Vec<&Exclusion> = exclusions.iter().filter(|e| e.intersects_row(top, h, table_h, lo, hi)).collect();
     if let Some(below) = here.iter().filter(|e| e.top_bottom).map(|e| e.bottom).reduce(f32::max) {
