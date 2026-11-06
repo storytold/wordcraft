@@ -389,3 +389,23 @@ fn a_heading_past_level_six_keeps_its_list() {
         assert!(c.contains("<text:list"), "level {level}: {c}");
     }
 }
+
+/// A style at an unnumbered level with a heading numbered by its own level stays on the outline,
+/// or LibreOffice shows that heading no number; with none, it comes off, for the level's indent.
+#[test]
+fn a_style_with_a_heading_numbered_by_its_own_level_stays_on_the_outline() {
+    let styles = format!(
+        r#"<style:style style:name="Low" style:family="paragraph" style:parent-style-name="Standard" style:default-outline-level="3"/><style:style style:name="Heading_20_3" style:display-name="Heading 3" style:family="paragraph" style:default-outline-level="3"/>{NUMBERED}"#
+    );
+    let saved = |body: &str| crate::odt::tests::styles_of(&crate::odt::tests::export_model(&in_custom_style(&styles, body)).unwrap());
+    let style_of = |xml: &str, name: &str| {
+        xml.split("<style:style ").find(|x| x.starts_with(&format!(r#"style:name="{name}""#))).map(String::from).unwrap_or_default()
+    };
+    let xml = saved(
+        r#"<text:h text:style-name="Low" text:outline-level="1">a</text:h><text:h text:style-name="Heading_20_3" text:outline-level="2">b</text:h>"#,
+    );
+    assert!(!style_of(&xml, "Low").contains("style:list-style-name"), "{xml}");
+    assert!(!style_of(&xml, "Heading_20_3").contains("style:list-style-name"), "{xml}");
+    let xml = saved(r#"<text:h text:style-name="Low" text:outline-level="3">a</text:h>"#);
+    assert!(style_of(&xml, "Low").contains(r#"style:list-style-name="""#), "{xml}");
+}
