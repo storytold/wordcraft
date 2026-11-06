@@ -7,7 +7,7 @@
 //! Differences from the desktop app: no TCP control channel; Open and Insert › Pictures use the
 //! browser file picker (bytes arrive through `Services::inbox`); Save and Export download.
 //! Installed as an app, it opens documents the system's file manager hands it (`manifest.webmanifest`,
-//! `web::launch`).
+//! `web::launch` reads them, `launched` opens them).
 //! Preferences (theme, interface size, editing options…) are kept in `localStorage` (`prefs`).
 //! URL flags: `?webgl` forces WebGL2; `?sample` opens the sample document.
 //! `?host=parent` (inside an `<iframe>`) talks to a same-origin parent page instead: it sends the
@@ -18,7 +18,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(any(target_arch = "wasm32", test))]
-mod launch_failures;
+mod launched;
 #[cfg(test)]
 mod manifest;
 #[cfg(any(target_arch = "wasm32", test))]
