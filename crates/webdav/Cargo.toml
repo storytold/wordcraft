@@ -1,0 +1,17 @@
+[package]
+name = "wordcraft-webdav"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WordCraft WebDAV client: open, lock, save and unlock one document on a WebDAV server (native builds only)"
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+
+# The same ureq version and features craft-update already builds with, so the crate adds no new
+# code to the desktop build. Native only: on wasm the crate builds empty.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring", "gzip", "platform-verifier"] }
