@@ -160,6 +160,10 @@ pub struct CanvasState {
     /// file name in the window caption can be drawn.
     pub(crate) ime_faces: Vec<std::sync::Arc<wordcraft_fonts::FontFace>>,
     pub want_focus: bool,
+    /// A window that regained the OS focus re-arms `want_focus` from here, inside its own
+    /// viewport's pass ([`crate::windows::WordApp::draw_window`]): only when no other widget of
+    /// that viewport holds the keyboard focus, so a search box or a dialog field keeps it.
+    pub rearm_focus: bool,
     pub context_issue: Option<serde_json::Value>,
     pub context_synonyms: Option<serde_json::Value>,
     /// The right-click context menu is open (the mini toolbar stands down while it is).
@@ -374,6 +378,7 @@ impl Default for CanvasState {
             ime_preedit_range: None,
             ime_faces: Vec::new(),
             want_focus: true,
+            rearm_focus: false,
             context_issue: None,
             context_synonyms: None,
             obj_drag: None,

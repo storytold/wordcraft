@@ -650,6 +650,15 @@ impl WordApp {
         if self.windows.shown != key {
             return;
         }
+        if self.canvas.rearm_focus {
+            self.canvas.rearm_focus = false;
+            // In this window's own viewport: `focused` is one of its widgets, so the re-arm takes
+            // the keyboard only back from the canvas, never from a search box or a dialog field.
+            let canvas = self.window_id("wordcraft_canvas");
+            if ui.memory(|m| m.focused().is_none_or(|f| f == canvas)) {
+                self.canvas.want_focus = true;
+            }
+        }
         self.window_ui(ui);
         // Drawing can close the window or bring another forward: the fields then hold another
         // window's state.
@@ -672,10 +681,12 @@ impl WordApp {
                     // the keyboard focus: `want_focus` is consumed on the first frame (a new
                     // window is not OS-focused yet, so `has_focus` is false and it takes it) and
                     // nothing re-armed it, so a window that regained the focus did not respond
-                    // to typing (#5263).
+                    // to typing (#5263). The re-arm is decided in [`WordApp::draw_window`], inside
+                    // the window's own viewport: only when the keyboard focus is free or already
+                    // the canvas's, so a field that has it keeps it.
                     let Some(key) = self.windows.list.get(id).copied() else { continue };
                     if self.enter_window(key) {
-                        self.canvas.want_focus = true;
+                        self.canvas.rearm_focus = true;
                         ctx.request_repaint();
                     }
                 }

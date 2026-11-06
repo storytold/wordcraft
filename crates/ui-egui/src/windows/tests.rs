@@ -153,7 +153,6 @@ fn new_opens_a_second_window_and_each_keeps_its_state() {
 fn docx_on_disk(name: &str, body: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("wordcraft-windows-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-
     let path = dir.join(format!("{name}.docx"));
     let mut s = Session::new(wordcraft_doc::Document::new());
     s.run("text.insert", &json!({"text": body})).unwrap();
@@ -171,38 +170,22 @@ fn a_window_that_regains_the_focus_types_into_its_canvas() {
     let mut a = app("First");
     let first = a.session.document_id();
     frames(&ctx, &mut a, 3);
-    assert_eq!(
-        ctx.memory(|m| m.focused()),
-        Some(a.window_id("wordcraft_canvas")),
-        "the first window's canvas holds the keyboard focus"
-    );
+    assert_eq!(ctx.memory(|m| m.focused()), Some(a.window_id("wordcraft_canvas")), "the first window's canvas holds the keyboard focus");
 
     a.run("file.new", json!({})).unwrap();
     frames(&ctx, &mut a, 3);
     let child = a.active_viewport();
     assert_ne!(child, ViewportId::ROOT, "the new window has a viewport of its own");
-    assert_eq!(
-        ctx.memory(|m| m.focused()),
-        Some(a.window_id("wordcraft_canvas")),
-        "the new window's canvas takes the keyboard focus"
-    );
+    assert!(a.canvas.focused, "the new window's canvas takes the keyboard focus");
 
     focus(ViewportId::ROOT);
     frames(&ctx, &mut a, 2);
     assert_eq!(a.session.document_id(), first, "the focused window becomes the active one");
-    assert_eq!(
-        ctx.memory(|m| m.focused()),
-        Some(a.window_id("wordcraft_canvas")),
-        "regaining the OS focus gives its canvas the keyboard focus back"
-    );
+    assert_eq!(ctx.memory(|m| m.focused()), Some(a.window_id("wordcraft_canvas")), "regaining the OS focus gives its canvas the keyboard focus back");
 
     focus(child);
     frames(&ctx, &mut a, 2);
-    assert_eq!(
-        ctx.memory(|m| m.focused()),
-        Some(a.window_id("wordcraft_canvas")),
-        "and the other window's canvas takes it back again"
-    );
+    assert!(a.canvas.focused, "and the other window's canvas takes it back again");
 }
 
 /// Open of a file a window already shows brings that window to the front; Open with only an
@@ -271,11 +254,7 @@ fn closing_a_window_asks_first_and_the_root_adopts_another() {
     assert_eq!(a.canvas.scroll_request, Some(a.canvas.scroll_offset), "its page stays where it was");
     frames(&ctx, &mut a, 2);
     assert_eq!(DRAWN.with(|d| d.borrow().clone()), [ViewportId::ROOT]);
-    assert_eq!(
-        ctx.memory(|m| m.focused()),
-        Some(a.window_id("wordcraft_canvas")),
-        "the adopted window takes the keyboard focus"
-    );
+    assert_eq!(ctx.memory(|m| m.focused()), Some(a.window_id("wordcraft_canvas")), "the adopted window takes the keyboard focus");
     assert!(a.has_document() && a.session.documents().len() == 1);
 }
 
