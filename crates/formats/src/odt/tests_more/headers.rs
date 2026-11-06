@@ -287,6 +287,7 @@ fn a_watermark_is_a_shape_in_the_header_and_reads_back_as_one() {
     );
 }
 
+/// A watermark added, changed or removed in WordCraft reaches a file's page definitions.
 #[test]
 fn a_watermark_change_to_a_file_is_saved() {
     // A file's own page definitions were written back whatever happened to its watermark, so one
@@ -335,6 +336,7 @@ fn a_watermark_change_to_a_file_is_saved() {
     assert!(s.contains(r#"style:page-usage="mirrored""#) && !s.contains(shape), "no text: {s}");
 }
 
+/// Different Odd & Even Pages turned on or off in WordCraft reaches a file's page definitions.
 #[test]
 fn different_odd_and_even_pages_changed_in_a_file_is_saved() {
     // A file's own page definitions were written back whatever happened to this setting, so the
