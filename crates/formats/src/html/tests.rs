@@ -75,6 +75,22 @@ fn borderless_tables_export_without_cell_borders() {
 }
 
 #[test]
+fn cell_diagonals_do_not_add_a_grid_to_other_format_exports() {
+    let mut document = wordcraft_doc::Document::new();
+    let mut table = wordcraft_doc::Table::new(1, 1, 120.0);
+    table.props.style = None;
+    let border = wordcraft_doc::props::Border { style: wordcraft_doc::props::BorderStyle::Single, width: 1.0, ..Default::default() };
+    table.rows[0].cells[0].props.borders = Some(wordcraft_doc::props::Borders { tl2br: Some(border), ..Default::default() });
+    document.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(table))];
+
+    let flow = model::from_doc(&document);
+    let FBlock::Table(table) = &flow.blocks[0] else { panic!("expected a table") };
+    assert!(table.borderless, "a cell diagonal is not a table grid border");
+    let html = export(&document);
+    assert!(!html.contains("border:1px solid #999"), "{html}");
+}
+
+#[test]
 fn input_newlines_preserve_preformatted_lines() {
     for newline in ["\n", "\r\n", "\r"] {
         let f = parse(&format!("<pre>{newline}  Alpha{newline}  <b>Beta</b>{newline}{newline}  Gamma</pre>"));

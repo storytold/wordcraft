@@ -246,6 +246,14 @@ pub fn borders(w: &mut W, tag: &str, b: &Borders, inner: Option<&str>, extra: &[
             border_el(w, "w:insideV", x);
         }
     }
+    if tag == "w:tcBorders" {
+        if let Some(x) = &b.tl2br {
+            border_el(w, "w:tl2br", x);
+        }
+        if let Some(x) = &b.tr2bl {
+            border_el(w, "w:tr2bl", x);
+        }
+    }
     w.close(tag);
 }
 
@@ -707,5 +715,28 @@ fn table_float(w: &mut W, f: &TableFloat) {
     w.empty("w:tblpPr", &a);
     if !f.overlap {
         w.val("w:tblOverlap", "never");
+    }
+}
+
+#[cfg(test)]
+mod border_tests {
+    use super::*;
+
+    #[test]
+    fn diagonal_borders_are_written_only_for_cells() {
+        let diagonal = Border::default();
+        let borders = Borders { tl2br: Some(diagonal), tr2bl: Some(diagonal), ..Borders::default() };
+        for tag in ["w:pBdr", "w:tblBorders", "w:pgBorders"] {
+            let mut w = W::default();
+            borders_fn(&mut w, tag, &borders);
+            assert!(!w.s.contains("w:tl2br") && !w.s.contains("w:tr2bl"), "{tag}: {}", w.s);
+        }
+        let mut w = W::default();
+        borders_fn(&mut w, "w:tcBorders", &borders);
+        assert!(w.s.contains("w:tl2br") && w.s.contains("w:tr2bl"), "{}", w.s);
+    }
+
+    fn borders_fn(w: &mut W, tag: &str, borders: &Borders) {
+        super::borders(w, tag, borders, Some("w:insideH"), &[]);
     }
 }
