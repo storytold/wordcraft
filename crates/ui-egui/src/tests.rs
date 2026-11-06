@@ -5388,6 +5388,24 @@ fn check_spelling_survives_restart() {
     assert!(second.session.prefs.check_spelling, "the live spelling setting and its saved copy agree");
 }
 
+/// With several documents open, turning Check spelling as you type off in one keeps it off in the
+/// others, and the next run starts with it off whichever document was active when the settings
+/// were saved (#5740: it came back on every time the file was opened again).
+#[test]
+fn check_spelling_off_survives_a_switch_and_a_restart() {
+    let mut first = app();
+    let a = first.session.document_id();
+    first.run("file.new", json!({})).unwrap();
+    first.run("file.options", json!({"checkSpelling": false})).unwrap();
+    first.session.activate(a).unwrap();
+    assert!(!first.session.view.proofing, "off in the other document too");
+    let saved = serde_json::to_vec(&first.prefs()).unwrap();
+
+    let mut second = app();
+    second.apply_prefs(serde_json::from_slice(&saved).unwrap());
+    assert!(!second.session.view.proofing && !second.session.prefs.check_spelling);
+}
+
 #[test]
 fn prefs_without_user_name_keep_default() {
     let mut a = app();

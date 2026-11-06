@@ -386,7 +386,11 @@ impl Session {
         let at = self.others.iter().position(|d| d.document_id == id).ok_or_else(|| unknown(id))?;
         let mut d = self.others.swap_remove(at);
         self.swap_doc(&mut d);
+        // App-wide settings each document's view keeps a copy of: the saved preference wins, so
+        // a change made while another document was active holds here too (Check spelling as you
+        // type, #5740).
         self.view.read_page_color = self.prefs.read_page_color;
+        self.view.proofing = self.prefs.check_spelling;
         self.others.push(d);
         Ok(())
     }
