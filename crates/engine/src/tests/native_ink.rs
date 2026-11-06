@@ -131,6 +131,33 @@ fn native_ink_opens_renders_hides_and_exports_as_pdf_vectors() {
     }
 }
 
+#[test]
+fn unreadable_direct_native_ink_has_a_visible_sized_placeholder() {
+    let doc = crate::io::open_bytes("ink.docx", &document_with_ink("direct", "malformed")).unwrap();
+    let mut session = Session::new(doc);
+    fn placeholder(draws: &[Draw]) -> Option<(f32, f32, f32, f32)> {
+        draws.iter().find_map(|draw| match draw {
+            Draw::Image { rect, media, .. } if media.is_empty() => Some((rect.x, rect.y, rect.w, rect.h)),
+            Draw::Figure { draws, .. } => placeholder(draws),
+            Draw::Clip { items, .. } | Draw::Rotated { items, .. } => placeholder(items),
+            _ => None,
+        })
+    }
+    for _ in 0..2 {
+        let layout = session.layout();
+        let page = &layout.pages[0];
+        let draws = page_display(&session.doc, page, &Default::default());
+        let (x, y, w, h) = placeholder(&draws).unwrap_or_else(|| panic!("direct ink placeholder draw: {draws:?}"));
+        assert!(w >= 72.0 && h >= 36.0);
+        let image = wordcraft_render::render_page(&session.doc, page, 1.0, &Default::default());
+        let pixel = image.pixel((x + w / 2.0) as u32, (y + h / 2.0) as u32);
+        assert_eq!(pixel, [0xD0, 0xD0, 0xD0, 255]);
+        let saved = crate::io::save_bytes("ink.docx", &session.doc).unwrap();
+        session = Session::new(crate::io::open_bytes("ink.docx", &saved).unwrap());
+        assert!(session.doc.passthrough.values().any(|bytes| bytes.as_slice() == b"malformed"));
+    }
+}
+
 /// Count the advanced fixture's compound outlines and check that layout keeps pen opacity.
 fn outlines(draws: &[Draw]) -> usize {
     draws

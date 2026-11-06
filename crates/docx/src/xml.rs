@@ -29,6 +29,8 @@ pub const NAMESPACES: &[(&str, &str)] = &[
     ("mc", "http://schemas.openxmlformats.org/markup-compatibility/2006"),
     ("w14", "http://schemas.microsoft.com/office/word/2010/wordml"),
     ("wpi", "http://schemas.microsoft.com/office/word/2010/wordprocessingInk"),
+    ("ink", "http://www.w3.org/2003/InkML"),
+    ("mml", "http://www.w3.org/1998/Math/MathML"),
     ("w15", "http://schemas.microsoft.com/office/word/2012/wordml"),
     ("wp14", "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing"),
     ("wps", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"),
@@ -59,8 +61,6 @@ pub const DECORATIVE_NS: &str = "http://schemas.microsoft.com/office/drawing/201
 
 /// Namespaces that only appear in non-body parts.
 const OTHER_NAMESPACES: &[(&str, &str)] = &[
-    ("ink", "http://www.w3.org/2003/InkML"),
-    ("mml", "http://www.w3.org/1998/Math/MathML"),
     ("b", "http://schemas.openxmlformats.org/officeDocument/2006/bibliography"),
     ("rel", "http://schemas.openxmlformats.org/package/2006/relationships"),
     ("ct", "http://schemas.openxmlformats.org/package/2006/content-types"),

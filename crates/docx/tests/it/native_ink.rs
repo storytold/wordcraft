@@ -137,6 +137,22 @@ fn native_ink_without_a_preview_keeps_a_placeholder_when_it_cannot_be_drawn() {
         let files = unzip(&wordcraft_docx::write(&doc).unwrap());
         assert!(files.values().any(|bytes| bytes == b"malformed"));
     }
+    let bytes = docx(
+        r#"<w:p><w:r><w:contentPart r:id="rInk"/></w:r></w:p>"#,
+        &[("rInk", "customXml", "ink/ink1.xml")],
+        &[("[Content_Types].xml", INK_TYPES), ("word/ink/ink1.xml", "malformed")],
+    );
+    let mut doc = wordcraft_docx::read(&bytes).unwrap();
+    for _ in 0..2 {
+        let objects = graphics(&doc);
+        let [InlineObject::Graphic { w, h, graphic, .. }] = objects.as_slice() else { panic!("direct native ink missing") };
+        assert!(*w > 0.0 && *h > 0.0, "direct placeholder needs a visible frame");
+        assert_eq!((*w, *h), (graphic.w, graphic.h));
+        assert!(matches!(graphic.items.as_slice(), [GraphicItem::Image { rect, media }] if media.is_empty() && *rect == [0.0, 0.0, *w, *h]));
+        let saved = wordcraft_docx::write(&doc).unwrap();
+        assert!(unzip(&saved).values().any(|bytes| bytes == b"malformed"));
+        doc = wordcraft_docx::read(&saved).unwrap();
+    }
 }
 
 /// A direct run-level ink part derives its graphic frame from the decoded stroke bounds.
@@ -220,4 +236,30 @@ fn native_ink_decoding_and_copying_share_the_document_graphic_budget() {
     }
     assert!((60_000..2_000_000).contains(&segments));
     assert!(placeholders > 0, "copied geometry also consumes the shared budget");
+}
+
+#[test]
+fn direct_native_ink_copy_budget_keeps_sized_placeholders() {
+    let ink = format!(r#"<ink xmlns="http://www.w3.org/2003/InkML"><trace>{}</trace></ink>"#, "0 0,1 1,".repeat(30_000));
+    let body = r#"<w:p><w:r><w:contentPart r:id="rInk"/></w:r></w:p>"#.repeat(65);
+    let bytes = docx(&body, &[("rInk", "customXml", "ink/ink1.xml")], &[("[Content_Types].xml", INK_TYPES), ("word/ink/ink1.xml", &ink)]);
+    let doc = wordcraft_docx::read(&bytes).unwrap();
+    let objects = graphics(&doc);
+    assert_eq!(objects.len(), 65);
+    let mut vectors = 0;
+    let mut placeholders = 0;
+    for object in objects {
+        let InlineObject::Graphic { w, h, graphic, .. } = object else { panic!("direct native ink missing") };
+        assert!(graphic.source.is_some());
+        match graphic.items.as_slice() {
+            [GraphicItem::Image { rect, media }] => {
+                assert!(w > 0.0 && h > 0.0 && media.is_empty());
+                assert_eq!(*rect, [0.0, 0.0, w, h]);
+                placeholders += 1;
+            }
+            [GraphicItem::Path { .. }] => vectors += 1,
+            items => panic!("unexpected direct ink items: {items:?}"),
+        }
+    }
+    assert!(vectors > 0 && placeholders > 0, "copy exhaustion must not hide later native ink");
 }

@@ -333,6 +333,18 @@ mod tests {
         zw.finish().unwrap().into_inner()
     }
 
+    #[test]
+    fn standalone_embedded_ink_and_mathml_keep_their_namespaces() {
+        let xml = br#"<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><pen:trace xmlns:pen="http://www.w3.org/2003/InkML" xmlns:math="http://www.w3.org/1998/Math/MathML"><math:math math:id="formula"/></pen:trace></a:graphic>"#;
+        let root = crate::xml::parse(xml).unwrap();
+        let kept = super::standalone_xml(&root).unwrap();
+        assert!(kept.contains(r#"xmlns:ink="http://www.w3.org/2003/InkML""#), "{kept}");
+        assert!(kept.contains(r#"xmlns:mml="http://www.w3.org/1998/Math/MathML""#), "{kept}");
+        let back = crate::xml::parse(kept.as_bytes()).unwrap();
+        let ink = back.child("ink:trace").unwrap();
+        assert_eq!(ink.child("mml:math").and_then(|e| e.attr("mml:id")), Some("formula"));
+    }
+
     /// The parts the reader carries over unchanged, as one string.
     fn unmodelled_roots(d: &wordcraft_doc::Document) -> String {
         d.passthrough.get(UNMODELLED_ROOTS).map(|v| String::from_utf8_lossy(v).to_string()).unwrap_or_default()

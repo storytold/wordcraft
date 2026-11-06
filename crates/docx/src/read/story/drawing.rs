@@ -192,7 +192,7 @@ impl Reader<'_> {
     /// otherwise the native ink element alone. `None` means its related part is missing, malformed
     /// as a package part, or not declared to have the InkML content type.
     fn ink_member(&mut self, content: &El, alternate: Option<&El>, rels: &Rels) -> Option<(Arc<Graphic>, Option<String>)> {
-        let InlineObject::Graphic { mut graphic, .. } = self.read_ink_content_part(content, rels)? else { return None };
+        let mut graphic = self.ink_content_graphic(content, rels)?;
         let mut preview = None;
         let choice = alternate.and_then(children_of_choice).filter(|c| c.name == "mc:Choice");
         if let (Some(choice), Some(fallback)) = (choice, alternate.and_then(|a| a.child("mc:Fallback"))) {
@@ -214,14 +214,25 @@ impl Reader<'_> {
     /// Returns `None` when the relationship, InkML content type, or preserved source cannot be
     /// read. An unreadable InkML payload remains a graphic with no vectors for fallback handling.
     pub(super) fn read_ink_content_part(&mut self, content: &El, rels: &Rels) -> Option<InlineObject> {
+        let mut graphic = self.ink_content_graphic(content, rels)?;
+        if graphic.items.is_empty() {
+            // Direct content parts have no outer frame or picture fallback. Group and canvas
+            // members use the undecorated graphic so their own frames and fallbacks still win.
+            let g = Arc::make_mut(&mut graphic);
+            (g.w, g.h) = (72.0, 36.0);
+            g.items = vec![GraphicItem::Image { rect: [0.0, 0.0, g.w, g.h], media: String::new() }];
+        }
+        Some(InlineObject::Graphic { w: graphic.w, h: graphic.h, alt: String::new(), float: Float::default(), graphic })
+    }
+
+    fn ink_content_graphic(&mut self, content: &El, rels: &Rels) -> Option<Arc<Graphic>> {
         let part = crate::read::part_of(rels, content.attr("r:id")?, INK_REL)?;
         let pkg = self.pkg;
         if self.content_types.get_or_insert_with(|| ContentTypes::read(pkg)).of(&part) != Some("application/inkml+xml") {
             return None;
         }
         let source = self.keep_embedded(content, rels, &[])?;
-        let graphic = self.ink_graphic(&part, source);
-        Some(InlineObject::Graphic { w: graphic.w, h: graphic.h, alt: String::new(), float: Float::default(), graphic })
+        Some(self.ink_graphic(&part, source))
     }
 
     /// Reuse a part's decoded InkML vectors within the shared graphic-work budget.

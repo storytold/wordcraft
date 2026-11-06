@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **InkML review update:** 2026-11-06 · Contact/pressure fallbacks, continuation tips, tap fitting, stroke widths and dark-page mask blending corrected; bounded preview remains partial, with Word qualification deferred.
+> **InkML review update:** 2026-11-06 · Contact/pressure fallbacks, continuation tips, tap fitting, stroke widths and dark-page mask blending corrected. Unsupported direct ink has a sized placeholder, and kept InkML/MathML markup declares its namespaces; bounded preview remains partial, with Word qualification deferred.
 
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
@@ -146,6 +146,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-06: Native InkML review follow-up: unreadable direct run-level ink shows a sized placeholder without changing group/canvas fallbacks, and retained InkML/MathML markup keeps its namespace declarations on save. Synthetic round-trip and shared-budget controls only. Gap #2 now estimates remaining native ink qualification and OLE opening/editing separately from chart/SmartArt editing (#13); readiness estimates and Word-file qualification remain open.
 - 2026-11-06: Windows print submissions run in separate helper processes (#5710). A helper acknowledges cancellation before it stops, so a driver stalled in a cancelled job cannot hold another job’s provider lock. A private temporary PDF and bounded settings messages cross the process boundary; normal shutdown reaps helpers and removes their inputs. The helper erases its plaintext inputs before driver work; a hard app crash during startup can still leave private temporary files. Jobs already sending still complete. Readiness estimates unchanged.
 - 2026-11-06: File › Print: before sending starts, Cancel printing stops a waiting job, frees the Print page and keeps the settings; a successfully cancelled job is never sent. Cancellation remains available after the last document closes. Quitting cancels waiting jobs and joins jobs already sending (#5710). On Windows, winprint repeats the DEVMODE conversion after sending starts. A stall during that repeat prevents cancellation and can keep shutdown waiting, even before a native job exists. Readiness estimates unchanged.
 - 2026-11-06: File › Print on Windows no longer waits on printer drivers to list printers (#5710). The list used to wait until each printer's driver said whether it prints on both sides, and a networked printer asleep in power save could keep it empty with Refresh unavailable; now discovery asks no driver (the Windows spooler still supplies the list), and printing still checks the job's options with the driver. The reporter's sleeping printer has not been retested yet. Readiness estimates unchanged.
@@ -811,6 +812,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | trivial | Native InkML follow-up: sized direct placeholders, namespace-safe preservation and gap #2 estimate separated from #13; synthetic validation only, Word qualification deferred |
 | 2026-11-06 | trivial | Native InkML review fixes; bounded import/rendering only, synthetic qualification, Word validation deferred |
 | 2026-11-06 | trivial | Print helpers remove loaded PDF/settings files before driver work, tolerate prior removal and report cleanup errors; a held-driver regression checks the files are already absent (#5710) |
 | 2026-11-06 | trivial | Windows print submissions isolated per helper process; cancelled driver work cannot block a retry (#5710) |
