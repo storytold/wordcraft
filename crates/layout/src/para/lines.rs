@@ -109,6 +109,8 @@ struct Scan {
     skip: bool,
     /// `w:overflowPunct`: the first cluster of this line that hangs past its right margin.
     hang_from: Option<usize>,
+    /// The last cluster that hung: a run of closing marks continues from it (review, #3462).
+    hang_last: Option<usize>,
     /// The first visible cluster of the line has been seen (`w:topLinePunct` acts once).
     line_visible: bool,
 }
@@ -297,6 +299,7 @@ impl<'e> Breaker<'e> {
             has_tab: false,
             skip: false,
             hang_from: None,
+            hang_last: None,
             line_visible: false,
         }
     }
@@ -915,7 +918,7 @@ impl Scan {
         // A run of closing marks hangs together: after `。` hangs, the `」` that follows it may
         // not start the next line either (kinsoku), so it hangs too. The pen is already past the
         // margin by then, which is why the run needs its own condition (review, #3462).
-        let run_continues = self.hang_from.is_some_and(|h| h + 1 == j);
+        let run_continues = self.hang_last == Some(j.wrapping_sub(1));
         let hangs = !fits
             && bk.rp.overflow_punct
             && !self.narrowed
@@ -924,6 +927,7 @@ impl Scan {
             && (c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room));
         if hangs {
             self.hang_from.get_or_insert(j);
+            self.hang_last = Some(j);
         } else if !fits && pl.is_edit_boundary(c.start) && (c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room)) {
             self.wrap(bk, pl);
             return true;

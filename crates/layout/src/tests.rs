@@ -7978,6 +7978,25 @@ fn overflow_punct_hangs_a_full_stop_past_the_margin() {
     assert_eq!(off.lines.get(1).map(|l| l.start), Some(fourth), "the fourth ideograph moves down with the full stop: {:?}", off.lines);
 }
 
+/// A run of **three** closing marks hangs together (review on #3462): the second and third must
+/// continue the run from the last mark that hung, not from the first. `漢字漢字」）。あ` at the
+/// four-character width: line 1 is the four ideographs plus `」）、`, line 2 starts at `あ` — not at
+/// `。`, which 行頭禁則 forbids.
+#[test]
+fn a_long_run_of_closing_marks_hangs_together() {
+    let text = "漢字漢字」）。あ";
+    let adv = advances(text);
+    let width: f32 = adv.get(..4).into_iter().flatten().sum();
+    let d = document_of_width(text, width);
+    let pl = first_paragraph(&lay(&d));
+    let l0 = pl.lines.first().expect("a first line");
+    let want: usize = 4 + 3;
+    assert_eq!(l0.c1 - l0.c0, want, "four ideographs and three closing marks: {:?}", pl.lines);
+    assert_eq!(l0.hang, 3, "all three closing marks hang: {:?}", pl.lines);
+    let l1 = pl.lines.get(1).expect("a second line");
+    assert_eq!(l1.start, text.find('あ').expect("a letter after the marks"), "the line after them starts at the letter: {:?}", pl.lines);
+}
+
 /// A run of closing marks hangs together (review on #3462): with `。」` after the last ideograph,
 /// the `」` may not start the next line either, so it hangs beside the `。` rather than wrapping
 /// alone and breaking 行頭禁則.
