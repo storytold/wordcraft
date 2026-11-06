@@ -351,6 +351,7 @@ fn handle_primary_press(
     app.canvas.unit_drag = None;
     if clicks <= 1 {
         app.canvas.hf_press_switched = false;
+        app.canvas.click_and_type = false;
     }
     // A double-click that enters or leaves a header/footer is handled on release.
     let hf_switch = hf_enter || app.canvas.hf_press_switched || (matches!(story, StoryRef::Part(_)) && !in_text_box(app) && hf_zone.is_none());
@@ -433,6 +434,23 @@ fn handle_primary_press(
         app.canvas.dragging = true;
         return true;
     }
+    // Click and Type: double-clicking empty page space adds the paragraphs needed to reach the
+    // click. A click on an existing line keeps the usual word selection.
+    if clicks == 2
+        && story == StoryRef::Body
+        && !mods.shift
+        && !mods.alt
+        && !mods.command
+        && layout.line_at_point(page, x, y, story).is_none()
+        && app.run("caret.clickAndType", json!({"page": page, "x": x, "y": y})).is_ok()
+    {
+        app.canvas.click_and_type = true;
+        app.canvas.dragging = false;
+        app.canvas.column_drag = None;
+        app.canvas.unit_drag = None;
+        app.session.page_hint = page;
+        return;
+    }
     let Some(pos) = layout.hit(page, x, y, story) else { return true };
     // Ctrl/⌘+click follows a hyperlink.
     if mods.command
@@ -492,6 +510,15 @@ fn pointer_story(app: &WordApp, layout: &DocLayout, page: usize, x: f32, y: f32,
 /// drag may have grown it). `false` for a plain click or drag.
 fn handle_completed_click(app: &mut WordApp, pointer: &PagePointer<'_>) -> bool {
     let PagePointer { layout, page, x, y, story, clicks, .. } = *pointer;
+    // Click and Type already placed the caret on the double-click's press; its release must not
+    // select a word.
+    if app.canvas.click_and_type {
+        app.canvas.click_and_type = false;
+        app.canvas.dragging = false;
+        app.canvas.unit_drag = None;
+        return true;
+    }
+    // The press already selected the word or paragraph (and a drag may have grown it).
     let released_clicks = if clicks >= 2 { clicks } else { 0 };
     if released_clicks > 0 && app.canvas.unit_drag.as_ref().is_some_and(|d| d.clicks == released_clicks) {
         app.canvas.unit_drag = None;

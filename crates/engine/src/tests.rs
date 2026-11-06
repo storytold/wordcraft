@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use wordcraft_doc::props::BorderStyle;
 use wordcraft_doc::{Pos, StoryRef};
+use wordcraft_layout::hit::page_lines;
 
 use crate::{Session, cmd};
 
@@ -14551,4 +14552,37 @@ fn a_range_paste_formatting_keeps_the_targets_link_and_tracked_marks() {
     let c = at_start(&s);
     assert!(c.ins.is_some(), "Paste Formatting kept the insertion mark");
     assert_eq!(c.bold, Some(true));
+/// #4246: double-clicking empty page space adds the paragraphs needed to reach it, in one undo
+/// step; the caret lands on the page that was clicked.
+#[test]
+fn click_and_type_adds_paragraphs_below_the_last_line() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Top"}));
+    let l = s.layout();
+    let page = l.pages.len() - 1;
+    let body = l.pages[page].body;
+    let before = s.doc.body.len();
+    run(&mut s, "caret.clickAndType", json!({"page": page, "x": body.x + 10.0, "y": body.bottom() - 10.0}));
+    assert!(s.doc.body.len() > before, "added paragraphs: {} → {}", before, s.doc.body.len());
+    assert_eq!(s.sel.focus.story, StoryRef::Body);
+    assert_eq!(s.sel.focus.path.0, [s.doc.body.len() as u32 - 1], "nothing is left below the caret");
+    assert_eq!(s.doc.body[0].as_para().map(|p| p.text.as_str()), Some("Top"));
+    assert!(s.undo(), "one undo step takes the empty paragraphs back");
+    assert_eq!(s.doc.body.len(), before);
+    assert_eq!(s.doc.body[0].as_para().map(|p| p.text.as_str()), Some("Top"));
+}
+
+/// #4246: a double-click on an existing line keeps the ordinary line behavior and adds nothing.
+#[test]
+fn click_and_type_on_a_line_adds_nothing() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    let l = s.layout();
+    let page = 0;
+    let line = page_lines(&l.pages[page], StoryRef::Body).into_iter().next().expect("one line");
+    let before = s.doc.body.len();
+    run(&mut s, "caret.clickAndType", json!({"page": page, "x": line.left + 1.0, "y": (line.top + line.bottom) / 2.0}));
+    assert_eq!(s.doc.body.len(), before);
+    assert_eq!(s.sel.focus.path.0, [0]);
+    assert_eq!(s.sel.focus.story, StoryRef::Body);
 }
