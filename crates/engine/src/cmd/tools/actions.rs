@@ -1,4 +1,5 @@
 use super::{Arc, CmdError, CmdResult, Document, Pos, Selection, Session, StoryRef, Value, delete_selection, json, p, sel_result};
+use wordcraft_doc::CharProps;
 
 /// Options › Language › Set as default: only the saved default proofing language (what future
 /// blank documents are written in), as Word's Set as Preferred. A setting, like `file.options`: the
@@ -14,8 +15,15 @@ pub(super) fn preferred_language(s: &mut Session, v: &Value) -> CmdResult {
 /// Set Proofing Language: the selection's language and "do not check spelling or grammar",
 /// or (`default`) the document's default and the saved language for future blank documents;
 /// `detect` is the per-user detection preference.
-/// Nothing at all sets US English, as before.
+/// Nothing at all sets US English, as before. `scope: "document"` sets it for every story.
 pub(super) fn language(s: &mut Session, v: &Value) -> CmdResult {
+    // Checked first, so a bad scope changes nothing (not even the detect preference).
+    let whole_document = match v.get("scope") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(t)) if t == "selection" => false,
+        Some(Value::String(t)) if t == "document" => true,
+        Some(other) => return Err(CmdError::Params(format!("`scope` must be \"selection\" or \"document\", not {other}"))),
+    };
     let lang = match p::str(v, "lang") {
         Some(t) => Some(
             wordcraft_proof::lang::normalize_tag(t)
@@ -45,18 +53,73 @@ pub(super) fn language(s: &mut Session, v: &Value) -> CmdResult {
     if lang.is_none() && no_proof.is_none() {
         return Ok(json!({"detect": s.prefs.detect_language}));
     }
-    let result = crate::cmd::format::apply(s, &|c| {
+    let change = |c: &mut CharProps| {
         if let Some(l) = &lang {
             c.lang = Some(l.clone());
         }
         if let Some(np) = no_proof {
             c.no_proof = Some(np);
         }
-    })?;
+    };
+    let result = if whole_document {
+        set_document_props(s, &change)?;
+        json!({"scope": "document"})
+    } else {
+        crate::cmd::format::apply(s, &change)?
+    };
     if p::bool(v, "default") == Some(true) {
         s.prefs.default_language = lang;
     }
     Ok(result)
+}
+
+/// Apply `f` to the character formatting of every story of the document (Language dialog, "Apply
+/// to the whole document"): text and paragraph marks of the body, headers, footers, notes,
+/// comments, text boxes (all `Document::parts`), table cells, and the glossary's building blocks.
+/// The selection is untouched; formatting waiting for typing follows.
+fn set_document_props(s: &mut Session, f: &dyn Fn(&mut CharProps)) -> Result<(), CmdError> {
+    let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect();
+    for story in stories {
+        for path in s.doc.para_paths(story) {
+            let para = s.doc.para_mut(story, &path)?;
+            let len = para.len();
+            para.format(0, len, f)?;
+            f(&mut para.mark);
+            para.touch();
+        }
+    }
+    for block in &mut s.doc.glossary {
+        format_blocks(&mut block.blocks, f, 0);
+    }
+    if let Some(pend) = s.pending.as_mut() {
+        f(pend);
+    }
+    Ok(())
+}
+
+/// [`set_document_props`] for a block list outside any story (depth-limited like `para_paths`).
+fn format_blocks(blocks: &mut wordcraft_doc::Blocks, f: &dyn Fn(&mut CharProps), depth: usize) {
+    if depth > wordcraft_doc::PARA_WALK_DEPTH {
+        return;
+    }
+    for blk in blocks.iter_mut() {
+        match Arc::make_mut(blk) {
+            wordcraft_doc::Block::Para(p) => {
+                let len = p.len();
+                // A range inside the paragraph can't fail; the mark is formatted regardless.
+                let _ = p.format(0, len, f);
+                f(&mut p.mark);
+                p.touch();
+            }
+            wordcraft_doc::Block::Table(t) => {
+                for row in &mut t.rows {
+                    for cell in &mut row.cells {
+                        format_blocks(&mut cell.blocks, f, depth + 1);
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub(super) fn macros(s: &mut Session, v: &Value) -> CmdResult {

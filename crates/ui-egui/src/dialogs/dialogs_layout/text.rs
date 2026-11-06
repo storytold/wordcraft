@@ -320,6 +320,11 @@ pub struct LanguageForm {
     pub lang: String,
     pub no_proof: bool,
     pub detect: bool,
+    /// "Apply to the whole document": OK sends `scope: "document"` (every story), not the selection.
+    pub whole_document: bool,
+    /// The language and Do-not-check state the dialog opened with, to tell what the user changed.
+    #[serde(skip)]
+    pub initial: (String, bool),
 }
 
 impl LanguageForm {
@@ -328,12 +333,27 @@ impl LanguageForm {
         let style = s.doc.para_at(&s.sel.focus).and_then(|p| p.props.style.as_deref());
         let here = s.doc.styles.resolve_char(style, &s.typing_props());
         let lang = here.lang.unwrap_or_else(|| "en-US".into());
-        LanguageForm { lang, no_proof: here.no_proof, detect: s.prefs.detect_language }
+        LanguageForm { initial: (lang.clone(), here.no_proof), lang, no_proof: here.no_proof, detect: s.prefs.detect_language, whole_document: false }
     }
 
     /// `review.language` parameters for OK.
     pub fn params(&self) -> Value {
-        json!({"lang": self.lang, "noProof": self.no_proof, "detect": self.detect})
+        if !self.whole_document {
+            return json!({"lang": self.lang, "noProof": self.no_proof, "detect": self.detect});
+        }
+        // Whole document: the caret's values must not flatten what differs elsewhere, so send only
+        // what was changed. With no edits at all the language goes (never the engine's en-US default).
+        let (lang_changed, proof_changed) = (self.lang != self.initial.0, self.no_proof != self.initial.1);
+        let mut v = json!({"scope": "document", "detect": self.detect});
+        if let Some(m) = v.as_object_mut() {
+            if lang_changed || !proof_changed {
+                m.insert("lang".into(), json!(self.lang));
+            }
+            if proof_changed {
+                m.insert("noProof".into(), json!(self.no_proof));
+            }
+        }
+        v
     }
 }
 
@@ -343,7 +363,7 @@ pub(super) fn language_name(tag: &str) -> String {
 }
 
 pub(super) fn language_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LanguageForm) -> bool {
-    ui.label(tl!("Mark selected text as:"));
+    ui.label(if f.whole_document { tl!("Mark the whole document as:") } else { tl!("Mark selected text as:") });
     let list = crate::ribbon::language_list(&f.lang);
     egui::Frame::NONE.stroke(egui::Stroke::new(1.0, crate::theme::Tokens::get(ui.ctx()).border_strong)).inner_margin(4.0).show(ui, |ui| {
         egui::ScrollArea::vertical().max_height(220.0).min_scrolled_height(220.0).show(ui, |ui| {
@@ -360,6 +380,7 @@ pub(super) fn language_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LanguageForm) 
     ui.add_space(4.0);
     ui.checkbox(&mut f.no_proof, tl!("Do not check spelling or grammar"));
     ui.checkbox(&mut f.detect, tl!("Detect language automatically"));
+    ui.checkbox(&mut f.whole_document, tl!("Apply to the whole document"));
     ui.add_space(4.0);
     let set_default = ui.button(tl!("Set As Default")).clicked();
     if set_default && run(app, "review.language", json!({"lang": f.lang, "default": true, "detect": f.detect})) {
