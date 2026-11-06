@@ -74,6 +74,7 @@ languages, screen-reader access, ecosystem decisions (VBA, add-ins, cloud), an i
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | trivial | DOCX text-frame anchor locks survive JSON and two save/reopen cycles, including position and size edits |
 | 2026-11-03 | minor | M15: Arabic mirrored interface (#1195); 28 UI languages from craft-i18n; Hebrew UI, native-speaker review and native IME acceptance (#155–#164) remain open |
 | 2026-10-29 | trivial | HTML import keeps preformatted lines with CR, CRLF or LF input newlines (#4810); numeric character references retain their separate meaning; readiness estimates unchanged. |
 | 2026-10-27 | trivial | RTF export update (2026-10-27): RTF export now writes the default, first-page and even-page header/footer stories for each section, sharing document font/colour/revision tables. Omitted destinations stay linked; explicit empty stories clear inherited content. Synthetic tests cover section boundaries, tables and styles; readiness estimates are unchanged. Notes/comments remain separate work (#1056). The `\facingp` document setting survives import/export; stored even stories do not enable it when it is off. |
