@@ -3630,7 +3630,7 @@ fn cancelling_a_waiting_print_job_frees_the_print_page() {
         let expected = if never_sent {
             "Printing cancelled. Nothing was sent to the printer."
         } else {
-            "Printing can no longer be cancelled here. The printer driver may still be processing the job. If it appears in the system's print queue, cancel it there."
+            "Cancellation could not be confirmed here. The printer driver may still be processing the job. If it appears in the system's print queue, cancel it there."
         };
         assert_eq!(said, expected, "never_sent {never_sent}: the status bar says what happened");
         assert_eq!(enabled(&a), !never_sent);

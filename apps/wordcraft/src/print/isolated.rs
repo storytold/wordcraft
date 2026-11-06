@@ -465,10 +465,10 @@ mod tests {
         }
         assert!(directory.join("held").exists(), "the child is held inside its driver");
         assert!(submission.cancel(), "a stalled driver still acknowledges cancellation");
-        assert_eq!(running.join().unwrap(), Err(CANCELLED.into()));
-        assert!(!directory.exists(), "the reaped helper's PDF and settings were removed");
         let next = Submission::new();
         assert_eq!(next.submit_with(b"synthetic PDF", &job(), |dir| command(dir, "ready")), Ok("spooled synthetic job".into()));
+        assert_eq!(running.join().unwrap(), Err(CANCELLED.into()));
+        assert!(!directory.exists(), "the reaped helper's PDF and settings were removed");
         assert!(!next.cancel(), "a completed job keeps its receipt");
     }
 
@@ -522,10 +522,15 @@ mod tests {
     #[test]
     fn helper_crashes_are_errors_and_inputs_are_bounded() {
         let submission = Submission::new();
+        let mut inputs = None;
         assert_eq!(
-            submission.submit_with(b"synthetic PDF", &job(), |dir| command(dir, "crash")),
+            submission.submit_with(b"synthetic PDF", &job(), |dir| {
+                inputs = Some(dir.to_path_buf());
+                command(dir, "crash")
+            }),
             Err("the print helper stopped without a receipt".into())
         );
+        assert!(!inputs.unwrap().exists(), "a helper crash removes the PDF and settings");
         assert_eq!(bounded(&b"abcd"[..], 3), Err("print helper input exceeds its limit".into()));
         assert_eq!(bounded(&b"abc"[..], 3), Ok(b"abc".to_vec()));
     }
