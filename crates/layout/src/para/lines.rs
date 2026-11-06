@@ -491,7 +491,9 @@ impl<'e> Breaker<'e> {
             0.0
         };
         let mut label_extra = 0.0;
-        if self.first && let Some(lab) = &pl.label {
+        if self.first
+            && let Some(lab) = &pl.label
+        {
             if !matches!(rp.line_spacing, LineSpacing::Exactly(_)) {
                 // Automatic/minimum spacing keeps text descent. Only the label's ascent
                 // overflow adds room, unscaled by the automatic spacing multiplier.
