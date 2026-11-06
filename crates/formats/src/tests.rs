@@ -1147,8 +1147,8 @@ fn epub_keeps_numbered_headings_as_headings() {
     let mut d = Document::new();
     let mut blocks = Vec::new();
     blocks.push(para_block(Paragraph::with_text("Chapter", CharProps::default()).styled("Heading1")));
-    let bullets = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
-    let numbers = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let bullets = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Bullet);
+    let numbers = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     // A bullet list directly followed by a numbered Heading 2: the list must end before the
     // heading, and the heading must still be written as a heading (with its navigation entry).
     let mut item = Paragraph::with_text("Before", CharProps::default()).styled("ListParagraph");
@@ -1284,7 +1284,16 @@ fn epub_reencodes_bmp_as_png() {
     let n = p.len();
     p.insert_object(
         n,
-        InlineObject::Image { media: key, w: 30.0, h: 15.0, alt: "bmp".into(), float: Default::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media: key,
+            w: 30.0,
+            h: 15.0,
+            alt: "bmp".into(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            fx: Default::default(),
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -1336,7 +1345,7 @@ fn epub_rejects_malformed_language_tags() {
         assert_xml(&opf);
     }
     let mut d = Document::new();
-    d.styles.default_chr.lang = Some("en--US".into());
+    Arc::make_mut(&mut d.styles).default_chr.lang = Some("en--US".into());
     let (_, parts) = epub_parts(&crate::epub::export(&d).unwrap());
     assert!(epub_text(&parts, "OEBPS/content.opf").contains("<dc:language>en</dc:language>"));
 }

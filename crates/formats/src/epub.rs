@@ -734,7 +734,9 @@ fn render_inlines(inlines: &[Inline], ctx: &mut Ctx, chapter: &str, out: &mut St
                 }
             },
             Inline::Anchor(anchor) => out.push_str(&format!("<a id=\"{}\"></a>", xml_attr(&anchor_id(anchor)))),
-            Inline::Figure(alt) => {
+            // A chart the flow keeps as a box would be drawn; EPUB has no chart markup, so it
+            // shows the chart's alt text where a figure's goes.
+            Inline::Figure(alt) | Inline::Chart(crate::model::Chart { alt, .. }) => {
                 ctx.omitted.figures += 1;
                 out.push_str("<span class=\"figure\">");
                 if alt.trim().is_empty() {
@@ -753,6 +755,21 @@ fn render_inlines(inlines: &[Inline], ctx: &mut Ctx, chapter: &str, out: &mut St
             // EPUB 3 is XHTML5: ruby is real markup there (base text with its phonetic guide),
             // inside the run's own tags.
             Inline::Ruby { base, ruby, fmt } => render_ruby(base, ruby, fmt, ctx, chapter, out),
+            // `model::from_doc` asks for none of the flow options that produce these (fields,
+            // notes, comments, boxes), so EPUB leaves them out, as their docs say a format
+            // without them does.
+            Inline::AnchorEnd(_)
+            | Inline::Note { .. }
+            | Inline::Comment { .. }
+            | Inline::CommentEnd(_)
+            | Inline::Shape { .. }
+            | Inline::Group { .. }
+            | Inline::FieldStart(_)
+            | Inline::FieldEnd => {}
+            // ASK and SET show nothing (see `model::shows_nothing`).
+            Inline::Field { instr, .. } if model::shows_nothing(instr) => {}
+            // A field, or a content control, is its result's text.
+            Inline::Field { result, fmt, .. } | Inline::Control { text: result, fmt, .. } => render_text(result, fmt, ctx, chapter, out),
         }
     }
 }
