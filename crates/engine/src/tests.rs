@@ -235,6 +235,65 @@ fn word_default_shortcuts_resolve_function_keys() {
 }
 
 #[test]
+fn word_for_mac_default_shortcuts_resolve() {
+    // Commands that already existed but had no Word key: Word for Mac's documented defaults, plus
+    // Word for Windows' keys where Word for Mac's own key is already taken by another command.
+    assert_eq!(id("Alt+F3"), Some("insert.autoText"));
+    let mac = cfg!(target_os = "macos");
+    // (key, the command on Word for Mac, the command on Linux and Windows)
+    let keys: &[(&str, Option<&str>, Option<&str>)] = &[
+        ("F1", Some("edit.undo"), None),
+        ("F2", Some("edit.cut"), None),
+        ("Mod+Ctrl+V", Some("edit.pasteSpecial"), None),
+        ("Mod+Alt+C", Some("edit.copyFormat"), Some("text.copyright")),
+        ("Ctrl+Shift+M", Some("para.indent"), None),
+        ("Alt+Space", Some("text.nbsp"), None),
+        ("Alt+G", Some("text.copyright"), None),
+        ("Alt+R", Some("text.registered"), None),
+        ("Alt+2", Some("text.trademark"), None),
+        ("Alt+;", Some("text.ellipsis"), None),
+        ("Mod+Ctrl+Alt+R", Some("review.thesaurus"), None),
+        // Word for Mac's Control+Shift outline keys.
+        ("Ctrl+Shift+=", Some("outline.expand"), None),
+        ("Ctrl+Shift+-", Some("outline.collapse"), None),
+        ("Ctrl+Shift+1", Some("outline.showLevel1"), None),
+        ("Ctrl+Shift+2", Some("outline.showLevel2"), None),
+        ("Ctrl+Shift+3", Some("outline.showLevel3"), None),
+        ("Ctrl+Shift+4", Some("outline.showLevel4"), None),
+        ("Ctrl+Shift+5", Some("outline.showLevel5"), None),
+        ("Ctrl+Shift+6", Some("outline.showLevel6"), None),
+        ("Ctrl+Shift+7", Some("outline.showLevel7"), None),
+        ("Ctrl+Shift+8", Some("outline.showLevel8"), None),
+        ("Ctrl+Shift+9", Some("outline.showLevel9"), None),
+        ("Ctrl+Shift+A", Some("outline.showAll"), None),
+        ("Ctrl+Shift+L", Some("outline.firstLineOnly"), None),
+        ("Ctrl+Shift+N", Some("outline.demoteToBody"), None),
+        // Word for Windows' outline keys stay as aliases on macOS.
+        ("Alt+Shift+1", Some("outline.showLevel1"), Some("outline.showLevel1")),
+        ("Alt+Shift+=", Some("outline.expand"), Some("outline.expand")),
+        ("Alt+Shift+-", Some("outline.collapse"), Some("outline.collapse")),
+        ("Alt+Shift+A", Some("outline.showAll"), Some("outline.showAll")),
+        // Word for Mac shows the first line with Control+Shift+L.
+        ("Alt+Shift+L", None, Some("outline.firstLineOnly")),
+        ("Mod+Ctrl+I", Some("table.insertRowAbove"), None),
+        ("Ctrl+0", Some("view.zoom100"), None),
+        ("Ctrl+=", Some("view.zoomIn"), None),
+        ("Ctrl+-", Some("view.zoomOut"), None),
+        ("Alt+Shift+Home", Some("table.selectRow"), Some("table.selectRow")),
+        ("Alt+Shift+End", Some("table.selectRow"), Some("table.selectRow")),
+        ("Alt+Shift+PageUp", Some("table.selectColumn"), Some("table.selectColumn")),
+        ("Alt+Shift+PageDown", Some("table.selectColumn"), Some("table.selectColumn")),
+        ("Mod+Alt+S", Some("view.split"), Some("view.split")),
+        // Word for Mac keeps Alt+Shift+C for the Reviewing Pane.
+        ("Alt+Shift+C", None, Some("view.split")),
+    ];
+    for (key, on_mac, elsewhere) in keys {
+        let expected = if mac { *on_mac } else { *elsewhere };
+        assert_eq!(id(key), expected, "{key}");
+    }
+}
+
+#[test]
 fn reset_shortcuts_remove_direct_formatting_but_keep_styles() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "Hello world"}));
