@@ -232,11 +232,51 @@ pub struct ProofOptions {
     /// Mark grammar errors as you type.
     pub grammar: bool,
     pub spelling: wordcraft_proof::Options,
+    /// How many spaces go between sentences (#5648).
+    pub sentence_spaces: SentenceSpaces,
 }
 
 impl Default for ProofOptions {
     fn default() -> Self {
-        ProofOptions { grammar: true, spelling: wordcraft_proof::Options::default() }
+        ProofOptions { grammar: true, spelling: wordcraft_proof::Options::default(), sentence_spaces: SentenceSpaces::default() }
+    }
+}
+
+/// Grammar's Space between sentences (File › Options › Proofing, #5648): a run of spaces after a
+/// sentence's end is an extra space with `One`, two are right with `Two` (more are still marked),
+/// and any number is left alone with `DontCheck`. Spaces elsewhere are always checked.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SentenceSpaces {
+    #[default]
+    One,
+    Two,
+    DontCheck,
+}
+
+impl SentenceSpaces {
+    pub const ALL: [SentenceSpaces; 3] = [SentenceSpaces::One, SentenceSpaces::Two, SentenceSpaces::DontCheck];
+
+    /// The name `file.options` takes and returns.
+    pub fn code(self) -> &'static str {
+        match self {
+            SentenceSpaces::One => "one",
+            SentenceSpaces::Two => "two",
+            SentenceSpaces::DontCheck => "dontCheck",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<SentenceSpaces> {
+        SentenceSpaces::ALL.into_iter().find(|s| s.code() == code)
+    }
+
+    /// Whether `n` spaces after a sentence's end are right.
+    pub fn allows(self, n: usize) -> bool {
+        match self {
+            SentenceSpaces::One => n <= 1,
+            SentenceSpaces::Two => n <= 2,
+            SentenceSpaces::DontCheck => true,
+        }
     }
 }
 

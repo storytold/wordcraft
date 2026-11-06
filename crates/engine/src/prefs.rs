@@ -55,6 +55,9 @@ pub struct Prefs {
     pub ignore_uppercase: bool,
     pub ignore_numbers: bool,
     pub ignore_internet: bool,
+    /// Grammar's Space between sentences (#5648). A damaged saved value reads as one space.
+    #[serde(deserialize_with = "lenient_sentence_spaces")]
+    pub sentence_spaces: wordcraft_layout::SentenceSpaces,
     /// AutoCorrect Options: replacements, capitalization and AutoFormat As You Type (per user, as
     /// in Word). A damaged saved value reads as the defaults.
     #[serde(deserialize_with = "crate::cmd::tools::lenient_autocorrect")]
@@ -81,6 +84,7 @@ impl Default for Prefs {
             ignore_uppercase: true,
             ignore_numbers: true,
             ignore_internet: true,
+            sentence_spaces: Default::default(),
             detect_language: true,
             default_language: None,
             autocorrect: Default::default(),
@@ -97,6 +101,12 @@ impl Prefs {
             ignore_internet: self.ignore_internet,
         }
     }
+}
+
+/// Read a saved Space between sentences, one space when it isn't one of the choices.
+fn lenient_sentence_spaces<'de, D: serde::Deserializer<'de>>(d: D) -> Result<wordcraft_layout::SentenceSpaces, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
 /// Ignore malformed saved language tags without discarding the other preferences.

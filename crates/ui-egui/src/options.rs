@@ -337,9 +337,32 @@ fn proofing(app: &mut WordApp, ui: &mut Ui) {
     let spelling = app.session.view.proofing;
     flag(app, ui, "Check spelling as you type", "checkSpelling", spelling);
     ui.add_enabled_ui(app.session.view.proofing, |ui| flag(app, ui, "Mark grammar errors as you type", "markGrammar", pr.mark_grammar));
+    sentence_spaces_picker(app, ui);
     ui.add_space(8.0);
     section(ui, "Custom dictionary");
     custom_dictionary(app, ui);
+}
+
+/// Grammar's Space between sentences (#5648): one space, two, or not checked.
+fn sentence_spaces_picker(app: &mut WordApp, ui: &mut Ui) {
+    use wordcraft_layout::SentenceSpaces;
+    let label = |s: SentenceSpaces| match s {
+        SentenceSpaces::One => "One space",
+        SentenceSpaces::Two => "Two spaces",
+        SentenceSpaces::DontCheck => "Don't check",
+    };
+    let current = app.session.prefs.sentence_spaces;
+    ui.horizontal(|ui| {
+        let text = ui.label(tl!("Space between sentences:"));
+        let combo = craft_ui::ComboBox::from_id_salt("options_sentence_spaces").selected_text(tl!(label(current))).width(160.0).show_ui(ui, |ui| {
+            for s in SentenceSpaces::ALL {
+                if ui.selectable_label(current == s, tl!(label(s))).clicked() {
+                    set(app, json!({"spacesBetweenSentences": s.code()}));
+                }
+            }
+        });
+        combo.response.labelled_by(text.id);
+    });
 }
 
 /// Where the spelling dictionaries come from (#1063): a folder searched before the system's

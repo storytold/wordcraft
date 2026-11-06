@@ -8986,7 +8986,7 @@ fn hyphenation_and_proofing_follow_each_runs_language() {
     assert_eq!(flagged, ["żeka", "beautifull"]);
     // The layout and the Review commands report the same issues.
     let p = d.para(StoryRef::Body, &Path::top(0)).unwrap();
-    let issues = para::paragraph_issues(p, &para::proof_runs(&d, p, None), &Default::default(), true, false);
+    let issues = para::paragraph_issues(p, &para::proof_runs(&d, p, None), &Default::default(), true, false, Default::default());
     assert_eq!(issues.iter().map(|i| (i.start, i.end, i.kind == wordcraft_proof::IssueKind::Grammar)).collect::<Vec<_>>(), para.issues);
     assert_eq!(issues[0].lang, wordcraft_proof::ProofLang::Pl);
     assert_eq!(issues[1].lang, wordcraft_proof::ProofLang::En);
@@ -13751,5 +13751,35 @@ fn turned_cell_float_keeps_its_along_text_offset() {
         let confined = place(direction, false);
         let reference = place(direction, true);
         assert!((confined.y - reference.y).abs() < 0.01, "{direction:?}: {confined:?} vs {reference:?}");
+    }
+}
+
+/// #5648: Space between sentences. Two spaces after a sentence's end are an extra space with One
+/// space, right with Two spaces (three still aren't), and any run there is left alone with Don't
+/// check. Doubled spaces inside a sentence are marked whatever the choice.
+#[test]
+fn sentence_spacing_choice_decides_which_runs_of_spaces_are_squiggled() {
+    use crate::SentenceSpaces::{DontCheck, One, Two};
+    let text = "It rained.  We stayed in!   \u{201c}Why?\u{201d}  Because  it rained.";
+    let d = Document::from_text(text);
+    let at = |s: &str| text.find(s).unwrap();
+    let (two, three, quoted, inside) = (at(".  We"), at("!   "), at("\u{201d}  B"), at("Because  it"));
+    let (two, three, quoted, inside) = (two + 1, three + 1, quoted + "\u{201d}".len(), inside + "Because".len());
+    for (spaces, expected) in [
+        (One, vec![(two, two + 2), (three, three + 3), (quoted, quoted + 2), (inside, inside + 2)]),
+        (Two, vec![(three, three + 3), (inside, inside + 2)]),
+        (DontCheck, vec![(inside, inside + 2)]),
+    ] {
+        let opts = LayoutOptions {
+            proofing: true,
+            proof: crate::ProofOptions { sentence_spaces: spaces, ..Default::default() },
+            ..LayoutOptions::default()
+        };
+        let l = layout(&d, &mut LayoutCache::new(), &opts);
+        let para =
+            l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }).expect("a paragraph");
+        let marked: Vec<(usize, usize)> =
+            para.issues.iter().filter(|i| i.2 && text[i.0..i.1].bytes().all(|b| b == b' ')).map(|i| (i.0, i.1)).collect();
+        assert_eq!(marked, expected, "{spaces:?}");
     }
 }

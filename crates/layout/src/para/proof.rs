@@ -33,13 +33,15 @@ pub(super) fn lang_at(runs: &[ProofRun], off: usize) -> wordcraft_proof::ProofLa
 /// ([`wordcraft_proof::check_text_with`]: what spelling skips, and grammar only with `grammar`),
 /// and none touching a run left unchecked.
 ///
-/// `list_item` (see [`is_list_item`]) turns off the capital-first-word grammar rule.
+/// `list_item` (see [`is_list_item`]) turns off the capital-first-word grammar rule, and
+/// `sentence_spaces` says how many spaces may follow a sentence's end.
 pub fn paragraph_issues(
     p: &Paragraph,
     runs: &[ProofRun],
     spelling: &wordcraft_proof::Options,
     grammar: bool,
     list_item: bool,
+    sentence_spaces: crate::SentenceSpaces,
 ) -> Vec<wordcraft_proof::Issue> {
     if p.text.trim().is_empty() || p.text.len() > 100_000 {
         return Vec::new();
@@ -47,11 +49,27 @@ pub fn paragraph_issues(
     let text = proof_text(p);
     let spans: Vec<(std::ops::Range<usize>, wordcraft_proof::ProofLang)> = runs.iter().map(|r| (r.range.clone(), r.lang)).collect();
     let skipped = skipped_ranges(runs);
-    let issues = wordcraft_proof::check_text_with(&text, &spans, spelling, grammar, list_item);
+    let mut issues = wordcraft_proof::check_text_with(&text, &spans, spelling, grammar, list_item);
+    if sentence_spaces != crate::SentenceSpaces::One {
+        issues.retain(|i| !allowed_sentence_spaces(&text, i, sentence_spaces));
+    }
     if skipped.is_empty() {
         return issues;
     }
     issues.into_iter().filter(|i| !overlaps(&skipped, i.start, i.end)).collect()
+}
+
+/// Whether `i` is a grammar issue over a run of spaces after a sentence's end (`.`, `!`, `?` or
+/// `…`, then any closing quotes or brackets) that `spaces` allows (#5648). Every language's
+/// grammar marks such a run as an extra space; its message is in that language, so the issue is
+/// told by the text it covers.
+fn allowed_sentence_spaces(text: &str, i: &wordcraft_proof::Issue, spaces: crate::SentenceSpaces) -> bool {
+    if i.kind != wordcraft_proof::IssueKind::Grammar {
+        return false;
+    }
+    let Some(run) = text.get(i.start..i.end).filter(|r| !r.is_empty() && r.bytes().all(|b| b == b' ')) else { return false };
+    let before = text.get(..i.start).unwrap_or("").trim_end_matches(['"', '\'', ')', ']', '\u{201d}', '\u{2019}', '\u{bb}']);
+    before.ends_with(['.', '!', '?', '\u{2026}']) && spaces.allows(run.len())
 }
 
 /// The byte ranges of the runs left unchecked, in order, those that overlap merged: their
@@ -92,7 +110,7 @@ pub(super) fn proof_issues(
     typing: Option<(usize, usize)>,
     list_item: bool,
 ) -> Vec<(usize, usize, bool)> {
-    paragraph_issues(p, runs, &opts.spelling, opts.grammar, list_item)
+    paragraph_issues(p, runs, &opts.spelling, opts.grammar, list_item, opts.sentence_spaces)
         .into_iter()
         .map(|i| (i.start, i.end, i.kind == wordcraft_proof::IssueKind::Grammar))
         .filter(|&(a, b, grammar)| grammar || !typing.is_some_and(|(s, e)| a < e && s < b))

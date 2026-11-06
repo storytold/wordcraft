@@ -22,7 +22,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("file.options", "Options", "File", options)
             .params(
-                r#"{"pane"?: "general|display|proofing|save|language|accessibility|advanced|agents", "author"?: string, "initials"?: string, "units"?: "inches|centimeters|millimeters|points|picas|auto" (auto: the region's), "region"?: string (a locale tag like pl-PL, saved: the paper File › New starts on, the default units and the decimal separator; auto: the system's), "typingReplacesSelection"?: bool, "insertKeyOvertype"?: bool, "overtype"?: bool, "marks"?: {"tabs"?: bool, "spaces"?: bool, "paragraphs"?: bool, "hidden"?: bool}, "checkSpelling"?: bool, "markGrammar"?: bool, "ignoreUppercase"?: bool, "ignoreNumbers"?: bool, "ignoreInternet"?: bool, "dictionariesFolder"?: string (a folder of Hunspell .aff/.dic files searched first, saved; auto: the system locations only), "userTemplatesFolder"?: string (the folder File › New lists personal templates from, saved; auto: the app's own Templates folder; not a network folder), "addWords"?: [string], "removeWords"?: [string]} — with any setting it changes them and opens nothing; without, it opens File › Options (at `pane`). Returns the settings."#,
+                r#"{"pane"?: "general|display|proofing|save|language|accessibility|advanced|agents", "author"?: string, "initials"?: string, "units"?: "inches|centimeters|millimeters|points|picas|auto" (auto: the region's), "region"?: string (a locale tag like pl-PL, saved: the paper File › New starts on, the default units and the decimal separator; auto: the system's), "typingReplacesSelection"?: bool, "insertKeyOvertype"?: bool, "overtype"?: bool, "marks"?: {"tabs"?: bool, "spaces"?: bool, "paragraphs"?: bool, "hidden"?: bool}, "checkSpelling"?: bool, "markGrammar"?: bool, "ignoreUppercase"?: bool, "ignoreNumbers"?: bool, "ignoreInternet"?: bool, "spacesBetweenSentences"?: "one|two|dontCheck" (grammar: how many spaces may follow a sentence's end), "dictionariesFolder"?: string (a folder of Hunspell .aff/.dic files searched first, saved; auto: the system locations only), "userTemplatesFolder"?: string (the folder File › New lists personal templates from, saved; auto: the app's own Templates folder; not a network folder), "addWords"?: [string], "removeWords"?: [string]} — with any setting it changes them and opens nothing; without, it opens File › Options (at `pane`). Returns the settings."#,
             )
             .pure(),
         CommandSpec::new("text.overtype", "Overtype", "File › Options › Advanced", |s, v| {
@@ -145,6 +145,14 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
         Some(_) => return Err(CmdError::Params("`marks` must be an object of true/false".into())),
     }
     let check_spelling = bool_param(v, "checkSpelling")?;
+    let sentence_spaces = match v.get("spacesBetweenSentences") {
+        None | Some(Value::Null) => None,
+        Some(x) => Some(
+            x.as_str()
+                .and_then(wordcraft_layout::SentenceSpaces::from_code)
+                .ok_or_else(|| CmdError::Params("`spacesBetweenSentences` is one of one, two, dontCheck".into()))?,
+        ),
+    };
     let add = words_param(v, "addWords")?;
     let remove = words_param(v, "removeWords")?;
 
@@ -157,6 +165,7 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
         || !flag_values.is_empty()
         || !mark_values.is_empty()
         || check_spelling.is_some()
+        || sentence_spaces.is_some()
         || !add.is_empty()
         || !remove.is_empty();
     if let Some(name) = author {
@@ -187,6 +196,9 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(b) = check_spelling {
         s.view.proofing = b;
         s.prefs.check_spelling = b;
+    }
+    if let Some(x) = sentence_spaces {
+        s.prefs.sentence_spaces = x;
     }
     for w in &add {
         wordcraft_proof::add_word(w);
@@ -230,6 +242,7 @@ pub fn current(s: &Session) -> Value {
         "ignoreUppercase": pr.ignore_uppercase,
         "ignoreNumbers": pr.ignore_numbers,
         "ignoreInternet": pr.ignore_internet,
+        "spacesBetweenSentences": pr.sentence_spaces.code(),
         "dictionary": wordcraft_proof::user_dictionary(),
         "dictionariesFolder": pr.dictionaries_folder,
         "userTemplatesFolder": pr.user_templates_folder,
