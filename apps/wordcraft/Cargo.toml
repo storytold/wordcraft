@@ -77,9 +77,9 @@ windows = { version = "0.62", features = ["UI_ViewManagement", "System_UserProfi
 clipboard-win = { version = "5.4", features = ["std"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# Pinned apart from craft-ui, which doesn't depend on it: this revision adds `printer_queues`, the
-# printer list that asks no driver (#5710, storytold/craft-libs#618).
-craft-print = { git = "https://github.com/storytold/craft-libs", rev = "e653048a187036d30fd912f35f14b32ab4084e5c" }
+# Pinned apart from craft-ui, which doesn't depend on it: `printer_queues`, the printer list that
+# asks no driver (#5710, storytold/craft-libs#618), and `submit_cancellable` (storytold/craft-libs#622).
+craft-print = { git = "https://github.com/storytold/craft-libs", rev = "85c8ca1703a566fd7389f77b9a8d69ed0b2600eb" }
 rfd = { workspace = true }
 # Waits for an `rfd::AsyncFileDialog` on a background thread (the dialogs don't block the UI, #94);
 # rfd itself already depends on it.
