@@ -77,7 +77,7 @@ a save that doesn't touch it:
 - a paragraph or table WordCraft hasn't changed keeps its own markup, with what it names (its
   automatic styles, common styles, font faces, and the package files and folders they refer to);
 - while no style or list definition changed, the file's own style definitions are written;
-- its page layouts and master pages, and each section starts with the master page it started
+- the file's page layouts and master pages, and each section starts with the master page it started
   with. A change to margins, paper size, columns or page borders changes just those values in the
   page layout that says them, so the rest stays (a header's background, the footnote line); only
   a change to what a page is made of (a header added or removed, a new section), to the page
