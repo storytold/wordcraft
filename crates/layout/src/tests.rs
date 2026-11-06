@@ -10,6 +10,7 @@ mod budget;
 mod cell_floats;
 mod complex;
 mod grid;
+mod kept_table;
 mod ligature;
 pub(crate) mod linear;
 mod nbsp;

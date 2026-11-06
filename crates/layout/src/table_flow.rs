@@ -107,13 +107,58 @@ fn row_can_start(row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, p
     table::split_row_keeping_cells(laid, room).is_some()
 }
 
+/// The explicit break that placement applies to an inline table's first paragraph.
+pub(super) fn table_breaks_before(doc: &wordcraft_doc::Document, table: &wordcraft_doc::Table) -> bool {
+    let first = table.rows.first().and_then(|r| r.cells.first()).and_then(|c| c.blocks.first()).and_then(|b| b.as_para());
+    table.props.float.is_none() && first.is_some_and(|p| doc.styles.resolve_para(&p.props).page_break_before)
+}
+
+/// Whether an inline table can begin in the space below a kept body paragraph. Probe the
+/// real cell geometry without advancing list/equation numbers or consuming text-box budgets.
+/// Floating tables retain their independent anchoring rules.
+pub(crate) fn kept_table_can_start(ctx: &mut Ctx, pb: &PageBuilder, block: usize, start: f32) -> Option<bool> {
+    let super::Block::Table(table) = &**ctx.doc.body.get(block + 1)? else { return None };
+    if table.props.float.is_some() || table_breaks_before(ctx.doc, table) {
+        return None;
+    }
+    let counters = ctx.counters.clone();
+    let eq_count = ctx.eq_count;
+    let boxes = std::mem::take(&mut ctx.boxes);
+    let chains = std::mem::take(&mut ctx.chains);
+    let track = std::mem::replace(&mut ctx.track_totals, false);
+    let laid = table::layout_table(ctx, StoryRef::Body, table, &[(block + 1) as u32], pb.col_w(), 1);
+    ctx.counters = counters;
+    ctx.eq_count = eq_count;
+    ctx.boxes = boxes;
+    ctx.chains = chains;
+    ctx.track_totals = track;
+    // Use the same full-width float clearance as placement, without moving the page cursor.
+    let x = pb.col_x() + laid.x;
+    // Placement tests the table's cursor after the heading, not the heading's current cursor.
+    // In a continuous section the heading can start at pb.top halfway down a physical page.
+    let gap = table.props.space_before.filter(|s| s.is_finite() && *s > 0.0 && start > pb.top + 0.01).map_or(0.0, |s| s.min(MAX_TABLE_SPACE));
+    let start = below(&body_wraps(ctx, pb), start + gap, x, x + laid.width);
+    let room = pb.bottom - start;
+    let headers = table.rows.iter().take_while(|row| row.props.header).count();
+    let header_height: f32 = laid.rows.iter().take(headers).map(|row| row.height).sum();
+    let (Some(row), Some(geometry)) = (table.rows.get(headers), laid.rows.get(headers)) else {
+        return Some(header_height <= room + 0.01);
+    };
+    let room = room - header_height;
+    if geometry.height + geometry.edge <= room + 0.01 {
+        return Some(true);
+    }
+    let indivisible = row.props.cant_split || (row.props.height_rule == HeightRule::Exact && row.props.height.is_some_and(|h| h > 0.0));
+    let short_of_min = row.props.height_rule == HeightRule::AtLeast && row.props.height.is_some_and(|h| h > room + 0.01);
+    Some(!indivisible && !short_of_min && table::split_row_keeping_cells(geometry, room).is_some())
+}
+
 pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, block: usize, body_top: f32) {
     pb.prev = None;
     // A page break before the first row's paragraph moves the whole table to a new page, as
     // Word does (and as an ODT table starting a page opens). Before the table is laid out, so
     // its cells' fields (PAGE) are those of the page it lands on.
-    let first = t.rows.first().and_then(|r| r.cells.first()).and_then(|c| c.blocks.first()).and_then(|b| b.as_para());
-    if t.props.float.is_none() && !pb.at_top() && !pb.web && first.is_some_and(|p| ctx.doc.styles.resolve_para(&p.props).page_break_before) {
+    if !pb.at_top() && !pb.web && table_breaks_before(ctx.doc, t) {
         pb.new_page(block, body_top);
         ctx.fields.page = pb.number;
     }

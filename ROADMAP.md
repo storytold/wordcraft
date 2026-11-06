@@ -809,6 +809,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-04 | trivial | Progress log: ODT checked against 220 files from other applications (gap 19) |
 | 2026-11-04 | trivial | Progress log: OpenDocument files shown in Microsoft Word style or LibreOffice style (gap 19) |
 | 2026-11-04 | trivial | PR #4609: relative REF keeps context already displayed by the own or a needed ancestor label; six synthetic legal-template cases and separate-list context follow the Word for Windows measurements reported by @pakiat in PR discussion. Existing unknown-switch/cache boundaries and readiness estimates unchanged; no new native Word run. |
+| 2026-11-04 | trivial | PR #5166: the kept-table probe includes finite positive capped table space-before at the projected table cursor, including a heading at a continuous-section top. Explicit direct/style-inherited first-cell page breaks bypass both table-prefix and generic keep lookahead, avoiding an extra page. Synthetic keep/disabled-keep, invalid-gap, page-top, continuous-section and near-bottom break controls; no new native Word comparison or readiness change. |
 | 2026-11-01 | trivial | Progress log: SEQ, STYLEREF and REF fields show fresh results in output |
 | 2026-10-29 | trivial | Progress log: Print Markup balloon anchors use one object walk per paragraph (#3614); readiness estimates unchanged |
 | 2026-10-28 | trivial | Print Markup text-copy comment discovery walks paragraph objects once (#3614); quotes, order, limits and readiness estimates unchanged |
@@ -821,6 +822,8 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-03 | trivial | Progress log: a long comment's card and balloon stop at ten lines (#3382) |
 | 2026-11-03 | trivial | Progress log: Replace and Remove Table of Contents with Word's title above a section break (#4041) |
 | 2026-11-03 | trivial | Progress log: language-packs-2 published and pinned, 75 Language packs |
+| 2026-11-03 | trivial | PR #5166 — Keep headings with tables (2026-11-03): A body heading kept with the next inline table uses the laid-out header, first body row and float clearance. Existing synthetic Word comparisons and layout regressions cover the narrow rule. Floating tables, longer paragraph chains and general oversized-row pagination retain their existing limitations. |
+| 2026-11-03 | trivial | Keep body headings with the real inline-table prefix after float clearance; retain synthetic Word controls and boundary regressions; broader pagination gaps remain open (#5166). |
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
