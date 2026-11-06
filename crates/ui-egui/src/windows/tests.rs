@@ -176,6 +176,8 @@ fn a_window_that_regains_the_focus_types_into_its_canvas() {
     frames(&ctx, &mut a, 3);
     let child = a.active_viewport();
     assert_ne!(child, ViewportId::ROOT, "the new window has a viewport of its own");
+    focus(child);
+    frames(&ctx, &mut a, 3);
     assert!(a.canvas.focused, "the new window's canvas takes the keyboard focus");
 
     focus(ViewportId::ROOT);
