@@ -23,6 +23,8 @@ mod print;
 mod region;
 #[cfg(target_os = "macos")]
 mod traffic_lights;
+#[cfg(all(unix, not(target_os = "macos")))]
+mod x11_scale;
 
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{
@@ -439,6 +441,9 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
 /// geometry, opens requested documents or the Start screen, starts the control server when
 /// asked, and runs the eframe event loop.
 fn main() -> eframe::Result {
+    // Apply X11 scaling before logger setup; a successful re-exec must not duplicate log I/O.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    x11_scale::apply();
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
     if let Some(result) = craft_update::self_update::finish(&wordcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {

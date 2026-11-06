@@ -51,6 +51,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 dispatch2 = "0.3"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+x11rb = { version = "=0.13.2", default-features = false }
 winit = { version = "0.30", default-features = false, features = ["x11"] }
 # The desktop's animation setting on Linux and the BSDs, read from the XDG settings portal over
 # D-Bus. Already in the build through AccessKit, at this version; this adds only its blocking API.
