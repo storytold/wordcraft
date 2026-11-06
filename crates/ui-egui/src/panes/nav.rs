@@ -83,12 +83,15 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
             let collapsed_flags: Vec<bool> = items.iter().enumerate().map(|(i, (p, _, _))| has_children[i] && app.ui.nav_collapsed.contains(p)).collect();
             let levels: Vec<u8> = items.iter().map(|(_, lv, _)| *lv).collect();
             let visible = visible_headings(&levels, &collapsed_flags);
+            let parents: Vec<Path> = items.iter().zip(&has_children).filter(|(_, c)| **c).map(|((p, ..), _)| p.clone()).collect();
             for (i, (path, lv, txt)) in items.into_iter().enumerate() {
                 if !visible[i] {
                     continue;
                 }
                 let collapsed = collapsed_flags[i];
                 let (toggle, r) = nav_heading(ui, lv, &txt, current == Some(i), has_children[i].then_some(collapsed));
+                // Right-click, as in Word's Navigation pane (#3573).
+                r.context_menu(|ui| heading_menu(app, ui, &path, &parents));
                 if toggle {
                     if !app.ui.nav_collapsed.remove(&path) {
                         app.ui.nav_collapsed.insert(path);
@@ -104,6 +107,30 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
             }
         }
     });
+}
+
+/// A heading's right-click menu: Delete removes the heading with everything under it
+/// (`outline.deleteSubtree`), and Expand All / Collapse All open or fold every heading that has
+/// headings under it. A heading inside a table has no subtree to delete.
+fn heading_menu(app: &mut WordApp, ui: &mut Ui, path: &Path, parents: &[Path]) {
+    ui.set_min_width(180.0);
+    let block = (path.0.len() == 1).then(|| path.0.first().copied()).flatten();
+    let deletable = block.is_some() && crate::widgets::enabled(app, "outline.deleteSubtree");
+    if ui.add_enabled(deletable, crate::rtl::menu_item(ui, tl!("Delete"), "", 0.0)).clicked() {
+        if let Some(b) = block {
+            let _ = app.run("outline.deleteSubtree", json!({"block": b}));
+        }
+        ui.close();
+    }
+    ui.separator();
+    if ui.add_enabled(!app.ui.nav_collapsed.is_empty(), crate::rtl::menu_item(ui, tl!("Expand All"), "", 0.0)).clicked() {
+        app.ui.nav_collapsed.clear();
+        ui.close();
+    }
+    if ui.add_enabled(parents.iter().any(|p| !app.ui.nav_collapsed.contains(p)), crate::rtl::menu_item(ui, tl!("Collapse All"), "", 0.0)).clicked() {
+        app.ui.nav_collapsed.extend(parents.iter().cloned());
+        ui.close();
+    }
 }
 
 /// Which headings the pane shows: those under a collapsed heading (every following heading

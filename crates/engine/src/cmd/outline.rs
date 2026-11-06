@@ -99,6 +99,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(BLOCK)
             .when(in_outline)
             .pure(),
+        CommandSpec::new("outline.deleteSubtree", "Delete Heading and Content", "View › Navigation Pane", delete_subtree).params(BLOCK),
         CommandSpec::new("outline.showLevel", "Show Level", "Outlining › Outline Tools", |s, v| {
             let level = match v.get("level") {
                 Some(Value::String(a)) if a.eq_ignore_ascii_case("all") => 0,
@@ -353,6 +354,50 @@ fn select_subtree(s: &mut Session, v: &Value) -> CmdResult {
     let focus = block_end(&s.doc, end - 1);
     s.sel = Selection { anchor, focus };
     s.goal_x = None;
+    sel_result(s)
+}
+
+/// The Navigation pane's Delete (#3573): heading `block` (default: the one at the caret) goes
+/// with everything under it, up to the next heading of its level or higher, paragraph marks
+/// included, as in Word. It deletes through `text.delete`, so Track Changes, protection and
+/// what the deleted paragraphs anchor are handled as for any deletion, in one undo step.
+fn delete_subtree(s: &mut Session, v: &Value) -> CmdResult {
+    let levels = ol::levels(&s.doc);
+    let start = match v.get("block") {
+        Some(b) => {
+            b.as_u64().and_then(|b| usize::try_from(b).ok()).ok_or_else(|| CmdError::Params("`block` must be a body paragraph index".into()))?
+        }
+        None => selected_blocks(s).map(|(i, _)| i).ok_or_else(|| CmdError::Failed("put the caret in a heading".into()))?,
+    };
+    if levels.get(start).is_none_or(|l| *l >= BODY) {
+        return Err(CmdError::Failed("`block` is not a heading".into()));
+    }
+    let end = ol::subtree_end(&levels, start).max(start + 1);
+    // From the end of what comes before, so what follows keeps its own paragraph. A first
+    // heading has nothing before it: from its start to the start of what follows, which takes
+    // the deleted heading's paragraph mark and gets its own formatting back below.
+    let follows = s.doc.body.get(end).and_then(|b| b.as_para()).map(|p| (p.props.clone(), p.mark.clone(), p.section.clone()));
+    let (anchor, focus) = match start.checked_sub(1) {
+        Some(before) => (block_end(&s.doc, before), block_end(&s.doc, end - 1)),
+        None if end < levels.len() => (Pos::body(0, 0), Pos::body(end, 0)),
+        None => (Pos::body(0, 0), block_end(&s.doc, end - 1)),
+    };
+    s.sel = Selection { anchor: s.doc.clamp(&anchor), focus: s.doc.clamp(&focus) };
+    s.goal_x = None;
+    let blocks = s.doc.body.len();
+    s.join_next_undo();
+    s.run("text.delete", &json!({}))?;
+    // Merged into the first paragraph (not kept as a tracked deletion): it is what followed.
+    if start == 0
+        && s.doc.body.len() < blocks
+        && let Some((props, mark, section)) = follows
+    {
+        let p = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0))?;
+        p.props = props;
+        p.mark = mark;
+        p.section = section;
+        p.touch();
+    }
     sel_result(s)
 }
 

@@ -9940,6 +9940,78 @@ fn outline_collapse_hides_descendants_and_expand_restores() {
 /// #3621: with thousands of collapsed headings, an Enter above them (which shifts every index)
 /// finds them again without scanning the document once per heading, and a caret move doesn't
 /// redo the matching.
+/// Heading 1 "One", body "a", Heading 2 "Two", body "b", Heading 1 "Three", body "c", in Print
+/// Layout (the Navigation pane's view).
+fn heading_doc() -> Session {
+    let mut s = outline_doc();
+    run(&mut s, "view.printLayout", json!({}));
+    s
+}
+
+fn body_styles(s: &Session) -> Vec<String> {
+    s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.style.clone().unwrap_or_else(|| "Normal".into())).collect()
+}
+
+/// #3573: the Navigation pane's Delete removes a heading with everything under it, paragraph
+/// marks included, and leaves what follows (or, at the end, what comes before) as it was, in one
+/// undo step.
+#[test]
+fn delete_heading_and_content_removes_the_subtree() {
+    let all = ["One", "a", "Two", "b", "Three", "c"];
+    for (block, texts, styles) in [
+        (0, vec!["Three", "c"], vec!["Heading1", "Normal"]),
+        (2, vec!["One", "a", "Three", "c"], vec!["Heading1", "Normal", "Heading1", "Normal"]),
+        (4, vec!["One", "a", "Two", "b"], vec!["Heading1", "Normal", "Heading2", "Normal"]),
+    ] {
+        let mut s = heading_doc();
+        let before = body_styles(&s);
+        run(&mut s, "outline.deleteSubtree", json!({"block": block}));
+        assert_eq!(body_texts(&s), texts, "heading {block}");
+        assert_eq!(body_styles(&s), styles, "heading {block}: what is left keeps its style");
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(body_texts(&s), all, "heading {block}: one undo step");
+        assert_eq!(body_styles(&s), before);
+    }
+    // A first heading followed by a heading of another level: that one keeps its own style.
+    let mut s = heading_doc();
+    s.sel = crate::Selection::caret(Pos::body(0, 0));
+    run(&mut s, "para.style", json!({"style": "Heading2"}));
+    s.sel = crate::Selection::caret(Pos::body(2, 0));
+    run(&mut s, "para.style", json!({"style": "Heading1"}));
+    run(&mut s, "outline.deleteSubtree", json!({"block": 0}));
+    assert_eq!(body_texts(&s), ["Two", "b", "Three", "c"]);
+    assert_eq!(body_styles(&s), ["Heading1", "Normal", "Heading1", "Normal"]);
+    // Without `block`, the heading at the caret.
+    let mut s = heading_doc();
+    s.sel = crate::Selection::caret(Pos::body(2, 1));
+    run(&mut s, "outline.deleteSubtree", json!({}));
+    assert_eq!(body_texts(&s), ["One", "a", "Three", "c"]);
+}
+
+/// Delete takes headings only, and a bad index is an error that changes nothing.
+#[test]
+fn delete_heading_and_content_refuses_body_text_and_bad_indexes() {
+    let mut s = heading_doc();
+    for bad in [json!({"block": 1}), json!({"block": 99}), json!({"block": -1}), json!({"block": "x"})] {
+        assert!(s.run("outline.deleteSubtree", &bad).is_err(), "{bad}");
+    }
+    s.sel = crate::Selection::caret(Pos::body(3, 0));
+    assert!(s.run("outline.deleteSubtree", &json!({})).is_err(), "the caret in body text");
+    assert_eq!(body_texts(&s), ["One", "a", "Two", "b", "Three", "c"]);
+}
+
+/// With Track Changes on, the deleted heading and its content stay, marked as deleted, as any
+/// deletion does.
+#[test]
+fn delete_heading_and_content_is_tracked() {
+    let mut s = heading_doc();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "outline.deleteSubtree", json!({"block": 2}));
+    assert_eq!(body_texts(&s).len(), 6, "the paragraphs stay until the deletion is accepted");
+    run(&mut s, "review.acceptAll", json!({}));
+    assert_eq!(body_texts(&s), ["One", "a", "Three", "c"]);
+}
+
 #[test]
 fn outline_many_collapsed_headings_stay_fast_after_edits() {
     const N: usize = 8000;
