@@ -1143,6 +1143,103 @@ fn bundled_interface_fonts_cover_slovenian_letters() {
     assert!(!lang("sl").uses_cjk());
 }
 
+/// The Unix locale variables keep glibc's script modifier, which sys-locale drops: Latin Serbian
+/// isn't shown in Cyrillic, and Cyrillic Bosnian isn't shown in Latin script. They are read as
+/// gettext reads them: one of `LC_ALL`, `LC_MESSAGES`, `LANG` is in effect, and `LANGUAGE`
+/// replaces it.
+#[test]
+fn posix_script_modifiers_pick_the_script() {
+    needs_catalogs!();
+    let system = |vars: &[(&str, &str)]| {
+        let tags = posix_locale_tags(|k| vars.iter().find(|(name, _)| *name == k).map(|(_, v)| (*v).to_owned()));
+        first_supported(tags.iter().map(String::as_str))
+    };
+    assert_eq!(system(&[("LANG", "sr_RS.UTF-8@latin")]), Some(lang("sr-latn")));
+    assert_eq!(system(&[("LANG", "sr_RS.UTF-8")]), Some(lang("sr")));
+    assert_eq!(system(&[("LANG", "bs_BA.UTF-8")]), Some(lang("bs")));
+    assert_eq!(system(&[("LANG", "bs_BA.UTF-8@cyrillic")]), None, "Cyrillic Bosnian has no catalog");
+    // A lower variable is overridden, not a fallback: no crossing into Latin script.
+    assert_eq!(system(&[("LC_ALL", "bs_BA@cyrillic"), ("LANG", "bs_BA.UTF-8")]), None);
+    assert_eq!(system(&[("LC_MESSAGES", "bs_BA@cyrillic"), ("LANG", "bs_BA.UTF-8")]), None);
+    assert_eq!(system(&[("LC_MESSAGES", "bs_BA.UTF-8"), ("LANG", "en_US.UTF-8")]), Some(lang("bs")));
+    // `LANGUAGE` is an ordered list that replaces the locale, and an empty one is unset.
+    assert_eq!(system(&[("LANGUAGE", "bs_BA@cyrillic:hr_HR"), ("LANG", "bs_BA.UTF-8")]), Some(lang("hr")));
+    assert_eq!(system(&[("LANGUAGE", "bs_BA@cyrillic"), ("LANG", "bs_BA.UTF-8")]), None);
+    assert_eq!(system(&[("LANGUAGE", ""), ("LANG", "bs_BA.UTF-8")]), Some(lang("bs")));
+    // The `C` locale ignores `LANGUAGE` (English), and no variable at all asks for nothing.
+    assert_eq!(system(&[("LANGUAGE", "bs_BA"), ("LC_ALL", "C.UTF-8")]), Some(Lang::EN));
+    assert_eq!(system(&[("LANGUAGE", "bs_BA")]), None);
+}
+
+/// Bosnian (Latin script) follows `bs-BA` system locales and a saved choice, and choosing it leaves
+/// the document as it was. Cyrillic Bosnian has no catalog: a script is never crossed.
+#[test]
+fn bosnian_locales_and_saved_preference_work_without_changing_the_document() {
+    needs_catalogs!();
+    let bs = lang("bs");
+    for tag in ["bs", "bs-BA", "bs_BA.UTF-8", "BS-ba", "bs-Latn-BA"] {
+        assert_eq!(lang_from_tag(tag), Some(bs), "{tag}");
+    }
+    assert_eq!(lang_from_tag("bs-Cyrl-BA"), None, "Cyrillic Bosnian has no catalog");
+    assert_eq!(first_supported([UNSUPPORTED, "bs-BA", "en-US"]), Some(bs));
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let before = serde_json::to_value(&app.session.doc).unwrap();
+    let result = app.run("ui.language", serde_json::json!({"value": "BS"})).unwrap();
+    assert_eq!(result["effective"], "bs");
+    assert_eq!(app.ui.language, "bs");
+    assert!(result["available"].as_array().unwrap().iter().any(|l| l["code"] == "bs" && l["name"] == "Bosanski"));
+    assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+    let saved = serde_json::to_string(&app.ui).unwrap();
+    let restored: crate::UiState = serde_json::from_str(&saved).unwrap();
+    assert_eq!(Lang::from_pref(&restored.language), bs);
+    assert_eq!(bs.editing_lang(), None, "WordCraft doesn't proof Bosnian, so documents stay in its default");
+    assert!(!bs.uses_cjk());
+}
+
+/// Bosnian counts take CLDR's three forms through the embedded catalog: `one` for 1, 21, 101 (not
+/// 11), `few` for 2–4, 22–24 (not 12–14) and `other` for the rest.
+#[test]
+fn bosnian_plurals_take_one_few_other() {
+    needs_catalogs!();
+    let bs = lang("bs");
+    let count = |n| I18N.trn_plain(bs.lang, n, "{n} item", "{n} items");
+    for (n, want) in [
+        (1, "1 stavka"),
+        (21, "21 stavka"),
+        (101, "101 stavka"),
+        (2, "2 stavke"),
+        (4, "4 stavke"),
+        (22, "22 stavke"),
+        (0, "0 stavki"),
+        (5, "5 stavki"),
+        (11, "11 stavki"),
+        (12, "12 stavki"),
+        (14, "14 stavki"),
+        (111, "111 stavki"),
+    ] {
+        assert_eq!(count(n), want, "{n}");
+    }
+}
+
+/// The bundled interface faces draw every Bosnian letter (č ć đ š ž), every other accented letter
+/// the catalog uses, and its punctuation, without a system fallback.
+#[test]
+fn bundled_interface_fonts_cover_bosnian_letters() {
+    let db = wordcraft_fonts::FontDb::with_font_dirs(Vec::new());
+    needs_catalogs!();
+    let extra = ['č', 'ć', 'đ', 'š', 'ž', 'Č', 'Ć', 'Đ', 'Š', 'Ž', '„', '”', '–', '…'];
+    // Every accented Latin letter the catalog uses (Latin-1 and Latin Extended-A), and the above.
+    let accented = |c: &char| ('\u{C0}'..='\u{17F}').contains(c) && c.is_alphabetic();
+    let chars: std::collections::HashSet<char> = translations("bs").iter().flat_map(|e| e.chars()).filter(accented).chain(extra).collect();
+    for (family, style) in [("Inter", "Regular"), ("Inter", "Medium"), ("Inter", "SemiBold"), ("JetBrains Mono", "Regular")] {
+        let face = db.face(family, style);
+        assert_eq!(face.family, family, "must use the bundled interface face");
+        for ch in &chars {
+            assert_ne!(face.glyph_for(*ch), 0, "{family} {style} lacks {ch}");
+        }
+    }
+}
+
 /// The "Open" paragraph-spacing preset is roomy spacing, not the file verb: only a `spacing` row
 /// translates it.
 #[test]
