@@ -257,6 +257,10 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         );
     }
     let password = p::str(v, "password");
+    // The file as it is before it is read (#5623): a write that lands while it is being read then
+    // still differs from the stamp, and the next look reloads it. Bytes handed in with the path
+    // only name the document: there is no file of ours to watch.
+    let stamp = if p::str(v, "data").is_none() { crate::io::disk_stamp(std::path::Path::new(path)) } else { None };
     let (mut doc, encrypted) = if let Some(data) = p::str(v, "data") {
         let bytes = super::insert::base64_decode(data).ok_or_else(|| CmdError::Params("bad base64".into()))?;
         // An empty file (File Explorer's New › Microsoft Word Document makes one) opens as a new
@@ -289,13 +293,7 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         super::view::restore_zoom(s, z);
     }
     s.path = Some(path.into());
-    // What the file looks like now, so a change by another program is noticed (#5623). Bytes
-    // handed in with the path only name the document: there is no file of ours to watch.
-    if p::str(v, "data").is_none() {
-        s.stamp_disk();
-    } else {
-        s.disk = None;
-    }
+    s.disk = stamp;
     // Like Word, a document opened with a password is saved with it again.
     if encrypted {
         s.password = password.map(crate::io::Password::new);
@@ -309,7 +307,8 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
 /// file another program (an editor, a script, `git`, an agent) changed while it was open (#5623).
 /// The desktop app runs it by itself for a document without unsaved changes whose file changed,
 /// and offers it for one with them. The document keeps its id, its view and, where the new
-/// content still has the place, its caret ([`Session::reload_document`]).
+/// content still has the place, its caret ([`Session::reload_document`]). A file that is not
+/// encrypted any more drops the document's password.
 fn reload(s: &mut Session, v: &Value) -> CmdResult {
     let id = match v.get("id").filter(|x| !x.is_null()) {
         None => s.document_id(),
@@ -332,6 +331,9 @@ fn reload_active(s: &mut Session, force: bool) -> CmdResult {
     }
     // A document opened with a password reads its file with it again.
     let password = s.password.as_ref().map(|pw| pw.as_str().to_string());
+    // The file as it is before it is read, as `file.open` takes it: a write that lands during the
+    // read is still a change afterwards.
+    let stamp = crate::io::disk_stamp(&path);
     let (mut doc, encrypted) = if crate::io::is_empty_file(&path) {
         (normal_document(s), false)
     } else {
@@ -344,7 +346,12 @@ fn reload_active(s: &mut Session, force: bool) -> CmdResult {
     {
         Arc::make_mut(&mut doc.styles).default_chr.lang = Some(lang.clone());
     }
-    s.reload_document(doc);
+    // The password follows the file: one that is no longer encrypted (another program replaced
+    // it, or `file.encrypt` was never saved) is not saved encrypted by surprise.
+    if !encrypted {
+        s.password = None;
+    }
+    s.reload_document(doc, stamp);
     Ok(json!({
         "reloaded": true,
         "id": s.document_id(),

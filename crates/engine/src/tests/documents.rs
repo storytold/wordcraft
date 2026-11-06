@@ -439,3 +439,45 @@ fn reload_by_id_reads_a_parked_document() {
     assert!(s.run("file.reload", &json!({"id": 999_999})).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The stamp a reload (or an open) measures the next change against is the file as it was
+/// before it was read: a write that lands during the read is still a change afterwards.
+#[test]
+fn reload_measures_the_next_change_against_the_file_as_it_was_before_reading() {
+    let dir = temp_dir("reload-stamp");
+    let path = dir.join("notes.txt");
+    std::fs::write(&path, "alpha").unwrap();
+    let mut s = s();
+    run(&mut s, "file.open", json!({"path": path.to_string_lossy()}));
+    let before = crate::io::disk_stamp(&path);
+    std::fs::write(&path, "alpha beta").unwrap();
+    let mut doc = crate::io::open_path(&path).unwrap();
+    doc.ensure_nonempty();
+    // What `file.reload` does, with the file changing between the stamp and the swap.
+    std::fs::write(&path, "alpha beta gamma").unwrap();
+    s.reload_document(doc, before);
+    assert_eq!(text(&s), "alpha beta");
+    assert!(s.changed_on_disk(), "the write after the stamp is still a change");
+    run(&mut s, "file.reload", json!({}));
+    assert_eq!(text(&s), "alpha beta gamma");
+    assert!(!s.changed_on_disk());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A password set but never saved (`file.encrypt`) does not survive a forced reload of a file
+/// that isn't encrypted: the next save would otherwise encrypt it by surprise.
+#[test]
+fn reload_of_an_unencrypted_file_drops_an_unsaved_password() {
+    let dir = temp_dir("reload-password");
+    let path = dir.join("notes.txt");
+    std::fs::write(&path, "alpha").unwrap();
+    let mut s = s();
+    run(&mut s, "file.open", json!({"path": path.to_string_lossy()}));
+    run(&mut s, "file.encrypt", json!({"password": "secret-1"}));
+    assert!(s.password.is_some() && s.dirty);
+    let r = run(&mut s, "file.reload", json!({"force": true}));
+    assert_eq!(r["encrypted"], false);
+    assert!(s.password.is_none(), "the file isn't encrypted, so the document isn't either");
+    assert_eq!(run(&mut s, "file.info", json!({}))["encrypted"], false);
+    let _ = std::fs::remove_dir_all(&dir);
+}

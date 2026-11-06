@@ -51,9 +51,10 @@ impl Session {
     /// good. The view (zoom, scroll, Read Mode…) stays, and the caret and selection stay where
     /// they were when the new content still has that place (clamped otherwise). Like
     /// [`Session::set_document`] otherwise: the old content is gone, so there is no undo
-    /// history, no versions and no unsaved changes; the file as it is now is the stamp the next
-    /// change on disk is measured against.
-    pub fn reload_document(&mut self, doc: Document) {
+    /// history, no versions and no unsaved changes. `stamp` is the file as the caller saw it
+    /// before reading it, what the next change on disk is measured against: taken after the read,
+    /// a write that landed during the read would go unnoticed.
+    pub fn reload_document(&mut self, doc: Document, stamp: Option<crate::io::DiskStamp>) {
         self.autocap = None;
         self.note_body_replaced();
         self.bib_style = doc_bib_style(&doc);
@@ -82,7 +83,7 @@ impl Session {
         self.touch();
         self.dirty = false;
         self.made_rev = self.rev;
-        self.stamp_disk();
+        self.disk = stamp;
         self.relayout();
     }
 
