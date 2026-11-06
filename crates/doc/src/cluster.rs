@@ -189,9 +189,9 @@ fn line_segmenter() -> &'static icu_segmenter::LineSegmenterBorrowed<'static> {
 
 /// Line-break opportunities within Thai and Lao text, which have no spaces between words.
 ///
-/// UAX #14 (`unicode_linebreak`) assigns class SA to these scripts and permits a break at every
-/// character boundary — which is visually wrong. This function uses the ICU4X dictionary
-/// segmenter to return proper word boundaries instead. Only breaks between two consecutive
+/// UAX #14 (`unicode_linebreak`) gives these scripts class SA, which without a dictionary
+/// resolves to AL (LB1), so it finds no breaks inside a Thai or Lao run at all. This function
+/// uses the ICU4X dictionary segmenter to find the word boundaries. Only breaks between two consecutive
 /// Thai/Lao characters are returned so that Latin/Thai mixed text is unaffected outside the
 /// Thai/Lao spans.
 ///
@@ -300,30 +300,33 @@ mod tests {
         assert!(!backspaces_by_char('ب') && !backspaces_by_char('\u{06E5}') && !backspaces_by_char('\u{08E2}'));
     }
 
+    /// Checks dictionary breaks by behaviour, not by exact ICU4X offsets (which move when the
+    /// segmenter data is updated): there is at least one break, far fewer than one per
+    /// character, each on a grapheme boundary between two Thai/Lao characters, and never right
+    /// after a leading vowel (which belongs to the following consonant).
+    fn assert_word_breaks(text: &str, leading_vowels: &[char]) -> Vec<usize> {
+        let breaks = thai_lao_breaks(text);
+        let graphemes: Vec<usize> = text.grapheme_indices(true).map(|(i, _)| i).collect();
+        assert!(!breaks.is_empty(), "{text:?}: expected at least one word break");
+        assert!(breaks.len() * 2 < graphemes.len(), "{text:?}: breaks look per-character: {breaks:?}");
+        for &b in &breaks {
+            assert!(b > 0 && b < text.len(), "{text:?}: break at an edge: {b}");
+            assert!(graphemes.contains(&b), "{text:?}: break at {b} splits a grapheme");
+            let prev = text.get(..b).and_then(|s| s.chars().next_back()).unwrap();
+            let next = text.get(b..).and_then(|s| s.chars().next()).unwrap();
+            assert!(is_thai_lao(prev) && is_thai_lao(next), "{text:?}: break at {b} leaves Thai/Lao");
+            assert!(!leading_vowels.contains(&prev), "{text:?}: break at {b} follows a leading vowel");
+        }
+        breaks
+    }
+
     #[test]
     fn thai_wraps_at_word_boundaries() {
-        // "ภาคภูมิใจในภาษาไทย" = ภาค (9 B) + ภูมิใจ (18 B) + ใน (6 B) + ภาษา (12 B) + ไทย (9 B) = 54 B.
-        // ICU4X dictionary breaks: [9, 27, 33, 45] (before ภูมิ, ใน, ภาษา, ไทย).
-        let thai = "ภาคภูมิใจในภาษาไทย";
-        assert_eq!(thai.len(), 54);
-        let breaks = thai_lao_breaks(thai);
-        assert_eq!(breaks, vec![9, 27, 33, 45], "expected breaks at word boundaries: {breaks:?}");
-        // Every break must fall on a char boundary.
-        for &b in &breaks {
-            assert!(thai.is_char_boundary(b), "break at {b} is not a char boundary");
-        }
-        // No break at position 0 or at the end.
-        assert!(!breaks.contains(&0));
-        assert!(!breaks.contains(&thai.len()));
-        // Breaks must not fall inside a Thai character (sanity: all offsets map to is_thai_lao chars).
-        for &b in &breaks {
-            let prev = thai.get(..b).and_then(|s| s.chars().next_back()).unwrap();
-            let next = thai.get(b..).and_then(|s| s.chars().next()).unwrap();
-            assert!(is_thai_lao(prev) && is_thai_lao(next));
-        }
+        const LEADING: [char; 5] = ['เ', 'แ', 'โ', 'ใ', 'ไ'];
+        assert_word_breaks("ภาคภูมิใจในภาษาไทย", &LEADING);
+        assert_word_breaks("แมวกินปลาที่ตลาดเมื่อวานนี้", &LEADING);
         // Latin text: no breaks injected (UAX #14 handles Latin; this function is Thai/Lao only).
         assert!(thai_lao_breaks("Hello world").is_empty());
-        // Empty input is fine.
         assert!(thai_lao_breaks("").is_empty());
         // Mixed: breaks are only between Thai characters, not at the Thai–Latin boundary.
         let mixed = "testภาษาไทยtest";
@@ -336,17 +339,8 @@ mod tests {
 
     #[test]
     fn lao_wraps_at_word_boundaries() {
-        // "ໂລກໃໝ່" = ໂລກ (world, 9 B) + ໃໝ່ (new, 9 B); ICU4X break at [9].
-        let lao = "ໂລກໃໝ່";
-        assert_eq!(lao.len(), 18);
-        let breaks = thai_lao_breaks(lao);
-        assert_eq!(breaks, vec![9], "expected one Lao word break: {breaks:?}");
-        for &b in &breaks {
-            assert!(lao.is_char_boundary(b));
-            let prev = lao.get(..b).and_then(|s| s.chars().next_back()).unwrap();
-            let next = lao.get(b..).and_then(|s| s.chars().next()).unwrap();
-            assert!(is_thai_lao(prev) && is_thai_lao(next));
-        }
+        const LEADING: [char; 5] = ['ເ', 'ແ', 'ໂ', 'ໃ', 'ໄ'];
+        assert_word_breaks("ໂລກໃໝ່ທີ່ສວຍງາມ", &LEADING);
         assert!(thai_lao_breaks("").is_empty());
     }
 }

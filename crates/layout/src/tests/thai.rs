@@ -8,16 +8,17 @@ fn word_wrap_false_preserves_thai_icu4x_boundaries() {
     // fall into the Latin break category — incorrectly inserting a break between every Thai
     // character and discarding the ICU4X dictionary boundaries.  The fix: Thai/Lao chars are
     // excluded from the !word_wrap path; their breaks come from thai_lao_breaks() only.
-    let thai = "อนุรักษ์ภาษาไทย"; // ICU4X dictionary breaks at bytes 24 and 36
+    let thai = "อนุรักษ์ภาษาไทย";
     let mut opps: Vec<usize> = unicode_linebreak::linebreaks(thai).map(|(i, _)| i).filter(|&i| i < thai.len()).collect();
     crate::kinsoku::apply(thai, &mut opps, true, false, false); // word_wrap=false, NOT stacked
-    // Every opportunity must be an ICU4X word boundary, not a grapheme or char boundary.
+    // Neither UAX #14 (SA resolves to AL without a dictionary) nor kinsoku's !word_wrap path may
+    // add a break between two Thai characters: those come from thai_lao_breaks() alone.
     for &o in &opps {
         let prev = thai.get(..o).and_then(|s| s.chars().next_back());
         let next = thai.get(o..).and_then(|s| s.chars().next());
         let both_thai = matches!((prev, next), (Some(p), Some(n))
             if wordcraft_doc::cluster::is_thai_lao(p) && wordcraft_doc::cluster::is_thai_lao(n));
-        assert!(!both_thai || matches!(o, 24 | 36), "Thai break at {o} is not an ICU4X word boundary (expected 24 or 36): {opps:?}");
+        assert!(!both_thai, "kinsoku added a Thai–Thai break at {o}: {opps:?}");
     }
 }
 
