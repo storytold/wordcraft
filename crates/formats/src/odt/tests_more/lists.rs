@@ -204,4 +204,20 @@ fn a_list_items_further_paragraphs_are_paragraphs_with_no_number() {
         let nums: Vec<u32> = back.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.props.numbering.map(|n| n.num)).collect();
         assert_eq!(nums[0], nums[1], "{nums:?}");
     }
+    // Edited, an unnumbered paragraph is saved as edited, not as the list's kept markup said, and
+    // the list around it stays one.
+    for t in ["Header", "Still one"] {
+        let mut d = import(&package(&content, Some(&styles))).unwrap();
+        let i = d.body.iter().position(|b| b.as_para().is_some_and(|p| p.text == t)).unwrap();
+        d.insert_text(&wordcraft_doc::Pos::body(i, 0), "Edited ", &Default::default()).unwrap();
+        let back = import(&export(&d).unwrap()).unwrap();
+        let rows = shape(&back);
+        assert_eq!(rows.len(), 6, "each its own paragraph: {rows:?}");
+        assert!(!rows.iter().any(|r| r.0 == t), "{t} was edited: {rows:?}");
+        let row = rows.iter().find(|r| r.0 == format!("Edited {t}")).unwrap_or_else(|| panic!("the edit: {rows:?}"));
+        assert_eq!((row.1, row.2), (false, Some(72.0)), "{t}: no number, at the item's text: {rows:?}");
+        let nums: Vec<u32> = back.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.props.numbering.map(|n| n.num)).collect();
+        assert_eq!(nums.len(), 2, "{rows:?}");
+        assert_eq!(nums[0], nums[1], "{nums:?}");
+    }
 }
