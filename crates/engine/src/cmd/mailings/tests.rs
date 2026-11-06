@@ -718,3 +718,40 @@ fn merge_uses_only_filtered_records_in_sort_order() {
     assert!(s.run("mailings.finish", &json!({})).is_err());
     assert!(s.run("mailings.editRecipients", &json!({})).is_ok());
 }
+
+/// A wide header and many one-field rows: every record is padded to every field (and the list
+/// kept twice), so the cells the list keeps are capped, not just its records and fields.
+#[test]
+fn a_wide_sparse_recipient_list_is_capped_by_cells() {
+    let header = (1..=1_000).map(|i| format!("F{i}")).collect::<Vec<_>>().join(",");
+    let csv = format!("{header}\n{}", "x\n".repeat(20_000));
+    let mut s = Session::new(Document::from_text("Hello"));
+    let r = s.run("mailings.recipients", &json!({"csv": csv})).unwrap();
+    assert_eq!(r["records"], 4_000);
+    let rows: Vec<Value> = (0..20_000).map(|_| json!({})).collect();
+    let fields: Vec<String> = (1..=1_000).map(|i| format!("F{i}")).collect();
+    let r = s.run("mailings.recipients", &json!({"rows": rows, "fields": fields})).unwrap();
+    assert_eq!(r["records"], 4_000);
+    // A narrow list keeps its usual number of records.
+    let r = s.run("mailings.recipients", &json!({"csv": format!("Name\n{}", "Ann\n".repeat(20_000))})).unwrap();
+    assert_eq!(r["records"], 20_000);
+}
+
+/// An import says how many records the cap left out; an edit that would lose records is refused
+/// and the list stays as it was.
+#[test]
+fn recipient_cap_is_reported_and_edits_that_exceed_it_are_refused() {
+    let mut s = Session::new(Document::from_text("Hello"));
+    let fields: Vec<String> = (1..=80).map(|i| format!("F{i}")).collect();
+    let rows: Vec<Value> = (0..50_000).map(|_| json!({})).collect();
+    let r = s.run("mailings.recipients", &json!({"rows": rows, "fields": fields})).unwrap();
+    assert_eq!((r["records"].clone(), r.get("dropped")), (json!(50_000), None));
+    let fields: Vec<String> = (1..=81).map(|i| format!("F{i}")).collect();
+    let rows: Vec<Value> = (0..50_000).map(|_| json!({})).collect();
+    let e = s.run("mailings.editRecipients", &json!({"rows": rows, "fields": fields.clone()}));
+    assert!(matches!(e, Err(CmdError::Params(_))), "{e:?}");
+    assert_eq!((s.merge.headers.len(), s.merge.rows.len()), (80, 50_000));
+    let rows: Vec<Value> = (0..50_000).map(|_| json!({})).collect();
+    let r = s.run("mailings.recipients", &json!({"rows": rows, "fields": fields})).unwrap();
+    assert_eq!((r["records"].clone(), r["dropped"].clone()), (json!(49_382), json!(618)));
+}

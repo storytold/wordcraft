@@ -26,8 +26,8 @@ use merge::{address_map, finish, go_to, merge_fields, step};
 pub use merge::{merge_range, refresh};
 #[cfg(test)]
 use merge::{mergefield_name, placeholder};
-use recipients::recipients;
 pub use recipients::{RECIPIENT_EXTENSIONS, is_spreadsheet_name, parse_csv};
+use recipients::{recipients, recipients_strict};
 
 /// The mail-merge data source and preview state (lives in the session, not the document).
 #[derive(Clone, Debug, Default)]
@@ -80,7 +80,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 // Edited records keep the list's filter and sort (rules on removed fields drop).
                 // Copies, so a list that fails to load leaves the filter and sort as they were.
                 let (filter, sort) = (s.merge.filter.clone(), s.merge.sort.clone());
-                let r = recipients(s, &json!({"rows": v.get("rows"), "fields": v.get("fields")}))?;
+                // An edit that would lose records is refused, not truncated.
+                let r = recipients_strict(s, &json!({"rows": v.get("rows"), "fields": v.get("fields")}))?;
                 s.merge.filter = filter;
                 s.merge.sort = sort;
                 apply_filter(s);
