@@ -8,6 +8,9 @@ pub struct Services {
     pub printers: Option<printing::Discover>,
     /// Desktop: submit the PDF with the chosen settings on a worker.
     pub print_native: Option<printing::Submit>,
+    /// Desktop: stop the print job still waiting to be sent (on a sleeping printer's driver,
+    /// say). `true`: it will never be sent; `false`: it was already being sent.
+    pub cancel_print: Option<Box<dyn Fn() -> bool>>,
     /// Pick a file to open; the argument says what for (`document`, `picture`).
     pub pick_open: Option<Box<dyn Fn(&str) -> Option<String>>>,
     /// Pick a path to save to, given a suggested name.
@@ -63,12 +66,13 @@ pub struct Services {
     /// Desktop: the HTML on the system clipboard — another program's formatted copy (a Word
     /// document, a web page) — if any. Paste keeps its formatting (#687); see [`system_clipboard`].
     pub clipboard_html: Option<Box<dyn Fn() -> Option<String>>>,
-    /// Desktop: put HTML on the system clipboard with its plain-text alternative (html, text, and
-    /// for a copy of one equation alone its MathML, else empty), so other programs keep the
-    /// formatting (#1523) and equations (#816). The MathML goes in the platform's MathML formats
-    /// as well, which Word reads a pasted equation from (#1297). `true` when the HTML and text are
-    /// there; otherwise the copy's text goes through egui as usual.
-    pub set_clipboard_html: Option<Box<dyn Fn(&str, &str, &str) -> bool>>,
+    /// Desktop: put a copy on the system clipboard as (text, html, rtf, mathml): its text, with
+    /// its HTML (equations as MathML, #816) and RTF beside it where the platform takes them, so
+    /// other programs keep the formatting (#1523); an empty one isn't offered. `mathml` is a copy
+    /// of one equation alone (else empty), for the platform's MathML formats, which Word reads a
+    /// pasted equation from (#1297). `true` when the text and HTML are there; otherwise the copy's
+    /// text goes through egui as usual.
+    pub set_clipboard_rich: Option<Box<dyn Fn(&str, &str, &str, &str) -> bool>>,
     /// Desktop: the RTF on the system clipboard, where the platform offers it (#687).
     pub clipboard_rtf: Option<Box<dyn Fn() -> Option<String>>>,
     /// Desktop: the names of the formats on the system clipboard (MIME types, Windows format
