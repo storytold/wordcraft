@@ -686,6 +686,8 @@ fn hf_nav_prefers_nearest_section_in_navigation_direction() {
     // Unlinking while at this position must unlink Section 3, not Section 2
     let res = s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
     assert_eq!(res["section"], 2, "unlinking must target Section 3 (index 2)");
+}
+
 /// #1707: Insert ▸ Date & Time and DATE/TIME fields use the local civil date, time and
 /// weekday, not UTC's.
 #[test]
