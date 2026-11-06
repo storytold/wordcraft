@@ -70,7 +70,7 @@ fn can_persist(s: &Session) -> bool {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn load_for_path(s: &mut Session, path: &Path) {
-    if s.password.is_some() {
+    if s.password.is_some() || !path.is_absolute() {
         return;
     }
     let sidecar = sidecar_path(path);
@@ -111,7 +111,7 @@ pub(crate) fn load_for_path(s: &mut Session, path: &Path) {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn persist(s: &Session) -> Result<bool, String> {
     let Some(doc_path) = s.path.as_deref() else { return Ok(false) };
-    if !can_persist(s) {
+    if !can_persist(s) || !doc_path.is_absolute() {
         return Ok(false);
     }
     let sidecar = sidecar_path(doc_path);
