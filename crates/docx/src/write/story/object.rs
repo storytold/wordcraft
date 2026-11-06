@@ -249,7 +249,7 @@ impl Writer<'_> {
     fn write_image(&mut self, w: &mut W, o: &InlineObject, props: &CharProps, rels: &mut PartRels, _depth: usize) {
         let InlineObject::Image { media, w: iw, h: ih, alt, float, ole, .. } = o else { return };
         // An OLE object read from a file: the object itself, at its current size.
-        if let Some(src) = ole.as_deref()
+        if let Some(src) = ole.as_deref().filter(|e| !e.is_odf_object())
             && let Some(obj) = self.embedded_xml(src, rels, Some((*iw, *ih, float, alt.as_str())))
         {
             self.rev_open(w, props);
