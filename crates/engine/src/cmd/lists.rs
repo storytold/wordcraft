@@ -452,6 +452,78 @@ mod tests {
         assert_eq!(numbered(&mut b), want);
     }
 
+    /// Each line's label in the plain-text export: what comes before the first tab after the
+    /// level's indent, or `None` for a line without one.
+    fn txt_labels(s: &Session) -> Vec<Option<String>> {
+        let txt = String::from_utf8(wordcraft_formats::txt::export(&s.doc)).unwrap();
+        txt.split("\r\n").map(|l| l.trim_start_matches('\t').split_once('\t').map(|(a, _)| a.to_string())).collect()
+    }
+
+    fn md_lines(s: &Session) -> Vec<String> {
+        wordcraft_formats::markdown::export(&s.doc).lines().filter(|l| !l.is_empty()).map(str::to_string).collect()
+    }
+
+    /// #5745: the plain-text and Markdown exports label numbered headings as the page does
+    /// (`1`, `1.1`, `2`, not `1.`, `a.`), and Markdown keeps them headings with their number.
+    #[test]
+    fn text_exports_label_numbered_headings_as_the_page_does() {
+        let mut s = headings("Heading1");
+        s.run("list.multilevelPreset", &json!({"preset": "headings"})).unwrap();
+        let page: Vec<Option<String>> = numbered(&mut s).into_iter().map(|x| x.0).collect();
+        assert_eq!(page, [Some("1".to_string()), Some("1.1".to_string()), Some("2".to_string())]);
+        assert_eq!(txt_labels(&s), page, "txt labels = the page's");
+        assert_eq!(md_lines(&s), ["# 1 One", "## 1.1 Two", "# 2 Three"]);
+    }
+
+    /// #5745: a bulleted list between two numbered headings doesn't restart their count in the
+    /// exports, and Markdown ends the bulleted list before the next heading.
+    #[test]
+    fn a_bulleted_list_between_numbered_headings_does_not_restart_them_in_the_exports() {
+        let mut s = Session::new(Document::new());
+        s.run("list.multilevelPreset", &json!({"preset": "headings"})).unwrap();
+        for c in [
+            json!(["text.insert", {"text": "Alpha"}]),
+            json!(["text.newParagraph", {}]),
+            json!(["para.style", {"style": "Normal"}]),
+            json!(["para.bullets", {}]),
+            json!(["text.insert", {"text": "item"}]),
+            json!(["text.newParagraph", {}]),
+            json!(["para.bullets", {"off": true}]),
+            json!(["para.style", {"style": "Heading 1"}]),
+            json!(["text.insert", {"text": "Beta"}]),
+        ] {
+            s.run(c[0].as_str().unwrap(), &c[1]).unwrap();
+        }
+        let page: Vec<Option<String>> = numbered(&mut s).into_iter().map(|x| x.0).collect();
+        assert_eq!((page[0].as_deref(), page[2].as_deref()), (Some("1"), Some("2")), "{page:?}");
+        let txt = txt_labels(&s);
+        assert_eq!((txt[0].as_deref(), txt[1].as_deref(), txt[2].as_deref()), (Some("1"), Some("•"), Some("2")), "{txt:?}");
+        let md = wordcraft_formats::markdown::export(&s.doc);
+        assert!(md.contains("# 1 Alpha\n\n- "), "{md}");
+        assert!(md.contains("\n\n# 2 Beta"), "a blank line ends the list before the heading: {md}");
+    }
+
+    /// The plain-text export's labels are the page's for an ordinary numbered list too, a
+    /// paragraph outside it in between included.
+    #[test]
+    fn text_export_labels_a_numbered_list_as_the_page_does() {
+        let mut s = Session::new(Document::new());
+        // A new paragraph takes the list of the one it splits from: only "a", "plain" and "c"
+        // switch numbering.
+        for (i, (t, toggle)) in [("a", Some(true)), ("b", None), ("plain", Some(false)), ("c", Some(true))].iter().enumerate() {
+            if i > 0 {
+                s.run("text.newParagraph", &json!({})).unwrap();
+            }
+            s.run("text.insert", &json!({"text": t})).unwrap();
+            if let Some(on) = toggle {
+                s.run("para.numbering", &if *on { json!({}) } else { json!({"off": true}) }).unwrap();
+            }
+        }
+        let page: Vec<Option<String>> = numbered(&mut s).into_iter().map(|x| x.0).collect();
+        assert_eq!(page.iter().filter(|l| l.is_some()).count(), 3, "{page:?}");
+        assert_eq!(txt_labels(&s), page);
+    }
+
     /// #1793: the other heading presets of Word's List Library, level by level.
     #[test]
     fn every_heading_preset_numbers_three_heading_levels() {
