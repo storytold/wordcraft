@@ -754,3 +754,61 @@ fn the_autosave_knob_sits_right_when_on_and_mirrors_right_to_left() {
     assert_eq!(autosave_knob_x(true, true, track), 108.0, "right to left, on: left");
     assert_eq!(autosave_knob_x(true, false, track), 122.0, "right to left, off: right");
 }
+
+/// #4311: If a new pointer press arrives after an OS resize hand-off before recovery, release_after_os_resize
+/// must not append a synthetic release after the new press, preserving the new interaction.
+#[test]
+fn release_after_os_resize_preserves_new_press() {
+    let ctx = ctx();
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(resize_handed_off_id(), HandOff { pass, released: None }));
+
+    // Run a pass to advance cumulative_pass_nr beyond hand-off pass
+    let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
+
+    let new_press_pos = egui::pos2(300.0, 200.0);
+    let mut raw = egui::RawInput {
+        events: vec![egui::Event::PointerButton {
+            pos: new_press_pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        }],
+        ..Default::default()
+    };
+
+    release_after_os_resize(&ctx, &mut raw);
+
+    assert_eq!(raw.events.len(), 1, "synthetic release must not be appended when input brings a new press");
+    assert!(matches!(raw.events[0], egui::Event::PointerButton { pressed: true, .. }), "new press must be preserved");
+
+    let h = ctx.data(|d| d.get_temp::<HandOff>(resize_handed_off_id())).expect("HandOff exists");
+    assert!(h.released.is_some(), "hand-off is marked as released");
+}
+
+/// #4311: When egui has primary button down and the compositor consumed the release during OS resize,
+/// release_after_os_resize injects a synthetic release on the next frame to clear the down state.
+#[test]
+fn release_after_os_resize_injects_release_when_no_new_press() {
+    let ctx = ctx();
+    let pos = egui::pos2(100.0, 100.0);
+    let _ = ctx.run_ui(
+        egui::RawInput {
+            events: vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }],
+            ..Default::default()
+        },
+        |_| {},
+    );
+    assert!(ctx.input(|i| i.pointer.primary_down()), "primary button is down");
+
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(resize_handed_off_id(), HandOff { pass, released: None }));
+
+    let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
+
+    let mut raw = egui::RawInput::default();
+    release_after_os_resize(&ctx, &mut raw);
+
+    assert_eq!(raw.events.len(), 1, "synthetic release should be injected");
+    assert!(matches!(raw.events[0], egui::Event::PointerButton { pressed: false, .. }), "synthetic release has pressed: false");
+}

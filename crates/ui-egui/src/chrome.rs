@@ -426,14 +426,17 @@ struct HandOff {
 /// pressed: the zones stopped hovering until the next click, every other resize (#1581). End the
 /// press ourselves on the input after the hand-off, but only while egui still has it down and this
 /// input brings no release of its own: where the OS does send it (Windows, X11), nothing is added,
-/// so no second release can turn into a click. Call from `raw_input_hook`.
+/// so no second release can turn into a click. If this input already brings a new press, do not
+/// append a release after it either, so the new interaction is not ended before a drag starts.
+/// Call from `raw_input_hook`.
 pub fn release_after_os_resize(ctx: &egui::Context, raw: &mut egui::RawInput) {
     let Some(h) = ctx.data(|d| d.get_temp::<HandOff>(resize_handed_off_id())) else { return };
     if h.released.is_some() || h.pass >= ctx.cumulative_pass_nr() {
         return;
     }
     let os_released = raw.events.iter().any(|e| matches!(e, egui::Event::PointerButton { button: PointerButton::Primary, pressed: false, .. }));
-    if let Some(pos) = ctx.input(|i| i.pointer.latest_pos()).filter(|_| !os_released && ctx.input(|i| i.pointer.primary_down())) {
+    let os_pressed = raw.events.iter().any(|e| matches!(e, egui::Event::PointerButton { button: PointerButton::Primary, pressed: true, .. }));
+    if let Some(pos) = ctx.input(|i| i.pointer.latest_pos()).filter(|_| !os_released && !os_pressed && ctx.input(|i| i.pointer.primary_down())) {
         raw.events.push(egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: ctx.input(|i| i.modifiers) });
     }
     let pass = ctx.cumulative_pass_nr();
