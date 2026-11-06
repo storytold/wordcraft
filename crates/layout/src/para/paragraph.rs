@@ -487,6 +487,7 @@ impl<'a> BreakText<'a> {
         if self.skipped { self.ends.binary_search_by_key(&i, |end| end.0).ok().and_then(|k| self.ends.get(k)).map(|end| end.1) } else { Some(i) }
     }
 
+    /// Maps a paragraph byte offset back to its offset in visible text.
     fn to_visible(&self, i: usize) -> Option<usize> {
         if self.skipped { self.ends.binary_search_by_key(&i, |end| end.1).ok().and_then(|k| self.ends.get(k)).map(|end| end.0) } else { Some(i) }
     }

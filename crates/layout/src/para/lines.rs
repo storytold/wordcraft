@@ -154,6 +154,7 @@ fn mirrored_exclusions(exclusions: &[Exclusion], width: f32) -> Vec<Exclusion> {
 const THAI_JUSTIFY_SPACE_MAX_EM: f32 = 0.5;
 const THAI_JUSTIFY_GROUP_MAX_EM: f32 = 0.15;
 
+/// Shares available line slack evenly without exceeding any opportunity's cap.
 fn capped_equal_spacing(slack: f32, caps: &[f32]) -> Vec<f32> {
     let mut added = vec![0.0; caps.len()];
     let mut active: Vec<usize> = caps.iter().enumerate().filter_map(|(i, cap)| (cap.is_finite() && *cap > 0.0).then_some(i)).collect();
@@ -185,6 +186,7 @@ fn capped_equal_spacing(slack: f32, caps: &[f32]) -> Vec<f32> {
     added
 }
 
+/// Returns a cluster's finite font size, falling back to the paragraph default.
 fn style_size(pl: &ParaLayout, cluster: usize) -> f32 {
     pl.clusters.get(cluster).and_then(|c| pl.styles.get(c.style as usize)).map(|s| s.size).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(12.0)
 }
@@ -215,6 +217,7 @@ fn line_thai_groups(indices: &[usize], c0: usize, c1: usize, align_from: usize) 
     indices.get(start..end).unwrap_or(&[])
 }
 
+/// Finds the nearest displayed text clusters on either side of a space.
 fn space_text_neighbors(pl: &ParaLayout, p: &Paragraph, k: usize, c0: usize, c1: usize) -> Option<(usize, usize)> {
     if pl.clusters.get(k)?.kind != ClKind::Space {
         return None;
@@ -252,6 +255,7 @@ fn space_text_neighbors(pl: &ParaLayout, p: &Paragraph, k: usize, c0: usize, c1:
     (!left_text.is_empty() && !right_text.is_empty()).then_some((left, right))
 }
 
+/// Applies Thai justification within the per-space and per-group expansion caps.
 #[allow(clippy::too_many_arguments)]
 fn apply_thai_justification(
     pl: &ParaLayout,
@@ -337,6 +341,7 @@ pub(super) fn break_lines<'e>(
 }
 
 impl<'e> Breaker<'e> {
+    /// Creates a line breaker with its paragraph and Thai justification metadata.
     fn new(
         pl: &ParaLayout,
         p: &'e Paragraph,
