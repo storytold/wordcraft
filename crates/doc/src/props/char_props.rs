@@ -235,6 +235,14 @@ pub struct CharProps {
     pub style: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
+    /// The theme font slots `font` came from (`w:rFonts/@w:asciiTheme`, `@w:hAnsiTheme`:
+    /// `minorHAnsi`, `majorAscii`…), kept so saving writes them back and the text keeps following
+    /// the theme's fonts in Word. Layout reads `font` only. Saving writes a slot only while it
+    /// still names `font` in the document's theme, so a font chosen later is never hidden by it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_ascii_theme: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_hansi_theme: Option<String>,
     /// The symbol's own font (OOXML `w:sym/@w:font`, ECMA-376 §17.3.3.30), set on a symbol
     /// character from a `w:sym` or Insert › Symbol: it is shown in this font whatever `font` is,
     /// so changing the text's font keeps the symbol. `None` = the run's font.
@@ -503,10 +511,15 @@ impl CharProps {
     /// overlaid on `base`.
     pub fn minus(mut self, base: &CharProps) -> CharProps {
         self.minus_text_style(base);
+        self.minus_latin_theme(base);
         self.minus_run_visibility(base);
         self.minus_script_style(base);
         self.minus_document_marks(base);
         self
+    }
+
+    fn minus_latin_theme(&mut self, base: &CharProps) {
+        drop_same_fields!(self, base; font_ascii_theme, font_hansi_theme);
     }
 
     fn minus_text_style(&mut self, base: &CharProps) {
@@ -532,12 +545,22 @@ impl CharProps {
     /// format both scripts must set both values explicitly.
     pub fn overlay(&mut self, patch: &CharProps) {
         self.overlay_text_style(patch);
+        self.overlay_latin_theme(patch);
         self.overlay_run_visibility(patch);
         self.overlay_script_style(patch);
         self.overlay_document_marks(patch);
         if let Some(p) = &patch.text_effects {
             self.text_effects.get_or_insert_with(Default::default).overlay(p);
         }
+    }
+
+    fn overlay_latin_theme(&mut self, patch: &CharProps) {
+        // A font set without its theme slots replaces the slots too (as for `font_ea_theme`).
+        if patch.font.is_some() && patch.font_ascii_theme.is_none() && patch.font_hansi_theme.is_none() {
+            self.font_ascii_theme = None;
+            self.font_hansi_theme = None;
+        }
+        overlay_fields!(self, patch; font_ascii_theme, font_hansi_theme);
     }
 
     fn overlay_text_style(&mut self, patch: &CharProps) {

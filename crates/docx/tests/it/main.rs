@@ -18,6 +18,7 @@ mod emphasis_marks;
 mod fixtures;
 mod glossary;
 mod heading_levels;
+mod latin_theme_slots;
 mod legacy_forms;
 mod ligatures;
 mod malformed;
