@@ -64,45 +64,18 @@ fn dense_markers(n: usize) -> Document {
     doc
 }
 
-// Ignore scheduler delays. An absent, failed, decreasing or nonadvancing counter supplies no
-// performance evidence; the semantic assertions below still run on every platform.
-fn cpu_cost(mut f: impl FnMut()) -> Option<f64> {
-    let ran = || std::fs::read_to_string("/proc/thread-self/schedstat").ok()?.split_whitespace().next()?.parse::<u64>().ok();
-    let before = ran();
-    f();
-    match (before, ran()) {
-        (Some(a), Some(b)) if b > a => Some((b - a) as f64 * 1e-9),
-        _ => None,
-    }
-}
-
-/// Unrelated markers must add one walk, rather than a fresh paragraph-prefix scan per marker.
 #[test]
 fn comment_export_discovery_scales_with_unrelated_markers() {
     let (small, big) = (dense_markers(2_000), dense_markers(16_000));
     let expected = vec![Note { author: "Ada".into(), quote: "é漢 quote".into(), text: "Kept note".into(), replies: vec![] }];
     assert_eq!(notes(&small), expected);
     assert_eq!(notes(&big), expected);
-    let (mut t1, mut t8) = (f64::INFINITY, f64::INFINITY);
-    for _ in 0..3 {
-        let a = cpu_cost(|| {
-            for _ in 0..8 {
-                std::hint::black_box(notes(&small));
-            }
-        });
-        let b = cpu_cost(|| {
-            std::hint::black_box(notes(&big));
-        });
-        if let (Some(a), Some(b)) = (a, b) {
-            t1 = t1.min(a / 8.0);
-            t8 = t8.min(b);
-        }
-    }
-    if t1.is_finite() && t8.is_finite() {
-        let ratio = t8 / t1;
-        eprintln!("comment discovery CPU: small={t1:.6}s big={t8:.6}s ratio={ratio:.2}");
-        assert!(ratio < 24.0, "8x the markers cost {ratio:.2}x CPU ({t1:.6}s versus {t8:.6}s)");
-    } else {
-        eprintln!("comment discovery scaling skipped: no advancing thread CPU samples");
-    }
+    // The characters the discovery walks (`wordcraft_doc::work`), not a timing: about 8x for 8x
+    // the markers when the walk is linear, about 64x when it is quadratic. Timed, this failed on
+    // busy CI machines with a linear walk (58x for a 17 µs baseline).
+    let (s, b) = (wordcraft_doc::work::count(|| drop(notes(&small))), wordcraft_doc::work::count(|| drop(notes(&big))));
+    let ratio = b as f64 / s.max(1) as f64;
+    eprintln!("comment discovery steps: {s} -> {b}, {ratio:.1}x for 8x markers");
+    assert!(s > 0, "no steps counted, so the walk this test watches no longer counts them (wordcraft_doc::work)");
+    assert!(ratio <= 12.0, "8x the markers cost {ratio:.1}x the steps ({s} -> {b})");
 }

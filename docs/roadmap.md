@@ -72,11 +72,11 @@ languages, screen-reader access, ecosystem decisions (VBA, add-ins, cloud), an i
 
 ## Revision history
 
-
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-31 | minor | #3693: Delete Previous Sentence command and keyboard dispatch, with sentence/paragraph/cell, selection, undo and tracking regressions. Additional WordCraft behavior; Word-parity estimates unchanged. |
+| 2026-11-03 | trivial | DOCX text-frame anchor locks survive JSON and two save/reopen cycles, including position and size edits |
 | 2026-11-03 | minor | M15: Arabic mirrored interface (#1195); 28 UI languages from craft-i18n; Hebrew UI, native-speaker review and native IME acceptance (#155–#164) remain open |
+| 2026-10-31 | minor | #3693: Delete Previous Sentence command and keyboard dispatch, with sentence/paragraph/cell, selection, undo and tracking regressions. Additional WordCraft behavior; Word-parity estimates unchanged. |
 | 2026-10-29 | trivial | HTML import keeps preformatted lines with CR, CRLF or LF input newlines (#4810); numeric character references retain their separate meaning; readiness estimates unchanged. |
 | 2026-10-25 | trivial | egui 0.37 migration: 27 interface languages remain pinned by `craft-i18n.rev` (9205108…); input-method surrounding-delete and commit handling has synthetic regressions only, with managed CI passing; native acceptance (#155–#164) and native-speaker review remain open |
 | 2026-10-18 | trivial | M6: Manage Sources imports Word's `Sources.xml` (#2640) |
