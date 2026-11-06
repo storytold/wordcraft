@@ -421,6 +421,33 @@ fn a_picture_frame_in_the_headers_is_the_watermark_only_where_every_page_shows_i
 }
 
 #[test]
+fn a_picture_frame_of_unknown_size_is_not_a_watermark() {
+    // An EMF picture shows in a header, but its size isn't a raster's, which a watermark is sized
+    // from: the frames stay the pictures they are (taking them out would lose them).
+    let mut emf = vec![0u8; 88];
+    emf[0..4].copy_from_slice(&1u32.to_le_bytes());
+    emf[4..8].copy_from_slice(&88u32.to_le_bytes());
+    emf[24..40].copy_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0x10, 0x27, 0, 0, 0x10, 0x27, 0, 0]);
+    emf[40..44].copy_from_slice(&0x464D_4520u32.to_le_bytes());
+    assert!(wordcraft_doc::watermark::own_size(&emf).is_none());
+    let a = wm_frame("a.emf");
+    let pkg = watermark_package(&[(&a, ""), (&a, "")]);
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&pkg)).unwrap();
+    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+    for i in 0..z.len() {
+        let mut f = z.by_index(i).unwrap();
+        let mut b = Vec::new();
+        std::io::Read::read_to_end(&mut f, &mut b).unwrap();
+        entries.push((f.name().to_string(), b));
+    }
+    entries.push(("Pictures/a.emf".into(), emf));
+    let refs: Vec<(&str, &[u8])> = entries.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+    let d = import(&crate::odt::tests::zip_of(&refs)).unwrap();
+    assert_eq!(d.settings.watermark, None);
+    assert_eq!(part_pictures(&d).iter().map(|(_, n)| n).sum::<usize>(), 2, "{:?}", part_pictures(&d));
+}
+
+#[test]
 fn a_watermark_added_to_an_odt_file_is_saved() {
     // Open an ODT, add a watermark, save as ODT: the watermark is written (the page setup was
     // taken as unchanged because the fingerprint left the watermark out), with its picture once.

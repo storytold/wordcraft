@@ -87,6 +87,9 @@ fn picture_plan(reads: &[SlotRead], pages: &Pages) -> Option<(Vec<u8>, (f32, f32
         return None;
     }
     let first = headers.first()?.pictures.first()?;
+    // A picture whose size can't be read is no watermark (`add` couldn't place it, and the frames
+    // taken out of the headers would be lost): it stays a header picture, as in the DOCX plan.
+    wordcraft_doc::watermark::own_size(&first.0)?;
     if !headers.iter().filter_map(|r| r.pictures.first()).all(|p| p.0 == first.0 && p.2 == first.2) {
         return None;
     }
