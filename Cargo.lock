@@ -6856,6 +6856,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wordcraft-collab"
+version = "0.15.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "wordcraft-control-key"
 version = "0.15.1"
 
