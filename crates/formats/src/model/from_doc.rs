@@ -419,7 +419,10 @@ fn flow_comment(doc: &Document, c: &wordcraft_doc::Comment, parent: Option<u32>,
 fn flow_list(kind: Kind, list: Option<ListInfo>, p: &Paragraph, opts: FlowOpts) -> Option<ListInfo> {
     let mut li = list?;
     if !opts.lists {
-        (li.list, li.label) = (0, None);
+        li.label = None;
+        if !opts.numbered {
+            li.list = 0;
+        }
     } else if matches!(kind, Kind::Heading(_)) && p.props.numbering.is_none() {
         return None;
     }
@@ -1139,6 +1142,12 @@ pub fn from_doc(doc: &Document) -> Flow {
     flow_of(doc, FlowOpts::default())
 }
 
+/// [`from_doc`] with each list item naming its list ([`FlowOpts::numbered`]), for the text
+/// exports that count labels with [`DocLabels`].
+pub fn from_doc_numbered(doc: &Document) -> Flow {
+    flow_of(doc, FlowOpts { numbered: true, ..Default::default() })
+}
+
 /// [`from_doc`] keeping tracked changes: deleted text stays, and text carries its insertion and
 /// deletion marks ([`Fmt::ins`], [`Fmt::del`]), for formats that can write revisions (RTF).
 pub fn from_doc_tracked(doc: &Document) -> Flow {
@@ -1169,6 +1178,40 @@ fn flow_of(doc: &Document, tracked: FlowOpts) -> Flow {
             description: c.description.clone(),
             created: c.created.clone(),
         },
+    }
+}
+
+/// The labels a document's list paragraphs show on its pages, counted in document order by the
+/// document's own numbering, as the layout counts them (#5745): `1`, `1.1`, `2` for numbered
+/// headings, a list that goes on after a bulleted one, a restart only where the list restarts.
+/// Bullets keep the plain-text glyphs of [`ListCounter`]. A paragraph whose list the document
+/// doesn't define is counted by [`ListCounter`].
+pub struct DocLabels<'a> {
+    numbering: &'a wordcraft_doc::Numbering,
+    counters: wordcraft_doc::numbering::Counters,
+    fallback: ListCounter,
+}
+
+impl<'a> DocLabels<'a> {
+    pub fn new(doc: &'a Document) -> DocLabels<'a> {
+        DocLabels { numbering: &doc.numbering, counters: Default::default(), fallback: ListCounter::default() }
+    }
+
+    /// The label `li`'s paragraph shows, counting it; `None` for a level that shows no label.
+    pub fn label(&mut self, li: ListInfo) -> Option<String> {
+        if li.list == 0 || self.numbering.level(li.list, li.level).is_none() {
+            return Some(self.fallback.label(li));
+        }
+        let (label, def) = self.counters.next_label(self.numbering, li.list, li.level)?;
+        if def.format == NumFormat::Bullet {
+            return Some(self.fallback.label(ListInfo { ordered: false, ..li }));
+        }
+        Some(label)
+    }
+
+    /// A paragraph outside any list: the fallback counter restarts, as it always has.
+    pub fn reset_fallback(&mut self) {
+        self.fallback.reset();
     }
 }
 

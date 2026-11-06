@@ -931,7 +931,17 @@ pub fn export_template(doc: &Document) -> Result<Vec<u8>, String> {
 fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     let flow = model::from_doc_with(
         doc,
-        model::FlowOpts { tracked: true, fields: true, notes: true, comments: true, lists: true, chars: true, paras: true, boxes: true },
+        model::FlowOpts {
+            tracked: true,
+            fields: true,
+            notes: true,
+            comments: true,
+            lists: true,
+            chars: true,
+            paras: true,
+            boxes: true,
+            numbered: false,
+        },
     );
     let accents = doc.settings.theme_colors.get(4..10).map(<[_]>::to_vec).unwrap_or_default();
     // Paragraphs kept as read name their own automatic styles: WordCraft's take another prefix.
