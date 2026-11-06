@@ -56,8 +56,8 @@ regex = { version = "1", default-features = false, features = ["std", "unicode",
 regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "meta", "nfa-pikevm", "unicode"] }
 
 # text / rendering / formats
-skrifa = "0.47"
-harfrust = "0.13"
+skrifa = "0.49"
+harfrust = "0.15"
 # WOFF / WOFF2 web fonts added by the user (#582): pure Rust (MIT); its brotli and zlib decoders
 # (brotli-decompressor, flate2) are already in the tree.
 wuff = "0.2.9"
