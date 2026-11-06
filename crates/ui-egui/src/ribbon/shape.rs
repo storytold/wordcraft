@@ -50,13 +50,15 @@ pub(super) fn shape_format(app: &mut WordApp, ui: &mut Ui) {
         Some((_, o)) => (None, None, o.canvas_style().and_then(|c| c.fill.clone())),
         _ => (None, None, None),
     };
+    // Shape Fill's bar shows the current fill; no fill, no bar.
+    let fill_sw = fill.as_ref().map_or(egui::Color32::TRANSPARENT, |f| crate::theme::c32(f.main_color()));
     let theme = app.session.doc.settings.theme_colors.clone();
     group(ui, "Shape Styles", None, app, |ui, app| {
         stack(ui, |ui| {
             menu_button(
                 ui,
                 app,
-                crate::widgets::MenuButtonOptions::new("shading", Some("Shape Fill"), "Shape Fill", false, "shape.fill"),
+                crate::widgets::MenuButtonOptions::new("shading", Some("Shape Fill"), "Shape Fill", false, "shape.fill").swatch(fill_sw),
                 |ui, app| {
                     mi(ui, app, "No Color", "shape.fill", json!({"color": null}));
                     crate::colors::menu(ui, app, &theme, Target::cmd("shape.fill"));

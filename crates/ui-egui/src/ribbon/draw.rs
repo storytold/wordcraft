@@ -19,7 +19,9 @@ pub(super) fn draw(app: &mut WordApp, ui: &mut Ui) {
         big_toggle(ui, app, "eraser", "Eraser", "draw.eraser", mode == DrawMode::Eraser);
         big_toggle(ui, app, "pen", "Pen", "draw.pen", mode == DrawMode::Pen(InkTool::Pen) && custom.is_none());
         big_toggle(ui, app, "pencil", "Pencil", "draw.pencil", mode == DrawMode::Pen(InkTool::Pencil) && custom.is_none());
-        big_toggle(ui, app, "highlight", "Highlighter", "draw.highlighter", mode == DrawMode::Pen(InkTool::Highlighter) && custom.is_none());
+        let hl_ink = crate::theme::c32(app.session.view.draw.settings(InkTool::Highlighter).color);
+        let hl_on = mode == DrawMode::Pen(InkTool::Highlighter) && custom.is_none();
+        crate::widgets::big_toggle_swatch(ui, app, "highlight", "Highlighter", "draw.highlighter", hl_on, hl_ink);
         // Pens added with Add Pen; right-click one to remove it.
         let pens = app.session.view.draw.pens.clone();
         for (i, pen) in pens.iter().enumerate() {
@@ -102,7 +104,7 @@ fn gallery_pen(ui: &mut Ui, app: &mut WordApp, i: usize, pen: wordcraft_engine::
         InkTool::Highlighter => "highlight",
     };
     let color = crate::theme::c32(pen.color);
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.min.y + 20.0), vec2(28.0, 28.0)), icon, t.icon, color);
+    icons::paint_state(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.min.y + 20.0), vec2(28.0, 28.0)), icon, t.icon, color, false);
     let bar = (pen.width * 0.6).clamp(1.5, 8.0);
     let y = r.min.y + 46.0;
     ui.painter().line_segment([pos2(r.min.x + 6.0, y), pos2(r.max.x - 6.0, y)], Stroke::new(bar, color));
