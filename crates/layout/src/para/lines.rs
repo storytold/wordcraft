@@ -6,6 +6,16 @@ use super::paragraph::word_widths;
 use super::tabs::{next_tab, pl_text_at, ptab_stop, resolve_tab};
 use super::{Align, Arc, Level, LevelSuffix, LineSpacing, MathJc, ParaLayout, TabAlign, TabLeader, TabStop, VecDeque, WrapText};
 
+/// The first character a text cluster draws: a field or note result is classed by the text it shows
+/// (as [`auto_space`] does), else by the paragraph's own text. `None` for objects, breaks and
+/// markers, whose byte range stands for no character of the text.
+fn cluster_char(text: &str, shown: &[(usize, String, Vec<std::ops::Range<usize>>)], k: usize, c: &Cluster) -> Option<char> {
+    if let Ok(i) = shown.binary_search_by_key(&k, |s| s.0) {
+        return shown.get(i).and_then(|s| s.1.chars().next());
+    }
+    text.get(c.start..c.end).and_then(|s| s.chars().next())
+}
+
 /// Narrow cells and float spans must retain their usable width.
 const MIN_LINE_WIDTH: f32 = 1.0;
 
@@ -97,6 +107,12 @@ struct Scan {
     has_tab: bool,
     /// The first word doesn't fit a span narrowed by a floating object: it moves on whole.
     skip: bool,
+    /// `w:overflowPunct`: the first cluster of this line that hangs past its right margin.
+    hang_from: Option<usize>,
+    /// The last cluster that hung: a run of closing marks continues from it (review, #3462).
+    hang_last: Option<usize>,
+    /// The first visible cluster of the line has been seen (`w:topLinePunct` acts once).
+    line_visible: bool,
 }
 
 /// Whether anything but markers (a bookmark, say) is among the clusters `c0..j`: an empty line
@@ -147,14 +163,14 @@ fn mirrored_exclusions(exclusions: &[Exclusion], width: f32) -> Vec<Exclusion> {
 
 /// Break a paragraph into lines, measure each line, apply the paragraph's alignment and place
 /// the list label. Fills `pl.lines`, `pl.height` and the label's position.
-pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Option<&Level>) {
+pub(super) fn break_lines(pl: &mut ParaLayout, text: &str, env: &ParaEnv, mark_style: u32, level: Option<&Level>) {
     let width = env.width.max(MIN_LINE_WIDTH);
     let mirrored = pl.rp.bidi.then(|| mirrored_exclusions(env.exclusions, width));
     let exclusions = mirrored.as_deref().unwrap_or(env.exclusions);
     let mut bk = Breaker::new(pl, (env, exclusions), mark_style, level);
     loop {
         let mut sc = bk.begin_line(pl);
-        sc.scan(&mut bk, pl);
+        sc.scan(&mut bk, pl, text);
         if sc.skip {
             bk.skip_row(&sc);
             continue;
@@ -282,6 +298,9 @@ impl<'e> Breaker<'e> {
             space_w: 0.0,
             has_tab: false,
             skip: false,
+            hang_from: None,
+            hang_last: None,
+            line_visible: false,
         }
     }
 
@@ -342,7 +361,13 @@ impl<'e> Breaker<'e> {
         }
         let (c1, j, hyphen) = self.settle_clusters(pl, &mut sc);
         let v = self.measure(pl, (sc.c0, c1));
-        self.align(pl, &mut sc, c1);
+        // `w:overflowPunct`: the trailing clusters that hang past the margin. A break before them
+        // (a hyphenation point) keeps them on the next line, and then this line has none.
+        let hang = match sc.hang_from {
+            Some(h) if h >= sc.c0 && h < c1 => c1 - h,
+            _ => 0,
+        };
+        self.align(pl, &mut sc, c1, hang);
         let start = pl.clusters.get(sc.c0).map(|c| c.start).unwrap_or(pl.text_len);
         let stop = if c1 > sc.c0 { pl.clusters.get(c1 - 1).map(|c| c.end).unwrap_or(pl.text_len) } else { start };
         if self.first_x0.is_none() {
@@ -365,6 +390,7 @@ impl<'e> Breaker<'e> {
             left: sc.left,
             right: sc.right_edge,
             hyphen,
+            hang,
             beside: sc.beside,
             vis: Vec::new(),
             rtl: self.rtl_para,
@@ -536,10 +562,10 @@ impl<'e> Breaker<'e> {
     }
 
     /// Alignment / justification of the line (trailing spaces hang).
-    fn align(&mut self, pl: &mut ParaLayout, sc: &mut Scan, c1: usize) {
+    fn align(&mut self, pl: &mut ParaLayout, sc: &mut Scan, c1: usize, hang: usize) {
         let rp = &self.rp;
         let c0 = sc.c0;
-        let content_end = content_end(pl, sc, c1);
+        let content_end = content_end(pl, sc, c1, hang);
         let slack = sc.right_edge - content_end;
         let last_tab = (c0..c1).rev().find(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Tab));
         let align_from = last_tab.map(|k| k + 1).unwrap_or(c0);
@@ -574,7 +600,7 @@ impl<'e> Breaker<'e> {
         if shrink {
             shrink_line_spaces(pl, &mut sc.xs, c0, c1, content_end, slack);
         } else if justify && slack > 0.0 {
-            justify_line(pl, &mut sc.xs, (c0, c1, align_from), (content_end, slack), rp.align == Align::Distribute);
+            justify_line(pl, &mut sc.xs, (c0, c1, align_from), (content_end, slack), rp.align == Align::Distribute, hang);
         }
     }
 
@@ -635,6 +661,7 @@ impl<'e> Breaker<'e> {
             left,
             right,
             hyphen: None,
+            hang: 0,
             beside: false,
             vis: Vec::new(),
             rtl: self.rtl_para,
@@ -704,9 +731,14 @@ struct Measure {
 }
 
 /// Where the line's content ends: trailing spaces and markers hang.
-fn content_end(pl: &ParaLayout, sc: &Scan, c1: usize) -> f32 {
+fn content_end(pl: &ParaLayout, sc: &Scan, c1: usize, hang: usize) -> f32 {
     let mut content_end = sc.xs.last().copied().unwrap_or(sc.line_start_x);
     for k in (sc.c0..c1).rev() {
+        if k >= c1 - hang {
+            // A mark hanging past the margin takes no room in the line's content.
+            content_end = sc.xs.get(k - sc.c0).copied().unwrap_or(content_end);
+            continue;
+        }
         match pl.clusters.get(k).map(|c| c.kind) {
             Some(ClKind::Space) | Some(ClKind::Marker) | Some(ClKind::LineBreak) | Some(ClKind::PageBreak) | Some(ClKind::ColumnBreak) => {
                 content_end = sc.xs.get(k - sc.c0).copied().unwrap_or(content_end);
@@ -723,7 +755,14 @@ fn content_end(pl: &ParaLayout, sc: &Scan, c1: usize) -> f32 {
 
 /// Stretch the line to its right edge: its spaces widen by `slack` between them, or all its
 /// clusters by an equal share when `distribute` (or there are no spaces).
-fn justify_line(pl: &ParaLayout, xs: &mut [f32], (c0, c1, align_from): (usize, usize, usize), (content_end, slack): (f32, f32), distribute: bool) {
+fn justify_line(
+    pl: &ParaLayout,
+    xs: &mut [f32],
+    (c0, c1, align_from): (usize, usize, usize),
+    (content_end, slack): (f32, f32),
+    distribute: bool,
+    hang: usize,
+) {
     // Spaces before the line's first character (after the last tab) keep their width, as in Word:
     // text indented with spaces stays where the spaces put it. Zero-width markers (a bookmark,
     // hidden text), floating objects' anchors and the break a line ends with don't count as a
@@ -740,15 +779,23 @@ fn justify_line(pl: &ParaLayout, xs: &mut [f32], (c0, c1, align_from): (usize, u
         .filter(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Space) && xs.get(k - c0).copied().unwrap_or(f32::MAX) < content_end - 0.01)
         .collect();
     if distribute || spaces.is_empty() {
-        // Distributed across the gaps between the first and last characters: spaces hanging at
-        // the line's end take none, so the last character reaches the margin.
-        let text_to = (text_from..c1).rev().find(|k| !blank(*k)).map_or(text_from, |k| k + 1);
-        let cnt = (text_to - text_from).saturating_sub(1).max(1) as f32;
         if distribute {
-            let per = slack / cnt;
-            for (q, v) in xs.iter_mut().enumerate().skip(text_from - c0) {
-                let k = (q + c0 - text_from) as f32;
-                *v += per * k.min(cnt);
+            // A hanging punctuation mark takes no slot: the content spreads over the line
+            // (gaining the whole `slack`, so its end reaches the margin) and the mark, which
+            // starts where the content ended, moves the same distance and hangs past it. A
+            // line with a single content cluster has no gap to spread: the mark stays
+            // attached to the cluster rather than drifting away from it. Distributed across
+            // the gaps between the first and last characters: spaces hanging at the line's
+            // end take none, so the last character reaches the margin.
+            let content = c1 - hang;
+            let text_to = (text_from..content).rev().find(|k| !blank(*k)).map_or(text_from, |k| k + 1);
+            let count = text_to.saturating_sub(text_from);
+            if count > 1 {
+                let per = slack / (count - 1) as f32;
+                for (q, v) in xs.iter_mut().enumerate().skip(text_from - c0) {
+                    let k = (q + c0 - text_from) as f32;
+                    *v += per * k.min((count - 1) as f32);
+                }
             }
         }
         return;
@@ -772,12 +819,12 @@ fn justify_line(pl: &ParaLayout, xs: &mut [f32], (c0, c1, align_from): (usize, u
 
 impl Scan {
     /// Put clusters on the line until it is full or ends.
-    fn scan(&mut self, bk: &mut Breaker, pl: &mut ParaLayout) {
-        while self.j < bk.n && !self.step(bk, pl) {}
+    fn scan(&mut self, bk: &mut Breaker, pl: &mut ParaLayout, text: &str) {
+        while self.j < bk.n && !self.step(bk, pl, text) {}
     }
 
     /// Put the cluster at `j` on the line. True when the line ends here.
-    fn step(&mut self, bk: &mut Breaker, pl: &mut ParaLayout) -> bool {
+    fn step(&mut self, bk: &mut Breaker, pl: &mut ParaLayout, text: &str) -> bool {
         let Some(c) = pl.clusters.get(self.j).cloned() else { return true };
         match c.kind {
             ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak => {
@@ -792,7 +839,7 @@ impl Scan {
                 true
             }
             ClKind::Tab => self.tab(bk, pl),
-            _ => self.cluster(bk, pl, &c),
+            _ => self.cluster(bk, pl, text, &c),
         }
     }
 
@@ -870,7 +917,9 @@ impl Scan {
     }
 
     /// A text or object cluster. True when the line ends before or at it.
-    fn cluster(&mut self, bk: &mut Breaker, pl: &mut ParaLayout, c: &Cluster) -> bool {
+    fn cluster(&mut self, bk: &mut Breaker, pl: &mut ParaLayout, text: &str, cluster: &Cluster) -> bool {
+        // A copy: `w:topLinePunct` halves this cluster's advance, which the line then counts.
+        let mut c = cluster.clone();
         let (j, c0) = (self.j, self.c0);
         // A display equation sits on a line of its own.
         let is_display = pl.displays.iter().any(|(ci, _)| *ci == j);
@@ -882,6 +931,26 @@ impl Scan {
         // each segment's font, glyphs and position for painting.
         let advance = pl.atomic_advance(j);
         let absorbs = self.absorbs(pl, advance);
+        // `w:topLinePunct`: a line whose first visible character is closing punctuation sets it
+        // at half width (Word's "Compress punctuation at the start of a line"), so what comes
+        // after it arrives half a character earlier and one more character may fit.
+        if !self.line_visible && takes_room(&c) {
+            self.line_visible = true;
+            // A span narrowed by a floating object can be abandoned and broken again (`skip`),
+            // which would halve the character twice; its edge is not the text margin anyway.
+            if bk.rp.top_line_punct
+                && !self.narrowed
+                && pl.clusters.get(j).and_then(|p| cluster_char(text, &pl.shown, j, p)).is_some_and(crate::kinsoku::closing_punct)
+            {
+                if let Some(p) = pl.clusters.get_mut(j) {
+                    p.adv *= 0.5;
+                }
+                c.adv *= 0.5;
+            }
+        }
+        // The advance the fit check below uses: one unit per grapheme, and the halved width
+        // `w:topLinePunct` just stored for this cluster.
+        let advance = pl.atomic_advance(j);
         let shrink = if bk.shrink_spaces && !self.has_tab {
             space_room(self.space_w, self.x + advance - pl.auto_space_after(j) - self.word_from)
         } else {
@@ -891,7 +960,23 @@ impl Scan {
             || self.x + advance - pl.auto_space_after(j) <= self.right_edge + shrink + 0.01
             || c.kind == ClKind::Space
             || c.kind == ClKind::Marker;
-        if !fits && pl.is_edit_boundary(c.start) && (c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room)) {
+        // `w:overflowPunct` (Word's default): closing punctuation that would start the next
+        // line may hang past this line's right margin instead, as long as it starts on the
+        // line. Its advance is no part of the line's content: the text ends before it.
+        // A run of closing marks hangs together: after `。` hangs, the `」` that follows it may
+        // not start the next line either (kinsoku), so it hangs too. The pen is already past the
+        // margin by then, which is why the run needs its own condition (review, #3462).
+        let run_continues = self.hang_last == Some(j.wrapping_sub(1));
+        let hangs = !fits
+            && bk.rp.overflow_punct
+            && !self.narrowed
+            && (self.x <= self.right_edge + 0.01 || run_continues)
+            && pl.clusters.get(j).and_then(|p| cluster_char(text, &pl.shown, j, p)).is_some_and(crate::kinsoku::closing_punct)
+            && (c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room));
+        if hangs {
+            self.hang_from.get_or_insert(j);
+            self.hang_last = Some(j);
+        } else if !fits && pl.is_edit_boundary(c.start) && (c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room)) {
             self.wrap(bk, pl);
             return true;
         }
@@ -906,7 +991,12 @@ impl Scan {
             return true;
         }
         if c.break_after {
-            self.note_break(bk, pl, c, shrink);
+            self.note_break(bk, pl, &c, shrink);
+        } else if hangs {
+            // A line may always end after closing punctuation, also where the paragraph's
+            // kinsoku keeps the next character from starting a line (。「」 after a full stop):
+            // the hang is only worth anything if the line can end there.
+            self.last_break = Some(j);
         }
         self.j += 1;
         false
