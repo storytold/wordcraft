@@ -110,7 +110,10 @@ impl Windows {
             recent: vec![1],
             focus: None,
             menu: WindowMenu::default(),
-            builder: egui::ViewportBuilder::default().with_inner_size([1440.0, 920.0]).with_min_inner_size([760.0, 480.0]),
+            builder: egui::ViewportBuilder::default()
+                .with_inner_size([1440.0, 920.0])
+                .with_min_inner_size([760.0, 480.0])
+                .with_decorations(cfg!(target_os = "macos")),
             input_plugin: false,
             driven: false,
         }
