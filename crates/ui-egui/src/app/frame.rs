@@ -67,6 +67,10 @@ impl WordApp {
                 let before = ui.available_rect_before_wrap();
                 glass = self.ribbon_glass().then(|| (ui.painter().add(egui::Shape::Noop), before));
                 chrome::title_bar(self, ui);
+                // A command that brings another window's state in ends the drawing: the rest would be its.
+                if moved(self) {
+                    return;
+                }
                 crate::ribbon_blur::set_drawing(ctx, self.ribbon_glass());
                 let menu_fill = ctx.global_style().visuals.window_fill;
                 if glass.is_some() {
@@ -79,9 +83,9 @@ impl WordApp {
                 crate::ribbon_blur::set_drawing(ctx, false);
                 if let Some((_, r)) = glass.as_mut() {
                     r.max.y = ui.available_rect_before_wrap().min.y;
-                    if moved(self) {
-                        return;
-                    }
+                }
+                if moved(self) {
+                    return;
                 }
                 crate::language_packs::bar(self, ui);
                 chrome::status_bar(self, ui);

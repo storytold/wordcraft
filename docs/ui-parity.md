@@ -96,8 +96,8 @@ Right-click and Shift+F10 keep the compact suggestions menu. The pane is shared 
 ## Revision history
 
 | Date | Change | Summary |
-| 2026-10-26 | trivial | Ribbon: opt-in blur under the ribbon plus animated transitions and translucent chrome, building on #3131 and #3781 (#4019) |
 |---|---|---|
+| 2026-10-26 | trivial | Ribbon: opt-in blur under the ribbon plus animated transitions and translucent chrome, building on #3131 and #3781 (#4019) |
 | 2026-10-17 | trivial | Drawing Canvas members are selected with a click and dragged, resized, turned, nudged, formatted, deleted and copied on their own inside the canvas; a click in a text box member's text puts the caret there (#2637) |
 | 2026-10-31 | trivial | Dialogs are modal (#3859): while one is open, clicks on the ribbon, File or the page, typing and shortcuts do nothing, as in Word. Find and Replace, Symbol, Mark Index Entry, Cross-reference and Insert Merge Field stay modeless, as in Word for Mac. A press beside a modal dialog shakes it a little, or flashes its border with animation effects off, so it is clear why nothing behind it reacts |
 | 2026-10-17 | trivial | Copy and Cut put RTF beside the text and HTML on the system clipboard, for programs that read RTF rather than HTML (Windows "Rich Text Format", macOS `public.rtf`, Wayland `text/rtf`; an X11 copy stays text and HTML, since arboard owns the selection there; a copy of only pictures or shapes carries no HTML or RTF, so pasting it back keeps every detail); Paste reads another program's RTF on macOS and X11 too, as on Windows and Wayland |

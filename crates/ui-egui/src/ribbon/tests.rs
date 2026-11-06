@@ -1077,3 +1077,29 @@ fn the_content_comes_in_from_the_side_the_new_tab_lies_on() {
     assert_eq!((same.dir, same.start), (-1.0, 6.0), "no change, no restart");
     assert_eq!(next_tab_change(Some(&forward), "Draw", 3, 8.0, false).dir, 0.0, "animations off");
 }
+
+#[test]
+fn two_windows_keep_their_own_tab_animation_state() {
+    use egui::{RawInput, ViewportId};
+    let ctx = egui::Context::default();
+    let windows = [(ViewportId::from_hash_of("a"), "Home", 1), (ViewportId::from_hash_of("b"), "Insert", 2)];
+    let mut settled = [(0.0, 0.0); 2];
+    for frame in 0..200 {
+        let now = 1.0 + f64::from(frame) * 0.05;
+        for (n, (viewport_id, tab, index)) in windows.iter().enumerate() {
+            ctx.run_ui(
+                RawInput {
+                    viewport_id: *viewport_id,
+                    viewports: [(*viewport_id, Default::default())].into_iter().collect(),
+                    time: Some(now),
+                    ..Default::default()
+                },
+                |ui| {
+                    settled[n] = tabs::tab_content_entry(ui.ctx(), tab, *index, now, true);
+                },
+            )
+            .drop_without_applying_deltas();
+        }
+    }
+    assert_eq!(settled, [(1.0, 0.0); 2], "each window settles on its own tab");
+}

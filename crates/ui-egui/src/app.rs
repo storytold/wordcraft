@@ -459,7 +459,7 @@ impl WordApp {
             backstage::forget_open_error(&ctx);
             backstage::forget_save_as_error(&ctx);
         }
-        let enter = ctx.animate_bool_responsive(egui::Id::unique("backstage_enter"), self.ui.backstage);
+        let enter = ctx.animate_bool_responsive(egui::Id::unique(("backstage_enter", ctx.viewport_id())), self.ui.backstage);
         let enter = egui::emath::easing::cubic_out(enter);
         self.paint_window(ui, &ctx, t, enter, window);
         if !moved(self) {

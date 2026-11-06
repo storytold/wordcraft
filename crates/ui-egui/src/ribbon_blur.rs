@@ -143,7 +143,7 @@ struct Strip {
 
 /// Show `image` as the strip's texture and return it.
 pub fn upload(ctx: &Context, name: &str, image: ColorImage) -> egui::TextureId {
-    let id = egui::Id::unique(("ribbon_blur_strip", name));
+    let id = egui::Id::unique(("ribbon_blur_strip", name, ctx.viewport_id()));
     let kept: Option<Strip> = ctx.data(|d| d.get_temp(id));
     let strip = match kept {
         Some(mut s) => {
@@ -231,7 +231,7 @@ pub fn glass(c: Color32) -> Color32 {
 /// The strip's size in texels, once it has been made.
 #[cfg(test)]
 pub fn strip_size(ctx: &Context) -> Option<[usize; 2]> {
-    let kept: Option<Strip> = ctx.data(|d| d.get_temp(egui::Id::unique(("ribbon_blur_strip", "ribbon"))));
+    let kept: Option<Strip> = ctx.data(|d| d.get_temp(egui::Id::unique(("ribbon_blur_strip", "ribbon", ctx.viewport_id()))));
     kept.map(|s| s.image.size)
 }
 
