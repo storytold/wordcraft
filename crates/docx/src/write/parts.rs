@@ -21,11 +21,28 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     } else {
         doc
     };
+    let mut source_ids = std::collections::HashSet::new();
     let mut wr = Writer {
         eq_number: 0,
         doc,
         media_files: BTreeMap::new(),
-        bookmarks: HashMap::new(),
+        bookmarks: doc
+            .bookmark_attrs
+            .iter()
+            .filter(|(_, attrs)| {
+                !attrs.id.is_empty() && source_ids.insert(attrs.id.trim().parse::<i128>().map_or_else(|_| attrs.id.clone(), |id| id.to_string()))
+            })
+            .map(|(name, attrs)| (name.clone(), attrs.id.clone()))
+            .collect(),
+        // Reserve numeric values, while `bookmarks` retains the original XML spelling.
+        bookmark_ids: doc
+            .bookmark_attrs
+            .values()
+            .filter(|attrs| !attrs.id.is_empty())
+            .map(|attrs| attrs.id.trim().parse::<i128>().map_or_else(|_| attrs.id.clone(), |id| id.to_string()))
+            .collect(),
+        next_bookmark_id: 0,
+        lifted_bookmarks: HashMap::new(),
         next_rev_id: 0,
         open_moves: Vec::new(),
         // Fresh drawing ids start past the shapes' own (connectors refer to those).
