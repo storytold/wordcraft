@@ -29,8 +29,10 @@ fn records(id: &str) -> bool {
         || id.starts_with("file."))
 }
 
-/// Tables nested deeper than this aren't compared (hostile documents).
-const MAX_DEPTH: usize = 16;
+/// Tables nested deeper than this aren't compared (hostile documents). Shared with Compare's
+/// change-counting traversals (`cmd::tools::compare`) so the recording and counting walks can
+/// never disagree on how deep they look.
+pub(crate) const MAX_DEPTH: usize = 16;
 
 /// A paragraph's, table's or cell's tracked formatting change, if it carries one.
 type Slot<T> = Option<Box<PropChange<T>>>;
@@ -44,6 +46,12 @@ struct Recorder<'a> {
     before: &'a [Revision],
     revisions: &'a mut Vec<Revision>,
     rid: Option<u32>,
+    /// Compare Documents adopts the revised paragraph (and so its embedded section) wholesale, so
+    /// the revised section's headers and footers would otherwise survive adoption untracked while
+    /// [`resolve_section`] preserves the current references across accept/reject — Reject could
+    /// never restore the original's. The compare entry points set this so [`Recorder::para`] keeps
+    /// the ORIGINAL references; the editing path leaves it false, unchanged.
+    keep_section_refs: bool,
 }
 
 impl Recorder<'_> {
@@ -71,6 +79,20 @@ impl Recorder<'_> {
     /// The tracked change `after` should carry, given the props `before` the command (`f` strips
     /// everything that isn't formatting); `None` when it already carries the right one.
     fn change<T: Clone + PartialEq>(&mut self, before: &T, after: &T, f: fn(&T) -> T, get: fn(&T) -> &Slot<T>) -> Option<Replacement<T>> {
+        self.change_keeping(before, after, f, f, get)
+    }
+
+    /// As [`change`], but `snap` builds the stored original where `before` carries no earlier
+    /// change: a comparison can ignore properties the snapshot must keep, so rejecting restores
+    /// them.
+    fn change_keeping<T: Clone + PartialEq>(
+        &mut self,
+        before: &T,
+        after: &T,
+        f: fn(&T) -> T,
+        snap: fn(&T) -> T,
+        get: fn(&T) -> &Slot<T>,
+    ) -> Option<Replacement<T>> {
         let (fb, fa) = (f(before), f(after));
         let (had, has) = (get(before), get(after));
         let want = if fb == fa {
@@ -83,8 +105,8 @@ impl Recorder<'_> {
             // The author's own earlier change keeps the formatting before it; another author's
             // is superseded by this one.
             let own = had.as_ref().filter(|c| self.own(c.rev));
-            let old = own.map(|c| c.old.clone()).unwrap_or(fb);
-            if old == fa {
+            let old = own.map(|c| c.old.clone()).unwrap_or_else(|| snap(before));
+            if f(&old) == fa {
                 None
             } else {
                 let rev = own.map(|c| c.rev).unwrap_or_else(|| self.rid());
@@ -118,7 +140,25 @@ impl Recorder<'_> {
         }
         let mark = self.change(&b.mark, &a.mark, CharProps::formatting, |c| &c.fmt_change);
         let props = self.change(&b.props, &a.props, ParaProps::formatting, |p| &p.fmt_change);
-        if runs.is_empty() && mark.is_none() && props.is_none() {
+        // The section's properties on the paragraph (`w:sectPrChange`).
+        let section = match (b.section.as_deref(), a.section.as_deref()) {
+            (Some(bs), Some(x)) => self.change(bs, x, strip_section, |s| &s.fmt_change),
+            _ => None,
+        };
+        // Compare Documents adopts the revised paragraph whole: an embedded section's revised
+        // headers and footers are content (not formatting — `strip_section` leaves them out), and
+        // `resolve_section` preserves the current references, so left alone they would leak the
+        // revised document's stories in and Reject could never restore the original's. Keep the
+        // ORIGINAL references when both paragraphs carry a section. If only one side does, the
+        // difference is left exactly as before (no `w:sectPrChange`, and the single section's
+        // references stand).
+        if self.keep_section_refs
+            && let (Some(bs), Some(x)) = (b.section.as_deref(), a.section.as_deref_mut())
+        {
+            x.headers = bs.headers;
+            x.footers = bs.footers;
+        }
+        if runs.is_empty() && mark.is_none() && props.is_none() && section.is_none() {
             return;
         }
         for (from, to, want) in runs {
@@ -129,6 +169,11 @@ impl Recorder<'_> {
         }
         if let Some(Replacement(p)) = props {
             a.props.fmt_change = p;
+        }
+        if let Some(Replacement(w)) = section
+            && let Some(s) = a.section.as_deref_mut()
+        {
+            s.fmt_change = w;
         }
         a.normalize();
         a.touch();
@@ -142,40 +187,46 @@ impl Recorder<'_> {
             if Arc::ptr_eq(b, a) {
                 continue;
             }
-            match (&**b, &**a) {
-                (Block::Para(pb), Block::Para(pa)) if pb.text == pa.text => {
-                    if let Block::Para(pa) = Arc::make_mut(a) {
-                        self.para(pb, pa);
-                        // The section's properties on the paragraph (`w:sectPrChange`).
-                        let (Some(b), Some(x)) = (pb.section.as_deref(), pa.section.as_deref_mut()) else { continue };
-                        if let Some(Replacement(w)) = self.change(b, x, strip_section, |s| &s.fmt_change) {
-                            x.fmt_change = w;
-                        }
-                    }
+            self.block(b, a, depth);
+        }
+    }
+
+    /// Record the formatting changes between one original and one revised block: a paragraph with
+    /// the same text, or a table whose row count and grid match. The table's gate is per row, not
+    /// all-or-nothing: every row's own properties are compared, and only a row whose cell count
+    /// differs has its cells skipped, while the other rows' cells are still compared.
+    fn block(&mut self, before: &Arc<Block>, after: &mut Arc<Block>, depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        match (&**before, &**after) {
+            (Block::Para(pb), Block::Para(pa)) if pb.text == pa.text => {
+                if let Block::Para(pa) = Arc::make_mut(after) {
+                    self.para(pb, pa);
                 }
-                (Block::Table(tb), Block::Table(ta)) if tb.rows.len() == ta.rows.len() && tb.grid == ta.grid => {
-                    let Block::Table(ta) = Arc::make_mut(a) else { continue };
-                    if let Some(Replacement(w)) = self.change(&tb.props, &ta.props, strip_table, |t| &t.fmt_change) {
-                        ta.props.fmt_change = w;
-                    }
-                    for (rb, ra) in tb.rows.iter().zip(ta.rows.iter_mut()) {
-                        if let Some(Replacement(w)) = self.change(&rb.props, &ra.props, strip_row, |r| &r.fmt_change) {
-                            ra.props.fmt_change = w;
-                        }
-                        if rb.cells.len() != ra.cells.len() {
-                            continue;
-                        }
-                        for (cb, ca) in rb.cells.iter().zip(ra.cells.iter_mut()) {
-                            // Merges are structure, not formatting: span and vertical merge stay out.
-                            if let Some(Replacement(w)) = self.change(&cb.props, &ca.props, strip_cell, |c| &c.fmt_change) {
-                                ca.props.fmt_change = w;
-                            }
-                            self.blocks(&cb.blocks, &mut ca.blocks, depth + 1);
-                        }
-                    }
-                }
-                _ => {}
             }
+            (Block::Table(tb), Block::Table(ta)) if tb.rows.len() == ta.rows.len() && tb.grid == ta.grid => {
+                let Block::Table(ta) = Arc::make_mut(after) else { return };
+                if let Some(Replacement(w)) = self.change(&tb.props, &ta.props, strip_table, |t| &t.fmt_change) {
+                    ta.props.fmt_change = w;
+                }
+                for (rb, ra) in tb.rows.iter().zip(ta.rows.iter_mut()) {
+                    if let Some(Replacement(w)) = self.change(&rb.props, &ra.props, strip_row, |r| &r.fmt_change) {
+                        ra.props.fmt_change = w;
+                    }
+                    if rb.cells.len() != ra.cells.len() {
+                        continue;
+                    }
+                    for (cb, ca) in rb.cells.iter().zip(ra.cells.iter_mut()) {
+                        // Merges are structure, not formatting: span and vertical merge stay out.
+                        if let Some(Replacement(w)) = self.change(&cb.props, &ca.props, strip_cell, |c| &c.fmt_change) {
+                            ca.props.fmt_change = w;
+                        }
+                        self.blocks(&cb.blocks, &mut ca.blocks, depth + 1);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -203,7 +254,8 @@ pub(crate) fn record(s: &mut Session, id: &str, before: &Document) {
     }
     let author = s.author.clone();
     let doc = &mut s.doc;
-    let mut r = Recorder { author, date: super::now_iso(), before: &before.revisions, revisions: &mut doc.revisions, rid: None };
+    let mut r =
+        Recorder { author, date: super::now_iso(), before: &before.revisions, revisions: &mut doc.revisions, rid: None, keep_section_refs: false };
     r.blocks(&before.body, &mut doc.body, 0);
     for (k, pb) in &before.parts {
         if let Some(pa) = doc.parts.get_mut(k) {
@@ -234,8 +286,32 @@ pub(crate) fn record_para_props(s: &mut Session, story: StoryRef, path: &Path, b
 /// Compare Documents: record how paragraph `new` (the revised version, same text) is formatted
 /// differently from `old` as tracked formatting changes by `author`.
 pub(crate) fn compare_formatting(old: &Paragraph, new: &mut Paragraph, revisions: &mut Vec<Revision>, author: &str, date: &str) {
-    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None };
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None, keep_section_refs: true };
     r.para(old, new);
+}
+
+/// Compare Documents: record how block `new` (the revised version) is formatted differently from
+/// `old` as tracked formatting changes by `author`: a paragraph's section properties, or a
+/// matched table's, rows' and cells' properties (`w:sectPrChange`, `w:tblPrChange`,
+/// `w:trPrChange`, `w:tcPrChange`). A table is compared when its row count and grid match; each
+/// row's properties are compared even when another row's cell count differs (only that row's
+/// cells are then skipped).
+pub(crate) fn compare_block(old: &Arc<Block>, new: &mut Arc<Block>, revisions: &mut Vec<Revision>, author: &str, date: &str) {
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None, keep_section_refs: true };
+    r.block(old, new, 0);
+}
+
+/// Compare Documents: record how the final section `new` (the revised version) is formatted
+/// differently from `old` as a tracked formatting change by `author`. Returns whether the
+/// section's properties differ (the caller takes the revised section then).
+pub(crate) fn compare_section(old: &SectionProps, new: &mut SectionProps, revisions: &mut Vec<Revision>, author: &str, date: &str) -> bool {
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None, keep_section_refs: false };
+    if let Some(Replacement(w)) = r.change(old, new, strip_section, |s| &s.fmt_change) {
+        new.fmt_change = w;
+        true
+    } else {
+        false
+    }
 }
 
 /// The properties a change sets, as the Style Inspector lists them: `[{"prop", "value"}]` in
