@@ -248,6 +248,46 @@ fn frame_zero_side_is_automatic() {
 }
 
 #[test]
+fn locked_frame_anchor_survives_two_saves() {
+    for (lock, expected) in [("", None), (" w:anchorLock=\"1\"", Some(true)), (" w:anchorLock=\"0\"", Some(false))] {
+        let mut document = read_body(&format!(r#"<w:p><w:pPr><w:framePr w:w="1440" w:h="720"{lock}/></w:pPr><w:r><w:t>Locked</w:t></w:r></w:p>"#));
+        let paragraph = paras(&document)[0];
+        assert_eq!(paragraph.props.frame.as_ref().and_then(|f| f.anchor_lock), expected);
+        if expected == Some(true) {
+            let Some(wordcraft_doc::Block::Para(paragraph)) = document.body.get_mut(0).map(std::sync::Arc::make_mut) else {
+                panic!("first block is the framed paragraph");
+            };
+            let frame = paragraph.props.frame.as_mut().unwrap();
+            frame.x = 36.0;
+            frame.y = 72.0;
+            frame.w = Some(108.0);
+        }
+        let json = serde_json::to_vec(&document).unwrap();
+        document = serde_json::from_slice(&json).unwrap();
+        if expected == Some(true) {
+            let frame = paras(&document)[0].props.frame.as_ref().unwrap();
+            assert_eq!((frame.x, frame.y, frame.w), (36.0, 72.0, Some(108.0)));
+        }
+        for pass in 0..2 {
+            let bytes = wordcraft_docx::write(&document).unwrap();
+            let xml = text(&unzip(&bytes), "word/document.xml");
+            let expected_xml = match expected {
+                Some(true) => "w:anchorLock=\"1\"",
+                Some(false) => "w:anchorLock=\"0\"",
+                None => "w:anchorLock=",
+            };
+            assert_eq!(xml.contains(expected_xml), expected.is_some(), "lock changed on save {}: {xml}", pass + 1);
+            document = wordcraft_docx::read(&bytes).unwrap();
+            assert_eq!(paras(&document)[0].props.frame.as_ref().and_then(|f| f.anchor_lock), expected);
+            if expected == Some(true) {
+                let frame = paras(&document)[0].props.frame.as_ref().unwrap();
+                assert_eq!((frame.x, frame.y, frame.w), (36.0, 72.0, Some(108.0)));
+            }
+        }
+    }
+}
+
+#[test]
 fn omitted_paragraph_defaults_can_be_edited() {
     let styles =
         format!(r#"<w:styles {W_NS}><w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#);
