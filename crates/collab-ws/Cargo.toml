@@ -1,0 +1,19 @@
+[package]
+name = "wordcraft-collab-ws"
+description = "WebSocket transport for the WordCraft collaboration client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+wordcraft-collab = { path = "../collab" }
+wordcraft-collab-client = { path = "../collab-client" }
+serde_json = { workspace = true }
+tokio = { version = "1.54.1", features = ["rt", "macros", "sync", "time", "net"] }
+tokio-tungstenite = "0.30.0"
+futures-util = "0.3.34"
+
+[lints]
+workspace = true

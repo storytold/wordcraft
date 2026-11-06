@@ -189,7 +189,7 @@ fn a_room_is_restored_from_disk() {
     let room = restored.room_for(doc);
     let guard = room.lock().expect("room lock");
     assert_eq!(guard.room.version(), 1, "the snapshot restores the version");
-    let text = guard.room.model().document().body.first().and_then(|b| b.as_para()).map(|p| p.text.clone()).unwrap_or_default();
+    let text = guard.room.model().session().doc.body.first().and_then(|b| b.as_para()).map(|p| p.text.clone()).unwrap_or_default();
     assert_eq!(text, "Hi");
 }
 
@@ -265,4 +265,75 @@ async fn the_committed_docx_opens_in_libreoffice() {
         .expect("a converted text file");
     assert!(txt.contains("Hello collaboration"), "converted text: {txt:?}");
     let _ = std::fs::remove_dir_all(&work);
+}
+
+#[tokio::test]
+async fn a_command_operation_runs_on_the_server() {
+    let (url, cfg) = spawn_server().await;
+    let mut alice = connect(&url, &cfg, "editor", "alice").await;
+    let _ = next_msg(&mut alice).await;
+    let node = node_of(&mut alice).await;
+
+    let command = Op {
+        op_id: OpId::new("alice", 1),
+        base_version: 0,
+        epoch: None,
+        kind: OpKind::Command,
+        target: Target::new("body", node, 0),
+        payload: json!({"command": "text.insert", "params": {"text": "Hi"}}),
+    };
+    alice.send(Message::Text(serde_json::to_string(&ClientMsg::Op { op: command }).expect("json").into())).await.expect("send");
+    match next_msg(&mut alice).await {
+        ServerMsg::Applied { applied } => assert_eq!(applied.version, 1),
+        other => panic!("expected applied, got {other:?}"),
+    }
+
+    // Commands that reach beyond the document never run on a server.
+    let forbidden = Op {
+        op_id: OpId::new("alice", 2),
+        base_version: 1,
+        epoch: None,
+        kind: OpKind::Command,
+        target: Target::new("body", node, 0),
+        payload: json!({"command": "file.new"}),
+    };
+    alice.send(Message::Text(serde_json::to_string(&ClientMsg::Op { op: forbidden }).expect("json").into())).await.expect("send");
+    match next_msg(&mut alice).await {
+        ServerMsg::Rejected { reject } => assert_eq!(reject.code, wordcraft_collab::wire::RejectCode::Forbidden),
+        other => panic!("expected rejection, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn the_transport_client_edits_through_the_server() {
+    use wordcraft_collab_ws::{Event, TransportEvent};
+
+    let (url, cfg) = spawn_server().await;
+    let token = token(&cfg, "alice", "editor", "wordcraft", 600);
+    let mut handle = wordcraft_collab_ws::spawn(url, token, "alice");
+
+    let mut joined = false;
+    let mut nodes = None;
+    while !joined || nodes.is_none() {
+        match timeout(Duration::from_secs(10), handle.events.recv()).await.expect("an event in time") {
+            Some(TransportEvent::Event(Event::Welcome { .. })) => joined = true,
+            Some(TransportEvent::Event(Event::Nodes { nodes: list })) => nodes = Some(list),
+            Some(_) => {}
+            None => panic!("the transport ended before the session joined"),
+        }
+    }
+    let node = nodes.expect("nodes").iter().find(|node| node.story == "body").expect("a body node").id;
+    handle.submit(OpKind::Primitive, Target::new("body", node, 0), json!({"op": "insert_text", "text": "Hi"})).expect("submit");
+
+    loop {
+        match timeout(Duration::from_secs(10), handle.events.recv()).await.expect("an answer in time") {
+            Some(TransportEvent::Event(Event::Applied { applied })) => {
+                assert_eq!(applied.version, 1);
+                break;
+            }
+            Some(TransportEvent::Event(Event::Rejected { reject })) => panic!("refused: {reject:?}"),
+            Some(_) => {}
+            None => panic!("the transport ended before the answer"),
+        }
+    }
 }
