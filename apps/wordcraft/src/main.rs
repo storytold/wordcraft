@@ -19,6 +19,7 @@ mod file_dialogs;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
 mod logging;
+mod prefs_saver;
 mod print;
 mod region;
 #[cfg(target_os = "macos")]
@@ -32,8 +33,9 @@ use wordcraft_ui_egui::{
 
 /// The app, the restored window geometry (or, with none, the default: no position) until the
 /// first frame that knows the monitor has checked it, the control server's key file (removed on
-/// exit), the file dialogs the app asked for, this frame's raw host window state and, on macOS,
-/// the documents opened from Finder.
+/// exit), the file dialogs the app asked for, this frame's raw host window state, what saves the
+/// preferences when they change (none when preferences are off) and, on macOS, the documents
+/// opened from Finder.
 struct App(
     WordApp,
     Option<WindowGeometry>,
@@ -42,6 +44,7 @@ struct App(
     // The host's answer for this frame. `InputState` still describes the last painted frame on
     // a hidden logic tick.
     RawWindowState,
+    Option<prefs_saver::PrefsSaver>,
     #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
 );
 
@@ -51,8 +54,14 @@ impl eframe::App for App {
     /// on unsaved changes and active printing.
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
-        apple_events::poll(&self.5, &mut self.0, ctx);
+        apple_events::poll(&self.6, &mut self.0, ctx);
         self.0.logic(ctx);
+        // A changed setting is saved now, not only on a clean exit (#5740).
+        if let Some(saver) = &mut self.5
+            && let Some(wait) = saver.tick(std::time::Instant::now(), || prefs_bytes(&self.0), store_prefs)
+        {
+            ctx.request_repaint_after(wait);
+        }
         self.3.show(frame);
         let mut window = self.4;
         // Only until the off-screen check below has run: it is the one reader.
@@ -298,21 +307,27 @@ fn save_prefs(app: &WordApp) {
     if !prefs_enabled() {
         return;
     }
-    if let Some(p) = prefs_path() {
-        if let Some(dir) = p.parent()
-            && let Err(e) = std::fs::create_dir_all(dir)
-        {
-            log::warn!("preferences: cannot create {}: {e}", dir.display());
-            return;
-        }
-        match serde_json::to_vec_pretty(&app.prefs()) {
-            Ok(bytes) => {
-                if let Err(e) = write_prefs(&p, &bytes) {
-                    log::warn!("preferences: cannot save {}: {e}", p.display());
-                }
-            }
-            Err(e) => log::warn!("preferences: cannot serialize: {e}"),
-        }
+    if let Some(bytes) = prefs_bytes(app) {
+        store_prefs(&bytes);
+    }
+}
+
+/// The preferences as `ui.json` holds them.
+fn prefs_bytes(app: &WordApp) -> Option<Vec<u8>> {
+    serde_json::to_vec_pretty(&app.prefs()).map_err(|e| log::warn!("preferences: cannot serialize: {e}")).ok()
+}
+
+/// Write `bytes` to `ui.json`, logging what goes wrong.
+fn store_prefs(bytes: &[u8]) {
+    let Some(p) = prefs_path() else { return };
+    if let Some(dir) = p.parent()
+        && let Err(e) = std::fs::create_dir_all(dir)
+    {
+        log::warn!("preferences: cannot create {}: {e}", dir.display());
+        return;
+    }
+    if let Err(e) = write_prefs(&p, bytes) {
+        log::warn!("preferences: cannot save {}: {e}", p.display());
     }
 }
 
@@ -608,6 +623,8 @@ fn main() -> eframe::Result {
             for f in other_files {
                 open_non_unicode(&mut app, &f);
             }
+            // From here on, a changed preference is saved as it changes (#5740).
+            let saver = if prefs_enabled() { prefs_bytes(&app).map(|b| prefs_saver::PrefsSaver::new(b, std::time::Instant::now())) } else { None };
             Ok(Box::new(App(
                 app,
                 // With nothing restored, the window the system placed is checked all the same.
@@ -615,6 +632,7 @@ fn main() -> eframe::Result {
                 key_file,
                 dialogs,
                 RawWindowState::default(),
+                saver,
                 #[cfg(target_os = "macos")]
                 apple_events.connect(&cc.egui_ctx),
             )))
@@ -743,7 +761,32 @@ mod launch_arg_tests {
 
 #[cfg(test)]
 mod prefs_tests {
-    use super::write_prefs;
+    use super::{Services, Session, UiState, WordApp, prefs_bytes, prefs_saver, write_prefs};
+
+    /// #5740: turning Check spelling as you type off is saved while the app runs, so another
+    /// WordCraft started then (a document opened from the file manager) or after this one dies
+    /// reads it off, without this one having to quit cleanly first.
+    #[test]
+    fn a_changed_setting_is_saved_while_the_app_runs() {
+        let dir = std::env::temp_dir().join(format!("wordcraft-prefs-saver-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ui.json");
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        assert!(app.session.view.proofing, "on by default");
+        let t0 = std::time::Instant::now();
+        let mut saver = prefs_saver::PrefsSaver::new(prefs_bytes(&app).unwrap(), t0);
+        let save = |b: &[u8]| write_prefs(&path, b).unwrap();
+
+        app.run("review.proofing", serde_json::json!({"value": false})).unwrap();
+        let due = t0 + prefs_saver::INTERVAL;
+        assert_eq!(saver.tick(due, || prefs_bytes(&app), save), None);
+
+        let saved = UiState::from_json(&std::fs::read(&path).unwrap()).unwrap();
+        let mut next = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        next.apply_prefs(saved);
+        assert!(!next.session.view.proofing, "the next WordCraft starts with it off");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn failed_preferences_write_keeps_the_old_file_and_reports_the_error() {
