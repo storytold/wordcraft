@@ -8,6 +8,7 @@ use wordcraft_layout::display::{DisplayOptions, Draw, page_display};
 use super::{Session, json, run};
 
 mod completion;
+mod defaults;
 mod inverse;
 
 /// Minimal InkML package part used in the native screen/PDF integration fixtures.

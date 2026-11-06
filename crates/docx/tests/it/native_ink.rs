@@ -58,6 +58,7 @@ fn native_ink_unsupported_features_keep_the_preview_and_original_bytes() {
         INK_XML.replace("</brush>", r#"<brushProperty name="rasterOp" value="unsupported"/></brush>"#),
         INK_XML.replace("</context>", "<canvasTransform/></context>"),
         "<not-ink>broken".to_string(),
+        r#"<ink xmlns="http://www.w3.org/2003/InkML"><traceFormat><channel name="X"/><channel name="Y"/><channel name="F"/></traceFormat><trace>0 0 .5,1 1 1</trace><trace>2 2 1.1</trace></ink>"#.to_string(),
         r#"<ink xmlns="http://www.w3.org/2003/InkML"><context><canvasTransform><mapping type="unknown"/><mapping type="product"><mapping type="mathml" xmlns:m="http://www.w3.org/1998/Math/MathML"><bind source="X" variable="x"/><bind target="X"/><m:math><m:apply><m:root/><m:ci>x</m:ci></m:apply></m:math></mapping><mapping type="affine"><bind source="Y" column="1"/><bind target="Y" column="1"/><affine>1 0</affine></mapping></mapping></canvasTransform></context><trace>0 0,1 1</trace><trace>-1e-100 0,2 2</trace></ink>"#.to_string(),
         r#"<ink xmlns="http://www.w3.org/2003/InkML"><traceFormat><channel name="X" type="integer"/><channel name="Y" type="integer"/></traceFormat><context><canvas><traceFormat><channel name="X" type="integer"/><channel name="Y" type="integer"/></traceFormat></canvas><canvasTransform><mapping type="unknown"/><mapping type="affine"><affine>0.5 0 0,0 1 0</affine></mapping></canvasTransform></context><trace>0 0,1 1</trace></ink>"#.to_string(),
     ];
@@ -82,6 +83,7 @@ fn native_ink_unsupported_features_keep_the_preview_and_original_bytes() {
 #[test]
 fn advanced_native_ink_roundtrips_json_and_all_drawing_frames() {
     let variants = [
+        r#"<traceFormat><channel name="X"/><channel name="Y"/><channel name="BW"/><channel name="F"/></traceFormat><trace>0 0 1 .5,25.4 12.7 2 1</trace>"#,
         r##"<brush><brushProperty name="color" value="#2563EB"/><brushProperty name="width" value="4"/><brushProperty name="height" value="8"/><brushProperty name="tip" value="rectangle"/><brushProperty name="transparency" value="128"/></brush><trace>0 0,10 10</trace>"##,
         r##"<context><canvasTransform><mapping type="affine"><affine>2 0 0,0 3 0</affine></mapping></canvasTransform></context><trace xml:id="a" continuation="begin">0 0,10 10</trace><trace continuation="end" priorRef="#a">20 10,30 0</trace>"##,
         r##"<traceFormat><channel name="X"/><channel name="Y"/><intermittentChannels><channel name="C" default="255"/><channel name="BW" default="4"/><channel name="A" max="255" default="128"/></intermittentChannels></traceFormat><trace>0 0,10 10,20 0 #FF0000 8</trace>"##,

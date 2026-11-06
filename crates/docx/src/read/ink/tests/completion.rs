@@ -20,7 +20,7 @@ fn paths(items: &[GraphicItem]) -> Vec<(&Vec<PathSeg>, f32)> {
 
 fn mapped(mapping: &str, samples: &str) -> String {
     ink(&format!(
-        r#"<context><canvas><traceFormat><channel name="X"/><channel name="Y"/></traceFormat></canvas><canvasTransform>{mapping}</canvasTransform></context><trace>{samples}</trace>"#
+        r#"<context><canvas><traceFormat><channel name="X" units="pt"/><channel name="Y" units="pt"/></traceFormat></canvas><canvasTransform>{mapping}</canvasTransform></context><trace>{samples}</trace>"#
     ))
 }
 

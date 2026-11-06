@@ -5,6 +5,7 @@ use wordcraft_doc::para::ShapeKind;
 
 mod advanced;
 mod completion;
+mod defaults;
 mod inverse;
 
 /// Wrap InkML body markup with the real namespace and decode it under a fresh ample work budget.
@@ -53,7 +54,7 @@ fn compact_numbers_hex_exponents_trailing_comma_and_cdata() {
 fn context_and_brush_references_reordered_channels_and_units() {
     let graphic = ink(r##"
         <definitions>
-          <traceFormat xml:id="format"><channel name="T"/><channel name="Y" units="in" orientation="-ve"/><channel name="X" units="cm"/><channel name="F"/></traceFormat>
+          <traceFormat xml:id="format"><channel name="T"/><channel name="Y" units="in" orientation="-ve"/><channel name="X" units="cm"/><channel name="F" units="dev"/></traceFormat>
           <context xml:id="parent" traceFormatRef="#format" brushRef="#pen"/>
           <context xml:id="child" contextRef="#parent"/>
           <brush xml:id="base"><brushProperty name="color" value="#2563EB"/><brushProperty name="width" value="0.1" units="in"/></brush>

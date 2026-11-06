@@ -15,7 +15,7 @@ fn mapped(mapping: &str, trace: &str) -> Option<Graphic> {
 /// Intermittent values inherit defaults and prior integration state; unknowns do not corrupt peers.
 #[test]
 fn intermittent_defaults_booleans_and_unknown_values() {
-    let body = r#"<traceFormat><channel name="X"/><channel name="Y"/><intermittentChannels><channel name="B1" type="boolean" default="F"/><channel name="custom" default="7"/></intermittentChannels></traceFormat><trace>0 0, 1 1 T, 2 2 ? 9, 3 3, 4 4 * ?</trace>"#;
+    let body = r#"<traceFormat><channel name="X" units="pt"/><channel name="Y" units="pt"/><intermittentChannels><channel name="B1" type="boolean" default="F"/><channel name="custom" default="7"/></intermittentChannels></traceFormat><trace>0 0, 1 1 T, 2 2 ? 9, 3 3, 4 4 * ?</trace>"#;
     let graphic = ink(body).unwrap();
     assert_eq!(graphic, ink("<trace>0 0,1 1,2 2,3 3,4 4</trace>").unwrap());
     let root=crate::xml::parse_strict(br#"<traceFormat xmlns="http://www.w3.org/2003/InkML"><channel name="X"/><channel name="Y"/><intermittentChannels><channel name="V" default="2"/></intermittentChannels></traceFormat>"#).unwrap();
@@ -28,7 +28,7 @@ fn intermittent_defaults_booleans_and_unknown_values() {
 #[test]
 fn tip_switch_overrides_contact_type_and_breaks_runs() {
     for kind in ["penDown", "penUp", "indeterminate"] {
-        let graphic=ink(&format!(r#"<traceFormat><channel name="X"/><channel name="Y"/><channel name="S" type="boolean"/></traceFormat><trace type="{kind}">0 0 T,1 0 T,100 100 F,10 0 T,11 0 T</trace>"#)).unwrap();
+        let graphic=ink(&format!(r#"<traceFormat><channel name="X" units="pt"/><channel name="Y" units="pt"/><channel name="S" type="boolean"/></traceFormat><trace type="{kind}">0 0 T,1 0 T,100 100 F,10 0 T,11 0 T</trace>"#)).unwrap();
         assert_eq!(paths(&graphic).len(), 2);
         near(graphic.w, 12.0);
         near(graphic.h, 1.0);
@@ -49,7 +49,7 @@ fn device_resolution_converts_to_points() {
 fn context_declaration_defaults_and_child_precedence() {
     let graphic=ink(r##"<definitions><context xml:id="empty"/></definitions><brush><brushProperty name="color" value="#FF0000"/></brush><trace contextRef="#empty">0 0,1 1</trace>"##).unwrap();
     assert_eq!(paths(&graphic)[0].1, Rgb::BLACK);
-    let graphic=ink(r##"<context traceFormatRef="#missing" brushRef="https://example.invalid/#pen" canvasRef="#bad" canvasTransformRef="#bad"><traceFormat><channel name="X"/><channel name="Y"/></traceFormat><brush/><canvas><traceFormat><channel name="X"/><channel name="Y"/></traceFormat></canvas><canvasTransform><mapping type="identity"/></canvasTransform></context><trace>0 0,1 1</trace>"##).unwrap();
+    let graphic=ink(r##"<context traceFormatRef="#missing" brushRef="https://example.invalid/#pen" canvasRef="#bad" canvasTransformRef="#bad"><traceFormat><channel name="X" units="pt"/><channel name="Y" units="pt"/></traceFormat><brush/><canvas><traceFormat><channel name="X" units="pt"/><channel name="Y" units="pt"/></traceFormat></canvas><canvasTransform><mapping type="identity"/></canvasTransform></context><trace>0 0,1 1</trace>"##).unwrap();
     assert_eq!(graphic, ink("<trace>0 0,1 1</trace>").unwrap());
 }
 
@@ -84,7 +84,7 @@ fn affine_canvas_mapping_and_explicit_channel_bindings() {
 /// Mapped visual channels participate in rendering, not just the X/Y outputs.
 #[test]
 fn canvas_mapping_can_provide_width_and_color_channels() {
-    let graphic=ink(r#"<context><canvas><traceFormat><channel name="X"/><channel name="Y"/><channel name="BW"/><channel name="C"/></traceFormat></canvas><canvasTransform><mapping type="affine"><affine>1 0 0,0 1 0,0 0 4,0 0 #FF0000</affine></mapping></canvasTransform></context><trace>0 0,10 10</trace>"#).unwrap();
+    let graphic=ink(r#"<context><canvas><traceFormat><channel name="X" units="pt"/><channel name="Y" units="pt"/><channel name="BW" units="pt"/><channel name="C"/></traceFormat></canvas><canvasTransform><mapping type="affine"><affine>1 0 0,0 1 0,0 0 4,0 0 #FF0000</affine></mapping></canvasTransform></context><trace>0 0,10 10</trace>"#).unwrap();
     assert_eq!(paths(&graphic)[0].1, Rgb(255, 0, 0));
     near(paths(&graphic)[0].2, 4.0);
     near(graphic.w, 14.0);
@@ -229,7 +229,7 @@ fn transparent_runs_keep_stroke_boundaries() {
 /// Width, packed color, normalized alpha and calibrated pressure can vary independently per sample.
 #[test]
 fn visual_channels_and_brush_precedence() {
-    let format = r#"<traceFormat><channel name="X"/><channel name="Y"/><channel name="BW"/><channel name="F" min="0" max="100"/><intermittentChannels><channel name="C" default="16711680"/><channel name="A" max="255" default="0"/></intermittentChannels></traceFormat>"#;
+    let format = r#"<traceFormat><channel name="X" units="pt"/><channel name="Y" units="pt"/><channel name="BW" units="pt"/><channel name="F" units="N" min="0" max="100"/><intermittentChannels><channel name="C" default="16711680"/><channel name="A" max="255" default="0"/></intermittentChannels></traceFormat>"#;
     let graphic = ink(&format!("{format}<trace>0 0 4 50,10 0 4 100 #0000FF 128</trace>")).unwrap();
     near(graphic.w, 13.0);
     near(graphic.h, 4.0);

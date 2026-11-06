@@ -163,7 +163,7 @@ fn add(format: &mut Format, el: &El) -> Option<()> {
         Some("-ve") => -1.0,
         _ => return None,
     };
-    let units = el.attr("units");
+    let units = channel_units(el);
     let (scale, offset) = visual_scale(el, name, min, max, sign)?;
     format.channels.push(Channel {
         name: name.into(),
@@ -180,6 +180,16 @@ fn add(format: &mut Format, el: &El) -> Option<()> {
     Some(())
 }
 
+fn channel_units(el: &El) -> Option<&str> {
+    el.attr("units").or_else(|| match el.attr("name")? {
+        "X" | "Y" | "Z" | "W" | "BW" | "BH" => Some("mm"),
+        "F" => Some("%"),
+        "OTx" | "OTy" | "OA" | "OE" | "OR" => Some("deg"),
+        "T" => Some("ms"),
+        _ => None,
+    })
+}
+
 fn visual_scale(el: &El, name: &str, min: Option<f64>, max: Option<f64>, sign: f64) -> Option<(Option<f64>, f64)> {
     let length = matches!(name, "X" | "Y" | "W" | "BW" | "BH");
     if !length && name != "OR" {
@@ -188,7 +198,7 @@ fn visual_scale(el: &El, name: &str, min: Option<f64>, max: Option<f64>, sign: f
     if length && el.attr("respectTo").is_some() {
         return None;
     }
-    let units = el.attr("units");
+    let units = channel_units(el);
     if units == Some("dev") {
         return Some((None, 0.0));
     }
