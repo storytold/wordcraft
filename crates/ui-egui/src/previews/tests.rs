@@ -28,10 +28,10 @@ fn font_menu_entries_leave_installed_families_unloaded() {
 /// returns the painted shapes of the last one and every texture picture uploaded on the way.
 fn run_gallery(mut doc: Document, style: wordcraft_doc::styles::Style) -> (Vec<egui::epaint::ClippedShape>, Vec<egui::ColorImage>) {
     // Only the style under test is in the gallery.
-    for other in &mut doc.styles.styles {
+    for other in &mut Arc::make_mut(&mut doc.styles).styles {
         other.quick = false;
     }
-    doc.styles.upsert(style);
+    Arc::make_mut(&mut doc.styles).upsert(style);
     let mut app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
     app.ui.language = "en".into();
     let ctx = egui::Context::default();
@@ -380,4 +380,16 @@ fn font_menu_entries_take_the_theme_text_colour() {
         }
         assert_eq!(images, 1, "{theme:?}: the entry draws its rendered name");
     }
+}
+
+#[test]
+fn font_sample_shows_small_caps_and_the_script_mark() {
+    let white = wordcraft_doc::Rgb(255, 255, 255);
+    let plain = CharProps { size: Some(20.0), ..Default::default() };
+    let draw = |p: &CharProps, mark, dark| font_sample("AaBbYyZz", p, mark, (200.0, 40.0, 1.0), white, dark).map(|i| i.pixels);
+    let small = CharProps { small_caps: Some(true), ..plain.clone() };
+    assert_ne!(draw(&plain, None, false), draw(&small, None, false), "small caps change the sample");
+    let sup = Some(wordcraft_doc::props::VertAlign::Superscript);
+    assert_ne!(draw(&plain, None, false), draw(&plain, sup, false), "the mark is drawn");
+    assert_ne!(draw(&plain, None, false), draw(&plain, None, true), "Switch Modes transforms the preview");
 }
