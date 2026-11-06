@@ -626,6 +626,25 @@ fn caret_animation_is_a_ui_command_and_survives_a_restart() {
     assert_eq!(a.run("ui.caretAnimation", json!({"value": true})).unwrap()["caretAnimation"], true);
 }
 
+/// #2184: the Linux display server is a UI command, kept in `ui.json` for the desktop app to
+/// read at the next launch; junk is refused, and an unknown saved value reads as Automatic.
+#[test]
+fn display_server_is_a_ui_command_and_survives_a_restart() {
+    let mut a = app();
+    assert_eq!(a.run("ui.displayServer", json!({})).unwrap(), json!({"displayServer": "auto"}), "automatic by default; no value reads it");
+    assert_eq!(a.run("ui.displayServer", json!({"value": " X11 "})).unwrap(), json!({"displayServer": "x11"}));
+    for junk in [json!({"value": "mir"}), json!({"value": 1}), json!({"value": null}), json!({"value": ["wayland"]})] {
+        assert!(a.run("ui.displayServer", junk).is_err());
+    }
+    assert_eq!(a.ui.display_server, DisplayServer::X11, "a rejected value keeps the setting");
+    let saved = serde_json::to_string(&a.prefs()).unwrap();
+    assert!(saved.contains(r#""displayServer":"x11""#), "{saved}");
+    assert_eq!(UiState::from_json(saved.as_bytes()).unwrap().display_server, DisplayServer::X11);
+    for old in [r#"{"tab":"Insert"}"#, r#"{"displayServer":"mir"}"#, r#"{"displayServer":7}"#] {
+        assert_eq!(UiState::from_json(old.as_bytes()).unwrap().display_server, DisplayServer::Auto, "{old}");
+    }
+}
+
 /// #1945: showing or hiding the Quick Access Toolbar is a UI command (no value toggles it),
 /// kept between runs; settings saved before it existed show the toolbar; it works with no
 /// document open, like the other interface settings.
@@ -694,7 +713,7 @@ fn start_screen_shows_file_home_and_esc_leaves_no_document() {
     for id in ["format.bold", "text.insert", "file.save", "file.saveAs", "file.print", "edit.paste", "insert.table", "ui.print"] {
         assert!(!widgets::enabled(a, id), "{id} is off with no document");
     }
-    for id in ["file.new", "file.open", "ui.backstage", "ui.tab", "ui.discord", "file.options", "ui.theme"] {
+    for id in ["file.new", "file.open", "ui.backstage", "ui.tab", "ui.discord", "file.options", "ui.theme", "ui.statusCount"] {
         assert!(widgets::enabled(a, id), "{id} works with no document");
     }
     assert!(!chrome::qat_enabled(a, "file.save"));
@@ -5537,6 +5556,29 @@ fn interface_theme_resolves_against_the_os_appearance() {
     assert_eq!(a.run("ui.theme", json!({"value": "dark"})).unwrap()["theme"], "dark");
     assert_eq!(a.run("ui.dark", json!({})).unwrap()["theme"], "light", "ui.dark toggles the manual choice");
     assert_eq!(a.run("ui.theme", json!({})).unwrap()["theme"], "light");
+}
+
+/// #2797: `ui.statusCount` reads and sets what the status bar's live count shows; a value it
+/// doesn't know is refused, and the choice is written to `ui.json` and read back.
+#[test]
+fn the_status_bar_count_is_a_ui_command() {
+    let mut a = app();
+    assert_eq!(a.run("ui.statusCount", json!({})).unwrap(), json!({"statusCount": "words"}), "words, the default");
+    assert!(a.run("ui.statusCount", json!({"value": "paragraphs"})).is_err(), "junk is refused");
+    // A value that isn't a string reads the setting, like `ui.theme`'s.
+    assert_eq!(a.run("ui.statusCount", json!({"value": 7})).unwrap(), json!({"statusCount": "words"}));
+    assert_eq!(a.run("ui.statusCount", json!({"value": "characters"})).unwrap()["statusCount"], "characters");
+    assert_eq!(a.ui.status_count, StatusCount::Characters);
+    // Like the theme setting, the code is read without regard to case or surrounding space.
+    assert_eq!(a.run("ui.statusCount", json!({"value": " CharactersNoSpaces "})).unwrap()["statusCount"], "charactersNoSpaces");
+    assert_eq!(a.ui.status_count, StatusCount::CharactersNoSpaces);
+    let saved = serde_json::to_vec(&a.prefs()).unwrap();
+    assert_eq!(UiState::from_json(&saved).unwrap().status_count, StatusCount::CharactersNoSpaces, "kept between runs");
+    assert_eq!(UiState::from_json(br#"{"statusCount": "words"}"#).unwrap().status_count, StatusCount::Words);
+    // A `ui.json` with a wrong value in this one setting keeps the rest and reads the default.
+    assert_eq!(UiState::from_json(br#"{"statusCount": "paragraphs"}"#).unwrap().status_count, StatusCount::Words);
+    assert_eq!(UiState::from_json(br#"{"statusCount": 7}"#).unwrap().status_count, StatusCount::Words);
+    assert_eq!(UiState::from_json(br#"{"statusCount": ["characters"]}"#).unwrap().status_count, StatusCount::Words);
 }
 
 /// One app frame with the OS appearance egui reports; returns the window commands it sent.
