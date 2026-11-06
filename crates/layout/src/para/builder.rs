@@ -213,7 +213,9 @@ impl<'a> Builder<'a> {
             if let Some(f) = missing.latin.filter(|_| asks_latin) {
                 self.note_substituted(f, drawn);
             }
-            if let Some(f) = missing.east_asian.filter(|_| !in_ea_font && sub.chars().any(east_asian)) {
+            // A missing East Asian font has no face of its own: CJK text drawn in the East Asian
+            // face is in its font table alternate (#2702) and still asks for it.
+            if let Some(f) = missing.east_asian.filter(|_| sub.chars().any(east_asian)) {
                 self.note_substituted(f, drawn);
             }
         }
@@ -234,25 +236,29 @@ impl<'a> Builder<'a> {
         let rc_cs: Option<Arc<ResolvedChar>> = text.chars().any(|c| rc.uses_complex(c)).then(|| Arc::new(rc.complex()));
         let family = lookup_family(self.env.doc, &rc.font);
         let resolved = wordcraft_fonts::word::resolve(family, rc.bold, rc.italic);
+        // The requested font is missing when it was substituted, or when another family stands in
+        // for it: its font table alternate (#2702), which may itself be installed.
+        let requested_missing = resolved.substituted || !family.eq_ignore_ascii_case(&rc.font);
         let primary = resolved.face;
         // Symbol-font characters are laid out as their Unicode equivalents.
         let sym = SymbolRun::of(&rc.font, &resolved);
         let show = |c: char| sym.map_or(c, |m| m.show(c));
-        // A font isn't installed when it was substituted, or looked up as a missing roman font.
+        // A font isn't installed when it was substituted, or looked up as a missing roman font or
+        // its font table alternate (#2702).
         let resolved_cs = rc_cs.as_ref().map(|r| {
             let family = lookup_family(self.env.doc, &r.font);
             let resolved = wordcraft_fonts::word::resolve(family, r.bold, r.italic);
-            (resolved.face, resolved.substituted || family != r.font)
+            (resolved.face, resolved.substituted || !family.eq_ignore_ascii_case(&r.font))
         });
         let primary_cs = resolved_cs.map(|(face, _)| face);
         // Chinese, Japanese and Korean characters use the run's East Asian font (`w:eastAsia`) when
-        // it is installed and has them.
-        let wanted_ea = rc
-            .font_ea
-            .as_deref()
-            .filter(|f| !f.eq_ignore_ascii_case(&rc.font) && text.chars().any(east_asian))
-            .map(|f| (f, wordcraft_fonts::word::resolve(f, rc.bold, rc.italic)));
-        let primary_ea = wanted_ea.filter(|(_, r)| !r.substituted).map(|(_, r)| r.face);
+        // it, or the font table alternate it is drawn in (#2702), is installed and has them.
+        let wanted_ea = rc.font_ea.as_deref().filter(|f| !f.eq_ignore_ascii_case(&rc.font) && text.chars().any(east_asian)).map(|f| {
+            let family = lookup_family(self.env.doc, f);
+            let resolved = wordcraft_fonts::word::resolve(family, rc.bold, rc.italic);
+            (f, resolved, resolved.substituted || !family.eq_ignore_ascii_case(f))
+        });
+        let primary_ea = wanted_ea.filter(|(_, r, _)| !r.substituted).map(|(_, r, _)| r.face);
         // The levels by byte of `text`, from `lbase` on.
         let (levels, lbase): (&[u8], usize) = match dir {
             Dir::Para => (&self.levels, base),
@@ -264,7 +270,7 @@ impl<'a> Builder<'a> {
         // A missing Thai font: one face for the run's Thai and Latin text (#1549). A run with its
         // own complex-script font keeps that font for the Thai letters.
         let run_face: Option<FaceRef> = if primary_cs.is_none_or(|f| f.id() == primary.id()) {
-            thai_run_face(&rc.font, resolved.substituted, primary, text, rc.bold, rc.italic)
+            thai_run_face(&rc.font, requested_missing, primary, text, rc.bold, rc.italic)
         } else {
             None
         };
@@ -300,9 +306,9 @@ impl<'a> Builder<'a> {
             context: &context,
         });
         let missing = MissingFonts {
-            latin: (resolved.substituted || family != rc.font).then_some(rc.font.as_str()),
+            latin: requested_missing.then_some(rc.font.as_str()),
             complex: rc_cs.as_ref().filter(|_| resolved_cs.is_some_and(|(_, missing)| missing)).map(|r| r.font.as_str()),
-            east_asian: wanted_ea.filter(|(_, r)| r.substituted).map(|(f, _)| f),
+            east_asian: wanted_ea.filter(|(_, _, missing)| *missing).map(|(f, _, _)| f),
             names_east_asian: wanted_ea.is_some(),
         };
         self.note_missing_fonts(text, &segs, (primary, primary_cs, primary_ea), &missing);
