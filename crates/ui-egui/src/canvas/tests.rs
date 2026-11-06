@@ -3032,6 +3032,44 @@ fn middle_click_pastes_the_primary_selection_instead_of_scrolling() {
     assert_eq!(h.state().session.sel.focus.off, "pasted words".len(), "the caret ends up after the pasted text");
 }
 
+/// #1934: the paste goes in at the caret, as X11 and GTK middle-paste does: a selection left
+/// behind by an earlier click or drag is collapsed first, never replaced by another program's
+/// selection.
+#[test]
+#[cfg(target_os = "linux")]
+fn a_middle_click_pastes_at_the_caret_not_over_the_selection() {
+    let mut a =
+        WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("A line of text in a long document.")), Default::default());
+    a.canvas.auto_scroll.supported = true;
+    a.session.prefs.middle_click_paste = true;
+    a.services.primary_selection_text = Some(Box::new(|| Some("pasted words".to_string())));
+    let mut h: H = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    // Select the start of the line, leaving the caret ten characters in.
+    h.state_mut().session.run("select.range", &json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 10}})).unwrap();
+    h.run_steps(2);
+    let before = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert_eq!(before, "A line of text in a long document.");
+
+    let anchor = h.state().canvas.viewport.expect("the canvas is shown").center();
+    h.event(egui::Event::PointerMoved(anchor));
+    h.event(egui::Event::PointerButton { pos: anchor, button: egui::PointerButton::Middle, pressed: true, modifiers: Default::default() });
+    h.step();
+    h.event(egui::Event::PointerButton { pos: anchor, button: egui::PointerButton::Middle, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+
+    // The text comes in at the caret: nothing selected was replaced.
+    let after = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert_eq!(after, "A line of pasted wordstext in a long document.", "the paste goes in at the caret, over nothing");
+}
+
 /// #1934: only a middle click on the canvas pastes. Over the ribbon, a pane or a panel above
 /// the canvas the middle button is theirs — pasting there would put text in the document where
 /// the user clicked something else.

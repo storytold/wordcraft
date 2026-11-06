@@ -103,14 +103,18 @@ pub(crate) fn put_result(app: &WordApp, ctx: &egui::Context, r: &Value) {
     put(app, ctx, s("text"), s("html"), s("rtf"), s("mathml"));
 }
 
-/// The document's selection last put on the primary selection (#1934): the range it covered, so
-/// the same selection isn't put there again, and the text that was put there.
+/// The document's selection last put on the primary selection (#1934): which document held it,
+/// its revision and the range it covered, so the same selection isn't put there again while an
+/// edit under the same range is.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct SharedSelection {
+    /// Which document the selection was in ([`wordcraft_engine::Session::document_id`]).
+    pub doc: u64,
+    /// The document's revision then ([`wordcraft_engine::Session::rev`]): an edit or a reformat
+    /// under the same range changes the text, so it is published again.
+    pub rev: u64,
     /// The selection's range, as the session orders it.
     pub range: (wordcraft_doc::Pos, wordcraft_doc::Pos),
-    /// The text that was put on the primary selection.
-    pub text: String,
 }
 
 /// Put the document's selection on the primary selection (#1934).
@@ -128,28 +132,42 @@ pub(crate) struct SharedSelection {
 ///
 /// A selection that is still moving isn't published: while a button is down it changes with the
 /// pointer, and it settles when the pointer comes up, which is when it is published. The same
-/// selection isn't published twice, and a selection too large to paste isn't published at all.
+/// selection isn't published twice — but a different document, an edit or a reformat under the
+/// same range is, since the text changed, and a collapsed selection forgets the record, so a
+/// selection made again after another program took the primary selection is published again. A
+/// selection too large to paste isn't published at all, and is remembered as skipped so it isn't
+/// read afresh on every frame.
 pub(crate) fn share_selection(app: &mut WordApp, ctx: &egui::Context) {
     if !app.session.prefs.middle_click_paste {
+        return;
+    }
+    if ctx.input(|i| i.pointer.any_down()) {
+        // The selection is still moving.
+        return;
+    }
+    if app.session.sel.is_collapsed() {
+        // Nothing is selected: what is on the primary selection stays until the next selection,
+        // and the record goes so selecting the same range again publishes it again.
+        app.shared_selection = None;
         return;
     }
     let Some(set) = &app.services.set_primary_text else {
         return;
     };
-    if ctx.input(|i| i.pointer.any_down()) {
-        // The selection is still moving.
-        return;
-    }
+    let doc = app.session.document_id();
+    let rev = app.session.rev();
     let range = app.session.sel.ordered();
-    if app.shared_selection.as_ref().is_some_and(|s| s.range == range) {
+    if app.shared_selection.as_ref().is_some_and(|s| s.doc == doc && s.rev == rev && s.range == range) {
         return;
     }
+    // Recorded before the text is read: a selection too large to publish is not rebuilt on every
+    // frame while it stays selected.
+    app.shared_selection = Some(SharedSelection { doc, rev, range });
     let text = app.session.selected_text();
     if text.is_empty() || text.len() > MAX_PASTE_BYTES {
         return;
     }
     let _ = set(&text);
-    app.shared_selection = Some(SharedSelection { range, text });
 }
 
 /// Format names worth showing: not the clipboard protocol's own bookkeeping targets.
@@ -411,15 +429,41 @@ mod tests {
         share_selection(&mut a, &ctx);
         assert_eq!(primary.borrow().last().map(String::as_str), Some("of"), "the new selection is on it");
 
+        // An edit under the same range changes the text, so it is published again (a case change,
+        // as Shift+F3 makes): a middle click elsewhere never pastes what was selected before.
+        a.session.run("select.range", &json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 6}})).unwrap();
+        share_selection(&mut a, &ctx);
+        a.session.run("format.changeCase", &json!({"mode": "upper"})).unwrap();
+        share_selection(&mut a, &ctx);
+        assert_eq!(primary.borrow().last().map(String::as_str), Some("STUDIO"), "an edit under the same range is published again");
+
+        // A click collapses the selection: the record goes, so selecting the same range again is
+        // published again, even when another program took the primary selection in between.
+        a.session.run("select.collapse", &json!({"end": true})).unwrap();
+        share_selection(&mut a, &ctx);
+        let after_collapse = primary.borrow().len();
+        assert_eq!(primary.borrow().last().map(String::as_str), Some("STUDIO"), "a collapsed selection publishes nothing");
+        a.session.run("select.range", &json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 6}})).unwrap();
+        share_selection(&mut a, &ctx);
+        assert_eq!(primary.borrow().len(), after_collapse + 1, "a selection made again after a collapse is published again");
+
+        // The same range in another document is another selection.
+        a.session.set_document(wordcraft_doc::Document::from_text("Studio of text"));
+        a.session.run("select.range", &json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 6}})).unwrap();
+        share_selection(&mut a, &ctx);
+        assert_eq!(primary.borrow().last().map(String::as_str), Some("Studio"), "another document's same range is published");
+
         // A selection too large to paste isn't put there.
         a.session.run("select.all", &json!({})).unwrap();
         let big = "x".repeat(MAX_PASTE_BYTES + 1);
         a.run("document.setText", json!({"text": big})).unwrap();
         a.session.run("select.all", &json!({})).unwrap();
         share_selection(&mut a, &ctx);
-        assert_eq!(primary.borrow().last().map(String::as_str), Some("of"), "an oversized selection isn't put there");
+        assert_eq!(primary.borrow().last().map(String::as_str), Some("Studio"), "an oversized selection isn't put there");
+        assert!(a.shared_selection.is_some(), "it is remembered as skipped, so it is not rebuilt on every frame");
 
         // With the option off the mouse selection other programs keep stays theirs.
+        let published = primary.borrow().len();
         let mut b = app(Services {
             set_primary_text: Some(Box::new({
                 let s = primary.clone();
@@ -433,7 +477,7 @@ mod tests {
         b.run("document.setText", json!({"text": "Studio of text"})).unwrap();
         b.session.run("select.all", &json!({})).unwrap();
         share_selection(&mut b, &ctx);
-        assert_eq!(primary.borrow().len(), 2, "with the option off the selection isn't put there");
+        assert_eq!(primary.borrow().len(), published, "with the option off the selection isn't put there");
     }
 
     /// #816: a copy of an equation gives the host HTML with the equation as MathML beside the
