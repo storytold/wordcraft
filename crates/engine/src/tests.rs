@@ -10702,7 +10702,7 @@ fn spacing_commands_cancel_spacing_in_lines() {
     run(&mut s, "para.removeSpaceAfter", json!({}));
     assert_eq!(rp(&s).space_after, 0.0);
     // Lines from the paragraph's style are cancelled too.
-    std::sync::Arc::make_mut(&mut s.doc.styles).default_para.space_before_lines = Some(2.0);
+    Arc::make_mut(&mut s.doc.styles).default_para.space_before_lines = Some(2.0);
     let path = s.sel.focus.path.clone();
     s.doc.para_mut(StoryRef::Body, &path).unwrap().props.space_before_lines = None;
     assert_eq!(rp(&s).space_before, 24.0);
@@ -10731,7 +10731,7 @@ fn paragraph_dialog_spacing_cancels_spacing_in_lines() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "From WPS"}));
     let rp = |s: &Session| s.doc.styles.resolve_para(&s.doc.para_at(&s.sel.focus).unwrap().props);
-    std::sync::Arc::make_mut(&mut s.doc.styles).default_para.space_before_lines = Some(2.0);
+    Arc::make_mut(&mut s.doc.styles).default_para.space_before_lines = Some(2.0);
     let path = s.sel.focus.path.clone();
     s.doc.para_mut(StoryRef::Body, &path).unwrap().props.space_after_lines = Some(0.5);
     assert_eq!((rp(&s).space_before, rp(&s).space_after), (24.0, 6.0));
@@ -10741,6 +10741,48 @@ fn paragraph_dialog_spacing_cancels_spacing_in_lines() {
     assert_eq!((rp(&s).space_before, rp(&s).space_after), (9.0, 6.0), "Before in points wins over the style's lines; After keeps its own");
     run(&mut s, "para.set", json!({"props": {"spaceAfter": 4, "spaceAfterLines": 1.5}}));
     assert_eq!(rp(&s).space_after, 18.0, "lines given with the points stay");
+}
+
+/// Modify Style with Before/After in points: the style's spacing in lines, its own or from the
+/// style it is based on, no longer wins over them (a WPS Normal with `w:beforeLines="100"`
+/// set to 6 pt before is 6 pt on the page); lines given along with the points stay.
+#[test]
+fn modify_style_spacing_in_points_cancels_the_styles_lines() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "From WPS"}));
+    let rp = |s: &Session| s.doc.styles.resolve_para(&s.doc.para_at(&s.sel.focus).unwrap().props);
+    Arc::make_mut(&mut s.doc.styles).default_para.space_before_lines = Some(1.0);
+    let normal = Arc::make_mut(&mut s.doc.styles).get_mut("Normal").expect("Normal");
+    normal.para.space_after_lines = Some(0.5);
+    assert_eq!((rp(&s).space_before, rp(&s).space_after), (12.0, 6.0));
+    run(&mut s, "styles.modify", json!({"style": "Normal", "para": {"spaceBefore": 6}}));
+    assert_eq!((rp(&s).space_before, rp(&s).space_after), (6.0, 6.0), "Before in points wins; After keeps its lines");
+    run(&mut s, "styles.modify", json!({"style": "Normal", "para": {"spaceAfter": 4, "spaceAfterLines": 1.5}}));
+    assert_eq!(rp(&s).space_after, 18.0, "lines given with the points stay");
+    run(&mut s, "styles.modify", json!({"style": "Normal", "para": {"spaceAfter": 3}}));
+    assert_eq!(rp(&s).space_after, 3.0);
+}
+
+/// Setting the space before in points in a table cell cancels spacing in lines from the table's
+/// style too, which layout applies to the cell's paragraphs.
+#[test]
+fn spacing_in_points_in_a_cell_cancels_the_table_styles_lines() {
+    use wordcraft_doc::{Style, StyleKind};
+    let mut s = s();
+    let mut tb = Style { id: "Spaced".into(), name: "Spaced".into(), kind: StyleKind::Table, ..Default::default() };
+    tb.para.space_before_lines = Some(1.0);
+    Arc::make_mut(&mut s.doc.styles).upsert(tb);
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    let at = s.doc.body.iter().position(|b| b.as_table().is_some()).expect("a table") as u32;
+    let table = wordcraft_doc::Path(vec![at]);
+    s.doc.table_mut(StoryRef::Body, &table).unwrap().props.style = Some("Spaced".into());
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [at, 0, 0, 0], "off": 0}}));
+    let tp = s.doc.styles.table_style("Spaced").unwrap().para;
+    let rp = |s: &Session| s.doc.styles.resolve_para_in(&s.doc.para_at(&s.sel.focus).unwrap().props, Some(&tp));
+    assert_eq!(rp(&s).space_before, 12.0, "the table style's line");
+    run(&mut s, "para.spacing", json!({"before": 3}));
+    assert_eq!(rp(&s).space_before, 3.0, "the points win over the table style's lines");
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().props.space_before_lines, Some(0.0));
 }
 
 /// #712, as in Word: Ctrl+F (`edit.find` with no text) opens the Navigation pane and asks the UI
