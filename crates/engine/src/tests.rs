@@ -2285,6 +2285,21 @@ fn cell_widths_follow_the_grid_after_skipped_columns() {
 }
 
 #[test]
+fn file_versions_delete_and_clear_work() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Versioned."));
+    run(&mut s, "file.versions", json!({"save": "one"}));
+    run(&mut s, "file.versions", json!({"save": "two"}));
+    let list = run(&mut s, "file.versions", json!({}));
+    assert_eq!(list.as_array().map(|a| a.len()), Some(2));
+    let list = run(&mut s, "file.versions", json!({"delete": 0}));
+    assert_eq!(list.as_array().map(|a| a.len()), Some(1));
+    assert_eq!(list[0]["label"], "two");
+    let list = run(&mut s, "file.versions", json!({"clear": true}));
+    assert_eq!(list.as_array().map(|a| a.len()), Some(0));
+    assert!(s.run("file.versions", &json!({"delete": 0})).is_err());
+}
+
+#[test]
 fn a_rejected_version_restore_saves_nothing() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Original text."));
     s.run("review.restrict", &json!({"mode": "readOnly", "password": "pw"})).unwrap();

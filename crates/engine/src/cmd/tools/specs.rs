@@ -5,7 +5,7 @@ use super::autocorrect::autocorrect_options;
 use super::compare::{COMPARE_PARAMS, compare};
 use super::inspect::{accessibility, inspect_doc};
 use super::{
-    Block, CharProps, CmdError, CommandSpec, InlineObject, NumRef, Paragraph, Selection, StoryRef, Value, delete_selection, json, p, para_block,
+    Block, CharProps, CmdError, CommandSpec, InlineObject, NumRef, Paragraph, Selection, StoryRef, delete_selection, json, p, para_block,
     sel_result,
 };
 use std::sync::Arc;
@@ -72,34 +72,41 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"mode": "none|readOnly|comments|trackedChanges"} (starting enforcement; "none" doesn't stop a protected document — use review.restrict {"stop": true})"#),
         CommandSpec::new("file.versions", "Version History", "File › Info", |s, v| {
-            // Validate a restore before anything is saved: a rejected command must leave the
-            // version list as it was. A `restore` that is there but not a non-negative integer
-            // is refused, not read as absent.
+            // Validate a restore before mutating the version list: a rejected command must leave
+            // state as it was. `restore` must be a non-negative integer when present.
             let restore = if v.get("restore").is_some_and(|x| !x.is_null()) {
                 let i = p::u64(v, "restore").ok_or_else(|| CmdError::Params("restore (non-negative integer) is required".into()))?;
-                // A `u64` that doesn't fit in `usize` names no version: `as usize` would wrap it
-                // to a small index on a 32-bit target and restore the wrong document.
                 let i = usize::try_from(i).map_err(|_| CmdError::Params("no such version".into()))?;
                 let version = s.versions.get(i).cloned().ok_or_else(|| CmdError::Params("no such version".into()))?;
-                // The restore replaces the whole document, including the content the protection
-                // kept read-only, so the protection is stopped first (with its password, when it
-                // has one) — a restore must not go around it.
                 crate::cmd::protect::check_version_restore(s)?;
                 Some(version)
             } else {
                 None
             };
+            let mut changed = false;
             if let Some(label) = p::str(v, "save") {
-                s.versions.push((label.to_string(), crate::cmd::now_iso(), s.doc.clone()));
-                if s.versions.len() > 50 {
-                    s.versions.remove(0);
+                crate::versions::push_snapshot(s, label.to_string());
+                changed = true;
+            }
+            if p::bool(v, "clear") == Some(true) || p::bool(v, "deleteAll") == Some(true) {
+                crate::versions::clear(s);
+                changed = true;
+            } else if let Some(d) = v.get("delete").filter(|x| !x.is_null()) {
+                let i = d
+                    .as_u64()
+                    .or_else(|| d.as_f64().filter(|f| *f >= 0.0 && f.is_finite()).map(|f| f as u64))
+                    .ok_or_else(|| CmdError::Params("delete (non-negative integer) is required".into()))?;
+                let i = usize::try_from(i).map_err(|_| CmdError::Params("no such version".into()))?;
+                crate::versions::delete_index(s, i)?;
+                changed = true;
+            }
+            if changed && restore.is_none() {
+                if let Err(e) = crate::versions::persist(s) {
+                    log::warn!("version history persistence failed: {e}");
                 }
             }
             if let Some((_, _, d)) = restore {
                 s.checkpoint("Restore Version");
-                // A snapshot's own protection is stale: it was taken at some earlier moment, and
-                // restoring it must not bring a protection back that the live document doesn't
-                // have (#1327 follow-up).
                 let protection = s.doc.settings.protection.clone();
                 let protect_hash = s.doc.settings.protect_hash.clone();
                 let protect_formatting = s.doc.settings.protect_formatting;
@@ -107,16 +114,14 @@ pub fn specs() -> Vec<CommandSpec> {
                 s.doc.settings.protection = protection;
                 s.doc.settings.protect_hash = protect_hash;
                 s.doc.settings.protect_formatting = protect_formatting;
-                // The restored document reuses the open document's id; the body and any equation
-                // editing session are replaced.
                 s.note_body_replaced();
                 s.math = None;
                 s.touch();
                 s.clamp_selection();
             }
-            Ok(Value::Array(s.versions.iter().enumerate().map(|(i, (l, d, _))| json!({"index": i, "label": l, "date": d})).collect()))
+            Ok(crate::versions::list_value(s))
         })
-        .params(r#"{"save"?: label, "restore"?: index}"#)
+        .params(r#"{"save"?: label, "restore"?: index, "delete"?: index, "clear"?: true | "deleteAll"?: true} → version list; snapshots persist next to the document on desktop when a file path is known and the document is not password-protected"#)
         .pure(),
         CommandSpec::new("file.versions.compare", "Compare to Version", "Review › Compare", super::compare::compare_versions)
             .params(r#"{"version": index (original snapshot), "other"?: index | "current" (revised snapshot; default current), "showIn"?: "original" | "revised" | "new" (default new), "preserveVersions"?: bool (default true: keep saved version snapshots), "author"?: string, "level"?: "word" | "character", "caseChanges"|"whiteSpace"|"formatting"?: bool (default true), "moves"|"comments"|"headersFooters"|"footnotes"|"textBoxes"|"fields"?: bool (accepted; not honoured yet except tables)}"#),
