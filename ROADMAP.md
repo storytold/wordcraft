@@ -1,5 +1,7 @@
 # WordCraft roadmap
 
+> **Cursor update:** 2026-11-05 · Windows uses a cached native contrasting I-beam for Magnifier mouse tracking. Live fractional-DPI and accessibility-preference validation remain open; readiness estimates are unchanged.
+
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -150,6 +152,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-11-04: CLI `convert` rejects a missing or repeated `--format` value before opening the input or writing output, matching the existing page/scale option checks. Readiness estimates unchanged.
 - 2026-11-04: MHT import keeps semicolons and escaped quotes inside quoted MIME parameters, so an unrelated parameter cannot supply a false multipart boundary and hide the document text. Readiness estimates unchanged.
 - 2026-10-30: Equations: `\int`, `\sum` and the other n-ary operators typed with AutoCorrect wait for their limits. `\int` + Space, then `_0^1` and Space, gives ∫ with its limits and the caret in its operand, and `\int_0^1` typed in one go does the same, since any character that can't continue `\name` corrects it; this is observed in Word for Windows on #4938. Enter or an arrow key builds it without going into the operand, and `∫∫` puts the operand in the inner operator; those two are not observed in Word (#4917). Readiness unchanged.
+- 2026-11-05: Windows' contrasting I-beam is a native RGBA cursor rather than a hidden system pointer with a canvas-painted replacement. A controlled original/disabled/original experiment isolated centered Magnifier panning jumps to pointer replacement; a native-cursor prototype passed light/dark page, text/table selection and border-resizing checks at 100% display scale and 400% Magnifier. Live 125%/150% display scaling, enlarged pointers, custom colors, High Contrast and native allocation-failure recovery remain unverified. Caret accessibility is unchanged.
 
 - 2026-10-28: Ink replay, eraser picking, lasso selection and arrow-candidate discovery reuse the paragraph prefixes they have already scanned (#3614). Page item order, stroke geometry and saved data retain their behavior. This narrows the stability work; ink import fidelity, native pen input and broader corpus qualification remain open.
 - 2026-10-29: Page drawing finds text-box warps without rescanning the paragraph for every box (#3614). Only requested offsets are indexed, and each paragraph walk stops after its last requested character. Original Linux discovery, complete display-output and CLI/MCP save/reopen controls; native Word comparison untested. Readiness estimates unchanged.
@@ -795,6 +798,8 @@ Section page-numbering settings preserve `w:chapStyle` values across the full un
 MATH glyphs that reference the same construction now share its immutable variants and assembly data (#3630). Glyph mappings, values and the existing partial-record fallback stay unchanged. Repeated glyph IDs keep their last valid reference without retaining superseded constructions. Distinct overlapping constructions and assembly-only sharing remain separate.
 
 ## Revision history
+
+> 2026-11-05 · Native contrasting Windows I-beam and centered Magnifier prototype evidence; fractional-DPI, preference and failure-path acceptance remain open. Readiness unchanged.
 
 > 2026-11-03 · Arabic dialogs read right to left (rtl::Table); recorded in the progress log, readiness unchanged.
 >
