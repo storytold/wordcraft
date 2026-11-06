@@ -1195,9 +1195,9 @@ impl Styles {
         self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.fmt.font.as_deref().map(str::to_string)).or_else(|| self.default_font.clone())
     }
 
-    /// The document's default paragraph spacing: the default style's, with the Standard
-    /// paragraph style's over it, on ODF's initial values (no margins, single lines).
-    pub(super) fn doc_spacing(&self) -> Spacing {
+    /// The default style's paragraph spacing on ODF's initial values (no margins, single
+    /// lines): what a common style with no parent inherits (ODF 1.3 §16.2).
+    fn default_style_spacing(&self) -> Spacing {
         let mut sp = Spacing {
             before: Some(0.0),
             after: Some(0.0),
@@ -1208,7 +1208,15 @@ impl Styles {
             ..Default::default()
         };
         overlay_spacing(&mut sp, &self.default_spacing);
-        if let Some(s) = self.map.get("Standard").filter(|s| !s.auto) {
+        sp
+    }
+
+    /// The document's default paragraph spacing: the default style's, with the Standard
+    /// paragraph style's over it, on ODF's initial values (no margins, single lines). Should
+    /// Standard have a parent, what Standard leaves unset comes from that parent first (§16.2).
+    pub(super) fn doc_spacing(&self) -> Spacing {
+        let mut sp = self.default_style_spacing();
+        for (_, s) in self.chain("Standard").iter().rev().filter(|(_, s)| !s.auto) {
             overlay_spacing(&mut sp, &s.spacing);
         }
         sp
@@ -1467,11 +1475,23 @@ impl Styles {
         if s.parent.is_none() && fmt.size.is_none() && self.doc_size() != self.default_size {
             fmt.size = self.default_size;
         }
+        // Its spacing too: what it leaves unset is the default style's, where Standard's differs.
+        let mut spacing = s.spacing;
+        if s.parent.is_none() {
+            let (base, doc) = (self.default_style_spacing(), self.doc_spacing());
+            let pick = |own: Option<f32>, base: Option<f32>, doc: Option<f32>| own.or(base.filter(|_| base != doc));
+            spacing.before = pick(spacing.before, base.before, doc.before);
+            spacing.after = pick(spacing.after, base.after, doc.after);
+            spacing.left = pick(spacing.left, base.left, doc.left);
+            spacing.right = pick(spacing.right, base.right, doc.right);
+            spacing.first = pick(spacing.first, base.first, doc.first);
+            spacing.line = spacing.line.or(base.line.filter(|_| base.line != doc.line));
+        }
         let look = ParaLook {
             align: s.align,
             keep_next: s.keep_next == Some(true),
             fmt,
-            spacing: s.spacing,
+            spacing,
             tabs: s.tabs.clone(),
             borders: s.para_borders.filter(|b| b.takes_room()),
             shading: s.para_shading.flatten(),
