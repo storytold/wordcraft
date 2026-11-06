@@ -3185,6 +3185,163 @@ fn a_section_starting_a_page_flushes_the_page_before_with_its_own_margins() {
 }
 
 #[test]
+fn footnotes_carried_onto_a_filler_page_keep_the_ending_sections_margins() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    // Section one (72 pt margins, 468 pt of text) ends with a footnote too long for its last
+    // page; section two starts on an odd or even page, with 144 pt and 36 pt margins (432 pt of
+    // text). The blank page put in between is section one's: the rest of the note on it and the
+    // continuation separator above it keep section one's margin and width (#5620).
+    let sep = |cont: bool| {
+        let mut p = wordcraft_doc::Paragraph::new();
+        p.props.space_after = Some(0.0);
+        p.insert_object(0, InlineObject::note_separator(cont), &Default::default()).unwrap();
+        Some(vec![wordcraft_doc::para_block(p)])
+    };
+    for (start, custom) in
+        [(SectionStart::OddPage, false), (SectionStart::EvenPage, false), (SectionStart::OddPage, true), (SectionStart::EvenPage, true)]
+    {
+        let tag = format!("{start:?}, document separators: {custom}");
+        // Section one ends on page 1 (odd start) or page 2 (even start): the next is the filler.
+        let even = start == SectionStart::EvenPage;
+        let mut d = Document::from_text(if even { "Intro\nSection one text.\nTwo" } else { "Section one text.\nTwo" });
+        let end = usize::from(even);
+        if even {
+            d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.page_break_before = Some(true);
+        }
+        let id = footnote(&mut d, &Pos::body(end, 5), &"A long footnote that runs on and on. ".repeat(200));
+        d.para_mut(StoryRef::Body, &Path::top(end)).unwrap().section = Some(Box::new(SectionProps::default()));
+        d.last_section.start = start;
+        d.last_section.margin_left = 144.0;
+        d.last_section.margin_right = 36.0;
+        if custom {
+            d.footnote_separators =
+                wordcraft_doc::NoteSeparators { separator: sep(false), continuation_separator: sep(true), continuation_notice: None };
+        }
+        // A footnote of the following section, long enough to continue past its first page:
+        // its continuation separator must be restored to that section's own width.
+        let following = if custom {
+            Some(footnote(&mut d, &Pos::body(end + 1, 0), &"A long section-two footnote that runs on and on. ".repeat(200)))
+        } else {
+            None
+        };
+        let l = lay(&d);
+        let filler = end + 1;
+        assert_eq!(l.pages.get(filler).map(|p| p.section), Some(0), "{tag}: the blank page is section one's");
+        // The page after it still starts section two with section two's margins.
+        assert_eq!(l.pages.get(filler + 1).map(|p| (p.section, p.body.x)), Some((1, 144.0)), "{tag}: section two's first page");
+        if let Some(following) = following {
+            let pieces = note_pieces(&l, following);
+            assert_eq!(pieces.first().map(|p| p.0), Some(filler + 1), "{tag}: section-two note starts on section two's page");
+            let continuation_page = pieces.iter().find_map(|p| (p.0 > filler + 1).then_some(p.0)).expect("section-two note continues");
+            let rules: Vec<f32> = l.pages[continuation_page]
+                .items
+                .iter()
+                .filter_map(|it| if let Placed::Rule { x0, y0, x1, y1, .. } = it { (y0 == y1).then_some(x1 - x0) } else { None })
+                .collect();
+            assert!(rules.iter().any(|w| (w - 432.0).abs() < 0.01), "{tag}: section-two continuation separator: {rules:?}");
+        }
+        let page = &l.pages[filler];
+        let notes: Vec<(f32, f32)> = page
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Lines { story: StoryRef::Part(n), x, para, l0, l1, .. } if *n == id => {
+                    let lines = para.lines.get(*l0..*l1).unwrap_or(&[]);
+                    let right = lines.iter().flat_map(|ln| (ln.c0..ln.c1).filter_map(|k| ln.cl_right(k))).fold(0.0f32, f32::max);
+                    Some((*x, *x + right))
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!notes.is_empty(), "{tag}: the note continues onto the blank page");
+        for (x, right) in &notes {
+            assert!((x - 72.0).abs() < 0.01, "{tag}: the note sits at section one's margin, not {x}");
+            assert!(*right <= 540.01, "{tag}: the note stays inside section one's text, ends at {right}");
+        }
+        let rules: Vec<(f32, f32)> = page
+            .items
+            .iter()
+            .filter_map(|it| if let Placed::Rule { x0, y0, x1, y1, .. } = it { (y0 == y1).then_some((*x0, x1 - x0)) } else { None })
+            .collect();
+        assert!(
+            matches!(rules.as_slice(), [(x, w)] if (x - 72.0).abs() < 0.01 && (w - 468.0).abs() < 0.01),
+            "{tag}: section one's continuation separator, at its margin and across its text: {rules:?}"
+        );
+    }
+}
+
+#[test]
+fn footnotes_carried_onto_a_filler_page_keep_the_ending_sections_footnote_placement() {
+    use wordcraft_doc::section::{NotePos, NoteProps, SectionProps, SectionStart};
+    // Section one puts its footnotes beneath the text; section two (the default) puts
+    // them at the page bottom. The short rest of a note carried onto the blank page
+    // that puts section two on an odd page is section one's: it sits beneath that
+    // page's text, at its top, not down at the bottom where section two's placement
+    // would put it.
+    let mut d = Document::from_text("Section one text.\nTwo");
+    let id = footnote(&mut d, &Pos::body(0, 5), &"A long footnote that runs on and on. ".repeat(100));
+    let first = SectionProps { footnote_pr: NoteProps { pos: Some(NotePos::BeneathText), ..Default::default() }, ..Default::default() };
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(first));
+    d.last_section.start = SectionStart::OddPage;
+    d.last_section.margin_left = 144.0;
+    d.last_section.margin_right = 36.0;
+    // Section two's own note, on its own page: the filler's placement swap must have
+    // been undone by then, or this note would sit beneath the text too.
+    let id2 = footnote(&mut d, &Pos::body(1, 0), "Section two's own note.");
+    let l = lay(&d);
+    let pieces = note_pieces(&l, id);
+    assert_eq!(pieces.len(), 2, "the note starts on section one's page and its rest carries onto the filler: {pieces:?}");
+    assert_eq!(pieces[1].0, 1, "the rest is on the filler page: {pieces:?}");
+    assert!(pieces[1].3 < 200.0, "the rest sits beneath the filler page's text (top {}), not at its bottom", pieces[1].3);
+    let own = note_pieces(&l, id2);
+    assert_eq!(own.len(), 1, "section two's short note fits on its own page: {own:?}");
+    assert_eq!(own[0].0, 2, "section two's note is on section two's page: {own:?}");
+    assert!(own[0].3 > 400.0, "section two's note sits at its page bottom (top {}), not beneath its text", own[0].3);
+}
+
+#[test]
+fn filler_page_separators_take_the_ending_sections_field_context() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    // The continuation separator on the blank page is the ending section's: SECTION
+    // and SECTIONPAGES fields in it count that section, not the following one —
+    // whose field context is already installed when the filler page is finished.
+    // Section two runs to three pages; section one has two (its text page and the
+    // filler, which is section one's page), so both counts differ by section.
+    let body = format!("Section one text.\n{}", "Three pages of section two text. ".repeat(450));
+    let mut d = Document::from_text(&body);
+    footnote(&mut d, &Pos::body(0, 5), &"A long footnote that runs on and on. ".repeat(100));
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(SectionProps::default()));
+    d.last_section.start = SectionStart::OddPage;
+    let field = |instr: &str| InlineObject::Field {
+        instr: instr.into(),
+        result: String::new(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    let mut cont = wordcraft_doc::Paragraph::new();
+    cont.props.space_after = Some(0.0);
+    cont.insert_object(0, field("SECTIONPAGES"), &Default::default()).unwrap();
+    cont.insert_object(0, field("SECTION"), &Default::default()).unwrap();
+    d.footnote_separators = wordcraft_doc::NoteSeparators {
+        separator: None,
+        continuation_separator: Some(vec![wordcraft_doc::para_block(cont)]),
+        continuation_notice: None,
+    };
+    let l = lay(&d);
+    assert_eq!(l.pages.get(1).map(|p| p.section), Some(0), "the blank page is section one's");
+    let text: String = flat(display::page_display(&d, &l.pages[1], &Default::default()))
+        .iter()
+        .filter_map(|i| if let display::Draw::Glyphs { text, .. } = i { Some(text.as_str()) } else { None })
+        .collect();
+    assert!(
+        text.starts_with("12"),
+        "the filler's separator counts the ending section (its number 1, then its 2 pages including the filler): {text:?}"
+    );
+}
+
+#[test]
 fn paragraph_marks_sit_past_text_running_the_other_way() {
     // A left-to-right paragraph ending in Hebrew, and a right-to-left one ending in Latin: the
     // logically last letters are at the wrong edge, but the ¶ still goes past every glyph.

@@ -259,19 +259,47 @@ fn begin_section_state<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, sec: &Sec<'p
     }
 }
 
-/// The blank page that puts a section on the right side ends the previous section.
-fn end_previous_section<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<'p>, si: usize, block: usize) {
+/// The blank page that puts a section on the right side ends the previous section. It is
+/// finished here, with the footnotes continued onto it, under that section's margins and
+/// footnote separators: the page is the previous section's, and the new section's state is
+/// already in place for the page that follows (#5620, as #5291 for the page before the break).
+fn end_previous_section<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<'p>, si: usize, block: usize, totals: &Totals) {
     let Some((_, prev)) = si.checked_sub(1).and_then(|k| hf.sections.get(k)) else { return };
     pb.sect = prev;
     pb.sect_idx = si - 1;
     let (ph, pf) = (hf.heads.set(si - 1), hf.feet.set(si - 1));
     let top = body_top_for(ctx, prev, ph.default);
     pb.foot_top = foot_top_for(ctx, prev, pf.default);
+    // `begin_section_state` has laid the separators out for the new section's text width.
+    let doc = ctx.doc;
+    let seps = if doc.footnote_separators.is_empty() {
+        None
+    } else {
+        // The temporary separators are the ending section's, so any SECTION or
+        // SECTIONPAGES field in them counts that section — not the following one,
+        // whose field context `begin_section_state` has already installed.
+        let saved = (ctx.fields.section, ctx.fields.section_pages);
+        ctx.fields.section = u32::try_from(si - 1).unwrap_or(u32::MAX).saturating_add(1);
+        ctx.fields.section_pages = totals.section(si - 1);
+        let built = NoteSeps::new(ctx, &doc.footnote_separators, prev.text_width());
+        ctx.fields.section = saved.0;
+        ctx.fields.section_pages = saved.1;
+        Some(std::mem::replace(&mut pb.seps, built))
+    };
+    // The filler is the previous section's page for footnote placement too: a note
+    // continued onto it sits where that section puts its footnotes, not where the new
+    // section (whose state is already in place) puts its own.
+    let beneath = std::mem::replace(&mut pb.sect_beneath, doc.note_options(prev, false).pos == wordcraft_doc::section::NotePos::BeneathText);
     pb.new_page(block, top);
+    pb.finish_page();
+    pb.sect_beneath = beneath;
+    if let Some(seps) = seps {
+        pb.seps = seps;
+    }
 }
 
 /// Start the section on a new page, after the blank one that puts it on the right side if any.
-fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<'p>, sec: &Sec<'p>, (mode, block): (Mode, usize)) {
+fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<'p>, sec: &Sec<'p>, (mode, block): (Mode, usize), totals: &Totals) {
     // A page holds text running one way: a section turning the other way starts a page.
     if !mode.web {
         pb.take_back_break_page();
@@ -279,7 +307,7 @@ fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<
     let s = &ctx.doc.settings;
     let (filler, restart) = section_side(sec.start, sec.sect.page_num_start, pb.number, pb.pages.len(), s.even_odd_headers, s.mirror_margins);
     if filler && !mode.web {
-        end_previous_section(ctx, pb, hf, sec.si, block);
+        end_previous_section(ctx, pb, hf, sec.si, block, totals);
         pb.sect = sec.sect;
         pb.sect_idx = sec.si;
     }
@@ -519,7 +547,7 @@ pub(crate) fn layout_pass(
         if mode.web && si > 0 {
             // one long page
         } else if pb.pages.is_empty() || start != SectionStart::Continuous || turn != prev_turn {
-            start_section_page(&mut ctx, &mut pb, &hf, &sec, (mode, block));
+            start_section_page(&mut ctx, &mut pb, &hf, &sec, (mode, block), totals);
         } else {
             continue_page(&mut pb, sect, block);
         }
