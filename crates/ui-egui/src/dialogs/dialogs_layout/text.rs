@@ -320,6 +320,8 @@ pub struct LanguageForm {
     pub lang: String,
     pub no_proof: bool,
     pub detect: bool,
+    /// "Apply to the whole document": OK sends `scope: "document"` (every story), not the selection.
+    pub whole_document: bool,
 }
 
 impl LanguageForm {
@@ -328,12 +330,16 @@ impl LanguageForm {
         let style = s.doc.para_at(&s.sel.focus).and_then(|p| p.props.style.as_deref());
         let here = s.doc.styles.resolve_char(style, &s.typing_props());
         let lang = here.lang.unwrap_or_else(|| "en-US".into());
-        LanguageForm { lang, no_proof: here.no_proof, detect: s.prefs.detect_language }
+        LanguageForm { lang, no_proof: here.no_proof, detect: s.prefs.detect_language, whole_document: false }
     }
 
     /// `review.language` parameters for OK.
     pub fn params(&self) -> Value {
-        json!({"lang": self.lang, "noProof": self.no_proof, "detect": self.detect})
+        let mut v = json!({"lang": self.lang, "noProof": self.no_proof, "detect": self.detect});
+        if let (true, Some(m)) = (self.whole_document, v.as_object_mut()) {
+            m.insert("scope".into(), json!("document"));
+        }
+        v
     }
 }
 
@@ -360,6 +366,7 @@ pub(super) fn language_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LanguageForm) 
     ui.add_space(4.0);
     ui.checkbox(&mut f.no_proof, tl!("Do not check spelling or grammar"));
     ui.checkbox(&mut f.detect, tl!("Detect language automatically"));
+    ui.checkbox(&mut f.whole_document, tl!("Apply to the whole document"));
     ui.add_space(4.0);
     let set_default = ui.button(tl!("Set As Default")).clicked();
     if set_default && run(app, "review.language", json!({"lang": f.lang, "default": true, "detect": f.detect})) {

@@ -340,7 +340,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"format": "decimal|upperRoman|lowerLetter…", "text"?: "%1.", "start"?: n}"#),
         CommandSpec::new("review.language", "Language", "Review › Language", language).params(
-            r#"{"lang"?: "en-US|en-GB|pl-PL|fr-FR|…" (BCP 47; default en-US), "noProof"?: bool, "detect"?: bool (detect language automatically, a preference), "default"?: bool (also the document's default and the saved language for future blank documents)}"#,
+            r#"{"lang"?: "en-US|en-GB|pl-PL|fr-FR|…" (BCP 47; default en-US), "noProof"?: bool, "detect"?: bool (detect language automatically, a preference), "default"?: bool (also the document's default and the saved language for future blank documents), "scope"?: "selection" (default) | "document" (every run and paragraph mark of every story: body, headers, footers, notes, comments, text boxes, tables, glossary; one undo step, selection unchanged)}"#,
         ),
         CommandSpec::new("review.language.preferred", "Set as Default Language", "File › Options › Language", preferred_language)
             .params(r#"{"lang": "en-US|en-GB|pl-PL|nl-NL|…" (BCP 47)} — only the saved default proofing language, what future blank documents are written in, as Options › Language › Set as default does; the open document, the selection and the undo history don't change. Returns {"preferred": tag}."#)
