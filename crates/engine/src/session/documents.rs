@@ -46,6 +46,7 @@ pub struct DocState {
     pub(super) path: Option<PathBuf>,
     pub(super) file_name: Option<String>,
     pub(super) dirty: bool,
+    pub(super) disk: Option<crate::io::DiskStamp>,
     pub(super) pending_move: Option<crate::cmd::moves::PendingMove>,
     pub(super) find: FindState,
     pub(super) goal_x: Option<f32>,
@@ -100,6 +101,7 @@ impl DocState {
             path: None,
             file_name: None,
             dirty: false,
+            disk: None,
             pending_move: None,
             find: FindState::default(),
             goal_x: None,
@@ -200,6 +202,7 @@ impl Session {
             path: _,
             file_name: _,
             dirty: _,
+            disk: _,
             pending_move: _,
             find: _,
             goal_x: _,
@@ -290,6 +293,7 @@ impl Session {
             path,
             file_name,
             dirty,
+            disk,
             pending_move,
             find,
             goal_x,
@@ -337,6 +341,7 @@ impl Session {
         swap(&mut self.path, path);
         swap(&mut self.file_name, file_name);
         swap(&mut self.dirty, dirty);
+        swap(&mut self.disk, disk);
         swap(&mut self.pending_move, pending_move);
         swap(&mut self.find, find);
         swap(&mut self.goal_x, goal_x);
@@ -663,4 +668,22 @@ impl Session {
 
 fn unknown(id: u64) -> CmdError {
     CmdError::Params(format!("no open document has id {id}"))
+}
+
+impl Session {
+    /// Remember the active document's file as it is now: after it was read or written, and when
+    /// the person chooses to keep their version over a change on disk (the next change on disk
+    /// is then the one that counts). A document without a file remembers nothing.
+    pub fn stamp_disk(&mut self) {
+        self.disk = self.path.as_deref().and_then(crate::io::disk_stamp);
+    }
+
+    /// Whether another program has changed the active document's file since it was read or
+    /// written (#5623): its size or modification time differ from the stamp taken then. A
+    /// document without a file, or whose file is gone, hasn't changed on disk: there is nothing
+    /// to read again.
+    pub fn changed_on_disk(&self) -> bool {
+        let (Some(path), Some(was)) = (self.path.as_deref(), self.disk) else { return false };
+        crate::io::disk_stamp(path).is_some_and(|now| now != was)
+    }
 }
