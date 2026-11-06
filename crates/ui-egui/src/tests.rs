@@ -3607,7 +3607,9 @@ fn cancelling_a_waiting_print_job_frees_the_print_page() {
             cancels.set(cancels.get() + 1);
             never_sent
         }));
-        assert!(a.run("ui.printCancel", json!({})).is_err(), "nothing to cancel before a job is submitted");
+        for junk in [json!({}), json!(null), json!("all"), json!([1, 2]), json!({"cancel": -1, "job": "x"})] {
+            assert!(a.run("ui.printCancel", junk).is_err(), "nothing to cancel before a job is submitted");
+        }
         a.run("ui.print", json!({})).unwrap();
         assert!(a.printing.busy(), "the job waits");
         let enabled = |a: &WordApp| printing::commands(a).iter().any(|c| c["id"] == "ui.printCancel" && c["enabled"] == true);
@@ -3618,6 +3620,10 @@ fn cancelling_a_waiting_print_job_frees_the_print_page() {
         assert_eq!(a.printing.busy(), !never_sent, "never_sent {never_sent}: whether the page is still locked");
         assert_eq!(a.printing.settings.printer, "Office", "the chosen printer is kept");
         assert_eq!(a.printing.settings.copies, 3, "the settings are kept");
+        assert_eq!(a.printing.printers.len(), 1, "the printer list is kept");
+        let said = a.status_msg.as_ref().map(|(text, _)| text.as_str()).unwrap_or_default();
+        let expected = if never_sent { "Nothing was sent" } else { "already being sent" };
+        assert!(said.contains(expected), "never_sent {never_sent}: the status bar says what happened: {said:?}");
         assert_eq!(enabled(&a), !never_sent);
         assert_eq!(held.borrow().len(), 1);
     }

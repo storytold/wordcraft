@@ -42,19 +42,20 @@ fn jobs() -> std::sync::MutexGuard<'static, Vec<Job>> {
 /// never sent and quitting doesn't wait on the driver.
 pub fn finish_pending_jobs() {
     let pending = std::mem::take(&mut *jobs());
-    for job in pending {
-        if !job.worker.is_finished() && (job.cancel)() {
-            continue;
-        }
+    // Cancel them all first: a job left waiting while another is joined could start sending.
+    let sending: Vec<_> = pending.into_iter().filter(|job| !(job.cancel)()).collect();
+    for job in sending {
         if job.worker.join().is_err() {
             log::error!("the print worker stopped unexpectedly during shutdown");
         }
     }
 }
 
-/// The Print page's Cancel: stops every job not yet being sent. `true` when none will be sent.
+/// The Print page's Cancel: stops the job being submitted (the Print page submits one at a
+/// time, the latest) unless it has started reaching the spooler. `true` when it will never be
+/// sent. A job that has finished sending answers `false`, so its receipt is still shown.
 pub fn cancel() -> Box<dyn Fn() -> bool> {
-    Box::new(|| jobs().iter().filter(|job| !job.worker.is_finished()).fold(true, |all, job| (job.cancel)() && all))
+    Box::new(|| jobs().last().is_none_or(|job| (job.cancel)()))
 }
 
 pub fn submit() -> Submit {
@@ -103,28 +104,35 @@ mod tests {
         (worker, release, completion)
     }
 
+    /// A cancel action that records when it was asked and answers `stops`.
+    fn asked(stops: bool) -> (Box<dyn Fn() -> bool + Send>, std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let set = flag.clone();
+        let cancel = Box::new(move || {
+            set.store(true, std::sync::atomic::Ordering::SeqCst);
+            stops
+        });
+        (cancel, flag)
+    }
+
     /// Shutdown waits for a job already being sent, so the spooler has it before the process
     /// exits, but not for one still waiting on a driver (a sleeping printer, #5710): that one is
-    /// cancelled, so it is never sent, and quitting doesn't hang on it. The two share the one
-    /// test because JOBS is global.
+    /// cancelled, so it is never sent, and quitting doesn't hang on it. Every job is cancelled
+    /// before any is waited for, so a waiting job can't start sending meanwhile. The Print page's
+    /// Cancel asks only the latest job. One test, because JOBS is global.
     #[test]
     fn shutdown_waits_for_jobs_being_sent_and_cancels_the_rest() {
         let (sending, release_sending, sent) = worker();
         let (stuck, release_stuck, _) = worker();
-        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let asked = cancelled.clone();
-        *JOBS.lock().unwrap() = vec![
-            Job { worker: sending, cancel: Box::new(|| false) },
-            Job {
-                worker: stuck,
-                cancel: Box::new(move || {
-                    asked.store(true, std::sync::atomic::Ordering::SeqCst);
-                    true
-                }),
-            },
-        ];
-        // Cancel from the Print page: the job being sent can't be stopped, so not all are.
-        assert!(!cancel()(), "a job already being sent completes");
+        let (stop_sending, sending_asked) = asked(false);
+        let (stop_stuck, cancelled) = asked(true);
+        // The job being sent comes first, so a one-at-a-time shutdown would join it before
+        // cancelling the waiting one.
+        *JOBS.lock().unwrap() = vec![Job { worker: sending, cancel: stop_sending }, Job { worker: stuck, cancel: stop_stuck }];
+        // Cancel from the Print page asks the latest job only.
+        assert!(cancel()(), "the latest job was still waiting: never sent");
+        assert!(!sending_asked.load(std::sync::atomic::Ordering::SeqCst), "an earlier job isn't the one being submitted");
+        cancelled.store(false, std::sync::atomic::Ordering::SeqCst);
         let (finished, shutdown) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             finish_pending_jobs();
@@ -132,11 +140,18 @@ mod tests {
         });
         let wait = std::time::Duration::from_millis(200);
         assert!(shutdown.recv_timeout(wait).is_err(), "shutdown waits for the job being sent");
+        assert!(cancelled.load(std::sync::atomic::Ordering::SeqCst), "the waiting job was cancelled before the wait");
         release_sending.send(()).unwrap();
         assert!(shutdown.recv_timeout(std::time::Duration::from_secs(10)).is_ok(), "shutdown doesn't wait for the stuck job");
         sent.recv().unwrap();
-        assert!(cancelled.load(std::sync::atomic::Ordering::SeqCst), "the waiting job was cancelled");
         assert!(JOBS.lock().unwrap().is_empty(), "shutdown took every job");
+        // A job that has already been sent answers false, so the Print page keeps its receipt.
+        let (done, release_done, finished) = worker();
+        release_done.send(()).unwrap();
+        finished.recv().unwrap();
+        *JOBS.lock().unwrap() = vec![Job { worker: done, cancel: Box::new(|| false) }];
+        assert!(!cancel()(), "a sent job isn't reported as cancelled");
+        JOBS.lock().unwrap().clear();
         // The stuck worker was left behind without blocking shutdown; let it end.
         release_stuck.send(()).unwrap();
     }
