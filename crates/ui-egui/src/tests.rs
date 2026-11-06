@@ -605,6 +605,25 @@ fn caret_animation_is_a_ui_command_and_survives_a_restart() {
     assert_eq!(a.run("ui.caretAnimation", json!({"value": true})).unwrap()["caretAnimation"], true);
 }
 
+/// #2184: the Linux display server is a UI command, kept in `ui.json` for the desktop app to
+/// read at the next launch; junk is refused, and an unknown saved value reads as Automatic.
+#[test]
+fn display_server_is_a_ui_command_and_survives_a_restart() {
+    let mut a = app();
+    assert_eq!(a.run("ui.displayServer", json!({})).unwrap(), json!({"displayServer": "auto"}), "automatic by default; no value reads it");
+    assert_eq!(a.run("ui.displayServer", json!({"value": " X11 "})).unwrap(), json!({"displayServer": "x11"}));
+    for junk in [json!({"value": "mir"}), json!({"value": 1}), json!({"value": null}), json!({"value": ["wayland"]})] {
+        assert!(a.run("ui.displayServer", junk).is_err());
+    }
+    assert_eq!(a.ui.display_server, DisplayServer::X11, "a rejected value keeps the setting");
+    let saved = serde_json::to_string(&a.prefs()).unwrap();
+    assert!(saved.contains(r#""displayServer":"x11""#), "{saved}");
+    assert_eq!(UiState::from_json(saved.as_bytes()).unwrap().display_server, DisplayServer::X11);
+    for old in [r#"{"tab":"Insert"}"#, r#"{"displayServer":"mir"}"#, r#"{"displayServer":7}"#] {
+        assert_eq!(UiState::from_json(old.as_bytes()).unwrap().display_server, DisplayServer::Auto, "{old}");
+    }
+}
+
 /// #1945: showing or hiding the Quick Access Toolbar is a UI command (no value toggles it),
 /// kept between runs; settings saved before it existed show the toolbar; it works with no
 /// document open, like the other interface settings.
@@ -673,7 +692,7 @@ fn start_screen_shows_file_home_and_esc_leaves_no_document() {
     for id in ["format.bold", "text.insert", "file.save", "file.saveAs", "file.print", "edit.paste", "insert.table", "ui.print"] {
         assert!(!widgets::enabled(a, id), "{id} is off with no document");
     }
-    for id in ["file.new", "file.open", "ui.backstage", "ui.tab", "ui.discord", "file.options", "ui.theme"] {
+    for id in ["file.new", "file.open", "ui.backstage", "ui.tab", "ui.discord", "file.options", "ui.theme", "ui.statusCount"] {
         assert!(widgets::enabled(a, id), "{id} works with no document");
     }
     assert!(!chrome::qat_enabled(a, "file.save"));
@@ -3563,6 +3582,65 @@ fn a_successful_native_print_returns_to_the_document() {
     }
 }
 
+/// #5710: a job waiting on a sleeping network printer's driver locked the Print page until the
+/// driver answered. `ui.printCancel` stops it before it is sent and frees the page at once,
+/// keeping the chosen printer; a job already being sent can't be stopped, and the page says so.
+#[test]
+fn cancelling_a_waiting_print_job_frees_the_print_page() {
+    use printing::Printer;
+    for (never_sent, close_document) in [(true, false), (false, false), (true, true), (false, true)] {
+        let mut a = app();
+        a.printing.printers = vec![Printer { name: "Office".into(), label: String::new(), default: true }];
+        a.printing.settings.printer = "Office".into();
+        a.printing.settings.copies = 3;
+        // The worker never answers, as when the driver doesn't: keep its sender alive.
+        let held = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let senders = held.clone();
+        a.services.print_native = Some(Box::new(move |_, _, _, _| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            senders.borrow_mut().push(tx);
+            rx
+        }));
+        let asked = std::rc::Rc::new(std::cell::Cell::new(0));
+        let cancels = asked.clone();
+        a.services.cancel_print = Some(Box::new(move || {
+            cancels.set(cancels.get() + 1);
+            never_sent
+        }));
+        for junk in [json!({}), json!(null), json!("all"), json!([1, 2]), json!({"cancel": -1, "job": "x"})] {
+            assert!(a.run("ui.printCancel", junk).is_err(), "nothing to cancel before a job is submitted");
+        }
+        a.run("ui.print", json!({})).unwrap();
+        assert!(a.printing.busy(), "the job waits");
+        if close_document {
+            a.execute("file.close", json!({})).unwrap();
+            assert!(!a.has_document(), "the last document closed");
+            assert!(a.printing.busy(), "closing the document keeps its pending print job");
+        }
+        let enabled = |a: &WordApp| printing::commands(a).iter().any(|c| c["id"] == "ui.printCancel" && c["enabled"] == true);
+        assert!(enabled(&a), "Cancel is offered while the job waits");
+        let reply = a.execute("ui.printCancel", json!({})).unwrap();
+        assert_eq!(reply["cancelled"], never_sent);
+        assert_eq!(asked.get(), 1, "the host was asked to stop the job");
+        assert_eq!(a.printing.busy(), !never_sent, "never_sent {never_sent}: whether the page is still locked");
+        assert_eq!(a.printing.settings.printer, "Office", "the chosen printer is kept");
+        assert_eq!(a.printing.settings.copies, 3, "the settings are kept");
+        assert_eq!(a.printing.printers.len(), 1, "the printer list is kept");
+        let said = a.status_msg.as_ref().map(|(text, _)| text.as_str()).unwrap_or_default();
+        let expected = if never_sent {
+            "Printing cancelled. Nothing was sent to the printer."
+        } else {
+            "Cancellation could not be confirmed here. The printer driver may still be processing the job. If it appears in the system's print queue, cancel it there."
+        };
+        assert_eq!(said, expected, "never_sent {never_sent}: the status bar says what happened");
+        assert_eq!(enabled(&a), !never_sent);
+        if never_sent {
+            assert_eq!(a.execute("ui.printCancel", json!({})).unwrap_err(), "no print job is being submitted");
+        }
+        assert_eq!(held.borrow().len(), 1);
+    }
+}
+
 /// #1156: the Print page's preview fills the pane beside the settings, zooms from its own
 /// bar, scrolls both ways once the page outgrows the pane, and One Page fits it again.
 #[test]
@@ -5508,6 +5586,29 @@ fn interface_theme_resolves_against_the_os_appearance() {
     assert_eq!(a.run("ui.theme", json!({"value": "dark"})).unwrap()["theme"], "dark");
     assert_eq!(a.run("ui.dark", json!({})).unwrap()["theme"], "light", "ui.dark toggles the manual choice");
     assert_eq!(a.run("ui.theme", json!({})).unwrap()["theme"], "light");
+}
+
+/// #2797: `ui.statusCount` reads and sets what the status bar's live count shows; a value it
+/// doesn't know is refused, and the choice is written to `ui.json` and read back.
+#[test]
+fn the_status_bar_count_is_a_ui_command() {
+    let mut a = app();
+    assert_eq!(a.run("ui.statusCount", json!({})).unwrap(), json!({"statusCount": "words"}), "words, the default");
+    assert!(a.run("ui.statusCount", json!({"value": "paragraphs"})).is_err(), "junk is refused");
+    // A value that isn't a string reads the setting, like `ui.theme`'s.
+    assert_eq!(a.run("ui.statusCount", json!({"value": 7})).unwrap(), json!({"statusCount": "words"}));
+    assert_eq!(a.run("ui.statusCount", json!({"value": "characters"})).unwrap()["statusCount"], "characters");
+    assert_eq!(a.ui.status_count, StatusCount::Characters);
+    // Like the theme setting, the code is read without regard to case or surrounding space.
+    assert_eq!(a.run("ui.statusCount", json!({"value": " CharactersNoSpaces "})).unwrap()["statusCount"], "charactersNoSpaces");
+    assert_eq!(a.ui.status_count, StatusCount::CharactersNoSpaces);
+    let saved = serde_json::to_vec(&a.prefs()).unwrap();
+    assert_eq!(UiState::from_json(&saved).unwrap().status_count, StatusCount::CharactersNoSpaces, "kept between runs");
+    assert_eq!(UiState::from_json(br#"{"statusCount": "words"}"#).unwrap().status_count, StatusCount::Words);
+    // A `ui.json` with a wrong value in this one setting keeps the rest and reads the default.
+    assert_eq!(UiState::from_json(br#"{"statusCount": "paragraphs"}"#).unwrap().status_count, StatusCount::Words);
+    assert_eq!(UiState::from_json(br#"{"statusCount": 7}"#).unwrap().status_count, StatusCount::Words);
+    assert_eq!(UiState::from_json(br#"{"statusCount": ["characters"]}"#).unwrap().status_count, StatusCount::Words);
 }
 
 /// One app frame with the OS appearance egui reports; returns the window commands it sent.
