@@ -17,6 +17,11 @@ pub const MAX_DEPTH: usize = 256;
 pub const MAX_ELEMENTS: usize = 8_000_000;
 /// Maximum number of attributes on one element (#3702).
 pub const MAX_ATTRS: usize = 1024;
+/// Maximum cumulative number of retained attributes across one part (#4299): 1,024 full-attribute
+/// elements (`1,048,576` attributes, ~24 MiB of `(String, String)` headers on 32-bit WASM).
+pub const MAX_TOTAL_ATTRS: usize = 1024 * MAX_ATTRS;
+/// Maximum cumulative byte budget (names + values) of retained attributes across one part (#4299).
+pub const MAX_TOTAL_ATTR_BYTES: usize = 64 * 1024 * 1024;
 
 /// Known namespaces and the canonical prefix we use for them (read and write).
 pub const NAMESPACES: &[(&str, &str)] = &[
@@ -320,6 +325,8 @@ pub fn parse_strict(bytes: &[u8]) -> Result<El, DocxError> {
     parse_with(bytes, &[], true)
 }
 
+/// Parse XML bytes into an [`El`] tree, resolving namespaces and enforcing element, attribute,
+/// and nesting limits.
 fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Result<El, DocxError> {
     // UTF-16 (with a BOM) is transcoded to UTF-8; a UTF-8 BOM is stripped.
     let transcoded = utf16_to_utf8(bytes);
@@ -338,6 +345,8 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
     let mut stack: Vec<El> = Vec::new();
     let mut root: Option<El> = None;
     let mut count = 0usize;
+    let mut total_attrs = 0usize;
+    let mut total_attr_bytes = 0usize;
     let mut buf = Vec::new();
     loop {
         buf.clear();
@@ -371,6 +380,12 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
                     if raw_key == b"xmlns" || raw_key.starts_with(b"xmlns:") {
                         continue;
                     }
+                    let attr_bytes = raw_key.len().saturating_add(a.value.len());
+                    if total_attrs >= MAX_TOTAL_ATTRS || total_attr_bytes.saturating_add(attr_bytes) > MAX_TOTAL_ATTR_BYTES {
+                        return Err(DocxError::Limit("too many XML attributes".into()));
+                    }
+                    total_attrs = total_attrs.saturating_add(1);
+                    total_attr_bytes = total_attr_bytes.saturating_add(attr_bytes);
                     let (ares, alocal) = r.resolver_mut().resolve_attribute(key);
                     let alocal = String::from_utf8_lossy(alocal.as_ref()).into_owned();
                     let aname = match ares {
@@ -705,6 +720,22 @@ mod tests {
         let p = parse(format!("<p{many}/>").as_bytes()).unwrap();
         assert_eq!(p.attrs.len(), 256);
         assert_eq!(p.attr("a255"), Some("255"));
+    }
+
+    #[test]
+    fn cumulative_attributes_across_elements_is_capped() {
+        // 1,025 elements with 1,024 attributes each = 1,049,600 attributes > MAX_TOTAL_ATTRS (#4299).
+        let attrs = " a=\"\"".repeat(MAX_ATTRS);
+        let elem = format!("<c{attrs}/>");
+        let body = elem.repeat(1025);
+        let xml = format!("<root>{body}</root>");
+        assert!(matches!(parse(xml.as_bytes()), Err(DocxError::Limit(_))));
+
+        // Byte budget: 65 elements carrying a 1 MiB attribute value exceed MAX_TOTAL_ATTR_BYTES.
+        let big_val = "x".repeat(1024 * 1024);
+        let big_elem = format!("<c a=\"{big_val}\"/>");
+        let big_xml = format!("<root>{}</root>", big_elem.repeat(65));
+        assert!(matches!(parse(big_xml.as_bytes()), Err(DocxError::Limit(_))));
     }
 
     #[test]
