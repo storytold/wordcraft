@@ -4033,6 +4033,30 @@ fn a_page_break_in_a_heading_or_list_item_splits_it_like_enter() {
     assert_eq!(paras(&s).iter().map(|p| p.1.is_some()).collect::<Vec<_>>(), [true, true, true]);
 }
 
+/// A heading typed straight after a page break doesn't hold the break, so updating a table of
+/// contents before it leaves no blank page: the contents, then the headings on the next page.
+#[test]
+fn a_heading_typed_after_a_page_break_leaves_no_blank_page_after_a_contents() {
+    let mut s = s();
+    run(&mut s, "references.toc", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "insert.pageBreak", json!({}));
+    for i in 1..=15 {
+        run(&mut s, "para.style", json!({"style": "Heading 1"}));
+        run(&mut s, "text.insert", json!({"text": format!("Heading {i}")}));
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "references.toc", json!({}));
+    let text: Vec<_> = paras(&s).into_iter().map(|p| p.0).collect();
+    // The contents' entries have a tab; the heading itself doesn't.
+    let heading = text.iter().position(|t| t.contains("Heading 1") && !t.contains('\t')).expect("the first heading");
+    let page = s.layout().caret(&Pos::body(heading, text[heading].len())).map(|c| c.page);
+    assert_eq!(page, Some(1), "the first heading is on the page after the contents, with no blank page between");
+    let breaks: Vec<_> = text.iter().filter(|t| t.contains('\u{000C}')).collect();
+    assert_eq!(breaks, ["\u{000C}"], "the break has a paragraph of its own, not the heading's");
+}
+
 /// Tracked, the break and the paragraph marks around it are all insertions, and one undo takes
 /// the whole break back.
 #[test]
