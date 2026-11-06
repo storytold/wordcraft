@@ -3582,6 +3582,65 @@ fn a_successful_native_print_returns_to_the_document() {
     }
 }
 
+/// #5710: a job waiting on a sleeping network printer's driver locked the Print page until the
+/// driver answered. `ui.printCancel` stops it before it is sent and frees the page at once,
+/// keeping the chosen printer; a job already being sent can't be stopped, and the page says so.
+#[test]
+fn cancelling_a_waiting_print_job_frees_the_print_page() {
+    use printing::Printer;
+    for (never_sent, close_document) in [(true, false), (false, false), (true, true), (false, true)] {
+        let mut a = app();
+        a.printing.printers = vec![Printer { name: "Office".into(), label: String::new(), default: true }];
+        a.printing.settings.printer = "Office".into();
+        a.printing.settings.copies = 3;
+        // The worker never answers, as when the driver doesn't: keep its sender alive.
+        let held = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let senders = held.clone();
+        a.services.print_native = Some(Box::new(move |_, _, _, _| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            senders.borrow_mut().push(tx);
+            rx
+        }));
+        let asked = std::rc::Rc::new(std::cell::Cell::new(0));
+        let cancels = asked.clone();
+        a.services.cancel_print = Some(Box::new(move || {
+            cancels.set(cancels.get() + 1);
+            never_sent
+        }));
+        for junk in [json!({}), json!(null), json!("all"), json!([1, 2]), json!({"cancel": -1, "job": "x"})] {
+            assert!(a.run("ui.printCancel", junk).is_err(), "nothing to cancel before a job is submitted");
+        }
+        a.run("ui.print", json!({})).unwrap();
+        assert!(a.printing.busy(), "the job waits");
+        if close_document {
+            a.execute("file.close", json!({})).unwrap();
+            assert!(!a.has_document(), "the last document closed");
+            assert!(a.printing.busy(), "closing the document keeps its pending print job");
+        }
+        let enabled = |a: &WordApp| printing::commands(a).iter().any(|c| c["id"] == "ui.printCancel" && c["enabled"] == true);
+        assert!(enabled(&a), "Cancel is offered while the job waits");
+        let reply = a.execute("ui.printCancel", json!({})).unwrap();
+        assert_eq!(reply["cancelled"], never_sent);
+        assert_eq!(asked.get(), 1, "the host was asked to stop the job");
+        assert_eq!(a.printing.busy(), !never_sent, "never_sent {never_sent}: whether the page is still locked");
+        assert_eq!(a.printing.settings.printer, "Office", "the chosen printer is kept");
+        assert_eq!(a.printing.settings.copies, 3, "the settings are kept");
+        assert_eq!(a.printing.printers.len(), 1, "the printer list is kept");
+        let said = a.status_msg.as_ref().map(|(text, _)| text.as_str()).unwrap_or_default();
+        let expected = if never_sent {
+            "Printing cancelled. Nothing was sent to the printer."
+        } else {
+            "Cancellation could not be confirmed here. The printer driver may still be processing the job. If it appears in the system's print queue, cancel it there."
+        };
+        assert_eq!(said, expected, "never_sent {never_sent}: the status bar says what happened");
+        assert_eq!(enabled(&a), !never_sent);
+        if never_sent {
+            assert_eq!(a.execute("ui.printCancel", json!({})).unwrap_err(), "no print job is being submitted");
+        }
+        assert_eq!(held.borrow().len(), 1);
+    }
+}
+
 /// #1156: the Print page's preview fills the pane beside the settings, zooms from its own
 /// bar, scrolls both ways once the page outgrows the pane, and One Page fits it again.
 #[test]
