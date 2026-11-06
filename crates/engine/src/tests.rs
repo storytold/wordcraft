@@ -12497,3 +12497,32 @@ fn page_down_extends_a_selection_that_ends_in_collapsed_outline_text() {
     assert!(s.sel.focus.path.0[0] > 6, "Page Down extends the selection a page on: {:?}", s.sel.focus);
     assert!(s.layout().caret(&s.sel.focus).is_some(), "to a place the outline shows");
 }
+
+#[test]
+fn file_options_sets_the_space_between_sentences_the_grammar_check_expects() {
+    // #5648: two spaces after a sentence are an extra space by default, and right once the
+    // option says two; `review.issues` (F7 and the Spelling pane) follows it like the squiggles.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("One sentence.  Two  spaces."));
+    let extra_spaces = |s: &mut Session| -> Vec<String> {
+        let issues = s.run("review.issues", &json!({})).unwrap();
+        let texts = issues.as_array().unwrap().iter().filter(|i| i["kind"] == "grammar").map(|i| i["text"].as_str().unwrap_or("").to_string());
+        texts.filter(|t| !t.is_empty() && t.bytes().all(|b| b == b' ')).collect()
+    };
+    assert_eq!(run(&mut s, "file.options", json!({}))["spacesBetweenSentences"], "one");
+    assert_eq!(extra_spaces(&mut s), ["  ", "  "]);
+    let r = run(&mut s, "file.options", json!({"spacesBetweenSentences": "two"}));
+    assert_eq!(r["spacesBetweenSentences"], "two");
+    assert_eq!(r["opened"], false, "a setting opens nothing");
+    assert_eq!(extra_spaces(&mut s), ["  "], "only the doubled space inside the sentence is left");
+    assert!(s.run("file.options", &json!({"spacesBetweenSentences": "three"})).is_err());
+    assert!(s.run("file.options", &json!({"spacesBetweenSentences": 2, "markGrammar": false})).is_err());
+    assert!(s.prefs.mark_grammar, "a bad value changes nothing");
+    assert_eq!(s.prefs.sentence_spaces, wordcraft_layout::SentenceSpaces::Two);
+    // Saved and read back with the other settings; a damaged value reads as one space.
+    let saved = serde_json::to_value(&s.prefs).unwrap();
+    assert_eq!(saved["sentenceSpaces"], "two");
+    let back: crate::Prefs = serde_json::from_value(saved).unwrap();
+    assert_eq!(back.sentence_spaces, wordcraft_layout::SentenceSpaces::Two);
+    let damaged: crate::Prefs = serde_json::from_value(json!({"sentenceSpaces": 7, "ignoreNumbers": false})).unwrap();
+    assert_eq!((damaged.sentence_spaces, damaged.ignore_numbers), (wordcraft_layout::SentenceSpaces::One, false));
+}
