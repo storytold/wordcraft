@@ -20,6 +20,7 @@ mod projection;
 mod trace;
 mod units;
 mod views;
+mod xml;
 
 /// Maximum InkML XML size accepted for vector decoding (original bytes are preserved separately).
 const MAX_BYTES: usize = 2 * 1024 * 1024;
@@ -40,7 +41,7 @@ pub(super) fn read(bytes: &[u8], work: &mut usize) -> Option<Graphic> {
         return None;
     }
     spend(work, bytes.len().div_ceil(16))?;
-    let root = crate::xml::parse_strict(bytes).ok()?;
+    let root = xml::parse(bytes, work)?;
     if root.name != "ink:ink" {
         return None;
     }
@@ -234,11 +235,14 @@ impl<'a> InkReader<'a, '_> {
         if *nodes > MAX_NODES || depth > MAX_DEPTH {
             return None;
         }
+        if matches!(el.name.as_str(), "ink:annotation" | "ink:annotationXML") {
+            return Some(());
+        }
         let in_definitions = in_definitions || el.name == "ink:definitions";
         if in_definitions && el.name == "ink:trace" {
             self.definition_traces.insert(el as *const El);
         }
-        if let Some(id) = el.attr("xml:id") {
+        if let Some(id) = xml::id(el) {
             if id.is_empty()
                 || id.len() > 256
                 || matches!(id, "DefaultContext" | "DefaultBrush" | "DefaultCanvas" | "DefaultTraceFormat")
@@ -387,7 +391,7 @@ impl<'a> InkReader<'a, '_> {
                 "ink:brush" => ctx.brush = self.brush(child, 0)?,
                 "ink:context" => {
                     ctx = self.context(child, ctx, 0)?;
-                    if let Some(id) = child.attr("xml:id") {
+                    if let Some(id) = xml::id(child) {
                         self.contexts.insert(id, ctx.clone());
                     }
                 }
@@ -491,7 +495,7 @@ impl<'a> InkReader<'a, '_> {
                 }
             }
         }
-        if let Some(id) = el.attr("xml:id") {
+        if let Some(id) = xml::id(el) {
             self.tails.insert(id, Tail { stroke: tail, open: to == samples.len() && matches!(el.attr("continuation"), Some("begin" | "middle")) });
         }
         Some(())

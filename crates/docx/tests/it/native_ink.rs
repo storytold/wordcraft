@@ -3,6 +3,9 @@
 use super::*;
 use wordcraft_doc::graphic::{Graphic, GraphicItem, PathSeg};
 
+#[path = "native_ink/xml.rs"]
+mod xml;
+
 /// Replace the fixture package's InkML part without changing its DOCX drawing or relationships.
 fn replace_ink(bytes: &[u8], ink: &str) -> Vec<u8> {
     let mut files = unzip(bytes);

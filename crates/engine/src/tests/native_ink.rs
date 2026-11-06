@@ -11,6 +11,7 @@ mod completion;
 mod defaults;
 mod discrete;
 mod inverse;
+mod xml;
 
 /// Minimal InkML package part used in the native screen/PDF integration fixtures.
 const INK: &str = r##"<ink xmlns="http://www.w3.org/2003/InkML"><brush><brushProperty name="color" value="#2563EB"/><brushProperty name="width" value="4" units="pt"/></brush><trace>0 0, 50 0, 50 25</trace></ink>"##;
@@ -24,6 +25,10 @@ fn document(placement: &str) -> Vec<u8> {
 
 /// Package arbitrary synthetic InkML for the same placement, without importing any Word file.
 fn document_with_ink(placement: &str, ink: &str) -> Vec<u8> {
+    document_with_ink_bytes(placement, ink.as_bytes())
+}
+
+fn document_with_ink_bytes(placement: &str, ink: &[u8]) -> Vec<u8> {
     let inner = placement.ends_with("-inner");
     let placement = placement.strip_suffix("-inner").unwrap_or(placement);
     let content = if matches!(placement, "group" | "canvas") {
@@ -67,11 +72,12 @@ fn document_with_ink(placement: &str, ink: &str) -> Vec<u8> {
             "word/_rels/document.xml.rels",
             r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="ink" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="ink/ink1.xml"/></Relationships>"#,
         ),
-        ("word/ink/ink1.xml", ink),
     ] {
         zip.start_file(path, zip::write::SimpleFileOptions::default()).unwrap();
         zip.write_all(data.as_bytes()).unwrap();
     }
+    zip.start_file("word/ink/ink1.xml", zip::write::SimpleFileOptions::default()).unwrap();
+    zip.write_all(ink).unwrap();
     zip.finish().unwrap().into_inner()
 }
 

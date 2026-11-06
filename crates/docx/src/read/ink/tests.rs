@@ -8,6 +8,7 @@ mod completion;
 mod defaults;
 mod discrete;
 mod inverse;
+mod xml;
 
 /// Wrap InkML body markup with the real namespace and decode it under a fresh ample work budget.
 fn ink(body: &str) -> Option<Graphic> {
