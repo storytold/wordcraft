@@ -613,7 +613,7 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ins: u32, del: u32, o
     p
 }
 
-pub(super) const MERGE3_PARAMS: &str = r#"{"base": {"path"?: string, "text"?: string} | path string (common ancestor), "ours"?: {"path"?: string, "text"?: string} | path string (default: current document), "theirs": {"path"?: string, "text"?: string} | path string, "showIn"?: "new"|"original" (default new), "conflicts"?: "markers"|"ours"|"theirs" (default markers)}"#;
+pub(super) const MERGE3_PARAMS: &str = r#"{"base": {"path"?: string, "text"?: string} | path string (common ancestor), "ours"?: {"path"?: string, "text"?: string} | path string (default: current document), "theirs": {"path"?: string, "text"?: string} | path string, "showIn"?: "new"|"original" (default new), "conflicts"?: "markers"|"ours"|"theirs" (default markers)}. Merges body blocks only (block/paragraph-granular with word-level refinement for simple 1:1 paragraph text conflicts). Headers/footers, notes, comments, text boxes and other non-body stories are not merged; tables merge as whole blocks. Reports scope/nonBodyStoriesMerged/tables/wordLevelRefinements/notes."#;
 
 fn load_source(s: &Session, v: &Value, key: &str, ours_default_current: bool) -> Result<Document, CmdError> {
     let src = v.get(key);
@@ -926,16 +926,24 @@ fn try_merge_simple_para_conflict(base_b: &Arc<Block>, ob: &Arc<Block>, tb: &Arc
     Some((blocks, conflicts.max(1)))
 }
 
-/// Three-way merge at paragraph/block granularity. Returns (merged blocks, conflicts, notes).
-fn merge3_blocks(base: &[Arc<Block>], ours: &[Arc<Block>], theirs: &[Arc<Block>], conflict_mode: &str) -> (Vec<Arc<Block>>, usize, Vec<String>) {
+#[derive(Clone, Debug, Default)]
+struct Merge3Info {
+    tables_involved: bool,
+    word_level_refinements: usize,
+}
+
+fn has_table_blocks(blocks: &[Arc<Block>]) -> bool {
+    blocks.iter().any(|b| matches!(b.as_ref(), Block::Table(_)))
+}
+
+/// Three-way merge at paragraph/block granularity. Returns (merged blocks, conflicts, info).
+fn merge3_blocks(base: &[Arc<Block>], ours: &[Arc<Block>], theirs: &[Arc<Block>], conflict_mode: &str) -> (Vec<Arc<Block>>, usize, Merge3Info) {
     let ov = side_view(base, ours);
     let tv = side_view(base, theirs);
     let mut out = Vec::new();
     let mut conflicts = 0usize;
-    let notes = vec![
-        "3-way merge is block/paragraph-granular; non-body stories, fine formatting merges, and revision provenance may need manual review."
-            .to_string(),
-    ];
+    let mut info =
+        Merge3Info { tables_involved: has_table_blocks(base) || has_table_blocks(ours) || has_table_blocks(theirs), word_level_refinements: 0 };
     for i in 0..=base.len() {
         let oi = ov.ins.get(i).cloned().unwrap_or_default();
         let ti = tv.ins.get(i).cloned().unwrap_or_default();
@@ -979,6 +987,7 @@ fn merge3_blocks(base: &[Arc<Block>], ours: &[Arc<Block>], theirs: &[Arc<Block>]
                 } else if let Some(base_b) = base_b
                     && let Some((blocks, c)) = try_merge_simple_para_conflict(base_b, ob, tb, conflict_mode)
                 {
+                    info.word_level_refinements += 1;
                     conflicts += c;
                     out.extend(blocks);
                 } else {
@@ -1034,12 +1043,37 @@ fn merge3_blocks(base: &[Arc<Block>], ours: &[Arc<Block>], theirs: &[Arc<Block>]
     if out.is_empty() {
         out.push(para_block(Paragraph::new()));
     }
-    (out, conflicts, notes)
+    (out, conflicts, info)
 }
 
 /// Three-way merge: merge `ours` and `theirs` relative to `base`. Defaults to a new untitled
 /// document; `conflicts:"markers"` inserts conflict markers where both sides changed the same
 /// base region differently.
+fn merge3_result(conflicts: usize, conflict_mode: &str, info: &Merge3Info) -> Value {
+    let mut notes = vec![
+        "Merges body blocks only (block/paragraph-granular, with word-level refinement for simple 1:1 paragraph text conflicts).".to_string(),
+        "Headers/footers, footnotes/endnotes, comments, text boxes and other non-body stories are not merged; non-body content remains from the target document.".to_string(),
+        "Adopted styles, revisions, numbering and parts are remapped; formatting merge, revision provenance and complex part/media relationships may need manual review.".to_string(),
+    ];
+    if info.tables_involved {
+        notes.push("Tables are present and merged as whole blocks (no cell-level merge).".to_string());
+    }
+    if info.word_level_refinements > 0 {
+        notes.push(format!("Applied word-level merge refinement to {} simple paragraph conflict region(s).", info.word_level_refinements));
+    }
+    json!({
+        "merged": true,
+        "conflicts": conflicts,
+        "mode": "merge3",
+        "conflictMode": conflict_mode,
+        "scope": "body",
+        "nonBodyStoriesMerged": false,
+        "tables": { "involved": info.tables_involved, "mergedAs": "whole-block" },
+        "wordLevelRefinements": info.word_level_refinements,
+        "notes": notes,
+    })
+}
+
 pub(super) fn merge3(s: &mut Session, v: &Value) -> CmdResult {
     let base = load_source(s, v, "base", false)?;
     let theirs = load_source(s, v, "theirs", false)?;
@@ -1057,29 +1091,19 @@ pub(super) fn merge3(s: &mut Session, v: &Value) -> CmdResult {
         crate::cmd::protect::check_version_restore(s)?;
     }
     s.checkpoint("Merge");
-    if let Some(ours) = ours_doc {
+    let (merged, conflicts, info) = if let Some(ours) = ours_doc {
         let mut perms = 0u32;
         let base_blocks = s.doc.adopt_blocks(base, false, &mut perms).into_iter().map(Arc::new).collect::<Vec<_>>();
         let theirs_blocks = s.doc.adopt_blocks(theirs, false, &mut perms).into_iter().map(Arc::new).collect::<Vec<_>>();
         let ours_blocks = s.doc.adopt_blocks(ours, false, &mut perms).into_iter().map(Arc::new).collect::<Vec<_>>();
-        let (merged, conflicts, notes) = merge3_blocks(&base_blocks, &ours_blocks, &theirs_blocks, conflict_mode);
-        s.doc.body = merged;
-        s.doc.ensure_nonempty();
-        s.note_body_replaced();
-        s.math = None;
-        if show_in == "new" {
-            s.path = None;
-            s.file_name = None;
-            s.clear_versions();
-        }
-        s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
-        return Ok(json!({"merged": true, "conflicts": conflicts, "mode": "merge3", "conflictMode": conflict_mode, "notes": notes}));
-    }
-    let ours_blocks = s.doc.body.clone();
-    let mut perms = 0u32;
-    let base_blocks = s.doc.adopt_blocks(base, false, &mut perms).into_iter().map(Arc::new).collect::<Vec<_>>();
-    let theirs_blocks = s.doc.adopt_blocks(theirs, false, &mut perms).into_iter().map(Arc::new).collect::<Vec<_>>();
-    let (merged, conflicts, notes) = merge3_blocks(&base_blocks, &ours_blocks, &theirs_blocks, conflict_mode);
+        merge3_blocks(&base_blocks, &ours_blocks, &theirs_blocks, conflict_mode)
+    } else {
+        let ours_blocks = s.doc.body.clone();
+        let mut perms = 0u32;
+        let base_blocks = s.doc.adopt_blocks(base, false, &mut perms).into_iter().map(Arc::new).collect::<Vec<_>>();
+        let theirs_blocks = s.doc.adopt_blocks(theirs, false, &mut perms).into_iter().map(Arc::new).collect::<Vec<_>>();
+        merge3_blocks(&base_blocks, &ours_blocks, &theirs_blocks, conflict_mode)
+    };
     s.doc.body = merged;
     s.doc.ensure_nonempty();
     s.note_body_replaced();
@@ -1090,5 +1114,5 @@ pub(super) fn merge3(s: &mut Session, v: &Value) -> CmdResult {
         s.clear_versions();
     }
     s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
-    Ok(json!({"merged": true, "conflicts": conflicts, "mode": "merge3", "conflictMode": conflict_mode, "notes": notes}))
+    Ok(merge3_result(conflicts, conflict_mode, &info))
 }

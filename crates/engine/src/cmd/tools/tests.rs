@@ -303,6 +303,10 @@ fn merge3_marks_conflicts_and_supports_resolution_modes() {
     let mut s = Session::new(Document::from_text("base\nours"));
     let r = s.run("review.merge", &json!({"base": {"text": "base\nold"}, "theirs": {"text": "base\ntheirs"}, "conflicts": "markers"})).unwrap();
     assert!(r["conflicts"].as_u64().unwrap() >= 1, "{r}");
+    assert_eq!(r["scope"], "body", "{r}");
+    assert_eq!(r["nonBodyStoriesMerged"], false, "{r}");
+    assert_eq!(r["tables"]["mergedAs"], "whole-block", "{r}");
+    assert!(r["notes"].as_array().is_some_and(|a| !a.is_empty()), "{r}");
     let text = s.doc.plain_text(StoryRef::Body);
     assert!(text.contains("<<<<<<< ours"), "{text}");
     assert!(text.contains(">>>>>>> theirs"), "{text}");
