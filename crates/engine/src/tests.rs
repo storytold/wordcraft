@@ -10494,6 +10494,44 @@ fn picture_change_keeps_the_replacement_format() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Change Picture keeps the width and takes the replacement's aspect ratio: swapping a figure for
+/// a revised one of a different shape must not stretch it into the old frame.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn picture_change_keeps_width_and_takes_new_aspect() {
+    let dir = scratch_dir("picture-change-aspect");
+    let mut wide = Vec::new();
+    image::RgbImage::from_pixel(40, 20, image::Rgb([200, 30, 30])).write_to(&mut std::io::Cursor::new(&mut wide), image::ImageFormat::Png).unwrap();
+    let mut tall = Vec::new();
+    image::RgbImage::from_pixel(30, 60, image::Rgb([30, 30, 200])).write_to(&mut std::io::Cursor::new(&mut tall), image::ImageFormat::Png).unwrap();
+    let (first, second) = (dir.join("wide.png"), dir.join("tall.png"));
+    std::fs::write(&first, &wide).unwrap();
+    std::fs::write(&second, &tall).unwrap();
+
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "insert.picture", json!({"path": first.to_string_lossy()}));
+    let size = |s: &Session| {
+        let mut out = (0.0f32, 0.0f32, [1.0f32; 4]);
+        s.doc.objects_in_reading_order(&mut |o| {
+            if let wordcraft_doc::para::InlineObject::Image { w, h, crop, .. } = o {
+                out = (*w, *h, *crop);
+            }
+        });
+        out
+    };
+    let (w0, h0, _) = size(&s);
+    assert!((w0 / h0 - 2.0).abs() < 1e-3, "inserted at its own 2:1 shape: {w0} x {h0}");
+    run(&mut s, "picture.crop", json!({"left": 0.1}));
+    let (w_cropped, _, crop) = size(&s);
+    assert!(crop[0] > 0.0, "cropped before the change");
+    run(&mut s, "picture.change", json!({"path": second.to_string_lossy()}));
+    let (w1, h1, crop) = size(&s);
+    assert!((w1 - w_cropped).abs() < 1e-3, "the width is kept: {w_cropped} -> {w1}");
+    assert!((h1 / w1 - 2.0).abs() < 1e-3, "the height follows the new 1:2 picture: {w1} x {h1}");
+    assert_eq!(crop, [0.0; 4], "the old picture's crop is dropped");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn json_open_repairs_hostile_run_lengths() {
     use wordcraft_doc::{Block, Document};
