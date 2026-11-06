@@ -79,6 +79,10 @@ pub(super) struct Body<'a> {
     /// drawings were waiting before it.
     loose_open: Option<(usize, usize, usize)>,
     fmt: Vec<Fmt>,
+    /// For each paragraph being read: the size its heading, title or code style gives its text.
+    para_sizes: Vec<Option<f32>>,
+    /// That size for the paragraph being finished.
+    para_size: Option<f32>,
     para: Option<Para>,
     /// The text read last ended in a space collapsed from XML whitespace (not a `text:s`).
     xml_space_end: bool,
@@ -237,6 +241,8 @@ impl<'a> Body<'a> {
             xml_space_end: false,
             spaces_left: MAX_EXTRA_SPACES,
             para_cont: false,
+            para_sizes: Vec::new(),
+            para_size: None,
             lists: Vec::new(),
             lists_saved: Vec::new(),
             item_used: Vec::new(),
@@ -952,6 +958,8 @@ impl Body<'_> {
         } else {
             self.para_cont = false;
         }
+        let kind_size = matches!(kind, Kind::Code | Kind::Heading(_) | Kind::Title).then(|| style.and_then(|s| self.styles.named_size(s))).flatten();
+        self.para_sizes.push(kind_size);
         self.fmt.push(base);
         // Drawings waiting outside a paragraph come first in it, when it is the text's own (not
         // a text box's, a note's or a cell's).
@@ -970,6 +978,7 @@ impl Body<'_> {
         self.index_marks.clear();
         let Some(mut p) = self.para.take() else { return };
         self.glue_connectors(&mut p);
+        self.para_size = self.para_sizes.pop().flatten();
         // A paragraph without text has its own text formatting as its mark's: its size is its
         // height, and its drawings' runs have it.
         if let Some(base) = self.fmt.pop()
@@ -1020,8 +1029,9 @@ impl Body<'_> {
             p.kind = Kind::Normal;
         }
         if matches!(p.kind, Kind::Code | Kind::Heading(_) | Kind::Title) {
-            // The style says the size of its text: text of another size keeps its own.
-            let style_size = self.fmt.last().and_then(|f| f.size);
+            // The style says the size of its text, stated again or not: text of another size keeps
+            // its own.
+            let style_size = self.para_size;
             for i in &mut p.inlines {
                 if let Inline::Text(_, f) = i {
                     if p.kind == Kind::Code {
@@ -1530,7 +1540,10 @@ impl Body<'_> {
         match local(q) {
             "span" => {
                 let base = self.cur_fmt();
-                let fmt = get(a, "text:style-name").map_or_else(|| base.clone(), |s| self.styles.span_fmt(s, &base));
+                // A size in percent is of the size it is in: its heading's, where nothing nearer
+                // states one.
+                let sized = Fmt { size: base.size.or(self.para_sizes.last().copied().flatten()), ..base.clone() };
+                let fmt = get(a, "text:style-name").map_or_else(|| base.clone(), |s| self.styles.span_fmt(s, &sized));
                 self.fmt.push(fmt);
             }
             "a" => {

@@ -305,3 +305,46 @@ fn a_headings_text_of_another_size_keeps_it() {
     assert_eq!(d.body[0].as_para().unwrap().runs[0].props.size, None, "the style's stays the style's");
     check(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap(), "written from the model");
 }
+
+/// Text at its heading's size goes with the heading style, stated or not, and a size in percent
+/// is of the heading's size; text of another size keeps it, and so does a paragraph's own.
+#[test]
+fn a_headings_text_sizes_are_measured_against_the_heading() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:style style:name="Heading" style:family="paragraph"><style:text-properties fo:font-size="20pt"/></style:style><style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:parent-style-name="Heading" style:default-outline-level="1"><style:text-properties fo:font-size="80%"/></style:style></office:styles></office:document-styles>"#
+    );
+    let span = |name: &str, size: &str| {
+        format!(r#"<style:style style:name="{name}" style:family="text"><style:text-properties fo:font-size="{size}"/></style:style>"#)
+    };
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles>{}{}{}<style:style style:name="P1" style:family="paragraph" style:parent-style-name="Heading_20_1"><style:text-properties fo:font-size="30pt"/></style:style></office:automatic-styles><office:body><office:text><text:h text:style-name="Heading_20_1" text:outline-level="1">plain <text:span text:style-name="Same">same</text:span> <text:span text:style-name="Pct">pct</text:span> <text:span text:style-name="Other">other</text:span></text:h><text:h text:style-name="P1" text:outline-level="1">own</text:h></office:text></office:body></office:document-content>"#,
+        span("Same", "16pt"),
+        span("Pct", "50%"),
+        span("Other", "10pt"),
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    let sizes = |d: &Document| {
+        let p = d.body[0].as_para().unwrap();
+        let of = |word: &str| {
+            let at = p.text.find(word).unwrap();
+            let mut from = 0;
+            let run = p.runs.iter().find(|r| {
+                from += r.len;
+                at < from
+            });
+            d.styles.resolve_char(p.props.style.as_deref(), &run.unwrap().props).size
+        };
+        [of("plain"), of("same"), of("pct"), of("other")]
+    };
+    let want = |t: f32| [t, t, 8.0, 10.0];
+    let plain = |d: &Document| d.body[0].as_para().unwrap().runs.iter().filter(|r| r.props.size.is_some()).count();
+    assert_eq!(sizes(&d), want(16.0));
+    assert_eq!(plain(&d), 2, "only the two of another size state one");
+    // The paragraph's own size stays with its text.
+    let own = d.body[1].as_para().unwrap();
+    assert_eq!(d.styles.resolve_char(own.props.style.as_deref(), &own.runs[0].props).size, 30.0);
+    // A change to the style reaches what goes with it.
+    let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+    std::sync::Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(24.0);
+    assert_eq!(sizes(&d), want(24.0));
+}

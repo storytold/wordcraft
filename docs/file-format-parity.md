@@ -320,7 +320,7 @@ CSL and library import are separate work.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-05 | trivial | ODT: text of another size in a heading, title or code paragraph keeps it. Every run's size went with the style, on screen and in LibreOffice after a save |
+| 2026-11-05 | trivial | ODT: text of another size in a heading, title or code paragraph keeps it. Every run's size went with the style, on screen and in LibreOffice after a save Text at the heading's size goes with the style, stated or not, and a percentage is of the heading's size. |
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` keeps its default and explicit values in schema-ordered repeated saves |
 | 2026-11-04 | trivial | REF context update: 2026-11-04 · #4609 retains the label and template actually rendered by an ancestor list instance; implicitly counted levels remain distinct from explicitly rendered paragraphs. Synthetic instance-override and field-update regressions; no new native Word qualification or readiness change. |
 | 2026-11-04 | trivial | PR #4609: relative REF keeps context already displayed by the own or a needed ancestor label; six synthetic legal-template cases and separate-list context follow the Word for Windows measurements reported by @pakiat in PR discussion. Existing unknown-switch/cache boundaries and readiness estimates unchanged; no new native Word run. |

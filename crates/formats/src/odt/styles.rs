@@ -1263,6 +1263,16 @@ impl Styles {
     /// The formatting of a span in text style `name` over `base`: the automatic styles' over the
     /// nearest custom character style, which the span then names ([`Fmt::extra`]'s style, by ODF
     /// name until import makes it a document style id); without one, the whole chain's.
+    /// The size of text in paragraph style `name` by its named styles, not its automatic ones,
+    /// which are the paragraph's own: what they say on what the document says.
+    pub(super) fn named_size(&self, name: &str) -> Option<f32> {
+        let mut f = Fmt { size: self.doc_size(), ..Fmt::default() };
+        for (_, s) in self.chain(name).iter().rev().filter(|(_, s)| !s.auto) {
+            s.fmt.apply(&mut f);
+        }
+        f.size
+    }
+
     pub(super) fn span_fmt(&self, name: &str, base: &Fmt) -> Fmt {
         let chain = self.chain(name);
         let Some(at) = chain.iter().position(|(n, _)| self.is_named_text(n)) else { return self.text_fmt(name, base) };
