@@ -45,6 +45,10 @@ pub enum Event {
     Resync {
         reason: String,
     },
+    /// Session node ids for addressing paragraphs (ADR-0002).
+    Nodes {
+        nodes: Vec<wordcraft_collab::wire::NodeRef>,
+    },
     Presence {
         client_id: String,
         state: Value,
@@ -175,7 +179,7 @@ impl Client {
                 }
                 Event::Rejected { reject }
             }
-            ServerMsg::Nodes { .. } => Event::None,
+            ServerMsg::Nodes { nodes } => Event::Nodes { nodes },
             ServerMsg::Presence { client_id, state } => Event::Presence { client_id, state },
             ServerMsg::Left { client_id } => Event::Left { client_id },
             ServerMsg::Snapshot { version, bytes, last } => {

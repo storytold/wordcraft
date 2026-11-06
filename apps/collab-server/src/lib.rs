@@ -30,7 +30,7 @@ use tokio::time::{Duration, interval, timeout};
 use sha2::Digest;
 use wordcraft_collab::room::{Model, Role, Room};
 use wordcraft_collab::wire::{ClientMsg, Participant, Reject, RejectCode, ServerMsg, Version};
-use wordcraft_collab_doc::DocModel;
+use wordcraft_collab_engine::SessionModel;
 
 pub mod store;
 
@@ -91,7 +91,7 @@ struct Peer {
 
 /// A document room and its connected peers.
 struct RoomState {
-    room: Room<DocModel>,
+    room: Room<SessionModel>,
     peers: HashMap<String, Peer>,
     /// Cabinet session that holds the lease; a different session may join only
     /// as `owner` (ADR-0008).
@@ -162,13 +162,13 @@ impl AppState {
                 let restored = self.store.load(doc).and_then(|snapshot| {
                     let document = serde_json::from_slice::<wordcraft_doc::Document>(&snapshot.model).ok()?;
                     Some(RoomState {
-                        room: Room::restore(DocModel::new(document), snapshot.version, snapshot.epoch),
+                        room: Room::restore(SessionModel::from_document(document), snapshot.version, snapshot.epoch),
                         peers: HashMap::new(),
                         session: String::new(),
                     })
                 });
                 Arc::new(Mutex::new(restored.unwrap_or_else(|| RoomState {
-                    room: Room::new(DocModel::new(wordcraft_doc::Document::new())),
+                    room: Room::new(SessionModel::from_document(wordcraft_doc::Document::new())),
                     peers: HashMap::new(),
                     session: String::new(),
                 })))
@@ -535,7 +535,7 @@ fn snapshot_frames(version: Version, bytes: Vec<u8>) -> Vec<ServerMsg> {
 fn build_docx(room: &Arc<Mutex<RoomState>>) -> Result<(Vec<u8>, Vec<String>), String> {
     let doc = {
         let guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
-        guard.room.model().document().clone()
+        guard.room.model().session().doc.clone()
     };
     let mut warnings = Vec::new();
     if doc.kept.get().is_some() {

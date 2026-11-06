@@ -7468,8 +7468,21 @@ dependencies = [
  "wordcraft-collab",
  "wordcraft-collab-doc",
  "wordcraft-collab-engine",
+ "wordcraft-collab-ws",
  "wordcraft-doc",
  "wordcraft-docx",
+]
+
+[[package]]
+name = "wordcraft-collab-ws"
+version = "0.15.1"
+dependencies = [
+ "futures-util",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "wordcraft-collab",
+ "wordcraft-collab-client",
 ]
 
 [[package]]
