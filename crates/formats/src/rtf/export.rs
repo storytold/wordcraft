@@ -33,6 +33,12 @@ pub fn esc(s: &str) -> String {
     o
 }
 
+/// [`esc`] for a `\fonttbl` name: `;` would end the entry, so it is written `\'3b`, and control
+/// characters, which `esc` writes as `\line` or `\tab`, are dropped.
+fn esc_font(name: &str) -> String {
+    esc(&name.replace(char::is_control, "")).replace(';', "\\'3b")
+}
+
 pub(super) struct Tables {
     pub(super) fonts: Vec<String>,
     pub(super) colors: Vec<Rgb>,
@@ -147,6 +153,15 @@ fn rtf_border_style(s: wordcraft_doc::props::BorderStyle) -> &'static str {
         BorderStyle::Triple => "\\brdrtriple",
         BorderStyle::DotDash => "\\brdrdashd",
         BorderStyle::Wave => "\\brdrwavy",
+        BorderStyle::ThinThickSmallGap => "\\brdrtnthsg",
+        BorderStyle::ThickThinSmallGap => "\\brdrthtnsg",
+        BorderStyle::ThinThickThinSmallGap => "\\brdrtnthtnsg",
+        BorderStyle::ThinThickMediumGap => "\\brdrtnthmg",
+        BorderStyle::ThickThinMediumGap => "\\brdrthtnmg",
+        BorderStyle::ThinThickThinMediumGap => "\\brdrtnthtnmg",
+        BorderStyle::ThinThickLargeGap => "\\brdrtnthlg",
+        BorderStyle::ThickThinLargeGap => "\\brdrthtnlg",
+        BorderStyle::ThinThickThinLargeGap => "\\brdrtnthtnlg",
     }
 }
 
@@ -235,7 +250,9 @@ impl Writer {
         // leaks the reader's NTLM credentials.
         match f.link.as_deref().filter(|l| wordcraft_doc::link::is_safe_href(l)) {
             Some(l) => {
-                out.push_str(&format!("{{\\field{{\\*\\fldinst{{HYPERLINK \"{}\"}}}}{{\\fldrslt{{{}}}}}}}", esc(&l.replace('"', "%22")), body));
+                // In a field's quotes `\\` is one backslash; a quote is stored as `%22`.
+                let target = l.replace('\\', "\\\\").replace('"', "%22");
+                out.push_str(&format!("{{\\field{{\\*\\fldinst{{HYPERLINK \"{}\"}}}}{{\\fldrslt{{{}}}}}}}", esc(&target), body));
             }
             None => out.push_str(&body),
         }
@@ -341,9 +358,19 @@ impl Writer {
     }
 
     fn picture(&mut self, img: &model::Img, out: &mut String) {
+        // A metafile's `\picw`/`\pich` are its size in 0.01 mm (#4259).
+        let hundredths = ((img.w * 2540.0 / 72.0).round() as i64, (img.h * 2540.0 / 72.0).round() as i64);
         let (data, blip) = match img.ext.as_str() {
             "png" => (img.data.to_vec(), "\\pngblip"),
             "jpeg" | "jpg" => (img.data.to_vec(), "\\jpegblip"),
+            // The bytes decide, as on reading: an EMF starts with its header record, type 1 (a
+            // DOCX may store one under `.wmf`).
+            "emf" | "wmf" if img.data.starts_with(&[1, 0, 0, 0]) => (img.data.to_vec(), "\\emfblip"),
+            // RTF holds a WMF without its 22-byte placeable header.
+            "emf" | "wmf" => {
+                let data = if img.data.starts_with(&[0xD7, 0xCD, 0xC6, 0x9A]) { img.data.get(22..).unwrap_or_default() } else { img.data.as_slice() };
+                (data.to_vec(), "\\wmetafile8")
+            }
             _ => {
                 // Re-encode other formats as PNG, bounding the decode so a tiny file declaring
                 // huge dimensions can't exhaust memory on export.
@@ -355,7 +382,14 @@ impl Writer {
                 (buf, "\\pngblip")
             }
         };
-        let (pw, ph) = model::image_px(&data).unwrap_or((1, 1));
+        // A placeable header with nothing after it leaves no picture to write.
+        if data.is_empty() {
+            return;
+        }
+        let (pw, ph) = match blip {
+            "\\emfblip" | "\\wmetafile8" => hundredths,
+            _ => model::image_px(&data).map(|(a, b)| (i64::from(a), i64::from(b))).unwrap_or((1, 1)),
+        };
         out.push_str(&format!(
             "{{\\pict{blip}\\picw{pw}\\pich{ph}\\picwgoal{}\\pichgoal{}\n",
             (img.w * 20.0).round() as i64,
@@ -382,7 +416,20 @@ impl Writer {
                 }
                 // RTF keeps no ruby yet: its base text, in the run's formatting.
                 Inline::Ruby { base, fmt, .. } => self.run(base, fmt, out),
-                Inline::Figure(_) | Inline::Equation { .. } => {}
+                // ASK and SET show nothing (see `model::shows_nothing`).
+                Inline::Field { instr, .. } if model::shows_nothing(instr) => {}
+                Inline::Field { result, fmt, .. } | Inline::Control { text: result, fmt, .. } => self.run(result, fmt, out),
+                Inline::Figure(_)
+                | Inline::Chart(_)
+                | Inline::Equation { .. }
+                | Inline::Note { .. }
+                | Inline::Comment { .. }
+                | Inline::CommentEnd(_)
+                | Inline::Shape { .. }
+                | Inline::Group { .. }
+                | Inline::FieldStart(_)
+                | Inline::FieldEnd
+                | Inline::AnchorEnd(_) => {}
             }
         }
     }
@@ -665,7 +712,7 @@ fn export_with(m: &Meta, w: &Writer, body: &str, sec: &wordcraft_doc::SectionPro
     let mut out = String::from("{\\rtf1\\ansi\\ansicpg1252\\deff0\\deflang1033\\uc1\n{\\fonttbl");
     for (i, f) in w.t.fonts.iter().enumerate() {
         let fam = if model::is_mono(f) { "\\fmodern" } else { "\\fswiss" };
-        out.push_str(&format!("{{\\f{i}{fam}\\fcharset0 {};}}", esc(f)));
+        out.push_str(&format!("{{\\f{i}{fam}\\fcharset0 {};}}", esc_font(f)));
     }
     out.push_str("}\n{\\colortbl;");
     for c in &w.t.colors {

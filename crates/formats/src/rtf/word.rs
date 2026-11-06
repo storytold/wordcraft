@@ -30,6 +30,8 @@ impl Reader {
                     self.pict_h = None;
                     self.pict_sx = 0.0;
                     self.pict_sy = 0.0;
+                    self.pict_nat = (0, 0);
+                    self.pict_mm = 0;
                 }
                 Dest::FldInst if self.st.field.is_none() => self.start_field(),
                 // Old character formatting holds the properties that changed (Word) or, after a
@@ -204,15 +206,24 @@ impl Reader {
             "clbrdrb" => self.cell_side = Some('b'),
             "clbrdrr" => self.cell_side = Some('r'),
             "brdrs" | "brdrth" | "brdrsh" | "brdrdb" | "brdrdot" | "brdrdash" | "brdrdashsm" | "brdrdashd" | "brdrdashdd" | "brdrhair"
-            | "brdrtriple" | "brdrthtnsg" | "brdrtnthsg" | "brdrthtnmg" | "brdrtnthmg" | "brdrwavy" | "brdrwavydb" | "brdrnone" | "brdrnil"
-            | "brdrtbl"
+            | "brdrtriple" | "brdrthtnsg" | "brdrtnthsg" | "brdrtnthtnsg" | "brdrthtnmg" | "brdrtnthmg" | "brdrtnthtnmg" | "brdrthtnlg"
+            | "brdrtnthlg" | "brdrtnthtnlg" | "brdrwavy" | "brdrwavydb" | "brdrnone" | "brdrnil" | "brdrtbl"
                 if self.cell_side.is_some() || self.st.border_side.is_some() =>
             {
                 use wordcraft_doc::props::{Border, BorderStyle};
                 let style = match w {
                     "brdrnone" | "brdrnil" | "brdrtbl" => BorderStyle::None,
                     "brdrth" => BorderStyle::Thick,
-                    "brdrdb" | "brdrthtnsg" | "brdrtnthsg" | "brdrthtnmg" | "brdrtnthmg" | "brdrwavydb" => BorderStyle::Double,
+                    "brdrdb" | "brdrwavydb" => BorderStyle::Double,
+                    "brdrtnthsg" => BorderStyle::ThinThickSmallGap,
+                    "brdrthtnsg" => BorderStyle::ThickThinSmallGap,
+                    "brdrtnthtnsg" => BorderStyle::ThinThickThinSmallGap,
+                    "brdrtnthmg" => BorderStyle::ThinThickMediumGap,
+                    "brdrthtnmg" => BorderStyle::ThickThinMediumGap,
+                    "brdrtnthtnmg" => BorderStyle::ThinThickThinMediumGap,
+                    "brdrtnthlg" => BorderStyle::ThinThickLargeGap,
+                    "brdrthtnlg" => BorderStyle::ThickThinLargeGap,
+                    "brdrtnthtnlg" => BorderStyle::ThinThickThinLargeGap,
                     "brdrdot" => BorderStyle::Dotted,
                     "brdrdash" | "brdrdashsm" => BorderStyle::Dashed,
                     "brdrdashd" | "brdrdashdd" => BorderStyle::DotDash,
@@ -453,6 +464,14 @@ impl Reader {
         match word {
             "pngblip" => self.pict_kind = 1,
             "jpegblip" => self.pict_kind = 2,
+            // Windows and Enhanced Metafiles (#4259): drawn by the metafile renderer.
+            "wmetafile" => {
+                self.pict_kind = 3;
+                self.pict_mm = value;
+            }
+            "emfblip" => self.pict_kind = 4,
+            "picw" => self.pict_nat.0 = value,
+            "pich" => self.pict_nat.1 = value,
             "picwgoal" => self.pict_w = Some(value.clamp(1, 31_680) as f32 / 20.0),
             "pichgoal" => self.pict_h = Some(value.clamp(1, 31_680) as f32 / 20.0),
             "picscalex" => self.pict_sx = value.clamp(1, 1000) as f32,
@@ -497,76 +516,7 @@ impl Reader {
     }
 }
 
-/// The target of a `HYPERLINK "url"` (or `HYPERLINK "url" \l "bookmark"`, `HYPERLINK \l "bookmark"`) field instruction.
+/// The target of a `HYPERLINK` field instruction; `%22` is a quote, as the writer stores one.
 pub(super) fn hyperlink(instr: &str) -> Option<String> {
-    let t = instr.trim();
-    let rest = if t.get(..9).is_some_and(|h| h.eq_ignore_ascii_case("hyperlink")) {
-        t[9..].trim()
-    } else {
-        return None;
-    };
-    if rest.is_empty() {
-        return None;
-    }
-
-    let mut url: Option<String> = None;
-    let mut local: Option<String> = None;
-    let mut switch: Option<&str> = None;
-
-    let mut i = 0;
-    let bytes = rest.as_bytes();
-    while i < bytes.len() {
-        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        if i >= bytes.len() {
-            break;
-        }
-        if bytes[i] == b'\\' {
-            let start = i;
-            i += 1;
-            while i < bytes.len() && (bytes[i].is_ascii_alphabetic() || bytes[i] == b'*') {
-                i += 1;
-            }
-            switch = Some(&rest[start..i]);
-            continue;
-        }
-        let arg = if bytes[i] == b'"' {
-            i += 1;
-            let start = i;
-            while i < bytes.len() && bytes[i] != b'"' {
-                i += 1;
-            }
-            let val = &rest[start..i];
-            if i < bytes.len() && bytes[i] == b'"' {
-                i += 1;
-            }
-            val.to_string()
-        } else {
-            let start = i;
-            while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
-                i += 1;
-            }
-            rest[start..i].to_string()
-        };
-        let clean_arg = arg.replace("%22", "\"");
-        if switch.take() == Some("\\l") {
-            local = Some(clean_arg);
-        } else if url.is_none() {
-            url = Some(clean_arg);
-        }
-    }
-
-    match (url, local) {
-        (Some(u), Some(l)) if !u.is_empty() && !l.is_empty() => {
-            let frag = l.trim_start_matches('#');
-            if u.contains('#') { Some(u) } else { Some(format!("{u}#{frag}")) }
-        }
-        (Some(u), _) if !u.is_empty() => Some(u),
-        (None, Some(l)) if !l.is_empty() => {
-            let frag = l.trim_start_matches('#');
-            Some(format!("#{frag}"))
-        }
-        _ => None,
-    }
+    wordcraft_doc::link::hyperlink_target(instr).map(|t| t.replace("%22", "\""))
 }

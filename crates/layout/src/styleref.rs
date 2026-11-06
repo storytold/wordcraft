@@ -149,6 +149,10 @@ pub struct StyleIndex {
     by_path: HashMap<Path, usize>,
     /// Lower-cased style id or name → (id, character style).
     styles: HashMap<String, (String, bool)>,
+    /// Paragraph style id → the entries of that style, in order.
+    para_entries: HashMap<String, Vec<usize>>,
+    /// Character style id → the entries with a run of that style, in order.
+    char_entries: HashMap<String, Vec<usize>>,
 }
 
 fn clean(s: &str) -> String {
@@ -167,6 +171,8 @@ impl StyleIndex {
         let mut ordinals: HashMap<String, u32> = HashMap::new();
         let mut entries = Vec::new();
         let mut by_path = HashMap::new();
+        let mut para_entries: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut char_entries: HashMap<String, Vec<usize>> = HashMap::new();
         for path in doc.para_paths(StoryRef::Body) {
             let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
             let style = p.props.style.clone().unwrap_or_else(|| "Normal".to_string());
@@ -206,10 +212,18 @@ impl StyleIndex {
                 }
                 off = end;
             }
-            by_path.insert(path.clone(), entries.len());
+            let i = entries.len();
+            by_path.insert(path.clone(), i);
+            para_entries.entry(style.clone()).or_default().push(i);
+            for (cs, _) in &runs {
+                let list = char_entries.entry(cs.clone()).or_default();
+                if list.last() != Some(&i) {
+                    list.push(i);
+                }
+            }
             entries.push(Entry { path, style, text: clean(&p.plain_text()), runs, label, levels, ordinal });
         }
-        StyleIndex { entries, by_path, styles }
+        StyleIndex { entries, by_path, styles, para_entries, char_entries }
     }
 
     /// The entry of the body paragraph at `path`.
@@ -261,28 +275,50 @@ impl StyleIndex {
         }
     }
 
+    /// The entries `t` matches, in order.
+    fn matches(&self, t: &Target) -> &[usize] {
+        let list = match t {
+            Target::Para(id) => self.para_entries.get(id),
+            Target::Char(id) => self.char_entries.get(id),
+        };
+        list.map_or(&[], Vec::as_slice)
+    }
+
+    /// The first entry of `found` (the entries a target matches, in order) in a STYLEREF's search
+    /// order from `at`, with whether it counts as below the field. From a body paragraph: that
+    /// paragraph and back to the start, then on from it. From a header or footer: the page's
+    /// paragraphs (from the last when `last`), then back from the page, then on from it. A binary
+    /// search over `found`, so a target few or no paragraphs have costs no walk over the body.
+    fn first_in_order(found: &[usize], n: usize, at: At, last_first: bool) -> Option<(usize, bool)> {
+        let at_or_before = |k: usize| found.partition_point(|&p| p <= k).checked_sub(1).and_then(|j| found.get(j)).copied();
+        let from = |k: usize| found.get(found.partition_point(|&p| p < k)).copied().filter(|&p| p < n);
+        match at {
+            At::Body(i) => {
+                let i = i.min(n.checked_sub(1)?);
+                at_or_before(i).map(|p| (p, false)).or_else(|| from(i.saturating_add(1)).map(|p| (p, true)))
+            }
+            At::Page { first, last } => {
+                if let Some(l) = last.filter(|&l| first <= l).map(|l| l.min(n.saturating_sub(1))) {
+                    let on = if last_first { at_or_before(l).filter(|&p| p >= first) } else { from(first).filter(|&p| p <= l) };
+                    if let Some(p) = on {
+                        return Some((p, true));
+                    }
+                }
+                let before = first.min(n).checked_sub(1).and_then(at_or_before);
+                let after = last.map_or(first, |l| l.saturating_add(1));
+                before.map(|p| (p, false)).or_else(|| from(after).map(|p| (p, true)))
+            }
+        }
+    }
+
     /// The field's result.
     pub fn eval(&self, instr: &str, at: At) -> String {
         let code = parse(instr);
         let Some(target) = self.target(&code.style) else { return NO_TEXT.to_string() };
-        let n = self.entries.len();
-        // Candidates in search order, with whether each one counts as below the field (lazy:
-        // headers evaluate this for every page on every pass).
-        let order: Box<dyn Iterator<Item = (usize, bool)>> = match at {
-            At::Page { first, last } => {
-                let on = match last {
-                    Some(l) if first <= l => first..l.min(n.saturating_sub(1)).saturating_add(1),
-                    _ => 0..0,
-                };
-                let after = last.map_or(first, |l| l.saturating_add(1));
-                let page: Box<dyn Iterator<Item = usize>> = if code.last { Box::new(on.rev()) } else { Box::new(on) };
-                Box::new(page.map(|i| (i, true)).chain((0..first.min(n)).rev().map(|i| (i, false))).chain((after..n).map(|i| (i, true))))
-            }
-            At::Body(i) => Box::new((0..=i.min(n.saturating_sub(1))).rev().map(|k| (k, false)).chain((i.saturating_add(1)..n).map(|k| (k, true)))),
-        };
-        let Some((i, text, below)) = order.into_iter().find_map(|(i, below)| self.text_of(i, &target).map(|t| (i, t, below))) else {
+        let Some((i, below)) = Self::first_in_order(self.matches(&target), self.entries.len(), at, code.last) else {
             return NO_TEXT.to_string();
         };
+        let Some(text) = self.text_of(i, &target) else { return NO_TEXT.to_string() };
         let Some(e) = self.entries.get(i) else { return NO_TEXT.to_string() };
         let mut out = match code.number {
             Number::Text if code.position => String::new(),
@@ -355,6 +391,52 @@ mod tests {
         assert_eq!(parse("STYLEREF 1 \\s").number, Number::Chapter);
         assert_eq!(parse("STYLEREF Heading 2 \\p").style, "Heading 2");
         assert_eq!(parse("STYLEREF").style, "");
+    }
+
+    /// The search order the index's binary search follows, walked entry by entry as it was before
+    /// the index: the body paragraph and back, then on; or the page (from its last paragraph when
+    /// `last_first`), back from it, then on.
+    fn first_by_walk(found: &[usize], n: usize, at: At, last_first: bool) -> Option<(usize, bool)> {
+        let order: Vec<(usize, bool)> = match at {
+            At::Page { first, last } => {
+                let on: Vec<usize> = match last {
+                    Some(l) if first <= l => (first..l.min(n.saturating_sub(1)).saturating_add(1)).collect(),
+                    _ => Vec::new(),
+                };
+                let after = last.map_or(first, |l| l.saturating_add(1));
+                let page: Vec<usize> = if last_first { on.into_iter().rev().collect() } else { on };
+                page.into_iter().map(|i| (i, true)).chain((0..first.min(n)).rev().map(|i| (i, false))).chain((after..n).map(|i| (i, true))).collect()
+            }
+            At::Body(i) => (0..=i.min(n.saturating_sub(1))).rev().map(|k| (k, false)).chain((i.saturating_add(1)..n).map(|k| (k, true))).collect(),
+        };
+        order.into_iter().find(|(i, _)| *i < n && found.contains(i))
+    }
+
+    #[test]
+    fn the_index_finds_what_walking_the_body_finds() {
+        // Every placement of matches among up to 7 paragraphs, from every body paragraph and every
+        // page range (in and past the body), both ways round.
+        for n in 0..=7usize {
+            for mask in 0u32..(1 << n) {
+                let found: Vec<usize> = (0..n).filter(|i| mask & (1 << i) != 0).collect();
+                let mut ats: Vec<At> = (0..=n + 1).map(At::Body).collect();
+                for first in 0..=n + 1 {
+                    ats.push(At::Page { first, last: None });
+                    for last in 0..=n + 1 {
+                        ats.push(At::Page { first, last: Some(last) });
+                    }
+                }
+                for at in ats {
+                    for last_first in [false, true] {
+                        assert_eq!(
+                            StyleIndex::first_in_order(&found, n, at, last_first),
+                            first_by_walk(&found, n, at, last_first),
+                            "n {n}, found {found:?}, {at:?}, last {last_first}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
