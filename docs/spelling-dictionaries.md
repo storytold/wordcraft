@@ -1,6 +1,6 @@
 # Installing languages and spelling dictionaries
 
-> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-11-03 · **Change:** trivial (Language packs are installed from Your languages and Add a language…; the Dictionaries folder is in Options › Language); previously trivial (Language packs: the missing-pack bar works on a fresh install and counts the caret's language); previously trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland); Mongolian and Thai aren't packs yet); previously trivial (Language packs: the first set, language-packs-1, is published and pinned: 61 languages, and which aren't packs yet); previously minor (Language packs: install a language's spelling and hyphenation from File › Options › Language, or from the bar a document in that language shows; they are searched after the dictionaries folder and before the system's dictionaries; previously trivial: the Flatpak's own dictionaries folder; previously trivial: WordCraft's own dictionaries folder is searched on macOS and Linux too, as on Windows, so a dictionary dropped there works without a setting; previously minor: ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-11-03 · **Change:** trivial (Portuguese (Portugal) has its own `pt_PT` dictionary, #1028); previously trivial (Language packs are installed from Your languages and Add a language…; the Dictionaries folder is in Options › Language); previously trivial (Language packs: the missing-pack bar works on a fresh install and counts the caret's language); previously trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland); Mongolian and Thai aren't packs yet); previously trivial (Language packs: the first set, language-packs-1, is published and pinned: 61 languages, and which aren't packs yet); previously minor (Language packs: install a language's spelling and hyphenation from File › Options › Language, or from the bar a document in that language shows; they are searched after the dictionaries folder and before the system's dictionaries; previously trivial: the Flatpak's own dictionaries folder; previously trivial: WordCraft's own dictionaries folder is searched on macOS and Linux too, as on Windows, so a dictionary dropped there works without a setting; previously minor: ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
 
 English spelling works out of the box. Polish, Russian, Portuguese, Czech, Italian, Croatian,
 Turkish, Indonesian and Spanish spelling use a standard **Hunspell** dictionary (an `.aff` and a `.dic` file) that
@@ -68,7 +68,8 @@ WordCraft looks for the first of these file names (each name means a `<name>.aff
 |---|---|---|
 | Polish | `pl_PL`, `pl-PL`, `pl` | SJP.PL |
 | Russian | `ru_RU`, `ru-RU`, `ru` | LibreOffice `dict-ru` |
-| Portuguese (Brazil and Portugal) | `pt_BR`, `pt-BR`, `pt` | VERO (LibreOffice `dict-pt-BR`) |
+| Portuguese (Brazil, and Portuguese with no region or another region) | `pt_BR`, `pt-BR`, `pt` | VERO (LibreOffice `dict-pt-BR`) |
+| Portuguese (Portugal) | `pt_PT`, `pt-PT`, `pt` | Natura, Universidade do Minho (LibreOffice `dict-pt-PT`; the `pt-pt` Language pack) |
 | Czech | `cs_CZ`, `cs-CZ`, `cs` | LibreOffice `dict-cs` |
 | Italian | `it_IT`, `it_CH`, `it-IT`, `it` | LibreOffice `dict-it` |
 | Croatian | `hr_HR`, `hr-HR`, `hr` | LibreOffice `dict-hr` |
@@ -79,8 +80,9 @@ WordCraft looks for the first of these file names (each name means a `<name>.aff
 | Spanish (Latin America, and the other Spanish regions of the Americas) | `es_419`, `es-419`, `es_ANY`, `es`, `es_US`, `es_MX`, `es_AR`, `es-AR` | LibreOffice `dict-es` (RLA-ES) |
 | Spanish (Uruguay) | `es_UY`, `es-UY`, `es_AR`, `es-AR`, `es_419`, `es-419`, `es_ANY`, `es` | LibreOffice `dict-es` (RLA-ES) |
 
-Every Portuguese region uses the same `pt_BR` dictionary, so text marked *Português (Portugal)*
-is checked with it too.
+Portuguese has a dictionary per spelling: text marked *Português (Portugal)* uses `pt_PT` (or the
+`pt-pt` Language pack), so `facto`, `equipa` and `económico` are words and `econômico` is flagged;
+text marked *Português (Brasil)*, Portuguese with no region and the other regions use `pt_BR`.
 
 Spanish has a dictionary per variety: text marked *Español (España)* uses `es_ES`, *Español
 (México)* `es_MX`, *Español (Uruguay)* `es_UY`, and *Español (Latinoamérica)* and the other
@@ -193,6 +195,7 @@ Never commit dictionary files to this repository: they stay on the user's system
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | trivial | Portuguese (Portugal) reads its own `pt_PT` dictionary (or the `pt-pt` pack), as craft-proof does since WordCraft's pin moved; the page said every Portuguese region used `pt_BR` (#1028) |
 | 2026-11-03 | trivial | Language packs (CP4.3): the missing-pack bar offers a language before the list is fetched and gets the list, then the pack, on Install; a missing or stale list is fetched once while downloading is on; the caret's typing language counts |
 | 2026-11-03 | trivial | Language packs: install from Your languages or Add a language… in Options › Language; the Dictionaries folder is in Options › Language, not Proofing |
 | 2026-11-03 | trivial | Language packs: language-packs-2 is published and pinned (75 languages, adding the compounding languages); Mongolian and Thai aren't packs yet, and why |
