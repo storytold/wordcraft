@@ -195,6 +195,9 @@ pub fn compare(r: &[Line], rp: usize, t: &[Line], tp: usize) -> Value {
         matched[a] = Some(b);
     }
     let mut dys: Vec<f64> = Vec::new();
+    // Right edge differences of lines with the same text: how the widths add up (signed,
+    // WordCraft minus Word; ragged-right lines only show it).
+    let mut drs: Vec<f64> = Vec::new();
     let (mut max_dx, mut max_dy) = (0.0f64, 0.0f64);
     let mut first: Option<Value> = None;
     for (i, l) in r.iter().enumerate() {
@@ -217,6 +220,7 @@ pub fn compare(r: &[Line], rp: usize, t: &[Line], tp: usize) -> Value {
         }
         let (dy, dx) = (m.y - l.y, m.x - l.x);
         dys.push(dy.abs());
+        drs.push((m.right - m.x) - (l.right - l.x));
         max_dy = max_dy.max(dy.abs());
         max_dx = max_dx.max(dx.abs());
         if first.is_none() && (dy.abs() > TOL || dx.abs() > TOL) {
@@ -226,6 +230,7 @@ pub fn compare(r: &[Line], rp: usize, t: &[Line], tp: usize) -> Value {
         }
     }
     dys.sort_by(f64::total_cmp);
+    drs.sort_by(f64::total_cmp);
     let same = pairs.len();
     let status = if rp == tp && same == r.len() && same == t.len() && max_dy <= TOL && max_dx <= TOL {
         "same"
@@ -244,6 +249,7 @@ pub fn compare(r: &[Line], rp: usize, t: &[Line], tp: usize) -> Value {
         "dy_median": round(dys.get(dys.len() / 2).copied().unwrap_or(0.0)),
         "dy_max": round(max_dy),
         "dx_max": round(max_dx),
+        "width_diff": [round(drs.first().copied().unwrap_or(0.0)), round(drs.get(drs.len() / 2).copied().unwrap_or(0.0)), round(drs.last().copied().unwrap_or(0.0))],
         "first_difference": first,
     })
 }

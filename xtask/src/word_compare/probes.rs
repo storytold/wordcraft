@@ -251,6 +251,21 @@ fn raised(v: &mut Vec<Probe>) {
         let body = format!("{}{}", p(r#"<w:jc w:val="center"/>"#, &runs), paras(&mut w, 6, 120, ""));
         v.push(probe(format!("authors-{key}"), "a centred author line with small superscript affiliations", base(fname, hp, SINGLE, body)));
     }
+    // Raised and lowered digits at many base sizes: Word's superscript size, raise and drop.
+    let mut body = String::new();
+    for hp in [16u32, 18, 20, 22, 24, 26, 28, 32, 40, 48, 72] {
+        let sz = format!(r#"<w:sz w:val="{hp}"/><w:szCs w:val="{hp}"/>"#);
+        let runs = format!(
+            "{}{}{}{}{}",
+            r(&sz, "Base "),
+            r(&format!(r#"{sz}<w:vertAlign w:val="superscript"/>"#), "1234567890"),
+            r(&sz, " mid "),
+            r(&format!(r#"{sz}<w:vertAlign w:val="subscript"/>"#), "1234567890"),
+            r(&sz, " end")
+        );
+        body.push_str(&p("", &runs));
+    }
+    v.push(probe("raised-sizes", "superscript and subscript digits at base sizes 8 to 36 pt (Arial)", base("Arial", 22, SINGLE, body)));
     let mut w = Words::new(8);
     let body: String = (0..10)
         .map(|_| {
