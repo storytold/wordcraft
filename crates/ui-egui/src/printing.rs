@@ -140,7 +140,7 @@ pub fn cancel(app: &mut crate::WordApp) -> Result<serde_json::Value, String> {
     }
     let cancel = app.services.cancel_print.as_ref().ok_or("cancelling a print job isn't available here")?;
     if !cancel() {
-        app.status(tl!("The print job is already being sent. Cancel it from the system's print queue."));
+        app.status(tl!("Printing can no longer be cancelled here. The printer driver may still be processing the job. If it appears in the system's print queue, cancel it there."));
         return Ok(serde_json::json!({"cancelled": false}));
     }
     // The shared state keeps the job's receiver private: a fresh one drops it (the worker's

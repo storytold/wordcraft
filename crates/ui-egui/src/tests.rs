@@ -3627,8 +3627,12 @@ fn cancelling_a_waiting_print_job_frees_the_print_page() {
         assert_eq!(a.printing.settings.copies, 3, "the settings are kept");
         assert_eq!(a.printing.printers.len(), 1, "the printer list is kept");
         let said = a.status_msg.as_ref().map(|(text, _)| text.as_str()).unwrap_or_default();
-        let expected = if never_sent { "Nothing was sent" } else { "already being sent" };
-        assert!(said.contains(expected), "never_sent {never_sent}: the status bar says what happened: {said:?}");
+        let expected = if never_sent {
+            "Printing cancelled. Nothing was sent to the printer."
+        } else {
+            "Printing can no longer be cancelled here. The printer driver may still be processing the job. If it appears in the system's print queue, cancel it there."
+        };
+        assert_eq!(said, expected, "never_sent {never_sent}: the status bar says what happened");
         assert_eq!(enabled(&a), !never_sent);
         if never_sent {
             assert_eq!(a.execute("ui.printCancel", json!({})).unwrap_err(), "no print job is being submitted");
