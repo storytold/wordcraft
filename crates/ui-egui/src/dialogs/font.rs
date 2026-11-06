@@ -15,8 +15,17 @@ pub(super) fn font_box(
     preview: &dyn Fn(&mut egui::Ui, &str) -> egui::Response,
     shown_as: Option<&str>,
 ) -> Option<String> {
-    let options =
-        crate::widgets::FontComboOptions { id, width: 220.0, current, items, recent: &[], preview: Some(preview), tip: tl!("Font"), shown_as };
+    let options = crate::widgets::FontComboOptions {
+        id,
+        width: 220.0,
+        current,
+        items,
+        recent: &[],
+        monospaced: &[],
+        preview: Some(preview),
+        tip: tl!("Font"),
+        shown_as,
+    };
     crate::widgets::font_combo_with_recent_hint(ui, options)
 }
 

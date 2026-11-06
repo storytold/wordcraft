@@ -261,6 +261,7 @@ fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens, preview_on_hover: b
         let warning = app.font_box_warning(&font);
         let font = app.previews.font_shown(&font);
         let fams = app.previews.families();
+        let monospaced = app.previews.monospaced_families();
         let recent: Vec<String> = app.ui.recent_fonts.iter().map(|f| app.previews.font_shown(f)).collect();
         let prev = app.previews.font_preview_fn();
         let _ = widgets::take_hover(ui.ctx());
@@ -270,6 +271,7 @@ fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens, preview_on_hover: b
             current: &font,
             items: &fams,
             recent: &recent,
+            monospaced: &monospaced,
             preview: Some(&*prev),
             tip: tl!("Font"),
             shown_as: warning.as_deref(),

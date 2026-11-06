@@ -23,6 +23,8 @@ pub struct Previews {
     english_names: HashMap<String, String>,
     /// The Chinese, Japanese and Korean fonts of the font list (the Asian text font box).
     east_asian: Option<Vec<String>>,
+    /// The monospaced families of the font list (the Font box's Monospace filter, #4398).
+    monospaced: Option<Vec<String>>,
     styles_hash: (u64, u64),
     /// Previews rendered this frame (rendering is spread over frames).
     budget: std::cell::Cell<u32>,
@@ -174,6 +176,7 @@ impl Previews {
             self.english_names = names.into_iter().map(|(e, l)| (l, e)).collect();
             self.families = Some((lang, f));
             self.east_asian = None;
+            self.monospaced = None;
         }
         self.families.as_ref().map(|(_, f)| f.clone()).unwrap_or_default()
     }
@@ -196,6 +199,24 @@ impl Previews {
         self.east_asian.clone().unwrap_or_default()
     }
 
+    /// The monospaced families of the font list, named as in [`Previews::families`]: what the Font
+    /// box's "Monospace fonts only" filter keeps (#4398).
+    pub fn monospaced_families(&mut self) -> Vec<String> {
+        self.families();
+        if self.monospaced.is_none() {
+            let mut f: Vec<String> = wordcraft_fonts::FontDb::global()
+                .monospaced_families()
+                .into_iter()
+                .filter(|f| !f.starts_with('.'))
+                .map(|f| self.local_names.get(&f.to_lowercase()).cloned().unwrap_or(f))
+                .collect();
+            f.sort_by_key(|a| a.to_lowercase());
+            f.dedup();
+            self.monospaced = Some(f);
+        }
+        self.monospaced.clone().unwrap_or_default()
+    }
+
     /// The name the font box shows for the document's font `family`: its name in the interface
     /// language when the font has one.
     pub fn font_shown(&mut self, family: &str) -> String {
@@ -215,6 +236,7 @@ impl Previews {
     pub fn fonts_changed(&mut self, ctx: &egui::Context, families: impl Iterator<Item = String>) {
         self.families = None;
         self.east_asian = None;
+        self.monospaced = None;
         ctx.data_mut(|d| {
             for f in families {
                 d.remove::<TextureHandle>(egui::Id::unique(format!("font:{f}")));

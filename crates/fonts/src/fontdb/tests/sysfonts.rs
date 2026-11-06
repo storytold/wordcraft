@@ -529,6 +529,44 @@ fn with_code_pages(data: &[u8], pages: u32) -> Vec<u8> {
     mini_font(&tables)
 }
 
+/// `data` with its `post` table's `isFixedPitch` set to `fixed`.
+fn with_fixed_pitch(data: &[u8], fixed: u32) -> Vec<u8> {
+    let font = skrifa::FontRef::new(data).unwrap();
+    let tables: Vec<([u8; 4], Vec<u8>)> = font
+        .table_directory()
+        .table_records()
+        .iter()
+        .map(|r| {
+            let mut t = font.table_data(r.tag()).unwrap().as_bytes().to_vec();
+            if r.tag() == skrifa::Tag::new(b"post") {
+                t[12..16].copy_from_slice(&fixed.to_be_bytes());
+            }
+            (r.tag().to_be_bytes(), t)
+        })
+        .collect();
+    mini_font(&tables)
+}
+
+#[test]
+fn monospaced_fonts_are_listed_for_the_font_picker_filter() {
+    // #4398: the Font picker can show only the monospaced families, found by the `post` table's
+    // fixed-pitch flag during the scan, without loading them.
+    let dir = font_dir("monospaced");
+    let mono = with_family_names("SourceSans3-Regular.ttf", &[(0x0409, "Typewriter Test")]);
+    std::fs::write(dir.join("mono.ttf"), with_fixed_pitch(&mono, 1)).unwrap();
+    let prop = with_family_names("SourceSans3-Regular.ttf", &[(0x0409, "Proportional Test")]);
+    std::fs::write(dir.join("prop.ttf"), with_fixed_pitch(&prop, 0)).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir]);
+    let listed = |db: &FontDb, family: &str| db.monospaced_families().iter().filter(|f| *f == family).count();
+    assert_eq!(listed(&db, "Typewriter Test"), 1);
+    assert_eq!(listed(&db, "Proportional Test"), 0, "a proportional font is left out");
+    assert!(db.families().iter().any(|f| f == "Proportional Test"), "it is still in the full list");
+    // Loaded, it is still listed once.
+    assert!(db.face("Typewriter Test", "Regular").is_monospaced());
+    assert!(!db.face("Proportional Test", "Regular").is_monospaced());
+    assert_eq!(listed(&db, "Typewriter Test"), 1);
+}
+
 #[test]
 fn east_asian_fonts_are_listed_for_the_asian_text_font_box() {
     // #505: the Font dialog's Asian text font box lists the Chinese, Japanese and Korean fonts,
