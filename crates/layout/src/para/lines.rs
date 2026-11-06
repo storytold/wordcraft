@@ -529,6 +529,11 @@ impl<'e> Breaker<'e> {
             self.top + ((height - up - desc) / 2.0).max(0.0) + up
         } else if let Some(m) = spacing.filter(|_| pictures_alone) {
             self.top + (text_natural * m.min(1.0) - text_pictures).max(0.0) + obj_asc
+        } else if matches!(rp.line_spacing, LineSpacing::Exactly(_)) && text {
+            // An exact line with text keeps its baseline where text alone puts it; a taller
+            // picture beside the text is cut off at the line's top (Word for Mac: a 50pt picture
+            // and text in a 30pt exact line, baseline 24pt down).
+            self.top + baseline_offset(rp.line_spacing, asc, height, below)
         } else {
             self.top + baseline_offset(rp.line_spacing, asc, height, below).max(obj_asc.min(height - below))
         };
@@ -1038,14 +1043,21 @@ const MIN_SPAN: f32 = 20.0;
 /// How far below a line's top its baseline sits. Multiple spacing at or above single keeps the
 /// text at the top of the line and puts the extra leading below the baseline; below single it
 /// shrinks the whole box, ascent included (Word's output for docxide-pdf's fixtures: 1.15-spaced
-/// Times New Roman 12pt sits one ascent below the line top, not 1.8pt lower). Exact and at-least
-/// spacing keep the descent below the baseline and the rest above it.
+/// Times New Roman 12pt sits one ascent below the line top, not 1.8pt lower). At-least spacing
+/// keeps the descent below the baseline and the rest above it. Exact spacing puts the baseline
+/// four fifths of the way down the line, whatever the font and its size (Word for Mac: Georgia,
+/// Arial, Times New Roman and Verdana at 10 to 22pt, exact lines of 6 to 40pt, all within the
+/// 0.24pt its PDF positions are rounded to).
 fn baseline_offset(spacing: LineSpacing, asc: f32, height: f32, desc: f32) -> f32 {
     match spacing {
         LineSpacing::Multiple(m) => asc * m.min(1.0),
-        LineSpacing::AtLeast(_) | LineSpacing::Exactly(_) => height - desc,
+        LineSpacing::AtLeast(_) => height - desc,
+        LineSpacing::Exactly(_) => height * EXACT_BASELINE,
     }
 }
+
+/// Where an exactly spaced line's baseline sits, as a share of the line's height from its top.
+const EXACT_BASELINE: f32 = 0.8;
 
 /// The spans of a row at `top` (about `h` tall) between `lo` and `hi` that text can use around
 /// the exclusions, left to right (Square wrapping uses both sides of an object). `Err(y)`: none
