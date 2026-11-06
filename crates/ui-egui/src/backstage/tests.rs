@@ -673,6 +673,25 @@ fn recent_context_menu_shows_in_folder() {
 }
 
 #[test]
+fn recent_show_in_folder_error_uses_a_translatable_message() {
+    let mut app = WordApp::new(
+        wordcraft_engine::Session::new(wordcraft_doc::Document::new()),
+        Services { show_in_folder: Some(Box::new(|_| Err("platform-specific failure".into()))), ..Default::default() },
+    );
+    app.ui.recent = vec![RecentDocument { path: "/tmp/report.docx".into(), last_opened: String::new(), modified: String::new() }];
+    app.ui.backstage = true;
+    app.ui.backstage_page = "home".into();
+    let mut h = a11y_harness(app);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "report.docx, /tmp/report.docx, Last opened: Unknown, Last edited: Unknown")
+        .click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Show in folder").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Couldn't show this file in its folder.").is_some());
+    assert!(h.query_by_label("platform-specific failure").is_none());
+}
+
+#[test]
 fn recent_actions_work_without_a_document() {
     assert!(crate::works_without_document("ui.recentClear"));
     assert!(crate::works_without_document("ui.recentRemove"));
