@@ -611,7 +611,11 @@ impl Writer {
         let style = self.graphic_style(format!(
             " draw:stroke=\"none\" draw:fill=\"none\"{mode} style:run-through=\"background\" style:wrap=\"run-through\" style:horizontal-pos=\"center\" style:horizontal-rel=\"page-content\" style:vertical-pos=\"middle\" style:vertical-rel=\"page-content\" style:flow-with-text=\"false\" draw:auto-grow-height=\"false\" draw:auto-grow-width=\"false\"",
         ));
-        let href = self.picture(img);
+        // The picture goes into the package once, however many master pages and slots show it.
+        let href = match self.pictures.iter().find(|(_, data, _)| std::sync::Arc::ptr_eq(data, &img.data)) {
+            Some((name, ..)) => name.clone(),
+            None => self.picture(img),
+        };
         let (aw, ah) = (if area.0.is_finite() { area.0 } else { img.w }, if area.1.is_finite() { area.1 } else { img.h });
         format!(
             "<draw:frame text:anchor-type=\"char\" draw:z-index=\"0\" draw:name=\"{PICTURE_WATERMARK_NAME}\" draw:style-name=\"{style}\" svg:x=\"{}\" svg:y=\"{}\" svg:width=\"{}\" svg:height=\"{}\"><draw:image xlink:href=\"{href}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/></draw:frame>",

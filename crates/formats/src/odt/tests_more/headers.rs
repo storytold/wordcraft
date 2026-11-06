@@ -342,6 +342,114 @@ fn a_picture_watermark_is_a_picture_frame_in_the_header_and_reads_back_as_one() 
     assert!(!styles.contains("DRAFT") && !styles.contains("WordPictureWatermark") && !styles.contains("<draw:image "), "{styles}");
 }
 
+/// A package whose `styles.xml` has one master page per entry of `masters`: (header content,
+/// footer content), a picture watermark frame being `wm_frame(picture file)`; with the pictures
+/// `Pictures/a.png` and `Pictures/b.png`.
+fn watermark_package(masters: &[(&str, &str)]) -> Vec<u8> {
+    let ns = crate::odt::tests::NS_T;
+    let nsd = r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink""#;
+    let pages: String = masters
+        .iter()
+        .enumerate()
+        .map(|(i, (head, foot))| {
+            let foot = if foot.is_empty() { String::new() } else { format!("<style:footer><text:p>{foot}</text:p></style:footer>") };
+            format!(r#"<style:master-page style:name="M{i}" style:page-layout-name="pm1"><style:header><text:p>{head}</text:p></style:header>{foot}</style:master-page>"#)
+        })
+        .collect();
+    let styles = format!(
+        r##"<office:document-styles {ns} {nsd}><office:automatic-styles><style:style style:name="Mgr1" style:family="graphic"><style:graphic-properties style:run-through="background" style:wrap="run-through"/></style:style><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in" fo:margin-top="1in" fo:margin-bottom="1in" fo:margin-left="1in" fo:margin-right="1in"/></style:page-layout></office:automatic-styles><office:master-styles>{pages}</office:master-styles></office:document-styles>"##
+    );
+    let paras: String = (0..masters.len()).map(|i| format!(r#"<text:p text:style-name="Standard">p{i}</text:p>"#)).collect();
+    let content = format!("<office:document-content {ns}><office:body><office:text>{paras}</office:text></office:body></office:document-content>");
+    let (a, b) = (watermark_png(60, 30), watermark_png(30, 30));
+    crate::odt::tests::zip_of(&[
+        ("mimetype", b"application/vnd.oasis.opendocument.text"),
+        ("content.xml", content.as_bytes()),
+        ("styles.xml", styles.as_bytes()),
+        ("Pictures/a.png", &a),
+        ("Pictures/b.png", &b),
+    ])
+}
+
+/// A frame the way a picture watermark is written, 3 × 1.5 in.
+fn wm_frame(file: &str) -> String {
+    format!(
+        r#"<draw:frame draw:name="WordPictureWatermark" draw:style-name="Mgr1" text:anchor-type="char" svg:x="0in" svg:y="1in" svg:width="3in" svg:height="1.5in"><draw:image xlink:href="Pictures/{file}"/></draw:frame>"#
+    )
+}
+
+/// The pictures in each header and footer part, in order.
+fn part_pictures(d: &Document) -> Vec<(PartKind, usize)> {
+    let mut v: Vec<(u32, PartKind, usize)> = d
+        .parts
+        .iter()
+        .filter(|(_, p)| matches!(p.kind, PartKind::Header | PartKind::Footer))
+        .map(|(id, p)| {
+            let n = p.blocks.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.objects).filter(|o| matches!(o, InlineObject::Image { .. })).count();
+            (*id, p.kind, n)
+        })
+        .collect();
+    v.sort_by_key(|(id, ..)| *id);
+    v.into_iter().map(|(_, k, n)| (k, n)).collect()
+}
+
+#[test]
+fn a_picture_frame_in_the_headers_is_the_watermark_only_where_every_page_shows_it() {
+    let a = wm_frame("a.png");
+    // The same picture in every header: the document's watermark, and no picture left in them.
+    let d = import(&watermark_package(&[(&a, ""), (&a, "")])).unwrap();
+    assert!(d.settings.watermark.as_ref().is_some_and(|w| w.picture.is_some()));
+    assert!(part_pictures(&d).iter().all(|(_, n)| *n == 0), "{:?}", part_pictures(&d));
+    // A different picture on the second master page: both stay pictures in their headers.
+    let d = import(&watermark_package(&[(&a, ""), (&wm_frame("b.png"), "")])).unwrap();
+    assert_eq!(d.settings.watermark, None);
+    assert_eq!(part_pictures(&d).iter().map(|(_, n)| n).sum::<usize>(), 2, "{:?}", part_pictures(&d));
+    // One in a footer too: nothing is taken, all three stay.
+    let d = import(&watermark_package(&[(&a, &a)])).unwrap();
+    assert_eq!(d.settings.watermark, None);
+    assert_eq!(part_pictures(&d).iter().map(|(_, n)| n).sum::<usize>(), 2, "{:?}", part_pictures(&d));
+    // A header without one on a second master page.
+    let d = import(&watermark_package(&[(&a, ""), ("Plain", "")])).unwrap();
+    assert_eq!(d.settings.watermark, None);
+    assert_eq!(part_pictures(&d).iter().map(|(_, n)| n).sum::<usize>(), 1);
+    // Beside a text watermark: the text one is the document's, the picture stays in its header.
+    let text = r##"<draw:custom-shape text:anchor-type="char" draw:name="PowerPlusWaterMarkObject" draw:style-name="Mgr1" svg:width="4in" svg:height="1in"><text:p>DRAFT</text:p><draw:enhanced-geometry svg:viewBox="0 0 21600 21600" draw:text-path="true" draw:type="fontwork-plain-text"/></draw:custom-shape>"##;
+    let d = import(&watermark_package(&[(&format!("{a}{text}"), "")])).unwrap();
+    let wm = d.settings.watermark.clone().expect("the text watermark");
+    assert_eq!((wm.text.as_str(), wm.picture.is_none()), ("DRAFT", true));
+    assert_eq!(part_pictures(&d).iter().map(|(_, n)| n).sum::<usize>(), 1);
+}
+
+#[test]
+fn a_watermark_added_to_an_odt_file_is_saved() {
+    // Open an ODT, add a watermark, save as ODT: the watermark is written (the page setup was
+    // taken as unchanged because the fingerprint left the watermark out), with its picture once.
+    let opened = import(&watermark_package(&[("Head", ""), ("Head", "")])).unwrap();
+    assert_eq!(opened.settings.watermark, None);
+    let png = watermark_png(40, 20);
+    let mut d = opened.clone();
+    let key = d.add_media(png.clone(), "png");
+    d.settings.watermark = Some(wordcraft_doc::Watermark {
+        picture: Some(wordcraft_doc::WatermarkPicture { media: key, scale: Some(50.0), washout: true }),
+        ..Default::default()
+    });
+    let saved = export(&d).unwrap();
+    let back = import(&saved).unwrap();
+    let pic = back.settings.watermark.clone().and_then(|w| w.picture).expect("the picture watermark was saved");
+    assert_eq!((pic.scale, pic.washout), (Some(50.0), true));
+    assert_eq!(back.media.get(&pic.media).map(|b| b.as_slice()), Some(png.as_slice()));
+    let manifest = crate::odt::tests::entry(&saved, "META-INF/manifest.xml");
+    assert_eq!(manifest.matches("Pictures/").count(), 1, "one picture file for two master pages: {manifest}");
+    // A text watermark with its transparency.
+    let mut d = opened;
+    let mut wm = wordcraft_doc::Watermark { text: "COPY".into(), ..Default::default() };
+    wm.set_transparency(80);
+    d.settings.watermark = Some(wm);
+    let back = import(&export(&d).unwrap()).unwrap();
+    let got = back.settings.watermark.expect("the text watermark was saved");
+    assert_eq!((got.text.as_str(), got.transparency()), ("COPY", 80));
+}
+
 #[test]
 fn libreoffices_watermark_reads_as_the_watermark() {
     // As LibreOffice's Format › Watermark writes it (observed): turned, half see-through.

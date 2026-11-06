@@ -281,12 +281,14 @@ fn watermark(s: &mut Session, v: &Value) -> CmdResult {
             None
         }
     };
+    // The picture's bytes wait: it joins the document's media only after every check below.
+    let mut pending = None;
     if let Some((bytes, key)) = picked {
         let media = match key {
             Some(key) => key,
             None => {
-                let ext = super::insert::image_ext(&bytes);
-                s.doc.add_media(bytes, ext)
+                pending = Some(bytes);
+                String::new()
             }
         };
         wm.picture = Some(WatermarkPicture { media, ..wm.picture.take().unwrap_or_default() });
@@ -324,6 +326,10 @@ fn watermark(s: &mut Session, v: &Value) -> CmdResult {
                 wm.set_transparency(if t.is_finite() { t.clamp(0.0, 100.0).round() as u8 } else { 0 });
             }
         }
+    }
+    if let (Some(bytes), Some(pic)) = (pending, wm.picture.as_mut()) {
+        let ext = super::insert::image_ext(&bytes);
+        pic.media = s.doc.add_media(bytes, ext);
     }
     s.doc.settings.watermark = Some(wm);
     sel_result(s)

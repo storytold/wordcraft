@@ -214,7 +214,8 @@ pub(super) fn plan(r: &Reader, body: &El, rels: &Rels) -> Plan {
         return Plan::default();
     }
     let all: Vec<&Seen> = found.values().flatten().collect();
-    let Some(first) = all.first() else { return Plan::default() };
+    // The first shown header's, whatever order the map holds them in.
+    let Some(first) = shown.iter().flatten().find_map(|p| found.get(p.as_str())?.as_ref()) else { return Plan::default() };
     if !all.iter().all(|s| s.bytes == first.bytes && s.washout == first.washout) {
         return Plan::default();
     }

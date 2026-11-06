@@ -64,7 +64,10 @@ pub(super) struct Body<'a> {
     pub(super) watermark: Option<wordcraft_doc::Watermark>,
     /// A picture watermark found (in a header): its picture, its frame's size (points) and
     /// whether it is washed out. See [`Self::end_frame`].
-    pub(super) watermark_picture: Option<(Vec<u8>, (f32, f32), bool)>,
+    pub(super) watermark_pictures: Vec<(Vec<u8>, (f32, f32), bool)>,
+    /// Take those frames out of the header (the document's watermark), rather than leave them
+    /// there as pictures: set once every header and footer has been read and they qualify.
+    pub(super) take_watermark_pictures: bool,
     /// The open frame is drawn faded (`draw:color-mode` `watermark`).
     frame_washout: bool,
     /// Reading a master page's header or footer (where a watermark lives).
@@ -224,7 +227,8 @@ impl<'a> Body<'a> {
             entries: &[],
             forms: Default::default(),
             watermark: None,
-            watermark_picture: None,
+            watermark_pictures: Vec::new(),
+            take_watermark_pictures: false,
             frame_washout: false,
             page_part: false,
             watermark_shape: None,
