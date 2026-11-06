@@ -484,7 +484,7 @@ impl<W: Write, R: Read> Conversation<'_, W, R> {
         if let Some(lang) = req.lang.and_then(super::plain_tag) {
             self.command(&format!("SET SELF LANGUAGE {lang}"))?;
         }
-        // A name with spaces ("Microsoft Szabolcs", an espeak variant) goes as it is: the server
+        // A name with spaces ("English (Great Britain)") goes as it is: the server
         // joins every word after `SYNTHESIS_VOICE` back into the name, and libspeechd sends it
         // the same way, unquoted.
         if let Some(voice) = req.voice.and_then(plain_voice) {

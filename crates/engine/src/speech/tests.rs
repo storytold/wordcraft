@@ -524,6 +524,55 @@ fn text_in_another_script_keeps_its_own_voice() {
 }
 
 #[test]
+fn an_untagged_sentence_is_judged_by_its_letters() {
+    let ru = Voice { id: "Milena".into(), name: "Milena".into(), lang: "ru_RU".into(), kind: VoiceKind::Mac };
+    let hi = Voice { id: "inc/hi".into(), name: "Hindi".into(), lang: "hi".into(), kind: VoiceKind::Espeak };
+    let hu = Voice { id: "urj/hu".into(), name: "Hungarian".into(), lang: "hu".into(), kind: VoiceKind::Espeak };
+    // A plain-text or Markdown file has no language tags.
+    assert_eq!(voice_for(Some(&ru), None, "Hello there"), None, "a Russian voice doesn't read untagged English");
+    assert_eq!(voice_for(Some(&hi), None, "Hello there"), None);
+    assert_eq!(voice_for(Some(&hi), None, "नमस्ते दुनिया"), Some(&hi));
+    assert_eq!(voice_for(Some(&hu), None, "नमस्ते दुनिया"), None, "a Latin voice doesn't spell out Devanagari");
+    assert_eq!(voice_for(Some(&hu), None, "Jó reggelt"), Some(&hu));
+    assert_eq!(voice_for(Some(&ru), None, "2026"), Some(&ru), "a number keeps the chosen voice");
+    assert_eq!(voice_for(Some(&hi), None, "2026"), Some(&hi));
+}
+
+#[test]
+fn voices_named_by_rarer_languages_keep_their_script() {
+    // espeak-ng's Chuvash, Tatar and Bashkir voices are Cyrillic; its Kurdish is Kurmanji, in
+    // Latin letters; `cmn` is Mandarin.
+    let cv = Voice { id: "trk/cv".into(), name: "Chuvash".into(), lang: "cv".into(), kind: VoiceKind::Espeak };
+    assert_eq!(voice_for(Some(&cv), Some("en-US"), "Hello"), None, "a Chuvash voice doesn't read English");
+    assert_eq!(voice_for(Some(&cv), Some("ru"), "Салам"), Some(&cv), "Cyrillic text detected as Russian");
+    let tt = Voice { id: "trk/tt".into(), name: "Tatar".into(), lang: "tt".into(), kind: VoiceKind::Espeak };
+    assert_eq!(voice_for(Some(&tt), Some("ru"), "Сәлам"), Some(&tt));
+    let ku = Voice { id: "ira/ku".into(), name: "Kurdish".into(), lang: "ku".into(), kind: VoiceKind::Espeak };
+    assert_eq!(voice_for(Some(&ku), Some("en-US"), "Rojbaş, tu çawa yî?"), Some(&ku), "Kurmanji is Latin");
+    assert_eq!(voice_for(Some(&ku), Some("ar"), "مرحبا"), None);
+    let cmn = Voice { id: "sit/cmn".into(), name: "Chinese (Mandarin)".into(), lang: "cmn".into(), kind: VoiceKind::Espeak };
+    assert_eq!(voice_for(Some(&cmn), Some("zh-CN"), "你好"), Some(&cmn));
+    // The tag a voice is looked up by doesn't change: `cmn` and `tt` still give way to the
+    // script's language, which every system has voices for.
+    assert_eq!(speech_language("你好", Some("cmn-Hans"), None).as_deref(), Some("zh"));
+    assert_eq!(speech_language("Сәлам дөнья", Some("tt-RU"), None).as_deref(), Some("ru"));
+}
+
+#[test]
+fn a_chosen_speech_dispatcher_voice_goes_with_its_own_language() {
+    let hu = Voice { id: "Hungarian".into(), name: "Hungarian".into(), lang: "hu".into(), kind: VoiceKind::Dispatcher };
+    // Every sentence in the chosen voice gets the same language, so the server's module never
+    // swaps the voice for the default voice of a sentence's tag.
+    assert_eq!(dispatcher_lang_voice(Some("en-US"), Some(&hu)), (Some("hu"), Some("Hungarian")));
+    assert_eq!(dispatcher_lang_voice(Some("hu-HU"), Some(&hu)), (Some("hu"), Some("Hungarian")));
+    assert_eq!(dispatcher_lang_voice(Some("ru"), None), (Some("ru"), None), "no chosen voice: the sentence's language");
+    let espeak = Voice { id: "urj/hu".into(), name: "Hungarian".into(), lang: "hu".into(), kind: VoiceKind::Espeak };
+    assert_eq!(dispatcher_lang_voice(Some("ru"), Some(&espeak)), (Some("ru"), None), "another program's voice isn't passed on");
+    let unnamed = Voice { id: "x".into(), name: "x".into(), lang: String::new(), kind: VoiceKind::Dispatcher };
+    assert_eq!(dispatcher_lang_voice(Some("de"), Some(&unnamed)), (None, Some("x")));
+}
+
+#[test]
 fn every_other_script_language_has_its_script() {
     for lang in OTHER_SCRIPT_LANGUAGES {
         assert!(!other_script_blocks(lang).is_empty(), "{lang}");

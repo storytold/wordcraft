@@ -206,7 +206,6 @@ impl WordApp {
             zotero: _,
             ctx: _,
             read_aloud_error: _,
-            voice_picker_open: _,
             saves_in_flight: _,
             recovery_seen: _,
             no_document: _,

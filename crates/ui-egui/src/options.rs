@@ -563,7 +563,9 @@ fn accessibility(app: &mut WordApp, ui: &mut Ui) {
 /// voice. The list is asked for in the background; until it arrives only Automatic shows.
 fn voice_picker(app: &mut WordApp, ui: &mut Ui) {
     let voices = app.session.read_aloud.voices();
-    if voices.is_none() {
+    // Also while the list is asked for again (opening it may start a speech server): the voices
+    // show when they arrive, without waiting for a mouse move.
+    if voices.is_none() || app.session.read_aloud.voices_pending() {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
     }
     let voices = voices.unwrap_or_default();
@@ -586,11 +588,13 @@ fn voice_picker(app: &mut WordApp, ui: &mut Ui) {
         });
         list.response.labelled_by(name.id);
         // Opening the list asks for the voices once more, and may start Speech Dispatcher for them.
+        // Whether it was open is kept per window (viewport): every window draws its own Options.
         let open = list.inner.is_some();
-        if open && !app.voice_picker_open {
+        let was_open = egui::Id::unique("wordcraft.readAloudVoiceOpen").with(ui.ctx().viewport_id());
+        if open && !ui.ctx().data(|d| d.get_temp::<bool>(was_open)).unwrap_or(false) {
             app.session.read_aloud.ask_voices_starting_server();
         }
-        app.voice_picker_open = open;
+        ui.ctx().data_mut(|d| d.insert_temp(was_open, open));
     });
     if let Some(id) = pick {
         let _ = app.run("readAloud.voice", json!({"value": id}));

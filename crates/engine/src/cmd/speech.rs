@@ -112,7 +112,7 @@ fn voice(s: &mut Session, v: &Value) -> CmdResult {
     let list = s.read_aloud.voices();
     Ok(serde_json::json!({
         "voices": list.as_deref().unwrap_or_default().iter().map(speech::Voice::to_json).collect::<Vec<_>>(),
-        "pending": list.is_none(),
+        "pending": list.is_none() || s.read_aloud.voices_pending(),
         "voice": s.read_aloud.voice(),
     }))
 }

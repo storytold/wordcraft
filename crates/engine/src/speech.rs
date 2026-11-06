@@ -264,9 +264,27 @@ fn script_language(primary: &str) -> Option<&'static str> {
         "th" => "th",
         "ko" => "ko",
         "ja" => "ja",
-        "zh" | "cmn" | "yue" => "zh",
+        "zh" => "zh",
         _ => return None,
     })
+}
+
+/// The script group of a voice's language (or of a sentence's tag when a voice is chosen):
+/// [`script_language`], with the languages speech programs name voices by that a document tag
+/// rarely carries. Mandarin and Cantonese (`cmn`, `yue`) are Chinese; Chuvash, Tatar, Bashkir,
+/// Ossetian, Yakut and Chechen are written in Cyrillic; espeak-ng's Kurdish (`ku`) is Kurmanji,
+/// in Latin letters, and Sorani (`ckb`) is the Kurdish in Arabic letters. Kept apart from
+/// [`script_language`], which picks the tag a voice is looked up by, so a `tt` or `cmn` tag still
+/// gives way to `ru` or `zh` there.
+#[cfg(any(not(target_arch = "wasm32"), test))]
+fn voice_script(primary: &str) -> Option<&'static str> {
+    match primary {
+        "cmn" | "yue" => Some("zh"),
+        "cv" | "tt" | "ba" | "os" | "sah" | "ce" => Some("ru"),
+        "ckb" => Some("ar"),
+        "ku" => None,
+        p => script_language(p),
+    }
 }
 
 /// The language to speak `text` in: the document's `explicit` tag when it fits the text, else the
@@ -527,39 +545,47 @@ fn is_latin_text(text: &str) -> bool {
     latin > 0 && other.saturating_mul(5) < latin.saturating_add(other)
 }
 
-/// The chosen voice, when it suits the sentence `text` in `lang`: the sentence has no language,
-/// the voice speaks its language, or the voice speaks another language in the same script. A
+/// The chosen voice, when it suits the sentence `text` in `lang`: the voice speaks its language,
+/// or another language in the same script, or the text is in the voice's script. A
 /// Latin-script voice reads every sentence of Latin letters whatever its tag, since the tag is
 /// often only the default (Word and new documents tag every run `en-US`, Hungarian text
 /// included), and a voice of another script reads text in its script whatever the tag; text in
 /// another script keeps the voice of its language, so a Hungarian voice doesn't spell out a
-/// Russian or Hindi sentence letter by letter, and a Hindi voice doesn't read English.
+/// Russian or Hindi sentence letter by letter, and a Hindi voice doesn't read English. A sentence
+/// without a language is judged by its letters alone: untagged text has no script
+/// [`speech_language`] detects (it would carry that script's language), so a Russian voice
+/// doesn't read it unless it has no letters.
 #[cfg(any(not(target_arch = "wasm32"), test))]
 fn voice_for<'a>(voice: Option<&'a Voice>, lang: Option<&str>, text: &str) -> Option<&'a Voice> {
     let voice = voice?;
     // A language as a program writes it: `hu`, `en-gb`, `ru_RU`, `cmn-latn-pinyin`.
     let primary = |tag: &str| primary_tag(tag.split(['-', '_']).next().unwrap_or(""));
-    let Some(sentence) = lang.and_then(primary) else { return Some(voice) };
+    let sentence = lang.and_then(primary);
     // A voice without a language the program names (empty, `none`) counts as a Latin-script one.
     let own = primary(&voice.lang);
-    if own.as_deref() == Some(sentence.as_str()) {
+    if sentence.is_some() && own == sentence {
         return Some(voice);
     }
-    let script = script_language(&sentence);
-    if let Some(own_script) = own.as_deref().and_then(script_language) {
-        return (script == Some(own_script)).then_some(voice);
+    let script = sentence.as_deref().and_then(voice_script);
+    let letters = text.chars().any(char::is_alphabetic);
+    if let Some(own_script) = own.as_deref().and_then(voice_script) {
+        let fits = match sentence {
+            Some(_) => script == Some(own_script),
+            None => !letters,
+        };
+        return fits.then_some(voice);
     }
     // A voice of a script the detection doesn't know (Hindi, Georgian…) reads text in its script
     // whatever the tag, as a Latin voice does Latin text: Devanagari tagged `en-US` (the tag Word
     // writes on every run) goes to the chosen Hindi voice. A tag of a detected script (Russian
     // text) keeps that script's voice, and other text keeps its own.
     if let Some(o) = own.as_deref().filter(|o| OTHER_SCRIPT_LANGUAGES.contains(o)) {
-        return (script.is_none() && in_other_script(o, text)).then_some(voice);
+        return ((script.is_none() && in_other_script(o, text)) || (sentence.is_none() && !letters)).then_some(voice);
     }
     // Text without letters (a `2026` cell) keeps the chosen voice, unless its tag is a language of
     // another script, whose voice reads the number in that language.
-    if !text.chars().any(char::is_alphabetic) {
-        return (script.is_none() && !OTHER_SCRIPT_LANGUAGES.contains(&sentence.as_str())).then_some(voice);
+    if !letters {
+        return (script.is_none() && !sentence.as_deref().is_some_and(|s| OTHER_SCRIPT_LANGUAGES.contains(&s))).then_some(voice);
     }
     // A Latin-script voice reads Latin text whatever the tag: an English sentence in a Russian
     // document (every run `ru-RU`) goes to the chosen English voice.
@@ -847,14 +873,24 @@ fn installed_voices() -> Option<Arc<[Voice]>> {
     }
 }
 
-/// The installed voice `id`, waiting while the list is asked for the first time, but no longer
-/// than [`VOICE_WAIT`]; `Err` as soon as reading moves on.
+/// Is the system being asked for its voices right now?
+#[cfg(not(target_arch = "wasm32"))]
+fn voices_asking() -> bool {
+    VOICES.lock().unwrap_or_else(PoisonError::into_inner).asking
+}
+
+/// The installed voice `id`, waiting while the list is asked for, the first time or again (a
+/// speech server started for it may bring the voice), but no longer than [`VOICE_WAIT`]; `Err`
+/// as soon as reading moves on.
 #[cfg(not(target_arch = "wasm32"))]
 fn chosen_voice(id: &str, changed: &dyn Fn() -> bool) -> Result<Option<Voice>, ()> {
     let until = std::time::Instant::now() + VOICE_WAIT;
     loop {
         if let Some(list) = installed_voices() {
-            return Ok(list.iter().find(|v| v.id == id).cloned());
+            let found = list.iter().find(|v| v.id == id).cloned();
+            if found.is_some() || !voices_asking() {
+                return Ok(found);
+            }
         }
         if changed() {
             return Err(());
@@ -899,6 +935,19 @@ fn speak_dispatcher(text: &str, lang: Option<&str>, voice: Option<&str>, rate: f
     let lang = dispatcher_language(lang);
     let req = ssip::Request { text, rate: spd_rate(rate), lang: lang.as_deref(), voice };
     Some(dispatcher_spoken(ssip::converse(&stream, &req, changed)))
+}
+
+/// The language and voice name Speech Dispatcher is given for a sentence in `lang`, with the
+/// `voice` [`voice_for`] chose for it: a chosen Speech Dispatcher voice goes with its own language,
+/// not the sentence's tag. Its modules set again only what changed since the last sentence, and a
+/// new language alone replaces the voice (espeak-ng's module sets the language's default voice):
+/// a Hungarian voice reading sentences tagged `hu`, then `en-US`, would turn English.
+#[cfg(any(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")), test))]
+fn dispatcher_lang_voice<'a>(lang: Option<&'a str>, voice: Option<&'a Voice>) -> (Option<&'a str>, Option<&'a str>) {
+    match voice.filter(|v| v.kind == VoiceKind::Dispatcher) {
+        Some(v) => (Some(v.lang.as_str()).filter(|l| !l.is_empty()), Some(v.id.as_str())),
+        None => (lang, None),
+    }
 }
 
 /// How a sentence Speech Dispatcher handled ended, for the worker.
@@ -1263,10 +1312,8 @@ impl ReadAloud {
     pub fn set_voice(&mut self, voice: Option<&str>) {
         let v = voice.and_then(voice_id).map(str::to_string);
         let changed = self.voice() != v;
-        // The list is asked for now, so the first sentence doesn't wait for it.
-        if v.is_some() && self.backend == Backend::System {
-            let _ = installed_voices();
-        }
+        // Nothing is asked of the system here: a restored choice mustn't start a voice listing (a
+        // PowerShell on Windows) at every launch. Reading or the voice picker asks for the list.
         if !changed {
             return;
         }
@@ -1293,6 +1340,15 @@ impl ReadAloud {
     /// voices with the system's speech, none with a silent backend (tests never ask the system).
     pub fn voices(&self) -> Option<Arc<[Voice]>> {
         if self.backend == Backend::System { installed_voices() } else { Some(Arc::new([])) }
+    }
+    /// Is the voice list still coming: not there yet, or being asked for again (the voice picker
+    /// opened and may have started a speech server)? Ask again shortly.
+    pub fn voices_pending(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.backend == Backend::System {
+            return self.voices().is_none() || voices_asking();
+        }
+        false
     }
     /// Ask for the voices once more, allowing Speech Dispatcher to be started for them (the voice
     /// picker just opened): with only Speech Dispatcher installed, its voices are listed only
@@ -1622,9 +1678,8 @@ fn speak_with(text: &str, lang: Option<&str>, voice: Option<&Voice>, rate: f32, 
         #[cfg(all(unix, not(target_os = "macos")))]
         if not_found {
             NO_ESPEAK.set(true);
-            if let Some(spoken) =
-                speak_dispatcher(text, lang, voice.filter(|v| v.kind == VoiceKind::Dispatcher).map(|v| v.id.as_str()), rate, changed)
-            {
+            let (lang, voice) = dispatcher_lang_voice(lang, voice);
+            if let Some(spoken) = speak_dispatcher(text, lang, voice, rate, changed) {
                 return (spoken, false, None);
             }
         }
