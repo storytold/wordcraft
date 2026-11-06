@@ -256,3 +256,71 @@ fn custom_styles_based_on_any_kinds_style_keep_their_name_when_edited() {
     let s = crate::odt::tests::styles_of(&saved);
     assert!(s.contains(r#"style:name="Banner" style:display-name="Banner" style:family="paragraph" style:parent-style-name="Title""#), "{s}");
 }
+
+/// A heading's number is its own outline level's, as in LibreOffice, not its style's: `(level)` of
+/// each paragraph's number, as layout takes it.
+fn number_levels(d: &Document) -> Vec<Option<u8>> {
+    d.body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .map(|p| p.props.numbering.or(d.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0).map(|n| n.level))
+        .collect()
+}
+
+#[test]
+fn a_headings_own_outline_level_gives_its_number() {
+    let outline = r#"<text:outline-style style:name="Outline"><text:outline-level-style text:level="1" style:num-format="1" style:num-suffix="."/><text:outline-level-style text:level="2" style:num-format="1" text:display-levels="2" style:num-suffix="."/><text:outline-level-style text:level="3" style:num-format=""/></text:outline-style>"#;
+    let styles = format!(
+        r#"{HEAD}<style:style style:name="Low" style:family="paragraph" style:parent-style-name="Standard" style:default-outline-level="3"/><style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:default-outline-level="1"/>{outline}"#
+    );
+    let h = |style: &str, level: u8| format!(r#"<text:h text:style-name="{style}" text:outline-level="{level}">{style} {level}</text:h>"#);
+    let body = [h("Head", 1), h("Head", 2), h("Head", 3), h("Low", 3), h("Low", 1), h("Low", 2), h("Heading_20_1", 2), h("Heading_20_1", 3)].concat();
+    let d = in_custom_style(&styles, &body);
+    let want = vec![Some(0), Some(1), None, None, Some(0), Some(1), Some(1), None];
+    assert_eq!(number_levels(&d), want);
+    let nums: std::collections::BTreeSet<u32> = d
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .filter_map(|p| p.props.numbering.or(d.styles.resolve_para(&p.props).numbering))
+        .map(|n| n.num)
+        .filter(|n| *n != 0)
+        .collect();
+    assert_eq!(nums.len(), 1, "one list with the headings': {nums:?}");
+    // Written from the model the outline still numbers them, by the levels stated, and read back
+    // they are as they were.
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let c = crate::odt::tests::content_of(&saved);
+    assert!(!c.contains("<text:list"), "{c}");
+    for (style, level) in [("Head", 2), ("Low", 1), ("Heading_20_1", 3)] {
+        assert!(c.contains(&format!(r#"<text:h text:style-name="{style}" text:outline-level="{level}">{style} {level}"#)), "{c}");
+    }
+    assert_eq!(number_levels(&import(&saved).unwrap()), want);
+}
+
+/// A heading in a list is that list's, whatever its outline level would number.
+#[test]
+fn a_heading_in_a_list_keeps_the_lists_number() {
+    let styles = format!(
+        r#"{HEAD}{NUMBERED}<text:list-style style:name="L"><text:list-level-style-number text:level="1" style:num-format="a"/></text:list-style>"#
+    );
+    let d = in_custom_style(
+        &styles,
+        r#"<text:list text:style-name="L"><text:list-item><text:h text:style-name="Head" text:outline-level="2">x</text:h></text:list-item></text:list>"#,
+    );
+    let p = d.body[0].as_para().unwrap();
+    let n = p.props.numbering.expect("its list");
+    assert_eq!(d.numbering.level(n.num, n.level).map(|l| l.format), Some(NumFormat::LowerLetter));
+}
+
+/// A style based on Title with an outline level is a heading at that level, in its own name.
+#[test]
+fn a_title_based_style_with_an_outline_level_stays_a_heading() {
+    let styles = r#"<style:style style:name="Title" style:family="paragraph"/><style:style style:name="Banner" style:family="paragraph" style:parent-style-name="Title" style:default-outline-level="1"/>"#;
+    let mut d = in_custom_style(styles, r#"<text:p text:style-name="Banner">report</text:p>"#);
+    let p = d.body[0].as_para().unwrap().props.clone();
+    assert_eq!((p.style.as_deref(), d.styles.resolve_para(&p).outline_level), (Some("Banner"), Some(0)));
+    let saved = saved_after_an_edit(&mut d);
+    let c = crate::odt::tests::content_of(&saved);
+    assert!(c.contains(r#"<text:h text:style-name="Banner" text:outline-level="1">Yearly report"#), "{c}");
+}

@@ -364,7 +364,7 @@ fn apply_look(doc: &mut Document, kind: model::Kind, look: &super::styles::ParaL
 fn number_headings(doc: &mut Document, levels: &[super::styles::ListLevel]) {
     use wordcraft_doc::numbering::{AbstractNum, ListKind, Num, levels_for};
     use wordcraft_doc::props::NumRef;
-    let numbered: Vec<bool> = (0..6).map(|i| levels.get(i).is_some_and(|l| l.ordered)).collect();
+    let numbered: Vec<bool> = (0..9).map(|i| levels.get(i).is_some_and(|l| l.ordered)).collect();
     if !numbered.contains(&true) {
         return;
     }
@@ -407,6 +407,36 @@ fn number_headings(doc: &mut Document, levels: &[super::styles::ListLevel]) {
     for st in &mut styles.styles {
         if let Some(l) = st.para.outline_level.filter(|l| numbered.get(usize::from(*l)) == Some(&true)) {
             st.para.numbering = Some(NumRef { num: nid, level: l });
+        }
+    }
+    // A heading's own outline level goes before its style's: LibreOffice numbers it by that level.
+    // A heading in a list is that list's.
+    let styles = doc.styles.clone();
+    each_body_para(&mut doc.body, 0, &mut |p| {
+        let Some(l) = p.props.outline_level.filter(|_| p.props.numbering.is_none()) else { return };
+        let style = styles.resolve_para(&wordcraft_doc::props::ParaProps { style: p.props.style.clone(), ..Default::default() });
+        if style.outline_level.is_none() {
+            return;
+        }
+        let own = (numbered.get(usize::from(l)) == Some(&true)).then_some(NumRef { num: nid, level: l });
+        if own != style.numbering {
+            // (`num: 0` switches the style's number off.)
+            p.props.numbering = Some(own.unwrap_or(NumRef { num: 0, level: 0 }));
+        }
+    });
+}
+
+/// Each paragraph of `blocks`, those in tables too (to 16 levels deep).
+fn each_body_para(blocks: &mut [Arc<wordcraft_doc::Block>], depth: usize, f: &mut dyn FnMut(&mut wordcraft_doc::Paragraph)) {
+    for b in blocks {
+        match Arc::make_mut(b) {
+            wordcraft_doc::Block::Para(p) => f(p),
+            wordcraft_doc::Block::Table(t) if depth < 16 => {
+                for cell in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                    each_body_para(&mut cell.blocks, depth + 1, f);
+                }
+            }
+            wordcraft_doc::Block::Table(_) => {}
         }
     }
 }

@@ -417,13 +417,15 @@ fn flow_comment(doc: &Document, c: &wordcraft_doc::Comment, parent: Option<u32>,
 }
 
 /// A paragraph's list membership as the flow keeps it: without the list's identity and label
-/// unless `opts` asks for them, and none for a heading numbered only through its style, which a
-/// format with heading numbering of its own (ODT's outline style) numbers instead.
-fn flow_list(kind: Kind, list: Option<ListInfo>, p: &Paragraph, opts: FlowOpts) -> Option<ListInfo> {
+/// unless `opts` asks for them, and none for a heading numbered only through its style or by the
+/// list its styles number with, which a format with heading numbering of its own (ODT's outline
+/// style) numbers instead.
+fn flow_list(doc: &Document, kind: Kind, list: Option<ListInfo>, p: &Paragraph, opts: FlowOpts) -> Option<ListInfo> {
     let mut li = list?;
     if !opts.lists {
         (li.list, li.label) = (0, None);
-    } else if matches!(kind, Kind::Heading(_)) && p.props.numbering.is_none() {
+    } else if matches!(kind, Kind::Heading(_)) && (p.props.numbering.is_none() || doc.numbering.level(li.list, 0).is_some_and(|l| l.style.is_some()))
+    {
         return None;
     }
     Some(li)
@@ -461,7 +463,7 @@ pub fn flow_paras(doc: &Document, p: &Paragraph) -> Vec<Para> {
 fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
     let tracked = opts.tracked;
     let (kind, list) = para_kind(doc, p);
-    let list = flow_list(kind, list, p, opts);
+    let list = flow_list(doc, kind, list, p, opts);
     let mut done: Vec<Para> = Vec::new();
     let borders = if kind == Kind::Rule { None } else { p.props.borders.filter(|b| b.takes_room()) };
     let mut out = Para {
