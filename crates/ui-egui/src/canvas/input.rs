@@ -97,7 +97,7 @@ pub(super) fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[
     // A finger lifted: end a selection it started, and let the format painter apply as it does
     // on a mouse release.
     let touch_release = app.canvas.touch.take_release();
-    if touch_release.is_some() {
+    if let Some(release) = touch_release {
         if app.canvas.dragging {
             app.canvas.cancel_text_drag();
             if app.session.painter.is_some() && !app.session.sel.is_collapsed() {
@@ -107,6 +107,19 @@ pub(super) fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[
         // A double-tap still selects a word (and a triple-tap a paragraph); every other finger
         // release ends here.
         if !resp.double_clicked() && !resp.triple_clicked() {
+            // A tap selects what the mouse press would have selected. The finger's gesture
+            // claimed the press (Touch Start and the synthesized press arrive in the same
+            // frame on native backends), so `objects::pointer` and the table handlers never
+            // saw it: finish the tap here, as the right-click path does, before anything else
+            // can read the tap as a caret (#1503, #2155). A pan restores its own selection and
+            // a long press has already started one, so neither is a tap.
+            if !release.panned
+                && !release.selecting
+                && !over_balloon(app, release.pos)
+                && !crate::objects::select_at(app, layout, rects, scale, release.pos)
+            {
+                crate::table_mouse::tap(app, layout, rects, scale, release.pos);
+            }
             return;
         }
     }
@@ -118,7 +131,7 @@ pub(super) fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[
     if app.canvas.touch.panning() || app.canvas.touch.pinching() || (app.canvas.touch.down() && !app.canvas.touch.selecting() && !releasing) {
         return;
     }
-    let Some(route) = route_pointer_targets(app, ui, resp, rects, layout, scale, touch_release) else {
+    let Some(route) = route_pointer_targets(app, ui, resp, rects, layout, scale, touch_release.map(|r| r.pos)) else {
         return;
     };
     let pointer = route.pointer;

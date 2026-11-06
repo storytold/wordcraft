@@ -41,6 +41,18 @@ struct Candidate {
     before: Selection,
 }
 
+/// How a finger's gesture ended: where it lifted, and whether it was a pan or a long-press
+/// selection rather than a tap (a tap selects what a mouse press at the same place would).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TouchRelease {
+    /// Where the finger lifted.
+    pub(crate) pos: Pos2,
+    /// The finger panned the page: a pan is not a tap.
+    pub(crate) panned: bool,
+    /// The finger's long press started a selection: not a tap either.
+    pub(crate) selecting: bool,
+}
+
 /// The page's one-finger gesture: pan, tap, long-press selection, or pinch.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TouchDrag {
@@ -70,8 +82,9 @@ pub(crate) struct TouchDrag {
     /// Fingers currently on the screen, by touch id. eframe/egui can report `multi_touch` a
     /// frame after the second finger lands, so count the touch events ourselves.
     active: Vec<TouchId>,
-    /// Where the finger lifted this frame; the canvas ends the drag it may have started.
-    released_at: Option<Pos2>,
+    /// How the finger's gesture ended this frame; the canvas finishes a tap the way a mouse
+    /// press would and ends any drag the gesture started.
+    released: Option<TouchRelease>,
     /// The pan's coast after the finger lifts.
     momentum: Momentum,
 }
@@ -86,7 +99,7 @@ impl TouchDrag {
         self.momentum.cancel();
         self.candidate = None;
         self.pinching = false;
-        self.released_at = None;
+        self.released = None;
         self.down = true;
         self.panning = false;
         self.selecting = false;
@@ -106,7 +119,7 @@ impl TouchDrag {
         }
         // A new press stops any coast from the last finger.
         self.momentum.cancel();
-        self.released_at = None;
+        self.released = None;
         self.candidate = Some(Candidate { pos, time: now, before });
     }
 
@@ -135,7 +148,7 @@ impl TouchDrag {
     fn track_touches(&mut self, input: &InputState) {
         if input.any_touches() {
             // A new finger starts a new gesture; don't report the last one's release to it.
-            self.released_at = None;
+            self.released = None;
         }
         if !input.any_touches() {
             self.active.clear();
@@ -189,7 +202,7 @@ impl TouchDrag {
                 if self.panning && momentum {
                     self.momentum.release();
                 }
-                self.released_at = Some(self.last);
+                self.released = Some(TouchRelease { pos: self.last, panned: self.panning, selecting: self.selecting });
                 self.reset();
             }
             return if momentum { self.momentum.tick(dt) } else { Vec2::ZERO };
@@ -238,10 +251,11 @@ impl TouchDrag {
         delta
     }
 
-    /// The finger lifted this frame: the canvas ends a selection drag it started. The
-    /// position is for a double-tap whose release frame also carried `PointerGone`.
-    pub(crate) fn take_release(&mut self) -> Option<Pos2> {
-        self.released_at.take()
+    /// The finger lifted this frame: the canvas finishes the tap or ends a selection drag it
+    /// started. The position is for a double-tap whose release frame also carried
+    /// `PointerGone`.
+    pub(crate) fn take_release(&mut self) -> Option<TouchRelease> {
+        self.released.take()
     }
 
     /// The selection to put back when a pan starts, once.
@@ -289,7 +303,7 @@ impl TouchDrag {
         self.momentum.cancel();
         self.candidate = None;
         self.pinching = false;
-        self.released_at = None;
+        self.released = None;
         self.active.clear();
     }
 

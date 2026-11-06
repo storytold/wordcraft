@@ -5043,6 +5043,30 @@ fn a_touch_drag_from_a_floating_picture_pans_without_moving_it() {
     assert_eq!(after, before, "the picture stayed where it was");
 }
 
+/// Review repro: a native finger tap on a floating picture selects it, as a mouse click does.
+/// The finger's gesture claims the press (native backends deliver `Touch Start` and the
+/// synthesized press in the same frame), so the tap is finished on release (#2155).
+#[test]
+fn rr_native_tap_on_floating_picture_selects_it() {
+    let (mut h, pos) = floating_picture_document();
+    assert!(wordcraft_engine::cmd::objects::object_selection(&h.state().session).is_none(), "no picture is selected before the tap");
+    let rect = h.state_mut().session.layout().object(&pos, 0).expect("the floating picture is laid out").rect;
+    let at = crate::frame::to_screen(h.state().canvas.page_rects[0], h.state().canvas.scale, rect).center();
+    // Native order: `Touch Start` and the synthesized press arrive in the same frame.
+    h.input_mut().events.extend([touch(0, egui::TouchPhase::Start, at), primary(at, true)]);
+    h.step();
+    // Their end and release do too.
+    h.input_mut().events.extend([touch(0, egui::TouchPhase::End, at), primary(at, false), egui::Event::PointerGone]);
+    h.step();
+    h.step();
+    assert_eq!(
+        wordcraft_engine::cmd::objects::object_selection(&h.state().session).map(|(p, _)| p),
+        Some(pos),
+        "a native tap selects the floating picture"
+    );
+    assert_eq!(h.state().canvas.scroll_offset.y, 0.0, "a tap must not scroll");
+}
+
 /// The web's pointerdown-first order: that frame starts an object drag, and the finger's
 /// `Touch Start` takes it back so the swipe pans (#1503, #2155).
 #[test]
