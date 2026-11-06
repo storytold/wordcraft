@@ -7,6 +7,8 @@ use wordcraft_layout::display::{DisplayOptions, Draw, page_display};
 
 use super::{Session, json, run};
 
+mod completion;
+
 /// Minimal InkML package part used in the native screen/PDF integration fixtures.
 const INK: &str = r##"<ink xmlns="http://www.w3.org/2003/InkML"><brush><brushProperty name="color" value="#2563EB"/><brushProperty name="width" value="4" units="pt"/></brush><trace>0 0, 50 0, 50 25</trace></ink>"##;
 /// Expected brush colour used to identify the fixture's stroke in display lists and pixels.
@@ -19,8 +21,12 @@ fn document(placement: &str) -> Vec<u8> {
 
 /// Package arbitrary synthetic InkML for the same placement, without importing any Word file.
 fn document_with_ink(placement: &str, ink: &str) -> Vec<u8> {
+    let inner = placement.ends_with("-inner");
+    let placement = placement.strip_suffix("-inner").unwrap_or(placement);
     let content = if matches!(placement, "group" | "canvas") {
         r#"<w14:contentPart r:id="ink"><w14:xfrm><a:off x="254000" y="254000"/><a:ext cx="1371600" cy="736600"/></w14:xfrm></w14:contentPart>"#
+    } else if inner {
+        r#"<w14:contentPart r:id="ink"><w14:xfrm rot="5400000"><a:off x="127000" y="254000"/><a:ext cx="1371600" cy="736600"/></w14:xfrm></w14:contentPart>"#
     } else {
         r#"<w14:contentPart r:id="ink"><w14:xfrm><a:off x="0" y="0"/><a:ext cx="2743200" cy="1473200"/></w14:xfrm></w14:contentPart>"#
     };

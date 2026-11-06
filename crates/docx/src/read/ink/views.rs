@@ -15,7 +15,10 @@ impl<'a> InkReader<'a, '_> {
     /// not additional paint operations (important for translucent ink and recognition groupings).
     pub(super) fn view(&mut self, el: &'a El, context: Context<'a>, depth: usize) -> Option<()> {
         let selection = self.selection(el, context, depth)?;
-        self.draw_selection(selection)
+        let stream_tails = std::mem::take(&mut self.tails);
+        let result = self.draw_selection(selection);
+        self.tails = stream_tails;
+        result
     }
 
     /// Resolve references and contexts into a bounded selection tree, detecting cycles by depth.

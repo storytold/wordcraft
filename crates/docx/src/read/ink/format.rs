@@ -19,6 +19,7 @@ pub(super) struct Channel {
     pub max: Option<f64>,
     /// Unit and orientation conversion; `None` means uncalibrated device units.
     pub scale: Option<f64>,
+    pub offset: f64,
     /// Axis orientation retained while a device-unit channel awaits calibration.
     pub orientation: f64,
     /// Whether force/transparency/color samples are already normalized fractions.
@@ -31,8 +32,7 @@ impl Channel {
         super::bounded(value)
             && (!self.boolean || value == 0.0 || value == 1.0)
             && (!self.integer || value.fract() == 0.0)
-            && self.min.is_none_or(|v| value >= v)
-            && self.max.is_none_or(|v| value <= v)
+            && if self.fraction { (0.0..=1.0).contains(&value) } else { self.min.is_none_or(|v| value >= v) && self.max.is_none_or(|v| value <= v) }
     }
 
     /// Normalize a visual channel with an explicit range or fractional units.
@@ -74,6 +74,7 @@ impl Default for Format {
                     min: None,
                     max: None,
                     scale: Some(1.0),
+                    offset: 0.0,
                     orientation: 1.0,
                     fraction: false,
                 })
@@ -92,7 +93,8 @@ impl Format {
     /// Read a value in the channel's physical units, including its orientation.
     pub fn value(&self, values: &[Option<f64>], name: &str) -> Option<f64> {
         let i = self.index(name)?;
-        Some(values.get(i).copied().flatten()? * self.channels.get(i)?.scale?)
+        let channel = self.channels.get(i)?;
+        Some(values.get(i).copied().flatten()? * channel.scale? + channel.offset)
     }
 
     /// Get a normalized force, alpha, or individual color component.
@@ -162,25 +164,7 @@ fn add(format: &mut Format, el: &El) -> Option<()> {
         _ => return None,
     };
     let units = el.attr("units");
-    let scale = if matches!(name, "X" | "Y" | "W" | "BW" | "BH") {
-        if el.attr("respectTo").is_some() {
-            return None;
-        }
-        match units {
-            Some("dev") => None,
-            _ => Some(unit(units)? * sign),
-        }
-    } else if name == "OR" {
-        Some(
-            match units {
-                None | Some("deg") => std::f64::consts::PI / 180.0,
-                Some("rad") => 1.0,
-                _ => return None,
-            } * sign,
-        )
-    } else {
-        Some(sign)
-    };
+    let (scale, offset) = visual_scale(el, name, min, max, sign)?;
     format.channels.push(Channel {
         name: name.into(),
         boolean,
@@ -189,10 +173,43 @@ fn add(format: &mut Format, el: &El) -> Option<()> {
         min,
         max,
         scale,
+        offset,
         orientation: sign,
         fraction: units == Some("%"),
     });
     Some(())
+}
+
+fn visual_scale(el: &El, name: &str, min: Option<f64>, max: Option<f64>, sign: f64) -> Option<(Option<f64>, f64)> {
+    let length = matches!(name, "X" | "Y" | "W" | "BW" | "BH");
+    if !length && name != "OR" {
+        return Some((Some(sign), 0.0));
+    }
+    if length && el.attr("respectTo").is_some() {
+        return None;
+    }
+    let units = el.attr("units");
+    if units == Some("dev") {
+        return Some((None, 0.0));
+    }
+    if units == Some("%") {
+        let (low, high) = (min?, max?);
+        if high <= low {
+            return None;
+        }
+        let k = if length { 1.0 } else { std::f64::consts::PI / 180.0 } * sign;
+        return Some((Some((high - low) * k), low * k));
+    }
+    let scale = if length {
+        unit(units)?
+    } else {
+        let q = super::units::parse(units.unwrap_or("deg"))?;
+        if q.dimension != super::units::ANGLE {
+            return None;
+        }
+        q.scale
+    };
+    Some((Some(scale * sign), 0.0))
 }
 
 /// Read the source format and calibrate `dev` units from physical channel resolutions.
@@ -221,9 +238,8 @@ pub(super) fn calibrate(format: &mut Format, el: &El, work: &mut usize) -> Optio
             if v <= 0.0 {
                 return None;
             }
-            let units = p.attr("units")?;
-            let scale = if let Some(u) = units.strip_prefix("1/") { unit(Some(u))? / v } else { unit(Some(units))? * v };
-            c.scale = Some(scale * c.orientation);
+            let dimension = if c.name == "OR" { super::units::ANGLE } else { super::units::LENGTH };
+            c.scale = Some(super::units::resolution(v, p.attr("units")?, dimension)? * c.orientation);
         }
     }
     Some(())
@@ -231,16 +247,7 @@ pub(super) fn calibrate(format: &mut Format, el: &El, work: &mut usize) -> Optio
 
 /// Length units in application points; nominal em/ex sizes are application-defined.
 pub(super) fn unit(value: Option<&str>) -> Option<f64> {
-    match value {
-        None | Some("em" | "pt") => Some(1.0),
-        Some("ex") => Some(0.5),
-        Some("in") => Some(72.0),
-        Some("cm") => Some(72.0 / 2.54),
-        Some("mm") => Some(72.0 / 25.4),
-        Some("m") => Some(72.0 / 0.0254),
-        Some("pc") => Some(12.0),
-        _ => None,
-    }
+    super::units::length(value)
 }
 
 /// Charge repeated format/source scans before resolving attributes; references cannot amplify

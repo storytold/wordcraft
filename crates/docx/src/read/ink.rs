@@ -18,6 +18,7 @@ mod format;
 mod mapping;
 mod projection;
 mod trace;
+mod units;
 mod views;
 
 /// Maximum InkML XML size accepted for vector decoding (original bytes are preserved separately).
@@ -60,7 +61,7 @@ pub(super) fn read(bytes: &[u8], work: &mut usize) -> Option<Graphic> {
         // A valid pen-up-only part must not resurrect an unrelated picture fallback.
         return Some(Graphic {
             kind: GraphicKind::Ink,
-            items: vec![GraphicItem::InkOutline { segs: Vec::new(), color: Rgb::BLACK, alpha: 0.0 }],
+            items: vec![GraphicItem::InkOutline { segs: Vec::new(), color: Rgb::BLACK, alpha: 0.0, mask_pen: false }],
             w: 1.0,
             h: 1.0,
             ..Default::default()
@@ -92,6 +93,49 @@ pub(super) fn fit_frame(graphic: &mut Graphic, w: f32, h: f32) {
     }
     graphic.w = w;
     graphic.h = h;
+}
+
+pub(super) fn place_frame(graphic: &mut Graphic, outer: (f32, f32), inner: [f32; 4]) {
+    if graphic.items.is_empty() {
+        return;
+    }
+    let [x, y, w, h] = inner;
+    fit_frame(graphic, w, h);
+    for item in &mut graphic.items {
+        match item {
+            GraphicItem::Path { segs, .. } | GraphicItem::InkOutline { segs, .. } => {
+                for seg in segs {
+                    match seg {
+                        PathSeg::Move(a, b) | PathSeg::Line(a, b) => {
+                            *a += x;
+                            *b += y;
+                        }
+                        PathSeg::Cubic(a, b, c, d, e, f) => {
+                            *a += x;
+                            *b += y;
+                            *c += x;
+                            *d += y;
+                            *e += x;
+                            *f += y;
+                        }
+                        PathSeg::Close => {}
+                    }
+                }
+            }
+            GraphicItem::Shape { rect, .. } => {
+                let [a, b, _, _] = rect;
+                *a += x;
+                *b += y;
+            }
+            _ => {}
+        }
+    }
+    if w <= 0.0 || h <= 0.0 {
+        graphic.items = vec![GraphicItem::InkOutline { segs: Vec::new(), color: Rgb::BLACK, alpha: 0.0, mask_pen: false }];
+    }
+    graphic.ink_frame = Some(inner);
+    graphic.w = outer.0;
+    graphic.h = outer.1;
 }
 
 /// Scale bounded path coordinates, including any future curve segments.
@@ -362,11 +406,48 @@ impl<'a> InkReader<'a, '_> {
         Some(())
     }
 
+    fn prior(&mut self, el: &'a El, range: Option<(usize, usize)>) -> Option<Option<usize>> {
+        match (el.attr("continuation"), el.attr("priorRef")) {
+            (None, None) | (Some("begin"), None) => Some(None),
+            (Some("middle" | "end"), Some(reference)) => {
+                if range.is_some() {
+                    self.validate_prior(el, 0)?;
+                }
+                let id = reference.strip_prefix('#')?;
+                let Some(prior) = self.tails.get_mut(id) else {
+                    return range.map(|_| None);
+                };
+                if !prior.open {
+                    return range.map(|_| None);
+                }
+                prior.open = false;
+                Some(if range.is_none_or(|r| r.0 == 1) { prior.stroke } else { None })
+            }
+            _ => None,
+        }
+    }
+
+    fn validate_prior(&mut self, el: &'a El, depth: usize) -> Option<()> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        spend(self.work, el.attrs.len().saturating_mul(8).max(1))?;
+        match (el.attr("continuation"), el.attr("priorRef")) {
+            (Some("begin"), None) => Some(()),
+            (Some("middle" | "end"), Some(reference)) => {
+                let prior = self.resolve(reference, "ink:trace")?;
+                if !matches!(prior.attr("continuation"), Some("begin" | "middle")) {
+                    return None;
+                }
+                self.validate_prior(prior, depth + 1)
+            }
+            _ => None,
+        }
+    }
+
     /// Decode, map and append one trace fragment. A view optionally selects a 1-based inclusive range.
     fn trace(&mut self, el: &'a El, ctx: &Context<'a>, range: Option<(usize, usize)>) -> Option<()> {
-        if el.els().next().is_some() || (range.is_some() && (el.attr("continuation").is_some() || el.attr("priorRef").is_some())) {
-            // A view can cut a fragment away from its continuation's context. Do not draw a
-            // disconnected subset until view-level continuation assembly is implemented.
+        if el.els().next().is_some() {
             return None;
         }
         let default_down = match el.attr("type") {
@@ -374,21 +455,7 @@ impl<'a> InkReader<'a, '_> {
             Some("penUp" | "indeterminate") => false,
             _ => return None,
         };
-        let mut tail = None;
-        if range.is_none() {
-            match (el.attr("continuation"), el.attr("priorRef")) {
-                (None, None) | (Some("begin"), None) => {}
-                (Some("middle" | "end"), Some(reference)) => {
-                    let prior = self.tails.get_mut(reference.strip_prefix('#')?)?;
-                    if !prior.open {
-                        return None;
-                    }
-                    prior.open = false;
-                    tail = prior.stroke;
-                }
-                _ => return None,
-            }
-        }
+        let mut tail = self.prior(el, range)?;
         let samples = trace::read(&el.text(), &ctx.format, self.work, &mut self.points)?;
         let (from, to) = range.unwrap_or((1, samples.len()));
         if from == 0 || to < from || to > samples.len() {
@@ -424,10 +491,8 @@ impl<'a> InkReader<'a, '_> {
                 }
             }
         }
-        if range.is_none()
-            && let Some(id) = el.attr("xml:id")
-        {
-            self.tails.insert(id, Tail { stroke: tail, open: matches!(el.attr("continuation"), Some("begin" | "middle")) });
+        if let Some(id) = el.attr("xml:id") {
+            self.tails.insert(id, Tail { stroke: tail, open: to == samples.len() && matches!(el.attr("continuation"), Some("begin" | "middle")) });
         }
         Some(())
     }

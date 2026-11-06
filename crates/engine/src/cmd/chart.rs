@@ -129,7 +129,7 @@ fn has_chart(s: &Session) -> Option<&'static str> {
 pub fn chart_graphic(spec: ChartSpec, theme: &[Rgb], w: f32, h: f32) -> Graphic {
     let spec = spec.sanitized();
     let items = wordcraft_docx::chart_items(&spec, theme, w, h);
-    Graphic { kind: GraphicKind::Chart, items, w, h, source: None, chart: Some(Arc::new(spec)), smart_art: None }
+    Graphic { kind: GraphicKind::Chart, items, w, h, source: None, chart: Some(Arc::new(spec)), smart_art: None, ink_frame: None }
 }
 
 /// `type` of the params, if given.

@@ -4,6 +4,7 @@ use super::*;
 use wordcraft_doc::para::ShapeKind;
 
 mod advanced;
+mod completion;
 
 /// Wrap InkML body markup with the real namespace and decode it under a fresh ample work budget.
 fn ink(body: &str) -> Option<Graphic> {
@@ -135,7 +136,7 @@ fn unsupported_visual_semantics_refuse_the_whole_preview() {
         r##"<trace contextRef="#missing">0 0, 1 1</trace>"##,
         r##"<context><canvasTransform/></context><trace>0 0, 1 1</trace>"##,
         r##"<context canvasRef="#other"/><trace>0 0, 1 1</trace>"##,
-        r##"<brush><brushProperty name="rasterOp" value="maskPen"/></brush><trace>0 0, 1 1</trace>"##,
+        r##"<brush><brushProperty name="rasterOp" value="xorPen"/></brush><trace>0 0, 1 1</trace>"##,
         r##"<brush><brushProperty name="tip" value="custom"/></brush><trace>0 0, 1 1</trace>"##,
         r##"<traceFormat><channel name="X" units="dev"/><channel name="Y" units="dev"/></traceFormat><trace>0 0, 1 1</trace>"##,
         r##"<traceFormat><channel name="X"/><channel name="Y"/><channel name="S"/></traceFormat><trace>0 0 T, 1 1 F</trace>"##,

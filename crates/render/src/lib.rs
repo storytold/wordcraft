@@ -615,6 +615,17 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
         Draw::Path { .. } => draw_path(ctx, &fr, it),
         Draw::Art { .. } => draw_art(ctx, &fr, it),
         Draw::Ink { .. } => draw_ink(ctx, &fr, it),
+        Draw::MaskInk { segs, color: c, alpha } => {
+            let path = wordcraft_layout::display::seg_path(segs);
+            if path.elements().is_empty() {
+                return;
+            }
+            ctx.set_transform(view);
+            ctx.push_blend_layer(peniko::Mix::Multiply.into());
+            ctx.set_paint(color(opts.ink(*c), *alpha));
+            ctx.fill_path(&path);
+            ctx.pop_layer();
+        }
         Draw::Shape { .. } => draw_shape(ctx, &fr, it),
         Draw::Clip { rect, items } => {
             let r = kurbo_rect(rect);

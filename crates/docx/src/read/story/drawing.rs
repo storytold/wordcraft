@@ -47,17 +47,18 @@ impl Reader<'_> {
                     *e = (*e - p).clamp(0.0, 1584.0);
                 }
             }
-            let inner = group_xfrm(Some(content));
+            let mut inner = group_xfrm(Some(content));
+            if content.child("w14:xfrm").and_then(|x| x.child("a:ext")).is_none() {
+                inner.ext = (w, h);
+            }
             let ordinary_frame =
                 content.child("w14:xfrm").is_none() || (inner.off == (0.0, 0.0) && (inner.ext.0 - w).abs() < 0.01 && (inner.ext.1 - h).abs() < 0.01);
-            let mut graphic = if ordinary_frame {
-                self.ink_graphic(&part, source)
+            let mut graphic = self.ink_graphic(&part, source);
+            if ordinary_frame {
+                crate::read::ink::fit_frame(Arc::make_mut(&mut graphic), w, h);
             } else {
-                // Nonstandard inner placement needs its own coordinate mapping, not a fit to
-                // the outer frame. Keep the preview until that mapping is supported.
-                Arc::new(Graphic { kind: GraphicKind::Ink, source: Some(source), ..Default::default() })
-            };
-            crate::read::ink::fit_frame(Arc::make_mut(&mut graphic), w, h);
+                crate::read::ink::place_frame(Arc::make_mut(&mut graphic), (w, h), [inner.off.0, inner.off.1, inner.ext.0, inner.ext.1]);
+            }
             if graphic.items.is_empty() {
                 let g = Arc::make_mut(&mut graphic);
                 g.items = vec![GraphicItem::Image { rect: [0.0, 0.0, w, h], media: String::new() }];
@@ -256,7 +257,9 @@ impl Reader<'_> {
             GraphicKind::Diagram => self.diagram_part(gd, rels),
             GraphicKind::Ink => None,
         };
-        let Some(path) = part else { return Arc::new(Graphic { kind, items: Vec::new(), w, h, source, chart: None, smart_art: None }) };
+        let Some(path) = part else {
+            return Arc::new(Graphic { kind, items: Vec::new(), w, h, source, chart: None, smart_art: None, ink_frame: None });
+        };
         let key = (kind, path, w.to_bits(), h.to_bits());
         if let Some(g) = self.graphics.get(&key) {
             return g.clone();
@@ -274,7 +277,7 @@ impl Reader<'_> {
             _ => None,
         };
         let source = if chart.is_some() || smart_art.is_some() { None } else { source };
-        let g = Arc::new(Graphic { kind, items, w, h, source, chart, smart_art });
+        let g = Arc::new(Graphic { kind, items, w, h, source, chart, smart_art, ink_frame: None });
         self.graphics.insert(key, g.clone());
         g
     }

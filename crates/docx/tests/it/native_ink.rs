@@ -84,6 +84,9 @@ fn advanced_native_ink_roundtrips_json_and_all_drawing_frames() {
         r##"<context><canvasTransform><mapping type="affine"><affine>2 0 0,0 3 0</affine></mapping></canvasTransform></context><trace xml:id="a" continuation="begin">0 0,10 10</trace><trace continuation="end" priorRef="#a">20 10,30 0</trace>"##,
         r##"<traceFormat><channel name="X"/><channel name="Y"/><intermittentChannels><channel name="C" default="255"/><channel name="BW" default="4"/><channel name="A" max="255" default="128"/></intermittentChannels></traceFormat><trace>0 0,10 10,20 0 #FF0000 8</trace>"##,
         r##"<definitions><trace xml:id="a">0 0,10 10,20 0,30 10</trace></definitions><traceView traceDataRef="#a" from="2" to="3"/>"##,
+        r##"<brush><brushProperty name="color" value="#ffff00"/><brushProperty name="rasterOp" value="maskPen"/></brush><trace>0 0,10 10</trace>"##,
+        r##"<context><canvasTransform><mapping type="unknown"/><mapping type="affine"><affine>2 0 0,0 3 0</affine></mapping></canvasTransform></context><trace>0 0,10 10</trace>"##,
+        r##"<definitions><traceGroup xml:id="g"><trace xml:id="a" continuation="begin">0 0,10 10</trace><trace continuation="end" priorRef="#a">20 10,30 0</trace></traceGroup></definitions><traceView traceDataRef="#g" from="1:2" to="2:1"/>"##,
     ];
     for body in variants {
         let ink = format!(r#"<ink xmlns="http://www.w3.org/2003/InkML">{body}</ink>"#);
@@ -136,23 +139,31 @@ fn direct_native_ink_has_intrinsic_dimensions_and_visible_strokes() {
 
 /// Keep inner-offset or resized ink on its preview; continue drawing a supported rotated frame.
 #[test]
-fn native_ink_inner_placement_uses_the_preview_but_pure_rotation_keeps_vectors() {
-    for (from, to, vectors) in [
-        ("<q:xfrm>", r#"<q:xfrm rot="2700000">"#, true),
-        (r#"<a:off x="0" y="0"/>"#, r#"<a:off x="127000" y="254000"/>"#, false),
-        (r#"<a:ext cx="1828800" cy="914400"/>"#, r#"<a:ext cx="914400" cy="457200"/>"#, false),
+fn native_ink_inner_placement_and_rotation_keep_vectors() {
+    for (from, to, frame) in [
+        ("<q:xfrm>", r#"<q:xfrm rot="2700000">"#, None),
+        (r#"<a:off x="0" y="0"/>"#, r#"<a:off x="127000" y="254000"/>"#, Some([10.0, 20.0, 144.0, 72.0])),
+        (r#"<a:ext cx="1828800" cy="914400"/>"#, r#"<a:ext cx="914400" cy="457200"/>"#, Some([0.0, 0.0, 72.0, 36.0])),
+        (r#"<a:off x="0" y="0"/>"#, r#"<a:off x="-127000" y="-254000"/>"#, Some([-10.0, -20.0, 144.0, 72.0])),
+        (r#"<a:ext cx="1828800" cy="914400"/>"#, "", None),
     ] {
         let mut files = unzip(&ink_docx(true, false));
         let body = text(&files, "word/document.xml").replace(from, to);
         files.insert("word/document.xml".into(), body.into_bytes());
         let entries: Vec<_> = files.iter().map(|(path, bytes)| (path.as_str(), bytes.as_slice())).collect();
-        let doc = wordcraft_docx::read(&zip(&entries)).unwrap();
-        let graphic = ink_graphic(&doc, false);
-        assert_eq!(matches!(graphic.items.first(), Some(GraphicItem::Path { .. })), vectors);
-        if !vectors {
-            assert!(matches!(graphic.items.as_slice(), [GraphicItem::Image { media, .. }] if doc.media.contains_key(media)));
+        let mut doc = wordcraft_docx::read(&zip(&entries)).unwrap();
+        let expected = ink_graphic(&doc, false).items.clone();
+        doc = serde_json::from_slice(&serde_json::to_vec(&doc).unwrap()).unwrap();
+        for _ in 0..3 {
+            let graphic = ink_graphic(&doc, false);
+            assert!(matches!(graphic.items.first(), Some(GraphicItem::Path { .. })));
+            assert_eq!(graphic.ink_frame, frame);
+            assert_eq!(graphic.items, expected);
+            assert_eq!((graphic.w, graphic.h), (144.0, 72.0));
+            let saved = wordcraft_docx::write(&doc).unwrap();
+            check_ink(&unzip(&saved));
+            doc = wordcraft_docx::read(&saved).unwrap();
         }
-        check_ink(&unzip(&wordcraft_docx::write(&doc).unwrap()));
     }
 }
 

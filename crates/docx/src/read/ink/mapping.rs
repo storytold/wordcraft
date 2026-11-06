@@ -4,6 +4,7 @@
 use super::{El, MAX_CHANNELS, MAX_DEPTH, bounded, format::Format, number, spend, trace::Sample, trace::Tokens};
 use std::collections::HashMap;
 
+mod inverse;
 mod spline;
 
 /// A mapping compiled to channel indices, so sample evaluation never resolves XML references.
@@ -23,21 +24,41 @@ pub(super) enum Mapping {
 
 impl Mapping {
     /// Compile a local mapping, resolving references with a hard depth and shared work bound.
-    pub fn read(el: &El, source: &Format, target: &Format, ids: &HashMap<&str, &El>, work: &mut usize, depth: usize) -> Option<Self> {
-        super::format::charge(el, work, 0)?;
-        if depth > MAX_DEPTH {
-            return None;
-        }
-        if let Some(reference) = el.attr("mappingRef") {
-            let el = *ids.get(reference.strip_prefix('#')?)?;
-            if el.name != "ink:mapping" {
+    pub fn read<'a>(
+        mut el: &'a El,
+        source: &Format,
+        target: &Format,
+        ids: &HashMap<&str, &'a El>,
+        work: &mut usize,
+        mut depth: usize,
+    ) -> Option<Self> {
+        let mut binding_override = None;
+        loop {
+            super::format::charge(el, work, 0)?;
+            if depth > MAX_DEPTH || el.name != "ink:mapping" {
                 return None;
             }
-            return Self::read(el, source, target, ids, work, depth + 1);
+            if binding_override.is_none() && el.children("ink:bind").next().is_some() {
+                binding_override = Some(el);
+            }
+            let Some(reference) = el.attr("mappingRef") else {
+                break;
+            };
+            el = *ids.get(reference.strip_prefix('#')?)?;
+            depth += 1;
         }
+        let bound = binding_override.unwrap_or(el);
         let map = match el.attr("type").unwrap_or("unknown") {
-            "identity" => Self::Identity(target.channels.iter().enumerate().filter_map(|(j, c)| source.index(&c.name).map(|i| (i, j))).collect()),
+            "identity" => {
+                if bound.children("ink:bind").next().is_some() {
+                    return None;
+                }
+                Self::Identity(target.channels.iter().enumerate().filter_map(|(j, c)| source.index(&c.name).map(|i| (i, j))).collect())
+            }
             "product" => {
+                if bound.children("ink:bind").next().is_some() {
+                    return None;
+                }
                 let mut maps = Vec::new();
                 for child in el.els() {
                     if child.name != "ink:mapping" || maps.len() >= MAX_CHANNELS {
@@ -53,10 +74,10 @@ impl Mapping {
                 if n == 0 || n > MAX_CHANNELS || rows.len() > MAX_CHANNELS {
                     return None;
                 }
-                let sources = bindings(el, "source", source, n)?;
-                let targets = if el.els().any(|b| b.name == "ink:bind" && b.attr("target").is_some()) {
-                    bindings(el, "target", target, rows.len())?
-                } else if el.els().any(|b| b.name == "ink:bind") && rows.len() == sources.len() {
+                let sources = bindings(bound, "source", source, n)?;
+                let targets = if bound.els().any(|b| b.name == "ink:bind" && b.attr("target").is_some()) {
+                    bindings(bound, "target", target, rows.len())?
+                } else if bound.els().any(|b| b.name == "ink:bind") && rows.len() == sources.len() {
                     sources.iter().map(|i| target.index(&source.channels.get(*i)?.name)).collect::<Option<Vec<_>>>()?
                 } else {
                     (rows.len() <= target.regular).then(|| (0..rows.len()).collect())?
@@ -66,16 +87,16 @@ impl Mapping {
             "mathml" => {
                 let mut vars = HashMap::new();
                 let mut destination = None;
-                for b in el.children("ink:bind") {
+                for b in bound.children("ink:bind") {
                     if let Some(name) = b.attr("source") {
-                        vars.insert(b.attr("variable")?, source.index(name)?);
+                        bind_variable(&mut vars, b.attr("variable")?, source.index(name)?)?;
                     }
                     if let Some(name) = b.attr("target") {
                         if destination.replace(target.index(name)?).is_some() {
                             return None;
                         }
-                        if let Some(var) = b.attr("variable") {
-                            vars.insert(var, source.index(name)?);
+                        if let (Some(var), Some(index)) = (b.attr("variable"), source.index(name)) {
+                            bind_variable(&mut vars, var, index)?;
                         }
                     }
                 }
@@ -87,7 +108,7 @@ impl Mapping {
                 }
                 Self::Formula { target: destination?, expression }
             }
-            "table" => Self::Table(Table::read(el, source, target, work)?),
+            "table" => Self::Table(Table::read(el, bound, source, target, work)?),
             _ => return None,
         };
         // Product maps cannot silently overwrite a sibling map's output.
@@ -155,6 +176,13 @@ impl Mapping {
         }
         Some(())
     }
+}
+
+fn bind_variable<'a>(vars: &mut HashMap<&'a str, usize>, name: &'a str, channel: usize) -> Option<()> {
+    if name.is_empty() || name.len() > 128 || vars.insert(name, channel).is_some_and(|prior| prior != channel) {
+        return None;
+    }
+    Some(())
 }
 
 /// Bind matrix rows or columns, with one-based indices and no missing/duplicate assignments.
@@ -244,17 +272,7 @@ impl Expr {
             return None;
         }
         Some(match el.name.as_str() {
-            "mml:cn" if el.els().next().is_none() => {
-                let text = el.text();
-                spend(work, text.len())?;
-                let value = number(text.trim())?;
-                match el.attr("type") {
-                    None | Some("real") => {}
-                    Some("integer") if value.fract() == 0.0 => {}
-                    _ => return None,
-                }
-                Self::Constant(value)
-            }
+            "mml:cn" => Self::Constant(constant(el, work)?),
             "mml:ci" if el.els().next().is_none() => {
                 let text = el.text();
                 spend(work, text.len())?;
@@ -340,7 +358,7 @@ impl Expr {
             Self::Channel(i) => input.get(*i).copied().flatten()?,
             Self::Apply(op, args) => {
                 let v = args.iter().map(|a| a.eval(input, work)).collect::<Option<Vec<_>>>()?;
-                let a = *v.first()?;
+                let a = v.first().copied().unwrap_or(0.0);
                 let binary = || (v.len() == 2).then(|| v.get(1).copied()).flatten();
                 let unary = || (v.len() == 1).then_some(a);
                 let flag = |v: bool| if v { 1.0 } else { 0.0 };
@@ -375,17 +393,63 @@ impl Expr {
                     "and" => flag(v.iter().all(|n| *n != 0.0)),
                     "or" => flag(v.iter().any(|n| *n != 0.0)),
                     "xor" => flag(v.iter().filter(|n| **n != 0.0).count() % 2 == 1),
-                    "eq" => flag(a == binary()?),
+                    "eq" | "gt" | "lt" | "geq" | "leq" if v.len() >= 2 => flag(v.windows(2).all(|pair| match pair {
+                        [x, y] => match op.as_str() {
+                            "eq" => x == y,
+                            "gt" => x > y,
+                            "lt" => x < y,
+                            "geq" => x >= y,
+                            _ => x <= y,
+                        },
+                        _ => false,
+                    })),
                     "neq" => flag(a != binary()?),
-                    "gt" => flag(a > binary()?),
-                    "lt" => flag(a < binary()?),
-                    "geq" => flag(a >= binary()?),
-                    "leq" => flag(a <= binary()?),
                     _ => return None,
                 }
             }
         };
         bounded(value).then_some(value)
+    }
+}
+
+fn constant(el: &El, work: &mut usize) -> Option<f64> {
+    use crate::xml::Node;
+    let mut text = String::new();
+    for node in &el.kids {
+        match node {
+            Node::Text(t) => {
+                spend(work, t.len())?;
+                text.push_str(t);
+            }
+            Node::El(separator) if separator.name == "mml:sep" && separator.kids.is_empty() && el.attr("type") == Some("rational") => text.push('/'),
+            _ => return None,
+        }
+        if text.len() > 128 {
+            return None;
+        }
+    }
+    if el.attr("type") == Some("rational") {
+        let (a, b) = if let Some((a, b)) = text.split_once('/') {
+            (number(a.trim())?, number(b.trim())?)
+        } else {
+            let mut values = text.split_ascii_whitespace();
+            let pair = (number(values.next()?)?, number(values.next()?)?);
+            if values.next().is_some() {
+                return None;
+            }
+            pair
+        };
+        if a.fract() != 0.0 || b.fract() != 0.0 || b == 0.0 {
+            return None;
+        }
+        let value = a / b;
+        return bounded(value).then_some(value);
+    }
+    let value = number(text.trim())?;
+    match el.attr("type") {
+        None | Some("real") => Some(value),
+        Some("integer") if value.fract() == 0.0 => Some(value),
+        _ => None,
     }
 }
 
@@ -408,7 +472,7 @@ pub(super) struct Table {
 
 impl Table {
     /// Validate bindings and completeness before accepting a table for evaluation.
-    fn read(el: &El, source: &Format, target: &Format, work: &mut usize) -> Option<Self> {
+    fn read(el: &El, bound: &El, source: &Format, target: &Format, work: &mut usize) -> Option<Self> {
         let table = el.child("ink:table")?;
         let rows = rows(table, work)?;
         let width = rows.first()?.len();
@@ -425,7 +489,7 @@ impl Table {
         let mut targets = Vec::new();
         let mut additions = Vec::new();
         let mut assigned = vec![false; width];
-        for b in el.children("ink:bind") {
+        for b in bound.children("ink:bind") {
             let column = b.attr("column")?.parse::<usize>().ok()?.checked_sub(1)?;
             if *assigned.get(column)? {
                 return None;

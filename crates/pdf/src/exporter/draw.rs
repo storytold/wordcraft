@@ -64,6 +64,19 @@ impl Exporter<'_> {
                 s.set_fill(None);
                 s.set_stroke(None);
             }
+            Draw::MaskInk { segs, color, alpha } => {
+                let mut pb = PathBuilder::new();
+                append_path(&mut pb, &wordcraft_layout::display::seg_path(segs));
+                let Some(path) = pb.finish() else {
+                    return;
+                };
+                s.push_blend_mode(krilla::blend::BlendMode::Multiply);
+                s.set_stroke(None);
+                s.set_fill(Some(fill(*color, *alpha)));
+                s.draw_path(&path);
+                s.set_fill(None);
+                s.pop();
+            }
             Draw::Ink { pts, color, width, alpha } => {
                 let mut pb = PathBuilder::new();
                 let mut used = 0usize;

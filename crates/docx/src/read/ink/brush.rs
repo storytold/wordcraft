@@ -40,6 +40,7 @@ pub(super) struct Brush {
     pub curve: bool,
     /// Preserve a no-operation trace without painting a fallback picture.
     pub invisible: bool,
+    pub mask_pen: bool,
 }
 
 impl Brush {
@@ -92,9 +93,10 @@ impl Brush {
                     }
                 }
                 "rasterOp" => {
-                    self.invisible = match value {
-                        "copyPen" => false,
-                        "noOperation" => true,
+                    (self.invisible, self.mask_pen) = match value {
+                        "copyPen" => (false, false),
+                        "noOperation" => (true, false),
+                        "maskPen" => (false, true),
                         _ => return None,
                     }
                 }
@@ -155,6 +157,11 @@ impl Brush {
             }
             None => Rgb::BLACK,
         };
+        // Multiply equals bitwise AND only for binary pen components. Other mask colors
+        // must keep the original fallback rather than approximate a raster operation.
+        if self.mask_pen && [color.0, color.1, color.2].iter().any(|c| !matches!(c, 0 | 255)) {
+            return None;
+        }
         let alpha = if self.invisible {
             0.0
         } else {
@@ -165,7 +172,7 @@ impl Brush {
             }
         };
         let angle = channel("OR", 0.0)?;
-        Some(Point { xy, width, height, angle, color, alpha, tip: self.tip })
+        Some(Point { xy, width, height, angle, color, alpha, tip: self.tip, mask_pen: self.mask_pen })
     }
 }
 
@@ -195,6 +202,7 @@ pub(super) struct Point {
     pub alpha: f64,
     /// Resolved nib shape.
     pub tip: Tip,
+    pub mask_pen: bool,
 }
 
 /// A pen-down run, possibly assembled from several continuation fragments.
@@ -215,6 +223,7 @@ struct Geometry {
     alpha: f64,
     /// A circular constant-width pen may use the existing round-cap native ink renderer.
     width: Option<f64>,
+    mask_pen: bool,
 }
 
 /// Generate bounded geometry and reduce large origins before f32 conversion.
@@ -223,11 +232,15 @@ pub(super) fn drawing(strokes: Vec<Stroke>, work: &mut usize) -> Option<Graphic>
     for stroke in strokes {
         let first = *stroke.points.first()?;
         let simple = !stroke.curve
+            && !first.mask_pen
             && first.tip == Tip::Ellipse
             && first.width == first.height
             && first.alpha == 1.0
             && first.width > 0.0
-            && stroke.points.iter().all(|p| p.width == first.width && p.height == first.height && p.color == first.color && p.alpha == first.alpha);
+            && stroke
+                .points
+                .iter()
+                .all(|p| p.width == first.width && p.height == first.height && p.color == first.color && p.alpha == first.alpha && !p.mask_pen);
         if simple {
             spend(work, stroke.points.len())?;
             geometries.push(Geometry {
@@ -235,6 +248,7 @@ pub(super) fn drawing(strokes: Vec<Stroke>, work: &mut usize) -> Option<Graphic>
                 color: first.color,
                 alpha: 1.0,
                 width: Some(first.width),
+                mask_pen: false,
             });
             continue;
         }
@@ -250,10 +264,13 @@ pub(super) fn drawing(strokes: Vec<Stroke>, work: &mut usize) -> Option<Graphic>
             };
             previous = Some(nib);
             let same_stroke = geometries.len() > first_geometry;
-            if let Some(g) = geometries.last_mut().filter(|g| same_stroke && g.width.is_none() && g.color == p.color && g.alpha == p.alpha) {
+            if let Some(g) = geometries
+                .last_mut()
+                .filter(|g| same_stroke && g.width.is_none() && g.color == p.color && g.alpha == p.alpha && g.mask_pen == p.mask_pen)
+            {
                 g.polygons.push(polygon);
             } else {
-                geometries.push(Geometry { polygons: vec![polygon], color: p.color, alpha: p.alpha, width: None });
+                geometries.push(Geometry { polygons: vec![polygon], color: p.color, alpha: p.alpha, width: None, mask_pen: p.mask_pen });
             }
         }
     }
@@ -300,7 +317,7 @@ pub(super) fn drawing(strokes: Vec<Stroke>, work: &mut usize) -> Option<Graphic>
                 items.push(GraphicItem::Path { segs, fill: None, stroke: Some(g.color), stroke_width: width });
             }
         } else {
-            items.push(GraphicItem::InkOutline { segs, color: g.color, alpha: g.alpha as f32 });
+            items.push(GraphicItem::InkOutline { segs, color: g.color, alpha: g.alpha as f32, mask_pen: g.mask_pen });
         }
     }
     (!items.is_empty()).then_some(Graphic { kind: GraphicKind::Ink, items, w: (w * scale) as f32, h: (h * scale) as f32, ..Default::default() })

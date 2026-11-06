@@ -22,6 +22,8 @@ pub struct Graphic {
     pub w: f32,
     #[serde(default)]
     pub h: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ink_frame: Option<[f32; 4]>,
     /// Where the graphic was read from, so saving writes the original drawing itself back (not
     /// only these items). `None` for graphics made some other way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -125,6 +127,8 @@ pub enum GraphicItem {
         color: Rgb,
         /// Opacity in 0..1; original InkML transparency remains preserved separately.
         alpha: f32,
+        #[serde(default)]
+        mask_pen: bool,
     },
     /// One line of text in `rect`, aligned horizontally by `align`, centred vertically.
     Text {

@@ -487,7 +487,7 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
         }
         Placed::Graphic { rect, graphic, spin, .. } => {
             if !opts.hide_ink || graphic.kind != wordcraft_doc::graphic::GraphicKind::Ink {
-                spun(*spin, *rect, graphic_draws(doc, graphic, *rect, alpha), out);
+                spun(*spin, super::objects::graphic_rotation_frame(graphic, *rect), graphic_draws(doc, graphic, *rect, alpha), out);
             }
         }
         Placed::Clip { rect, spin, items } => {

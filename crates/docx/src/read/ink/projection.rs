@@ -23,7 +23,7 @@ impl Projection {
         let mut canvas = ctx.canvas.as_deref().cloned().unwrap_or_default();
         canvas.channels.truncate(canvas.regular);
         let mapping = match ctx.transform {
-            Some(transform) => Some(Mapping::read(transform.child("ink:mapping")?, &ctx.format, &canvas, ids, work, 0)?),
+            Some(transform) => Some(Mapping::transform(transform, &ctx.format, &canvas, ids, work)?),
             None => None,
         };
         let mut format = (*ctx.format).clone();
