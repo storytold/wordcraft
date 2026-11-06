@@ -656,29 +656,47 @@ fn side_view(base: &[Arc<Block>], side: &[Arc<Block>]) -> SideView {
     let ops = lcs_ops(&base.iter().map(|b| block_key(b)).collect::<Vec<_>>(), &side.iter().map(|b| block_key(b)).collect::<Vec<_>>(), &mut budget);
     let mut ins = vec![Vec::new(); base.len() + 1];
     let mut kept = Vec::with_capacity(base.len());
-    let (mut bi, mut si) = (0usize, 0usize);
+    let (mut bi, mut si, mut k) = (0usize, 0usize, 0usize);
     let mut at = 0usize;
-    for op in ops {
-        match op {
-            Op::Ins => {
-                if let Some(sb) = side.get(si) {
-                    if let Some(slot) = ins.get_mut(at) {
-                        slot.push(sb.clone());
-                    }
-                }
-                si += 1;
-            }
-            Op::Del => {
-                kept.push(None);
-                bi += 1;
-                at = at.saturating_add(1);
-            }
-            Op::Same => {
+    while k < ops.len() {
+        match ops.get(k).copied() {
+            Some(Op::Same) => {
                 kept.push(side.get(si).cloned().or_else(|| base.get(bi).cloned()));
                 bi += 1;
                 si += 1;
                 at = at.saturating_add(1);
+                k += 1;
             }
+            Some(Op::Ins) if matches!(ops.get(k + 1), Some(Op::Del)) => {
+                kept.push(side.get(si).cloned().or_else(|| base.get(bi).cloned()));
+                bi += 1;
+                si += 1;
+                at = at.saturating_add(1);
+                k += 2;
+            }
+            Some(Op::Del) if matches!(ops.get(k + 1), Some(Op::Ins)) => {
+                kept.push(side.get(si).cloned().or_else(|| base.get(bi).cloned()));
+                bi += 1;
+                si += 1;
+                at = at.saturating_add(1);
+                k += 2;
+            }
+            Some(Op::Ins) => {
+                if let Some(sb) = side.get(si)
+                    && let Some(slot) = ins.get_mut(at)
+                {
+                    slot.push(sb.clone());
+                }
+                si += 1;
+                k += 1;
+            }
+            Some(Op::Del) => {
+                kept.push(None);
+                bi += 1;
+                at = at.saturating_add(1);
+                k += 1;
+            }
+            None => break,
         }
     }
     while bi < base.len() {
@@ -686,10 +704,10 @@ fn side_view(base: &[Arc<Block>], side: &[Arc<Block>]) -> SideView {
         bi += 1;
     }
     while si < side.len() {
-        if let Some(sb) = side.get(si) {
-            if let Some(slot) = ins.last_mut() {
-                slot.push(sb.clone());
-            }
+        if let Some(sb) = side.get(si)
+            && let Some(slot) = ins.last_mut()
+        {
+            slot.push(sb.clone());
         }
         si += 1;
     }
@@ -744,12 +762,25 @@ fn merge3_blocks(base: &[Arc<Block>], ours: &[Arc<Block>], theirs: &[Arc<Block>]
                 let btxt = base_b.map(|b| block_key(b)).unwrap_or_default();
                 let ot = block_key(ob);
                 let tt = block_key(tb);
-                if ot == tt || (ot != btxt && tt == btxt) {
+                if ot == tt {
                     out.push((*ob).clone());
-                } else if tt != btxt && ot == btxt {
+                } else if ot == btxt {
                     out.push((*tb).clone());
-                } else {
+                } else if tt == btxt {
                     out.push((*ob).clone());
+                } else {
+                    conflicts += 1;
+                    match conflict_mode {
+                        "ours" => out.push((*ob).clone()),
+                        "theirs" => out.push((*tb).clone()),
+                        _ => {
+                            out.push(para_block(Paragraph::with_text("<<<<<<< ours", CharProps::default())));
+                            out.push((*ob).clone());
+                            out.push(para_block(Paragraph::with_text("=======", CharProps::default())));
+                            out.push((*tb).clone());
+                            out.push(para_block(Paragraph::with_text(">>>>>>> theirs", CharProps::default())));
+                        }
+                    }
                 }
             }
             (None, None) => {}

@@ -15,10 +15,60 @@ use crate::WordApp;
 use crate::theme::{Tokens, semibold};
 
 #[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeForm {
+    pub base: String,
+    pub ours: String,
+    pub ours_current: bool,
+    pub theirs: String,
+    pub conflicts: String,
+    pub show_in: String,
+    pub message: String,
+}
+
+impl MergeForm {
+    pub fn new(app: &WordApp) -> MergeForm {
+        MergeForm {
+            base: String::new(),
+            ours: String::new(),
+            ours_current: true,
+            theirs: String::new(),
+            conflicts: "markers".into(),
+            show_in: "new".into(),
+            message: if app.session.path.is_none() {
+                tl!("Current document is untitled; use an explicit file for “Ours” if needed.").into()
+            } else {
+                String::new()
+            },
+        }
+    }
+
+    fn params(&self) -> Option<Value> {
+        if self.base.trim().is_empty() || self.theirs.trim().is_empty() {
+            return None;
+        }
+        if !self.ours_current && self.ours.trim().is_empty() {
+            return None;
+        }
+        let mut v = json!({
+            "base": self.base.trim(),
+            "theirs": self.theirs.trim(),
+            "conflicts": self.conflicts,
+            "showIn": self.show_in,
+        });
+        if !self.ours_current {
+            v["ours"] = json!(self.ours.trim());
+        }
+        Some(v)
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
 #[serde(tag = "form", rename_all = "camelCase")]
 pub enum ReviewDialog {
     Compare(CompareForm),
     CompareVersions(CompareVersionsForm),
+    Merge(MergeForm),
     AutoCorrect(Box<AutoCorrectForm>),
 }
 
@@ -28,6 +78,7 @@ impl ReviewDialog {
             ReviewDialog::Compare(f) if f.combine => "combine",
             ReviewDialog::Compare(_) => "compare",
             ReviewDialog::CompareVersions(_) => "compareVersions",
+            ReviewDialog::Merge(_) => "merge",
             ReviewDialog::AutoCorrect(_) => "autoCorrect",
         }
     }
@@ -38,17 +89,19 @@ impl ReviewDialog {
             ReviewDialog::Compare(f) if f.combine => "Combine Documents",
             ReviewDialog::Compare(_) => "Compare Documents",
             ReviewDialog::CompareVersions(_) => "Compare to Version",
+            ReviewDialog::Merge(_) => "Merge Documents",
             ReviewDialog::AutoCorrect(_) => "AutoCorrect",
         }
     }
 }
 
-/// The dialog `ui.dialog` opens by `name`: `compare`, `combine`, `compareVersions` or `autoCorrect`.
+/// The dialog `ui.dialog` opens by `name`: `compare`, `combine`, `compareVersions`, `merge` or `autoCorrect`.
 /// `restrictEditing` opens the Restrict Editing pane instead (no dialog).
 pub fn open(name: &str, app: &mut WordApp) -> Option<ReviewDialog> {
     Some(match name {
         "compare" | "combine" => ReviewDialog::Compare(CompareForm::new(app, name == "combine")),
         "compareVersions" | "compareToVersion" => ReviewDialog::CompareVersions(CompareVersionsForm::new(app)),
+        "merge" => ReviewDialog::Merge(MergeForm::new(app)),
         "autoCorrect" => ReviewDialog::AutoCorrect(Box::new(AutoCorrectForm::new(app))),
         "restrictEditing" => {
             app.restrict.open = true;
@@ -63,6 +116,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut ReviewDialog) -> bool {
     match d {
         ReviewDialog::Compare(f) => compare_ui(app, ui, f),
         ReviewDialog::CompareVersions(f) => compare_versions_ui(app, ui, f),
+        ReviewDialog::Merge(f) => merge_ui(app, ui, f),
         ReviewDialog::AutoCorrect(f) => autocorrect_ui(app, ui, f),
     }
 }
@@ -376,6 +430,123 @@ impl CompareVersionsForm {
         }
         Some(v)
     }
+}
+
+/// 0=base, 1=ours, 2=theirs.
+pub(crate) fn set_merge_path(app: &mut WordApp, which: u8, path: String) {
+    if let Some(crate::dialogs::Dialog::Review(d)) = app.dialog.as_mut()
+        && let ReviewDialog::Merge(f) = &mut **d
+    {
+        match which {
+            0 => f.base = path,
+            1 => {
+                f.ours = path;
+                f.ours_current = false;
+            }
+            _ => f.theirs = path,
+        }
+    }
+}
+
+fn merge_ui(app: &mut WordApp, ui: &mut Ui, f: &mut MergeForm) -> bool {
+    let browse = can_browse(app);
+    let mut pick: Option<u8> = None;
+    if !browse {
+        ui.label(egui::RichText::new(tl!("Merging with other files needs the desktop app.")).small().weak());
+    }
+    ui.label(
+        egui::RichText::new(tl!(
+            "3-way merge is block/paragraph-granular with conflict markers. Formatting and non-body stories may need manual review."
+        ))
+        .small()
+        .weak(),
+    );
+    crate::rtl::Table::new("merge_files").columns(2).spacing(vec2(16.0, 4.0)).top().show(ui, |t| {
+        t.row(|r| {
+            r.cell(|ui| {
+                crate::rtl::vertical(ui, |ui| {
+                    heading(ui, "Base document");
+                    ui.horizontal(|ui| {
+                        ui.add_enabled(browse, egui::TextEdit::singleline(&mut f.base).desired_width(190.0));
+                        if ui.add_enabled(browse, egui::Button::new(tl!("Browse…"))).clicked() {
+                            pick = Some(0);
+                        }
+                    });
+                });
+            });
+            r.cell(|ui| {
+                crate::rtl::vertical(ui, |ui| {
+                    heading(ui, "Theirs");
+                    ui.horizontal(|ui| {
+                        ui.add_enabled(browse, egui::TextEdit::singleline(&mut f.theirs).desired_width(190.0));
+                        if ui.add_enabled(browse, egui::Button::new(tl!("Browse…"))).clicked() {
+                            pick = Some(2);
+                        }
+                    });
+                });
+            });
+        });
+        t.row(|r| {
+            r.cell(|ui| {
+                crate::rtl::vertical(ui, |ui| {
+                    heading(ui, "Ours");
+                    ui.radio_value(&mut f.ours_current, true, tl!("This document"));
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut f.ours_current, false, "");
+                        ui.add_enabled(browse && !f.ours_current, egui::TextEdit::singleline(&mut f.ours).desired_width(170.0));
+                        if ui.add_enabled(browse, egui::Button::new(tl!("Browse…"))).clicked() {
+                            pick = Some(1);
+                        }
+                    });
+                });
+            });
+            r.cell(|ui| {
+                crate::rtl::vertical(ui, |ui| {
+                    heading(ui, "Conflicts");
+                    for (v, l) in [("markers", "Insert markers"), ("ours", "Keep ours"), ("theirs", "Keep theirs")] {
+                        ui.radio_value(&mut f.conflicts, v.to_string(), tl!(l));
+                    }
+                    ui.add_space(4.0);
+                    ui.label(tl!("Show in:"));
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut f.show_in, "new".to_string(), tl!("New document"));
+                        ui.radio_value(&mut f.show_in, "original".to_string(), tl!("Original document"));
+                    });
+                });
+            });
+        });
+    });
+    if let Some(which) = pick {
+        if app.services.file_dialog.is_none()
+            && let Some(pick_open) = &app.services.pick_open
+        {
+            if let Some(path) = pick_open("document") {
+                set_merge_path(app, which, path);
+            }
+        } else {
+            let _ = app.ask_file(
+                crate::file_dialogs::FileDialogRequest::Open { purpose: "document".into() },
+                crate::file_dialogs::AfterPick::MergePath { which },
+            );
+        }
+    }
+    error(ui, &f.message);
+    let params = f.params();
+    let (ok, cancel) = buttons(ui, params.is_some());
+    if ok && let Some(params) = params {
+        match app.run("review.merge", params) {
+            Ok(v) => {
+                let n = v.get("conflicts").and_then(Value::as_u64).unwrap_or(0).to_string();
+                app.status(crate::i18n::fmt(tl!("Merged: {conflicts} conflicts"), &[("conflicts", &n)]));
+                return true;
+            }
+            Err(e) => {
+                f.message = e;
+                return false;
+            }
+        }
+    }
+    cancel
 }
 
 fn version_label(label: &str, date: &str, i: usize) -> String {

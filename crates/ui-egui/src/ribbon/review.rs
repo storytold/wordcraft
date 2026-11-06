@@ -114,6 +114,7 @@ pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
             |ui, app| {
                 mi(ui, app, "Compare…", "review.compare", json!({}));
                 mi(ui, app, "Combine…", "review.combine", json!({}));
+                mi(ui, app, "Merge Documents…", "ui.dialog", json!({"name": "merge"}));
                 mi(ui, app, "Compare to Version…", "ui.dialog", json!({"name": "compareVersions"}));
             },
         );
