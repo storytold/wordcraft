@@ -324,3 +324,49 @@ fn a_title_based_style_with_an_outline_level_stays_a_heading() {
     let c = crate::odt::tests::content_of(&saved);
     assert!(c.contains(r#"<text:h text:style-name="Banner" text:outline-level="1">Yearly report"#), "{c}");
 }
+
+/// A style based on a numbered heading, at a level the outline doesn't number, has no number: as
+/// in LibreOffice, not its parent's.
+#[test]
+fn a_style_at_an_unnumbered_level_has_no_number_from_its_parent() {
+    let outline = r#"<text:outline-style style:name="Outline"><text:outline-level-style text:level="1" style:num-format="1" style:num-suffix="."/><text:outline-level-style text:level="2" style:num-format=""/><text:outline-level-style text:level="3" style:num-format="1" style:num-suffix="."/></text:outline-style>"#;
+    let styles = format!(
+        r#"<style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:parent-style-name="Standard" style:default-outline-level="1"/><style:style style:name="Child" style:family="paragraph" style:parent-style-name="Heading_20_1" style:default-outline-level="2"/><style:style style:name="Grand" style:family="paragraph" style:parent-style-name="Heading_20_1" style:default-outline-level="3"/>{outline}"#
+    );
+    let body = r#"<text:h text:style-name="Heading_20_1" text:outline-level="1">One</text:h><text:p text:style-name="Child">As p</text:p><text:h text:style-name="Child" text:outline-level="2">As h</text:h><text:p text:style-name="Grand">Third</text:p><text:h text:style-name="Heading_20_1" text:outline-level="1">Two</text:h>"#;
+    let d = in_custom_style(&styles, body);
+    let want = vec![Some(0), None, None, Some(2), Some(0)];
+    assert_eq!(number_levels(&d), want);
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let written = crate::odt::tests::styles_of(&saved);
+    let child = written.split("<style:style ").find(|x| x.starts_with(r#"style:name="Child""#)).unwrap_or_default();
+    assert!(child.contains(r#"style:list-style-name="""#), "LibreOffice gives it no number: {child}");
+    assert_eq!(number_levels(&import(&saved).unwrap()), want);
+}
+
+/// A heading in a list of its own stays in it, whatever the list's levels are linked to: only the
+/// number the outline itself gives a heading goes with the outline.
+#[test]
+fn a_heading_in_a_list_linked_to_a_style_stays_in_it() {
+    use std::sync::Arc;
+    use wordcraft_doc::props::NumRef;
+    let mut d = Document::new();
+    let numbering = Arc::make_mut(&mut d.numbering);
+    let num = numbering.add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    let first = numbering.abstracts.last_mut().and_then(|a| a.levels.first_mut()).unwrap();
+    first.style = Some("Heading1".into());
+    let mut p = wordcraft_doc::Paragraph::with_text("x", Default::default());
+    p.props.style = Some("Heading2".into());
+    p.props.numbering = Some(NumRef { num, level: 1 });
+    let has_list = |d: &Document| crate::odt::tests::content_of(&crate::odt::tests::export_model(d).unwrap()).contains("<text:list");
+    // At a deeper level than the link, no level of its own stated.
+    d.body = vec![wordcraft_doc::para_block(p.clone())];
+    assert!(has_list(&d), "a list of its own");
+    // At its own level too, but its heading style isn't numbered: the outline wouldn't number it.
+    p.props.outline_level = Some(1);
+    d.body = vec![wordcraft_doc::para_block(p)];
+    assert!(has_list(&d), "the outline has no number for it");
+    // Its heading style numbered there by this list: the outline's number.
+    Arc::make_mut(&mut d.styles).get_mut("Heading2").unwrap().para.numbering = Some(NumRef { num, level: 1 });
+    assert!(!has_list(&d), "the outline's");
+}

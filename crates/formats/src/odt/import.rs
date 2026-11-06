@@ -409,6 +409,20 @@ fn number_headings(doc: &mut Document, levels: &[super::styles::ListLevel]) {
             st.para.numbering = Some(NumRef { num: nid, level: l });
         }
     }
+    // A style at a level the outline doesn't number doesn't take its parent's number from it.
+    let of_outline = |st: &wordcraft_doc::styles::Style| {
+        let at = wordcraft_doc::props::ParaProps { style: Some(st.id.clone()), ..Default::default() };
+        st.para.numbering.is_none()
+            && st.para.outline_level.is_some_and(|l| numbered.get(usize::from(l)) != Some(&true))
+            && styles.resolve_para(&at).numbering.is_some_and(|n| n.num == nid)
+    };
+    let unnumbered: Vec<String> = styles.styles.iter().filter(|st| of_outline(st)).map(|st| st.id.clone()).collect();
+    for id in unnumbered {
+        if let Some(st) = styles.get_mut(&id) {
+            // (`num: 0` switches the number off.)
+            st.para.numbering = Some(NumRef { num: 0, level: 0 });
+        }
+    }
     // A heading's own outline level goes before its style's: LibreOffice numbers it by that level.
     // A heading in a list is that list's.
     let styles = doc.styles.clone();

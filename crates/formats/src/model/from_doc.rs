@@ -416,16 +416,29 @@ fn flow_comment(doc: &Document, c: &wordcraft_doc::Comment, parent: Option<u32>,
     FComment { author: c.author.clone(), initials: c.initials.clone(), date: c.date.clone(), resolved: c.resolved, parent, blocks }
 }
 
+/// Whether `li`, the list of heading `p`, is the number its outline level has from its heading
+/// style's list, not a list of its own: it states that level, and the heading style of that level
+/// numbers with that list there (past Heading 6, which has none, a heading style numbers with it).
+fn numbered_by_outline(doc: &Document, p: &Paragraph, li: &ListInfo) -> bool {
+    use wordcraft_doc::props::NumRef;
+    let style_num = |level: u8| doc.styles.para_style_props(&format!("Heading{}", level + 1)).0.numbering;
+    p.props.outline_level == Some(li.level)
+        && if li.level < 6 {
+            style_num(li.level) == Some(NumRef { num: li.list, level: li.level })
+        } else {
+            (0..6).any(|l| style_num(l).is_some_and(|r| r.num == li.list))
+        }
+}
+
 /// A paragraph's list membership as the flow keeps it: without the list's identity and label
-/// unless `opts` asks for them, and none for a heading numbered only through its style or by the
-/// list its styles number with, which a format with heading numbering of its own (ODT's outline
-/// style) numbers instead.
+/// unless `opts` asks for them, and none for a heading numbered only through its style or
+/// [`numbered_by_outline`], which a format with heading numbering of its own (ODT's outline style)
+/// numbers instead.
 fn flow_list(doc: &Document, kind: Kind, list: Option<ListInfo>, p: &Paragraph, opts: FlowOpts) -> Option<ListInfo> {
     let mut li = list?;
     if !opts.lists {
         (li.list, li.label) = (0, None);
-    } else if matches!(kind, Kind::Heading(_)) && (p.props.numbering.is_none() || doc.numbering.level(li.list, 0).is_some_and(|l| l.style.is_some()))
-    {
+    } else if matches!(kind, Kind::Heading(_)) && (p.props.numbering.is_none() || numbered_by_outline(doc, p, &li)) {
         return None;
     }
     Some(li)
