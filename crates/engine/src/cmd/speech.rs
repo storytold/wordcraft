@@ -100,8 +100,8 @@ fn speed(s: &mut Session, v: &Value) -> CmdResult {
 fn voice(s: &mut Session, v: &Value) -> CmdResult {
     match v.get("value") {
         None => {}
-        Some(Value::Null) => s.read_aloud.set_voice(None),
-        Some(Value::String(id)) if speech::voice_id(id).is_some() => s.read_aloud.set_voice(Some(id)),
+        Some(Value::Null) => s.read_aloud.choose_voice(None),
+        Some(Value::String(id)) if speech::voice_id(id).is_some() => s.read_aloud.choose_voice(Some(id)),
         Some(_) => {
             return Err(CmdError::Params(format!(
                 "`value` must be a voice id from the list (1 to {} bytes, no control characters) or null",

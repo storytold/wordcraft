@@ -484,6 +484,9 @@ impl<W: Write, R: Read> Conversation<'_, W, R> {
         if let Some(lang) = req.lang.and_then(super::plain_tag) {
             self.command(&format!("SET SELF LANGUAGE {lang}"))?;
         }
+        // A name with spaces ("Microsoft Szabolcs", an espeak variant) goes as it is: the server
+        // joins every word after `SYNTHESIS_VOICE` back into the name, and libspeechd sends it
+        // the same way, unquoted.
         if let Some(voice) = req.voice.and_then(plain_voice) {
             self.command(&format!("SET SELF SYNTHESIS_VOICE {voice}"))?;
         }
@@ -769,6 +772,12 @@ mod tests {
         assert!(got.contains(&"SET SELF LANGUAGE pt-BR".to_string()), "{got:?}");
         assert!(got.contains(&"SET SELF SYNTHESIS_VOICE Hungarian".to_string()));
         let at = got.iter().position(|l| l == "SPEAK").unwrap();
+        // A voice name with spaces is sent whole, as libspeechd sends it.
+        let (client, srv) = UnixStream::pair().unwrap();
+        let h2 = server(srv, Ending::End);
+        let spaced = Request { text: "x", rate: 0, lang: None, voice: Some("English (Great Britain)") };
+        assert_eq!(converse(&Stream::Unix(client), &spaced, &|| false).unwrap(), Outcome::Done);
+        assert!(h2.join().unwrap().contains(&"SET SELF SYNTHESIS_VOICE English (Great Britain)".to_string()));
         assert_eq!(got[at + 1..at + 3], ["!-!QUIT".to_string(), ".".to_string()], "the text went as data");
         assert_eq!(speaks(&got), 1);
         assert!(!got.iter().any(|l| l.starts_with("CANCEL")), "nothing cancelled");

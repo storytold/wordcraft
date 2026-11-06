@@ -394,8 +394,8 @@ fn the_voice_picker_may_start_the_server_once() {
     assert!(ask_voices_now(true, false, Some(VOICES_RETRY), false));
     assert!(ask_voices_now(false, false, Some(VOICES_REFRESH), false));
     assert!(ask_voices_now(true, false, None, false), "never asked");
-    // A request that arrives while a query without it runs (the saved voice restored at
-    // start-up, the picker opened during the first frame's query) isn't lost: an empty
+    // A request that arrives while a query without it runs (reading started in a saved voice,
+    // the picker opened during the first frame's query) isn't lost: an empty
     // answer is followed at once by a query that may start the server.
     assert_eq!(after_voice_query(true, false, true), (true, true));
     // A query that ran with it settles it, whatever it found; so does a list that came back,
@@ -408,6 +408,28 @@ fn the_voice_picker_may_start_the_server_once() {
     let r = ReadAloud::default();
     r.ask_voices_starting_server();
     assert_eq!(r.voices().as_deref(), Some(&[][..]));
+}
+
+#[test]
+fn only_the_user_starts_speech_dispatcher_for_a_voice() {
+    let sentence = || vec![Utterance { text: "Jó reggelt.".into(), start: Pos::body(0, 0), end: Pos::body(0, 4), lang: None }];
+    let mut r = ReadAloud::default();
+    // The saved choice restored at start-up.
+    r.set_voice(Some("Hungarian"));
+    assert_eq!(r.server_requests.get(), 0, "restoring a voice starts no server");
+    r.choose_voice(Some("Hungarian"));
+    assert_eq!(r.server_requests.get(), 0, "the same voice again");
+    r.choose_voice(Some("Russian"));
+    assert_eq!(r.server_requests.get(), 1, "the user chose a voice");
+    r.choose_voice(None);
+    assert_eq!(r.server_requests.get(), 1, "Automatic needs no list");
+    r.set_voice(Some("Hungarian"));
+    r.start(sentence());
+    assert_eq!(r.server_requests.get(), 2, "reading in the chosen voice");
+    r.stop();
+    r.set_voice(None);
+    r.start(sentence());
+    assert_eq!(r.server_requests.get(), 2, "reading without a chosen voice");
 }
 
 #[cfg(unix)]
@@ -483,6 +505,29 @@ fn text_in_another_script_keeps_its_own_voice() {
     assert_eq!(voice_for(Some(&hi), Some("en-US"), "Hello"), None, "a Hindi voice doesn't read English");
     let ka = Voice { id: "ccs/ka".into(), name: "Georgian".into(), lang: "ka".into(), kind: VoiceKind::Espeak };
     assert_eq!(voice_for(Some(&ka), Some("en-US"), "Hello"), None);
+    // The `en-US` Word writes on every run doesn't hide a voice of another script from its text.
+    assert_eq!(voice_for(Some(&hi), Some("en-US"), "नमस्ते दुनिया"), Some(&hi), "Devanagari tagged en-US");
+    assert_eq!(voice_for(Some(&hi), Some("en-US"), "मैंने Microsoft Word खोला"), Some(&hi), "with some Latin words");
+    let mr = Voice { id: "inc/mr".into(), name: "Marathi".into(), lang: "mr".into(), kind: VoiceKind::Espeak };
+    assert_eq!(voice_for(Some(&mr), Some("hi"), "नमस्ते"), Some(&mr), "the same script, another language");
+    assert_eq!(voice_for(Some(&ka), Some("en-US"), "გამარჯობა"), Some(&ka));
+    assert_eq!(voice_for(Some(&ka), Some("en-US"), "नमस्ते"), None, "a Georgian voice doesn't read Devanagari");
+    assert_eq!(voice_for(Some(&hi), Some("ru"), "Привет"), None, "Russian keeps the Russian voice");
+    assert_eq!(voice_for(Some(&hi), Some("en-US"), "Hello, नमस्ते, my dear friends here"), None, "mostly Latin: not its text");
+    assert_eq!(voice_for(Some(&hi), Some("en-US"), "2026"), None, "a number under an English tag");
+    let ta = Voice { id: "dra/ta".into(), name: "Tamil".into(), lang: "ta".into(), kind: VoiceKind::Espeak };
+    assert_eq!(voice_for(Some(&ta), Some("en-US"), "வணக்கம்"), Some(&ta));
+    let am = Voice { id: "sem/am".into(), name: "Amharic".into(), lang: "am".into(), kind: VoiceKind::Espeak };
+    assert_eq!(voice_for(Some(&am), Some("en-US"), "ሰላም"), Some(&am));
+    let hy = Voice { id: "ine/hy".into(), name: "Armenian".into(), lang: "hy".into(), kind: VoiceKind::Espeak };
+    assert_eq!(voice_for(Some(&hy), Some("en-US"), "Բարեւ"), Some(&hy));
+}
+
+#[test]
+fn every_other_script_language_has_its_script() {
+    for lang in OTHER_SCRIPT_LANGUAGES {
+        assert!(!other_script_blocks(lang).is_empty(), "{lang}");
+    }
 }
 
 #[test]

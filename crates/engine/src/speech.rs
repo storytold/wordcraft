@@ -464,6 +464,49 @@ const OTHER_SCRIPT_LANGUAGES: &[&str] = &[
     "iu",
 ];
 
+/// The Unicode blocks of the script an [`OTHER_SCRIPT_LANGUAGES`] language (a primary subtag) is
+/// written in, or none for another language.
+#[cfg(any(not(target_arch = "wasm32"), test))]
+fn other_script_blocks(primary: &str) -> &'static [(char, char)] {
+    match primary {
+        "hi" | "mr" | "ne" | "sa" => &[('\u{0900}', '\u{097F}'), ('\u{A8E0}', '\u{A8FF}')],
+        "bn" | "as" => &[('\u{0980}', '\u{09FF}')],
+        "pa" => &[('\u{0A00}', '\u{0A7F}')],
+        "gu" => &[('\u{0A80}', '\u{0AFF}')],
+        "or" => &[('\u{0B00}', '\u{0B7F}')],
+        "ta" => &[('\u{0B80}', '\u{0BFF}')],
+        "te" => &[('\u{0C00}', '\u{0C7F}')],
+        "kn" => &[('\u{0C80}', '\u{0CFF}')],
+        "ml" => &[('\u{0D00}', '\u{0D7F}')],
+        "si" => &[('\u{0D80}', '\u{0DFF}')],
+        "ka" => &[('\u{10A0}', '\u{10FF}'), ('\u{1C90}', '\u{1CBF}'), ('\u{2D00}', '\u{2D2F}')],
+        "hy" => &[('\u{0530}', '\u{058F}'), ('\u{FB13}', '\u{FB17}')],
+        "am" | "ti" => &[('\u{1200}', '\u{139F}'), ('\u{2D80}', '\u{2DDF}'), ('\u{AB00}', '\u{AB2F}')],
+        "km" => &[('\u{1780}', '\u{17FF}'), ('\u{19E0}', '\u{19FF}')],
+        "lo" => &[('\u{0E80}', '\u{0EFF}')],
+        "my" => &[('\u{1000}', '\u{109F}'), ('\u{AA60}', '\u{AA7F}'), ('\u{A9E0}', '\u{A9FF}')],
+        "bo" | "dz" => &[('\u{0F00}', '\u{0FFF}')],
+        "dv" => &[('\u{0780}', '\u{07BF}')],
+        "iu" => &[('\u{1400}', '\u{167F}'), ('\u{18B0}', '\u{18FF}')],
+        _ => &[],
+    }
+}
+
+/// Is `text` in the script of the [`OTHER_SCRIPT_LANGUAGES`] language `primary`: at least a fifth
+/// of its letters (as in [`detect_language`]), and not Latin text? Marks count as letters here:
+/// Indic vowel signs are marks, and a word can be as many marks as letters.
+#[cfg(any(not(target_arch = "wasm32"), test))]
+fn in_other_script(primary: &str, text: &str) -> bool {
+    let blocks = other_script_blocks(primary);
+    let in_script = |c: char| blocks.iter().any(|(a, b)| (*a..=*b).contains(&c));
+    let (mut own, mut letters) = (0usize, 0usize);
+    for c in text.chars().filter(|c| c.is_alphabetic() || in_script(*c)) {
+        letters += 1;
+        own += usize::from(in_script(c));
+    }
+    own > 0 && own.saturating_mul(5) >= letters && !is_latin_text(text)
+}
+
 /// Is `text` written in Latin letters (with their accented forms and ligatures)? Letters of other
 /// scripts may be there, but less than a fifth of them, as in [`detect_language`]: a Greek letter
 /// in a formula doesn't make a Hungarian sentence Greek. Modifier letters (`ʼ`) and the micro sign
@@ -488,9 +531,9 @@ fn is_latin_text(text: &str) -> bool {
 /// the voice speaks its language, or the voice speaks another language in the same script. A
 /// Latin-script voice reads every sentence of Latin letters whatever its tag, since the tag is
 /// often only the default (Word and new documents tag every run `en-US`, Hungarian text
-/// included); text in another script keeps the voice of its language, so a Hungarian voice
-/// doesn't spell out a Russian or Hindi sentence letter by letter, and a Hindi voice doesn't read
-/// English.
+/// included), and a voice of another script reads text in its script whatever the tag; text in
+/// another script keeps the voice of its language, so a Hungarian voice doesn't spell out a
+/// Russian or Hindi sentence letter by letter, and a Hindi voice doesn't read English.
 #[cfg(any(not(target_arch = "wasm32"), test))]
 fn voice_for<'a>(voice: Option<&'a Voice>, lang: Option<&str>, text: &str) -> Option<&'a Voice> {
     let voice = voice?;
@@ -506,8 +549,12 @@ fn voice_for<'a>(voice: Option<&'a Voice>, lang: Option<&str>, text: &str) -> Op
     if let Some(own_script) = own.as_deref().and_then(script_language) {
         return (script == Some(own_script)).then_some(voice);
     }
-    if own.is_some_and(|o| OTHER_SCRIPT_LANGUAGES.contains(&o.as_str())) {
-        return None;
+    // A voice of a script the detection doesn't know (Hindi, Georgian…) reads text in its script
+    // whatever the tag, as a Latin voice does Latin text: Devanagari tagged `en-US` (the tag Word
+    // writes on every run) goes to the chosen Hindi voice. A tag of a detected script (Russian
+    // text) keeps that script's voice, and other text keeps its own.
+    if let Some(o) = own.as_deref().filter(|o| OTHER_SCRIPT_LANGUAGES.contains(o)) {
+        return (script.is_none() && in_other_script(o, text)).then_some(voice);
     }
     // Text without letters (a `2026` cell) keeps the chosen voice, unless its tag is a language of
     // another script, whose voice reads the number in that language.
@@ -1089,6 +1136,9 @@ pub struct ReadAloud {
     /// The document being read ([`crate::Session::document_id`]): the sentences' positions are
     /// in it.
     pub document: Option<u64>,
+    /// How often Speech Dispatcher may have been started for the voice list (tests).
+    #[cfg(test)]
+    server_requests: std::cell::Cell<u32>,
 }
 
 impl Default for ReadAloud {
@@ -1113,6 +1163,8 @@ impl Default for ReadAloud {
             skip_citations: true,
             open: false,
             document: None,
+            #[cfg(test)]
+            server_requests: std::cell::Cell::new(0),
         }
     }
 }
@@ -1137,6 +1189,11 @@ impl ReadAloud {
     /// Start reading `queue` from its first sentence.
     pub fn start(&mut self, queue: Vec<Utterance>) {
         self.open = true;
+        // Reading in a chosen voice may start Speech Dispatcher for its voice list: only now that
+        // the user asked for reading, never when the saved choice is restored at start-up.
+        if self.voice().is_some() {
+            self.ask_voices_starting_server();
+        }
         self.change(|s| {
             s.state = if queue.is_empty() { State::Stopped } else { State::Playing };
             s.queue = queue;
@@ -1199,17 +1256,15 @@ impl ReadAloud {
         lock(&self.shared.0).rate
     }
 
-    /// Choose the voice to read in ([`Voice::id`]), or `None` (or an empty id) for the voice of
-    /// each sentence's language. The id is kept as given: a voice that isn't installed (a saved
-    /// choice from another machine) is simply not used.
+    /// Set the voice to read in ([`Voice::id`]), or `None` (or an empty id) for the voice of each
+    /// sentence's language. The id is kept as given: a voice that isn't installed (a saved choice
+    /// from another machine) is simply not used. Restoring a saved choice goes through here, so it
+    /// never starts a speech server; [`ReadAloud::choose_voice`] is the user's choice.
     pub fn set_voice(&mut self, voice: Option<&str>) {
         let v = voice.and_then(voice_id).map(str::to_string);
         let changed = self.voice() != v;
-        // The list is asked for now, so the first sentence doesn't wait for it; a newly chosen
-        // (or restored) voice may start Speech Dispatcher for it, once.
-        if v.is_some() && changed {
-            self.ask_voices_starting_server();
-        } else if v.is_some() && self.backend == Backend::System {
+        // The list is asked for now, so the first sentence doesn't wait for it.
+        if v.is_some() && self.backend == Backend::System {
             let _ = installed_voices();
         }
         if !changed {
@@ -1219,6 +1274,15 @@ impl ReadAloud {
             self.change(|s| s.voice = v);
         } else {
             lock(&self.shared.0).voice = v;
+        }
+    }
+    /// The user chose a voice ([`ReadAloud::set_voice`]): a new one may start Speech Dispatcher
+    /// for its voice list, once.
+    pub fn choose_voice(&mut self, voice: Option<&str>) {
+        let before = self.voice();
+        self.set_voice(voice);
+        if self.voice().is_some() && self.voice() != before {
+            self.ask_voices_starting_server();
         }
     }
     /// The chosen voice's id, if any.
@@ -1234,6 +1298,8 @@ impl ReadAloud {
     /// picker just opened): with only Speech Dispatcher installed, its voices are listed only
     /// while it runs. Nothing with a silent backend.
     pub fn ask_voices_starting_server(&self) {
+        #[cfg(test)]
+        self.server_requests.set(self.server_requests.get() + 1);
         #[cfg(not(target_arch = "wasm32"))]
         if self.backend == Backend::System {
             {
