@@ -167,3 +167,30 @@ fn an_object_in_a_header_is_kept_too() {
     assert!(z.file_names().any(|n| n.ends_with("/content.xml") && n.starts_with("Object M")), "{:?}", z.file_names().collect::<Vec<_>>());
     assert!(entry(&saved, "styles.xml").contains("<draw:object xlink:href=\"./Object M"));
 }
+
+/// A replacement picture may come before its object. It is kept whatever it is, though WordCraft
+/// can't show it, and a save from the model writes it back.
+#[test]
+fn a_replacement_picture_before_its_object_is_kept() {
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><text:p>Sheet <draw:frame draw:name="Object1" text:anchor-type="as-char" svg:width="3in" svg:height="1in"><draw:image xlink:href="./ObjectReplacements/Object 1" xlink:type="simple"/><draw:object xlink:href="./Object 1" xlink:type="simple"/></draw:frame></text:p></office:text></office:body></office:document-content>"#
+    );
+    let bytes = zip_of(&[
+        ("META-INF/manifest.xml", MANIFEST.as_bytes()),
+        ("content.xml", content.as_bytes()),
+        ("Object 1/content.xml", SHEET.as_bytes()),
+        ("Object 1/styles.xml", b"<office:document-styles/>"),
+        ("ObjectReplacements/Object 1", METAFILE),
+    ]);
+    let replacement = |bytes: &[u8]| {
+        let flow = parse(bytes).unwrap();
+        paras(&flow)
+            .into_iter()
+            .flat_map(|p| &p.inlines)
+            .find_map(|i| if let Inline::Image(img) = i { img.object.clone() } else { None })
+            .and_then(|o| o.replacement.clone())
+    };
+    assert_eq!(replacement(&bytes).as_deref().map(Vec::as_slice), Some(METAFILE));
+    let saved = crate::odt::tests::export_model(&import(&bytes).unwrap()).unwrap();
+    assert_eq!(replacement(&saved).as_deref().map(Vec::as_slice), Some(METAFILE), "written from the model");
+}
