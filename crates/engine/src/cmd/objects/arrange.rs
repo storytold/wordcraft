@@ -6,6 +6,9 @@ pub(super) const MAX_OFFSET: f32 = 4000.0;
 
 /// Resize and/or move the selected object (dragging its frame or handles).
 pub(super) fn bounds(s: &mut Session, v: &Value) -> CmdResult {
+    if let Some(r) = crate::cmd::canvas::member_bounds(s, v) {
+        return r;
+    }
     let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
     let to = match (p::f32(v, "x"), p::f32(v, "y")) {
         (Some(x), Some(y)) => Some((x, y)),
@@ -161,8 +164,9 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
         Some(path) => (Pos { story, path, off: 0 }, false),
         None => (nearest_line(&layout, page, y, story).ok_or_else(|| CmdError::Params("no text on that page to anchor to".into()))?, true),
     };
-    // Move its character to the anchor (unless it's already in that paragraph).
-    let at = if anchor.story == pos.story && anchor.path == pos.path && !on_page {
+    // Move its character to the anchor, unless it's already in that paragraph and drawn on this
+    // page (one anchored on a later page of it is drawn there, #4250).
+    let at = if anchor.story == pos.story && anchor.path == pos.path && !on_page && layout.object(pos, page).is_some_and(|o| o.page == page) {
         pos.clone()
     } else {
         let obj = s.doc.para_at(pos).and_then(|p| p.object_at(pos.off)).cloned().ok_or_else(|| CmdError::Failed("object vanished".into()))?;
