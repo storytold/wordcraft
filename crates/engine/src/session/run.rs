@@ -30,15 +30,38 @@ struct ElsewhereContext {
 }
 
 impl Session {
-    /// Filling in a form field goes on through typing, deleting, copying and read-only
-    /// queries; any other edit, caret movement, selection, field navigation or undo ends
-    /// it (#5525).
+    /// Filling in a form field (#5525) goes on through typing, Backspace and Delete (also by
+    /// word), Tab and Shift+Tab (which finish it and move on), Paste (plain text is appended; a
+    /// rich paste finishes it itself), copying and read-only queries. Repeat leaves it to the
+    /// command it repeats. Any other edit commits the fill first
+    /// ([`crate::cmd::commit_form_fill`]): the typed text stays the field's result and the
+    /// command runs with the caret after the field, so it can neither delete the field nor lose
+    /// the text. Undo, redo, caret movement, selection and field navigation end it where it is.
     fn end_form_fill_for_command(&mut self, id: &str, mutates: bool) {
-        if !matches!(
-            id,
-            "text.insert" | "text.backspace" | "text.delete" | "edit.copy" | "fields.selected" | "edit.undoHistory" | "edit.clipboardItems"
-        ) && (mutates || ["caret.", "select.", "fields.", "edit."].iter().any(|pre| id.starts_with(pre)))
+        if self.form_fill.is_none()
+            || matches!(
+                id,
+                "text.insert"
+                    | "text.backspace"
+                    | "text.delete"
+                    | "text.deleteWordBack"
+                    | "text.deleteWordForward"
+                    | "text.tab"
+                    | "text.backTab"
+                    | "edit.paste"
+                    | "edit.pasteText"
+                    | "edit.repeat"
+                    | "edit.copy"
+                    | "fields.selected"
+                    | "edit.undoHistory"
+                    | "edit.clipboardItems"
+            )
         {
+            return;
+        }
+        if mutates && !matches!(id, "edit.undo" | "edit.redo") {
+            crate::cmd::commit_form_fill(self);
+        } else if mutates || ["caret.", "select.", "fields.", "edit."].iter().any(|pre| id.starts_with(pre)) {
             self.form_fill = None;
         }
     }
@@ -87,6 +110,10 @@ impl Session {
         let join = join
             || (equation_join && matches!(id, "equation.type" | "equation.backspace"))
             || (id == "text.insert" && ime_text_join.as_ref().is_some_and(|sel| sel == &self.sel));
+        // A form field fill is committed before the command is even checked, so whether it is
+        // enabled, and what it does, is judged at the caret after the field, not over the
+        // selected field (#5525).
+        self.end_form_fill_for_command(id, spec.mutates);
         if let Some(why) = (spec.enabled)(self) {
             return Err(CmdError::Disabled(format!("{id}: {why}")));
         }
@@ -116,7 +143,6 @@ impl Session {
         }
         // Typing, caret movement and selection outside the equation commands leave the equation.
         self.leave_math_for_command(id);
-        self.end_form_fill_for_command(id, spec.mutates);
         // The undo stacks are snapshotted whole, not as a length: commands run nested commands,
         // whose checkpoints, undos and redos (and evictions at the limit) must be put back too.
         let ime_epoch_before = spec.mutates.then_some(self.ime_body_epoch);
