@@ -503,6 +503,9 @@ pub struct WordApp {
     pub(crate) updates_rt: updates_ui::Runtime,
     /// Language pack installs, the missing-pack bar ([`language_packs`]).
     pub(crate) packs_rt: language_packs::Runtime,
+    /// Whether the document has Thai text, for the Thai Distributed button, keyed by document
+    /// and revision ([`ribbon::thai_in_use`]); a `Cell` so keytips can read it through `&self`.
+    pub(crate) thai_text: std::cell::Cell<Option<(u64, u64, bool)>>,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
     /// Admitted `ui.screenshot` requests: count/byte budgets, retries and completion slots.
     shots: control::Shots,

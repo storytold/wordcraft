@@ -94,7 +94,7 @@ Right-click and Shift+F10 keep the compact suggestions menu. The pane is shared 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-06 | trivial | Home › Paragraph: a Thai Distributed button after Justify sets `para.thaiDistribute` and is lit while the paragraph has it; its icon is drawn in code and its keytip is Alt, H, 1 (Home has no free letter left), so the other Home keytips keep their letters |
+| 2026-11-06 | trivial | Home › Paragraph: a Thai Distributed button after Justify sets `para.thaiDistribute` and is lit while the paragraph has it; it shows while Thai is in use (a Thai interface, default, editing or document language, Thai letters in the document, or a Thai Distributed paragraph at the insertion point), and its keytip only then; its icon is drawn in code and its keytip is Alt, H, 1 (Home has no free letter left), so the other Home keytips keep their letters |
 | 2026-10-31 | trivial | Dialogs are modal (#3859): while one is open, clicks on the ribbon, File or the page, typing and shortcuts do nothing, as in Word. Find and Replace, Symbol, Mark Index Entry, Cross-reference and Insert Merge Field stay modeless, as in Word for Mac. A press beside a modal dialog shakes it a little, or flashes its border with animation effects off, so it is clear why nothing behind it reacts |
 | 2026-11-03 | trivial | Comments: a long comment's card, balloon and fields stop at ten lines; the fields scroll, and a balloon that isn't selected shows the first ten lines of the comment and of each reply (#3382) |
 | 2026-11-03 | minor | Arabic mirrored interface: title bar, ribbon, panes, File page, dialogs and menus run from the right; document canvas stays independent (#1195); Hebrew UI still open |

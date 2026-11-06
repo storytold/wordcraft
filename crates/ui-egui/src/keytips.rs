@@ -192,14 +192,23 @@ struct Control {
     /// A fixed badge, assigned before shortcut and name letters. A badge is one key, because
     /// `Phase::Commands` matches a single key press.
     keytip: Option<char>,
+    /// Whether the ribbon draws the control now (always when `None`). A hidden control has no
+    /// badge and takes no letter, so its key does nothing.
+    shown: Option<fn(&WordApp) -> bool>,
 }
 
 /// A tab's controls in the order they are drawn; mirrors `ribbon.rs`, so badges land in order.
 fn controls(tab: &str) -> Vec<Control> {
-    let c = |tip: &'static str, id: &'static str| Control { tip, target: Target::Cmd { id, params: serde_json::json!({}) }, keytip: None };
+    let c =
+        |tip: &'static str, id: &'static str| Control { tip, target: Target::Cmd { id, params: serde_json::json!({}) }, keytip: None, shown: None };
     let m = c;
-    let d = |tip: &'static str, name: &'static str| Control { tip, target: Target::Dialog { name }, keytip: None };
-    let p = |tip: &'static str, id: &'static str, params: serde_json::Value| Control { tip, target: Target::Cmd { id, params }, keytip: None };
+    let d = |tip: &'static str, name: &'static str| Control { tip, target: Target::Dialog { name }, keytip: None, shown: None };
+    let p = |tip: &'static str, id: &'static str, params: serde_json::Value| Control {
+        tip,
+        target: Target::Cmd { id, params },
+        keytip: None,
+        shown: None,
+    };
     match tab {
         "Home" => vec![
             m("Paste", "edit.paste"),
@@ -235,7 +244,8 @@ fn controls(tab: &str) -> Vec<Control> {
             c("Dictate", "tools.dictate"),
             c("Editor", "review.spelling"),
             // Home has used every letter. A digit stays reachable without changing its old badges.
-            Control { keytip: Some('1'), ..c("Thai Distributed", "para.thaiDistribute") },
+            // The button shows only while Thai is in use, as the ribbon draws it.
+            Control { keytip: Some('1'), shown: Some(crate::ribbon::thai_in_use), ..c("Thai Distributed", "para.thaiDistribute") },
         ],
         "Insert" => vec![
             m("Cover Page", "insert.coverPage"),
@@ -458,8 +468,19 @@ fn letters_for(app: &WordApp, tab: &str) -> Vec<String> {
         Target::Tab(_) => "ui.tab",
     };
 
+    // A hidden control keeps an empty badge, so it takes no letter and no key reaches it.
+    let hidden: Vec<bool> = ctrls.iter().map(|ctl| ctl.shown.is_some_and(|shown| !shown(app))).collect();
+    for (o, h) in out.iter_mut().zip(&hidden) {
+        if *h {
+            *o = Some(String::new());
+        }
+    }
+
     // Pass 1: explicit keytips and own shortcut letters. First-come keeps a shared letter.
     for (i, ctl) in ctrls.iter().enumerate() {
+        if hidden.get(i).copied().unwrap_or(false) {
+            continue;
+        }
         if let Some(c) = ctl.keytip.or_else(|| shortcut_letter(app, id_of(ctl)))
             && !used.contains(&c)
         {

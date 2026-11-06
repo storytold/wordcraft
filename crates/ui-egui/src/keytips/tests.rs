@@ -129,7 +129,7 @@ fn every_keytip_command_is_registered() {
 #[test]
 fn home_keytip_applies_thai_distributed_without_typing() {
     use wordcraft_doc::{Align, Path, StoryRef};
-    let mut a = app();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("ภาษาไทย")), crate::Services::default());
     activate(&mut a);
     for key in [egui::Key::H, egui::Key::Num1] {
         assert!(handle_key(&mut a, key));
@@ -137,6 +137,22 @@ fn home_keytip_applies_thai_distributed_without_typing() {
     assert_eq!(a.ui.keytips, Phase::Off);
     let p = a.session.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
     assert_eq!(p.props.align, Some(Align::ThaiDistribute));
+    assert_eq!(p.text, "ภาษาไทย", "keytip keys never enter the document");
+}
+
+/// With no Thai in use the button is hidden, so it has no badge and Alt, H, 1 does nothing.
+#[test]
+fn home_keytip_for_thai_distributed_is_off_while_the_button_is_hidden() {
+    use wordcraft_doc::{Path, StoryRef};
+    let mut a = app();
+    let home = letters(&a).1.into_iter().find(|(tab, _)| tab == "Home").map(|(_, l)| l).unwrap();
+    assert!(!home.iter().any(|l| l == "1"), "no badge for a hidden button");
+    activate(&mut a);
+    for key in [egui::Key::H, egui::Key::Num1] {
+        assert!(handle_key(&mut a, key));
+    }
+    let p = a.session.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+    assert_eq!(p.props.align, None, "the alignment is unchanged");
     assert!(p.text.is_empty(), "keytip keys never enter the document");
 }
 

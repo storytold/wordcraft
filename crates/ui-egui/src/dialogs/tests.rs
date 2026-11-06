@@ -549,13 +549,11 @@ fn paragraph_dialog_offers_thai_distributed_and_khmer_justify() {
         // The Alignment list is the dialog's only combo box; its text is the node's value.
         let combo = h.get_by_role(egui::accesskit::Role::ComboBox);
         assert_eq!(combo.accesskit_node().value().as_deref(), Some("Left"));
-        let list_top = combo.rect().max.y;
         combo.click();
         for _ in 0..3 {
             h.step();
         }
-        // The ribbon has a Thai Distributed button too; the list's entry is the one below the box.
-        h.query_all_by_label(label).find(|n| n.rect().min.y >= list_top).expect(label).click();
+        h.get_by_label(label).click();
         for _ in 0..3 {
             h.step();
         }

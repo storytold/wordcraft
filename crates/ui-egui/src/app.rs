@@ -104,6 +104,7 @@ impl WordApp {
             mac_titlebar: chrome::MacTitleBar::default(),
             updates_rt: updates_ui::Runtime::default(),
             packs_rt: Default::default(),
+            thai_text: Default::default(),
             control_rx: None,
             shots: crate::control::Shots::default(),
             capture_epoch: 0,

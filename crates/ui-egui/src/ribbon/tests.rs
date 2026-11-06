@@ -900,3 +900,54 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+/// Home › Paragraph shows Thai Distributed only while Thai is in use: not on an English
+/// document, and as soon as Thai text is typed (the letters are read again after an edit).
+#[test]
+fn thai_distributed_button_shows_once_thai_is_typed() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    assert!(h.query_by_label("Justify").is_some(), "the Paragraph group is drawn");
+    assert!(h.query_by_label("Thai Distributed").is_none(), "no button on an English document");
+    h.state_mut().run("text.insert", json!({"text": " ภาษาไทย"})).unwrap();
+    h.run_steps(3);
+    h.get_by_label("Thai Distributed").click();
+    h.run_steps(3);
+    let p = h.state().session.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).unwrap();
+    assert_eq!(p.props.align, Some(wordcraft_doc::Align::ThaiDistribute), "the button sets Thai Distributed");
+}
+
+/// The other signs that Thai is in use: a Thai editing language, a Thai document default
+/// language (Word on a Thai system saves `th-TH` as the complex-script language), and a Thai
+/// Distributed paragraph at the insertion point, which the button must be able to turn off.
+#[test]
+fn thai_is_in_use_with_a_thai_language_or_a_thai_distributed_paragraph() {
+    let english = || WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    assert!(!thai_in_use(&english()));
+
+    let mut a = english();
+    a.session.editing_lang = Some("th-TH".into());
+    assert!(thai_in_use(&a), "Thai editing language");
+
+    let mut a = english();
+    std::sync::Arc::make_mut(&mut a.session.doc.styles).default_chr.lang_bidi = Some("th-TH".into());
+    assert!(thai_in_use(&a), "Thai complex-script default");
+
+    let mut a = english();
+    std::sync::Arc::make_mut(&mut a.session.doc.styles).default_chr.lang_bidi = Some("thr-NP".into());
+    assert!(!thai_in_use(&a), "Tharu is not Thai");
+
+    let mut a = english();
+    a.run("para.thaiDistribute", json!({})).unwrap();
+    assert!(thai_in_use(&a), "a Thai Distributed paragraph");
+}

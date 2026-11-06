@@ -43,6 +43,7 @@ use draw::draw;
 use home::home;
 #[cfg(test)]
 use home::painter_double_click;
+pub(crate) use home::thai_in_use;
 use insert::insert;
 #[cfg(test)]
 pub(crate) use language::PROOFING_LANGUAGES;

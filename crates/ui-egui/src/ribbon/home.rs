@@ -26,6 +26,51 @@ pub(super) fn painter_double_click(app: &mut WordApp) {
     let _ = app.run("edit.formatPainter", json!({"sticky": true}));
 }
 
+/// Body paragraphs [`thai_in_use`] reads for Thai letters; a longer document's tail isn't read.
+const THAI_PARAGRAPHS_SCANNED: usize = 20_000;
+
+/// Is `tag` a Thai language tag (`th`, `th-TH`)?
+fn is_thai_tag(tag: Option<&str>) -> bool {
+    tag.is_some_and(|t| t.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("th")) && matches!(t.get(2..3), None | Some("-" | "_")))
+}
+
+/// Does Home › Paragraph show Thai Distributed? Word shows it once Thai is an editing language.
+/// WordCraft has no list of editing languages, so the button shows when Thai is in use: Thai is
+/// the interface, default or editing language, or the document's default language (Word on a
+/// Thai system saves `th-TH` as the complex-script language); the document has Thai letters; or
+/// the insertion point's paragraph is Thai Distributed already, so the button can turn it off.
+pub(crate) fn thai_in_use(app: &WordApp) -> bool {
+    let s = &app.session;
+    let default = &s.doc.styles.default_chr;
+    if [Some(crate::i18n::current().code()), s.prefs.default_language.as_deref(), s.editing_lang.as_deref()]
+        .into_iter()
+        .chain([default.lang.as_deref(), default.lang_bidi.as_deref()])
+        .any(is_thai_tag)
+    {
+        return true;
+    }
+    if s.doc.para_at(&s.sel.focus).is_some_and(|p| s.doc.styles.resolve_para(&p.props).align == wordcraft_doc::Align::ThaiDistribute) {
+        return true;
+    }
+    // The letters are read again only after an edit or another document.
+    let key = (s.document_id(), s.rev());
+    if let Some((id, rev, thai)) = app.thai_text.get()
+        && (id, rev) == key
+    {
+        return thai;
+    }
+    let body = wordcraft_doc::StoryRef::Body;
+    let thai = s
+        .doc
+        .para_paths(body)
+        .iter()
+        .take(THAI_PARAGRAPHS_SCANNED)
+        .filter_map(|path| s.doc.para(body, path))
+        .any(|p| p.text.chars().any(wordcraft_doc::thai::is_thai));
+    app.thai_text.set(Some((key.0, key.1, thai)));
+    thai
+}
+
 pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
     let st = app.session.run("format.state", &json!({})).unwrap_or_default();
     let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
@@ -270,14 +315,16 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                 small(ui, app, "alignCenter", None, "Center", crate::widgets::ButtonAction::new("para.alignCenter", json!({}), align == A::Center));
                 small(ui, app, "alignRight", None, "Align Right", crate::widgets::ButtonAction::new("para.alignRight", json!({}), align == A::Right));
                 small(ui, app, "justify", None, "Justify", crate::widgets::ButtonAction::new("para.justify", json!({}), align == A::Justify));
-                small(
-                    ui,
-                    app,
-                    "thaiDistribute",
-                    None,
-                    "Thai Distributed",
-                    crate::widgets::ButtonAction::new("para.thaiDistribute", json!({}), align == A::ThaiDistribute),
-                );
+                if thai_in_use(app) {
+                    small(
+                        ui,
+                        app,
+                        "thaiDistribute",
+                        None,
+                        "Thai Distributed",
+                        crate::widgets::ButtonAction::new("para.thaiDistribute", json!({}), align == A::ThaiDistribute),
+                    );
+                }
                 ui.add_space(4.0);
                 small(ui, app, "textLtr", None, "Left-to-Right Text Direction", crate::widgets::ButtonAction::new("para.ltr", json!({}), !rtl));
                 small(ui, app, "textRtl", None, "Right-to-Left Text Direction", crate::widgets::ButtonAction::new("para.rtl", json!({}), rtl));
