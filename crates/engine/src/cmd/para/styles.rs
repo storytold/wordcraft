@@ -114,12 +114,30 @@ pub(super) fn modify_style(s: &mut Session, v: &Value) -> CmdResult {
         v.get("para").map(|c| serde_json::from_value(c.clone())).transpose().map_err(|e| CmdError::Params(e.to_string()))?;
     let next = p::str(v, "next").map(str::to_string);
     let name = p::str(v, "name").map(str::to_string);
+    // The space before/after given in points wins over the style's spacing in lines, its own or
+    // inherited, unless the lines are given too: as for a paragraph, `w:beforeLines="0"`.
+    let cancel = para.as_ref().map(|pp| {
+        let inherited = s.doc.styles.para_style_props(&id).0;
+        let points_only = |pt: Option<f32>, lines: Option<f32>, have: Option<f32>| pt.is_some() && lines.is_none() && have.is_some_and(|l| l != 0.0);
+        (
+            points_only(pp.space_before, pp.space_before_lines, inherited.space_before_lines),
+            points_only(pp.space_after, pp.space_after_lines, inherited.space_after_lines),
+        )
+    });
     let st = Arc::make_mut(&mut s.doc.styles).get_mut(&id).ok_or_else(|| CmdError::Params("no such style".into()))?;
     if let Some(c) = chr {
         st.chr.overlay(&c);
     }
     if let Some(pp) = para {
         st.para.overlay(&pp);
+    }
+    if let Some((before, after)) = cancel {
+        if before {
+            st.para.space_before_lines = Some(0.0);
+        }
+        if after {
+            st.para.space_after_lines = Some(0.0);
+        }
     }
     if let Some(n) = next {
         st.next = Some(n);

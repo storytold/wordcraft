@@ -17,22 +17,33 @@ pub fn cur(s: &Session) -> wordcraft_doc::resolve::ResolvedPara {
     s.doc.styles.resolve_para(&props)
 }
 
+/// The paragraph formatting of the table style of the table the paragraph at `path` is in, as
+/// layout resolves the paragraph with it (`None` outside a table, or for a table without a style).
+fn table_style_para(doc: &wordcraft_doc::Document, story: wordcraft_doc::StoryRef, path: &wordcraft_doc::Path) -> Option<ParaProps> {
+    // [.., table, row, cell, block]: the innermost table is the path less its last three steps.
+    let table = path.0.len().checked_sub(3).filter(|&n| n > 0).and_then(|n| doc.table(story, &wordcraft_doc::Path(path.0[..n].to_vec())))?;
+    Some(doc.styles.table_style(table.props.style.as_deref()?)?.para)
+}
+
 /// After setting the space before/after in points in the selected paragraphs: keep spacing in
-/// lines (each paragraph's own or inherited) from winning over it, as Word does
-/// (`w:beforeLines="0"`). Paragraphs without spacing in lines are left as they are.
+/// lines (each paragraph's own or inherited, from its style or its table's style) from winning
+/// over it, as Word does (`w:beforeLines="0"`). Paragraphs without spacing in lines are left as
+/// they are.
 pub(super) fn cancel_line_spacing(s: &mut Session, before: bool, after: bool) -> CmdResult {
     let story = s.sel.focus.story;
     for path in crate::cmd::selected_paths(s) {
         let Some(para) = s.doc.para(story, &path) else { continue };
-        let [b, a] = s.doc.styles.resolve_para(&para.props).space_lines;
+        let table = table_style_para(&s.doc, story, &path);
+        let [b, a] = s.doc.styles.resolve_para_in(&para.props, table.as_ref()).space_lines;
         let (b, a) = (before && b != 0.0, after && a != 0.0);
         if b || a {
-            let props = &mut s.doc.para_mut(story, &path)?.props;
-            for (on, lines) in [(b, &mut props.space_before_lines), (a, &mut props.space_after_lines)] {
+            let para = s.doc.para_mut(story, &path)?;
+            for (on, lines) in [(b, &mut para.props.space_before_lines), (a, &mut para.props.space_after_lines)] {
                 if on {
                     *lines = Some(0.0);
                 }
             }
+            para.touch();
         }
     }
     sel_result(s)
