@@ -3935,3 +3935,43 @@ fn typing_a_quote_into_a_text_form_field_with_track_changes_stays_smart() {
     // were before form field fills existed (#5525).
     assert_eq!(s.doc.body[0].as_para().unwrap().plain_text(), "Name: \u{201D}\u{201D}XXXXX");
 }
+
+/// #5525 review: keys pressed while a text form field is being filled, through the keyboard's
+/// commands: Tab finishes the fill and selects the next form field (no tab is typed over the
+/// fill), Backspace edits inside the result, and Enter finishes the fill and breaks the
+/// paragraph after the field. The fields, their `w:ffData` and every typed character stay.
+#[test]
+fn keys_during_a_text_form_field_fill_keep_the_fields_and_the_text() {
+    let mut s = s();
+    typ(&mut s, "Name: ");
+    run(&mut s, "insert.field", json!({"instr": "FORMTEXT", "result": "XXXXX"}));
+    typ(&mut s, " City: ");
+    run(&mut s, "insert.field", json!({"instr": "FORMTEXT", "result": "XXXXX"}));
+    let ff =
+        r#"<w:ffData><w:name w:val="Text1"/><w:enabled/><w:calcOnExit w:val="0"/><w:textInput><w:default w:val="XXXXX"/></w:textInput></w:ffData>"#;
+    let para = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    for o in &mut para.objects {
+        if let wordcraft_doc::InlineObject::Field { form, .. } = o {
+            *form = ff.into();
+        }
+    }
+    para.touch();
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "fields.next", json!({}));
+    typ(&mut s, "Janex\u{8}\tOslo\nnext");
+    let results: Vec<(String, String)> = s
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| match o {
+            wordcraft_doc::InlineObject::Field { result, form, .. } => Some((result.clone(), form.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results, [("Jane".to_string(), ff.to_string()), ("Oslo".to_string(), ff.to_string())]);
+    let texts: Vec<String> = s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect();
+    // "next" ends with no space or punctuation, so AutoCorrect hasn't capitalised it yet.
+    assert_eq!(texts, ["Name: Jane City: Oslo", "next"]);
+}

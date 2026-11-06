@@ -98,7 +98,8 @@ pub(super) fn insert_paragraphs(s: &mut Session, text: &str) -> CmdResult {
             }
         }
         if !line.is_empty() {
-            type_text(s, line)?;
+            // Typing: over a selected form field the line fills it in (#5525).
+            crate::cmd::type_text_effect(s, line)?;
         }
     }
     sel_result(s)
@@ -183,6 +184,10 @@ fn enter(s: &mut Session, undo_step: bool) -> Result<(), CmdError> {
 /// left- and first-indent with tabs and backspaces" on, at the start of a line of a paragraph with
 /// text: indent. Else a tab.
 pub(super) fn tab(s: &mut Session, _: &Value) -> CmdResult {
+    // Filling in a form field: Tab finishes it and moves to the next one, typing nothing (#5525).
+    if crate::cmd::form_fill_tab(s, false) {
+        return sel_result(s);
+    }
     if let Some((tpath, r, c)) = s.sel.focus.path.cell() {
         let story = s.sel.focus.story;
         let Some(t) = s.doc.table(story, &tpath) else { return ins_char(s, '\t') };
@@ -276,6 +281,9 @@ fn indent_by_tab(s: &mut Session, f: &Pos) -> CmdResult {
 }
 
 pub(super) fn back_tab(s: &mut Session, _: &Value) -> CmdResult {
+    if crate::cmd::form_fill_tab(s, true) {
+        return sel_result(s);
+    }
     if let Some((tpath, r, c)) = s.sel.focus.path.cell() {
         let story = s.sel.focus.story;
         let (nr, nc) = if c > 0 {

@@ -1,6 +1,6 @@
 # Typing parity with Word
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-04 · **Change:** trivial (typing into a legacy text form field fills the field and keeps its w:ffData, #5525); previously minor (English spelling by dialect from SCOWL 2026, CP2; previously trivial: a tracked heading or border-line AutoFormat replaces another author's formatting change; previously trivial: Relative font-size commands preserve mixed sizes in the selection (#4903); existing button steps and one-point shortcuts are unchanged; readiness estimates unchanged); previously trivial (highlight at a caret leaves the word alone, #4086); previously trivial (Arabic Backspace removes one combining mark and keeps its base letter (#4757); previously trivial: tests and notes for the border-line, table, tab-indent and wide-space rules; previously trivial: `*Bold* and _italic_ as real formatting` in AutoFormat As You Type; previously trivial: highlight target includes selected paragraph marks, #4085; previously trivial: full-target highlight check beyond 10,000 runs, #4085; previously trivial: queued IME replacements are rejected before mutation after their marked composition loses its body/equation target; previously trivial: the transactional equation delete proves its commit with the engine revision; previously trivial: a refused byte-counted equation deletion drops only the immediately adjacent stale replacement, so a later direct commit still applies; previously trivial: a tracked own-insertion shifts the rest of a two-sided IME deletion; previously trivial: AutoCorrect/AutoFormat classification compares the actual paragraph; previously trivial: a replaced body starts a new input-method context and interrupts the composition; a quote the engine leaves as typed is the input method's own change; equation `DeleteSurrounding` erases counted characters; previously trivial: AutoCorrect finds the word after a no-break space or an ideographic space; previously trivial: a command that changes nothing is not an edit: no undo step, no unsaved changes, no relayout, and the redo stack survives it; previously trivial: while an input method composes, the caret and its candidate window sit at the input method's cursor inside the composition; previously trivial: Ctrl+Tab types a tab in a table cell, #3137; previously trivial: List AutoFormat triggers in front of an already-written paragraph, not only a fresh empty one, checked in Word for Windows, #3352; previously trivial: AltGr types its characters without opening KeyTips on Linux, #2388; previously trivial: Delete on whole selected cells leaves one empty paragraph in each, with the cell's last paragraph's formatting; nested tables go too, #2802; previously trivial: Bullets and Numbering toggle off style-inherited lists at their effective level, including basedOn chains and numbered ListParagraph styles; other paragraphs and list definitions stay unchanged (related to #3459); previously trivial: a text box that keeps the keyboard no longer resets the input method every frame, #2986; previously trivial: a slash opening a word travels whole to the next line, #2963; previously trivial: typing over a selection takes the first selected character's formatting, also when the selection was made right to left, #2879; previously trivial: Turkish and Azerbaijani case mapping in AutoCorrect, #1923; previously trivial: smart quotes in Hebrew pinned: logical order, ” in acronyms as in Word, #1670; previously trivial: Backspace on a selected table, rows or columns deletes them, Delete clears them, #1844; previously trivial: typed text takes its direction from its own letters, #1543; previously trivial: an input method's request to erase text around the caret is honoured, so web typing in Cyrillic and other non-Latin text no longer repeats, #1480; previously trivial: `-->` AutoCorrect replacement, #2223; previously trivial: a heading-list preset keeps Heading styles and makes other paragraphs Heading 1, as in Word, #1793; previously trivial: numbered headings: a heading-linked Multilevel List numbers new headings by their style; numbering keeps a heading a heading, #1793; previously trivial: reversing an automatic capital adds an exception, #1857; previously trivial: smart quotes open after guillemets and low quotes and nest; previously trivial: Enter on an empty list item numbered by its paragraph style moves it up a level, #2143; previously trivial: Backspace after a section break and Delete before it remove the break, also on the last paragraph, #2127; previously trivial: a table inserted in right-to-left text is right to left, so Tab moves left, #2634; previously trivial: Shift+Delete cuts the selection on every platform, #1669; previously trivial: Select All then Delete removes a table the document starts with, #1198; previously trivial: Alt+numpad character codes, #961; previously trivial: Down and Up from a line start beside a table go into it, #1007; previously trivial: sample-text formulas on Enter, #1067; previously trivial: Track Changes: Accept All after a tracked delete from a paragraph end keeps the next paragraph; Reject All after typing into an empty paragraph keeps it (#864); previously minor: Correct TWo INitial CApitals, cAPS LOCK and table-cell capitals, #544; previously trivial: complex-script caret and Backspace, #604; Move Paragraph Up/Down, Promote/Demote, Go Back and Alt+X keys, #343; the body IME deletion maps signed placeholder growth/shrink, keeps control markers outside the range and scopes its undo join to the matching replacement) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-05 · **Change:** trivial (form field fills: other commands commit the fill instead of deleting the field; Tab moves to the next form field; plain paste appends; breaks and control characters never enter a result; Word's behaviour marked unverified, #5525); previously trivial (typing into a legacy text form field fills the field and keeps its w:ffData, #5525);; previously minor (English spelling by dialect from SCOWL 2026, CP2; previously trivial: a tracked heading or border-line AutoFormat replaces another author's formatting change; previously trivial: Relative font-size commands preserve mixed sizes in the selection (#4903); existing button steps and one-point shortcuts are unchanged; readiness estimates unchanged); previously trivial (highlight at a caret leaves the word alone, #4086); previously trivial (Arabic Backspace removes one combining mark and keeps its base letter (#4757); previously trivial: tests and notes for the border-line, table, tab-indent and wide-space rules; previously trivial: `*Bold* and _italic_ as real formatting` in AutoFormat As You Type; previously trivial: highlight target includes selected paragraph marks, #4085; previously trivial: full-target highlight check beyond 10,000 runs, #4085; previously trivial: queued IME replacements are rejected before mutation after their marked composition loses its body/equation target; previously trivial: the transactional equation delete proves its commit with the engine revision; previously trivial: a refused byte-counted equation deletion drops only the immediately adjacent stale replacement, so a later direct commit still applies; previously trivial: a tracked own-insertion shifts the rest of a two-sided IME deletion; previously trivial: AutoCorrect/AutoFormat classification compares the actual paragraph; previously trivial: a replaced body starts a new input-method context and interrupts the composition; a quote the engine leaves as typed is the input method's own change; equation `DeleteSurrounding` erases counted characters; previously trivial: AutoCorrect finds the word after a no-break space or an ideographic space; previously trivial: a command that changes nothing is not an edit: no undo step, no unsaved changes, no relayout, and the redo stack survives it; previously trivial: while an input method composes, the caret and its candidate window sit at the input method's cursor inside the composition; previously trivial: Ctrl+Tab types a tab in a table cell, #3137; previously trivial: List AutoFormat triggers in front of an already-written paragraph, not only a fresh empty one, checked in Word for Windows, #3352; previously trivial: AltGr types its characters without opening KeyTips on Linux, #2388; previously trivial: Delete on whole selected cells leaves one empty paragraph in each, with the cell's last paragraph's formatting; nested tables go too, #2802; previously trivial: Bullets and Numbering toggle off style-inherited lists at their effective level, including basedOn chains and numbered ListParagraph styles; other paragraphs and list definitions stay unchanged (related to #3459); previously trivial: a text box that keeps the keyboard no longer resets the input method every frame, #2986; previously trivial: a slash opening a word travels whole to the next line, #2963; previously trivial: typing over a selection takes the first selected character's formatting, also when the selection was made right to left, #2879; previously trivial: Turkish and Azerbaijani case mapping in AutoCorrect, #1923; previously trivial: smart quotes in Hebrew pinned: logical order, ” in acronyms as in Word, #1670; previously trivial: Backspace on a selected table, rows or columns deletes them, Delete clears them, #1844; previously trivial: typed text takes its direction from its own letters, #1543; previously trivial: an input method's request to erase text around the caret is honoured, so web typing in Cyrillic and other non-Latin text no longer repeats, #1480; previously trivial: `-->` AutoCorrect replacement, #2223; previously trivial: a heading-list preset keeps Heading styles and makes other paragraphs Heading 1, as in Word, #1793; previously trivial: numbered headings: a heading-linked Multilevel List numbers new headings by their style; numbering keeps a heading a heading, #1793; previously trivial: reversing an automatic capital adds an exception, #1857; previously trivial: smart quotes open after guillemets and low quotes and nest; previously trivial: Enter on an empty list item numbered by its paragraph style moves it up a level, #2143; previously trivial: Backspace after a section break and Delete before it remove the break, also on the last paragraph, #2127; previously trivial: a table inserted in right-to-left text is right to left, so Tab moves left, #2634; previously trivial: Shift+Delete cuts the selection on every platform, #1669; previously trivial: Select All then Delete removes a table the document starts with, #1198; previously trivial: Alt+numpad character codes, #961; previously trivial: Down and Up from a line start beside a table go into it, #1007; previously trivial: sample-text formulas on Enter, #1067; previously trivial: Track Changes: Accept All after a tracked delete from a paragraph end keeps the next paragraph; Reject All after typing into an empty paragraph keeps it (#864); previously minor: Correct TWo INitial CApitals, cAPS LOCK and table-cell capitals, #544; previously trivial: complex-script caret and Backspace, #604; Move Paragraph Up/Down, Promote/Demote, Go Back and Alt+X keys, #343; the body IME deletion maps signed placeholder growth/shrink, keeps control markers outside the range and scopes its undo join to the matching replacement) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 What Word does when you type, observed black-box (same keystrokes typed into Word and
 WordCraft, results read back paragraph by paragraph) and pinned by tests in
@@ -32,22 +32,44 @@ performed for this change.
 
 ## Typing into a legacy text form field (#5525)
 
-In Word, tabbing or clicking into a legacy text form field (`FORMTEXT`) selects its
-current result; typing replaces it, and further keystrokes keep editing the result up to
-the field's maximum length. The field itself — its instruction and its `w:ffData` (name,
-default, text-input settings) — stays in the document. WordCraft does the same: an insert
-over a selected `FORMTEXT` field writes into the field's result instead of replacing the
-selection, which used to delete the field and merge the typed text into the preceding run.
-A fill continues across keystrokes until the selection moves or another edit intervenes;
-Backspace and Delete edit inside the result and never remove the field (at its edges they
-end the fill and step out). Line and paragraph breaks are not taken into the result, the
-field's `w:maxLength` caps the whole result, and AutoCorrect and AutoFormat stay out of a
-fill in progress, copying and read-only queries do not end a fill, a multi-line
-insert fills the field instead of Enter deleting it, a separator-only insert leaves
-the result alone, restoring a version ends a fill, and a quote typed into a
-selected field stays straight instead of taking its opening/closing from the
-paragraph text. Re-selecting a field replaces its result again. With Track Changes on,
-typing over a selected field remains a tracked replacement of the selection.
+**WordCraft's behaviour.** Typing over a selected legacy text form field (`FORMTEXT` with
+`w:ffData`, selected as Alt+F1 selects it) fills it in: the typed text becomes the field's
+result, and the field itself — its instruction and its `w:ffData` (name, default,
+text-input settings) — stays in the document. Before #5525 the insert replaced the
+selection, deleting the field and merging the typed text into the preceding run. Only
+typing (`text.insert`) and plain-text paste fill a field; breaks, symbols and the other
+inserting commands never write into a result.
+
+- A fill continues across keystrokes until the selection moves or another edit
+  intervenes. Backspace and Delete, and Ctrl+Backspace and Ctrl+Delete (by word), edit
+  inside the result and never remove the field; at the result's edges they end the fill
+  and step out before or after the field.
+- Any other edit during a fill commits it first: the typed text stays the field's
+  result and the command runs with the caret right after the field. Enter breaks the
+  paragraph after the field; a page or column break, a symbol (with its own font) or a
+  formatted paste lands after the field; Cut has nothing left selected. None of them
+  deletes the field or the text. Undo, redo, caret movement and selection end the fill
+  where it is.
+- Tab finishes the fill and selects the next legacy text form field in the story, ready to
+  be filled in (Shift+Tab: the previous one); with none, the caret goes after (before) the
+  field. No tab is typed. Plain-text paste appends at the fill's caret, its line breaks
+  dropped. Repeat (F4) repeats the last typing or deleting inside the result.
+- A result is one line of plain text: control characters (tab, page and column breaks,
+  every C0 and C1 code), line and paragraph separators and U+FFFC are dropped wherever
+  they come from. The field's `w:maxLength` caps the whole result.
+- AutoCorrect and AutoFormat stay out of a fill in progress, and a quote typed into a
+  selected field stays straight instead of taking its opening/closing from the paragraph
+  text. Copying and read-only queries do not end a fill; a multi-line insert fills the
+  field instead of Enter deleting it; a separator-only insert leaves the result alone;
+  restoring a version ends a fill. Re-selecting a field replaces its result again.
+- With Track Changes on, typing over a selected field remains a tracked replacement of
+  the selection.
+
+**Word's behaviour: not verified.** No Word observation is recorded for this, protected or
+unprotected. In an unprotected document Word may treat `FORMTEXT` as an ordinary field;
+whether typing over it, Tab, Enter or the break keys behave as above has not been compared.
+WordCraft does not yet treat legacy form fields as editable regions under forms protection
+(only content controls are), so there filling is refused — a separate gap.
 
 Regressions: `typing_into_text_form_field_keeps_the_field`,
 `typing_keystrokes_into_text_form_field_fills_it`,
@@ -57,12 +79,26 @@ Regressions: `typing_into_text_form_field_keeps_the_field`,
 `undo_ends_a_form_field_fill`, `copy_during_a_form_field_fill_keeps_the_fill`,
 `queries_during_a_form_field_fill_keep_the_fill`,
 `paragraphs_insert_into_a_selected_form_field_keeps_the_field`,
-`separator_only_insert_leaves_a_form_field_result_alone` and
-`restoring_a_version_ends_a_form_field_fill`
+`separator_only_insert_leaves_a_form_field_result_alone`,
+`restoring_a_version_ends_a_form_field_fill`,
+`enter_during_a_fill_keeps_the_field_and_the_text`,
+`delete_word_back_during_a_fill_edits_the_result_and_never_removes_the_field`,
+`delete_word_forward_during_a_fill_never_removes_the_field`,
+`cut_during_a_fill_keeps_the_field_and_the_text`,
+`tab_during_a_fill_moves_to_the_next_form_field`,
+`plain_text_paste_during_a_fill_appends`,
+`rich_paste_during_a_fill_lands_after_the_field`,
+`symbol_during_a_fill_lands_after_the_field_with_its_font`,
+`repeat_during_a_fill_keeps_the_typed_text`,
+`page_break_during_a_fill_lands_after_the_field`,
+`column_break_during_a_fill_lands_after_the_field` and
+`control_characters_never_enter_a_form_field_result`
 (`crates/engine/src/cmd/fields.rs`), and
-`typing_into_text_form_field_fills_it_through_the_command_path` and
-`typing_a_quote_into_a_text_form_field_stays_straight` (`crates/engine/src/tests/typing.rs`). Synthetic command
-qualification; native Word comparison has not been performed for this change.
+`typing_into_text_form_field_fills_it_through_the_command_path`,
+`typing_a_quote_into_a_text_form_field_stays_straight` and
+`keys_during_a_text_form_field_fill_keep_the_fields_and_the_text`
+(`crates/engine/src/tests/typing.rs`). Synthetic command qualification; native Word
+comparison has not been performed for this change.
 
 ## Sample text (#1067)
 
@@ -599,6 +635,8 @@ this correction; native Windows interaction and Microsoft Word remain untested.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-03 | trivial | Alt+numpad codes type their character in text boxes too (Find what, dialog fields), not the digits or nothing (#4403) |
+| 2026-11-05 | trivial | Form field fills (#5525): any other command commits the fill and runs after the field (Enter, breaks, symbols, rich paste, Cut never delete the field or the text); Ctrl+Backspace/Ctrl+Delete edit inside the result; Tab moves to the next form field; plain paste appends; control characters and U+FFFC never enter a result; Word's behaviour marked unverified |
+| 2026-11-04 | trivial | Typing into a legacy text form field fills the field and keeps its w:ffData (#5525) |
 | 2026-11-01 | minor | English spelling by dialect from SCOWL 2026: typed British, Canadian and Australian text, modern words and ordinals pinned (#40, #520, #1281, #1045; CP2) |
 | 2026-10-29 | trivial | Relative font-size commands preserve mixed sizes in the selection (#4903); existing button steps and one-point shortcuts are unchanged; readiness estimates unchanged |
 | 2026-10-28 | trivial | Highlighting at a caret leaves the word alone and sets the colour for what is typed next (#4086). |
