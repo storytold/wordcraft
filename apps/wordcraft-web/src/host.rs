@@ -1,14 +1,20 @@
-//! The `postMessage` bridge to a same-origin parent page (`?host=parent`), for pages that embed
-//! WordCraft in an `<iframe>` and keep its files (a Nextcloud app, a personal file server). The
-//! same messages as GridCraft's and PdfCraft's bridges; each is a plain object with a `type`:
+//! Host modes: a page that runs WordCraft (as an `<iframe>`, or in its own document) opens
+//! documents in it and stores what it saves instead of the browser downloading. The messages and
+//! the two transports are `craft-web-host`'s (storytold/craft-libs), the same contract as the
+//! other Craft apps' bridges, with the `wordcraft:` prefix. This module is WordCraft's part of it.
 //!
-//! - `wordcraft:ready` (to the parent): `{ version }`, sent once the app is running and
-//!   listening; send a file now.
-//! - `wordcraft:open` (from the parent): `{ name, bytes }`, bytes an `ArrayBuffer` or
-//!   `Uint8Array`. It opens like a document picked with File › Open or dropped on the window.
-//! - `wordcraft:save` (to the parent): `{ name, saveAs, bytes }` (a transferred `ArrayBuffer`) for
-//!   every file WordCraft would otherwise download. The parent stores it and reports failures
-//!   itself. `saveAs` says whether the file becomes the document's file:
+//! - `?host=parent` (an `<iframe>`, such as a Nextcloud app) talks to the same-origin parent over
+//!   `postMessage`; `data-host="page"` on the canvas (the page's own document, no iframe) uses
+//!   DOM `CustomEvent`s on the canvas instead. `?host=parent` wins when both are present. With no
+//!   parent, or a parent on another origin, there is no bridge: the normal app with downloads.
+//! - `wordcraft:ready` once the app is running and listening; send a file now. WordCraft reads
+//!   bytes, so it says `file: false` and a host sends `bytes`.
+//! - `wordcraft:open` (from the host): `{ name, bytes }`. It opens like a document picked with
+//!   File › Open or dropped on the window; a file over [`MAX_OPEN_BYTES`] is refused before it is
+//!   copied.
+//! - `wordcraft:save` (to the host): `{ name, saveAs, bytes }` for every file WordCraft would
+//!   otherwise download. The host stores it and reports failures itself. `saveAs` says whether
+//!   the file becomes the document's file:
 //!   - Save: `false`. It writes the opened file under its own name and format, as the desktop
 //!     app does. A name the parent never sent (an untitled document, an imported .doc saved as
 //!     .docx) is a new file: `true`, as for Save As.
@@ -17,70 +23,57 @@
 //!     is now that file; the next Save sends its name with `false`.
 //!   - Save As or Export to a format that doesn't (PDF, Markdown, plain text), Export as PDF and
 //!     Export Page as PNG: `false`. They are copies; the document's file stays the same.
-//! - `wordcraft:dirty` (to the parent): `{ dirty }` whenever unsaved changes appear or go away.
-//! - `wordcraft:failed` (to the parent): `{ error }` when the app couldn't start.
+//! - `wordcraft:dirty` whenever unsaved changes appear or go away, `wordcraft:failed` when the
+//!   app couldn't start.
 //!
-//! Only the parent window on the page's own origin is heard or answered. In host mode the parent
-//! guards leaving the page, and `?author=` names the user for comments and tracked changes.
+//! In both host modes the host sends the document to edit, so no sample opens, saves are handed
+//! to the host rather than downloaded, the host guards leaving the page, and `?author=` names the
+//! user for comments and tracked changes.
 
-use std::cell::Cell;
 use std::rc::Rc;
 
-use wasm_bindgen::JsCast as _;
-use wasm_bindgen::JsValue;
-use wasm_bindgen::closure::Closure;
+use craft_web_host::web::{FileData, Host, Message};
 use wordcraft_ui_egui::{Inbox, Services, WordApp};
+
+/// The app id in the host messages (`wordcraft:ready`).
+const APP: &str = "wordcraft";
+
+/// The name a document gets when the host sent none (the crate says `document` for a blank name).
+const DEFAULT_NAME: &str = "Document.docx";
+
+/// The largest document taken from the host page, refused before it is copied.
+const MAX_OPEN_BYTES: u64 = 512 << 20;
 
 /// The longest user name taken from `?author=`.
 const MAX_AUTHOR_CHARS: usize = 200;
 
 #[derive(Clone)]
 pub struct Bridge {
-    window: web_sys::Window,
-    parent: web_sys::Window,
-    origin: String,
+    host: Rc<Host>,
 }
 
 impl Bridge {
-    /// `None` when the page isn't framed (there is no parent to talk to), or when the parent is
-    /// on another origin: messages only go to this origin, so the browser would drop every save
-    /// without an error while the document showed as saved.
-    pub fn new() -> Option<Self> {
-        let window = web_sys::window()?;
-        let parent = window.parent().ok().flatten()?;
-        if js_sys::Object::is(&parent, &window) {
-            return None;
-        }
-        let origin = window.location().origin().ok()?;
-        // An opaque origin (a `file://` page in some browsers) can't be a `postMessage` target.
-        if origin == "null" {
-            return None;
-        }
-        // Reading another origin's location throws, which is `None` too.
-        if parent.location().origin().ok()? != origin {
-            return None;
-        }
-        Some(Self { window, parent, origin })
+    /// The bridge for this page, or `None` when WordCraft isn't hosted: no `?host=parent` and no
+    /// `data-host="page"` on the canvas, an unframed `?host=parent` page (it stays the normal app
+    /// with downloads), or a parent on another origin.
+    pub fn detect(canvas: &web_sys::HtmlCanvasElement) -> Option<Self> {
+        Some(Self { host: Rc::new(Host::connect(APP, canvas)?) })
     }
 
-    /// Hand saved and exported files to the parent instead of downloading them, report unsaved
+    /// Hand saved and exported files to the host instead of downloading them, report unsaved
     /// changes to it, and hear the files it sends.
     pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
         self.listen(inbox, ctx);
         let bridge = self.clone();
         services.host_save = Some(Box::new(move |name: &str, bytes: &[u8], save_as: bool| bridge.post_save(name, bytes, save_as)));
-        // Anything else that would download goes to the parent too.
+        // Anything else that would download goes to the host too.
         let bridge = self.clone();
         services.download = Some(Box::new(move |name: &str, bytes: &[u8]| bridge.post_save(name, bytes, false)));
         // The browser's save picker is never used, so no save finishes later.
         services.async_saves = None;
-        let bridge = self.clone();
-        let reported: Rc<Cell<Option<bool>>> = Rc::default();
-        services.on_dirty = Some(Box::new(move |dirty: bool| {
-            if reported.get() != Some(dirty) && bridge.send(&[("type", "wordcraft:dirty".into()), ("dirty", dirty.into())]) {
-                reported.set(Some(dirty));
-            }
-        }));
+        // The crate does not repeat a state it already reported.
+        let host = self.host.clone();
+        services.on_dirty = Some(Box::new(move |dirty: bool| host.post_dirty(dirty)));
     }
 
     /// `?author=`: the host's name for the user signs comments and tracked changes.
@@ -92,78 +85,43 @@ impl Bridge {
     }
 
     pub fn post_ready(&self) {
-        self.send(&[("type", "wordcraft:ready".into()), ("version", env!("CARGO_PKG_VERSION").into())]);
+        let _ = self.host.post_ready(env!("CARGO_PKG_VERSION"), false);
     }
 
-    /// The app couldn't start (no WebGPU or WebGL2, for example): let the parent say so.
+    /// The app couldn't start (no WebGPU or WebGL2, for example): let the host say so.
     pub fn post_failed(&self, error: &str) {
-        self.send(&[("type", "wordcraft:failed".into()), ("error", error.into())]);
+        let _ = self.host.post_failed(error, None);
     }
 
     fn post_save(&self, path: &str, bytes: &[u8], save_as: bool) -> Result<(), String> {
         let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
-        let buffer = js_sys::Uint8Array::from(bytes).buffer();
-        let message = message(&[
-            ("type", "wordcraft:save".into()),
-            ("name", name.as_str().into()),
-            ("saveAs", save_as.into()),
-            ("bytes", buffer.clone().into()),
-        ])
-        .ok_or_else(|| "couldn't build the message".to_string())?;
-        self.parent
-            .post_message_with_transfer(&message, &self.origin, &js_sys::Array::of1(&buffer))
-            .map_err(|e| e.as_string().unwrap_or_else(|| format!("{e:?}")))
+        self.host.post_save(&name, bytes, None, save_as)
     }
 
-    /// Hear `wordcraft:open` from the parent and queue the file like a dropped one.
+    /// Hear `wordcraft:open` and queue the file like a dropped one.
     fn listen(&self, inbox: Inbox, ctx: egui::Context) {
-        let parent = self.parent.clone();
-        let origin = self.origin.clone();
-        let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
-            if event.origin() != origin || !event.source().is_some_and(|s| js_sys::Object::is(&s, &parent)) {
-                return;
+        self.host.listen(move |message| {
+            if let Message::Open { name, data } = message {
+                deliver_open(&inbox, &ctx, &name, &data);
             }
-            let data = event.data();
-            if string(&data, "type").as_deref() != Some("wordcraft:open") {
-                return;
-            }
-            let name = string(&data, "name").filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "Document.docx".to_string());
-            let Some(bytes) = bytes(&data) else { return };
-            inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
-            ctx.request_repaint();
         });
-        if self.window.add_event_listener_with_callback("message", on_message.as_ref().unchecked_ref()).is_ok() {
-            // The listener lives as long as the page.
-            on_message.forget();
-        }
-    }
-
-    /// Post a message to the parent; false if it couldn't be sent.
-    fn send(&self, fields: &[(&str, JsValue)]) -> bool {
-        message(fields).is_some_and(|m| self.parent.post_message(&m, &self.origin).is_ok())
     }
 }
 
-fn message(fields: &[(&str, JsValue)]) -> Option<js_sys::Object> {
-    let m = js_sys::Object::new();
-    for (key, value) in fields {
-        js_sys::Reflect::set(&m, &JsValue::from_str(key), value).ok()?;
+/// The file an open message carries, pushed onto the inbox for the next frame, like a dropped
+/// file. A host's file is untrusted input: an oversized one is refused before it is copied into
+/// the app's memory (the data's own length, not the host's claim). The crate has cleaned the name
+/// (and cut it to 255 characters); a blank one comes as `document` and becomes `Document.docx`.
+fn deliver_open(inbox: &Inbox, ctx: &egui::Context, name: &str, data: &FileData) {
+    let name = if name == "document" { DEFAULT_NAME } else { name }.to_string();
+    let FileData::Bytes(array) = data else {
+        log::warn!("host file {name} came as a File; WordCraft reads bytes only; not opened");
+        return;
+    };
+    if data.size() > MAX_OPEN_BYTES as f64 {
+        log::warn!("host file is {} bytes, over the {} MiB host open limit; not opened", data.size(), MAX_OPEN_BYTES >> 20);
+        return;
     }
-    Some(m)
-}
-
-fn string(data: &JsValue, key: &str) -> Option<String> {
-    js_sys::Reflect::get(data, &JsValue::from_str(key)).ok()?.as_string()
-}
-
-/// `bytes` as an `ArrayBuffer` or `Uint8Array`.
-fn bytes(data: &JsValue) -> Option<Vec<u8>> {
-    let bytes = js_sys::Reflect::get(data, &JsValue::from_str("bytes")).ok()?;
-    if let Some(array) = bytes.dyn_ref::<js_sys::Uint8Array>() {
-        Some(array.to_vec())
-    } else if bytes.is_instance_of::<js_sys::ArrayBuffer>() {
-        Some(js_sys::Uint8Array::new(&bytes).to_vec())
-    } else {
-        None
-    }
+    inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, array.to_vec()));
+    ctx.request_repaint();
 }
