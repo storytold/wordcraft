@@ -262,7 +262,7 @@ fn begin_section_state<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, sec: &Sec<'p
 /// The blank page that puts a section on the right side ends the previous section. It is
 /// finished here, with the footnotes continued onto it, under that section's margins and
 /// footnote separators: the page is the previous section's, and the new section's state is
-/// already in place for the page that follows (#5620, as #5289 for the page before the break).
+/// already in place for the page that follows (#5620, as #5291 for the page before the break).
 fn end_previous_section<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<'p>, si: usize, block: usize, totals: &Totals) {
     let Some((_, prev)) = si.checked_sub(1).and_then(|k| hf.sections.get(k)) else { return };
     pb.sect = prev;
