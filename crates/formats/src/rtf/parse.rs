@@ -25,11 +25,60 @@ struct Parsed {
     headers_footers: Vec<Vec<(HeaderFooter, Vec<FBlock>)>>,
 }
 
+/// Where the document `{\rtf…}` starting at `start` ends: just past the last `}` that closes it
+/// (RTF spec, "RTF Syntax": the file is one group). Text, control words and raw bytes after that
+/// brace are not part of it, nor is another group starting `{\rtf` there. A stray `}` inside the
+/// document that closes the outer group early doesn't end it while more groups close after it.
+fn document_end(bytes: &[u8], start: usize) -> usize {
+    let mut depth = 0usize;
+    let mut end = bytes.len();
+    let mut closed = false;
+    let mut i = start;
+    while let Some(&c) = bytes.get(i) {
+        match c {
+            b'{' => {
+                if closed && depth == 0 && bytes.get(i + 1..).is_some_and(|b| b.starts_with(b"\\rtf")) {
+                    break;
+                }
+                depth = depth.saturating_add(1);
+                i += 1;
+            }
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                i += 1;
+                if depth == 0 {
+                    end = i;
+                    closed = true;
+                }
+            }
+            b'\\' if bytes.get(i + 1..).is_some_and(|b| b.starts_with(b"bin")) => {
+                // `\binN` and its N raw bytes, which may hold braces.
+                let mut k = i + 4;
+                let mut n = 0usize;
+                while let Some(d) = bytes.get(k).filter(|d| d.is_ascii_digit()) {
+                    n = n.saturating_mul(10).saturating_add(usize::from(d - b'0'));
+                    k += 1;
+                }
+                if bytes.get(k) == Some(&b' ') {
+                    k += 1;
+                }
+                i = k.saturating_add(n);
+            }
+            // An escaped brace or backslash is text.
+            b'\\' => i += 2,
+            _ => i += 1,
+        }
+    }
+    end
+}
+
 fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
     let start = bytes.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(0);
     if !bytes.get(start..).is_some_and(|b| b.starts_with(b"{\\rtf")) {
         return Err("not an RTF document (it doesn't start with {\\rtf)".into());
     }
+    // Whatever follows the document's closing brace isn't part of it, as in Word.
+    let bytes = bytes.get(..document_end(bytes, start)).unwrap_or(bytes);
     let mut r = Reader::default();
     let mut i = start;
     let mut first_in_group = false;
