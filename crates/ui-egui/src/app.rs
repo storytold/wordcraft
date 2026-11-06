@@ -13,6 +13,8 @@ use super::{
 mod commands;
 mod control;
 mod files;
+#[cfg(test)]
+pub(crate) use files::clean_save_name;
 mod fonts;
 mod frame;
 mod input;
@@ -72,6 +74,7 @@ impl WordApp {
             tab,
             backstage,
             backstage_page,
+            save_as_name,
             print,
             nav_collapsed,
             keytip_prefix,
@@ -87,6 +90,7 @@ impl WordApp {
                 tab,
                 backstage,
                 backstage_page,
+                save_as_name,
                 print,
                 nav_collapsed,
                 keytip_prefix,
