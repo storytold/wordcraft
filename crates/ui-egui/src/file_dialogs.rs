@@ -171,15 +171,17 @@ impl WordApp {
         }
     }
 
-    /// Treat the system dialog the host is showing as cancelled, e.g. one that never showed up.
+    /// Treat the system dialog the host is showing as cancelled, e.g. one that never showed up;
+    /// returns the format of the export it was for, if any.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn give_up_file_dialog(&mut self) {
+    pub(crate) fn give_up_file_dialog(&mut self) -> Option<String> {
         if let Some(cancel) = &self.services.cancel_file_dialog {
             cancel();
         }
-        if let Some(d) = self.file_dialog.take() {
-            let _ = self.finish_pick(d.after, None);
-        }
+        let d = self.file_dialog.take()?;
+        let export = if let AfterPick::Export { ext } = &d.after { Some(ext.clone()) } else { None };
+        let _ = self.finish_pick(d.after, None);
+        export
     }
 
     /// The host couldn't show a system dialog (#576): ask in the built-in browser instead, which
@@ -300,6 +302,9 @@ impl WordApp {
                     self.run("file.exportPng", json!({"path": path}))
                 } else if ext == crate::print_page::EXPORT_WORD_2003 {
                     self.run("file.saveAs", json!({"path": path, "format": ext}))
+                } else if ext == "xml" {
+                    // Word XML even over a Word 2003 XML file, which a save by path would keep.
+                    self.run("file.saveAs", json!({"path": path, "format": wordcraft_engine::cmd::file::FORMAT_FLAT_OPC}))
                 } else {
                     self.run("file.saveAs", json!({"path": path}))
                 };
@@ -436,8 +441,7 @@ impl WordApp {
 
     /// File › Export: ask where to save a copy in this format, then write it.
     pub(crate) fn export_dialog(&mut self, ext: &str) {
-        let file_ext = if ext == crate::print_page::EXPORT_WORD_2003 { "xml" } else { ext };
-        let name = format!("{}.{file_ext}", self.title_stem());
+        let name = format!("{}.{}", self.title_stem(), crate::print_page::export_file_ext(ext));
         let _ = self.ask_file(FileDialogRequest::Save { name, dir: None }, AfterPick::Export { ext: ext.to_string() });
     }
 
