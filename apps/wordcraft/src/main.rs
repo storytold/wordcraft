@@ -1,6 +1,7 @@
 //! WordCraft desktop app.
 //!
-//! Usage: `wordcraft [--control <port>] [--sample] [files…]`; `--help` prints `USAGE`.
+//! Usage: `wordcraft [--control <port> [--automation-read-root <dir>] [--automation-write-root <dir>]]
+//! [--sample] [files…]`; `--help` prints `USAGE`.
 //!
 //! `--control <port>` (or `WORDCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
 //! `{"id":1,"key":"…","method":"engine.execute","params":{"command":"text.insert","params":{"text":"Hi"}}}`.
@@ -364,15 +365,37 @@ const USAGE: &str = "\
 wordcraft — the WordCraft desktop app
 
 USAGE:
-  wordcraft [--sample] [--control PORT] [FILE…]
+  wordcraft [--sample] [--control PORT [--automation-read-root DIR] [--automation-write-root DIR]] [FILE…]
 
 OPTIONS:
   --sample            open the sample document
   --control PORT      start the localhost control server on PORT, for agents and scripts
                       (or set WORDCRAFT_CONTROL_PORT); see docs/control-protocol.md
+  --automation-read-root DIR, --automation-write-root DIR
+                      the only folders the control server's commands may read and write;
+                      what you do in the window is not limited (see docs/mcp.md)
   --version           print the version
   -h, --help          print this help
 ";
+
+/// Print `wordcraft: <message>` and stop with status 2. Unlike `eprintln!`, never panics.
+fn usage_error(message: &str) -> ! {
+    let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("wordcraft: {message}\n"));
+    std::process::exit(2);
+}
+
+/// The folders the control channel is confined to (#3695), opened from the root flags: `None`
+/// without them. They confine the control channel, so they need `--control` (or
+/// `WORDCRAFT_CONTROL_PORT`); a root that isn't an existing folder is an error.
+fn control_roots(
+    args: &wordcraft_engine::file_access::AutomationArgs,
+    control: bool,
+) -> Result<Option<std::sync::Arc<wordcraft_engine::file_access::AutomationRoots>>, String> {
+    if args.any() && !control {
+        return Err("--automation-read-root and --automation-write-root confine the control channel; give --control PORT too".into());
+    }
+    wordcraft_engine::file_access::AutomationRoots::new(args.read_root.as_deref(), args.write_root.as_deref())
+}
 
 /// The commit the build came from (short), or `dev`.
 fn build_sha() -> &'static str {
@@ -454,6 +477,7 @@ fn main() -> eframe::Result {
     // Only macOS (Finder / LaunchServices) adds these; elsewhere `-NS…` could be a real file name.
     let args = if cfg!(target_os = "macos") { without_launch_args(args) } else { args };
     let mut bad_control: Option<Option<String>> = None;
+    let mut roots = wordcraft_engine::file_access::AutomationArgs::new(None, None);
     let mut args = args.into_iter().peekable();
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -475,15 +499,21 @@ fn main() -> eframe::Result {
                 let _ = std::io::Write::write_all(&mut std::io::stdout(), USAGE.as_bytes());
                 return Ok(());
             }
-            _ => files.push(a),
+            // The control channel's roots (#3695); a malformed one stops the app rather than
+            // leave the channel unconfined.
+            _ => match roots.consume(&a, &mut args) {
+                Ok(true) => {}
+                Ok(false) => files.push(a),
+                Err(e) => usage_error(&e),
+            },
         }
     }
-    // After the loop, so `--version` later on the line still wins. Unlike `eprintln!`, never panics.
+    // After the loop, so `--version` later on the line still wins.
     if let Some(port) = bad_control {
         let got = port.map(|p| format!(", got {p:?}")).unwrap_or_default();
-        let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("wordcraft: --control needs a port number from 1 to 65535{got}\n"));
-        std::process::exit(2);
+        usage_error(&format!("--control needs a port number from 1 to 65535{got}"));
     }
+    let control_roots = control_roots(&roots, control_port.is_some()).unwrap_or_else(|e| usage_error(&e));
     // The log file lives in the settings directory, next to the preferences; opened after the
     // arguments, so `--version` leaves no file behind. Records logged until now are written to it
     // first. Runs without preferences (agents' test runs) log to standard error only, so they
@@ -591,7 +621,11 @@ fn main() -> eframe::Result {
             if let Some(port) = control_port
                 && let Some((rx, file)) = control_server::start(port, cc.egui_ctx.clone(), wordcraft_control_key::settings_dir().as_deref())
             {
-                app = app.with_control(rx);
+                if let Some(r) = &control_roots {
+                    let show = |p: Option<&std::path::Path>| p.map_or_else(|| "none".into(), |p| p.display().to_string());
+                    log::info!("control channel confined: read root {}, write root {}", show(r.read_root()), show(r.write_root()));
+                }
+                app = app.with_control(rx).with_control_roots(control_roots.clone());
                 key_file = file;
             }
             // Nothing to open (no files, no sample, no control channel driving the editor): start
@@ -757,6 +791,32 @@ mod prefs_tests {
         std::fs::create_dir(dir.join(format!(".ui.json.{}.tmp", std::process::id()))).unwrap();
         assert!(write_prefs(&path, b"newer").is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod control_roots_tests {
+    use super::control_roots;
+    use wordcraft_engine::file_access::AutomationArgs;
+
+    /// #3695: the root flags confine the control channel, so they need `--control`, and a root must
+    /// be an existing folder: either mistake stops the app instead of leaving it unconfined.
+    #[test]
+    fn roots_need_the_control_channel_and_existing_folders() {
+        let dir = std::env::temp_dir().join(format!("wordcraft-control-roots-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut args = AutomationArgs::new(None, None);
+        assert!(control_roots(&args, false).unwrap().is_none(), "no flags: nothing to confine");
+        assert!(control_roots(&args, true).unwrap().is_none());
+        assert!(args.consume("--automation-read-root", &mut [dir.to_string_lossy().into_owned()].into_iter()).unwrap());
+        assert!(control_roots(&args, false).is_err(), "a root without --control");
+        let roots = control_roots(&args, true).unwrap().unwrap();
+        assert!(roots.read_root().is_some());
+        assert!(roots.write_root().is_none(), "a root left out grants nothing");
+        let mut missing = AutomationArgs::new(None, None);
+        assert!(missing.consume(&format!("--automation-write-root={}", dir.join("no-such-folder").display()), &mut std::iter::empty()).unwrap());
+        assert!(control_roots(&missing, true).is_err(), "a root that isn't a folder");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

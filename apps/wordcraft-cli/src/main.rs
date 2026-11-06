@@ -1,7 +1,6 @@
 //! `wordcraft-cli`: WordCraft from the command line.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-mod automation_args;
 mod script;
 
 use std::ffi::{OsStr, OsString};
@@ -278,7 +277,7 @@ fn automation_roots(
     command: &str,
     args: &[String],
 ) -> Result<(Option<std::sync::Arc<wordcraft_engine::file_access::AutomationRoots>>, Vec<String>), String> {
-    let mut found = automation_args::AutomationArgs::new(None, None);
+    let mut found = wordcraft_engine::file_access::AutomationArgs::new(None, None);
     let mut left = Vec::new();
     let mut it = args.iter().cloned();
     while let Some(arg) = it.next() {
@@ -607,7 +606,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let connect = arg_value(&rest, "--connect");
             if roots.is_some() && connect.is_some() {
                 return Err(
-                    "mcp: --automation-read-root and --automation-write-root confine the headless server; a running app is not confined by them"
+                    "mcp: --automation-read-root and --automation-write-root confine the headless server, not the app --connect reaches; start the app with them instead: wordcraft --control PORT --automation-read-root DIR --automation-write-root DIR"
                         .into(),
                 );
             }

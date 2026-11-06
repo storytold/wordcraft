@@ -2289,6 +2289,116 @@ fn control_keyboard_reaches_the_background_document_once() {
     }
 }
 
+/// Folders `inside` and `outside` in a fresh temporary folder, and roots that confine reading
+/// and writing to `inside`.
+fn confined_folders(name: &str) -> (std::path::PathBuf, std::path::PathBuf, std::sync::Arc<wordcraft_engine::file_access::AutomationRoots>) {
+    let dir = std::env::temp_dir().join(format!("wc-control-roots-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let (inside, outside) = (dir.join("inside"), dir.join("outside"));
+    std::fs::create_dir_all(&inside).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let roots = wordcraft_engine::file_access::AutomationRoots::new(Some(&inside), Some(&inside)).unwrap().unwrap();
+    (inside, outside, roots)
+}
+
+/// #3695: started with roots (`wordcraft --control PORT --automation-read-root DIR
+/// --automation-write-root DIR`), the control channel's commands read and write only inside
+/// them, as `wordcraft-cli mcp` with the same flags does. Without roots nothing changes.
+#[test]
+fn control_requests_stay_inside_the_roots() {
+    let (inside, outside, roots) = confined_folders("requests");
+    let ctx = egui::Context::default();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut a = app().with_control(rx).with_control_roots(Some(roots));
+    a.run("document.setText", json!({"text": "Seed"})).unwrap();
+    let send = |a: &mut WordApp, path: &std::path::Path| {
+        let (req, reply) = ControlRequest::new("engine.execute", json!({"command": "file.saveAs", "params": {"path": path}}));
+        tx.send(req).unwrap();
+        control_frame(a, &ctx, true);
+        reply.try_recv().unwrap()
+    };
+    let refused = send(&mut a, &outside.join("out.docx"));
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert!(refused["error"].as_str().unwrap().contains("automation path rejected"), "{refused}");
+    assert!(!outside.join("out.docx").exists());
+    let saved = send(&mut a, &inside.join("in.docx"));
+    assert_eq!(saved["ok"], true, "{saved}");
+    assert!(inside.join("in.docx").is_file());
+    // The person at the keyboard is not confined.
+    a.run("file.saveAs", json!({"path": outside.join("mine.docx")})).unwrap();
+    assert!(outside.join("mine.docx").is_file());
+
+    // An app without roots: the control channel is not confined.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut free = app().with_control(rx);
+    let (req, reply) = ControlRequest::new("engine.execute", json!({"command": "file.saveAs", "params": {"path": outside.join("free.docx")}}));
+    tx.send(req).unwrap();
+    control_frame(&mut free, &ctx, true);
+    assert_eq!(reply.try_recv().unwrap()["ok"], true);
+    let _ = std::fs::remove_dir_all(inside.parent().unwrap());
+}
+
+/// #3695: a key the control channel sends (`ui.key`, MCP's `key`) acts for the agent, so the frame
+/// that plays it is confined too: its Ctrl+S on a document saved outside the write root is
+/// refused, while the same Ctrl+S from the person saves it.
+#[test]
+fn control_keys_are_confined_but_the_persons_are_not() {
+    let (inside, outside, roots) = confined_folders("keys");
+    let ctx = egui::Context::default();
+    let mut a = app().with_control_roots(Some(roots));
+    let path = outside.join("notes.docx");
+    a.run("document.setText", json!({"text": "Seed"})).unwrap();
+    a.run("file.saveAs", json!({"path": path})).unwrap();
+    let saved = std::fs::read(&path).unwrap();
+    for _ in 0..4 {
+        control_frame(&mut a, &ctx, true);
+    }
+    a.run("select.all", json!({})).unwrap();
+    a.run("text.insert", json!({"text": "Changed"})).unwrap();
+    assert!(a.session.dirty);
+
+    control_input(&mut a, &ctx, "ui.key", json!({"key": "s", "cmd": true}));
+    for _ in 0..3 {
+        control_frame(&mut a, &ctx, true);
+    }
+    assert!(a.synthetic.is_empty(), "the key was played");
+    assert!(a.session.dirty, "the control channel's Ctrl+S didn't save outside the write root");
+    assert_eq!(std::fs::read(&path).unwrap(), saved, "the file is as it was");
+
+    // The person's own Ctrl+S, in a frame with no control input.
+    let mut raw = egui::RawInput {
+        focused: true,
+        time: Some(ctx.input(|i| i.time) + 1.0 / 60.0),
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))),
+        events: vec![egui::Event::Key { key: egui::Key::S, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }],
+        ..Default::default()
+    };
+    a.raw_input_hook(&ctx, &mut raw);
+    ctx.run_ui(raw, |ui| {
+        a.logic(ui.ctx());
+        a.ui(ui);
+    })
+    .drop_without_applying_deltas();
+    assert!(!a.session.dirty, "the person's Ctrl+S saved");
+    assert_ne!(std::fs::read(&path).unwrap(), saved);
+
+    // Without roots the same control-channel Ctrl+S saves: what was refused above was the roots.
+    let mut free = app();
+    let other = outside.join("free.docx");
+    free.run("document.setText", json!({"text": "Seed"})).unwrap();
+    free.run("file.saveAs", json!({"path": other})).unwrap();
+    for _ in 0..4 {
+        control_frame(&mut free, &ctx, true);
+    }
+    free.run("text.insert", json!({"text": "Changed"})).unwrap();
+    control_input(&mut free, &ctx, "ui.key", json!({"key": "s", "cmd": true}));
+    for _ in 0..3 {
+        control_frame(&mut free, &ctx, true);
+    }
+    assert!(!free.session.dirty, "an unconfined control channel's Ctrl+S saves");
+    let _ = std::fs::remove_dir_all(inside.parent().unwrap());
+}
+
 /// Synthetic control text and keys target the focused background widget (the Find field), and
 /// Escape closes it. Closing a dirty document offers Save Changes, and Escape cancels without
 /// losing the document.

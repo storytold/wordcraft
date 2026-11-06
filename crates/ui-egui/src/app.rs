@@ -105,6 +105,7 @@ impl WordApp {
             updates_rt: updates_ui::Runtime::default(),
             packs_rt: Default::default(),
             control_rx: None,
+            control_roots: None,
             shots: crate::control::Shots::default(),
             capture_epoch: 0,
             surface_geometry: None,
@@ -192,6 +193,21 @@ impl WordApp {
         self
     }
 
+    /// Confine the control channel to `roots` (#3695): its requests, the screenshots they write
+    /// and the frames that play its `ui.click`, `ui.key`, `ui.text`… input read and write only
+    /// inside the roots, as `wordcraft-cli mcp` with the same flags does. What the person does
+    /// at the keyboard is not confined. `None` leaves the channel unconfined.
+    pub fn with_control_roots(mut self, roots: Option<std::sync::Arc<wordcraft_engine::file_access::AutomationRoots>>) -> Self {
+        self.control_roots = roots;
+        self
+    }
+
+    /// The roots in force for this frame: the control channel's while the frame plays its input
+    /// (a click or key from the control channel acts for the agent, not the person).
+    fn frame_roots(&self) -> Option<std::sync::Arc<wordcraft_engine::file_access::AutomationRoots>> {
+        self.control_roots.clone().filter(|_| self.synthetic_pending)
+    }
+
     /// Start-up with no document to open (#766): show File › Home (Blank document, the templates
     /// and Recent), as Word starts, when the Start screen setting is on (the default). No document
     /// is open until the user picks Blank document or a template or opens a file (#1129): Esc or
@@ -227,8 +243,14 @@ impl WordApp {
         self.print_feedback();
     }
 
-    /// Per-frame logic before layout: control requests, screenshots, shortcuts, file drops.
+    /// Per-frame logic before layout: control requests, screenshots, shortcuts, file drops. A
+    /// frame that plays control-channel input runs inside its roots (#3695).
     pub fn logic(&mut self, ctx: &egui::Context) {
+        let roots = self.frame_roots();
+        wordcraft_engine::file_access::confine(roots.as_ref(), || self.frame_logic(ctx));
+    }
+
+    fn frame_logic(&mut self, ctx: &egui::Context) {
         // #2726: egui's AccessKit update must carry the focused node in its node list; a frame
         // that drops it panics in `accesskit_consumer` and closes the window (see `a11y::FocusGuard`).
         ctx.add_plugin(super::a11y::FocusGuard);
@@ -410,6 +432,12 @@ impl WordApp {
     /// Lay out the windows: on the desktop each open document's in its own native window
     /// ([`windows`]), on the web the one window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        // A frame that plays control-channel input runs inside its roots (#3695).
+        let roots = self.frame_roots();
+        wordcraft_engine::file_access::confine(roots.as_ref(), || self.frame_ui(ui));
+    }
+
+    fn frame_ui(&mut self, ui: &mut egui::Ui) {
         if self.windows.native() {
             self.windows_ui(ui);
         } else {

@@ -11,7 +11,16 @@ It listens on `127.0.0.1` only. Send one JSON object per line, with the window's
 ```
 
 Errors come back as `{"id": …, "ok": false, "error": "message"}`. A failed command leaves the
-document unchanged. A line that isn't valid JSON gets one error reply, then the server closes the
+document unchanged.
+
+To keep what the channel reaches to some folders, start the app with
+`wordcraft --control 7981 --automation-read-root DIR --automation-write-root DIR` (#3695). The
+channel's commands then read and write only there, as `wordcraft-cli mcp` with the same flags
+does (see [Confining file access](mcp.md#confining-file-access)). That includes the screenshots
+`ui.screenshot` writes and what the input it sends (`ui.click`, `ui.key`, `ui.text`…) does: a
+control-channel Ctrl+S on a document outside the write root is refused. What the person does in
+the window is not confined. The flags need `--control`, and each root must be an existing folder.
+A mistake in them prints an error and exits with status 2. A line that isn't valid JSON gets one error reply, then the server closes the
 connection (so an HTTP request sent to the port can't run a command); reconnect to continue.
 
 ## Keys

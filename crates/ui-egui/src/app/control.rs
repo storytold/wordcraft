@@ -37,9 +37,11 @@ impl WordApp {
     /// admits a screenshot, then puts the receiver back.
     pub(super) fn drain_control(&mut self, ctx: &egui::Context) {
         let Some(rx) = self.control_rx.take() else { return };
+        // Every request runs inside the control channel's roots, if it has any (#3695).
+        let roots = self.control_roots.clone();
         while let Ok(req) = rx.try_recv() {
             let reply = req.reply.clone();
-            match control::handle(self, ctx, &req) {
+            match wordcraft_engine::file_access::confine(roots.as_ref(), || control::handle(self, ctx, &req)) {
                 control::Outcome::Done(v) => {
                     let _ = reply.send(v);
                 }
