@@ -369,6 +369,13 @@ impl WordApp {
         let _ = self.save_as(AfterSave::Nothing);
     }
 
+    /// [`Self::save_as_dialog`] under the name typed in Save As › File name, when there is one
+    /// (#5800): the dialog opens with it, and the web build downloads under it.
+    pub(crate) fn save_as_dialog_named(&mut self, typed: Option<&str>) {
+        let name = typed.and_then(|t| self.typed_save_name(t));
+        let _ = self.save_as_named(AfterSave::Nothing, name);
+    }
+
     /// A plain Save As (Backstage's Browse…, AutoSave) failed to write: say so on the status bar,
     /// and, if the Save As page is what's showing, there too — its own render loop skips the
     /// status bar while Backstage is open, so that page was otherwise left with nothing to explain
@@ -389,7 +396,12 @@ impl WordApp {
 
     /// Ask where to save, save there, then do `after`.
     pub(crate) fn save_as(&mut self, after: AfterSave) -> Asked {
-        let name = self.default_save_name();
+        self.save_as_named(after, None)
+    }
+
+    /// [`Self::save_as`] suggesting `name` (a file name with its extension) instead of the default.
+    fn save_as_named(&mut self, after: AfterSave, name: Option<String>) -> Asked {
+        let name = name.unwrap_or_else(|| self.default_save_name());
         self.ask_file(FileDialogRequest::Save { name, dir: None }, AfterPick::SaveAs { after, document: self.session.document_id() })
     }
 

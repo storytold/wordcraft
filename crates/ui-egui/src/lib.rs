@@ -283,6 +283,10 @@ pub struct UiState {
     pub tab: String,
     pub backstage: bool,
     pub backstage_page: String,
+    /// File › Save As › File name: what was typed, with the id of the document it was typed for
+    /// (#5800). `None` until the person types, so the field follows the document's title.
+    #[serde(skip)]
+    pub save_as_name: Option<(u64, String)>,
     /// File › Print settings (#641); not saved.
     #[serde(skip)]
     pub print: print_page::PrintSettings,
@@ -450,6 +454,7 @@ impl Default for UiState {
             tab: DEFAULT_TAB.into(),
             backstage: false,
             backstage_page: "home".into(),
+            save_as_name: None,
             print: print_page::PrintSettings::default(),
             ribbon_collapsed: false,
             quick_access_toolbar: true,
