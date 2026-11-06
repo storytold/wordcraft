@@ -35,6 +35,23 @@ pub fn has_named_substitutes(family: &str) -> bool {
     substitutes_by_name(charset_base_family(family)).1
 }
 
+/// Serif faces known by name with no open clone of their own (lowercase): they take the generic
+/// serif list, but as fonts we know, not by a guess from the name ([`has_own_substitutes`]).
+const KNOWN_SERIFS: &[&str] = &[
+    "cambria",
+    "cambria math",
+    "georgia",
+    "garamond",
+    "constantia",
+    "baskerville old face",
+    "century",
+    "century schoolbook",
+    "bookman old style",
+    "sitka text",
+    "sitka",
+    "aptos serif",
+];
+
 /// [`substitutes`], and whether they were chosen for this family by name.
 fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
     const SANS: &[&str] = &["Carlito", "Helvetica Neue", "Arial", "Liberation Sans", "Noto Sans", "DejaVu Sans", "Source Sans 3"];
@@ -134,18 +151,7 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
         "courier new" | "courier" | "consolas" | "lucida console" | "cascadia code" | "cascadia mono" => (MONO, true),
         "symbol" | "wingdings" | "wingdings 2" | "wingdings 3" | "segoe ui symbol" | "webdings" => (SYMBOL, true),
         // Serif faces with no open clone of their own: the generic serif list, as for any font.
-        "cambria"
-        | "cambria math"
-        | "georgia"
-        | "garamond"
-        | "constantia"
-        | "baskerville old face"
-        | "century"
-        | "century schoolbook"
-        | "bookman old style"
-        | "sitka text"
-        | "sitka"
-        | "aptos serif" => (SERIF, false),
+        _ if KNOWN_SERIFS.contains(&f.as_str()) => (SERIF, false),
         _ if f.contains("mono") || f.contains("code") => (MONO, false),
         _ if f.contains("serif") && !f.contains("sans") => (SERIF, false),
         _ => (SANS, false),
@@ -193,10 +199,12 @@ pub fn charset_base_family(family: &str) -> &str {
 }
 
 /// Whether `family` (or the font its charset name stands for) has substitutes of its own: Times
-/// New Roman, Book Antiqua, Courier New, the symbol, Hebrew and Persian fonts… rather than the
-/// generic list a font we don't know gets.
+/// New Roman, Book Antiqua, Courier New, the symbol, Hebrew and Persian fonts, or a serif face we
+/// know (Georgia, Garamond…), rather than the generic list a font we don't know gets, also when
+/// its name only suggests one ("… Mono", "… Serif").
 pub fn has_own_substitutes(family: &str) -> bool {
-    substitutes(charset_base_family(family)) != substitutes("")
+    let base = charset_base_family(family);
+    has_named_substitutes(base) || KNOWN_SERIFS.contains(&base.to_ascii_lowercase().as_str())
 }
 
 /// Whether `family` has substitutes of its own ([`has_own_substitutes`]) and one of them is
@@ -616,7 +624,8 @@ mod tests {
         ] {
             assert!(has_own_substitutes(f), "{f}");
         }
-        for f in ["No Such Brand Font", "NewCenturySchlbk", ""] {
+        // A name that only suggests a list ("… Mono", "… Serif") isn't a font we know.
+        for f in ["No Such Brand Font", "NewCenturySchlbk", "", "Brand Serif", "Foo Mono", "Source Code Pro"] {
             assert!(!has_own_substitutes(f), "{f}");
         }
     }

@@ -185,8 +185,13 @@ fn a_missing_thai_font_with_a_latin_alternate_still_draws_the_run_in_one_face() 
     let alt_face = wordcraft_fonts::word::resolve(alt, false, false).face;
     assert!(!alt_face.covers('\u{0E19}'), "{} has no Thai, so the run must move", alt_face.family);
     let db = wordcraft_fonts::FontDb::global();
+    // One face for the run needs a Thai font with Latin letters and digits too.
+    let thai_latin = thai_latin_font_installed();
+    if !thai_latin {
+        eprintln!("skipped the one-face cases: no Thai font with Latin letters installed");
+    }
     for font in ["TH Sarabun New", "Angsana New"] {
-        if db.has_family(font) {
+        if !thai_latin || db.has_family(font) {
             continue;
         }
         let faces = cluster_faces_with_alternate(THAI_RUN, font, alt);
