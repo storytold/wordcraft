@@ -189,6 +189,7 @@ fn style_size(pl: &ParaLayout, cluster: usize) -> f32 {
     pl.clusters.get(cluster).and_then(|c| pl.styles.get(c.style as usize)).map(|s| s.size).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(12.0)
 }
 
+/// Return the displayed text for a text cluster, including atomic objects.
 pub(super) fn text_cluster_source<'a>(pl: &'a ParaLayout, p: &'a Paragraph, cluster: usize) -> Option<&'a str> {
     let c = pl.clusters.get(cluster)?;
     if c.kind != ClKind::Text {
