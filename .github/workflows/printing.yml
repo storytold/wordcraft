@@ -56,7 +56,7 @@ jobs:
       - name: Check out craft-fonts
         uses: storytold/craft-common-actions/actions/checkout-craft-fonts@main
         with:
-          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          ref: aced4137c022f1f587624d48e81ec77e1914a9cc
 
       - name: Build with craft-fonts
         shell: bash

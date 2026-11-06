@@ -28,7 +28,7 @@ jobs:
     with:
       app-name: wordcraft
       app-title: WordCraft
-      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      craft-fonts-ref: aced4137c022f1f587624d48e81ec77e1914a9cc
       web-craft-fonts: true
       version: ${{ inputs.version }}
     secrets:
