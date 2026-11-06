@@ -688,6 +688,35 @@ fn only_add_font_asks_for_several_files() {
     assert!(!a.file_dialog_open());
 }
 
+/// #4843: Insert › Object did nothing, as the button ran `insert.object` with no file. It now asks
+/// for a document and inserts its text where the caret is, in one undo step. A cancelled picker
+/// leaves nothing behind: no edit, no undo step, no Repeat or macro step.
+#[test]
+fn insert_object_asks_for_a_document_and_inserts_its_text() {
+    let dir = scratch("object");
+    let file = dir.join("insert-me.txt");
+    std::fs::write(&file, "Text from another document").unwrap();
+    let (mut a, shown) = async_app();
+    a.run("text.insert", json!({"text": "Before. "})).unwrap();
+    let (depth, last) = (a.session.undo_depth(), a.session.last_command.clone());
+    // The ribbon button: no path, so the app asks for a file.
+    assert_eq!(a.run("insert.object", json!({})).unwrap(), json!({"pending": "insertObject"}));
+    assert_eq!(shown.borrow().len(), 1, "the picker is shown");
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "object".into() });
+    answer(&shown, None);
+    assert_eq!(a.poll_file_dialog().unwrap().unwrap(), json!({"cancelled": true}));
+    assert_eq!(body_text(&a), "Before. ", "cancelling inserts nothing");
+    assert_eq!((a.session.undo_depth(), a.session.last_command.clone()), (depth, last), "and records nothing");
+    a.run("insert.object", json!({})).unwrap();
+    answer(&shown, Some(&file.to_string_lossy()));
+    a.poll_file_dialog().unwrap().unwrap();
+    assert!(body_text(&a).starts_with("Before. Text from another document"), "{}", body_text(&a));
+    assert_eq!(a.session.undo_depth(), depth + 1, "one undo step");
+    a.run("edit.undo", json!({})).unwrap();
+    assert_eq!(body_text(&a), "Before. ");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A hostile selection is bounded: only the first MAX_FONTS_PER_PICK are tried.
 #[test]
 fn a_huge_font_selection_is_capped() {
