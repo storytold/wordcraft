@@ -4,8 +4,11 @@ use super::headers::HfLinks;
 use super::placed::Placed;
 use super::{
     Anchor, Arc, Block, CharProps, Counters, DocLayout, Document, FieldCtx, Float, HashMap, HashSet, HideDeleted, InlineObject, LayoutOptions, Level,
-    ParaLayout, Paragraph, Rect, Rgb, SectionProps, StoryRef, ViewMode, Wrap, contour, math, para, styleref, textbox,
+    ParaLayout, Paragraph, Rect, SectionProps, StoryRef, ViewMode, Wrap, contour, math, para, styleref, textbox,
 };
+
+/// The character style Word formats line numbers with (`w:styleId="LineNumber"`).
+const LINE_NUMBER_STYLE: &str = "LineNumber";
 
 /// A layout pass: finished, or to be done again with the page totals it found, or with the
 /// floats placed above their anchors it found ([`EarlyFloats`]).
@@ -193,10 +196,11 @@ impl Ctx<'_> {
         if let Some(p) = self.numbers.get(&n) {
             return p.clone();
         }
-        let mut p = Paragraph::with_text(
-            &n.to_string(),
-            CharProps { size: Some(10.0), color: Some(wordcraft_doc::TextColor::Rgb(Rgb(0x60, 0x60, 0x60))), ..Default::default() },
-        );
+        // Word formats line numbers with the "Line Number" character style over the document's
+        // defaults (measured in Word for Mac: Aptos 12 pt black in a document whose defaults are
+        // Aptos 12 pt), not in a fixed small grey.
+        let style = self.doc.styles.get(LINE_NUMBER_STYLE).map(|s| s.id.clone());
+        let mut p = Paragraph::with_text(&n.to_string(), CharProps { style, ..Default::default() });
         p.props.space_after = Some(0.0);
         p.props.space_before = Some(0.0);
         let env = para::ParaEnv {
