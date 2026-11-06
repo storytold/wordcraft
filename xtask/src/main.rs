@@ -10,6 +10,7 @@ mod parity;
 mod stats;
 mod version;
 mod visual_diff;
+mod word_compare;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
@@ -37,6 +38,10 @@ commands:
   visual-diff <ref.pdf> <test.pdf> <outdir> [--private] [--dpi N]
                   compare two PDFs of a document page by page (SSIM, line breaks, offsets);
                   needs poppler (pdftoppm, pdftotext)
+  word-compare [--word] [--only TEXT] [--out DIR] [--wordcraft BIN] [--list]
+                  the comparison harness against Word: synthetic probe documents exported by Word
+                  (macOS, --word) and by WordCraft, compared line by line (breaks, pages, baselines);
+                  output in plan/word/compare/ (never committed)
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
 ";
@@ -57,6 +62,7 @@ fn main() -> ExitCode {
         Some("parity") => parity::run(&root()),
         Some("ico") => ico::run(&rest),
         Some("visual-diff") => visual_diff::run(&rest),
+        Some("word-compare") => word_compare::run(&root(), &rest),
         Some("version") => version::run(&root(), &rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
