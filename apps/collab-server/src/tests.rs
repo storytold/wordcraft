@@ -27,7 +27,8 @@ fn token(cfg: &Config, sub: &str, role: &str, app: &str, ttl: i64) -> String {
 }
 
 fn dev_config() -> Config {
-    Config { bind: "127.0.0.1:0".into(), jwt_secret: Some("test-secret".into()), jwt_pem: None }
+    let dir = std::env::temp_dir().join(format!("wordcraft-collab-test-{}", std::process::id()));
+    Config { bind: "127.0.0.1:0".into(), jwt_secret: Some("test-secret".into()), jwt_pem: None, data_dir: dir }
 }
 
 #[test]
@@ -166,4 +167,41 @@ async fn a_viewer_cannot_write() {
         }
         other => panic!("expected rejection, got {other:?}"),
     }
+}
+
+#[test]
+fn a_room_is_restored_from_disk() {
+    let cfg = dev_config();
+    let doc = "doc-restore";
+    let state = AppState::new(cfg.clone());
+    let room = state.room_for(doc);
+    let node = {
+        let mut guard = room.lock().expect("room lock");
+        guard.room.join(None, false).nodes.first().expect("a node").id
+    };
+    let op = insert("alice", 1, 0, node, 0, "Hi");
+    room.lock().expect("room lock").room.submit("alice", wordcraft_collab::room::Role::Editor, op).expect("apply");
+    state.persist(doc, &room, None).expect("persist");
+    drop(room);
+    drop(state);
+
+    let restored = AppState::new(cfg);
+    let room = restored.room_for(doc);
+    let guard = room.lock().expect("room lock");
+    assert_eq!(guard.room.version(), 1, "the snapshot restores the version");
+    let text = guard.room.model().document().body.first().and_then(|b| b.as_para()).map(|p| p.text.clone()).unwrap_or_default();
+    assert_eq!(text, "Hi");
+}
+
+#[test]
+fn a_second_session_needs_the_owner_role() {
+    let state = AppState::new(dev_config());
+    let room = state.room_for("doc-lease");
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    assert!(super::register(&room, "alice", "sid-1", wordcraft_collab::room::Role::Editor, &tx, None).is_ok());
+
+    let denied = super::register(&room, "bob", "sid-2", wordcraft_collab::room::Role::Editor, &tx, None);
+    assert_eq!(denied.expect_err("a foreign session needs the owner").code, wordcraft_collab::wire::RejectCode::Lease);
+
+    assert!(super::register(&room, "carol", "sid-3", wordcraft_collab::room::Role::Owner, &tx, None).is_ok());
 }

@@ -53,6 +53,16 @@ impl Journal {
         self.head
     }
 
+    /// Continue from a snapshot: the journal starts empty at `version`, so a
+    /// client whose `lastVersion` is older takes a snapshot (ADR-0005).
+    pub fn restore(&mut self, version: Version, epoch: u64) {
+        self.head = version;
+        self.epoch = epoch;
+        self.entries.clear();
+        self.dedup.clear();
+        self.order.clear();
+    }
+
     pub fn epoch(&self) -> u64 {
         self.epoch
     }

@@ -105,8 +105,20 @@ impl<M: Model> Room<M> {
         Room { model, journal: Journal::new(10_000, 10_000), ids: NodeIds::new(), undo: UndoStacks::new(200) }
     }
 
+    /// Restore a room from a snapshot: the model is authoritative at `version`.
+    pub fn restore(model: M, version: Version, epoch: u64) -> Room<M> {
+        let mut journal = Journal::new(10_000, 10_000);
+        journal.restore(version, epoch);
+        Room { model, journal, ids: NodeIds::new(), undo: UndoStacks::new(200) }
+    }
+
     pub fn version(&self) -> Version {
         self.journal.head()
+    }
+
+    /// Whether the room should write a snapshot now (ADR-0005: 500 operations).
+    pub fn should_snapshot(&self) -> bool {
+        self.journal.should_snapshot()
     }
 
     pub fn epoch(&self) -> u64 {
