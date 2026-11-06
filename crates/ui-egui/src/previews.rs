@@ -603,6 +603,11 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
             let mut p = Paragraph::with_text(tl!("AaBbCcDd"), CharProps::default()).styled(id);
             p.props.space_before = Some(0.0);
             p.props.align = Some(wordcraft_doc::Align::Left);
+            // The sample letters are a left-to-right script, in the Arabic interface too (its
+            // catalog keeps `AaBbCcDd`), so a right-to-left style's tile keeps them at the left
+            // edge, where they start (#4944). A sample translated into a right-to-left script
+            // would be cut at its start here and need a solution of its own.
+            p.props.bidi = Some(false);
             // Keep hanging indents (bullets) but start the first line at the tile's left edge.
             let first = doc.styles.resolve_para(&p.props).indent_first;
             p.props.indent_left = Some(if first.is_finite() { (-first).max(0.0) } else { 0.0 });
