@@ -7,6 +7,7 @@ use wordcraft_doc::{Pos, Table};
 mod autospace;
 mod bidi;
 mod budget;
+mod cell_floats;
 mod complex;
 mod grid;
 mod ligature;
@@ -1487,6 +1488,37 @@ fn right_tab_aligns_text_end() {
     assert!((end - 472.0).abs() < 1.0, "{end}");
 }
 
+/// Native Word moves every ordinary-tab group with centered or right paragraph alignment.
+#[test]
+fn ordinary_tabs_move_as_line() {
+    use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+    for stops in [
+        vec![(180.0, TabAlign::Left)],
+        vec![(234.0, TabAlign::Center)],
+        vec![(234.0, TabAlign::Center), (364.5, TabAlign::Right)],
+        vec![(234.0, TabAlign::Center), (468.0, TabAlign::Right)],
+    ] {
+        let text = if stops.len() == 1 { "Label\tfilename" } else { "Label\tfilename\ttime" };
+        let mut d = Document::from_text(text);
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+            p.tabs = Some(stops.iter().map(|(pos, align)| TabStop { pos: *pos, align: *align, leader: TabLeader::None }).collect());
+        })
+        .unwrap();
+        let left = lay(&d);
+        let end = left.caret(&Pos::body(0, text.len())).unwrap().x;
+        let slack = 540.0 - end;
+        for (align, fraction) in [(Align::Center, 0.5), (Align::Right, 1.0)] {
+            d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.align = Some(align)).unwrap();
+            let aligned = lay(&d);
+            for off in [0, 6, text.len()] {
+                let before = left.caret(&Pos::body(0, off)).unwrap().x;
+                let after = aligned.caret(&Pos::body(0, off)).unwrap().x;
+                assert!((after - before - slack * fraction).abs() < 0.1, "{align:?} {stops:?} offset {off}: {before} -> {after}, slack {slack}");
+            }
+        }
+    }
+}
+
 /// A paragraph `before` + positional tab + `after`, with left and right indents and a custom
 /// left tab stop at 50 pt that the positional tab must ignore.
 fn ptab_doc(before: &str, after: &str, ptab: InlineObject, indents: (f32, f32)) -> Document {
@@ -2233,6 +2265,162 @@ fn turned_up_cell_text_reads_bottom_to_top() {
     assert!((c0.top - b.bottom()).abs() < 1.0 && c1.top < c0.top - 50.0, "{c0:?} {c1:?} {b:?}");
     let hit = l.hit(0, b.x + b.w / 2.0, b.bottom() - 2.0, StoryRef::Body).unwrap();
     assert_eq!((hit.path, hit.off), (Path(vec![1, 0, 1, 0]), 0));
+}
+
+/// #2038 with turned cell text: a click just outside a floating table, in the 2pt around turned
+/// text that still takes a click, goes to the text beside or after the table, not into a cell; a
+/// click on the table's edge still lands in one. A table that doesn't float keeps such a click.
+#[test]
+fn a_click_just_outside_a_floating_table_skips_its_turned_cell_text() {
+    use TextDirection::{Down, Horizontal, Up};
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    // (the section's direction, the cells' direction, whether the table floats)
+    let cases = [
+        (Horizontal, Down, true),
+        (Horizontal, Up, true),
+        (Down, Horizontal, true),
+        (Up, Horizontal, true),
+        (Horizontal, Down, false),
+        (Horizontal, Up, false),
+    ];
+    for (section, cells, floats) in cases {
+        let case = format!("section {section:?}, cells {cells:?}, floating {floats}");
+        let mut d = Document::from_text("before\nafter");
+        d.last_section.text_direction = section;
+        let mut t = Table::new(2, 2, 200.0);
+        for c in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+            c.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Turned", Default::default()))];
+            c.props.text_direction = cells;
+        }
+        if floats {
+            t.props.float = Some(TableFloat {
+                h_rel: Anchor::Column,
+                v_rel: Anchor::Paragraph,
+                x: 150.0,
+                dist: [9.0, 0.0, 9.0, 0.0],
+                overlap: true,
+                ..Default::default()
+            });
+        }
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let page = &l.pages[0];
+        assert_eq!(page.float_tables.len(), usize::from(floats), "{case}");
+        let area = page
+            .items
+            .iter()
+            .filter_map(|it| if let Placed::Cell { rect, .. } = it { Some(*rect) } else { None })
+            .reduce(|a, b| a.union(&b))
+            .unwrap();
+        let turned: Vec<Rect> = page
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Lines { story: StoryRef::Body, path, .. } if path.0.len() > 1 => it.turned_bounds(),
+                _ => None,
+            })
+            .collect();
+        assert!(!turned.is_empty(), "{case}: the cells' text is turned");
+        // Points on each side of the table (on its edge, and 1 and 2pt outside) across from turned
+        // cell text, which takes a click up to 2pt from its bounds.
+        let near = |p: &Point| turned.iter().any(|r| r.expand(2.0).contains(*p));
+        let side = |r: &Rect, out: f32| {
+            let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+            [Point::new(cx, area.y - out), Point::new(cx, area.bottom() + out), Point::new(area.x - out, cy), Point::new(area.right() + out, cy)]
+        };
+        let outside: Vec<Point> = turned.iter().flat_map(|r| [side(r, 1.0), side(r, 2.0)]).flatten().filter(near).collect();
+        let edge: Vec<Point> = turned.iter().flat_map(|r| side(r, 0.0)).filter(near).collect();
+        assert!(!outside.is_empty() && !edge.is_empty(), "{case}: turned text within 2pt of the edge {area:?}: {turned:?}");
+        for p in outside {
+            let hit = l.hit(0, p.x, p.y, StoryRef::Body).unwrap();
+            assert_eq!(hit.path.0.len() == 1, floats, "{case}: a click at {p:?} landed in {:?}", hit.path);
+        }
+        for p in edge {
+            let hit = l.hit(0, p.x, p.y, StoryRef::Body).unwrap();
+            assert!(hit.path.0.len() > 1, "{case}: a click on the edge at {p:?} landed in {:?}", hit.path);
+        }
+    }
+}
+
+/// The same rule when nothing upright but a floating table's cells is on the page (the page's
+/// paragraphs taken off the laid-out page): a click outside the table goes to other turned text
+/// there, and one by turned text of the table's own still lands in that cell, not in the nearest
+/// upright one.
+#[test]
+fn a_click_by_a_floating_table_with_no_upright_text_beside_it_prefers_turned_text() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let table = |dirs: [TextDirection; 2], floats: bool| {
+        let mut t = Table::new(1, 2, 200.0);
+        for (c, dir) in t.rows[0].cells.iter_mut().zip(dirs) {
+            c.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Cell text", Default::default()))];
+            c.props.text_direction = dir;
+        }
+        if floats {
+            t.props.float = Some(TableFloat {
+                h_rel: Anchor::Column,
+                v_rel: Anchor::Paragraph,
+                x: 150.0,
+                dist: [9.0, 0.0, 9.0, 0.0],
+                overlap: true,
+                ..Default::default()
+            });
+        }
+        wordcraft_doc::Block::Table(t)
+    };
+    let lay_bare = |d: &Document| {
+        let mut l = lay(d);
+        l.pages[0].items.retain(|it| !matches!(it, Placed::Lines { path, .. } if path.0.len() == 1));
+        l
+    };
+    let cell_area = |l: &DocLayout, t: u32| {
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Cell { rect, table, .. } if table.0 == [t] => Some(*rect),
+                _ => None,
+            })
+            .reduce(|a, b| a.union(&b))
+            .unwrap()
+    };
+    // A floating table with an upright cell and a turned one: a click 1pt above the turned
+    // text lands in it, as it did before the floating-table rule.
+    let mut d = Document::from_text("before\nafter");
+    d.insert_block(StoryRef::Body, &Path::top(1), table([TextDirection::Horizontal, TextDirection::Down], true)).unwrap();
+    let l = lay_bare(&d);
+    assert_eq!(l.pages[0].float_tables, [Path::top(1)]);
+    let area = cell_area(&l, 1);
+    let turned = turned_lines(&l).turned_bounds().unwrap();
+    let p = Point::new(turned.x + turned.w / 2.0, area.y - 1.0);
+    assert!(turned.expand(2.0).contains(p) && !area.contains(p), "{p:?} {turned:?} {area:?}");
+    assert_eq!(l.hit(0, p.x, p.y, StoryRef::Body).unwrap().path, Path(vec![1, 0, 1, 0]));
+    // An upright floating table and, below it, a table in the text flow with turned cells: a
+    // click below the floating one goes to that turned text, not to the floating table.
+    let mut d = Document::from_text("before\nbeside\nbeside\nbeside\nafter");
+    d.insert_block(StoryRef::Body, &Path::top(1), table([TextDirection::Horizontal; 2], true)).unwrap();
+    d.insert_block(StoryRef::Body, &Path::top(5), table([TextDirection::Down; 2], false)).unwrap();
+    let l = lay_bare(&d);
+    assert_eq!(l.pages[0].float_tables, [Path::top(1)]);
+    let (area, flow) = (cell_area(&l, 1), cell_area(&l, 5));
+    assert!(flow.y > area.bottom() + 12.0, "{area:?} {flow:?}");
+    let hit = l.hit(0, area.x + area.w / 2.0, area.bottom() + 6.0, StoryRef::Body).unwrap();
+    assert_eq!(hit.path.0.first(), Some(&5), "{hit:?}");
+    // Both: a click 1pt above the floating table's turned cell goes to the other turned text,
+    // which comes before the table's own.
+    let mut d = Document::from_text(&format!("before\n{}after", "beside\n".repeat(6)));
+    d.insert_block(StoryRef::Body, &Path::top(1), table([TextDirection::Horizontal, TextDirection::Down], true)).unwrap();
+    d.insert_block(StoryRef::Body, &Path::top(8), table([TextDirection::Down; 2], false)).unwrap();
+    let l = lay_bare(&d);
+    assert_eq!(l.pages[0].float_tables, [Path::top(1)]);
+    let (area, flow) = (cell_area(&l, 1), cell_area(&l, 8));
+    assert!(flow.y > area.bottom() + 12.0, "{area:?} {flow:?}");
+    let turned = turned_lines(&l).turned_bounds().unwrap();
+    let p = Point::new(turned.x + turned.w / 2.0, area.y - 1.0);
+    assert!(turned.expand(2.0).contains(p) && !area.contains(p), "{p:?} {turned:?} {area:?}");
+    let hit = l.hit(0, p.x, p.y, StoryRef::Body).unwrap();
+    assert_eq!(hit.path.0.first(), Some(&8), "{hit:?}");
 }
 
 #[test]
@@ -5841,6 +6029,110 @@ fn floats_in_headers_and_table_cells_are_drawn() {
     let c = shapes(&l.pages[0].items);
     assert_eq!(c.len(), 1, "cell float drawn");
     assert!(c[0].x > 72.0 && c[0].x < 72.0 + 234.0, "inside the first cell: {:?}", c[0]);
+}
+
+/// A float laid out in its cell (`layoutInCell`) whose offset would take it out of the cell is
+/// moved in to the cell's outer side (a letterhead logo anchored left of its header cell). One laid out on the page (`layoutInCell="0"`) keeps its offset.
+#[test]
+fn cell_floats_laid_out_in_the_cell_stay_in_it() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let cell_w = 234.0;
+    let place = |x: f32, outside_cell: bool, wrap: Wrap| {
+        let mut d = Document::from_text("Body text.");
+        let mut t = Table::new(1, 2, 468.0);
+        let mut cp = wordcraft_doc::Paragraph::with_text("cell", Default::default());
+        let f = Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x, dist: 9.0, outside_cell, ..Default::default() };
+        cp.insert_object(0, rect_shape(80.0, 48.0, f), &Default::default()).unwrap();
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(cp)];
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        let c = shapes(&lay(&d).pages[0].items);
+        assert_eq!(c.len(), 1, "cell float drawn");
+        c[0].x
+    };
+    // An offset inside the cell is kept: the cell's text starts 20 pt left of this one.
+    let text_left = place(20.0, false, Wrap::Tight) - 20.0;
+    assert!(text_left > 72.0 && text_left < 72.0 + 12.0, "the cell's text starts past its margin: {text_left}");
+    let cell_left = text_left - 5.4;
+    // Anchored 95 pt left of the column: moved in to the cell's outer left side.
+    let left = place(-95.0, false, Wrap::Tight);
+    assert!((left - cell_left).abs() < 0.5, "pulled in to the left side: {left} vs {text_left}");
+    // Past the right side: moved in to it.
+    let right = place(cell_w + 40.0, false, Wrap::Tight);
+    // (within a point: the cell's border room is not split evenly between its two sides)
+    assert!((right - (cell_left + cell_w - 80.0)).abs() < 1.0, "pulled in to the right side: {right}");
+    // Not laid out in the cell: the offset is kept, off the cell or not.
+    let out = place(-95.0, true, Wrap::Tight);
+    assert!((out - (text_left - 95.0)).abs() < 0.5, "layoutInCell=0 keeps the offset: {out}");
+    // Front-of-text shapes do not wrap and keep their offsets even with layoutInCell on.
+    for offset in [-95.0, cell_w + 40.0] {
+        let front = place(offset, false, Wrap::InFrontOfText);
+        assert!((front - (text_left + offset)).abs() < 0.5, "front-of-text offset preserved: {front}");
+    }
+}
+
+/// Cell confinement uses the finite, nonnegative width that float placement actually draws.
+#[test]
+fn cell_float_bounds_use_the_placed_width() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let place = |width, x, wrap, outside_cell| {
+        let mut d = Document::from_text("Body");
+        let mut t = Table::new(1, 2, 468.0);
+        let mut p = wordcraft_doc::Paragraph::with_text("cell", Default::default());
+        let f = Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x, dist: 9.0, outside_cell, ..Default::default() };
+        p.insert_object(0, rect_shape(width, 48.0, f), &Default::default()).unwrap();
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        let objects = shapes(&lay(&d).pages[0].items);
+        assert_eq!(objects.len(), 1);
+        objects[0]
+    };
+    // Invalid stored widths are placed as zero-width objects; offsets at either side must
+    // match an explicitly zero-width object, rather than inventing extra room in the cell.
+    for offset in [-95.0, 300.0] {
+        let zero = place(0.0, offset, Wrap::Tight, false);
+        for stored in [-100.0, f32::NEG_INFINITY, f32::NAN, f32::INFINITY] {
+            let placed = place(stored, offset, Wrap::Tight, false);
+            assert_eq!(placed.w, 0.0);
+            assert!((placed.x - zero.x).abs() < 0.01, "stored width {stored}, offset {offset}: {placed:?} vs {zero:?}");
+        }
+        // Neither opt-out path gains confinement from the width normalization.
+        for (wrap, outside_cell) in [(Wrap::InFrontOfText, false), (Wrap::Tight, true)] {
+            let zero = place(0.0, offset, wrap, outside_cell);
+            let negative = place(-100.0, offset, wrap, outside_cell);
+            assert_eq!(negative.w, zero.w);
+            assert!((negative.x - zero.x).abs() < 0.01);
+        }
+    }
+}
+
+#[test]
+fn keep_in_cell_bounds() {
+    use super::boxes::keep_in_cell;
+    assert_eq!(keep_in_cell(-95.0, 80.0, 0.0, 234.0), 0.0);
+    assert_eq!(keep_in_cell(300.0, 80.0, 0.0, 234.0), 234.0 - 80.0);
+    assert_eq!(keep_in_cell(20.0, 80.0, 0.0, 234.0), 20.0);
+    // Wider than the cell, or exactly its width: starts at the outer left side.
+    assert_eq!(keep_in_cell(50.0, 300.0, 0.0, 234.0), 0.0);
+    assert_eq!(keep_in_cell(50.0, 234.0, 0.0, 234.0), 0.0);
+    // Nearly full: no clearance is added to the object's position.
+    assert_eq!(keep_in_cell(-95.0, 230.0, 0.0, 234.0), 0.0);
+    assert_eq!(keep_in_cell(300.0, 230.0, 0.0, 234.0), 4.0);
+    // Cell edges include its margins; negative offsets can be wholly inside the cell.
+    assert_eq!(keep_in_cell(-5.0, 80.0, 0.0, 234.0), 0.0);
+    assert_eq!(keep_in_cell(-5.0, 80.0, -4.0, 234.0), -4.0);
+    assert_eq!(keep_in_cell(-5.15, 63.75, -5.4, 448.2), -5.15);
+    assert_eq!(keep_in_cell(395.95, 47.25, -5.4, 448.2), 395.95);
+    // Clamp limits stay finite and ordered even at small scales or with malformed geometry.
+    for width in [0.1_f32, 0.3, 1.0, 234.0] {
+        let object = width * 0.98;
+        for offset in [-width, 0.0, width, f32::NAN, f32::INFINITY] {
+            let x = keep_in_cell(offset, object, 0.0, width);
+            assert!(x.is_finite() && x >= 0.0 && x + object <= width + f32::EPSILON * width.max(1.0));
+        }
+    }
+    assert_eq!(keep_in_cell(10.0, 80.0, 0.0, f32::NAN), 0.0);
+    assert_eq!(keep_in_cell(10.0, f32::NAN, 0.0, 234.0), 0.0);
+    assert_eq!(keep_in_cell(10.0, 80.0, f32::NAN, 234.0), 10.0);
 }
 
 /// Paragraph anchors exclude space-before; line and frameless page/margin anchors retain it.
@@ -13434,4 +13726,30 @@ fn a_table_moved_by_a_page_break_shows_its_new_page_number() {
         })
         .collect();
     assert_eq!(shown, ["2"]);
+}
+
+/// Cell confinement must not change page-vertical placement through the rotated text axis.
+#[test]
+fn turned_cell_float_keeps_its_along_text_offset() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let place = |direction, outside_cell| {
+        let mut doc = Document::from_text("Synthetic body");
+        let mut table = Table::new(1, 2, 468.0);
+        table.rows[0].props.height = Some(100.0);
+        table.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::Exact;
+        table.rows[0].cells[0].props.text_direction = direction;
+        let mut para = Paragraph::with_text("Synthetic cell", Default::default());
+        let float = Float { wrap: Wrap::Tight, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 150.0, outside_cell, ..Default::default() };
+        para.insert_object(0, rect_shape(20.0, 10.0, float), &Default::default()).unwrap();
+        table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(para)];
+        doc.insert_block(StoryRef::Body, &Path::top(1), Block::Table(table)).unwrap();
+        let objects = shapes(&lay(&doc).pages[0].items);
+        assert_eq!(objects.len(), 1);
+        objects[0]
+    };
+    for direction in [TextDirection::Down, TextDirection::Up] {
+        let confined = place(direction, false);
+        let reference = place(direction, true);
+        assert!((confined.y - reference.y).abs() < 0.01, "{direction:?}: {confined:?} vs {reference:?}");
+    }
 }
