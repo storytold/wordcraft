@@ -197,3 +197,97 @@ fn leading_is_at_least_a_line_and_the_leading() {
     assert_eq!(after(""), 8.5);
     assert_eq!(after(r#" fo:margin-bottom="6pt""#), 14.5);
 }
+
+/// Each paragraph's resolved space before, space after and line spacing.
+fn resolved(d: &Document) -> Vec<(f32, f32, LineSpacing)> {
+    props(d)
+        .iter()
+        .map(|p| {
+            let r = d.styles.resolve_para(p);
+            (r.space_before, r.space_after, r.line_spacing)
+        })
+        .collect()
+}
+
+fn assert_spacing(got: &[(f32, f32, LineSpacing)], want: &[(f32, f32, f32)]) {
+    assert_eq!(got.len(), want.len(), "{got:?}");
+    for (g, w) in got.iter().zip(want) {
+        let ok = (g.0 - w.0).abs() < 0.01 && (g.1 - w.1).abs() < 0.01 && g.2 == LineSpacing::Multiple(w.2);
+        assert!(ok, "got {got:?}, want {want:?}");
+    }
+}
+
+#[test]
+fn automatic_styles_on_a_parentless_no_spacing_style_keep_its_spacing() {
+    // #5101, as a LibreOffice résumé lays it out: Standard sets 0.139in after and 115% lines,
+    // but most paragraphs use automatic styles that only change the font, whose parent is "No
+    // Spacing", a common style with no parent that sets 0 / 0 / 100%. Those paragraphs take No
+    // Spacing's values, not Standard's (in LibreOffice 9 pages; Standard's spacing made 14).
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles>
+        <style:style style:name="Standard" style:family="paragraph" style:class="text"><style:paragraph-properties fo:margin-top="0in" fo:margin-bottom="0.139in" fo:line-height="115%"/></style:style>
+        <style:style style:name="No_20_Spacing" style:display-name="No Spacing" style:family="paragraph"><style:paragraph-properties fo:margin-top="0in" fo:margin-bottom="0in" fo:line-height="100%"/></style:style>
+        </office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles>
+        <style:style style:name="P1" style:family="paragraph" style:parent-style-name="No_20_Spacing"><style:text-properties fo:font-size="12pt" fo:font-weight="bold"/></style:style>
+        <style:style style:name="P2" style:family="paragraph" style:parent-style-name="No_20_Spacing"><style:text-properties fo:font-size="12pt"/></style:style>
+        </office:automatic-styles><office:body><office:text>
+        <text:p text:style-name="P1">Heading line</text:p><text:p text:style-name="P2">Body line</text:p>
+        <text:p text:style-name="No_20_Spacing">Plain no spacing</text:p><text:p>Default</text:p>
+        </office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    assert_spacing(&resolved(&d), &[(0.0, 0.0, 1.0), (0.0, 0.0, 1.0), (0.0, 0.0, 1.0), (0.0, 10.008, 1.15)]);
+}
+
+#[test]
+fn a_parentless_style_inherits_the_default_styles_spacing_not_standards() {
+    // ODF 1.3 §16.2: a common style with no parent inherits from the default style. Standard is
+    // the document default only for paragraphs that use it (or no style, or an automatic style
+    // with no parent, which LibreOffice puts on Standard), so what "Plain" leaves unset comes
+    // from the default style (0.05in after), then ODF's initial values (single lines).
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles>
+        <style:default-style style:family="paragraph"><style:paragraph-properties fo:margin-bottom="0.05in"/></style:default-style>
+        <style:style style:name="Standard" style:family="paragraph" style:class="text"><style:paragraph-properties fo:margin-top="0.1in" fo:margin-bottom="0.139in" fo:line-height="115%"/></style:style>
+        <style:style style:name="Plain" style:family="paragraph"><style:paragraph-properties fo:margin-top="6pt"/></style:style>
+        <style:style style:name="Body" style:family="paragraph" style:parent-style-name="Standard"/>
+        </office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles>
+        <style:style style:name="P1" style:family="paragraph" style:parent-style-name="Plain"><style:text-properties fo:font-size="12pt"/></style:style>
+        <style:style style:name="P2" style:family="paragraph"><style:text-properties fo:font-size="12pt"/></style:style>
+        </office:automatic-styles><office:body><office:text>
+        <text:p text:style-name="Plain">Plain</text:p><text:p text:style-name="P1">Plain, automatic</text:p>
+        <text:p text:style-name="Body">Body</text:p><text:p>Default</text:p><text:p text:style-name="P2">Automatic only</text:p>
+        </office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let plain = (6.0, 3.6, 1.0);
+    let standard = (7.2, 10.008, 1.15);
+    assert_spacing(&resolved(&d), &[plain, plain, standard, standard, standard]);
+}
+
+#[test]
+fn standards_own_parent_style_gives_what_standard_leaves_unset() {
+    // §16.2 again: should Standard have a parent, what Standard leaves unset comes from that
+    // parent (12pt after) before the default style (2pt after, 200% lines).
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles>
+        <style:default-style style:family="paragraph"><style:paragraph-properties fo:margin-bottom="2pt" fo:line-height="200%"/></style:default-style>
+        <style:style style:name="Base" style:family="paragraph"><style:paragraph-properties fo:margin-top="3pt" fo:margin-bottom="12pt"/></style:style>
+        <style:style style:name="Standard" style:family="paragraph" style:class="text" style:parent-style-name="Base"><style:paragraph-properties fo:margin-top="6pt"/></style:style>
+        <style:style style:name="Body" style:family="paragraph" style:parent-style-name="Standard"/>
+        </office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text>
+        <text:p>Default</text:p><text:p text:style-name="Body">Body</text:p>
+        </office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    assert_spacing(&resolved(&d), &[(6.0, 12.0, 2.0), (6.0, 12.0, 2.0)]);
+}
