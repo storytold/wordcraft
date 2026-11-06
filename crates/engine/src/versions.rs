@@ -74,24 +74,10 @@ pub(crate) fn load_for_path(s: &mut Session, path: &Path) {
         return;
     }
     let sidecar = sidecar_path(path);
-    let path_str = sidecar.to_string_lossy();
-    if crate::file_access::check_read(&path_str).is_err() {
-        return;
-    }
-    let meta = match std::fs::metadata(&sidecar) {
-        Ok(m) => m,
-        Err(_) => return,
-    };
-    if !meta.is_file() || meta.len() > MAX_BYTES {
-        log::warn!("version history sidecar ignored (missing/too large): {}", sidecar.display());
-        return;
-    }
-    let bytes = match std::fs::read(&sidecar) {
+    // Goes through `io` (read-root check, regular-file and size checks, bounded read).
+    let bytes = match crate::io::read_file_capped(&sidecar.to_string_lossy(), MAX_BYTES, "version history sidecar") {
         Ok(b) => b,
-        Err(e) => {
-            log::warn!("version history sidecar read failed ({}): {e}", sidecar.display());
-            return;
-        }
+        Err(_) => return,
     };
     let parsed: Sidecar = match serde_json::from_slice(&bytes) {
         Ok(v) => v,
@@ -117,10 +103,7 @@ pub(crate) fn persist(s: &Session) -> Result<bool, String> {
     let sidecar = sidecar_path(doc_path);
     let path_str = sidecar.to_string_lossy().into_owned();
     if s.versions.is_empty() {
-        if sidecar.exists() {
-            crate::file_access::check_write(&path_str).map_err(|e| e.to_string())?;
-            std::fs::remove_file(&sidecar).map_err(|e| e.to_string())?;
-        }
+        crate::io::remove_file_if_exists(&path_str)?;
         return Ok(true);
     }
     let data = Sidecar {
@@ -145,11 +128,7 @@ pub(crate) fn load_for_path(_s: &mut Session, _path: &std::path::Path) {}
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn remove_persisted_for_path(path: &Path) -> Result<(), String> {
     let sidecar = sidecar_path(path);
-    if sidecar.exists() {
-        let path_str = sidecar.to_string_lossy();
-        crate::file_access::check_write(&path_str).map_err(|e| e.to_string())?;
-        std::fs::remove_file(&sidecar).map_err(|e| e.to_string())?;
-    }
+    crate::io::remove_file_if_exists(&sidecar.to_string_lossy())?;
     Ok(())
 }
 

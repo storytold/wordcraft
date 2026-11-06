@@ -208,6 +208,7 @@ fn links_out_of_a_root_are_refused() {
 }
 
 /// The names in `dir`, sorted.
+#[allow(dead_code)] // only used by unix-only tests; on Windows it is unused
 fn names(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
     names.sort();

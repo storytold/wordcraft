@@ -825,6 +825,23 @@ pub fn write_file(path: &str, _bytes: &[u8]) -> Result<(), String> {
     Err(format!("{path}: files are saved through the browser on the web"))
 }
 
+/// Delete the file at `path`, inside the automation write root when there is one. A missing file is ok.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn remove_file_if_exists(path: &str) -> Result<bool, String> {
+    crate::file_access::check_write(path)?;
+    match std::fs::remove_file(std::path::Path::new(path)) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(format!("{path}: {e}")),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn remove_file_if_exists(path: &str) -> Result<bool, String> {
+    let _ = path;
+    Ok(false)
+}
+
 #[cfg(target_arch = "wasm32")]
 pub fn open_path_with(path: &std::path::Path, _password: Option<&str>) -> Result<(Document, bool), String> {
     Err(format!("{}: files are opened through the browser on the web", path.display()))
