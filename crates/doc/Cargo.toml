@@ -16,7 +16,7 @@ workspace = true
 test-support = []
 
 [dependencies]
-wordcraft-geom = { workspace = true }
+wordcraft-geom = { workspace = true, features = ["image"] }
 base64 = { workspace = true }
 log = { workspace = true }
 serde = { workspace = true }

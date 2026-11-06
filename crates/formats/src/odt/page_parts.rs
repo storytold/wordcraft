@@ -56,6 +56,54 @@ pub(super) struct Parts {
     even_odd: bool,
     /// The watermark a header holds (the first found).
     pub(super) watermark: Option<wordcraft_doc::Watermark>,
+    /// The picture watermark a header holds (the first found), if no text one is.
+    picture: Option<PictureRead>,
+}
+
+/// One header or footer as read.
+struct SlotRead {
+    name: String,
+    kind: Slot,
+    text: Option<wordcraft_doc::Watermark>,
+    pictures: Vec<(Vec<u8>, (f32, f32), bool)>,
+    blocks: Vec<FBlock>,
+}
+
+/// The picture watermark the headers and footers read hold, if they make one: its picture, its
+/// frame's size, Washout and the room Auto fills on the first master page (points).
+fn picture_plan(reads: &[SlotRead], pages: &Pages) -> Option<(Vec<u8>, (f32, f32), bool, (f32, f32))> {
+    if reads.iter().all(|r| r.pictures.is_empty()) || reads.iter().any(|r| r.text.is_some()) {
+        return None;
+    }
+    if reads.iter().any(|r| r.kind.footer() && !r.pictures.is_empty()) {
+        return None;
+    }
+    // Every header holds exactly one, and every master page has its default header.
+    let headers: Vec<&SlotRead> = reads.iter().filter(|r| !r.kind.footer()).collect();
+    if headers.iter().any(|r| r.pictures.len() != 1) {
+        return None;
+    }
+    if !pages.masters.keys().all(|m| headers.iter().any(|r| r.name == *m && matches!(r.kind, Slot::Header))) {
+        return None;
+    }
+    let first = headers.first()?.pictures.first()?;
+    // A picture whose size can't be read is no watermark (`add` couldn't place it, and the frames
+    // taken out of the headers would be lost): it stays a header picture, as in the DOCX plan.
+    wordcraft_doc::watermark::own_size(&first.0)?;
+    if !headers.iter().filter_map(|r| r.pictures.first()).all(|p| p.0 == first.0 && p.2 == first.2) {
+        return None;
+    }
+    let fit = headers.first().and_then(|r| pages.masters.get(&r.name)).map_or((0.0, 0.0), |s| (s.text_width(), s.text_height()));
+    Some((first.0.clone(), first.1, first.2, fit))
+}
+
+/// A picture watermark as read: its picture, its frame's size and the room Auto fills on its
+/// master page (points), and whether it is washed out.
+struct PictureRead {
+    data: Vec<u8>,
+    size: (f32, f32),
+    fit: (f32, f32),
+    washout: bool,
 }
 
 impl Parts {
@@ -125,17 +173,45 @@ pub(super) fn read(
     });
     let none = Pages::default();
     let mut out = Parts::default();
-    for (name, kind, evs) in found {
-        let mut reader = Body::new(styles, &none, fetch);
-        reader.in_text = true;
-        (reader.entries, reader.manifest) = (objects.0, Some(objects.1));
-        reader.spaces_left = *spaces_left;
-        for ev in evs {
-            reader.feed(ev);
+    // Read every slot; `take` leaves a picture watermark's frame out of the blocks.
+    let mut read_all = |take: bool, spaces_left: &mut usize| -> Vec<SlotRead> {
+        let mut reads = Vec::with_capacity(found.len());
+        for (name, kind, evs) in &found {
+            let mut reader = Body::new(styles, &none, fetch);
+            reader.in_text = true;
+            reader.page_part = true;
+            reader.take_watermark_pictures = take && !kind.footer();
+            (reader.entries, reader.manifest) = (objects.0, Some(objects.1));
+            reader.spaces_left = *spaces_left;
+            for ev in evs.iter().cloned() {
+                reader.feed(ev);
+            }
+            *spaces_left = reader.spaces_left;
+            reads.push(SlotRead {
+                name: name.clone(),
+                kind: *kind,
+                text: reader.watermark.take(),
+                pictures: std::mem::take(&mut reader.watermark_pictures),
+                blocks: reader.take_blocks(),
+            });
         }
-        *spaces_left = reader.spaces_left;
-        out.watermark = out.watermark.take().or(reader.watermark.take());
-        out.parts.push((if kind.footer() { PartKind::Footer } else { PartKind::Header }, reader.take_blocks()));
+        reads
+    };
+    let spaces_start = *spaces_left;
+    let mut reads = read_all(false, spaces_left);
+    // A picture watermark is the document's only as Word's DOCX plan has it: the same picture in
+    // every header of every master page (one in each), none in a footer, no text watermark.
+    // Otherwise the frames stay as the pictures in the headers they are.
+    let picture = picture_plan(&reads, pages);
+    if picture.is_some() {
+        *spaces_left = spaces_start;
+        reads = read_all(true, spaces_left);
+    }
+    out.picture = picture.map(|(data, size, washout, fit)| PictureRead { data, size, fit, washout });
+    for read in reads {
+        let SlotRead { name, kind, text, blocks, .. } = read;
+        out.watermark = out.watermark.take().or(text);
+        out.parts.push((if kind.footer() { PartKind::Footer } else { PartKind::Header }, blocks));
         if let Some(sec) = pages.masters.get_mut(&name) {
             kind.set(sec, out.parts.len() as u32);
         }
@@ -174,6 +250,23 @@ pub(super) fn read(
 pub(super) fn add(doc: &mut Document, parts: Parts) {
     if parts.watermark.is_some() {
         doc.settings.watermark.clone_from(&parts.watermark);
+    } else if let Some(pic) = parts.picture
+        && let Some((own_w, own_h)) = wordcraft_doc::watermark::own_size(&pic.data)
+    {
+        // Auto when the frame is as large as fits the margins, else its width as a percentage of
+        // the picture's own size, in tenths as a command gives one.
+        let auto = wordcraft_doc::WatermarkPicture::default().size(own_w, own_h, pic.fit).map(|s| s.0);
+        let scale = if auto.is_some_and(|a| (a - pic.size.0).abs() <= 1.0) {
+            None
+        } else {
+            Some(((pic.size.0 / own_w * 1000.0).round() / 10.0).clamp(wordcraft_doc::watermark::MIN_SCALE, wordcraft_doc::watermark::MAX_SCALE))
+        };
+        let ext = model::sniff_image(&pic.data).unwrap_or("png");
+        let media = doc.add_media(pic.data, ext);
+        doc.settings.watermark = Some(wordcraft_doc::Watermark {
+            picture: Some(wordcraft_doc::WatermarkPicture { media, scale, washout: pic.washout }),
+            ..Default::default()
+        });
     }
     let mut ids: Vec<Option<u32>> = Vec::with_capacity(parts.parts.len());
     for (kind, blocks) in parts.parts {

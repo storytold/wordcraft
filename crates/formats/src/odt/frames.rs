@@ -64,6 +64,9 @@ pub(super) struct Graphic {
     dash: Option<String>,
     gradient: Option<String>,
     markers: [Option<String>; 2],
+    /// Washout (`draw:color-mode` `watermark`: the picture drawn faded), which a picture
+    /// watermark states.
+    washout: Option<bool>,
     /// A picture's crop (`fo:clip`, §20.179): how much is cut off its top, right, bottom and
     /// left, in lengths of its original size.
     pub(super) clip: Option<[f32; 4]>,
@@ -165,6 +168,7 @@ impl Graphic {
             markers: [s("draw:marker-start"), s("draw:marker-end")],
             stroke_width: get(a, "svg:stroke-width").and_then(length).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 12.0)),
             clip: get(a, "fo:clip").and_then(clip_rect),
+            washout: get(a, "draw:color-mode").map(|v| v.trim() == "watermark"),
             wrap_contour: get(a, "style:wrap-contour").map(|v| v.trim() == "true"),
             vert: get(a, "loext:writing-mode").or_else(|| get(a, "style:writing-mode")).map(|m| {
                 use wordcraft_doc::props::{TextDirection, TextVert};
@@ -181,9 +185,14 @@ impl Graphic {
         }
     }
 
-    /// A watermark's look from its shape's style: its fill colour, and whether it is see-through.
-    pub(super) fn watermark_look(&self) -> (Option<Rgb>, bool) {
-        (self.fill_color, self.opacity.is_some_and(|o| o < 100.0))
+    /// Whether a picture's style draws it faded (`draw:color-mode` `watermark`).
+    pub(super) fn is_washed_out(&self) -> bool {
+        self.washout == Some(true)
+    }
+
+    /// A watermark's look from its shape's style: its fill colour, and its transparency in percent.
+    pub(super) fn watermark_look(&self) -> (Option<Rgb>, u8) {
+        (self.fill_color, self.opacity.filter(|o| o.is_finite()).map_or(0, |o| (100.0 - o).round().clamp(0.0, 100.0) as u8))
     }
 
     /// This placement with `parent`'s filling what it leaves unsaid.
@@ -209,6 +218,7 @@ impl Graphic {
         fill(&mut self.fill, &parent.fill);
         self.fill_color = self.fill_color.or(parent.fill_color);
         self.opacity = self.opacity.or(parent.opacity);
+        self.washout = self.washout.or(parent.washout);
         self.background = self.background.or(parent.background);
         fill(&mut self.stroke, &parent.stroke);
         self.stroke_color = self.stroke_color.or(parent.stroke_color);

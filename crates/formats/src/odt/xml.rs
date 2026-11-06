@@ -42,6 +42,7 @@ pub(super) fn local(q: &str) -> &str {
     q.rsplit(':').next().unwrap_or(q)
 }
 
+#[derive(Clone)]
 pub(super) enum Ev {
     Start(String, Attrs),
     End(String),

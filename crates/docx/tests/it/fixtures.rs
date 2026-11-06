@@ -1381,7 +1381,14 @@ fn vml_textpath_in_header_is_the_watermark() {
     // Horizontal, centred both ways without Word's id, opacity in 65536ths.
     let flat = r##"<v:shape type="#_x0000_t136" style="position:absolute;width:300pt;height:60pt;mso-position-horizontal:center;mso-position-vertical:center" fillcolor="#336699"><v:fill opacity="32768f"/><v:textpath string="ASAP"/></v:shape>"##;
     let wm = read(flat, true).0.expect("watermark");
-    assert_eq!((wm.color, wm.diagonal, wm.semitransparent), (Rgb(0x33, 0x66, 0x99), false, true));
+    assert_eq!((wm.color, wm.diagonal, wm.semitransparent, wm.transparency()), (Rgb(0x33, 0x66, 0x99), false, true, 50));
+
+    // Any opacity is read as a transparency percentage, not only Word's `.5`.
+    for (opacity, want) in [(".25", 75), ("0", 100), ("1", 0), ("2", 0), ("-1", 100)] {
+        let shape = flat.replace(r#"opacity="32768f""#, &format!(r#"opacity="{opacity}""#));
+        let wm = read(&shape, true).0.expect("watermark");
+        assert_eq!(wm.transparency(), want, "{opacity}");
+    }
 
     // Not watermarks: the same shape in the body (WordArt); header WordArt that isn't centred
     // and isn't Word's watermark (a logo); a textpath turned off; a watermark-like shape inside a
@@ -1496,6 +1503,281 @@ fn word_watermark_survives_save() {
     assert_eq!(d.settings.watermark, None);
     let d2 = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     assert_eq!(d2.settings.watermark, None);
+}
+
+/// #2954: Word's picture watermark (a VML picture with Word's `WordPictureWatermark` id in the
+/// headers) becomes the document's picture watermark: its picture, the scale from the shape's
+/// width (Auto when it fills the margins) and Washout from `gain` and `blacklevel`. The header
+/// keeps its text. Another header picture, even centred, stays a picture.
+#[test]
+fn word_picture_watermark_is_the_documents_watermark() {
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(400, 200, image::Rgba([10, 20, 30, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let read = |id: &str, size: &str, wash: &str| {
+        let hdr = format!(
+            r##"<w:hdr {W_NS}><w:p><w:r><w:t>Head</w:t></w:r><w:r><w:pict><v:shapetype id="_x0000_t75" coordsize="21600,21600" o:spt="75" path="m@4@5l@4@11@9@11@9@5xe" filled="f" stroked="f"/><v:shape id="{id}" o:spid="_x0000_s2049" type="#_x0000_t75" style="position:absolute;margin-left:0;margin-top:0;{size};z-index:-251657216;mso-position-horizontal:center;mso-position-horizontal-relative:margin;mso-position-vertical:center;mso-position-vertical-relative:margin" o:allowincell="f"><v:imagedata r:id="rIdP" o:title="logo"{wash}/></v:shape></w:pict></w:r></w:p></w:hdr>"##
+        );
+        let doc = format!(
+            r#"<w:document {W_NS}><w:body><w:p><w:r><w:t>Body</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rIdH"/></w:sectPr></w:body></w:document>"#
+        );
+        let (drels, hrels) = (rels(&[("rIdH", "header", "header1.xml")]), rels(&[("rIdP", "image", "media/logo.png")]));
+        let parts: [(&str, &[u8]); 6] = [
+            ("_rels/.rels", ROOT_RELS.as_bytes()),
+            ("word/document.xml", doc.as_bytes()),
+            ("word/_rels/document.xml.rels", drels.as_bytes()),
+            ("word/header1.xml", hdr.as_bytes()),
+            ("word/_rels/header1.xml.rels", hrels.as_bytes()),
+            ("word/media/logo.png", &png),
+        ];
+        wordcraft_docx::read(&zip(&parts)).unwrap()
+    };
+    let header_objects = |d: &Document| -> usize {
+        let hid = d.last_section.headers.default.unwrap();
+        d.parts[&hid].blocks.iter().filter_map(|b| b.as_para()).map(|p| p.objects.len()).sum()
+    };
+    // 400 × 200 px is 300 × 150 pt at 96 ppi: 150 pt wide is 50 %.
+    let d = read("WordPictureWatermark77", "width:150pt;height:75pt", r#" gain="19661f" blacklevel="22938f""#);
+    let pic = d.settings.watermark.as_ref().and_then(|w| w.picture.clone()).expect("picture watermark");
+    assert_eq!((pic.scale, pic.washout), (Some(50.0), true));
+    assert_eq!(d.media.get(&pic.media).map(|b| b.as_slice()), Some(png.as_slice()));
+    assert_eq!(header_objects(&d), 0);
+    let hid = d.last_section.headers.default.unwrap();
+    assert_eq!(d.parts[&hid].blocks[0].as_para().unwrap().plain_text(), "Head");
+    // As wide as the margins of a Letter page with 1 in margins: Auto. No Washout.
+    let d = read("WordPictureWatermark1", "width:468pt;height:234pt", "");
+    let pic = d.settings.watermark.as_ref().and_then(|w| w.picture.clone()).expect("picture watermark");
+    assert_eq!((pic.scale, pic.washout), (None, false));
+    // Another centred header picture is not a watermark.
+    let d = read("Logo1", "width:150pt;height:75pt", "");
+    assert_eq!(d.settings.watermark, None);
+    assert_eq!(header_objects(&d), 1);
+}
+
+/// A 400 × 200 px PNG of one colour (300 × 150 pt at 96 ppi).
+fn solid_png(c: [u8; 4]) -> Vec<u8> {
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(400, 200, image::Rgba(c)).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    png
+}
+
+/// Word's picture watermark shape: `extra` added to its style, `wash` to its `v:imagedata`.
+fn wm_shape(size: &str, extra: &str, wash: &str) -> String {
+    format!(
+        r##"<w:r><w:pict><v:shape id="WordPictureWatermark1" type="#_x0000_t75" style="position:absolute;margin-left:0;margin-top:0;{size};z-index:-251657216;mso-position-horizontal:center;mso-position-horizontal-relative:margin;mso-position-vertical:center;mso-position-vertical-relative:margin{extra}" o:allowincell="f"><v:imagedata r:id="rIdP" o:title="wm"{wash}/></v:shape></w:pict></w:r>"##
+    )
+}
+
+/// A document of `body` (its `w:sectPr`s refer to `rH1`, `rH2`…) whose headers are `headers`:
+/// (label, runs after the label, picture file under `word/media`).
+fn headers_doc(body: &str, headers: &[(&str, String, &str)], pics: &[(&str, Vec<u8>)]) -> Document {
+    parts_doc(body, headers, &[], pics)
+}
+
+/// [`headers_doc`] with footers too, referred to as `rF1`, `rF2`….
+fn parts_doc(body: &str, headers: &[(&str, String, &str)], footers: &[(&str, String, &str)], pics: &[(&str, Vec<u8>)]) -> Document {
+    let mut list: Vec<(String, String, &str, String, &str)> = Vec::new();
+    for (kind, tag, prefix, set) in [("header", "w:hdr", "rH", headers), ("footer", "w:ftr", "rF", footers)] {
+        for (i, (label, runs, pic)) in set.iter().enumerate() {
+            let xml = format!(r#"<{tag} {W_NS}><w:p><w:r><w:t>{label}</w:t></w:r>{runs}</w:p></{tag}>"#);
+            list.push((format!("{prefix}{}", i + 1), format!("{kind}{}.xml", i + 1), kind, xml, pic));
+        }
+    }
+    let doc_rels = rels(&list.iter().map(|(id, name, kind, ..)| (id.as_str(), *kind, name.as_str())).collect::<Vec<_>>());
+    let doc = format!(r#"<w:document {W_NS}><w:body>{body}</w:body></w:document>"#);
+    let mut parts: Vec<(String, Vec<u8>)> = vec![
+        ("_rels/.rels".into(), ROOT_RELS.as_bytes().to_vec()),
+        ("word/document.xml".into(), doc.into_bytes()),
+        ("word/_rels/document.xml.rels".into(), doc_rels.into_bytes()),
+    ];
+    for (_, name, _, xml, pic) in &list {
+        parts.push((format!("word/{name}"), xml.clone().into_bytes()));
+        parts.push((format!("word/_rels/{name}.rels"), rels(&[("rIdP", "image", &format!("media/{pic}"))]).into_bytes()));
+    }
+    for (name, bytes) in pics {
+        parts.push((format!("word/media/{name}"), bytes.clone()));
+    }
+    let entries: Vec<(&str, &[u8])> = parts.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+    wordcraft_docx::read(&zip(&entries)).unwrap()
+}
+
+/// Pictures in each header part, by its text.
+fn header_pictures(d: &Document) -> Vec<(String, usize)> {
+    let mut out: Vec<(String, usize)> = d
+        .parts
+        .values()
+        .filter(|p| p.kind == wordcraft_doc::PartKind::Header)
+        .map(|p| {
+            let paras: Vec<&Paragraph> = p.blocks.iter().filter_map(|b| b.as_para()).collect();
+            let text = paras.iter().map(|p| p.plain_text()).collect::<Vec<_>>().join("").replace('\u{FFFC}', "");
+            let pics = paras.iter().flat_map(|p| &p.objects).filter(|o| matches!(o, InlineObject::Image { .. })).count();
+            (text, pics)
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+const PORTRAIT: &str = r#"<w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>"#;
+const LANDSCAPE: &str = r#"<w:pgSz w:w="15840" w:h="12240" w:orient="landscape"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>"#;
+
+/// #2954 review: Word's picture watermark becomes the document's watermark only when every page
+/// shows the same one, placed as Word places it. A cover page whose header lacks it, a section
+/// with another picture, a watermark moved, turned or with other picture settings: each picture
+/// stays in its header, as before, and still does after saving and reopening.
+#[test]
+fn picture_watermark_stays_in_headers_unless_every_page_shows_it() {
+    let (a, b) = (solid_png([20, 60, 140, 255]), solid_png([140, 20, 20, 255]));
+    let portrait_auto = wm_shape("width:468pt;height:234pt", "", r#" gain="19661f" blacklevel="22938f""#);
+    let landscape_auto = wm_shape("width:648pt;height:324pt", "", r#" gain="19661f" blacklevel="22938f""#);
+    let p = |label: &str, run: &str, pic: &'static str| (label.to_string(), run.to_string(), pic);
+    let read = |body: &str, hs: Vec<(String, String, &str)>| {
+        let hs: Vec<(&str, String, &str)> = hs.iter().map(|(l, r, p)| (l.as_str(), r.clone(), *p)).collect();
+        headers_doc(body, &hs, &[("a.png", a.clone()), ("b.png", b.clone())])
+    };
+    let saved = |d: &Document| wordcraft_docx::read(&wordcraft_docx::write(d).unwrap()).unwrap();
+    let two_sections = format!(
+        r#"<w:p><w:pPr><w:sectPr><w:headerReference w:type="default" r:id="rH1"/>{PORTRAIT}</w:sectPr></w:pPr><w:r><w:t>One</w:t></w:r></w:p><w:p><w:r><w:t>Two</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rH2"/>{LANDSCAPE}</w:sectPr>"#
+    );
+
+    // Every page: two sections, each Auto for its own page, and a title page with both headers.
+    let d = read(&two_sections, vec![p("One", &portrait_auto, "a.png"), p("Two", &landscape_auto, "a.png")]);
+    let pic = d.settings.watermark.as_ref().and_then(|w| w.picture.clone()).expect("the document's watermark");
+    assert_eq!((pic.scale, pic.washout), (None, true));
+    assert_eq!(header_pictures(&d), vec![("One".into(), 0), ("Two".into(), 0)]);
+    let title = format!(
+        r#"<w:p><w:r><w:t>Body</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rH1"/><w:headerReference w:type="first" r:id="rH2"/>{PORTRAIT}<w:titlePg/></w:sectPr>"#
+    );
+    let d = read(&title, vec![p("Main", &portrait_auto, "a.png"), p("Cover", &portrait_auto, "a.png")]);
+    assert!(d.settings.watermark.as_ref().is_some_and(|w| w.picture.is_some()));
+
+    // A: the cover page's header has none.
+    let d = read(&title, vec![p("Main", &portrait_auto, "a.png"), p("Cover", "", "a.png")]);
+    assert_eq!(d.settings.watermark, None);
+    assert_eq!(header_pictures(&d), vec![("Cover".into(), 0), ("Main".into(), 1)]);
+    let d = saved(&d);
+    assert_eq!(d.settings.watermark, None);
+    assert_eq!(header_pictures(&d), vec![("Cover".into(), 0), ("Main".into(), 1)], "saved");
+
+    // B: section 2 has another picture.
+    let d = read(&two_sections, vec![p("One", &portrait_auto, "a.png"), p("Two", &landscape_auto, "b.png")]);
+    assert_eq!(d.settings.watermark, None);
+    assert_eq!(header_pictures(&d), vec![("One".into(), 1), ("Two".into(), 1)]);
+    let d2 = saved(&d);
+    assert_eq!(d2.settings.watermark, None);
+    assert_eq!(header_pictures(&d2), vec![("One".into(), 1), ("Two".into(), 1)], "saved");
+    let media = |d: &Document| {
+        let mut m: Vec<Vec<u8>> = d.media.values().map(|b| b.to_vec()).collect();
+        m.sort();
+        m
+    };
+    assert_eq!(media(&d2), media(&d), "both pictures kept");
+
+    // C: moved, turned, or with picture settings other than Washout; and a header without one.
+    let one = format!(r#"<w:p><w:r><w:t>Body</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rH1"/>{PORTRAIT}</w:sectPr>"#);
+    for run in [
+        wm_shape("width:468pt;height:234pt", ";mso-position-horizontal:left", ""),
+        wm_shape("width:468pt;height:234pt", ";rotation:30", ""),
+        wm_shape("width:468pt;height:234pt", ";flip:x", ""),
+        wm_shape("width:468pt;height:234pt", "", r#" gain="0.5" blacklevel="0.1""#),
+        wm_shape("width:468pt;height:234pt", "", r#" grayscale="t""#),
+    ] {
+        let d = read(&one, vec![p("Main", &run, "a.png")]);
+        assert_eq!(d.settings.watermark, None, "{run}");
+        assert_eq!(header_pictures(&d), vec![("Main".into(), 1)], "{run}");
+    }
+    let no_header = format!(
+        r#"<w:p><w:pPr><w:sectPr>{PORTRAIT}</w:sectPr></w:pPr><w:r><w:t>One</w:t></w:r></w:p><w:p><w:r><w:t>Two</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rH1"/>{PORTRAIT}</w:sectPr>"#
+    );
+    let d = read(&no_header, vec![p("Two", &portrait_auto, "a.png")]);
+    assert_eq!(d.settings.watermark, None, "the first section's pages have no header");
+}
+
+/// #2954 second review: watermarks the plan must leave alone, as main did. A text watermark in
+/// a footer stays the document's watermark (the headers' pictures stay pictures), and a Word
+/// picture watermark in a footer keeps every picture where it is. A stretched shape, a scale
+/// outside 1 to 500 %, other picture corrections, in front of the text, hidden, in a group,
+/// or a section in tracked insertion with no header: all stay header pictures.
+#[test]
+fn picture_watermark_plan_leaves_other_watermarks_alone() {
+    let a = solid_png([20, 60, 140, 255]);
+    let pics = [("a.png", a.clone())];
+    let one = format!(
+        r#"<w:p><w:r><w:t>Body</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rH1"/><w:footerReference w:type="default" r:id="rF1"/>{PORTRAIT}</w:sectPr>"#
+    );
+    let auto = wm_shape("width:468pt;height:234pt", "", r#" gain="19661f" blacklevel="22938f""#);
+    let text = r##"<w:r><w:pict><v:shape id="PowerPlusWaterMarkObject9" type="#_x0000_t136" style="position:absolute;width:400pt;height:100pt;rotation:315;mso-position-horizontal:center;mso-position-horizontal-relative:margin;mso-position-vertical:center;mso-position-vertical-relative:margin" fillcolor="silver"><v:fill opacity=".5"/><v:textpath style="font-family:&quot;Calibri&quot;" string="DRAFT"/></v:shape></w:pict></w:r>"##;
+
+    // A footer's text watermark: the document's watermark, as before; the header picture stays,
+    // and both survive saving.
+    let d = parts_doc(&one, &[("Head", auto.clone(), "a.png")], &[("Foot", text.to_string(), "a.png")], &pics);
+    let wm = d.settings.watermark.clone().expect("the footer's text watermark");
+    assert_eq!((wm.text.as_str(), wm.picture.is_none()), ("DRAFT", true));
+    assert_eq!(header_pictures(&d), vec![("Head".into(), 1)]);
+    let d = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(d.settings.watermark.as_ref().map(|w| w.text.as_str()), Some("DRAFT"), "saved");
+    assert_eq!(header_pictures(&d), vec![("Head".into(), 1)], "saved");
+
+    // A footer's picture watermark: nothing is promoted, nothing is drawn twice.
+    let d = parts_doc(&one, &[("Head", auto.clone(), "a.png")], &[("Foot", auto.clone(), "a.png")], &pics);
+    assert_eq!(d.settings.watermark, None);
+    assert_eq!(header_pictures(&d), vec![("Head".into(), 1)]);
+
+    let only = format!(r#"<w:p><w:r><w:t>Body</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rH1"/>{PORTRAIT}</w:sectPr>"#);
+    let group = r##"<w:r><w:pict><v:group style="position:absolute;width:468pt;height:234pt;z-index:-1" coordsize="468,234"><v:shape id="WordPictureWatermark1" type="#_x0000_t75" style="position:absolute;width:468;height:234"><v:imagedata r:id="rIdP"/></v:shape></v:group></w:pict></w:r>"##;
+    for (run, why) in [
+        (wm_shape("width:468pt;height:100pt", "", ""), "stretched"),
+        (wm_shape("width:1800pt;height:900pt", "", ""), "600 %"),
+        (wm_shape("width:2pt;height:1pt", "", ""), "under 1 %"),
+        (wm_shape("width:468pt;height:234pt", "", r#" gain="79922f" blacklevel="-1966f""#), "other corrections"),
+        (wm_shape("width:468pt;height:234pt", "", r#" gain="1" blacklevel="0""#), "identity values"),
+        (wm_shape("width:468pt;height:234pt", ";z-index:5", ""), "in front of the text"),
+        (wm_shape("width:468pt;height:234pt", ";visibility:hidden", ""), "hidden"),
+        (group.to_string(), "in a group"),
+    ] {
+        let d = headers_doc(&only, &[("Head", run, "a.png")], &pics);
+        assert_eq!(d.settings.watermark, None, "{why}");
+    }
+    // The first section, inside a tracked insertion, has no header: its pages show none.
+    let tracked = format!(
+        r#"<w:ins w:id="1" w:author="A"><w:p><w:pPr><w:sectPr>{PORTRAIT}</w:sectPr></w:pPr><w:r><w:t>One</w:t></w:r></w:p></w:ins><w:p><w:r><w:t>Two</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rH1"/>{PORTRAIT}</w:sectPr>"#
+    );
+    let d = headers_doc(&tracked, &[("Head", auto.clone(), "a.png")], &pics);
+    assert_eq!(d.settings.watermark, None, "tracked section");
+    // A header that only a table cell's section property loads, with another picture.
+    let cell = format!(
+        r#"<w:tbl><w:tr><w:tc><w:p><w:pPr><w:sectPr><w:headerReference w:type="default" r:id="rH2"/>{PORTRAIT}</w:sectPr></w:pPr></w:p></w:tc></w:tr></w:tbl><w:p/><w:sectPr><w:headerReference w:type="default" r:id="rH1"/>{PORTRAIT}</w:sectPr>"#
+    );
+    let b = solid_png([140, 20, 20, 255]);
+    let both = [("a.png", a.clone()), ("b.png", b)];
+    let d = headers_doc(&cell, &[("Head", auto.clone(), "a.png"), ("Cell", auto.clone(), "b.png")], &both);
+    assert_eq!(d.settings.watermark, None, "a header with another picture");
+    // The same document with the plain watermark is promoted.
+    let d = headers_doc(&only, &[("Head", auto, "a.png")], &pics);
+    assert!(d.settings.watermark.is_some_and(|w| w.picture.is_some()));
+}
+
+/// A watermark in a tracked deletion is not the document's: a text one stays the WordArt text
+/// box it is read as (not drawn on every page), and a picture one keeps the plan from making any
+/// picture the document's watermark. The same watermarks outside a deletion are the document's.
+#[test]
+fn a_watermark_in_a_tracked_deletion_is_not_the_documents() {
+    let a = solid_png([20, 60, 140, 255]);
+    let pics = [("a.png", a)];
+    let one = format!(r#"<w:p><w:r><w:t>Body</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rH1"/>{PORTRAIT}</w:sectPr>"#);
+    let pic = wm_shape("width:468pt;height:234pt", "", r#" gain="19661f" blacklevel="22938f""#);
+    let text = r##"<w:r><w:pict><v:shape id="PowerPlusWaterMarkObject9" type="#_x0000_t136" style="position:absolute;width:400pt;height:100pt;rotation:315;mso-position-horizontal:center;mso-position-horizontal-relative:margin;mso-position-vertical:center;mso-position-vertical-relative:margin" fillcolor="silver"><v:textpath style="font-family:&quot;Calibri&quot;" string="DRAFT"/></v:shape></w:pict></w:r>"##;
+    let deleted = |runs: &str| format!(r#"<w:del w:id="9" w:author="A" w:date="2024-01-01T00:00:00Z">{}</w:del>"#, runs);
+    for (runs, kind) in [(&pic, "picture"), (&text.to_string(), "text")] {
+        let live = headers_doc(&one, &[("Head", runs.to_string(), "a.png")], &pics);
+        assert!(live.settings.watermark.is_some(), "{kind}: outside a deletion it is the document's");
+        let gone = headers_doc(&one, &[("Head", deleted(runs), "a.png")], &pics);
+        assert_eq!(gone.settings.watermark, None, "{kind}: in a deletion it isn't");
+    }
+    // The picture stays in the header, marked deleted.
+    let gone = headers_doc(&one, &[("Head", deleted(&pic), "a.png")], &pics);
+    assert_eq!(header_pictures(&gone), vec![("Head".into(), 1)]);
 }
 
 /// Issue #1775: a picture watermark in a header that starts with a table is anchored in a cell

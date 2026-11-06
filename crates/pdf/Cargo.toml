@@ -16,6 +16,8 @@ wordcraft-layout = { workspace = true }
 wordcraft-metafile = { workspace = true }
 craft-pdf = { workspace = true }
 kurbo = { workspace = true }
+hayro-syntax = { version = "0.7.2", optional = true }
+hayro-interpret = { version = "0.7.0", default-features = false, features = ["embed-fonts"], optional = true }
 image = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
@@ -24,6 +26,10 @@ chrono = { workspace = true }
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 # The browser clock (`SystemTime::now()` panics on wasm32-unknown-unknown).
 js-sys = "0.3"
+
+[features]
+# What an exported PDF draws, read back, for other crates' tests.
+test-support = ["dep:hayro-syntax", "dep:hayro-interpret"]
 
 [dev-dependencies]
 hayro-syntax = "0.7.2"

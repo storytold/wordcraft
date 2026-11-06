@@ -7,7 +7,7 @@ impl Writer<'_> {
     fn watermark_headers(&mut self, s: &SectionProps) -> wordcraft_doc::section::HeaderSet {
         let mut set = s.headers;
         let linked = &mut self.linked_headers;
-        if self.doc.settings.watermark.as_ref().and_then(crate::write::watermark::text).is_some() {
+        if crate::write::watermark::shown(self.doc) {
             let id = self.wm_header;
             if set.default.or(linked.default).is_none() {
                 set.default = Some(id);

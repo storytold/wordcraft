@@ -27,7 +27,7 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::Bookmark { name, by_location, hidden, deleted } => bookmark(app, ui, name, by_location, hidden, deleted),
         Dialog::WordCount { .. } => word_count_dialog(app, ui, d),
         Dialog::Zoom { .. } => zoom_dialog(app, ui, d),
-        Dialog::Watermark { .. } => watermark_dialog(app, ui, d),
+        Dialog::Watermark { form } => crate::dialogs_watermark::watermark(app, ui, form),
         Dialog::Phonetic { .. } => phonetic_dialog(app, ui, d),
         Dialog::NewStyle { .. } => new_style_dialog(app, ui, d),
         Dialog::ModifyStyle { .. } => modify_style_dialog(app, ui, d),
@@ -857,25 +857,6 @@ fn zoom_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
         let _ = app.run("view.zoom", json!({"value": *percent}));
-    }
-    ok || cancel
-}
-
-fn watermark_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
-    let Dialog::Watermark { text, diagonal } = d else {
-        return false;
-    };
-    ui.horizontal(|ui| {
-        ui.label(tl!("Text:"));
-        ui.text_edit_singleline(text);
-    });
-    ui.horizontal(|ui| {
-        ui.radio_value(diagonal, true, tl!("Diagonal"));
-        ui.radio_value(diagonal, false, tl!("Horizontal"));
-    });
-    let (ok, cancel) = buttons(ui, tl!("OK"));
-    if ok {
-        let _ = app.run("design.watermark", json!({"text": text, "diagonal": *diagonal}));
     }
     ok || cancel
 }

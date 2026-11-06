@@ -251,8 +251,12 @@ fn page_parts(doc: &Document, sec: &SectionProps, w: &mut Writer) -> PageParts {
     let mut out = PageParts::default();
     let even = doc.settings.even_odd_headers;
     // A watermark is a shape in every header (one written for it alone when there is none).
-    let wm = doc.settings.watermark.as_ref().filter(|w| !w.text.trim().is_empty());
+    let wm = doc.settings.watermark.as_ref().filter(|w| w.picture.is_some() || !w.text.trim().is_empty());
     let area = (sec.page_w - sec.margin_left - sec.margin_right, sec.page_h - sec.margin_top - sec.margin_bottom);
+    // A picture watermark that can't be read is not written; one that can is sized for this
+    // master page (a master page's header is its own part in the file).
+    let picture = wm.and_then(|w| w.picture.as_ref()).and_then(|pic| watermark_image(doc, sec, pic));
+    let wm = wm.filter(|w| w.picture.is_none() || picture.is_some());
     for (set, name) in [(&sec.headers, "header"), (&sec.footers, "footer")] {
         let wanted =
             set.default.is_some() || (even && set.even.is_some()) || (sec.title_page && set.first.is_some()) || (name == "header" && wm.is_some());
@@ -265,23 +269,15 @@ fn page_parts(doc: &Document, sec: &SectionProps, w: &mut Writer) -> PageParts {
             if !on {
                 continue;
             }
-            let mut body = String::new();
-            if let Some(part) = id.and_then(|i| doc.parts.get(&i)) {
-                let blocks = model::part_flow(
-                    doc,
-                    &part.blocks,
-                    // Pictures, shapes, text boxes, charts and objects too, as in the body.
-                    model::FlowOpts { fields: true, lists: true, chars: true, paras: true, boxes: true, ..Default::default() },
-                );
-                w.blocks(&blocks, &mut body, 0);
-            }
-            if body.is_empty() {
-                body.push_str("<text:p/>");
-            }
+            let mut body = slot_body(doc, id, w);
             if name == "header"
                 && let Some(wm) = wm
             {
-                body = with_watermark(&body, &w.watermark(wm, (sec.page_w, sec.page_h), area));
+                let shape = match &picture {
+                    Some((img, washout)) => w.watermark_picture(img, *washout, area),
+                    None => w.watermark(wm, (sec.page_w, sec.page_h), area),
+                };
+                body = with_watermark(&body, &shape);
             }
             out.xml.push_str(&format!("<style:{el}>{body}</style:{el}>"));
         }
@@ -292,6 +288,36 @@ fn page_parts(doc: &Document, sec: &SectionProps, w: &mut Writer) -> PageParts {
         }
     }
     out
+}
+
+/// The picture watermark `pic` as an image sized for section `sec`'s text area, with its
+/// Washout. None when the picture is missing, unreadable, of an unknown type or has no size.
+fn watermark_image(doc: &Document, sec: &SectionProps, pic: &wordcraft_doc::WatermarkPicture) -> Option<(model::Img, bool)> {
+    let data = doc.media.get(&pic.media)?;
+    let (own_w, own_h) = wordcraft_doc::watermark::own_size(data)?;
+    let ext = model::sniff_image(data)?;
+    let (w, h) = pic.size(own_w, own_h, (sec.text_width(), sec.text_height()))?;
+    let img = model::Img { data: data.clone(), ext: ext.to_string(), w, h, alt: String::new(), float: None, object: None, crop: [0.0; 4] };
+    Some((img, pic.washout))
+}
+
+/// The ODF body of a header or footer slot: its part `id` written by `w`, or an empty paragraph
+/// when the slot has no content.
+fn slot_body(doc: &Document, id: Option<u32>, w: &mut Writer) -> String {
+    let mut body = String::new();
+    if let Some(part) = id.and_then(|i| doc.parts.get(&i)) {
+        let blocks = model::part_flow(
+            doc,
+            &part.blocks,
+            // Pictures, shapes, text boxes, charts and objects too, as in the body.
+            model::FlowOpts { fields: true, lists: true, chars: true, paras: true, boxes: true, ..Default::default() },
+        );
+        w.blocks(&blocks, &mut body, 0);
+    }
+    if body.is_empty() {
+        body.push_str("<text:p/>");
+    }
+    body
 }
 
 /// A header's content with `shape` (anchored to a character) at the start of its first

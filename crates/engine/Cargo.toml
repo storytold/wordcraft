@@ -56,3 +56,5 @@ wordcraft-doc = { workspace = true, features = ["test-support"] }
 encoding_rs = { workspace = true }
 zip = { workspace = true }
 cfb = { workspace = true }
+# The PDF side of the watermark size check (what the export draws, read back).
+wordcraft-pdf = { workspace = true, features = ["test-support"] }

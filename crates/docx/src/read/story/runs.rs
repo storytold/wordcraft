@@ -244,7 +244,11 @@ impl Reader<'_> {
                 if let Some(o) = self.read_signature_line(sc, k, rels) {
                     self.emit_obj(sc, pb, o, props);
                 } else {
-                    for o in self.read_vml_all(sc, k, rels) {
+                    // A watermark in a tracked deletion is not the document's: it stays a shape.
+                    sc.in_deletion = props.del.is_some();
+                    let objects = self.read_vml_all(sc, k, rels);
+                    sc.in_deletion = false;
+                    for o in objects {
                         self.emit_obj(sc, pb, o, props);
                     }
                 }

@@ -17,6 +17,27 @@ fn tiny_png() -> Vec<u8> {
     out.into_inner()
 }
 
+/// #2954: a picture watermark and a text watermark's transparency survive Word 2003 XML (the
+/// picture as `w:binData`, the same VML shapes as in DOCX).
+#[test]
+fn watermarks_round_trip_through_2003() {
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text("Body", CharProps::default()))];
+    let key = d.add_media(tiny_png(), "png");
+    let pic = wordcraft_doc::WatermarkPicture { media: key, scale: Some(150.0), washout: true };
+    d.settings.watermark = Some(wordcraft_doc::Watermark { picture: Some(pic), ..Default::default() });
+    let back = read_xml(&write_wordml2003(&d).expect("write")).expect("read");
+    let got = back.settings.watermark.and_then(|w| w.picture).expect("picture watermark");
+    assert_eq!((got.scale, got.washout), (Some(150.0), true));
+    assert_eq!(back.media.get(&got.media).map(|b| b.as_slice()), Some(tiny_png().as_slice()));
+
+    let mut wm = wordcraft_doc::Watermark::default();
+    wm.set_transparency(70);
+    d.settings.watermark = Some(wm.clone());
+    let back = read_xml(&write_wordml2003(&d).expect("write")).expect("read");
+    assert_eq!(back.settings.watermark, Some(wm));
+}
+
 fn paras(doc: &Document) -> Vec<&Paragraph> {
     doc.body.iter().filter_map(|b| b.as_para()).collect()
 }

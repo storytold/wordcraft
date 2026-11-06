@@ -21,7 +21,7 @@ mod media;
 #[cfg(test)]
 use media::{CACHE_BYTES, MediaCache, OVERSIZED_GLYPHS_NOTED, cacheable, decode_pixmap_within, note_oversized_glyphs, shrink};
 pub use media::{decode_pixmap, decode_pixmap_fx, image_size, metafile_size};
-use media::{draw_page_picture, draw_vector, lock, pixmap_for, premul_pixmap, vector_for};
+use media::{draw_page_picture, draw_vector, draw_watermark_picture, lock, pixmap_for, premul_pixmap, vector_for};
 
 mod color_glyph;
 pub mod icon_lib;
@@ -300,8 +300,10 @@ fn render_region_capped(doc: &Document, page: &Page, w: u32, h: u32, view: Affin
         draw_page_picture(&mut ctx, doc, page, view);
     }
     let visible = view.inverse().transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, w16 as f64, h16 as f64)).inflate(40.0, 40.0);
-    if let Some(wm) = &doc.settings.watermark {
-        draw_watermark(&mut ctx, view, page, wm, opts);
+    match doc.settings.watermark.as_ref() {
+        Some(wordcraft_doc::Watermark { picture: Some(pic), .. }) => draw_watermark_picture(&mut ctx, doc, page, view, pic),
+        Some(wm) => draw_watermark(&mut ctx, view, page, wm, opts),
+        None => {}
     }
     // A dimmed layer is drawn whole, then faded once, so its overlaps don't darken.
     for (alpha, items) in page_layers(doc, page, &opts.display) {
@@ -480,7 +482,7 @@ fn draw_watermark(ctx: &mut RenderContext, view: Affine, page: &Page, wm: &wordc
         * Affine::rotate(angle)
         * Affine::translate((-bw / 2.0, bh / 2.0 - descent * bh))
         * Affine::scale_non_uniform(stretch, 1.0);
-    ctx.set_paint(color(opts.ink(wm.color), if wm.semitransparent { 0.35 } else { 0.8 }));
+    ctx.set_paint(color(opts.ink(wm.color), wm.opacity()));
     let db = FontDb::global();
     let mut x = 0.0;
     for g in &glyphs {

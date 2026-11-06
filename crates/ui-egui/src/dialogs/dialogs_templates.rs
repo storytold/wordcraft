@@ -53,7 +53,7 @@ impl TemplatesForm {
 
 /// Whether this host shows a file picker whose answer comes back to the dialog (the web's picker
 /// opens what it picks instead).
-fn can_pick(app: &WordApp) -> bool {
+pub(crate) fn can_pick(app: &WordApp) -> bool {
     app.services.open_async.is_none() && (app.services.file_dialog.is_some() || app.services.pick_open.is_some())
 }
 

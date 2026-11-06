@@ -12,7 +12,9 @@ use wordcraft_doc::props::{
 use wordcraft_doc::section::{Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, NumFormat, PageVAlign, SectionProps, SectionStart};
 use wordcraft_doc::styles::{Style, StyleKind};
 use wordcraft_doc::table::{Cell, Table};
-use wordcraft_doc::{Block, Blocks, Comment, Document, InlineObject, Paragraph, PartKind, Revision, RevisionKind, Source, Watermark, para_block};
+use wordcraft_doc::{
+    Block, Blocks, Comment, Document, InlineObject, Paragraph, PartKind, Revision, RevisionKind, Source, Watermark, WatermarkPicture, para_block,
+};
 
 fn rt(doc: &Document) -> Document {
     let bytes = wordcraft_docx::write(doc).expect("write");
@@ -1561,7 +1563,10 @@ fn watermark_roundtrips() {
             diagonal: false,
             semitransparent: false,
             size: None,
+            ..Default::default()
         },
+        // Any transparency, not only Word's two.
+        Watermark { transparency: Some(80), ..Default::default() },
         // A box of its own (not Word's default for the page) is kept.
         Watermark { text: "COPY".into(), size: Some([300.0, 80.0]), ..Default::default() },
     ] {
@@ -1570,6 +1575,147 @@ fn watermark_roundtrips() {
         let r = rt(&d);
         assert_eq!(r.settings.watermark, Some(wm));
         assert_eq!(paras(&r).len(), 1, "the body gains nothing");
+    }
+}
+
+/// A `w`×`h` px PNG of one colour.
+fn wm_png(w: u32, h: u32) -> Vec<u8> {
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(w, h, image::Rgba([20, 60, 140, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    png
+}
+
+/// #2954: a picture watermark round-trips through Word's VML picture shape in every header:
+/// the picture, Auto or a scale, and Washout (`gain` and `blacklevel`) on or off. The header
+/// keeps its own text and gains no picture of its own.
+#[test]
+fn picture_watermark_roundtrips() {
+    let png = wm_png(40, 20);
+    let mut d = doc_with(vec![Paragraph::with_text("Body", CharProps::default())]);
+    let h = d.add_part(PartKind::Header, vec![para_block(Paragraph::with_text("Head", CharProps::default()))]);
+    d.last_section.headers.default = Some(h);
+    let key = d.add_media(png.clone(), "png");
+    for (scale, washout) in [(None, true), (Some(50.0), false), (Some(200.0), true)] {
+        let wm = Watermark { picture: Some(WatermarkPicture { media: key.clone(), scale, washout }), ..Watermark::default() };
+        d.settings.watermark = Some(wm.clone());
+        let bytes = wordcraft_docx::write(&d).unwrap();
+        let hdr = part_xml(&bytes, "word/header1.xml");
+        assert_eq!(hdr.matches("<v:shape ").count(), 1);
+        assert!(hdr.contains(r#"id="WordPictureWatermark1""#) && hdr.contains("mso-position-vertical-relative:margin"), "{hdr}");
+        assert_eq!(hdr.contains(r#"gain="19661f" blacklevel="22938f""#), washout);
+        assert!(part_xml(&bytes, "word/_rels/header1.xml.rels").contains("media/"));
+        let r = wordcraft_docx::read(&bytes).unwrap();
+        let back = r.settings.watermark.clone().expect("watermark");
+        let pic = back.picture.clone().expect("picture");
+        assert_eq!((pic.scale, pic.washout), (scale, washout));
+        assert_eq!(r.media.get(&pic.media).map(|b| b.as_slice()), Some(png.as_slice()));
+        let hid = r.last_section.headers.default.unwrap();
+        assert_eq!(part_text(&r, Some(hid)), "Head");
+        assert!(r.parts[&hid].blocks.iter().filter_map(|b| b.as_para()).all(|p| p.objects.is_empty()), "no picture left in the header");
+        assert_eq!(rt(&r).settings.watermark, r.settings.watermark, "second generation");
+    }
+    // A watermark whose picture can't be read is not written.
+    d.media.insert(key, Arc::new(b"junk".to_vec()));
+    let r = rt(&d);
+    assert_eq!(r.settings.watermark, None);
+    assert!(!part_xml(&wordcraft_docx::write(&d).unwrap(), "word/header1.xml").contains("v:shape"));
+}
+
+/// A portrait first section whose header the landscape last section links to ("link to
+/// previous"), with a wide picture watermark at Auto.
+fn portrait_then_landscape_linked(header: bool, scale: Option<f32>) -> Document {
+    let mut d = Document::new();
+    let mut s1 = SectionProps::default();
+    if header {
+        s1.headers.default = Some(d.add_part(PartKind::Header, vec![para_block(Paragraph::with_text("Head", CharProps::default()))]));
+    }
+    let mut p1 = Paragraph::with_text("Portrait", CharProps::default());
+    p1.section = Some(Box::new(s1));
+    d.body = vec![para_block(p1), para_block(Paragraph::with_text("Landscape", CharProps::default()))];
+    d.last_section.set_landscape(true);
+    let key = d.add_media(wm_png(400, 200), "png");
+    d.settings.watermark = Some(Watermark { picture: Some(WatermarkPicture { media: key, scale, washout: true }), ..Watermark::default() });
+    d
+}
+
+/// #2954 review: Auto is sized once per header, for the first section that names it. A portrait
+/// section before a landscape one that links to its header: the header holds the portrait size
+/// (468 pt wide), and reads back as Auto.
+#[test]
+fn auto_picture_watermark_is_sized_for_the_first_section_naming_its_header() {
+    let d = portrait_then_landscape_linked(true, None);
+    // The header the landscape section links to is the portrait section's.
+    assert_eq!(d.watermark_fit(d.sections()[0].1.headers.default), (468.0, 648.0));
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    assert!(part_xml(&bytes, "word/header1.xml").contains("width:468.000pt;height:234.000pt"));
+    let r = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(r.settings.watermark.and_then(|w| w.picture).map(|p| p.scale), Some(None), "still Auto");
+}
+
+/// A document of two sections, the first with no header of its own and the last landscape: the
+/// watermark's own header serves both, sized for the first.
+#[test]
+fn auto_picture_watermark_header_written_for_the_watermark_alone() {
+    let d = portrait_then_landscape_linked(false, None);
+    assert_eq!(d.watermark_fit(None), (468.0, 648.0));
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    assert!(part_xml(&bytes, "word/header1.xml").contains("width:468.000pt;height:234.000pt"));
+    let r = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(r.settings.watermark.and_then(|w| w.picture).map(|p| p.scale), Some(None));
+}
+
+/// #2954 second review: a watermark at a fixed scale, its header shapes the same size in a
+/// portrait and a landscape section, fills one section's margins but not the other's. It is
+/// still the document's watermark at that scale after saving and reopening, washed out, and
+/// the headers gain no pictures.
+#[test]
+fn fixed_scale_watermark_across_differing_sections() {
+    let mut d = Document::new();
+    let h1 = d.add_part(PartKind::Header, vec![para_block(Paragraph::with_text("Portrait", CharProps::default()))]);
+    let h2 = d.add_part(PartKind::Header, vec![para_block(Paragraph::with_text("Landscape", CharProps::default()))]);
+    let mut s1 = SectionProps::default();
+    s1.headers.default = Some(h1);
+    let mut p1 = Paragraph::with_text("One", CharProps::default());
+    p1.section = Some(Box::new(s1));
+    d.body = vec![para_block(p1), para_block(Paragraph::with_text("Two", CharProps::default()))];
+    d.last_section.set_landscape(true);
+    d.last_section.headers.default = Some(h2);
+    let key = d.add_media(wm_png(624, 312), "png");
+    let wm = Watermark { picture: Some(WatermarkPicture { media: key, scale: Some(100.0), washout: true }), ..Watermark::default() };
+    d.settings.watermark = Some(wm);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    for name in ["word/header1.xml", "word/header2.xml"] {
+        assert!(part_xml(&bytes, name).contains("width:468.000pt;height:234.000pt"), "{name}");
+    }
+    let r = wordcraft_docx::read(&bytes).unwrap();
+    let pic = r.settings.watermark.clone().and_then(|w| w.picture).expect("still the document's watermark");
+    assert_eq!((pic.scale, pic.washout), (Some(100.0), true));
+    for id in header_ids(&r) {
+        assert!(r.parts[&id].blocks.iter().filter_map(|b| b.as_para()).all(|p| p.objects.is_empty()), "no header picture");
+    }
+    let r2 = rt(&r);
+    assert_eq!(r2.settings.watermark, r.settings.watermark, "second generation");
+}
+
+/// #2954: the text watermark's transparency round-trips as `v:fill` `opacity`; Word's
+/// Semitransparent is `.5`, and an opaque watermark has no `v:fill`.
+#[test]
+fn text_watermark_transparency_roundtrips() {
+    for (t, fill) in [(0, None), (25, Some(".75")), (50, Some(".5")), (80, Some(".2")), (100, Some("0"))] {
+        let mut d = doc_with(vec![Paragraph::with_text("Body", CharProps::default())]);
+        let mut wm = Watermark::default();
+        wm.set_transparency(t);
+        d.settings.watermark = Some(wm.clone());
+        let bytes = wordcraft_docx::write(&d).unwrap();
+        let hdr = part_xml(&bytes, "word/header1.xml");
+        match fill {
+            Some(o) => assert!(hdr.contains(&format!(r#"<v:fill opacity="{o}"/>"#)), "{t}: {hdr}"),
+            None => assert!(!hdr.contains("v:fill"), "{t}"),
+        }
+        let r = wordcraft_docx::read(&bytes).unwrap();
+        assert_eq!(r.settings.watermark, Some(wm), "{t}");
     }
 }
 

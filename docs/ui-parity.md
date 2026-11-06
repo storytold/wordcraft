@@ -100,6 +100,7 @@ Right-click and Shift+F10 keep the compact suggestions menu. The pane is shared 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | trivial | Custom Watermark (#3001): No watermark, Picture watermark (Select Picture…, Scale Auto or 50–500 %, Washout) and Text watermark (Text, Semitransparent with a transparency percentage kept in step, Layout), opening on the document's watermark; OK runs `design.watermark` |
 | 2026-10-17 | trivial | Drawing Canvas members are selected with a click and dragged, resized, turned, nudged, formatted, deleted and copied on their own inside the canvas; a click in a text box member's text puts the caret there (#2637) |
 | 2026-11-05 | trivial | On-canvas objects: dragging an In Line with Text picture, shape or text box shows a bold, solid insertion cursor, twice the caret's width, as in Word; the dashed one was hard to see (#4195) |
 | 2026-10-31 | trivial | Dialogs are modal (#3859): while one is open, clicks on the ribbon, File or the page, typing and shortcuts do nothing, as in Word. Find and Replace, Symbol, Mark Index Entry, Cross-reference and Insert Merge Field stay modeless, as in Word for Mac. A press beside a modal dialog shakes it a little, or flashes its border with animation effects off, so it is clear why nothing behind it reacts |

@@ -479,7 +479,7 @@ fn family_fingerprint(doc: &crate::Document, root: u32, replies: &HashMap<u32, V
 
 /// What `doc`'s page setup is: each section's setup (where it starts, its size, margins,
 /// columns, headers and footers), the headers' and footers' content, the page colour and
-/// picture, and the notes' numbering.
+/// picture, the watermark, and the notes' numbering.
 pub fn pages_fingerprint(doc: &crate::Document) -> u64 {
     let mut sections: Vec<&crate::SectionProps> = doc.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.section.as_deref()).collect();
     sections.push(&doc.last_section);
@@ -492,6 +492,7 @@ pub fn pages_fingerprint(doc: &crate::Document) -> u64 {
         parts,
         &s.page_color,
         &s.page_picture,
+        &s.watermark,
         (&s.footnote_format, &s.endnote_format, &s.footnote_pr, &s.endnote_pr),
         (&doc.footnote_separators, &doc.endnote_separators),
     )) {

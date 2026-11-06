@@ -142,6 +142,7 @@ impl Reader<'_> {
         let rels = self.pkg.rels(path);
         let mut sc = StoryCtx::default();
         sc.in_hf = true;
+        sc.picture_wm = !footer && self.picture_wm_header(path);
         let mut blocks = Blocks::new();
         self.hf_depth += 1;
         self.read_blocks(&mut sc, &root, &rels, &mut blocks, self.chunks.depth);

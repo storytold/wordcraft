@@ -90,6 +90,28 @@ impl Body<'_> {
     pub(in crate::odt) fn end_frame(&mut self) {
         if let Some((w, h, img, alt, eq, chart, object)) = self.frame.take() {
             let boxed = self.frame_box.take();
+            let washout = std::mem::take(&mut self.frame_washout);
+            // A picture watermark (the header's frame of the name the writer gives it, holding a
+            // picture and nothing else) is noted; when every header holds the same one, no
+            // footer and no text watermark does, it is the document's watermark and not a picture
+            // in the header (see `page_parts::read`).
+            if boxed.is_none()
+                && eq.is_none()
+                && chart.is_none()
+                && object.is_none()
+                && self.page_part
+                && self.frame_name.as_deref().is_some_and(|n| n.starts_with(crate::odt::writer::PICTURE_WATERMARK_NAME))
+                && let Some((data, w, h)) = img.clone().zip(w).zip(h).map(|((d, w), h)| (d, w, h))
+            {
+                if self.watermark_pictures.len() < 4 {
+                    self.watermark_pictures.push((data, (w, h), washout));
+                }
+                if self.take_watermark_pictures {
+                    self.frame_clip = None;
+                    self.frame = None;
+                    return;
+                }
+            }
             let mut float = self.frame_float.take();
             if boxed.is_some()
                 && self.shape_kind.is_some()
@@ -176,7 +198,7 @@ impl Body<'_> {
     /// The shape ending is a watermark (see [`Self::start_shape`]) holding `blocks`: the
     /// document's watermark, from its text, font, colour, size and turn, and not a shape.
     fn take_watermark(&mut self, blocks: &[FBlock]) -> bool {
-        let Some(((w, h), rot, color, see_through, true)) = self.watermark_shape.take() else { return false };
+        let Some(((w, h), rot, color, transparency, true)) = self.watermark_shape.take() else { return false };
         let mut text = String::new();
         let mut font = None;
         for b in blocks {
@@ -195,14 +217,16 @@ impl Body<'_> {
         }
         let turned = rot.rem_euclid(360.0);
         let base = wordcraft_doc::Watermark::default();
-        self.watermark = Some(wordcraft_doc::Watermark {
+        let mut wm = wordcraft_doc::Watermark {
             text,
             font: font.unwrap_or(base.font),
             color: color.unwrap_or(base.color),
             diagonal: turned > 1.0 && turned < 359.0,
-            semitransparent: see_through,
             size: Some([w, h]).filter(|[w, h]| w.is_finite() && h.is_finite() && *w > 0.0 && *h > 0.0),
-        });
+            ..base
+        };
+        wm.set_transparency(transparency);
+        self.watermark = Some(wm);
         true
     }
 
@@ -372,8 +396,8 @@ impl Body<'_> {
         self.frame_look.conn = self.conn_of(a).map(Box::new);
         // Word's and LibreOffice's watermark: a shape of this name whose geometry follows its text.
         self.watermark_shape = get(a, "draw:name").filter(|n| n.starts_with(crate::odt::writer::WATERMARK_NAME)).map(|_| {
-            let (color, see_through) = g.watermark_look();
-            ((w, h), float.rot, color, see_through, false)
+            let (color, transparency) = g.watermark_look();
+            ((w, h), float.rot, color, transparency, false)
         });
         self.shape_path = crate::odt::shapes::freeform(local(q), a, w, h).map(std::sync::Arc::new);
         self.shape_kind = Some(kind);

@@ -91,6 +91,17 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         let blocks: Blocks = doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
         // The watermark goes in every header, at the start of its first paragraph.
         wr.pending_watermark = match &doc.settings.watermark {
+            // A picture watermark is sized for the first section naming this header (or, for the
+            // header written for the watermark alone, the first needing it): the same size the
+            // screen and a PDF draw.
+            Some(wm) if !footer && wm.picture.is_some() => watermark::picture(doc).and_then(|(pic, own)| {
+                let fit = doc.watermark_fit((id != wr.wm_header).then_some(id));
+                pic.size(own.0, own.1, fit)?;
+                let file = wr.media_files.get(&pic.media)?;
+                let rid = prels.add(rt::IMAGE, &format!("media/{file}"), false);
+                wr.used_media.insert(pic.media.clone());
+                watermark::picture_run(pic, own, done, fit, &rid)
+            }),
             Some(wm) if !footer => watermark::run(wm, done, &doc.last_section),
             _ => None,
         };
