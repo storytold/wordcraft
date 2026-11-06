@@ -746,6 +746,7 @@ impl WordApp {
             // Native printing submits the selected queue on a worker; the browser owns its dialog.
             "ui.printSettings" => return Some(printing::settings(&mut self.printing, p, self.services.printers.as_ref())),
             "ui.print" | "ui.printSubmit" => return Some(self.print_to_system(p)),
+            "ui.printCancel" => return Some(printing::cancel(self)),
             // File › Options › General › Make WordCraft the default… changes the user's system
             // default apps (Linux) or opens system settings (Windows), so only a click on that
             // button does it ([`WordApp::make_default_app`]); scripts, the control channel and
@@ -1054,6 +1055,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.language"
             | "ui.saveChanges"
             | "ui.openFileDialog"
+            | "ui.printCancel"
             | "ui.fileBrowser"
             | "ui.makeDefaultApp"
             | "ui.discord"
