@@ -27,6 +27,15 @@ fn lay(doc: &Document) -> DocLayout {
     layout(doc, &mut c, &LayoutOptions::default())
 }
 
+/// A document in the bundled Source Sans 3, so fixtures whose page and line boundaries matter
+/// break the same way on every host, whatever stands in for Aptos there (a narrow Carlito, a wide
+/// Helvetica Neue): see docs/layout-parity.md, "Validation fonts".
+fn bundled_font_document(text: &str) -> Document {
+    let mut doc = Document::from_text(text);
+    Arc::make_mut(&mut doc.styles).default_chr.font = Some(WRAP_TEST_FONT.into());
+    doc
+}
+
 /// These pagination fixtures test physical boundaries, not the host's Aptos substitution.
 /// Keep their explicit spacing local; ordinary document/layout defaults remain unchanged.
 pub(super) fn pagination_fixture_document(text: &str) -> Document {
@@ -5797,7 +5806,7 @@ fn leading_spaces_keep_their_width_in_justified_lines() {
     // before them): Word ignores those, and a bookmark, there too; the first character is still
     // the one after the spaces.
     let first_x = |align: Align, hidden: &str, float: bool| {
-        let mut d = Document::from_text(&format!("{hidden}{spaces}{body}"));
+        let mut d = bundled_font_document(&format!("{hidden}{spaces}{body}"));
         d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.align = Some(align)).unwrap();
         if !hidden.is_empty() {
             d.format_range(&Pos::body(0, 0), &Pos::body(0, hidden.len()), &|c| c.hidden = Some(true)).unwrap();
@@ -6206,7 +6215,7 @@ fn a_float_anchored_two_pages_into_its_paragraph_is_drawn_on_that_page() {
 /// A long paragraph with a long footnote on page one, and a page-placed square float anchored at
 /// line `k` of page two as laid out without it.
 fn footnoted_float(k: usize) -> DocLayout {
-    let mut d = Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(400));
+    let mut d = bundled_font_document(&"The quick brown fox jumps over the lazy dog. ".repeat(400));
     let mut note = wordcraft_doc::Paragraph::with_text(&"The note text runs on for a while. ".repeat(30), Default::default()).styled("FootnoteText");
     note.props.space_after = Some(0.0);
     let id = d.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(note)]);
@@ -6245,14 +6254,15 @@ fn a_float_whose_anchor_comes_back_to_page_one_stays_there_with_the_text_around_
 /// back to page two; the note goes with it, once, not left on page one as well.
 #[test]
 fn a_footnote_pushed_on_by_a_float_coming_back_is_on_its_reference_s_page_only() {
-    let mut d = Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(400));
+    let mut d = bundled_font_document(&"The quick brown fox jumps over the lazy dog. ".repeat(400));
     let note = |text: &str| {
         let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default()).styled("FootnoteText");
         p.props.space_after = Some(0.0);
         vec![wordcraft_doc::para_block(p)]
     };
     let noteref = |id| InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() };
-    let long = d.add_part(wordcraft_doc::PartKind::Footnote, note(&"The note text runs on for a while. ".repeat(30)));
+    // Long enough that, in the bundled font, the float's wrap sends page two's first line back.
+    let long = d.add_part(wordcraft_doc::PartKind::Footnote, note(&"The note text runs on for a while. ".repeat(35)));
     d.insert_object(&Pos::body(0, 4), noteref(long), &Default::default()).unwrap();
     let anchor = lines_on(&lay(&d), 1)[0].2;
     let short = d.add_part(wordcraft_doc::PartKind::Footnote, note("A short note."));
@@ -6276,7 +6286,7 @@ fn a_footnote_pushed_on_by_a_float_coming_back_is_on_its_reference_s_page_only()
 /// there; the other is still drawn on page two.
 #[test]
 fn of_two_floats_held_back_only_the_one_whose_anchor_comes_back_stays_on_page_one() {
-    let mut d = Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(400));
+    let mut d = bundled_font_document(&"The quick brown fox jumps over the lazy dog. ".repeat(400));
     let mut note = wordcraft_doc::Paragraph::with_text(&"The note text runs on for a while. ".repeat(30), Default::default()).styled("FootnoteText");
     note.props.space_after = Some(0.0);
     let id = d.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(note)]);
@@ -6295,7 +6305,7 @@ fn of_two_floats_held_back_only_the_one_whose_anchor_comes_back_stays_on_page_on
 /// a float anchored on the first line it pushes on to page three is drawn on page three.
 #[test]
 fn a_float_anchored_on_a_line_a_footnote_pushes_on_is_drawn_on_the_next_page() {
-    let mut d = Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(600));
+    let mut d = bundled_font_document(&"The quick brown fox jumps over the lazy dog. ".repeat(600));
     let mut note = wordcraft_doc::Paragraph::with_text(&"The note text runs on for a while. ".repeat(30), Default::default()).styled("FootnoteText");
     note.props.space_after = Some(0.0);
     let id = d.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(note)]);
@@ -6320,8 +6330,8 @@ fn a_float_anchored_on_a_line_a_footnote_pushes_on_is_drawn_on_the_next_page() {
 #[test]
 fn a_float_anchored_on_a_line_widow_control_takes_on_is_drawn_on_the_next_page() {
     // A paragraph of three pages whose last two lines are on the third only by widow control.
-    let (mut d, l) = (150..300)
-        .map(|k| Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(k)))
+    let (mut d, l) = (100..600)
+        .map(|k| bundled_font_document(&"The quick brown fox jumps over the lazy dog. ".repeat(k)))
         .map(|d| {
             let l = lay(&d);
             (d, l)
