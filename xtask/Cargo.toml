@@ -9,4 +9,6 @@ publish = false
 workspace = true
 
 [dependencies]
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
