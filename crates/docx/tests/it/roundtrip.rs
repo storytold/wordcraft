@@ -2895,6 +2895,14 @@ fn a_drop_caps_own_size_round_trips() {
     assert!(xml.contains(r#"<w:sz w:val="177"/>"#), "a second save writes the same size: {xml}");
     assert_eq!(paras(&r)[0].runs[0].props.size, Some(20.0));
 
+    // A letter near the text's size is its own size too, not the text's (#3000).
+    for size in [10.0, 11.5, 14.0, 15.0, 16.0] {
+        let (_, r) = round_trip(&doc_with(vec![sized(size)]));
+        assert_eq!(paras(&r)[0].runs[0].props.size, Some(size), "a {size} pt letter");
+        let (_, r) = round_trip(&r);
+        assert_eq!(paras(&r)[0].runs[0].props.size, Some(size), "a {size} pt letter, saved again");
+    }
+
     let (xml, r) = round_trip(&doc_with(vec![sized(300.0)]));
     assert!(xml.contains(r#"<w:sz w:val="2000"/>"#), "{xml}");
     assert_eq!(paras(&r)[0].runs[0].props.size, Some(1000.0));

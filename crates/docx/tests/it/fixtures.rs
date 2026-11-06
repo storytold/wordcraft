@@ -3869,6 +3869,25 @@ fn a_drop_caps_letter_after_a_bookmark_in_its_frame_takes_the_texts_size() {
     assert_eq!(r[0].run_ranges().next().map(|(_, props)| props.size), Some(Some(12.0)), "and keeps its size: {:?}", r[0].runs);
 }
 
+/// #3000: only a bookmark or comment anchor moves behind the letter. A content control around the
+/// frame's letter keeps it, so the control's content survives a save, and the letter keeps its size.
+#[test]
+fn a_drop_caps_letter_in_a_content_control_stays_in_it() {
+    let d = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:sdt><w:sdtPr><w:alias w:val="Cap"/></w:sdtPr><w:sdtContent><w:r><w:rPr><w:sz w:val="88"/></w:rPr><w:t>B</w:t></w:r></w:sdtContent></w:sdt></w:p>
+        <w:p><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>efore we start</w:t></w:r></w:p>"#,
+    );
+    let p = paras(&d);
+    assert_eq!(p.len(), 1);
+    let at = p[0].text.find('B').unwrap();
+    let letter = p[0].run_ranges().find(|(range, _)| range.contains(&at)).map(|(_, props)| props.size);
+    assert_eq!(letter, Some(Some(44.0)), "{:?}", p[0].runs);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = text(&unzip(&bytes), "word/document.xml");
+    let content = xml.split("<w:sdtContent>").nth(1).and_then(|c| c.split("</w:sdtContent>").next()).unwrap_or_default();
+    assert!(content.contains(">B<"), "the control keeps its letter: {xml}");
+}
+
 /// #2360: a `w:framePr` in the document defaults, the sizeless top-left one Apple Pages writes,
 /// frames no paragraph, as in Word: a header's title and the body's text stay in the text instead
 /// of moving to the page's corner, and the default isn't written back. The defaults' other

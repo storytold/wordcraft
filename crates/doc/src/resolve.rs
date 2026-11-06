@@ -29,13 +29,14 @@ pub fn drop_cap_size(size: f32, lines: u8) -> f32 {
 const DROP_CAP_SIZE_BAND: std::ops::RangeInclusive<f32> = 0.7..=1.3;
 
 /// The size of the letter whose drop cap was saved at `big` points, or `None` when that's the
-/// letter of `text`-point text: around the size the text draws a letter, or the text's own size,
-/// as older saves wrote it. A whole or half point size is preferred if it's saved the same. A letter at
+/// letter of `text`-point text: the text's own size, as older saves wrote it, or around the size
+/// the text draws a letter. A whole or half point size saved exactly as [`drop_cap_size`] gives it is
+/// that size, as this writer saves a letter of its own, even one near the text's size. A letter at
 /// the 1000 pt cap has no inverse and stays as it is. Never below 1 pt, as when reading a size.
 pub fn drop_cap_letter_size(big: f32, text: f32, lines: u8) -> Option<f32> {
     let half_points = |s: f32| (s * 2.0).round();
     let lines = lines.max(1);
-    if half_points(big) == half_points(text) || (lines > 1 && DROP_CAP_SIZE_BAND.contains(&(big / drop_cap_size(text, lines)))) {
+    if half_points(big) == half_points(text) {
         return None;
     }
     if big >= 1000.0 {
@@ -43,7 +44,13 @@ pub fn drop_cap_letter_size(big: f32, text: f32, lines: u8) -> Option<f32> {
     }
     let exact = (big * 0.7 / ((lines as f32 - 1.0) * 1.2 + 0.7)).max(1.0);
     let half = half_points(exact) / 2.0;
-    Some(if half_points(drop_cap_size(half, lines)) == half_points(big) { half } else { exact })
+    if half_points(drop_cap_size(half, lines)) == half_points(big) {
+        return (half_points(half) != half_points(text)).then_some(half);
+    }
+    if lines > 1 && DROP_CAP_SIZE_BAND.contains(&(big / drop_cap_size(text, lines))) {
+        return None;
+    }
+    Some(exact)
 }
 
 /// Concrete character formatting.

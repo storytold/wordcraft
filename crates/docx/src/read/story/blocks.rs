@@ -38,8 +38,14 @@ impl Reader<'_> {
                         props.drop_cap_margin = first.props.drop_cap_margin;
                         props.drop_cap_distance = first.props.drop_cap_distance;
                         // The first character is the one a drop cap drops, in the layout and when saving,
-                        // so a bookmark or comment anchor opening the frame moves behind the letter.
+                        // so a bookmark or comment anchor opening the frame moves behind the letter. A
+                        // field, content control or permission range stays around it: moving the letter
+                        // out would lose the field's result, the control's content or the protection.
+                        use wordcraft_doc::para::InlineObject as O;
                         if let Some(at) = first_visible(&first).filter(|at| *at > 0)
+                            && first.objects_with_offsets().take_while(|(i, _)| *i < at).all(|(_, o)| {
+                                matches!(o, O::BookmarkStart { .. } | O::BookmarkEnd { .. } | O::CommentStart { .. } | O::CommentEnd { .. })
+                            })
                             && let Some(len) =
                                 first.text.get(at..).and_then(|t| t.chars().next()).filter(|c| *c != wordcraft_doc::para::OBJ).map(char::len_utf8)
                             && let Ok(mut letter) = first.split_off(at)
@@ -82,7 +88,9 @@ impl Reader<'_> {
                         let cap_sizes = cap.as_ref().map(|c| (c.size, c.size_cs));
                         let new_size = letter_size(cap.as_ref().and_then(|c| c.size), text_props.size, resolved.size);
                         let new_size_cs = letter_size(cap.as_ref().and_then(|c| c.size_cs), text_props.size_cs, resolved.size_cs);
-                        for r in first.runs.iter_mut().filter(|r| Some((r.props.size, r.props.size_cs)) == cap_sizes) {
+                        // A letter left behind a marker isn't dropped, so it keeps the size it shows at.
+                        let dropped = first.text.chars().next().is_some_and(|c| c != wordcraft_doc::para::OBJ);
+                        for r in first.runs.iter_mut().filter(|r| dropped && Some((r.props.size, r.props.size_cs)) == cap_sizes) {
                             r.props.size = new_size;
                             r.props.size_cs = new_size_cs;
                         }
