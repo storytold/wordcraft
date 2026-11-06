@@ -263,7 +263,7 @@ impl<'a> Shaped<'a> {
         // If the cluster spans a run boundary, fall back to just the base consonant.
         let is_thai = wordcraft_doc::cluster::is_thai_lao(c);
         let nbytes = if is_thai {
-            let tcb = wordcraft_doc::thai_fn::thai_lao_tcb_byte_len(cx.p.text);
+            let tcb = wordcraft_doc::thai_fn::thai_lao_tcb_byte_len(&cx.p.text);
             if tcb <= text.len() { tcb } else { c.len_utf8() }
         } else {
             c.len_utf8()
