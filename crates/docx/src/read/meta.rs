@@ -306,8 +306,9 @@ impl Reader<'_> {
                 "dc:description" => c.description = t,
                 "cp:lastModifiedBy" => c.last_modified_by = t,
                 "cp:revision" => c.revision = u32_of(&t).unwrap_or(0),
-                "dcterms:created" => c.created = t,
-                "dcterms:modified" => c.modified = t,
+                // A date that isn't a W3CDTF date isn't one: leave the field empty.
+                "dcterms:created" if crate::w3cdtf::is_w3cdtf(&t) => c.created = t,
+                "dcterms:modified" if crate::w3cdtf::is_w3cdtf(&t) => c.modified = t,
                 "cp:category" => c.category = t,
                 _ => {}
             }
