@@ -109,7 +109,7 @@ fn has_content(pl: &ParaLayout, c0: usize, j: usize) -> bool {
 /// control's start, a bookmark) and floating objects' anchors take no room and don't count (Word:
 /// a picture a little wider than the line, after an anchor, stays on the first line rather than
 /// leaving the anchor a line of its own).
-fn takes_room(c: &Cluster) -> bool {
+pub(super) fn takes_room(c: &Cluster) -> bool {
     c.kind != ClKind::Marker && !(matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0)
 }
 
@@ -962,6 +962,27 @@ impl Scan {
         }
         while b > c0 && pl.clusters.get(b).is_some_and(|c| !pl.is_edit_boundary(c.start)) {
             b -= 1;
+        }
+        // Nor start the next line with a cluster glued to the one before it (a note mark and its
+        // neighbours, #5402): back up to before the glued run.
+        let glued = |k: usize| u32::try_from(k).is_ok_and(|k| pl.no_line_start.binary_search(&k).is_ok());
+        while b > c0 + 1 && glued(b) {
+            b -= 1;
+            while b > c0 + 1 && pl.clusters.get(b).is_some_and(|c| glyphless(b) || !pl.is_edit_boundary(c.start)) {
+                b -= 1;
+            }
+        }
+        // The glued run starts the line: it stays on this line whole, running past its edge (a
+        // column a letter or two wide), rather than splitting.
+        if glued(b) && b <= c0 + 1 && !self.skip {
+            let mut k = j;
+            while k < bk.n && glued(k) {
+                self.xs.push(self.x);
+                self.x += pl.clusters.get(k).map_or(0.0, |c| c.adv);
+                k += 1;
+            }
+            self.j = k;
+            return;
         }
         if b < j
             && b > c0

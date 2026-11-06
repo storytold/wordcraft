@@ -6708,6 +6708,200 @@ fn no_line_break_right_after_a_slash() {
     assert!(lines > 10, "{lines} lines");
 }
 
+/// The body line starts of `d` laid out with a right margin of `m` points.
+fn body_line_starts(d: &Document, m: f32) -> Vec<usize> {
+    let mut d = d.clone();
+    d.last_section.margin_right = m;
+    let l = lay(&d);
+    l.pages
+        .iter()
+        .flat_map(|pg| pg.items.iter())
+        .filter_map(|it| if let Placed::Lines { story: StoryRef::Body, para, l0, l1, .. } = it { Some(para.lines[*l0..*l1].to_vec()) } else { None })
+        .flatten()
+        .map(|line| line.start)
+        .collect()
+}
+
+/// #5402: a footnote mark stays with the text before it, as the report shows Word doing: at no
+/// width does a line start with a mark that follows a full stop, a closing parenthesis or a word.
+/// The comma after a mark stays with it too (not checked in Word). A space beside a mark is still a place to break, after the
+/// mark and before it.
+#[test]
+fn a_note_mark_stays_with_the_text_before_it() {
+    let text = "The kilns were fired twice a week (in winter). Glazes came from the coast, and the ash- and soda-glaze ran thin.";
+    let mut d = Document::from_text(text);
+    // Back to front, so the earlier offsets stay put: after "thin.", after the hyphen of "ash-",
+    // after "coast", before "from" (after a space), after "(in winter)."
+    let marks = [text.len(), text.find(" and soda").unwrap(), text.find(", and").unwrap(), text.find("from").unwrap(), text.find(" Glazes").unwrap()];
+    for &at in &marks {
+        footnote(&mut d, &Pos::body(0, at), "A note.");
+    }
+    let p = d.para(StoryRef::Body, &Path::top(0)).unwrap().clone();
+    let refs: Vec<usize> = p.objects_with_offsets().filter(|(_, o)| matches!(o, InlineObject::NoteRef { .. })).map(|(i, _)| i).collect();
+    assert_eq!(refs.len(), 5);
+    let after_space = |r: usize| p.text[..r].ends_with(' ');
+    let obj = wordcraft_doc::para::OBJ.len_utf8();
+    let (mut wrapped, mut broke_before_spaced_mark) = (0, false);
+    for m in 100..=430 {
+        let starts = body_line_starts(&d, m as f32);
+        wrapped += starts.len();
+        for &r in &refs {
+            if after_space(r) {
+                broke_before_spaced_mark |= starts.contains(&r);
+            } else {
+                assert!(!starts.contains(&r), "margin {m}: a line starts with the note mark at {r}: {:?}", &p.text[r..]);
+            }
+            assert!(!starts.contains(&(r + obj)) || p.text[r + obj..].starts_with(' '), "margin {m}: a line starts right after the mark at {r}");
+        }
+    }
+    assert!(wrapped > 500, "{wrapped} lines");
+    assert!(broke_before_spaced_mark, "a line can start with a mark after a space");
+}
+
+/// #5402: a word too long for the line is split, and when only its note mark or the comma after
+/// the mark doesn't fit, the mark takes the word's last letter along and keeps the comma, instead
+/// of a line starting with the mark or the comma.
+#[test]
+fn a_split_word_keeps_its_note_mark() {
+    let word = "Pneumonoultramicroscopicsilicovolcanoconiosis";
+    let mut d = Document::from_text(&format!("{word},"));
+    footnote(&mut d, &Pos::body(0, word.len()), "A note.");
+    let after = word.len() + wordcraft_doc::para::OBJ.len_utf8();
+    let mut split = 0;
+    for m in 200..=500 {
+        let starts = body_line_starts(&d, m as f32);
+        split += usize::from(starts.len() > 1);
+        assert!(!starts.contains(&word.len()), "margin {m}: a line starts with the note mark: {starts:?}");
+        assert!(!starts.contains(&after), "margin {m}: a line starts with the comma after the mark: {starts:?}");
+    }
+    assert!(split > 100, "{split} widths split the word");
+}
+
+/// #5402: in a column only a letter or two wide, a note mark after a word's first letter still
+/// doesn't start a line: with no letter left to take along, the mark and the comma after it stay
+/// on the first letter's line, past its edge.
+#[test]
+fn a_note_mark_after_a_first_letter_stays_in_a_narrow_column() {
+    // 40 pt letters, so a letter or two fill the narrowest column (18 pt).
+    let text = "A, Pneumonoultramicroscopic";
+    let mut d = Document::from_text(text);
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| c.size = Some(40.0)).unwrap();
+    footnote(&mut d, &Pos::body(0, 1), "A note.");
+    let p = d.para(StoryRef::Body, &Path::top(0)).unwrap().clone();
+    let after = 1 + wordcraft_doc::para::OBJ.len_utf8();
+    let width = |m: f32| d.last_section.page_w - d.last_section.margin_left - m;
+    let mut narrow = 0;
+    for m in 380..=540 {
+        let m = m as f32;
+        let starts = body_line_starts(&d, m);
+        narrow += usize::from(width(m) < 40.0);
+        assert!(!starts.contains(&1), "width {}: a line starts with the note mark: {starts:?}", width(m));
+        assert!(!starts.contains(&after), "width {}: a line starts with the comma after the mark: {:?}", width(m), &p.text[after..]);
+    }
+    assert!(narrow > 5, "{narrow} columns under 40 pt");
+}
+
+/// #5402: the break before a note mark is judged on the text line breaking reads. A mark behind a
+/// bookmark after a hyphen, or right after a soft hyphen, doesn't start a line; a hidden mark
+/// after a hyphen leaves the break after the hyphen in place.
+#[test]
+fn a_note_mark_after_a_hyphen_bookmark_or_soft_hyphen() {
+    let text = "Kilns burn wood. The ash- glazes ran, the soda\u{ad} washes dried, and the salt-glazes pitted.";
+    let mut d = Document::from_text(text);
+    let obj = wordcraft_doc::para::OBJ.len_utf8();
+    // Back to front: a hidden note after "salt-", a note after the soft hyphen of "soda", and a
+    // bookmark then a note after "ash-". A line starting at the bookmark starts with the mark too.
+    let salt = text.find("salt-").unwrap() + 5;
+    footnote(&mut d, &Pos::body(0, salt), "Hidden.");
+    d.format_range(&Pos::body(0, salt), &Pos::body(0, salt + obj), &|c| c.hidden = Some(true)).unwrap();
+    let soda = text.find("soda").unwrap() + 4 + '\u{ad}'.len_utf8();
+    footnote(&mut d, &Pos::body(0, soda), "Soft hyphen.");
+    let ash = text.find("ash-").unwrap() + 4;
+    d.insert_object(&Pos::body(0, ash), InlineObject::BookmarkStart { name: "glaze".into() }, &Default::default()).unwrap();
+    footnote(&mut d, &Pos::body(0, ash + obj), "Bookmark.");
+    let p = d.para(StoryRef::Body, &Path::top(0)).unwrap().clone();
+    let notes: Vec<usize> = p.objects_with_offsets().filter(|(_, o)| matches!(o, InlineObject::NoteRef { .. })).map(|(i, _)| i).collect();
+    let [ash_note, soda_note, salt_note] = notes[..] else { panic!("{notes:?}") };
+    let mut broke_after_salt = false;
+    for m in 100..=430 {
+        let starts = body_line_starts(&d, m as f32);
+        for (r, what) in [(ash_note, "behind a bookmark"), (soda_note, "after a soft hyphen")] {
+            assert!(!starts.contains(&r) && !starts.contains(&(r - obj)), "margin {m}: a line starts with the mark {what}: {starts:?}");
+        }
+        broke_after_salt |= starts.contains(&salt_note) || starts.contains(&(salt_note + obj));
+    }
+    assert!(broke_after_salt, "a hidden mark keeps the break after the hyphen");
+}
+
+/// #5402: whatever surrounds a note mark, no line starts with it, with what lies between it and
+/// the text it follows (a bookmark, hidden text), or with what is glued after it, with or without
+/// automatic hyphenation. Only a space after the mark is a place to break. Checked on the laid-out
+/// clusters, where every source of break opportunities has had its say: no forbidden place is a
+/// break or a hyphenation point. Then at narrow widths, where a word too long for its line is split
+/// at any letter, no line starts at a forbidden place either.
+#[test]
+fn a_note_mark_never_starts_a_line_whatever_surrounds_it() {
+    let obj = wordcraft_doc::para::OBJ.len_utf8();
+    let (head, tail) = ("Lorem ipsum dolor sit amet consectetur", " adipiscing elit sed do eiusmod tempor");
+    let mut cases = 0;
+    for before in [".", ")", "\u{201d}", "-", "\u{2013}", "\u{2014}", "\u{ad}", "/", "a", "7", "\u{5b57}"] {
+        for between in ["", "bookmark", "hidden"] {
+            for after in [",", ".", ")", "s", " ", ""] {
+                for auto in [false, true] {
+                    let text =
+                        format!("{head}{before}{}{after}{}", if between == "hidden" { "x" } else { "" }, if after.is_empty() { "" } else { tail });
+                    let mut d = Document::from_text(&text);
+                    d.settings.auto_hyphenation = auto;
+                    let mut at = head.len() + before.len();
+                    let mut forbidden = Vec::new();
+                    match between {
+                        "bookmark" => {
+                            d.insert_object(&Pos::body(0, at), InlineObject::BookmarkStart { name: "b".into() }, &Default::default()).unwrap();
+                            forbidden.push(at);
+                            at += obj;
+                        }
+                        "hidden" => {
+                            d.format_range(&Pos::body(0, at), &Pos::body(0, at + 1), &|c| c.hidden = Some(true)).unwrap();
+                            forbidden.push(at);
+                            at += 1;
+                        }
+                        _ => {}
+                    }
+                    footnote(&mut d, &Pos::body(0, at), "A note.");
+                    forbidden.push(at);
+                    if !after.is_empty() && after != " " {
+                        forbidden.push(at + obj);
+                    }
+                    let case = format!("{before:?} {between:?} mark {after:?} auto {auto}");
+                    cases += 1;
+                    // The clusters: no break and no hyphenation point before a forbidden place.
+                    let l = lay(&d);
+                    let para = l
+                        .pages
+                        .iter()
+                        .flat_map(|pg| pg.items.iter())
+                        .find_map(|it| if let Placed::Lines { story: StoryRef::Body, para, .. } = it { Some(para.clone()) } else { None })
+                        .unwrap();
+                    for f in &forbidden {
+                        let Some(k) = para.clusters.iter().position(|c| c.start == *f) else { continue };
+                        let Some(prev) = k.checked_sub(1) else { continue };
+                        assert!(!para.clusters[prev].break_after, "{case}: a break before {f}");
+                        assert!(!para.hyph_after.contains(&(prev as u32)), "{case}: a hyphenation point before {f}");
+                    }
+                    // Split words: down to a few letters a line.
+                    for m in (470..=530).step_by(12) {
+                        let starts = body_line_starts(&d, m as f32);
+                        for f in &forbidden {
+                            assert!(!starts.contains(f), "{case}, margin {m}: a line starts at {f}: {starts:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(cases, 11 * 3 * 6 * 2);
+}
+
 /// #2963: a word after a slash ("caption /заполняется") wraps whole, as in Word. UAX #14 forbids a
 /// break between the space and the slash, and the break after the slash is dropped (Word keeps
 /// "and/or" whole), so the slash word had no break before it and split between two letters.
