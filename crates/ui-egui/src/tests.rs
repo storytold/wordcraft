@@ -3,6 +3,15 @@ use egui_kittest::kittest::Queryable;
 
 mod perf;
 
+/// The native caption uses the compiled application name with and without a document.
+#[test]
+fn native_window_title_uses_the_compiled_application_name() {
+    let app = app();
+    assert!(app.window_title().ends_with(crate::build_config::app_name()));
+    assert_eq!(crate::windows::title("Synthetic", false), format!("Synthetic - {}", crate::build_config::app_name()));
+    assert_eq!(crate::windows::title("Synthetic", true), format!("Synthetic • - {}", crate::build_config::app_name()));
+}
+
 fn mod_key(key: egui::Key) -> egui::Event {
     egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }
 }
@@ -478,12 +487,67 @@ fn app() -> WordApp {
     WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default())
 }
 
+/// A fitted label survives long names and the exact-width boundary without overflowing.
+#[test]
+fn title_elision_retains_a_fitting_build_label() {
+    let width = |text: &str| text.chars().count() as f32;
+    let title = "Document sintetic șțăîâ ".repeat(20);
+    let shown = chrome::fitted_title(&title, " (Preview)", 24.0, width);
+    assert!(shown.ends_with("… (Preview)"));
+    assert!(width(&shown) <= 24.0);
+    for available in [10.0, 10.5] {
+        let shown = chrome::fitted_title(&title, " (Preview)", available, width);
+        assert_eq!(shown, " (Preview)", "omit the ellipsis when only the label fits");
+        assert!(width(&shown) <= available);
+    }
+    assert_eq!(chrome::fitted_title(&title, " (Preview)", 0.0, width), "");
+    assert_eq!(chrome::fitted_title("Notes", "", 24.0, width), "Notes");
+    assert_eq!(chrome::fitted_title("Document1 — Not saved", "", 12.0, width), "Document1 —…");
+    let narrow = chrome::fitted_title(&title, " (A very long build label)", 12.0, width);
+    assert_eq!(narrow, "(A very lon…");
+    assert!(width(&narrow) <= 12.0);
+}
+
+/// Saving state and the distribution label survive a long name, including Unicode names.
+#[test]
+fn title_elision_preserves_save_state_before_the_document_name() {
+    let width = |text: &str| text.chars().count() as f32;
+    let name = "Note sintetice șțăîâ ".repeat(30);
+    for state in [" — Saved", " — Edited", " — Not saved", " — Salvat"] {
+        for label in ["", " (Preview)"] {
+            let suffix = format!("{state}{label}");
+            let available = width(&suffix) + 8.0;
+            let shown = chrome::fitted_document_title(&name, state, label, available, width);
+            assert!(shown.ends_with(&suffix), "{shown:?}");
+            assert!(shown.contains('…'));
+            assert!(width(&shown) <= available);
+            assert_eq!(chrome::fitted_document_title("Note", state, label, 100.0, width), format!("Note{suffix}"));
+        }
+    }
+}
+
+/// An empty-window title protects the same label, even when only the label fits.
+#[test]
+fn title_elision_keeps_the_empty_window_distribution_label() {
+    let width = |text: &str| text.chars().count() as f32;
+    for available in [10.0, 12.0, 15.0] {
+        let shown = chrome::fitted_document_title("WordCraft", "", " (Preview)", available, width);
+        assert!(shown.ends_with(" (Preview)"), "{shown:?}");
+        assert!(width(&shown) <= available);
+    }
+    let narrow = chrome::fitted_document_title("Document", " — Not saved", " (Preview)", 12.0, width);
+    assert!(narrow.ends_with(" (Preview)"));
+    assert!(width(&narrow) <= 12.0);
+    assert_eq!(chrome::fitted_document_title("Document", " — Not saved", " (Preview)", 0.0, width), "");
+}
+
 /// All title-bar inputs have accessible names. Clicking the title opens Rename Document, the
 /// Rename button saves a new name, Escape cancels, a long name stays clickable, and rename
 /// leaves the document clean.
 #[test]
 fn title_and_account_buttons_work() {
     use egui_kittest::kittest::Queryable;
+    let suffix = if build_config::BUILD_LABEL.is_empty() { String::new() } else { format!(" ({})", build_config::BUILD_LABEL) };
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
@@ -495,7 +559,7 @@ fn title_and_account_buttons_work() {
     h.run_steps(6);
     assert!(h.unnamed_widgets().is_empty(), "chrome inputs have accessible names: {:?}", h.unnamed_widgets());
     h.check_accessibility();
-    h.get_by_label("Document1 — Not saved").click();
+    h.get_by_label(&format!("Document1 — Not saved{suffix}")).click();
     h.run_steps(2);
     assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("renameDocument"));
     assert!(h.unnamed_widgets().is_empty(), "the document-name field is labelled: {:?}", h.unnamed_widgets());
@@ -504,7 +568,7 @@ fn title_and_account_buttons_work() {
     assert!(h.state().dialog.is_none());
     assert!(h.state().session.file_name.is_none());
     assert!(!h.state().session.dirty);
-    h.get_by_label("Document1 — Not saved").click();
+    h.get_by_label(&format!("Document1 — Not saved{suffix}")).click();
     h.run_steps(2);
     h.event(egui::Event::Key {
         key: egui::Key::A,
@@ -526,7 +590,7 @@ fn title_and_account_buttons_work() {
     let long_name = "Notes ".repeat(25);
     h.state_mut().run("file.rename", json!({"name": long_name})).unwrap();
     h.run_steps(2);
-    h.get_by_label(&format!("{} — Not saved", long_name.trim())).click();
+    h.get_by_label(&format!("{} — Not saved{suffix}", long_name.trim())).click();
     h.run_steps(2);
     assert!(h.state().dialog.is_some());
     h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
@@ -687,7 +751,7 @@ fn start_screen_shows_file_home_and_esc_leaves_no_document() {
     let a = h.state_mut();
     assert!(!a.ui.backstage, "Esc leaves the Start screen");
     assert!(!a.has_document(), "for an empty window, not a blank document");
-    assert_eq!(a.sent_title, "WordCraft", "the window is titled with the app alone");
+    assert_eq!(a.sent_title, build_config::app_name(), "the window is titled with the app alone");
     // The ribbon's commands are off, but Help, the File tab and the settings work.
     for id in ["format.bold", "text.insert", "file.save", "file.saveAs", "file.print", "edit.paste", "insert.table", "ui.print"] {
         assert!(!widgets::enabled(a, id), "{id} is off with no document");

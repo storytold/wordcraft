@@ -49,7 +49,23 @@ impl WordApp {
     /// Whether the app asks for a newer release when it starts (off until the desktop app turns it on).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_startup_update_check(&mut self, on: bool) {
-        self.updates_rt.startup_check = on;
+        self.updates_rt.startup_check = crate::build_config::startup_update_check(on);
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn internal_build_keeps_startup_check_off_but_accepts_manual_checks() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        assert!(!app.updates_rt.startup_check);
+        app.set_startup_update_check(true);
+        assert_eq!(app.updates_rt.startup_check, crate::build_config::BUILD_LABEL.is_empty());
+        check(&mut app);
+        assert!(app.updates_rt.check_requested);
+        assert_eq!(app.updates_rt.startup_check, crate::build_config::BUILD_LABEL.is_empty());
     }
 }
 

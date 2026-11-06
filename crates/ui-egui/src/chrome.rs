@@ -275,6 +275,48 @@ impl MacTitleBar {
     }
 }
 
+/// Elide the document title before sacrificing the compiled distribution label.
+/// If the label alone does not fit, show an elided label instead of painting into controls.
+pub(crate) fn fitted_title(title: &str, suffix: &str, available: f32, width: impl Fn(&str) -> f32) -> String {
+    let (title, suffix) = if width(suffix) > available { (suffix.trim_start(), "") } else { (title, suffix) };
+    let mut shown: String = title.chars().take(240).collect();
+    if width(&format!("{shown}{suffix}")) > available {
+        if width(&format!("…{suffix}")) > available {
+            return suffix.to_string();
+        }
+        while !shown.is_empty() && width(&format!("{shown}…{suffix}")) > available {
+            shown.pop();
+        }
+        shown.push('…');
+    }
+    shown.push_str(suffix);
+    shown
+}
+
+/// Shorten the document name first, retaining the save state and distribution label when they
+/// fit. If those alone exceed the space, shorten the state before the label.
+pub(crate) fn fitted_document_title(name: &str, state: &str, label: &str, available: f32, width: impl Fn(&str) -> f32) -> String {
+    let suffix = format!("{state}{label}");
+    if width(&suffix) <= available {
+        // Shorten raw text first: removing the closing PDI of an already isolated name would
+        // accidentally put the status and label inside its bidi isolate.
+        let display = |text: &str| format!("{}{suffix}", crate::i18n::isolate(text));
+        let mut shown: String = name.chars().take(240).collect();
+        if width(&display(&shown)) > available {
+            if width(&display("…")) > available {
+                return suffix;
+            }
+            while !shown.is_empty() && width(&display(&format!("{shown}…"))) > available {
+                shown.pop();
+            }
+            shown.push('…');
+        }
+        display(&shown)
+    } else {
+        fitted_title(state.trim_start(), label, available, width)
+    }
+}
+
 /// Where the AutoSave switch's knob sits in its track `r`: on at the right and off at the left,
 /// mirrored in a right-to-left interface (on at the left).
 fn autosave_knob_x(rtl: bool, on: bool, r: Rect) -> f32 {
@@ -397,33 +439,26 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
             });
             let (qat_end, right_start) = if rtl { (right_start, qat_end) } else { (qat_end, right_start) };
             // Centred title.
-            let title = if !app.has_document() {
-                // No document open (#1129): the app's name alone.
-                "WordCraft".to_string()
+            let name = if app.has_document() { app.title_stem() } else { "WordCraft".to_string() };
+            let state = if !app.has_document() {
+                String::new()
             } else {
-                format!(
-                    "{} — {}",
-                    crate::i18n::isolate(&app.title_stem()),
-                    if app.session.dirty {
-                        tl!("Edited")
-                    } else if app.session.path.is_some() {
-                        tl!("Saved")
-                    } else {
-                        tl!("Not saved")
-                    }
-                )
+                let state = if app.session.dirty {
+                    tl!("Edited")
+                } else if app.session.path.is_some() {
+                    tl!("Saved")
+                } else {
+                    tl!("Not saved")
+                };
+                format!(" — {state}")
             };
+            let label = if crate::build_config::BUILD_LABEL.is_empty() { String::new() } else { format!(" ({})", crate::build_config::BUILD_LABEL) };
+            let title = format!("{}{state}{label}", crate::i18n::isolate(&name));
             let font = TypeRung::Chrome.semibold();
             let track = TypeRung::Chrome.tracking();
             let cx = full.center().x;
             let available = 2.0 * (cx - qat_end - 10.0).min(right_start - 10.0 - cx);
-            let mut shown: String = title.chars().take(240).collect();
-            if text_width(ui.painter(), &shown, &font, track, t.text) > available {
-                while !shown.is_empty() && text_width(ui.painter(), &format!("{shown}…"), &font, track, t.text) > available {
-                    shown.pop();
-                }
-                shown.push('…');
-            }
+            let shown = fitted_document_title(&name, &state, &label, available, |text| text_width(ui.painter(), text, &font, track, t.text));
             let w = text_width(ui.painter(), &shown, &font, track, t.text);
             if available > 24.0 {
                 let rect = Rect::from_center_size(pos2(cx, full.center().y), vec2(w + 8.0, control_h));

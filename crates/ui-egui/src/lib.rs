@@ -27,6 +27,7 @@ pub mod a11y_pane;
 pub mod async_saves;
 pub mod autoscroll;
 pub mod backstage;
+pub mod build_config;
 pub mod canvas;
 pub mod caret_glide;
 pub mod chrome;
