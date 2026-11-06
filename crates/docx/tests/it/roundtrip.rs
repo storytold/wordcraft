@@ -128,6 +128,8 @@ fn every_char_prop_round_trips() {
         cs: Some(true),
         font_cs: Some("B Nazanin".into()),
         font_ea: Some("宋体".into()),
+        font_ea_theme: Some("minorEastAsia".into()),
+        font_cs_theme: Some("minorBidi".into()),
         size_cs: Some(13.0),
         bold_cs: Some(false),
         italic_cs: Some(true),

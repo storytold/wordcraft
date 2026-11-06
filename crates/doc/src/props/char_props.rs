@@ -329,6 +329,16 @@ pub struct CharProps {
     /// inherit, then `font`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_ea: Option<String>,
+    /// The theme font slot of the East Asian font (`w:rFonts/@w:eastAsiaTheme`: `minorEastAsia`,
+    /// `majorEastAsia`…), kept so saving writes it back. Word picks the East Asian font through it
+    /// (over `font_ea`); losing it changes which font Word uses for CJK and East Asian punctuation,
+    /// and so the line breaks. Layout doesn't read it: `font_ea` and inheritance decide there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_ea_theme: Option<String>,
+    /// The theme font slot of the complex-script font (`w:rFonts/@w:cstheme`: `minorBidi`…), kept
+    /// so saving writes it back, like `font_ea_theme`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_cs_theme: Option<String>,
     /// Complex-script size, points (`w:szCs`). `None` leaves the inherited value unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size_cs: Option<f32>,
@@ -509,7 +519,7 @@ impl CharProps {
     }
 
     fn minus_script_style(&mut self, base: &CharProps) {
-        drop_same_fields!(self, base; cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout);
+        drop_same_fields!(self, base; cs, font_cs, font_ea, font_ea_theme, font_cs_theme, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout);
     }
 
     fn minus_document_marks(&mut self, base: &CharProps) {
@@ -540,7 +550,15 @@ impl CharProps {
     }
 
     fn overlay_script_style(&mut self, patch: &CharProps) {
-        overlay_fields!(self, patch; cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout);
+        // A font set without a theme slot replaces the slot too: in Word the slot wins over the
+        // named font, so keeping it would hide the font just chosen.
+        if patch.font_ea.is_some() && patch.font_ea_theme.is_none() {
+            self.font_ea_theme = None;
+        }
+        if patch.font_cs.is_some() && patch.font_cs_theme.is_none() {
+            self.font_cs_theme = None;
+        }
+        overlay_fields!(self, patch; cs, font_cs, font_ea, font_ea_theme, font_cs_theme, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout);
     }
 
     fn overlay_document_marks(&mut self, patch: &CharProps) {

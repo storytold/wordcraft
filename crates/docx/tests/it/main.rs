@@ -36,6 +36,7 @@ mod section_valign;
 mod settings_merge;
 mod text_alignment;
 mod text_boxes;
+mod theme_font_slots;
 mod toc_ranges;
 mod undefined_style;
 mod vml_shapes;
