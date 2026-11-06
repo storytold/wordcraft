@@ -770,6 +770,12 @@ impl WordApp {
     pub(crate) fn other_windows(&self) -> impl Iterator<Item = &WindowUi> {
         self.windows.open.iter().filter_map(|w| w.ui.as_deref())
     }
+
+    /// [`WordApp::other_windows`] with each window's key, for each window's composition face
+    /// ([`crate::theme::composition_family`]).
+    pub(crate) fn other_windows_by_key(&self) -> impl Iterator<Item = (u64, &WindowUi)> {
+        self.windows.open.iter().filter_map(|w| w.ui.as_deref().map(|ui| (w.key, ui)))
+    }
 }
 
 #[cfg(test)]

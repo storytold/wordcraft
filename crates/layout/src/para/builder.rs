@@ -149,6 +149,7 @@ impl<'a> Builder<'a> {
         };
         let st = StyleRun {
             face,
+            requested_face: r.face,
             size,
             synth_bold,
             synth_italic,

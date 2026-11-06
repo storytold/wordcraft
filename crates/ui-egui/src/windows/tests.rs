@@ -360,6 +360,64 @@ fn a_composition_stays_in_its_window() {
     assert_eq!(text(&a), "B", "a commit in the other window doesn't land here");
 }
 
+/// The fonts are the app's, one set for every window. A composition in one window installs them
+/// with the faces another window borrowed for its interface text, and each window's composition
+/// keeps its own document's face, whichever window installed the fonts last. With both windows
+/// composing, neither installs them again.
+#[test]
+fn a_composition_keeps_every_windows_fonts() {
+    let ctx = backend();
+    let font = |a: &mut WordApp, name: &str| {
+        a.run("select.all", json!({})).unwrap();
+        a.run("format.font", json!({"name": name})).unwrap();
+        a.run("caret.docEnd", json!({})).unwrap();
+    };
+    let mut a = app("Serif");
+    font(&mut a, "Source Serif 4");
+    let first = a.windows.shown();
+    frames(&ctx, &mut a, 2);
+    a.run("file.new", json!({})).unwrap();
+    a.run("text.insert", json!({"text": "Mono"})).unwrap();
+    font(&mut a, "JetBrains Mono");
+    let (second, b) = (a.windows.shown(), a.active_viewport());
+    assert_ne!(first, second);
+    // The second window borrows a face for its interface text, as for a file name in a script
+    // the interface fonts lack.
+    let borrowed = wordcraft_fonts::FontDb::global().fallback_for('A', u32::MAX).expect("a face for Latin");
+    let borrowed_name = format!("fallback {} {} {}", borrowed.family, borrowed.style, borrowed.id());
+    a.canvas.ime_faces.push(borrowed);
+    a.styled = false;
+    let compose = |id: ViewportId| {
+        EVENTS.with(|e| {
+            e.borrow_mut().entry(id).or_default().push(egui::Event::Ime(egui::ImeEvent::Preedit { text: "tottori".into(), active_range_chars: None }))
+        })
+    };
+    let face_of = |window: u64| {
+        ctx.fonts(|f| f.definitions().families.get(&crate::theme::composition_family(window)).and_then(|v| v.first().cloned())).unwrap_or_default()
+    };
+    let has_borrowed = || ctx.fonts(|f| f.definitions().families.get(&egui::FontFamily::Proportional).is_some_and(|v| v.contains(&borrowed_name)));
+
+    focus(ViewportId::ROOT);
+    frames(&ctx, &mut a, 8);
+    assert!(a.active_viewport() == ViewportId::ROOT && a.canvas.focused);
+    compose(ViewportId::ROOT);
+    frames(&ctx, &mut a, 3);
+    assert!(face_of(first).contains("Source Serif"), "{}", face_of(first));
+    assert!(has_borrowed(), "the first window's composition keeps the face the second borrowed");
+
+    focus(b);
+    frames(&ctx, &mut a, 8);
+    assert!(a.active_viewport() == b && a.canvas.focused);
+    compose(b);
+    frames(&ctx, &mut a, 3);
+    assert!(face_of(second).contains("JetBrains Mono"), "{}", face_of(second));
+    assert!(face_of(first).contains("Source Serif"), "the first window's composition keeps its face: {}", face_of(first));
+    assert!(has_borrowed());
+    UPLOADS.with(|u| *u.borrow_mut() = 0);
+    frames(&ctx, &mut a, 4);
+    assert_eq!(UPLOADS.with(|u| *u.borrow()), 0, "the fonts are not installed again");
+}
+
 /// Control-channel typing goes to the active window when it has a viewport of its own (the
 /// root's raw-input hook doesn't see that window's input), once.
 #[test]
