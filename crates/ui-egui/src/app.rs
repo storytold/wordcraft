@@ -149,6 +149,7 @@ impl WordApp {
             windows: windows::Windows::new(shown_document),
             print_document: None,
             canvas,
+            paste_options: None,
             controls,
             dialog,
             colors,
