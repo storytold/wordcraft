@@ -176,6 +176,8 @@ impl EmbeddedManifest {
         m
     }
 
+    /// The Flat OPC XML of the package: the parts that pass the manifest check, as
+    /// [`Package::from_bytes`] reads them back.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut s = String::new();
         for (part, p) in &self.parts {
@@ -221,6 +223,8 @@ impl Package {
         Package::open_limited(bytes, MAX_PART, MAX_TOTAL)
     }
 
+    /// [`open_limited`] with the package's own caps: a hostile file is held to the part and
+    /// total sizes and the XML element budget it can pay for.
     pub fn open_limited(bytes: &[u8], max_part: u64, max_total: u64) -> Result<Package, DocxError> {
         Package::open_limited_within(bytes, max_part, max_total, xml::MAX_ELEMENTS_TOTAL)
     }
@@ -299,6 +303,8 @@ impl Package {
         Ok(())
     }
 
+    /// Builds the package's lowercase index and checks case collisions: two names that differ
+    /// only in case are refused by the caller, a file's parts are found case-insensitively.
     fn new(mut files: BTreeMap<String, Arc<Vec<u8>>>) -> Package {
         let mut lower: HashMap<String, String> = HashMap::new();
         let mut collides = false;
@@ -359,6 +365,9 @@ impl Package {
         }
     }
 
+    /// A package part as a parsed XML tree, charged against the element budget: the parser
+    /// stops at what is left of the budget or the per-part cap, whichever is less, and the
+    /// count it built is charged after. A lenient read: malformed XML is a truncated one.
     pub fn xml(&self, name: &str) -> Result<Option<El>, DocxError> {
         match self.get(name) {
             Some(b) => {
@@ -460,6 +469,8 @@ impl Rels {
     }
 }
 
+/// The parent directory of a package part and its name: `/word/media/a.png` splits to
+/// `/word/media` and `a.png`, a part at the root to an empty directory and the name itself.
 fn split_dir(part: &str) -> (&str, &str) {
     let p = part.trim_start_matches('/');
     match p.rfind('/') {
@@ -538,6 +549,7 @@ pub fn zip_entries(entries: &[(String, Vec<u8>)]) -> Result<Vec<u8>, DocxError> 
 mod tests {
     use super::*;
 
+    /// Zips test entries (name, bytes) into a package in memory.
     fn zip_of(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
         let e: Vec<(String, Vec<u8>)> = entries.iter().map(|(n, b)| (n.to_string(), b.clone())).collect();
         zip_entries(&e).unwrap()

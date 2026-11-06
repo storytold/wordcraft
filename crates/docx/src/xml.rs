@@ -86,6 +86,8 @@ const STRICT: &[(&str, &str)] = &[
     ("m", "http://purl.oclc.org/ooxml/officeDocument/math"),
 ];
 
+/// The canonical prefix the parser maps a namespace URI to: one of `extra`'s (prefix, URI) pairs
+/// whose URI matches, else the canonical prefix `NAMESPACES` names.
 fn prefix_for(uri: &[u8], extra: &[(&'static str, &str)]) -> &'static str {
     if let Some((p, _)) = extra.iter().find(|(_, u)| u.as_bytes() == uri) {
         return p;
@@ -219,6 +221,7 @@ impl El {
     /// All descendant text (depth-bounded by the parser).
     pub fn deep_text(&self) -> String {
         let mut s = String::new();
+        /// Walks the subtree depth-first, appending text until [`MAX_DEPTH`].
         fn go(e: &El, s: &mut String, depth: usize) {
             if depth > MAX_DEPTH {
                 return;
@@ -332,6 +335,10 @@ pub fn parse_ns(bytes: &[u8], extra: &[(&'static str, &str)]) -> Result<El, Docx
     parse_with(bytes, extra, false, MAX_ELEMENTS).map(|(e, _)| e)
 }
 
+/// The XML parser everything else goes through: transcodes UTF-16, walks the events and builds
+/// the tree depth-first, counting every element and stopping at `max` (a mismatched end tag or
+/// an element left open at the end of the data is an error when `strict`, a cue to stop
+/// reading when not).
 fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool, max: usize) -> Result<(El, usize), DocxError> {
     // UTF-16 (with a BOM) is transcoded to UTF-8; a UTF-8 BOM is stripped.
     let transcoded = utf16_to_utf8(bytes);
@@ -477,6 +484,8 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool, max: u
     root.map(|e| (e, count)).ok_or_else(|| DocxError::Xml("no root element".into()))
 }
 
+/// Appends `s` to the top element's text: continues the last text node when the previous child
+/// is one, else starts a new one (adjacent events of one run stay one node).
 fn push_text(top: &mut El, s: &str) {
     if let Some(Node::Text(prev)) = top.kids.last_mut() {
         prev.push_str(s);
@@ -485,6 +494,8 @@ fn push_text(top: &mut El, s: &str) {
     }
 }
 
+/// Attaches a closed element to its parent on the stack, or, when the stack is empty, to the
+/// root: the first one wins, further top-level elements are refused by the caller's check.
 fn attach(stack: &mut [El], root: &mut Option<El>, el: El) {
     match stack.last_mut() {
         Some(parent) => parent.kids.push(Node::El(el)),
