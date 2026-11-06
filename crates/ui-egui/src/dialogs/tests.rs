@@ -1916,3 +1916,40 @@ fn the_page_waits_for_the_keyboard_until_a_modal_dialog_closes() {
     h.run_steps(2);
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "!", "the page has it after the dialog");
 }
+
+#[test]
+fn font_sample_props_map_each_field_to_its_property() {
+    use super::font::font_sample_props;
+    use wordcraft_doc::props::Underline;
+    let mut app = app_with("Example");
+    let white = wordcraft_doc::Rgb(255, 255, 255);
+    let mut p = |fx: (bool, bool, bool, bool), sc: (bool, bool, bool)| font_sample_props(&mut app, white, "Serif", "12", "", fx, sc, 1.5);
+    let q = p((true, false, false, true), (true, false, false));
+    assert_eq!((q.bold, q.italic, q.strike), (Some(true), Some(false), Some(true)));
+    assert_eq!((q.small_caps, q.caps, q.spacing), (Some(true), Some(false), Some(1.5)));
+    let q = p((false, true, false, false), (false, true, false));
+    assert_eq!((q.italic, q.small_caps, q.caps), (Some(true), Some(false), Some(true)));
+    assert_eq!(p((false, false, false, false), (false, false, true)).underline, Some(Underline::Dotted));
+    assert_eq!(p((false, false, true, false), (false, false, true)).underline, Some(Underline::Single));
+}
+
+#[test]
+fn font_dialog_opens_at_its_final_size() {
+    let mut app = app_with("Example");
+    app.dialog = Dialog::open("font", &mut app);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    use egui_kittest::kittest::Queryable;
+    let mut widths = Vec::new();
+    for _ in 0..8 {
+        h.step();
+        widths.push(h.get_by_label("OK").rect().min.x);
+    }
+    assert!(widths[2..].windows(2).all(|w| w[0] == w[1]), "the dialog keeps growing: {widths:?}");
+}
