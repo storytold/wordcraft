@@ -71,6 +71,7 @@ struct Shaped<'a> {
     drop_cap: Option<(usize, u8, f32)>,
     drop_cap_w: f32,
     maths: Vec<(usize, Arc<crate::math::MathLayout>)>,
+    check_boxes: Vec<usize>,
     enclosures: Vec<(usize, Enclosed)>,
     rubies: Vec<RubyLayout>,
     displays: Vec<(usize, wordcraft_doc::math::MathJc)>,
@@ -176,6 +177,7 @@ impl<'a> Shaped<'a> {
             drop_cap: None,
             drop_cap_w: 0.0,
             maths: Vec::new(),
+            check_boxes: Vec::new(),
             enclosures: Vec::new(),
             rubies: Vec::new(),
             displays: Vec::new(),
@@ -266,6 +268,8 @@ impl<'a> Shaped<'a> {
         big.size = (((lines - 1.0) * line_h + rc.size * 0.7) / 0.7).min(1000.0).max(rc.size);
         if let Some(f) = &rp.drop_cap_font {
             big.font = f.clone();
+            big.font_cs = f.clone();
+            big.font_ea = Some(f.clone());
         }
         let before = self.b.clusters.len();
         self.b.shape(first, 0, &Arc::new(big), None);
@@ -404,6 +408,7 @@ impl<'a> Shaped<'a> {
         let scale = size.map_or(1.0, |sz| sz / rc.size.max(0.5));
         let (a, d) = (a * scale, d * scale);
         self.b.clusters.push(slot.cluster(ClKind::Object(k), a + d, (a.max(0.01), d)));
+        self.check_boxes.push(k);
     }
 
     fn field_result(&mut self, cx: &Cx, (instr, result): (&str, &str), slot: Slot, rc: &Arc<ResolvedChar>) {
@@ -622,7 +627,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     mark_break_opportunities(&mut sh.b.clusters, &bt, &rp);
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
-    let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
+    let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, check_boxes, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
     let mut pl = ParaLayout {
         rp,
         substituted: b.substituted,
@@ -643,6 +648,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         bidi_levels: b.levels,
         drop_cap_w,
         maths,
+        check_boxes,
         rubies,
         displays,
         ptabs,
