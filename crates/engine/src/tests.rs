@@ -12,6 +12,8 @@ use crate::{Session, cmd};
 
 mod bidi;
 mod documents;
+mod field_search_controls;
+mod find_fields;
 mod font_sizes;
 mod fonts;
 mod ime_noop;
