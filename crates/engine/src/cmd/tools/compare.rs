@@ -718,6 +718,214 @@ fn same_blocks(a: &[Arc<Block>], b: &[Arc<Block>]) -> bool {
     a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| block_key(x) == block_key(y))
 }
 
+fn simple_para_text(b: &Block) -> Option<String> {
+    match b {
+        Block::Para(p) if p.objects.is_empty() && p.text.chars().all(|c| c != OBJ) => Some(p.plain_text()),
+        _ => None,
+    }
+}
+
+fn merge_text_tokens(base: &[&str], ours: &[&str], theirs: &[&str], conflict_mode: &str) -> (Vec<String>, usize) {
+    let ov = side_view_tokens(base, ours);
+    let tv = side_view_tokens(base, theirs);
+    let mut out = Vec::new();
+    let mut conflicts = 0usize;
+    for i in 0..=base.len() {
+        let oi = ov.ins.get(i).cloned().unwrap_or_default();
+        let ti = tv.ins.get(i).cloned().unwrap_or_default();
+        if !oi.is_empty() || !ti.is_empty() {
+            if oi == ti || ti.is_empty() {
+                out.extend(oi);
+            } else if oi.is_empty() {
+                out.extend(ti);
+            } else {
+                conflicts += 1;
+                match conflict_mode {
+                    "ours" => out.extend(oi),
+                    "theirs" => out.extend(ti),
+                    _ => {
+                        out.push("<<<<<<< ours".to_string());
+                        out.extend(oi);
+                        out.push("=======".to_string());
+                        out.extend(ti);
+                        out.push(">>>>>>> theirs".to_string());
+                    }
+                }
+            }
+        }
+        if i == base.len() {
+            break;
+        }
+        let b = base.get(i).copied().unwrap_or("");
+        let ob = ov.kept.get(i).and_then(|x| x.as_deref());
+        let tb = tv.kept.get(i).and_then(|x| x.as_deref());
+        match (ob, tb) {
+            (Some(o), Some(t)) => {
+                if o == t {
+                    out.push(o.to_string());
+                } else if o == b {
+                    out.push(t.to_string());
+                } else if t == b {
+                    out.push(o.to_string());
+                } else {
+                    conflicts += 1;
+                    match conflict_mode {
+                        "ours" => out.push(o.to_string()),
+                        "theirs" => out.push(t.to_string()),
+                        _ => {
+                            out.push("<<<<<<< ours".to_string());
+                            out.push(o.to_string());
+                            out.push("=======".to_string());
+                            out.push(t.to_string());
+                            out.push(">>>>>>> theirs".to_string());
+                        }
+                    }
+                }
+            }
+            (None, None) => {}
+            (Some(o), None) => {
+                if o != b {
+                    conflicts += 1;
+                    match conflict_mode {
+                        "ours" => out.push(o.to_string()),
+                        "theirs" => {}
+                        _ => {
+                            out.push("<<<<<<< ours".to_string());
+                            out.push(o.to_string());
+                            out.push("=======".to_string());
+                            out.push(">>>>>>> theirs (deleted)".to_string());
+                        }
+                    }
+                }
+            }
+            (None, Some(t)) => {
+                if t != b {
+                    conflicts += 1;
+                    match conflict_mode {
+                        "ours" => {}
+                        "theirs" => out.push(t.to_string()),
+                        _ => {
+                            out.push("<<<<<<< ours (deleted)".to_string());
+                            out.push("=======".to_string());
+                            out.push(t.to_string());
+                            out.push(">>>>>>> theirs".to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (out, conflicts)
+}
+
+#[derive(Clone, Debug)]
+struct TokenSideView {
+    ins: Vec<Vec<String>>,
+    kept: Vec<Option<String>>,
+}
+
+fn side_view_tokens(base: &[&str], side: &[&str]) -> TokenSideView {
+    let mut budget = MAX_COMPARE_CELLS;
+    let ops = lcs_ops(base, side, &mut budget);
+    let mut ins = vec![Vec::new(); base.len() + 1];
+    let mut kept = Vec::with_capacity(base.len());
+    let (mut bi, mut si, mut k) = (0usize, 0usize, 0usize);
+    let mut at = 0usize;
+    while k < ops.len() {
+        match ops.get(k).copied() {
+            Some(Op::Same) => {
+                kept.push(Some(side.get(si).copied().unwrap_or_else(|| base.get(bi).copied().unwrap_or("")).to_string()));
+                bi += 1;
+                si += 1;
+                at = at.saturating_add(1);
+                k += 1;
+            }
+            Some(Op::Ins) if matches!(ops.get(k + 1), Some(Op::Del)) => {
+                kept.push(Some(side.get(si).copied().unwrap_or("").to_string()));
+                bi += 1;
+                si += 1;
+                at = at.saturating_add(1);
+                k += 2;
+            }
+            Some(Op::Del) if matches!(ops.get(k + 1), Some(Op::Ins)) => {
+                kept.push(Some(side.get(si).copied().unwrap_or("").to_string()));
+                bi += 1;
+                si += 1;
+                at = at.saturating_add(1);
+                k += 2;
+            }
+            Some(Op::Ins) => {
+                if let Some(slot) = ins.get_mut(at) {
+                    slot.push(side.get(si).copied().unwrap_or("").to_string());
+                }
+                si += 1;
+                k += 1;
+            }
+            Some(Op::Del) => {
+                kept.push(None);
+                bi += 1;
+                at = at.saturating_add(1);
+                k += 1;
+            }
+            None => break,
+        }
+    }
+    while bi < base.len() {
+        kept.push(None);
+        bi += 1;
+    }
+    while si < side.len() {
+        if let Some(slot) = ins.last_mut() {
+            slot.push(side.get(si).copied().unwrap_or("").to_string());
+        }
+        si += 1;
+    }
+    TokenSideView { ins, kept }
+}
+
+fn try_merge_simple_para_conflict(base_b: &Arc<Block>, ob: &Arc<Block>, tb: &Arc<Block>, conflict_mode: &str) -> Option<(Vec<Arc<Block>>, usize)> {
+    let (bt, ot, tt) = (simple_para_text(base_b)?, simple_para_text(ob)?, simple_para_text(tb)?);
+    if ot == tt {
+        return Some((vec![ob.clone()], 0));
+    }
+    if ot == bt {
+        return Some((vec![tb.clone()], 0));
+    }
+    if tt == bt {
+        return Some((vec![ob.clone()], 0));
+    }
+    // word-level merge on simple text
+    let bw: Vec<&str> = bt.split_inclusive(char::is_whitespace).collect();
+    let ow: Vec<&str> = ot.split_inclusive(char::is_whitespace).collect();
+    let tw: Vec<&str> = tt.split_inclusive(char::is_whitespace).collect();
+    let (merged, conflicts) = merge_text_tokens(&bw, &ow, &tw, conflict_mode);
+    if conflicts == 0 {
+        return Some((vec![para_block(Paragraph::with_text(&merged.concat(), CharProps::default()))], 0));
+    }
+    // Render token-level conflicts as separate paragraphs/lines for clarity.
+    let mut blocks = Vec::new();
+    let mut cur = String::new();
+    let flush = |blocks: &mut Vec<Arc<Block>>, cur: &mut String| {
+        if !cur.is_empty() {
+            blocks.push(para_block(Paragraph::with_text(cur.trim_end_matches('\n'), CharProps::default())));
+            cur.clear();
+        }
+    };
+    for t in merged {
+        if t == "<<<<<<< ours" || t == "=======" || t == ">>>>>>> theirs" || t == ">>>>>>> theirs (deleted)" || t == "<<<<<<< ours (deleted)" {
+            flush(&mut blocks, &mut cur);
+            blocks.push(para_block(Paragraph::with_text(&t, CharProps::default())));
+        } else {
+            cur.push_str(&t);
+        }
+    }
+    flush(&mut blocks, &mut cur);
+    if blocks.is_empty() {
+        blocks.push(para_block(Paragraph::with_text(&tt, CharProps::default())));
+    }
+    Some((blocks, conflicts.max(1)))
+}
+
 /// Three-way merge at paragraph/block granularity. Returns (merged blocks, conflicts, notes).
 fn merge3_blocks(base: &[Arc<Block>], ours: &[Arc<Block>], theirs: &[Arc<Block>], conflict_mode: &str) -> (Vec<Arc<Block>>, usize, Vec<String>) {
     let ov = side_view(base, ours);
@@ -768,6 +976,11 @@ fn merge3_blocks(base: &[Arc<Block>], ours: &[Arc<Block>], theirs: &[Arc<Block>]
                     out.push((*tb).clone());
                 } else if tt == btxt {
                     out.push((*ob).clone());
+                } else if let Some(base_b) = base_b
+                    && let Some((blocks, c)) = try_merge_simple_para_conflict(base_b, ob, tb, conflict_mode)
+                {
+                    conflicts += c;
+                    out.extend(blocks);
                 } else {
                     conflicts += 1;
                     match conflict_mode {
