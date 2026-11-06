@@ -141,7 +141,7 @@ impl WordApp {
                 && let Some(pw) = params.get("password").filter(|v| !v.is_null())
             {
                 if !wordcraft_engine::io::can_encrypt(&name) || pw.as_str().is_none_or(str::is_empty) {
-                    return Err("only Word documents (.docx, .docm, .dotx, .dotm) can be saved with a password, and it can't be empty".into());
+                    return Err("only Word documents (.docx, .docm, .dotx, .dotm) and OpenDocument text files (.odt, .ott) can be saved with a password, and it can't be empty".into());
                 }
                 self.session.run("file.encrypt", &json!({"password": pw})).map_err(|e| e.to_string())?;
             }
@@ -658,6 +658,17 @@ impl WordApp {
                 self.read_system_animations();
                 json!({"animations": self.ui.animations.code(), "enabled": self.animations_on(), "system": self.system_animations})
             }
+            "ui.statusCount" => {
+                // `words` (the default), `characters` or `charactersNoSpaces`: what the status
+                // bar's live count shows; no value reads it (#2797).
+                if let Some(v) = s("value") {
+                    match crate::StatusCount::from_code(v) {
+                        Some(c) => self.ui.status_count = c,
+                        None => return Some(Err(format!("unknown status count {v:?}; use words, characters or charactersNoSpaces"))),
+                    }
+                }
+                json!({"statusCount": self.ui.status_count.code()})
+            }
             "ui.language" => {
                 // `auto` (follow the system) or a language code; anything else is an error.
                 if let Some(v) = s("value") {
@@ -778,6 +789,18 @@ impl WordApp {
                     Some(_) => return Some(Err("`value` must be true or false".into())),
                 }
                 json!({"startScreen": self.ui.start_screen})
+            }
+            "ui.displayServer" => {
+                // File › Options › Advanced › Linux display server (#2184): `value` `auto`,
+                // `wayland` or `x11`; no value reads it. The desktop app reads it at the next launch.
+                match p.get("value") {
+                    None => {}
+                    Some(v) => match v.as_str().and_then(crate::DisplayServer::from_code) {
+                        Some(d) => self.ui.display_server = d,
+                        None => return Some(Err(format!("unknown display server {v}; use auto, wayland or x11"))),
+                    },
+                }
+                json!({"displayServer": self.ui.display_server.code()})
             }
             // Shape Format › Text › Create Link: the next click on an empty text box links the
             // selected box to it (`shape.link` with that box as the target); Esc cancels.
@@ -1036,6 +1059,8 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.discord"
             | "ui.caretAnimation"
             | "ui.startScreen"
+            | "ui.displayServer"
+            | "ui.statusCount"
             | "ui.checkForUpdates"
     ) || id.starts_with("help.")
 }
