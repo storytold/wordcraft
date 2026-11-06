@@ -492,3 +492,81 @@ fn a_margin_changed_with_the_watermark_or_odd_and_even_pages_keeps_them() {
     assert!(!back.settings.even_odd_headers);
     assert!((back.last_section.margin_left - d.last_section.margin_left).abs() < 0.5, "the margin: {s}");
 }
+
+/// XML allows space around an attribute's `=`, and either quote. A change replaces such an
+/// attribute: a second one by that name would make a file no reader can open.
+#[test]
+fn a_page_setup_change_replaces_an_attribute_however_the_file_writes_it() {
+    let ns = crate::odt::tests::NS_T;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties style:print-orientation=' fo:margin-left="9cm"' fo:page-width = "21cm" fo:page-height= '29.7cm' fo:margin-top = "2cm" fo:margin-bottom ="2cm" fo:margin-left= '3cm' fo:margin-right
+ =
+ "2cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>"#
+    );
+    let content =
+        format!("<office:document-content {ns}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>");
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    let s = &mut d.last_section;
+    (s.margin_top, s.margin_bottom, s.margin_left, s.margin_right) = (100.0, 90.0, 80.0, 70.0);
+    let saved = export(&d).unwrap();
+    let written = crate::odt::tests::entry(&saved, "styles.xml");
+    let layout = written.split(r#"style:name="pm1""#).nth(1).and_then(|r| r.split("</style:page-layout>").next()).unwrap();
+    for (name, value) in [("fo:margin-top", "100pt"), ("fo:margin-bottom", "90pt"), ("fo:margin-right", "70pt")] {
+        assert_eq!(layout.matches(name).count(), 1, "{name} once: {layout}");
+        assert!(layout.contains(&format!(r#"{name}="{value}""#)), "{name}: {layout}");
+    }
+    assert!(
+        layout.contains(r#"fo:margin-left="80pt""#) && layout.contains(r#"' fo:margin-left="9cm"'"#),
+        "the value that looks like one stays: {layout}"
+    );
+    let back = import(&saved).unwrap().last_section;
+    assert_eq!((back.margin_top, back.margin_bottom, back.margin_left, back.margin_right), (100.0, 90.0, 80.0, 70.0), "{layout}");
+}
+
+/// Later pages follow a border change only where they said what the first pages did: what else
+/// they say of their border and padding stays, stated side by side or all at once.
+#[test]
+fn a_border_change_keeps_what_later_pages_say_of_the_rest() {
+    let ns = crate::odt::tests::NS_T;
+    let page =
+        r#"fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm" fo:margin-bottom="2cm" fo:margin-left="2cm" fo:margin-right="2cm""#;
+    let (black, red) = ("1pt solid #000000", "3pt solid #ff0000");
+    let changed = |later: &str| {
+        let styles = format!(
+            r#"<office:document-styles {ns}><office:automatic-styles><style:page-layout style:name="later"><style:page-layout-properties {page} {later}/></style:page-layout><style:page-layout style:name="first"><style:page-layout-properties {page} fo:border="{black}" fo:padding="10pt"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="later"/><style:master-page style:name="First" style:page-layout-name="first" style:next-style-name="Standard"/></office:master-styles></office:document-styles>"#
+        );
+        let content = format!(
+            r#"<office:document-content {ns}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:master-page-name="First"/></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">x</text:p></office:text></office:body></office:document-content>"#
+        );
+        let mut d = import(&package(&content, Some(&styles))).unwrap();
+        let top = d.last_section.page_borders.as_mut().and_then(|b| b.top.as_mut()).expect("a top border");
+        (top.width, top.color) = (2.0, Some(Rgb(0, 0, 255)));
+        let s = crate::odt::tests::styles_of(&export(&d).unwrap());
+        let layout = |name: &str| {
+            let key = format!(r#"style:name="{name}""#);
+            s.split(key.as_str()).nth(1).and_then(|r| r.split("</style:page-layout>").next()).unwrap().to_string()
+        };
+        (layout("first"), layout("later"))
+    };
+    let has = |layout: &str, attr: &str, value: &str| assert!(layout.contains(&format!(r#"{attr}="{value}""#)), "{attr}={value}: {layout}");
+    let blue = "2pt solid #0000ff";
+
+    // Their top said what the first pages' did; their other sides and their padding differ.
+    let (first, later) = changed(&format!(r#"fo:border="{red}" fo:border-top="{black}" fo:padding="20pt""#));
+    has(&first, "fo:border-top", blue);
+    has(&first, "fo:border-left", black);
+    has(&later, "fo:border-top", blue);
+    for side in ["bottom", "left", "right"] {
+        has(&later, &format!("fo:border-{side}"), red);
+    }
+    for side in ["top", "bottom", "left", "right"] {
+        has(&later, &format!("fo:padding-{side}"), "20pt");
+    }
+    assert!(!later.contains(r#"fo:border=""#) && !later.contains(r#"fo:padding=""#), "{later}");
+
+    // Their border said what the first pages' did, all at once; their padding differs.
+    let (_, later) = changed(&format!(r#"fo:border="{black}" fo:padding="20pt""#));
+    has(&later, "fo:border-top", blue);
+    has(&later, "fo:border-left", black);
+    has(&later, "fo:padding-left", "20pt");
+}

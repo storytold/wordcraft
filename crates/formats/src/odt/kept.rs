@@ -431,23 +431,32 @@ fn locate(xml: &str, path: &str) -> Option<(usize, usize, usize, usize)> {
     found
 }
 
+/// Where attribute `name` is in `tag` (a start tag): from the space before it to its value's end.
+/// XML allows space around the `=` and either quote, and a value may hold what looks like an
+/// attribute, so this walks the attributes in turn.
+fn attr_span(tag: &str, name: &str) -> Option<(usize, usize)> {
+    let past_space = |at: usize| Some(at + tag.get(at..)?.find(|c: char| !c.is_ascii_whitespace())?);
+    let mut at = tag.find(|c: char| c.is_ascii_whitespace())?;
+    loop {
+        let name_at = past_space(at)?;
+        let eq = name_at + tag.get(name_at..)?.find('=')?;
+        let value_at = past_space(eq + 1)?;
+        let rest = tag.get(value_at..)?;
+        let quote = rest.chars().next().filter(|c| matches!(c, '"' | '\''))?;
+        let end = value_at + 1 + rest.get(1..)?.find(quote)? + 1;
+        if tag.get(name_at..eq)?.trim_end() == name {
+            return Some((at, end));
+        }
+        at = end;
+    }
+}
+
 /// `tag` (a start tag) with its attributes set as `sets` says (`None`: taken out).
 fn tag_with(tag: &str, sets: &[(String, Option<String>)]) -> String {
     let mut tag = tag.to_string();
     for (name, value) in sets {
         let written = value.as_ref().map(|v| format!(" {name}=\"{}\"", super::writer::x(v))).unwrap_or_default();
-        let needle = format!("{name}=");
-        let span = tag.match_indices(&needle).find_map(|(at, _)| {
-            let before = tag.get(..at)?;
-            if !before.ends_with(char::is_whitespace) {
-                return None;
-            }
-            let after = tag.get(at + needle.len()..)?;
-            let quote = after.chars().next()?;
-            let close = after.get(1..)?.find(quote)?;
-            Some((before.trim_end().len(), at + needle.len() + close + 2))
-        });
-        match span {
+        match attr_span(&tag, name) {
             Some((from, to)) => tag.replace_range(from..to, &written),
             None => {
                 let at = tag.len() - if tag.ends_with("/>") { 2 } else { usize::from(tag.ends_with('>')) };
@@ -555,24 +564,35 @@ fn patch_layout(file: &str, then: &str, now: &str, place: Place) -> Option<Strin
         }
         let of_side = |n: &str| n == "fo:min-height" || (path == LAYOUT && SIDES.iter().any(|side| side.margin == n));
         let has = had.get(path);
+        // What the file says of `n`: a border's or padding's side may be in what it gave all at once.
+        let stated = |n: &str| {
+            let has = has?;
+            has.get(n).or_else(|| {
+                let (all, side) = n.rsplit_once('-')?;
+                (matches!(all, "fo:border" | "fo:padding") && matches!(side, "top" | "bottom" | "left" | "right")).then(|| has.get(all))?
+            })
+        };
         let names: BTreeSet<&String> = was.keys().chain(is.keys()).collect();
         let mut sets: Vec<(String, Option<String>)> = names
             .into_iter()
             .filter(|n| was.get(*n) != is.get(*n) && !of_side(n))
-            .filter(|n| place.own || same_value(has.and_then(|h| h.get(*n)), was.get(*n)))
+            .filter(|n| place.own || same_value(stated(n), was.get(*n)))
             .map(|n| (n.clone(), is.get(n).cloned()))
             .collect();
         if sets.is_empty() {
             continue;
         }
-        // Page borders: each side as they are now, in place of any the file gave all at once.
+        // Page borders: each side as they are now, in place of any the file gave all at once. A
+        // later page's sides that didn't follow the change stay as the file says them.
         if sets.iter().any(|(n, _)| n.starts_with("fo:border-") || n.starts_with("fo:padding-")) {
             for attr in ["fo:border", "fo:padding"] {
                 sets.push((attr.to_string(), None));
                 for side in ["top", "bottom", "left", "right"] {
                     let n = format!("{attr}-{side}");
+                    let followed = sets.iter().any(|(k, _)| *k == n);
                     sets.retain(|(k, _)| *k != n);
-                    sets.push((n.clone(), is.get(&n).cloned()));
+                    let value = if place.own || followed { is.get(&n).cloned() } else { stated(&n).cloned() };
+                    sets.push((n, value));
                 }
             }
         }
