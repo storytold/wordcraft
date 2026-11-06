@@ -1,4 +1,4 @@
-use super::boxes::{BoxInput, BoxLayout, layout_box};
+use super::boxes::{BoxContext, BoxInput, BoxLayout, layout_box};
 use super::ctx::Ctx;
 use super::floats::left_out_objects;
 use super::page::{PageBuilder, item_bottom};
@@ -112,8 +112,8 @@ pub(crate) struct NoteSeps {
 impl NoteSeps {
     /// Lay out `seps` `width` wide.
     pub(crate) fn new(ctx: &mut Ctx, seps: &wordcraft_doc::NoteSeparators, width: f32) -> NoteSeps {
-        let mut lay = |blocks: &Option<Blocks>| blocks.as_ref().map(|b| sep_box(ctx, b, width));
-        NoteSeps { sep: lay(&seps.separator), cont: lay(&seps.continuation_separator), notice: lay(&seps.continuation_notice) }
+        let mut lay = |blocks: &Option<Blocks>, separator| blocks.as_ref().map(|b| sep_box(ctx, b, width, separator));
+        NoteSeps { sep: lay(&seps.separator, true), cont: lay(&seps.continuation_separator, true), notice: lay(&seps.continuation_notice, false) }
     }
     /// Height of the separator above a page's notes (`cont`: the continuation separator, when the
     /// first is continued from the page before).
@@ -128,8 +128,12 @@ impl NoteSeps {
 }
 
 /// A note separator or continuation notice story (`blocks`) laid out `width` wide.
-fn sep_box(ctx: &mut Ctx, blocks: &Blocks, width: f32) -> SepBox {
-    let bl = layout_box(ctx, BoxInput::other(DECOR_STORY, blocks, width, 0, None));
+fn sep_box(ctx: &mut Ctx, blocks: &Blocks, width: f32, trim_after: bool) -> SepBox {
+    let mut input = BoxInput::other(DECOR_STORY, blocks, width, 0, None);
+    if trim_after {
+        input.context = BoxContext::FootnoteSeparator;
+    }
+    let bl = layout_box(ctx, input);
     let mut items = bl.items;
     items.extend(separator_rules(blocks, &items));
     (items, bl.height)
@@ -299,7 +303,7 @@ pub(crate) fn place_endnotes(ctx: &mut Ctx, pb: &mut PageBuilder, ids: Vec<u32>,
     }
     // The document's own endnote separator, else a short line.
     let width = pb.col_w();
-    if let Some((items, h)) = ctx.doc.endnote_separators.separator.as_ref().map(|b| sep_box(ctx, b, width)) {
+    if let Some((items, h)) = ctx.doc.endnote_separators.separator.as_ref().map(|b| sep_box(ctx, b, width, false)) {
         let (x, y) = (pb.col_x(), pb.y);
         if let Some(pg) = pb.page() {
             pg.items.extend(items.into_iter().map(|mut it| {

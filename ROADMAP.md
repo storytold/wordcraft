@@ -814,6 +814,8 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-03 | trivial | Progress log: a long comment's card and balloon stop at ten lines (#3382) |
 | 2026-11-03 | trivial | Progress log: Replace and Remove Table of Contents with Word's title above a section break (#4041) |
 | 2026-11-03 | trivial | Progress log: language-packs-2 published and pinned, 75 Language packs |
+| 2026-11-03 | trivial | PR #5170 — Footnote separator spacing (2026-11-03): Trailing paragraph after-space is excluded from the footnote separator area; line height, internal gaps, continuation notices and endnote behavior retain their prior contracts. The existing native Word Mac 16.114.3 A4 Helvetica Neue controls at 0/6/12 pt remain the reference. Native long-note continuation and multi-paragraph custom separators remain unqualified. |
+| 2026-11-03 | trivial | Exclude trailing after-space from footnote separators; retain existing native Word controls and synthetic continuation coverage; broader continuation qualification remains open (#5170). |
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
