@@ -36,7 +36,7 @@ pub use select::{min_size, object_selection, picked_objects, selected, selected_
 #[cfg(test)]
 use shape::can_link;
 pub(crate) use shape::set_text_body;
-pub use shape::text_box_target;
+pub use shape::{SHAPE_STYLE_COLORS, SHAPE_STYLES, ShapeStyle, shape_style, text_box_target};
 pub use specs::specs;
 
 #[cfg(test)]

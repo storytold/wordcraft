@@ -143,7 +143,7 @@ fn size_only(app: &WordApp, hit: &ObjectHit) -> bool {
 }
 
 /// The story of the selected text box.
-fn selected_text_box(app: &WordApp) -> Option<u32> {
+pub(crate) fn selected_text_box(app: &WordApp) -> Option<u32> {
     match selected(app)? {
         (_, InlineObject::Shape { story: Some(id), .. }) if app.session.doc.parts.get(id).is_some_and(|p| p.kind == PartKind::TextBox) => Some(*id),
         _ => None,
@@ -775,7 +775,12 @@ pub fn key(app: &mut WordApp, key: egui::Key, m: egui::Modifiers) -> bool {
 /// With a text box selected, put the caret at the end of its text (typing goes there).
 pub fn enter_text_box(app: &mut WordApp) -> bool {
     let Some(id) = selected_text_box(app) else { return false };
-    // A box linked from another shows (and edits) the first box's story.
+    enter_text_story(app, id)
+}
+
+/// Put the caret at the end of the text of text box `id` (the first box of its link chain, whose
+/// story a linked box shows and edits).
+pub fn enter_text_story(app: &mut WordApp, id: u32) -> bool {
     let id = app.session.doc.text_box_chain(id).and_then(|c| c.first().copied()).unwrap_or(id);
     let end = app.session.doc.end_of(StoryRef::Part(id));
     app.run("caret.set", json!({"pos": end})).is_ok()

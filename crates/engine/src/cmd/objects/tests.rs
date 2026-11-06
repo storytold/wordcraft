@@ -77,6 +77,63 @@ fn copy_to_drops_a_copy_and_leaves_the_original() {
     assert_eq!(count(&s), 1);
 }
 
+/// Style (the shape's right-click bar): fill, outline and shadow from the theme, in one undo
+/// step; unknown ids are refused and leave the shape as it was.
+#[test]
+fn shape_style_sets_fill_outline_and_shadow_from_the_theme() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    let before = selected(&s).unwrap().1;
+    let theme = s.doc.settings.theme_colors.clone();
+    let look = |s: &Session| match selected(s) {
+        Some((_, InlineObject::Shape { fill, stroke, stroke_width, effects, .. })) => {
+            (fill.map(|f| f.main_color()), stroke, stroke_width, effects.shadow.is_some())
+        }
+        other => panic!("not a shape: {other:?}"),
+    };
+    for (style, _) in SHAPE_STYLES {
+        for (color, _) in SHAPE_STYLE_COLORS {
+            s.run("shape.style", &json!({"style": style, "color": color})).unwrap();
+            let want = shape_style(style, color, &theme).unwrap();
+            assert_eq!(look(&s), (want.fill, want.stroke, want.width, want.shadow), "{style} {color}");
+        }
+    }
+    s.run("shape.style", &json!({"style": "outline", "color": "accent2"})).unwrap();
+    assert_eq!(look(&s).1, theme.get(5).copied(), "the outline is the theme's accent 2");
+    s.run("shape.style", &json!({"style": "intense"})).unwrap();
+    assert!(look(&s).3, "intense casts a shadow");
+    assert_ne!(selected(&s).unwrap().1.frame().unwrap().2.effect, [0.0; 4], "intense updates float.effect");
+    let after = look(&s);
+    assert!(s.run("shape.style", &json!({"style": "sparkly"})).is_err());
+    assert!(s.run("shape.style", &json!({"style": "fill", "color": "accent9"})).is_err());
+    assert_eq!(look(&s), after, "a refused style changes nothing");
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(look(&s).0, shape_style("outline", "accent2", &theme).unwrap().fill, "one undo step per style");
+    assert_ne!(selected(&s).unwrap().1, before);
+
+    // Multi-selection: applies to every selected shape.
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "ellipse"})).unwrap();
+    s.run("select.objects", &json!({"index": 0})).unwrap();
+    s.run("select.addObject", &json!({"index": 1})).unwrap();
+    s.run("shape.style", &json!({"style": "moderate", "color": "accent3"})).unwrap();
+    let want = shape_style("moderate", "accent3", &theme).unwrap();
+    for (_, o) in all_objects(&s) {
+        let InlineObject::Shape { fill, stroke, .. } = o else { panic!("expected shape") };
+        assert_eq!((fill.map(|f| f.main_color()), stroke), (want.fill, want.stroke));
+    }
+
+    // shape.addText attaches a text box in one undoable step and respects document protection.
+    s.run("select.objects", &json!({"index": 0})).unwrap();
+    let v = s.run("shape.addText", &json!({})).unwrap();
+    let id = v["textBox"].as_u64().unwrap() as u32;
+    assert_eq!(text_box_target(&s).map(|(_, i)| i), Some(id));
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(text_box_target(&s).is_none(), "undo detaches the added text box");
+    s.doc.settings.protection = Some("readOnly".into());
+    assert!(s.run("shape.addText", &json!({})).is_err(), "refused in a read-only document");
+}
+
 /// The body's top-level paragraphs, an object's character shown as ▣.
 fn body_text(s: &Session) -> String {
     (0..2)
@@ -1376,4 +1433,110 @@ fn only_ink_members_pin_a_group() {
         }
     }
     assert!(!holds_ink(&group), "a group of charts is not pinned");
+}
+
+/// shape.style on a line keeps it visible (a preset without an outline gives it the preset's
+/// colour) and a picture in a mixed selection is skipped, not returned as styled.
+#[test]
+fn shape_style_keeps_open_shapes_visible_and_skips_pictures() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.shape", &json!({"kind": "line"})).unwrap();
+    s.run("shape.style", &json!({"style": "moderate", "color": "accent2"})).unwrap();
+    let Some((_, InlineObject::Shape { stroke, stroke_width, .. })) = selected(&s) else { panic!("a line") };
+    assert!(stroke.is_some() && stroke_width >= 1.0, "a line keeps a visible stroke: {stroke:?} {stroke_width}");
+
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("insert.picture", &json!({"data": data})).unwrap();
+    s.run("select.all", &json!({})).unwrap();
+    let r = s.run("shape.style", &json!({"style": "fill"})).unwrap();
+    assert!(r["object"].get("Shape").is_some() || r["object"]["kind"].is_string(), "the returned object is the styled shape: {r}");
+}
+
+/// Moderate and intense shape style presets recolor open shapes with their fill color when they have no outline.
+#[test]
+fn shape_style_moderate_recolors_open_shapes() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.shape", &json!({"kind": "line"})).unwrap();
+    s.run("shape.outline", &json!({"color": "000000", "width": 1.0})).unwrap();
+    let theme_accent2 = shape_style("moderate", "accent2", &s.doc.settings.theme_colors).unwrap().fill.unwrap();
+    s.run("shape.style", &json!({"style": "moderate", "color": "accent2"})).unwrap();
+    let Some((_, InlineObject::Shape { stroke, fill, stroke_width, .. })) = selected(&s) else { panic!("a line") };
+    assert_eq!(stroke, Some(theme_accent2), "recolored with the preset's fill");
+    assert!(fill.is_none(), "open shape gets no solid fill");
+    assert!(stroke_width >= 1.0);
+}
+
+/// Ink Freeforms are styled as open paths: outline/fill color applied to stroke, no solid fill.
+#[test]
+fn shape_style_handles_ink_freeforms_as_open_paths() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("document.setText", &json!({"text": "Hello world"})).unwrap();
+    s.run("draw.stroke", &json!({"page": 0, "points": [[100, 100], [200, 200]], "color": "000000", "width": 2.0})).unwrap();
+    let objs = all_objects(&s);
+    assert_eq!(objs.len(), 1);
+    let (pos, _) = &objs[0];
+    s.sel = Selection { anchor: pos.clone(), focus: Pos { off: pos.off + wordcraft_doc::para::OBJ.len_utf8(), ..pos.clone() } };
+    let theme_accent3 = shape_style("intense", "accent3", &s.doc.settings.theme_colors).unwrap().fill.unwrap();
+    s.run("shape.style", &json!({"style": "intense", "color": "accent3"})).unwrap();
+    let Some((_, InlineObject::Shape { stroke, fill, stroke_width, freeform, .. })) = selected(&s) else { panic!("ink shape") };
+    assert!(freeform.as_ref().is_some_and(|f| f.is_ink()), "still an ink freeform");
+    assert_eq!(stroke, Some(theme_accent3), "ink stroke recolored with intense preset fill");
+    assert!(fill.is_none(), "ink freeform has no solid fill");
+    assert!(stroke_width >= 1.0);
+}
+
+/// shape.outline with width only preserves each shape's stroke and preserves also_selected.
+#[test]
+fn shape_outline_width_only_preserves_stroke_and_selection() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("shape.outline", &json!({"color": "FF0000", "width": 1.0})).unwrap();
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "ellipse"})).unwrap();
+    s.run("shape.outline", &json!({"color": "0000FF", "width": 1.0})).unwrap();
+
+    // Select both shapes
+    pick_objects(&mut s, &[0, 1]);
+    assert_eq!(s.also_selected.len(), 1);
+
+    // Apply width only
+    s.run("shape.outline", &json!({"width": 3.5})).unwrap();
+    // also_selected must be preserved!
+    assert_eq!(s.also_selected.len(), 1, "also_selected preserved after shape.outline");
+
+    let list = all_objects(&s);
+    let Some((_, InlineObject::Shape { stroke: s0, stroke_width: w0, .. })) = list.first() else { panic!() };
+    let Some((_, InlineObject::Shape { stroke: s1, stroke_width: w1, .. })) = list.get(1) else { panic!() };
+    assert_eq!(*s0, Some(wordcraft_doc::Rgb(0xFF, 0, 0)), "first shape kept its red outline");
+    assert_eq!(*w0, 3.5);
+    assert_eq!(*s1, Some(wordcraft_doc::Rgb(0, 0, 0xFF)), "second shape kept its blue outline");
+    assert_eq!(*w1, 3.5);
+
+    // Apply shape.style and verify also_selected is preserved too!
+    s.run("shape.style", &json!({"style": "subtle"})).unwrap();
+    assert_eq!(s.also_selected.len(), 1, "also_selected preserved after shape.style");
+}
+
+/// has_shape_or_canvas enables styling when a selection begins with a picture but includes a shape.
+#[test]
+fn has_shape_or_canvas_enables_with_mixed_selection() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data})).unwrap();
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+
+    // Select picture first, shape in also_selected
+    pick_objects(&mut s, &[0, 1]);
+    assert!(has_shape_or_canvas(&s).is_none(), "command enabled even though first selected is a picture");
+
+    // Styling succeeds and modifies the shape, leaving picture intact
+    let r = s.run("shape.style", &json!({"style": "subtle"})).unwrap();
+    assert!(r["object"].get("Shape").is_some() || r["object"]["kind"].is_string());
+
+    let list = all_objects(&s);
+    assert!(matches!(list[0].1, InlineObject::Image { .. }));
+    let InlineObject::Shape { stroke, .. } = &list[1].1 else { panic!() };
+    assert!(stroke.is_some());
 }

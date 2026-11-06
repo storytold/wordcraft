@@ -464,6 +464,7 @@ Chart Design|Data|Edit Data|chart.editData
 Chart Design|Chart Layouts|Chart Title|chart.title
 Chart Design|Chart Layouts|Legend|chart.legend
 Chart Design|Chart Layouts|Data Labels|chart.dataLabels
+Shape Format|Shape Styles|Shape Quick Styles|shape.style
 Shape Format|Shape Styles|Shape Fill|shape.fill
 Shape Format|Shape Styles|Shape Fill Gradient|shape.fill
 Shape Format|Shape Styles|Format Shape Pane|view.formatShapePane

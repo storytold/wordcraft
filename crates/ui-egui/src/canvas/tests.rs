@@ -2247,6 +2247,55 @@ fn right_click_on_a_picture_offers_wrap_text() {
     assert_eq!(o.frame().unwrap().2.wrap, wordcraft_doc::para::Wrap::Square);
 }
 
+/// Right-clicking a shape opens the Style/Fill/Outline bar and the shape context menu, and Add Text
+/// enters the shape's text box.
+#[test]
+fn right_click_on_a_shape_shows_style_fill_outline_bar_and_shape_menu() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("insert.shape", json!({"kind": "rectangle", "width": 120, "height": 60})).unwrap();
+    let pos = wordcraft_engine::cmd::objects::selected(&a.session).unwrap().0;
+    a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 0));
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let rect = h.state_mut().session.layout().object(&pos, 0).expect("the shape is laid out").rect;
+    let at = crate::frame::to_screen(h.state().canvas.page_rects[0], h.state().canvas.scale, rect).center();
+    h.event(egui::Event::PointerMoved(at));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+        h.step();
+    }
+    h.step();
+    assert!(h.state().canvas.context_menu_open, "context menu is open on shape right-click");
+    assert!(h.state().canvas.shape_bar.is_some(), "shape bar is placed above/below context menu");
+
+    // The shape bar offers Style, Fill, Outline buttons
+    assert!(h.query_by_label("Style").is_some());
+    assert!(h.query_by_label("Fill").is_some());
+    assert!(h.query_by_label("Outline").is_some());
+
+    // The shape context menu contains Word items: Add Text, Format Shape…, Wrap Text, etc.
+    assert!(h.query_by_label_contains("Add Text").is_some());
+    assert!(h.query_by_label_contains("Wrap Text").is_some());
+    assert!(h.query_by_label_contains("Format Shape…").is_some());
+
+    // Clicking Add Text enters the shape's text box
+    h.get_by_label_contains("Add Text").click();
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(matches!(h.state().session.sel.focus.story, wordcraft_doc::StoryRef::Part(_)), "caret is now inside the shape text box");
+}
+
 /// #1500: right-clicking a selected shape offers Format Shape…, which opens the Format Shape
 /// pane and leaves that shape selected.
 #[test]

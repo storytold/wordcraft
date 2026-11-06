@@ -1,6 +1,67 @@
 use super::select::{all_objects, edit_obj, picked_objects, selected, selected_all};
 use super::{CmdError, CmdResult, InlineObject, Pos, Rgb, Session, StoryRef, TextBody, Value, json, p};
 
+/// Shape styles (the shape's right-click Style button, `shape.style`): our own presets, built from
+/// the document's theme colours so they follow Design › Colors. Id and English name; one row of
+/// the gallery each.
+pub const SHAPE_STYLES: [(&str, &str); 6] = [
+    ("outline", "Outline Only"),
+    ("fill", "Solid Fill"),
+    ("fillLight", "Solid Fill, Light Outline"),
+    ("subtle", "Light Fill"),
+    ("moderate", "Fill, No Outline"),
+    ("intense", "Dark Fill with Shadow"),
+];
+
+/// The theme colours the gallery's columns are built from: id and `Settings::theme_colors` index
+/// (dk1 lt1 dk2 lt2 accent1..6).
+pub const SHAPE_STYLE_COLORS: [(&str, usize); 7] =
+    [("dark1", 0), ("accent1", 4), ("accent2", 5), ("accent3", 6), ("accent4", 7), ("accent5", 8), ("accent6", 9)];
+
+/// What a shape style sets: fill, outline colour and weight, and whether it casts a shadow.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShapeStyle {
+    pub fill: Option<Rgb>,
+    pub stroke: Option<Rgb>,
+    pub width: f32,
+    pub shadow: bool,
+}
+
+/// Shape style `style` in theme colour `color` (ids from [`SHAPE_STYLES`] and
+/// [`SHAPE_STYLE_COLORS`]); `None` for an unknown id. A theme short of colours falls back to
+/// black, white and a mid blue.
+pub fn shape_style(style: &str, color: &str, theme: &[Rgb]) -> Option<ShapeStyle> {
+    let &(_, slot) = SHAPE_STYLE_COLORS.iter().find(|(id, _)| *id == color)?;
+    let fallback = if slot == 0 { Rgb::BLACK } else { Rgb(0x3A, 0x6E, 0xB5) };
+    let base = theme.get(slot).copied().unwrap_or(fallback);
+    let light = theme.get(1).copied().unwrap_or(Rgb(0xFF, 0xFF, 0xFF));
+    // Towards white for k > 0, towards black for k < 0 (as the colour grid's tints and shades).
+    let tint = |c: Rgb, k: f32| {
+        let f = |v: u8| if k >= 0.0 { v as f32 + (255.0 - v as f32) * k } else { v as f32 * (1.0 + k) };
+        Rgb(f(c.0).round().clamp(0.0, 255.0) as u8, f(c.1).round().clamp(0.0, 255.0) as u8, f(c.2).round().clamp(0.0, 255.0) as u8)
+    };
+    let st = |fill: Option<Rgb>, stroke: Option<Rgb>, width: f32, shadow: bool| ShapeStyle { fill, stroke, width, shadow };
+    Some(match style {
+        "outline" => st(Some(light), Some(base), 1.0, false),
+        "fill" => st(Some(base), Some(tint(base, -0.5)), 1.0, false),
+        "fillLight" => st(Some(base), Some(light), 1.0, false),
+        "subtle" => st(Some(tint(base, 0.8)), Some(base), 1.0, false),
+        "moderate" => st(Some(base), None, 0.0, false),
+        "intense" => st(Some(tint(base, -0.25)), None, 0.0, true),
+        _ => return None,
+    })
+}
+
+/// Comma-separated list of valid shape style ids for error messages.
+pub(super) fn style_ids() -> String {
+    SHAPE_STYLES.iter().map(|(id, _)| *id).collect::<Vec<_>>().join(", ")
+}
+
+/// Comma-separated list of valid shape style theme colour ids for error messages.
+pub(super) fn color_ids() -> String {
+    SHAPE_STYLE_COLORS.iter().map(|(id, _)| *id).collect::<Vec<_>>().join(", ")
+}
+
 pub(super) const NO_TEXT_BOX: &str = "select a text box first";
 
 pub(super) fn has_text_box(s: &Session) -> Option<&'static str> {
@@ -37,6 +98,26 @@ pub(crate) fn set_text_body(s: &mut Session, f: impl Fn(&mut TextBody)) -> CmdRe
     // Its paragraph is laid out again.
     edit_obj(s, &pos, |_| {})?;
     Ok(json!({"textBox": id, "body": body}))
+}
+
+/// `shape.addText`: attaches a text box story to the selected shape if it doesn't already have one.
+pub(super) fn add_text(s: &mut Session, _: &Value) -> CmdResult {
+    let (pos, _) = selected(s).ok_or_else(|| CmdError::Disabled("select a shape first".into()))?;
+    let id = match s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)) {
+        Some(InlineObject::Shape { story: Some(id), .. }) if is_text_box(s, *id) => *id,
+        Some(InlineObject::Shape { .. }) => {
+            let empty_para = wordcraft_doc::Paragraph::with_text("", wordcraft_doc::props::CharProps::default());
+            let id = s.doc.try_add_part(wordcraft_doc::PartKind::TextBox, vec![std::sync::Arc::new(wordcraft_doc::Block::Para(empty_para))])?;
+            edit_obj(s, &pos, |o| {
+                if let InlineObject::Shape { story, .. } = o {
+                    *story = Some(id);
+                }
+            })?;
+            id
+        }
+        _ => return Err(CmdError::Disabled("select a shape first".into())),
+    };
+    Ok(json!({"textBox": id}))
 }
 
 pub(super) fn can_link(s: &Session) -> Option<&'static str> {

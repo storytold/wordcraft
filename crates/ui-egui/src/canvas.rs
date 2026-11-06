@@ -170,6 +170,10 @@ pub struct CanvasState {
     pub context_menu_from_keys: bool,
     /// Where the context menu stands: the right-click point, or below the caret.
     pub context_menu_at: Option<Pos2>,
+    /// Where the shape's Style/Fill/Outline bar stands (`shape_bar`), while it is up.
+    pub shape_bar: Option<Rect>,
+    /// One of the shape bar's drop-downs was open last frame (the bar stays while it is).
+    pub(crate) shape_bar_popup: bool,
     /// The frame drawn around the equation being edited, on screen (its options strip opens the
     /// equation's menu).
     pub eq_options: Option<EquationFrame>,
@@ -397,6 +401,8 @@ impl Default for CanvasState {
             context_menu_open: false,
             context_menu_from_keys: false,
             context_menu_at: None,
+            shape_bar: None,
+            shape_bar_popup: false,
             eq_options: None,
             mini_anchor: None,
             mini_dismissed: None,
@@ -1181,6 +1187,8 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
     }
 }
 
+/// Updates scroll, focus, pointer input, context menu, shape bar, rulers and Read Mode chrome
+/// after the canvas scroll area has been drawn.
 fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollAreaOutput<(egui::Response, Vec<Rect>)>) {
     let CanvasFinish { app, ui, layout, geo, caret, ime_geometry, ime_interrupt, area, dim_body, hruler, vruler } = finish;
     update_canvas_scroll_state(app, ui, layout, geo, caret, &out);
@@ -1232,7 +1240,7 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     let menu = menu.at_position(app.canvas.context_menu_at.unwrap_or(out.inner_rect.left_top()));
     let with_toolbar = crate::mini_toolbar::context_menu_visible(app);
     let menu = if with_toolbar { menu.frame(egui::Frame::NONE).close_behavior(egui::PopupCloseBehavior::IgnoreClicks) } else { menu };
-    menu.show(|ui| {
+    let popup = menu.show(|ui| {
         if with_toolbar {
             crate::mini_toolbar::show_in_context_menu(app, ui);
             ui.add_space(4.0);
@@ -1258,6 +1266,9 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     }
     // The standalone selection toolbar stands down while the context popup owns the pointer.
     app.canvas.context_menu_open = shown;
+    // A shape's menu comes with Word's Style / Fill / Outline bar just above it.
+    let menu_rect = popup.filter(|_| app.canvas.context_menu_open).map(|r| r.response.rect);
+    crate::shape_bar::update(app, ui.ctx(), menu_rect, area);
     if let Some(c) = crate::ink::cursor(app).filter(|_| resp.hovered() || app.canvas.ink.is_some()) {
         ui.ctx().set_cursor_icon(c);
     } else if resp.hovered() || app.canvas.obj_drag.is_some() {

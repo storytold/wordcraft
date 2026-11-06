@@ -59,19 +59,90 @@ pub(crate) fn issue_heading(issue: &serde_json::Value) -> String {
     tl!(issue.get("message").and_then(|m| m.as_str()).unwrap_or("")).to_string()
 }
 
+/// Adds a context menu button for command `id` with its shortcut and enabled state, running it and
+/// closing the menu when clicked.
+fn menu_item(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: serde_json::Value) {
+    let sc = crate::widgets::shortcut_text(app, id);
+    let on = crate::widgets::enabled(app, id);
+    if ui.add_enabled(on, crate::rtl::menu_item(ui, tl!(label), &sc, 0.0)).clicked() {
+        let _ = app.run(id, params);
+        ui.close();
+    }
+}
+
+/// Context menu for a selected shape, text box or group: clipboard, Add/Edit Text, Group,
+/// Bring to Front / Send to Back, Insert Caption, Wrap Text, Alt Text and Format Shape.
+fn shape_menu(app: &mut WordApp, ui: &mut Ui) {
+    menu_item(ui, app, "Cut", "edit.cut", json!({}));
+    menu_item(ui, app, "Copy", "edit.copy", json!({}));
+    menu_item(ui, app, "Paste", "edit.paste", json!({}));
+    ui.separator();
+
+    if crate::objects::selected_text_box(app).is_some() {
+        if ui.button(tl!("Edit Text")).clicked() {
+            crate::objects::enter_text_box(app);
+            ui.close();
+        }
+    } else if ui.button(tl!("Add Text")).clicked() {
+        add_shape_text(app);
+        ui.close();
+    }
+
+    let can_group = wordcraft_engine::cmd::objects::picked_objects(&app.session).len() >= 2;
+    let has_group = matches!(wordcraft_engine::cmd::objects::selected(&app.session), Some((_, wordcraft_doc::para::InlineObject::Group { .. })));
+    if can_group || has_group {
+        ui.menu_button(tl!("Group"), |ui| {
+            if can_group {
+                menu_item(ui, app, "Group", "arrange.group", json!({}));
+            }
+            if has_group {
+                menu_item(ui, app, "Ungroup", "arrange.ungroup", json!({}));
+            }
+        });
+    }
+
+    ui.menu_button(tl!("Bring to Front"), |ui| {
+        menu_item(ui, app, "Bring to Front", "arrange.bringForward", json!({}));
+        menu_item(ui, app, "Bring Forward", "arrange.bringForward", json!({}));
+        menu_item(ui, app, "Bring in Front of Text", "arrange.wrap", json!({"wrap": "inFrontOfText"}));
+    });
+    ui.menu_button(tl!("Send to Back"), |ui| {
+        menu_item(ui, app, "Send to Back", "arrange.sendBackward", json!({}));
+        menu_item(ui, app, "Send Backward", "arrange.sendBackward", json!({}));
+        menu_item(ui, app, "Send Behind Text", "arrange.wrap", json!({"wrap": "behindText"}));
+    });
+    ui.separator();
+    menu_item(ui, app, "Insert Caption…", "references.caption", json!({}));
+    ui.menu_button(tl!("Wrap Text"), |ui| crate::ribbon::wrap_text_items(ui, app));
+    ui.separator();
+    menu_item(ui, app, "View Alt Text…", "view.altTextPane", json!({"value": true}));
+    menu_item(ui, app, "Format Shape…", "view.formatShapePane", json!({"value": true}));
+}
+
+/// Attaches a text box story to the selected shape (if it doesn't already have one) and moves the
+/// caret inside it.
+fn add_shape_text(app: &mut WordApp) {
+    if crate::objects::enter_text_box(app) {
+        return;
+    }
+    if let Ok(v) = app.run("shape.addText", json!({}))
+        && let Some(id) = v.get("textBox").and_then(|i| i.as_u64()).and_then(|i| u32::try_from(i).ok())
+    {
+        crate::objects::enter_text_story(app, id);
+    }
+}
+
+/// Draws the right-click context menu for the current canvas selection (equation, shape, picture,
+/// table or text).
 pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     if app.session.math.is_some() {
         return equation_menu(app, ui);
     }
     ui.set_min_width(220.0);
-    let item = |ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: serde_json::Value| {
-        let sc = crate::widgets::shortcut_text(app, id);
-        let on = crate::widgets::enabled(app, id);
-        if ui.add_enabled(on, crate::rtl::menu_item(ui, tl!(label), &sc, 0.0)).clicked() {
-            let _ = app.run(id, params);
-            ui.close();
-        }
-    };
+    if crate::ribbon::has_shape_selected(&app.session) {
+        return shape_menu(app, ui);
+    }
+    let item = |ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: serde_json::Value| menu_item(ui, app, label, id, params);
     if let Some(issue) = app.canvas.context_issue.clone() {
         let sugg: Vec<String> = issue
             .get("suggestions")

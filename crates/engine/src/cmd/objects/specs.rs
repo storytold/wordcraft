@@ -3,12 +3,15 @@ use super::group::{add_object, group, ungroup};
 use super::picture::{adjust, adjust_media, clear_lum, crop, original_media, recolor, relook, remove_background, reset, size};
 use super::select::{
     all_objects, alt_text, can_group, edit_obj, has_floating, has_group, has_movable, has_object, has_picture, has_shape, has_shape_or_canvas,
-    has_sizable, obj_size, objects_list, selected, with_float, with_obj,
+    has_sizable, obj_size, objects_list, selected, styleable_targets, with_float, with_obj,
 };
-use super::shape::{NO_TEXT_BOX, can_link, has_text_box, link_text_box, set_text_body, shape_effects, text_box_target};
+use super::shape::{
+    NO_TEXT_BOX, add_text, can_link, color_ids, has_text_box, link_text_box, set_text_body, shape_effects, shape_style, style_ids, text_box_target,
+};
 use super::{CmdError, CommandSpec, InlineObject, Pos, Rgb, Selection, Spin, TextVert, VAlign, Wrap, WrapText, json, p, sel_result};
 use wordcraft_doc::picfx::PicFx;
 
+/// Command specifications for Picture Format, Shape Format and Arrange commands on inline objects.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("picture.size", "Size", "Picture Format › Size", size)
@@ -282,26 +285,82 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"index"?: n}"#)
         .pure(),
         CommandSpec::new("shape.outline", "Shape Outline", "Shape Format › Shape Styles", |s, v| {
+            let has_color = v.get("color").is_some();
             let c = p::str(v, "color").and_then(Rgb::parse);
             let w = p::f32(v, "width").map(|w| w.clamp(0.0, 72.0));
-            with_obj(s, |o| {
-                if let InlineObject::Shape { stroke, stroke_width, extra, .. } = o {
-                    *stroke = c;
-                    // A colour chosen here replaces an outline gradient from a file.
-                    extra.outline_fill = None;
-                    if let Some(w) = w {
-                        *stroke_width = w;
+            let targets = styleable_targets(s);
+            if targets.is_empty() {
+                return Err(CmdError::Disabled("no picture or shape selected".into()));
+            }
+            let mut last = serde_json::Value::Null;
+            for pos in &targets {
+                let o = edit_obj(s, pos, |o| {
+                    if let InlineObject::Shape { stroke, stroke_width, extra, .. } = o {
+                        if has_color {
+                            *stroke = c;
+                            // A colour chosen here replaces an outline gradient from a file.
+                            extra.outline_fill = None;
+                        }
+                        if let Some(w) = w {
+                            *stroke_width = w;
+                        }
+                    } else if let Some(style) = crate::cmd::canvas::style_mut(o) {
+                        if has_color {
+                            style.stroke = c;
+                        }
+                        if let Some(w) = w {
+                            style.stroke_width = w;
+                        }
                     }
-                } else if let Some(style) = crate::cmd::canvas::style_mut(o) {
-                    style.stroke = c;
-                    if let Some(w) = w {
-                        style.stroke_width = w;
-                    }
-                }
-            })
+                })?;
+                last = serde_json::to_value(o).unwrap_or(serde_json::Value::Null);
+            }
+            Ok(json!({"object": last}))
         })
         .params(r#"{"color": "RRGGBB" | null, "width"?: pt}  (a selected drawing canvas: its border)"#)
         .when(has_shape_or_canvas),
+        CommandSpec::new("shape.style", "Shape Styles", "Shape Format › Shape Styles", |s, v| {
+            let style = p::str(v, "style").unwrap_or("fill");
+            let color = p::str(v, "color").unwrap_or("accent1");
+            let st = shape_style(style, color, &s.doc.settings.theme_colors).ok_or_else(|| {
+                CmdError::Params(format!("unknown shape style `{style}` or colour `{color}` (styles: {}; colours: {})", style_ids(), color_ids()))
+            })?;
+            let targets = styleable_targets(s);
+            if targets.is_empty() {
+                return Err(CmdError::Disabled("no picture or shape selected".into()));
+            }
+            let mut last = serde_json::Value::Null;
+            for pos in &targets {
+                let o = edit_obj(s, pos, |o| {
+                    if let InlineObject::Shape { kind, freeform, fill, stroke, stroke_width, effects, float, extra, .. } = o {
+                        let is_open = kind.is_open() || freeform.as_ref().is_some_and(|f| f.is_ink());
+                        if is_open {
+                            // Lines, connectors and ink freeforms draw only their stroke: keep it, or give the
+                            // preset's stroke, falling back to fill colour when the preset has no outline.
+                            *stroke = st.stroke.or(st.fill).or(*stroke);
+                            *stroke_width = if st.width > 0.0 { st.width } else { stroke_width.max(1.0) };
+                        } else {
+                            let solid = st.fill.map(wordcraft_doc::fill::Fill::solid);
+                            (*fill, *stroke, *stroke_width) = (solid, st.stroke, st.width);
+                        }
+                        extra.outline_fill = None;
+                        effects.shadow = if st.shadow { wordcraft_doc::effects::Shadow::preset("offsetBottomRight") } else { None };
+                        float.effect = effects.extent();
+                    } else if let Some(c) = crate::cmd::canvas::style_mut(o) {
+                        (c.fill, c.stroke, c.stroke_width) = (st.fill.map(wordcraft_doc::fill::Fill::solid), st.stroke, st.width);
+                    }
+                })?;
+                last = serde_json::to_value(o).unwrap_or(serde_json::Value::Null);
+            }
+            Ok(json!({"object": last}))
+        })
+        .params(
+            r#"{"style": "outline|fill|fillLight|subtle|moderate|intense", "color"?: "dark1|accent1|…|accent6"}  (fill, outline and shadow in one step, from the document's theme colours; default accent1)"#,
+        )
+        .when(has_shape_or_canvas),
+        CommandSpec::new("shape.addText", "Add Text", "Shape Format › Text", add_text)
+            .params(r#"{}  (gives the selected shape a text box story so text can be typed in it)"#)
+            .when(has_shape),
         CommandSpec::new("shape.effects", "Shape Effects", "Shape Format › Shape Styles", shape_effects)
             .params(
                 r#"{"shadow"?: preset|{"preset"?, "color"?: "RRGGBB", "transparency"?: %, "blur"?: pt, "distance"?: pt, "angle"?: deg}|null, "glow"?: pt|{"color"?: "RRGGBB", "size"?: pt, "transparency"?: %}|null, "softEdge"?: pt|null}  (shadow presets: offsetBottomRight, offsetBottom, offsetBottomLeft, offsetRight, offsetCenter, offsetLeft, offsetTopRight, offsetTop, offsetTopLeft; an omitted key is left as it is; applies to every shape in the selection)"#,

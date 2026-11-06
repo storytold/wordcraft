@@ -360,6 +360,11 @@ fn paint_clipboard_to_insert(pen: &Pen, name: &str) -> bool {
             pen.rect(3.0, 3.0, 11.0, 11.0, c);
             pen.fcircle(13.0, 13.0, 4.5, a);
         }
+        "shapeStyle" => {
+            pen.rect(3.0, 3.0, 14.0, 14.0, c);
+            pen.fill(&[(3.0, 3.0), (14.0, 3.0), (3.0, 14.0)], a);
+            pen.line_c(&[(11.0, 17.0), (17.0, 11.0)], a);
+        }
         // Shape Effects: a square casting a soft shadow down and to the right.
         "shapeEffects" => {
             for (k, alpha) in [(2.0, 30), (1.0, 50), (0.0, 80)] {
