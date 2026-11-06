@@ -320,7 +320,7 @@ CSL and library import are separate work.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-05 | trivial | ODT: a table's or row's background (`fo:background-color`) shows behind cells with none of their own. It was dropped, on screen and in LibreOffice after a save |
+| 2026-11-05 | trivial | ODT: a table's or row's background (`fo:background-color`) shows behind cells with none of their own. It was dropped, on screen and in LibreOffice after a save A cell with no style takes its column's default cell style, and `transparent` clears a parent style's background. |
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` keeps its default and explicit values in schema-ordered repeated saves |
 | 2026-11-04 | trivial | REF context update: 2026-11-04 · #4609 retains the label and template actually rendered by an ancestor list instance; implicitly counted levels remain distinct from explicitly rendered paragraphs. Synthetic instance-override and field-update regressions; no new native Word qualification or readiness change. |
 | 2026-11-04 | trivial | PR #4609: relative REF keeps context already displayed by the own or a needed ancestor label; six synthetic legal-template cases and separate-list context follow the Word for Windows measurements reported by @pakiat in PR discussion. Existing unknown-switch/cache boundaries and readiness estimates unchanged; no new native Word run. |

@@ -1282,10 +1282,12 @@ impl Body<'_> {
             }
             "table-column" => {
                 let w = get(a, "table:style-name").and_then(|n| self.styles.column_width(n)).unwrap_or(0.0);
+                let cells = get(a, "table:default-cell-style-name").map(String::from);
                 let n = get(a, "table:number-columns-repeated").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).max(1);
                 if let Some(t) = self.tables.last_mut() {
                     let room = wordcraft_doc::table::MAX_COLS.saturating_sub(t.widths.len());
                     t.widths.extend(std::iter::repeat_n(w, n.min(room)));
+                    t.column_cells.extend(std::iter::repeat_n(cells, n.min(room)));
                 }
             }
             "table-row" => self.start_row(a),
@@ -1294,9 +1296,14 @@ impl Body<'_> {
                 let span = get(a, "table:number-columns-spanned").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1).clamp(1, 63);
                 let rows = get(a, "table:number-rows-spanned").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1).clamp(1, 1000);
                 // WordCraft's tables have their backgrounds on their cells: a row's or table's on
-                // those with none of their own, as it shows behind them.
+                // those with none of their own, as it shows behind them. A cell with no style has
+                // its column's default cell style; LibreOffice doesn't apply a row's.
                 let behind = self.tables.last().and_then(|t| t.row_background.or(t.background));
-                let shading = get(a, "table:style-name").and_then(|s| self.styles.cell_background(s)).or(behind);
+                let in_column = self.tables.last().and_then(|t| {
+                    let at: usize = t.row.iter().map(|c| c.colspan.max(1) as usize).sum();
+                    t.column_cells.get(at)?.as_deref()
+                });
+                let shading = get(a, "table:style-name").or(in_column).and_then(|s| self.styles.cell_background(s)).or(behind);
                 let valign = get(a, "table:style-name").and_then(|s| self.styles.cell_valign(s));
                 let borders = get(a, "table:style-name").and_then(|s| self.styles.cell_borders(s));
                 let margins = get(a, "table:style-name").and_then(|s| self.styles.cell_padding(s));
@@ -1377,7 +1384,16 @@ impl Body<'_> {
         let space = get(a, "table:style-name").map(|s| self.styles.table_space(s)).unwrap_or_default();
         let extra = model::TableExtra { align, width: None, width_pct, heights: Vec::new(), fixed: true, space, header_rows: 0 };
         let background = get(a, "table:style-name").and_then(|s| self.styles.table_background(s));
-        self.tables.push(TableB { rows: Vec::new(), row: Vec::new(), hcover: 0, widths: Vec::new(), extra, background, row_background: None });
+        self.tables.push(TableB {
+            rows: Vec::new(),
+            row: Vec::new(),
+            hcover: 0,
+            widths: Vec::new(),
+            column_cells: Vec::new(),
+            extra,
+            background,
+            row_background: None,
+        });
     }
 
     /// A table row (`table:table-row`) begins: its height, kept as rows are (see the row's end).
