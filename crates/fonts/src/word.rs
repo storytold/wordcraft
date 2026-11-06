@@ -192,6 +192,41 @@ pub fn charset_base_family(family: &str) -> &str {
         .map_or(family, str::trim_end)
 }
 
+/// Fonts made to measure alike (the same advance widths and line height), so text drawn in one
+/// wraps and paginates as in the others: Carlito for Calibri, Caladea for Cambria, Liberation and
+/// Croscore fonts for Arial, Times New Roman and Courier New, the Palatino look-alikes for Palatino
+/// Linotype and Book Antiqua, and Arial and Helvetica (drawn to Helvetica's widths) for one
+/// another. The one list of them: a missing font is drawn in its first installed twin
+/// ([`substitute`]), and text drawn in a twin doesn't change the layout ([`metric_compatible`]).
+/// Not macOS Times or Courier: their advance widths differ from Times New Roman's and Courier
+/// New's.
+const METRIC_TWINS: &[&[&str]] = &[
+    &["Arial", "Liberation Sans", "Helvetica", "Arimo"],
+    &["Times New Roman", "Liberation Serif", "Tinos"],
+    &["Courier New", "Liberation Mono", "Cousine"],
+    &["Calibri", "Carlito"],
+    &["Cambria", "Caladea"],
+    &["Palatino Linotype", "Palatino", "Book Antiqua", "TeX Gyre Pagella", "P052", "URW Palladio L", "Palladio"],
+];
+
+/// The fonts that measure like `family` ([`METRIC_TWINS`]), in the order they are tried, without
+/// `family` itself.
+fn metric_twins(family: &str) -> impl Iterator<Item = &'static str> + '_ {
+    let f = family.trim();
+    METRIC_TWINS
+        .iter()
+        .filter(move |g| g.iter().any(|t| t.eq_ignore_ascii_case(f)))
+        .flat_map(|g| g.iter().copied())
+        .filter(move |t| !t.eq_ignore_ascii_case(f))
+}
+
+/// Whether `substitute` was made to measure like `family` ([`METRIC_TWINS`]), so text drawn in it
+/// wraps and paginates as in `family`.
+pub fn metric_compatible(family: &str, substitute: &str) -> bool {
+    let s = substitute.trim();
+    metric_twins(charset_base_family(family.trim())).any(|t| t.eq_ignore_ascii_case(s))
+}
+
 /// Naskh-style Persian/Arabic document fonts (the "B …" family names come from the common
 /// Persian font packs; matched by name only).
 fn is_persian_naskh(f: &str) -> bool {
@@ -343,6 +378,10 @@ fn is_hebrew(f: &str) -> bool {
 /// letters and digits as well as Thai ones (a Thai face without Latin would leave a mixed run in
 /// two fonts, #1549), else the first with Thai letters, else the first installed.
 fn substitute(db: &FontDb, family: &str) -> Option<&'static str> {
+    // A twin draws the text as the font would: Carlito for Calibri, Helvetica for Arial on a Mac.
+    if let Some(twin) = metric_twins(family).find(|t| db.has_family(t)) {
+        return Some(twin);
+    }
     let mut installed = substitutes(family).iter().copied().filter(|s| db.has_family(s));
     if !is_thai_family(family) {
         return installed.next();
@@ -424,10 +463,26 @@ fn hhea_line(ascender: i16, descender: i16, line_gap: i16) -> (f64, f64) {
     (f64::from(ascender) + f64::from(line_gap.max(0)), f64::from(descender).abs())
 }
 
+/// The line (ascent, descent) in units of an `upem` em that Word gives the classic PostScript
+/// families: their Windows counterparts' spacing, though Apple's own Times and Courier are one em
+/// tall (hhea 0.75 / -0.25, no gap). Measured in Word for Mac on synthetic documents (single
+/// spacing, 11 and 20 pt): Times lines lie exactly as far apart as Times New Roman's (hhea 1825 /
+/// -443, gap 87 per 2048), Courier's as Courier New's (1705 / -615, no gap). On Windows, Word
+/// draws a "Times" document in Times New Roman anyway.
+fn borrowed_line(family: &str, upem: f64) -> Option<(f64, f64)> {
+    let (a, d) = match family.trim().to_ascii_lowercase().as_str() {
+        "times" => hhea_line(1825, -443, 87),
+        "courier" => hhea_line(1705, -615, 0),
+        _ => return None,
+    };
+    Some((a * upem / 2048.0, d * upem / 2048.0))
+}
+
 /// Line metrics for a face in font units: (ascent, descent), both positive, the way word
 /// processors measure single line spacing: the hhea values with the line gap above the ascent
 /// (Word puts the first baseline that far below the line top), falling back to OS/2
-/// usWinAscent/usWinDescent.
+/// usWinAscent/usWinDescent; Times and Courier borrow their Windows counterparts' (see
+/// [`borrowed_line`]).
 pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
     static CACHE: OnceLock<Mutex<HashMap<u32, (f64, f64)>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -435,7 +490,9 @@ pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
         return *v;
     }
     let mut v = (face.ascent.max(1.0), face.descent.abs());
-    if let Some(f) = face.skrifa() {
+    if let Some(m) = borrowed_line(&face.family, face.upem) {
+        v = m;
+    } else if let Some(f) = face.skrifa() {
         // hhea ascender + descender + line gap (Word on macOS), the gap above the ascent; OS/2
         // win metrics only when the hhea values are missing, and never more than twice the em.
         let hhea = f.hhea().ok().map(|h| hhea_line(h.ascender().to_i16(), h.descender().to_i16(), h.line_gap().to_i16()));
@@ -467,6 +524,18 @@ mod tests {
     }
 
     #[test]
+    fn times_and_courier_take_their_windows_counterparts_line() {
+        // Apple's Times has 2048 units to the em, Times New Roman's line is 1.15 em.
+        assert_eq!(borrowed_line("Times", 2048.0), Some((1912.0, 443.0)));
+        assert_eq!(borrowed_line(" times ", 1000.0), Some((1912.0 / 2.048, 443.0 / 2.048)));
+        assert_eq!(borrowed_line("Courier", 2048.0), Some((1705.0, 615.0)));
+        // Only those two: the Windows fonts themselves, and other Mac fonts, keep their own.
+        for family in ["Times New Roman", "Courier New", "Helvetica", "Hoefler Text", "Palatino", ""] {
+            assert_eq!(borrowed_line(family, 2048.0), None, "{family}");
+        }
+    }
+
+    #[test]
     fn family_cache_stays_bounded() {
         for i in 0..(FAMILY_CACHE_MAX + 50) {
             let _ = resolve(&format!("Zz Missing Family {i}"), false, false);
@@ -475,6 +544,30 @@ mod tests {
         let long = "L".repeat(10_000);
         let _ = resolve(&long, false, false);
         assert!(!resolve_cache().lock().unwrap_or_else(|e| e.into_inner()).1.keys().any(|k| k.0.len() > 1000));
+    }
+
+    #[test]
+    fn metric_compatible_substitutes_are_known() {
+        assert!(metric_compatible("Calibri", "Carlito"));
+        assert!(metric_compatible(" arial ", "Liberation Sans"));
+        assert!(metric_compatible("Arial CE", "Helvetica"));
+        assert!(metric_compatible("Book Antiqua", "TeX Gyre Pagella"));
+        assert!(!metric_compatible("Calibri", "Helvetica Neue"));
+        assert!(!metric_compatible("Open Sans", "Carlito"));
+        assert!(!metric_compatible("Times New Roman", "Times"));
+        assert_eq!(metric_twins("arial").collect::<Vec<_>>(), ["Liberation Sans", "Helvetica", "Arimo"]);
+    }
+
+    #[test]
+    fn a_missing_font_is_drawn_in_an_installed_twin() {
+        // The twins that decide the font box's warning are the faces layout draws in.
+        let db = FontDb::global();
+        for family in METRIC_TWINS.iter().flat_map(|g| g.iter()) {
+            let r = resolve(family, false, false);
+            if r.substituted && metric_twins(family).any(|t| db.has_family(t)) {
+                assert!(metric_compatible(family, &r.face.family), "{family} → {}", r.face.family);
+            }
+        }
     }
 
     #[test]
