@@ -250,6 +250,7 @@ impl WordApp {
         wordcraft_engine::file_access::confine(roots.as_ref(), || self.frame_logic(ctx));
     }
 
+    /// [`WordApp::logic`] inside the frame's roots, if any.
     fn frame_logic(&mut self, ctx: &egui::Context) {
         // #2726: egui's AccessKit update must carry the focused node in its node list; a frame
         // that drops it panics in `accesskit_consumer` and closes the window (see `a11y::FocusGuard`).
@@ -437,6 +438,7 @@ impl WordApp {
         wordcraft_engine::file_access::confine(roots.as_ref(), || self.frame_ui(ui));
     }
 
+    /// [`WordApp::ui`] inside the frame's roots, if any.
     fn frame_ui(&mut self, ui: &mut egui::Ui) {
         if self.windows.native() {
             self.windows_ui(ui);
