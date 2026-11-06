@@ -30,6 +30,8 @@ pub struct Line {
     pub page: usize,
     pub y: f64,
     pub x: f64,
+    /// Where the last glyph's advance ends.
+    pub right: f64,
     pub key: String,
     pub text: String,
 }
@@ -143,7 +145,8 @@ fn group(page: usize, mut glyphs: Vec<G>) -> Vec<Line> {
                     text.push_str(&g.text);
                 }
             }
-            Line { page, y, x, key, text }
+            let right = c.last().map_or(x, |g| g.end);
+            Line { page, y, x, right, key, text }
         })
         .collect()
 }
@@ -200,7 +203,7 @@ pub fn compare(r: &[Line], rp: usize, t: &[Line], tp: usize) -> Value {
                 // The test's line in the same place in the matching: after the previous match.
                 let prev = (0..i).rev().find_map(|k| matched[k]).map_or(0, |j| j + 1);
                 first = Some(
-                    json!({"kind": "line break", "page": l.page + 1, "word": l.text, "wordcraft": t.get(prev).map(|m| m.text.clone()), "word_page": l.page + 1, "wordcraft_page": t.get(prev).map(|m| m.page + 1)}),
+                    json!({"kind": "line break", "page": l.page + 1, "word": l.text, "wordcraft": t.get(prev).map(|m| m.text.clone()), "word_right": round(l.right), "wordcraft_right": t.get(prev).map(|m| round(m.right)), "word_page": l.page + 1, "wordcraft_page": t.get(prev).map(|m| m.page + 1)}),
                 );
             }
             continue;
@@ -277,13 +280,13 @@ mod tests {
     #[test]
     fn identical_lines_are_the_same_and_a_moved_word_is_a_break() {
         let a = vec![
-            Line { page: 0, y: 100.0, x: 72.0, key: "onetwo".into(), text: "one two".into() },
-            Line { page: 0, y: 114.0, x: 72.0, key: "three".into(), text: "three".into() },
+            Line { page: 0, y: 100.0, x: 72.0, right: 90.0, key: "onetwo".into(), text: "one two".into() },
+            Line { page: 0, y: 114.0, x: 72.0, right: 90.0, key: "three".into(), text: "three".into() },
         ];
         assert_eq!(compare(&a, 1, &a, 1)["status"], "same");
         let b = vec![
-            Line { page: 0, y: 100.0, x: 72.0, key: "one".into(), text: "one".into() },
-            Line { page: 0, y: 114.0, x: 72.0, key: "twothree".into(), text: "two three".into() },
+            Line { page: 0, y: 100.0, x: 72.0, right: 90.0, key: "one".into(), text: "one".into() },
+            Line { page: 0, y: 114.0, x: 72.0, right: 90.0, key: "twothree".into(), text: "two three".into() },
         ];
         let c = compare(&a, 1, &b, 1);
         assert_eq!(c["status"], "breaks");

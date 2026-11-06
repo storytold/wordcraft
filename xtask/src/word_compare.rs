@@ -187,7 +187,13 @@ fn markdown(rows: &[Value]) -> String {
         let first = match &r["first_difference"] {
             Value::Object(f) => {
                 let kind = f.get("kind").and_then(Value::as_str).unwrap_or("");
-                let text = |k: &str| f.get(k).and_then(Value::as_str).map(|t| t.chars().take(40).collect::<String>()).unwrap_or_default();
+                // Line ends: where two breaks differ.
+                let text = |k: &str| {
+                    f.get(k).and_then(Value::as_str).map_or(String::new(), |t| {
+                        let n = t.chars().count();
+                        if n > 40 { format!("…{}", t.chars().skip(n - 40).collect::<String>()) } else { t.to_string() }
+                    })
+                };
                 match kind {
                     "line break" => format!(
                         "p{} line break: Word “{}” / WordCraft “{}”",
