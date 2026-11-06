@@ -20,12 +20,21 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-const USAGE: &str = "usage: cargo xtask word-compare [--word] [--only TEXT] [--out DIR] [--wordcraft BIN] [--list]\n       cargo xtask word-compare --pair WORD.pdf WORDCRAFT.pdf";
+const USAGE: &str = "usage: cargo xtask word-compare [--word] [--only TEXT] [--out DIR] [--wordcraft BIN] [--list]\n       cargo xtask word-compare --pair WORD.pdf WORDCRAFT.pdf\n       cargo xtask word-compare --lines FILE.pdf";
 
 /// Longest wait for Word to export one probe.
 const WORD_TIMEOUT: Duration = Duration::from_secs(90);
 
 pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
+    if let Some(i) = args.iter().position(|a| *a == "--lines") {
+        // Every line of one PDF: page, baseline, left and right edge, text.
+        let pdf = args.get(i + 1).ok_or(USAGE)?;
+        let (lines, _) = lines::lines(read(Path::new(pdf))?)?;
+        for l in lines {
+            println!("{}\t{:.2}\t{:.2}\t{:.2}\t{}", l.page + 1, l.y, l.x, l.right, l.text);
+        }
+        return Ok(());
+    }
     if let Some(i) = args.iter().position(|a| *a == "--pair") {
         // Any two PDFs of one document (a real file exported by Word and by WordCraft).
         let (Some(a), Some(b)) = (args.get(i + 1), args.get(i + 2)) else { return Err(USAGE.into()) };

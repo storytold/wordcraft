@@ -141,6 +141,7 @@ pub fn all() -> Vec<Probe> {
     let mut v = Vec::new();
     fonts(&mut v);
     spacing(&mut v);
+    exact_grid(&mut v);
     alignment(&mut v);
     raised(&mut v);
     pagination(&mut v);
@@ -190,6 +191,32 @@ fn spacing(v: &mut Vec<Probe>) {
             format!("spacing-{key}"),
             "line spacing and paragraph spacing (Georgia 11)",
             base("Georgia", 22, sp, paras(&mut w, 12, 90, "")),
+        ));
+    }
+}
+
+/// Exact line spacing at many heights, one line per paragraph: where Word puts the baseline in
+/// an exact line (each line's top is the sum of the heights above it).
+pub const EXACT_GRID: [u32; 15] = [6, 8, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40];
+
+fn exact_grid(v: &mut Vec<Probe>) {
+    for (key, name, hp) in [
+        ("georgia-11", "Georgia", 22),
+        ("arial-11", "Arial", 22),
+        ("times-12", "Times New Roman", 24),
+        ("verdana-10", "Verdana", 20),
+        ("georgia-22", "Georgia", 44),
+    ] {
+        let body: String = EXACT_GRID
+            .iter()
+            .map(|pt| {
+                p(&format!(r#"<w:spacing w:before="0" w:after="0" w:line="{}" w:lineRule="exact"/>"#, pt * 20), &r("", &format!("Exact {pt} Hxg")))
+            })
+            .collect();
+        v.push(probe(
+            format!("exact-grid-{key}"),
+            "one-line paragraphs at exact line heights 6 to 40 pt: the baseline inside an exact line",
+            base(name, hp, SINGLE, body),
         ));
     }
 }
