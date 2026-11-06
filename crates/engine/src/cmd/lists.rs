@@ -185,15 +185,14 @@ fn get(s: &mut Session, v: &Value) -> CmdResult {
 fn define(s: &mut Session, v: &Value) -> CmdResult {
     let given = v.get("levels").and_then(Value::as_array).ok_or_else(|| CmdError::Params("`levels` (array) is required".into()))?;
     let target = p::u64(v, "num").map(|n| n.min(u32::MAX as u64) as u32);
-    // `list.get` shows a list's own typed start as the level's start. A level sent back exactly as
-    // `list.get` showed it is not an explicit start: drop its start, so the shared definition and
-    // the lists sharing it stay as they are and the list keeps its own override. A level that
-    // differs in anything else (a direct `{"start": 5}` included) sets its start as given.
+    // `list.get` shows a list's own typed start as the level's start. Sending it back unchanged
+    // is not an explicit start: drop it, so the shared definition and the lists sharing it stay as
+    // they are and the list keeps its own override.
     let mut given = given.clone();
-    if let (Some(n), Some(shown)) = (target, target.and_then(|n| levels_of(s, n))) {
-        let overridden = |i: usize| s.doc.numbering.num(n).is_some_and(|x| x.start_overrides.iter().any(|(l, _)| *l as usize == i));
+    if let Some(x) = target.and_then(|n| s.doc.numbering.num(n)) {
         for (i, lv) in given.iter_mut().enumerate() {
-            if shown.get(i).is_some_and(|l| *lv == level_json(l)) && overridden(i) {
+            let own = x.start_overrides.iter().find(|(l, _)| *l as usize == i).map(|(_, st)| *st as u64);
+            if own.is_some() && p::u64(lv, "start") == own.map(|o| o.min(MAX_LIST_START as u64)) {
                 if let Some(o) = lv.as_object_mut() {
                     o.remove("start");
                 }
