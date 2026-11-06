@@ -188,20 +188,44 @@ fn trim_num(v: f32) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
-fn para_attrs(p: &Para) -> String {
-    let mut css: Vec<&str> = Vec::new();
+/// A paragraph's ` style="…"` attribute (empty when it has nothing to say): its alignment, its
+/// spacing and indents when `spacing` asks for them, and a page break before it.
+fn para_attrs(p: &Para, spacing: bool) -> String {
+    let mut css: Vec<String> = Vec::new();
     if let Some(a) = align_css(p.align) {
-        css.push(a);
+        css.push(a.to_string());
+    }
+    if spacing {
+        css.extend(spacing_css(&p.spacing));
     }
     if p.page_break {
-        css.push("break-before:page;page-break-before:always");
+        css.push("break-before:page;page-break-before:always".to_string());
     }
     if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) }
 }
 
-fn para_html(p: &Para) -> String {
+/// A paragraph's spacing and indents as CSS declarations in points: margins for the space before
+/// and after and the left and right indents, and `text-indent` for a first-line indent (negative:
+/// hanging).
+fn spacing_css(s: &model::Spacing) -> Vec<String> {
+    let mut css = Vec::new();
+    for (name, v) in [("margin-top", s.before), ("margin-right", s.right), ("margin-bottom", s.after), ("margin-left", s.left)] {
+        if let Some(v) = v.filter(|v| v.is_finite()) {
+            // `+ 0.0` turns -0.0 into 0.0, which would otherwise print as "-0".
+            css.push(format!("{name}:{}pt", trim_num(v + 0.0)));
+        }
+    }
+    if let Some(v) = s.first.filter(|v| v.is_finite() && *v != 0.0) {
+        css.push(format!("text-indent:{}pt", trim_num(v)));
+    }
+    css
+}
+
+/// A paragraph as an HTML element (a heading, a rule or a `<p>`), with its spacing and indents
+/// when `spacing` asks for them.
+fn para_html(p: &Para, spacing: bool) -> String {
     let body = inlines_html(&p.inlines);
-    let attrs = para_attrs(p);
+    let attrs = para_attrs(p, spacing);
     match p.kind {
         Kind::Heading(n) => format!("<h{n}{attrs}>{body}</h{n}>", n = n.clamp(1, 6)),
         Kind::Title => format!("<h1{attrs}>{body}</h1>"),
@@ -211,6 +235,7 @@ fn para_html(p: &Para) -> String {
     }
 }
 
+/// A table as HTML, its cells' blocks nested at `depth + 1`.
 fn table_html(t: &FTable, out: &mut String, depth: usize) {
     out.push_str("<table style=\"border-collapse:collapse\">\n");
     for row in &t.rows {
@@ -251,7 +276,7 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
                 Some(p) => out.push_str(&inlines_html(&p.inlines)),
                 None => {
                     out.push('\n');
-                    blocks_html(&c.blocks, out, depth + 1);
+                    blocks_html(&c.blocks, out, depth + 1, false);
                 }
             }
             out.push_str(&format!("</{tag}>"));
@@ -261,7 +286,9 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
     out.push_str("</table>\n");
 }
 
-fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
+/// `blocks` as HTML: list paragraphs as nested lists, code as `<pre>`, quotes as `<blockquote>`,
+/// and plain paragraphs with their spacing and indents when `spacing` asks for them.
+fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize, spacing: bool) {
     let mut i = 0;
     while let Some(b) = blocks.get(i) {
         match b {
@@ -300,7 +327,7 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
                         top.1 = true;
                     }
                     let body = inlines_html(&q.inlines);
-                    let attrs = para_attrs(q);
+                    let attrs = para_attrs(q, false);
                     out.push_str(&format!("<li{attrs}>{body}"));
                     i += 1;
                 }
@@ -331,14 +358,14 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
                     if q.kind != Kind::Quote || q.list.is_some() {
                         break;
                     }
-                    out.push_str(&para_html(&Para { kind: Kind::Normal, ..q.clone() }));
+                    out.push_str(&para_html(&Para { kind: Kind::Normal, ..q.clone() }, false));
                     out.push('\n');
                     i += 1;
                 }
                 out.push_str("</blockquote>\n");
             }
             FBlock::Para(p) => {
-                out.push_str(&para_html(p));
+                out.push_str(&para_html(p, spacing));
                 out.push('\n');
                 i += 1;
             }
@@ -362,11 +389,12 @@ pub fn export(doc: &Document) -> String {
 }
 
 /// `doc`'s content as an HTML fragment (no head or style sheet): what a copy puts on the system
-/// clipboard beside its text, equations as MathML (#816).
+/// clipboard beside its text, equations as MathML (#816). With no style sheet to give them, its
+/// plain paragraphs carry their own spacing and indents (#5537).
 pub fn export_fragment(doc: &Document) -> String {
     let flow = model::from_doc(doc);
     let mut out = String::from("<meta charset=\"utf-8\">");
-    blocks_html(&flow.blocks, &mut out, 0);
+    blocks_html(&flow.blocks, &mut out, 0, true);
     out
 }
 
@@ -387,7 +415,7 @@ pub fn export_flow(flow: &Flow, lang: &str) -> String {
          table{border-collapse:collapse;margin:0.5em 0}\nblockquote{margin:0.5em 2em;font-style:italic;color:#404040}\n\
          pre{background:#f5f5f5;padding:0.5em;font-family:'Courier New',monospace;font-size:10pt}\n</style>\n</head>\n<body>\n",
     );
-    blocks_html(&flow.blocks, &mut out, 0);
+    blocks_html(&flow.blocks, &mut out, 0, false);
     out.push_str("</body>\n</html>\n");
     out
 }

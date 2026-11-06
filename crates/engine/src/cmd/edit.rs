@@ -195,16 +195,94 @@ fn copy_with(s: &mut Session, whole: Option<&Path>) -> CmdResult {
     s.clipboard_text = f.clipboard_text();
     s.clip_history.push(&f, &s.clipboard_text);
     s.clipboard = Some(f);
-    Ok(copy_result(s))
+    let bare = bare_blocks(s, &a, &b);
+    Ok(copy_result(s, &bare))
+}
+
+/// For each block a copy of `a..b` gives, whether it goes out bare (`with_source_spacing`): a
+/// paragraph taken out of a table cell, or a piece of one paragraph.
+fn bare_blocks(s: &Session, a: &Pos, b: &Pos) -> Vec<bool> {
+    if a.path == b.path && (a.off > 0 || b.off < s.doc.para(a.story, &a.path).map_or(0, |p| p.len())) {
+        return vec![true];
+    }
+    if a.path.parent() == b.path.parent() {
+        return vec![a.path.0.len() > 1; b.path.last().saturating_sub(a.path.last()).saturating_add(1)];
+    }
+    s.doc.paths_between(a, b).iter().map(|p| p.0.len() > 1).collect()
+}
+
+/// The copy as a document whose top-level paragraphs carry, as their own formatting, the space
+/// before and after and the indents they have in the source document (`styles`): the copy holds
+/// only the built-in styles, so its HTML would otherwise lose what the source's styles give (#5537).
+/// Paragraphs marked in `bare` go out with none of this: layout resolves a cell's paragraphs with
+/// the table style, which the flattened copy no longer knows, a column selection's rows are lines
+/// rather than paragraphs, and a piece of a paragraph is inline text, as in Word.
+fn with_source_spacing(f: &Fragment, styles: &wordcraft_doc::StyleSheet, bare: &[bool]) -> wordcraft_doc::Document {
+    let mut d = f.to_document();
+    let is_bare = |i: usize| bare.get(i).copied().unwrap_or(false);
+    let names: Vec<Option<String>> = d
+        .body
+        .iter()
+        .enumerate()
+        .map(|(i, b)| match &**b {
+            wordcraft_doc::Block::Para(p) if !is_bare(i) => Some(styles.resolve_para(&p.props).style),
+            _ => None,
+        })
+        .collect();
+    for (i, b) in d.body.iter_mut().enumerate() {
+        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+            if is_bare(i) {
+                let pp = &mut p.props;
+                (pp.space_before, pp.space_after) = (None, None);
+                (pp.indent_left, pp.indent_right, pp.indent_first) = (None, None, None);
+                continue;
+            }
+            let mut r = styles.resolve_para(&p.props);
+            // Indents in characters are measured in the paragraph mark's font size, as in layout.
+            if r.indent_chars.iter().any(|c| *c != 0.0) {
+                r.set_char_unit(styles.resolve_char(p.props.style.as_deref(), &p.mark).size);
+            }
+            // A list item's indents come from its list, which the copy doesn't hold, and its
+            // style's spacing is contextual: it gets none, as before. A numbered heading goes out
+            // as a heading, so it keeps its spacing, but not those indents.
+            let list = r.numbering.is_some();
+            let heading = r.outline_level.is_some();
+            // Contextual spacing drops a paragraph's own space towards a neighbour of its style,
+            // as layout does; at the ends of the copy no neighbour takes it away.
+            // Automatic spacing resolves to the 14 pt it is laid out with.
+            let beside = |j: Option<usize>| r.contextual_spacing && j.and_then(|j| names.get(j)).and_then(Option::as_deref) == Some(r.style.as_str());
+            let space = |v: f32, gone: bool| (!list || heading).then_some(if gone { 0.0 } else { v });
+            // A right-to-left paragraph's indents would land on the wrong side in an HTML
+            // paragraph without a direction, so they are left out.
+            let ind = |v: f32| (!list && !r.bidi).then_some(v);
+            // A paragraph that switches its style's list off keeps only indents of its own, as
+            // in layout.
+            let off = p.props.numbering.is_some_and(|n| n.num == 0);
+            let own = |pts: Option<f32>, chars: Option<f32>, v: f32| {
+                if off && pts.is_none() && chars.is_none_or(|c| c == 0.0) { 0.0 } else { v }
+            };
+            // Other programs have no page margin for a negative indent to hang into.
+            let left = own(p.props.indent_left, p.props.indent_left_chars, r.indent_left).max(0.0);
+            let first = own(p.props.indent_first, p.props.indent_first_chars, r.indent_first).max(-left);
+            let pp = &mut p.props;
+            pp.space_before = space(r.space_before, beside(i.checked_sub(1)));
+            pp.space_after = space(r.space_after, beside(i.checked_add(1)));
+            pp.indent_left = ind(left);
+            pp.indent_right = ind(r.indent_right.max(0.0));
+            pp.indent_first = ind(first);
+        }
+    }
+    d
 }
 
 /// What Copy and Cut return: the clipboard's text, and the copy as HTML (equations as MathML,
 /// #816) and as RTF for the host to put on the system clipboard too, so other programs keep the
-/// formatting; and for a copy of one equation alone, its MathML (#1297).
-pub(crate) fn copy_result(s: &mut Session) -> Value {
+/// formatting; and for a copy of one equation alone, its MathML (#1297). `bare`: see
+/// `with_source_spacing`.
+pub(crate) fn copy_result(s: &mut Session, bare: &[bool]) -> Value {
     (s.clipboard_html, s.clipboard_rtf) = match &s.clipboard {
         Some(f) => {
-            let d = f.to_document();
+            let d = with_source_spacing(f, &s.doc.styles, bare);
             (wordcraft_formats::html::export_fragment(&d), wordcraft_formats::rtf::export(&d))
         }
         None => (String::new(), String::new()),
