@@ -78,9 +78,29 @@ Known limitation, ADR-0005: `Document::kept` is not serialized, so unmodelled
 paragraph markup is preserved only for paragraphs unchanged since open. The
 warning says so; the fix is to keep the source `.docx` next to the snapshot.
 
+## Command operations
+
+Besides the positional primitives, the server accepts `kind:"command"` operations
+for engine commands a client cannot express as primitives. The room model wraps a
+real `Session` (`crates/collab-engine`), so a command runs through the same
+`Session::run` the UI uses:
+
+```json
+{"kind":"command",
+ "target":{"story":"body","nodeId":18,"off":42},
+ "payload":{"command":"text.insert","params":{"text":"Hi"}}}
+```
+
+The caret comes from `target`, `author` comes from the JWT `sub`, and the
+response delta repeats the command so other replicas can run it at the same
+place. Only mutating commands outside areas that reach beyond the document are
+accepted: `file.`, `tools.`, `ui.`, `view.`, `caret.`, `select.`, `collab.`,
+`edit.undo`, `edit.redo`, `edit.repeat` and `review.readAloud` are refused with
+`forbidden`. The server session keeps no undo history: per-user undo is the
+protocol's (ADR-0010), and a command has no inverse there.
+
 ## What is not here yet
 
 - Client connection and UI (feature flag `collab`), PR-4.
 - Snapshot persistence on disk and restart recovery.
 - Lease enforcement and token refresh.
-- `kind:"command"` execution through `Session::run`.

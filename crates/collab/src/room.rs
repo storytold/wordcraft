@@ -27,9 +27,11 @@ pub struct Effect {
 
 /// The application half of a room: applies an operation to the document.
 pub trait Model {
-    /// Apply an operation to the authoritative state. `Err` refuses the
-    /// operation and leaves the state untouched (ADR-0004).
-    fn apply(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject>;
+    /// Apply an operation to the authoritative state as `actor` (the JWT
+    /// `sub`). `Err` refuses the operation and leaves the state untouched
+    /// (ADR-0004). The actor is what the model puts in tracked changes and
+    /// comment authors; it never comes from the operation itself (ADR-0008).
+    fn apply(&mut self, actor: &str, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject>;
 
     /// Native snapshot of the state, plus the source file bytes when the
     /// format keeps unmodelled parts (ADR-0005).
@@ -166,7 +168,7 @@ impl<M: Model> Room<M> {
             return Ok(cached.clone());
         }
         self.journal.check(&op)?;
-        let effect = self.model.apply(&op, &mut self.ids)?;
+        let effect = self.model.apply(actor, &op, &mut self.ids)?;
         let applied = self.journal.accept(&op, actor, effect.delta, effect.inverse.clone());
         if !effect.inverse.is_empty() || !effect.forward.is_empty() {
             let step = UndoStep::new(effect.label, effect.inverse, effect.forward);
