@@ -111,6 +111,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 // editing session are replaced.
                 s.note_body_replaced();
                 s.math = None;
+                // A fill belongs to the replaced document: a matching field in the
+                // restored version must not continue it (#5525).
+                s.form_fill = None;
                 s.touch();
                 s.clamp_selection();
             }

@@ -21,6 +21,7 @@ impl Session {
         self.math = None;
         self.sel = Selection::caret(self.doc.start_of(StoryRef::Body));
         self.pending = None;
+        self.form_fill = None;
         self.typing = None;
         self.also_selected.clear();
         self.column = None;
@@ -163,6 +164,8 @@ impl Session {
             // Go Back's places, like the caret history: not part of the document.
             edit_marks: _,
             go_back_step: _,
+            // Checked against the field's result before each use: a restored document ends it.
+            form_fill: _,
         } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {

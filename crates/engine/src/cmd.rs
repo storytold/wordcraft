@@ -345,8 +345,13 @@ pub fn type_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
     insert_text(s, text, true).map(|_| ())
 }
 
-/// [`type_text`] with the effect the insertion had.
+/// Typing (`text.insert`): [`type_text`] with the effect the insertion had. Over a selected legacy
+/// text form field the text fills it in ([`FormFill`]); [`type_text`], which the break, symbol and
+/// other inserting commands use, never does (#5525).
 pub(crate) fn type_text_effect(s: &mut Session, text: &str) -> Result<InsertEffect, CmdError> {
+    if let Some(effect) = fill_text_form_field(s, text)? {
+        return Ok(effect);
+    }
     insert_text(s, text, true)
 }
 
@@ -355,6 +360,16 @@ pub(crate) fn type_text_effect(s: &mut Session, text: &str) -> Result<InsertEffe
 /// one would end the list).
 pub fn paste_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
     insert_text(s, text, false).map(|_| ())
+}
+
+/// A Paste of plain text: [`paste_text`], except that over a selected legacy text form field, or
+/// while one is being filled, the text goes into its result as typed text does (appended at the
+/// fill's caret), its line breaks dropped (#5525).
+pub(crate) fn paste_plain_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
+    if fill_text_form_field(s, text)?.is_some() {
+        return Ok(());
+    }
+    paste_text(s, text)
 }
 
 /// Inserts typed or pasted text at the caret: resolves field ends and content-control placeholders,
@@ -426,6 +441,208 @@ fn insert_text(s: &mut Session, text: &str, enter: bool) -> Result<InsertEffect,
     s.goal_x = None;
     let content_changed = deletion.content_changed || inserted;
     Ok(InsertEffect { content_changed, state_changed: deletion.state_changed || content_changed || placeholder_changed })
+}
+
+/// A legacy text form field being filled in (#5525): typing goes on inside its result until the
+/// selection leaves the field. The field is one object in its paragraph, so the caret inside its
+/// result is kept here, not in the selection (which stays on the field).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FormFill {
+    /// Where the field object is.
+    pub at: Pos,
+    /// The caret in the result, in characters.
+    pub caret: usize,
+    /// The result as the fill last wrote it: any other change to it ends the fill.
+    pub text: String,
+}
+
+/// The legacy text form field (`FORMTEXT`) the selection is exactly: its position, its length
+/// limit and its current result.
+pub(crate) fn selected_text_form_field(s: &Session) -> Option<(Pos, Pos, usize, String)> {
+    let (a, b) = s.sel.ordered();
+    if a.story != b.story || a.path != b.path || a.off.checked_add(wordcraft_doc::para::OBJ.len_utf8()) != Some(b.off) {
+        return None;
+    }
+    let obj = s.doc.para_at(&a)?.object_at(a.off)?;
+    let max_len = match obj.legacy_form() {
+        Some(wordcraft_doc::legacy_form::LegacyForm::Text { max_len, .. }) => max_len,
+        _ => return None,
+    };
+    let wordcraft_doc::para::InlineObject::Field { result, .. } = obj else { return None };
+    let limit = max_len.map_or(usize::MAX, |n| usize::try_from(n).unwrap_or(usize::MAX));
+    Some((a, b, limit, result.clone()))
+}
+
+/// The fill in progress, taken out of the session: `None` (and the fill ended) when changes are
+/// tracked, the selection isn't exactly that field any more, or its result isn't what the fill
+/// wrote (an undo, a redo or another edit changed it).
+fn active_fill(s: &mut Session) -> Option<FormFill> {
+    let fill = s.form_fill.take()?;
+    if s.doc.settings.track_changes {
+        return None;
+    }
+    let (at, _, _, result) = selected_text_form_field(s)?;
+    (at == fill.at && result == fill.text && fill.caret <= result.chars().count()).then_some(fill)
+}
+
+/// Byte offset of character `i` in `t` (its end past the last one).
+fn char_byte(t: &str, i: usize) -> usize {
+    t.char_indices().nth(i).map_or(t.len(), |(b, _)| b)
+}
+
+/// Can `c` be part of a form field's result? Its result is one line of plain text: no control
+/// character (tab, breaks, the page and column breaks, which the DOCX writer drops from a result
+/// anyway), no line or paragraph separator and no object replacement character (#5525).
+fn result_char(c: char) -> bool {
+    !c.is_control() && !matches!(c, wordcraft_doc::para::OBJ | '\u{2028}' | '\u{2029}')
+}
+
+/// Write a form field's result and carry the fill on with the caret at `caret`. The one place a
+/// fill writes a result: characters a result cannot hold ([`result_char`]) are dropped here, so
+/// none can reach it whichever path called.
+fn write_fill(s: &mut Session, at: &Pos, text: String, caret: usize) -> Result<(), CmdError> {
+    let text = if text.chars().all(result_char) { text } else { text.chars().filter(|c| result_char(*c)).collect() };
+    let caret = caret.min(text.chars().count());
+    let para = s.doc.para_mut(at.story, &at.path)?;
+    if let Some(wordcraft_doc::para::InlineObject::Field { result, dirty, .. }) = para.object_at_mut(at.off) {
+        result.clone_from(&text);
+        *dirty = false;
+    }
+    para.touch();
+    s.form_fill = Some(FormFill { at: at.clone(), caret, text });
+    s.goal_x = None;
+    Ok(())
+}
+
+/// Text typed over a selected legacy text form field (`FORMTEXT`, as Alt+F1 selects it) fills it
+/// in (Word's behaviour not compared): the text becomes the field's result (one line, cut to the field's maximum
+/// length) and the field, with its `w:ffData`, stays (#5525). The field stays selected and the
+/// next keystrokes go on inside its result ([`FormFill`]), the maximum length capping the whole
+/// result. Returns `None`, changing nothing, when the selection isn't exactly one such field or
+/// changes are tracked; `Some` with neither change set when an insert adds nothing (a
+/// separator-only insert, or a fill already at the field's maximum length) and is handled
+/// without writing anything, so the caller does not report a change that never happened.
+fn fill_text_form_field(s: &mut Session, text: &str) -> Result<Option<InsertEffect>, CmdError> {
+    let active = active_fill(s);
+    if s.doc.settings.track_changes {
+        return Ok(None);
+    }
+    let Some((a, b, limit, result)) = selected_text_form_field(s) else { return Ok(None) };
+    controls::check_edit(s, &a, &b)?;
+    // Separators, tabs, breaks and other control characters can't be in a result: dropped.
+    let typed = text.chars().filter(|c| result_char(*c));
+    let (filled, caret) = match active {
+        Some(fill) => {
+            let added: String = typed.take(limit.saturating_sub(result.chars().count())).collect();
+            if added.is_empty() {
+                // Nothing to add (separators only, or the result is already at the maximum
+                // length): keep the fill and report no change (#5525).
+                s.form_fill = Some(fill);
+                return Ok(Some(InsertEffect::default()));
+            }
+            let mut filled = result;
+            filled.insert_str(char_byte(&filled, fill.caret), &added);
+            (filled, fill.caret.saturating_add(added.chars().count()))
+        }
+        None => {
+            let filled: String = typed.take(limit).collect();
+            // Separators are stripped from a result, so a separator-only insert has
+            // nothing to write: leave the existing result alone instead of erasing
+            // it with an empty one (#5525).
+            if filled.is_empty() {
+                return Ok(Some(InsertEffect::default()));
+            }
+            let n = filled.chars().count();
+            (filled, n)
+        }
+    };
+    write_fill(s, &a, filled, caret)?;
+    Ok(Some(InsertEffect { content_changed: true, state_changed: true }))
+}
+
+/// Backspace (or, `forward`, Delete) while a form field is being filled ([`FormFill`]): removes
+/// the character before (after) the caret in its result; with `word` (Ctrl+Backspace,
+/// Ctrl+Delete) the word before the caret with the spaces after it (the word after it with its
+/// spaces). At the result's start (end) the fill ends and the caret goes before (after) the
+/// field, which is never deleted. `None` when no fill is in progress; else whether the result
+/// changed.
+pub(crate) fn form_fill_delete(s: &mut Session, forward: bool, word: bool) -> Result<Option<bool>, CmdError> {
+    let Some(fill) = active_fill(s) else { return Ok(None) };
+    let (a, b) = s.sel.ordered();
+    let chars: Vec<char> = fill.text.chars().collect();
+    let caret = fill.caret.min(chars.len());
+    let (from, to) = match (forward, word) {
+        (true, false) => (caret, caret.saturating_add(1).min(chars.len())),
+        (false, false) => (caret.saturating_sub(1), caret),
+        (true, true) => {
+            let rest = chars.get(caret..).unwrap_or_default();
+            let letters = rest.iter().take_while(|c| !c.is_whitespace()).count();
+            let spaces = rest.iter().skip(letters).take_while(|c| c.is_whitespace()).count();
+            (caret, caret.saturating_add(letters).saturating_add(spaces))
+        }
+        (false, true) => {
+            let before = chars.get(..caret).unwrap_or_default();
+            let spaces = before.iter().rev().take_while(|c| c.is_whitespace()).count();
+            let letters = before.iter().rev().skip(spaces).take_while(|c| !c.is_whitespace()).count();
+            (caret.saturating_sub(spaces).saturating_sub(letters), caret)
+        }
+    };
+    if from >= to {
+        s.sel = crate::Selection::caret(if forward { b } else { a });
+        return Ok(Some(false));
+    }
+    controls::check_edit(s, &a, &b)?;
+    let mut text = fill.text;
+    let (from_b, to_b) = (char_byte(&text, from), char_byte(&text, to));
+    text.replace_range(from_b..to_b, "");
+    write_fill(s, &fill.at, text, from)?;
+    Ok(Some(true))
+}
+
+/// Finishes a fill in progress before a command that is not part of filling runs (#5525): what
+/// was typed stays the field's result, the field stays, and the caret goes right after the field,
+/// so the command runs there (Enter splits the paragraph after the field, a break or symbol lands
+/// after it, a rich paste is inserted after it) instead of over the selected field, which would
+/// delete it and the typed text. A stale fill (an undo or another edit changed the result) is
+/// dropped and the selection left alone. Returns whether a fill was committed.
+pub(crate) fn commit_form_fill(s: &mut Session) -> bool {
+    if active_fill(s).is_none() {
+        return false;
+    }
+    let (_, b) = s.sel.ordered();
+    s.sel = crate::Selection::caret(b);
+    s.goal_x = None;
+    true
+}
+
+/// Tab (or, `back`, Shift+Tab) while a form field is being filled: the fill is committed and the
+/// next (previous) legacy text form field in the story is selected, ready to be filled in; with
+/// none, the caret goes after (before) the field. Nothing is typed into the result. `false`, and
+/// nothing done, when no fill is in progress (#5525).
+pub(crate) fn form_fill_tab(s: &mut Session, back: bool) -> bool {
+    if active_fill(s).is_none() {
+        return false;
+    }
+    let (a, b) = s.sel.ordered();
+    let view: &Session = s;
+    let is_text_form = |at: &Pos| {
+        view.doc
+            .para_at(at)
+            .and_then(|p| p.object_at(at.off))
+            .and_then(|o| o.legacy_form())
+            .is_some_and(|f| matches!(f, wordcraft_doc::legacy_form::LegacyForm::Text { .. }))
+    };
+    let forms: Vec<Pos> = fields::story_fields(view, a.story).into_iter().filter(|f| f.end.is_none() && is_text_form(&f.at)).map(|f| f.at).collect();
+    let target = if back { forms.iter().rev().find(|at| **at < a) } else { forms.iter().find(|at| **at > a) };
+    s.sel = match target {
+        Some(at) => {
+            let end = Pos { off: at.off.saturating_add(wordcraft_doc::para::OBJ.len_utf8()), ..at.clone() };
+            crate::Selection { anchor: at.clone(), focus: end }
+        }
+        None => crate::Selection::caret(if back { a } else { b }),
+    };
+    s.goal_x = None;
+    true
 }
 
 /// Is the paragraph at `at` still without letters (empty, or only spaces, digits and

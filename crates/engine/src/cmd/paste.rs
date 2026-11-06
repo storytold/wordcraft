@@ -298,7 +298,8 @@ pub fn paste_fragment(s: &mut Session, v: &Value) -> Result<Fragment, CmdError> 
 pub fn insert_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
     // Only our own cut, pasted straight after it, becomes a move (see `insert`).
     s.pending_move = None;
-    super::paste_text(s, &text.replace("\r\n", "\r").replace('\n', "\r"))
+    // Over (or while filling) a legacy text form field the text fills it in (#5525).
+    super::paste_plain_text(s, &text.replace("\r\n", "\r").replace('\n', "\r"))
 }
 
 /// Merge Formatting (#687): the pasted text takes the formatting where it lands — the paragraph's

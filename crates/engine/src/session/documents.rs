@@ -281,7 +281,10 @@ impl Session {
             untitled_count: _,
             #[cfg(not(target_arch = "wasm32"))]
                 recovery: _,
+            // Names a field of the active document: a switch ends it (below).
+            form_fill: _,
         } = self;
+        self.form_fill = None;
         let DocState {
             doc,
             sel,

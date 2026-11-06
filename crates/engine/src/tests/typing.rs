@@ -3837,3 +3837,141 @@ fn issues_1281_1045_english_dialects_proof_typed_text() {
     let words: Vec<&str> = issues.as_array().unwrap().iter().filter(|i| i["kind"] == "spelling").filter_map(|i| i["text"].as_str()).collect();
     assert_eq!(words, ["21th"]);
 }
+
+/// #5525: typing into a legacy text form field through the command path (one
+/// `text.insert` per keystroke, as the keyboard does) fills its result and keeps
+/// the field, as the typing-parity rule requires a test here.
+#[test]
+fn typing_into_text_form_field_fills_it_through_the_command_path() {
+    let mut s = s();
+    typ(&mut s, "Name: ");
+    run(&mut s, "insert.field", json!({"instr": "FORMTEXT", "result": "XXXXX"}));
+    // A bare FORMTEXT field is not a legacy form field until its `w:ffData` says so.
+    let ff =
+        r#"<w:ffData><w:name w:val="Text1"/><w:enabled/><w:calcOnExit w:val="0"/><w:textInput><w:default w:val="XXXXX"/></w:textInput></w:ffData>"#;
+    let para = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    for o in &mut para.objects {
+        if let wordcraft_doc::InlineObject::Field { form, .. } = o {
+            *form = ff.into();
+        }
+    }
+    para.touch();
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "fields.next", json!({}));
+    typ(&mut s, "Jane");
+    let fields: Vec<String> = s
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| match o {
+            wordcraft_doc::InlineObject::Field { result, .. } => Some(result.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fields, ["Jane"]);
+    assert_eq!(s.doc.body[0].as_para().unwrap().plain_text(), "Name: Jane");
+}
+
+/// #5525: a straight quote typed into a selected text form field stays straight:
+/// smart quotes must not read the paragraph text (the field object, or the text
+/// before it) instead of the field's result, on the first keystroke or during
+/// a fill.
+#[test]
+fn typing_a_quote_into_a_text_form_field_stays_straight() {
+    let mut s = s();
+    typ(&mut s, "Name: ");
+    run(&mut s, "insert.field", json!({"instr": "FORMTEXT", "result": "XXXXX"}));
+    // A bare FORMTEXT field is not a legacy form field until its `w:ffData` says so.
+    let ff =
+        r#"<w:ffData><w:name w:val="Text1"/><w:enabled/><w:calcOnExit w:val="0"/><w:textInput><w:default w:val="XXXXX"/></w:textInput></w:ffData>"#;
+    let para = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    for o in &mut para.objects {
+        if let wordcraft_doc::InlineObject::Field { form, .. } = o {
+            *form = ff.into();
+        }
+    }
+    para.touch();
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "fields.next", json!({}));
+    typ(&mut s, "\"\"");
+    let fields: Vec<String> = s
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| match o {
+            wordcraft_doc::InlineObject::Field { result, .. } => Some(result.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fields, ["\"\""]);
+    assert_eq!(s.doc.body[0].as_para().unwrap().plain_text(), "Name: \"\"");
+}
+
+#[test]
+fn typing_a_quote_into_a_text_form_field_with_track_changes_stays_smart() {
+    let mut s = s();
+    typ(&mut s, "Name: ");
+    run(&mut s, "insert.field", json!({"instr": "FORMTEXT", "result": "XXXXX"}));
+    // A bare FORMTEXT field is not a legacy form field until its `w:ffData` says so.
+    let ff =
+        r#"<w:ffData><w:name w:val="Text1"/><w:enabled/><w:calcOnExit w:val="0"/><w:textInput><w:default w:val="XXXXX"/></w:textInput></w:ffData>"#;
+    let para = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    for o in &mut para.objects {
+        if let wordcraft_doc::InlineObject::Field { form, .. } = o {
+            *form = ff.into();
+        }
+    }
+    para.touch();
+    s.doc.settings.track_changes = true;
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "fields.next", json!({}));
+    typ(&mut s, "\"\"");
+    // Track Changes declines the fill, so the tracked path runs and the quotes are
+    // converted (both curly here: the field object is the preceding context), as they
+    // were before form field fills existed (#5525).
+    assert_eq!(s.doc.body[0].as_para().unwrap().plain_text(), "Name: \u{201D}\u{201D}XXXXX");
+}
+
+/// #5525 review: keys pressed while a text form field is being filled, through the keyboard's
+/// commands: Tab finishes the fill and selects the next form field (no tab is typed over the
+/// fill), Backspace edits inside the result, and Enter finishes the fill and breaks the
+/// paragraph after the field. The fields, their `w:ffData` and every typed character stay.
+#[test]
+fn keys_during_a_text_form_field_fill_keep_the_fields_and_the_text() {
+    let mut s = s();
+    typ(&mut s, "Name: ");
+    run(&mut s, "insert.field", json!({"instr": "FORMTEXT", "result": "XXXXX"}));
+    typ(&mut s, " City: ");
+    run(&mut s, "insert.field", json!({"instr": "FORMTEXT", "result": "XXXXX"}));
+    let ff =
+        r#"<w:ffData><w:name w:val="Text1"/><w:enabled/><w:calcOnExit w:val="0"/><w:textInput><w:default w:val="XXXXX"/></w:textInput></w:ffData>"#;
+    let para = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    for o in &mut para.objects {
+        if let wordcraft_doc::InlineObject::Field { form, .. } = o {
+            *form = ff.into();
+        }
+    }
+    para.touch();
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "fields.next", json!({}));
+    typ(&mut s, "Janex\u{8}\tOslo\nnext");
+    let results: Vec<(String, String)> = s
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| match o {
+            wordcraft_doc::InlineObject::Field { result, form, .. } => Some((result.clone(), form.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results, [("Jane".to_string(), ff.to_string()), ("Oslo".to_string(), ff.to_string())]);
+    let texts: Vec<String> = s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect();
+    // "next" ends with no space or punctuation, so AutoCorrect hasn't capitalised it yet.
+    assert_eq!(texts, ["Name: Jane City: Oslo", "next"]);
+}
