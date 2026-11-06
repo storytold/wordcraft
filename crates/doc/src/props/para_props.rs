@@ -417,6 +417,10 @@ pub struct ParaProps {
     /// "Allow Latin text to wrap in the middle of a word"). Unset = on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub word_wrap: Option<bool>,
+    /// Force character-level line breaks (Thai/Lao paragraphs; `w:wordWrap` val="0" for complex
+    /// scripts). Once true it stays true: overlay only copies `true`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force_char_break: bool,
     /// `w:overflowPunct`: punctuation may hang past the line end. Unset = on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overflow_punct: Option<bool>,
@@ -463,6 +467,9 @@ impl ParaProps {
 
     fn overlay_script_layout(&mut self, patch: &ParaProps) {
         overlay_fields!(self, patch; bidi, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn, text_alignment);
+        if patch.force_char_break {
+            self.force_char_break = true;
+        }
     }
     pub fn overlaid(mut self, patch: &ParaProps) -> ParaProps {
         self.overlay(patch);
