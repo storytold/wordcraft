@@ -736,7 +736,7 @@ impl WordApp {
                 json!({"dir": dir})
             }
             // The built-in file browser (#576), for when the system's file dialog doesn't show up
-            // (desktop only): `purpose` is document (default), picture, recipients or save. A system
+            // (desktop only): `purpose` is document (default), picture, recipients, save or export. A system
             // dialog still waiting for an answer is given up as cancelled.
             #[cfg(not(target_arch = "wasm32"))]
             "ui.fileBrowser" => {
