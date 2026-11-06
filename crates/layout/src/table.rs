@@ -8,6 +8,7 @@ use wordcraft_doc::styles::{PartSet, TablePart, TableStyleProps};
 use wordcraft_doc::{Block, Blocks, Paragraph, Row, StoryRef, Table};
 use wordcraft_geom::Rect;
 
+use crate::boxes::BoxContext;
 use crate::para::{CellText, ClKind, ParaLayout};
 use crate::{BoxInput, BoxLayout, Ctx, Placed, layout_box};
 
@@ -621,8 +622,13 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 turned = Some(Turned { turn, len, across, snap, region, ci, top: margins[0] + band_t });
                 (items, len)
             } else {
-                let BoxLayout { mut items, mut height, floats_bottom, last_top, .. } =
-                    layout_box(ctx, BoxInput::cell(story, &cell.blocks, &cpath, cw, text, depth));
+                let BoxLayout { mut items, mut height, floats_bottom, last_top, .. } = layout_box(
+                    ctx,
+                    BoxInput {
+                        context: BoxContext::Cell { text, left: -margins[1], right: x1 - x0 - margins[1], clamp: true },
+                        ..BoxInput::cell(story, &cell.blocks, &cpath, cw, text, depth)
+                    },
+                );
                 // A hidden end-of-cell mark: an empty last paragraph takes no room (Word for
                 // Windows: a row of empty such cells is only its borders).
                 if cell.props.hide_mark && cell.blocks.last().and_then(|b| b.as_para()).is_some_and(|p| p.text.is_empty()) {
@@ -1288,6 +1294,7 @@ fn cell_picture(pic: &wordcraft_doc::props::CellPicture, rect: Rect, story: Stor
         path: wordcraft_doc::Path(path.to_vec()),
         off: usize::MAX,
         spin: wordcraft_geom::Spin::default(),
+        fx: Default::default(),
     };
     let sized = w.is_finite() && h.is_finite() && w > 0.1 && h > 0.1;
     match pic.repeat {

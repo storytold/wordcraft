@@ -324,6 +324,20 @@ fn floating_box_that_resizes_to_fit_takes_its_texts_height() {
     assert!((shrunk.h - grown.h).abs() < 0.5, "{shrunk:?} {grown:?}");
 }
 
+/// #4250: on a later page of its paragraph, a floating box that resizes to fit its text takes its
+/// text's height too.
+#[test]
+fn a_floating_box_on_a_later_page_of_its_paragraph_fits_its_text() {
+    let mut d = Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(400));
+    let float = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, ..Default::default() };
+    let id = text_box_with(&mut d, 0, "Inside", 144.0, 1.0, TextBody { auto_fit: true, ..Default::default() }, float);
+    let l = lay(&d);
+    assert!(l.pages.len() >= 3, "pages {}", l.pages.len());
+    let hit = l.find_object(0, |o| o.text_box == Some(id)).unwrap();
+    assert!(hit.page > 0, "drawn on the page of its anchor");
+    assert!(hit.rect.h > 15.0 && hit.rect.h < 30.0, "one line and the margins: {:?}", hit.rect);
+}
+
 #[test]
 fn a_turned_linked_box_turns_only_its_own_lines() {
     // Linked boxes show the first box's story; turning the second box turns the lines it shows,
@@ -357,4 +371,46 @@ fn a_turned_linked_box_turns_only_its_own_lines() {
     let shown = display::ItemDisplay::new(&d, &l.pages[0]);
     let items: Vec<display::Draw> = l.pages[0].items.iter().flat_map(|it| shown.draws(it, &Default::default())).collect();
     assert_eq!(turned_texts(&items), (true, true));
+}
+
+#[test]
+fn a_clipped_line_in_a_turned_box_is_drawn_once_turned_and_clipped() {
+    // Lines in a cell cut off at its edge (an exact-height row) inside a turned text box: drawn
+    // once, clipped, inside the box's turn (it was drawn upright and clipped, and again turned).
+    let mut d = Document::from_text("one");
+    let text = "Words in the box.";
+    let float = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, x: 20.0, y: 100.0, rot: 30.0, ..Default::default() };
+    let b = text_box_with(&mut d, 0, text, 144.0, 200.0, TextBody::default(), float);
+    let l = lay(&d);
+    let mut page = l.pages[0].clone();
+    let in_box: Vec<usize> = page
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(_, it)| matches!(it, Placed::Lines { story: StoryRef::Part(s), .. } if *s == b))
+        .map(|(i, _)| i)
+        .collect();
+    // Its lines taken as ones in a clipped cell (table 5, row 0, cell 0).
+    let Some(Placed::Lines { path, .. }) = in_box.first().and_then(|&i| page.items.get_mut(i)) else { panic!("the box has no lines") };
+    *path = wordcraft_doc::Path(vec![5, 0, 0, 0]);
+    let rect = Rect::new(0.0, 0.0, 1000.0, 1000.0);
+    page.items.push(Placed::Cell {
+        rect,
+        covered: false,
+        table: wordcraft_doc::Path(vec![5]),
+        row: 0,
+        cell: 0,
+        story: StoryRef::Part(b),
+        clip: true,
+    });
+    let draws = display::page_display(&d, &page, &display::DisplayOptions::default());
+    let upright_clips = draws.iter().filter(|x| matches!(x, display::Draw::Clip { .. })).count();
+    let turned_clips: usize = draws
+        .iter()
+        .map(|x| match x {
+            display::Draw::Rotated { items, .. } => items.iter().filter(|g| matches!(g, display::Draw::Clip { .. })).count(),
+            _ => 0,
+        })
+        .sum();
+    assert_eq!((upright_clips, turned_clips), (0, 1));
 }
