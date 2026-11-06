@@ -7,7 +7,10 @@ use super::{
     Block, Border, ClKind, DeleteMark, Document, Draw, InlineObject, InsertMark, LineEnd, MItem, ParaLayout, Path, Rect, Rgb, SectionStart, Spin,
     StoryRef, TextColor, Underline,
 };
+use crate::display::Paint;
 use wordcraft_doc::Paragraph;
+use wordcraft_doc::graphic::PathSeg;
+use wordcraft_doc::para::ShapeKind;
 
 /// Append display items for the half-open line range `l0..l1` of a laid-out paragraph.
 /// `(x, y)` positions the paragraph's left origin and the first selected line's top; later lines
@@ -346,6 +349,57 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 out.push(Draw::Line { x0, y0: sy, x1, y1: sy, width: thick, color, stroke, alpha, text_bg });
             }
         }
+        // Emphasis marks (Font › Emphasis mark): one over (or under) each character.
+        if rc.emphasis != wordcraft_doc::props::EmphasisMark::None {
+            for kk in run_start..end_k {
+                if pl.clusters.get(kk).is_none_or(|c| c.kind != ClKind::Text) {
+                    continue;
+                }
+                let a = x + line.cl_left(kk).unwrap_or(0.0);
+                let b = x + line.cl_right(kk).unwrap_or(a - x);
+                out.push(emphasis_mark(rc.emphasis, (a + b) / 2.0, base - st.shift, st.size, color));
+            }
+        }
+    }
+}
+
+/// An emphasis mark `mark` for a character centred at `cx` on baseline `base`, in a font of
+/// `size` points: a dot or a hollow circle above, a comma (sesame) above, or a dot below.
+fn emphasis_mark(mark: wordcraft_doc::props::EmphasisMark, cx: f32, base: f32, size: f32, color: Rgb) -> Draw {
+    use wordcraft_doc::props::EmphasisMark as E;
+    let size = if size.is_finite() { size.clamp(1.0, 1638.0) } else { 12.0 };
+    let r = size * 0.07;
+    // Above the tallest letters, or below the descenders.
+    // Clear of full-height (East Asian) characters, inside the room the line makes for them.
+    let cy = if mark == E::UnderDot { base + size * 0.32 } else { base - size * 1.2 };
+    let disc = |r: f32, fill: bool| Draw::Shape {
+        rect: Rect::new(cx - r, cy - r, r * 2.0, r * 2.0),
+        kind: ShapeKind::Ellipse,
+        fill: fill.then_some(Paint::Solid(color, 1.0)),
+        stroke: (!fill).then_some(color),
+        stroke_width: size * 0.03,
+        dash: Vec::new(),
+        cap: Default::default(),
+        effects: Default::default(),
+        corner: None,
+    };
+    match mark {
+        E::Circle => disc(r * 1.3, false),
+        // A teardrop leaning right, as the sesame mark is drawn.
+        E::Comma => Draw::Path {
+            segs: vec![
+                PathSeg::Move(cx - r * 0.4, cy - r * 1.4),
+                PathSeg::Cubic(cx + r * 1.2, cy - r * 0.6, cx + r * 1.0, cy + r * 1.0, cx - r * 0.2, cy + r * 1.4),
+                PathSeg::Cubic(cx + r * 0.2, cy + r * 0.4, cx - r * 0.6, cy - r * 0.4, cx - r * 0.4, cy - r * 1.4),
+                PathSeg::Close,
+            ],
+            fill: Some(Paint::Solid(color, 1.0)),
+            stroke: None,
+            stroke_width: 0.0,
+            dash: Vec::new(),
+            cap: Default::default(),
+        },
+        _ => disc(r, true),
     }
 }
 
@@ -574,7 +628,7 @@ fn inline_objects(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
     for k in line.c0..line.c1 {
         let Some(c) = pl.clusters.get(k) else { continue };
         let ClKind::Object(oi) = c.kind else { continue };
-        if c.obj_h <= 0.0 {
+        if c.obj_h + c.obj_d <= 0.0 {
             continue;
         }
         // A dragged inline object is left out too: its preview stands in for it.
@@ -583,7 +637,7 @@ fn inline_objects(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         }
         let cx = x + line.cl_left(k).unwrap_or(0.0);
         let obj = para.and_then(|p| p.objects.get(oi));
-        let rect = inline_rect(obj, cx, base, c.adv, c.obj_h, pl.rule_room(line, k));
+        let rect = inline_rect(obj, cx, base, c.adv, (c.obj_h, c.obj_d), pl.rule_room(line, k));
         let spin = obj.and_then(InlineObject::frame).map(|(_, _, f)| f.spin()).unwrap_or_default();
         match obj {
             Some(o @ (InlineObject::Image { .. } | InlineObject::Shape { .. } | InlineObject::Group { .. })) => {
