@@ -111,6 +111,9 @@ pub(super) struct St {
     pub(super) chg_p: FmtRevSt<Para>,
     pub(super) uc: usize,
     pub(super) hidden: bool,
+    /// Whether `\langnp` / `\langfenp` set the run's language (reset by `\plain`): a legacy
+    /// `\lang1024` / `\langfe1024` then keeps that language instead of clearing it.
+    pub(super) lang_np: [bool; 2],
     // Paragraph properties.
     pub(super) align: Option<Align>,
     pub(super) style: i32,
@@ -149,6 +152,7 @@ impl Default for St {
             old_rev: (None, None),
             uc: 1,
             hidden: false,
+            lang_np: [false; 2],
             align: None,
             style: 0,
             intbl: false,

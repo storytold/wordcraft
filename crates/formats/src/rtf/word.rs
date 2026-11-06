@@ -52,6 +52,9 @@ impl Reader {
         if self.destination_word(w, p, on, pv) {
             return;
         }
+        if self.language_word(w, on, pv) {
+            return;
+        }
         match w {
             "par" => self.end_para_mark(),
             "sect" => self.end_section(),
@@ -95,6 +98,7 @@ impl Reader {
                 self.st.rev = RevSt::default();
                 self.st.chg_c = FmtRevSt::default();
                 self.st.hidden = false;
+                self.st.lang_np = [false; 2];
             }
             "pard" => {
                 let field = self.st.field;
@@ -273,6 +277,55 @@ impl Reader {
             }
             _ => {}
         }
+    }
+
+    /// The language words: a run's languages and No Proofing, and the document's defaults.
+    fn language_word(&mut self, word: &str, on: bool, value: i32) -> bool {
+        match word {
+            // Language IDs ([MS-LCID]). `\lang1024` and `\langfe1024` are the legacy form of
+            // `\noproof` (RTF 1.7+, written for older readers): the text isn't proofed and has no
+            // language of its own, unless `\langnp` / `\langfenp` (which Word writes beside them
+            // with the real language) set one. Another ID that names no language changes nothing.
+            "lang" | "langfe" if value == NO_PROOF_LID => {
+                self.st.fmt.no_proof = true;
+                let i = usize::from(word == "langfe");
+                if !self.st.lang_np.get(i).copied().unwrap_or(false) {
+                    let lang = if i == 0 { &mut self.st.fmt.lang } else { &mut self.st.fmt.lang_ea };
+                    *lang = None;
+                }
+            }
+            "lang" => {
+                set_lang(&mut self.st.fmt.lang, value);
+            }
+            "langfe" => {
+                set_lang(&mut self.st.fmt.lang_ea, value);
+            }
+            "langnp" | "langfenp" => {
+                let i = usize::from(word == "langfenp");
+                let lang = if i == 0 { &mut self.st.fmt.lang } else { &mut self.st.fmt.lang_ea };
+                if set_lang(lang, value)
+                    && let Some(np) = self.st.lang_np.get_mut(i)
+                {
+                    *np = true;
+                }
+            }
+            "alang" => {
+                set_lang(&mut self.st.fmt.lang_bidi, value);
+            }
+            "noproof" => self.st.fmt.no_proof = on,
+            "deflang" | "deflangfe" | "adeflang" => {
+                let i = match word {
+                    "deflang" => 0,
+                    "deflangfe" => 1,
+                    _ => 2,
+                };
+                if let (Some(d), Some(tag)) = (self.deflang.get_mut(i), lang_tag(value)) {
+                    *d = Some(tag);
+                }
+            }
+            _ => return false,
+        }
+        true
     }
 
     fn destination_for_word(&mut self, w: &str) -> Option<Dest> {
@@ -514,6 +567,23 @@ impl Reader {
     fn in_info(&self) -> bool {
         self.info_depth.is_some_and(|d| self.depth() > d)
     }
+}
+
+/// The language tag of an RTF language ID (`1029` → `cs-CZ`).
+fn lang_tag(pv: i32) -> Option<&'static str> {
+    u16::try_from(pv).ok().and_then(wordcraft_doc::lcid::tag)
+}
+
+/// `\lang1024`: the legacy "no proofing" language ID.
+const NO_PROOF_LID: i32 = 1024;
+
+/// Sets `lang` to the tag of an RTF language ID; whether the ID named a language.
+fn set_lang(lang: &mut Option<String>, pv: i32) -> bool {
+    let tag = lang_tag(pv);
+    if let Some(tag) = tag {
+        *lang = Some(tag.to_string());
+    }
+    tag.is_some()
 }
 
 /// The target of a `HYPERLINK` field instruction; `%22` is a quote, as the writer stores one.
