@@ -11,6 +11,7 @@ pub mod controls;
 pub mod design;
 pub mod draw;
 pub mod edit;
+pub mod embedded_objects;
 pub mod equation;
 pub mod fields;
 pub mod file;

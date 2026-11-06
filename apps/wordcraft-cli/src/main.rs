@@ -291,6 +291,13 @@ fn automation_roots(
     Ok((roots, left))
 }
 
+/// The warning for a save or export result's `notShown` (#5393): the embedded objects `output`
+/// shows only as their pictures. `None` when there are none.
+fn not_shown_warning(result: &Value, output: &str) -> Option<String> {
+    let names: Vec<String> = result.get("notShown")?.as_array()?.iter().filter_map(|n| n.as_str().map(str::to_string)).collect();
+    wordcraft_engine::cmd::embedded_objects::warning(&names, output)
+}
+
 /// The password a protected Word file is opened with: `--password` (which any other process on
 /// the machine can read from the command line), `--password-file`, or `WORDCRAFT_PASSWORD`.
 const PASSWORD_OPTIONS: &[OptionSpec] =
@@ -453,8 +460,12 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 }
                 s.run("file.save", &params)
             };
-            r.map_err(|e| e.to_string())?;
+            let r = r.map_err(|e| e.to_string())?;
             eprintln!("wrote {o}");
+            // Embedded objects the output shows only as their pictures (#5393): never silently.
+            if let Some(w) = not_shown_warning(&r, &o) {
+                eprintln!("wordcraft-cli: warning: {w}");
+            }
             Ok(())
         }
         "info" => {
@@ -471,6 +482,11 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let password = password_from(&rest)?;
             let s = open(paths.first().ok_or_else(missing_argument)?, password.as_deref())?;
             let text = listed_text(&s.doc)?;
+            // What is inside an embedded object isn't in the text (#5393): say so on stderr.
+            let objects = wordcraft_engine::cmd::embedded_objects::shown_as_pictures(&s.doc);
+            if let Some(w) = wordcraft_engine::cmd::embedded_objects::warning(&objects, "the text") {
+                eprintln!("wordcraft-cli: warning: {w}");
+            }
             write_stdout(|o| writeln!(o, "{text}"))
         }
         "inspect" => {

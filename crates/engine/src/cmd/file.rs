@@ -94,7 +94,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("file.save", "Save", "File", save)
             .key("Mod+S / Shift+F12 / Alt+Shift+F2")
-            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format)}"#)
+            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format)} → {"saved", "path", "encrypted", "notShown"?: [embedded objects a PDF, text, Markdown, HTML or LaTeX copy shows only as their pictures, by program id]}"#)
             .pure(),
         CommandSpec::new("file.saveAs", "Save As", "File", save_as).key(super::mac_or("F12 / Mod+Shift+S", "F12 / Alt+F2")).params(r#"{"path": string, "password"?: string, "markup"?: bool, "format"?: string (as file.save)}"#).pure(),
         // Pure: the password must not land in Repeat or a recorded macro, and it isn't an edit
@@ -112,9 +112,9 @@ pub fn specs() -> Vec<CommandSpec> {
             let path = if path.to_ascii_lowercase().ends_with(".pdf") { path.to_string() } else { format!("{path}.pdf") };
             let opts = export_options(s, v);
             crate::io::save_path_with(std::path::Path::new(&path), &s.doc, None, &opts).map_err(CmdError::Failed)?;
-            Ok(json!({"path": path, "markup": opts.markup}))
+            Ok(with_not_shown(json!({"path": path, "markup": opts.markup}), &s.doc, "pdf"))
         })
-        .params(r#"{"path": string, "markup"?: bool (Print Markup: tracked changes marked up and each page scaled down beside the comments in balloons; default file.printMarkup)}"#)
+        .params(r#"{"path": string, "markup"?: bool (Print Markup: tracked changes marked up and each page scaled down beside the comments in balloons; default file.printMarkup)} → {"path", "markup", "notShown"?: [embedded objects drawn only as their pictures, by program id]}"#)
         .pure(),
         CommandSpec::new("file.exportPng", "Export Page as PNG", "File › Export", export_png)
             .params(r#"{"path": string, "page"?: n (1-based), "scale"?: px per pt, "markup"?: bool (the page with its comments in balloons beside it; default file.printMarkup)}"#)
@@ -388,7 +388,17 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         s.dirty = false;
         s.relayout();
     }
-    Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted}))
+    Ok(with_not_shown(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted}), &s.doc, &ext))
+}
+
+/// `result` with `notShown`, the embedded objects a `ext` file shows only as their pictures
+/// (#5393), when there are any: a PDF, page image or text file doesn't hold what is inside them.
+fn with_not_shown(mut result: Value, doc: &wordcraft_doc::Document, ext: &str) -> Value {
+    let names = super::embedded_objects::not_shown_in(doc, ext);
+    if !names.is_empty() {
+        result["notShown"] = json!(names);
+    }
+    result
 }
 
 /// Does `path` hold a Word 2003 XML Document already (so a plain save keeps that format)?
