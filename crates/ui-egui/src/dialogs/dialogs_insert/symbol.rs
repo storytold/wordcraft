@@ -131,6 +131,10 @@ pub struct SymbolForm {
     /// Scroll the grid to this row on the next frame.
     #[serde(skip)]
     scroll_to: Option<usize>,
+    /// Picking a bullet for Define New Bullet (#2786): OK hands the character and its font back
+    /// to that dialog instead of inserting it, and Cancel goes back to it unchanged.
+    #[serde(skip)]
+    pub bullet: Option<Box<crate::dialogs_bullet::DefineBulletForm>>,
 }
 
 /// Grid geometry.
@@ -151,10 +155,43 @@ impl SymbolForm {
         let recent = app.ui.recent_symbols.first().cloned();
         let font = recent.as_ref().map(|r| r.font.clone()).unwrap_or_default();
         let selected = recent.and_then(|r| r.ch.chars().next());
-        let mut f =
-            SymbolForm { tab, font, selected, code: String::new(), special: 0, text_font, chars: Vec::new(), chars_of: None, scroll_to: None };
+        let mut f = SymbolForm {
+            tab,
+            font,
+            selected,
+            code: String::new(),
+            special: 0,
+            text_font,
+            chars: Vec::new(),
+            chars_of: None,
+            scroll_to: None,
+            bullet: None,
+        };
         f.sync_code();
         f
+    }
+
+    /// The Symbol dialog picking `form`'s bullet: it opens on the bullet's font and character.
+    pub fn for_bullet(app: &WordApp, form: crate::dialogs_bullet::DefineBulletForm) -> SymbolForm {
+        let mut f = SymbolForm::new(app, 0);
+        f.font = form.font.clone();
+        f.selected = form.ch.chars().next();
+        f.load();
+        f.sync_code();
+        f.scroll_to = f.selected.and_then(|c| f.row_of(c));
+        f.bullet = Some(Box::new(form));
+        f
+    }
+
+    /// Back to Define New Bullet, with `picked` (a character and its font) when one was chosen.
+    fn back_to_bullet(&mut self, app: &mut WordApp, picked: Option<(String, String)>) -> bool {
+        let Some(mut form) = self.bullet.take() else { return false };
+        if let Some((ch, font)) = picked {
+            form.ch = ch;
+            form.font = font;
+        }
+        app.dialog = Some(crate::dialogs::Dialog::Insert(Box::new(super::InsertDialog::DefineBullet(*form))));
+        true
     }
 
     /// The font the grid shows: the chosen one, or the text's.
@@ -266,9 +303,8 @@ fn symbol_cell(app: &mut WordApp, ui: &mut Ui, font: &str, c: char, selected: bo
     resp
 }
 
-pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> bool {
-    let t = Tokens::get(ui.ctx());
-    ui.set_width(GRID_COLS as f32 * CELL + 24.0);
+/// The Symbols and Special Characters tabs.
+fn symbol_tabs(ui: &mut Ui, f: &mut SymbolForm) {
     ui.horizontal(|ui| {
         for (i, l) in ["Symbols", "Special Characters"].into_iter().enumerate() {
             if ui.selectable_label(f.tab == i as u8, tl!(l)).clicked() {
@@ -277,6 +313,17 @@ pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> b
         }
     });
     ui.separator();
+}
+
+pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> bool {
+    let t = Tokens::get(ui.ctx());
+    ui.set_width(GRID_COLS as f32 * CELL + 24.0);
+    if f.bullet.is_some() {
+        // A bullet is one character in a font: the Special Characters tab has nothing for it.
+        f.tab = 0;
+    } else {
+        symbol_tabs(ui, f);
+    }
     let mut insert: Option<(Value, String, String)> = None;
     if f.tab == 1 {
         if special_ui(app, ui, f, &mut insert, &t) {
@@ -329,8 +376,10 @@ pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> b
         let rows = f.chars.len().div_ceil(GRID_COLS);
         let mut area = egui::ScrollArea::vertical().id_salt("symbol_grid").max_height(CELL * GRID_ROWS as f32).auto_shrink([false, false]);
         if let Some(row) = f.scroll_to.take() {
-            // Keep the row in view: it lands on the grid's second row when there is room.
-            area = area.vertical_scroll_offset(row.saturating_sub(1) as f32 * CELL);
+            // Keep the row in view: it lands on the grid's second row when there is room. Rows
+            // are `CELL` plus the item spacing apart (`show_rows` adds it between rows).
+            let pitch = CELL + ui.spacing().item_spacing.y;
+            area = area.vertical_scroll_offset(row.saturating_sub(1) as f32 * pitch);
         }
         let font = f.shown_font().to_string();
         let chars = f.chars.clone();
@@ -401,14 +450,22 @@ pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> b
         if double && let Some(p) = f.params() {
             insert = Some((p, f.selected.map(String::from).unwrap_or_default(), f.font.clone()));
         }
-        // The Insert button.
-        let (ok, close) = buttons(ui, "Insert", "Close", f.selected.is_some());
+        // The Insert button (OK while picking a bullet).
+        let (ok_label, close_label) = if f.bullet.is_some() { ("OK", "Cancel") } else { ("Insert", "Close") };
+        let (ok, close) = buttons(ui, ok_label, close_label, f.selected.is_some());
         if ok && let Some(p) = f.params() {
             insert = Some((p, f.selected.map(String::from).unwrap_or_default(), f.font.clone()));
         }
         if close {
+            f.back_to_bullet(app, None);
             return true;
         }
+    }
+    if f.bullet.is_some()
+        && let Some((_, ch, font)) = insert
+    {
+        remember_symbol(app, &ch, &font);
+        return f.back_to_bullet(app, Some((ch, font)));
     }
     if let Some((params, ch, font)) = insert {
         // Special characters with their own command insert through it (non-breaking hyphen…).
