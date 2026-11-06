@@ -38,6 +38,7 @@ struct Request {
 }
 
 impl Request {
+    /// Preserve all spooler options in a platform-independent wire representation.
     fn from_job(job: &craft_print::Job) -> Self {
         Self {
             printer: job.printer.clone(),
@@ -55,6 +56,7 @@ impl Request {
         }
     }
 
+    /// Restore the job without substituting printer defaults or changing copy semantics.
     fn job(self) -> craft_print::Job {
         craft_print::Job {
             printer: self.printer,
@@ -94,10 +96,12 @@ enum State {
 pub(crate) struct Submission(Arc<(Mutex<State>, Condvar)>);
 
 impl Submission {
+    /// Create one submission whose driver cannot run until the parent grants startup.
     pub(crate) fn new() -> Self {
         Self(Arc::new((Mutex::new(State::Starting), Condvar::new())))
     }
 
+    /// Recover the lifecycle state after poisoning without invoking another driver call.
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
         self.0.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
@@ -133,6 +137,7 @@ impl Submission {
     }
 
     #[cfg(windows)]
+    /// Submit through this executable's private helper mode and await its final receipt.
     pub(crate) fn submit(&self, pdf: &[u8], job: &craft_print::Job) -> Result<String, String> {
         self.submit_with(pdf, job, |directory| {
             let mut command = Command::new(std::env::current_exe()?);
@@ -141,6 +146,7 @@ impl Submission {
         })
     }
 
+    /// Publish a terminal state on every result, waking a cancellation caller awaiting an ack.
     fn submit_with(&self, pdf: &[u8], job: &craft_print::Job, command: impl FnOnce(&Path) -> std::io::Result<Command>) -> Result<String, String> {
         let result = self.run(pdf, job, command);
         let mut state = self.state();
@@ -151,6 +157,7 @@ impl Submission {
         if matches!(*state, State::Cancelled) { Err(CANCELLED.into()) } else { result }
     }
 
+    /// Own the private inputs and child until receipt, acknowledged cancellation or failure.
     fn run(&self, pdf: &[u8], job: &craft_print::Job, command: impl FnOnce(&Path) -> std::io::Result<Command>) -> Result<String, String> {
         if matches!(*self.state(), State::Cancelled) {
             return Err(CANCELLED.into());
@@ -235,16 +242,19 @@ impl Submission {
     }
 }
 
+/// Keep helper transport failures distinct from a printer's own error message.
 fn error(error: impl std::fmt::Display) -> String {
     format!("print helper: {error}")
 }
 
+/// Read at most one byte beyond the cap so oversized files fail without unbounded allocation.
 fn bounded(mut input: impl Read, limit: u64) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     input.by_ref().take(limit.saturating_add(1)).read_to_end(&mut bytes).map_err(error)?;
     if bytes.len() as u64 > limit { Err("print helper input exceeds its limit".into()) } else { Ok(bytes) }
 }
 
+/// Read one bounded UTF-8 protocol record, distinguishing EOF from an oversized message.
 fn line(input: &mut impl BufRead) -> Result<Option<String>, String> {
     let mut bytes = Vec::new();
     input.take(MAX_MESSAGE + 1).read_until(b'\n', &mut bytes).map_err(error)?;
@@ -254,6 +264,7 @@ fn line(input: &mut impl BufRead) -> Result<Option<String>, String> {
     if bytes.is_empty() { Ok(None) } else { String::from_utf8(bytes).map(|s| Some(s.trim_end().to_owned())).map_err(error) }
 }
 
+/// Serialize complete events under stdout's lock so the driver and listener cannot interleave.
 fn emit(event: &Event) -> Result<(), String> {
     let mut output = std::io::stdout().lock();
     write!(output, "{PREFIX}").map_err(error)?;
@@ -261,6 +272,20 @@ fn emit(event: &Event) -> Result<(), String> {
     writeln!(output).and_then(|_| output.flush()).map_err(error)
 }
 
+/// Remove both plaintext inputs even when one fails; already-removed inputs count as success.
+fn remove_inputs(directory: &Path) -> Result<(), String> {
+    let mut first_error = None;
+    for name in ["job.json", "input.pdf"] {
+        if let Err(failure) = std::fs::remove_file(directory.join(name))
+            && failure.kind() != std::io::ErrorKind::NotFound
+        {
+            first_error.get_or_insert_with(|| error(format!("could not remove {name}: {failure}")));
+        }
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
+/// Load and erase the private inputs before driver work, while an independent listener can cancel.
 fn helper(
     directory: &Path,
     cancel_request: impl Fn(&craft_print::Cancel) -> bool + Send + 'static,
@@ -300,11 +325,13 @@ fn helper(
     let request: Request =
         serde_json::from_slice(&bounded(std::fs::File::open(directory.join("job.json")).map_err(error)?, MAX_MESSAGE)?).map_err(error)?;
     let pdf = bounded(std::fs::File::open(directory.join("input.pdf")).map_err(error)?, MAX_PDF)?;
+    remove_inputs(directory)?;
     let result = submit(&pdf, &request.job(), &cancel);
     emit(&Event::Done(result))
 }
 
 #[cfg(windows)]
+/// Handle only the private first-argument flag, before logging or GUI initialization.
 pub(crate) fn helper_mode() -> Option<i32> {
     let mut args = std::env::args_os().skip(1);
     if args.next().as_deref() != Some(std::ffi::OsStr::new(FLAG)) {
@@ -325,7 +352,7 @@ pub(crate) fn helper_mode() -> Option<i32> {
 mod tests {
     use super::*;
 
-    // A real child of the test executable exercises the same pipes, token and process cleanup.
+    /// A real test child exercises production pipes, token handling and process cleanup.
     #[test]
     #[ignore = "launched by the process protocol tests"]
     fn helper_process() {
@@ -368,6 +395,7 @@ mod tests {
         std::process::exit(i32::from(result.is_err()));
     }
 
+    /// Launch just the ignored helper entry, without invoking printer hardware.
     fn command(directory: &Path, mode: &str) -> std::io::Result<Command> {
         let mut command = Command::new(std::env::current_exe()?);
         let name = module_path!().split_once("::").map_or(module_path!(), |(_, name)| name);
@@ -376,11 +404,13 @@ mod tests {
         Ok(command)
     }
 
+    /// Give the child a literal printer identity to verify transport.
     fn job() -> craft_print::Job {
         craft_print::Job { printer: Some("test queue".into()), ..Default::default() }
     }
 
     #[test]
+    /// Cancelling before submission cannot launch a driver process.
     fn cancelled_start_never_launches_a_helper() {
         let submission = Submission::new();
         assert!(submission.cancel());
@@ -389,6 +419,7 @@ mod tests {
     }
 
     #[test]
+    /// A cancellation during creation withholds the start grant and removes private inputs.
     fn cancellation_during_startup_never_starts_the_driver() {
         let submission = Submission::new();
         let worker = submission.clone();
@@ -409,6 +440,7 @@ mod tests {
     }
 
     #[test]
+    /// A hung startup has no permission to send and can be killed without a token ack.
     fn an_unresponsive_starting_process_can_be_stopped_without_an_acknowledgement() {
         let submission = Submission::new();
         let worker = submission.clone();
@@ -431,6 +463,7 @@ mod tests {
     }
 
     #[test]
+    /// Job transport preserves every explicit setting, including Unicode and duplex direction.
     fn job_options_survive_the_process_boundary() {
         let expected = craft_print::Job {
             printer: Some("Office λ".into()),
@@ -448,6 +481,7 @@ mod tests {
     }
 
     #[test]
+    /// Retry succeeds immediately after cancellation, before joining the old worker.
     fn cancelled_driver_does_not_block_the_next_process() {
         let submission = Submission::new();
         let worker = submission.clone();
@@ -464,6 +498,8 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(directory.join("held").exists(), "the child is held inside its driver");
+        assert!(!directory.join("input.pdf").exists(), "the stalled driver retains no plaintext PDF");
+        assert!(!directory.join("job.json").exists(), "loaded settings were erased before driver work");
         assert!(submission.cancel(), "a stalled driver still acknowledges cancellation");
         let next = Submission::new();
         assert_eq!(next.submit_with(b"synthetic PDF", &job(), |dir| command(dir, "ready")), Ok("spooled synthetic job".into()));
@@ -473,6 +509,7 @@ mod tests {
     }
 
     #[test]
+    /// A refused cancellation keeps the sending process alive until its receipt.
     fn cancellation_refusal_preserves_the_sending_job() {
         let submission = Submission::new();
         let worker = submission.clone();
@@ -498,6 +535,7 @@ mod tests {
     }
 
     #[test]
+    /// Closing the parent's pipe stops a waiting driver and permits parent-side cleanup.
     fn parent_disconnect_stops_a_waiting_driver() {
         let submission = Submission::new();
         let worker = submission.clone();
@@ -520,6 +558,7 @@ mod tests {
     }
 
     #[test]
+    /// Helper failure removes its input directory; input limits reject oversize data.
     fn helper_crashes_are_errors_and_inputs_are_bounded() {
         let submission = Submission::new();
         let mut inputs = None;
@@ -533,5 +572,21 @@ mod tests {
         assert!(!inputs.unwrap().exists(), "a helper crash removes the PDF and settings");
         assert_eq!(bounded(&b"abcd"[..], 3), Err("print helper input exceeds its limit".into()));
         assert_eq!(bounded(&b"abc"[..], 3), Ok(b"abc".to_vec()));
+    }
+
+    /// Cleanup is repeatable and reports real failures while still attempting both inputs.
+    #[test]
+    fn input_cleanup_tolerates_missing_files_and_reports_failures() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("job.json"), b"settings").unwrap();
+        std::fs::write(directory.path().join("input.pdf"), b"private PDF").unwrap();
+        assert_eq!(remove_inputs(directory.path()), Ok(()));
+        assert_eq!(remove_inputs(directory.path()), Ok(()));
+        assert!(!directory.path().join("input.pdf").exists());
+        std::fs::create_dir(directory.path().join("job.json")).unwrap();
+        std::fs::write(directory.path().join("input.pdf"), b"private PDF").unwrap();
+        let error = remove_inputs(directory.path()).unwrap_err();
+        assert!(error.contains("could not remove job.json"), "{error}");
+        assert!(!directory.path().join("input.pdf").exists(), "a settings cleanup failure does not retain the PDF");
     }
 }

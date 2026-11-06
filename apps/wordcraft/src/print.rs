@@ -69,6 +69,7 @@ pub fn cancel() -> Box<dyn Fn() -> bool> {
     Box::new(|| jobs().last().is_none_or(|job| (job.cancel)()))
 }
 
+/// Submit off the UI thread, isolating Windows drivers while retaining CUPS token cancellation.
 pub fn submit() -> Submit {
     Box::new(|bytes, settings: Settings, collate, options| {
         let (sender, receiver) = std::sync::mpsc::channel();
