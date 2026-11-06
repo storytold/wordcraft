@@ -27,7 +27,7 @@ pub use ids::{NodeId, NodeIds};
 pub use journal::{Entry, Journal};
 pub use room::{Effect, JoinPlan, Model, Role, Room};
 pub use undo::{UndoStacks, UndoStep};
-pub use wire::{Applied, ClientMsg, Op, OpId, OpKind, Reject, RejectCode, ServerMsg, Target, Version};
+pub use wire::{Applied, ClientMsg, NodeRef, Op, OpId, OpKind, Reject, RejectCode, ServerMsg, Target, Version};
 
 #[cfg(test)]
 mod tests;
