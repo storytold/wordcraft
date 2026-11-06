@@ -205,3 +205,64 @@ fn a_second_session_needs_the_owner_role() {
 
     assert!(super::register(&room, "carol", "sid-3", wordcraft_collab::room::Role::Owner, &tx, None).is_ok());
 }
+
+/// The acceptance gate from TASK.md §8: the committed file opens in LibreOffice
+/// without a repair prompt. Ignored by default because it needs `soffice`.
+#[tokio::test]
+#[ignore = "needs LibreOffice (soffice) on PATH"]
+async fn the_committed_docx_opens_in_libreoffice() {
+    let (url, cfg) = spawn_server().await;
+    let mut owner = connect(&url, &cfg, "owner", "owner").await;
+    let _ = next_msg(&mut owner).await;
+    let node = node_of(&mut owner).await;
+
+    owner
+        .send(Message::Text(
+            serde_json::to_string(&ClientMsg::Op { op: insert("owner", 1, 0, node, 0, "Hello collaboration") }).expect("json").into(),
+        ))
+        .await
+        .expect("send op");
+    let _ = next_msg(&mut owner).await;
+
+    owner
+        .send(Message::Text(
+            serde_json::to_string(&ClientMsg::Commit { op_id: wordcraft_collab::wire::OpId::new("owner", 2), expected_version: 1, etag: None })
+                .expect("json")
+                .into(),
+        ))
+        .await
+        .expect("commit");
+    let committed = loop {
+        match next_msg(&mut owner).await {
+            ServerMsg::Committed { version, sha256, warnings } => break (version, sha256, warnings),
+            ServerMsg::Applied { .. } => continue,
+            other => panic!("expected committed, got {other:?}"),
+        }
+    };
+    assert_eq!(committed.0, 1);
+    assert!(!committed.1.is_empty());
+
+    let docx = cfg.data_dir.join("doc-1").join("source.docx");
+    let bytes = std::fs::read(&docx).expect("the server saved the committed file");
+    assert!(bytes.starts_with(b"PK"), "a .docx is a zip package");
+
+    let work = std::env::temp_dir().join(format!("wordcraft-collab-lo-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).expect("work dir");
+    let status = std::process::Command::new("soffice")
+        .args(["--headless", "--convert-to", "txt:Text", "--outdir"])
+        .arg(&work)
+        .arg(&docx)
+        .status()
+        .expect("run soffice");
+    assert!(status.success(), "LibreOffice converts the committed document");
+
+    let txt = std::fs::read_dir(&work)
+        .expect("converted files")
+        .filter_map(|entry| entry.ok())
+        .find(|entry| entry.path().extension().is_some_and(|ext| ext == "txt"))
+        .map(|entry| std::fs::read_to_string(entry.path()).unwrap_or_default())
+        .expect("a converted text file");
+    assert!(txt.contains("Hello collaboration"), "converted text: {txt:?}");
+    let _ = std::fs::remove_dir_all(&work);
+}
