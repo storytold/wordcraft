@@ -59,6 +59,8 @@ pub(crate) fn issue_heading(issue: &serde_json::Value) -> String {
     tl!(issue.get("message").and_then(|m| m.as_str()).unwrap_or("")).to_string()
 }
 
+/// Build contextual native commands from the actual document selection, including Ask Agent.
+/// Opening its conversation uses the same adapter as the ribbon rather than a separate edit path.
 pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     if app.session.math.is_some() {
         return equation_menu(app, ui);

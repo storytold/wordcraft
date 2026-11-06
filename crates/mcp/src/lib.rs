@@ -69,6 +69,8 @@ pub fn doc_param(params: &Value) -> Result<Option<u64>, String> {
     }
 }
 
+/// Dispatch headless methods against the selected native session. UI-only Ask Agent methods
+/// remain a running application's capability rather than a separate headless edit authority.
 fn answer_on(session: &mut Session, method: &str, params: Value) -> Result<Value, String> {
     match method {
         "engine.execute" | "command" => {

@@ -616,3 +616,6 @@ fn review_scope_active_equation_cannot_redirect_agent_typing() {
         assert_eq!(hub.snapshot(id).unwrap().status, Status::Working { conn: 7 });
     }
 }
+
+#[path = "escape.rs"]
+mod escape_tests;

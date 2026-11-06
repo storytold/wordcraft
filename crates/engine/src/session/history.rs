@@ -7,6 +7,7 @@ use super::{Arc, Document, Session};
 pub struct UndoToken(Arc<Undo>);
 
 impl PartialEq for UndoToken {
+    /// Compare retained allocation identity, so an unrelated checkpoint at the same depth differs.
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
@@ -15,6 +16,7 @@ impl PartialEq for UndoToken {
 impl Eq for UndoToken {}
 
 impl std::fmt::Debug for UndoToken {
+    /// Keep checkpoint pointers and document contents out of diagnostic output.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("UndoToken(..)")
     }

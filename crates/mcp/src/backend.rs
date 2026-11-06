@@ -46,6 +46,8 @@ impl AgentState {
         &self.open
     }
 
+    /// Fill an omitted agent name or oldest open request tag from this bridge's state.
+    /// Leave explicit caller values untouched and never manufacture a null request tag.
     fn before(&self, method: &str, params: &mut Value) {
         let Some(p) = params.as_object_mut() else { return };
         match method {
@@ -63,6 +65,8 @@ impl AgentState {
         }
     }
 
+    /// Retain bounded acquired request ids and forget completed, cancelled or rejected ones.
+    /// A non-final progress reply must keep its existing ownership context.
     fn after(&mut self, method: &str, params: &Value, result: &Result<Value, String>) {
         match method {
             "agent.listen" => {
@@ -189,6 +193,8 @@ impl Remote {
         Self::connect_with(addr, Box::new(find_key))
     }
 
+    /// Create the remote with an injectable key resolver, then establish its initial connection.
+    /// Production uses the local key lookup; tests can supply a synthetic key without global environment changes.
     fn connect_with(addr: &str, find_key: KeyFinder) -> std::io::Result<Self> {
         let mut r = Self {
             addr: addr.to_string(),
@@ -238,6 +244,7 @@ impl Remote {
         self
     }
 
+    /// Borrow bridge tagging state with poison recovery; the guard is released before network I/O.
     fn agent(&self) -> std::sync::MutexGuard<'_, AgentState> {
         self.agent.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -347,6 +354,7 @@ impl Backend for Remote {
         true
     }
 
+    /// Describe eager/lazy connection state and endpoint without exposing the control key.
     fn describe(&self) -> String {
         if self.connected {
             format!("connected to the WordCraft app at {}", self.addr)
@@ -355,6 +363,7 @@ impl Backend for Remote {
         }
     }
 
+    /// Keep a bounded, control-free display name for attribution, separate from socket ownership.
     fn set_client(&mut self, name: &str) {
         self.agent().client = Some(name.chars().filter(|c| !c.is_control()).take(64).collect());
     }

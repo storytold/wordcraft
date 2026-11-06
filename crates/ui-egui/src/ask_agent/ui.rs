@@ -266,13 +266,14 @@ fn picker(ui: &mut egui::Ui, agents: &[String], picked: &mut Option<String>, tr:
     if agents.len() < 2 {
         return;
     }
-    craft_ui::ComboBox::from_id_salt("ask_agent_picker").selected_text(picked.clone().unwrap_or_else(|| tr("Any"))).show_ui(ui, |ui| {
+    let combo = craft_ui::ComboBox::from_id_salt("ask_agent_picker").selected_text(picked.clone().unwrap_or_else(|| tr("Any"))).show_ui(ui, |ui| {
         ui.selectable_value(picked, None, tr("Any"));
         for name in agents {
             ui.selectable_value(picked, Some(name.clone()), name);
         }
     });
-    ui.label(RichText::new(tr("Agent")).weak());
+    let label = ui.label(RichText::new(tr("Agent")).weak());
+    combo.response.labelled_by(label.id);
 }
 
 /// The agent's colour dot and name.

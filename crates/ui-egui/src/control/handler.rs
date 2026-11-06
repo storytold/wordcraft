@@ -10,6 +10,8 @@ fn ok(v: Value) -> Outcome {
     Outcome::Done(json!({"ok": true, "result": v}))
 }
 
+/// Separate an uppercase machine-readable code from its displayed explanation while
+/// leaving ordinary errors untouched; punctuation in prose is not a code.
 fn err(e: impl std::fmt::Display) -> Outcome {
     let message = e.to_string();
     match message.split_once(':') {
@@ -20,6 +22,8 @@ fn err(e: impl std::fmt::Display) -> Outcome {
     }
 }
 
+/// Report the active native window and selection geometry for inspection, including conversation visibility.
+/// These observations do not grant permission to mutate a captured selection.
 pub fn inspect(app: &mut WordApp, ctx: &egui::Context) -> Value {
     let r = ctx.input_for(app.active_viewport(), |i| i.content_rect());
     let caret = crate::canvas::caret_screen(app).map(|(p, h)| json!({"x": p.x, "y": p.y, "h": h}));

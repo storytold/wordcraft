@@ -37,9 +37,19 @@ cat ~/.config/wordcraft/control-key.local-7981   # Linux, outside Flatpak, port 
   `{"ok": false, "error": "unauthorized"}`, and the app closes the connection.
 - A line over 1 MiB gets `{"ok": false, "error": "line too long"}`, and the app closes the
   connection.
-- A connection that sends no authorised request within 30 s of being accepted is closed. That is
-  one limit: blank lines and bad JSON do not extend it. After an authorised request the
-  connection may stay idle.
+- A connection with no authorised request closes after 30 s; blank lines do not renew that
+  first-request deadline, and bad JSON closes it immediately. Authenticated idle listeners
+  without current work also expire after 30 s. A live authenticated connection that owns at
+  least one `Working` Ask Agent request can wait through further idle periods while thinking;
+  `done:false` keeps that ownership, while completion, cancellation or closing the conversation
+  removes the exemption when no other owned work remains. This is socket liveness, not an
+  independent proof that an external process is still reasoning.
+- The first byte of each request starts an absolute 30 s line deadline. Only working owners
+  get that full window when data arrives late; other clients also retain their earlier idle
+  deadline. Later bytes cannot extend either limit. Partial UTF-8/JSON stays in the same bounded
+  reader until the line completes; expiry closes the socket and requeues its unanswered work.
+  The 1 MiB line cap and bounded write deadline still apply. A real EOF or socket error releases
+  the connection immediately, rather than waiting for a reflection period.
 
 `wordcraft-cli mcp --connect` takes the key from `WORDCRAFT_CONTROL_KEY`, or else from the key
 file for the port it connects to, and reads it again on every new connection (the app may have

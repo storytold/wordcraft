@@ -1,5 +1,7 @@
 //! Ask Agent's Word adapter. The queue and bubble mirror storytold/craft-libs#142 until it
 //! merges; app-owned document identities, revisions, geometry and undo provenance stay here.
+//! Hub behavior starts from common revision `37443257`, plus the transport-only `owns_work`
+//! query from #142; that query keeps live sockets open and never authorizes a document edit.
 
 pub mod hub;
 #[cfg(not(target_arch = "wasm32"))]
@@ -27,6 +29,7 @@ pub enum Unavailable {
 }
 
 impl Unavailable {
+    /// Present the actionable cause of unavailability in the app's current language.
     pub fn shown(&self) -> String {
         match self {
             Self::NoControlChannel => tl!("Start WordCraft with --control to let an agent connect").to_string(),
@@ -64,6 +67,8 @@ pub struct AskAgent {
 }
 
 impl AskAgent {
+    /// Check channel, listener and opt-in launcher availability without spawning a process.
+    /// The actual launch remains tied to the person's explicit Send action.
     pub fn unavailable(&self) -> Option<Unavailable> {
         let Some(hub) = &self.hub else { return Some(Unavailable::NoControlChannel) };
         if !hub.agents().is_empty() {
@@ -84,10 +89,13 @@ fn current(session: &Session) -> Target {
     Target { document: session.document_id().to_string(), revision: session.rev() }
 }
 
+/// Capture native endpoints as the scope authority alongside plain text for the agent.
+/// Plain-text extraction alone is not sufficient to validate embedded objects or cell ranges.
 fn captured_selection(session: &Session) -> Value {
     json!({"text": session.selected_text(), "anchor": session.sel.anchor, "focus": session.sel.focus})
 }
 
+/// Decode both native endpoints, refusing malformed positions or a scope spanning two stories.
 fn range(selection: &Value) -> Option<(Pos, Pos)> {
     let a: Pos = serde_json::from_value(selection.get("anchor")?.clone()).ok()?;
     let b: Pos = serde_json::from_value(selection.get("focus")?.clone()).ok()?;
@@ -248,6 +256,8 @@ pub fn as_agent(
     result
 }
 
+/// Keep an absent tag distinct from a present malformed one, including JSON null.
+/// This runs before dispatch so invalid tags cannot silently become unrestricted commands.
 fn request_id(params: &Value) -> Result<Option<u64>, String> {
     match params.get("request") {
         None => Ok(None),
@@ -308,10 +318,12 @@ pub fn sync(app: &mut WordApp) {
     }
 }
 
+/// Expose only active-document holds as native ranges and stable agent colours for painting.
 pub fn held_ranges(app: &WordApp) -> Vec<(Pos, Pos, [u8; 3])> {
     held_by(app).into_iter().map(|(a, b, name)| (a, b, hub::colour(&name))).collect()
 }
 
+/// Map hub holds back to native positions only while the original conversation document is active.
 fn held_by(app: &WordApp) -> Vec<(Pos, Pos, String)> {
     let Some(hub) = &app.ask_agent.hub else { return vec![] };
     if app.ask_agent.open.as_ref().is_none_or(|open| open.document != app.session.document_id()) {
@@ -320,6 +332,8 @@ fn held_by(app: &WordApp) -> Vec<(Pos, Pos, String)> {
     hub.held().into_iter().filter_map(|(selection, name)| range(&selection).map(|(a, b)| (a, b, name))).collect()
 }
 
+/// Explain the document hold for command enablement. Actual edits still undergo native ownership
+/// and selection validation; this label is never used as authorization.
 pub fn held(app: &WordApp, command: &str) -> Option<String> {
     if app.ask_agent.agent_turn || !app.session.registry.get(command).is_some_and(|command| command.mutates) {
         return None;
@@ -329,6 +343,8 @@ pub fn held(app: &WordApp, command: &str) -> Option<String> {
     Some(format!("{} ({name})", tl!("Held by Agent")))
 }
 
+/// Validate the real selection and enqueue a bounded snapshot of the current document revision.
+/// A changed revision starts new edit provenance rather than inheriting an unrelated checkpoint.
 fn ask(app: &mut WordApp, instruction: String) -> Result<(), String> {
     let Some(hub) = app.ask_agent.hub.clone() else { return Err(Unavailable::NoControlChannel.shown()) };
     if !ordinary_text(&app.session) {
@@ -412,6 +428,7 @@ fn send(app: &mut WordApp, text: String) -> Result<(), String> {
     result
 }
 
+/// Create an unsent conversation anchored to the current selection and native document identity.
 fn open_at_caret(app: &mut WordApp) {
     close(app);
     let caret = crate::canvas::caret_screen(app).map(|(p, h)| Rect::from_min_size(p, vec2(1.0, h)));
@@ -431,12 +448,15 @@ fn open_at_caret(app: &mut WordApp) {
     });
 }
 
+/// Remove the conversation's queue entry and local review state without reversing native edits.
 fn close(app: &mut WordApp) {
     if let (Some(hub), Some(id)) = (&app.ask_agent.hub, app.ask_agent.open.take().and_then(|open| open.id)) {
         hub.close(id);
     }
 }
 
+/// Handle the native Ask Agent command: open, explicitly close, or send an instruction.
+/// The caller's connection boundary separately prevents remote dismissal of human review.
 pub fn command(app: &mut WordApp, params: &Value) -> Result<Value, String> {
     if params.get("close").and_then(Value::as_bool) == Some(true) {
         close(app);
@@ -452,11 +472,20 @@ pub fn command(app: &mut WordApp, params: &Value) -> Result<Value, String> {
     Ok(json!({"open":true,"request":app.ask_agent.open.as_ref().and_then(|open|open.id)}))
 }
 
+/// Escape closes this conversation only when no higher-priority dialog, menu or keytip owns it.
 pub fn escape(app: &mut WordApp, ctx: &egui::Context) {
-    if app.ask_agent.open.is_some() && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+    if app.ask_agent.open.is_some()
+        && !app.modal_open()
+        && app.dialog.is_none()
+        && !app.ui.backstage
+        && app.ui.keytips == crate::keytips::Phase::Off
+        && !egui::Popup::is_any_open(ctx)
+        && ctx.input(|input| input.key_pressed(egui::Key::Escape))
+    {
         close(app);
     }
 }
+/// Dismiss only an unsent draft when native typing resumes, leaving owned/reviewable work intact.
 pub fn typing_resumed(app: &mut WordApp) {
     if app.ask_agent.open.as_ref().is_some_and(|open| open.id.is_none()) {
         close(app);
@@ -477,6 +506,7 @@ fn keep(app: &mut WordApp) -> Result<(), String> {
     Ok(())
 }
 
+/// Require the exact retained native checkpoint at the conversation's revision before Undo.
 fn can_undo(app: &WordApp) -> bool {
     app.ask_agent.open.as_ref().is_some_and(|open| {
         open.document == app.session.document_id()
@@ -486,6 +516,8 @@ fn can_undo(app: &WordApp) -> bool {
     })
 }
 
+/// Render the shared literal-text conversation and apply only the person's explicit actions
+/// on the UI thread; a proposal never becomes an executable document command.
 pub fn show(app: &mut WordApp, ctx: &egui::Context, _viewport: Rect) {
     sync(app);
     let Some(hub) = app.ask_agent.hub.clone() else { return };
@@ -534,6 +566,8 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context, _viewport: Rect) {
     }
 }
 
+/// Attach one native comment for the response and rebase its anchors while preserving the
+/// conversation's undo provenance. Failure remains recoverable instead of marking the note saved.
 fn comment_once(app: &mut WordApp, snapshot: &Snapshot) {
     let Some(open) = app.ask_agent.open.as_ref().filter(|open| {
         !open.commented && open.id == Some(snapshot.id) && open.document == app.session.document_id() && open.revision == app.session.rev()

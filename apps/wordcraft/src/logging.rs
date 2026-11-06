@@ -299,7 +299,7 @@ pub fn install() -> Option<&'static AppLogger> {
 }
 
 /// Replace text a panic message quotes between backticks with `…`: std quotes the string it was
-/// slicing (`byte index 5 is not a char boundary; … of `<the string>``), and that string can be
+/// slicing (``byte index 5 is not a char boundary; … of `<the string>` ``), and that string can be
 /// the user's writing. An unpaired backtick leaves the rest of the message out too.
 pub fn redact_quoted(message: &str) -> String {
     let mut out = String::with_capacity(message.len());

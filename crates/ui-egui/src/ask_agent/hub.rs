@@ -421,6 +421,13 @@ impl AgentHub {
         self.shared.1.notify_all();
     }
 
+    /// Whether this connection currently owns any request still being worked on.
+    /// Used only for connection liveness; it grants no document or editing permission.
+    /// The short read lock is released before callers perform any transport I/O.
+    pub fn owns_work(&self, conn: u64) -> bool {
+        self.lock().entries.iter().any(|e| e.shown.status == Status::Working { conn })
+    }
+
     /// Names of the agents listening, sorted, for the picker.
     pub fn agents(&self) -> Vec<String> {
         let mut names: Vec<String> = self.lock().listeners.values().cloned().collect();

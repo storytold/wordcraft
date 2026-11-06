@@ -1194,6 +1194,8 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
     }
 }
 
+/// Finish input, accessibility and overlays after the page layout has stable geometry.
+/// Agent affordances use those native positions rather than agent-supplied screen rectangles.
 fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollAreaOutput<(egui::Response, Vec<Rect>)>) {
     let CanvasFinish { app, ui, layout, geo, caret, ime_geometry, ime_interrupt, area, dim_body, hruler, vruler } = finish;
     update_canvas_scroll_state(app, ui, layout, geo, caret, &out);
@@ -1394,6 +1396,8 @@ fn live_selection_screen_rects(app: &mut WordApp, rects: &[Rect], scale: f32) ->
         .collect()
 }
 
+/// Lay out and paint the document canvas, then publish its native selection geometry
+/// for overlays and control inspection before finishing this frame's interactions.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.available_rect_before_wrap();

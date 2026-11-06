@@ -176,6 +176,8 @@ impl Server {
         }
     }
 
+    /// Route MCP requests to the backend and propagate the initialize client's display name.
+    /// Tool validation stays in the common dispatcher, including optional Ask Agent wait/reply fields.
     fn request(&mut self, method: &str, params: &Value) -> Result<Value, (i64, String)> {
         match method {
             "initialize" => {

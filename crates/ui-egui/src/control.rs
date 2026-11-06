@@ -47,6 +47,8 @@ pub struct ControlRequest {
 }
 
 impl ControlRequest {
+    /// Create one native UI-queue request and its matching response receiver.
+    /// The accepting transport attaches its connection identity before dispatch.
     pub fn new(method: impl Into<String>, params: Value) -> (Self, std::sync::mpsc::Receiver<Value>) {
         let (tx, rx) = std::sync::mpsc::channel();
         (Self { method: method.into(), connection: None, params, reply: tx }, rx)

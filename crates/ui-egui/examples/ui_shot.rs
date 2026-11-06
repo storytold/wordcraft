@@ -23,6 +23,8 @@ use wordcraft_ui_egui::{ControlRequest, Services, WordApp};
 
 static READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Drive the real WordApp from a bounded JSON-lines capture script without a desktop window.
+/// The explicit demo-agent fixture exists only in this example; normal control remains authenticated.
 fn main() {
     let path = std::env::args().nth(1).expect("usage: ui_shot script.jsonl");
     let script = std::fs::read_to_string(&path).expect("read script");

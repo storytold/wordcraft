@@ -25,6 +25,8 @@ impl ToolResult {
     pub fn json(v: &Value) -> Self {
         Self::text(serde_json::to_string_pretty(v).unwrap_or_default())
     }
+    /// Preserve uppercase structured error codes in tool output so clients can distinguish
+    /// refused scope or lost ownership from ordinary prose errors.
     pub fn error(t: impl Into<String>) -> Self {
         let message = t.into();
         let text = match message.split_once(':') {
@@ -65,6 +67,7 @@ fn with_doc(mut schema: Value) -> Value {
 
 const DOC_DESC: &str = "Id of the open document to work on (list_documents); the active document when left out. The active document stays active.";
 
+/// Build a tool schema with side-effect hints derived from its actual read-only classification.
 fn tool(name: &str, title: &str, desc: &str, schema: Value, ro: bool) -> Value {
     json!({"name": name, "title": title, "description": desc, "inputSchema": schema, "annotations": {"title": title, "readOnlyHint": ro, "destructiveHint": !ro, "openWorldHint": false}})
 }
