@@ -26,3 +26,12 @@ Local packaging: `packaging/macos/package.sh --arch universal`, `packaging/windo
 Dry run: `gh workflow run release.yml --ref <branch>` builds the unsigned jobs (version, Linux,
 Linux riscv64, Flatpak, FreeBSD, web) on any branch; the signing jobs are refused there by the `release`
 environment's branch rule, so no draft release is made.
+
+Local notarization can use `APPLE_KEYCHAIN_PROFILE` with a real `MACOS_SIGN_IDENTITY`. The profile replaces `APPLE_ID`, `APPLE_PASSWORD` and `APPLE_TEAM_ID` for submission and failure-log requests; the three-variable form remains supported.
+
+## Revision history
+
+| Date | Change |
+|---|---|
+
+| 2026-11-05 | trivial | PR #5266: macOS notarization accepts a Keychain profile for submit and rejection logs, with legacy authentication retained. Synthetic authentication controls; no new Apple notarization run. |
