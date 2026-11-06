@@ -11,7 +11,7 @@ AddType application/manifest+json .webmanifest
   <FilesMatch "\.(wasm|js)$">
     Header set Cache-Control "public, max-age=31536000, immutable"
   </FilesMatch>
-  <FilesMatch "^(index\.html|manifest\.webmanifest)$">
+  <FilesMatch "^(index\.html|manifest\.webmanifest|ai\.storyteller\.wordcraft\.png)$">
     Header set Cache-Control "no-cache"
   </FilesMatch>
 </IfModule>

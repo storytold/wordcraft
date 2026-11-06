@@ -1,7 +1,7 @@
 //! Documents the operating system hands the installed web app ("Open with WordCraft"): the
 //! browser passes them to `window.launchQueue`'s consumer as file handles, declared by
-//! `file_handlers` in `manifest.webmanifest`. Their bytes go through the inbox, as dropped files
-//! do, so each opens beside the documents already open and none replaces unsaved work.
+//! `file_handlers` in `manifest.webmanifest`. Each is read into [`crate::launched`], which opens
+//! it as a dropped file opens: beside the documents already open, never replacing unsaved work.
 //!
 //! A handle is only read: Save still asks where to write, since the browser grants no write
 //! access with a launch.
@@ -10,10 +10,8 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use crate::launch_failures::Failures;
+use crate::launched;
 use wasm_bindgen::JsCast as _;
-use wordcraft_ui_egui::Inbox;
-use wordcraft_ui_egui::i18n;
 
 /// Largest launched file read into memory; wasm32 has 4 GB at most, shared with the app.
 const MAX_LAUNCHED_BYTES: f64 = (256u32 << 20) as f64;
@@ -34,7 +32,7 @@ struct Launches {
 
 /// Register the consumer once, at startup. Browsers without `launchQueue` (Firefox, Safari, or a
 /// page that isn't installed) skip this silently: there is nothing to receive.
-pub(super) fn listen(inbox: Inbox, ctx: egui::Context, messages: Rc<RefCell<Vec<String>>>) -> Result<(), String> {
+pub(super) fn listen(launched: launched::Shared, ctx: egui::Context) -> Result<(), String> {
     let window = web_sys::window().ok_or("no window")?;
     let queue = js_sys::Reflect::get(&window, &"launchQueue".into()).map_err(|e| format!("{e:?}"))?;
     if queue.is_undefined() || queue.is_null() {
@@ -64,7 +62,7 @@ pub(super) fn listen(inbox: Inbox, ctx: egui::Context, messages: Rc<RefCell<Vec<
             start
         };
         if start {
-            wasm_bindgen_futures::spawn_local(read_all(launches.clone(), inbox.clone(), ctx.clone(), messages.clone()));
+            wasm_bindgen_futures::spawn_local(read_all(launches.clone(), launched.clone(), ctx.clone()));
         }
     });
     set_consumer.call1(&queue, consumer.as_ref()).map_err(|e| format!("{e:?}"))?;
@@ -74,58 +72,38 @@ pub(super) fn listen(inbox: Inbox, ctx: egui::Context, messages: Rc<RefCell<Vec<
 }
 
 /// Read the waiting files one after another, in the order given, until none is left. A file is
-/// read only once the app has taken everything out of the inbox, so at most one launched file's
-/// bytes wait in memory, however many files and launches arrive. The files left out are reported
-/// once the last one has opened: opening a document clears the status bar. Files that couldn't be
-/// read are reported then too, for the same reason: a failure shown earlier would be replaced as
-/// soon as the next file opened.
-async fn read_all(launches: Rc<RefCell<Launches>>, inbox: Inbox, ctx: egui::Context, messages: Rc<RefCell<Vec<String>>>) {
-    let mut failures = Failures::default();
+/// read only once the app has opened the previous one, so at most one launched file's bytes wait
+/// in memory, however many files and launches arrive. The app reports the files that failed and
+/// those left out once the last has opened ([`launched::open_next`]).
+async fn read_all(launches: Rc<RefCell<Launches>>, launched: launched::Shared, ctx: egui::Context) {
+    launched.borrow_mut().start();
     loop {
-        let next = launches.borrow_mut().waiting.pop_front();
-        let Some(handle) = next else {
-            while !inbox_empty(&inbox) {
-                sleep(DRAIN_POLL_MS).await;
-            }
-            let omitted = {
-                let mut l = launches.borrow_mut();
-                if !l.waiting.is_empty() {
-                    continue;
-                }
-                l.reading = false;
-                std::mem::take(&mut l.omitted)
-            };
-            let omission = (omitted > 0).then(|| {
-                i18n::fmt(
-                    i18n::t("{count} more files weren't opened: WordCraft opens up to {limit} at a time."),
-                    &[("count", &omitted.to_string()), ("limit", &MAX_WAITING_FILES.to_string())],
-                )
-            });
-            let report: Vec<String> = std::mem::take(&mut failures).report().into_iter().chain(omission).collect();
-            if !report.is_empty() {
-                messages.borrow_mut().push(report.join(" "));
-                ctx.request_repaint();
-            }
-            return;
-        };
-        while !inbox_empty(&inbox) {
+        while !launched.borrow().is_drained() {
             sleep(DRAIN_POLL_MS).await;
         }
+        let next = {
+            let mut l = launches.borrow_mut();
+            let next = l.waiting.pop_front();
+            if next.is_none() {
+                l.reading = false;
+                launched.borrow_mut().finish(std::mem::take(&mut l.omitted), MAX_WAITING_FILES);
+            }
+            next
+        };
+        let Some(handle) = next else {
+            ctx.request_repaint();
+            return;
+        };
         let name = handle.name();
         match read(&handle).await {
-            Ok(bytes) => inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes)),
+            Ok(bytes) => launched.borrow_mut().push(name, bytes),
             Err(error) => {
                 log::warn!("{name}: {error}");
-                failures.add(name, error);
+                launched.borrow_mut().failed(name, error);
             }
         }
         ctx.request_repaint();
     }
-}
-
-/// Whether the app has taken every file handed to it, so the next launched file may be read.
-fn inbox_empty(inbox: &Inbox) -> bool {
-    inbox.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
 }
 
 /// Wait `ms` milliseconds on the browser's timer; at once without a window.

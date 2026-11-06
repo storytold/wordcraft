@@ -18,10 +18,11 @@ There is no server-side code. Upload the folder's contents anywhere that serves 
 
 All URLs in `index.html` are relative (`public_url = "./"` in `apps/wordcraft-web/Trunk.toml`),
 so the site works at a domain root (`https://example.com/`), under a prefix
-(`https://example.com/tools/wordcraft/`) and from a CDN bucket. The asset names carry a content
-hash, so they can be cached forever. Only `index.html` and `manifest.webmanifest` need
-revalidation. The manifest has no `id`, so its relative `start_url` names the app: copies under
-different prefixes install as different apps.
+(`https://example.com/tools/wordcraft/`) and from a CDN bucket. Most asset names carry a content
+hash, so they can be cached forever. Only `index.html`, `manifest.webmanifest` and the icons in
+`icons/` (fixed names, so a release that redraws them reuses the path) need revalidation. The
+manifest has no `id`, so its relative `start_url` names the app: copies under different prefixes
+install as different apps.
 
 ## Required server settings
 
@@ -33,7 +34,7 @@ different prefixes install as different apps.
   download from about 13 MB to about 5 MB. You can also precompress (`brotli -k *.wasm`) and let
   the server send `Content-Encoding: br`.
 - **Caching:** `Cache-Control: public, max-age=31536000, immutable` on the hashed `.wasm` and
-  `.js` files, and `no-cache` on `index.html` and `manifest.webmanifest`.
+  `.js` files, and `no-cache` on `index.html`, `manifest.webmanifest` and `icons/`.
 - **HTTPS:** WebGPU (and the clipboard) only work in a secure context, which means `https://`
   or `http://localhost`. Over plain HTTP elsewhere, the app falls back to WebGL2.
 - **No special isolation headers:** WordCraft doesn't use `SharedArrayBuffer`, so it doesn't
@@ -49,7 +50,7 @@ location /wordcraft/ {
     gzip on;
     gzip_types application/wasm text/javascript text/html;
     location ~* \.(wasm|js)$ { add_header Cache-Control "public, max-age=31536000, immutable"; }
-    location ~* (index\.html|manifest\.webmanifest)$ { add_header Cache-Control "no-cache"; }
+    location ~* (index\.html|manifest\.webmanifest|/icons/.*\.png)$ { add_header Cache-Control "no-cache"; }
 }
 ```
 
@@ -69,7 +70,8 @@ The installed app opens Word, OpenDocument, RTF, Markdown, LaTeX and HTML docume
 system's file manager (Open with › WordCraft). Each file opens beside the documents already open,
 as a dropped file does; none replaces unsaved work. The app reads the file but can't write to it:
 Save asks where to save, as it does for any document opened in the browser. Files open one at a
-time, each up to 256 MB; at most 20 wait to be opened, and the app says how many more it left out.
+time, each up to 256 MB; at most 20 wait to be opened. Once the last has opened, the status bar
+names the files that couldn't be read or opened and says how many were left out.
 
 Browsers without installable apps or file handling (Firefox, Safari) run the page as before. An
 app run by a host page (`?host=parent` in an iframe, or `data-host="page"`) doesn't take files
