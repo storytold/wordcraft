@@ -1,6 +1,7 @@
 //! Hand-written minimal WordprocessingML fixtures (written for these tests from the spec).
 
 use std::io::Write;
+use std::sync::Arc;
 
 use wordcraft_doc::fill::Fill;
 use wordcraft_doc::para::{Anchor, FloatAlign, NoteKind, ShapeKind, Wrap};
@@ -247,12 +248,52 @@ fn frame_zero_side_is_automatic() {
 }
 
 #[test]
+fn locked_frame_anchor_survives_two_saves() {
+    for (lock, expected) in [("", None), (" w:anchorLock=\"1\"", Some(true)), (" w:anchorLock=\"0\"", Some(false))] {
+        let mut document = read_body(&format!(r#"<w:p><w:pPr><w:framePr w:w="1440" w:h="720"{lock}/></w:pPr><w:r><w:t>Locked</w:t></w:r></w:p>"#));
+        let paragraph = paras(&document)[0];
+        assert_eq!(paragraph.props.frame.as_ref().and_then(|f| f.anchor_lock), expected);
+        if expected == Some(true) {
+            let Some(wordcraft_doc::Block::Para(paragraph)) = document.body.get_mut(0).map(std::sync::Arc::make_mut) else {
+                panic!("first block is the framed paragraph");
+            };
+            let frame = paragraph.props.frame.as_mut().unwrap();
+            frame.x = 36.0;
+            frame.y = 72.0;
+            frame.w = Some(108.0);
+        }
+        let json = serde_json::to_vec(&document).unwrap();
+        document = serde_json::from_slice(&json).unwrap();
+        if expected == Some(true) {
+            let frame = paras(&document)[0].props.frame.as_ref().unwrap();
+            assert_eq!((frame.x, frame.y, frame.w), (36.0, 72.0, Some(108.0)));
+        }
+        for pass in 0..2 {
+            let bytes = wordcraft_docx::write(&document).unwrap();
+            let xml = text(&unzip(&bytes), "word/document.xml");
+            let expected_xml = match expected {
+                Some(true) => "w:anchorLock=\"1\"",
+                Some(false) => "w:anchorLock=\"0\"",
+                None => "w:anchorLock=",
+            };
+            assert_eq!(xml.contains(expected_xml), expected.is_some(), "lock changed on save {}: {xml}", pass + 1);
+            document = wordcraft_docx::read(&bytes).unwrap();
+            assert_eq!(paras(&document)[0].props.frame.as_ref().and_then(|f| f.anchor_lock), expected);
+            if expected == Some(true) {
+                let frame = paras(&document)[0].props.frame.as_ref().unwrap();
+                assert_eq!((frame.x, frame.y, frame.w), (36.0, 72.0, Some(108.0)));
+            }
+        }
+    }
+}
+
+#[test]
 fn omitted_paragraph_defaults_can_be_edited() {
     let styles =
         format!(r#"<w:styles {W_NS}><w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#);
     let mut d = wordcraft_docx::read(&docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
     assert!(!d.styles.default_para_present);
-    d.styles.default_para.space_after = Some(12.0);
+    Arc::make_mut(&mut d.styles).default_para.space_after = Some(12.0);
     let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     assert!(again.styles.default_para_present);
     assert_eq!(again.styles.default_para.space_after, Some(12.0));
@@ -3940,6 +3981,144 @@ fn hyperlink_with_empty_target_is_no_link() {
     assert_eq!(p.props_of_char(5).link.as_deref(), Some("mailto:a@example.com"));
 }
 
+/// Picture brightness, contrast and transparency (#1711, #1766): VML `gain`/`blacklevel` (Word's
+/// watermark "Washout"), DrawingML `a:lum` and `a:alphaModFix`; saved as DrawingML and read back.
+#[test]
+fn picture_brightness_contrast_transparency() {
+    use wordcraft_doc::picfx::PicFx;
+    let png: &[u8] = b"\x89PNG\r\n\x1a\nnot really a png";
+    let vml =
+        |attrs: &str| format!(r#"<w:r><w:pict><v:shape style="width:1in;height:36pt"><v:imagedata r:id="rIdImg" {attrs}/></v:shape></w:pict></w:r>"#);
+    let dml = |blip: &str| {
+        format!(
+            r#"<w:r><w:drawing><wp:inline><wp:extent cx="1270000" cy="635000"/><wp:docPr id="3" name="P"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rIdImg">{blip}</a:blip></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"#
+        )
+    };
+    let cases: Vec<(String, Option<PicFx>)> = vec![
+        // Word's Washout: 0.3 and 0.35 in 16.16 fixed point.
+        (vml(r#"gain="19661f" blacklevel="22938f""#), Some(PicFx::new(70_000, -70_000, 0))),
+        (vml(r#"gain="0.5" blacklevel="0.25""#), Some(PicFx::new(50_000, -50_000, 0))),
+        (vml(r#"gain="131072f""#), Some(PicFx::new(0, 50_000, 0))),
+        (vml(""), Some(PicFx::default())),
+        (dml(r#"<a:lum bright="80000" contrast="-80000"/>"#), Some(PicFx::new(80_000, -80_000, 0))),
+        (dml(r#"<a:alphaModFix amt="40000"/><a:lum bright="-20000"/>"#), Some(PicFx::new(-20_000, 0, 60_000))),
+        (dml(""), Some(PicFx::default())),
+        // Hostile values: clamped, never a panic.
+        (vml(r#"gain="NaNf" blacklevel="infinity""#), None),
+        (vml(r#"gain="-99999999f" blacklevel="99999999999f""#), None),
+        (vml(r#"gain="1e308" blacklevel="-1e308""#), None),
+        (vml(r#"gain="f" blacklevel="--3""#), None),
+        (dml(r#"<a:lum bright="999999999" contrast="-99999999999999999999"/><a:alphaModFix amt="-5"/>"#), None),
+        (dml(r#"<a:alphaModFix amt="250000"/><a:lum bright="x" contrast=""/>"#), None),
+    ];
+    let body: String = cases.iter().map(|(x, _)| format!("<w:p>{x}</w:p>")).collect();
+    let doc = format!(r#"<w:document {W_NS}><w:body>{body}</w:body></w:document>"#);
+    let r = rels(&[("rIdImg", "image", "media/pic.png")]);
+    let bytes = zip(&[
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", doc.as_bytes()),
+        ("word/_rels/document.xml.rels", r.as_bytes()),
+        ("word/media/pic.png", png),
+    ]);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    let fx_of = |d: &Document| -> Vec<PicFx> {
+        paras(d)
+            .iter()
+            .map(|p| match p.objects.first() {
+                Some(InlineObject::Image { fx, .. }) => *fx,
+                o => panic!("{o:?}"),
+            })
+            .collect()
+    };
+    let read = fx_of(&d);
+    assert_eq!(read.len(), cases.len());
+    for ((x, want), got) in cases.iter().zip(&read) {
+        assert_eq!(*got, got.clamped(), "{x}");
+        if let Some(want) = want {
+            let near = |a: i32, b: i32| (a - b).abs() <= 2;
+            assert!(near(got.bright, want.bright) && near(got.contrast, want.contrast) && got.transparency == want.transparency, "{x}: {got:?}");
+        }
+    }
+    // Clamped hostile values.
+    assert_eq!(read[11], PicFx::new(100_000, -100_000, 100_000));
+    assert_eq!(read[12], PicFx::default());
+    // Saved as DrawingML (VML pictures too) and read back unchanged.
+    let out = wordcraft_docx::write(&d).unwrap();
+    let back = wordcraft_docx::read(&out).unwrap();
+    assert_eq!(fx_of(&back), read);
+}
+
+/// Word's picture watermark with Washout (#1711): a VML picture in a header's Watermarks
+/// building block keeps its brightness and contrast.
+#[test]
+fn washout_picture_watermark_in_header() {
+    let hdr = format!(
+        r##"<w:hdr {W_NS}><w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Watermarks"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent><w:p><w:r><w:pict><v:shape id="WordPictureWatermark1" type="#_x0000_t75" style="position:absolute;margin-left:0;margin-top:0;width:200pt;height:200pt;z-index:-251657216;mso-position-horizontal:center;mso-position-horizontal-relative:margin;mso-position-vertical:center;mso-position-vertical-relative:margin"><v:imagedata r:id="rImg" o:title="wm" gain="19661f" blacklevel="22938f"/></v:shape></w:pict></w:r></w:p></w:sdtContent></w:sdt></w:hdr>"##
+    );
+    let hrels = rels(&[("rImg", "image", "media/wm.png")]);
+    let body = r#"<w:p><w:r><w:t>Body</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rHdr"/></w:sectPr>"#;
+    let d = wordcraft_docx::read(&docx(
+        body,
+        &[("rHdr", "header", "header1.xml")],
+        &[("word/header1.xml", &hdr), ("word/_rels/header1.xml.rels", &hrels), ("word/media/wm.png", "not really a png")],
+    ))
+    .unwrap();
+    let id = d.last_section.headers.default.unwrap();
+    let fx = d.parts[&id]
+        .blocks
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .find_map(|o| if let InlineObject::Image { fx, .. } = o { Some(*fx) } else { None })
+        .expect("watermark picture");
+    assert!((fx.bright - 70_000).abs() <= 2 && (fx.contrast + 70_000).abs() <= 2, "{fx:?}");
+}
+
+/// A faded DrawingML picture behind a header's text (#1766; #1961 review): `a:alphaModFix` reads
+/// and is written back once, as in the body.
+#[test]
+fn faded_picture_behind_text_in_header() {
+    let hdr = format!(
+        r#"<w:hdr {W_NS}><w:p><w:r><w:drawing><wp:anchor behindDoc="1" distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="margin"><wp:align>center</wp:align></wp:positionH><wp:positionV relativeFrom="margin"><wp:align>center</wp:align></wp:positionV><wp:extent cx="2540000" cy="2540000"/><wp:wrapNone/><wp:docPr id="7" name="Faded"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rImg"><a:alphaModFix amt="20000"/></a:blip></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p></w:hdr>"#
+    );
+    let hrels = rels(&[("rImg", "image", "media/wm.png")]);
+    let body = r#"<w:p><w:r><w:t>Body</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rHdr"/></w:sectPr>"#;
+    let header_picture = |d: &wordcraft_doc::Document| {
+        let id = d.last_section.headers.default.unwrap();
+        d.parts[&id]
+            .blocks
+            .iter()
+            .filter_map(|b| b.as_para())
+            .flat_map(|p| p.objects.iter())
+            .find_map(|o| if let InlineObject::Image { fx, float, .. } = o { Some((*fx, float.wrap)) } else { None })
+            .expect("header picture")
+    };
+    let d = wordcraft_docx::read(&docx(
+        body,
+        &[("rHdr", "header", "header1.xml")],
+        &[("word/header1.xml", &hdr), ("word/_rels/header1.xml.rels", &hrels), ("word/media/wm.png", "not really a png")],
+    ))
+    .unwrap();
+    let (fx, wrap) = header_picture(&d);
+    assert_eq!(fx, wordcraft_doc::picfx::PicFx::new(0, 0, 80_000));
+    assert_eq!(wrap, wordcraft_doc::para::Wrap::BehindText);
+    let saved = wordcraft_docx::write(&d).unwrap();
+    let again = wordcraft_docx::read(&saved).unwrap();
+    assert_eq!(header_picture(&again), (fx, wrap), "the same picture after saving");
+}
+
+/// An OLE object's preview keeps the corrections of its picture (#1961 review).
+#[test]
+fn ole_preview_keeps_its_corrections() {
+    let body = r##"<w:p><w:r><w:object w:dxaOrig="1440" w:dyaOrig="720"><v:shape id="_x0000_i1025" type="#_x0000_t75" style="width:72pt;height:36pt" o:ole=""><v:imagedata r:id="rIdImg" gain="19661f" blacklevel="22938f"/></v:shape></w:object></w:r></w:p>"##;
+    let d = wordcraft_docx::read(&docx(body, &[("rIdImg", "image", "media/p.png")], &[("word/media/p.png", "not really a png")])).unwrap();
+    let fx = d.body[0]
+        .as_para()
+        .and_then(|p| p.objects.iter().find_map(|o| if let InlineObject::Image { fx, .. } = o { Some(*fx) } else { None }))
+        .expect("the preview");
+    assert!((fx.bright - 70_000).abs() <= 2 && (fx.contrast + 70_000).abs() <= 2, "{fx:?}");
+}
+
 #[test]
 fn row_table_borders_round_trip() {
     let d = read_body(
@@ -4373,6 +4552,20 @@ fn vml_textbox_style_anchor_and_fit() {
     let tb = doc.parts.get(&story_id).unwrap();
     assert_eq!(tb.body.anchor, wordcraft_doc::props::VAlign::Center);
     assert!(tb.body.auto_fit);
+}
+
+/// #2601: a drop-cap frame of two letters in two fonts. The first letter's font is the cap's; only
+/// the runs in that font get the text's font back, the other letter keeps its own.
+#[test]
+fn drop_cap_frame_keeps_other_fonts() {
+    let body = r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Liberation Mono" w:hAnsi="Liberation Mono"/></w:rPr><w:t>A</w:t></w:r><w:r><w:rPr><w:rFonts w:ascii="Liberation Sans" w:hAnsi="Liberation Sans"/></w:rPr><w:t>b</w:t></w:r></w:p>
+        <w:p><w:r><w:rPr><w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/></w:rPr><w:t>c tale</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let p = paras(&d);
+    assert_eq!(p.len(), 1, "the frame merges into its paragraph");
+    assert_eq!(p[0].props.drop_cap_font.as_deref(), Some("Liberation Mono"));
+    assert_eq!(p[0].props_of_char(0).font.as_deref(), Some("Liberation Serif"), "the cap letter gets the text's font");
+    assert_eq!(p[0].props_of_char(1).font.as_deref(), Some("Liberation Sans"), "the other letter keeps its own");
 }
 
 /// A VML horizontal rule (`o:hr`, a web page's `<hr>` pasted into Word) is read as one: the whole
