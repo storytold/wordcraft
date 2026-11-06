@@ -223,7 +223,7 @@ fn line_draws(
     out: &mut Vec<Draw>,
 ) {
     use wordcraft_doc::connector::{connector_segs, end_direction};
-    match connector_segs(kind, rect.w, rect.h) {
+    match connector_segs(kind, rect.w, rect.h, extra.connector.as_ref()) {
         Some(segs) => {
             let segs = segs
                 .into_iter()
@@ -255,7 +255,7 @@ fn line_draws(
     let (start, end) = ((rect.x, rect.y), (rect.right(), rect.bottom()));
     for (on, tip, at_end, style) in [(extra.arrow_start, start, false, extra.start_style), (extra.arrow_end, end, true, extra.end_style)] {
         if on {
-            out.push(arrowhead(tip, end_direction(kind, rect.w, rect.h, at_end), stroke_width, style, color));
+            out.push(arrowhead(tip, end_direction(kind, rect.w, rect.h, at_end, extra.connector.as_ref()), stroke_width, style, color));
         }
     }
 }

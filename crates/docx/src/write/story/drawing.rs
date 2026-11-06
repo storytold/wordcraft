@@ -110,19 +110,7 @@ impl Writer<'_> {
         };
         match geom {
             Some(f) => cust_geom(w, f, *sw, *sh),
-            None => {
-                w.open("a:prstGeom", &[("prst", prst)]);
-                match extra.corner.filter(|_| *kind == ShapeKind::RoundedRectangle) {
-                    Some(c) => {
-                        w.open("a:avLst", &[]);
-                        let fmla = format!("val {}", c.min(wordcraft_doc::connector::MAX_CORNER));
-                        w.empty("a:gd", &[("name", "adj"), ("fmla", &fmla)]);
-                        w.close("a:avLst");
-                    }
-                    None => w.empty("a:avLst", &[]),
-                }
-                w.close("a:prstGeom");
-            }
+            None => prst_geom(w, *kind, prst, extra),
         }
         let alpha = geom.map_or(1.0, |f| f.alpha);
         let ink = geom.is_some_and(|f| f.is_ink());
@@ -590,4 +578,40 @@ pub(super) fn write_fill(w: &mut W, f: Option<&Fill>) {
             w.close("a:gradFill");
         }
     }
+}
+
+/// `a:prstGeom` for preset `prst`: with a rounded rectangle's corner, or an elbow's or curve's
+/// preset and adjust values as they were read.
+fn prst_geom(w: &mut W, kind: ShapeKind, prst: &str, extra: &wordcraft_doc::connector::ShapeExtra) {
+    // Normalized: a document's geometry didn't necessarily come through `ConnectorGeom::new`.
+    let connector =
+        extra.connector.as_ref().filter(|_| matches!(kind, ShapeKind::ElbowConnector | ShapeKind::CurvedConnector)).and_then(|c| c.normalized());
+    let connector = connector.as_ref();
+    let named;
+    let prst = match connector {
+        Some(c) => {
+            named = format!("{}{}", if kind == ShapeKind::ElbowConnector { "bentConnector" } else { "curvedConnector" }, c.preset.clamp(2, 5));
+            named.as_str()
+        }
+        None => prst,
+    };
+    w.open("a:prstGeom", &[("prst", prst)]);
+    match (extra.corner.filter(|_| kind == ShapeKind::RoundedRectangle), connector) {
+        (Some(c), _) => {
+            w.open("a:avLst", &[]);
+            let fmla = format!("val {}", c.min(wordcraft_doc::connector::MAX_CORNER));
+            w.empty("a:gd", &[("name", "adj"), ("fmla", &fmla)]);
+            w.close("a:avLst");
+        }
+        (None, Some(c)) if !c.adj.is_empty() => {
+            w.open("a:avLst", &[]);
+            for (k, v) in c.adj.iter().enumerate() {
+                let (name, fmla) = (format!("adj{}", k + 1), format!("val {v}"));
+                w.empty("a:gd", &[("name", &name), ("fmla", &fmla)]);
+            }
+            w.close("a:avLst");
+        }
+        _ => w.empty("a:avLst", &[]),
+    }
+    w.close("a:prstGeom");
 }
