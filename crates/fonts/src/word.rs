@@ -512,6 +512,33 @@ pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
 mod tests {
     use super::*;
 
+    /// Built with craft-fonts' Latin manifest, the metric-compatible Office substitutes are
+    /// embedded, so a Calibri or Cambria document wraps as in Word without any installed font.
+    #[test]
+    fn embedded_office_substitutes_stand_in_without_system_fonts() {
+        if !crate::CRAFT_FONTS.iter().any(|f| f.family == "Carlito") {
+            eprintln!("skipped: built without craft-fonts' Latin manifest (set CRAFT_FONTS_DIR to a recent checkout)");
+            return;
+        }
+        let db = FontDb::with_font_dirs(Vec::new());
+        db.set_system_fallback(false);
+        for (office, open) in [
+            ("Calibri", "Carlito"),
+            ("Cambria", "Caladea"),
+            ("Arial", "Liberation Sans"),
+            ("Times New Roman", "Liberation Serif"),
+            ("Courier New", "Liberation Mono"),
+        ] {
+            assert!(metric_compatible(office, open), "{office} ↔ {open}");
+            for style in ["Regular", "Bold", "Italic", "Bold Italic"] {
+                let face = db.face(open, style);
+                assert_eq!((face.family.as_str(), face.style.as_str()), (open, style), "{open} {style} is embedded");
+            }
+        }
+        assert_eq!(substitute(&db, "Calibri"), Some("Carlito"));
+        assert_eq!(substitute(&db, "Cambria"), Some("Caladea"));
+    }
+
     #[test]
     fn the_line_gap_goes_above_the_ascent() {
         // Times New Roman (hhea 1825 / -443, gap 87), and a font with a large gap: Word puts the
