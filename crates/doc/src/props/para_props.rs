@@ -305,6 +305,9 @@ pub struct TextFrame {
     pub v_anchor: String,
     /// `around`, `auto`, `notBeside`, `none`, `tight` or `through`.
     pub wrap: String,
+    /// Whether the frame stays fixed to its page anchor when its paragraph moves.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor_lock: Option<bool>,
     /// Distance from the text left and right, and above and below.
     pub h_space: f32,
     pub v_space: f32,
@@ -359,6 +362,9 @@ pub struct ParaProps {
     /// outside ones, so they swap sides on even (left-hand) pages.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mirror_indents: Option<bool>,
+    /// `w:adjustRightInd`: automatically adjust the right indent for the document grid when enabled; keep the specified right indent when disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adjust_right_indent: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keep_next: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -447,7 +453,7 @@ impl ParaProps {
 
     fn overlay_layout(&mut self, patch: &ParaProps) {
         overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars,
-            space_before, space_after, space_before_auto, space_after_auto, line_spacing, contextual_spacing, mirror_indents, tabs, shading, borders);
+            space_before, space_after, space_before_auto, space_after_auto, line_spacing, contextual_spacing, mirror_indents, adjust_right_indent, tabs, shading, borders);
     }
 
     fn overlay_pagination(&mut self, patch: &ParaProps) {
