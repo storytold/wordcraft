@@ -377,3 +377,20 @@ fn check_spelling_is_one_setting_for_every_open_document() {
     run(&mut s, "file.new", json!({}));
     assert!(!s.view.proofing);
 }
+
+/// A window's view put back after Check spelling as you type changed in another window takes the
+/// setting as it is now, not as it was when the window's view was taken (#5740): every view made
+/// active follows the saved preference.
+#[test]
+fn a_window_view_put_back_follows_the_spelling_setting() {
+    let mut s = s();
+    assert!(s.view.proofing);
+    let held = s.take_view();
+    run(&mut s, "file.options", json!({"checkSpelling": false}));
+    s.put_view(held);
+    assert!(!s.view.proofing, "the view taken with spelling on comes back with it off");
+    let held = s.take_view();
+    run(&mut s, "review.proofing", json!({"value": true}));
+    s.put_view(held);
+    assert!(s.view.proofing);
+}
