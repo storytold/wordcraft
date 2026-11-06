@@ -81,21 +81,25 @@ pub(in crate::odt) struct TableB {
     pub(in crate::odt) extra: crate::model::TableExtra,
 }
 
-/// `room` points divided by `shares`; empty unless every column has a share.
-fn widths_of_shares(shares: &[f32], room: f32) -> Vec<f32> {
-    let total: f32 = shares.iter().sum();
-    if !room.is_finite() || room <= 0.0 || !total.is_finite() || shares.iter().any(|s| *s <= 0.0) {
+/// Each column's width out of `room` points, as LibreOffice shares it out: by its share if it has
+/// one, else its stated width, which comes off the room first. Empty if a column has neither, or
+/// no room is left to share.
+fn widths_of_shares(widths: &[f32], shares: &[f32], room: f32) -> Vec<f32> {
+    let columns = || widths.iter().zip(shares);
+    let usable = |v: f32| v.is_finite() && v > 0.0;
+    let left = room - columns().filter(|(_, s)| **s <= 0.0).map(|(w, _)| *w).sum::<f32>();
+    let total: f32 = shares.iter().filter(|s| **s > 0.0).sum();
+    if widths.len() != shares.len() || !usable(left) || !usable(total) || columns().any(|(w, s)| *w <= 0.0 && *s <= 0.0) {
         return Vec::new();
     }
-    shares.iter().map(|s| s / total * room).collect()
+    columns().map(|(w, s)| if *s > 0.0 { s / total * left } else { *w }).collect()
 }
 
 impl TableB {
     pub(in crate::odt) fn finish(self) -> FTable {
-        // Columns stating only their shares (LibreOffice's tables filling the margins, §20.334)
-        // divide the table's width by them; a column with neither leaves the whole grid to the
-        // equal split.
-        let widths = if self.widths.iter().all(|w| *w > 0.0) { self.widths } else { widths_of_shares(&self.shares, self.room) };
+        // Columns stating their shares (LibreOffice's tables filling the margins, §20.334) divide
+        // the table's width by them; a column with neither leaves the whole grid to the equal split.
+        let widths = if self.widths.iter().all(|w| *w > 0.0) { self.widths } else { widths_of_shares(&self.widths, &self.shares, self.room) };
         let mut rows = self.rows;
         share_edges(&mut rows);
         // A table whose cells all say "no line" draws none.

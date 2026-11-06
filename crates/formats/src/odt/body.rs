@@ -1282,7 +1282,7 @@ impl Body<'_> {
             }
             "table-column" => {
                 let w = get(a, "table:style-name").and_then(|n| self.styles.column_width(n)).unwrap_or(0.0);
-                let share = get(a, "table:style-name").and_then(|n| self.styles.column_share(n)).unwrap_or(0.0);
+                let share = self.styles.column_share(get(a, "table:style-name")).unwrap_or(0.0);
                 let n = get(a, "table:number-columns-repeated").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).max(1);
                 if let Some(t) = self.tables.last_mut() {
                     let room = wordcraft_doc::table::MAX_COLS.saturating_sub(t.widths.len());
@@ -1374,7 +1374,9 @@ impl Body<'_> {
         // LibreOffice's tables keep their columns' widths, whatever their content (and however
         // far past the margins): Word's fixed layout.
         let space = get(a, "table:style-name").map(|s| self.styles.table_space(s)).unwrap_or_default();
-        let room = self.sec.text_width() * width_pct.unwrap_or(100.0) / 100.0;
+        // What the shares divide: an aligned table's stated width, however wide, as LibreOffice
+        // keeps it; else its part of the text width.
+        let room = width.filter(|_| align.is_some() && rel.is_none()).unwrap_or_else(|| self.sec.text_width() * width_pct.unwrap_or(100.0) / 100.0);
         let extra = model::TableExtra { align, width: None, width_pct, heights: Vec::new(), fixed: true, space, header_rows: 0 };
         self.tables.push(TableB { rows: Vec::new(), row: Vec::new(), hcover: 0, widths: Vec::new(), shares: Vec::new(), room, extra });
     }
