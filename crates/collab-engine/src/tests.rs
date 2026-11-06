@@ -82,3 +82,37 @@ fn a_command_on_a_deleted_node_is_gone() {
         .expect_err("gone");
     assert_eq!(err.code, RejectCode::Gone);
 }
+
+#[test]
+fn the_actor_is_the_tracked_change_author() {
+    let mut document = Document::new();
+    document.settings.track_changes = true;
+    let mut room = Room::new(SessionModel::from_document(document));
+    let node = node(&mut room);
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Command, node, 0, json!({"command": "text.insert", "params": {"text": "Hi"}})))
+        .expect("command applies");
+
+    let session = room.model().session();
+    assert!(session.doc.revisions.iter().any(|revision| revision.author == "alice"), "{:?}", session.doc.revisions);
+}
+
+#[test]
+fn pending_formatting_travels_with_the_command() {
+    let mut room = room();
+    let node = node(&mut room);
+    let payload = json!({"command": "text.insert", "params": {"text": "Bold"}, "pending": {"bold": true}});
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Command, node, 0, payload)).expect("command applies");
+
+    let session = room.model().session();
+    let para = session.doc.body.first().and_then(|block| block.as_para()).expect("a paragraph");
+    assert_eq!(para.runs.first().map(|run| run.props.bold), Some(Some(true)), "{:?}", para.runs);
+}
+
+#[test]
+fn the_server_session_keeps_no_undo_history() {
+    let mut room = room();
+    let node = node(&mut room);
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Command, node, 0, json!({"command": "text.insert", "params": {"text": "Hi"}})))
+        .expect("command applies");
+    assert_eq!(room.model().session().undo_depth(), 0);
+}

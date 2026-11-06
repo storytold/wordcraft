@@ -18,6 +18,7 @@ use wordcraft_collab::ids::{NodeId, NodeIds};
 use wordcraft_collab::room::{Effect, Model};
 use wordcraft_collab::wire::{Op, OpKind, Reject, RejectCode};
 use wordcraft_collab_doc::DocModel;
+use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Document, Path, Pos, StoryRef};
 use wordcraft_engine::{Selection, Session};
 
@@ -47,9 +48,10 @@ impl SessionModel {
         &mut self.session
     }
 
-    /// A command operation: `{"command": "format.bold", "params": {...}}` with
-    /// the caret in `target`.
-    fn apply_command(&mut self, op: &Op, ids: &NodeIds) -> Result<Effect, Reject> {
+    /// A command operation: `{"command": "format.bold", "params": {...}, "pending": {...}}`
+    /// with the caret in `target`. The author is the JWT actor, never the
+    /// operation's payload (ADR-0008).
+    fn apply_command(&mut self, actor: &str, op: &Op, ids: &NodeIds) -> Result<Effect, Reject> {
         let command = op.payload.get("command").and_then(Value::as_str).ok_or_else(|| invalid(op, "a command operation needs `command`"))?;
         if !allowed_command(command) {
             return Err(Reject::new(op.op_id.clone(), RejectCode::Forbidden, format!("command {command} is not available over the network")));
@@ -69,11 +71,35 @@ impl SessionModel {
         })?;
         let story = parse_story(&key.story).ok_or_else(|| invalid(op, format!("unknown story {:?}", key.story)))?;
         self.session.sel = Selection::caret(Pos { story, path: Path(key.path.clone()), off: op.target.off });
+        self.session.author = actor.to_string();
+
+        // Formatting picked with a collapsed caret travels with the operation:
+        // the server has no user interface to pick it (RFC §3.1).
+        let pending = match op.payload.get("pending") {
+            Some(value) if !value.is_null() => {
+                Some(serde_json::from_value::<CharProps>(value.clone()).map_err(|err| invalid(op, format!("bad `pending`: {err}")))?)
+            }
+            _ => None,
+        };
+        self.session.pending = pending.clone();
 
         let params = op.payload.get("params").cloned().unwrap_or(Value::Null);
         self.session.run(command, &params).map_err(|err| invalid(op, err.to_string()))?;
+
+        // Per-user undo is the protocol's (ADR-0010); the room must not keep a
+        // parallel history of full document snapshots for every command.
+        self.session.reset_history();
+
         Ok(Effect {
-            delta: Some(json!({"op": "command", "command": command, "nodeId": op.target.node_id})),
+            delta: Some(json!({
+                "op": "command",
+                "command": command,
+                "params": params,
+                "story": op.target.story,
+                "nodeId": op.target.node_id,
+                "off": op.target.off,
+                "pending": pending,
+            })),
             // Engine commands have no inverse here; per-user undo covers
             // primitives and structural operations (ADR-0010).
             inverse: Vec::new(),
@@ -84,15 +110,15 @@ impl SessionModel {
 }
 
 impl Model for SessionModel {
-    fn apply(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
+    fn apply(&mut self, actor: &str, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
         if op.kind == OpKind::Command {
-            return self.apply_command(op, ids);
+            return self.apply_command(actor, op, ids);
         }
         // Primitives and structural operations are the document adapter's; the
         // session around the document is untouched by them.
         let document = std::mem::replace(&mut self.session.doc, Document::new());
         let mut model = DocModel::new(document);
-        let result = model.apply(op, ids);
+        let result = model.apply(actor, op, ids);
         self.session.doc = model.into_document();
         result
     }

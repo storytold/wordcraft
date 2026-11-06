@@ -210,7 +210,7 @@ impl DocModel {
 }
 
 impl Model for DocModel {
-    fn apply(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
+    fn apply(&mut self, _actor: &str, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
         match op.kind {
             OpKind::Primitive => self.primitive(op, ids),
             OpKind::Structural => self.structural(op, ids),

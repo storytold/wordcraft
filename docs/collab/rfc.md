@@ -49,8 +49,13 @@ lease (ADR-0008), commit сервером (ADR-0009), per-user undo (ADR-0010).
   `split_para`, `merge_para`, `set_run_props`, `set_para_props`, `insert_block`,
   `remove_block`, `move_block`, `insert_row`, `remove_row`, `insert_cell`, `set_style`,
   `add_comment`, `resolve_comment`, `set_field`.
-- `kind:"command"` — нормализованная команда движка с явным адресом и контекстом
-  (`pos`, `pending`, `author`); допустима для команд без побочных эффектов на сервере.
+- `kind:"command"` — нормализованная команда движка с явным адресом и контекстом:
+  `payload: {"command":"format.bold","params":{...},"pending":<CharProps>}`; каретка
+  берётся из `target`, `pending` — из payload, `author` — из JWT `sub` (сервер
+  подставляет его в `Session`). Команда исполняется тем же `Session::run`, что и в UI.
+  Допустимы только команды, меняющие документ, и только вне запрещённых областей
+  (`file.`, `tools.`, `ui.`, `view.`, `caret.`, `select.`, `collab.`, `edit.undo`,
+  `edit.redo`, `edit.repeat`, `review.readAloud`); остальные — `forbidden`.
 - `kind:"structural"` — эксклюзивно, `baseVersion == head`: вставка/удаление таблицы,
   `parts`, смена стиля/нумерации, paste фрагмента.
 - `kind:"merge"` — комментарии и свойства, не зависящие от структуры (LWW по свойству).
@@ -58,6 +63,13 @@ lease (ADR-0008), commit сервером (ADR-0009), per-user undo (ADR-0010).
 Клиент выводит примитивы из своей локальной команды: `Arc::ptr_eq` по `body`/`parts`
 даёт изменённые блоки бесплатно, внутри изменённого абзаца — минимальный текстовый дифф
 по байтовым смещениям. Сырые `Session::run(id, params)` на проводе запрещены.
+
+`kind:"command"` — запасной путь для команд, чей эффект клиент не смог нормализовать в
+примитивы. Авторитетная дельта такой операции повторяет саму операцию
+(`{"op":"command","command","params","nodeId","off","pending"}`), чтобы остальные
+реплики исполнили её локально при том же документе. Обратной операции для произвольной
+команды нет: шаг per-user undo для `kind:"command"` не создаётся, а клиент получает
+`label` и не показывает Undo для этого шага (ADR-0010, ограничение v1).
 
 **Границы с движком.** Производное (layout, номера страниц, результаты полей, метки
 списков) не пересылается — пересчитывается каждой репликой (`Session::layout()`).
@@ -208,6 +220,11 @@ Lease — одна комната на файл, TTL + heartbeat; отзыв з�
 
 - `crates/collab` — протокол, состояние комнаты, журнал, дедуп, ID-карта, undo,
   транспортно-независимо (тестируется без сети).
+- `crates/collab-doc` — адаптер модели `Document` к позиционным примитивам.
+- `crates/collab-engine` — модель комнаты поверх `Session`: команды движка идут тем же
+  `Session::run`, что и в UI, с автором из JWT и без серверной истории undo.
+- `crates/collab-client` — состояние клиента (opId, очередь, reconnect) без транспорта;
+  `crates/collab-ws` — WebSocket-транспорт, который ведёт это состояние.
 - `apps/wordcraft-collab-server` — бинарь: `tokio` + `axum` WS, JWT, комнаты, снапшоты,
   commit; конфиг из env (`COLLAB_BIND`, `COLLAB_JWT_PUB`, `COLLAB_DATA_DIR`).
 - Healthcheck `GET /healthz`; метрики `GET /metrics` (Prometheus-текст): комнаты,

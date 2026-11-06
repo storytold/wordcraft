@@ -36,7 +36,7 @@ impl TextModel {
 }
 
 impl Model for TextModel {
-    fn apply(&mut self, op: &Op, _ids: &mut crate::ids::NodeIds) -> Result<Effect, crate::wire::Reject> {
+    fn apply(&mut self, _actor: &str, op: &Op, _ids: &mut crate::ids::NodeIds) -> Result<Effect, crate::wire::Reject> {
         match op.kind {
             OpKind::Primitive => self.apply_insert(op),
             OpKind::Structural => {
