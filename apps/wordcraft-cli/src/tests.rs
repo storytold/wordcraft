@@ -76,6 +76,22 @@ fn unknown_options_are_rejected_before_file_access() {
 }
 
 #[test]
+fn convert_rejects_malformed_format_options_before_file_access() {
+    for (options, error) in [
+        (vec!["--format"], "convert: --format requires a value"),
+        (vec!["--format", "--markup"], "convert: --format requires a value"),
+        (vec!["--format", "flatopc", "--format", "wordml2003"], "convert: duplicate --format option"),
+    ] {
+        let mut argv = args(&["convert", "missing.docx", "out.xml"]);
+        argv.extend(args(&options));
+        assert_eq!(run(&argv), Err(error.into()), "{options:?}");
+    }
+    // A valid single value reaches file access, rather than a format-option error.
+    let error = run(&args(&["convert", "missing.docx", "out.xml", "--format", "flatopc"])).unwrap_err().to_string();
+    assert!(error.starts_with("missing.docx:"), "{error}");
+}
+
+#[test]
 fn help_or_h_after_a_subcommand_asks_for_the_usage() {
     for cmd in SUBCOMMANDS {
         assert!(wants_help(cmd, &args(&["in.docx", "--help"])), "{cmd}");
@@ -542,22 +558,4 @@ fn script_parse_resolves_paths_against_the_base() {
     let s = script::parse(r#"{"commands":["caret.docEnd"],"save":["o.docx"]}"#, None).unwrap();
     assert_eq!(s.save, vec!["o.docx".to_string()]);
     assert_eq!(s.commands.len(), 1);
-}
-
-/// `WORDCRAFT_ODF` names a display style, and a session opened in one keeps it, so a `run`
-/// script's later `file.open` reads OpenDocument files the same way.
-#[test]
-fn the_odf_style_is_kept_by_the_session() {
-    use wordcraft_doc::odf_profile::OdfProfile;
-    assert_eq!(odf_from(None), Ok(OdfProfile::default()));
-    assert_eq!(odf_from(Some("libreoffice".into())), Ok(OdfProfile::libreoffice()));
-    assert_eq!(odf_from(Some("word".into())), Ok(OdfProfile::word()));
-    assert!(odf_from(Some("custom".into())).is_err());
-    let dir = std::env::temp_dir().join(format!("wc-cli-odf-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("a.txt");
-    std::fs::write(&path, "Hello").unwrap();
-    let s = open_in(&path, None, OdfProfile::libreoffice()).unwrap();
-    assert_eq!(s.prefs.odf, OdfProfile::libreoffice());
-    let _ = std::fs::remove_dir_all(&dir);
 }

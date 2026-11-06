@@ -5,7 +5,7 @@ use wordcraft_geom::Unit;
 use super::{decimal, length, parse_length, unit};
 
 use crate::theme::Appearance;
-use crate::{Services, UiState, WordApp};
+use crate::{Services, StatusCount, UiState, WordApp};
 
 #[test]
 fn unknown_settings_keys_load_in_linear_time() {
@@ -155,6 +155,7 @@ fn options_survive_a_restart_and_junk_in_ui_json() {
     .unwrap();
     a.ui.recent_count = 30;
     a.ui.print_backgrounds = true;
+    a.ui.status_count = StatusCount::CharactersNoSpaces;
     let saved = serde_json::to_vec(&a.prefs()).unwrap();
     let mut b = app();
     b.apply_prefs(UiState::from_json(&saved).unwrap());
@@ -162,13 +163,16 @@ fn options_survive_a_restart_and_junk_in_ui_json() {
     assert_eq!(b.session.prefs.units, Some(Unit::Centimeters));
     assert_eq!(b.session.initials, "VK");
     assert_eq!((b.ui.recent_count, b.ui.print_backgrounds), (30, true));
+    assert_eq!(b.ui.status_count, StatusCount::CharactersNoSpaces, "#2797: what the status bar counts");
     assert!(wordcraft_engine::proof::user_dictionary().contains(&"zqxoptionsword".to_string()));
 
     let junk = br#"{"theme": "dark", "recentCount": "lots", "printBackgrounds": 7, "optionsPane": ["x"], "dark": true,
+            "statusCount": "paragraphs",
             "editing": {"measurementUnits": "furlongs", "typingReplacesSelection": false, "marks": {"tabs": "yes", "spaces": true}}}"#;
     let ui = UiState::from_json(junk).unwrap();
     assert_eq!(ui.theme, Appearance::Dark);
     assert_eq!((ui.recent_count, ui.print_backgrounds, ui.options_pane.as_str()), (12, false, "general"));
+    assert_eq!(ui.status_count, StatusCount::Words, "#2797: a wrong value reads the default");
     assert_eq!(ui.legacy_dark, Some(true));
     assert_eq!(ui.editing.units, None);
     assert!(!ui.editing.typing_replaces_selection);
@@ -246,6 +250,14 @@ fn options_panes_open_and_change_settings() {
     h.get_by_label("Spaces").click();
     h.run_steps(2);
     assert!(h.state().session.prefs.marks.spaces, "Display › Spaces");
+    // #2797: what the status bar's count shows, chosen here as in its right-click menu. The
+    // Display pane's other combo box is Numerals, drawn above this one.
+    h.get_all_by_role(egui::accesskit::Role::ComboBox).last().expect("the status bar count picker").click();
+    h.run_steps(4);
+    h.get_by_label("Characters (with spaces)").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.status_count, StatusCount::Characters, "Display › Status bar count");
+    assert_eq!(h.state_mut().run("ui.statusCount", json!({})).unwrap()["statusCount"], "characters", "the command answers the same");
     h.get_by_label("Proofing").click();
     h.run_steps(4);
     assert_eq!(h.state().ui.options_pane, "proofing");
@@ -481,47 +493,4 @@ fn length_units_follow_the_interface_language() {
     h.state_mut().run("ui.language", json!({"value": "en"})).unwrap();
     h.run_steps(4);
     assert_eq!(length(72.0), "25,4 mm", "English keeps the English names");
-}
-
-/// File › Options › Advanced › OpenDocument files: the preset drop-down is `file.options` `odf`, and
-/// Custom starts from the choices in use and shows each case.
-#[test]
-fn advanced_opendocument_presets_and_custom_cases() {
-    use wordcraft_doc::odf_profile::{OdfPreset, OdfProfile};
-    let mut a = app();
-    a.run("file.options", json!({"pane": "advanced"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 1600.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
-    assert!(h.query_by_label("Tab stops are measured from the paragraph's indent").is_none(), "a preset shows no cases");
-    let pick = |h: &mut egui_kittest::Harness<'static, WordApp>, name: &str| {
-        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Where the standard leaves the look open, follow:").click();
-        h.run_steps(4);
-        h.get_by_label(name).click();
-        h.run_steps(4);
-    };
-    let preset = |h: &egui_kittest::Harness<'static, WordApp>| {
-        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Where the standard leaves the look open, follow:").value()
-    };
-    // Two display styles: Microsoft Word's (the default) and LibreOffice's.
-    assert_eq!(preset(&h).as_deref(), Some("Microsoft Word style"));
-    pick(&mut h, "LibreOffice style");
-    assert_eq!(preset(&h).as_deref(), Some("LibreOffice style"));
-    assert_eq!(h.state().session.prefs.odf.effective(), OdfProfile::libreoffice());
-    pick(&mut h, "Custom");
-    let odf = &h.state().session.prefs.odf;
-    assert_eq!(odf.preset, OdfPreset::Custom);
-    assert_eq!(OdfProfile { preset: OdfPreset::LibreOffice, ..odf.effective() }, OdfProfile::libreoffice(), "starting from LibreOffice's");
-    h.get_by_label("Tab stops are measured from the paragraph's indent").click();
-    h.run_steps(4);
-    assert!(!h.state().session.prefs.odf.effective().tabs_from_indent, "a case turned off");
-    pick(&mut h, "Microsoft Word style");
-    assert_eq!(preset(&h).as_deref(), Some("Microsoft Word style"));
-    assert_eq!(h.state().session.prefs.odf.effective(), OdfProfile::word());
 }

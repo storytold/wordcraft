@@ -530,6 +530,14 @@ fn shows_pixels(d: &ObjectDrag) -> bool {
     (d.picture && d.object.spin.is_identity()) || d.drag.grab == Grab::Move || (d.drag.grab == Grab::Rotate && d.object.text_box.is_none())
 }
 
+/// The pixels-per-page-point for a `w` x `h` preview, lowered so neither side exceeds the GPU's
+/// `max_side` (the texture is painted into the object's rect, so a smaller one is only stretched).
+fn preview_scale(px: f32, w: f32, h: f32, max_side: usize) -> f32 {
+    let room = (max_side.min(wordcraft_render::MAX_SIDE as usize).max(2) - 1) as f32;
+    let px = if px.is_finite() { px } else { 1.0 };
+    px.min(room / w.max(h).max(1.0))
+}
+
 /// `o` drawn alone over its rotated bounds, as a texture, at the canvas's `scale` (screen points
 /// per page point).
 fn preview(app: &WordApp, ctx: &egui::Context, layout: &DocLayout, o: &ObjectHit, scale: f32) -> Option<egui::TextureHandle> {
@@ -539,13 +547,13 @@ fn preview(app: &WordApp, ctx: &egui::Context, layout: &DocLayout, o: &ObjectHit
     opts.dark = crate::canvas::dark_page(app);
     let items = wordcraft_layout::display::object_display(&app.session.doc, page, obj, o.rect, o.text_box, &opts.display);
     let b = o.bounds();
-    let img = wordcraft_render::render_items(
-        &app.session.doc,
-        &items,
-        wordcraft_geom::Rect::new(b.x, b.y, b.w, b.h),
-        scale * ctx.pixels_per_point(),
-        &opts,
-    );
+    let max_side = ctx.input(|i| i.max_texture_side);
+    let px = preview_scale(scale * ctx.pixels_per_point(), b.w, b.h, max_side);
+    let img = wordcraft_render::render_items(&app.session.doc, &items, wordcraft_geom::Rect::new(b.x, b.y, b.w, b.h), px, &opts);
+    // A texture over the device limit panics wgpu outside `Session::run`; fall back to the outline.
+    if img.width as usize > max_side || img.height as usize > max_side {
+        return None;
+    }
     let ci = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight());
     Some(ctx.load_texture("object-drag", ci, egui::TextureOptions::LINEAR))
 }
@@ -726,7 +734,7 @@ pub fn cursor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at:
         } else if d.copy && d.drag.moved {
             egui::CursorIcon::Copy
         } else {
-            d.drag.grab.cursor()
+            d.drag.grab.cursor(d.drag.deg)
         });
     }
     if connector_end_at(app, layout, pages, scale, at).is_some() {
@@ -738,7 +746,7 @@ pub fn cursor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at:
 /// The cursor over part `g` of object `o`: none of a drag for an object that won't move there (a
 /// fixed graphic, or the body of a chart or SmartArt, which only resizes).
 fn hover_cursor(app: &WordApp, o: &ObjectHit, g: Grab) -> egui::CursorIcon {
-    if fixed(app, o) || (g == Grab::Move && size_only(app, o)) { egui::CursorIcon::Default } else { g.cursor() }
+    if fixed(app, o) || (g == Grab::Move && size_only(app, o)) { egui::CursorIcon::Default } else { g.cursor(o.spin.deg) }
 }
 
 /// Keys for a selected object: arrows nudge a floating one; typing or Enter goes into a text box.
