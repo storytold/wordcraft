@@ -425,7 +425,11 @@ impl<'e> Breaker<'e> {
             let check_box = object.is_some_and(|o| pl.check_boxes.contains(&o));
             // A picture sits on the baseline of its run (raised or lowered by its position):
             // the line keeps that font's ascent and descent, and grows to fit it.
-            let (a, d) = if check_box {
+            let (a, d) = if c.warichu {
+                // 割注: its two half-size sub-lines sit in a normal line, which keeps the
+                // run's full-size height (Word does not grow the line for them).
+                (c.obj_h, c.obj_d)
+            } else if check_box {
                 // Word sizes a line by a legacy check box as by text of the box's size (measured
                 // with Arial at 10 and 20 pt: a 20 pt box's line is 23 pt, times the spacing).
                 let (a, d) = st.line_extent();

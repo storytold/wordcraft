@@ -58,6 +58,7 @@ impl Slot {
             obj_h,
             obj_d,
             dot: false,
+            warichu: false,
         }
     }
 }
@@ -248,6 +249,16 @@ impl<'a> Shaped<'a> {
             let style = self.b.style(rc, None, false);
             let slot = Slot { start: range.start + i, end: range.start + i + c.len_utf8(), style, g: self.b.glyphs.len() as u32 };
             self.special(cx, c, slot, (rc, props));
+        }
+        // 割注 (`w:eastAsianLayout/@w:combine`): the whole run on two half-size sub-lines inside
+        // one line. A run holding a tab, break or object is left as ordinary text (its pieces
+        // would need brackets of their own); Word's dialog applies the setting to plain text.
+        if seg == 0
+            && let Some(brackets) = rc.combine
+            && !text.chars().any(|c| matches!(c, '\t' | LINE_BREAK | PAGE_BREAK | COLUMN_BREAK | OBJ | '\r'))
+            && self.b.shape_warichu(text, range.start, rc, brackets)
+        {
+            return;
         }
         if let Some(s) = text.get(seg..) {
             self.b.shape(s, range.start + seg, rc, None);
@@ -606,6 +617,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         clusters: Vec::new(),
         levels,
         shown: Vec::new(),
+        force_face: None,
         substituted: Vec::new(),
     };
     let cx = Cx { p, env, rp: &rp, res, math_props: doc.settings.math.clone().unwrap_or_default(), drop_first: drop_cap_char(p, &rp) };
