@@ -6,6 +6,7 @@ use wordcraft_doc::para::ShapeKind;
 mod advanced;
 mod completion;
 mod defaults;
+mod discrete;
 mod inverse;
 
 /// Wrap InkML body markup with the real namespace and decode it under a fresh ample work budget.

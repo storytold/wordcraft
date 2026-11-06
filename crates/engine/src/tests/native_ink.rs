@@ -9,6 +9,7 @@ use super::{Session, json, run};
 
 mod completion;
 mod defaults;
+mod discrete;
 mod inverse;
 
 /// Minimal InkML package part used in the native screen/PDF integration fixtures.

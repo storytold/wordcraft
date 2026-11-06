@@ -29,10 +29,12 @@ pub(super) enum Mapping {
     Table(Table),
     InverseCurve(inverse::curve::Curve),
     InverseFormula(inverse::formula::Scalar),
+    InverseDiscrete(inverse::discrete::Lookup),
     CheckedInverse {
         forward: Box<Mapping>,
         backward: Box<Mapping>,
         format: Format,
+        recorded: Format,
     },
 }
 
@@ -83,7 +85,7 @@ impl Mapping {
                 Self::Product(maps)
             }
             "affine" => {
-                let rows = rows(el.child("ink:affine")?, work)?;
+                let rows = rows(el.child("ink:affine")?, work)?.values;
                 let n = rows.first()?.len().checked_sub(1)?;
                 if n == 0 || n > MAX_CHANNELS || rows.len() > MAX_CHANNELS {
                     return None;
@@ -149,6 +151,7 @@ impl Mapping {
             Self::Table(table) => out.extend(table.targets.iter().map(|p| p.0)),
             Self::InverseCurve(curve) => out.push(curve.target),
             Self::InverseFormula(scalar) => out.push(scalar.target),
+            Self::InverseDiscrete(lookup) => out.extend(&lookup.targets),
             Self::CheckedInverse { backward, .. } => backward.targets(out),
         }
     }
@@ -192,9 +195,10 @@ impl Mapping {
             Self::Table(table) => table.apply(input, output, work)?,
             Self::InverseCurve(curve) => put(output, curve.target, curve.at(input.get(curve.source).copied().flatten()?, work)?)?,
             Self::InverseFormula(scalar) => put(output, scalar.target, scalar.at(input, work)?)?,
-            Self::CheckedInverse { forward, backward, format } => {
+            Self::InverseDiscrete(lookup) => lookup.apply(input, output, work)?,
+            Self::CheckedInverse { forward, backward, format, recorded } => {
                 backward.apply(input, output, work)?;
-                inverse::check(forward, format, input, output, work)?;
+                inverse::check(forward, format, recorded, input, output, work)?;
             }
         }
         Some(())
@@ -228,8 +232,13 @@ fn bindings(el: &El, attr: &str, format: &Format, size: usize) -> Option<Vec<usi
     out.into_iter().collect()
 }
 
+struct Rows {
+    values: Vec<Vec<f64>>,
+    boolean: bool,
+}
+
 /// Parse a bounded rectangular matrix from InkML number tokens (including boolean table values).
-fn rows(el: &El, work: &mut usize) -> Option<Vec<Vec<f64>>> {
+fn rows(el: &El, work: &mut usize) -> Option<Rows> {
     let text = el.text();
     spend(work, text.len())?;
     let mut tokens = Tokens(text.trim());
@@ -273,7 +282,7 @@ fn rows(el: &El, work: &mut usize) -> Option<Vec<Vec<f64>>> {
             tokens.space();
         }
     }
-    (!rows.is_empty()).then_some(rows)
+    (!rows.is_empty()).then_some(Rows { values: rows, boolean: boolean_values? })
 }
 
 /// A scalar expression from the restricted Content MathML subset in InkML §6.1.1.
@@ -491,13 +500,15 @@ pub(super) struct Table {
     interpolation: String,
     /// Natural cubic coefficients for a univariate cubic table, otherwise absent.
     spline: Option<spline::Spline>,
+    boolean: bool,
 }
 
 impl Table {
     /// Validate bindings and completeness before accepting a table for evaluation.
     fn read(el: &El, bound: &El, source: &Format, target: &Format, work: &mut usize) -> Option<Self> {
         let table = el.child("ink:table")?;
-        let rows = rows(table, work)?;
+        let data = rows(table, work)?;
+        let rows = data.values;
         let width = rows.first()?.len();
         let interpolation = table.attr("interpolation").unwrap_or("linear");
         if !matches!(interpolation, "floor" | "middle" | "ceiling" | "linear" | "cubic") {
@@ -562,7 +573,7 @@ impl Table {
         } else {
             None
         };
-        Some(Self { sources, targets, relative: additions, rows, interpolation: interpolation.into(), spline })
+        Some(Self { sources, targets, relative: additions, rows, interpolation: interpolation.into(), spline, boolean: data.boolean })
     }
 
     /// Evaluate a grid/spline and apply optional relative output to the original named channel.
@@ -595,6 +606,8 @@ impl Table {
             let low = if exact { knots.get(hi).copied() } else { hi.checked_sub(1).and_then(|i| knots.get(i)).copied() };
             let high = knots.get(hi).copied();
             let (a, b, t) = match self.interpolation.as_str() {
+                _ if self.boolean && exact => (value, value, 0.0),
+                _ if self.boolean => return None,
                 "floor" => {
                     let a = low?;
                     (a, a, 0.0)

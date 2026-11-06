@@ -1,7 +1,9 @@
 use super::{El, Format, HashMap, MAX_CHANNELS, MAX_DEPTH, Mapping, Sample, Table, bounded, spend};
 
 pub(super) mod curve;
+pub(super) mod discrete;
 pub(super) mod formula;
+mod product;
 
 impl Mapping {
     pub(in crate::read::ink) fn transform(el: &El, source: &Format, target: &Format, ids: &HashMap<&str, &El>, work: &mut usize) -> Option<Self> {
@@ -16,56 +18,47 @@ impl Mapping {
             return Self::read(forward, source, target, ids, work, 0);
         }
         let forward = Self::read(reverse?, target, source, ids, work, 0)?;
-        forward.exact_integer_outputs(target, source, work)?;
-        let backward = forward.inverse(target, work)?;
-        spend(work, target.channels.len())?;
-        Some(Self::CheckedInverse { forward: Box::new(forward), backward: Box::new(backward), format: target.clone() })
+        let backward = forward.inverse(target, source, work)?;
+        spend(work, target.channels.len().saturating_add(source.channels.len()))?;
+        Some(Self::CheckedInverse { forward: Box::new(forward), backward: Box::new(backward), format: target.clone(), recorded: source.clone() })
     }
 
-    fn inverse(&self, format: &Format, work: &mut usize) -> Option<Self> {
+    fn inverse(&self, format: &Format, recorded: &Format, work: &mut usize) -> Option<Self> {
         spend(work, 1)?;
-        let inverse = match self {
-            Self::Identity(pairs) => Self::Identity(pairs.iter().map(|&(a, b)| (b, a)).collect()),
-            Self::Affine { sources, targets, rows } => {
-                let inverse = invert(rows, work)?;
-                Self::Affine { sources: targets.clone(), targets: sources.clone(), rows: inverse }
-            }
-            Self::Product(maps) => {
-                let mut rows = Vec::new();
-                if affine_rows(self, &mut rows, work).is_some() {
-                    let mut sources: Vec<_> = rows.iter().flat_map(|r| r.1.iter().map(|p| p.0)).collect();
-                    sources.sort_unstable();
-                    sources.dedup();
-                    rows.sort_by_key(|r| r.0);
-                    let targets: Vec<_> = rows.iter().map(|r| r.0).collect();
-                    if sources.len() > targets.len() || sources.len() > MAX_CHANNELS {
-                        return None;
-                    }
-                    let mut matrix = Vec::new();
-                    for (_, terms, constant) in rows {
-                        let mut row = vec![0.0; sources.len() + 1];
-                        for (source, coefficient) in terms {
-                            *row.get_mut(sources.binary_search(&source).ok()?)? += coefficient;
-                        }
-                        *row.last_mut()? = constant;
-                        matrix.push(row);
-                    }
-                    Self::Affine { sources: targets, targets: sources, rows: invert(&matrix, work)? }
-                } else {
-                    Self::Product(maps.iter().map(|m| m.inverse(format, work)).collect::<Option<Vec<_>>>()?)
-                }
-            }
-            Self::Table(table) => table.inverse(work)?,
-            Self::Formula { target, expression } => Self::InverseFormula(formula::inverse(expression, *target, format, work)?),
-            Self::InverseCurve(_) | Self::InverseFormula(_) | Self::CheckedInverse { .. } => return None,
+        let inverse = if matches!(self, Self::Product(_)) {
+            let groups = product::groups(self, work)?;
+            Self::Product(groups.iter().map(|group| Self::inverse_component(group, format, recorded, work)).collect::<Option<_>>()?)
+        } else {
+            Self::inverse_component(&[self], format, recorded, work)?
         };
         let mut targets = Vec::new();
         inverse.targets(&mut targets);
         targets.sort_unstable();
-        if targets.windows(2).any(|w| w.first() == w.get(1)) {
+        if targets.is_empty() || targets.windows(2).any(|w| w.first() == w.get(1)) {
             return None;
         }
         Some(inverse)
+    }
+
+    fn inverse_component(maps: &[&Self], format: &Format, recorded: &Format, work: &mut usize) -> Option<Self> {
+        if let Some(lookup) = discrete::Lookup::new(maps, format, recorded, work) {
+            return Some(Self::InverseDiscrete(lookup));
+        }
+        for map in maps {
+            map.exact_integer_outputs(format, recorded, work)?;
+        }
+        if let [map] = maps {
+            return Some(match map {
+                Self::Identity(pairs) => Self::Identity(pairs.iter().map(|&(a, b)| (b, a)).collect()),
+                Self::Affine { sources, targets, rows } => {
+                    Self::Affine { sources: targets.clone(), targets: sources.clone(), rows: invert(rows, work)? }
+                }
+                Self::Table(table) => table.inverse(work)?,
+                Self::Formula { target, expression } => Self::InverseFormula(formula::inverse(expression, *target, format, work)?),
+                _ => return None,
+            });
+        }
+        affine_component(maps, work)
     }
 
     fn exact_integer_outputs(&self, source: &Format, target: &Format, work: &mut usize) -> Option<()> {
@@ -99,9 +92,12 @@ impl Mapping {
     }
 }
 
-pub(super) fn check(forward: &Mapping, format: &Format, input: &Sample, output: &mut Sample, work: &mut usize) -> Option<()> {
-    spend(work, input.len().saturating_add(output.len()))?;
-    for (channel, value) in format.channels.iter().zip(output.iter_mut()) {
+pub(super) fn normalize(format: &Format, values: &mut Sample, work: &mut usize) -> Option<()> {
+    spend(work, format.channels.len())?;
+    if values.len() != format.channels.len() {
+        return None;
+    }
+    for (channel, value) in format.channels.iter().zip(values) {
         if let Some(v) = value {
             if channel.integer {
                 *v = v.round();
@@ -111,15 +107,25 @@ pub(super) fn check(forward: &Mapping, format: &Format, input: &Sample, output: 
             }
         }
     }
+    Some(())
+}
+
+pub(super) fn same(expected: f64, actual: f64, exact: bool) -> bool {
+    let tolerance = if exact { 0.0 } else { 128.0 * f64::EPSILON * expected.abs().max(actual.abs()).max(1.0) };
+    bounded(expected) && bounded(actual) && (expected - actual).abs() <= tolerance
+}
+
+pub(super) fn check(forward: &Mapping, format: &Format, recorded: &Format, input: &Sample, output: &mut Sample, work: &mut usize) -> Option<()> {
+    spend(work, input.len().saturating_add(output.len()))?;
+    normalize(format, output, work)?;
     let mut recovered = vec![None; input.len()];
     forward.apply(output, &mut recovered, work)?;
-    for (expected, actual) in input.iter().zip(recovered) {
-        if let (Some(expected), Some(actual)) = (expected, actual) {
-            let expected = *expected;
-            let tolerance = 128.0 * f64::EPSILON * expected.abs().max(actual.abs()).max(1.0);
-            if (expected - actual).abs() > tolerance {
-                return None;
-            }
+    normalize(recorded, &mut recovered, work)?;
+    for ((expected, actual), channel) in input.iter().zip(recovered).zip(&recorded.channels) {
+        if let (Some(expected), Some(actual)) = (expected, actual)
+            && !same(*expected, actual, channel.integer || channel.boolean)
+        {
+            return None;
         }
     }
     Some(())
@@ -164,6 +170,31 @@ fn affine_rows(mapping: &Mapping, rows: &mut Vec<AffineRow>, work: &mut usize) -
         _ => return None,
     }
     (rows.len() <= MAX_CHANNELS).then_some(())
+}
+
+fn affine_component(maps: &[&Mapping], work: &mut usize) -> Option<Mapping> {
+    let mut rows = Vec::new();
+    for map in maps {
+        affine_rows(map, &mut rows, work)?;
+    }
+    let mut sources: Vec<_> = rows.iter().flat_map(|r| r.1.iter().map(|p| p.0)).collect();
+    sources.sort_unstable();
+    sources.dedup();
+    rows.sort_by_key(|r| r.0);
+    let targets: Vec<_> = rows.iter().map(|r| r.0).collect();
+    if sources.len() > targets.len() || sources.len() > MAX_CHANNELS {
+        return None;
+    }
+    let mut matrix = Vec::new();
+    for (_, terms, constant) in rows {
+        let mut row = vec![0.0; sources.len() + 1];
+        for (source, coefficient) in terms {
+            *row.get_mut(sources.binary_search(&source).ok()?)? += coefficient;
+        }
+        *row.last_mut()? = constant;
+        matrix.push(row);
+    }
+    Some(Mapping::Affine { sources: targets, targets: sources, rows: invert(&matrix, work)? })
 }
 
 fn invert(rows: &[Vec<f64>], work: &mut usize) -> Option<Vec<Vec<f64>>> {
@@ -295,6 +326,7 @@ impl Table {
             rows,
             interpolation: "linear".into(),
             spline: None,
+            boolean: false,
         }))
     }
 }
