@@ -922,7 +922,7 @@ fn with_kept_defs(
 /// own `style:font-face` elements) as `faces` has it.
 fn with_file_faces(xml: &mut String, faces: &[&str]) {
     for face in faces {
-        let Some(name) = face.split("style:name=\"").nth(1).and_then(|r| r.split('"').next()) else { continue };
+        let Some(name) = face.split('>').next().and_then(|head| super::kept::raw_attr(head, "style:name")) else { continue };
         let ours = format!("<style:font-face style:name=\"{name}\"");
         let Some(at) = xml.find(&ours) else { continue };
         // WordCraft's own declarations are empty elements.

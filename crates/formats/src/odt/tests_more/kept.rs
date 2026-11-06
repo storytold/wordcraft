@@ -190,3 +190,43 @@ fn the_files_font_declarations_are_kept() {
     }
     check(&export(&d).unwrap(), "an edit");
 }
+
+/// A font declaration in single quotes is the file's too: it replaces WordCraft's, and isn't
+/// declared a second time.
+#[test]
+fn a_font_declaration_in_single_quotes_is_kept() {
+    let ns = format!(r#"{NS_T} xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0""#);
+    let face = r#"<style:font-face style:name='Odd Roman' svg:font-family='Odd Roman' style:font-family-generic='roman'/>"#;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:font-face-decls>{face}</office:font-face-decls><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="Odd Roman" fo:font-size="12pt"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}><office:font-face-decls>{face}</office:font-face-decls><office:automatic-styles><style:style style:name="P1" style:family="paragraph"><style:text-properties style:font-name="Odd Roman"/></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">x</text:p></office:text></office:body></office:document-content>"#
+    );
+    let saved = export(&import(&package(&content, Some(&styles))).unwrap()).unwrap();
+    for part in [styles_of(&saved), content_of(&saved)] {
+        assert!(part.contains(face), "{part}");
+        assert_eq!(part.matches("<style:font-face").count(), part.matches("<style:font-face style:name=").count());
+        assert_eq!(part.matches(r#"style:name="Odd Roman""#).count(), 0, "declared once: {part}");
+        assert_eq!(part.matches("style:name='Odd Roman'").count(), 1, "declared once: {part}");
+    }
+}
+
+/// A name space only the declarations' container states goes with the declaration: without it the
+/// saved part isn't well-formed in its name spaces.
+#[test]
+fn a_name_space_on_the_font_declarations_goes_with_them() {
+    let ns = format!(r#"{NS_T} xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0""#);
+    let decls = r#"<office:font-face-decls xmlns:x="urn:example:x"><style:font-face style:name="Odd Roman" svg:font-family="Odd Roman" x:odd="1"/></office:font-face-decls>"#;
+    let styles = format!(
+        r#"<office:document-styles {ns}>{decls}<office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="Odd Roman" fo:font-size="12pt"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}>{decls}<office:automatic-styles><style:style style:name="P1" style:family="paragraph"><style:text-properties style:font-name="Odd Roman"/></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">x</text:p></office:text></office:body></office:document-content>"#
+    );
+    let saved = export(&import(&package(&content, Some(&styles))).unwrap()).unwrap();
+    for part in [styles_of(&saved), content_of(&saved)] {
+        assert!(part.contains(r#"x:odd="1""#), "{part}");
+        assert!(part.contains(r#"xmlns:x="urn:example:x""#), "{part}");
+    }
+}

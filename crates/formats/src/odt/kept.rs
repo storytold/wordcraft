@@ -44,6 +44,17 @@ pub(super) fn defs(xml: &[u8], content: bool) -> Vec<(String, Arc<str>)> {
                 }
                 return;
             }
+            // Those a part's container declares too: what is kept of it leaves the container behind.
+            if depth == 2 {
+                for (k, v) in &a {
+                    if let Some(p) = k.strip_prefix("xmlns:").filter(|p| !p.is_empty() && p.len() <= 64)
+                        && out.len() < MAX_DEFS
+                        && !out.iter().any(|(key, _)| key.strip_prefix("ns:") == Some(p))
+                    {
+                        out.push((format!("ns:{p}"), Arc::from(v.as_str())));
+                    }
+                }
+            }
             // A reference mark (§6.6.2), which `text:reference-ref` names: WordCraft reads it as a
             // bookmark, and writes it as both.
             if content
@@ -183,14 +194,28 @@ fn space(q: &str, family: &str) -> String {
 pub(super) fn defined(xml: &str, def: &str) -> bool {
     let head = def.split('>').next().unwrap_or("");
     let el = head.trim_start_matches('<').split([' ', '/', '\t', '\n', '\r']).next().unwrap_or("");
-    let name = ["style:name=\"", "draw:name=\""].into_iter().find_map(|a| {
-        let at = head.find(a)? + a.len();
-        let len = head.get(at..)?.find('"')?;
-        head.get(at - a.len()..at + len + 1)
-    });
-    let (Some(name), false) = (name, el.is_empty()) else { return false };
+    let name = ["style:name", "draw:name"].into_iter().find_map(|a| Some((a, raw_attr(head, a)?)));
+    let (Some((attr, name)), false) = (name, el.is_empty()) else { return false };
     let open = format!("<{el} ");
-    xml.match_indices(&open).any(|(i, _)| xml.get(i..).and_then(|t| t.split('>').next()).is_some_and(|tag| tag.contains(name)))
+    xml.match_indices(&open).any(|(i, _)| xml.get(i..).and_then(|t| t.split('>').next()).is_some_and(|tag| raw_attr(tag, attr) == Some(name)))
+}
+
+/// Attribute `name`'s value as `tag` (a start tag) writes it, spaced and quoted however XML allows.
+pub(super) fn raw_attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let past_space = |at: usize| Some(at + tag.get(at..)?.find(|c: char| !c.is_ascii_whitespace())?);
+    let mut at = tag.find(|c: char| c.is_ascii_whitespace())?;
+    loop {
+        let name_at = past_space(at)?;
+        let eq = name_at + tag.get(name_at..)?.find('=')?;
+        let value_at = past_space(eq + 1)?;
+        let rest = tag.get(value_at..)?;
+        let quote = rest.chars().next().filter(|c| matches!(c, '"' | '\''))?;
+        let len = rest.get(1..)?.find(quote)?;
+        if tag.get(name_at..eq)?.trim_end() == name {
+            return rest.get(1..1 + len);
+        }
+        at = value_at + 1 + len + 1;
+    }
 }
 
 /// The children of `container` (a child of the root) in `xml` (a part WordCraft wrote): each
