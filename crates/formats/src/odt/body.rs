@@ -1414,6 +1414,13 @@ impl Body<'_> {
     fn frame_part(&mut self, q: &str, a: &Attrs) {
         match local(q) {
             "image" => {
+                // What a picture holds (§10.4.4 lets it hold text; LibreOffice writes an empty
+                // paragraph in one it draws as a shape, as it does every picture in a group) isn't
+                // the text's: read as a paragraph, it ended the one around the frame. It isn't
+                // shown, and stays in the paragraph's markup as read.
+                if q == "draw:image" {
+                    self.skip = 1;
+                }
                 // A chart's replacement picture (what readers that can't draw it show): kept with
                 // the chart as read, written back with it while it is unchanged.
                 if let Some(href) = get(a, "xlink:href")
