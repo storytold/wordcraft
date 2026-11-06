@@ -154,6 +154,28 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
     true
 }
 
+/// A finger tap on a table target: what a mouse press without a drag does (#2155). A finger's
+/// gesture claims the press, so `pointer` never saw it; the canvas finishes the tap on release.
+/// A selection area (or the move handle, tapped rather than dragged) selects its row, column or
+/// cell, and an insert button inserts the row or column, as the press does.
+pub fn tap(app: &mut WordApp, layout: &DocLayout, rects: &[Rect], scale: f32, at: Pos2) -> bool {
+    if !available(app) {
+        return false;
+    }
+    let Some((page, x, y, reach, target)) = target_at(app, layout, rects, scale, at) else {
+        return false;
+    };
+    let params = select_params(json!({"page": page, "x": x, "y": y, "reach": reach, "extend": false}), None);
+    let id = match target.spot {
+        Spot::InsertRow(_) | Spot::InsertColumn(_) => "table.insertAt",
+        _ => "table.selectAt",
+    };
+    if let Err(e) = app.run_keep_view(id, params) {
+        app.status(e);
+    }
+    true
+}
+
 /// Whether the selection's anchor (or its selected cells) is in the table at `tp`.
 fn in_table(app: &WordApp, tp: &wordcraft_doc::Path) -> bool {
     let body = |story| story == wordcraft_doc::StoryRef::Body;

@@ -66,6 +66,31 @@ fn dragging_down_the_row_areas_selects_rows() {
     assert_eq!(h.state().session.cell_range().map(|r| (r.rows, r.cols)), Some(((0, 1), (0, 2))));
 }
 
+fn touch(id: u64, phase: egui::TouchPhase, pos: Pos2) -> egui::Event {
+    egui::Event::Touch { device_id: egui::TouchDeviceId(0), id: egui::TouchId(id), phase, pos, force: None }
+}
+
+/// A finger tap on a row's selection area selects the row: the finger's gesture claims the
+/// press, so the canvas finishes the tap on release, as a mouse press would (#2155).
+#[test]
+fn a_finger_tap_beside_a_row_selects_it() {
+    let mut h = table_window();
+    let a = cell(&mut h, 0, 0);
+    let at = screen(&mut h, a.x - 10.0, a.y + a.h / 2.0);
+    h.event(egui::Event::PointerMoved(at));
+    h.step();
+    // Native order: `Touch Start` and the synthesized press arrive in the same frame…
+    h.event(touch(0, egui::TouchPhase::Start, at));
+    button(&h, at, true);
+    h.step();
+    assert!(h.state().session.cell_range().is_none(), "the gesture's press has not selected a row");
+    // …and their end and release do too.
+    button(&h, at, false);
+    h.event(touch(0, egui::TouchPhase::End, at));
+    steps(&mut h, 2);
+    assert_eq!(h.state().session.cell_range().map(|r| (r.rows, r.cols)), Some(((0, 0), (0, 2))), "a finger tap selects the row");
+}
+
 /// The selection bar beside a table (the page margin, well past the row areas) selects the
 /// row; a drag down it selects the rows it passes; Shift+click extends by rows.
 #[test]
