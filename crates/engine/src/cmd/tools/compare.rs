@@ -16,6 +16,8 @@ pub(super) struct CompareOptions {
     pub white_space: bool,
     /// Formatting differences become tracked formatting changes.
     pub formatting: bool,
+    /// Compare table structure/content.
+    pub tables: bool,
     /// Changed paragraphs are compared character by character (else word by word).
     pub characters: bool,
 }
@@ -33,13 +35,28 @@ impl CompareOptions {
             case: p::bool(v, "caseChanges").unwrap_or(true),
             white_space: p::bool(v, "whiteSpace").unwrap_or(true),
             formatting: p::bool(v, "formatting").unwrap_or(true),
+            tables: p::bool(v, "tables").unwrap_or(true),
             characters: matches!(level, "character" | "char"),
         }
     }
 }
 
+/// Options accepted by Compare/Combine that are not fully honoured by the current engine.
+/// Reported when the caller requests comparison behavior the body diff does not implement with
+/// fidelity (move detection, non-body stories, field semantics, or text-box story diffing).
+/// `tables` is compared in the body; `tables:false` is reported because suppression is not
+/// implemented with Word fidelity.
 pub(super) fn not_honoured_options(v: &Value) -> Vec<&'static str> {
-    ["moves", "comments", "headersFooters", "footnotes", "textBoxes", "fields"].into_iter().filter(|k| v.get(*k).is_some()).collect()
+    let mut out = Vec::new();
+    for key in ["moves", "comments", "headersFooters", "footnotes", "textBoxes", "fields"] {
+        if matches!(v.get(key).and_then(Value::as_bool), Some(true) | None if v.get(key).is_some()) {
+            out.push(key);
+        }
+    }
+    if v.get("tables").and_then(Value::as_bool) == Some(false) {
+        out.push("tables");
+    }
+    out
 }
 
 pub(super) struct CompareRun {
@@ -50,6 +67,7 @@ pub(super) struct CompareRun {
     pub author: String,
     pub not_honoured: Vec<&'static str>,
     pub clear_versions_on_untitled: bool,
+    pub combine: bool,
 }
 
 /// Changed paragraphs longer than this (in characters) are compared word by word even at
@@ -85,7 +103,57 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let author = p::str(v, "author").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).unwrap_or_else(|| s.author.clone());
     compare_loaded(
         s,
-        CompareRun { revised, show_in: show_in.to_string(), original_loaded, opts, author, not_honoured, clear_versions_on_untitled: true },
+        CompareRun {
+            revised,
+            show_in: show_in.to_string(),
+            original_loaded,
+            opts,
+            author,
+            not_honoured,
+            clear_versions_on_untitled: true,
+            combine: false,
+        },
+    )
+}
+
+/// Combine revisions from an original and revised document. Uses the compare diff engine with
+/// combine mode metadata; full multi-reviewer revision merging fidelity is limited (see
+/// `notHonoured`/result `mode`).
+pub(super) fn combine(s: &mut Session, v: &Value) -> CmdResult {
+    let revised = if let Some(t) = p::str(v, "text") {
+        Document::from_text(t)
+    } else if let Some(path) = p::str(v, "path") {
+        crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?
+    } else {
+        return Err(CmdError::Params("`path` or `text` of the revised document is required".into()));
+    };
+    let show_in = p::str(v, "showIn").unwrap_or("original");
+    if !matches!(show_in, "original" | "revised" | "new") {
+        return Err(CmdError::Params("`showIn` is \"original\", \"revised\" or \"new\"".into()));
+    }
+    let original_loaded = p::str(v, "original").is_some();
+    if let Some(path) = p::str(v, "original") {
+        let doc = crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?;
+        s.doc = doc;
+        s.doc.ensure_nonempty();
+        s.note_body_replaced();
+        s.math = None;
+    }
+    let opts = CompareOptions::from_params(v);
+    let not_honoured = not_honoured_options(v);
+    let author = p::str(v, "author").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).unwrap_or_else(|| s.author.clone());
+    compare_loaded(
+        s,
+        CompareRun {
+            revised,
+            show_in: show_in.to_string(),
+            original_loaded,
+            opts,
+            author,
+            not_honoured,
+            clear_versions_on_untitled: true,
+            combine: true,
+        },
     )
 }
 
@@ -93,19 +161,17 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
 /// When `clear_versions_on_untitled` is true, an untitled compare result clears saved versions,
 /// preserving the historical `review.compare`/`review.combine` behavior.
 pub(super) fn compare_loaded(s: &mut Session, run: CompareRun) -> CmdResult {
-    let CompareRun { revised, show_in, original_loaded, opts, author, not_honoured, clear_versions_on_untitled } = run;
+    let CompareRun { revised, show_in, original_loaded, opts, author, not_honoured, clear_versions_on_untitled, combine } = run;
     if !matches!(show_in.as_str(), "original" | "revised" | "new") {
         return Err(CmdError::Params("`showIn` is \"original\", \"revised\" or \"new\"".into()));
     }
     let date = crate::cmd::now_iso();
     let old: Vec<Arc<Block>> = s.doc.body.clone();
-    let new: Vec<Arc<Block>> = if revised.parts.values().any(|p| p.kind == wordcraft_doc::PartKind::TextBox) {
-        // The revised document's text boxes get stories of their own in the result, so its
-        // boxes never show a story of the original's (or none at all).
-        s.doc.adopt_fragment(&revised.body_fragment()).into_iter().map(Arc::new).collect()
-    } else {
-        revised.body.clone()
-    };
+    // Adopt revised content so revision ids, styles, numbering, media, notes and text boxes are
+    // remapped into this document. Combine keeps revised styles/identity (`keep_styles`); compare
+    // uses the engine's normal adoption.
+    let mut perms = 0u32;
+    let new: Vec<Arc<Block>> = s.doc.adopt_blocks(revised, combine, &mut perms).into_iter().map(Arc::new).collect();
     s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Insert, author: author.clone(), date: date.clone(), move_name: None });
     let ins = (s.doc.revisions.len() - 1) as u32;
     s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Delete, author: author.clone(), date: date.clone(), move_name: None });
@@ -198,7 +264,7 @@ pub(super) fn compare_loaded(s: &mut Session, run: CompareRun) -> CmdResult {
         }
     }
     s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
-    Ok(json!({"changes": changes, "author": author, "notHonoured": not_honoured}))
+    Ok(json!({"changes": changes, "author": author, "notHonoured": not_honoured, "mode": if combine { "combine" } else { "compare" }}))
 }
 
 /// Compare saved document versions. `version` is the original snapshot index; `other` is another
@@ -253,6 +319,7 @@ pub(super) fn compare_versions(s: &mut Session, v: &Value) -> CmdResult {
             author,
             not_honoured,
             clear_versions_on_untitled: !preserve_versions,
+            combine: false,
         },
     )?;
     if let Value::Object(map) = &mut result {
