@@ -4664,6 +4664,12 @@ fn hostile_file_params_never_panic() {
         let entries = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path());
         entries.map(|p| (p.file_name().unwrap().to_string_lossy().into_owned(), std::fs::read(&p).ok())).collect()
     }
+    /// The names whose bytes differ, so a failure lists them instead of printing every file.
+    fn changed(before: &std::collections::BTreeMap<String, Option<Vec<u8>>>, dir: &std::path::Path) -> Vec<String> {
+        let after = contents(dir);
+        let names: std::collections::BTreeSet<_> = before.keys().chain(after.keys()).collect();
+        names.into_iter().filter(|n| before.get(*n) != after.get(*n)).cloned().collect()
+    }
     let reg = cmd::registry();
     let base = scratch_dir("hostile-files");
     let (input, output, outside) = (base.join("in"), base.join("out"), base.join("outside"));
@@ -4738,10 +4744,11 @@ fn hostile_file_params_never_panic() {
         }
     }
 
-    assert_eq!(contents(&input), before, "the read root is only read");
-    assert_eq!(contents(&outside), Default::default(), "nothing outside the write root");
+    let nothing = Vec::<String>::new();
+    assert_eq!(changed(&before, &input), nothing, "the read root is only read");
+    assert_eq!(changed(&Default::default(), &outside), nothing, "nothing outside the write root");
     // Every name counts: an empty path comes out as `.pdf` or `.dotx` here.
-    assert_eq!(contents(working_dir), working_dir_before, "nothing in the working directory");
+    assert_eq!(changed(&working_dir_before, working_dir), nothing, "nothing in the working directory");
 
     // The junk above met the files, not a closed door: usable files work through the same roots...
     let mut s = s();
