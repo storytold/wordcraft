@@ -417,6 +417,59 @@ fn a_typed_list_start_shows_in_the_list_levels() {
     assert!(levels[1..].iter().all(|l| l.start == 1));
 }
 
+/// Redefining a typed list in place edits the shared definition: the list's own typed start is not
+/// copied into it, and the list still starts where it was typed.
+#[test]
+fn redefining_a_typed_list_keeps_its_start_out_of_the_shared_definition() {
+    let mut s = typed("5. a");
+    let num = crate::cmd::lists::caret_list(&s).expect("in a list");
+    run(&mut s, "list.define", json!({"num": num, "levels": [{}]}));
+    assert_eq!(s.doc.numbering.level(num, 0).expect("level").start, 1);
+    assert_eq!(crate::cmd::lists::levels_of(&s, num).expect("levels")[0].start, 5);
+}
+
+/// A start given when a typed list is redefined in place replaces the list's own typed start.
+#[test]
+fn redefining_a_typed_list_with_a_start_replaces_its_typed_start() {
+    let mut s = typed("5. a");
+    let num = crate::cmd::lists::caret_list(&s).expect("in a list");
+    run(&mut s, "list.define", json!({"num": num, "levels": [{"start": 7}]}));
+    assert_eq!(s.doc.numbering.level(num, 0).expect("level").start, 7);
+    assert_eq!(crate::cmd::lists::levels_of(&s, num).expect("levels")[0].start, 7);
+}
+
+/// Sending a typed list's levels back unchanged leaves the shared definition alone, and a typed
+/// number above the largest start stays text.
+#[test]
+fn a_round_trip_of_a_typed_list_keeps_its_start_out_of_the_shared_definition() {
+    let mut s = typed("5. a");
+    let num = crate::cmd::lists::caret_list(&s).expect("in a list");
+    let got = s.run("list.get", &json!({"num": num})).unwrap();
+    run(&mut s, "list.define", json!({"num": num, "levels": got["levels"]}));
+    assert_eq!(s.doc.numbering.level(num, 0).expect("level").start, 1);
+    assert_eq!(crate::cmd::lists::levels_of(&s, num).expect("levels")[0].start, 5);
+    let s = typed("32768. a");
+    assert_eq!(paras(&s), vec![("32768. a".to_string(), None, false)]);
+}
+
+/// Two lists share one definition: a level sent back as `list.get` showed it leaves the shared
+/// start alone, while a direct start equal to the list's own typed start changes it for both.
+#[test]
+fn a_direct_start_equal_to_the_typed_start_changes_the_shared_definition() {
+    let mut s = typed("5. a");
+    let a = crate::cmd::lists::caret_list(&s).expect("in a list");
+    let abstract_id = s.doc.numbering.num(a).expect("list").abstract_id;
+    let b = s.doc.numbering.nums.iter().map(|n| n.id).max().unwrap() + 1;
+    std::sync::Arc::make_mut(&mut s.doc.numbering).nums.push(wordcraft_doc::numbering::Num { id: b, abstract_id, ..Default::default() });
+    let got = s.run("list.get", &json!({"num": a})).unwrap();
+    run(&mut s, "list.define", json!({"num": a, "levels": got["levels"]}));
+    assert_eq!(crate::cmd::lists::levels_of(&s, b).expect("levels")[0].start, 1);
+    assert_eq!(crate::cmd::lists::levels_of(&s, a).expect("levels")[0].start, 5);
+    run(&mut s, "list.define", json!({"num": a, "levels": [{"start": 5}]}));
+    assert_eq!(crate::cmd::lists::levels_of(&s, b).expect("levels")[0].start, 5);
+    assert_eq!(crate::cmd::lists::levels_of(&s, a).expect("levels")[0].start, 5);
+}
+
 /// The label is removed by the AutoFormat: with Track Changes on, what this author typed goes
 /// outright, but a label that was already in the paragraph is marked deleted, so Reject All
 /// brings it back.
