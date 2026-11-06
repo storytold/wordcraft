@@ -734,7 +734,7 @@ pub fn cursor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at:
         } else if d.copy && d.drag.moved {
             egui::CursorIcon::Copy
         } else {
-            d.drag.grab.cursor()
+            d.drag.grab.cursor(d.drag.deg)
         });
     }
     if connector_end_at(app, layout, pages, scale, at).is_some() {
@@ -746,7 +746,7 @@ pub fn cursor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at:
 /// The cursor over part `g` of object `o`: none of a drag for an object that won't move there (a
 /// fixed graphic, or the body of a chart or SmartArt, which only resizes).
 fn hover_cursor(app: &WordApp, o: &ObjectHit, g: Grab) -> egui::CursorIcon {
-    if fixed(app, o) || (g == Grab::Move && size_only(app, o)) { egui::CursorIcon::Default } else { g.cursor() }
+    if fixed(app, o) || (g == Grab::Move && size_only(app, o)) { egui::CursorIcon::Default } else { g.cursor(o.spin.deg) }
 }
 
 /// Keys for a selected object: arrows nudge a floating one; typing or Enter goes into a text box.
