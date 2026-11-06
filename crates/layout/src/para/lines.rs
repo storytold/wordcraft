@@ -12,6 +12,7 @@ const MIN_LINE_WIDTH: f32 = 1.0;
 /// What a paragraph's lines are broken with: the paragraph's measures and the state the lines
 /// are broken in, from one to the next.
 struct Breaker<'e> {
+    has_thai: bool,
     level: Option<&'e Level>,
     rp: wordcraft_doc::resolve::ResolvedPara,
     mark_style: u32,
@@ -81,6 +82,7 @@ struct Scan {
     leaders: Vec<(usize, TabLeader)>,
     /// Cluster index after which we may break.
     last_break: Option<usize>,
+    last_emergency_break: Option<usize>,
     /// The last non-hyphen break and the x after it.
     last_plain: Option<(usize, f32)>,
     /// Where the space before the current word starts.
@@ -147,11 +149,11 @@ fn mirrored_exclusions(exclusions: &[Exclusion], width: f32) -> Vec<Exclusion> {
 
 /// Break a paragraph into lines, measure each line, apply the paragraph's alignment and place
 /// the list label. Fills `pl.lines`, `pl.height` and the label's position.
-pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Option<&Level>) {
+pub(super) fn break_lines<'e>(pl: &mut ParaLayout, env: &'e ParaEnv<'e>, mark_style: u32, level: Option<&'e Level>, has_thai: bool) {
     let width = env.width.max(MIN_LINE_WIDTH);
     let mirrored = pl.rp.bidi.then(|| mirrored_exclusions(env.exclusions, width));
     let exclusions = mirrored.as_deref().unwrap_or(env.exclusions);
-    let mut bk = Breaker::new(pl, (env, exclusions), mark_style, level);
+    let mut bk = Breaker::new(pl, (env, exclusions), mark_style, level, has_thai);
     loop {
         let mut sc = bk.begin_line(pl);
         sc.scan(&mut bk, pl);
@@ -168,7 +170,13 @@ pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, l
 }
 
 impl<'e> Breaker<'e> {
-    fn new(pl: &ParaLayout, (env, exclusions): (&'e ParaEnv<'e>, &'e [Exclusion]), mark_style: u32, level: Option<&'e Level>) -> Self {
+    fn new(
+        pl: &ParaLayout,
+        (env, exclusions): (&'e ParaEnv<'e>, &'e [Exclusion]),
+        mark_style: u32,
+        level: Option<&'e Level>,
+        has_thai: bool,
+    ) -> Self {
         let rp = pl.rp.clone();
         let width = env.width.max(MIN_LINE_WIDTH);
         let settings = &env.doc.settings;
@@ -179,6 +187,7 @@ impl<'e> Breaker<'e> {
             .unwrap_or(14.0)
             .max(1.0);
         Breaker {
+            has_thai,
             level,
             mark_style,
             exclusions,
@@ -273,6 +282,7 @@ impl<'e> Breaker<'e> {
             xs: Vec::new(),
             leaders: Vec::new(),
             last_break: None,
+            last_emergency_break: None,
             last_plain: None,
             word_from: left,
             hyph_ok: self.hyph_limit == 0 || self.lines.iter().rev().take_while(|l| l.hyphen.is_some()).count() < self.hyph_limit,
@@ -891,12 +901,14 @@ impl Scan {
             || self.x + advance - pl.auto_space_after(j) <= self.right_edge + shrink + 0.01
             || c.kind == ClKind::Space
             || c.kind == ClKind::Marker;
-        if !fits && pl.is_edit_boundary(c.start) && (c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room)) {
-            self.wrap(bk, pl);
+        if !fits && pl.is_edit_boundary(c.start) && (c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room)) && self.wrap(bk, pl) {
             return true;
         }
         self.xs.push(self.x);
         self.x += c.adv;
+        if c.emergency_break_after && !pl.clusters.get(j + 1).is_some_and(|next| next.kind == ClKind::Text && next.g1 <= next.g0) {
+            self.last_emergency_break = Some(j);
+        }
         if c.kind == ClKind::Space {
             self.space_w += c.adv;
         }
@@ -965,7 +977,7 @@ impl Scan {
     }
 
     /// The cluster at `j` doesn't fit: wrap, backing up to the last break opportunity on the line.
-    fn wrap(&mut self, bk: &mut Breaker, pl: &ParaLayout) {
+    fn wrap(&mut self, bk: &mut Breaker, pl: &ParaLayout) -> bool {
         let c0 = self.c0;
         self.end = LineEnd::Wrap;
         // Hyphenate only when the plain break leaves more than the hyphenation zone empty.
@@ -984,8 +996,9 @@ impl Scan {
             // Recompute x for the kept clusters.
             self.x = self.xs.last().copied().unwrap_or(self.line_start_x) + pl.clusters.get(b).map(|c| c.adv).unwrap_or(0.0);
         } else {
-            self.break_long_word(bk, pl);
+            return self.break_long_word(bk, pl);
         }
+        true
     }
 
     /// The text after a right, centre or decimal tab doesn't fit: like Word, the tab goes to the
@@ -1005,10 +1018,23 @@ impl Scan {
     /// No opportunity to break: break here (a long word), unless the span is beside a floating
     /// object and the word fits the full line; then it tries the row's next span, or the next row.
     /// The word runs to the next break that isn't a hyphenation point.
-    fn break_long_word(&mut self, bk: &Breaker, pl: &ParaLayout) {
+    fn break_long_word(&mut self, bk: &Breaker, pl: &ParaLayout) -> bool {
         let (c0, j) = (self.c0, self.j);
         let full = bk.base_right - self.row_lo;
         self.skip = self.narrowed && bk.skipped < 50 && bk.widths.get(c0).is_some_and(|w| *w <= full + 0.01);
+        if self.skip {
+            return true;
+        }
+        if bk.has_thai {
+            if let Some(b) = self.last_emergency_break.filter(|b| *b >= c0) {
+                self.xs.truncate(b + 1 - c0);
+                self.j = b + 1;
+                self.x = self.xs.last().copied().unwrap_or(self.line_start_x) + pl.clusters.get(b).map(|c| c.adv).unwrap_or(0.0);
+                return true;
+            }
+            self.end = LineEnd::Para;
+            return false;
+        }
         // Never split a ligature's letters or a grapheme's drawing segments across
         // lines: back up to their first segment (unless it starts the line).
         let glyphless = |k: usize| pl.clusters.get(k).is_some_and(|c| c.kind == ClKind::Text && c.g1 <= c.g0);
@@ -1028,6 +1054,7 @@ impl Scan {
             self.x = bx;
             self.j = b;
         }
+        true
     }
 }
 

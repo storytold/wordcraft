@@ -503,3 +503,9 @@ Repeated table-cell control, 12 October 2026: four same-style contextual paragra
 
 > 2026-10-29 · Port #3915 to split layout modules: ordinary LTR tab groups follow paragraph alignment. Positional tabs, lists, RTL and display math retain their alignment paths. Source port only; no test execution or new native measurements.
 > 2026-10-29 · Port #2437 to split layout modules: finite border extents and terminal-break keep preflight. Recursive keep lookahead remains outside scope. Source port only; no test execution or new native measurements.
+
+### Thai dictionary wrapping (#1548) — 2026-11-06
+
+Dictionary word opportunities and safe emergency boundaries are isolated from alignment. See [Thai segmentation](thai-segmentation.md).
+
+Validation is recorded in the pull request; no change to readiness estimates.
