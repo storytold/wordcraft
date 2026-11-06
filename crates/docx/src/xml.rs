@@ -372,7 +372,7 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool, max: u
                 }
                 count += 1;
                 if count > max {
-                    return Err(DocxError::Limit(format!("over the XML element budget: {max} elements")));
+                    return Err(DocxError::Limit(format!("over the XML element budget for this parse: at most {max} elements")));
                 }
                 let local = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
                 let name = match el_prefix {

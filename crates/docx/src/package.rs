@@ -759,9 +759,10 @@ mod tests {
         let document = format!(r#"<w:document {ns}>{}</w:document>"#, "<a/>".repeat(200));
         let z = zip_of(&[("word/document.xml", document.into_bytes())]);
         // 200 elements: inside the per-part cap, over the package's 100 budget. The parse
-        // refuses at the budget, so the error is the parse's, not the charge's.
+        // refuses at the budget, so the error is the parse's, not the charge's, and names
+        // the effective limit for this parse (the remaining budget), not the whole budget.
         let pkg = Package::open_limited_within(&z, MAX_PART, MAX_TOTAL, 100).unwrap();
         let e = crate::read::read_opened(&pkg, None).expect_err("refused");
-        assert!(e.to_string().contains("over the XML element budget"), "{e}");
+        assert!(e.to_string().contains("over the XML element budget for this parse: at most 100 elements"), "{e}");
     }
 }
