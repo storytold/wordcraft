@@ -13,7 +13,14 @@ use super::{
 /// Cell identity is independent of optional table-style formatting.
 pub(crate) enum BoxContext<'a> {
     Other,
-    Cell(Option<&'a para::CellText>),
+    /// Outer cell edges relative to its text origin (not including wrap distances).
+    Cell {
+        text: Option<&'a para::CellText>,
+        left: f32,
+        right: f32,
+        /// False for a turned text frame: its x axis becomes page y after rotation.
+        clamp: bool,
+    },
 }
 
 pub(crate) struct BoxInput<'a> {
@@ -32,7 +39,7 @@ impl<'a> BoxInput<'a> {
     }
 
     pub(crate) fn cell(story: StoryRef, blocks: &'a Blocks, prefix: &'a [u32], width: f32, cell: Option<&'a para::CellText>, depth: usize) -> Self {
-        Self { story, blocks, prefix, width, context: BoxContext::Cell(cell), depth, frame: None }
+        Self { story, blocks, prefix, width, context: BoxContext::Cell { text: cell, left: 0.0, right: width, clamp: false }, depth, frame: None }
     }
 }
 
@@ -191,9 +198,9 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     // inline (restored for the story around this box when it's done).
     let outer_hide = std::mem::replace(&mut ctx.hide_deleted, ctx.opts.hides_deleted(story));
     let empty_cell = para::CellText::default();
-    let (table, in_cell) = match context {
-        BoxContext::Other => (None, false),
-        BoxContext::Cell(table) => (Some(table.unwrap_or(&empty_cell)), true),
+    let (in_cell, table, cell_edges) = match context {
+        BoxContext::Other => (false, None, None),
+        BoxContext::Cell { text, left, right, clamp } => (true, Some(text.unwrap_or(&empty_cell)), clamp.then_some((left, right))),
     };
     // Word 16.113.3: the override applies in modes 11/12/14, but not mode 15.
     let allow_same_style_space =
@@ -290,7 +297,16 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     // Only paragraph-relative placement excludes space-before. Line anchors
                     // and frameless page/margin fallbacks retain the text-top origin.
                     let float_y = if float.v_rel == Anchor::Paragraph { para_top } else { y };
-                    let r = float_rect(frame, (0.0, width), float_y, w, h, float);
+                    let mut r = float_rect(frame, (0.0, width), float_y, w, h, float);
+                    // Only move an offset-positioned float when its box crosses the outer
+                    // cell edge. Cell text margins and wrap distances do not move the object.
+                    if let Some((left, right)) = cell_edges
+                        && !float.outside_cell
+                        && float.h_align.is_none()
+                        && float.wrap != Wrap::InFrontOfText
+                    {
+                        r.x = keep_in_cell(r.x, r.w, left, right);
+                    }
                     let outline = ctx.wrap_outline(o);
                     excl.extend(wrap_area(r, float, outline.as_deref().map(Vec::as_slice)));
                     floats.insert(oi, r);
@@ -316,7 +332,14 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 prev_end = push_para(&mut items, (story, &path), &pl, (0, pl.lines.len()), (0.0, y + lead), width, edges);
                 // Pictures, shapes and text boxes: drawn, their areas and text boxes' text.
                 if !p.objects.is_empty() {
-                    let at = ObjFrame { page: frame, col: (0.0, width), para_y: para_top, table_chr: table.map(|t| &t.chr), pinned: Some(&pinned) };
+                    let at = ObjFrame {
+                        page: frame,
+                        col: (0.0, width),
+                        para_y: para_top,
+                        table_chr: table.map(|t| &t.chr),
+                        pinned: Some(&pinned),
+                        late: None,
+                    };
                     let (back, front) = place_objects(
                         ctx,
                         &ObjectPlacement {
@@ -507,6 +530,19 @@ pub(crate) fn clear_of_float_tables(mut r: Rect, f: &TableFloat, legacy: f32, te
     r
 }
 
+/// Keep a float's box within the outer cell edges, relative to the cell's text origin.
+/// Offsets that fit are unchanged, including those inside the text margins. Wrap distances
+/// affect surrounding text only. An oversized object starts at the outer left edge.
+pub(crate) fn keep_in_cell(x: f32, w: f32, left: f32, right: f32) -> f32 {
+    let left = if left.is_finite() { left } else { 0.0 };
+    let end = right - w;
+    if !end.is_finite() || end <= left {
+        return left;
+    }
+    // max/min also place a non-finite offset at a finite edge without panicking.
+    x.max(left).min(end)
+}
+
 /// A text box's default internal margins (Word's: 0.1" left/right, 0.05" top/bottom); a box's
 /// own come from its [`wordcraft_doc::TextBody`].
 #[cfg(test)]
@@ -587,7 +623,10 @@ pub(crate) fn joined(doc: &Document, blocks: &Blocks, i: usize, j: Option<usize>
 /// The room a paragraph's top or bottom border takes in the text flow: its distance from the
 /// text plus its width (Word).
 fn border_room(b: Option<Border>) -> f32 {
-    b.filter(Border::is_visible).map_or(0.0, |b| b.space + b.width)
+    b.filter(Border::is_visible).map_or(0.0, |b| {
+        let extent = b.space + b.width;
+        if extent.is_finite() { extent.max(0.0) } else { 0.0 }
+    })
 }
 
 /// How a piece of a paragraph meets the paragraphs around it: the room taken by its top and
