@@ -9,6 +9,7 @@ mod bidi;
 mod budget;
 mod cell_floats;
 mod complex;
+mod field_fonts;
 mod grid;
 mod ligature;
 pub(crate) mod linear;
