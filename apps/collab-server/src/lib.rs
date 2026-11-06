@@ -12,6 +12,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -27,9 +28,13 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, interval, timeout};
 
 use sha2::Digest;
-use wordcraft_collab::room::{Role, Room};
+use wordcraft_collab::room::{Model, Role, Room};
 use wordcraft_collab::wire::{ClientMsg, Participant, Reject, RejectCode, ServerMsg, Version};
 use wordcraft_collab_doc::DocModel;
+
+pub mod store;
+
+use store::{Snapshot, Store};
 
 /// Largest WebSocket frame the server accepts (RFC §9).
 pub const MAX_FRAME: usize = 1 << 20;
@@ -48,6 +53,8 @@ pub struct Config {
     pub jwt_secret: Option<String>,
     /// PEM public key for ES256 tokens (production, per ADR-0008).
     pub jwt_pem: Option<String>,
+    /// Where snapshots are written (ADR-0005, ADR-0011).
+    pub data_dir: PathBuf,
 }
 
 impl Config {
@@ -58,7 +65,8 @@ impl Config {
         if jwt_secret.is_none() && jwt_pem.is_none() {
             return Err("set COLLAB_JWT_SECRET (HS256, local) or COLLAB_JWT_PEM (ES256 public key)".into());
         }
-        Ok(Config { bind, jwt_secret, jwt_pem })
+        let data_dir = std::env::var("COLLAB_DATA_DIR").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("collab-data"));
+        Ok(Config { bind, jwt_secret, jwt_pem, data_dir })
     }
 }
 
@@ -85,6 +93,9 @@ struct Peer {
 struct RoomState {
     room: Room<DocModel>,
     peers: HashMap<String, Peer>,
+    /// Cabinet session that holds the lease; a different session may join only
+    /// as `owner` (ADR-0008).
+    session: String,
 }
 
 /// Counters for `/metrics`.
@@ -124,11 +135,23 @@ pub struct AppState {
     pub cfg: Arc<Config>,
     rooms: Arc<Mutex<HashMap<String, Arc<Mutex<RoomState>>>>>,
     pub metrics: Arc<Metrics>,
+    store: Store,
 }
 
 impl AppState {
     pub fn new(cfg: Config) -> AppState {
-        AppState { cfg: Arc::new(cfg), rooms: Arc::new(Mutex::new(HashMap::new())), metrics: Arc::new(Metrics::default()) }
+        let store = Store::new(&cfg.data_dir);
+        AppState { cfg: Arc::new(cfg), rooms: Arc::new(Mutex::new(HashMap::new())), metrics: Arc::new(Metrics::default()), store }
+    }
+
+    /// Write the room's snapshot (ADR-0005): model JSON plus the source `.docx`
+    /// when one is known.
+    fn persist(&self, doc: &str, room: &Arc<Mutex<RoomState>>, source: Option<Vec<u8>>) -> Result<(), String> {
+        let (version, epoch, model) = {
+            let guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
+            (guard.room.version(), guard.room.epoch(), guard.room.model().snapshot())
+        };
+        self.store.save(doc, &Snapshot { version, epoch, model, source })
     }
 
     fn room_for(&self, doc: &str) -> Arc<Mutex<RoomState>> {
@@ -136,7 +159,19 @@ impl AppState {
         rooms
             .entry(doc.to_string())
             .or_insert_with(|| {
-                Arc::new(Mutex::new(RoomState { room: Room::new(DocModel::new(wordcraft_doc::Document::new())), peers: HashMap::new() }))
+                let restored = self.store.load(doc).and_then(|snapshot| {
+                    let document = serde_json::from_slice::<wordcraft_doc::Document>(&snapshot.model).ok()?;
+                    Some(RoomState {
+                        room: Room::restore(DocModel::new(document), snapshot.version, snapshot.epoch),
+                        peers: HashMap::new(),
+                        session: String::new(),
+                    })
+                });
+                Arc::new(Mutex::new(restored.unwrap_or_else(|| RoomState {
+                    room: Room::new(DocModel::new(wordcraft_doc::Document::new())),
+                    peers: HashMap::new(),
+                    session: String::new(),
+                })))
             })
             .clone()
     }
@@ -195,9 +230,16 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     };
     let room = state.room_for(&claims.doc);
     let (tx, mut rx) = mpsc::unbounded_channel::<ServerMsg>();
-    let (plan, peers) = register(&room, &client_id, role, &tx, wants_version);
+    let (plan, peers) = match register(&room, &client_id, &claims.sid, role, &tx, wants_version) {
+        Ok(parts) => parts,
+        Err(reject) => {
+            let _ = send(&mut sink, &ServerMsg::Rejected { reject }).await;
+            let _ = sink.close().await;
+            return;
+        }
+    };
     if !send_join(&mut sink, &claims, role, &plan, peers).await {
-        leave(&state, &room, &client_id);
+        leave(&state, &claims.doc, &room, &client_id);
         return;
     }
 
@@ -228,7 +270,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             }
         }
     }
-    leave(&state, &room, &client_id);
+    leave(&state, &claims.doc, &room, &client_id);
 }
 
 async fn authenticate(
@@ -258,11 +300,20 @@ async fn authenticate(
 fn register(
     room: &Arc<Mutex<RoomState>>,
     client_id: &str,
+    sid: &str,
     role: Role,
     tx: &mpsc::UnboundedSender<ServerMsg>,
     wants_version: Option<Version>,
-) -> (wordcraft_collab::room::JoinPlan, Vec<Participant>) {
+) -> Result<(wordcraft_collab::room::JoinPlan, Vec<Participant>), Reject> {
     let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
+    if guard.session.is_empty() {
+        guard.session = sid.to_string();
+    } else if guard.session != sid && role != Role::Owner {
+        let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Lease, "another session holds this document");
+        return Err(reject);
+    } else if guard.session != sid {
+        guard.session = sid.to_string();
+    }
     let plan = guard.room.join(wants_version, false);
     guard.peers.insert(client_id.to_string(), Peer { role, out: tx.clone() });
     let peers = guard
@@ -270,7 +321,7 @@ fn register(
         .iter()
         .map(|(id, peer)| Participant { client_id: id.clone(), role: peer.role.as_str().to_string(), color: None, presence: None })
         .collect();
-    (plan, peers)
+    Ok((plan, peers))
 }
 
 async fn send_join(
@@ -325,7 +376,7 @@ async fn process_frame(
             broadcast(room, client_id, ServerMsg::Presence { client_id: client_id.to_string(), state: presence }, sink).await;
             true
         }
-        ClientMsg::Commit { op_id, expected_version, .. } => handle_commit(state, room, sink, role, op_id, expected_version).await,
+        ClientMsg::Commit { op_id, expected_version, .. } => handle_commit(state, room, sink, claims, role, op_id, expected_version).await,
         ClientMsg::Ping { ts } => send(sink, &ServerMsg::Pong { ts }).await.is_ok(),
         ClientMsg::Auth { .. } => {
             let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Invalid, "already authenticated");
@@ -356,6 +407,10 @@ async fn handle_op(
                 let nodes = room.lock().unwrap_or_else(|poison| poison.into_inner()).room.nodes();
                 broadcast(room, "", ServerMsg::Nodes { nodes }, sink).await;
             }
+            let due = room.lock().unwrap_or_else(|poison| poison.into_inner()).room.should_snapshot();
+            if due && let Err(message) = state.persist(&claims.doc, room, None) {
+                log::warn!("snapshot failed for {}: {message}", claims.doc);
+            }
             true
         }
         Err(reject) => {
@@ -369,6 +424,7 @@ async fn handle_commit(
     state: &AppState,
     room: &Arc<Mutex<RoomState>>,
     sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    claims: &Claims,
     role: Role,
     op_id: wordcraft_collab::wire::OpId,
     expected_version: Version,
@@ -386,6 +442,9 @@ async fn handle_commit(
         Ok((bytes, warnings)) => {
             Metrics::inc(&state.metrics.commits);
             let sha256 = hex(&sha2::Sha256::digest(&bytes));
+            if let Err(message) = state.persist(&claims.doc, room, Some(bytes)) {
+                log::warn!("snapshot after commit failed: {message}");
+            }
             send(sink, &ServerMsg::Committed { version, sha256, warnings }).await.is_ok()
         }
         Err(message) => {
@@ -430,7 +489,7 @@ async fn broadcast(room: &Arc<Mutex<RoomState>>, sender: &str, msg: ServerMsg, s
     let _ = send(sink, &msg).await;
 }
 
-fn leave(state: &AppState, room: &Arc<Mutex<RoomState>>, client_id: &str) {
+fn leave(state: &AppState, doc: &str, room: &Arc<Mutex<RoomState>>, client_id: &str) {
     let gone = {
         let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
         guard.peers.remove(client_id)
@@ -449,6 +508,10 @@ fn leave(state: &AppState, room: &Arc<Mutex<RoomState>>, client_id: &str) {
         guard.peers.is_empty()
     };
     if empty {
+        // The last peer left: keep the room's state on disk before dropping it.
+        if let Err(message) = state.persist(doc, room, None) {
+            log::warn!("snapshot on leave failed for {doc}: {message}");
+        }
         let mut rooms = state.rooms.lock().unwrap_or_else(|poison| poison.into_inner());
         rooms.retain(|_, existing| !Arc::ptr_eq(existing, room));
     }
