@@ -4748,11 +4748,13 @@ fn hostile_large_params_stay_bounded() {
             assert_ne!(s.read_aloud.backend, crate::speech::Backend::System, "tests must never start real speech");
             let start = Instant::now();
             let r = s.run(spec.id, j);
-            s.clamp_selection();
-            let _ = s.layout();
             let elapsed = start.elapsed();
             assert!(!caught_panic(&reg, &r), "{} panicked on large params: {r:?}", spec.id);
             assert_within_budget(spec.id, elapsed, BUDGET);
+            // Laying the result out is not part of the command's budget; the layout tests
+            // cover long text separately. It still runs so a bad parameter reaches the layout.
+            s.clamp_selection();
+            let _ = s.layout();
         }
     }
 }
