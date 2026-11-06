@@ -370,3 +370,22 @@ fn a_heading_in_a_list_linked_to_a_style_stays_in_it() {
     Arc::make_mut(&mut d.styles).get_mut("Heading2").unwrap().para.numbering = Some(NumRef { num, level: 1 });
     assert!(!has_list(&d), "the outline's");
 }
+
+/// Past Heading 6 the outline written has no number to give, so a heading there keeps its list.
+#[test]
+fn a_heading_past_level_six_keeps_its_list() {
+    use std::sync::Arc;
+    use wordcraft_doc::props::NumRef;
+    let mut d = Document::new();
+    let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    Arc::make_mut(&mut d.styles).get_mut("Heading1").unwrap().para.numbering = Some(NumRef { num, level: 0 });
+    for level in 6..=8 {
+        let mut p = wordcraft_doc::Paragraph::with_text("x", Default::default());
+        p.props.style = Some("Heading6".into());
+        p.props.outline_level = Some(level);
+        p.props.numbering = Some(NumRef { num, level });
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+        assert!(c.contains("<text:list"), "level {level}: {c}");
+    }
+}

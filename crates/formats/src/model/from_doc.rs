@@ -418,16 +418,12 @@ fn flow_comment(doc: &Document, c: &wordcraft_doc::Comment, parent: Option<u32>,
 
 /// Whether `li`, the list of heading `p`, is the number its outline level has from its heading
 /// style's list, not a list of its own: it states that level, and the heading style of that level
-/// numbers with that list there (past Heading 6, which has none, a heading style numbers with it).
+/// numbers with that list there. Past Heading 6 no such style gives the written outline a number.
 fn numbered_by_outline(doc: &Document, p: &Paragraph, li: &ListInfo) -> bool {
     use wordcraft_doc::props::NumRef;
-    let style_num = |level: u8| doc.styles.para_style_props(&format!("Heading{}", level + 1)).0.numbering;
     p.props.outline_level == Some(li.level)
-        && if li.level < 6 {
-            style_num(li.level) == Some(NumRef { num: li.list, level: li.level })
-        } else {
-            (0..6).any(|l| style_num(l).is_some_and(|r| r.num == li.list))
-        }
+        && li.level < 6
+        && doc.styles.para_style_props(&format!("Heading{}", li.level + 1)).0.numbering == Some(NumRef { num: li.list, level: li.level })
 }
 
 /// A paragraph's list membership as the flow keeps it: without the list's identity and label
