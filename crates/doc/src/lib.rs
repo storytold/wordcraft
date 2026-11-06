@@ -15,6 +15,7 @@ mod byte_store;
 pub mod cfb_guard;
 pub mod chart;
 mod cjk_numbers;
+mod thai_numbers;
 pub mod cluster;
 pub mod collate;
 pub mod connector;

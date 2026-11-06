@@ -363,6 +363,28 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                         Err(e) => format!("!{e}"),
                     };
                     updates.push((k, text));
+                } else if let Some(fmt) = wordcraft_layout::fields::format_switch(instr) {
+                    // `{ = 12345 \* BahtText }` (or other format switch) outside a table:
+                    // evaluate only single literals; leave multi-operand expressions alone.
+                    let token = wordcraft_layout::fields::literal_after_eq(instr);
+                    let val = if fmt == NumFormat::BahtText {
+                        token.and_then(wordcraft_doc::section::parse_baht_token)
+                    } else {
+                        token.and_then(|t| t.parse::<f64>().ok())
+                    };
+                    if fmt == NumFormat::BahtText {
+                        if let Some(text) = val.and_then(wordcraft_doc::section::baht_text_f64) {
+                            updates.push((k, text));
+                        }
+                    } else if fmt == NumFormat::DollarText {
+                        if let Some(x) = val {
+                            if let Some(text) = wordcraft_layout::fields::dollar_text(x) {
+                                updates.push((k, wordcraft_layout::fields::apply_case_switch(instr, text)));
+                            }
+                        }
+                    } else if let Some(x) = val.filter(|x| *x >= 0.0 && *x <= f64::from(u32::MAX) && x.fract() == 0.0) {
+                        updates.push((k, wordcraft_layout::fields::field_number(instr, fmt, x as u32)));
+                    }
                 }
                 continue;
             }
@@ -449,7 +471,36 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     let text = if has_switch(instr, 'p') { fn_path } else { fn_name };
                     updates.push((k, text_result(instr, text)));
                 }
-                _ => {}
+                "BAHTTEXT" => {
+                    // `{ BAHTTEXT 12345 }` — number is the second token.
+                    // Use parse_baht_token to avoid f64 precision loss (e.g. "1.005" → 1.01).
+                    let val = instr.split_whitespace().nth(1).and_then(wordcraft_doc::section::parse_baht_token);
+                    if let Some(text) = val.and_then(wordcraft_doc::section::baht_text_f64) {
+                        updates.push((k, text));
+                    }
+                }
+                _ => {
+                    // `{ 12345 \* BahtText }` — field name IS the number; apply the format switch.
+                    if let Some(fmt) = wordcraft_layout::fields::format_switch(instr) {
+                        if fmt == NumFormat::BahtText {
+                            let val = wordcraft_doc::section::parse_baht_token(&name);
+                            if let Some(text) = val.and_then(wordcraft_doc::section::baht_text_f64) {
+                                updates.push((k, text));
+                            }
+                        } else {
+                            let val = name.parse::<f64>().ok();
+                            if fmt == NumFormat::DollarText {
+                                if let Some(x) = val {
+                                    if let Some(text) = wordcraft_layout::fields::dollar_text(x) {
+                                        updates.push((k, wordcraft_layout::fields::apply_case_switch(instr, text)));
+                                    }
+                                }
+                            } else if let Some(x) = val.filter(|x| *x >= 0.0 && *x <= f64::from(u32::MAX) && x.fract() == 0.0) {
+                                updates.push((k, wordcraft_layout::fields::field_number(instr, fmt, x as u32)));
+                            }
+                        }
+                    }
+                }
             }
         }
         if core != s.doc.core {
