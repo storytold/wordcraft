@@ -46,6 +46,11 @@ impl DocModel {
         &mut self.doc
     }
 
+    /// Take the document back (used by adapters that borrow it for one call).
+    pub fn into_document(self) -> Document {
+        self.doc
+    }
+
     fn primitive(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
         let name = op.payload.get(PAYLOAD_OP).and_then(Value::as_str).unwrap_or_default();
         match name {
