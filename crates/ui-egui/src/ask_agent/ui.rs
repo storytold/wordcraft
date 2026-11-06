@@ -81,6 +81,8 @@ pub fn bubble(ctx: &egui::Context, anchor: Rect, view: &View, draft: &mut String
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).corner_radius(12.0).inner_margin(egui::Margin::symmetric(16, 14)).show(ui, |ui| {
                 ui.set_width(WIDTH);
+                // An Area remembers its previous size; permit growth before bounding the body.
+                ui.set_max_height((ctx.content_rect().height() - 28.0).max(0.0));
                 let spacing = ui.spacing_mut();
                 spacing.item_spacing = vec2(8.0, 10.0);
                 spacing.interact_size.y = ROW;
@@ -106,98 +108,111 @@ pub fn bubble(ctx: &egui::Context, anchor: Rect, view: &View, draft: &mut String
                     });
                 });
 
-                if !view.instruction.is_empty() || !view.history.is_empty() {
-                    egui::CollapsingHeader::new(tr("Conversation"))
-                        .id_salt(("ask_conversation", view.history.len()))
-                        .default_open(!view.history.is_empty())
-                        .show(ui, |ui| {
-                            egui::ScrollArea::vertical().id_salt("ask_conversation_scroll").max_height(160.0).show(ui, |ui| {
-                                for turn in view.history {
-                                    ui.label(RichText::new(tr("You")).strong());
-                                    ui.label(&turn.instruction);
-                                    ui.label(RichText::new(tr("Agent")).strong());
-                                    ui.label(&turn.answer);
-                                    ui.separator();
+                // Bound the entire body, including arbitrary progress, replies and the draft.
+                // The header stays visible; review and send actions remain reachable by scrolling.
+                let body_height = (ctx.content_rect().height() - ROW - 64.0).max(0.0);
+                egui::ScrollArea::vertical().id_salt("ask_bubble_body").max_height(body_height).show(ui, |ui| {
+                    if !view.instruction.is_empty() || !view.history.is_empty() {
+                        egui::CollapsingHeader::new(tr("Conversation"))
+                            .id_salt(("ask_conversation", view.history.len()))
+                            .default_open(!view.history.is_empty())
+                            .show(ui, |ui| {
+                                egui::ScrollArea::vertical().id_salt("ask_conversation_scroll").max_height(160.0).show(ui, |ui| {
+                                    for turn in view.history {
+                                        ui.label(RichText::new(tr("You")).strong());
+                                        ui.label(&turn.instruction);
+                                        ui.label(RichText::new(tr("Agent")).strong());
+                                        ui.label(&turn.answer);
+                                        ui.separator();
+                                    }
+                                    if !view.instruction.is_empty() {
+                                        ui.label(RichText::new(tr("Current instruction")).strong());
+                                        ui.label(view.instruction);
+                                    }
+                                });
+                            });
+                    }
+
+                    if let Some(s) = view.snapshot {
+                        for note in &s.notes {
+                            ui.label(RichText::new(note).weak());
+                        }
+                        response_details(ui, s, tr);
+                    }
+                    match status {
+                        Some(Status::Queued) => _ = ui.label(RichText::new(tr("Waiting for an agent…")).weak()),
+                        Some(Status::Working { .. }) => {
+                            row(ui, Layout::left_to_right(Align::Center), |ui| {
+                                ui.spinner();
+                                ui.label(RichText::new(tr("Working on it…")).weak());
+                            });
+                        }
+                        Some(Status::Failed) => {
+                            let error = view.snapshot.and_then(|s| s.error.as_deref()).unwrap_or_default();
+                            ui.label(RichText::new(error).color(ui.visuals().error_fg_color));
+                            // The decision on the right, primary last, like Send below.
+                            row(ui, Layout::right_to_left(Align::Center), |ui| {
+                                if ui
+                                    .add(primary(ui, tr("Keep")))
+                                    .on_hover_text(tr("Keep tool edits and notes. Proposals are not applied."))
+                                    .clicked()
+                                {
+                                    action = Some(Action::Keep);
                                 }
-                                if !view.instruction.is_empty() {
-                                    ui.label(RichText::new(tr("Current instruction")).strong());
-                                    ui.label(view.instruction);
+                                if ui.button(tr("Undo")).on_hover_text(tr("Undo all of the agent's edits")).clicked() {
+                                    action = Some(Action::Undo);
+                                }
+                            });
+                        }
+                        Some(Status::Answered) => {
+                            ui.label(view.snapshot.and_then(|s| s.answer.as_deref()).unwrap_or_default());
+                            // The decision on the right, primary last, like Send below.
+                            row(ui, Layout::right_to_left(Align::Center), |ui| {
+                                if ui
+                                    .add(primary(ui, tr("Keep")))
+                                    .on_hover_text(tr("Keep tool edits and notes. Proposals are not applied."))
+                                    .clicked()
+                                {
+                                    action = Some(Action::Keep);
+                                }
+                                if ui.button(tr("Undo")).on_hover_text(tr("Undo all of the agent's edits")).clicked() {
+                                    action = Some(Action::Undo);
+                                }
+                            });
+                            ui.separator();
+                        }
+                        None => {}
+                    }
+                    if matches!(status, None | Some(Status::Answered | Status::Failed)) {
+                        let hint = if status.is_none() { tr("What should the agent do?") } else { tr("Reply to refine…") };
+                        let field = ui.add(
+                            egui::TextEdit::multiline(draft)
+                                .hint_text(hint)
+                                .desired_rows(3)
+                                .desired_width(f32::INFINITY)
+                                .margin(egui::Margin::symmetric(8, 6))
+                                // Shift+Enter makes a new line; Enter alone sends, below.
+                                .return_key(egui::KeyboardShortcut::new(egui::Modifiers::SHIFT, Key::Enter)),
+                        );
+                        // Focus the field once, when the bubble opens, so Tab can then reach the other controls.
+                        if status.is_none() && opened {
+                            field.request_focus();
+                        }
+                        let enter = field.has_focus() && ui.input(|i| i.key_pressed(Key::Enter) && !i.modifiers.shift);
+                        // Footer: starting points on the left, Send on the right.
+                        row(ui, Layout::left_to_right(Align::Center), |ui| {
+                            if matches!(status, None | Some(Status::Answered)) && !view.actions.is_empty() {
+                                quick_actions(ui, view.actions, draft, tr);
+                            }
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                let ready = !draft.trim().is_empty();
+                                if (ui.add_enabled(ready, primary(ui, tr("Send"))).clicked() || enter) && ready {
+                                    action = Some(Action::Send(std::mem::take(draft).trim().to_string()));
                                 }
                             });
                         });
-                }
-
-                if let Some(s) = view.snapshot {
-                    for note in &s.notes {
-                        ui.label(RichText::new(note).weak());
                     }
-                    response_details(ui, s, tr);
-                }
-                match status {
-                    Some(Status::Queued) => _ = ui.label(RichText::new(tr("Waiting for an agent…")).weak()),
-                    Some(Status::Working { .. }) => {
-                        row(ui, Layout::left_to_right(Align::Center), |ui| {
-                            ui.spinner();
-                            ui.label(RichText::new(tr("Working on it…")).weak());
-                        });
-                    }
-                    Some(Status::Failed) => {
-                        let error = view.snapshot.and_then(|s| s.error.as_deref()).unwrap_or_default();
-                        ui.label(RichText::new(error).color(ui.visuals().error_fg_color));
-                        // The decision on the right, primary last, like Send below.
-                        row(ui, Layout::right_to_left(Align::Center), |ui| {
-                            if ui.add(primary(ui, tr("Keep"))).on_hover_text(tr("Keep tool edits and notes. Proposals are not applied.")).clicked() {
-                                action = Some(Action::Keep);
-                            }
-                            if ui.button(tr("Undo")).on_hover_text(tr("Undo all of the agent's edits")).clicked() {
-                                action = Some(Action::Undo);
-                            }
-                        });
-                    }
-                    Some(Status::Answered) => {
-                        ui.label(view.snapshot.and_then(|s| s.answer.as_deref()).unwrap_or_default());
-                        // The decision on the right, primary last, like Send below.
-                        row(ui, Layout::right_to_left(Align::Center), |ui| {
-                            if ui.add(primary(ui, tr("Keep"))).on_hover_text(tr("Keep tool edits and notes. Proposals are not applied.")).clicked() {
-                                action = Some(Action::Keep);
-                            }
-                            if ui.button(tr("Undo")).on_hover_text(tr("Undo all of the agent's edits")).clicked() {
-                                action = Some(Action::Undo);
-                            }
-                        });
-                        ui.separator();
-                    }
-                    None => {}
-                }
-                if matches!(status, None | Some(Status::Answered | Status::Failed)) {
-                    let hint = if status.is_none() { tr("What should the agent do?") } else { tr("Reply to refine…") };
-                    let field = ui.add(
-                        egui::TextEdit::multiline(draft)
-                            .hint_text(hint)
-                            .desired_rows(3)
-                            .desired_width(f32::INFINITY)
-                            .margin(egui::Margin::symmetric(8, 6))
-                            // Shift+Enter makes a new line; Enter alone sends, below.
-                            .return_key(egui::KeyboardShortcut::new(egui::Modifiers::SHIFT, Key::Enter)),
-                    );
-                    // Focus the field once, when the bubble opens, so Tab can then reach the other controls.
-                    if status.is_none() && opened {
-                        field.request_focus();
-                    }
-                    let enter = field.has_focus() && ui.input(|i| i.key_pressed(Key::Enter) && !i.modifiers.shift);
-                    // Footer: starting points on the left, Send on the right.
-                    row(ui, Layout::left_to_right(Align::Center), |ui| {
-                        if matches!(status, None | Some(Status::Answered)) && !view.actions.is_empty() {
-                            quick_actions(ui, view.actions, draft, tr);
-                        }
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            let ready = !draft.trim().is_empty();
-                            if (ui.add_enabled(ready, primary(ui, tr("Send"))).clicked() || enter) && ready {
-                                action = Some(Action::Send(std::mem::take(draft).trim().to_string()));
-                            }
-                        });
-                    });
-                }
+                });
             });
         });
     action
