@@ -526,3 +526,93 @@ fn review_boundary_local_close_and_remote_empty_bubble_keep_their_existing_behav
     assert_eq!(response["ok"], true);
     assert!(app.ask_agent.open.is_none());
 }
+
+#[test]
+fn review_scope_paragraph_separators_cannot_change_an_empty_list_item() {
+    for separator in ["\r", "\u{2029}"] {
+        for level in [0, 1] {
+            for paragraphs in [None, Some(false)] {
+                for wrapped in [false, true] {
+                    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+                    let hub = AgentHub::default();
+                    app.ask_agent.hub = Some(hub.clone());
+                    app.run("para.numbering", json!({})).unwrap();
+                    app.run("para.listLevel", json!({"level":level})).unwrap();
+                    let numbering = app.session.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.unwrap();
+                    assert_ne!(numbering.num, 0, "fixture must be a real numbered list item");
+                    assert_eq!(numbering.level, level);
+                    assert!(app.session.doc.para_at(&Pos::body(0, 0)).unwrap().is_empty());
+                    let id = claim(&mut app, &hub);
+                    let before = app.session.doc.clone();
+                    let selection = app.session.sel.clone();
+                    let revision = app.session.rev();
+                    let depth = app.session.undo_depth();
+                    let token = app.session.undo_token();
+                    let redo = app.session.redo_label().map(str::to_owned);
+                    let mut params = json!({"text":separator,"request":id});
+                    if let Some(value) = paragraphs {
+                        params["paragraphs"] = json!(value);
+                    }
+                    let result = if wrapped {
+                        remote(&mut app, 7, "engine.execute", json!({"command":"text.insert","params":params}))
+                    } else {
+                        remote(&mut app, 7, "text.insert", params)
+                    };
+                    let context = format!("separator={separator:?}, level={level}, paragraphs={paragraphs:?}, wrapped={wrapped}");
+                    assert_eq!(app.session.doc, before, "{context}: a text-only agent changed list structure");
+                    assert_eq!(app.session.doc.numbering, before.numbering, "{context}");
+                    assert_eq!(app.session.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering, Some(numbering), "{context}");
+                    assert_eq!(app.session.sel, selection, "{context}");
+                    assert_eq!(app.session.rev(), revision, "{context}");
+                    assert_eq!(app.session.undo_depth(), depth, "{context}");
+                    assert_eq!(app.session.undo_token(), token, "{context}");
+                    assert_eq!(app.session.redo_label(), redo.as_deref(), "{context}");
+                    assert_eq!(result["errorCode"], "OUTSIDE_SELECTION", "{context}: {result}");
+                    assert_eq!(hub.snapshot(id).unwrap().status, Status::Working { conn: 7 });
+                    // Refusing paragraph creation must leave ordinary scoped typing usable.
+                    let result = remote(&mut app, 7, "text.insert", json!({"text":"List text","request":id}));
+                    assert!(result.get("errorCode").is_none(), "{context}: {result}");
+                    assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "List text");
+                    assert_eq!(app.session.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering, Some(numbering));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn review_scope_active_equation_cannot_redirect_agent_typing() {
+    for wrapped in [false, true] {
+        let (mut app, hub) = app();
+        app.run("insert.equation", json!({"linear":"x + y"})).unwrap();
+        assert!(app.session.math.is_some(), "native insert must enter an actual equation editor");
+        app.run("equation.exit", json!({"before":true})).unwrap();
+        let id = claim(&mut app, &hub);
+        let revision = app.session.rev();
+        app.run("equation.edit", json!({})).unwrap();
+        assert!(app.session.math.is_some(), "native edit must re-enter the equation");
+        assert!(app.session.sel.is_collapsed(), "the risky ordinary-text range is empty");
+        assert_eq!(app.session.rev(), revision, "entering the editor alone must not stale the fixture");
+        let before = app.session.doc.clone();
+        let selection = app.session.sel.clone();
+        let math = app.session.math.clone();
+        let depth = app.session.undo_depth();
+        let token = app.session.undo_token();
+        let redo = app.session.redo_label().map(str::to_owned);
+        let params = json!({"text":"Outside the equation","request":id});
+        let result = if wrapped {
+            remote(&mut app, 7, "engine.execute", json!({"command":"text.insert","params":params}))
+        } else {
+            remote(&mut app, 7, "text.insert", params)
+        };
+        assert_eq!(app.session.doc, before, "agent typing escaped the captured caret beside the equation");
+        assert_eq!(app.session.sel, selection, "text.insert moved the real body caret while leaving the equation");
+        assert_eq!(app.session.math, math, "the refusal must preserve the active equation editor");
+        assert_eq!(app.session.rev(), revision);
+        assert_eq!(app.session.undo_depth(), depth);
+        assert_eq!(app.session.undo_token(), token);
+        assert_eq!(app.session.redo_label(), redo.as_deref());
+        assert_eq!(result["errorCode"], "OUTSIDE_SELECTION", "{result}");
+        assert_eq!(hub.snapshot(id).unwrap().status, Status::Working { conn: 7 });
+    }
+}

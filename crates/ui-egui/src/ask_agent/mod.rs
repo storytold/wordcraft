@@ -99,7 +99,7 @@ fn range(selection: &Value) -> Option<(Pos, Pos)> {
 
 /// Plain-text extraction hides inline objects; inspect the actual selected structure instead.
 fn ordinary_text(session: &Session) -> bool {
-    if session.column.is_some() || session.cell_range().is_some() || !session.also_selected.is_empty() {
+    if session.math.is_some() || session.column.is_some() || session.cell_range().is_some() || !session.also_selected.is_empty() {
         return false;
     }
     let (start, end) = session.sel.ordered();
@@ -157,7 +157,9 @@ fn within_selection(session: &Session, command: &str, selection: &Value) -> bool
 /// Scoped typing cannot AutoCorrect a neighboring word or widen the target into paragraphs.
 pub(crate) fn command_params(app: &WordApp, command: &str, mut params: Value) -> Result<Value, String> {
     if app.ask_agent.agent_turn && command == "text.insert" {
-        if params.get("paragraphs").and_then(Value::as_bool) == Some(true) {
+        if params.get("paragraphs").and_then(Value::as_bool) == Some(true)
+            || params.get("text").and_then(Value::as_str).is_some_and(|text| text.contains(['\r', '\u{2029}']))
+        {
             return Err("OUTSIDE_SELECTION: structural paragraph creation needs an explicit structural scope".into());
         }
         if let Some(object) = params.as_object_mut() {
