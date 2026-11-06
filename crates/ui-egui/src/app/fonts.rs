@@ -21,6 +21,10 @@ impl WordApp {
     /// those collections are too large to add here.
     pub(super) fn ensure_caption_fonts(&mut self) {
         let stem = self.title_stem();
+        if self.caption_fonts_for.as_deref() == Some(&stem) {
+            return;
+        }
+        self.caption_fonts_for = Some(stem.clone());
         if stem.chars().any(wordcraft_fonts::is_cjk) {
             self.want_system_cjk = true;
         }
@@ -68,6 +72,12 @@ impl WordApp {
     /// the caption (and as the Recent list, `ensure_recent_fonts`): CJK loads the CJK UI font,
     /// other scripts borrow the document fallback faces. Looked at again only when the names change.
     pub(super) fn ensure_recover_fonts(&mut self) {
+        if !self.session.has_recovery_documents() {
+            if self.recover_fonts_for.is_some() {
+                self.recover_fonts_for = None;
+            }
+            return;
+        }
         use std::hash::{Hash, Hasher};
         let docs = self.session.recovery_documents();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
