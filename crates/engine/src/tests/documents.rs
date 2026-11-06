@@ -346,3 +346,96 @@ fn input_method_joins_stay_with_their_window() {
     assert_eq!(text(&s).trim(), "Hello", "B's typing is its own undo step");
     drop(a);
 }
+
+/// #5623: a file another program changed while it was open is read again by `file.reload`. The
+/// document keeps its id, is not dirty, has no undo history, and its selection stays where the
+/// new text still has it.
+#[test]
+fn reload_reads_the_file_again_under_the_same_id() {
+    let dir = temp_dir("reload");
+    let path = dir.join("notes.txt");
+    std::fs::write(&path, "alpha beta").unwrap();
+    let mut s = s();
+    run(&mut s, "file.open", json!({"path": path.to_string_lossy()}));
+    let id = s.document_id();
+    assert!(!s.changed_on_disk(), "just opened: the file is as it was read");
+    run(&mut s, "select.text", json!({"text": "beta"}));
+    std::fs::write(&path, "alpha beta gamma").unwrap();
+    assert!(s.changed_on_disk(), "another program wrote the file");
+    assert_eq!(run(&mut s, "file.info", json!({}))["changedOnDisk"], true);
+    let r = run(&mut s, "file.reload", json!({}));
+    assert_eq!((r["reloaded"].as_bool(), r["id"].as_u64()), (Some(true), Some(id)));
+    assert_eq!(text(&s), "alpha beta gamma");
+    assert_eq!(s.document_id(), id, "the same document, for windows and agents");
+    assert!(!s.dirty && !s.changed_on_disk(), "the file as it is now is what the next change is measured against");
+    assert_eq!(s.undo_depth(), 0, "the old content is gone: nothing to undo to");
+    assert_eq!(s.selected_text(), "beta", "the selection stays where the new text still has it");
+    // A caret past the end of the shorter new text is pulled back inside it.
+    run(&mut s, "select.text", json!({"text": "gamma"}));
+    std::fs::write(&path, "al").unwrap();
+    run(&mut s, "file.reload", json!({}));
+    assert_eq!(text(&s), "al");
+    assert!(s.sel.focus.off <= 2 && s.sel.anchor.off <= 2, "clamped: {:?}", s.sel);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Unsaved changes are never thrown away silently: `file.reload` refuses them unless forced.
+#[test]
+fn reload_refuses_unsaved_changes_unless_forced() {
+    let dir = temp_dir("reload-dirty");
+    let path = dir.join("notes.txt");
+    std::fs::write(&path, "alpha").unwrap();
+    let mut s = s();
+    run(&mut s, "file.open", json!({"path": path.to_string_lossy()}));
+    run(&mut s, "text.insert", json!({"text": "X"}));
+    std::fs::write(&path, "alpha beta").unwrap();
+    let e = s.run("file.reload", &json!({})).unwrap_err().to_string();
+    assert!(e.contains("unsaved changes"), "{e}");
+    assert_eq!(text(&s), "Xalpha", "nothing was lost");
+    assert!(s.dirty);
+    run(&mut s, "file.reload", json!({"force": true}));
+    assert_eq!(text(&s), "alpha beta");
+    assert!(!s.dirty);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The document's own save is not a change on disk, and a document without a file has nothing
+/// to reload (or to watch).
+#[test]
+fn own_save_is_not_a_change_on_disk_and_a_new_document_has_no_file() {
+    let mut s = s();
+    assert!(!s.changed_on_disk());
+    let e = s.run("file.reload", &json!({})).unwrap_err().to_string();
+    assert!(e.contains("no file"), "{e}");
+    let dir = temp_dir("reload-save");
+    let path = dir.join("notes.txt");
+    std::fs::write(&path, "alpha").unwrap();
+    run(&mut s, "file.open", json!({"path": path.to_string_lossy()}));
+    run(&mut s, "text.insert", json!({"text": "X"}));
+    run(&mut s, "file.save", json!({}));
+    assert!(!s.changed_on_disk(), "our own write is the file we know");
+    assert_eq!(run(&mut s, "file.info", json!({}))["changedOnDisk"], false);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `file.reload {"id"}` reads a document that isn't the active one, and leaves the active one
+/// active.
+#[test]
+fn reload_by_id_reads_a_parked_document() {
+    let dir = temp_dir("reload-parked");
+    let path = dir.join("notes.txt");
+    std::fs::write(&path, "alpha").unwrap();
+    let mut s = s();
+    run(&mut s, "file.open", json!({"path": path.to_string_lossy()}));
+    let a = s.document_id();
+    run(&mut s, "file.new", json!({}));
+    let b = s.document_id();
+    std::fs::write(&path, "alpha beta").unwrap();
+    let r = run(&mut s, "file.reload", json!({"id": a}));
+    assert_eq!(r["id"].as_u64(), Some(a));
+    assert_eq!(s.document_id(), b, "the active document stays active");
+    s.activate(a).unwrap();
+    assert_eq!(text(&s), "alpha beta");
+    assert!(s.run("file.reload", &json!({"id": 999_999})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}

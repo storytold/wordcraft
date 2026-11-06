@@ -37,6 +37,7 @@ pub mod credits;
 pub mod crop;
 pub mod desktop_theme;
 pub mod dialogs;
+pub mod disk_change;
 pub mod documents;
 pub mod equation_tab;
 /// The built-in file browser, for desktops without a system file dialog (#576).
@@ -735,6 +736,15 @@ pub struct WordApp {
     /// The document's [`StatusCounts`] and the key they were computed for; see [`WordApp::cached_status_counts`].
     pub status_counts: (u64, StatusCounts),
     last_autosave: f64,
+    /// When the active document's file was last looked at for a change by another program
+    /// ([`disk_change`]), in milliseconds of [`clock::now_ms`].
+    disk_check_at: f64,
+    /// The document whose file changed on disk while it had unsaved changes: the bar under the
+    /// ribbon asks about it (Reload / Keep mine) while it is the one on screen.
+    disk_notice: Option<u64>,
+    /// Whether the window had the focus in the last frame: getting it back looks at the file at
+    /// once, since that is when another program has usually just written it.
+    window_focused: bool,
     /// The tab shown before the Equation tab came up (restored when editing ends).
     pub(crate) equation_prev_tab: Option<String>,
     /// SmartArt Text Pane: the item last focused (Promote, Demote and Add Shape act on it) and

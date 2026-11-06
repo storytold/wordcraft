@@ -71,6 +71,7 @@ fn rename(s: &mut Session, v: &Value) -> CmdResult {
                 crate::io::rename_file(path, &destination).map_err(CmdError::Failed)?;
             }
             s.path = Some(destination);
+            s.stamp_disk();
             s.relayout();
         }
     } else {
@@ -144,6 +145,9 @@ pub fn specs() -> Vec<CommandSpec> {
         .key("Mod+W / Mod+F4")
         .params(r#"{"force"?: bool (desktop app's control channel and MCP bridge only: without it a document with unsaved changes is an error and stays open; with it the changes are discarded. Headless sessions never ask; file.closeDocument closes a document there)}"#)
         .pure(),
+        CommandSpec::new("file.reload", "Reload from Disk", "File", reload)
+            .params(r#"{"id"?: n (an open document, see view.switchWindows; default the active one), "force"?: bool (discard unsaved changes; without it a document with unsaved changes is an error and stays as it is)} → {"reloaded": true, "id", "path", "paragraphs", "words", "encrypted"}; reads the document's file again, for one another program changed (file.info says: "changedOnDisk"); the document keeps its id, zoom, scroll and caret, and loses its undo history"#)
+            .pure(),
         CommandSpec::new("file.closeDocument", "Close Document", "Agents", close_document)
             .params(r#"{"id"?: n (an open document, see view.switchWindows; default the active one), "force"?: bool (discard unsaved changes; without it a document with unsaved changes is an error and stays open)} → {"closed": id, "active": id, "documents": [{"id", "title", "path", "dirty", "active"}]}; closing the last document leaves a new blank one"#)
             .pure(),
@@ -285,6 +289,13 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         super::view::restore_zoom(s, z);
     }
     s.path = Some(path.into());
+    // What the file looks like now, so a change by another program is noticed (#5623). Bytes
+    // handed in with the path only name the document: there is no file of ours to watch.
+    if p::str(v, "data").is_none() {
+        s.stamp_disk();
+    } else {
+        s.disk = None;
+    }
     // Like Word, a document opened with a password is saved with it again.
     if encrypted {
         s.password = password.map(crate::io::Password::new);
@@ -292,6 +303,56 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     Ok(
         json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()}),
     )
+}
+
+/// File › Reload from Disk: read the document's file again and show what it holds now, for a
+/// file another program (an editor, a script, `git`, an agent) changed while it was open (#5623).
+/// The desktop app runs it by itself for a document without unsaved changes whose file changed,
+/// and offers it for one with them. The document keeps its id, its view and, where the new
+/// content still has the place, its caret ([`Session::reload_document`]).
+fn reload(s: &mut Session, v: &Value) -> CmdResult {
+    let id = match v.get("id").filter(|x| !x.is_null()) {
+        None => s.document_id(),
+        Some(x) => x.as_u64().ok_or_else(|| CmdError::Params("`id` must be an open document's id".into()))?,
+    };
+    if !s.is_open(id) {
+        return Err(CmdError::Params(format!("no open document has id {id}")));
+    }
+    let force = p::bool(v, "force") == Some(true);
+    s.with_document(id, |s| reload_active(s, force))?
+}
+
+/// [`reload`] for the active document.
+fn reload_active(s: &mut Session, force: bool) -> CmdResult {
+    let Some(path) = s.path.clone() else {
+        return Err(CmdError::Failed("the document has no file to reload".into()));
+    };
+    if s.dirty && !force {
+        return Err(CmdError::Failed("the document has unsaved changes: save it first, or pass \"force\": true to discard them".into()));
+    }
+    // A document opened with a password reads its file with it again.
+    let password = s.password.as_ref().map(|pw| pw.as_str().to_string());
+    let (mut doc, encrypted) = if crate::io::is_empty_file(&path) {
+        (normal_document(s), false)
+    } else {
+        crate::io::open_path_in(&path, password.as_deref(), &s.region()).map_err(CmdError::Failed)?
+    };
+    // Plain text and Markdown carry no language: they are in the editing language, as on open.
+    let ext = path.extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
+    if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref())
+        && matches!(ext.as_str(), "txt" | "text" | "md" | "markdown")
+    {
+        Arc::make_mut(&mut doc.styles).default_chr.lang = Some(lang.clone());
+    }
+    s.reload_document(doc);
+    Ok(json!({
+        "reloaded": true,
+        "id": s.document_id(),
+        "path": path.to_string_lossy(),
+        "paragraphs": s.doc.paragraph_count(),
+        "words": s.doc.word_count(),
+        "encrypted": encrypted,
+    }))
 }
 
 /// Close a document with no window to ask about it (agents, headless sessions).
@@ -386,6 +447,7 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     if own_file || ["docx", "docm", "dotx", "dotm", "odt", "ott", "fodt", "rtf", "json", "xml"].contains(&ext.as_str()) {
         s.path = Some(path.clone());
         s.dirty = false;
+        s.stamp_disk();
         s.relayout();
     }
     Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted}))
@@ -531,6 +593,7 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
     Ok(json!({
         "path": s.path.as_ref().map(|p| p.to_string_lossy().to_string()),
         "dirty": s.dirty,
+        "changedOnDisk": s.changed_on_disk(),
         "pages": l.pages.len(),
         "words": s.doc.word_count(),
         "paragraphs": s.doc.paragraph_count(),

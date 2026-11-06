@@ -58,6 +58,10 @@ pub struct Session {
     /// name, not document metadata, so it is not part of the document or its undo history.
     pub file_name: Option<String>,
     pub dirty: bool,
+    /// The file as it was when the document was read from it or last written to it, so a change
+    /// by another program can be noticed ([`Session::changed_on_disk`]); `None` for a document
+    /// without a file, or one whose bytes were handed in with a name only.
+    pub(crate) disk: Option<crate::io::DiskStamp>,
     /// Where the custom dictionary is kept on disk, if the host wired one up. Only the desktop
     /// app does: headless sessions (MCP, `wordcraft-cli run`), tests and the web build leave
     /// `None`, so an agent's words stay in memory and never change the person's dictionary.
