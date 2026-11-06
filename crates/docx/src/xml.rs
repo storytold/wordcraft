@@ -29,6 +29,8 @@ pub const NAMESPACES: &[(&str, &str)] = &[
     ("mc", "http://schemas.openxmlformats.org/markup-compatibility/2006"),
     ("w14", "http://schemas.microsoft.com/office/word/2010/wordml"),
     ("wpi", "http://schemas.microsoft.com/office/word/2010/wordprocessingInk"),
+    ("ink", "http://www.w3.org/2003/InkML"),
+    ("mml", "http://www.w3.org/1998/Math/MathML"),
     ("w15", "http://schemas.microsoft.com/office/word/2012/wordml"),
     ("wp14", "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing"),
     ("wps", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"),

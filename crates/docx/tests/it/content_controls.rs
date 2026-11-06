@@ -257,6 +257,20 @@ fn a_controls_run_properties_are_read_and_kept() {
     assert!(out.contains(r#"<w:rPr><w:rStyle w:val="Eingabe"/><w:sz w:val="20"/></w:rPr>"#), "{out}");
 }
 
+#[test]
+fn retained_ink_and_mathml_properties_keep_declared_namespaces() {
+    let pr = r#"<w:id w:val="42"/><pen:annotation xmlns:pen="http://www.w3.org/2003/InkML" xmlns:math="http://www.w3.org/1998/Math/MathML"><math:math math:id="formula"><math:cn>2</math:cn></math:math></pen:annotation>"#;
+    let mut d = read(&package(&p(&sdt(pr, &t("Note"))))).unwrap();
+    for _ in 0..2 {
+        let out = document_xml(&write(&d).unwrap());
+        assert!(out.contains(r#"xmlns:ink="http://www.w3.org/2003/InkML""#), "{out}");
+        assert!(out.contains(r#"xmlns:mml="http://www.w3.org/1998/Math/MathML""#), "{out}");
+        assert!(out.contains(r#"<ink:annotation><mml:math mml:id="formula"><mml:cn>2</mml:cn></mml:math></ink:annotation>"#), "{out}");
+        d = read(&write(&d).unwrap()).unwrap();
+        assert!(by_id(&d, 42).extra.iter().any(|x| x.contains("<ink:annotation><mml:math")));
+    }
+}
+
 /// Word's Table of Contents control (`w:docPartObj`, #2427) around a TOC the engine's
 /// heading/entry form doesn't cover (no `TOCHeading`, unstyled entries, the field ending in a
 /// paragraph of its own) is kept as read: nothing rebuilds it on save.

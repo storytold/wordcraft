@@ -3,18 +3,57 @@ use super::paint::{Paint, paint_for};
 use super::{BezPath, Document, Draw, FaceRef, Graphic, GraphicItem, GraphicKind, InlineObject, PathSeg, Rect, Rgb, ShapeKind, Spin, TextAlign};
 use wordcraft_doc::connector::ArrowStyle;
 
-/// The draws of a chart or diagram's items inside `rect` (page coordinates). The items were built
-/// for the size `g.w` × `g.h` (0: `rect`'s own size), so they are scaled to `rect`; strokes and text
-/// by the mean of the two scales.
+/// Build page-coordinate draws for a chart, diagram, or native InkML graphic inside `rect`.
+///
+/// The items were built for `g.w` × `g.h` (zero means the frame's own size) and are scaled to the
+/// target rectangle. Stroke widths and text sizes use the mean of its X and Y scales. Native ink
+/// paths enter the round-cap-and-join ink pipeline shared by screen and PDF rendering.
 pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32) -> Vec<Draw> {
     let (sx, sy) = (scale_of(rect.w, g.w), scale_of(rect.h, g.h));
     let k = (sx + sy) / 2.0;
-    let inside = |r: &[f32; 4]| Rect::new(rect.x + r[0] * sx, rect.y + r[1] * sy, r[2] * sx, r[3] * sy);
     let mut out = Vec::with_capacity(g.items.len());
     for it in &g.items {
-        match it {
-            GraphicItem::Shape { rect: r, kind, fill, stroke, stroke_width } => out.push(Draw::Shape {
-                rect: inside(r),
+        if let Some(draw) = graphic_geometry(it, rect, sx, sy, alpha, g.kind == GraphicKind::Ink) {
+            out.push(draw);
+        } else if let GraphicItem::Text { rect: r, .. } = it {
+            let inside = Rect::new(rect.x + r[0] * sx, rect.y + r[1] * sy, r[2] * sx, r[3] * sy);
+            out.extend(text_glyphs(doc, inside, it, alpha, k));
+        }
+    }
+    out
+}
+
+pub(super) fn graphic_rotation_frame(g: &Graphic, rect: Rect) -> Rect {
+    if g.kind == GraphicKind::Ink
+        && let Some([x, y, w, h]) = g.ink_frame
+    {
+        let (sx, sy) = (scale_of(rect.w, g.w), scale_of(rect.h, g.h));
+        let mapped = Rect::new(rect.x + x * sx, rect.y + y * sy, w * sx, h * sy);
+        if [mapped.x, mapped.y, mapped.w, mapped.h].iter().all(|n| n.is_finite()) {
+            return mapped;
+        }
+    }
+    rect
+}
+
+/// Map a non-text graphic item from its local coordinates into its page-coordinate draw.
+///
+/// When `ink` is true, circular-pen paths with valid move/line segments become ink draws so both
+/// renderers apply native ink caps and joins. Text is returned as `None` for shaped separately.
+fn graphic_geometry(it: &GraphicItem, rect: Rect, sx: f32, sy: f32, alpha: f32, ink: bool) -> Option<Draw> {
+    let inside = |r: &[f32; 4]| Rect::new(rect.x + r[0] * sx, rect.y + r[1] * sy, r[2] * sx, r[3] * sy);
+    let k = (sx + sy) / 2.0;
+    Some(match it {
+        GraphicItem::Shape { rect: r, kind, fill, stroke, stroke_width } => {
+            let [x, y, width, height] = *r;
+            let frame = if ink && *kind == ShapeKind::Ellipse && fill.is_some() && stroke.is_none() && width == height {
+                let size = width * k;
+                Rect::new(rect.x + (x + width / 2.0) * sx - size / 2.0, rect.y + (y + height / 2.0) * sy - size / 2.0, size, size)
+            } else {
+                inside(r)
+            };
+            Draw::Shape {
+                rect: frame,
                 kind: *kind,
                 fill: fill.map(Paint::solid),
                 stroke: *stroke,
@@ -23,31 +62,68 @@ pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32)
                 corner: None,
                 dash: Vec::new(),
                 cap: Default::default(),
-            }),
-            GraphicItem::Path { segs, fill, stroke, stroke_width } => {
-                let segs = page_segs(segs, |x, y| (rect.x + x * sx, rect.y + y * sy));
-                out.push(Draw::Path {
+            }
+        }
+        GraphicItem::Path { segs, fill, stroke, stroke_width } => {
+            let segs = page_segs(segs, |x, y| (rect.x + x * sx, rect.y + y * sy));
+            if ink
+                && fill.is_none()
+                && let Some(color) = stroke
+                && let Some(pts) = ink_points(&segs)
+            {
+                // Reuse the ink pipeline so both output backends use round joins as well as
+                // round caps. Ordinary graphic paths retain their own outline behavior.
+                Draw::Ink { pts, color: *color, width: stroke_width * k, alpha }
+            } else {
+                Draw::Path {
                     segs,
                     fill: fill.map(Paint::solid),
                     stroke: *stroke,
                     stroke_width: stroke_width * k,
                     dash: Vec::new(),
                     cap: Default::default(),
-                })
+                }
             }
-            GraphicItem::Text { rect: r, .. } => out.extend(text_glyphs(doc, inside(r), it, alpha, k)),
-            GraphicItem::Image { rect: r, media } => out.push(Draw::Image {
-                rect: inside(r),
-                media: media.clone(),
-                crop: [0.0; 4],
-                alpha,
-                alt: String::new(),
-                fx: Default::default(),
-                decorative: false,
-            }),
         }
-    }
-    out
+        GraphicItem::InkOutline { segs, color, alpha: opacity, mask_pen } => {
+            let segs = page_segs(segs, |x, y| (rect.x + x * sx, rect.y + y * sy));
+            let alpha = if opacity.is_finite() { opacity.clamp(0.0, 1.0) * alpha } else { alpha };
+            if *mask_pen {
+                Draw::MaskInk { segs, color: *color, alpha }
+            } else {
+                Draw::Path {
+                    segs,
+                    fill: Some(Paint::Solid(*color, alpha)),
+                    stroke: None,
+                    stroke_width: 0.0,
+                    dash: Vec::new(),
+                    cap: Default::default(),
+                }
+            }
+        }
+        GraphicItem::Image { rect: r, media } => Draw::Image {
+            rect: inside(r),
+            media: media.clone(),
+            crop: [0.0; 4],
+            alpha,
+            alt: String::new(),
+            fx: Default::default(),
+            decorative: false,
+        },
+        GraphicItem::Text { .. } => return None,
+    })
+}
+
+/// Convert a single uninterrupted move/line path into the point list accepted by `Draw::Ink`.
+fn ink_points(segs: &[PathSeg]) -> Option<Vec<(f32, f32)>> {
+    segs.iter()
+        .enumerate()
+        .map(|(i, seg)| match *seg {
+            PathSeg::Move(x, y) if i == 0 => Some((x, y)),
+            PathSeg::Line(x, y) if i > 0 => Some((x, y)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Scale from the size `built` points a graphic's items were made for to `len` points; 1 when
@@ -445,26 +521,10 @@ pub(super) fn object_draws(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32
                 None => spun(own, rect, members, out),
             }
         }
-        // Native ink in a group (kept opaque): drawn as drawing-level ink is, from its pictures.
-        InlineObject::Graphic { graphic, .. } if graphic.kind == GraphicKind::Ink => {
+        InlineObject::Graphic { graphic, .. } if graphic.kind == GraphicKind::Ink && !opts.hide_ink => {
             let (sx, sy) = (scale_of(rect.w, graphic.w), scale_of(rect.h, graphic.h));
-            let items = graphic
-                .items
-                .iter()
-                .filter_map(|it| match it {
-                    GraphicItem::Image { rect: r, media } => Some(Draw::Image {
-                        rect: Rect::new(rect.x + r[0] * sx, rect.y + r[1] * sy, r[2] * sx, r[3] * sy),
-                        media: media.clone(),
-                        crop: [0.0; 4],
-                        alpha,
-                        alt: String::new(),
-                        fx: Default::default(),
-                        decorative: false,
-                    }),
-                    _ => None,
-                })
-                .collect();
-            spun(own, rect, items, out)
+            let items = graphic.items.iter().filter_map(|it| graphic_geometry(it, rect, sx, sy, alpha, true)).collect();
+            spun(own, graphic_rotation_frame(graphic, rect), items, out)
         }
         _ => {}
     }
