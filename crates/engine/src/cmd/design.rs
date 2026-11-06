@@ -3,7 +3,8 @@
 use serde_json::{Value, json};
 use std::sync::Arc;
 use wordcraft_doc::props::{Border, BorderStyle, Borders, CharProps, LineSpacing, Rgb, TextColor};
-use wordcraft_doc::styles;
+use wordcraft_doc::watermark::{MAX_SCALE, MIN_SCALE};
+use wordcraft_doc::{WatermarkPicture, styles};
 
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
@@ -71,7 +72,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("design.scaleFontSizes", "Scale Font Sizes", "Design › Document Formatting", scale_font_sizes)
             .params(r#"{"delta": pt (-1638..1638, not 0) | "percent": number (-99..1000, not 0; 10 = +10%)} (exactly one)"#),
         CommandSpec::new("design.watermark", "Watermark", "Design › Page Background", watermark)
-            .params(r#"{"text"?: string, "remove"?: bool, "diagonal"?: bool, "color"?: "RRGGBB", "transparency"?: 0-100 (percent; Word's Semitransparent is 50), "semitransparent"?: bool (50 or 0 percent)}"#),
+            .params(r#"{"text"?: string (a text watermark), "remove"?: bool, "diagonal"?: bool, "color"?: "RRGGBB", "transparency"?: 0-100 (percent; Word's Semitransparent is 50), "semitransparent"?: bool (50 or 0 percent), "picture"?: {"path": string} | {"data": base64} | {"media": key} (a picture watermark; at most 64 MB) | false (back to text), "scale"?: "auto" | 1-500 (percent of the picture's own size; auto fits the margins), "washout"?: bool (faded, default on)}"#),
         CommandSpec::new("design.pageColor", "Page Color", "Design › Page Background", |s, v| {
             s.doc.settings.page_color = p::str(v, "color").and_then(Rgb::parse);
             s.doc.settings.page_picture = None;
@@ -247,30 +248,120 @@ fn scale_font_sizes(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
+/// Design › Watermark: a text watermark (`text` switches to one), or a picture watermark
+/// (`picture`) with its scale and Washout; the text keeps its settings meanwhile, as in Word's
+/// dialog. Settings for the other kind are refused rather than silently kept.
 fn watermark(s: &mut Session, v: &Value) -> CmdResult {
     if p::bool(v, "remove").unwrap_or(false) {
         s.doc.settings.watermark = None;
         return sel_result(s);
     }
     let mut wm = s.doc.settings.watermark.clone().unwrap_or_default();
+    // Everything is checked before the document is touched (a picture added to the media).
+    let scale = match v.get("scale") {
+        None => None,
+        Some(Value::String(a)) if a.eq_ignore_ascii_case("auto") => Some(None),
+        Some(_) => {
+            let percent =
+                p::f32(v, "scale").filter(|p| p.is_finite()).ok_or_else(|| CmdError::Params("`scale` is \"auto\" or a percentage".into()))?;
+            // Tenths of a percent, as a saved file gives it back.
+            Some(Some((percent.clamp(MIN_SCALE, MAX_SCALE) * 10.0).round() / 10.0))
+        }
+    };
+    let picked = match v.get("picture") {
+        Some(Value::Bool(false)) => {
+            wm.picture = None;
+            None
+        }
+        Some(pic) if !pic.is_null() => Some(watermark_picture(s, pic)?),
+        _ => {
+            if p::str(v, "text").is_some() {
+                wm.picture = None;
+            }
+            None
+        }
+    };
+    if let Some((bytes, key)) = picked {
+        let media = match key {
+            Some(key) => key,
+            None => {
+                let ext = super::insert::image_ext(&bytes);
+                s.doc.add_media(bytes, ext)
+            }
+        };
+        wm.picture = Some(WatermarkPicture { media, ..wm.picture.take().unwrap_or_default() });
+    }
     if let Some(t) = p::str(v, "text") {
         wm.text = t.chars().take(200).collect();
     }
-    if let Some(d) = p::bool(v, "diagonal") {
-        wm.diagonal = d;
-    }
-    if let Some(c) = p::str(v, "color").and_then(Rgb::parse) {
-        wm.color = c;
-    }
-    if let Some(on) = p::bool(v, "semitransparent") {
-        wm.set_transparency(if on { 50 } else { 0 });
-    }
-    // Applied after `semitransparent`, so a percentage wins when both are given.
-    if let Some(t) = p::f32(v, "transparency") {
-        wm.set_transparency(if t.is_finite() { t.clamp(0.0, 100.0).round() as u8 } else { 0 });
+    match wm.picture.as_mut() {
+        Some(pic) => {
+            if let Some(k) = ["diagonal", "color", "transparency", "semitransparent"].into_iter().find(|k| v.get(*k).is_some()) {
+                return Err(CmdError::Params(format!("`{k}` is for a text watermark: give `text` or `\"picture\": false` too")));
+            }
+            if let Some(scale) = scale {
+                pic.scale = scale;
+            }
+            if let Some(w) = p::bool(v, "washout") {
+                pic.washout = w;
+            }
+        }
+        None => {
+            if let Some(k) = ["scale", "washout"].into_iter().find(|k| v.get(*k).is_some()) {
+                return Err(CmdError::Params(format!("`{k}` is for a picture watermark: give `picture` too")));
+            }
+            if let Some(d) = p::bool(v, "diagonal") {
+                wm.diagonal = d;
+            }
+            if let Some(c) = p::str(v, "color").and_then(Rgb::parse) {
+                wm.color = c;
+            }
+            if let Some(on) = p::bool(v, "semitransparent") {
+                wm.set_transparency(if on { 50 } else { 0 });
+            }
+            // Applied after `semitransparent`, so a percentage wins when both are given.
+            if let Some(t) = p::f32(v, "transparency") {
+                wm.set_transparency(if t.is_finite() { t.clamp(0.0, 100.0).round() as u8 } else { 0 });
+            }
+        }
     }
     s.doc.settings.watermark = Some(wm);
     sel_result(s)
+}
+
+/// Largest watermark picture taken, bytes. A watermark is a faded backdrop, not a photograph
+/// library: far below Insert › Pictures' 200 MB, so refusing a bigger one never costs a large
+/// allocation (the base64 text is measured before it is decoded).
+const MAX_PICTURE_BYTES: usize = 64 << 20;
+
+/// The picture of a watermark: a file (`path`), base64 `data`, or a picture already in the
+/// document (`media`, returned as its key). Only pictures the renderers draw are taken.
+fn watermark_picture(s: &Session, v: &Value) -> Result<(Vec<u8>, Option<String>), CmdError> {
+    let unsupported = || CmdError::Failed("not a supported picture (PNG, JPEG, GIF, WebP, BMP, TIFF)".into());
+    let readable = |b: &[u8]| wordcraft_doc::watermark::own_size(b).is_some();
+    let too_large = || CmdError::Failed(format!("the picture is larger than {} MB", MAX_PICTURE_BYTES >> 20));
+    if let Some(key) = p::str(v, "media") {
+        let bytes = s.doc.media.get(key).ok_or_else(|| CmdError::Params(format!("no picture `{key}` in the document")))?;
+        return if readable(bytes) { Ok((Vec::new(), Some(key.to_string()))) } else { Err(unsupported()) };
+    }
+    let bytes = if let Some(d) = p::str(v, "data") {
+        // base64 is 4 characters for 3 bytes: measured before anything is decoded.
+        if d.len() > MAX_PICTURE_BYTES / 3 * 4 + 4 {
+            return Err(too_large());
+        }
+        super::insert::base64_decode(d).ok_or_else(|| CmdError::Params("bad base64 data".into()))?
+    } else if let Some(path) = p::str(v, "path") {
+        crate::io::read_file_capped(path, MAX_PICTURE_BYTES as u64, "picture").map_err(CmdError::Failed)?
+    } else {
+        return Err(CmdError::Params("`picture` needs `path`, `data` or `media`".into()));
+    };
+    if bytes.len() > MAX_PICTURE_BYTES {
+        return Err(too_large());
+    }
+    if !readable(&bytes) {
+        return Err(unsupported());
+    }
+    Ok((bytes, None))
 }
 
 /// Page borders of the caret's section (or every section with `applyTo: "document"`).
@@ -299,12 +390,61 @@ fn page_borders(s: &mut Session, v: &Value) -> CmdResult {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use wordcraft_doc::{Document, Watermark};
+    use wordcraft_doc::{Document, Watermark, WatermarkPicture};
 
+    use super::MAX_PICTURE_BYTES;
     use crate::Session;
+
+    fn png(w: u32, h: u32) -> Vec<u8> {
+        let mut b = Vec::new();
+        image::RgbaImage::from_pixel(w, h, image::Rgba([30, 60, 200, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png)
+            .unwrap();
+        b
+    }
 
     fn wm(s: &Session) -> Watermark {
         s.doc.settings.watermark.clone().unwrap()
+    }
+
+    /// #2954: a picture watermark from a file's bytes, its scale and Washout, then back to text;
+    /// each step undoes.
+    #[test]
+    fn picture_watermark_and_back_to_text() {
+        let mut s = Session::new(Document::new());
+        let data = super::super::insert::base64_encode(&png(40, 20));
+        s.run("design.watermark", &json!({"picture": {"data": data}})).unwrap();
+        let pic = wm(&s).picture.unwrap();
+        assert_eq!((pic.scale, pic.washout), (None, true), "Word's defaults: Auto, washed out");
+        assert!(s.doc.media.contains_key(&pic.media));
+        s.run("design.watermark", &json!({"scale": 150, "washout": false})).unwrap();
+        assert_eq!(wm(&s).picture, Some(WatermarkPicture { media: pic.media.clone(), scale: Some(150.0), washout: false }));
+        s.run("design.watermark", &json!({"scale": "AUTO"})).unwrap();
+        assert_eq!(wm(&s).picture.unwrap().scale, None);
+        // Clamped to Word's range.
+        s.run("design.watermark", &json!({"scale": 9000})).unwrap();
+        assert_eq!(wm(&s).picture.unwrap().scale, Some(500.0));
+        s.run("design.watermark", &json!({"scale": 0})).unwrap();
+        assert_eq!(wm(&s).picture.unwrap().scale, Some(1.0));
+        s.run("design.watermark", &json!({"scale": 33.333})).unwrap();
+        assert_eq!(wm(&s).picture.unwrap().scale, Some(33.3));
+        // A picture already in the document; text settings are refused while it is a picture.
+        s.run("design.watermark", &json!({"picture": {"media": pic.media}, "scale": 50})).unwrap();
+        assert!(s.run("design.watermark", &json!({"transparency": 30})).is_err());
+        assert!(s.run("design.watermark", &json!({"diagonal": false})).is_err());
+        // Text (or `picture: false`) makes it a text watermark again, with its text settings.
+        s.run("design.watermark", &json!({"text": "SAMPLE", "transparency": 30})).unwrap();
+        let text = wm(&s);
+        assert_eq!((text.picture.is_none(), text.text.as_str(), text.transparency()), (true, "SAMPLE", 30));
+        assert!(s.run("design.watermark", &json!({"washout": true})).is_err());
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(wm(&s).picture.unwrap().scale, Some(50.0));
+        s.run("design.watermark", &json!({"picture": false})).unwrap();
+        assert_eq!(wm(&s).picture, None);
+        s.run("design.watermark", &json!({"remove": true})).unwrap();
+        assert_eq!(s.doc.settings.watermark, None);
+        s.run("edit.undo", &json!({})).unwrap();
+        assert!(s.doc.settings.watermark.is_some());
     }
 
     /// #2954: the text's transparency in percent, kept in step with Semitransparent.
@@ -323,5 +463,48 @@ mod tests {
         assert_eq!(wm(&s).transparency(), 0);
         s.run("edit.undo", &json!({})).unwrap();
         assert_eq!(wm(&s).transparency(), 100);
+    }
+
+    /// #2954: pictures that can't be drawn, and missing ones, are refused and change nothing.
+    #[test]
+    fn bad_watermark_pictures_are_refused() {
+        let mut s = Session::new(Document::new());
+        let text = s.doc.add_media(b"not a picture".to_vec(), "png");
+        for bad in [
+            json!({"picture": {}}),
+            json!({"picture": {"data": "%%%"}}),
+            json!({"picture": {"data": super::super::insert::base64_encode(b"plain text")}}),
+            json!({"picture": {"media": "nope.png"}}),
+            json!({"picture": {"media": text}}),
+            json!({"picture": {"path": "/nonexistent/watermark.png"}}),
+            json!({"picture": 7}),
+            json!({"picture": {"data": super::super::insert::base64_encode(&png(4, 4))}, "scale": "big"}),
+        ] {
+            assert!(s.run("design.watermark", &bad).is_err(), "{bad}");
+            assert_eq!(s.doc.settings.watermark, None, "{bad}");
+            assert_eq!(s.doc.media.len(), 1, "{bad}");
+        }
+    }
+
+    /// #2954 review: a picture too large is refused before anything is decoded or read: the
+    /// base64 text is measured first, and a file by its size.
+    #[test]
+    fn oversized_watermark_pictures_are_refused_without_a_large_allocation() {
+        let mut s = Session::new(Document::new());
+        // Longer than the largest picture's base64 text: refused by length, never decoded (the
+        // decoded bytes would be as large as the cap again).
+        let big = "A".repeat(MAX_PICTURE_BYTES / 3 * 4 + 8);
+        let e = s.run("design.watermark", &json!({"picture": {"data": big}})).unwrap_err();
+        let e = format!("{e:?}");
+        assert!(e.contains("larger than"), "{e}");
+        assert_eq!((s.doc.settings.watermark.clone(), s.doc.media.len()), (None, 0));
+        // A file past the cap is refused by its size (a sparse file, so nothing is written).
+        let path = std::env::temp_dir().join(format!("wordcraft-wm-big-{}.png", std::process::id()));
+        std::fs::File::create(&path).unwrap().set_len(MAX_PICTURE_BYTES as u64 + 1).unwrap();
+        let e = s.run("design.watermark", &json!({"picture": {"path": path.to_string_lossy()}})).unwrap_err();
+        let e = format!("{e:?}");
+        let _ = std::fs::remove_file(&path);
+        assert!(e.contains("larger than"), "{e}");
+        assert_eq!((s.doc.settings.watermark.clone(), s.doc.media.len()), (None, 0));
     }
 }

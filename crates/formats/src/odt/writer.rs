@@ -11,7 +11,7 @@ mod tables;
 mod tracked;
 
 use drawing::Place;
-pub(super) use drawing::WATERMARK_NAME;
+pub(super) use drawing::{PICTURE_WATERMARK_NAME, WATERMARK_NAME};
 use indexes::index_at;
 pub(super) use indexes::{IndexKind, index_instr};
 use notes::annotation_name;

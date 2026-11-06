@@ -21,7 +21,8 @@ impl Reader<'_> {
                 break;
             }
             if sc.in_hf
-                && let Some(wm) = vml_watermark(e)
+                && !sc.in_deletion
+                && let Some(wm) = vml_watermark(e).or_else(|| self.picture_watermark(sc, e, rels))
             {
                 // The document's watermark (the first one found); drawn on every page, not as
                 // a shape, so it is not one of the objects this picture contributes.
@@ -482,7 +483,7 @@ fn vml_textbox(e: &El, depth: usize) -> Option<(&El, &El)> {
     })
 }
 
-fn vml_style<'a>(style: &'a str, key: &str) -> Option<&'a str> {
+pub(in crate::read) fn vml_style<'a>(style: &'a str, key: &str) -> Option<&'a str> {
     style.rsplit(';').filter_map(|d| d.split_once(':')).find(|(k, _)| k.trim().eq_ignore_ascii_case(key)).map(|(_, v)| v.trim())
 }
 
@@ -608,7 +609,7 @@ fn vml_float(shape: &El, style: &str, in_hf: bool) -> Float {
 /// with the shape's `fillcolor`, as transparent as its `v:fill` `opacity` says (any value), and
 /// diagonal when the shape is turned. Only Word's watermark shape counts (its `id`), or text
 /// placed absolutely and centred both ways; other header WordArt (a logo or a title) is None.
-fn vml_watermark(shape: &El) -> Option<wordcraft_doc::Watermark> {
+pub(in crate::read) fn vml_watermark(shape: &El) -> Option<wordcraft_doc::Watermark> {
     let tp = shape.child("v:textpath")?;
     if tp.attr("on").is_some_and(|v| matches!(v, "f" | "false" | "0")) {
         return None;
@@ -650,7 +651,7 @@ fn vml_opacity(v: &str) -> Option<f32> {
 
 /// A VML shape's turn: `rotation` in degrees, or 65536ths of one with an `fd` suffix; `flip`: `x`
 /// and/or `y`.
-fn vml_spin(style: &str) -> wordcraft_geom::Spin {
+pub(in crate::read) fn vml_spin(style: &str) -> wordcraft_geom::Spin {
     let get = |k: &str| vml_style(style, k);
     let rot = get("rotation").and_then(|v| match v.strip_suffix("fd") {
         Some(fd) => fd.trim().parse::<f32>().ok().map(|f| f / 65_536.0),

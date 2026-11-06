@@ -106,6 +106,7 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
         tag_index: HashMap::new(),
         links: Vec::new(),
         bookmarks: std::cell::OnceCell::new(),
+        watermark_fit: HashMap::new(),
     };
     if let Some(o) = ex.outline(pages) {
         pdf.set_outline(o);

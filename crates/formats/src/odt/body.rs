@@ -62,6 +62,13 @@ pub(super) struct Body<'a> {
     forms: super::forms::FormsReader,
     /// A watermark found (in a header): see [`Self::start_shape`].
     pub(super) watermark: Option<wordcraft_doc::Watermark>,
+    /// A picture watermark found (in a header): its picture, its frame's size (points) and
+    /// whether it is washed out. See [`Self::end_frame`].
+    pub(super) watermark_picture: Option<(Vec<u8>, (f32, f32), bool)>,
+    /// The open frame is drawn faded (`draw:color-mode` `watermark`).
+    frame_washout: bool,
+    /// Reading a master page's header or footer (where a watermark lives).
+    pub(super) page_part: bool,
     /// The shape being read is a watermark's, if its geometry follows its text: its size, turn,
     /// colour and transparency (percent), and whether its geometry is fontwork.
     watermark_shape: Option<((f32, f32), f32, Option<wordcraft_doc::props::Rgb>, u8, bool)>,
@@ -217,6 +224,9 @@ impl<'a> Body<'a> {
             entries: &[],
             forms: Default::default(),
             watermark: None,
+            watermark_picture: None,
+            frame_washout: false,
+            page_part: false,
             watermark_shape: None,
             break_next: false,
             sources: Vec::new(),
@@ -1330,6 +1340,7 @@ impl Body<'_> {
                 self.frame_look = g.look(h.is_none(), &self.styles.defs);
                 self.frame_name = get(a, "draw:name").map(|n| n.chars().take(256).collect());
                 self.frame_clip = g.clip;
+                self.frame_washout = g.is_washed_out();
             }
             "image" | "object" | "object-ole" | "desc" | "title" | "contour-polygon" => self.frame_part(q, a),
             // A columned section (ODF 1.3 §5.4) is a continuous section with its columns.

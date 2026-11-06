@@ -599,7 +599,29 @@ impl Writer {
 /// The name a watermark shape carries (Word's and LibreOffice's: how readers know it).
 pub(in crate::odt) const WATERMARK_NAME: &str = "PowerPlusWaterMarkObject";
 
+/// The name a picture watermark's frame carries (Word's picture watermark shape id).
+pub(in crate::odt) const PICTURE_WATERMARK_NAME: &str = "WordPictureWatermark";
+
 impl Writer {
+    /// The document's picture watermark in a header: a frame holding the picture, `size` points
+    /// (width, height), behind the text, centred on a page whose text area is `area`, drawn
+    /// faded when `washout` (`draw:color-mode` `watermark`).
+    pub(in crate::odt) fn watermark_picture(&mut self, img: &model::Img, washout: bool, area: (f32, f32)) -> String {
+        let mode = if washout { " draw:color-mode=\"watermark\"" } else { "" };
+        let style = self.graphic_style(format!(
+            " draw:stroke=\"none\" draw:fill=\"none\"{mode} style:run-through=\"background\" style:wrap=\"run-through\" style:horizontal-pos=\"center\" style:horizontal-rel=\"page-content\" style:vertical-pos=\"middle\" style:vertical-rel=\"page-content\" style:flow-with-text=\"false\" draw:auto-grow-height=\"false\" draw:auto-grow-width=\"false\"",
+        ));
+        let href = self.picture(img);
+        let (aw, ah) = (if area.0.is_finite() { area.0 } else { img.w }, if area.1.is_finite() { area.1 } else { img.h });
+        format!(
+            "<draw:frame text:anchor-type=\"char\" draw:z-index=\"0\" draw:name=\"{PICTURE_WATERMARK_NAME}\" draw:style-name=\"{style}\" svg:x=\"{}\" svg:y=\"{}\" svg:width=\"{}\" svg:height=\"{}\"><draw:image xlink:href=\"{href}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/></draw:frame>",
+            pt((aw - img.w) / 2.0),
+            pt((ah - img.h) / 2.0),
+            pt(img.w),
+            pt(img.h)
+        )
+    }
+
     /// The document's watermark as LibreOffice and Word write one in a header: a fontwork shape
     /// (§10.3.2 `draw:custom-shape` whose geometry follows its text, `draw:text-path`) behind the
     /// text, centred on a page whose text area is `area` (width, height; points), turned up 45°

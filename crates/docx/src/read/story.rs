@@ -25,6 +25,8 @@ mod fields;
 mod runs;
 mod vml;
 
+pub(super) use vml::{vml_spin, vml_style, vml_watermark};
+
 const INK_URI: &str = "http://schemas.microsoft.com/office/word/2010/wordprocessingInk";
 const INK_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml";
 /// The `a:graphicData` URI of an Office 2016 chart (`cx:chart`).
@@ -113,6 +115,10 @@ pub struct StoryCtx {
     pub story_depth: usize,
     /// Reading a header or footer (not a text box inside one): where Word keeps its watermark.
     pub in_hf: bool,
+    /// This header's Word picture watermark is the document's watermark (see `watermark::plan`).
+    pub picture_wm: bool,
+    /// Reading the content of a tracked deletion: a watermark shape in it is not the document's.
+    pub in_deletion: bool,
 }
 
 /// Paragraph content under construction.
@@ -158,7 +164,7 @@ fn clean_text(s: &str) -> String {
         .collect()
 }
 
-fn children_of_choice(ac: &El) -> Option<&El> {
+pub(super) fn children_of_choice(ac: &El) -> Option<&El> {
     // Prefer a Choice whose requirements we understand; else the Fallback; else any Choice.
     // `m`: Office Math (a producer may guard an equation with a picture fallback, #1273).
     const KNOWN: &[&str] = &["wps", "wpg", "wpc", "wpi", "w14", "w15", "wp14", "a14", "w16se", "w16cid", "w16", "w16cex", "w16sdtdh", "v", "m"];

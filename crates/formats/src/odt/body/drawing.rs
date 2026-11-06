@@ -90,6 +90,24 @@ impl Body<'_> {
     pub(in crate::odt) fn end_frame(&mut self) {
         if let Some((w, h, img, alt, eq, chart, object)) = self.frame.take() {
             let boxed = self.frame_box.take();
+            let washout = std::mem::take(&mut self.frame_washout);
+            // A picture watermark (the header's frame of the name the writer gives it, holding a
+            // picture and nothing else): the document's watermark, not a picture in the header.
+            if boxed.is_none()
+                && eq.is_none()
+                && chart.is_none()
+                && object.is_none()
+                && self.page_part
+                && self.frame_name.as_deref().is_some_and(|n| n.starts_with(crate::odt::writer::PICTURE_WATERMARK_NAME))
+                && let Some((data, w, h)) = img.clone().zip(w).zip(h).map(|((d, w), h)| (d, w, h))
+            {
+                if self.watermark_picture.is_none() {
+                    self.watermark_picture = Some((data, (w, h), washout));
+                }
+                self.frame_clip = None;
+                self.frame = None;
+                return;
+            }
             let mut float = self.frame_float.take();
             if boxed.is_some()
                 && self.shape_kind.is_some()

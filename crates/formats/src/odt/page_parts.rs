@@ -56,6 +56,17 @@ pub(super) struct Parts {
     even_odd: bool,
     /// The watermark a header holds (the first found).
     pub(super) watermark: Option<wordcraft_doc::Watermark>,
+    /// The picture watermark a header holds (the first found), if no text one is.
+    picture: Option<PictureRead>,
+}
+
+/// A picture watermark as read: its picture, its frame's size and the room Auto fills on its
+/// master page (points), and whether it is washed out.
+struct PictureRead {
+    data: Vec<u8>,
+    size: (f32, f32),
+    fit: (f32, f32),
+    washout: bool,
 }
 
 impl Parts {
@@ -128,6 +139,7 @@ pub(super) fn read(
     for (name, kind, evs) in found {
         let mut reader = Body::new(styles, &none, fetch);
         reader.in_text = true;
+        reader.page_part = true;
         (reader.entries, reader.manifest) = (objects.0, Some(objects.1));
         reader.spaces_left = *spaces_left;
         for ev in evs {
@@ -135,6 +147,14 @@ pub(super) fn read(
         }
         *spaces_left = reader.spaces_left;
         out.watermark = out.watermark.take().or(reader.watermark.take());
+        if !kind.footer()
+            && out.picture.is_none()
+            && let Some((data, (w, h), washout)) = reader.watermark_picture.take()
+        {
+            // The room Auto fills on this master page, to tell Auto from a scale.
+            let fit = pages.masters.get(&name).map_or((0.0, 0.0), |s| (s.text_width(), s.text_height()));
+            out.picture = Some(PictureRead { data, size: (w, h), fit, washout });
+        }
         out.parts.push((if kind.footer() { PartKind::Footer } else { PartKind::Header }, reader.take_blocks()));
         if let Some(sec) = pages.masters.get_mut(&name) {
             kind.set(sec, out.parts.len() as u32);
@@ -174,6 +194,23 @@ pub(super) fn read(
 pub(super) fn add(doc: &mut Document, parts: Parts) {
     if parts.watermark.is_some() {
         doc.settings.watermark.clone_from(&parts.watermark);
+    } else if let Some(pic) = parts.picture
+        && let Some((own_w, own_h)) = wordcraft_doc::watermark::own_size(&pic.data)
+    {
+        // Auto when the frame is as large as fits the margins, else its width as a percentage of
+        // the picture's own size, in tenths as a command gives one.
+        let auto = wordcraft_doc::WatermarkPicture::default().size(own_w, own_h, pic.fit).map(|s| s.0);
+        let scale = if auto.is_some_and(|a| (a - pic.size.0).abs() <= 1.0) {
+            None
+        } else {
+            Some(((pic.size.0 / own_w * 1000.0).round() / 10.0).clamp(wordcraft_doc::watermark::MIN_SCALE, wordcraft_doc::watermark::MAX_SCALE))
+        };
+        let ext = model::sniff_image(&pic.data).unwrap_or("png");
+        let media = doc.add_media(pic.data, ext);
+        doc.settings.watermark = Some(wordcraft_doc::Watermark {
+            picture: Some(wordcraft_doc::WatermarkPicture { media, scale, washout: pic.washout }),
+            ..Default::default()
+        });
     }
     let mut ids: Vec<Option<u32>> = Vec::with_capacity(parts.parts.len());
     for (kind, blocks) in parts.parts {

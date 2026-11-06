@@ -245,6 +245,9 @@ pub struct Watermark {
     /// ([`Watermark::frame`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<[f32; 2]>,
+    /// A picture watermark, drawn instead of the text (which is kept for the dialog).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub picture: Option<crate::watermark::WatermarkPicture>,
 }
 
 impl Default for Watermark {
@@ -257,6 +260,7 @@ impl Default for Watermark {
             semitransparent: true,
             transparency: None,
             size: None,
+            picture: None,
         }
     }
 }

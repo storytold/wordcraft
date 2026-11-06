@@ -48,6 +48,7 @@ pub mod smart_art;
 pub mod styles;
 pub mod symbol_fonts;
 pub mod table;
+pub mod watermark;
 pub mod wordart;
 pub mod work;
 pub mod wrap;
@@ -92,6 +93,7 @@ pub use settings::{
 };
 pub(crate) use text_walk::{PARA_WALK_DEPTH, walk_between};
 pub use text_walk::{count_chars, count_chars_no_spaces, count_words};
+pub use watermark::WatermarkPicture;
 
 /// A document.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -372,6 +372,31 @@ pub(crate) fn draw_page_picture(ctx: &mut RenderContext, doc: &Document, page: &
     ctx.reset_paint_transform();
 }
 
+/// A picture watermark, centred in the page's text area behind the text, at its scale or at Auto
+/// the size the first section naming the page's header gives it ([`Document::watermark_fit`]),
+/// washed out as Word does when it is: drawn through the same picture path as any picture with
+/// corrections ([`pixmap_for`] with [`wordcraft_doc::WatermarkPicture::fx`]).
+pub(crate) fn draw_watermark_picture(ctx: &mut RenderContext, doc: &Document, page: &Page, view: Affine, pic: &wordcraft_doc::WatermarkPicture) {
+    let Some((own_w, own_h)) = doc.media.get(&pic.media).and_then(|b| wordcraft_doc::watermark::own_size(b)) else { return };
+    // The document page, not a Print Markup area beside it.
+    let b = page.body;
+    let body =
+        if b.w > 0.0 && b.h > 0.0 { b } else { wordcraft_geom::Rect::new(0.0, 0.0, (page.w - page.markup.max(0.0)).max(1.0), page.h.min(2000.0)) };
+    let fit = if pic.scale.is_none() { doc.watermark_fit(page.header_story) } else { (0.0, 0.0) };
+    let Some(r) = pic.place(own_w, own_h, fit, body) else { return };
+    let Some(pm) = pixmap_for(doc, &pic.media, pic.fx()) else { return };
+    let (pw, ph) = (pm.width().max(1) as f64, pm.height().max(1) as f64);
+    let rect = kurbo::Rect::new(f64::from(r.x), f64::from(r.y), f64::from(r.x) + f64::from(r.w), f64::from(r.y) + f64::from(r.h));
+    ctx.set_transform(view);
+    ctx.set_paint(vello_cpu::Image {
+        image: vello_cpu::ImageSource::Pixmap(pm),
+        sampler: peniko::ImageSampler::default().with_quality(peniko::ImageQuality::Medium),
+    });
+    ctx.set_paint_transform(Affine::translate((rect.x0, rect.y0)) * Affine::scale_non_uniform(rect.width() / pw, rect.height() / ph));
+    ctx.fill_rect(&rect);
+    ctx.reset_paint_transform();
+}
+
 pub(crate) fn pixmap_for(doc: &Document, key: &str, fx: wordcraft_doc::picfx::PicFx) -> Option<Arc<Pixmap>> {
     let bytes = doc.media.get(key)?;
     // Corrected pixels are cached apart from the picture's own (the same picture can be shown

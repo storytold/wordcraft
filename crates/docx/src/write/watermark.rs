@@ -1,10 +1,31 @@
-//! The document's text watermark as a VML text shape in the headers (ECMA-376 Part 4, VML:
-//! `shape`, `shapetype`, `path`, `textpath`, `fill`), which is how a WordprocessingML consumer
-//! draws text behind every page. The reader (`read::story::vml_watermark`) maps it back.
+//! The document's watermark in the headers: a text watermark as a VML text shape (ECMA-376
+//! Part 4, VML: `shape`, `shapetype`, `path`, `textpath`, `fill`), a picture watermark as a VML
+//! picture (`imagedata`), which is how a WordprocessingML consumer draws them behind every page.
+//! The reader (`read::story::vml_watermark`, `read::watermark`) maps them back.
 
-use wordcraft_doc::{SectionProps, Watermark};
+use wordcraft_doc::watermark::own_size;
+use wordcraft_doc::{Document, SectionProps, Watermark, WatermarkPicture};
 
 use crate::xml::esc;
+
+/// Word's Washout on `v:imagedata`: `gain` 0.3 and `blacklevel` 0.35, in 65536ths.
+const WASHOUT: &str = r#" gain="19661f" blacklevel="22938f""#;
+
+/// The document's picture watermark and its picture's own size, when its picture can be read.
+pub(super) fn picture(doc: &Document) -> Option<(&WatermarkPicture, (f32, f32))> {
+    let pic = doc.settings.watermark.as_ref()?.picture.as_ref()?;
+    Some((pic, doc.media.get(&pic.media).and_then(|b| own_size(b))?))
+}
+
+/// Whether the document's watermark is written: text that isn't blank, or a picture that can be
+/// read.
+pub(super) fn shown(doc: &Document) -> bool {
+    match &doc.settings.watermark {
+        Some(wm) if wm.picture.is_some() => picture(doc).is_some(),
+        Some(wm) => text(wm).is_some(),
+        None => false,
+    }
+}
 
 /// The shape type the watermark shape uses: two straight subpaths, the box's top and bottom
 /// edges, between which the `v:textpath` text is stretched to fit the shape (`fitshape`). A single
@@ -74,6 +95,31 @@ pub(super) fn run(wm: &Watermark, n: usize, page: &SectionProps) -> Option<Strin
         fill = fill,
         tstyle = esc(&format!("font-family:\"{font}\";font-size:1pt")),
         text = esc(&text),
+    ))
+}
+
+/// A `w:r` holding the picture watermark for header part number `n`, its picture relationship
+/// `rid`: Word's picture shape, centred on the margins, behind the text, with Word's Washout
+/// values when washed out. `fit` is the room Auto fills (see [`Document::watermark_fit`]).
+pub(super) fn picture_run(pic: &WatermarkPicture, own: (f32, f32), n: usize, fit: (f32, f32), rid: &str) -> Option<String> {
+    let (w, h) = pic.size(own.0, own.1, fit)?;
+    let style = format!(
+        "position:absolute;margin-left:0;margin-top:0;width:{w:.3}pt;height:{h:.3}pt;z-index:-251657216;\
+         mso-position-horizontal:center;mso-position-horizontal-relative:margin;\
+         mso-position-vertical:center;mso-position-vertical-relative:margin"
+    );
+    Some(format!(
+        concat!(
+            r#"<w:r><w:rPr><w:noProof/></w:rPr><w:pict>"#,
+            r#"<v:shapetype id="_x0000_t75" coordsize="21600,21600" o:spt="75" o:preferrelative="t" path="m0,0l0,21600,21600,21600,21600,0xe" filled="f" stroked="f">"#,
+            r#"<v:path o:extrusionok="f" gradientshapeok="t" o:connecttype="rect"/><o:lock v:ext="edit" aspectratio="t"/></v:shapetype>"#,
+            r##"<v:shape id="WordPictureWatermark{n}" type="#_x0000_t75" style="{style}" o:allowincell="f">"##,
+            r#"<v:imagedata r:id="{rid}"{wash}/></v:shape></w:pict></w:r>"#
+        ),
+        n = n,
+        style = esc(&style),
+        rid = esc(rid),
+        wash = if pic.washout { WASHOUT } else { "" },
     ))
 }
 

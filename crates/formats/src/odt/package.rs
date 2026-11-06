@@ -251,8 +251,19 @@ fn page_parts(doc: &Document, sec: &SectionProps, w: &mut Writer) -> PageParts {
     let mut out = PageParts::default();
     let even = doc.settings.even_odd_headers;
     // A watermark is a shape in every header (one written for it alone when there is none).
-    let wm = doc.settings.watermark.as_ref().filter(|w| !w.text.trim().is_empty());
+    let wm = doc.settings.watermark.as_ref().filter(|w| w.picture.is_some() || !w.text.trim().is_empty());
     let area = (sec.page_w - sec.margin_left - sec.margin_right, sec.page_h - sec.margin_top - sec.margin_bottom);
+    // A picture watermark that can't be read is not written; one that can is sized for this
+    // master page (a master page's header is its own part in the file).
+    let picture = wm.and_then(|w| w.picture.as_ref()).and_then(|pic| {
+        let data = doc.media.get(&pic.media)?;
+        let (own_w, own_h) = wordcraft_doc::watermark::own_size(data)?;
+        let ext = model::sniff_image(data)?;
+        let (w, h) = pic.size(own_w, own_h, (sec.text_width(), sec.text_height()))?;
+        let img = model::Img { data: data.clone(), ext: ext.to_string(), w, h, alt: String::new(), float: None, object: None, crop: [0.0; 4] };
+        Some((img, pic.washout))
+    });
+    let wm = wm.filter(|w| w.picture.is_none() || picture.is_some());
     for (set, name) in [(&sec.headers, "header"), (&sec.footers, "footer")] {
         let wanted =
             set.default.is_some() || (even && set.even.is_some()) || (sec.title_page && set.first.is_some()) || (name == "header" && wm.is_some());
@@ -281,7 +292,11 @@ fn page_parts(doc: &Document, sec: &SectionProps, w: &mut Writer) -> PageParts {
             if name == "header"
                 && let Some(wm) = wm
             {
-                body = with_watermark(&body, &w.watermark(wm, (sec.page_w, sec.page_h), area));
+                let shape = match &picture {
+                    Some((img, washout)) => w.watermark_picture(img, *washout, area),
+                    None => w.watermark(wm, (sec.page_w, sec.page_h), area),
+                };
+                body = with_watermark(&body, &shape);
             }
             out.xml.push_str(&format!("<style:{el}>{body}</style:{el}>"));
         }

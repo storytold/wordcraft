@@ -296,6 +296,52 @@ fn a_watermark_is_a_shape_in_the_header_and_reads_back_as_one() {
     );
 }
 
+/// A solid `w`×`h` px PNG.
+fn watermark_png(w: u32, h: u32) -> Vec<u8> {
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(w, h, image::Rgba([20, 60, 140, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    png
+}
+
+#[test]
+fn a_picture_watermark_is_a_picture_frame_in_the_header_and_reads_back_as_one() {
+    // A picture watermark is written as its picture (not the text kept for the dialog) in a frame
+    // behind the text of every header, and read back as the watermark, not a picture in the header.
+    let png = watermark_png(400, 200);
+    for (scale, washout) in [(None, true), (Some(50.0), false), (Some(200.0), true)] {
+        let mut d = Document::new();
+        d.body = vec![para_block(Paragraph::with_text("Body", CharProps::default()))];
+        let key = d.add_media(png.clone(), "png");
+        let pic = wordcraft_doc::WatermarkPicture { media: key, scale, washout };
+        d.settings.watermark = Some(wordcraft_doc::Watermark { text: "DRAFT".into(), picture: Some(pic), ..Default::default() });
+        let saved = export(&d).unwrap();
+        let styles = crate::odt::tests::entry(&saved, "styles.xml");
+        assert!(styles.contains("draw:name=\"WordPictureWatermark\"") && styles.contains("<draw:image "), "{styles}");
+        assert!(!styles.contains("DRAFT") && !styles.contains("draw:text-path"), "the picture, not the text: {styles}");
+        assert_eq!(styles.contains("draw:color-mode=\"watermark\""), washout, "{styles}");
+        assert!(crate::odt::tests::entry(&saved, "META-INF/manifest.xml").contains("Pictures/"), "the picture is in the package");
+        let back = import(&saved).unwrap();
+        let wm = back.settings.watermark.clone().expect("the watermark");
+        let pic = wm.picture.expect("a picture watermark");
+        assert_eq!((pic.scale, pic.washout), (scale, washout));
+        assert_eq!(back.media.get(&pic.media).map(|b| b.as_slice()), Some(png.as_slice()));
+        // Not a picture in the header too.
+        let header = back.last_section.headers.default.and_then(|id| back.parts.get(&id)).unwrap();
+        assert!(header.blocks.iter().filter_map(|b| b.as_para()).all(|p| p.objects.is_empty()), "no picture left in the header");
+        assert_eq!(import(&export(&back).unwrap()).unwrap().settings.watermark, back.settings.watermark, "second generation");
+    }
+    // A picture that can't be read is not written, and the text isn't written in its place.
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text("Body", CharProps::default()))];
+    d.media.insert("junk.png".into(), std::sync::Arc::new(b"junk".to_vec()));
+    let pic = wordcraft_doc::WatermarkPicture { media: "junk.png".into(), scale: None, washout: true };
+    d.settings.watermark = Some(wordcraft_doc::Watermark { picture: Some(pic), ..Default::default() });
+    let styles = crate::odt::tests::entry(&export(&d).unwrap(), "styles.xml");
+    assert!(!styles.contains("DRAFT") && !styles.contains("WordPictureWatermark") && !styles.contains("<draw:image "), "{styles}");
+}
+
 #[test]
 fn libreoffices_watermark_reads_as_the_watermark() {
     // As LibreOffice's Format › Watermark writes it (observed): turned, half see-through.

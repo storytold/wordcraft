@@ -43,6 +43,9 @@ pub(crate) struct Exporter<'a> {
     /// Bookmarks by exact name, and by ASCII-lowercased name for the case-blind fallback; the
     /// first in document order wins either way.
     pub(crate) bookmarks: std::cell::OnceCell<(HashMap<String, wordcraft_doc::Pos>, HashMap<String, wordcraft_doc::Pos>)>,
+    /// What a picture watermark at Auto fills, by the header a page shows
+    /// ([`wordcraft_doc::Document::watermark_fit`]), worked out once per header.
+    pub(crate) watermark_fit: HashMap<Option<u32>, (f32, f32)>,
 }
 
 impl Exporter<'_> {
@@ -191,11 +194,16 @@ impl Exporter<'_> {
         if let Some(pic) = self.doc.settings.page_picture.clone() {
             self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.page_picture(s, &pic, w, h));
         }
-        if let Some(wm) = self.doc.settings.watermark.clone()
-            && !wm.text.trim().is_empty()
-        {
-            let area = page.body;
-            self.tagged(s, Role::Artifact(ArtifactType::Watermark), None, |me, s| me.watermark(s, &wm, w, h, area));
+        match self.doc.settings.watermark.clone() {
+            Some(wordcraft_doc::Watermark { picture: Some(pic), .. }) => {
+                let (body, header) = (page.body, page.header_story);
+                self.tagged(s, Role::Artifact(ArtifactType::Watermark), None, |me, s| me.watermark_picture(s, &pic, body, header, (w, h)));
+            }
+            Some(wm) if !wm.text.trim().is_empty() => {
+                let area = page.body;
+                self.tagged(s, Role::Artifact(ArtifactType::Watermark), None, |me, s| me.watermark(s, &wm, w, h, area));
+            }
+            _ => {}
         }
         let dopts = DisplayOptions {
             marks: false,
@@ -326,6 +334,27 @@ impl Exporter<'_> {
             tree.push(TagGroup::with_children(e.kind, e.children));
         }
         tree
+    }
+
+    /// A picture watermark, centred in the page's text area (`body`) at its scale or, at Auto, the
+    /// size the first section naming the page's `header` gives it, as on screen. Washed out, it is
+    /// the picture with Word's Washout baked in by the same path as any picture with corrections,
+    /// embedded once however many pages show it.
+    fn watermark_picture(&mut self, s: &mut Surface, pic: &wordcraft_doc::WatermarkPicture, body: Rect, header: Option<u32>, page: (f32, f32)) {
+        // The page's text area; the whole page without one.
+        let body = if body.w > 0.0 && body.h > 0.0 { body } else { Rect::new(0.0, 0.0, page.0, page.1.min(2000.0)) };
+        let Some((own_w, own_h)) = self.doc.media.get(&pic.media).and_then(|b| wordcraft_doc::watermark::own_size(b)) else { return };
+        let fit = if pic.scale.is_none() {
+            let doc = self.doc;
+            *self.watermark_fit.entry(header).or_insert_with(|| doc.watermark_fit(header))
+        } else {
+            (0.0, 0.0)
+        };
+        let Some(r) = pic.place(own_w, own_h, fit, body) else { return };
+        let (Some(img), Some(size)) = (self.image(&pic.media, pic.fx()), Size::from_wh(r.w, r.h)) else { return };
+        s.push_transform(&Transform::from_translate(r.x, r.y));
+        s.draw_image(img, size);
+        s.pop();
     }
 
     /// The watermark text stretched over its box (Word's `v:textpath fitshape`): its advance across

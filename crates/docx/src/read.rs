@@ -12,6 +12,7 @@ mod props;
 mod sdt;
 mod shape_style;
 mod story;
+mod watermark;
 mod wordart;
 
 use std::collections::{HashMap, HashSet};
@@ -116,6 +117,8 @@ pub(crate) struct Reader<'p> {
     pub theme_fills: shape_style::ThemeFills,
     /// The fill of the group being read (what its members' `a:grpFill` stands for).
     pub group_fill: Option<wordcraft_doc::fill::Fill>,
+    /// The document's picture watermark from the headers, if any (`watermark::plan`).
+    picture_wm: watermark::Plan,
 }
 
 /// The package path that internal relationship `id` points at, if it has type `kind` (an `rt`
@@ -188,6 +191,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         txbx_links: Vec::new(),
         theme_fills: Default::default(),
         group_fill: None,
+        picture_wm: watermark::Plan::default(),
         chunks,
     };
     r.pc.major_font = r.doc.settings.major_font.clone();
@@ -279,6 +283,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         }
     }
     if let Some(body) = root.child("w:body") {
+        r.picture_wm = watermark::plan(&r, body, &rels);
         let mut sc = StoryCtx::default();
         let mut blocks = Blocks::new();
         r.read_blocks(&mut sc, body, &rels, &mut blocks, r.chunks.depth);
