@@ -567,7 +567,7 @@ fn compare_versions_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CompareVersionsFo
                 crate::rtl::vertical(ui, |ui| {
                     heading(ui, "Original version");
                     let current = label_at(f.version.max(0) as usize);
-                    egui::ComboBox::from_id_salt("cv_original").selected_text(current).width(260.0).show_ui(ui, |ui| {
+                    craft_ui::ComboBox::from_id_salt("cv_original").selected_text(current).width(260.0).show_ui(ui, |ui| {
                         for i in 0..versions.len() {
                             ui.selectable_value(&mut f.version, i as i64, label_at(i));
                         }
@@ -584,7 +584,7 @@ fn compare_versions_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CompareVersionsFo
                     } else {
                         f.other.clone()
                     };
-                    egui::ComboBox::from_id_salt("cv_other").selected_text(selected).width(260.0).show_ui(ui, |ui| {
+                    craft_ui::ComboBox::from_id_salt("cv_other").selected_text(selected).width(260.0).show_ui(ui, |ui| {
                         ui.selectable_value(&mut f.other, "current".to_string(), tl!("Current document"));
                         for i in 0..versions.len() {
                             if i as i64 == f.version {

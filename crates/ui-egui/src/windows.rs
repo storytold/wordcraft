@@ -419,13 +419,10 @@ impl WordApp {
     /// drawn window is its document's only one.
     pub(crate) fn handle_window_request(&mut self, what: &str, req: &Value) {
         if !self.windows.native {
-            match what {
-                "syncScroll" => {
-                    if let Some(v) = req.get("value").and_then(Value::as_bool) {
-                        self.session.view.sync_scroll = v;
-                    }
-                }
-                _ => {}
+            if what == "syncScroll"
+                && let Some(v) = req.get("value").and_then(Value::as_bool)
+            {
+                self.session.view.sync_scroll = v;
             }
             return;
         }
