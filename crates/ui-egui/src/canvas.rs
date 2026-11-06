@@ -1199,14 +1199,22 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     let middle_gesture = app.canvas.auto_scroll.blocks_input();
     // Middle-click paste (#1934), Linux only, with the option on: a middle click pastes the primary
     // selection rather than starting the autoscroll gesture.
-    if app.canvas.auto_scroll.paste_requested()
-        && let Some(get_text) = &app.services.primary_selection_text
-        && let Some(text) = get_text()
-    {
-        // Plain text, and only plain text: the primary selection carries no formatting, and it
-        // carries no owner either — another program's selection that merely reads like our copy
-        // cannot be told apart from ours, so no copy's formatting may be applied to it (#1934).
-        let _ = app.run("edit.pasteText", json!({"text": text}));
+    if app.canvas.auto_scroll.paste_requested() {
+        // The paste goes in at the caret, as a middle click does in X11 and GTK: text selected
+        // here is not replaced by what another program's selection holds.
+        if !app.session.sel.is_collapsed() {
+            let end = app.session.sel.anchor <= app.session.sel.focus;
+            let _ = app.run("select.collapse", json!({"end": end}));
+        }
+        if let Some(get_text) = &app.services.primary_selection_text
+            && let Some(text) = get_text()
+        {
+            // Plain text, and only plain text: the primary selection carries no formatting, and
+            // it carries no owner either — another program's selection that merely reads like our
+            // copy cannot be told apart from ours, so no copy's formatting may be applied to it
+            // (#1934).
+            let _ = app.run("edit.pasteText", json!({"text": text}));
+        }
     }
     handle_primary_pointer(app, ui, &resp, &rects, layout, geo, middle_gesture);
     // A click on a check box ticks it; on a list's button opens the list.
