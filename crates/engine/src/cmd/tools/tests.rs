@@ -277,6 +277,43 @@ fn inspect_removals_are_refused_while_the_document_tracks_changes() {
     assert_eq!(found["found"]["hiddenText"], true, "{found}");
 }
 
+#[test]
+fn combine_reports_mode_and_marks_changes() {
+    let mut s = Session::new(Document::from_text("The cat sat.\nKeep this."));
+    let r = s.run("review.combine", &json!({"text": "The dog sat.\nKeep this.\nAdded."})).unwrap();
+    assert_eq!(r["mode"], "combine");
+    assert!(r["changes"].as_u64().unwrap() >= 1);
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "The dog sat.\nKeep this.\nAdded.");
+}
+
+#[test]
+fn merge3_applies_non_conflicting_changes() {
+    let mut s = Session::new(Document::from_text("base\nours changed\nshared"));
+    let r = s.run("review.merge", &json!({"base": {"text": "base\nmiddle\nshared"}, "theirs": {"text": "base\nmiddle\nshared theirs"}})).unwrap();
+    assert_eq!(r["mode"], "merge3");
+    assert_eq!(r["conflicts"], 0);
+    let text = s.doc.plain_text(StoryRef::Body);
+    assert!(text.contains("ours changed"), "{text}");
+    assert!(text.contains("shared theirs"), "{text}");
+}
+
+#[test]
+fn merge3_marks_conflicts_and_supports_resolution_modes() {
+    let mut s = Session::new(Document::from_text("base\nours"));
+    let r = s.run("review.merge", &json!({"base": {"text": "base\nold"}, "theirs": {"text": "base\ntheirs"}, "conflicts": "markers"})).unwrap();
+    assert!(r["conflicts"].as_u64().unwrap() >= 1, "{r}");
+    let text = s.doc.plain_text(StoryRef::Body);
+    assert!(text.contains("<<<<<<< ours"), "{text}");
+    assert!(text.contains(">>>>>>> theirs"), "{text}");
+
+    let mut s = Session::new(Document::from_text("base\nours"));
+    let r = s.run("review.merge", &json!({"base": {"text": "base\nold"}, "theirs": {"text": "base\ntheirs"}, "conflicts": "theirs"})).unwrap();
+    assert!(r["conflicts"].as_u64().unwrap() >= 1);
+    assert!(s.doc.plain_text(StoryRef::Body).contains("theirs"));
+    assert!(!s.doc.plain_text(StoryRef::Body).contains("ours\n"));
+}
+
 /// A document that doesn't track changes is inspected as before: the hidden text goes.
 #[test]
 fn inspect_removals_work_when_the_document_does_not_track_changes() {

@@ -17,6 +17,7 @@ pub(super) struct CompareOptions {
     /// Formatting differences become tracked formatting changes.
     pub formatting: bool,
     /// Compare table structure/content.
+    #[allow(dead_code)] // Parsed for option fidelity/reporting; body compare always compares tables today.
     pub tables: bool,
     /// Changed paragraphs are compared character by character (else word by word).
     pub characters: bool,
@@ -610,4 +611,240 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ins: u32, del: u32, o
         }
     }
     p
+}
+
+pub(super) const MERGE3_PARAMS: &str = r#"{"base": {"path"?: string, "text"?: string} | path string (common ancestor), "ours"?: {"path"?: string, "text"?: string} | path string (default: current document), "theirs": {"path"?: string, "text"?: string} | path string, "showIn"?: "new"|"original" (default new), "conflicts"?: "markers"|"ours"|"theirs" (default markers)}"#;
+
+fn load_source(s: &Session, v: &Value, key: &str, ours_default_current: bool) -> Result<Document, CmdError> {
+    let src = v.get(key);
+    let (path, text) = match src {
+        Some(Value::String(p)) => (Some(p.as_str()), None),
+        Some(Value::Object(m)) => (m.get("path").and_then(Value::as_str), m.get("text").and_then(Value::as_str)),
+        None if ours_default_current && key == "ours" => return Ok(s.doc.clone()),
+        None => (None, None),
+        _ => return Err(CmdError::Params(format!("`{key}` must be a path string or {{\"path\"|\"text\"}}"))),
+    };
+    if let Some(t) = text {
+        return Ok(Document::from_text(t));
+    }
+    if let Some(path) = path {
+        return crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed);
+    }
+    if ours_default_current && key == "ours" {
+        return Ok(s.doc.clone());
+    }
+    Err(CmdError::Params(format!("`{key}.path` or `{key}.text` (or `{key}` as a path string) is required")))
+}
+
+fn block_key(b: &Block) -> String {
+    match b {
+        Block::Para(p) => p.plain_text(),
+        Block::Table(_) => format!("\u{0}table\u{0}{}", block_text(b, 0)),
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SideView {
+    /// Insertions before each base index, and one trailing slot after the last base block.
+    ins: Vec<Vec<Arc<Block>>>,
+    /// Per base block: kept (side's version) or deleted.
+    kept: Vec<Option<Arc<Block>>>,
+}
+
+fn side_view(base: &[Arc<Block>], side: &[Arc<Block>]) -> SideView {
+    let mut budget = MAX_COMPARE_CELLS;
+    let ops = lcs_ops(&base.iter().map(|b| block_key(b)).collect::<Vec<_>>(), &side.iter().map(|b| block_key(b)).collect::<Vec<_>>(), &mut budget);
+    let mut ins = vec![Vec::new(); base.len() + 1];
+    let mut kept = Vec::with_capacity(base.len());
+    let (mut bi, mut si) = (0usize, 0usize);
+    let mut at = 0usize;
+    for op in ops {
+        match op {
+            Op::Ins => {
+                if let Some(sb) = side.get(si) {
+                    if let Some(slot) = ins.get_mut(at) {
+                        slot.push(sb.clone());
+                    }
+                }
+                si += 1;
+            }
+            Op::Del => {
+                kept.push(None);
+                bi += 1;
+                at = at.saturating_add(1);
+            }
+            Op::Same => {
+                kept.push(side.get(si).cloned().or_else(|| base.get(bi).cloned()));
+                bi += 1;
+                si += 1;
+                at = at.saturating_add(1);
+            }
+        }
+    }
+    while bi < base.len() {
+        kept.push(None);
+        bi += 1;
+    }
+    while si < side.len() {
+        if let Some(sb) = side.get(si) {
+            if let Some(slot) = ins.last_mut() {
+                slot.push(sb.clone());
+            }
+        }
+        si += 1;
+    }
+    SideView { ins, kept }
+}
+
+fn same_blocks(a: &[Arc<Block>], b: &[Arc<Block>]) -> bool {
+    a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| block_key(x) == block_key(y))
+}
+
+/// Three-way merge at paragraph/block granularity. Returns (merged blocks, conflicts, notes).
+fn merge3_blocks(base: &[Arc<Block>], ours: &[Arc<Block>], theirs: &[Arc<Block>], conflict_mode: &str) -> (Vec<Arc<Block>>, usize, Vec<String>) {
+    let ov = side_view(base, ours);
+    let tv = side_view(base, theirs);
+    let mut out = Vec::new();
+    let mut conflicts = 0usize;
+    let notes = vec![
+        "3-way merge is block/paragraph-granular; non-body stories, fine formatting merges, and revision provenance may need manual review."
+            .to_string(),
+    ];
+    for i in 0..=base.len() {
+        let oi = ov.ins.get(i).cloned().unwrap_or_default();
+        let ti = tv.ins.get(i).cloned().unwrap_or_default();
+        if !oi.is_empty() || !ti.is_empty() {
+            if same_blocks(&oi, &ti) || ti.is_empty() {
+                out.extend(oi);
+            } else if oi.is_empty() {
+                out.extend(ti);
+            } else {
+                conflicts += 1;
+                match conflict_mode {
+                    "ours" => out.extend(oi),
+                    "theirs" => out.extend(ti),
+                    _ => {
+                        out.push(para_block(Paragraph::with_text("<<<<<<< ours", CharProps::default())));
+                        out.extend(oi);
+                        out.push(para_block(Paragraph::with_text("=======", CharProps::default())));
+                        out.extend(ti);
+                        out.push(para_block(Paragraph::with_text(">>>>>>> theirs", CharProps::default())));
+                    }
+                }
+            }
+        }
+        if i == base.len() {
+            break;
+        }
+        let base_b = base.get(i);
+        let ob = ov.kept.get(i).and_then(|x| x.as_ref());
+        let tb = tv.kept.get(i).and_then(|x| x.as_ref());
+        match (ob, tb) {
+            (Some(ob), Some(tb)) => {
+                let btxt = base_b.map(|b| block_key(b)).unwrap_or_default();
+                let ot = block_key(ob);
+                let tt = block_key(tb);
+                if ot == tt || (ot != btxt && tt == btxt) {
+                    out.push((*ob).clone());
+                } else if tt != btxt && ot == btxt {
+                    out.push((*tb).clone());
+                } else {
+                    out.push((*ob).clone());
+                }
+            }
+            (None, None) => {}
+            (Some(ob), None) => {
+                let btxt = base_b.map(|b| block_key(b)).unwrap_or_default();
+                if block_key(ob) != btxt {
+                    conflicts += 1;
+                    match conflict_mode {
+                        "ours" => out.push((*ob).clone()),
+                        "theirs" => {}
+                        _ => {
+                            out.push(para_block(Paragraph::with_text("<<<<<<< ours", CharProps::default())));
+                            out.push((*ob).clone());
+                            out.push(para_block(Paragraph::with_text("=======", CharProps::default())));
+                            out.push(para_block(Paragraph::with_text(">>>>>>> theirs (deleted)", CharProps::default())));
+                        }
+                    }
+                }
+            }
+            (None, Some(tb)) => {
+                let btxt = base_b.map(|b| block_key(b)).unwrap_or_default();
+                if block_key(tb) != btxt {
+                    conflicts += 1;
+                    match conflict_mode {
+                        "ours" => {}
+                        "theirs" => out.push((*tb).clone()),
+                        _ => {
+                            out.push(para_block(Paragraph::with_text("<<<<<<< ours (deleted)", CharProps::default())));
+                            out.push(para_block(Paragraph::with_text("=======", CharProps::default())));
+                            out.push((*tb).clone());
+                            out.push(para_block(Paragraph::with_text(">>>>>>> theirs", CharProps::default())));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        out.push(para_block(Paragraph::new()));
+    }
+    (out, conflicts, notes)
+}
+
+/// Three-way merge: merge `ours` and `theirs` relative to `base`. Defaults to a new untitled
+/// document; `conflicts:"markers"` inserts conflict markers where both sides changed the same
+/// base region differently.
+pub(super) fn merge3(s: &mut Session, v: &Value) -> CmdResult {
+    let base = load_source(s, v, "base", false)?;
+    let theirs = load_source(s, v, "theirs", false)?;
+    let ours_explicit = v.get("ours").filter(|x| !x.is_null()).is_some();
+    let ours_doc = if ours_explicit { Some(load_source(s, v, "ours", false)?) } else { None };
+    let show_in = p::str(v, "showIn").unwrap_or("new");
+    if !matches!(show_in, "new" | "original") {
+        return Err(CmdError::Params("`showIn` is \"new\" or \"original\"".into()));
+    }
+    let conflict_mode = p::str(v, "conflicts").unwrap_or("markers");
+    if !matches!(conflict_mode, "markers" | "ours" | "theirs") {
+        return Err(CmdError::Params("`conflicts` is \"markers\", \"ours\" or \"theirs\"".into()));
+    }
+    if show_in == "original" {
+        crate::cmd::protect::check_version_restore(s)?;
+    }
+    s.checkpoint("Merge");
+    if let Some(ours) = ours_doc {
+        let mut perms = 0u32;
+        let base_blocks = s.doc.adopt_blocks(base, false, &mut perms).into_iter().map(Arc::new).collect::<Vec<_>>();
+        let theirs_blocks = s.doc.adopt_blocks(theirs, false, &mut perms).into_iter().map(Arc::new).collect::<Vec<_>>();
+        let ours_blocks = s.doc.adopt_blocks(ours, false, &mut perms).into_iter().map(Arc::new).collect::<Vec<_>>();
+        let (merged, conflicts, notes) = merge3_blocks(&base_blocks, &ours_blocks, &theirs_blocks, conflict_mode);
+        s.doc.body = merged;
+        s.doc.ensure_nonempty();
+        s.note_body_replaced();
+        s.math = None;
+        if show_in == "new" {
+            s.path = None;
+            s.file_name = None;
+            s.clear_versions();
+        }
+        s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
+        return Ok(json!({"merged": true, "conflicts": conflicts, "mode": "merge3", "conflictMode": conflict_mode, "notes": notes}));
+    }
+    let ours_blocks = s.doc.body.clone();
+    let mut perms = 0u32;
+    let base_blocks = s.doc.adopt_blocks(base, false, &mut perms).into_iter().map(Arc::new).collect::<Vec<_>>();
+    let theirs_blocks = s.doc.adopt_blocks(theirs, false, &mut perms).into_iter().map(Arc::new).collect::<Vec<_>>();
+    let (merged, conflicts, notes) = merge3_blocks(&base_blocks, &ours_blocks, &theirs_blocks, conflict_mode);
+    s.doc.body = merged;
+    s.doc.ensure_nonempty();
+    s.note_body_replaced();
+    s.math = None;
+    if show_in == "new" {
+        s.path = None;
+        s.file_name = None;
+        s.clear_versions();
+    }
+    s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
+    Ok(json!({"merged": true, "conflicts": conflicts, "mode": "merge3", "conflictMode": conflict_mode, "notes": notes}))
 }

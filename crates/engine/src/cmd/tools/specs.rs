@@ -2,7 +2,7 @@ use super::actions::{
     customize_keyboard, customize_ribbon, hf_nav, language, macros, preferred_language, quick_parts, search_commands, select_similar,
 };
 use super::autocorrect::autocorrect_options;
-use super::compare::{COMPARE_PARAMS, combine, compare};
+use super::compare::{COMPARE_PARAMS, MERGE3_PARAMS, combine, compare, merge3};
 use super::inspect::{accessibility, inspect_doc};
 use super::{
     Block, CharProps, CmdError, CommandSpec, InlineObject, NumRef, Paragraph, Selection, StoryRef, delete_selection, json, p, para_block, sel_result,
@@ -62,6 +62,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("review.compare", "Compare", "Review › Compare", compare).params(COMPARE_PARAMS),
         CommandSpec::new("review.combine", "Combine", "Review › Compare", combine).params(COMPARE_PARAMS),
+        CommandSpec::new("review.merge", "Merge Documents", "Review › Compare", merge3).params(MERGE3_PARAMS),
         CommandSpec::new("file.accessibility", "Check Accessibility", "Review › Accessibility", accessibility).pure(),
         CommandSpec::new("file.inspect", "Inspect Document", "File › Info", inspect_doc)
             .params(r#"{"remove"?: ["comments", "revisions", "properties", "hidden", "headers"]} → {found: {comments, revisions, properties, hiddenText, hiddenCount, hidden: [{story: "body|header|footer|footnote|endnote|comment|textBox", part?, text}] (at most 1000), truncated, unsupported: [{story, object: "table|opaque", ..}] (hidden text not inspected: table styles, verbatim objects), headers}, removed, residual: [..] (hidden text a removal couldn't reach), removedNotes: [{kind, part, text}] (notes whose hidden reference was removed)}; whole hidden paragraphs go with their marks; the removals are refused while the document tracks changes"#),
