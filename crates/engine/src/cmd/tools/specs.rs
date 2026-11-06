@@ -100,10 +100,11 @@ pub fn specs() -> Vec<CommandSpec> {
                 crate::versions::delete_index(s, i)?;
                 changed = true;
             }
-            if changed && restore.is_none() {
-                if let Err(e) = crate::versions::persist(s) {
-                    log::warn!("version history persistence failed: {e}");
-                }
+            if changed
+                && restore.is_none()
+                && let Err(e) = crate::versions::persist(s)
+            {
+                log::warn!("version history persistence failed: {e}");
             }
             if let Some((_, _, d)) = restore {
                 s.checkpoint("Restore Version");

@@ -139,6 +139,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-06: Review foundations (P1b/P2): durable document version history stored in a desktop sidecar (`*.wordcraft-versions.json`) with `file.versions` save/restore/delete/clear (capped, password-protected sessions are not persisted as plaintext). Compare/Combine report option fidelity limits and `review.combine` adopts/remaps revised revisions, styles, parts and related resources. New `review.merge` engine command performs 3-way body merge (block/paragraph-granular, with word-level refinement for simple 1:1 paragraph text conflicts, conflict markers or ours/theirs resolution) and reports scope/limitations; Review has a Merge Documents dialog and catalog entry. Non-body stories, table cell-level merge, formatting merge and full Word fidelity remain limited; manual GUI verification deferred.
+
 - 2026-10-28: Ink replay, eraser picking, lasso selection and arrow-candidate discovery reuse the paragraph prefixes they have already scanned (#3614). Page item order, stroke geometry and saved data retain their behavior. This narrows the stability work; ink import fidelity, native pen input and broader corpus qualification remain open.
 
 - 2026-11-04: OpenDocument files have no display settings any more (gap 19): File › Options › Advanced › OpenDocument files, `file.options` `odf`, `WORDCRAFT_ODF`, the LibreOffice style and custom values are gone. WordCraft makes one choice for each case the standard leaves open, the one the default made, and still follows what a file states ([docs/odf-interpretation.md](docs/odf-interpretation.md)).
