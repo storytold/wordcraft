@@ -182,7 +182,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     // after them can't start under them there, the table starts on the next page.
     let first = header_rows.len();
     if !header_rows.is_empty()
-        && !pb.at_top()
+        && !pb.fresh()
         && let Some(row) = tl.rows.get(first)
     {
         let room = pb.bottom - pb.y - tl.rows.iter().take(first).map(|r| r.height).sum::<f32>();
@@ -194,6 +194,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     }
     // For the move-on rule, the table's own header rows at the top of a page leave it empty.
     let table_at_top = pb.at_top();
+    let table_at_fresh = pb.fresh();
     for (ri, row) in tl.rows.iter().enumerate() {
         // Word never splits a row of an exact height: it moves on whole.
         let splittable = ri >= header_rows.len()
@@ -201,11 +202,26 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                 .rows
                 .get(ri)
                 .is_some_and(|r| r.props.cant_split || (r.props.height_rule == HeightRule::Exact && r.props.height.is_some_and(|h| h > 0.0)));
+        // Word for Mac 16.114.2 keeps cantSplit rows whole when they fit on a fresh page,
+        // but continues an oversized automatic/minimum-height row from there (#4736).
+        // Repeated header rows and explicitly exact heights keep their existing contracts.
+        let oversized_cant_split = ri >= header_rows.len()
+            && t.rows
+                .get(ri)
+                .is_some_and(|r| r.props.cant_split && !(r.props.height_rule == HeightRule::Exact && r.props.height.is_some_and(|h| h > 0.0)));
+        // Word Mac 16.114.3: when the first cantSplit body row exceeds a whole text
+        // area, its original headers get their own page. Intermediate row fragments
+        // have no repeated headers; the final fragment repeats them if they fit.
+        // Do not change the fitting-row or ordinary splittable-row contracts.
+        let separate_headers =
+            ri == first && !pb.web && !header_rows.is_empty() && oversized_cant_split && row.height + row.edge > pb.sect.text_height() + 0.01;
         let mut rest: Option<table::RowLayout> = None;
         // On a new page holding only the repeated header rows.
         let mut fresh = false;
-        // Nothing but this table's header rows above it on a page it started at the top of.
+        // Capture physical freshness before the headers: a continuous section's top may be
+        // midway down a page, while headers consume an otherwise fresh page's top.
         let under_top_headers = ri == first && table_at_top;
+        let under_fresh_headers = ri == first && table_at_fresh;
         // Each pass places the part of the row that fits, then breaks the page.
         for _ in 0..1000 {
             let cur = rest.as_ref().unwrap_or(row);
@@ -236,7 +252,8 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
             // (#4272): moving on can give the cell room there.
             let first_part = rest.is_none() && !pb.at_top() && !fresh && !under_top_headers;
             let moves_on = first_part && short_of_min(ri, room);
-            let split = match (splittable && !moves_on && !defer_kept, first_part) {
+            let can_split = splittable || (oversized_cant_split && (pb.fresh() || fresh || (under_fresh_headers && !separate_headers)));
+            let split = match (can_split && !moves_on && !defer_kept, first_part) {
                 (false, _) => None,
                 (true, true) => table::split_row_keeping_cells(cur, room),
                 (true, false) => table::split_row(cur, room),
@@ -249,18 +266,21 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                 }
                 // Like Word, a row that does not fit on an empty page, or under the header rows
                 // repeated there, is placed anyway and runs into the bottom margin.
-                None if pb.at_top() || fresh => break,
+                None if pb.fresh() || fresh => break,
                 None => {}
             }
             pb.advance(block, body_top);
+            // A column at a continuous section's mid-page top has not gained a fresh page.
+            fresh = pb.fresh();
             // Repeat header rows, up to the layout's cap.
-            if ri >= header_rows.len() && ctx.header_repeats.saturating_add(header_cost) <= header_cap {
+            let remaining = rest.as_ref().unwrap_or(row);
+            let repeat = !separate_headers || remaining.height + remaining.edge + repeated_height <= pb.bottom - pb.y + 0.01;
+            if ri >= header_rows.len() && repeat && ctx.header_repeats.saturating_add(header_cost) <= header_cap {
                 ctx.header_repeats = ctx.header_repeats.saturating_add(header_cost);
                 for h in header_rows.iter().filter_map(|hr| tl.rows.get(*hr)) {
                     place(pb, h);
                 }
             }
-            fresh = true;
         }
         let last = rest.as_ref().unwrap_or(row);
         place(pb, last);

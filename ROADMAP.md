@@ -800,6 +800,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-04 | trivial | Progress log: MHT quoted MIME parameters; readiness estimates unchanged |
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` is preserved with true, false and absent values; OOXML properties follow schema order. Grid layout remains open. |
 | 2026-10-28 | trivial | Per-page ink object lookups, #3614. Drawing order, geometry and saved data retain their behavior; no readiness estimate change |
+| 2026-11-05 | trivial | #4736/#4840: native Word Mac controls pin the original header before an oversized cantSplit first body row and repeats on its final fragment; fitting and ordinarily splittable rows retain their contracts. Joint multi-PR corpus evidence is qualified separately; readiness estimates unchanged. |
 | 2026-10-28 | trivial | Shared MATH construction records reuse variants and assembly data without changing glyph mappings or existing limits (#3630); readiness estimates unchanged |
 | 2026-10-29 | trivial | Page drawing indexes text-box warp lookups per paragraph (#3614); requested offsets only, bounded prefix traversal, original Linux display and persistence controls; readiness estimates unchanged |
 | 2026-11-04 | trivial | Progress log: OpenDocument display settings removed (gap 19) |
@@ -809,6 +810,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-04 | trivial | Progress log: ODT checked against 220 files from other applications (gap 19) |
 | 2026-11-04 | trivial | Progress log: OpenDocument files shown in Microsoft Word style or LibreOffice style (gap 19) |
 | 2026-11-04 | trivial | PR #4609: relative REF keeps context already displayed by the own or a needed ancestor label; six synthetic legal-template cases and separate-list context follow the Word for Windows measurements reported by @pakiat in PR discussion. Existing unknown-switch/cache boundaries and readiness estimates unchanged; no new native Word run. |
+| 2026-11-04 | trivial | PR #4840 validation after integration: 2026-11-04 · Integrate #4736/#4840 with current main: preserve first-fragment non-empty-cell checks and physical-page freshness for oversized cantSplit continuation; readiness estimates unchanged. |
 | 2026-11-01 | trivial | Progress log: SEQ, STYLEREF and REF fields show fresh results in output |
 | 2026-10-29 | trivial | Progress log: Print Markup balloon anchors use one object walk per paragraph (#3614); readiness estimates unchanged |
 | 2026-10-28 | trivial | Print Markup text-copy comment discovery walks paragraph objects once (#3614); quotes, order, limits and readiness estimates unchanged |
@@ -821,6 +823,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-03 | trivial | Progress log: a long comment's card and balloon stop at ten lines (#3382) |
 | 2026-11-03 | trivial | Progress log: Replace and Remove Table of Contents with Word's title above a section break (#4041) |
 | 2026-11-03 | trivial | Progress log: language-packs-2 published and pinned, 75 Language packs |
+| 2026-11-03 | trivial | Integrate #4736/#4840 with current main: preserve first-fragment non-empty-cell checks and physical-page freshness for oversized cantSplit continuation; readiness estimates unchanged. |
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
@@ -1245,6 +1248,11 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-29 | trivial | Progress log: corporate authors in bibliographies (#4848) |
 | 2026-10-29 | trivial | Progress log: Table Properties follows the selection (#4857) |
 | 2026-11-01 | trivial | Progress log: a list inside a Markdown block quote stays quoted |
+| 2026-10-31 | trivial | Office corpus validation: 2026-10-31 · A4 synthetic office corpus compared with Word Mac 16.114.3 using Helvetica Neue: clipping is fixed; 3/4 controls keep their marker-to-page assignments. Complex-table pagination, heading placement and footnote positions still differ. Readiness estimates unchanged. |
+| 2026-10-31 | trivial | Revalidate #4736/#4840 on current main with four synthetic A4 controls and Word Mac 16.114.3 / Helvetica Neue; add a preceding-table regression that fails before the fix. No complete pagination-parity claim. |
+| 2026-10-30 | trivial | Table pagination update: 2026-10-30 · Oversized automatic/minimum-height cantSplit rows start on a fresh page and continue without clipping (#4736); fitting rows, repeated header rows and exact-height clipping retain their contracts. Native synthetic Word Mac 16.114.2 reference; readiness estimates unchanged. |
+| 2026-10-29 | minor | Review follow-up for #4736: distinguish a physically fresh page from a mid-page continuous-section top, and keep repeated headers with the first oversized body fragment; synthetic regression coverage added. |
+| 2026-10-29 | minor | Oversized automatic/minimum-height cantSplit rows start on a fresh page and continue without clipping (#4736); fitting rows, repeated header rows and exact-height clipping retain their contracts. Native synthetic Word Mac 16.114.2 reference; readiness estimates unchanged. |
 | 2026-10-29 | trivial | Progress log: citation source and bibliography-number lookups (#4888) |
 | 2026-10-27 | trivial | Progress log: AutoCorrect Options with no document open (#4585) |
 | 2026-10-28 | trivial | Progress log: RTF metafile pictures are imported (#4259) |
