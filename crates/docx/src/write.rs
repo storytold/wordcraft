@@ -82,6 +82,26 @@ impl PartRels {
     }
 }
 
+/// Where Word's stacking orders (`relativeHeight`) start for objects made in Word.
+const FIRST_Z: u32 = 251_658_240;
+
+/// The `relativeHeight` the objects of `doc` that have none count up from, and the `relativeHeight`
+/// each stored order is written as when it isn't its own (#2638). A stored order
+/// ([`wordcraft_doc::para::Float::z`]) is one more than the file's, and the new objects go above
+/// every stored one. When the stored orders leave no room for them below `u32::MAX` (a file using
+/// values that high; `u32::MAX` itself would read back as the order below it), the stored ones are
+/// numbered again from [`FIRST_Z`] in their order, so no two objects share an order and none goes
+/// out of range.
+pub(crate) fn stacking(doc: &Document) -> (u32, BTreeMap<u32, u32>) {
+    let (orders, unset) = doc.stacking_orders();
+    let top = orders.last().map_or(0, |z| z.saturating_sub(1)).max(FIRST_Z);
+    if u32::try_from(unset).ok().and_then(|n| top.checked_add(n)).is_some_and(|last| last < u32::MAX) {
+        return (top, BTreeMap::new());
+    }
+    let zmap: BTreeMap<u32, u32> = orders.iter().zip(FIRST_Z..=u32::MAX).map(|(&z, to)| (z, to)).collect();
+    (zmap.values().last().copied().unwrap_or(FIRST_Z), zmap)
+}
+
 pub(crate) struct Writer<'d> {
     doc: &'d Document,
     /// Numbered display equations written so far (automatic numbers are written as text).
@@ -95,7 +115,11 @@ pub(crate) struct Writer<'d> {
     docpr: u32,
     /// Shapes' own drawing ids written so far (connectors refer to them).
     shape_ids: std::collections::HashSet<u32>,
+    /// The last stacking order (`relativeHeight`) given to an object that had none.
     z: u32,
+    /// Stored stacking orders written as other `relativeHeight`s (see [`stacking`]); empty: each
+    /// as its own.
+    zmap: BTreeMap<u32, u32>,
     /// Note part id → file note id, in first-reference order.
     footnotes: Vec<u32>,
     endnotes: Vec<u32>,

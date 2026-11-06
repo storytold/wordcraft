@@ -688,17 +688,24 @@ pub(crate) struct ObjectPlacement<'a> {
 /// The pictures, shapes and text boxes in lines `l0..l1` of paragraph `p` (story `story`, at
 /// `path`), whose lines start at (x, y): floating ones drawn, every one's area (hit testing,
 /// selection) and text boxes' text. Floating rects come from `floats` (by object index) or are
-/// worked out from `at`. Returns what goes behind the text, and what goes in front.
+/// worked out from `at`. Returns what goes behind the text, and what goes in front, the
+/// floating objects of each in their stacking order ([`Float::stack`]).
 pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed>, Vec<Placed>) {
+    stack_objects(object_groups(ctx, req))
+}
+
+/// One object's items behind and in front of the text, with its stacking order
+/// ([`Float::stack`]) if it floats.
+pub(crate) type ObjGroup = (Option<u64>, Vec<Placed>, Vec<Placed>);
+
+/// [`place_objects`], each object's items apart and in text order, so the body can put the
+/// floating objects of a whole page in stacking order ([`PageStacks`]).
+pub(crate) fn object_groups(ctx: &mut Ctx, req: &ObjectPlacement) -> Vec<ObjGroup> {
     let ObjectPlacement { story, path, p, pl, lines: (l0, l1), origin: (x, y), at, floats, depth } = *req;
-    // Each object's items (behind the text, in front), with its stacking order: drawn lowest
-    // first once all are placed, as Word stacks floating objects by `relativeHeight`, not by
-    // their order in the paragraph. Inline objects and objects without one keep their order.
-    let mut stack: Vec<(u32, Vec<Placed>, Vec<Placed>)> = Vec::new();
-    // The highest order so far: an object without one (inserted here) stacks above the objects
-    // before it, as the writer gives it the next order up on save.
-    let mut z_top = 0u32;
-    let Some(fl) = pl.lines.get(l0) else { return (Vec::new(), Vec::new()) };
+    let mut placed: Vec<ObjGroup> = Vec::new();
+    // The same for the objects a header or footer cell places on the page (see `Ctx::pin`).
+    let mut pin_placed: Vec<ObjGroup> = Vec::new();
+    let Some(fl) = pl.lines.get(l0) else { return Vec::new() };
     // Objects left out of the layout (hidden, or deleted in the final text) aren't placed.
     let left_out = left_out_objects(ctx.doc, p, at.table_chr, ctx.opts.show_hidden, ctx.hide_deleted);
     // The paragraph's first piece draws its floating objects, whichever of its lines holds the
@@ -797,31 +804,128 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
             }
             // Placed on the page from a header or footer cell: drawn with the header, once.
             if pinned.is_some() {
+                let (b, f) = (std::mem::take(&mut behind), std::mem::take(&mut front));
                 if let Some(pin) = ctx.pin.as_mut()
                     && pin.seen.insert((path.to_vec(), c.start))
                 {
-                    pin.behind.extend(behind);
-                    pin.front.extend(front);
+                    pin_placed.push((floating.then(|| float.stack()), b, f));
                 }
                 continue;
             }
-            let z = if floating && float.z > 0 {
-                z_top = z_top.max(float.z);
-                float.z
-            } else {
-                z_top
-            };
-            stack.push((z, behind, front));
+            placed.push((floating.then(|| float.stack()), behind, front));
         }
     }
-    // Stable: equal orders (none given) keep the paragraph's order.
-    stack.sort_by_key(|(z, _, _)| *z);
+    // Put on the page in their stacking order too.
+    if !pin_placed.is_empty()
+        && let Some(pin) = ctx.pin.as_mut()
+    {
+        let (behind, front) = stack_objects(pin_placed);
+        pin.behind.extend(behind);
+        pin.front.extend(front);
+    }
+    placed
+}
+
+/// The items of objects placed in text order (each with its stacking order if floating), the
+/// floating ones put in stacking order (a stable sort: equal ones keep text order). Inline
+/// objects keep their places.
+fn stack_objects(mut placed: Vec<ObjGroup>) -> (Vec<Placed>, Vec<Placed>) {
+    let floating: Vec<bool> = placed.iter().map(|o| o.0.is_some()).collect();
+    let mut stacked: Vec<_> = placed.iter_mut().filter(|o| o.0.is_some()).map(std::mem::take).collect();
+    stacked.sort_by_key(|o| o.0);
+    let mut stacked = stacked.into_iter();
+    for (o, _) in placed.iter_mut().zip(floating).filter(|(_, f)| *f) {
+        if let Some(s) = stacked.next() {
+            *o = s;
+        }
+    }
     let (mut behind, mut front) = (Vec::new(), Vec::new());
-    for (_, b, f) in stack {
+    for (_, b, f) in placed {
         behind.extend(b);
         front.extend(f);
     }
     (behind, front)
+}
+
+/// A floating object's items on a body page: `len` items from `at`, its stacking order and
+/// its place in the text (`seq`, which breaks ties).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct StackSpan {
+    pub key: u64,
+    pub seq: usize,
+    pub at: usize,
+    pub len: usize,
+}
+
+/// Where a body page's floating objects are among its items: `behind`, the items in front of
+/// the page's list (behind the text), in list order; `front`, the rest, `at` counted from the
+/// end of the items behind the text.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PageStacks {
+    pub behind: Vec<StackSpan>,
+    pub front: Vec<StackSpan>,
+}
+
+impl PageStacks {
+    /// A layout snapshot took the first `behind` items off the page's list and cut what follows
+    /// the items behind the text at `front`: forget the objects those were.
+    pub(crate) fn forget(&mut self, behind: usize, front: usize) {
+        let mut gone = 0usize;
+        let k = self
+            .behind
+            .iter()
+            .take_while(|s| {
+                gone = gone.saturating_add(s.len);
+                gone <= behind
+            })
+            .count();
+        self.behind.drain(..k);
+        self.front.retain(|s| s.at.saturating_add(s.len) <= front);
+    }
+}
+
+/// Puts the floating objects of a finished body page in stacking order: those behind the text
+/// (the first `behind` items) among themselves, and those in front of it in the places floating
+/// objects had among the text. Equal orders keep text order. A page whose record doesn't match
+/// its items is left as it is.
+pub(crate) fn stack_page(pg: &mut crate::Page, behind: usize, st: PageStacks) {
+    // Behind the text: the first `behind` items are these objects' and nothing else.
+    if behind > 0 && behind <= pg.items.len() && st.behind.iter().try_fold(0usize, |n, s| n.checked_add(s.len)) == Some(behind) {
+        let mut rest = pg.items.split_off(behind);
+        let mut items = std::mem::take(&mut pg.items).into_iter();
+        let mut groups: Vec<(StackSpan, Vec<Placed>)> = st.behind.iter().map(|s| (*s, items.by_ref().take(s.len).collect())).collect();
+        groups.sort_by_key(|(s, _)| (s.key, s.seq));
+        pg.items = groups.into_iter().flat_map(|(_, g)| g).collect();
+        pg.items.append(&mut rest);
+    }
+    // In front: each object keeps a place, the objects change places.
+    let mut spans = st.front;
+    spans.sort_by_key(|s| s.at);
+    let end = pg.items.len().saturating_sub(behind);
+    let fits = spans.windows(2).all(|w| matches!(w, [a, b] if a.at.saturating_add(a.len) <= b.at))
+        && spans.last().is_none_or(|s| s.at.saturating_add(s.len) <= end);
+    if spans.len() < 2 || behind > pg.items.len() || !fits {
+        return;
+    }
+    let mut rest: Vec<Option<Placed>> = pg.items.split_off(behind).into_iter().map(Some).collect();
+    let mut groups: Vec<((u64, usize), Vec<Placed>)> = spans
+        .iter()
+        .map(|s| {
+            let g = rest.get_mut(s.at..s.at.saturating_add(s.len)).map(|r| r.iter_mut().filter_map(Option::take).collect());
+            ((s.key, s.seq), g.unwrap_or_default())
+        })
+        .collect();
+    groups.sort_by_key(|g| g.0);
+    let mut groups = groups.into_iter();
+    let mut starts = spans.iter().map(|s| s.at).peekable();
+    for (i, it) in rest.into_iter().enumerate() {
+        if starts.next_if_eq(&i).is_some()
+            && let Some((_, g)) = groups.next()
+        {
+            pg.items.extend(g);
+        }
+        pg.items.extend(it);
+    }
 }
 
 /// The wrap areas for a paragraph laid out against `rel` (relative to its top) whose lines from the

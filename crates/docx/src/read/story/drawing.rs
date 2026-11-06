@@ -582,8 +582,9 @@ fn nv_alt(p: Option<&El>) -> (String, AltText) {
 
 fn anchor_float(c: &El) -> Float {
     // `relativeHeight`: the stacking order Word draws floating objects in (higher on top), which
-    // need not be their order in the file.
-    let z = c.attr("relativeHeight").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0);
+    // need not be their order in the file. Kept one more (see `Float::z`): 0, the lowest a file
+    // can give, isn't the 0 of an object without one, which stacks above them all.
+    let z = c.attr("relativeHeight").and_then(|v| v.trim().parse::<u32>().ok()).map_or(0, |z| z.saturating_add(1));
     let mut f = Float { wrap: Wrap::Square, z, ..Float::default() };
     let behind = on_off_attr(c, "behindDoc");
     // Word wraps a position relative to the page's size (`wp14:pctPosVOffset`) in
