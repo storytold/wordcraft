@@ -288,6 +288,19 @@ pub const PAPER_SIZES: &[(&str, f32, f32)] = &[
     ("Statement", 396.0, 612.0),
     ("Envelope #10", 297.0, 684.0),
     ("Envelope DL", 311.8, 623.6),
+    // Japanese paper sizes (はがき, JIS envelopes, B6 JIS, 四六判…): 1 mm is 72/25.4 pt. The names
+    // follow the English Word/Windows paper names, the comments give the Japanese ones.
+    ("A6", 297.64, 419.53),                         // A6判 105 × 148 mm
+    ("B6 (JIS)", 362.83, 515.91),                   // B6判 128 × 182 mm
+    ("Japanese Postcard", 283.46, 419.53),          // はがき 100 × 148 mm
+    ("Japanese Postcard (Double)", 419.53, 566.93), // 往復はがき 148 × 200 mm
+    ("Japanese Envelope #3", 340.16, 666.14),       // 封筒 長形3号 120 × 235 mm
+    ("Japanese Envelope #4", 255.12, 581.10),       // 封筒 長形4号 90 × 205 mm
+    ("Japanese Envelope Kaku #2", 680.31, 941.10),  // 封筒 角形2号 240 × 332 mm
+    ("Japanese Envelope Kaku #3", 612.28, 785.20),  // 封筒 角形3号 216 × 277 mm
+    ("Japanese Envelope Kaku #20", 649.13, 918.43), // 封筒 角形20 229 × 324 mm
+    ("Shiroku-ban", 360.00, 532.91),                // 四六判 127 × 188 mm
+    ("Japanese Business Card", 155.91, 257.95),     // 名刺 91 × 55 mm (portrait)
 ];
 
 /// The paper size whose dimensions match (either orientation, within half a point).
@@ -441,6 +454,53 @@ mod tests {
         assert_eq!(paper_by_name(" a4 ").map(|p| p.0), Some("A4"));
         assert_eq!(paper_by_name("Legal").map(|p| (p.1, p.2)), Some((612.0, 1008.0)));
         assert_eq!(paper_by_name("Quarto"), None);
+    }
+
+    /// The Japanese sizes (はがき, 往復はがき, the envelopes, A6, B6 JIS, 四六判, 名刺) in millimetres.
+    #[test]
+    fn japanese_paper_sizes() {
+        let mm = |v: f32| v * 72.0 / 25.4;
+        let sizes: &[(&str, f32, f32)] = &[
+            ("Japanese Postcard", 100.0, 148.0),
+            ("Japanese Postcard (Double)", 148.0, 200.0),
+            ("Japanese Envelope #3", 120.0, 235.0),
+            ("Japanese Envelope #4", 90.0, 205.0),
+            ("Japanese Envelope Kaku #2", 240.0, 332.0),
+            ("Japanese Envelope Kaku #3", 216.0, 277.0),
+            ("Japanese Envelope Kaku #20", 229.0, 324.0),
+            ("A6", 105.0, 148.0),
+            ("B6 (JIS)", 128.0, 182.0),
+            ("Shiroku-ban", 127.0, 188.0),
+            ("Japanese Business Card", 91.0, 55.0),
+        ];
+        for &(name, w, h) in sizes {
+            let (_, pw, ph) = paper_by_name(name).unwrap_or_else(|| panic!("{name} is a paper size"));
+            // Sizes are stored portrait: the short side first.
+            let (w, h) = (mm(w), mm(h));
+            let (w, h) = (w.min(h), w.max(h));
+            assert!((pw - w).abs() < 0.01 && (ph - h).abs() < 0.01, "{name}: {pw} × {ph} pt, expected {w} × {h}");
+            assert_eq!(paper_name(pw, ph), Some(name), "{name} in portrait");
+            assert_eq!(paper_name(ph, pw), Some(name), "{name} in landscape");
+        }
+        // Similar sizes stay apart: a postcard is not an A6 and neither is B6 JIS a 四六判.
+        assert_eq!(paper_name(mm(100.0), mm(148.0)), Some("Japanese Postcard"));
+        assert_eq!(paper_name(mm(105.0), mm(148.0)), Some("A6"));
+        assert_eq!(paper_name(mm(128.0), mm(182.0)), Some("B6 (JIS)"));
+        assert_eq!(paper_name(mm(127.0), mm(188.0)), Some("Shiroku-ban"));
+        // The sizes that were there keep their names and dimensions.
+        assert_eq!(paper_by_name("B4 (JIS)").map(|p| (p.1, p.2)), Some((728.5, 1031.8)));
+        assert_eq!(paper_by_name("A3").map(|(_, w, h)| (w, h)), Some((841.89, 1190.55)));
+        assert_eq!(paper_name(mm(105.0), mm(148.0)), Some("A6"), "A6 replaces no earlier entry");
+    }
+
+    /// Every paper size is reachable by its own name and the reverse lookup finds it again: no two
+    /// sizes are close enough to be confused (the lookup is forgiving within half a point).
+    #[test]
+    fn paper_sizes_are_consistent() {
+        for (name, w, h) in PAPER_SIZES {
+            assert_eq!(paper_by_name(name).map(|p| p.0), Some(*name), "{name} looks itself up");
+            assert_eq!(paper_name(*w, *h), Some(*name), "{name} ({w} × {h}) is found back");
+        }
     }
 
     /// Scale to paper size (#2108): one factor, centred, paper turned to the page's orientation.
