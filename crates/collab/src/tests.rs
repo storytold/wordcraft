@@ -50,6 +50,8 @@ impl Model for TextModel {
     fn snapshot(&self) -> Vec<u8> {
         self.text.clone().into_bytes()
     }
+
+    fn index_nodes(&self, _ids: &mut crate::ids::NodeIds) {}
 }
 
 fn insert(client: &str, seq: u64, base: u64, off: usize, text: &str) -> Op {

@@ -73,6 +73,11 @@ impl NodeIds {
         self.back.is_empty()
     }
 
+    /// Every live id with its current path, in id order.
+    pub fn iter(&self) -> impl Iterator<Item = (NodeId, &NodeKey)> {
+        self.back.iter().map(|(id, key)| (*id, key))
+    }
+
     /// The id for a node, issuing one on first sight.
     pub fn id_for(&mut self, key: &NodeKey) -> NodeId {
         if let Some(id) = self.forward.get(key) {

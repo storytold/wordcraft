@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::ids::NodeIds;
 use crate::journal::Journal;
 use crate::undo::{UndoStacks, UndoStep};
-use crate::wire::{Applied, Op, Reject, RejectCode, Version};
+use crate::wire::{Applied, NodeRef, Op, Reject, RejectCode, Version};
 
 /// What an accepted operation changed, and how to undo it (ADR-0010).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -34,6 +34,9 @@ pub trait Model {
     /// Native snapshot of the state, plus the source file bytes when the
     /// format keeps unmodelled parts (ADR-0005).
     fn snapshot(&self) -> Vec<u8>;
+
+    /// Issue session ids for nodes that do not have one yet (called on join).
+    fn index_nodes(&self, ids: &mut crate::ids::NodeIds);
 }
 
 /// `owner | editor | commenter | viewer` (ADR-0008).
@@ -85,6 +88,8 @@ pub struct JoinPlan {
     /// is required (ADR-0003, ADR-0005).
     pub replay: Option<Vec<Applied>>,
     pub snapshot: Option<Vec<u8>>,
+    /// Session nodes the client may address (ADR-0002).
+    pub nodes: Vec<NodeRef>,
 }
 
 /// A document room.
@@ -120,16 +125,24 @@ impl<M: Model> Room<M> {
         &self.model
     }
 
-    /// Plan the catch-up for a client that saw `last_version`.
-    pub fn join(&self, last_version: Option<Version>, snapshot_wanted: bool) -> JoinPlan {
+    /// Plan the catch-up for a client that saw `last_version`. Also issues
+    /// session ids for nodes that have none yet.
+    pub fn join(&mut self, last_version: Option<Version>, snapshot_wanted: bool) -> JoinPlan {
+        self.model.index_nodes(&mut self.ids);
         let version = self.journal.head();
+        let nodes = self.nodes();
         match last_version {
             Some(v) if !snapshot_wanted => match self.journal.since(v) {
-                Some(tail) => JoinPlan { version, epoch: self.journal.epoch(), replay: Some(tail), snapshot: None },
-                None => JoinPlan { version, epoch: self.journal.epoch(), replay: None, snapshot: Some(self.model.snapshot()) },
+                Some(tail) => JoinPlan { version, epoch: self.journal.epoch(), replay: Some(tail), snapshot: None, nodes },
+                None => JoinPlan { version, epoch: self.journal.epoch(), replay: None, snapshot: Some(self.model.snapshot()), nodes },
             },
-            _ => JoinPlan { version, epoch: self.journal.epoch(), replay: None, snapshot: Some(self.model.snapshot()) },
+            _ => JoinPlan { version, epoch: self.journal.epoch(), replay: None, snapshot: Some(self.model.snapshot()), nodes },
         }
+    }
+
+    /// The session nodes clients can address.
+    pub fn nodes(&self) -> Vec<NodeRef> {
+        self.ids.iter().map(|(id, key)| NodeRef { id: id.0, story: key.story.clone(), path: key.path.clone() }).collect()
     }
 
     /// Submit an operation for `actor` (the JWT `sub`).

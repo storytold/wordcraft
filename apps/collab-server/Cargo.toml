@@ -1,0 +1,32 @@
+[package]
+name = "wordcraft-collab-server"
+description = "Authoritative sync server for WordCraft real-time collaboration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "wordcraft-collab-server"
+path = "src/main.rs"
+
+[dependencies]
+wordcraft-collab = { path = "../../crates/collab" }
+wordcraft-collab-doc = { path = "../../crates/collab-doc" }
+wordcraft-doc = { workspace = true }
+wordcraft-docx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+log = { workspace = true }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+axum = { version = "0.8.9", features = ["ws"] }
+jsonwebtoken = { version = "11.1.0", default-features = false, features = ["rust_crypto", "use_pem"] }
+futures-util = "0.3.34"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tokio-tungstenite = "0.30.0"

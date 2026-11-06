@@ -19,6 +19,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use serde_json::{Value, json};
+use wordcraft_collab::ids::NodeKey;
 use wordcraft_collab::ids::{NodeId, NodeIds};
 use wordcraft_collab::room::{Effect, Model};
 use wordcraft_collab::wire::{Op, OpId, OpKind, Reject, RejectCode, Target};
@@ -217,6 +218,23 @@ impl Model for DocModel {
     /// bytes, because `Document::kept` is not serialized (ADR-0005).
     fn snapshot(&self) -> Vec<u8> {
         serde_json::to_vec(&self.doc).unwrap_or_default()
+    }
+
+    /// Issue ids for every paragraph of the body and of the secondary stories.
+    fn index_nodes(&self, ids: &mut NodeIds) {
+        for (index, block) in self.doc.body.iter().enumerate() {
+            if block.as_para().is_some() {
+                ids.id_for(&NodeKey::new("body", vec![index as u32]));
+            }
+        }
+        for (part, story) in &self.doc.parts {
+            let name = format!("part:{part}");
+            for (index, block) in story.blocks.iter().enumerate() {
+                if block.as_para().is_some() {
+                    ids.id_for(&NodeKey::new(name.clone(), vec![index as u32]));
+                }
+            }
+        }
     }
 }
 

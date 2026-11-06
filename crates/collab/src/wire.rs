@@ -193,6 +193,15 @@ pub enum ClientMsg {
     },
 }
 
+/// A session node the client can address (ADR-0002).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeRef {
+    pub id: u32,
+    pub story: String,
+    pub path: Vec<u32>,
+}
+
 /// Messages the server sends.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -222,6 +231,11 @@ pub enum ServerMsg {
     /// Journal tail the client missed, oldest first (ADR-0003, ADR-0004).
     Tail {
         entries: Vec<Applied>,
+    },
+    /// Session node ids, sent on join and after a structural edit moved paths
+    /// (ADR-0002).
+    Nodes {
+        nodes: Vec<NodeRef>,
     },
     /// Snapshot chunk: the client replaces its state on `last`.
     Snapshot {
