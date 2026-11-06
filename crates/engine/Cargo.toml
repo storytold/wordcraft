@@ -15,6 +15,7 @@ workspace = true
 test-support = []
 
 [dependencies]
+unicode-segmentation = { workspace = true }
 wordcraft-geom = { workspace = true, features = ["image"] }
 wordcraft-doc = { workspace = true }
 wordcraft-fonts = { workspace = true }
