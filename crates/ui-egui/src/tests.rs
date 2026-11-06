@@ -3588,7 +3588,7 @@ fn a_successful_native_print_returns_to_the_document() {
 #[test]
 fn cancelling_a_waiting_print_job_frees_the_print_page() {
     use printing::Printer;
-    for never_sent in [true, false] {
+    for (never_sent, close_document) in [(true, false), (false, false), (true, true), (false, true)] {
         let mut a = app();
         a.printing.printers = vec![Printer { name: "Office".into(), label: String::new(), default: true }];
         a.printing.settings.printer = "Office".into();
@@ -3612,9 +3612,14 @@ fn cancelling_a_waiting_print_job_frees_the_print_page() {
         }
         a.run("ui.print", json!({})).unwrap();
         assert!(a.printing.busy(), "the job waits");
+        if close_document {
+            a.execute("file.close", json!({})).unwrap();
+            assert!(!a.has_document(), "the last document closed");
+            assert!(a.printing.busy(), "closing the document keeps its pending print job");
+        }
         let enabled = |a: &WordApp| printing::commands(a).iter().any(|c| c["id"] == "ui.printCancel" && c["enabled"] == true);
         assert!(enabled(&a), "Cancel is offered while the job waits");
-        let reply = a.run("ui.printCancel", json!({})).unwrap();
+        let reply = a.execute("ui.printCancel", json!({})).unwrap();
         assert_eq!(reply["cancelled"], never_sent);
         assert_eq!(asked.get(), 1, "the host was asked to stop the job");
         assert_eq!(a.printing.busy(), !never_sent, "never_sent {never_sent}: whether the page is still locked");
@@ -3625,6 +3630,9 @@ fn cancelling_a_waiting_print_job_frees_the_print_page() {
         let expected = if never_sent { "Nothing was sent" } else { "already being sent" };
         assert!(said.contains(expected), "never_sent {never_sent}: the status bar says what happened: {said:?}");
         assert_eq!(enabled(&a), !never_sent);
+        if never_sent {
+            assert_eq!(a.execute("ui.printCancel", json!({})).unwrap_err(), "no print job is being submitted");
+        }
         assert_eq!(held.borrow().len(), 1);
     }
 }

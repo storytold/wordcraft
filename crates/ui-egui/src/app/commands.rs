@@ -1055,6 +1055,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.language"
             | "ui.saveChanges"
             | "ui.openFileDialog"
+            | "ui.printCancel"
             | "ui.fileBrowser"
             | "ui.makeDefaultApp"
             | "ui.discord"
