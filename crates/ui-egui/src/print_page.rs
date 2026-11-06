@@ -208,6 +208,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     if let Some(discover) = &app.services.printers {
                         crate::printing::show(&mut app.printing, ui, discover, |label| crate::i18n::t(label).to_owned());
                     }
+                    // A job can wait long on a sleeping printer's driver; Cancel frees the page.
+                    if app.printing.busy() && app.services.cancel_print.is_some() && ui.button(tl!("Cancel printing")).clicked() {
+                        let _ = app.run("ui.printCancel", serde_json::json!({}));
+                    }
                     app.ui.print.copies = app.printing.settings.copies;
                 } else if hook {
                     ui.label(tl!("Send the document straight to the system print dialog, or save a copy in another format below."));
