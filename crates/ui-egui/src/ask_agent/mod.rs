@@ -1,19 +1,23 @@
-//! Ask Agent: the person selects text and asks their own agent (connected over MCP or the control
-//! channel) to act on it. `hub.rs` and `ui.rs` are shared with the other apps; this file is
-//! WordCraft's part: the selection as JSON, one undo step per thread, authorship and the hold.
+//! Ask Agent's Word adapter. The queue and bubble mirror storytold/craft-libs#142 until it
+//! merges; app-owned document identities, revisions, geometry and undo provenance stay here.
 
 pub mod hub;
+#[cfg(not(target_arch = "wasm32"))]
+mod launcher;
 pub mod ui;
 
 use egui::{Rect, vec2};
-pub use hub::{AgentHub, HubError, Request, Snapshot, Status, Turn};
+pub use hub::{AgentHub, HubError, Reply, Request, Snapshot, Status, Target, Turn};
 use serde_json::{Value, json};
 use wordcraft_doc::Pos;
+use wordcraft_engine::{Session, UndoToken};
 
 use crate::WordApp;
 
-/// Opens Ask Agent at the selection (`Ctrl+Shift+O` / `⌘⇧O`).
 pub const SHORTCUT: &str = "Mod+Shift+O";
+#[cfg(not(target_arch = "wasm32"))]
+const LAUNCH_VARIABLE: &str = "WORDCRAFT_AGENT_LAUNCH";
+const MAX_TURNS: usize = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unavailable {
@@ -30,16 +34,18 @@ impl Unavailable {
     }
 }
 
-/// The open bubble: its current request and the thread of earlier turns.
+/// One conversation belongs to one opened document, irrespective of which window is active.
 pub struct Open {
     pub id: Option<u64>,
     pub anchor: Rect,
     pub turns: Vec<Turn>,
+    document: u64,
+    revision: u64,
     asked: String,
-    /// Where the text the agent was given starts, for its closing comment.
     target: Option<Pos>,
-    /// Undo depth before the agent's first edit, once it has edited.
+    selection: Value,
     edited_from: Option<usize>,
+    undo_token: Option<UndoToken>,
     commented: bool,
 }
 
@@ -49,21 +55,63 @@ pub struct AskAgent {
     pub open: Option<Open>,
     pub draft: String,
     pub picked: Option<String>,
-    /// The visible selection on screen, set by the canvas each frame.
     pub selection: Option<Rect>,
-    /// Set while a command from an agent runs, so the hold does not refuse it.
     agent_turn: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    launcher: launcher::Launcher,
 }
 
 impl AskAgent {
     pub fn unavailable(&self) -> Option<Unavailable> {
         let Some(hub) = &self.hub else { return Some(Unavailable::NoControlChannel) };
+        #[cfg(not(target_arch = "wasm32"))]
+        if launcher::available(LAUNCH_VARIABLE) {
+            return None;
+        }
         hub.agents().is_empty().then_some(Unavailable::NoAgent)
     }
 }
 
-/// Run `command` from control connection `conn`: while a request is open only the agent working on
-/// it edits; its edits join one undo step and are authored "Agent (<name>)".
+/// App-owned state, never an agent-supplied document id or revision.
+fn current(session: &Session) -> Target {
+    Target { document: session.document_id().to_string(), revision: session.rev() }
+}
+
+fn captured_selection(session: &Session) -> Value {
+    json!({"text": session.selected_text(), "anchor": session.sel.anchor, "focus": session.sel.focus})
+}
+
+fn range(selection: &Value) -> Option<(Pos, Pos)> {
+    let a: Pos = serde_json::from_value(selection.get("anchor")?.clone()).ok()?;
+    let b: Pos = serde_json::from_value(selection.get("focus")?.clone()).ok()?;
+    if a.story != b.story {
+        return None;
+    }
+    Some(if a <= b { (a, b) } else { (b, a) })
+}
+
+/// Only native commands whose complete effect is confined to the selected text are accepted.
+/// Whole-document commands, undo/redo, macros and document replacement are not selection edits.
+fn within_selection(session: &Session, command: &str, selection: &Value) -> bool {
+    if session.column.is_some() {
+        return false;
+    }
+    let Some((a, b)) = range(selection) else { return false };
+    let (c, d) = session.sel.ordered();
+    if a > c || d > b || a.story != c.story || b.story != d.story {
+        return false;
+    }
+    match command {
+        // Replacing the complete target, or appending at its end, has a well-defined rebased
+        // interval. Arbitrary partial structural replacements require a separate app adapter.
+        "text.insert" => (a == c && b == d) || (c == d && d == b),
+        "format.bold" | "format.italic" | "format.underline" | "format.strike" | "format.font" | "format.size" | "format.color"
+        | "format.highlight" | "format.clear" => true,
+        _ => false,
+    }
+}
+
+/// Every mutating control command goes through the same owner, document and geometry checks.
 pub fn as_agent(
     app: &mut WordApp,
     conn: Option<u64>,
@@ -71,51 +119,137 @@ pub fn as_agent(
     p: &Value,
     run: impl FnOnce(&mut WordApp) -> Result<Value, String>,
 ) -> Result<Value, String> {
-    let mutates = app.session.registry.get(command).is_some_and(|c| c.mutates);
+    let mutates = app.session.registry.get(command).is_some_and(|command| command.mutates)
+        || command.starts_with("file.")
+        || matches!(command, "edit.undo" | "edit.undoTo" | "edit.redo");
     let (Some(conn), Some(hub), true) = (conn, app.ask_agent.hub.clone(), mutates) else { return run(app) };
-    let request = p.get("request").and_then(Value::as_u64);
-    hub.may_edit(conn, request).map_err(|e| e.to_string())?;
+    let request = request_id(p)?;
+    let before = current(&app.session);
+    hub.may_edit(conn, request, &before, |selection| within_selection(&app.session, command, selection)).map_err(|error| error.to_string())?;
     let Some(id) = request else { return run(app) };
-    let name = hub.snapshot(id).and_then(|s| s.agent).unwrap_or_default();
-    let depth = app.session.undo_depth();
-    let mine = app.ask_agent.open.as_mut().filter(|o| o.id == Some(id));
-    let from = mine.as_ref().and_then(|o| o.edited_from);
-    if from.is_some_and(|f| depth == f + 1) {
-        app.session.join_next_undo();
+    let open = app
+        .ask_agent
+        .open
+        .as_ref()
+        .filter(|open| open.id == Some(id) && open.document == app.session.document_id())
+        .ok_or("STALE_REQUEST: no conversation owns this document")?;
+    let token = app.session.undo_token();
+    let join = open.revision == before.revision && open.undo_token.is_some() && open.undo_token == token;
+    if open.undo_token.is_some() && !join {
+        return Err("STALE_REQUEST: the undo checkpoint changed".into());
     }
+    let selection = open.selection.clone();
+    let depth = app.session.undo_depth();
+    if join {
+        app.session.join_next_undo();
+    } else {
+        app.session.close_typing();
+    }
+    let name = hub.snapshot(id).and_then(|snapshot| snapshot.agent).unwrap_or_default();
     let author = std::mem::replace(&mut app.session.author, format!("Agent ({name})"));
     app.ask_agent.agent_turn = true;
     let result = run(app);
     app.ask_agent.agent_turn = false;
     app.session.author = author;
-    if from.is_none()
-        && result.is_ok()
-        && app.session.undo_depth() > depth
-        && let Some(o) = app.ask_agent.open.as_mut().filter(|o| o.id == Some(id))
-    {
-        o.edited_from = Some(depth);
+    let after = current(&app.session);
+    if result.is_ok() && after != before {
+        let rebased = if command == "text.insert" {
+            let Some((start, _)) = range(&selection) else { return Err("STALE_REQUEST: selection unavailable".into()) };
+            json!({"anchor": start, "focus": app.session.sel.focus, "text": ""})
+        } else {
+            selection
+        };
+        hub.advance(conn, id, &before, after.clone(), rebased.clone()).map_err(|error| {
+            hub.invalidate(&after);
+            error.to_string()
+        })?;
+        if let Some(open) = app.ask_agent.open.as_mut().filter(|open| open.id == Some(id)) {
+            open.revision = after.revision;
+            open.selection = rebased;
+            if token != app.session.undo_token() || join {
+                open.edited_from.get_or_insert(depth);
+                open.undo_token = app.session.undo_token();
+            }
+        }
+    } else if after != before {
+        hub.invalidate(&after);
     }
     result
 }
 
-/// The text each agent is working on, in order, with the agent's colour.
+fn request_id(params: &Value) -> Result<Option<u64>, String> {
+    match params.get("request") {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value.as_u64().map(Some).ok_or_else(|| "INVALID_PARAMS: request must be an unsigned integer".into()),
+    }
+}
+
+/// No request-tagged edit may bypass the adapter by addressing a different, inactive document.
+pub fn guard_addressed(app: &mut WordApp, conn: Option<u64>, document: u64, command: &str, params: &Value) -> Result<(), String> {
+    let Some(hub) = app.ask_agent.hub.clone() else { return Ok(()) };
+    if !app.session.registry.get(command).is_some_and(|command| command.mutates) && !command.starts_with("file.") {
+        return Ok(());
+    }
+    if request_id(params)?.is_some() {
+        return Err("STALE_REQUEST: activate the request's document before editing it".into());
+    }
+    let target = app.session.with_document(document, |session| current(session)).map_err(|error| error.to_string())?;
+    hub.may_edit(conn.unwrap_or(0), None, &target, |_| false).map_err(|error| error.to_string())
+}
+
+/// Synthetic UI input could click Keep/Undo or move the edit target after authorization. Agents
+/// must use inspectable native commands while an Ask Agent conversation is open.
+pub fn guard_input(app: &WordApp) -> Result<(), String> {
+    if app.ask_agent.open.as_ref().is_some_and(|open| open.id.is_some()) {
+        return Err("HELD: synthetic UI input is disabled while Ask Agent is open; use native document commands".into());
+    }
+    Ok(())
+}
+
+/// Called on the document owner's UI thread, serialized with document edits.
+pub fn reply(app: &mut WordApp, conn: Option<u64>, params: &Value) -> Result<Value, String> {
+    let Some(conn) = conn else { return Err("NOT_OWNER: the reply needs an authenticated connection".into()) };
+    let Some(hub) = app.ask_agent.hub.clone() else { return Err("NO_REQUEST: Ask Agent is unavailable".into()) };
+    hub.handle(
+        conn,
+        "agent.reply",
+        params,
+        || true,
+        |captured| {
+            let id = captured.document.parse::<u64>().ok()?;
+            app.session.with_document(id, |session| current(session)).ok()
+        },
+    )
+    .ok_or_else(|| "INVALID_PARAMS: unknown Ask Agent method".into())
+}
+
+/// Detect outside edits without mistaking another active document for a revision of this one.
+pub fn sync(app: &mut WordApp) {
+    let Some(hub) = app.ask_agent.hub.clone() else { return };
+    let Some(open) = &app.ask_agent.open else { return };
+    if !app.session.is_open(open.document) {
+        close(app);
+        return;
+    }
+    if open.document == app.session.document_id() && open.revision != app.session.rev() {
+        hub.invalidate(&current(&app.session));
+    }
+}
+
 pub fn held_ranges(app: &WordApp) -> Vec<(Pos, Pos, [u8; 3])> {
     held_by(app).into_iter().map(|(a, b, name)| (a, b, hub::colour(&name))).collect()
 }
 
 fn held_by(app: &WordApp) -> Vec<(Pos, Pos, String)> {
     let Some(hub) = &app.ask_agent.hub else { return vec![] };
-    let range = |sel: &Value| {
-        let pos = |k: &str| serde_json::from_value::<Pos>(sel[k].clone()).ok();
-        let (a, b) = (pos("anchor")?, pos("focus")?);
-        Some(if a <= b { (a, b) } else { (b, a) })
-    };
-    hub.held().into_iter().filter_map(|(sel, name)| range(&sel).map(|(a, b)| (a, b, name))).collect()
+    if !app.ask_agent.open.as_ref().is_some_and(|open| open.document == app.session.document_id()) {
+        return vec![];
+    }
+    hub.held().into_iter().filter_map(|(selection, name)| range(&selection).map(|(a, b)| (a, b, name))).collect()
 }
 
-/// Why the person may not run `command` now: it would change text an agent is working on.
 pub fn held(app: &WordApp, command: &str) -> Option<String> {
-    if app.ask_agent.agent_turn || !app.session.registry.get(command).is_some_and(|c| c.mutates) {
+    if app.ask_agent.agent_turn || !app.session.registry.get(command).is_some_and(|command| command.mutates) {
         return None;
     }
     let (c, d) = app.session.sel.ordered();
@@ -123,104 +257,162 @@ pub fn held(app: &WordApp, command: &str) -> Option<String> {
     Some(format!("{} ({name})", tl!("Held by Agent")))
 }
 
-fn ask(app: &mut WordApp, instruction: String) {
-    let Some(hub) = app.ask_agent.hub.clone() else { return };
-    let sel = &app.session.sel;
-    let selection = json!({"text": app.session.selected_text(), "anchor": sel.anchor, "focus": sel.focus});
-    let start = sel.ordered().0;
+fn ask(app: &mut WordApp, instruction: String) -> Result<(), String> {
+    let Some(hub) = app.ask_agent.hub.clone() else { return Err(Unavailable::NoControlChannel.shown()) };
+    let target = current(&app.session);
+    let selection = captured_selection(&app.session);
+    let start = app.session.sel.ordered().0;
     let document = json!({"title": app.title_stem(), "saved": !app.session.dirty, "language": app.ui.language});
-    let Some(open) = &mut app.ask_agent.open else { return };
-    let history = open.turns.clone();
-    let agent = app.ask_agent.picked.clone();
-    open.asked = instruction.clone();
+    let Some(open) = &mut app.ask_agent.open else { return Err("NO_REQUEST: open Ask Agent first".into()) };
+    if open.document != app.session.document_id() {
+        return Err("STALE_REQUEST: return to the original document".into());
+    }
+    if open.revision != target.revision {
+        open.edited_from = None;
+        open.undo_token = None;
+    }
+    let request = Request {
+        id: 0,
+        instruction: instruction.clone(),
+        history: open.turns.clone(),
+        selection: selection.clone(),
+        document,
+        target: target.clone(),
+        agent: app.ask_agent.picked.clone(),
+    };
+    let id = hub.ask(request).map_err(|error| error.to_string())?;
+    open.id = Some(id);
+    open.asked = instruction;
     open.target.get_or_insert(start);
-    open.id = Some(hub.ask(Request { id: 0, instruction, history, selection, document, agent }));
+    open.selection = selection;
+    open.revision = target.revision;
     open.commented = false;
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Err(error) = app.ask_agent.launcher.start(LAUNCH_VARIABLE, &hub) {
+        hub.close(id);
+        if let Some(open) = &mut app.ask_agent.open {
+            open.id = None;
+        }
+        return Err(error);
+    }
+    Ok(())
 }
 
-/// Send the instruction; after an answer it is a follow-up that carries the thread so far.
-fn send(app: &mut WordApp, text: String) {
-    if let (Some(hub), Some(open)) = (&app.ask_agent.hub, &mut app.ask_agent.open)
-        && let Some(answer) = open.id.and_then(|id| hub.snapshot(id)).and_then(|s| s.answer)
-    {
-        open.turns.push(Turn { instruction: std::mem::take(&mut open.asked), answer });
-        open.id.take().into_iter().for_each(|id| hub.close(id));
+/// Close every prior request, including failed ones, before replacing its id.
+fn send(app: &mut WordApp, text: String) -> Result<(), String> {
+    let snapshot = app.ask_agent.hub.as_ref().and_then(|hub| app.ask_agent.open.as_ref().and_then(|open| open.id).and_then(|id| hub.snapshot(id)));
+    if let Some(snapshot) = snapshot.as_ref().filter(|snapshot| snapshot.status == Status::Answered) {
+        comment_once(app, snapshot);
     }
-    ask(app, text);
+    if let (Some(hub), Some(open)) = (&app.ask_agent.hub, &mut app.ask_agent.open) {
+        if open.turns.len() >= MAX_TURNS {
+            return Err("LIMIT_EXCEEDED: start a new Ask Agent conversation".into());
+        }
+        if let Some(snapshot) = snapshot.filter(|snapshot| snapshot.status == Status::Answered) {
+            open.turns.push(Turn { instruction: std::mem::take(&mut open.asked), answer: snapshot.review_text() });
+        }
+        if let Some(id) = open.id.take() {
+            hub.close(id);
+        }
+    }
+    ask(app, text)
 }
 
 fn open_at_caret(app: &mut WordApp) {
     close(app);
     let caret = crate::canvas::caret_screen(app).map(|(p, h)| Rect::from_min_size(p, vec2(1.0, h)));
     let anchor = app.ask_agent.selection.or(caret).unwrap_or(Rect::from_min_size(egui::pos2(96.0, 160.0), vec2(1.0, 16.0)));
-    app.ask_agent.open = Some(Open { id: None, anchor, turns: vec![], asked: String::new(), target: None, edited_from: None, commented: false });
+    app.ask_agent.open = Some(Open {
+        id: None,
+        anchor,
+        turns: vec![],
+        document: app.session.document_id(),
+        revision: app.session.rev(),
+        asked: String::new(),
+        target: None,
+        selection: Value::Null,
+        edited_from: None,
+        undo_token: None,
+        commented: false,
+    });
 }
 
 fn close(app: &mut WordApp) {
-    if let (Some(hub), Some(id)) = (&app.ask_agent.hub, app.ask_agent.open.take().and_then(|o| o.id)) {
+    if let (Some(hub), Some(id)) = (&app.ask_agent.hub, app.ask_agent.open.take().and_then(|open| open.id)) {
         hub.close(id);
     }
 }
 
-/// `ui.askAgent {instruction?, close?}`: open the bubble at the selection, and send right away
-/// when an instruction is given.
-pub fn command(app: &mut WordApp, p: &Value) -> Result<Value, String> {
-    if p.get("close").and_then(Value::as_bool) == Some(true) {
+pub fn command(app: &mut WordApp, params: &Value) -> Result<Value, String> {
+    if params.get("close").and_then(Value::as_bool) == Some(true) {
         close(app);
-        return Ok(json!({"open": false}));
+        return Ok(json!({"open":false}));
     }
     if let Some(why) = app.ask_agent.unavailable() {
         return Err(why.shown());
     }
     open_at_caret(app);
-    if let Some(text) = p.get("instruction").and_then(Value::as_str) {
-        ask(app, text.to_string());
+    if let Some(instruction) = params.get("instruction").and_then(Value::as_str) {
+        ask(app, instruction.to_string())?;
     }
-    Ok(json!({"open": true, "request": app.ask_agent.open.as_ref().and_then(|o| o.id)}))
+    Ok(json!({"open":true,"request":app.ask_agent.open.as_ref().and_then(|open|open.id)}))
 }
 
-/// Esc closes the bubble.
 pub fn escape(app: &mut WordApp, ctx: &egui::Context) {
-    if app.ask_agent.open.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    if app.ask_agent.open.is_some() && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+        close(app);
+    }
+}
+pub fn typing_resumed(app: &mut WordApp) {
+    if app.ask_agent.open.as_ref().is_some_and(|open| open.id.is_none()) {
         close(app);
     }
 }
 
-/// Typing elsewhere in the document puts away a bubble that is not waiting on anything.
-pub fn typing_resumed(app: &mut WordApp) {
-    if app.ask_agent.open.as_ref().is_some_and(|o| o.id.is_none()) {
-        app.ask_agent.open = None;
-    }
+fn can_undo(app: &WordApp) -> bool {
+    app.ask_agent.open.as_ref().is_some_and(|open| {
+        open.document == app.session.document_id()
+            && open.revision == app.session.rev()
+            && open.undo_token.is_some()
+            && open.undo_token == app.session.undo_token()
+    })
 }
 
-/// The chip beside the selection, or the open bubble with its request.
 pub fn show(app: &mut WordApp, ctx: &egui::Context, _viewport: Rect) {
+    sync(app);
     let Some(hub) = app.ask_agent.hub.clone() else { return };
+    let tr = |text| crate::i18n::t(text).to_string();
     let Some(open) = &app.ask_agent.open else {
         if let Some(anchor) = app.ask_agent.selection
             && app.ask_agent.unavailable().is_none()
-            && ui::chip(ctx, anchor)
+            && ui::chip(ctx, anchor, &tr)
         {
             open_at_caret(app);
         }
         return;
     };
+    if open.document != app.session.document_id() {
+        return;
+    }
     let (anchor, snapshot) = (open.anchor, open.id.and_then(|id| hub.snapshot(id)));
-    if let Some(s) = snapshot.as_ref().filter(|s| s.status == Status::Answered) {
-        comment_once(app, s);
+    if let Some(snapshot) = snapshot.as_ref().filter(|snapshot| snapshot.status == Status::Answered) {
+        comment_once(app, snapshot);
     }
     let agents = hub.agents();
     let Some(open) = app.ask_agent.open.as_ref() else { return };
     let view = ui::View { snapshot: snapshot.as_ref(), agents: &agents, actions: QUICK_ACTIONS, history: &open.turns, instruction: &open.asked };
-    match ui::bubble(ctx, anchor, &view, &mut app.ask_agent.draft, &mut app.ask_agent.picked) {
-        Some(ui::Action::Send(text)) => send(app, text),
+    match ui::bubble(ctx, anchor, &view, &mut app.ask_agent.draft, &mut app.ask_agent.picked, &tr) {
+        Some(ui::Action::Send(text)) => {
+            if let Err(error) = send(app, text.clone()) {
+                app.ask_agent.draft = text;
+                app.status(error);
+            }
+        }
         Some(ui::Action::Undo) => {
-            if let Some(from) = app.ask_agent.open.as_ref().and_then(|o| o.edited_from) {
-                if app.session.undo_depth() == from + 1 {
-                    app.session.undo();
-                } else {
-                    app.status(tl!("The document changed since the agent's edits; use Undo in the Edit menu"));
-                }
+            if can_undo(app) {
+                app.session.undo();
+            } else {
+                app.status(tl!("The document changed since the agent's edits; use Undo in the Edit menu"));
             }
             close(app);
         }
@@ -229,29 +421,45 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context, _viewport: Rect) {
     }
 }
 
-/// The agent's answer, once, as a comment on what it was asked about, authored like its edits.
-fn comment_once(app: &mut WordApp, s: &Snapshot) {
-    let Some(open) = app.ask_agent.open.as_mut().filter(|o| !o.commented) else { return };
-    open.commented = true;
-    let target = open.target.clone();
-    let (Some(answer), Some(name)) = (&s.answer, &s.agent) else { return };
-    let from = open.edited_from;
-    let depth = app.session.undo_depth();
-    if from.is_some_and(|f| depth == f + 1) {
+fn comment_once(app: &mut WordApp, snapshot: &Snapshot) {
+    let Some(open) = app.ask_agent.open.as_ref().filter(|open| {
+        !open.commented && open.id == Some(snapshot.id) && open.document == app.session.document_id() && open.revision == app.session.rev()
+    }) else {
+        return;
+    };
+    let Some(name) = &snapshot.agent else { return };
+    let (target, from, join, asked) =
+        (open.target.clone(), open.edited_from, open.undo_token.is_some() && open.undo_token == app.session.undo_token(), open.asked.clone());
+    if open.undo_token.is_some() && !join {
+        return;
+    }
+    if join {
         app.session.join_next_undo();
     }
+    let depth = app.session.undo_depth();
+    let token = app.session.undo_token();
+    let revision = app.session.rev();
     let author = std::mem::replace(&mut app.session.author, format!("Agent ({name})"));
-    let sel = app.session.sel.clone();
+    let selection = app.session.sel.clone();
     if let Some(at) = target {
         (app.session.sel.anchor, app.session.sel.focus) = (at.clone(), at);
     }
-    let text = format!("You: {}\n\nAgent: {answer}", open.asked);
-    let result = app.session.run("review.newComment", &json!({"text": text}));
-    if from.is_none() && result.is_ok() && app.session.undo_depth() > depth {
-        open.edited_from = Some(depth);
-    }
-    app.session.sel = sel;
+    let text = format!("You: {asked}\n\nAgent: {}", snapshot.review_text());
+    let result = app.session.run("review.newComment", &json!({"text":text}));
+    app.session.sel = selection;
     app.session.author = author;
+    if let Some(open) = &mut app.ask_agent.open {
+        open.commented = true;
+        if result.is_ok() {
+            if from.is_none() && token != app.session.undo_token() {
+                open.edited_from = Some(depth);
+            }
+            if join || (revision != app.session.rev() && token != app.session.undo_token()) {
+                open.undo_token = app.session.undo_token();
+            }
+            open.revision = app.session.rev();
+        }
+    }
 }
 
 const QUICK_ACTIONS: &[ui::QuickAction] = &[
@@ -274,82 +482,5 @@ const QUICK_ACTIONS: &[ui::QuickAction] = &[
 ];
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn opening_a_bubble_closes_any_previous_request_in_the_hub() {
-        let (mut app, hub) = app();
-        hub.listen(7, None, Duration::ZERO, || true);
-        command(&mut app, &json!({"instruction": "First"})).unwrap();
-        let first = hub.listen(7, None, Duration::ZERO, || true).unwrap().id;
-        assert!(hub.snapshot(first).is_some());
-        command(&mut app, &json!({})).unwrap();
-        assert!(hub.snapshot(first).is_none(), "opening a new bubble closed the earlier request");
-    }
-
-    #[test]
-    fn failed_command_does_not_record_edited_from_for_undo_join() {
-        let (mut app, hub) = app();
-        hub.listen(7, None, Duration::ZERO, || true);
-        command(&mut app, &json!({"instruction": "Edit"})).unwrap();
-        let id = hub.listen(7, None, Duration::ZERO, || true).unwrap().id;
-        let before = app.session.undo_depth();
-        // A failing command does not set edited_from
-        let _ = as_agent(&mut app, Some(7), "text.insert", &json!({"request": id}), |a| a.run("invalid.command", json!({})));
-        assert_eq!(app.ask_agent.open.as_ref().unwrap().edited_from, None);
-        // Successful command afterwards sets edited_from
-        let p = json!({"text": "done", "request": id});
-        as_agent(&mut app, Some(7), "text.insert", &p, |a| a.run("text.insert", p.clone())).unwrap();
-        assert_eq!(app.ask_agent.open.as_ref().unwrap().edited_from, Some(before));
-    }
-    use std::time::Duration;
-
-    fn app() -> (WordApp, AgentHub) {
-        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
-        let hub = AgentHub::default();
-        app.ask_agent.hub = Some(hub.clone());
-        app.run("text.insert", json!({"text": "Kilns fire clay."})).unwrap();
-        app.run("select.all", json!({})).unwrap();
-        (app, hub)
-    }
-
-    #[test]
-    fn the_agents_edits_are_one_undo_step_authored_by_it_and_hold_the_text() {
-        let (mut app, hub) = app();
-        hub.listen(7, Some("Claude"), Duration::ZERO, || true);
-        command(&mut app, &json!({"instruction": "Shorter"})).unwrap();
-        let id = hub.listen(7, Some("Claude"), Duration::ZERO, || true).unwrap().id;
-        let before = app.session.undo_depth();
-        for text in ["Kilns ", "fire."] {
-            let p = json!({"text": text, "request": id});
-            as_agent(&mut app, Some(7), "text.insert", &p, |a| a.run("text.insert", p.clone())).unwrap();
-        }
-        assert_eq!(app.session.undo_depth(), before + 1, "one undo step");
-        assert!(held(&app, "text.insert").unwrap().ends_with("(Claude)"), "the person's edit is refused");
-        let other = as_agent(&mut app, Some(8), "text.insert", &json!({"text": "x"}), |a| a.run("text.insert", json!({"text": "x"})));
-        assert!(other.unwrap_err().contains(hub::HELD), "another connection without the request");
-        hub.reply(7, id, "Shortened.", true, None).unwrap();
-        comment_once(&mut app, &hub.snapshot(id).unwrap());
-        assert_eq!(app.session.undo_depth(), before + 1, "the closing comment joins the step");
-        let comment = app.session.doc.comments.values().next().unwrap();
-        assert_eq!(comment.author, "Agent (Claude)");
-        let persisted = app.session.run("review.comments", &json!({})).unwrap().to_string();
-        assert!(persisted.contains("Shorter") && persisted.contains("Shortened."), "comment retains instruction and answer");
-        assert!(held(&app, "text.insert").is_none(), "answered: the text is free");
-    }
-
-    #[test]
-    fn a_follow_up_carries_the_thread_and_stays_in_the_same_undo_step() {
-        let (mut app, hub) = app();
-        hub.listen(1, None, Duration::ZERO, || true);
-        command(&mut app, &json!({"instruction": "Formal"})).unwrap();
-        let first = hub.listen(1, None, Duration::ZERO, || true).unwrap().id;
-        hub.reply(1, first, "Made formal.", true, None).unwrap();
-        send(&mut app, "Shorter".into());
-        let second = hub.listen(1, None, Duration::ZERO, || true).unwrap();
-        assert_eq!(second.history, vec![Turn { instruction: "Formal".into(), answer: "Made formal.".into() }]);
-        assert!(hub.snapshot(first).is_none(), "the answered request left the queue");
-    }
-}
+#[path = "tests/adapter.rs"]
+mod tests;

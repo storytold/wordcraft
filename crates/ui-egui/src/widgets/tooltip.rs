@@ -122,10 +122,9 @@ pub(super) fn tooltip(app: &WordApp, resp: Response, label: &str, id: &str) -> R
     } else {
         Some(app.session.why_disabled(id).unwrap_or(""))
     };
-    let (title, mut notes) = tooltip_lines(label, &shortcut_text(app, id), &desc, reason);
-    if let Some(why) = (id == "ui.askAgent").then(|| app.ask_agent.unavailable()).flatten() {
-        notes.push(why.shown());
-    }
+    let specific = (id == "ui.askAgent").then(|| app.ask_agent.unavailable()).flatten().map(|why| why.shown());
+    let reason = if reason == Some("") { specific.as_deref().or(reason) } else { reason };
+    let (title, notes) = tooltip_lines(label, &shortcut_text(app, id), &desc, reason);
     show_hint(&resp, &title, &notes);
     resp
 }

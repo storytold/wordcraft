@@ -185,14 +185,45 @@ printer is ready, or when the browser host provides its print flow.
 
 ## Ask Agent
 
-With the control channel enabled, an agent can receive instructions and edit selections from the WordCraft window:
+With the authenticated loopback control channel enabled, the person explicitly selects text and
+sends an instruction to their own connected agent. A queued request remains in memory; nothing is
+sent while no agent is connected. WordCraft does not log instruction text or choose a model. The
+person's external agent may keep its own history according to its own settings.
 
 | Method | Params | Result |
 |---|---|---|
-| `agent.listen` | `timeoutMs?` (default 30000, max 60000), `agent?` (name) | `{id, instruction, history, selection: {text, anchor, focus}, document: {title, saved, language}}` or `{none: true}` |
-| `agent.reply` | `id`, `text`, `done?` (default true), `error?` | `{id, shown: true, done}` or `{id, cancelled: true}` |
+| `agent.listen` | `timeoutMs?` (default 30000, max 60000), `agent?` | `{id, instruction, history, selection: {text, anchor, focus}, document: {title, saved, language}, target: {document, revision}}` or `{none: true}` |
+| `agent.reply` | `id`, `text?`, `done?`, `error?`, `proposal?`, `format?`, `comment?` | `{id, done}` |
 
-While a request is open, mutating commands are owned by the connection that claimed it (`request_id` tagged). Edits for the request join into one undo group. The bubble in the window shows progress notes (`done: false`), final answer (`done: true`), Keep (retains changes), Undo (reverts all edits in the group), and follow-up prompts. Disconnecting returns an unanswered request to the queue.
+A mutating command is associated with the claimed request using **`request`**, not `request_id`.
+Ownership alone grants no document-wide permission: WordCraft checks the captured document,
+current content revision, actual selection and supported selection-scoped command. Text insertion
+replaces the captured selection or appends at its end; supported character-format commands stay
+within it. Whole-document operations, macros and arbitrary structural replacements are refused.
+An inactive addressed document cannot bypass these checks; make the request's document active first.
+Synthetic UI input is refused while a request is open, so it cannot click the person's Keep/Undo.
+
+Authorized successive edits advance the request's revision and selection and retain the same real
+undo checkpoint. An outside edit, another checkpoint or another document invalidates that guarantee.
+Undo then refuses to revert unrelated work and asks the person to use the Edit menu's Undo instead.
+Replies are resolved and accepted on the document-owning UI thread, so a changed or closed document
+cannot receive a stale response. A disconnected connection releases its ownership and unfinished
+work returns to the queue. Idle connections and blocked writes time out.
+
+Proposals and format metadata are **literal review text**, never commands or markup. A proposal-only
+reply is supported and labeled "Proposal (not applied)". Keep retains native tool edits already made
+and the saved response note; it never executes a proposal. Responses have bounded text, proposals,
+notes and total size (the common `craft-ask-agent` contract proposed in storytold/craft-libs#142).
+
+### Optional personal launcher
+
+By default WordCraft starts no agent process. After explicit Send, if no agent is listening, it can
+start an opt-in executable: an absolute file path in `WORDCRAFT_AGENT_LAUNCH`, or `agent/launch`
+(`agent/launch.cmd` on Windows) beside the WordCraft executable. It passes no instruction, selected
+text or token in arguments, builds no shell command from document content, starts no second copy
+while its previous launcher still runs, and uses no model configuration or key of its own. The
+launcher is the person's program and connects through the ordinary authenticated control channel.
+This facility is not built for WASM. The app does not kill the person's launcher on exit.
 
 ### Physical print sheet layout
 

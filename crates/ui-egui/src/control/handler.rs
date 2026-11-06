@@ -133,7 +133,7 @@ fn reply<E: std::fmt::Display, F: std::fmt::Display>(r: Result<Result<Value, E>,
 
 /// A document method addressed to open document `doc`, which isn't the active one: it runs on
 /// that document, and the window keeps showing the active one.
-fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
+fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value, connection: Option<u64>) -> Outcome {
     if app.no_document == Some(doc) {
         return err(NO_DOCUMENT);
     }
@@ -152,6 +152,10 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
         _ => {
             let Some(id) = p.get("command").or(p.get("id")).and_then(Value::as_str) else { return err("missing `command`") };
             let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
+            let checked = json!({"request": p.get("request").or(params.get("request"))});
+            if let Err(error) = crate::ask_agent::guard_addressed(app, connection, doc, id, &checked) {
+                return err(error);
+            }
             if id.starts_with("ui.") {
                 return err(format!("`{id}` works on the window: make the document active first (view.switchWindows {{\"id\": {doc}}})"));
             }
@@ -182,9 +186,15 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
 /// ids as commands. It refuses closing unsaved work and document operations without a document.
 pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
+    if req.connection.is_some()
+        && matches!(req.method.as_str(), "ui.click" | "ui.drag" | "ui.clickText" | "ui.key" | "ui.text")
+        && let Err(error) = crate::ask_agent::guard_input(app)
+    {
+        return err(error);
+    }
     if DOC_METHODS.contains(&req.method.as_str()) {
         match addressed(app, p) {
-            Ok(Some(doc)) => return handle_in(app, doc, &req.method, p),
+            Ok(Some(doc)) => return handle_in(app, doc, &req.method, p, req.connection),
             Ok(None) => {}
             Err(e) => return err(e),
         }
@@ -192,6 +202,10 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
     let s = |k: &str| p.get(k).and_then(Value::as_str);
     let f = |k: &str| p.get(k).and_then(Value::as_f64).map(|v| v as f32);
     match req.method.as_str() {
+        "agent.reply" => match crate::ask_agent::reply(app, req.connection, p) {
+            Ok(response) => Outcome::Done(response),
+            Err(error) => err(error),
+        },
         "engine.execute" | "command" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));

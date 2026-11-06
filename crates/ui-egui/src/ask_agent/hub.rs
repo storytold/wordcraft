@@ -1,7 +1,9 @@
-//! Ask Agent's queue: requests from the window, the agents that listen for them, and who may edit.
-//! Shared as is by WordCraft, GridCraft, DeckCraft and PdfCraft: no egui, no app types.
+//! Shared queue mirror: storytold/craft-libs#142, cbe44ead63a2912dcc7ac6e381ea2e7594211ddc.
+//! The request queue: requests from the window, the agents that listen for them, and who may edit.
+//! No egui and no app types, so the control channel threads can share it.
 
 use std::collections::HashMap;
+use std::io::{self, Write};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -13,8 +15,78 @@ pub const NO_REQUEST: &str = "NO_REQUEST";
 pub const INVALID_PARAMS: &str = "INVALID_PARAMS";
 pub const READ_ONLY_REQUEST: &str = "READ_ONLY_REQUEST";
 pub const HELD: &str = "HELD";
+/// The requested document or revision is no longer the one captured by the request.
+pub const STALE_REQUEST: &str = "STALE_REQUEST";
+/// The app's selection predicate rejected a proposed edit.
+pub const OUTSIDE_SELECTION: &str = "OUTSIDE_SELECTION";
+/// A configured resource limit was reached; no partial request or reply was stored.
+pub const LIMIT_EXCEEDED: &str = "LIMIT_EXCEEDED";
 
-/// Longest `agent.listen` wait, and the wait when none is given.
+const MAX_NAME_BYTES: usize = 256;
+const MAX_PROPOSAL_BYTES: usize = 200_000;
+const MAX_REPLY_CHARS: usize = 4_000;
+const MAX_COMMENT_CHARS: usize = 2_000;
+const MAX_FORMAT_BYTES: usize = 64;
+
+/// Limits for retained requests, serialized inputs and agent responses.
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    /// Includes queued, running and completed requests until the person closes them.
+    pub requests: usize,
+    /// Serialized bytes of one request, including its selection, document and history.
+    pub request_bytes: usize,
+    /// Combined bytes of a response's text, error, proposal, format and comment.
+    pub reply_bytes: usize,
+    /// Total bytes of progress notes retained by one request.
+    pub progress_bytes: usize,
+    /// Maximum number of progress notes retained by one request.
+    pub progress_notes: usize,
+    /// Maximum number of registered agent connections.
+    pub listeners: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self { requests: 128, request_bytes: 1024 * 1024, reply_bytes: 256 * 1024, progress_bytes: 64 * 1024, progress_notes: 128, listeners: 64 }
+    }
+}
+
+/// An app-owned document identity and monotonically increasing content revision.
+///
+/// This token comes from the document owner, never from agent-supplied JSON. The app must
+/// allocate a new identity when opening/replacing a document, even when its path is reused.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Target {
+    /// Stable for one opened document, independent of the active tab or its filename.
+    pub document: String,
+    /// Increased after every content edit, including undo and redo.
+    pub revision: u64,
+}
+
+/// The text of a progress note, a completed answer, or an agent-reported error.
+#[derive(Clone, Copy, Debug)]
+pub struct Reply<'a> {
+    /// Plain text; never markup, commands or a document mutation.
+    pub text: &'a str,
+    /// False for a progress note; an error always completes the request.
+    pub done: bool,
+    /// A plain-text failure message, if the operation failed.
+    pub error: Option<&'a str>,
+    /// An unapplied proposal. It is displayed and saved as text, never executed.
+    pub proposal: Option<&'a str>,
+    /// Descriptive metadata only; it never selects a renderer or parser.
+    pub format: Option<&'a str>,
+    /// A note to retain with the response, displayed as literal text.
+    pub comment: Option<&'a str>,
+}
+
+impl Default for Reply<'_> {
+    fn default() -> Self {
+        Self { text: "", done: true, error: None, proposal: None, format: None, comment: None }
+    }
+}
+
+/// Longest `agent.listen` wait.
 pub const MAX_LISTEN: Duration = Duration::from_secs(60);
 pub const DEFAULT_LISTEN: Duration = Duration::from_secs(30);
 
@@ -33,6 +105,7 @@ impl std::fmt::Display for HubError {
 
 impl std::error::Error for HubError {}
 
+/// Build a refusal without exposing document contents.
 pub fn err(code: &'static str, message: impl Into<String>) -> HubError {
     HubError { code, message: message.into() }
 }
@@ -52,6 +125,8 @@ pub struct Request {
     pub history: Vec<Turn>,
     pub selection: Value,
     pub document: Value,
+    /// The document and content revision captured with the selection.
+    pub target: Target,
     /// The agent asked for by name; `None` for any.
     pub agent: Option<String>,
 }
@@ -73,11 +148,40 @@ pub struct Snapshot {
     pub notes: Vec<String>,
     pub answer: Option<String>,
     pub error: Option<String>,
+    pub proposal: Option<String>,
+    pub format: Option<String>,
+    pub comment: Option<String>,
+}
+
+impl Snapshot {
+    /// Plain text for app-native comments. Keeping this note never executes its proposal.
+    pub fn review_text(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(answer) = &self.answer
+            && !answer.is_empty()
+        {
+            parts.push(answer.clone());
+        }
+        if let Some(comment) = &self.comment {
+            parts.push(comment.clone());
+        }
+        if let Some(proposal) = &self.proposal {
+            parts.push("Proposal (not applied)".into());
+            if let Some(format) = &self.format {
+                parts.push(format!("Format: {format}"));
+            }
+            parts.push(proposal.clone());
+        } else if let Some(format) = &self.format {
+            parts.push(format!("Format: {format}"));
+        }
+        parts.join("\n\n")
+    }
 }
 
 struct Entry {
     request: Request,
     shown: Snapshot,
+    progress_bytes: usize,
 }
 
 #[derive(Default)]
@@ -89,82 +193,212 @@ struct Inner {
 }
 
 impl Inner {
+    /// Find an existing request; closed requests cannot be resurrected by a late response.
     fn entry(&mut self, id: u64) -> Result<&mut Entry, HubError> {
         self.entries.iter_mut().find(|e| e.request.id == id).ok_or_else(|| err(NO_REQUEST, format!("no Ask Agent request {id}")))
+    }
+
+    /// Requeue only work still owned by this disconnected connection.
+    fn disconnect(&mut self, conn: u64) {
+        self.listeners.remove(&conn);
+        for e in self.entries.iter_mut().filter(|e| e.shown.status == Status::Working { conn }) {
+            (e.shown.status, e.shown.agent) = (Status::Queued, None);
+            (e.shown.proposal, e.shown.format, e.shown.comment) = (None, None, None);
+            e.shown.notes.clear();
+            e.progress_bytes = 0;
+        }
     }
 }
 
 /// The queue, shared by the window and the control channel's connection threads.
-#[derive(Clone, Default)]
-pub struct AgentHub(Arc<(Mutex<Inner>, Condvar)>);
+#[derive(Clone)]
+pub struct AgentHub {
+    shared: Arc<(Mutex<Inner>, Condvar)>,
+    limits: Limits,
+}
+
+impl Default for AgentHub {
+    fn default() -> Self {
+        Self::with_limits(Limits::default())
+    }
+}
 
 impl AgentHub {
+    /// Construct a hub with application-owned bounds. Zero limits reject all relevant input.
+    pub fn with_limits(limits: Limits) -> Self {
+        Self { shared: Arc::default(), limits }
+    }
+
+    /// Recover a poisoned lock without discarding request ownership.
     fn lock(&self) -> MutexGuard<'_, Inner> {
-        self.0.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.shared.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Queue a request from the window; returns its id.
-    pub fn ask(&self, mut request: Request) -> u64 {
+    pub fn ask(&self, mut request: Request) -> Result<u64, HubError> {
+        if request.instruction.trim().is_empty() || request.target.document.trim().is_empty() {
+            return Err(err(INVALID_PARAMS, "an instruction and a stable document identity are required"));
+        }
+        check_name(&request.target.document)?;
+        if let Some(agent) = &mut request.agent {
+            *agent = agent.trim().to_string();
+            check_name(agent)?;
+        }
         let mut inner = self.lock();
-        inner.last_id += 1;
-        request.id = inner.last_id;
-        let shown = Snapshot { id: request.id, status: Status::Queued, agent: None, notes: vec![], answer: None, error: None };
-        inner.entries.push(Entry { request, shown });
-        self.0.1.notify_all();
-        inner.last_id
+        if inner.entries.len() >= self.limits.requests {
+            return Err(err(LIMIT_EXCEEDED, "close an Ask Agent request before opening another"));
+        }
+        let id = inner.last_id.checked_add(1).ok_or_else(|| err(LIMIT_EXCEEDED, "Ask Agent request ids are exhausted"))?;
+        request.id = id;
+        check_size(&request, self.limits.request_bytes)?;
+        let shown = Snapshot {
+            id: request.id,
+            status: Status::Queued,
+            agent: None,
+            notes: vec![],
+            answer: None,
+            error: None,
+            proposal: None,
+            format: None,
+            comment: None,
+        };
+        inner.entries.push(Entry { request, shown, progress_bytes: 0 });
+        inner.last_id = id;
+        self.shared.1.notify_all();
+        Ok(id)
     }
 
     /// Wait up to `wait` for a request this agent may take, and take it.
-    pub fn listen(&self, conn: u64, name: Option<&str>, wait: Duration, alive: impl Fn() -> bool) -> Option<Request> {
+    /// Connection ids must be unique for each connection lifetime; never reuse a disconnected id.
+    pub fn listen(&self, conn: u64, name: Option<&str>, wait: Duration, alive: impl Fn() -> bool) -> Result<Option<Request>, HubError> {
         let name = name.map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Agent").to_string();
-        // Counted down in short steps rather than read from a clock, which wasm builds lack.
-        let mut left = wait;
+        check_name(&name)?;
+        // Single-threaded browser builds cannot block on a condition variable.
+        // Other targets count down without reading a clock, which wasm builds lack.
+        let mut left = if cfg!(all(target_arch = "wasm32", target_os = "unknown", not(target_feature = "atomics"))) {
+            Duration::ZERO
+        } else {
+            wait.min(MAX_LISTEN)
+        };
         let mut inner = self.lock();
+        if !alive() {
+            inner.disconnect(conn);
+            self.shared.1.notify_all();
+            return Ok(None);
+        }
+        if !inner.listeners.contains_key(&conn) && inner.listeners.len() >= self.limits.listeners {
+            return Err(err(LIMIT_EXCEEDED, "too many Ask Agent connections"));
+        }
         inner.listeners.insert(conn, name.clone());
         loop {
+            // Never assign queued work to a connection that died while we waited.
+            if !alive() || !inner.listeners.contains_key(&conn) {
+                inner.disconnect(conn);
+                self.shared.1.notify_all();
+                return Ok(None);
+            }
             let free = |e: &&mut Entry| e.shown.status == Status::Queued && e.request.agent.as_ref().is_none_or(|a| *a == name);
             if let Some(e) = inner.entries.iter_mut().find(free) {
                 e.shown.status = Status::Working { conn };
                 e.shown.agent = Some(name);
-                return Some(e.request.clone());
+                return Ok(Some(e.request.clone()));
             }
-            if left.is_zero() || !alive() {
-                return None;
+            if left.is_zero() {
+                return Ok(None);
             }
             let step = left.min(Duration::from_millis(250));
-            inner = self.0.1.wait_timeout(inner, step).unwrap_or_else(PoisonError::into_inner).0;
+            inner = self.shared.1.wait_timeout(inner, step).unwrap_or_else(PoisonError::into_inner).0;
             left -= step;
         }
     }
 
     /// A progress note (`done` false), the answer, or a failure, from the agent working on `id`.
-    pub fn reply(&self, conn: u64, id: u64, text: &str, done: bool, error: Option<&str>) -> Result<(), HubError> {
+    /// The app resolves `current` from its own document state and accepts the reply in the same
+    /// serialized document operation. Socket threads must dispatch this to the document owner.
+    /// A missing/changed document fails the request and drops the response, including progress.
+    pub fn reply(&self, conn: u64, id: u64, reply: Reply<'_>, current: Option<&Target>) -> Result<(), HubError> {
         let mut inner = self.lock();
-        let shown = &mut inner.entry(id)?.shown;
-        if shown.status != (Status::Working { conn }) {
-            return Err(err(NOT_OWNER, format!("Ask Agent request {id} is not yours: listen for it first")));
+        let entry = inner.entry(id)?;
+        check_owner(entry, conn)?;
+        check_target(entry, current)?;
+        check_reply(reply, self.limits.reply_bytes)?;
+        let Reply { text, done, error, proposal, format, comment } = reply;
+        if error.is_none() && !done {
+            if entry.shown.notes.len() >= self.limits.progress_notes || text.len() > self.limits.progress_bytes.saturating_sub(entry.progress_bytes) {
+                return Err(err(LIMIT_EXCEEDED, "too many Ask Agent progress notes"));
+            }
+            entry.progress_bytes += text.len();
+        }
+        let shown = &mut entry.shown;
+        if let Some(proposal) = proposal {
+            shown.proposal = Some(proposal.into());
+        }
+        if let Some(format) = format {
+            shown.format = Some(format.into());
+        }
+        if let Some(comment) = comment {
+            shown.comment = Some(comment.into());
         }
         match (error, done) {
             (Some(e), _) => (shown.status, shown.error) = (Status::Failed, Some(e.into())),
             (None, true) => (shown.status, shown.answer) = (Status::Answered, Some(text.into())),
-            (None, false) => shown.notes.push(text.into()),
+            (None, false) if !text.is_empty() => shown.notes.push(text.into()),
+            (None, false) => {}
         }
         Ok(())
     }
 
-    /// The one edit rule: while a request is open, only the connection working on it edits, for it.
-    pub fn may_edit(&self, conn: u64, request: Option<u64>) -> Result<(), HubError> {
+    /// Authorize an edit against app-owned current document state and selection geometry.
+    ///
+    /// `contains` must inspect the actual proposed command against the captured selection;
+    /// it must not trust a selection supplied by the agent. The app serializes this check,
+    /// the command and [`Self::advance`] on its document thread. No document mutation is
+    /// performed here, and no permission or prompt can replace the app's command checks.
+    pub fn may_edit(&self, conn: u64, request: Option<u64>, current: &Target, contains: impl FnOnce(&Value) -> bool) -> Result<(), HubError> {
         let mut inner = self.lock();
-        let open = inner.entries.iter().any(|e| matches!(e.shown.status, Status::Queued | Status::Working { .. }));
+        let open = inner
+            .entries
+            .iter()
+            .any(|e| e.request.target.document == current.document && matches!(e.shown.status, Status::Queued | Status::Working { .. }));
         match request {
             None if open => Err(err(HELD, "the document is held for an Ask Agent request: pass its `request` id")),
             None => Ok(()),
-            Some(id) => match inner.entry(id)?.shown.status {
-                Status::Working { conn: c } if c == conn => Ok(()),
-                Status::Answered | Status::Failed => Err(err(READ_ONLY_REQUEST, format!("Ask Agent request {id} is finished"))),
-                _ => Err(err(NOT_OWNER, format!("Ask Agent request {id} is not yours: listen for it first"))),
-            },
+            Some(id) => {
+                let entry = inner.entry(id)?;
+                check_owner(entry, conn)?;
+                check_target(entry, Some(current))?;
+                if !contains(&entry.request.selection) {
+                    return Err(err(OUTSIDE_SELECTION, "the edit is outside the request's selection"));
+                }
+                Ok(())
+            }
         }
+    }
+
+    /// Advance a request after its authorized edit, rebasing the app-owned held selection.
+    /// Other requests for that document are invalidated against the new revision.
+    pub fn advance(&self, conn: u64, id: u64, previous: &Target, next: Target, selection: Value) -> Result<(), HubError> {
+        let mut inner = self.lock();
+        let entry = inner.entry(id)?;
+        check_owner(entry, conn)?;
+        check_target(entry, Some(previous))?;
+        if next.document != previous.document || next.revision <= previous.revision {
+            return Err(err(INVALID_PARAMS, "an edit must advance the same document's revision"));
+        }
+        let mut updated = entry.request.clone();
+        updated.target = next.clone();
+        updated.selection = selection;
+        check_size(&updated, self.limits.request_bytes)?;
+        entry.request = updated;
+        invalidate_entries(&mut inner, &next);
+        self.shared.1.notify_all();
+        Ok(())
+    }
+
+    /// Notify the hub after any other document edit or replacement. Stale work cannot resume.
+    pub fn invalidate(&self, current: &Target) {
+        invalidate_entries(&mut self.lock(), current);
+        self.shared.1.notify_all();
     }
 
     /// The selection of each request being worked on, with its agent's name.
@@ -177,11 +411,8 @@ impl AgentHub {
     /// The connection is gone: its unanswered request goes back in the queue.
     pub fn disconnect(&self, conn: u64) {
         let mut inner = self.lock();
-        inner.listeners.remove(&conn);
-        for e in inner.entries.iter_mut().filter(|e| e.shown.status == Status::Working { conn }) {
-            (e.shown.status, e.shown.agent) = (Status::Queued, None);
-        }
-        self.0.1.notify_all();
+        inner.disconnect(conn);
+        self.shared.1.notify_all();
     }
 
     /// Names of the agents listening, sorted, for the picker.
@@ -192,20 +423,36 @@ impl AgentHub {
         names
     }
 
+    /// Return bounded display state without exposing the request's document payload.
     pub fn snapshot(&self, id: u64) -> Option<Snapshot> {
         self.lock().entries.iter().find(|e| e.request.id == id).map(|e| e.shown.clone())
+    }
+
+    /// Resolve a request's document for routing, including its latest authorized revision.
+    /// This is not current app state or authorization; edits still require [`Self::may_edit`].
+    pub fn request_target(&self, id: u64) -> Option<Target> {
+        self.lock().entries.iter().find(|e| e.request.id == id).map(|e| e.request.target.clone())
     }
 
     /// The person is done with the request: it leaves the queue.
     pub fn close(&self, id: u64) {
         self.lock().entries.retain(|e| e.request.id != id);
+        self.shared.1.notify_all();
     }
 
     /// Answer `agent.listen` and `agent.reply` for connection `conn`; `None` for any other method.
-    pub fn handle(&self, conn: u64, method: &str, p: &Value, alive: impl Fn() -> bool) -> Option<Value> {
+    /// `current` resolves the captured document from trusted app state, not the active tab.
+    pub fn handle(
+        &self,
+        conn: u64,
+        method: &str,
+        p: &Value,
+        alive: impl Fn() -> bool,
+        current: impl FnOnce(&Target) -> Option<Target>,
+    ) -> Option<Value> {
         let reply = match method {
             "agent.listen" => self.handle_listen(conn, p, alive),
-            "agent.reply" => self.handle_reply(conn, p),
+            "agent.reply" => self.handle_reply(conn, p, current),
             _ => return None,
         };
         Some(match reply {
@@ -214,28 +461,128 @@ impl AgentHub {
         })
     }
 
+    /// Validate listen parameters before registering or assigning a connection.
     fn handle_listen(&self, conn: u64, p: &Value, alive: impl Fn() -> bool) -> Result<Value, HubError> {
+        check_object(p)?;
         let wait = match p.get("timeoutMs") {
             None | Some(Value::Null) => DEFAULT_LISTEN,
             Some(v) => v.as_u64().map(Duration::from_millis).ok_or_else(|| err(INVALID_PARAMS, "`timeoutMs` is a number of milliseconds"))?,
         };
-        let request = self.listen(conn, str_param(p, "agent")?, wait.min(MAX_LISTEN), alive);
+        let request = self.listen(conn, str_param(p, "agent")?, wait, alive)?;
         Ok(request.map_or_else(|| json!({"none": true}), |r| json!(r)))
     }
 
-    fn handle_reply(&self, conn: u64, p: &Value) -> Result<Value, HubError> {
+    /// Resolve the expected document afresh for every progress note and final response.
+    fn handle_reply(&self, conn: u64, p: &Value, current: impl FnOnce(&Target) -> Option<Target>) -> Result<Value, HubError> {
+        check_object(p)?;
         let id = p.get("id").and_then(Value::as_u64).ok_or_else(|| err(INVALID_PARAMS, "missing `id`: the request's id"))?;
         let done = match p.get("done") {
             None | Some(Value::Null) => true,
             Some(v) => v.as_bool().ok_or_else(|| err(INVALID_PARAMS, "`done` is true or false"))?,
         };
         let (text, error) = (str_param(p, "text")?.unwrap_or(""), str_param(p, "error")?);
-        if text.trim().is_empty() && error.is_none() {
-            return Err(err(INVALID_PARAMS, "missing `text`: what to show in the window"));
-        }
-        self.reply(conn, id, text, done, error)?;
-        Ok(json!({"id": id, "done": done}))
+        let (proposal, format, comment) = (str_param(p, "proposal")?, str_param(p, "format")?, str_param(p, "comment")?);
+        let target = self.lock().entry(id)?.request.target.clone();
+        let current = current(&target);
+        self.reply(conn, id, Reply { text, done, error, proposal, format, comment }, current.as_ref())?;
+        Ok(json!({"id": id, "done": done || error.is_some()}))
     }
+}
+
+/// Refuse non-object wire parameters before looking up optional fields.
+fn check_object(p: &Value) -> Result<(), HubError> {
+    if !p.is_object() {
+        return Err(err(INVALID_PARAMS, "parameters must be an object"));
+    }
+    Ok(())
+}
+
+/// Names and document identities are short, nonempty application identifiers.
+fn check_name(name: &str) -> Result<(), HubError> {
+    if name.is_empty() || name.len() > MAX_NAME_BYTES {
+        return Err(err(INVALID_PARAMS, "identities must contain 1 to 256 bytes"));
+    }
+    Ok(())
+}
+
+/// Check identity before disclosing target-specific state to a connection.
+fn check_owner(entry: &Entry, conn: u64) -> Result<(), HubError> {
+    match entry.shown.status {
+        Status::Working { conn: owner } if owner == conn => Ok(()),
+        Status::Answered | Status::Failed => Err(err(READ_ONLY_REQUEST, "the Ask Agent request is finished")),
+        _ => Err(err(NOT_OWNER, "listen for this Ask Agent request first")),
+    }
+}
+
+/// Stale work is terminal: neither disconnect nor a later reply can revive it.
+fn check_target(entry: &mut Entry, current: Option<&Target>) -> Result<(), HubError> {
+    if current != Some(&entry.request.target) {
+        fail_stale(entry);
+        return Err(err(STALE_REQUEST, "the request's document changed or was closed"));
+    }
+    Ok(())
+}
+
+/// Invalidate the content revision without retaining any untrusted late response.
+fn fail_stale(entry: &mut Entry) {
+    entry.shown.status = Status::Failed;
+    entry.shown.answer = None;
+    (entry.shown.proposal, entry.shown.format, entry.shown.comment) = (None, None, None);
+    entry.shown.error = Some("The document changed. Start a new Ask Agent request.".into());
+}
+
+/// Keep completed requests visible while invalidating queued and working stale requests.
+fn invalidate_entries(inner: &mut Inner, current: &Target) {
+    for entry in &mut inner.entries {
+        if entry.request.target.document == current.document
+            && entry.request.target.revision != current.revision
+            && matches!(entry.shown.status, Status::Queued | Status::Working { .. })
+        {
+            fail_stale(entry);
+        }
+    }
+}
+
+/// Validate the complete answer before changing status or retaining any text.
+fn check_reply(reply: Reply<'_>, limit: usize) -> Result<(), HubError> {
+    let Reply { text, error, proposal, format, comment, .. } = reply;
+    if (text.trim().is_empty() && error.is_none() && proposal.is_none_or(|proposal| proposal.trim().is_empty()))
+        || error.is_some_and(|error| error.trim().is_empty())
+    {
+        return Err(err(INVALID_PARAMS, "a reply needs text, an error, or a nonempty proposal"));
+    }
+    if text.chars().count() > MAX_REPLY_CHARS
+        || error.is_some_and(|text| text.chars().count() > MAX_REPLY_CHARS)
+        || proposal.is_some_and(|text| text.len() > MAX_PROPOSAL_BYTES)
+        || comment.is_some_and(|text| text.chars().count() > MAX_COMMENT_CHARS)
+        || format.is_some_and(|text| text.len() > MAX_FORMAT_BYTES)
+    {
+        return Err(err(LIMIT_EXCEEDED, "an Ask Agent response field is too large"));
+    }
+    let bytes = [Some(text), error, proposal, format, comment].iter().flatten().try_fold(0_usize, |total, text| total.checked_add(text.len()));
+    if bytes.is_none_or(|bytes| bytes > limit) {
+        return Err(err(LIMIT_EXCEEDED, "the Ask Agent response is too large"));
+    }
+    Ok(())
+}
+
+/// Count serialized bytes without allocating another copy of the document.
+struct BoundedWriter(usize);
+
+impl Write for BoundedWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 = self.0.checked_sub(bytes.len()).ok_or_else(|| io::Error::other("request size limit"))?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Serialize only into a counter, stopping as soon as the configured size is exceeded.
+fn check_size(request: &Request, limit: usize) -> Result<(), HubError> {
+    serde_json::to_writer(BoundedWriter(limit), request).map_err(|_| err(LIMIT_EXCEEDED, "the Ask Agent request is too large"))
 }
 
 /// An optional string parameter.
@@ -256,83 +603,8 @@ pub fn colour(name: &str) -> [u8; 3] {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use super::*;
-
-    const NOW: Duration = Duration::ZERO;
-
-    fn req(text: &str, agent: Option<&str>) -> Request {
-        Request {
-            id: 0,
-            instruction: text.into(),
-            history: vec![],
-            selection: json!({"text": text}),
-            document: json!({}),
-            agent: agent.map(Into::into),
-        }
-    }
-
-    #[test]
-    fn a_request_goes_to_one_agent_who_answers_it() {
-        let hub = AgentHub::default();
-        let id = hub.ask(req("Tighten", None));
-        let taken = hub.listen(1, Some("Claude"), NOW, || true).unwrap();
-        assert_eq!((taken.id, hub.snapshot(id).unwrap().status), (id, Status::Working { conn: 1 }));
-        assert!(hub.listen(2, Some("Codex"), NOW, || true).is_none(), "taken once");
-        hub.reply(1, id, "Halfway", false, None).unwrap();
-        hub.reply(1, id, "Done", true, None).unwrap();
-        let s = hub.snapshot(id).unwrap();
-        assert_eq!(
-            (s.status, s.notes, s.answer.as_deref(), s.agent.as_deref()),
-            (Status::Answered, vec!["Halfway".into()], Some("Done"), Some("Claude"))
-        );
-        assert_eq!(hub.reply(2, id, "x", true, None).unwrap_err().code, NOT_OWNER);
-    }
-
-    #[test]
-    fn only_the_working_connection_edits_while_a_request_is_open() {
-        let hub = AgentHub::default();
-        assert_eq!(hub.may_edit(9, None), Ok(()), "nothing open: anyone edits");
-        let id = hub.ask(req("Fix", None));
-        hub.listen(1, None, NOW, || true).unwrap();
-        for (conn, request, code) in [(1, Some(id), None), (2, Some(id), Some(NOT_OWNER)), (1, None, Some(HELD)), (1, Some(99), Some(NO_REQUEST))] {
-            assert_eq!(hub.may_edit(conn, request).err().map(|e| e.code), code, "{conn} {request:?}");
-        }
-        assert_eq!(hub.held(), vec![(json!({"text": "Fix"}), "Agent".to_string())]);
-        hub.reply(1, id, "Done", true, None).unwrap();
-        assert_eq!(hub.may_edit(1, Some(id)).unwrap_err().code, READ_ONLY_REQUEST);
-        assert!(hub.held().is_empty());
-    }
-
-    #[test]
-    fn a_dropped_agent_hands_its_request_back_and_routing_follows_names() {
-        let hub = AgentHub::default();
-        let id = hub.ask(req("Review", Some("Codex")));
-        assert!(hub.listen(1, Some("Claude"), NOW, || true).is_none(), "asked for Codex");
-        hub.listen(2, Some("Codex"), NOW, || true).unwrap();
-        assert_eq!(hub.agents(), vec!["Claude".to_string(), "Codex".to_string()]);
-        hub.disconnect(2);
-        assert_eq!((hub.snapshot(id).unwrap().status, hub.agents()), (Status::Queued, vec!["Claude".to_string()]));
-        assert_eq!(hub.listen(3, Some("Codex"), NOW, || true).unwrap().id, id);
-    }
-
-    #[test]
-    fn the_wire_methods_validate_their_parameters() {
-        let hub = AgentHub::default();
-        assert_eq!(hub.handle(1, "agent.listen", &json!({"timeoutMs": 0}), || true).unwrap()["result"], json!({"none": true}));
-        let id = hub.ask(req("Go", None));
-        assert_eq!(hub.handle(1, "agent.listen", &json!({"agent": "Claude", "timeoutMs": 0}), || true).unwrap()["result"]["id"], id);
-        for bad in [json!({"text": "x"}), json!({"id": id}), json!({"id": id, "text": 3}), json!({"id": id, "text": "x", "done": "yes"})] {
-            assert_eq!(hub.handle(1, "agent.reply", &bad, || true).unwrap()["errorCode"], INVALID_PARAMS, "{bad}");
-        }
-        assert_eq!(hub.handle(1, "agent.reply", &json!({"id": id, "text": "Done"}), || true).unwrap()["ok"], true);
-        assert!(hub.handle(1, "app.save", &json!({}), || true).is_none());
-    }
-
-    #[test]
-    fn colours_are_stable_and_spread() {
-        assert_eq!(colour("Claude"), colour("Claude"));
-        assert_ne!(colour("Claude"), colour("Codex"));
-    }
-}
+#[path = "tests/regression.rs"]
+mod regression_tests;
+#[cfg(test)]
+#[path = "tests/hub.rs"]
+mod tests;

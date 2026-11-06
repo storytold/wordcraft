@@ -1,4 +1,5 @@
-//! The chip and the bubble, in egui's own visuals (each app sets them from its theme).
+//! The chip and the bubble, in egui's own visuals (each app sets them from its theme). The app passes
+//! its translation function.
 //!
 //! Layout: the chip sits just under the selection, where the bubble then opens. The bubble has three
 //! bands on one left edge: a header (who gets the request, close), the content (conversation, status,
@@ -9,9 +10,8 @@ use egui::{Align, Color32, Key, Layout, Rect, RichText, Stroke, pos2, vec2};
 
 use super::hub::{Snapshot, Status, Turn, colour};
 
-fn tr(_ctx: &egui::Context, text: &'static str) -> &'static str {
-    crate::i18n::t(text)
-}
+/// The app's translation of an interface string.
+pub type Tr<'a> = &'a dyn Fn(&'static str) -> String;
 
 /// What the person did in the bubble.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,7 +45,7 @@ const WIDTH: f32 = 360.0;
 const ROW: f32 = 28.0;
 
 /// The chip just under the selection, on its left edge, where the bubble opens; true when clicked.
-pub fn chip(ctx: &egui::Context, anchor: Rect) -> bool {
+pub fn chip(ctx: &egui::Context, anchor: Rect, tr: Tr) -> bool {
     egui::Area::new(egui::Id::unique("ask_agent_chip"))
         .order(egui::Order::Foreground)
         .fixed_pos(origin(ctx, anchor, 140.0))
@@ -56,7 +56,7 @@ pub fn chip(ctx: &egui::Context, anchor: Rect) -> bool {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     sparkle(ui);
-                    ui.label(RichText::new(tr(ctx, "Ask Agent")).strong());
+                    ui.label(RichText::new(tr("Ask Agent")).strong());
                 })
             });
             let response = ui.interact(inner.response.rect, ui.scope_id().with("chip"), egui::Sense::click());
@@ -67,7 +67,7 @@ pub fn chip(ctx: &egui::Context, anchor: Rect) -> bool {
 
 /// The bubble under `anchor`: instruction, the agent at work, its answer with Keep, Undo and a
 /// follow-up field.
-pub fn bubble(ctx: &egui::Context, anchor: Rect, view: &View, draft: &mut String, picked: &mut Option<String>) -> Option<Action> {
+pub fn bubble(ctx: &egui::Context, anchor: Rect, view: &View, draft: &mut String, picked: &mut Option<String>, tr: Tr) -> Option<Action> {
     let mut action = None;
     // True on the first pass the bubble shows after at least one pass without it.
     let (id, pass) = (egui::Id::unique("ask_agent_bubble_pass"), ctx.cumulative_pass_nr());
@@ -93,34 +93,34 @@ pub fn bubble(ctx: &egui::Context, anchor: Rect, view: &View, draft: &mut String
                         Some(name) => agent_label(ui, name),
                         None => {
                             sparkle(ui);
-                            ui.label(RichText::new(tr(ctx, "Ask Agent")).strong());
+                            ui.label(RichText::new(tr("Ask Agent")).strong());
                         }
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if close_button(ui).on_hover_text(tr(ctx, "Close")).clicked() {
+                        if close_button(ui).on_hover_text(tr("Close")).clicked() {
                             action = Some(Action::Close);
                         }
                         if status.is_none() {
-                            picker(ui, view.agents, picked);
+                            picker(ui, view.agents, picked, tr);
                         }
                     });
                 });
 
                 if !view.instruction.is_empty() || !view.history.is_empty() {
-                    egui::CollapsingHeader::new(tr(ctx, "Conversation"))
+                    egui::CollapsingHeader::new(tr("Conversation"))
                         .id_salt(("ask_conversation", view.history.len()))
                         .default_open(!view.history.is_empty())
                         .show(ui, |ui| {
                             egui::ScrollArea::vertical().id_salt("ask_conversation_scroll").max_height(160.0).show(ui, |ui| {
                                 for turn in view.history {
-                                    ui.label(RichText::new(tr(ctx, "You")).strong());
+                                    ui.label(RichText::new(tr("You")).strong());
                                     ui.label(&turn.instruction);
-                                    ui.label(RichText::new(tr(ctx, "Agent")).strong());
+                                    ui.label(RichText::new(tr("Agent")).strong());
                                     ui.label(&turn.answer);
                                     ui.separator();
                                 }
                                 if !view.instruction.is_empty() {
-                                    ui.label(RichText::new(tr(ctx, "Current instruction")).strong());
+                                    ui.label(RichText::new(tr("Current instruction")).strong());
                                     ui.label(view.instruction);
                                 }
                             });
@@ -131,13 +131,14 @@ pub fn bubble(ctx: &egui::Context, anchor: Rect, view: &View, draft: &mut String
                     for note in &s.notes {
                         ui.label(RichText::new(note).weak());
                     }
+                    response_details(ui, s, tr);
                 }
                 match status {
-                    Some(Status::Queued) => _ = ui.label(RichText::new(tr(ctx, "Waiting for an agent…")).weak()),
+                    Some(Status::Queued) => _ = ui.label(RichText::new(tr("Waiting for an agent…")).weak()),
                     Some(Status::Working { .. }) => {
                         row(ui, Layout::left_to_right(Align::Center), |ui| {
                             ui.spinner();
-                            ui.label(RichText::new(tr(ctx, "Working on it…")).weak());
+                            ui.label(RichText::new(tr("Working on it…")).weak());
                         });
                     }
                     Some(Status::Failed) => {
@@ -148,10 +149,10 @@ pub fn bubble(ctx: &egui::Context, anchor: Rect, view: &View, draft: &mut String
                         ui.label(view.snapshot.and_then(|s| s.answer.as_deref()).unwrap_or_default());
                         // The decision on the right, primary last, like Send below.
                         row(ui, Layout::right_to_left(Align::Center), |ui| {
-                            if ui.add(primary(ui, tr(ctx, "Keep"))).clicked() {
+                            if ui.add(primary(ui, tr("Keep"))).on_hover_text(tr("Keep tool edits and notes. Proposals are not applied.")).clicked() {
                                 action = Some(Action::Keep);
                             }
-                            if ui.button(tr(ctx, "Undo")).on_hover_text(tr(ctx, "Undo all of the agent's edits")).clicked() {
+                            if ui.button(tr("Undo")).on_hover_text(tr("Undo all of the agent's edits")).clicked() {
                                 action = Some(Action::Undo);
                             }
                         });
@@ -160,7 +161,7 @@ pub fn bubble(ctx: &egui::Context, anchor: Rect, view: &View, draft: &mut String
                     None => {}
                 }
                 if matches!(status, None | Some(Status::Answered | Status::Failed)) {
-                    let hint = if status.is_none() { tr(ctx, "What should the agent do?") } else { tr(ctx, "Reply to refine…") };
+                    let hint = if status.is_none() { tr("What should the agent do?") } else { tr("Reply to refine…") };
                     let field = ui.add(
                         egui::TextEdit::multiline(draft)
                             .hint_text(hint)
@@ -178,11 +179,11 @@ pub fn bubble(ctx: &egui::Context, anchor: Rect, view: &View, draft: &mut String
                     // Footer: starting points on the left, Send on the right.
                     row(ui, Layout::left_to_right(Align::Center), |ui| {
                         if matches!(status, None | Some(Status::Answered)) && !view.actions.is_empty() {
-                            quick_actions(ui, view.actions, draft);
+                            quick_actions(ui, view.actions, draft, tr);
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             let ready = !draft.trim().is_empty();
-                            if (ui.add_enabled(ready, primary(ui, tr(ctx, "Send"))).clicked() || enter) && ready {
+                            if (ui.add_enabled(ready, primary(ui, tr("Send"))).clicked() || enter) && ready {
                                 action = Some(Action::Send(std::mem::take(draft).trim().to_string()));
                             }
                         });
@@ -191,6 +192,22 @@ pub fn bubble(ctx: &egui::Context, anchor: Rect, view: &View, draft: &mut String
             });
         });
     action
+}
+
+/// Show proposal metadata as literal review text, never as an executable edit or markup.
+fn response_details(ui: &mut egui::Ui, snapshot: &Snapshot, tr: Tr) {
+    if let Some(comment) = &snapshot.comment {
+        ui.label(comment);
+    }
+    if let Some(format) = &snapshot.format {
+        ui.label(format!("{}: {format}", tr("Format")));
+    }
+    if let Some(proposal) = &snapshot.proposal {
+        ui.label(RichText::new(tr("Proposal (not applied)")).strong());
+        egui::ScrollArea::vertical().id_salt("ask_proposal_scroll").max_height(160.0).show(ui, |ui| {
+            ui.label(proposal);
+        });
+    }
 }
 
 /// Where the chip and the bubble open: under the selection, on its left edge, kept on screen.
@@ -205,23 +222,23 @@ fn row(ui: &mut egui::Ui, layout: Layout, add: impl FnOnce(&mut egui::Ui)) {
 }
 
 /// The one filled button of a row.
-fn primary(ui: &egui::Ui, text: &str) -> egui::Button<'static> {
+fn primary(ui: &egui::Ui, text: String) -> egui::Button<'static> {
     egui::Button::new(RichText::new(text).strong()).fill(ui.visuals().selection.bg_fill).min_size(vec2(72.0, ROW))
 }
 
 /// Native menus keep less common actions out of the writing surface.
-fn quick_actions(ui: &mut egui::Ui, actions: &[QuickAction], draft: &mut String) {
-    ui.menu_button(tr(ui.ctx(), "Actions"), |ui| {
+fn quick_actions(ui: &mut egui::Ui, actions: &[QuickAction], draft: &mut String, tr: Tr) {
+    ui.menu_button(tr("Actions"), |ui| {
         for (index, action) in actions.iter().enumerate() {
             if action.group.is_empty() {
-                if ui.button(tr(ui.ctx(), action.label)).clicked() {
+                if ui.button(tr(action.label)).clicked() {
                     *draft = action.instruction.into();
                     ui.close();
                 }
             } else if !actions[..index].iter().any(|previous| previous.group == action.group) {
-                ui.menu_button(tr(ui.ctx(), action.group), |ui| {
+                ui.menu_button(tr(action.group), |ui| {
                     for action in actions.iter().filter(|item| item.group == action.group) {
-                        if ui.button(tr(ui.ctx(), action.label)).clicked() {
+                        if ui.button(tr(action.label)).clicked() {
                             *draft = action.instruction.into();
                             ui.close();
                         }
@@ -231,22 +248,22 @@ fn quick_actions(ui: &mut egui::Ui, actions: &[QuickAction], draft: &mut String)
         }
     })
     .response
-    .on_hover_text(tr(ui.ctx(), "Choose a starting instruction, then edit and send"));
+    .on_hover_text(tr("Choose a starting instruction, then edit and send"));
 }
 
 /// Who the request goes to, when more than one agent listens. Called in a right-to-left row, so
 /// the box comes first and its label lands on its left.
-fn picker(ui: &mut egui::Ui, agents: &[String], picked: &mut Option<String>) {
+fn picker(ui: &mut egui::Ui, agents: &[String], picked: &mut Option<String>, tr: Tr) {
     if agents.len() < 2 {
         return;
     }
-    craft_ui::ComboBox::from_id_salt("ask_agent_picker").selected_text(picked.as_deref().unwrap_or(tr(ui.ctx(), "Any"))).show_ui(ui, |ui| {
-        ui.selectable_value(picked, None, tr(ui.ctx(), "Any"));
+    craft_ui::ComboBox::from_id_salt("ask_agent_picker").selected_text(picked.clone().unwrap_or_else(|| tr("Any"))).show_ui(ui, |ui| {
+        ui.selectable_value(picked, None, tr("Any"));
         for name in agents {
             ui.selectable_value(picked, Some(name.clone()), name);
         }
     });
-    ui.label(RichText::new(tr(ui.ctx(), "Agent")).weak());
+    ui.label(RichText::new(tr("Agent")).weak());
 }
 
 /// The agent's colour dot and name.

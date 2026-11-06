@@ -120,7 +120,7 @@ fn serve_on(listener: TcpListener, ctx: egui::Context, key: String, first: Durat
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let (tx, ctx, key, hub) = (tx.clone(), ctx.clone(), key.clone(), hub.clone());
-            let conn = NEXT_CONN.fetch_add(1, Ordering::SeqCst);
+            let Ok(conn) = NEXT_CONN.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |id| id.checked_add(1)) else { break };
             std::thread::spawn(move || serve(stream, tx, ctx, &key, first, &hub, conn));
         }
     });
@@ -177,6 +177,9 @@ fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context, key:
     let Ok(read) = stream.try_clone() else { return };
     let Ok(probe) = stream.try_clone() else { return };
     let mut out = stream;
+    if out.set_write_timeout(Some(first)).is_err() {
+        return;
+    }
     let mut reader = BufReader::new(Timed { s: read, deadline: Some(Instant::now() + first) });
     let mut authorised = false;
     let mut conn_key: Option<String> = None;
@@ -219,23 +222,27 @@ fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context, key:
         }
         if !authorised {
             authorised = true;
-            reader.get_mut().deadline = None;
-            let _ = reader.get_mut().s.set_read_timeout(None);
+            reader.get_mut().deadline = Some(Instant::now() + first);
         }
         if method == "auth" {
             conn_key = Some(k.to_string());
             if !reply(json!({"ok": true, "result": {}})) {
                 break;
             }
+            reader.get_mut().deadline = Some(Instant::now() + first);
             continue;
         }
 
-        // Ask Agent: answered here, on the connection's own thread.
-        if let Some(r) = hub.handle(connection, &method, &params, || peer_open(&probe)) {
+        // Only the long poll runs on the socket thread. Replies resolve and validate their
+        // captured document on the UI/document owner's serialized command queue.
+        if method == "agent.listen"
+            && let Some(r) = hub.handle(connection, &method, &params, || peer_open(&probe), |_| None)
+        {
             ctx.request_repaint();
             if !reply(r) {
                 break;
             }
+            reader.get_mut().deadline = Some(Instant::now() + first);
             continue;
         }
 
@@ -251,6 +258,7 @@ fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context, key:
             hub.disconnect(connection);
             break;
         }
+        reader.get_mut().deadline = Some(Instant::now() + first);
     }
     hub.disconnect(connection);
 }
@@ -260,7 +268,7 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpStream;
-    use wordcraft_ui_egui::ask_agent::Request;
+    use wordcraft_ui_egui::ask_agent::{Request, Target};
 
     const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -316,14 +324,37 @@ mod tests {
 
     #[test]
     fn agent_listen_and_reply_over_socket() {
-        let (port, _rx, hub) = boot_agents(FIRST_REQUEST);
-        let id = hub.ask(Request {
-            id: 0,
-            instruction: "Fix style".into(),
-            history: vec![],
-            selection: json!({"text": "sample"}),
-            document: json!({"title": "Doc.docx"}),
-            agent: None,
+        let (port, rx, hub) = boot_agents(FIRST_REQUEST);
+        let id = hub
+            .ask(Request {
+                id: 0,
+                instruction: "Fix style".into(),
+                history: vec![],
+                selection: json!({"text": "sample"}),
+                document: json!({"title": "Doc.docx"}),
+                target: Target { document: "test".into(), revision: 1 },
+                agent: None,
+            })
+            .unwrap();
+
+        // A real window dispatches replies on its document-owning thread. This fixture supplies
+        // that same serialized hop with a known, current document token.
+        let answer_hub = hub.clone();
+        let worker = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let request = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                assert_eq!(request.method, "agent.reply");
+                let response = answer_hub
+                    .handle(
+                        request.connection.unwrap(),
+                        &request.method,
+                        &request.params,
+                        || true,
+                        |_| Some(Target { document: "test".into(), revision: 1 }),
+                    )
+                    .unwrap();
+                request.reply.send(response).unwrap();
+            }
         });
 
         let mut c = authed(port);
@@ -341,12 +372,23 @@ mod tests {
 
         let snap = hub.snapshot(id).unwrap();
         assert_eq!(snap.answer.as_deref(), Some("Done"));
+        worker.join().unwrap();
     }
 
     #[test]
     fn engine_requests_carry_their_connection_for_the_ownership_check() {
         let (port, rx, hub) = boot_agents(FIRST_REQUEST);
-        let id = hub.ask(Request { id: 0, instruction: "Edit".into(), history: vec![], selection: Value::Null, document: Value::Null, agent: None });
+        let id = hub
+            .ask(Request {
+                id: 0,
+                instruction: "Edit".into(),
+                history: vec![],
+                selection: Value::Null,
+                document: Value::Null,
+                target: Target { document: "test".into(), revision: 1 },
+                agent: None,
+            })
+            .unwrap();
         let mut c = authed(port);
         assert_eq!(c.call(r#"{"id":1,"method":"agent.listen","params":{"timeoutMs":1000}}"#)["result"]["id"], id);
         c.send(&format!(r#"{{"id":2,"method":"engine.execute","params":{{"command":"text.insert","params":{{"text":"a"}},"request":{id}}}}}"#));

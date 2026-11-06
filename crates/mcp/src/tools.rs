@@ -195,6 +195,9 @@ pub fn tool_definitions() -> Value {
                     "id": n("The request's id, from wait_for_request"),
                     "text": s("What to show the person: a progress note, or your answer"),
                     "error": s("Failure message: closes the request as failed"),
+                    "proposal": s("Unapplied proposal, displayed as plain text; never executed"),
+                    "format": s("Descriptive metadata only; never selects a parser or renderer"),
+                    "comment": s("Plain-text note to keep with the response"),
                     "done": {"type": "boolean", "description": "true (default) closes the request; false is a progress note"},
                 }),
                 &["id"]
@@ -358,7 +361,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
         "ui_inspect" => wrap(b.call("ui.inspect", json!({}))),
         "wait_for_request" | "reply_to_request" if !b.has_ui() => ToolResult::error(crate::ASK_NEEDS_APP),
         "wait_for_request" => {
-            if a.as_object().is_none_or(|o| o.keys().any(|k| !["timeout_s", "agent"].contains(&k.as_str()))) {
+            if !a.is_null() && a.as_object().is_none_or(|o| o.keys().any(|k| !["timeout_s", "agent"].contains(&k.as_str()))) {
                 return ToolResult::error("INVALID_PARAMS: unknown wait parameter");
             }
             let secs = match a.get("timeout_s") {
@@ -382,16 +385,32 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
                 return ToolResult::error("missing `id`: the request's id from wait_for_request");
             };
             let mut params = json!({"id": id});
-            if let Some(text) = st("text") {
-                params["text"] = json!(text);
+            for (key, limit, bytes) in
+                [("text", 4000, false), ("error", 4000, false), ("proposal", 200000, true), ("format", 64, true), ("comment", 2000, false)]
+            {
+                match a.get(key) {
+                    None | Some(Value::Null) => {}
+                    Some(Value::String(text)) => {
+                        let length = if bytes { text.len() } else { text.chars().count() };
+                        if length > limit {
+                            return ToolResult::error(format!("LIMIT_EXCEEDED: {key} is too long"));
+                        }
+                        params[key] = json!(text);
+                    }
+                    Some(_) => return ToolResult::error(format!("INVALID_PARAMS: {key} must be a string")),
+                }
             }
-            if let Some(error) = st("error") {
-                params["error"] = json!(error);
+            if params.get("text").and_then(Value::as_str).is_none_or(|text| text.trim().is_empty())
+                && params.get("proposal").and_then(Value::as_str).is_none_or(|text| text.trim().is_empty())
+                && params.get("error").is_none()
+            {
+                return ToolResult::error("INVALID_PARAMS: reply needs text, a proposal or an error");
             }
-            if params.get("text").is_none() && params.get("error").is_none() {
-                return ToolResult::error("missing `text` (what to show the person) or `error`");
+            match a.get("done") {
+                None => params["done"] = json!(true),
+                Some(Value::Bool(done)) => params["done"] = json!(done),
+                Some(_) => return ToolResult::error("INVALID_PARAMS: done must be a boolean"),
             }
-            params["done"] = json!(a.get("done").and_then(Value::as_bool).unwrap_or(true));
             wrap(b.call("agent.reply", params))
         }
         other => ToolResult::error(format!("unknown tool `{other}`")),

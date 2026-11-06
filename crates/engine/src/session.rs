@@ -16,6 +16,7 @@ pub use documents::{DocInfo, DocState};
 use documents::{document_id_mark, next_document_id, untitled_name};
 pub use views::WindowView;
 mod history;
+pub use history::UndoToken;
 mod ime;
 mod layout;
 mod lifecycle;

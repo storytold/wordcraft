@@ -201,10 +201,10 @@ text, click **Ask Agent** (the chip beside the selection, Help › Agents, or Ct
 
 | Tool | What it does |
 |---|---|
-| `wait_for_request` | waits up to `timeout_s` (default 30, at most 60) for the next request: `{id, instruction, history, selection: {text, anchor, focus}, document: {title, saved, language}}`, or `{none: true}` |
-| `reply_to_request` | `{id, text?, done?, error?}`: sends a progress note (`done: false`), final answer (`done: true`), or closes the request as failed (`error`) shown in the bubble under the selection |
+| `wait_for_request` | waits up to `timeout_s` (default 30, at most 60) for the next request: `{id, instruction, history, selection: {text, anchor, focus}, document: {title, saved, language}, target: {document, revision}}`, or `{none: true}` |
+| `reply_to_request` | `{id, text?, done?, error?, proposal?, format?, comment?}`: sends a progress note (`done: false`), final answer (`done: true`), or closes the request as failed (`error`) shown in the bubble under the selection |
 
-The agent's loop: `wait_for_request`; send progress notes with `reply_to_request {id, text: "Working…", done: false}`; edit the document with commands (tagged with `request_id`); answer with `reply_to_request {id, text: "Done."}`; then `wait_for_request` again. The bubble offers Keep (accepts edits), Undo (reverts the agent's edits in one step), or follow-up instructions.
+The agent's loop: `wait_for_request`; send progress notes with `reply_to_request {id, text: "Working…", done: false}`; edit the document with selection-scoped commands (tagged with `request`); answer with `reply_to_request {id, text: "Done."}`; then `wait_for_request` again. The bubble offers Keep (retains native tool edits and the response note), Undo, or follow-up instructions. Undo reverts the agent's group only while its captured document, revision and real checkpoint still match; if other edits intervene it refuses and asks the person to use Undo in the Edit menu. Proposals are retained as literal review text, labeled "Proposal (not applied)", and never executed. See the [control protocol](control-protocol.md#ask-agent) for scope, privacy, bounds and the optional personal launcher.
 
 ## Character and paragraph properties
 
