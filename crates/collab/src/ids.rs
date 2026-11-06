@@ -116,6 +116,29 @@ impl NodeIds {
         self.tombstones.contains_key(&id)
     }
 
+    /// Shift the top-level block index of every node in `story` whose block is
+    /// at or after `at`, after a block was inserted (`delta` > 0) or removed
+    /// (`delta` < 0). Deeper paths (table cells) are not shifted: v1 addresses
+    /// top-level blocks only.
+    pub fn shift_top_blocks(&mut self, story: &str, at: usize, delta: i32) {
+        let moved: Vec<(NodeId, NodeKey)> = self
+            .back
+            .iter()
+            .filter(|(_, key)| key.story == story && key.path.first().is_some_and(|first| (*first as usize) >= at))
+            .map(|(id, key)| (*id, key.clone()))
+            .collect();
+        for (id, mut key) in moved {
+            if let Some(first) = key.path.first_mut() {
+                let shifted = i64::from(*first) + i64::from(delta);
+                *first = u32::try_from(shifted.max(0)).unwrap_or(u32::MAX);
+            }
+            if let Some(old) = self.back.insert(id, key.clone()) {
+                self.forward.remove(&old);
+            }
+            self.forward.insert(key, id);
+        }
+    }
+
     /// Forget tombstones older than `before` (ADR-0003 keeps ids at least as
     /// long as the journal window, so a late operation can still be refused).
     pub fn compact(&mut self, before: Version) {

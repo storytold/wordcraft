@@ -29,7 +29,7 @@ pub struct Effect {
 pub trait Model {
     /// Apply an operation to the authoritative state. `Err` refuses the
     /// operation and leaves the state untouched (ADR-0004).
-    fn apply(&mut self, op: &Op) -> Result<Effect, Reject>;
+    fn apply(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject>;
 
     /// Native snapshot of the state, plus the source file bytes when the
     /// format keeps unmodelled parts (ADR-0005).
@@ -141,7 +141,7 @@ impl<M: Model> Room<M> {
             return Ok(cached.clone());
         }
         self.journal.check(&op)?;
-        let effect = self.model.apply(&op)?;
+        let effect = self.model.apply(&op, &mut self.ids)?;
         let applied = self.journal.accept(&op, actor, effect.delta, effect.inverse.clone());
         if !effect.inverse.is_empty() || !effect.forward.is_empty() {
             let step = UndoStep::new(effect.label, effect.inverse, effect.forward);
