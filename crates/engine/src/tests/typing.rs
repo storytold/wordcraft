@@ -1561,6 +1561,31 @@ fn a_link_on_a_selection_shows_the_text_to_display() {
 }
 
 #[test]
+fn a_new_selection_drops_the_formatting_left_after_a_link() {
+    // A link leaves plain formatting for what is typed after it. A selection made next doesn't
+    // take it: retyping that selection keeps its own formatting.
+    let bold_run = |s: &Session, text: &str| {
+        let p = s.doc.body.iter().find_map(|b| b.as_para()).unwrap();
+        p.run_ranges().any(|(r, c)| &p.text[r] == text && c.bold == Some(true))
+    };
+    let mut s = typed("kiln");
+    run(&mut s, "select.text", json!({"text": "kiln"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "Oven"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "Stove"}));
+    assert!(bold_run(&s, "Stove"), "select.all");
+    run(&mut s, "select.word", json!({}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "Range"}));
+    assert!(bold_run(&s, "Range"), "select.word");
+    let anchor = serde_json::to_value(s.doc.start_of(s.sel.focus.story)).unwrap();
+    let focus = serde_json::to_value(s.sel.focus.clone()).unwrap();
+    run(&mut s, "select.range", json!({"anchor": anchor, "focus": focus}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "Hob"}));
+    assert!(bold_run(&s, "Hob"), "select.range");
+}
+
+#[test]
 fn a_link_over_two_paragraphs_keeps_their_text() {
     // Word shows <<Selection in Document>> for such a selection: the text to display is ignored.
     let mut s = typed("one\ntwo");
