@@ -1612,34 +1612,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         } else {
             balloons(app, ui, &painter, &rects, &layout, geo.scale, view_rect);
         }
-        // Field shading (#4290): a screen-only grey behind field results, before the find marks
-        // and the selection. Field-code view already shades its codes. Only fields on a visible
-        // page are measured; scrolling a long citation-heavy document stays cheap.
-        if !app.session.view.field_codes && preview_sel(app).is_none() {
-            let visible_pages: Vec<bool> = rects.iter().map(|r| r.intersects(ui.clip_rect())).collect();
-            for (pi, r) in field_shading_rects_cached(
-                &app.canvas,
-                &layout,
-                &app.session,
-                app.session.view.field_shading,
-                &app.session.sel,
-                app.session.page_hint,
-                &visible_pages,
-            ) {
-                if let Some(pr) = rects.get(pi) {
-                    let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
-                    let sr = Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale));
-                    // Hide White Space overlaps page rects at the hidden margins: clip to the band
-                    // that page actually shows, as the page content does.
-                    let (top, bot) = geo.bands.get(pi).copied().unwrap_or((0.0, pr.height()));
-                    let band = Rect::from_min_max(pos2(pr.min.x, pr.min.y + top), pos2(pr.max.x, pr.min.y + bot));
-                    let sr = sr.intersect(band);
-                    if sr.is_positive() {
-                        painter.rect_filled(sr, 0.0, t.field_shading);
-                    }
-                }
-            }
-        }
+        // Field shading (#4290): the screen-only grey behind field results, before the find
+        // marks and the selection. Field-code view already shades its codes.
+        paint_field_shading(app, &painter, &rects, &layout, &geo, &t, ui.clip_rect());
         // Find › Reading Highlight. Its places are the document's, not the preview's.
         let marks: Vec<(Pos, Pos)> =
             if preview_sel(app).is_some() { Vec::new() } else { app.session.find_highlights().iter().take(5000).cloned().collect() };
@@ -1878,6 +1853,46 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         },
         out,
     );
+}
+
+/// The screen-only field shading (#4290): a light grey behind each visible field's result, drawn
+/// before the find marks and the selection. Field-code view already shades its codes, so it is
+/// left alone; a preview selection paints its own overlay. Only fields on a visible page are
+/// measured; scrolling a long citation-heavy document stays cheap.
+fn paint_field_shading(
+    app: &WordApp,
+    painter: &egui::Painter,
+    rects: &[Rect],
+    layout: &std::sync::Arc<DocLayout>,
+    geo: &Geometry,
+    t: &Tokens,
+    clip: Rect,
+) {
+    if app.session.view.field_codes || preview_sel(app).is_some() {
+        return;
+    }
+    let visible_pages: Vec<bool> = rects.iter().map(|r| r.intersects(clip)).collect();
+    for (pi, r) in field_shading_rects_cached(
+        &app.canvas,
+        layout,
+        &app.session,
+        app.session.view.field_shading,
+        &app.session.sel,
+        app.session.page_hint,
+        &visible_pages,
+    ) {
+        let Some(pr) = rects.get(pi) else { continue };
+        let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+        let sr = Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale));
+        // Hide White Space overlaps page rects at the hidden margins: clip to the band that page
+        // actually shows, as the page content does.
+        let (top, bot) = geo.bands.get(pi).copied().unwrap_or((0.0, pr.height()));
+        let band = Rect::from_min_max(pos2(pr.min.x, pr.min.y + top), pos2(pr.max.x, pr.min.y + bot));
+        let sr = sr.intersect(band);
+        if sr.is_positive() {
+            painter.rect_filled(sr, 0.0, t.field_shading);
+        }
+    }
 }
 
 /// The uncached form, for tests: the canvas itself paints through [`field_shading_rects_cached`].
