@@ -59,7 +59,8 @@ crate name links to its source tree.
   input, `.doc`, formats, typing parity (`engine/src/tests/typing.rs`), bidi, i18n catalogs, UI
   interaction (egui_kittest), MCP acceptance; `hostile_params_never_panic` runs every command with
   junk params.
-- `cargo xtask ci`: fmt, clippy `-D warnings`, tests, asset attribution, layering, wasm build.
+- `cargo xtask ci`: fmt, clippy `-D warnings`, tests, asset attribution, workflow-ref pinning,
+  layering, wasm build.
 - `cargo xtask parity` regenerates [`parity-checklist.md`](parity-checklist.md); a test keeps the
   catalog percentage above a floor that only rises.
 - GitHub Actions on PRs: packaging lint, and FreeBSD / Windows ARM64 when build files change;
