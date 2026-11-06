@@ -12497,3 +12497,48 @@ fn page_down_extends_a_selection_that_ends_in_collapsed_outline_text() {
     assert!(s.sel.focus.path.0[0] > 6, "Page Down extends the selection a page on: {:?}", s.sel.focus);
     assert!(s.layout().caret(&s.sel.focus).is_some(), "to a place the outline shows");
 }
+
+/// Issue #5667's document: `Intro`, then an inserted `Appendix` paragraph whose mark carries a
+/// section break (Normal, indented), then `Body` in Heading 1. The whole of `Appendix` is
+/// tracked as an insertion by `rev`, or as a deletion when `delete`.
+fn sectioned_revision(delete: bool) -> Session {
+    use wordcraft_doc::{Revision, RevisionKind};
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Intro\nAppendix\nBody"));
+    run(&mut s, "caret.set", json!({"pos": {"block": 2, "off": 0}}));
+    run(&mut s, "para.style", json!({"style": "Heading1"}));
+    let kind = if delete { RevisionKind::Delete } else { RevisionKind::Insert };
+    s.doc.revisions.push(Revision { kind, author: "Ada".into(), date: String::new(), move_name: None });
+    s.doc.last_section.margin_left = 72.0;
+    let mut sect = s.doc.last_section.clone();
+    sect.margin_left = 144.0;
+    let p = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path(vec![1])).unwrap();
+    let len = p.len();
+    p.format(0, len, &|c| if delete { c.del = Some(0) } else { c.ins = Some(0) }).unwrap();
+    if delete {
+        p.mark.del = Some(0)
+    } else {
+        p.mark.ins = Some(0)
+    }
+    p.props.indent_left = Some(36.0);
+    p.section = Some(Box::new(sect));
+    s
+}
+
+#[test]
+fn resolving_away_an_empty_paragraph_with_a_section_break_keeps_the_next_paragraphs_properties() {
+    // #5667: the resolved paragraph was left empty but kept for its section break, so the next
+    // paragraph joined it and took its properties (Normal, its indent). It goes whole instead,
+    // as an empty paragraph without a break does, and its section joins the following one.
+    for (delete, cmd) in [(false, "review.rejectAll"), (true, "review.acceptAll")] {
+        let mut s = sectioned_revision(delete);
+        assert_eq!(s.doc.sections().len(), 2);
+        run(&mut s, cmd, json!({}));
+        assert_eq!(body_texts(&s), ["Intro", "Body"], "{cmd}");
+        let body = s.doc.para(StoryRef::Body, &wordcraft_doc::Path(vec![1])).unwrap();
+        assert_eq!(body.props.style.as_deref(), Some("Heading1"), "{cmd}: Body keeps its style");
+        assert_eq!(body.props.indent_left, None, "{cmd}: and not the removed paragraph's indent");
+        assert!(s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.section.is_none()), "{cmd}: the break went with it");
+        assert_eq!(s.doc.sections().len(), 1, "{cmd}");
+        assert_eq!(s.doc.last_section.margin_left, 72.0, "{cmd}: the following section's setup stays");
+    }
+}
