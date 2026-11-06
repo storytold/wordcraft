@@ -149,6 +149,8 @@ pub(crate) fn read_opened(pkg: &Package, chunks: Option<ChunkImporter>) -> Resul
 /// [`read_opened`] with what chunks may still bring in; also gives the chunks, chunk bytes and
 /// graphic work left of that.
 fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize, u64, usize), DocxError> {
+    // The budget is per read, so a package read twice (tests, a Flat OPC conversion) starts over.
+    pkg.reset_budget();
     let root_rels = pkg.rels("");
     let main = root_rels.by_type(rt::OFFICE_DOC).filter(|r| !r.external).map(|r| r.target.clone()).unwrap_or_else(|| "word/document.xml".to_string());
     let Some(root) = pkg.xml_strict(&main)? else {

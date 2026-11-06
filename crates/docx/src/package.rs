@@ -1,5 +1,6 @@
 //! OPC package access: bounded zip reading, relationships, part names.
 
+use std::cell::Cell;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Cursor, Read, Write};
@@ -175,6 +176,8 @@ impl EmbeddedManifest {
         m
     }
 
+    /// The Flat OPC XML of the package: the parts that pass the manifest check, as
+    /// [`Package::from_bytes`] reads them back.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut s = String::new();
         for (part, p) in &self.parts {
@@ -205,6 +208,14 @@ pub struct Package {
     /// Lowercased part name → its stored spelling (the first in name order): part names are
     /// case-insensitive (ECMA-376 Part 2 §6.2.2.3), so every spelling is one part.
     lower: HashMap<String, String>,
+    /// Elements this package's XML parts may still be parsed into. Every XML part read through
+    /// [`Package::xml`] charges it, so a file of many parts each inside the per-part cap builds
+    /// bounded tree memory in total — a chart part with no series builds a maximal tree for
+    /// almost no graphic work, and the trees the reader keeps accumulate.
+    budget: Cell<usize>,
+    /// What [`Package::reset_budget`] restores: the cap the package was opened with (the default,
+    /// or a smaller one from [`Package::open_limited_within`]).
+    budget_cap: usize,
 }
 
 impl Package {
@@ -212,7 +223,15 @@ impl Package {
         Package::open_limited(bytes, MAX_PART, MAX_TOTAL)
     }
 
+    /// [`open_limited`] with the package's own caps: a hostile file is held to the part and
+    /// total sizes and the XML element budget it can pay for.
     pub fn open_limited(bytes: &[u8], max_part: u64, max_total: u64) -> Result<Package, DocxError> {
+        Package::open_limited_within(bytes, max_part, max_total, xml::MAX_ELEMENTS_TOTAL)
+    }
+
+    /// [`open_limited`] with an XML element budget of its own (nested documents share their
+    /// container's, tests use a small one).
+    pub fn open_limited_within(bytes: &[u8], max_part: u64, max_total: u64, max_elements: usize) -> Result<Package, DocxError> {
         // Before `zip` parses every entry the end record declares (#3660).
         wordcraft_doc::zip_guard::check(bytes, MAX_ENTRIES as u64).map_err(DocxError::Limit)?;
         let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| DocxError::Zip(e.to_string()))?;
@@ -252,7 +271,10 @@ impl Package {
             }
             files.insert(name, Arc::new(buf));
         }
-        Ok(Package::new(files))
+        let mut pkg = Package::new(files);
+        pkg.budget.set(max_elements);
+        pkg.budget_cap = max_elements;
+        Ok(pkg)
     }
 
     /// The bytes of all its parts.
@@ -266,6 +288,23 @@ impl Package {
         Package::new(files.into_iter().map(|(name, bytes)| (name, Arc::new(bytes))).collect())
     }
 
+    /// Start a read's element budget over: the budget is per read, not per package's lifetime.
+    pub(crate) fn reset_budget(&self) {
+        self.budget.set(self.budget_cap);
+    }
+
+    /// Charge `count` elements a parsed part built against the budget.
+    fn charge(&self, count: usize) -> Result<(), DocxError> {
+        let left = self.budget.get();
+        if count > left {
+            return Err(DocxError::Limit(format!("{count} XML elements, {left} left of the package's {} budget", xml::MAX_ELEMENTS_TOTAL)));
+        }
+        self.budget.set(left - count);
+        Ok(())
+    }
+
+    /// Builds the package's lowercase index and checks case collisions: two names that differ
+    /// only in case are refused by the caller, a file's parts are found case-insensitively.
     fn new(mut files: BTreeMap<String, Arc<Vec<u8>>>) -> Package {
         let mut lower: HashMap<String, String> = HashMap::new();
         let mut collides = false;
@@ -278,7 +317,7 @@ impl Package {
             }
         }
         if !collides {
-            return Package { files, lower };
+            return Package { files, lower, budget: Cell::new(xml::MAX_ELEMENTS_TOTAL), budget_cap: xml::MAX_ELEMENTS_TOTAL };
         }
         // Entries whose names differ only in case are one part, so every spelling of the name
         // reaches the same stored entry (#3704). The spelling kept is the one a relationship
@@ -292,7 +331,7 @@ impl Package {
         files.retain(|name, _| lower.get(&name.to_ascii_lowercase()) == Some(name));
         let dropped = before.saturating_sub(files.len());
         log::warn!("docx: {dropped} zip entries are other spellings of parts already read; they are left out");
-        Package { files, lower }
+        Package { files, lower, budget: Cell::new(xml::MAX_ELEMENTS_TOTAL), budget_cap: xml::MAX_ELEMENTS_TOTAL }
     }
 
     /// The stored spelling of part `name` (leading `/` ignored; case-insensitive).
@@ -314,14 +353,28 @@ impl Package {
     /// [`Package::xml`] for the main document part: malformed XML is an error, not a truncated read.
     pub fn xml_strict(&self, name: &str) -> Result<Option<El>, DocxError> {
         match self.get(name) {
-            Some(b) => xml::parse_strict(b).map(Some),
+            Some(b) => {
+                // The parser stops at the remaining budget or the per-part cap, whichever is less:
+                // a part over what is left of the package's budget is refused before the whole
+                // per-part tree is built.
+                let (el, count) = xml::parse_strict_counted(b, self.budget.get().min(xml::MAX_ELEMENTS))?;
+                self.charge(count)?;
+                Ok(Some(el))
+            }
             None => Ok(None),
         }
     }
 
+    /// A package part as a parsed XML tree, charged against the element budget: the parser
+    /// stops at what is left of the budget or the per-part cap, whichever is less, and the
+    /// count it built is charged after. A lenient read: malformed XML is a truncated one.
     pub fn xml(&self, name: &str) -> Result<Option<El>, DocxError> {
         match self.get(name) {
-            Some(b) => xml::parse(b).map(Some),
+            Some(b) => {
+                let (el, count) = xml::parse_counted(b, self.budget.get().min(xml::MAX_ELEMENTS))?;
+                self.charge(count)?;
+                Ok(Some(el))
+            }
             None => Ok(None),
         }
     }
@@ -416,6 +469,8 @@ impl Rels {
     }
 }
 
+/// The parent directory of a package part and its name: `/word/media/a.png` splits to
+/// `/word/media` and `a.png`, a part at the root to an empty directory and the name itself.
 fn split_dir(part: &str) -> (&str, &str) {
     let p = part.trim_start_matches('/');
     match p.rfind('/') {
@@ -494,6 +549,7 @@ pub fn zip_entries(entries: &[(String, Vec<u8>)]) -> Result<Vec<u8>, DocxError> 
 mod tests {
     use super::*;
 
+    /// Zips test entries (name, bytes) into a package in memory.
     fn zip_of(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
         let e: Vec<(String, Vec<u8>)> = entries.iter().map(|(n, b)| (n.to_string(), b.clone())).collect();
         zip_entries(&e).unwrap()
@@ -651,5 +707,81 @@ mod tests {
         assert_eq!((p.content_type.as_str(), p.rels.len(), p.rels[1].external), ("ct", 2, true));
         let junk = EmbeddedManifest::parse(b"R\tnope\trId1\tk\tt\tI\nP\tonly-two\n\t\t\n\xff\xfe");
         assert!(junk.parts.is_empty());
+    }
+
+    /// A file of many parts each inside the per-part cap is bounded in total: every XML part
+    /// read through the package charges a package-wide budget, and a part over it is skipped
+    /// (warned), never built. A chart part with no series builds a maximal tree for almost no
+    /// graphic work, so the trees a reader keeps would otherwise accumulate one per part.
+    #[test]
+    fn the_xml_element_budget_is_package_wide() {
+        let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
+        let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/></Relationships>"#;
+        let document = format!(r#"<w:document {ns}><w:body/></w:document>"#);
+        let dense = |root: &str| format!(r#"<{root} {ns}>{}</{root}>"#, "<a/>".repeat(900));
+        let z = zip_of(&[
+            ("word/document.xml", document.into_bytes()),
+            ("word/_rels/document.xml.rels", rels.as_bytes().to_vec()),
+            ("word/styles.xml", dense("w:styles").into_bytes()),
+            ("word/numbering.xml", dense("w:numbering").into_bytes()),
+        ]);
+        let pkg = Package::open_limited_within(&z, MAX_PART, MAX_TOTAL, 1_000).unwrap();
+        // styles (900 elements) reads; numbering (900 more) is over what is left and is skipped
+        // with a warning, not built.
+        let read = || crate::read::read_opened(&pkg, None);
+        let (first, warned) = crate::test_log::warnings(read);
+        assert!(first.is_ok(), "{:?}", first.err());
+        let refused: Vec<_> = warned.iter().filter(|w| w.contains("numbering") && w.contains("XML element")).collect();
+        assert_eq!(refused.len(), 1, "{warned:?}");
+        // The budget is per read: a second read starts it over and behaves the same.
+        let (second, warned) = crate::test_log::warnings(read);
+        assert!(second.is_ok(), "{:?}", second.err());
+        assert_eq!(warned.iter().filter(|w| w.contains("numbering") && w.contains("XML element")).count(), 1, "{warned:?}");
+    }
+
+    /// The main document part itself is strict: over the budget it is an error, not a
+    /// best-effort read of a tree the file then paid for.
+    #[test]
+    fn a_main_part_over_the_element_budget_is_refused() {
+        let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
+        let document = format!(r#"<w:document {ns}>{}</w:document>"#, "<a/>".repeat(20));
+        let z = zip_of(&[("word/document.xml", document.into_bytes())]);
+        let pkg = Package::open_limited_within(&z, MAX_PART, MAX_TOTAL, 10).unwrap();
+        assert!(matches!(crate::read::read_opened(&pkg, None), Err(DocxError::Limit(_))));
+    }
+
+    /// A part over what is left of the package's budget is refused while parsing, not after the
+    /// whole per-part tree is built: the parser stops at the remaining budget or the per-part
+    /// cap, whichever is less, so the file pays for at most what is left of the budget.
+    #[test]
+    fn a_part_over_the_remaining_budget_is_refused_while_parsing() {
+        let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
+        let document = format!(r#"<w:document {ns}>{}</w:document>"#, "<a/>".repeat(200));
+        let z = zip_of(&[("word/document.xml", document.into_bytes())]);
+        // 200 elements: inside the per-part cap, over the package's 100 budget. The parse
+        // refuses at the budget, so the error is the parse's, not the charge's, and names
+        // the effective limit for this parse (the remaining budget), not the whole budget.
+        let pkg = Package::open_limited_within(&z, MAX_PART, MAX_TOTAL, 100).unwrap();
+        let e = crate::read::read_opened(&pkg, None).expect_err("refused");
+        assert_eq!(e, DocxError::Limit("over the XML element budget for this parse: at most 100 elements".into()));
+    }
+
+    /// A part parsed earlier shrinks what is left of the budget: the next part is refused while
+    /// parsing at the remaining, not at the whole budget, and the error names the effective limit
+    /// for this parse (the remaining), not the package's budget.
+    #[test]
+    fn an_earlier_part_reduces_the_remaining_budget_the_next_part_names_it() {
+        let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
+        let styles = format!(r#"<w:styles {ns}>{}</w:styles>"#, "<a/>".repeat(60));
+        let settings = format!(r#"<w:settings {ns}>{}</w:settings>"#, "<a/>".repeat(60));
+        let z = zip_of(&[("word/styles.xml", styles.into_bytes()), ("word/settings.xml", settings.into_bytes())]);
+        // 100 elements of budget. The styles part parses (the main-part path: `xml_strict`) and
+        // charges its 61 elements, leaving 39.
+        let pkg = Package::open_limited_within(&z, MAX_PART, MAX_TOTAL, 100).unwrap();
+        pkg.xml_strict("word/styles.xml").unwrap();
+        // The settings part needs 61 elements, over the 39 left and under the per-part cap: the
+        // parse refuses at the remaining, so the error names 39, not the package's 100 budget.
+        let e = pkg.xml("word/settings.xml").expect_err("refused");
+        assert_eq!(e, DocxError::Limit("over the XML element budget for this parse: at most 39 elements".into()));
     }
 }
