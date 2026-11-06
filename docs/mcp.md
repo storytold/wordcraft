@@ -144,6 +144,19 @@ sha256 of each archive only matches what that index says: it catches a broken do
 changed pack. `proof.packs` then returns `"index_override": "<url or path>"`, and the app shows the
 test source in File › Options › Language and on the bar's Install.
 
+## Fields Word acts on
+
+An agent can be steered by text in the document it was asked to edit, so `insert.field`,
+`fields.setCode` and the mail-merge rules refuse, from MCP and from the control channel, the field
+types Microsoft Word acts on when it opens a document or updates its fields: `DDE` and `DDEAUTO`
+(Word offers to start another program) and `INCLUDETEXT`, `INCLUDEPICTURE`, `LINK`, `IMPORT` and
+`INCLUDE` (Word fetches the target, over the network for a `\\server\share` path), also nested in
+another field's code (#3628). The tool error reads, for example, `not available: DDEAUTO fields
+can't be inserted from automation`. Fields already in a document are kept, and the person at the
+keyboard can still insert them. A host that needs them from automation sets the environment
+variable `WORDCRAFT_ALLOW_ACTIVE_FIELDS=1` for the server or the app; no command parameter turns
+the check off.
+
 ## Tools
 
 | Tool | What it does |
