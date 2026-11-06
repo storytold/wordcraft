@@ -404,3 +404,43 @@ pub fn plan_strip(tabs: &[TabSpec], buttons: [f32; 3], avail: f32, more: f32) ->
 pub fn in_table_public(app: &WordApp) -> bool {
     app.session.sel.focus.path.cell().is_some()
 }
+
+#[cfg(test)]
+mod transition_tests {
+    use super::*;
+
+    /// Contextual tabs absent on the first frame do not animate; a newly shown one eases to rest.
+    #[test]
+    fn a_new_contextual_tab_eases_in() {
+        let ctx = egui::Context::default();
+        note_contextual_tabs(&ctx, &[("Table Design", 1)], 1.0, true);
+        assert_eq!(tab_entry(&ctx, "Table Design", 1.0, true), 1.0, "tabs already there do not slide");
+        note_contextual_tabs(&ctx, &[("Table Design", 1), ("Picture Format", 2)], 2.0, true);
+        let at = |secs: f64| tab_entry(&ctx, "Picture Format", 2.0 + secs, true);
+        assert_eq!(at(0.0), 0.0);
+        let (a, b, c) = (at(0.1), at(0.2), at(TAB_ENTRY_SECS));
+        assert!(0.0 < a && a < b && b < c && c == 1.0, "{a} {b} {c}");
+        assert!(a > 0.1 / TAB_ENTRY_SECS as f32, "faster than linear at the start: {a}");
+        assert!(c - b < b - a, "slower at the end: {a} {b} {c}");
+        assert_eq!(tab_entry(&ctx, "Picture Format", 2.0, false), 1.0, "animations off");
+        note_contextual_tabs(&ctx, &[("Table Design", 1), ("Picture Format", 2)], 3.0, true);
+        assert_eq!(tab_entry(&ctx, "Picture Format", 3.0, true), 1.0, "staying shown does not restart it");
+    }
+
+    /// A departing contextual tab remains for one exit and stops when motion is disabled.
+    #[test]
+    fn a_contextual_tab_that_goes_away_leaves_gently() {
+        let ctx = egui::Context::default();
+        let both = [("Table Design", 1), ("Picture Format", 2)];
+        assert!(note_contextual_tabs(&ctx, &both, 1.0, true).is_empty());
+        let leaving = note_contextual_tabs(&ctx, &both[..1], 2.0, true);
+        assert_eq!(leaving, vec![("Picture Format".to_string(), 2, 2.0)]);
+        assert_eq!(note_contextual_tabs(&ctx, &both[..1], 2.2, true).len(), 1, "still leaving");
+        assert!(note_contextual_tabs(&ctx, &both[..1], 2.0 + TAB_ENTRY_SECS + 0.01, true).is_empty(), "gone");
+        assert!(note_contextual_tabs(&ctx, &both, 4.0, true).is_empty());
+        assert!(note_contextual_tabs(&ctx, &both[..1], 5.0, false).is_empty(), "animations off");
+        note_contextual_tabs(&ctx, &both, 6.0, true);
+        note_contextual_tabs(&ctx, &both[..1], 7.0, true);
+        assert!(note_contextual_tabs(&ctx, &both, 7.1, true).is_empty(), "back again");
+    }
+}
