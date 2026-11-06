@@ -16,7 +16,8 @@ use indexes::index_at;
 pub(super) use indexes::{IndexKind, index_instr};
 use notes::annotation_name;
 pub(super) use props::{
-    align_attr, border_attrs, generated_style, generating_style, lang_attrs, odf_border, odf_name, props_text, script_attrs, spacing_props, tab_stops,
+    align_attr, border_attrs, generated_style, generating_style, is_script, lang_attrs, odf_border, odf_name, props_text, script_attrs,
+    spacing_props, tab_stops,
 };
 use props::{parent_style, text_props};
 use tracked::{Item, join_deleted_marks};

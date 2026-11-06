@@ -123,14 +123,10 @@ fn script_properties(a: &Attrs, x: &mut wordcraft_doc::props::CharProps, faces: 
     if let Some(s) = get(a, "style:font-style-complex") {
         x.italic_cs = Some(matches!(s.trim(), "italic" | "oblique"));
     }
-    fn tag(v: Option<&str>) -> Option<&str> {
-        v.map(str::trim).filter(|v| (1..=8).contains(&v.len()) && v.chars().all(|c| c.is_ascii_alphanumeric()) && *v != "none" && *v != "zxx")
-    }
-    let lang = |l: &str, c: &str| tag(get(a, l)).map(|l| tag(get(a, c)).map_or_else(|| l.to_string(), |c| format!("{l}-{c}")));
-    if let Some(l) = lang("style:language-asian", "style:country-asian") {
+    if let Some(l) = language_tag(a, "style:language-asian", "style:script-asian", "style:country-asian") {
         x.lang_ea = Some(l);
     }
-    if let Some(l) = lang("style:language-complex", "style:country-complex") {
+    if let Some(l) = language_tag(a, "style:language-complex", "style:script-complex", "style:country-complex") {
         x.lang_bidi = Some(l);
     }
 }
@@ -208,17 +204,21 @@ fn extra_text_properties(a: &Attrs, d: &mut FmtDelta) {
     }
 }
 
-/// The language `fo:language` and `fo:country` state, as a tag (`de-DE`); `None` when they state
-/// none, or no language at all (`none`, `zxx`).
+/// The language `fo:language`, `fo:script` and `fo:country` state: see [`language_tag`].
 fn language(a: &Attrs) -> Option<String> {
+    language_tag(a, "fo:language", "fo:script", "fo:country")
+}
+
+/// The language the attributes `language`, `script` and `country` state, as a tag (`de-DE`,
+/// `sr-Latn-RS`); `None` when they state none, or no language at all (`none`, `zxx`). A script of
+/// any other shape than a script's is left out: written back, it would read as a country.
+fn language_tag(a: &Attrs, language: &str, script: &str, country: &str) -> Option<String> {
     fn tag(v: Option<&str>) -> Option<&str> {
-        v.map(str::trim).filter(|v| (1..=8).contains(&v.len()) && v.chars().all(|c| c.is_ascii_alphanumeric()))
+        v.map(str::trim).filter(|v| (1..=8).contains(&v.len()) && v.chars().all(|c| c.is_ascii_alphanumeric()) && *v != "none")
     }
-    let l = tag(get(a, "fo:language")).filter(|l| *l != "none" && *l != "zxx")?;
-    Some(match tag(get(a, "fo:country")).filter(|c| *c != "none") {
-        Some(c) => format!("{l}-{c}"),
-        None => l.to_string(),
-    })
+    let language = tag(get(a, language)).filter(|l| *l != "zxx")?;
+    let script = tag(get(a, script)).filter(|s| super::writer::is_script(s));
+    Some([Some(language), script, tag(get(a, country))].into_iter().flatten().collect::<Vec<_>>().join("-"))
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1482,6 +1482,13 @@ impl Styles {
         // defaults here): its size, when Standard's differs.
         if s.parent.is_none() && fmt.size.is_none() && self.doc_size() != self.default_size {
             fmt.size = self.default_size;
+        }
+        // And its language, likewise.
+        if s.parent.is_none()
+            && let Some(lang) = self.default_lang.as_ref().filter(|l| self.document_lang().as_ref() != Some(*l))
+            && fmt.extra.as_ref().is_none_or(|x| x.lang.is_none())
+        {
+            fmt.extra.get_or_insert_with(Default::default).lang = Some(lang.clone());
         }
         let look = ParaLook {
             align: s.align,
