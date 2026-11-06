@@ -39,7 +39,7 @@ fn assert_layout_linear(what: &str, n: usize, doc: impl Fn(usize) -> Document, o
 
 /// A Thai paragraph with a long interior run of spaces followed by enough text to wrap.
 fn thai_justification_space_run(n: usize) -> Document {
-    let text = format!("ก{}{}", " ".repeat(n), "ก".repeat(800));
+    let text = format!("ก{}ก {}", " ".repeat(n), "ก".repeat(800));
     let mut d = Document::from_text(&text);
     let at = Pos::body(0, 0);
     d.format_paragraphs(&at, &at, &|p| {
@@ -47,6 +47,7 @@ fn thai_justification_space_run(n: usize) -> Document {
         p.indent_right = Some(468.0 - 4_000.0);
     })
     .expect("Thai paragraph formatting succeeds");
+    d.format_range(&Pos::body(0, "ก".len()), &Pos::body(0, "ก".len() + n), &|c| c.size = Some(1.0)).expect("space formatting succeeds");
     d
 }
 
@@ -79,6 +80,18 @@ fn proof_text_walks_the_runs_once() {
 /// Thai justification visits a long space run linearly instead of resolving each space's neighbors.
 #[test]
 fn thai_justification_walks_space_runs_linearly() {
+    for n in [64, 64 * SCALE] {
+        let layout = lay(&thai_justification_space_run(n), &LayoutOptions::default());
+        let para = first_para(&layout).expect("body paragraph");
+        let line = para.lines.first().expect("first line");
+        let space_start = "ก".len();
+        assert_eq!(line.end, para::LineEnd::Wrap);
+        assert!(line.stop > space_start + n, "the second Thai letter is on the wrapped line");
+        let spaces: Vec<_> =
+            (line.c0..line.c1).filter(|&k| para.clusters.get(k).is_some_and(|c| c.start >= space_start && c.end <= space_start + n)).collect();
+        assert_eq!(spaces.len(), n);
+        assert!(spaces.iter().all(|&k| line.cl_left(k).zip(line.cl_right(k)).is_some_and(|(l, r)| r - l > para.clusters[k].adv + 0.001)));
+    }
     assert_layout_linear("Thai justification space runs", 64, thai_justification_space_run, &LayoutOptions::default());
 }
 
