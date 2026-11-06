@@ -25,7 +25,9 @@ mod stsh;
 mod table;
 
 use std::io::{Read, Seek};
+use std::sync::Arc;
 
+use wordcraft_doc::link::hyperlink_target;
 use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::para::NoteKind;
 use wordcraft_doc::para::Paragraph;
@@ -49,6 +51,14 @@ const MAX_PARTS: usize = 50_000;
 /// headers, notes, text boxes), whatever the file's size. The working budget is tied to the
 /// WordDocument stream (see [`read`]); this caps even a maximal stream.
 const MAX_TOTAL_CHARS: u64 = 64 << 20;
+/// Most paragraph and cell marks across every story walk of one document. The character
+/// budget does not see them: a mark is one byte of the file but about 1 KB of document, so a
+/// file of nothing but marks would grow memory about a thousand times faster than its size.
+/// The cap bounds a flood to about 2 GB while reading (about 4 GB at the very cap, when the
+/// blocks are assembled). Past it the read fails with [`DocbinError::Limit`]. Real documents stay far below it:
+/// 50 paragraphs on each of 10,000 pages is 500,000, and a 10,000-page one-column table (46
+/// rows, each a cell mark plus a row mark) is about 920,000.
+const MAX_PARAGRAPHS: usize = 2_000_000;
 /// Bytes of repeated work per document beyond the text itself: piece Prm grpprls (Prcs, up
 /// to 64 KB each) interpreted (#3692), hyperlink targets (#3708), picture alt text (#3709)
 /// and floating objects (#3710) copied into every run or anchor. Past it Prms are skipped,
@@ -193,6 +203,12 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocbinError> {
 /// verifier ([`DocbinError::WrongPassword`] when it does not match) and then decrypted. The
 /// password is ignored for an unprotected file.
 pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Document, DocbinError> {
+    read_limited(bytes, password, MAX_PARAGRAPHS)
+}
+
+/// [`read_with_password`] with the paragraph cap as a parameter, so tests need not build a
+/// file of [`MAX_PARAGRAPHS`] marks.
+fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> Result<Document, DocbinError> {
     let mut comp = open_container(bytes)?;
     let mut word = stream(&mut comp, "WordDocument").ok_or_else(|| DocbinError::NotWord("no WordDocument stream".into()))?;
     if word.len() as u64 > MAX_STREAM {
@@ -248,9 +264,9 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         doc.core = core;
     }
     doc.body.clear();
-    doc.styles = fmt::stylesheet(&raw_styles, &fonts, standard_fonts);
-    doc.numbering = list::parse(&table, &fib, &fonts);
-    let sheet: StyleSheet = doc.styles.clone();
+    doc.styles = Arc::new(fmt::stylesheet(&raw_styles, &fonts, standard_fonts));
+    doc.numbering = Arc::new(list::parse(&table, &fib, &fonts));
+    let sheet: StyleSheet = StyleSheet::clone(&doc.styles);
     let sects = sections::parse(&word, &table, &fib);
     let stories = sections::header_stories(&table, &fib);
     // Subdocument layout in the CP space: main document, footnotes, headers, comments,
@@ -268,6 +284,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
     // tight against aliasing — and never past the absolute ceiling.
     let budget = std::cell::Cell::new((word.len() as u64).saturating_mul(2).min(MAX_TOTAL_CHARS));
     let work = Work::new(MAX_WORK);
+    let paragraphs = ParaBudget { left: std::cell::Cell::new(max_paragraphs), exceeded: std::cell::Cell::new(false) };
 
     let ctx = WalkCtx {
         word: &word,
@@ -283,6 +300,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         drawn: &[],
         sect_ends: &[],
         budget: &budget,
+        paragraphs: &paragraphs,
         work: &work,
     };
 
@@ -302,7 +320,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
             if doc.parts.len() >= MAX_PARTS || tb_stories.contains_key(&spid) {
                 continue;
             }
-            let blocks = table::assemble(walk(&ctx, a, b, &mut pics));
+            let blocks = story_blocks(&ctx, a, b, &mut pics, max_paragraphs)?;
             tb_stories.insert(spid, doc.add_part(PartKind::TextBox, blocks));
         }
     }
@@ -327,7 +345,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
                 0 | 1 | 4 => PartKind::Header,
                 _ => PartKind::Footer,
             };
-            let blocks = table::assemble(walk(&ctx, a, b, &mut pics));
+            let blocks = story_blocks(&ctx, a, b, &mut pics, max_paragraphs)?;
             if !blocks.is_empty() {
                 let id = doc.add_part(kind, blocks);
                 hf_ids.push((si, k, id));
@@ -340,7 +358,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
     let mut note_links: Vec<(u32, NoteKind, u32)> = Vec::new();
     for (cp, ab) in notes::parse_notes(&table, &fib, fib::pair::PLCF_FND_REF, fib::pair::PLCF_FND_TXT) {
         let Some((a, b)) = story(ftn_base, fib.ccp.ftn, ab) else { continue };
-        let blocks = table::assemble(walk(&ctx, a, b, &mut pics));
+        let blocks = story_blocks(&ctx, a, b, &mut pics, max_paragraphs)?;
         if !blocks.is_empty() && doc.parts.len() < MAX_PARTS {
             let id = doc.add_part(PartKind::Footnote, blocks);
             note_links.push((cp, NoteKind::Footnote, id));
@@ -348,7 +366,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
     }
     for (cp, ab) in notes::parse_notes(&table, &fib, fib::pair::PLCF_END_REF, fib::pair::PLCF_END_TXT) {
         let Some((a, b)) = story(edn_base, fib.ccp.edn, ab) else { continue };
-        let blocks = table::assemble(walk(&ctx, a, b, &mut pics));
+        let blocks = story_blocks(&ctx, a, b, &mut pics, max_paragraphs)?;
         if !blocks.is_empty() && doc.parts.len() < MAX_PARTS {
             let id = doc.add_part(PartKind::Endnote, blocks);
             note_links.push((cp, NoteKind::Endnote, id));
@@ -391,11 +409,28 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         doc.last_section = l;
     }
 
+    if paragraphs.exceeded.get() {
+        return Err(paragraph_limit(max_paragraphs));
+    }
     doc.media.extend(pics.media);
     doc.body = table::assemble(paras);
     doc.ensure_nonempty();
     work.log();
     Ok(doc)
+}
+
+fn paragraph_limit(max_paragraphs: usize) -> DocbinError {
+    DocbinError::Limit(format!("the document has more than {max_paragraphs} paragraphs and table cells"))
+}
+
+/// Walks one story into blocks. A walk that spent the shared paragraph budget is refused before
+/// its partial list is assembled, so a flood does not build blocks it will throw away.
+fn story_blocks(ctx: &WalkCtx<'_>, a: u32, b: u32, pics: &mut media::Pictures, max_paragraphs: usize) -> Result<wordcraft_doc::Blocks, DocbinError> {
+    let paras = walk(ctx, a, b, pics);
+    if ctx.paragraphs.exceeded.get() {
+        return Err(paragraph_limit(max_paragraphs));
+    }
+    Ok(table::assemble(paras))
 }
 
 /// A story's CP range `[a, b)`, relative to a subdocument starting at `base` with `len`
@@ -431,8 +466,33 @@ struct WalkCtx<'a> {
     /// footnotes, text boxes) are hostile and can each span a whole subdocument, so thousands of
     /// them could otherwise materialise the same text thousands of times; this bounds the total.
     budget: &'a std::cell::Cell<u64>,
+    /// Paragraph and cell marks still allowed across every story walk ([`MAX_PARAGRAPHS`]).
+    paragraphs: &'a ParaBudget,
     /// Repeated-work bytes left ([`MAX_WORK`]), and what they left out.
     work: &'a Work,
+}
+
+/// The paragraph and cell marks still allowed in this document, and whether a walk ran into
+/// the end of them (the read then fails).
+struct ParaBudget {
+    left: std::cell::Cell<usize>,
+    exceeded: std::cell::Cell<bool>,
+}
+
+impl ParaBudget {
+    /// Spends one mark; false (and the overrun noted) when none are left.
+    fn spend(&self) -> bool {
+        match self.left.get().checked_sub(1) {
+            Some(left) => {
+                self.left.set(left);
+                true
+            }
+            None => {
+                self.exceeded.set(true);
+                false
+            }
+        }
+    }
 }
 
 /// State while assembling one paragraph from per-CP formatting.
@@ -533,6 +593,9 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
         let section_mark = c == '\u{C}' && ctx.sect_ends.binary_search(&cp.saturating_add(1)).is_ok();
         match c {
             '\r' | '\u{7}' | '\u{C}' if c != '\u{C}' || section_mark => {
+                if !ctx.paragraphs.spend() {
+                    break;
+                }
                 // Paragraph mark: its PAPX covers the FC range of the paragraph it ends, so
                 // querying at the mark's own FC finds that paragraph's properties.
                 let fc_mark = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
@@ -542,6 +605,9 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 }
                 let mut row = table::decode(papx);
                 row.cell_mark = c == '\u{7}';
+                // Only table marks keep their table context; a plain paragraph would carry
+                // a `RowInfo` (about 300 bytes) it never uses.
+                let row = row.is_table().then(|| Box::new(row));
                 let mut ilvl = 0u8;
                 let mut ilfo = 0i32;
                 for prl in sprm::iter(papx) {
@@ -629,6 +695,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                             alt,
                             float: Default::default(),
                             crop: p.crop,
+                            fx: Default::default(),
                             ole: None,
                         });
                     }
@@ -674,7 +741,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
         out.push(ParaOut {
             para: Paragraph { text: done.text, runs: done.runs, props: done.props, mark: done.mark, objects: done.objects, ..Default::default() },
             end_cp: cp_end,
-            row: table::RowInfo::default(),
+            row: None,
         });
     }
     out
@@ -751,85 +818,6 @@ fn finish_field(pb: &mut ParaBuild, f: FieldBuild, work: &Work) {
     }
     pb.push('\u{FFFC}', CharProps::default());
     pb.objects.push(InlineObject::Field { instr, result: result.text, locked: false, dirty: false, code: false, form: String::new() });
-}
-
-/// `HYPERLINK "url"` / `HYPERLINK url \l "bookmark"` → the model link target
-/// (`#bookmark` for internal links); `None` when not a hyperlink.
-fn hyperlink_target(instr: &str) -> Option<String> {
-    let t = instr.trim();
-    let rest = if t.get(..9).is_some_and(|h| h.eq_ignore_ascii_case("hyperlink")) {
-        t.get(9..).filter(|r| r.is_empty() || r.starts_with(char::is_whitespace))?.trim()
-    } else {
-        return None;
-    };
-    if rest.is_empty() {
-        return None;
-    }
-
-    let mut url: Option<String> = None;
-    let mut local: Option<String> = None;
-    let mut switch: Option<&str> = None;
-
-    let mut i = 0;
-    let bytes = rest.as_bytes();
-    while i < bytes.len() {
-        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        if i >= bytes.len() {
-            break;
-        }
-        if bytes[i] == b'\\' {
-            let start = i;
-            i += 1;
-            while i < bytes.len() && (bytes[i].is_ascii_alphabetic() || bytes[i] == b'*') {
-                i += 1;
-            }
-            switch = Some(rest.get(start..i).unwrap_or(""));
-            continue;
-        }
-        let arg = if bytes[i] == b'"' {
-            i += 1;
-            let start = i;
-            while i < bytes.len() && bytes[i] != b'"' {
-                i += 1;
-            }
-            let val = rest.get(start..i).unwrap_or("");
-            if i < bytes.len() && bytes[i] == b'"' {
-                i += 1;
-            }
-            val.to_string()
-        } else {
-            let start = i;
-            while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
-                i += 1;
-            }
-            rest.get(start..i).unwrap_or("").to_string()
-        };
-        let clean_arg = arg.replace("%22", "\"");
-        match switch.take() {
-            Some("\\l") => local = Some(clean_arg),
-            Some(_) => {}
-            None => {
-                if url.is_none() {
-                    url = Some(clean_arg);
-                }
-            }
-        }
-    }
-
-    match (url, local) {
-        (Some(u), Some(l)) if !u.is_empty() && !l.is_empty() => {
-            let frag = l.trim_start_matches('#');
-            if u.contains('#') { Some(u) } else { Some(format!("{u}#{frag}")) }
-        }
-        (Some(u), _) if !u.is_empty() => Some(u),
-        (None, Some(l)) if !l.is_empty() => {
-            let frag = l.trim_start_matches('#');
-            Some(format!("#{frag}"))
-        }
-        _ => None,
-    }
 }
 
 /// `sprmCPicLocation` from a CHPX grpprl: the fc of the picture in the Data stream.
