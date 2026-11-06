@@ -34,7 +34,7 @@ use bookmarks::bookmark_at_caret;
 #[cfg(test)]
 use bookmarks::bookmark_names;
 pub use chrome::show;
-pub(crate) use chrome::{buttons, cancel_key_pressed, color_menu, ok_cancel_responses};
+pub(crate) use chrome::{block_behind, buttons, cancel_key_pressed, color_menu, forget_nudge, ok_cancel_responses, release_keyboard};
 pub use find::{FindExtra, FindTab, GoToWhat};
 #[cfg(test)]
 use find::{command_matches, goto_page, swallow_shortcut_text};
@@ -284,6 +284,10 @@ pub enum Dialog {
         /// The line the border choices draw.
         pen: crate::dialogs_table_style::BorderPen,
     },
+    /// View › Macros: the recorded macros to run or delete, and Record (#4327).
+    Macros {
+        name: String,
+    },
     Commands {
         query: String,
         /// Opened by a shortcut that may also send its key's text (Alt+Q's "q", in the same frame
@@ -496,6 +500,20 @@ impl Dialog {
         }
     }
 
+    /// Whether the dialog blocks the rest of the window while it is open. As in Word for Mac
+    /// (16.114.1, #3859), all are but those you keep working beside. Symbol opened from Define
+    /// New Bullet picks the bullet for it, so it blocks the window as that dialog does (#2786).
+    pub fn is_modal(&self) -> bool {
+        use crate::dialogs_insert::InsertDialog;
+        use crate::dialogs_refs::RefsDialog;
+        match self {
+            Dialog::Find { .. } | Dialog::InsertMergeField { .. } => false,
+            Dialog::Insert(d) => !matches!(&**d, InsertDialog::Symbol(f) if f.bullet.is_none()),
+            Dialog::Refs(d) => !matches!(**d, RefsDialog::MarkEntry(_) | RefsDialog::CrossRef(_)),
+            _ => true,
+        }
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Dialog::RenameDocument { .. } => "renameDocument",
@@ -520,6 +538,7 @@ impl Dialog {
             Dialog::TableStyle { id: None, .. } => "newTableStyle",
             Dialog::TableStyle { .. } => "modifyTableStyle",
             Dialog::Commands { .. } => "commands",
+            Dialog::Macros { .. } => "macros",
             Dialog::Insert(d) => d.name(),
             Dialog::Refs(d) => d.name(),
             Dialog::Icons { .. } => "icons",
@@ -751,6 +770,7 @@ impl Dialog {
             "manageStyles" => Dialog::ManageStyles { alphabetical: false, selected: s("style") },
             "newTableStyle" | "modifyTableStyle" => crate::dialogs_table_style::open(app, name)?,
             "commands" => Dialog::Commands { query: String::new(), swallow: true },
+            "macros" => Dialog::Macros { name: String::new() },
             "icons" => Dialog::Icons { query: String::new(), category: String::new(), selected: String::new() },
             "tableProperties" => {
                 let form = Box::new(TableForm::read(app)?);
@@ -775,6 +795,7 @@ impl Dialog {
             "about" => Dialog::About { tab: 0 },
             "contributors" => Dialog::About { tab: 1 },
             "models" => Dialog::About { tab: 2 },
+            "languageData" => Dialog::About { tab: 3 },
             // The current list to edit, or a new one to type.
             "recipientList" | "newRecipientList" => {
                 let m = &app.session.merge;

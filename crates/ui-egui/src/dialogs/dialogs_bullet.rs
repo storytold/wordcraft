@@ -309,7 +309,10 @@ mod tests {
         h.run_steps(2);
         let mut app = std::mem::replace(&mut h.state_mut().0, app_with_bullet());
         drop(h);
-        let Some(Dialog::Insert(d)) = app.dialog.take() else { panic!("the Symbol dialog is open") };
+        let Some(dialog) = app.dialog.take() else { panic!("the Symbol dialog is open") };
+        // Picking the bullet, it blocks the window as Define New Bullet does (#3859).
+        assert!(dialog.is_modal(), "the bullet's Symbol dialog is modal");
+        let Dialog::Insert(d) = dialog else { panic!("the Symbol dialog is open") };
         let InsertDialog::Symbol(mut sym) = *d else { panic!("the Symbol dialog is open") };
         assert_eq!(sym.bullet.as_deref().map(|b| b.align.as_str()), Some("center"), "it carries the form");
         sym.selected = Some('†');
