@@ -315,7 +315,7 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     if default_font.is_some() {
         Arc::make_mut(&mut doc.styles).default_chr.font = default_font;
     }
-    let dc = &mut doc.styles.default_chr;
+    let dc = &mut Arc::make_mut(&mut doc.styles).default_chr;
     for (lang, default) in [&mut dc.lang, &mut dc.lang_ea, &mut dc.lang_bidi].into_iter().zip(default_lang) {
         if let Some(tag) = default {
             *lang = Some(tag.to_string());
