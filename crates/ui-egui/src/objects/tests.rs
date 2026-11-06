@@ -771,6 +771,41 @@ fn rotation_window(app: WordApp) -> crate::table_resize::tests::H {
     h
 }
 
+/// #3932: over a shape turned 90° the pointer on a resize handle shows the arrow that handle
+/// resizes along (its own top handle, now on the right, left-right), and keeps it while dragged.
+#[test]
+fn a_turned_shapes_handles_show_turned_resize_arrows() {
+    use crate::table_resize::tests::{H, button, steps};
+    let (mut app, _) = app_with(filled_shape());
+    app.run("view.commentsPane", json!({"value": false})).unwrap();
+    app.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, OBJ.len_utf8())})).unwrap();
+    app.run("arrange.bounds", json!({"page": 0, "x": 150, "y": 180, "width": 200, "height": 100})).unwrap();
+    app.run("arrange.rotation", json!({"degrees": 90})).unwrap();
+    let mut h: H = rotation_window(app);
+    let o = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).unwrap();
+    assert_eq!(o.spin.deg, 90.0);
+    let (cx, cy) = (o.rect.x + o.rect.w / 2.0, o.rect.y + o.rect.h / 2.0);
+    // Turned 90° clockwise, the frame's top handle is on the right and its right one at the bottom.
+    let top = crate::canvas::page_to_screen(h.state_mut(), 0, cx + o.rect.h / 2.0, cy).unwrap();
+    let right = crate::canvas::page_to_screen(h.state_mut(), 0, cx, cy + o.rect.w / 2.0).unwrap();
+    let cursor = |h: &H| h.output().platform_output.cursor_icon;
+    for (at, arrow) in [(top, egui::CursorIcon::ResizeHorizontal), (right, egui::CursorIcon::ResizeVertical)] {
+        h.event(egui::Event::PointerMoved(at));
+        steps(&mut h, 2);
+        assert_eq!(cursor(&h), arrow, "over the handle at {at:?}");
+    }
+    h.event(egui::Event::PointerMoved(top));
+    button(&h, top, true);
+    h.step();
+    h.event(egui::Event::PointerMoved(top + egui::vec2(20.0, 0.0)));
+    steps(&mut h, 2);
+    let d = h.state().canvas.obj_drag.as_ref().expect("resizing");
+    assert_eq!(d.drag.grab, Grab::Resize(frame::Handle { x: 0, y: -1 }));
+    assert_eq!(cursor(&h), egui::CursorIcon::ResizeHorizontal, "while the handle is dragged");
+    button(&h, top + egui::vec2(20.0, 0.0), false);
+    steps(&mut h, 3);
+}
+
 /// #2277: the actual picture pixels follow the rotation handle before release, including
 /// pictures whose cached preview already contains a rotation and either reflection.
 #[test]
