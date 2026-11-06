@@ -344,8 +344,12 @@ fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
         templates_dir: wordcraft_control_key::settings_dir().map(|d| d.join("Templates")),
         animations_enabled: Some(animations::hook(ctx)),
         clipboard_text: Some(Box::new(clipboard::text)),
+        #[cfg(target_os = "linux")]
+        primary_selection_text: Some(Box::new(clipboard::primary_selection_text)),
         clipboard_html: Some(Box::new(clipboard::html)),
         set_clipboard_rich: Some(Box::new(clipboard::set_rich)),
+        #[cfg(target_os = "linux")]
+        set_primary_text: Some(Box::new(clipboard::set_primary)),
         clipboard_rtf: Some(Box::new(clipboard::rtf)),
         clipboard_formats: Some(Box::new(clipboard::formats)),
         ..Default::default()
