@@ -33,7 +33,7 @@ different prefixes install as different apps.
   download from about 13 MB to about 5 MB. You can also precompress (`brotli -k *.wasm`) and let
   the server send `Content-Encoding: br`.
 - **Caching:** `Cache-Control: public, max-age=31536000, immutable` on the hashed `.wasm` and
-  `.js` files, and `no-cache` on `index.html`.
+  `.js` files, and `no-cache` on `index.html` and `manifest.webmanifest`.
 - **HTTPS:** WebGPU (and the clipboard) only work in a secure context, which means `https://`
   or `http://localhost`. Over plain HTTP elsewhere, the app falls back to WebGL2.
 - **No special isolation headers:** WordCraft doesn't use `SharedArrayBuffer`, so it doesn't
@@ -45,7 +45,7 @@ nginx example:
 
 ```nginx
 location /wordcraft/ {
-    types { application/wasm wasm; text/javascript js; text/html html; application/manifest+json webmanifest; }
+    types { application/wasm wasm; text/javascript js; text/html html; application/manifest+json webmanifest; image/png png; image/x-icon ico; }
     gzip on;
     gzip_types application/wasm text/javascript text/html;
     location ~* \.(wasm|js)$ { add_header Cache-Control "public, max-age=31536000, immutable"; }
@@ -54,6 +54,10 @@ location /wordcraft/ {
 ```
 
 Local test: `python3 -m http.server 8765` inside the folder, then open http://localhost:8765/.
+
+The sample `_headers` rules start at the site root (`/manifest.webmanifest`), as Netlify and
+Cloudflare Pages match them against the request path. Under a prefix, put the prefix in front of
+each path (`/tools/wordcraft/manifest.webmanifest`).
 
 ## Installing it as an app
 
