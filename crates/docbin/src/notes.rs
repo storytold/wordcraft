@@ -93,6 +93,11 @@ pub(crate) fn parse_bookmarks(table: &[u8], fib: &crate::fib::Fib) -> Vec<(u32, 
 /// (1-byte length and Windows-1252 chars). `cbExtra` bytes after each string are skipped.
 /// Names are kept to 40 characters, but the reader always advances by the stored length.
 fn sttb_strings(table: &[u8], fc: u32, lcb: u32) -> Option<Vec<String>> {
+    sttb_strings_max(table, fc, lcb, 40)
+}
+
+/// [`sttb_strings`] keeping up to `max_chars` characters of each string.
+pub(crate) fn sttb_strings_max(table: &[u8], fc: u32, lcb: u32, max_chars: usize) -> Option<Vec<String>> {
     let b = table.get(fc as usize..(fc as usize).saturating_add(lcb as usize))?;
     let extended = b.get(0..2)? == [0xFF, 0xFF];
     let head = if extended { 2 } else { 0 };
@@ -125,9 +130,13 @@ fn sttb_strings(table: &[u8], fc: u32, lcb: u32) -> Option<Vec<String>> {
         }
         at += cb_extra;
         let s: String = if extended {
-            chars.as_chunks::<2>().0.iter().take(40).map(|c| char::from_u32(u16::from_le_bytes(*c) as u32).unwrap_or('\u{FFFD}')).collect()
+            // UTF-16: a surrogate pair is one character; a lone surrogate reads as U+FFFD.
+            char::decode_utf16(chars.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)))
+                .map(|r| r.unwrap_or('\u{FFFD}'))
+                .take(max_chars)
+                .collect()
         } else {
-            chars.iter().take(40).map(|&c| wordcraft_doc::encoding::cp1252(c)).collect()
+            chars.iter().take(max_chars).map(|&c| wordcraft_doc::encoding::cp1252(c)).collect()
         };
         out.push(s);
     }
@@ -174,6 +183,20 @@ mod tests {
         b.truncate(b.len() - 2);
         let got = sttb_strings(&b, 0, b.len() as u32).unwrap();
         assert_eq!(got, vec!["first".to_string()]);
+    }
+
+    #[test]
+    fn extended_names_decode_surrogate_pairs() {
+        // An author or bookmark name with a character outside the BMP is one character, not two
+        // U+FFFD; the length limit counts characters. A lone surrogate is U+FFFD.
+        let b = ext_sttb(&["Ann \u{1F600}"], &[]);
+        assert_eq!(sttb_strings(&b, 0, b.len() as u32).unwrap(), vec!["Ann \u{1F600}".to_string()]);
+        let b = ext_sttb(&[&"\u{1F600}".repeat(41)], &[]);
+        assert_eq!(sttb_strings(&b, 0, b.len() as u32).unwrap(), vec!["\u{1F600}".repeat(40)]);
+        let mut b = ext_sttb(&["ab"], &[]);
+        let n = b.len();
+        b[n - 2..].copy_from_slice(&0xD800u16.to_le_bytes());
+        assert_eq!(sttb_strings(&b, 0, b.len() as u32).unwrap(), vec!["a\u{FFFD}".to_string()]);
     }
 
     #[test]
