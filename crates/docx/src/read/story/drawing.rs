@@ -719,7 +719,13 @@ fn wrap_polygon(e: &El) -> Option<wordcraft_doc::wrap::WrapPolygon> {
 
 /// What a graphic's items cost to keep and draw: one per item, plus one per path segment.
 fn graphic_work(items: &[GraphicItem]) -> usize {
-    items.iter().map(|it| if let GraphicItem::Path { segs, .. } = it { segs.len() + 1 } else { 1 }).sum()
+    items
+        .iter()
+        .map(|it| match it {
+            GraphicItem::Path { segs, .. } | GraphicItem::InkOutline { segs, .. } => segs.len().saturating_add(1),
+            _ => 1,
+        })
+        .fold(0usize, usize::saturating_add)
 }
 
 /// A shape's `a:effectLst` (ECMA-376 Part 1 §20.1.8.26): its outer shadow, glow and soft edges.

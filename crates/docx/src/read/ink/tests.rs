@@ -1,6 +1,9 @@
 //! Unit coverage for the supported InkML subset and its hostile-input/resource limits.
 
 use super::*;
+use wordcraft_doc::para::ShapeKind;
+
+mod advanced;
 
 /// Wrap InkML body markup with the real namespace and decode it under a fresh ample work budget.
 fn ink(body: &str) -> Option<Graphic> {
@@ -132,12 +135,11 @@ fn unsupported_visual_semantics_refuse_the_whole_preview() {
         r##"<trace contextRef="#missing">0 0, 1 1</trace>"##,
         r##"<context><canvasTransform/></context><trace>0 0, 1 1</trace>"##,
         r##"<context canvasRef="#other"/><trace>0 0, 1 1</trace>"##,
-        r##"<brush><brushProperty name="transparency" value="100"/></brush><trace>0 0, 1 1</trace>"##,
-        r##"<brush><brushProperty name="tip" value="rectangle"/></brush><trace>0 0, 1 1</trace>"##,
-        r##"<brush><brushProperty name="width" value="2"/><brushProperty name="height" value="3"/></brush><trace>0 0, 1 1</trace>"##,
+        r##"<brush><brushProperty name="rasterOp" value="maskPen"/></brush><trace>0 0, 1 1</trace>"##,
+        r##"<brush><brushProperty name="tip" value="custom"/></brush><trace>0 0, 1 1</trace>"##,
         r##"<traceFormat><channel name="X" units="dev"/><channel name="Y" units="dev"/></traceFormat><trace>0 0, 1 1</trace>"##,
         r##"<traceFormat><channel name="X"/><channel name="Y"/><channel name="S"/></traceFormat><trace>0 0 T, 1 1 F</trace>"##,
-        r##"<trace type="indeterminate">0 0, 1 1</trace>"##,
+        r##"<trace type="unknown">0 0, 1 1</trace>"##,
         r##"<trace continuation="middle" priorRef="#prior">0 0, 1 1</trace>"##,
         r##"<traceView traceDataRef="#earlier"/>"##,
         "<trace>0 0, 10 10</trace><trace>1 1, broken</trace>",

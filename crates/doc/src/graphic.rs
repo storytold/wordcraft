@@ -116,6 +116,16 @@ pub enum GraphicItem {
         #[serde(default)]
         stroke_width: f32,
     },
+    /// A native ink nib swept into a compound, nonzero-filled outline. Painting the entire
+    /// outline once avoids dark joins and self-overlaps in a translucent pen stroke.
+    InkOutline {
+        /// Closed local-coordinate polygons, already bounded by the InkML decoder.
+        segs: Vec<PathSeg>,
+        /// Resolved brush or sample-channel color.
+        color: Rgb,
+        /// Opacity in 0..1; original InkML transparency remains preserved separately.
+        alpha: f32,
+    },
     /// One line of text in `rect`, aligned horizontally by `align`, centred vertically.
     Text {
         rect: [f32; 4],

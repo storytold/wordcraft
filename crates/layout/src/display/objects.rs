@@ -63,6 +63,14 @@ fn graphic_geometry(it: &GraphicItem, rect: Rect, sx: f32, sy: f32, alpha: f32, 
                 }
             }
         }
+        GraphicItem::InkOutline { segs, color, alpha: opacity } => Draw::Path {
+            segs: page_segs(segs, |x, y| (rect.x + x * sx, rect.y + y * sy)),
+            fill: Some(Paint::Solid(*color, if opacity.is_finite() { opacity.clamp(0.0, 1.0) * alpha } else { alpha })),
+            stroke: None,
+            stroke_width: 0.0,
+            dash: Vec::new(),
+            cap: Default::default(),
+        },
         GraphicItem::Image { rect: r, media } => Draw::Image {
             rect: inside(r),
             media: media.clone(),

@@ -14,6 +14,11 @@ const BLUE: Rgb = Rgb(0x25, 0x63, 0xEB);
 
 /// Create a tiny standards-shaped DOCX with native ink in the requested placement.
 fn document(placement: &str) -> Vec<u8> {
+    document_with_ink(placement, INK)
+}
+
+/// Package arbitrary synthetic InkML for the same placement, without importing any Word file.
+fn document_with_ink(placement: &str, ink: &str) -> Vec<u8> {
     let content = if matches!(placement, "group" | "canvas") {
         r#"<w14:contentPart r:id="ink"><w14:xfrm><a:off x="254000" y="254000"/><a:ext cx="1371600" cy="736600"/></w14:xfrm></w14:contentPart>"#
     } else {
@@ -53,13 +58,16 @@ fn document(placement: &str) -> Vec<u8> {
             "word/_rels/document.xml.rels",
             r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="ink" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="ink/ink1.xml"/></Relationships>"#,
         ),
-        ("word/ink/ink1.xml", INK),
+        ("word/ink/ink1.xml", ink),
     ] {
         zip.start_file(path, zip::write::SimpleFileOptions::default()).unwrap();
         zip.write_all(data.as_bytes()).unwrap();
     }
     zip.finish().unwrap().into_inner()
 }
+
+/// Synthetic transparent, rectangular pen with mapped coordinates and continuation fragments.
+const ADVANCED_INK: &str = r##"<ink xmlns="http://www.w3.org/2003/InkML"><brush><brushProperty name="color" value="#2563EB"/><brushProperty name="width" value="8" units="pt"/><brushProperty name="height" value="4" units="pt"/><brushProperty name="tip" value="rectangle"/><brushProperty name="transparency" value="128"/></brush><context><canvasTransform><mapping type="affine"><affine>1.5 0 0,0 1.5 0</affine></mapping></canvasTransform></context><trace xml:id="first" continuation="begin">0 0,20 0</trace><trace continuation="end" priorRef="#first">20 10,0 10</trace></ink>"##;
 
 /// Count the fixture's blue native-ink strokes through nested figure, clip, and rotation draws.
 fn strokes(draws: &[Draw]) -> usize {
@@ -104,6 +112,101 @@ fn native_ink_opens_renders_hides_and_exports_as_pdf_vectors() {
         assert!(tokens.windows(2).any(|p| p == ["1", "J"]), "{placement}: PDF must have round stroke caps");
         assert!(tokens.windows(2).any(|p| p == ["1", "j"]), "{placement}: PDF must have round joins, matching the screen");
         assert!(!raw.contains("/Subtype /Image"), "{placement}: ink must remain vector, not a raster fallback");
+    }
+}
+
+/// Count the advanced fixture's compound outlines and check that layout keeps pen opacity.
+fn outlines(draws: &[Draw]) -> usize {
+    draws
+        .iter()
+        .map(|draw| match draw {
+            Draw::Path { segs, fill: Some(wordcraft_layout::display::Paint::Solid(color, alpha)), stroke: None, .. } if *color == BLUE => {
+                assert!((*alpha - 127.0 / 255.0).abs() < 1e-6);
+                assert!(segs.len() > 10);
+                1
+            }
+            Draw::Figure { draws, .. } => outlines(draws),
+            Draw::Clip { items, .. } | Draw::Rotated { items, .. } => outlines(items),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// Screen and PDF share the same translucent compound geometry in every DOCX placement.
+#[test]
+fn advanced_native_ink_renders_hides_exports_and_survives_editing() {
+    for placement in ["inline", "floating", "group", "canvas", "direct"] {
+        let doc = crate::io::open_bytes("advanced.docx", &document_with_ink(placement, ADVANCED_INK)).unwrap();
+        let mut session = Session::new(doc);
+        let before = session.doc.body.clone();
+        run(&mut session, "text.insert", json!({"text":"Edited "}));
+        run(&mut session, "edit.undo", json!({}));
+        assert_eq!(session.doc.body, before);
+        run(&mut session, "edit.redo", json!({}));
+        for _ in 0..2 {
+            let saved = crate::io::save_bytes("advanced.docx", &session.doc).unwrap();
+            session = Session::new(crate::io::open_bytes("advanced.docx", &saved).unwrap());
+            assert!(session.doc.passthrough.values().any(|bytes| bytes.as_slice() == ADVANCED_INK.as_bytes()));
+        }
+        let layout = session.layout();
+        let page = &layout.pages[0];
+        assert_eq!(outlines(&page_display(&session.doc, page, &Default::default())), 1, "{placement}");
+        let hidden = DisplayOptions { hide_ink: true, ..Default::default() };
+        assert_eq!(outlines(&page_display(&session.doc, page, &hidden)), 0);
+        let colored = |image: &wordcraft_render::Rendered| {
+            image.pixels.as_chunks::<4>().0.iter().filter(|p| p[2] > 200 && p[0] < 220 && p[1] < 220 && p[2].saturating_sub(p[0]) > 25).count()
+        };
+        let raster = wordcraft_render::render_page(&session.doc, page, 1.0, &Default::default());
+        assert!(colored(&raster) > 50, "{placement}: translucent nib must paint");
+        let raster =
+            wordcraft_render::render_page(&session.doc, page, 1.0, &wordcraft_render::RenderOptions { display: hidden, ..Default::default() });
+        assert_eq!(colored(&raster), 0, "{placement}: Hide Ink must reach filled outlines");
+        let pdf = wordcraft_pdf::export_layout(&session.doc, &layout, &wordcraft_pdf::PdfOptions { compress: false, ..Default::default() }).unwrap();
+        let raw = String::from_utf8_lossy(&pdf);
+        assert!(raw.contains("/ca "), "{placement}: PDF retains nonstroking opacity");
+        assert!(!raw.contains("/Subtype /Image"), "{placement}: advanced ink remains vector");
+    }
+}
+
+/// Find a native outline's bounds through figure wrappers for a center-pixel opacity assertion.
+fn outline_bounds(draws: &[Draw]) -> Option<[f32; 4]> {
+    use wordcraft_doc::graphic::PathSeg;
+    draws.iter().find_map(|draw| match draw {
+        Draw::Path { segs, fill: Some(wordcraft_layout::display::Paint::Solid(Rgb(255, 0, 0), _)), .. } => {
+            let mut bounds = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+            for seg in segs {
+                if let PathSeg::Move(x, y) | PathSeg::Line(x, y) = seg {
+                    bounds[0] = bounds[0].min(*x);
+                    bounds[1] = bounds[1].min(*y);
+                    bounds[2] = bounds[2].max(*x);
+                    bounds[3] = bounds[3].max(*y);
+                }
+            }
+            Some(bounds)
+        }
+        Draw::Figure { draws, .. } => outline_bounds(draws),
+        Draw::Clip { items, .. } | Draw::Rotated { items, .. } => outline_bounds(items),
+        _ => None,
+    })
+}
+
+/// A retraced translucent pen does not accumulate opacity within one trace, but two traces do.
+#[test]
+fn native_ink_outline_composites_once_per_stroke_not_per_polygon() {
+    for count in [1, 2] {
+        let traces = "<trace>0 0,50 0,0 0</trace>".repeat(count);
+        let ink = format!(
+            r##"<ink xmlns="http://www.w3.org/2003/InkML"><brush><brushProperty name="color" value="#FF0000"/><brushProperty name="width" value="4"/><brushProperty name="tip" value="rectangle"/><brushProperty name="transparency" value="0.5" units="%"/></brush>{traces}</ink>"##
+        );
+        let doc = crate::io::open_bytes("opacity.docx", &document_with_ink("inline", &ink)).unwrap();
+        let mut session = Session::new(doc);
+        let layout = session.layout();
+        let page = &layout.pages[0];
+        let [l, t, r, b] = outline_bounds(&page_display(&session.doc, page, &Default::default())).unwrap();
+        let image = wordcraft_render::render_page(&session.doc, page, 1.0, &Default::default());
+        let pixel = image.pixel(((l + r) / 2.0) as u32, ((t + b) / 2.0) as u32);
+        let expected = if count == 1 { 128 } else { 64 };
+        assert!(pixel[0] > 250 && pixel[1].abs_diff(expected) <= 2 && pixel[2].abs_diff(expected) <= 2, "{count} strokes: {pixel:?}");
     }
 }
 

@@ -55,7 +55,7 @@ fn native_ink_strokes_render_in_all_frames_and_survive_json_and_two_docx_saves()
 fn native_ink_unsupported_features_keep_the_preview_and_original_bytes() {
     let variants = [
         INK_XML.replace("0 0, 1 1, 2 0", "0 0, NaN 1"),
-        INK_XML.replace("</brush>", r#"<brushProperty name="transparency" value="128"/></brush>"#),
+        INK_XML.replace("</brush>", r#"<brushProperty name="rasterOp" value="unsupported"/></brush>"#),
         INK_XML.replace("</context>", "<canvasTransform/></context>"),
         "<not-ink>broken".to_string(),
     ];
@@ -70,6 +70,35 @@ fn native_ink_unsupported_features_keep_the_preview_and_original_bytes() {
                 assert!(files.values().any(|bytes| bytes == ink.as_bytes()));
                 assert!(files.values().any(|bytes| bytes == b"original preview bytes"));
                 doc = wordcraft_docx::read(&saved).unwrap();
+            }
+        }
+    }
+}
+
+/// Advanced nibs, mapped coordinates, sparse channels and continuation traces keep vectors,
+/// source bytes and fallback images through JSON and repeated DOCX round trips.
+#[test]
+fn advanced_native_ink_roundtrips_json_and_all_drawing_frames() {
+    let variants = [
+        r##"<brush><brushProperty name="color" value="#2563EB"/><brushProperty name="width" value="4"/><brushProperty name="height" value="8"/><brushProperty name="tip" value="rectangle"/><brushProperty name="transparency" value="128"/></brush><trace>0 0,10 10</trace>"##,
+        r##"<context><canvasTransform><mapping type="affine"><affine>2 0 0,0 3 0</affine></mapping></canvasTransform></context><trace xml:id="a" continuation="begin">0 0,10 10</trace><trace continuation="end" priorRef="#a">20 10,30 0</trace>"##,
+        r##"<traceFormat><channel name="X"/><channel name="Y"/><intermittentChannels><channel name="C" default="255"/><channel name="BW" default="4"/><channel name="A" max="255" default="128"/></intermittentChannels></traceFormat><trace>0 0,10 10,20 0 #FF0000 8</trace>"##,
+        r##"<definitions><trace xml:id="a">0 0,10 10,20 0,30 10</trace></definitions><traceView traceDataRef="#a" from="2" to="3"/>"##,
+    ];
+    for body in variants {
+        let ink = format!(r#"<ink xmlns="http://www.w3.org/2003/InkML">{body}</ink>"#);
+        for (bytes, grouped) in frames(true) {
+            let doc = wordcraft_docx::read(&replace_ink(&bytes, &ink)).unwrap();
+            let expected = ink_graphic(&doc, grouped).items.clone();
+            assert!(!expected.is_empty() && expected.iter().all(|i| !matches!(i, GraphicItem::Image { .. })));
+            let mut doc: Document = serde_json::from_slice(&serde_json::to_vec(&doc).unwrap()).unwrap();
+            for _ in 0..2 {
+                let saved = wordcraft_docx::write(&doc).unwrap();
+                let files = unzip(&saved);
+                assert!(files.values().any(|b| b == ink.as_bytes()));
+                assert!(files.values().any(|b| b == b"original preview bytes"));
+                doc = wordcraft_docx::read(&saved).unwrap();
+                assert_eq!(ink_graphic(&doc, grouped).items, expected);
             }
         }
     }

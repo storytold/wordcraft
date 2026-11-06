@@ -1,35 +1,39 @@
-//! Bounded decoding of the visually simple subset of Word's native InkML strokes.
+//! Bounded native InkML previews built from the public W3C Recommendation.
 //!
-//! The original InkML remains opaque in the document model for lossless saves; this module only
-//! builds disposable drawing items. Unsupported visual semantics, invalid input and exhausted
-//! work return `None`, allowing the DOCX reader to keep its picture fallback instead.
+//! Original package bytes remain authoritative for saves. This decoder builds disposable vector
+//! geometry; unsupported visual semantics, invalid input and exhausted work refuse the entire
+//! preview so the reader can retain its original picture fallback. No external URI is fetched.
 
-use std::collections::HashMap;
-
-use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, PathSeg};
-use wordcraft_doc::para::ShapeKind;
-use wordcraft_doc::props::Rgb;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::xml::El;
+use brush::{Brush, Stroke};
+use format::Format;
+use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, PathSeg};
+use wordcraft_doc::props::Rgb;
 
-/// Maximum InkML part size that the vector preview decoder will parse (2 MiB).
+mod brush;
+mod format;
+mod mapping;
+mod projection;
+mod trace;
+mod views;
+
+/// Maximum InkML XML size accepted for vector decoding (original bytes are preserved separately).
 const MAX_BYTES: usize = 2 * 1024 * 1024;
-/// Maximum XML elements indexed from one InkML part.
+/// Maximum number of indexed XML elements, including annotations and definitions.
 const MAX_NODES: usize = 8192;
-/// Maximum nesting or chained reference depth accepted in InkML.
+/// Maximum XML, reference, mapping and trace-view nesting depth.
 const MAX_DEPTH: usize = 16;
-/// Maximum regular trace channels supported per format.
+/// Maximum combined regular/intermittent channels in a trace format.
 const MAX_CHANNELS: usize = 16;
-/// Maximum coordinate samples decoded from one InkML part.
+/// Maximum decoded samples, including repeated references and pen-up samples.
 const MAX_POINTS: usize = 100_000;
-/// Maximum absolute channel value accepted before unit conversion.
+/// Bound on input numbers and evaluated mapping intermediates.
 const MAX_VALUE: f64 = 1_000_000_000.0;
 
-/// Decode supported strokes from InkML, charging parsing and geometry work to the shared budget.
-///
-/// Returns `None` for malformed packages, unsupported visual semantics, excessive sizes, or
-/// exhausted work; callers can then display the original picture fallback. Success contains
-/// vector items in the drawing's intrinsic point coordinates, but never replaces the saved XML.
+/// Decode a supported native ink preview under the document's shared graphic-work allowance.
 pub(super) fn read(bytes: &[u8], work: &mut usize) -> Option<Graphic> {
     if bytes.len() > MAX_BYTES {
         return None;
@@ -39,17 +43,33 @@ pub(super) fn read(bytes: &[u8], work: &mut usize) -> Option<Graphic> {
     if root.name != "ink:ink" {
         return None;
     }
-    let mut ids = HashMap::new();
-    index(&root, &mut ids, &mut 0, 0, work)?;
-    let mut reader = InkReader { ids, work, strokes: Vec::new(), points: 0, default_context: Context::default() };
+    let mut reader = InkReader {
+        ids: HashMap::new(),
+        definitions: HashSet::new(),
+        definition_traces: HashSet::new(),
+        contexts: HashMap::new(),
+        work,
+        strokes: Vec::new(),
+        points: 0,
+        default_context: Context::default(),
+        tails: HashMap::new(),
+    };
+    reader.index(&root, &mut 0, 0, false)?;
     reader.walk(&root, Context::default(), 0)?;
-    drawing(reader.strokes)
+    if reader.strokes.is_empty() {
+        // A valid pen-up-only part must not resurrect an unrelated picture fallback.
+        return Some(Graphic {
+            kind: GraphicKind::Ink,
+            items: vec![GraphicItem::InkOutline { segs: Vec::new(), color: Rgb::BLACK, alpha: 0.0 }],
+            w: 1.0,
+            h: 1.0,
+            ..Default::default()
+        });
+    }
+    brush::drawing(reader.strokes, reader.work)
 }
 
-/// Scale decoded vector geometry from its InkML bounds into the frame dimensions in points.
-///
-/// Both coordinates and pen widths scale with the frame; picture items and empty graphics need
-/// no adjustment. The caller supplies already validated, nonnegative frame dimensions.
+/// Fit local geometry to an object frame; widths of legacy circular centerlines use mean scale.
 pub(super) fn fit_frame(graphic: &mut Graphic, w: f32, h: f32) {
     if graphic.w <= 0.0 || graphic.h <= 0.0 {
         return;
@@ -58,17 +78,10 @@ pub(super) fn fit_frame(graphic: &mut Graphic, w: f32, h: f32) {
     for item in &mut graphic.items {
         match item {
             GraphicItem::Path { segs, stroke_width, .. } => {
-                for seg in segs {
-                    match seg {
-                        PathSeg::Move(x, y) | PathSeg::Line(x, y) => {
-                            *x *= sx;
-                            *y *= sy;
-                        }
-                        _ => {}
-                    }
-                }
+                scale_segments(segs, sx, sy);
                 *stroke_width = (*stroke_width * ((sx + sy) / 2.0)).min(crate::units::MAX_LEN_PT);
             }
+            GraphicItem::InkOutline { segs, .. } => scale_segments(segs, sx, sy),
             GraphicItem::Shape { rect, .. } => {
                 for (v, scale) in rect.iter_mut().zip([sx, sy, sx, sy]) {
                     *v *= scale;
@@ -81,106 +94,133 @@ pub(super) fn fit_frame(graphic: &mut Graphic, w: f32, h: f32) {
     graphic.h = h;
 }
 
-/// Debit `amount` from the reader's shared allowance, returning `None` if it was exhausted.
+/// Scale bounded path coordinates, including any future curve segments.
+fn scale_segments(segs: &mut [PathSeg], sx: f32, sy: f32) {
+    for seg in segs {
+        match seg {
+            PathSeg::Move(x, y) | PathSeg::Line(x, y) => {
+                *x *= sx;
+                *y *= sy;
+            }
+            PathSeg::Cubic(a, b, c, d, e, f) => {
+                *a *= sx;
+                *b *= sy;
+                *c *= sx;
+                *d *= sy;
+                *e *= sx;
+                *f *= sy;
+            }
+            PathSeg::Close => {}
+        }
+    }
+}
+
+/// Debit work on both successes and failures; exhaustion never leaves a partially accepted preview.
 fn spend(work: &mut usize, amount: usize) -> Option<()> {
     let enough = *work >= amount;
     *work = work.saturating_sub(amount);
     enough.then_some(())
 }
 
-/// Index bounded, uniquely identified XML elements so local InkML references resolve in constant time.
-fn index<'a>(el: &'a El, ids: &mut HashMap<&'a str, &'a El>, nodes: &mut usize, depth: usize, work: &mut usize) -> Option<()> {
-    spend(work, 1)?;
-    *nodes += 1;
-    if *nodes > MAX_NODES || depth > MAX_DEPTH {
+/// Accept only finite numbers small enough for bounded geometry and mapping evaluation.
+fn bounded(value: f64) -> bool {
+    value.is_finite() && value.abs() <= MAX_VALUE
+}
+
+/// Parse a bounded decimal/exponent attribute or MathML literal.
+fn number(value: &str) -> Option<f64> {
+    if value.len() > 64 {
         return None;
     }
-    if let Some(id) = el.attr("xml:id")
-        && (id.is_empty() || id.len() > 256 || ids.insert(id, el).is_some())
-    {
-        return None;
-    }
-    for child in el.els() {
-        index(child, ids, nodes, depth + 1, work)?;
-    }
-    Some(())
+    let value = value.parse::<f64>().ok()?;
+    bounded(value).then_some(value)
 }
 
-/// Channel positions and unit conversion for the subset of an InkML trace format we draw.
-#[derive(Clone)]
-struct Format {
-    /// Number of regular channels that must be decoded for each sample.
-    channels: usize,
-    /// Zero-based channel index for the horizontal coordinate.
-    x: usize,
-    /// Zero-based channel index for the vertical coordinate.
-    y: usize,
-    /// Conversion factors from the X and Y units into document points.
-    scale: [f64; 2],
-}
-
-impl Default for Format {
-    /// Use InkML's default point-like X/Y canvas.
-    fn default() -> Self {
-        Self { channels: 2, x: 0, y: 1, scale: [1.0; 2] }
-    }
-}
-
-/// The supported visual properties inherited by an InkML trace.
+/// Fully resolved non-geometric context; large declarations are shared rather than cloned per sample.
 #[derive(Clone, Default)]
-struct Brush {
-    /// Brush colour, or black when the InkML document leaves it unspecified.
-    color: Option<Rgb>,
-    /// Circular pen diameter in points, or the renderer's one-point default.
-    width: Option<f64>,
-    /// Explicit tip height, if present; only circles whose height matches `width` are drawn.
-    height: Option<f64>,
-}
-
-/// Resolved trace-format and brush properties inherited by descendant traces.
-#[derive(Clone, Default)]
-struct Context {
-    /// Coordinate channels and their point conversion.
-    format: Format,
-    /// Visual pen properties for a trace using this context.
+struct Context<'a> {
+    /// Recorded sample format, optionally calibrated by an ink source.
+    format: Arc<Format>,
+    /// Source metadata is retained when a later trace format overrides the source's format.
+    source: Option<&'a El>,
+    /// Brush property overrides.
     brush: Brush,
+    /// Explicit output canvas; absent means use the source's physical coordinates.
+    canvas: Option<Arc<Format>>,
+    /// Forward mapping element, compiled against the resolved source/canvas formats per trace.
+    transform: Option<&'a El>,
 }
 
-/// One decoded pen-down trace, before placement in a drawing frame.
-struct Stroke {
-    /// Samples as finite X/Y values in the source InkML canvas.
-    points: Vec<[f64; 2]>,
-    /// Opaque pen colour.
-    color: Rgb,
-    /// Pen width in points.
-    width: f32,
+/// The last pen-down run of a continuation fragment, and whether another fragment may follow.
+struct Tail {
+    /// Index of the final stroke, absent if the fragment ends pen-up.
+    stroke: Option<usize>,
+    /// A begin/middle fragment may be consumed exactly once.
+    open: bool,
 }
 
-/// Stateful InkML walker with a part-local reference table and document-wide work allowance.
+/// Stateful stream reader with bounded local references and document-wide work accounting.
 struct InkReader<'a, 'w> {
-    /// Unique XML IDs retained for local context, brush, and format references.
+    /// Unique local IDs; URI references cannot escape this part.
     ids: HashMap<&'a str, &'a El>,
-    /// Remaining DOCX graphic-work budget shared with other embedded graphics.
+    /// IDs syntactically declared inside definitions, where context defaults are isolated.
+    definitions: HashSet<&'a str>,
+    /// Identity of definition-contained traces, including anonymous group children. Pointers
+    /// are compared only, never dereferenced; the immutable XML tree outlives this reader.
+    definition_traces: HashSet<*const El>,
+    /// Contexts encountered in stream order retain their declaration-time defaults.
+    contexts: HashMap<&'a str, Context<'a>>,
+    /// Shared allowance for parsing, reference expansion, mappings, geometry and copying.
     work: &'w mut usize,
-    /// Supported pen-down traces accumulated for the final vector graphic.
+    /// Pen-down runs ready for vector construction.
     strokes: Vec<Stroke>,
-    /// Total coordinate samples consumed from the current InkML part.
+    /// Decoded sample count including unknown/pen-up data and expanded views.
     points: usize,
-    /// Stream defaults in effect for an explicit `#DefaultContext` reference.
-    default_context: Context,
+    /// Stream properties used by the reserved DefaultContext URI.
+    default_context: Context<'a>,
+    /// Continuation references already seen, preventing forks, cycles and use after end.
+    tails: HashMap<&'a str, Tail>,
 }
 
 impl<'a> InkReader<'a, '_> {
-    /// Resolve a fragment-only URI to an indexed element of the expected InkML kind.
+    /// Index uniquely identified elements and enforce nesting/node bounds before reference traversal.
+    fn index(&mut self, el: &'a El, nodes: &mut usize, depth: usize, in_definitions: bool) -> Option<()> {
+        spend(self.work, 1)?;
+        *nodes += 1;
+        if *nodes > MAX_NODES || depth > MAX_DEPTH {
+            return None;
+        }
+        let in_definitions = in_definitions || el.name == "ink:definitions";
+        if in_definitions && el.name == "ink:trace" {
+            self.definition_traces.insert(el as *const El);
+        }
+        if let Some(id) = el.attr("xml:id") {
+            if id.is_empty()
+                || id.len() > 256
+                || matches!(id, "DefaultContext" | "DefaultBrush" | "DefaultCanvas" | "DefaultTraceFormat")
+                || self.ids.insert(id, el).is_some()
+            {
+                return None;
+            }
+            if in_definitions {
+                self.definitions.insert(id);
+            }
+        }
+        for child in el.els() {
+            self.index(child, nodes, depth + 1, in_definitions)?;
+        }
+        Some(())
+    }
+
+    /// Resolve only a local fragment of the expected InkML kind.
     fn resolve(&mut self, reference: &str, name: &str) -> Option<&'a El> {
         spend(self.work, 1)?;
-        let id = reference.strip_prefix('#')?;
-        let el = *self.ids.get(id)?;
+        let el = *self.ids.get(reference.strip_prefix('#')?)?;
         (el.name == name).then_some(el)
     }
 
-    /// Read a brush's supported properties, recursively resolving its optional inherited brush.
-    fn brush(&mut self, el: &El, depth: usize) -> Option<Brush> {
+    /// Resolve a brush's inheritance chain, bounded independently of XML nesting.
+    fn brush(&mut self, el: &'a El, depth: usize) -> Option<Brush> {
         spend(self.work, 1)?;
         if depth > MAX_DEPTH {
             return None;
@@ -192,74 +232,81 @@ impl<'a> InkReader<'a, '_> {
                 self.brush(parent, depth + 1)?
             }
         };
-        for p in el.els() {
-            spend(self.work, p.attrs.len().saturating_mul(4).max(1))?;
-            if matches!(p.name.as_str(), "ink:annotation" | "ink:annotationXML") {
-                continue;
-            }
-            if p.name != "ink:brushProperty" {
-                return None;
-            }
-            let value = p.attr("value")?;
-            match p.attr("name")? {
-                "color" => brush.color = Some(Rgb::parse(value)?),
-                "width" | "height" => {
-                    let size = number(value)? * unit(p.attr("units"))?;
-                    if !(0.001..=100_000.0).contains(&size) {
-                        return None;
-                    }
-                    if p.attr("name") == Some("width") {
-                        brush.width = Some(size);
-                    } else {
-                        brush.height = Some(size);
-                    }
-                }
-                "transparency" if number(value)? == 0.0 => {}
-                "tip" if value == "ellipse" => {}
-                "rasterOp" if value == "copyPen" => {}
-                _ => return None,
-            }
-        }
+        brush.properties(el, self.work)?;
         Some(brush)
     }
 
-    /// Resolve inherited, referenced, and directly specified properties for one context element.
-    fn context(&mut self, el: &El, inherited: Context, depth: usize) -> Option<Context> {
+    /// Resolve a format child before its reference; overridden references need not be valid.
+    fn format(&mut self, el: &'a El) -> Option<Option<Format>> {
+        if let Some(format) = el.child("ink:traceFormat") {
+            return Some(Some(format::read(format, self.work)?));
+        }
+        match el.attr("traceFormatRef") {
+            None => Some(None),
+            Some("#DefaultTraceFormat") => Some(Some(Format::default())),
+            Some(reference) => {
+                let format = self.resolve(reference, "ink:traceFormat")?;
+                Some(Some(format::read(format, self.work)?))
+            }
+        }
+    }
+
+    /// Resolve context inheritance and property precedence according to InkML §4.6.
+    fn context(&mut self, el: &'a El, inherited: Context<'a>, depth: usize) -> Option<Context<'a>> {
         spend(self.work, el.kids.len().saturating_add(el.attrs.len()).saturating_mul(12).max(1))?;
         if depth > MAX_DEPTH {
-            return None;
-        }
-        // A transform we cannot evaluate must not silently become an identity transform.
-        if el.attr("canvasRef").is_some_and(|r| r != "#DefaultCanvas")
-            || el.attr("canvasTransformRef").is_some()
-            || el.child("ink:canvas").is_some()
-            || el.child("ink:canvasTransform").is_some()
-        {
             return None;
         }
         let mut ctx = match el.attr("contextRef") {
             None => inherited,
             Some("#DefaultContext") => self.default_context.clone(),
             Some(reference) => {
-                let parent = self.resolve(reference, "ink:context")?;
-                self.context(parent, inherited, depth + 1)?
+                let id = reference.strip_prefix('#')?;
+                if let Some(ctx) = self.contexts.get(id) {
+                    ctx.clone()
+                } else {
+                    let parent = self.resolve(reference, "ink:context")?;
+                    // Definitions are independent of stream state. Forward references outside
+                    // definitions are not previously defined contexts and cannot be guessed.
+                    if !self.definitions.contains(id) {
+                        return None;
+                    }
+                    self.context(parent, Context::default(), depth + 1)?
+                }
             }
         };
-        if let Some(reference) = el.attr("inkSourceRef") {
-            let source = self.resolve(reference, "ink:inkSource")?;
-            ctx.format = source_format(source)?;
-        }
         if let Some(source) = el.child("ink:inkSource") {
-            ctx.format = source_format(source)?;
+            ctx.source = Some(source);
+            ctx.format = Arc::new(format::source(source, self.work)?);
+        } else if let Some(reference) = el.attr("inkSourceRef") {
+            let source = self.resolve(reference, "ink:inkSource")?;
+            ctx.source = Some(source);
+            ctx.format = Arc::new(format::source(source, self.work)?);
         }
-        if let Some(reference) = el.attr("traceFormatRef") {
-            let format = self.resolve(reference, "ink:traceFormat")?;
-            ctx.format = trace_format(format)?;
+        if let Some(mut format) = self.format(el)? {
+            if let Some(source) = ctx.source {
+                format::calibrate(&mut format, source, self.work)?;
+            }
+            ctx.format = Arc::new(format);
         }
-        if let Some(format) = el.child("ink:traceFormat") {
-            ctx.format = trace_format(format)?;
+        if let Some(canvas) = el.child("ink:canvas") {
+            ctx.canvas = Some(Arc::new(self.format(canvas)??));
+        } else if let Some(reference) = el.attr("canvasRef") {
+            ctx.canvas = Some(Arc::new(if reference == "#DefaultCanvas" {
+                Format::default()
+            } else {
+                let canvas = self.resolve(reference, "ink:canvas")?;
+                self.format(canvas)??
+            }));
         }
-        if let Some(reference) = el.attr("brushRef") {
+        if let Some(transform) = el.child("ink:canvasTransform") {
+            ctx.transform = Some(transform);
+        } else if let Some(reference) = el.attr("canvasTransformRef") {
+            ctx.transform = Some(self.resolve(reference, "ink:canvasTransform")?);
+        }
+        if let Some(brush) = el.child("ink:brush") {
+            ctx.brush = self.brush(brush, 0)?;
+        } else if let Some(reference) = el.attr("brushRef") {
             ctx.brush = if reference == "#DefaultBrush" {
                 Brush::default()
             } else {
@@ -267,14 +314,11 @@ impl<'a> InkReader<'a, '_> {
                 self.brush(brush, 0)?
             };
         }
-        if let Some(brush) = el.child("ink:brush") {
-            ctx.brush = self.brush(brush, 0)?;
-        }
         Some(ctx)
     }
 
-    /// Visit supported stream elements in document order and decode their traces recursively.
-    fn walk(&mut self, el: &El, mut ctx: Context, depth: usize) -> Option<()> {
+    /// Process stream elements in order without leaking group properties into following siblings.
+    fn walk(&mut self, el: &'a El, mut ctx: Context<'a>, depth: usize) -> Option<()> {
         if depth > MAX_DEPTH {
             return None;
         }
@@ -285,303 +329,108 @@ impl<'a> InkReader<'a, '_> {
             }
             match child.name.as_str() {
                 "ink:definitions" | "ink:annotation" | "ink:annotationXML" | "ink:timestamp" => {}
-                "ink:traceFormat" => ctx.format = trace_format(child)?,
-                "ink:inkSource" => ctx.format = source_format(child)?,
+                "ink:traceFormat" => {
+                    let mut format = format::read(child, self.work)?;
+                    if let Some(source) = ctx.source {
+                        format::calibrate(&mut format, source, self.work)?;
+                    }
+                    ctx.format = Arc::new(format);
+                }
+                "ink:inkSource" => {
+                    ctx.source = Some(child);
+                    ctx.format = Arc::new(format::source(child, self.work)?);
+                }
                 "ink:brush" => ctx.brush = self.brush(child, 0)?,
-                "ink:context" => ctx = self.context(child, ctx, 0)?,
+                "ink:context" => {
+                    ctx = self.context(child, ctx, 0)?;
+                    if let Some(id) = child.attr("xml:id") {
+                        self.contexts.insert(id, ctx.clone());
+                    }
+                }
                 "ink:traceGroup" => {
                     let group = self.context(child, ctx.clone(), 0)?;
                     self.walk(child, group, depth + 1)?;
                 }
                 "ink:trace" => {
                     let trace = self.context(child, ctx.clone(), 0)?;
-                    self.trace(child, &trace)?;
+                    self.trace(child, &trace, None)?;
+                }
+                "ink:traceView" => self.view(child, ctx.clone(), depth + 1)?,
+                _ => return None,
+            }
+        }
+        Some(())
+    }
+
+    /// Decode, map and append one trace fragment. A view optionally selects a 1-based inclusive range.
+    fn trace(&mut self, el: &'a El, ctx: &Context<'a>, range: Option<(usize, usize)>) -> Option<()> {
+        if el.els().next().is_some() || (range.is_some() && (el.attr("continuation").is_some() || el.attr("priorRef").is_some())) {
+            // A view can cut a fragment away from its continuation's context. Do not draw a
+            // disconnected subset until view-level continuation assembly is implemented.
+            return None;
+        }
+        let default_down = match el.attr("type") {
+            None | Some("penDown") => true,
+            Some("penUp" | "indeterminate") => false,
+            _ => return None,
+        };
+        let mut tail = None;
+        if range.is_none() {
+            match (el.attr("continuation"), el.attr("priorRef")) {
+                (None, None) | (Some("begin"), None) => {}
+                (Some("middle" | "end"), Some(reference)) => {
+                    let prior = self.tails.get_mut(reference.strip_prefix('#')?)?;
+                    if !prior.open {
+                        return None;
+                    }
+                    prior.open = false;
+                    tail = prior.stroke;
                 }
                 _ => return None,
             }
         }
-        Some(())
-    }
-
-    /// Decode one simple pen-down trace using its resolved channels and circular-pen properties.
-    fn trace(&mut self, el: &El, ctx: &Context) -> Option<()> {
-        if el.attr("continuation").is_some() || el.attr("priorRef").is_some() || el.els().next().is_some() {
+        let samples = trace::read(&el.text(), &ctx.format, self.work, &mut self.points)?;
+        let (from, to) = range.unwrap_or((1, samples.len()));
+        if from == 0 || to < from || to > samples.len() {
             return None;
         }
-        match el.attr("type") {
-            Some("penUp") => return Some(()),
-            None | Some("penDown") => {}
-            _ => return None,
-        }
-        let width = ctx.brush.width.unwrap_or(1.0);
-        if ctx.brush.height.is_some_and(|h| (h - width).abs() > 0.0001) {
-            return None;
-        }
-        let text = el.text();
-        let mut tokens = Tokens(text.trim());
-        let mut state = vec![ChannelState::default(); ctx.format.channels];
-        let mut points = Vec::new();
-        while !tokens.0.is_empty() {
-            spend(self.work, ctx.format.channels + 1)?;
-            if self.points >= MAX_POINTS {
-                return None;
-            }
-            for channel in &mut state {
-                channel.next(&mut tokens)?;
-            }
-            let x = state.get(ctx.format.x)?.value? * ctx.format.scale[0];
-            let y = state.get(ctx.format.y)?.value? * ctx.format.scale[1];
-            if !bounded(x) || !bounded(y) {
-                return None;
-            }
-            points.push([x, y]);
-            self.points += 1;
-            tokens.space();
-            if !tokens.0.is_empty() {
-                tokens.0 = tokens.0.strip_prefix(',')?;
-                tokens.space();
-            }
-        }
-        if points.is_empty() {
-            return None;
-        }
-        self.strokes.push(Stroke { points, color: ctx.brush.color.unwrap_or(Rgb::BLACK), width: width as f32 });
-        Some(())
-    }
-}
-
-/// Get the trace format declared inside an InkML input source.
-fn source_format(el: &El) -> Option<Format> {
-    trace_format(el.child("ink:traceFormat")?)
-}
-
-/// Read ordered regular channels, accepting supported X/Y axes and optional nonvisual channels.
-fn trace_format(el: &El) -> Option<Format> {
-    let mut format = Format { channels: 0, ..Default::default() };
-    let (mut x, mut y) = (None, None);
-    for channel in el.els() {
-        if channel.name != "ink:channel" || format.channels >= MAX_CHANNELS {
-            return None;
-        }
-        let index = format.channels;
-        format.channels += 1;
-        let axis = match channel.attr("name")? {
-            "X" if x.is_none() => {
-                x = Some(index);
-                Some(0)
-            }
-            "Y" if y.is_none() => {
-                y = Some(index);
-                Some(1)
-            }
-            "F" | "Z" | "T" | "OT" | "OA" | "OE" | "OR" => None,
-            _ => return None,
-        };
-        if let Some(axis) = axis {
-            let sign = match channel.attr("orientation") {
-                None | Some("+ve") => 1.0,
-                Some("-ve") => -1.0,
-                _ => return None,
+        let projection = projection::Projection::new(ctx, &self.ids, self.work)?;
+        let visual = &projection.format;
+        for values in samples.get(from - 1..to)? {
+            let resolved = projection.apply(values, self.work)?;
+            let down = if visual.index("S").is_some() {
+                match visual.value(&resolved, "S") {
+                    Some(0.0) | None => false,
+                    Some(1.0) => true,
+                    _ => return None,
+                }
+            } else {
+                default_down
             };
-            *format.scale.get_mut(axis)? = unit(channel.attr("units"))? * sign;
-        }
-    }
-    format.x = x?;
-    format.y = y?;
-    Some(format)
-}
-
-/// Convert a supported InkML physical unit into points; absent units mean one point per unit.
-fn unit(value: Option<&str>) -> Option<f64> {
-    match value {
-        None | Some("em" | "pt") => Some(1.0),
-        Some("in") => Some(72.0),
-        Some("cm") => Some(72.0 / 2.54),
-        Some("mm") => Some(72.0 / 25.4),
-        Some("m") => Some(72.0 / 0.0254),
-        Some("pc") => Some(12.0),
-        _ => None,
-    }
-}
-
-/// Whether a decoded coordinate or channel value is finite and within the parser's safe range.
-fn bounded(value: f64) -> bool {
-    value.is_finite() && value.abs() <= MAX_VALUE
-}
-
-/// Parse a bounded decimal/exponent channel number, rejecting long and nonfinite values.
-fn number(value: &str) -> Option<f64> {
-    if value.len() > 64 {
-        return None;
-    }
-    let value = value.parse::<f64>().ok()?;
-    bounded(value).then_some(value)
-}
-
-/// Accumulated explicit, first-difference, and second-difference state for one channel.
-#[derive(Clone, Default)]
-struct ChannelState {
-    /// Reconstructed absolute value at the current sample.
-    value: Option<f64>,
-    /// Reconstructed first difference used for second-difference samples.
-    delta: Option<f64>,
-    /// Last encoded value, reused when a `*` wildcard occurs.
-    last: Option<f64>,
-    /// Active encoding order: 0 explicit, 1 first difference, 2 second difference.
-    order: u8,
-}
-
-impl ChannelState {
-    /// Consume one trace token and update this channel's reconstructed value.
-    fn next(&mut self, tokens: &mut Tokens<'_>) -> Option<()> {
-        tokens.space();
-        let prefix = match tokens.0.as_bytes().first()? {
-            b'!' => Some(0),
-            b'\'' => Some(1),
-            b'"' => Some(2),
-            _ => None,
-        };
-        if let Some(order) = prefix {
-            self.order = order;
-            tokens.0 = tokens.0.get(1..)?;
-            tokens.space();
-        }
-        let value = if let Some(rest) = tokens.0.strip_prefix('*') {
-            if prefix.is_some() {
+            if !down {
+                tail = None;
+                continue;
+            }
+            let xy = [visual.value(&resolved, "X")?, visual.value(&resolved, "Y")?];
+            if !xy.iter().all(|v| bounded(*v)) {
                 return None;
             }
-            tokens.0 = rest;
-            self.last?
-        } else {
-            tokens.number()?
-        };
-        let next = match self.order {
-            0 => {
-                self.delta = None;
-                value
+            let point = ctx.brush.point(visual, &resolved, xy)?;
+            match tail {
+                Some(i) => self.strokes.get_mut(i)?.points.push(point),
+                None => {
+                    tail = Some(self.strokes.len());
+                    self.strokes.push(Stroke { points: vec![point], curve: ctx.brush.curve });
+                }
             }
-            1 => {
-                self.delta = Some(value);
-                self.value? + value
-            }
-            2 => {
-                let delta = self.delta? + value;
-                self.delta = Some(delta);
-                self.value? + delta
-            }
-            _ => return None,
-        };
-        if !bounded(next) {
-            return None;
         }
-        self.last = Some(value);
-        self.value = Some(next);
+        if range.is_none()
+            && let Some(id) = el.attr("xml:id")
+        {
+            self.tails.insert(id, Tail { stroke: tail, open: matches!(el.attr("continuation"), Some("begin" | "middle")) });
+        }
         Some(())
     }
-}
-
-/// Cursor over a trace's compact comma-separated sample data.
-struct Tokens<'a>(&'a str);
-
-impl Tokens<'_> {
-    /// Skip the XML whitespace allowed between trace values.
-    fn space(&mut self) {
-        self.0 = self.0.trim_start_matches([' ', '\t', '\r', '\n']);
-    }
-
-    /// Consume consecutive ASCII decimal digits and return their count.
-    fn digits(&mut self) -> usize {
-        let len = self.0.bytes().take_while(u8::is_ascii_digit).count();
-        self.0 = self.0.get(len..).unwrap_or("");
-        len
-    }
-
-    /// Parse one signed InkML decimal, exponent, or hexadecimal token from the cursor.
-    fn number(&mut self) -> Option<f64> {
-        self.space();
-        let sign = if let Some(rest) = self.0.strip_prefix('-') {
-            self.0 = rest;
-            self.space();
-            -1.0
-        } else {
-            1.0
-        };
-        if let Some(rest) = self.0.strip_prefix('#') {
-            let len = rest.bytes().take_while(u8::is_ascii_hexdigit).count();
-            if len == 0 || len > 8 {
-                return None;
-            }
-            let value = u32::from_str_radix(rest.get(..len)?, 16).ok()? as f64 * sign;
-            self.0 = rest.get(len..)?;
-            return bounded(value).then_some(value);
-        }
-        let start = self.0;
-        let mut digits = self.digits();
-        if let Some(rest) = self.0.strip_prefix('.') {
-            self.0 = rest;
-            digits += self.digits();
-        }
-        if digits == 0 {
-            return None;
-        }
-        if self.0.starts_with(['e', 'E']) {
-            self.0 = self.0.get(1..)?;
-            if self.0.starts_with(['+', '-']) {
-                self.0 = self.0.get(1..)?;
-            }
-            if self.digits() == 0 {
-                return None;
-            }
-        }
-        Some(number(start.get(..start.len().saturating_sub(self.0.len()))?)? * sign)
-    }
-}
-
-/// Build bounded vector items, centring the strokes in their intrinsic graphic bounds.
-fn drawing(strokes: Vec<Stroke>) -> Option<Graphic> {
-    let (mut left, mut top, mut right, mut bottom) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
-    for stroke in &strokes {
-        let radius = f64::from(stroke.width) / 2.0;
-        for &[x, y] in &stroke.points {
-            left = left.min(x - radius);
-            top = top.min(y - radius);
-            right = right.max(x + radius);
-            bottom = bottom.max(y + radius);
-        }
-    }
-    let (w, h) = (right - left, bottom - top);
-    if !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 {
-        return None;
-    }
-    let scale = (f64::from(crate::units::MAX_LEN_PT) / w.max(h)).min(1.0);
-    let point = |[x, y]: [f64; 2]| (((x - left) * scale) as f32, ((y - top) * scale) as f32);
-    let mut items = Vec::with_capacity(strokes.len());
-    for stroke in strokes {
-        let width = (f64::from(stroke.width) * scale) as f32;
-        let item = if let [p] = stroke.points.as_slice() {
-            let (x, y) = point(*p);
-            GraphicItem::Shape {
-                rect: [x - width / 2.0, y - width / 2.0, width, width],
-                kind: ShapeKind::Ellipse,
-                fill: Some(stroke.color),
-                stroke: None,
-                stroke_width: 0.0,
-            }
-        } else {
-            let segs = stroke
-                .points
-                .into_iter()
-                .enumerate()
-                .map(|(i, p)| {
-                    let (x, y) = point(p);
-                    if i == 0 { PathSeg::Move(x, y) } else { PathSeg::Line(x, y) }
-                })
-                .collect();
-            GraphicItem::Path { segs, fill: None, stroke: Some(stroke.color), stroke_width: width }
-        };
-        items.push(item);
-    }
-    Some(Graphic { kind: GraphicKind::Ink, items, w: (w * scale) as f32, h: (h * scale) as f32, ..Default::default() })
 }
 
 #[cfg(test)]
