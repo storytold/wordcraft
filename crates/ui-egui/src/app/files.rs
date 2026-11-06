@@ -81,6 +81,15 @@ impl WordApp {
         self.saves_in_flight.iter().any(|s| s.marked_saved && s.document == document)
     }
 
+    /// Whether the shown document has work that isn't saved yet: changes that aren't written
+    /// to a file, or a save that hasn't come back. The Save Changes prompt appears for a
+    /// command that would replace the document; a programmatic call (control channel, MCP
+    /// bridge), which never prompts, refuses the command instead — so both paths guard the
+    /// same work (#1268, #3274).
+    pub(crate) fn document_unsaved(&self) -> bool {
+        self.document_unsaved_by_id(self.session.document_id())
+    }
+
     /// The document's name as the Save Changes prompt shows it: its file's name, else its title.
     pub(super) fn prompt_name(&self) -> String {
         self.session.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| self.title_stem())
