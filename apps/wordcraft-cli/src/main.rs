@@ -291,6 +291,13 @@ fn automation_roots(
     Ok((roots, left))
 }
 
+/// Print `warning` on stderr, if there is one.
+fn warn(warning: Option<String>) {
+    if let Some(w) = warning {
+        eprintln!("wordcraft-cli: warning: {w}");
+    }
+}
+
 /// The warning for a save or export result's `notShown` (#5393): the embedded objects `output`
 /// shows only as their pictures. `None` when there are none.
 fn not_shown_warning(result: &Value, output: &str) -> Option<String> {
@@ -463,9 +470,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let r = r.map_err(|e| e.to_string())?;
             eprintln!("wrote {o}");
             // Embedded objects the output shows only as their pictures (#5393): never silently.
-            if let Some(w) = not_shown_warning(&r, &o) {
-                eprintln!("wordcraft-cli: warning: {w}");
-            }
+            warn(not_shown_warning(&r, &o));
             Ok(())
         }
         "info" => {
@@ -484,9 +489,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let text = listed_text(&s.doc)?;
             // What is inside an embedded object isn't in the text (#5393): say so on stderr.
             let objects = wordcraft_engine::cmd::embedded_objects::shown_as_pictures(&s.doc);
-            if let Some(w) = wordcraft_engine::cmd::embedded_objects::warning(&objects, "the text") {
-                eprintln!("wordcraft-cli: warning: {w}");
-            }
+            warn(wordcraft_engine::cmd::embedded_objects::warning(&objects, "the text"));
             write_stdout(|o| writeln!(o, "{text}"))
         }
         "inspect" => {
