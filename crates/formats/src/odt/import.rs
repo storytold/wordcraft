@@ -296,6 +296,8 @@ fn add_custom_styles(doc: &mut Document, named: &[super::styles::NamedStyle], od
             }),
             contextual_spacing: look.contextual,
             bidi: look.rtl.filter(|r| *r),
+            // The document's nine levels; ODF's tenth is the last of them.
+            outline_level: def.outline.map(|o| o.clamp(1, 9) - 1),
             ..Default::default()
         };
         let name = super::writer::generating_style(name).map_or_else(|| def.name.clone(), |(_, n)| n);
@@ -395,9 +397,16 @@ fn number_headings(doc: &mut Document, levels: &[super::styles::ListLevel]) {
     numbering.abstracts.push(AbstractNum { id: aid, name: None, levels: out, ..Default::default() });
     let nid = numbering.nums.iter().map(|n| n.id + 1).max().unwrap_or(1).max(1);
     numbering.nums.push(Num { id: nid, abstract_id: aid, ..Default::default() });
+    let styles = Arc::make_mut(&mut doc.styles);
     for (i, on) in numbered.iter().enumerate() {
-        if *on && let Some(st) = Arc::make_mut(&mut doc.styles).get_mut(&format!("Heading{}", i + 1)) {
+        if *on && let Some(st) = styles.get_mut(&format!("Heading{}", i + 1)) {
             st.para.numbering = Some(NumRef { num: nid, level: i as u8 });
+        }
+    }
+    // LibreOffice numbers a custom style at an outline level along with that level's headings.
+    for st in &mut styles.styles {
+        if let Some(l) = st.para.outline_level.filter(|l| numbered.get(usize::from(*l)) == Some(&true)) {
+            st.para.numbering = Some(NumRef { num: nid, level: l });
         }
     }
 }

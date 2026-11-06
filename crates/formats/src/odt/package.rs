@@ -63,20 +63,25 @@ fn kind_styles(doc: &Document) -> String {
         if let Some(c) = pp.contextual_spacing {
             para.push_str(&format!(" style:contextual-spacing=\"{c}\""));
         }
-        // A heading level the outline doesn't number names no list style: LibreOffice would
-        // otherwise give it the outline's (unnumbered) level, and its indent.
-        let numbered = pp
-            .numbering
-            .and_then(|r| doc.numbering.level(r.num, r.level))
-            .is_some_and(|l| !matches!(l.format, wordcraft_doc::section::NumFormat::None | wordcraft_doc::section::NumFormat::Bullet));
-        let detach = if outline.is_some() && !numbered { " style:list-style-name=\"\"" } else { "" };
-        let outline = outline.map(|n| format!(" style:default-outline-level=\"{n}\"{detach}")).unwrap_or_default();
+        let outline = outline.map(|n| outline_attrs(doc, n, &pp)).unwrap_or_default();
         s.push_str(&format!(
             "<style:style style:name=\"{name}\" style:display-name=\"{display}\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:next-style-name=\"Standard\"{outline} style:class=\"{class}\"><style:paragraph-properties{para}/><style:text-properties{}/></style:style>",
             props_text(&cp)
         ));
     }
     s
+}
+
+/// A paragraph style's outline level `n` (`style:default-outline-level`), its properties being `pp`.
+fn outline_attrs(doc: &Document, n: u8, pp: &wordcraft_doc::props::ParaProps) -> String {
+    // A level the outline doesn't number names no list style: LibreOffice would otherwise give
+    // it the outline's (unnumbered) level, and its indent.
+    let numbered = pp
+        .numbering
+        .and_then(|r| doc.numbering.level(r.num, r.level))
+        .is_some_and(|l| !matches!(l.format, wordcraft_doc::section::NumFormat::None | wordcraft_doc::section::NumFormat::Bullet));
+    let detach = if numbered { "" } else { " style:list-style-name=\"\"" };
+    format!(" style:default-outline-level=\"{n}\"{detach}")
 }
 
 /// The ODF parent of document style `id`: Standard for Normal, the kinds' styles for theirs, a
@@ -146,8 +151,9 @@ fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>) -> 
             })
             .unwrap_or_default();
         let parent = odf_parent(doc, st.based_on.as_deref());
+        let outline = pp.outline_level.filter(|l| *l < 9).map(|l| outline_attrs(doc, l + 1, pp)).unwrap_or_default();
         s.push_str(&format!(
-            "<style:style style:name=\"{}\" style:display-name=\"{}\" style:family=\"paragraph\" style:parent-style-name=\"{parent}\"><style:paragraph-properties{attrs}>{tabs}</style:paragraph-properties><style:text-properties{}/></style:style>",
+            "<style:style style:name=\"{}\" style:display-name=\"{}\" style:family=\"paragraph\" style:parent-style-name=\"{parent}\"{outline}><style:paragraph-properties{attrs}>{tabs}</style:paragraph-properties><style:text-properties{}/></style:style>",
             super::writer::odf_name(&id),
             x(&super::writer::generated_style(&id).map_or_else(|| st.name.clone(), |(_, d)| d)),
             props_text(&st.chr)

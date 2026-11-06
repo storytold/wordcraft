@@ -182,6 +182,9 @@ fn para_extra(doc: &Document, p: &wordcraft_doc::props::ParaProps) -> Option<Box
         tabs
     });
     let style = p.style.clone().filter(|id| is_custom_style(doc, id));
+    // Its own, else its custom style's: the kind doesn't say (it stops at Heading 6, and is the
+    // heading style's where the style is based on one).
+    let outline_level = p.outline_level.or_else(|| style.as_ref().and_then(|_| doc.styles.resolve_para(p).outline_level));
     let x = wordcraft_doc::props::ParaProps {
         tabs,
         shading: p.shading,
@@ -191,7 +194,7 @@ fn para_extra(doc: &Document, p: &wordcraft_doc::props::ParaProps) -> Option<Box
         drop_cap: p.drop_cap.filter(|l| *l > 1),
         drop_cap_distance: p.drop_cap_distance.filter(|_| p.drop_cap.is_some_and(|l| l > 1)),
         keep_lines: p.keep_lines.filter(|k| *k),
-        outline_level: p.outline_level,
+        outline_level,
         widow_control: p.widow_control.filter(|w| !*w),
         // Hyphenated (the document hyphenates and the paragraph doesn't opt out): `Some(false)`.
         suppress_hyphens: (doc.settings.auto_hyphenation && p.suppress_hyphens != Some(true)).then_some(false),

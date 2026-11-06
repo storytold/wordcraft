@@ -112,3 +112,147 @@ fn a_heading_looks_as_its_style_and_has_the_level_its_element_gives() {
     let back = import(&saved).unwrap();
     assert_eq!((props(&back, 0).style.as_deref(), props(&back, 0).outline_level), (Some("Heading2"), Some(0)));
 }
+
+/// A document with these common `styles` and this `body`.
+fn in_custom_style(styles: &str, body: &str) -> Document {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:style style:name="Standard" style:family="paragraph"/>{styles}</office:styles></office:document-styles>"#
+    );
+    let content =
+        format!(r#"<office:document-content {NS_T}><office:body><office:text>{body}</office:text></office:body></office:document-content>"#);
+    import(&package(&content, Some(&styles))).unwrap()
+}
+
+const HEAD: &str = r#"<style:style style:name="Head" style:family="paragraph" style:parent-style-name="Standard" style:default-outline-level="1" style:class="text"><style:text-properties fo:font-size="26pt" fo:font-weight="bold"/></style:style>"#;
+
+fn saved_after_an_edit(d: &mut Document) -> Vec<u8> {
+    d.insert_text(&wordcraft_doc::Pos::body(0, 0), "Yearly ", &Default::default()).unwrap();
+    export(d).unwrap()
+}
+
+#[test]
+fn a_custom_style_with_an_outline_level_stays_the_paragraphs_style() {
+    // The outline level is the style's; the look stays the file's own, not Heading 1's.
+    let mut d = in_custom_style(HEAD, r#"<text:p text:style-name="Head">Annual report edition</text:p>"#);
+    let p = d.body[0].as_para().unwrap().props.clone();
+    assert_eq!(p.style.as_deref(), Some("Head"));
+    assert_eq!(d.styles.resolve_para(&p).outline_level, Some(0), "still a heading in WordCraft");
+    let look = d.styles.resolve_char(p.style.as_deref(), &Default::default());
+    assert_eq!((look.size, look.bold), (26.0, true));
+    let r = d.body[0].as_para().unwrap().runs.first().unwrap().props.clone();
+    assert!(r.size.is_none() && r.bold.is_none(), "the look stays in the style: {r:?}");
+
+    // Edited, it is written from the model, under its own name, at its level.
+    let saved = saved_after_an_edit(&mut d);
+    let c = crate::odt::tests::content_of(&saved);
+    assert!(c.contains(r#"<text:h text:style-name="Head" text:outline-level="1">Yearly Annual"#), "{c}");
+    let s = crate::odt::tests::styles_of(&saved);
+    let head = s.split("<style:style ").find(|x| x.starts_with(r#"style:name="Head""#)).unwrap_or("");
+    assert!(head.contains(r#"style:default-outline-level="1""#) && head.contains(r#"fo:font-size="26pt""#), "{head}");
+
+    // And read back, it is the same heading.
+    let back = import(&saved).unwrap();
+    let p = back.body[0].as_para().unwrap().props.clone();
+    assert_eq!((p.style.as_deref(), back.styles.resolve_para(&p).outline_level), (Some("Head"), Some(0)));
+}
+
+#[test]
+fn an_unedited_paragraph_in_such_a_style_is_written_as_read() {
+    let body = r#"<text:p text:style-name="Head">Annual report edition</text:p>"#;
+    let saved = export(&in_custom_style(HEAD, body)).unwrap();
+    assert!(crate::odt::tests::content_of(&saved).contains(body));
+    let s = crate::odt::tests::styles_of(&saved);
+    assert_eq!(s.matches(r#"style:name="Head""#).count(), 1, "{s}");
+    assert!(s.contains(r#"style:default-outline-level="1""#), "{s}");
+}
+
+#[test]
+fn every_level_of_such_a_style_is_written_as_it_is() {
+    // The paragraph kinds stop at Heading 6; the outline levels go on, and a style based on another
+    // heading has its own.
+    let styles = r#"<style:style style:name="Heading_20_2" style:display-name="Heading 2" style:family="paragraph"/><style:style style:name="Deep" style:family="paragraph" style:default-outline-level="8"/><style:style style:name="Under" style:family="paragraph" style:parent-style-name="Heading_20_2" style:default-outline-level="3"/><style:style style:name="Child" style:family="paragraph" style:parent-style-name="Deep"/>"#;
+    let body =
+        r#"<text:p text:style-name="Deep">deep</text:p><text:p text:style-name="Under">under</text:p><text:p text:style-name="Child">child</text:p>"#;
+    let d = in_custom_style(styles, body);
+    let level = |d: &Document, i: usize| d.styles.resolve_para(&d.body[i].as_para().unwrap().props).outline_level;
+    assert_eq!([level(&d, 0), level(&d, 1), level(&d, 2)], [Some(7), Some(2), Some(7)]);
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let c = crate::odt::tests::content_of(&saved);
+    assert!(c.contains(r#"<text:h text:style-name="Deep" text:outline-level="8">deep"#), "{c}");
+    assert!(c.contains(r#"<text:h text:style-name="Under" text:outline-level="3">under"#), "{c}");
+    assert!(c.contains(r#"<text:h text:style-name="Child" text:outline-level="8">child"#), "{c}");
+    let back = import(&saved).unwrap();
+    assert_eq!([level(&back, 0), level(&back, 1), level(&back, 2)], [Some(7), Some(2), Some(7)]);
+}
+
+#[test]
+fn a_paragraphs_own_level_and_formatting_stay_over_such_a_style() {
+    let styles = format!(r#"<office:document-styles {NS_T}><office:styles>{HEAD}</office:styles></office:document-styles>"#);
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:parent-style-name="Head"><style:paragraph-properties fo:text-align="center"/></style:style></office:automatic-styles><office:body><office:text><text:h text:style-name="P1" text:outline-level="2">Moved</text:h></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let p = d.body[0].as_para().unwrap().props.clone();
+    assert_eq!((p.style.as_deref(), p.outline_level, p.align), (Some("Head"), Some(1), Some(wordcraft_doc::Align::Center)));
+    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    assert!(c.contains(r#"text:outline-level="2">Moved"#), "{c}");
+    assert!(c.contains(r#"style:parent-style-name="Head""#) && c.contains(r#"fo:text-align="center""#), "{c}");
+}
+
+#[test]
+fn a_hostile_outline_level_on_a_custom_style_is_no_heading() {
+    for bad in ["0", "11", "255", "999", "-1", "x", ""] {
+        let styles = format!(r#"<style:style style:name="Head" style:family="paragraph" style:default-outline-level="{bad}"/>"#);
+        let d = in_custom_style(&styles, r#"<text:p text:style-name="Head">Plain</text:p>"#);
+        let p = d.body[0].as_para().unwrap().props.clone();
+        assert_eq!((p.style.as_deref(), d.styles.resolve_para(&p).outline_level), (Some("Head"), None), "{bad}");
+        let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+        assert!(c.contains(r#"<text:p text:style-name="Head">Plain"#), "{bad}: {c}");
+    }
+}
+
+#[test]
+fn such_a_style_is_numbered_with_its_level() {
+    // LibreOffice numbers it through the outline style, one list with the level's headings.
+    let d = in_custom_style(
+        &format!(
+            r#"{HEAD}<style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:default-outline-level="1"/>{NUMBERED}"#
+        ),
+        r#"<text:p text:style-name="Head">First</text:p><text:h text:style-name="Heading_20_1" text:outline-level="1">Second</text:h>"#,
+    );
+    let num = |d: &Document, i: usize| d.styles.resolve_para(&d.body[i].as_para().unwrap().props).numbering;
+    assert!(num(&d, 0).is_some());
+    assert_eq!(num(&d, 0), num(&d, 1));
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let c = crate::odt::tests::content_of(&saved);
+    assert!(!c.contains("<text:list"), "the outline numbers it: {c}");
+    assert!(c.contains(r#"<text:h text:style-name="Head" text:outline-level="1">First"#), "{c}");
+    // A numbered level stays attached to the outline; an unnumbered one doesn't take its indent.
+    let head = |xml: String| xml.split("<style:style ").find(|x| x.starts_with(r#"style:name="Head""#)).map(String::from).unwrap_or_default();
+    assert!(!head(crate::odt::tests::styles_of(&saved)).contains("style:list-style-name"));
+    let back = import(&saved).unwrap();
+    assert!(num(&back, 0).is_some());
+    assert_eq!(num(&back, 0), num(&back, 1));
+    let plain = in_custom_style(HEAD, r#"<text:p text:style-name="Head">First</text:p>"#);
+    let s = crate::odt::tests::styles_of(&crate::odt::tests::export_model(&plain).unwrap());
+    assert!(head(s).contains(r#"style:list-style-name="""#));
+}
+
+#[test]
+fn custom_styles_based_on_any_kinds_style_keep_their_name_when_edited() {
+    // The kind's style took their place, without their own look.
+    let styles = r##"<style:style style:name="Title" style:family="paragraph"/><style:style style:name="Quotations" style:family="paragraph"/><style:style style:name="Preformatted_20_Text" style:display-name="Preformatted Text" style:family="paragraph"/><style:style style:name="Heading_20_2" style:display-name="Heading 2" style:family="paragraph"/><style:style style:name="Banner" style:family="paragraph" style:parent-style-name="Title"><style:text-properties fo:color="#cc6600"/></style:style><style:style style:name="Aside" style:family="paragraph" style:parent-style-name="Quotations"/><style:style style:name="Listing" style:family="paragraph" style:parent-style-name="Preformatted_20_Text"/><style:style style:name="Plaque" style:family="paragraph" style:parent-style-name="Heading_20_2"/>"##;
+    let body = r#"<text:p text:style-name="Banner">b</text:p><text:p text:style-name="Aside">a</text:p><text:p text:style-name="Listing">l</text:p><text:p text:style-name="Plaque">p</text:p>"#;
+    let saved = crate::odt::tests::export_model(&in_custom_style(styles, body)).unwrap();
+    let c = crate::odt::tests::content_of(&saved);
+    for want in [
+        r#"<text:p text:style-name="Banner">b"#,
+        r#"<text:p text:style-name="Aside">a"#,
+        r#"<text:p text:style-name="Listing">l"#,
+        r#"<text:h text:style-name="Plaque" text:outline-level="2">p"#,
+    ] {
+        assert!(c.contains(want), "{want} in {c}");
+    }
+    let s = crate::odt::tests::styles_of(&saved);
+    assert!(s.contains(r#"style:name="Banner" style:display-name="Banner" style:family="paragraph" style:parent-style-name="Title""#), "{s}");
+}
