@@ -29,6 +29,15 @@ pub(crate) fn metadata(doc: &Document, opts: &PdfOptions) -> Metadata {
     m
 }
 
+/// Whether `s` is a date this writer can put in a PDF.
+///
+/// A caller that pins the creation date has to ask the question this writer will ask, because a
+/// value it cannot read falls back to the clock below and the export stops being reproducible
+/// (noted in review).
+pub fn reads_as_date(s: &str) -> bool {
+    parse_iso(s).is_some()
+}
+
 type Civil = (i64, u8, u8, u8, u8, u8);
 
 /// `YYYY-MM-DD[THH:MM[:SS]]…` → civil time.

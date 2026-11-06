@@ -240,7 +240,7 @@ impl Session {
             links,
             ..Default::default()
         };
-        let bytes = wordcraft_pdf::export_layout(doc, &lay, &opts).map_err(|e| CmdError::Failed(e.to_string()))?;
+        let bytes = wordcraft_pdf::export_layout(&crate::io_ext::pdf_document(doc), &lay, &opts).map_err(|e| CmdError::Failed(e.to_string()))?;
         Ok((bytes, plan))
     }
 }

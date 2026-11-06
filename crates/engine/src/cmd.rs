@@ -543,10 +543,64 @@ pub fn now_unix() -> u64 {
     }
 }
 
-/// ISO-8601 timestamp (UTC, seconds).
+/// ISO-8601 timestamp (UTC, seconds): the clock, for an event that happened now -- a comment, a
+/// tracked change, a version. Not for what a saved or exported file records: see [`saved_iso`].
 pub fn now_iso() -> String {
     iso_from_unix_secs(now_unix())
 }
+
+/// The timestamp a saved or exported file records (its created and modified properties):
+/// `SOURCE_DATE_EPOCH` when it holds a non-negative whole number of seconds, else the clock. With
+/// it set, separate conversions of unchanged input can produce the same bytes. Repeated saves
+/// of one session still advance the document revision
+/// (<https://reproducible-builds.org/specs/source-date-epoch/>).
+///
+/// The clock stays in [`now_iso`]: an editing event's time is not the file's, and pinning it would
+/// misdate comments and tracked changes.
+///
+/// A value that is set but not one of those is ignored with a warning, so a build that meant to
+/// pin its dates hears that it did not.
+pub fn saved_iso() -> String {
+    let raw = std::env::var("SOURCE_DATE_EPOCH").ok();
+    if let Some(problem) = epoch_problem(raw.as_deref()) {
+        log::warn!("{problem}");
+    }
+    iso_from_unix_secs(pinned_or(|_| raw.clone(), now_unix))
+}
+
+/// Why `SOURCE_DATE_EPOCH` is set and still not used, for a caller with no logger to say so (the
+/// command line). `None` when it is unset, empty, or a value [`saved_iso`] takes.
+pub fn source_date_epoch_problem() -> Option<String> {
+    epoch_problem(std::env::var("SOURCE_DATE_EPOCH").ok().as_deref())
+}
+
+/// An empty value counts as unset, as a CI file's `SOURCE_DATE_EPOCH=` with nothing after it
+/// means; anything else that does not pin a date is worth a warning.
+fn epoch_problem(value: Option<&str>) -> Option<String> {
+    let v = value?;
+    if v.trim().is_empty() || pinned(v).is_some() {
+        return None;
+    }
+    Some(format!(
+        "SOURCE_DATE_EPOCH={v:?} is not a whole number of seconds from 1970 to 9999-12-31, so saved and exported files take the clock's date"
+    ))
+}
+
+/// The seconds a `SOURCE_DATE_EPOCH` value pins, if it pins any.
+fn pinned(v: &str) -> Option<u64> {
+    v.trim().parse::<u64>().ok().filter(|secs| *secs <= LAST_DATE)
+}
+
+/// [`saved_iso`]'s choice, with the environment and the clock given so a test can show which wins.
+pub(crate) fn pinned_or(get: impl Fn(&str) -> Option<String>, clock: impl Fn() -> u64) -> u64 {
+    get("SOURCE_DATE_EPOCH").as_deref().and_then(pinned).unwrap_or_else(clock)
+}
+
+/// The last date a document can record, as Unix seconds: 9999-12-31T23:59:59Z. A year runs to
+/// four digits in `xsd:dateTime`, which is what a .docx core property holds, so a value past this
+/// would be written as something no reader accepts -- `292277026596-12-04T15:30:07Z` for
+/// `i64::MAX`. Such a value is left to the clock, as a malformed one is.
+const LAST_DATE: u64 = 253_402_300_799;
 
 /// The local time zone's offset from UTC in seconds (east positive) at `unix`, daylight saving
 /// included: the system's zone, or the browser's on the web. 0 (UTC) when it can't be found.
@@ -682,5 +736,58 @@ mod iso_tests {
         assert_eq!(civil_from_days(-99_000_000), (-269_083, 3, 17));
         // The extremes must not overflow or panic (i128 intermediates).
         let _ = (civil_from_days(i64::MAX), civil_from_days(i64::MIN));
+    }
+}
+
+#[cfg(test)]
+mod saved_time_tests {
+    use super::{epoch_problem, iso_from_unix_secs, pinned_or};
+
+    /// What a saved or exported file records: `SOURCE_DATE_EPOCH` when it holds a non-negative
+    /// whole number of seconds, the clock whenever it does not. The environment and the clock are
+    /// given here rather than set, so no test changes this process's environment -- that is
+    /// `unsafe` under edition 2024 and would reach every test beside it.
+    #[test]
+    fn a_pinned_epoch_is_preferred_and_the_clock_answers_otherwise() {
+        let env = |v: Option<&'static str>| move |_: &str| v.map(str::to_owned);
+        let clock = || 1_000_000;
+        assert_eq!(pinned_or(env(Some("1791208980")), clock), 1_791_208_980, "the variable wins");
+        assert_eq!(pinned_or(env(Some("0")), clock), 0, "the epoch itself counts");
+        assert_eq!(pinned_or(env(Some("  1791208980  ")), clock), 1_791_208_980, "spaces around it are allowed");
+        // The last date a document can write is honoured; past it the year would not fit
+        // `xsd:dateTime` and the clock answers instead.
+        assert_eq!(pinned_or(env(Some("253402300799")), clock), 253_402_300_799);
+        assert_eq!(iso_from_unix_secs(253_402_300_799), "9999-12-31T23:59:59Z");
+        for ignored in [
+            None,
+            Some(""),
+            Some("   "),
+            Some("-1"),
+            Some("later"),
+            Some("1791208980.5"),
+            Some("99999999999999999999"),
+            Some("253402300800"),
+            Some("9223372036854775807"),
+        ] {
+            assert_eq!(pinned_or(env(ignored), clock), 1_000_000, "{ignored:?} leaves it to the clock");
+        }
+        // Only that variable is read.
+        assert_eq!(pinned_or(|name: &str| (name == "TZ").then(|| "1791208980".to_owned()), clock), 1_000_000);
+        // And it reaches the stamp as that instant, not as something near it.
+        assert_eq!(iso_from_unix_secs(pinned_or(env(Some("1791208980")), clock)), "2026-10-05T14:03:00Z");
+    }
+
+    /// A value that is set and still ignored is reported, so a build that meant to pin its dates
+    /// hears that it did not (noted in review). Unset and empty say nothing: an empty value is
+    /// how a CI file leaves the variable off.
+    #[test]
+    fn a_set_but_unusable_epoch_is_reported_and_nothing_else_is() {
+        for quiet in [None, Some(""), Some("   "), Some("0"), Some("1791208980"), Some(" 1791208980 "), Some("253402300799")] {
+            assert_eq!(epoch_problem(quiet), None, "{quiet:?}");
+        }
+        for loud in ["later", "-1", "1791208980.5", "1e9", "253402300800", "99999999999999999999"] {
+            let problem = epoch_problem(Some(loud)).unwrap_or_else(|| panic!("{loud:?} should be reported"));
+            assert!(problem.contains(&format!("{loud:?}")) && problem.contains("clock"), "{problem}");
+        }
     }
 }
