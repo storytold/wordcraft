@@ -10,7 +10,7 @@ use crate::{
     Placed, SectionProps, SectionStart, StoryRef, display, layout, para, work,
 };
 use wordcraft_doc::para::Run;
-use wordcraft_doc::props::Rgb;
+use wordcraft_doc::props::{Align, Rgb};
 use wordcraft_doc::{Pos, Table};
 
 fn lay(d: &Document, opts: &LayoutOptions) -> DocLayout {
@@ -37,6 +37,19 @@ fn assert_layout_linear(what: &str, n: usize, doc: impl Fn(usize) -> Document, o
     assert_linear_steps(what, n, doc, |d| drop(std::hint::black_box(lay(d, opts))));
 }
 
+/// A Thai paragraph with a long interior run of spaces followed by enough text to wrap.
+fn thai_justification_space_run(n: usize) -> Document {
+    let text = format!("ก{}{}", " ".repeat(n), "ก".repeat(800));
+    let mut d = Document::from_text(&text);
+    let at = Pos::body(0, 0);
+    d.format_paragraphs(&at, &at, &|p| {
+        p.align = Some(Align::Justify);
+        p.indent_right = Some(468.0 - 4_000.0);
+    })
+    .expect("Thai paragraph formatting succeeds");
+    d
+}
+
 /// The first laid-out body paragraph on page 0.
 fn first_para(l: &DocLayout) -> Option<&ParaLayout> {
     l.pages.first()?.items.iter().find_map(|it| match it {
@@ -61,6 +74,12 @@ fn proof_text_walks_the_runs_once() {
     // regression (#5185). Going back to the first run for every character counts the runs once
     // per character, which is the quadratic walk this watches for.
     assert_linear_steps("proof_text", 50_000, para, |p| drop(std::hint::black_box(para::proof_text(p))));
+}
+
+/// Thai justification visits a long space run linearly instead of resolving each space's neighbors.
+#[test]
+fn thai_justification_walks_space_runs_linearly() {
+    assert_layout_linear("Thai justification space runs", 64, thai_justification_space_run, &LayoutOptions::default());
 }
 
 /// A right-to-left paragraph whose one line holds `n` hidden letters: caret offsets with no width.

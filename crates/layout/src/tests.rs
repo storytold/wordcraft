@@ -5756,6 +5756,7 @@ fn justified_lines(text: &str, compat_mode: u32, align: Align) -> (usize, Vec<f3
     (lines_of(&l), ends)
 }
 
+/// Builds a Thai justification fixture with explicit word-wrap settings.
 fn thai_justification_layout_with_wrap(text: &str, align: Align, width: f32, size: f32, word_wrap: bool) -> (Document, DocLayout) {
     let mut d = Document::from_text(text);
     d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
@@ -5769,10 +5770,12 @@ fn thai_justification_layout_with_wrap(text: &str, align: Align, width: f32, siz
     (d, l)
 }
 
+/// Builds a Thai justification fixture using the default word-wrap setting.
 fn thai_justification_layout(text: &str, align: Align, width: f32, size: f32) -> (Document, DocLayout) {
     thai_justification_layout_with_wrap(text, align, width, size, false)
 }
 
+/// Returns the first laid-out body paragraph and its page-relative horizontal origin.
 fn body_para_and_x(l: &DocLayout) -> Option<(&ParaLayout, f32)> {
     l.pages.iter().flat_map(|p| &p.items).find_map(|it| match it {
         Placed::Lines { para, story: StoryRef::Body, path, x, .. } if path.0 == [0] => Some((para.as_ref(), *x)),
@@ -5780,6 +5783,7 @@ fn body_para_and_x(l: &DocLayout) -> Option<(&ParaLayout, f32)> {
     })
 }
 
+/// Measures the extra horizontal room assigned after cluster `k` on `line`.
 fn added_after(para: &ParaLayout, line: &Line, k: usize) -> f32 {
     line.cl_left(k).zip(line.cl_right(k)).map_or(0.0, |(a, b)| b - a) - para.clusters.get(k).map_or(0.0, |c| c.adv)
 }

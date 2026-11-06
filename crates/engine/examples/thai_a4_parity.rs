@@ -100,6 +100,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Builds the synthetic A4 Thai alignment document for an installed font.
 fn make_document(family: &str, size: f32) -> Result<Document, Box<dyn Error>> {
     let mut doc = Document::from_text(ISSUE_TEXT);
     // DOCX page size is stored in twentieths of a point; these are the exact round-tripped
@@ -123,6 +124,7 @@ fn make_document(family: &str, size: f32) -> Result<Document, Box<dyn Error>> {
     Ok(doc)
 }
 
+/// Checks that a DOCX round trip preserves the text, A4 setup, alignment, and font settings.
 fn verify_document(doc: &Document, family: &str, size: f32) -> Result<(), Box<dyn Error>> {
     if doc.plain_text(StoryRef::Body) != ISSUE_TEXT {
         return Err(io_error(format!("{family}: DOCX round trip changed the source text")).into());
@@ -146,6 +148,7 @@ fn verify_document(doc: &Document, family: &str, size: f32) -> Result<(), Box<dy
     Ok(())
 }
 
+/// Checks that Thai glyphs use the requested installed face and valid glyph IDs.
 fn verify_used_faces(doc: &Document, layout: &DocLayout, family: &str) -> Result<(), Box<dyn Error>> {
     let paragraph = body_para(layout)?;
     let source = doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).ok_or_else(|| io_error("paragraph 0 is missing"))?;
@@ -175,6 +178,7 @@ fn verify_used_faces(doc: &Document, layout: &DocLayout, family: &str) -> Result
     Ok(())
 }
 
+/// Finds body paragraph zero in the paginated layout.
 fn body_para(layout: &DocLayout) -> Result<&wordcraft_layout::ParaLayout, Box<dyn Error>> {
     layout
         .pages
@@ -187,12 +191,14 @@ fn body_para(layout: &DocLayout) -> Result<&wordcraft_layout::ParaLayout, Box<dy
         .ok_or_else(|| io_error("body paragraph 0 is absent from layout").into())
 }
 
+/// Returns the first line's source text from the laid-out body paragraph.
 fn first_line<'a>(doc: &'a Document, layout: &DocLayout) -> Result<&'a str, Box<dyn Error>> {
     let paragraph = doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).ok_or_else(|| io_error("paragraph 0 is missing"))?;
     let line = body_para(layout)?.lines.first().ok_or_else(|| io_error("paragraph has no first line"))?;
     paragraph.text.get(line.start..line.stop).ok_or_else(|| io_error("first line has invalid source offsets").into())
 }
 
+/// Checks that DOCX reopening preserves page, line, and glyph-position geometry.
 fn compare_layouts(a: &DocLayout, b: &DocLayout) -> Result<(), Box<dyn Error>> {
     if a.pages.len() != b.pages.len() {
         return Err(io_error(format!("DOCX reopen changed page count: {} vs {}", a.pages.len(), b.pages.len())).into());
@@ -221,6 +227,7 @@ fn compare_layouts(a: &DocLayout, b: &DocLayout) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Reads `word/document.xml` from a DOCX package.
 fn document_xml(bytes: &[u8]) -> Result<String, Box<dyn Error>> {
     let mut package = zip::ZipArchive::new(Cursor::new(bytes))?;
     let mut part = package.by_name("word/document.xml")?;
@@ -229,10 +236,12 @@ fn document_xml(bytes: &[u8]) -> Result<String, Box<dyn Error>> {
     Ok(xml)
 }
 
+/// Converts a font family name to a filename-safe lowercase stem.
 fn slug(family: &str) -> String {
     family.to_ascii_lowercase().replace(' ', "-")
 }
 
+/// Creates an `Other` I/O error for a failed parity assertion.
 fn io_error(message: impl Into<String>) -> std::io::Error {
     std::io::Error::other(message.into())
 }

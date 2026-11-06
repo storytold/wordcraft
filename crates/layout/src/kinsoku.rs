@@ -18,22 +18,27 @@
 
 use unicode_segmentation::UnicodeSegmentation;
 
+/// Returns whether `c` belongs to the Thai Unicode block.
 fn is_thai(c: char) -> bool {
     matches!(u32::from(c), 0x0E00..=0x0E7F)
 }
 
+/// Returns whether `c` is a Thai preposed vowel encoded before its consonant.
 fn is_thai_prefix_vowel(c: char) -> bool {
     matches!(u32::from(c), 0x0E40..=0x0E44)
 }
 
+/// Returns whether `c` is a Thai consonant that may follow a preposed vowel.
 fn is_thai_consonant(c: char) -> bool {
     matches!(u32::from(c), 0x0E01..=0x0E2E)
 }
 
+/// Returns whether `c` is a Thai letter or vowel used to detect Thai paragraph text.
 pub(crate) fn is_thai_text_char(c: char) -> bool {
     is_thai(c) && !matches!(c, '\u{0E2F}' | '\u{0E3F}' | '\u{0E46}' | '\u{0E4F}' | '\u{0E5A}' | '\u{0E5B}')
 }
 
+/// Returns the byte ranges of contiguous Thai text characters in `text`.
 pub(crate) fn thai_text_runs(text: &str) -> Vec<std::ops::Range<usize>> {
     let mut runs = Vec::new();
     let mut start = None;

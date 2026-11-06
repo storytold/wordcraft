@@ -68,6 +68,7 @@ fn distribute(s: &mut Session) -> CmdResult {
     sel_result(s)
 }
 
+/// Returns whether paragraph text contains a Thai letter or vowel.
 fn paragraph_has_thai_letter(text: &str) -> bool {
     text.chars().any(|c| matches!(c, '\u{0E01}'..='\u{0E2E}' | '\u{0E30}' | '\u{0E32}'..='\u{0E33}' | '\u{0E40}'..='\u{0E45}'))
 }

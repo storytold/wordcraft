@@ -217,41 +217,15 @@ fn line_thai_groups(indices: &[usize], c0: usize, c1: usize, align_from: usize) 
     indices.get(start..end).unwrap_or(&[])
 }
 
-/// Finds the nearest displayed text clusters on either side of a space.
-fn space_text_neighbors(pl: &ParaLayout, p: &Paragraph, k: usize, c0: usize, c1: usize) -> Option<(usize, usize)> {
-    if pl.clusters.get(k)?.kind != ClKind::Space {
+/// Finds the displayed text clusters bounding one contiguous run of spaces and markers.
+fn space_run_text_neighbors(pl: &ParaLayout, p: &Paragraph, run_start: usize, run_end: usize, c0: usize, c1: usize) -> Option<(usize, usize)> {
+    let left = run_start.checked_sub(1)?;
+    let right = run_end;
+    if left < c0 || right >= c1 {
         return None;
     }
-    let mut left = k;
-    let left_text = loop {
-        left = left.checked_sub(1)?;
-        if left < c0 {
-            return None;
-        }
-        let c = pl.clusters.get(left)?;
-        if c.kind == ClKind::Space {
-            continue;
-        }
-        if c.kind == ClKind::Marker {
-            continue;
-        }
-        break text_cluster_source(pl, p, left)?;
-    };
-    let mut right = k;
-    let right_text = loop {
-        right += 1;
-        if right >= c1 {
-            return None;
-        }
-        let c = pl.clusters.get(right)?;
-        if c.kind == ClKind::Space {
-            continue;
-        }
-        if c.kind == ClKind::Marker {
-            continue;
-        }
-        break text_cluster_source(pl, p, right)?;
-    };
+    let left_text = text_cluster_source(pl, p, left)?;
+    let right_text = text_cluster_source(pl, p, right)?;
     (!left_text.is_empty() && !right_text.is_empty()).then_some((left, right))
 }
 
@@ -269,20 +243,32 @@ fn apply_thai_justification(
     thai_justify_after: &[usize],
 ) {
     let mut increments = vec![0.0f32; c1.saturating_sub(c0)];
-    let space_indices: Vec<usize> = (align_from..c1)
-        .filter(|k| {
-            pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Space)
-                && xs.get(k - c0).copied().unwrap_or(f32::MAX) < content_end - 0.01
-                && space_text_neighbors(pl, p, *k, c0, c1).is_some()
-        })
-        .collect();
-    let space_caps: Vec<f32> = space_indices
-        .iter()
-        .map(|k| {
-            let (left, right) = space_text_neighbors(pl, p, *k, c0, c1).unwrap_or((*k, *k));
-            THAI_JUSTIFY_SPACE_MAX_EM * style_size(pl, left).min(style_size(pl, right))
-        })
-        .collect();
+    let mut space_indices = Vec::new();
+    let mut space_caps = Vec::new();
+    let mut run_start = c0;
+    while run_start < c1 {
+        crate::work::steps(1);
+        let transparent = pl.clusters.get(run_start).is_some_and(|c| matches!(c.kind, ClKind::Space | ClKind::Marker));
+        if !transparent {
+            run_start += 1;
+            continue;
+        }
+        let mut run_end = run_start;
+        while run_end < c1 && pl.clusters.get(run_end).is_some_and(|c| matches!(c.kind, ClKind::Space | ClKind::Marker)) {
+            crate::work::steps(1);
+            run_end += 1;
+        }
+        if let Some((left, right)) = space_run_text_neighbors(pl, p, run_start, run_end, c0, c1) {
+            for k in run_start.max(align_from)..run_end {
+                crate::work::steps(1);
+                if pl.clusters.get(k).is_some_and(|c| c.kind == ClKind::Space) && xs.get(k - c0).copied().unwrap_or(f32::MAX) < content_end - 0.01 {
+                    space_indices.push(k);
+                    space_caps.push(THAI_JUSTIFY_SPACE_MAX_EM * style_size(pl, left).min(style_size(pl, right)));
+                }
+            }
+        }
+        run_start = run_end;
+    }
     let space_added = capped_equal_spacing(slack, &space_caps);
     let mut remaining = slack.max(0.0);
     for (k, add) in space_indices.iter().zip(space_added) {
