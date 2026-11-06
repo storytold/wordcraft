@@ -3,6 +3,12 @@ use super::{
     Revision, RevisionKind, Rgb, StoryCtx, VBA_PROJECT_PART, VBA_RELATED, props, shape_style,
 };
 
+/// A font table entry for an East Asian font: `w:charset` 80, 81, 86 or 88 (Shift JIS, Hangul,
+/// GB2312, Big5).
+fn is_east_asian_font(f: &El) -> bool {
+    matches!(f.child("w:charset").and_then(|v| v.attr("w:val")), Some("80" | "81" | "86" | "88"))
+}
+
 impl Reader<'_> {
     /// Keep the parts the VBA project at `project` relates to, with their relationship types and
     /// content types (see [`VBA_RELATED`]). Parts outside `word/`, relationship parts, the project
@@ -55,15 +61,18 @@ impl Reader<'_> {
         let fonts =
             || table.children("w:font").filter_map(|f| f.attr("w:name").map(|n| (f, n))).filter(|(_, n)| !n.is_empty() && n.len() <= MAX_FONT_NAME);
         // Each list has its own limit, so fonts of one kind never crowd out the other.
-        let family = |class: &str| -> Vec<String> {
+        let family = |class: &str, skip: fn(&El) -> bool| -> Vec<String> {
             fonts()
-                .filter(|(f, _)| f.child("w:family").and_then(|v| v.attr("w:val")) == Some(class))
+                .filter(|(f, _)| f.child("w:family").and_then(|v| v.attr("w:val")) == Some(class) && !skip(f))
                 .take(MAX_TABLE_FONTS)
                 .map(|(_, n)| n.to_string())
                 .collect()
         };
-        self.doc.settings.roman_fonts = family("roman");
-        self.doc.settings.modern_fonts = family("modern");
+        self.doc.settings.roman_fonts = family("roman", |_| false);
+        // Word's font tables class MS Gothic, SimHei, KaiTi and FangSong as modern too, usually
+        // with an alternate in their own script that isn't installed either: their Latin text
+        // keeps the substitutes, not a serif face (#2711 review).
+        self.doc.settings.modern_fonts = family("modern", is_east_asian_font);
         self.doc.settings.font_alt_names = fonts()
             .filter_map(|(f, n)| {
                 let alt = f.child("w:altName").and_then(|v| v.attr("w:val"))?.trim();

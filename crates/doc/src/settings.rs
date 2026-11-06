@@ -127,7 +127,8 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub roman_fonts: Vec<String>,
     /// Fonts the font table classes as modern (fixed pitch, `w:family w:val="modern"`): Word draws
-    /// one that isn't installed, and whose alternate isn't either, in a serif face (#2702).
+    /// one that isn't installed, and whose alternate isn't either, in a serif face (#2702). Not
+    /// the East Asian ones (`w:charset` 80, 81, 86, 88: MS Gothic, SimHei…).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub modern_fonts: Vec<String>,
     /// Alternate names the document's font table gives its fonts (`w:font/w:altName`), as (font,
