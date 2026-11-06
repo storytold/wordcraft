@@ -8,10 +8,10 @@ use std::sync::Arc;
 
 use wordcraft_doc::picfx::PicFx;
 use wordcraft_doc::watermark::{MAX_SCALE, MIN_SCALE, own_size};
-use wordcraft_doc::{Watermark, WatermarkPicture};
+use wordcraft_doc::{SectionProps, Watermark, WatermarkPicture};
 
 use super::Reader;
-use super::props::sectpr;
+use super::props::{HfRef, sectpr};
 use super::story::{StoryCtx, children_of_choice, vml_style, vml_watermark};
 use crate::package::Rels;
 use crate::units::{measure, vml_number};
@@ -134,102 +134,144 @@ pub(super) fn plan(r: &Reader, body: &El, rels: &Rels) -> Plan {
     if sects.len() > MAX_SECTIONS {
         return Plan::default();
     }
+    let parts = collect_parts(r, rels, &sects);
+    if !parts_viable(r, &parts) || !footers_clean(r, &parts.footers) {
+        return Plan::default();
+    }
+    let Some(found) = read_headers(r, &parts.headers) else { return Plan::default() };
+    let Some((scale, washout)) = agreed(&parts.shown, &found) else { return Plan::default() };
+    Plan { headers: found.into_iter().filter(|(_, w)| w.is_some()).map(|(p, _)| p.to_string()).collect(), scale, washout }
+}
+
+/// The header and footer parts the sections name, and the header each page kind shows.
+#[derive(Default)]
+struct Parts {
+    /// Each header part, with the room Auto fills in the first section naming it
+    /// (`Document::watermark_fit`).
+    headers: HashMap<String, (f32, f32)>,
+    footers: HashSet<String>,
+    /// The header part (None: linked to none) of every page kind each section ending shows.
+    shown: Vec<Option<String>>,
+}
+
+/// Walks the sections in order, collecting the header and footer parts they name and the headers
+/// the pages show (each kind linked to the section before when a section has none).
+fn collect_parts(r: &Reader, rels: &Rels, sects: &[(&El, bool)]) -> Parts {
     let even = r.doc.settings.even_odd_headers;
+    let mut parts = Parts::default();
     let mut linked: [Option<String>; 3] = Default::default();
-    let mut shown: Vec<Option<String>> = Vec::new();
-    // Each header part, with the room Auto fills in the first section naming it
-    // (`Document::watermark_fit`).
-    let mut headers: HashMap<String, (f32, f32)> = HashMap::new();
-    let mut footers: HashSet<String> = HashSet::new();
-    for (s, top) in &sects {
+    for (s, top) in sects {
         let (sp, refs) = sectpr(&r.pc, s);
         for h in &refs {
-            let Some(rel) = rels.by_id(&h.rid).filter(|x| !x.external) else { continue };
-            if h.footer {
-                footers.insert(rel.target.clone());
-                continue;
-            }
-            headers.entry(rel.target.clone()).or_insert_with(|| (sp.text_width(), sp.text_height()));
-            if *top {
-                let slot = match h.kind.as_str() {
-                    "first" => 1,
-                    "even" => 2,
-                    _ => 0,
-                };
-                if let Some(l) = linked.get_mut(slot) {
-                    *l = Some(rel.target.clone());
-                }
-            }
+            note_ref(&mut parts, &mut linked, h, rels, &sp, *top);
         }
         if !*top {
             continue;
         }
         let [default, first, even_page] = &linked;
-        shown.push(default.clone());
+        parts.shown.push(default.clone());
         if sp.title_page {
-            shown.push(first.clone());
+            parts.shown.push(first.clone());
         }
         if even {
-            shown.push(even_page.clone());
+            parts.shown.push(even_page.clone());
         }
     }
+    parts
+}
+
+/// Records header or footer reference `h` of a section with properties `sp`: the part it names,
+/// and, in a section that ends one of the document's, the header kind it now links.
+fn note_ref(parts: &mut Parts, linked: &mut [Option<String>; 3], h: &HfRef, rels: &Rels, sp: &SectionProps, top: bool) {
+    let Some(rel) = rels.by_id(&h.rid).filter(|x| !x.external) else { return };
+    if h.footer {
+        parts.footers.insert(rel.target.clone());
+        return;
+    }
+    parts.headers.entry(rel.target.clone()).or_insert_with(|| (sp.text_width(), sp.text_height()));
+    if !top {
+        return;
+    }
+    let slot = match h.kind.as_str() {
+        "first" => 1,
+        "even" => 2,
+        _ => 0,
+    };
+    if let Some(l) = linked.get_mut(slot) {
+        *l = Some(rel.target.clone());
+    }
+}
+
+/// Whether `parts` can hold the document's watermark: not too many, every page shows a header
+/// and one of the headers is Word's.
+fn parts_viable(r: &Reader, parts: &Parts) -> bool {
     let has_word_id = |path: &str| r.pkg.get(path).is_some_and(|b| b.windows(WORD_ID.len()).any(|w| w == WORD_ID.as_bytes()));
-    if headers.len() > MAX_PARTS
-        || footers.len() > MAX_PARTS
-        || shown.is_empty()
-        || shown.iter().any(Option::is_none)
-        || !headers.keys().any(|p| has_word_id(p))
-    {
-        return Plan::default();
-    }
-    // A footer's text watermark is the document's watermark, and a footer's picture watermark
-    // stays where it is: either way the headers' pictures stay too.
-    for path in &footers {
-        let Ok(Some(root)) = r.pkg.xml(path) else { continue };
+    parts.headers.len() <= MAX_PARTS
+        && parts.footers.len() <= MAX_PARTS
+        && !parts.shown.is_empty()
+        && parts.shown.iter().all(Option::is_some)
+        && parts.headers.keys().any(|p| has_word_id(p))
+}
+
+/// Whether no footer holds a watermark: a footer's text watermark is the document's watermark,
+/// and a footer's picture watermark stays where it is, so either way the headers' pictures stay.
+fn footers_clean(r: &Reader, footers: &HashSet<String>) -> bool {
+    footers.iter().all(|path| {
+        let Ok(Some(root)) = r.pkg.xml(path) else { return true };
         let mut shapes = Vec::new();
-        if !word_shapes(&root, 0, "", false, false, &mut shapes) || !shapes.is_empty() {
-            return Plan::default();
-        }
-    }
-    let mut found: HashMap<&str, Option<Seen>> = HashMap::new();
-    for (path, fit) in &headers {
-        let Ok(Some(root)) = r.pkg.xml(path) else { return Plan::default() };
+        word_shapes(&root, 0, "", false, false, &mut shapes) && shapes.is_empty()
+    })
+}
+
+/// What each header part's Word picture watermark shows (None: it has none). None when a part
+/// can't be read, has a text watermark or several pictures, or its picture isn't placed as Word
+/// places it.
+fn read_headers<'a>(r: &Reader, headers: &'a HashMap<String, (f32, f32)>) -> Option<HashMap<&'a str, Option<Seen>>> {
+    let mut found = HashMap::new();
+    for (path, fit) in headers {
+        let root = r.pkg.xml(path).ok()??;
         let mut shapes = Vec::new();
         if !word_shapes(&root, 0, "", false, false, &mut shapes) || shapes.len() > 1 {
-            return Plan::default();
+            return None;
         }
         let wm = match shapes.first() {
             None => None,
-            Some(e) => {
-                let hrels = r.pkg.rels(path);
-                let s = shape(e);
-                let bytes = s.as_ref().and_then(|s| hrels.by_id(s.rid)).filter(|x| !x.external).and_then(|x| r.pkg.get_shared(&x.target));
-                let Some(w) = s.zip(bytes).and_then(|(s, b)| seen(b, &s, *fit)) else { return Plan::default() };
-                Some(w)
-            }
+            Some(e) => Some(header_seen(r, path, e, *fit)?),
         };
         found.insert(path.as_str(), wm);
     }
+    Some(found)
+}
+
+/// What header part `path`'s watermark shape `e` shows, when it is placed as Word places it and
+/// its picture is in the package.
+fn header_seen(r: &Reader, path: &str, e: &El, fit: (f32, f32)) -> Option<Seen> {
+    let hrels = r.pkg.rels(path);
+    let s = shape(e)?;
+    let bytes = hrels.by_id(s.rid).filter(|x| !x.external).and_then(|x| r.pkg.get_shared(&x.target))?;
+    seen(bytes, &s, fit)
+}
+
+/// The Scale (None: Auto) and Washout every shown header agrees on. None when a shown header has
+/// no picture, or they differ in picture, Washout, or scale.
+fn agreed(shown: &[Option<String>], found: &HashMap<&str, Option<Seen>>) -> Option<(Option<f32>, bool)> {
     if shown.iter().flatten().any(|p| found.get(p.as_str()).is_none_or(Option::is_none)) {
-        return Plan::default();
+        return None;
     }
     let all: Vec<&Seen> = found.values().flatten().collect();
     // The first shown header's, whatever order the map holds them in.
-    let Some(first) = shown.iter().flatten().find_map(|p| found.get(p.as_str())?.as_ref()) else { return Plan::default() };
+    let first = shown.iter().flatten().find_map(|p| found.get(p.as_str())?.as_ref())?;
     if !all.iter().all(|s| s.bytes == first.bytes && s.washout == first.washout) {
-        return Plan::default();
+        return None;
     }
-    let scale = if all.iter().all(|s| s.fits) {
-        None
-    } else {
-        let percent = (first.percent * 10.0).round() / 10.0;
-        if !(MIN_SCALE..=MAX_SCALE).contains(&percent) || all.iter().any(|s| (s.percent - first.percent).abs() > 0.1) {
-            return Plan::default();
-        }
-        Some(percent)
-    };
-    let washout = first.washout;
-    Plan { headers: found.into_iter().filter(|(_, w)| w.is_some()).map(|(p, _)| p.to_string()).collect(), scale, washout }
+    if all.iter().all(|s| s.fits) {
+        return Some((None, first.washout));
+    }
+    let percent = (first.percent * 10.0).round() / 10.0;
+    if !(MIN_SCALE..=MAX_SCALE).contains(&percent) || all.iter().any(|s| (s.percent - first.percent).abs() > 0.1) {
+        return None;
+    }
+    Some((Some(percent), first.washout))
 }
 
 /// The `w:sectPr` elements the reader reads, in order, as (element, whether it ends a section of

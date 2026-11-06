@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use wordcraft_doc::props::{Border, BorderStyle, Borders, CharProps, LineSpacing, Rgb, TextColor};
 use wordcraft_doc::watermark::{MAX_SCALE, MIN_SCALE};
-use wordcraft_doc::{WatermarkPicture, styles};
+use wordcraft_doc::{Watermark, WatermarkPicture, styles};
 
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
@@ -258,16 +258,7 @@ fn watermark(s: &mut Session, v: &Value) -> CmdResult {
     }
     let mut wm = s.doc.settings.watermark.clone().unwrap_or_default();
     // Everything is checked before the document is touched (a picture added to the media).
-    let scale = match v.get("scale") {
-        None => None,
-        Some(Value::String(a)) if a.eq_ignore_ascii_case("auto") => Some(None),
-        Some(_) => {
-            let percent =
-                p::f32(v, "scale").filter(|p| p.is_finite()).ok_or_else(|| CmdError::Params("`scale` is \"auto\" or a percentage".into()))?;
-            // Tenths of a percent, as a saved file gives it back.
-            Some(Some((percent.clamp(MIN_SCALE, MAX_SCALE) * 10.0).round() / 10.0))
-        }
-    };
+    let scale = watermark_scale(v)?;
     let picked = match v.get("picture") {
         Some(Value::Bool(false)) => {
             wm.picture = None;
@@ -282,50 +273,13 @@ fn watermark(s: &mut Session, v: &Value) -> CmdResult {
         }
     };
     // The picture's bytes wait: it joins the document's media only after every check below.
-    let mut pending = None;
-    if let Some((bytes, key)) = picked {
-        let media = match key {
-            Some(key) => key,
-            None => {
-                pending = Some(bytes);
-                String::new()
-            }
-        };
-        wm.picture = Some(WatermarkPicture { media, ..wm.picture.take().unwrap_or_default() });
-    }
+    let pending = pick_watermark_picture(&mut wm, picked);
     if let Some(t) = p::str(v, "text") {
         wm.text = t.chars().take(200).collect();
     }
     match wm.picture.as_mut() {
-        Some(pic) => {
-            if let Some(k) = ["diagonal", "color", "transparency", "semitransparent"].into_iter().find(|k| v.get(*k).is_some()) {
-                return Err(CmdError::Params(format!("`{k}` is for a text watermark: give `text` or `\"picture\": false` too")));
-            }
-            if let Some(scale) = scale {
-                pic.scale = scale;
-            }
-            if let Some(w) = p::bool(v, "washout") {
-                pic.washout = w;
-            }
-        }
-        None => {
-            if let Some(k) = ["scale", "washout"].into_iter().find(|k| v.get(*k).is_some()) {
-                return Err(CmdError::Params(format!("`{k}` is for a picture watermark: give `picture` too")));
-            }
-            if let Some(d) = p::bool(v, "diagonal") {
-                wm.diagonal = d;
-            }
-            if let Some(c) = p::str(v, "color").and_then(Rgb::parse) {
-                wm.color = c;
-            }
-            if let Some(on) = p::bool(v, "semitransparent") {
-                wm.set_transparency(if on { 50 } else { 0 });
-            }
-            // Applied after `semitransparent`, so a percentage wins when both are given.
-            if let Some(t) = p::f32(v, "transparency") {
-                wm.set_transparency(if t.is_finite() { t.clamp(0.0, 100.0).round() as u8 } else { 0 });
-            }
-        }
+        Some(pic) => apply_picture_settings(v, pic, scale)?,
+        None => apply_text_settings(v, &mut wm)?,
     }
     if let (Some(bytes), Some(pic)) = (pending, wm.picture.as_mut()) {
         let ext = super::insert::image_ext(&bytes);
@@ -333,6 +287,68 @@ fn watermark(s: &mut Session, v: &Value) -> CmdResult {
     }
     s.doc.settings.watermark = Some(wm);
     sel_result(s)
+}
+
+/// The watermark's `scale` param: None when absent, `Some(None)` for Auto, else the percentage in
+/// tenths, clamped.
+fn watermark_scale(v: &Value) -> Result<Option<Option<f32>>, CmdError> {
+    match v.get("scale") {
+        None => Ok(None),
+        Some(Value::String(a)) if a.eq_ignore_ascii_case("auto") => Ok(Some(None)),
+        Some(_) => {
+            let percent =
+                p::f32(v, "scale").filter(|p| p.is_finite()).ok_or_else(|| CmdError::Params("`scale` is \"auto\" or a percentage".into()))?;
+            // Tenths of a percent, as a saved file gives it back.
+            Ok(Some(Some((percent.clamp(MIN_SCALE, MAX_SCALE) * 10.0).round() / 10.0)))
+        }
+    }
+}
+
+/// Makes `picked` (bytes and an existing media key) the watermark's picture, keeping its other
+/// settings; returns the bytes still to join the document's media, if any.
+fn pick_watermark_picture(wm: &mut Watermark, picked: Option<(Vec<u8>, Option<String>)>) -> Option<Vec<u8>> {
+    let (bytes, key) = picked?;
+    let (media, pending) = match key {
+        Some(key) => (key, None),
+        None => (String::new(), Some(bytes)),
+    };
+    wm.picture = Some(WatermarkPicture { media, ..wm.picture.take().unwrap_or_default() });
+    pending
+}
+
+/// Applies a picture watermark's `scale` and `washout`; refuses a text watermark's settings.
+fn apply_picture_settings(v: &Value, pic: &mut WatermarkPicture, scale: Option<Option<f32>>) -> Result<(), CmdError> {
+    if let Some(k) = ["diagonal", "color", "transparency", "semitransparent"].into_iter().find(|k| v.get(*k).is_some()) {
+        return Err(CmdError::Params(format!("`{k}` is for a text watermark: give `text` or `\"picture\": false` too")));
+    }
+    if let Some(scale) = scale {
+        pic.scale = scale;
+    }
+    if let Some(w) = p::bool(v, "washout") {
+        pic.washout = w;
+    }
+    Ok(())
+}
+
+/// Applies a text watermark's layout, colour and transparency; refuses a picture's settings.
+fn apply_text_settings(v: &Value, wm: &mut Watermark) -> Result<(), CmdError> {
+    if let Some(k) = ["scale", "washout"].into_iter().find(|k| v.get(*k).is_some()) {
+        return Err(CmdError::Params(format!("`{k}` is for a picture watermark: give `picture` too")));
+    }
+    if let Some(d) = p::bool(v, "diagonal") {
+        wm.diagonal = d;
+    }
+    if let Some(c) = p::str(v, "color").and_then(Rgb::parse) {
+        wm.color = c;
+    }
+    if let Some(on) = p::bool(v, "semitransparent") {
+        wm.set_transparency(if on { 50 } else { 0 });
+    }
+    // Applied after `semitransparent`, so a percentage wins when both are given.
+    if let Some(t) = p::f32(v, "transparency") {
+        wm.set_transparency(if t.is_finite() { t.clamp(0.0, 100.0).round() as u8 } else { 0 });
+    }
+    Ok(())
 }
 
 /// Largest watermark picture taken, bytes. A watermark is a faded backdrop, not a photograph

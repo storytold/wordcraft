@@ -98,15 +98,8 @@ fn scale_label(s: Option<f32>) -> String {
     }
 }
 
-/// Returns true to close.
-pub fn watermark(app: &mut WordApp, ui: &mut Ui, f: &mut WatermarkForm) -> bool {
-    if let Some(p) = app.dialog_pick.take() {
-        f.path = Some(p);
-        f.kind = "picture".into();
-        f.message.clear();
-    }
-    ui.radio_value(&mut f.kind, "none".to_string(), tl!("No watermark"));
-    ui.radio_value(&mut f.kind, "picture".to_string(), tl!("Picture watermark"));
+/// The picture watermark's options (Select Picture, Scale, Washout), enabled for a picture.
+fn picture_options(app: &mut WordApp, ui: &mut Ui, f: &mut WatermarkForm) {
     ui.add_enabled_ui(f.kind == "picture", |ui| {
         ui.indent("wm_picture", |ui| {
             ui.horizontal(|ui| {
@@ -128,7 +121,10 @@ pub fn watermark(app: &mut WordApp, ui: &mut Ui, f: &mut WatermarkForm) -> bool 
             });
         });
     });
-    ui.radio_value(&mut f.kind, "text".to_string(), tl!("Text watermark"));
+}
+
+/// The text watermark's options (Text, Transparency, Layout), enabled for a text.
+fn text_options(ui: &mut Ui, f: &mut WatermarkForm) {
     ui.add_enabled_ui(f.kind == "text", |ui| {
         ui.indent("wm_text", |ui| {
             crate::rtl::grid(ui, egui::Grid::new("wm_text_grid").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
@@ -154,6 +150,20 @@ pub fn watermark(app: &mut WordApp, ui: &mut Ui, f: &mut WatermarkForm) -> bool 
             });
         });
     });
+}
+
+/// Returns true to close.
+pub fn watermark(app: &mut WordApp, ui: &mut Ui, f: &mut WatermarkForm) -> bool {
+    if let Some(p) = app.dialog_pick.take() {
+        f.path = Some(p);
+        f.kind = "picture".into();
+        f.message.clear();
+    }
+    ui.radio_value(&mut f.kind, "none".to_string(), tl!("No watermark"));
+    ui.radio_value(&mut f.kind, "picture".to_string(), tl!("Picture watermark"));
+    picture_options(app, ui, f);
+    ui.radio_value(&mut f.kind, "text".to_string(), tl!("Text watermark"));
+    text_options(ui, f);
     if !f.message.is_empty() {
         ui.colored_label(ui.visuals().error_fg_color, f.message.as_str());
     }
