@@ -1,4 +1,3 @@
-//! Shared queue mirror: storytold/craft-libs#142, cbe44ead63a2912dcc7ac6e381ea2e7594211ddc.
 //! The request queue: requests from the window, the agents that listen for them, and who may edit.
 //! No egui and no app types, so the control channel threads can share it.
 
@@ -273,9 +272,12 @@ impl AgentHub {
 
     /// Wait up to `wait` for a request this agent may take, and take it.
     /// Connection ids must be unique for each connection lifetime; never reuse a disconnected id.
+    /// An omitted or blank name keeps this connection's registered name, or starts as "Agent".
     pub fn listen(&self, conn: u64, name: Option<&str>, wait: Duration, alive: impl Fn() -> bool) -> Result<Option<Request>, HubError> {
-        let name = name.map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Agent").to_string();
-        check_name(&name)?;
+        let supplied = name.map(str::trim).filter(|name| !name.is_empty());
+        if let Some(name) = supplied {
+            check_name(name)?;
+        }
         // Single-threaded browser builds cannot block on a condition variable.
         // Other targets count down without reading a clock, which wasm builds lack.
         let mut left = if cfg!(all(target_arch = "wasm32", target_os = "unknown", not(target_feature = "atomics"))) {
@@ -292,6 +294,7 @@ impl AgentHub {
         if !inner.listeners.contains_key(&conn) && inner.listeners.len() >= self.limits.listeners {
             return Err(err(LIMIT_EXCEEDED, "too many Ask Agent connections"));
         }
+        let name = supplied.map(str::to_owned).or_else(|| inner.listeners.get(&conn).cloned()).unwrap_or_else(|| "Agent".into());
         inner.listeners.insert(conn, name.clone());
         loop {
             // Never assign queued work to a connection that died while we waited.
@@ -606,8 +609,9 @@ pub fn colour(name: &str) -> [u8; 3] {
 }
 
 #[cfg(test)]
-#[path = "tests/regression.rs"]
-mod regression_tests;
-#[cfg(test)]
 #[path = "tests/hub.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/regression.rs"]
+mod regression_tests;

@@ -131,6 +131,11 @@ fn reply<E: std::fmt::Display, F: std::fmt::Display>(r: Result<Result<Value, E>,
     }
 }
 
+/// Absence is distinct from an explicitly malformed request tag (including null).
+fn request_tag(outer: &Value, params: &Value) -> Value {
+    outer.get("request").or(params.get("request")).map_or_else(|| json!({}), |request| json!({"request":request}))
+}
+
 /// A document method addressed to open document `doc`, which isn't the active one: it runs on
 /// that document, and the window keeps showing the active one.
 fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value, connection: Option<u64>) -> Outcome {
@@ -152,7 +157,7 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value, connection: O
         _ => {
             let Some(id) = p.get("command").or(p.get("id")).and_then(Value::as_str) else { return err("missing `command`") };
             let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
-            let checked = json!({"request": p.get("request").or(params.get("request"))});
+            let checked = request_tag(p, &params);
             if let Err(error) = crate::ask_agent::guard_addressed(app, connection, doc, id, &checked) {
                 return err(error);
             }
@@ -225,7 +230,7 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
             if let Some(e) = close_refused(app, id, &params) {
                 return err(e);
             }
-            let request = json!({"request": p.get("request").or(params.get("request"))});
+            let request = request_tag(p, &params);
             match crate::ask_agent::as_agent(app, req.connection, id, &request, |app| app.execute(id, params)) {
                 Ok(v) => ok(v),
                 Err(e) => err(e),

@@ -196,6 +196,8 @@ person's external agent may keep its own history according to its own settings.
 | `agent.reply` | `id`, `text?`, `done?`, `error?`, `proposal?`, `format?`, `comment?` | `{id, done}` |
 
 A mutating command is associated with the claimed request using **`request`**, not `request_id`.
+When present, this field must be an unsigned JSON integer: null, strings, booleans, arrays and
+objects are rejected before any command runs. Omit the field when no request is open.
 Ownership alone grants no document-wide permission: WordCraft checks the captured document,
 current content revision, actual selection and supported selection-scoped command. Text insertion
 replaces the captured selection or appends at its end; supported character-format commands require a nonempty range within it. Whole-cell, block and object
@@ -206,6 +208,9 @@ word-wide formatting or overtype from changing text outside the requested interv
 paragraph structure (`paragraphs: true`), clearing paragraph formatting and typing into content controls, redirected field boundaries or protected exception boundaries require a separate structural-scope adapter and are refused.
 An inactive addressed document cannot bypass these checks; make the request's document active first.
 Synthetic UI input is refused while a request is open, so it cannot click the person's Keep/Undo.
+Remote close/reopen commands are also refused with `HUMAN_REVIEW_REQUIRED` while a real request
+exists, including after an answer or failure. The person keeps, undoes or closes that review in the
+app. Control access remains privileged: whoever has the key can run native document commands.
 
 Authorized successive edits advance the request's revision and selection and retain the same real
 undo checkpoint. An outside edit, another checkpoint or another document invalidates that guarantee.

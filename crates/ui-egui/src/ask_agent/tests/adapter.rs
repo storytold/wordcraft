@@ -231,7 +231,7 @@ fn a_ui_command_cannot_bypass_the_guard_and_close_the_persons_conversation() {
     let (mut app, hub) = app();
     let id = claim(&mut app, &hub);
     let result = as_agent(&mut app, Some(7), "ui.askAgent", &json!({"request":id}), |app| app.execute("ui.askAgent", json!({"close":true})));
-    assert!(result.unwrap_err().contains(hub::OUTSIDE_SELECTION));
+    assert!(result.unwrap_err().contains("HUMAN_REVIEW_REQUIRED"));
     assert_eq!(app.ask_agent.open.as_ref().unwrap().id, Some(id));
     assert_eq!(hub.snapshot(id).unwrap().status, Status::Working { conn: 7 });
 }
@@ -394,4 +394,135 @@ fn keep_after_partial_failure_and_an_outside_edit_never_claims_to_save_a_stale_n
     assert!(app.ask_agent.open.is_some());
     assert!(app.session.doc.comments.is_empty());
     assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), before);
+}
+
+#[test]
+fn a_disconnect_after_native_mutation_keeps_the_real_undo_checkpoint_and_note_author() {
+    let (mut app, hub) = app();
+    let id = claim(&mut app, &hub);
+    let params = json!({"request":id,"text":"Changed before disconnection"});
+    let error = as_agent(&mut app, Some(7), "text.insert", &params, |app| {
+        let result = app.run("text.insert", params.clone());
+        hub.disconnect(7);
+        result
+    })
+    .unwrap_err();
+    assert!(error.contains(hub::NOT_OWNER));
+    assert_eq!(hub.snapshot(id).unwrap().status, Status::Failed);
+    assert!(can_undo(&app), "advance rejection must not hide the native checkpoint");
+    assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Changed before disconnection");
+    keep(&mut app).unwrap();
+    assert_eq!(app.session.doc.comments.values().next().unwrap().author, "Agent (Claude)");
+    assert!(app.session.undo());
+    assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Kilns fire clay.");
+}
+
+#[test]
+fn an_error_returned_after_a_native_edit_keeps_that_edit_recoverable() {
+    let (mut app, hub) = app();
+    let id = claim(&mut app, &hub);
+    let params = json!({"request":id,"text":"Partial tool result"});
+    let error = as_agent(&mut app, Some(7), "text.insert", &params, |app| {
+        app.run("text.insert", params.clone())?;
+        Err("later step failed".into())
+    })
+    .unwrap_err();
+    assert_eq!(error, "later step failed");
+    assert!(can_undo(&app));
+    assert!(app.session.undo());
+    close(&mut app);
+    assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Kilns fire clay.");
+}
+
+fn remote(app: &mut WordApp, connection: u64, method: &str, params: Value) -> Value {
+    let (mut request, _) = crate::ControlRequest::new(method, params);
+    request.connection = Some(connection);
+    let crate::control::Outcome::Done(result) = crate::control::handle(app, &egui::Context::default(), &request) else {
+        panic!("expected an immediate response")
+    };
+    result
+}
+
+#[test]
+fn review_boundary_malformed_request_tags_never_mutate_the_document() {
+    for malformed in [Value::Null, json!("1"), json!(true), json!({}), json!([]), json!(-1), json!(1.5)] {
+        for route in ["direct", "outer", "inner", "without_hub", "inactive"] {
+            let (mut app, hub) = app();
+            let id = claim(&mut app, &hub);
+            reply(&mut app, Some(7), &json!({"id":id,"text":"Finished"})).unwrap();
+            let mut addressed = None;
+            if route == "inactive" {
+                let first = app.session.document_id();
+                app.session.run("file.new", &json!({})).unwrap();
+                addressed = Some(app.session.document_id());
+                app.session.switch_document(first).unwrap();
+            }
+            if route == "without_hub" {
+                app.ask_agent.hub = None;
+            }
+            let before = app.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+            let result = if matches!(route, "direct" | "without_hub") {
+                remote(&mut app, 7, "text.insert", json!({"text":"Unexpected mutation","request":malformed}))
+            } else if route == "inner" {
+                remote(&mut app, 7, "engine.execute", json!({"command":"text.insert","params":{"text":"Unexpected mutation","request":malformed}}))
+            } else {
+                let mut params = json!({"command":"text.insert","params":{"text":"Unexpected mutation"},"request":malformed});
+                if let Some(document) = addressed {
+                    params["doc"] = json!(document);
+                }
+                remote(&mut app, 7, "engine.execute", params)
+            };
+            assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), before, "{route}: malformed request modified the active document");
+            if let Some(document) = addressed {
+                let text = app.session.with_document(document, |session| session.doc.plain_text(wordcraft_doc::StoryRef::Body)).unwrap();
+                assert!(text.is_empty(), "malformed request modified an inactive document");
+            }
+            assert_eq!(result["errorCode"], "INVALID_PARAMS", "{route}: {result}");
+            assert_eq!(app.ask_agent.open.as_ref().unwrap().id, Some(id));
+        }
+    }
+}
+
+#[test]
+fn review_boundary_remote_close_or_reopen_preserves_failed_and_answered_edits_for_the_person() {
+    for failed in [false, true] {
+        for connection in [7, 8] {
+            for wrapped in [false, true] {
+                for close_request in [false, true] {
+                    let (mut app, hub) = app();
+                    let id = claim(&mut app, &hub);
+                    edit(&mut app, id, "Changes awaiting the person's review").unwrap();
+                    let reply_params = if failed { json!({"id":id,"error":"Failed after editing"}) } else { json!({"id":id,"text":"Finished"}) };
+                    reply(&mut app, Some(7), &reply_params).unwrap();
+                    let token = app.session.undo_token();
+                    let params = if close_request { json!({"close":true}) } else { json!({"instruction":"Replace the person's conversation"}) };
+                    let result = if wrapped {
+                        remote(&mut app, connection, "engine.execute", json!({"command":"ui.askAgent","params":params}))
+                    } else {
+                        remote(&mut app, connection, "ui.askAgent", params)
+                    };
+                    assert_eq!(app.ask_agent.open.as_ref().and_then(|open| open.id), Some(id), "remote action removed the person's review");
+                    assert_eq!(result["errorCode"], "HUMAN_REVIEW_REQUIRED");
+                    assert!(hub.snapshot(id).is_some());
+                    assert!(can_undo(&app));
+                    assert_eq!(app.session.undo_token(), token);
+                    assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Changes awaiting the person's review");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn review_boundary_local_close_and_remote_empty_bubble_keep_their_existing_behavior() {
+    let (mut app, hub) = app();
+    let id = claim(&mut app, &hub);
+    reply(&mut app, Some(7), &json!({"id":id,"text":"Done"})).unwrap();
+    as_agent(&mut app, None, "ui.askAgent", &json!({"close":true}), |app| app.execute("ui.askAgent", json!({"close":true}))).unwrap();
+    assert!(app.ask_agent.open.is_none());
+    command(&mut app, &json!({})).unwrap();
+    assert!(app.ask_agent.open.as_ref().unwrap().id.is_none());
+    let response = remote(&mut app, 7, "ui.askAgent", json!({"close":true}));
+    assert_eq!(response["ok"], true);
+    assert!(app.ask_agent.open.is_none());
 }

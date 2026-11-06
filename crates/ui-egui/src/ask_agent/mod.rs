@@ -47,6 +47,7 @@ pub struct Open {
     selection: Value,
     edited_from: Option<usize>,
     undo_token: Option<UndoToken>,
+    last_agent: Option<String>,
     commented: bool,
 }
 
@@ -131,8 +132,11 @@ fn within_selection(session: &Session, command: &str, selection: &Value) -> bool
         "text.insert" => {
             // Content-control placeholders and field boundaries may redirect ordinary typing.
             // This text adapter deliberately requires the native insertion point to stay put.
-            ((a == c && b == d) || (c == d && d == b))
-                && !(c == d && matches!(session.doc.settings.protection.as_deref(), Some("readOnly" | "comments")))
+            if c == d && matches!(session.doc.settings.protection.as_deref(), Some("readOnly" | "comments")) {
+                return false;
+            }
+            (a == c || c == d)
+                && b == d
                 && session.doc.control_at(&c).is_none()
                 && session.doc.control_at(&d).is_none()
                 && session.doc.typing_pos(&c) == c
@@ -171,11 +175,14 @@ pub fn as_agent(
     p: &Value,
     run: impl FnOnce(&mut WordApp) -> Result<Value, String>,
 ) -> Result<Value, String> {
+    let request = request_id(p)?;
+    if conn.is_some() && command == "ui.askAgent" && app.ask_agent.open.as_ref().is_some_and(|open| open.id.is_some()) {
+        return Err("HUMAN_REVIEW_REQUIRED: keep, undo or close this conversation in the application before opening another".into());
+    }
     let mutates = app.session.registry.get(command).is_none_or(|command| command.mutates)
         || command.starts_with("file.")
         || matches!(command, "edit.undo" | "edit.undoTo" | "edit.redo");
     let (Some(conn), Some(hub), true) = (conn, app.ask_agent.hub.clone(), mutates) else { return run(app) };
-    let request = request_id(p)?;
     let before = current(&app.session);
     hub.may_edit(conn, request, &before, |selection| within_selection(&app.session, command, selection)).map_err(|error| error.to_string())?;
     let Some(id) = request else { return run(app) };
@@ -209,45 +216,51 @@ pub fn as_agent(
     (app.session.prefs.overtype, app.session.prefs.typing_replaces_selection) = typing;
     app.session.cancel_undo_join();
     let after = current(&app.session);
-    if result.is_ok() && after != before {
+    if after != before {
         let rebased = if command == "text.insert" {
             let Some((start, _)) = range(&selection) else { return Err("STALE_REQUEST: selection unavailable".into()) };
             json!({"anchor": start, "focus": app.session.sel.focus, "text": ""})
         } else {
             selection
         };
-        hub.advance(conn, id, &before, after.clone(), rebased.clone()).map_err(|error| {
-            hub.invalidate(&after);
-            error.to_string()
-        })?;
         if let Some(open) = app.ask_agent.open.as_mut().filter(|open| open.id == Some(id)) {
             open.revision = after.revision;
-            open.selection = rebased;
+            open.selection = rebased.clone();
             if token != app.session.undo_token() || join {
                 open.edited_from.get_or_insert(depth);
                 open.undo_token = app.session.undo_token();
+                open.last_agent = Some(name);
             }
         }
-    } else if after != before {
-        hub.invalidate(&after);
+        // A disconnect can race with the native command. Its checkpoint belongs to this
+        // conversation even when queue ownership is lost before advance accepts the revision.
+        if result.is_ok() {
+            hub.advance(conn, id, &before, after.clone(), rebased).map_err(|error| {
+                hub.invalidate(&after);
+                error.to_string()
+            })?;
+        } else {
+            hub.invalidate(&after);
+        }
     }
     result
 }
 
 fn request_id(params: &Value) -> Result<Option<u64>, String> {
     match params.get("request") {
-        None | Some(Value::Null) => Ok(None),
+        None => Ok(None),
         Some(value) => value.as_u64().map(Some).ok_or_else(|| "INVALID_PARAMS: request must be an unsigned integer".into()),
     }
 }
 
 /// No request-tagged edit may bypass the adapter by addressing a different, inactive document.
 pub fn guard_addressed(app: &mut WordApp, conn: Option<u64>, document: u64, command: &str, params: &Value) -> Result<(), String> {
+    let request = request_id(params)?;
     let Some(hub) = app.ask_agent.hub.clone() else { return Ok(()) };
     if !app.session.registry.get(command).is_some_and(|command| command.mutates) && !command.starts_with("file.") {
         return Ok(());
     }
-    if request_id(params)?.is_some() {
+    if request.is_some() {
         return Err("STALE_REQUEST: activate the request's document before editing it".into());
     }
     let target = app.session.with_document(document, |session| current(session)).map_err(|error| error.to_string())?;
@@ -299,7 +312,7 @@ pub fn held_ranges(app: &WordApp) -> Vec<(Pos, Pos, [u8; 3])> {
 
 fn held_by(app: &WordApp) -> Vec<(Pos, Pos, String)> {
     let Some(hub) = &app.ask_agent.hub else { return vec![] };
-    if !app.ask_agent.open.as_ref().is_some_and(|open| open.document == app.session.document_id()) {
+    if app.ask_agent.open.as_ref().is_none_or(|open| open.document != app.session.document_id()) {
         return vec![];
     }
     hub.held().into_iter().filter_map(|(selection, name)| range(&selection).map(|(a, b)| (a, b, name))).collect()
@@ -329,6 +342,7 @@ fn ask(app: &mut WordApp, instruction: String) -> Result<(), String> {
     if open.revision != target.revision {
         open.edited_from = None;
         open.undo_token = None;
+        open.last_agent = None;
     }
     let request = Request {
         id: 0,
@@ -410,6 +424,7 @@ fn open_at_caret(app: &mut WordApp) {
         selection: Value::Null,
         edited_from: None,
         undo_token: None,
+        last_agent: None,
         commented: false,
     });
 }
@@ -523,7 +538,7 @@ fn comment_once(app: &mut WordApp, snapshot: &Snapshot) {
     }) else {
         return;
     };
-    let Some(name) = &snapshot.agent else { return };
+    let Some(name) = snapshot.agent.as_ref().or(open.last_agent.as_ref()) else { return };
     let (target, from, join, asked) =
         (range(&open.selection), open.edited_from, open.undo_token.is_some() && open.undo_token == app.session.undo_token(), open.asked.clone());
     if open.undo_token.is_some() && !join {
@@ -547,10 +562,10 @@ fn comment_once(app: &mut WordApp, snapshot: &Snapshot) {
     // Native comments insert two inline markers. Read their real positions and move every
     // captured position past the start marker but before the end marker. Restoring raw offsets
     // would truncate the next request and leave the person's caret inside the rewritten text.
-    if let Ok(value) = &result {
-        if let Some(id) = value.get("id").and_then(Value::as_u64).and_then(|id| u32::try_from(id).ok()) {
-            rebase_comment(app, id);
-        }
+    if let Ok(value) = &result
+        && let Some(id) = value.get("id").and_then(Value::as_u64).and_then(|id| u32::try_from(id).ok())
+    {
+        rebase_comment(app, id);
     }
     app.session.cancel_undo_join();
     if let Some(open) = &mut app.ask_agent.open {
@@ -599,12 +614,12 @@ fn rebase_comment(app: &mut WordApp, id: u32) {
     };
     map(&mut app.session.sel.anchor);
     map(&mut app.session.sel.focus);
-    if let Some(open) = &mut app.ask_agent.open {
-        if let Some((mut anchor, mut focus)) = range(&open.selection) {
-            map(&mut anchor);
-            map(&mut focus);
-            open.selection = json!({"anchor":anchor,"focus":focus,"text":""});
-        }
+    if let Some(open) = &mut app.ask_agent.open
+        && let Some((mut anchor, mut focus)) = range(&open.selection)
+    {
+        map(&mut anchor);
+        map(&mut focus);
+        open.selection = json!({"anchor":anchor,"focus":focus,"text":""});
     }
 }
 
