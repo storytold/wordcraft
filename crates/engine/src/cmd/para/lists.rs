@@ -89,6 +89,44 @@ pub(super) fn restart_numbering(s: &mut Session, _: &Value) -> CmdResult {
     sel_result(s)
 }
 
+/// Continue Numbering (#5361): the numbered list at the caret goes on from the nearest numbered
+/// list before it in the same story, as Word's Continue Numbering does. Every paragraph of the
+/// caret's list after that earlier list takes the earlier list's numbering, so its numbers carry
+/// on (3, 4… after 1, 2) instead of starting again.
+pub(super) fn continue_numbering(s: &mut Session, _: &Value) -> CmdResult {
+    let (current, earlier, after) = continuation(s).ok_or_else(|| CmdError::Failed("no earlier numbered list to continue".into()))?;
+    let story = s.sel.focus.story;
+    let paths: Vec<_> = s.doc.para_paths(story).into_iter().filter(|p| *p > after).collect();
+    for path in paths {
+        let para = s.doc.para_mut(story, &path)?;
+        if let Some(x) = para.props.numbering.filter(|x| x.num == current) {
+            para.props.numbering = Some(NumRef { num: earlier, level: x.level });
+            para.touch();
+        }
+    }
+    sel_result(s)
+}
+
+/// Why Continue Numbering is unavailable at the caret, or `None` when it can run.
+pub(super) fn continue_numbering_enabled(s: &Session) -> Option<&'static str> {
+    continuation(s).is_none().then_some("no earlier numbered list to continue")
+}
+
+/// What Continue Numbering joins: the list at the caret (its `num`), the nearest earlier numbered
+/// list in the same story that is a different list, and the path of that list's last paragraph
+/// before the caret. `None` when the caret isn't in a numbered list (bullets don't count) or no
+/// such earlier list exists.
+fn continuation(s: &Session) -> Option<(u32, u32, wordcraft_doc::Path)> {
+    let f = &s.sel.focus;
+    let numbered =
+        |n: &NumRef| n.num != 0 && s.doc.numbering.level(n.num, n.level).is_some_and(|l| l.format != wordcraft_doc::section::NumFormat::Bullet);
+    let here = s.doc.para_at(f).and_then(|p| p.props.numbering).filter(numbered)?;
+    s.doc.para_paths(f.story).into_iter().filter(|p| *p < f.path).rev().find_map(|path| {
+        let n = s.doc.para(f.story, &path)?.props.numbering.filter(numbered)?;
+        (n.num != here.num).then_some((here.num, n.num, path))
+    })
+}
+
 /// Manage Styles' list: paragraph, character, linked and table styles (a linked pair once, as
 /// its paragraph half), sorted as recommended (priority, then name) or alphabetically.
 pub fn manage_list(s: &Session, alphabetical: bool) -> Value {
@@ -208,4 +246,103 @@ pub fn list_buttons(doc: &wordcraft_doc::Document, numbering: Option<NumRef>) ->
     };
     let multilevel = (0..9u8).any(joined);
     ListButtons { bullets, numbering: !bullets, multilevel }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use wordcraft_doc::{Document, StoryRef};
+    use wordcraft_layout::Placed;
+
+    use crate::Session;
+
+    /// Each body paragraph's number as laid out (`None`: no number).
+    fn labels(s: &mut Session) -> Vec<Option<String>> {
+        let l = s.layout();
+        l.pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .filter_map(|i| if let Placed::Lines { para, l0: 0, .. } = i { Some(para.label.as_ref().map(|lb| lb.text.clone())) } else { None })
+            .collect()
+    }
+
+    fn label(t: &str) -> Option<String> {
+        Some(t.to_string())
+    }
+
+    /// Paragraphs `texts`, with the ones `numbered` picks made a numbered list each run of them
+    /// apart (the way a person does: Numbering on the first item of each run).
+    fn document(texts: &[&str], numbered: &[bool]) -> Session {
+        let mut s = Session::new(Document::new());
+        for (i, t) in texts.iter().enumerate() {
+            if i > 0 {
+                s.run("text.newParagraph", &json!({})).unwrap();
+                // A new paragraph takes the list of the one it was split from; set each one's own.
+                if !numbered[i] {
+                    s.run("para.numbering", &json!({"off": true})).unwrap();
+                }
+            }
+            if numbered[i] && (i == 0 || !numbered[i - 1]) {
+                s.run("para.numbering", &json!({"kind": "numbered"})).unwrap();
+            }
+            s.run("text.insert", &json!({"text": t})).unwrap();
+        }
+        s
+    }
+
+    fn caret_in(s: &mut Session, k: usize) {
+        let path = s.doc.para_paths(StoryRef::Body)[k].clone();
+        s.sel = crate::Selection::caret(wordcraft_doc::Pos { story: StoryRef::Body, path, off: 0 });
+    }
+
+    /// #5361: a list that starts again at 1 after a paragraph of text carries on from the list
+    /// before it, from its first item or any later one, in one undo step, and keeps its numbers
+    /// through a .docx save.
+    #[test]
+    fn continue_numbering_carries_on_from_the_list_before() {
+        let texts = ["One", "Two", "Between the lists.", "Three", "Four"];
+        let numbered = [true, true, false, true, true];
+        let mut s = document(&texts, &numbered);
+        let before = vec![label("1."), label("2."), None, label("1."), label("2.")];
+        assert_eq!(labels(&mut s), before, "the second list starts again at 1");
+
+        for item in [3, 4] {
+            let mut s = document(&texts, &numbered);
+            caret_in(&mut s, item);
+            assert_eq!(s.why_disabled("para.continueNumbering"), None);
+            s.run("para.continueNumbering", &json!({})).unwrap();
+            let after = vec![label("1."), label("2."), None, label("3."), label("4.")];
+            assert_eq!(labels(&mut s), after, "from item {item}");
+
+            let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+            assert_eq!(labels(&mut Session::new(back)), after, "the numbers survive a .docx save");
+
+            s.run("edit.undo", &json!({})).unwrap();
+            assert_eq!(labels(&mut s), before, "one undo step puts the restart back");
+        }
+    }
+
+    /// Continue Numbering needs a numbered list at the caret and an earlier numbered list in the
+    /// same story; otherwise it is disabled and a programmatic call is an error that changes
+    /// nothing.
+    #[test]
+    fn continue_numbering_needs_an_earlier_numbered_list() {
+        // The first list has nothing to continue, and a plain paragraph is in no list.
+        let mut s = document(&["One", "Two", "Plain text."], &[true, true, false]);
+        for k in [0, 1, 2] {
+            caret_in(&mut s, k);
+            assert!(s.why_disabled("para.continueNumbering").is_some(), "paragraph {k}");
+            assert!(s.run("para.continueNumbering", &json!({})).is_err(), "paragraph {k}");
+        }
+        assert_eq!(labels(&mut s), [label("1."), label("2."), None]);
+
+        // Bullets have no numbers to continue, and don't count as the earlier list either.
+        let mut s = document(&["Dot", "Plain text.", "One"], &[true, false, true]);
+        caret_in(&mut s, 0);
+        s.run("para.bullets", &json!({})).unwrap();
+        caret_in(&mut s, 2);
+        assert!(s.why_disabled("para.continueNumbering").is_some(), "a bullet before isn't a numbered list");
+        caret_in(&mut s, 0);
+        assert!(s.why_disabled("para.continueNumbering").is_some(), "a bullet item isn't numbered");
+    }
 }

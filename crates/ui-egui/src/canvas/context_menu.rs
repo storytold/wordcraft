@@ -122,6 +122,11 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     }
     item(ui, app, "Font…", "ui.dialog", json!({"name": "font"}));
     item(ui, app, "Paragraph…", "ui.dialog", json!({"name": "paragraph"}));
+    // A numbered paragraph offers its list's numbering, as Word's menu does (#5361).
+    if in_numbered_list(&app.session) {
+        item(ui, app, "Restart at 1", "para.restartNumbering", json!({}));
+        item(ui, app, "Continue Numbering", "para.continueNumbering", json!({}));
+    }
     item(ui, app, "Link…", "ui.dialog", json!({"name": "link"}));
     item(ui, app, "New Comment", "review.newComment", json!({}));
     if !wordcraft_engine::cmd::fields::selected(&app.session).is_empty() {
@@ -218,6 +223,16 @@ enum TablePick {
     Rows,
     Columns,
     Table,
+}
+
+/// Is the caret's paragraph in a numbered list (not a bulleted one)? Its numbering items show then.
+fn in_numbered_list(s: &wordcraft_engine::Session) -> bool {
+    s.doc
+        .para_at(&s.sel.focus)
+        .and_then(|p| p.props.numbering)
+        .filter(|n| n.num != 0)
+        .and_then(|n| s.doc.numbering.level(n.num, n.level))
+        .is_some_and(|l| l.format != wordcraft_doc::section::NumFormat::Bullet)
 }
 
 fn table_pick(s: &wordcraft_engine::Session) -> TablePick {

@@ -88,6 +88,7 @@ Home|Paragraph|Define New Multilevel List|list.define
 Home|Paragraph|Multilevel List Library|list.multilevelPreset
 Home|Paragraph|Change List Level|para.listLevel
 Home|Paragraph|Restart Numbering|para.restartNumbering
+Home|Paragraph|Continue Numbering|para.continueNumbering
 Home|Paragraph|Define New Bullet|para.defineBullet
 Home|Paragraph|Define New Number Format|para.defineNumber
 Home|Paragraph|Set Numbering Value|para.setNumberingValue
