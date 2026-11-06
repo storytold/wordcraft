@@ -11259,6 +11259,30 @@ fn row_nil_overrides_style() {
     assert_eq!(rules_on_page0(&lay(&d)), vec![2.0]);
 }
 
+/// A width-0 cell border (`w:sz="0"`, or a table border without `w:sz`) is drawn as a hairline,
+/// as Word draws it, but takes no room: the text after the table sits where it would without it.
+#[test]
+fn zero_width_cell_border_is_drawn_without_room() {
+    let after_y = |bottom: Option<Border>| {
+        let mut d = Document::from_text("before\nafter");
+        let mut t = Table::new(2, 1, 200.0);
+        t.props.style = None;
+        t.rows[0].cells[0].props.borders = Some(Borders { bottom, ..Default::default() });
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let y = l.pages[0].items.iter().filter_map(|i| if let Placed::Lines { y, .. } = i { Some(*y) } else { None }).fold(f32::MIN, f32::max);
+        (rules_on_page0(&l), y)
+    };
+    let (none_rules, none_y) = after_y(None);
+    let (zero_rules, zero_y) = after_y(Some(Border::single(0.0)));
+    let (half_rules, half_y) = after_y(Some(Border::single(0.5)));
+    assert!(none_rules.is_empty(), "{none_rules:?}");
+    assert_eq!(zero_rules, vec![0.0], "the width-0 border is drawn");
+    assert_eq!(half_rules, vec![0.5]);
+    assert!((zero_y - none_y).abs() < 0.001, "no room: {zero_y} vs {none_y}");
+    assert!(half_y > none_y, "a ½ pt border takes room: {half_y} vs {none_y}");
+}
+
 /// Continued text keeps the cell's border inset, as on its first fragment.
 #[test]
 fn split_cell_reuses_top_inset() {
