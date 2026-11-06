@@ -52,6 +52,7 @@ chrono = { workspace = true, features = ["clock"] }
 libc = { workspace = true }
 
 [dev-dependencies]
+wordcraft-doc = { workspace = true, features = ["test-support"] }
 encoding_rs = { workspace = true }
 zip = { workspace = true }
 cfb = { workspace = true }
