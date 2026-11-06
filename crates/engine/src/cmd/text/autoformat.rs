@@ -195,7 +195,7 @@ fn list_autoformat(s: &mut Session) -> Result<bool, CmdError> {
 }
 
 /// A typed number label, `"12. "` or `"12) "`: the list kind it starts and the number it starts at.
-/// Zero and numbers with a leading zero or more than five digits are ordinary text.
+/// Zero, numbers with a leading zero and numbers above `MAX_LIST_START` are ordinary text.
 fn numbered_trigger(prefix: &str) -> Option<(ListKind, u32)> {
     let label = prefix.strip_suffix(' ')?;
     let sep = label.chars().next_back()?;
@@ -208,7 +208,9 @@ fn numbered_trigger(prefix: &str) -> Option<(ListKind, u32)> {
         ')' => ListKind::NumberedParen,
         _ => return None,
     };
-    Some((kind, digits.parse().ok()?))
+    // Stops where `list.define` does, so a typed start survives later edits to the list.
+    let start: u32 = digits.parse().ok().filter(|n| *n <= crate::cmd::lists::MAX_LIST_START)?;
+    Some((kind, start))
 }
 
 /// "word" + two spaces → "word. ": the second Space turns the first into a period, after a
