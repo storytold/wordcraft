@@ -133,6 +133,9 @@ pub struct CanvasState {
     /// A drag after a double-click, triple-click or Ctrl/⌘+click: the unit it extends by, the
     /// unit first selected, and the last position the pointer hit.
     unit_drag: Option<UnitDrag>,
+    /// The last double-click on empty page space placed the caret with Click and Type; its
+    /// release must not select a word.
+    click_and_type: bool,
     pub last_highlight: String,
     pub last_font_color: String,
     pub last_shading: String,
@@ -370,6 +373,7 @@ impl Default for CanvasState {
             last_press: None,
             hf_press_switched: false,
             unit_drag: None,
+            click_and_type: false,
             last_highlight: "yellow".into(),
             last_font_color: "C00000".into(),
             last_shading: "FFF2CC".into(),

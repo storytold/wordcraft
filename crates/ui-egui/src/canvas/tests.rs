@@ -1844,6 +1844,49 @@ fn double_click_margin_creates_header_and_footer() {
     assert_eq!(h.state().session.doc.plain_text(footer), "Page foot");
 }
 
+/// #4246: double-clicking empty space below the last line adds the paragraphs needed to reach
+/// the click and leaves a collapsed caret there, not a word selection.
+#[test]
+fn double_click_empty_page_space_adds_lines_and_places_the_caret() {
+    use egui::{Event, PointerButton};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Top")), Default::default());
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 2200.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let double_click = |h: &mut egui_kittest::Harness<'_, WordApp>, at: Pos2| {
+        h.event(Event::PointerMoved(at));
+        for _ in 0..2 {
+            h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+            h.step();
+            h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+            h.step();
+        }
+        for _ in 0..40 {
+            h.step();
+        }
+    };
+    let before = h.state().session.doc.body.len();
+    let page = h.state_mut().session.layout().pages[0].clone();
+    let at = page_to_screen(h.state_mut(), 0, page.body.x + 20.0, page.body.bottom() - 20.0).expect("empty page space on screen");
+    double_click(&mut h, at);
+    assert!(h.state().session.doc.body.len() > before, "empty paragraphs were added");
+    assert_eq!(h.state().session.sel.focus.story, StoryRef::Body);
+    assert!(h.state().session.sel.focus.path.0.first().is_some_and(|i| *i > 0), "the caret is below the text: {:?}", h.state().session.sel.focus);
+    assert!(h.state().session.sel.is_collapsed(), "a caret, not a word selection");
+    assert_eq!(h.state_mut().session.layout().caret(&h.state().session.sel.focus).map(|c| c.page), Some(0));
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(h.state().session.doc.body.len(), before, "one undo takes the added lines back");
+}
+
 /// #2826: editing the default header, then turning on Different First Page: a double-click in
 /// page 1's top margin goes into page 1's own (new) header, and typing lands there.
 #[test]

@@ -18,6 +18,11 @@ use delete::{backspace, delete, delete_word_back, delete_word_fwd};
 pub use enter_tab::MAX_TYPED_PARAGRAPHS;
 use enter_tab::{back_tab, new_paragraph, tab};
 pub use unicode::{alt_code_char, oem_code_page, system_code_pages, system_oem_code_page, windows_code_pages};
+
+/// Append `n` empty paragraphs at the end of the body, for Click and Type.
+pub(crate) fn append_paragraphs(s: &mut Session, n: usize) -> Result<(), CmdError> {
+    enter_tab::append_paragraphs(s, n)
+}
 use unicode::{ins_char, insert_code, toggle_unicode};
 
 /// The text-entry commands: typing, Enter, breaks, Tab, deleting and typed symbols.
