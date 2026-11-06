@@ -335,16 +335,21 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
     crate::rtl::horizontal_top(ui, |ui| {
         crate::rtl::vertical(ui, |ui| settings(app, ui));
-        ui.add_space(SETTINGS_GAP);
-        crate::rtl::vertical(ui, |ui| preview(app, ui, &lay));
+        if ui.available_width() - SETTINGS_GAP >= MIN_PREVIEW_WIDTH {
+            ui.add_space(SETTINGS_GAP);
+            crate::rtl::vertical(ui, |ui| preview(app, ui, &lay));
+        }
     });
 }
 
 /// The settings column's width, and the space between it and the preview.
 const SETTINGS_WIDTH: f32 = 380.0;
 const SETTINGS_GAP: f32 = 24.0;
-/// The narrowest preview pane worth drawing when the layout is mirrored.
+/// The narrowest preview pane worth drawing.
 const MIN_PREVIEW_WIDTH: f32 = 200.0;
+/// The narrowest pane that keeps its bar on one row: the page indicator, with three-digit page
+/// numbers, beside the zoom buttons without their slider. A narrower one takes two rows.
+const ONE_ROW_BAR_WIDTH: f32 = 320.0;
 
 /// Room around the page inside the preview pane.
 const PREVIEW_MARGIN: f32 = 10.0;
@@ -374,7 +379,9 @@ fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout) {
     app.ui.print.preview = page;
     let Some(sheet) = sheets.get(page) else { return };
     let (pw, ph) = (sheet.width, sheet.height);
-    let pane = vec2(ui.available_width().max(120.0), (ui.available_height() - PREVIEW_BAR).max(120.0));
+    let one_row = ui.available_width() >= ONE_ROW_BAR_WIDTH;
+    let bar_height = if one_row { PREVIEW_BAR } else { 2.0 * PREVIEW_BAR };
+    let pane = vec2(ui.available_width().max(120.0), (ui.available_height() - bar_height).max(120.0));
     // Screen points per page point.
     let fit = ((pane.x - 2.0 * PREVIEW_MARGIN) / pw).min((pane.y - 2.0 * PREVIEW_MARGIN) / ph).max(0.01);
     let scale = app.ui.print.zoom.map_or(fit, |z| z * crate::canvas::PX_PER_PT);
@@ -400,7 +407,7 @@ fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout) {
         }
     });
     let rtl = crate::rtl::flows(ui);
-    ui.horizontal(|ui| {
+    let bar = |ui: &mut Ui| {
         ui.set_height(PREVIEW_BAR);
         let nav = |ui: &mut Ui, icon: &str, tip: &str, enabled: bool| {
             let (r, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
@@ -418,6 +425,9 @@ fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout) {
         ui.label(egui::RichText::new(&label).font(regular(13.0)));
         if nav(ui, if rtl { "chevronLeft" } else { "chevronRight" }, tl!("Next sheet"), page + 1 < total) {
             app.ui.print.preview = page + 1;
+        }
+        if !one_row {
+            ui.end_row();
         }
         ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             let z = scale / crate::canvas::PX_PER_PT;
@@ -448,7 +458,12 @@ fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout) {
                 app.ui.print.zoom = Some(zoom_step(z, far.2));
             }
         });
-    });
+    };
+    if one_row {
+        ui.horizontal(bar);
+    } else {
+        ui.horizontal_wrapped(bar);
+    }
 }
 
 /// The export "format" of a Word 2003 XML Document: an `.xml` file saved with `format: "wordml2003"`.

@@ -1,3 +1,6 @@
+use std::cell::Cell;
+use std::rc::Rc;
+
 use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
@@ -1053,4 +1056,334 @@ fn backstage_save_as_sidebar_opens_save_as_page() {
     h.get_by_label("Save As").click();
     h.run_steps(4);
     assert_eq!(h.state().ui.backstage_page, "saveAs");
+}
+
+/// Scrolls the File page with the wheel at `x` and returns doc0.docx's top before and after,
+/// plus the rectangle of the page's vertical scrollbar.
+fn file_page_wheel_at(x: f32) -> (f32, f32, egui::Rect) {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.recent = (0..12).map(|i| format!("/docs/doc{i}.docx")).collect();
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 500.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+
+    let bar = h
+        .query_all_by_role(egui::accesskit::Role::ScrollBar)
+        .map(|n| n.rect())
+        .filter(|r| r.height() > r.width())
+        .max_by(|a, b| a.height().total_cmp(&b.height()))
+        .expect("the File page's vertical scrollbar");
+    let before = h.get_by_label("doc0.docx").rect();
+    h.event(egui::Event::PointerMoved(egui::pos2(x, 300.0)));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -200.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    h.run_steps(4);
+    (before.min.y, h.get_by_label("doc0.docx").rect().min.y, bar)
+}
+
+/// #5396: on a window narrower than a File page, the page scrolls sideways, so the part past the
+/// right edge can be reached instead of being cut off.
+#[test]
+fn a_narrow_file_page_scrolls_sideways_to_its_cut_off_part() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(760.0, 500.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    // The harness keeps an 8 point margin, so the window edge is at x=752.
+    let before = h.get_by_label("Résumé").rect();
+    assert!(before.right() > 752.0, "the last template tile must start out past the window edge: {before:?}");
+    h.event(egui::Event::PointerMoved(egui::pos2(400.0, 300.0)));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(-400.0, 0.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    h.run_steps(4);
+    let after = h.get_by_label("Résumé").rect();
+    assert!(after.right() <= 752.0, "the last template tile must scroll into view: before={before:?}, after={after:?}");
+}
+
+/// #5396: the sideways scrollbar of a narrow File page sits at the bottom of the window, like the
+/// vertical one sits at its right edge (#5282), not under the end of a short page.
+#[test]
+fn a_narrow_file_pages_sideways_bar_sits_at_the_window_bottom() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(760.0, 500.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let bar = h
+        .query_all_by_role(egui::accesskit::Role::ScrollBar)
+        .map(|n| n.rect())
+        .find(|r| r.width() > r.height())
+        .expect("the File page's sideways scrollbar");
+    // The harness keeps an 8 point margin, and the page keeps 30 points below it: 500 - 8 - 30.
+    assert!((bar.bottom() - 462.0).abs() < 1.0, "expected the sideways scrollbar at the bottom of the page area: {bar:?}");
+}
+
+/// A right-to-left test language. Only its code makes it right to left, so its catalog needs no
+/// Arabic text, and the test no Arabic font.
+fn right_to_left() -> crate::i18n::Lang {
+    crate::i18n::fixture_lang("ar", "\tHome\tHome\n")
+}
+
+/// A File page of `doc` in a window `width` wide and 500 high, after its first frame, drawn in the
+/// language `lang` holds. It sets that after `logic` and calls `show` directly, since a whole frame
+/// sets the language back from its setting.
+fn opened_page(doc: wordcraft_doc::Document, page: &str, width: f32, lang: Rc<Cell<crate::i18n::Lang>>) -> egui_kittest::Harness<'static, WordApp> {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(doc), Services::default());
+    a.run("ui.backstage", json!({"value": true, "page": page})).unwrap();
+    egui_kittest::Harness::builder().with_size(egui::vec2(width, 500.0)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            crate::i18n::set_current(lang.get());
+            crate::rtl::sync(&ctx);
+            super::show(app, ui);
+        },
+        a,
+    )
+}
+
+/// The same page of an empty document, settled.
+fn page_at(page: &str, width: f32, lang: Rc<Cell<crate::i18n::Lang>>) -> egui_kittest::Harness<'static, WordApp> {
+    let mut h = opened_page(wordcraft_doc::Document::new(), page, width, lang);
+    h.run_steps(4);
+    h
+}
+
+/// The same File page in the smallest window this file measures.
+fn narrow_page(page: &str, lang: Rc<Cell<crate::i18n::Lang>>) -> egui_kittest::Harness<'static, WordApp> {
+    page_at(page, 760.0, lang)
+}
+
+/// Turns the wheel sideways over the page by `dx` points.
+fn wheel_sideways(h: &mut egui_kittest::Harness<'static, WordApp>, dx: f32) {
+    h.event(egui::Event::PointerMoved(egui::pos2(400.0, 300.0)));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(dx, 0.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    h.run_steps(4);
+}
+
+/// The left end of the page's leftmost widget or text.
+fn leftmost(h: &egui_kittest::Harness<'static, WordApp>) -> f32 {
+    use egui::accesskit::Role;
+    [Role::Button, Role::CheckBox, Role::Label, Role::TextInput, Role::ComboBox]
+        .into_iter()
+        .flat_map(|role| h.query_all_by_role(role).map(|n| n.rect().left()).collect::<Vec<_>>())
+        .fold(f32::MAX, f32::min)
+}
+
+/// #5396: a right-to-left page runs from the right and overflows on its left. It opens at its
+/// start, with the sideways bar there, and the part past the left edge scrolls into view.
+#[test]
+fn a_narrow_right_to_left_file_page_scrolls_sideways_to_its_cut_off_part() {
+    let mut h = narrow_page("home", Rc::new(Cell::new(right_to_left())));
+    let first = h.get_by_label("Blank document").rect();
+    let last = h.get_by_label("Résumé").rect();
+    assert!(first.left() > last.left(), "the tiles must run from the right: first={first:?}, last={last:?}");
+    assert!(last.left() < 8.0, "the last tile must start out past the window's left edge: {last:?}");
+    let bar = h.query_all_by_role(egui::accesskit::Role::ScrollBar).map(|n| n.rect()).find(|r| r.width() > r.height()).expect("a sideways scrollbar");
+    // The page keeps 40 points of padding to the edge of its area.
+    assert!((bar.right() - 40.0 - first.right()).abs() < 1.0, "the page must open at its start: {first:?}, {bar:?}");
+    wheel_sideways(&mut h, 400.0);
+    let scrolled = h.get_by_label("Résumé").rect();
+    assert!(scrolled.left() >= 8.0, "the last tile must scroll into view: {last:?}, then {scrolled:?}");
+    wheel_sideways(&mut h, -800.0);
+    assert_eq!(h.get_by_label("Résumé").rect(), last, "the page must scroll back to its start");
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+/// #5396: every File page wider than the window can be scrolled to its far end right to left too:
+/// Options' settings and New's tiles, not only Home.
+#[test]
+fn every_narrow_right_to_left_file_page_reaches_its_far_end() {
+    for page in ["home", "new", "options"] {
+        let mut h = narrow_page(page, Rc::new(Cell::new(right_to_left())));
+        let start = leftmost(&h);
+        assert!(start < 8.0, "{page} must overflow on the left: {start}");
+        wheel_sideways(&mut h, 2000.0);
+        let end = leftmost(&h);
+        assert!(end >= 8.0, "{page} must reach its far end: from {start} to {end}");
+    }
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+/// #5396: the wheel moves a right-to-left page right after it opens, with no frame in between that
+/// sets the page in place.
+#[test]
+fn a_right_to_left_file_page_takes_the_wheel_right_after_it_opens() {
+    let doc = wordcraft_doc::Document::new();
+    let mut h = opened_page(doc, "home", 760.0, Rc::new(Cell::new(right_to_left())));
+    wheel_sideways(&mut h, 400.0);
+    let last = h.get_by_label("Résumé").rect();
+    assert!(last.left() >= 8.0, "the last tile must scroll into view: {last:?}");
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+/// #5396: the issue's own example. Options > Language's description of the interface language is
+/// wider than a narrow window, and its far end can be reached in either direction.
+#[test]
+fn the_language_pane_reaches_its_far_end_in_either_direction() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT;
+    for (lang, dx) in [(crate::i18n::Lang::EN, -3000.0), (right_to_left(), 3000.0)] {
+        let mut h = narrow_page("options", Rc::new(Cell::new(lang)));
+        h.state_mut().ui.options_pane = "language".into();
+        h.run_steps(4);
+        let description = |h: &egui_kittest::Harness<'static, WordApp>| {
+            let mut labels = h.query_all_by_role(Role::Label);
+            labels.find(|n| n.accesskit_node().value().is_some_and(|v| v.starts_with("Automatic follows"))).expect("the description").rect()
+        };
+        let before = description(&h);
+        assert!(before.left() < 8.0 || before.right() > 752.0, "it must start out past the window: {before:?}");
+        wheel_sideways(&mut h, dx);
+        let after = description(&h);
+        assert!(after.left() >= 8.0 && after.right() <= 752.0, "it must scroll into view: {after:?}");
+    }
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+/// #5396: an offset doesn't carry over a change of direction: the page stands at its start in the
+/// new direction, whichever way the interface turned.
+#[test]
+fn a_sideways_scroll_does_not_carry_over_a_change_of_direction() {
+    let arabic = right_to_left();
+    let start_rtl = narrow_page("home", Rc::new(Cell::new(arabic))).get_by_label("Blank document").rect();
+    let lang = Rc::new(Cell::new(crate::i18n::Lang::EN));
+    let mut h = narrow_page("home", Rc::clone(&lang));
+    let start_ltr = h.get_by_label("Blank document").rect();
+    wheel_sideways(&mut h, -400.0);
+    let scrolled = h.get_by_label("Blank document").rect();
+    assert_ne!(scrolled, start_ltr, "the wheel must have scrolled the page");
+    lang.set(arabic);
+    h.step();
+    assert_eq!(h.get_by_label("Blank document").rect(), start_rtl, "the page must stand at its right-to-left start");
+    lang.set(crate::i18n::Lang::EN);
+    h.step();
+    assert_eq!(h.get_by_label("Blank document").rect(), start_ltr, "the page must stand at its left-to-right start");
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+/// #5396: a sideways scroll stays with its page, so the next File page opens at its own start.
+#[test]
+fn a_file_page_opens_at_its_start_after_another_page_scrolled_sideways() {
+    for (lang, dx) in [(crate::i18n::Lang::EN, -3000.0), (right_to_left(), 3000.0)] {
+        let lang = Rc::new(Cell::new(lang));
+        let start = narrow_page("new", Rc::clone(&lang)).get_by_label("Blank document").rect();
+        let mut h = narrow_page("home", lang);
+        let opened = h.get_by_label("Blank document").rect();
+        wheel_sideways(&mut h, dx);
+        assert_ne!(h.get_by_label("Blank document").rect(), opened, "the wheel must have scrolled Home");
+        h.state_mut().ui.backstage_page = "new".into();
+        h.run_steps(4);
+        assert_eq!(h.get_by_label("Blank document").rect(), start, "New must open at its start");
+    }
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+/// #5396: a window wide enough for the page leaves nothing to scroll, right to left too, and a
+/// narrower one opens the page at its start again.
+#[test]
+fn a_right_to_left_file_page_follows_the_window_width() {
+    let mut h = narrow_page("home", Rc::new(Cell::new(right_to_left())));
+    let start = h.get_by_label("Blank document").rect();
+    h.set_size(egui::vec2(1440.0, 500.0));
+    h.run_steps(4);
+    assert!(h.query_all_by_role(egui::accesskit::Role::ScrollBar).all(|n| n.rect().height() > n.rect().width()));
+    assert!(h.get_by_label("Résumé").rect().left() >= 8.0, "the whole page must fit");
+    h.set_size(egui::vec2(760.0, 500.0));
+    h.run_steps(4);
+    assert_eq!(h.get_by_label("Blank document").rect(), start, "the page must stand at its start again");
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+/// #5396: a window too narrow for Print's preview shows the settings alone, in either direction.
+#[test]
+fn a_narrow_print_page_shows_its_settings_alone() {
+    for lang in [crate::i18n::Lang::EN, right_to_left()] {
+        for width in [760.0, 850.0] {
+            let h = page_at("print", width, Rc::new(Cell::new(lang)));
+            assert!(h.query_by_label("Next sheet").is_none(), "at {width}: there is no room for the preview");
+            let save = h.get_by_label("Save these pages as PDF…").rect();
+            assert!(save.left() >= 8.0 && save.right() <= width - 8.0, "at {width}: the settings must fit: {save:?}");
+        }
+    }
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+/// #5396: Print's preview bar stays inside a narrower preview, on two rows when it needs them, with
+/// three-digit page numbers too, and no button or the page indicator runs over another.
+#[test]
+fn a_print_preview_keeps_its_whole_bar_at_any_width_it_shows() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT;
+    let text = "line\n".repeat(9000);
+    for lang in [crate::i18n::Lang::EN, right_to_left()] {
+        for width in [950.0, 1000.0, 1010.0, 1050.0, 1100.0] {
+            let doc = wordcraft_doc::Document::from_text(&text);
+            let mut h = opened_page(doc, "print", width, Rc::new(Cell::new(lang)));
+            h.run_steps(2);
+            h.state_mut().ui.print.preview = 120;
+            h.run_steps(4);
+            let mut bar: Vec<_> =
+                ["Previous sheet", "Next sheet", "Zoom Out", "Zoom In", "One Page"].into_iter().map(|name| h.get_by_label(name).rect()).collect();
+            let page = h.query_all_by_role(Role::Label).find(|n| n.accesskit_node().value().is_some_and(|v| v.starts_with("Sheet 121")));
+            bar.push(page.expect("the page indicator").rect());
+            for (i, r) in bar.iter().enumerate() {
+                assert!(r.left() >= 8.0 && r.right() <= width - 8.0 && r.bottom() <= 492.0, "at {width}: {r:?} must fit");
+                assert!(!bar[i + 1..].iter().any(|o| o.intersects(*r)), "at {width}: {r:?} covers something in {bar:?}");
+            }
+        }
+    }
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
+/// #5282: the File page scrolls with the wheel over its right side.
+#[test]
+fn the_file_page_scrolls_with_the_wheel_over_its_right_side() {
+    let (before, after, _) = file_page_wheel_at(1300.0);
+    assert!(after < before - 1.0, "expected doc0.docx to scroll up: before={before}, after={after}");
+}
+
+/// #5282: the scroll area reaches the window's right edge, so its bar sits there and the wheel
+/// works there too.
+#[test]
+fn the_file_page_scrolls_with_the_wheel_at_the_window_edge() {
+    // The harness keeps an 8 point margin, so the window edge is at x=1432.
+    let (before, after, bar) = file_page_wheel_at(1428.0);
+    assert!(after < before - 1.0, "expected doc0.docx to scroll up at the edge: before={before}, after={after}");
+    assert!((bar.right() - 1432.0).abs() < 1.0, "expected the scrollbar at the window edge: {bar:?}");
 }

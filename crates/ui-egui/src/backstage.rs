@@ -173,24 +173,32 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
             });
         });
-    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(40, 30))).show(ui, |ui| {
+    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(0, 30))).show(ui, |ui| {
+        // The side padding sits inside the pages, so the scroll area reaches the window's edge.
+        let pad = egui::Frame::NONE.inner_margin(egui::Margin::symmetric(40, 0));
         // The Print page fills the pane and scrolls its settings and its preview itself (#1156).
         if app.ui.backstage_page == "print" {
-            crate::rtl::root(ui, |ui| export_page(app, ui));
+            pad.show(ui, |ui| crate::rtl::root(ui, |ui| export_page(app, ui)));
             return;
         }
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            crate::rtl::root(ui, |ui| match app.ui.backstage_page.as_str() {
-                "home" => home_page(app, ui),
-                "new" => new_page(app, ui),
-                "open" => open_page(app, ui),
-                "saveAs" => save_as_page(app, ui),
-                "info" => info_page(app, ui),
-                "recover" => recovery_page(app, ui),
-                "print" | "export" => export_page(app, ui),
-                "options" => crate::options::page(app, ui),
-                _ => home_page(app, ui),
-            })
+        // Full width, so the bar sits at the window's edge and the wheel works over the whole page (#5282).
+        // A page wider than a narrow window scrolls sideways instead of being cut off, with that bar
+        // at the bottom of the window rather than under a short page (#5396).
+        let page = app.ui.backstage_page.clone();
+        crate::rtl::scroll_both(ui, &page, |ui| {
+            pad.show(ui, |ui| {
+                crate::rtl::root(ui, |ui| match app.ui.backstage_page.as_str() {
+                    "home" => home_page(app, ui),
+                    "new" => new_page(app, ui),
+                    "open" => open_page(app, ui),
+                    "saveAs" => save_as_page(app, ui),
+                    "info" => info_page(app, ui),
+                    "recover" => recovery_page(app, ui),
+                    "print" | "export" => export_page(app, ui),
+                    "options" => crate::options::page(app, ui),
+                    _ => home_page(app, ui),
+                })
+            });
         });
     });
 }
