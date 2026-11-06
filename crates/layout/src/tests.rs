@@ -13730,6 +13730,22 @@ fn lowered_pictures_and_check_boxes_take_words_line_heights() {
         let (h, top, font) = line_of("x", m, 30.0, -10.0);
         assert!((h - 30.0 - share(font)).abs() < 0.01 && top.abs() < 0.01, "beside text at {m}: {h}, {top}");
     }
+    // Exact spacing keeps the line's box and its baseline: a picture lowered past its height sits
+    // where one lowered by its height does.
+    let exact = |raise: f32| {
+        let mut d = Document::from_text("x");
+        let props = wordcraft_doc::CharProps { position: Some(raise), ..Default::default() };
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.props.line_spacing = Some(LineSpacing::Exactly(20.0));
+        let at = p.len();
+        p.insert_object(at, picture(40.0, 6.0, Default::default()), &props).unwrap();
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        (para.lines[0].height, para.lines[0].baseline - para.lines[0].top)
+    };
+    let (h, base) = exact(-6.0);
+    assert!((h - 20.0).abs() < 0.01, "{h}");
+    assert_eq!(exact(-30.0), (h, base));
     // A check box sizes its line as text of its size, alone or beside text.
     let box_line = |lead: &str, m: f32, size: u32| {
         let mut d = Document::from_text(lead);
