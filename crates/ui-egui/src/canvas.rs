@@ -671,13 +671,17 @@ fn scroll_motion(app: &mut WordApp, ui: &Ui, full: Rect, view: &CanvasView) -> S
         // A pan (or a pinch) is not the first tap of a double-tap.
         app.canvas.last_press = None;
     }
+    // A modal dialog owns the pointer, also in the editing views: a finger that was panning
+    // when it opened must not scroll the document behind it for this frame either (the delta
+    // was computed above, before the dialog's input was refused).
+    if app.dialog.is_some() {
+        app.canvas.touch.cancel();
+        touch_delta = egui::Vec2::ZERO;
+    }
     let wheel_delta = if app.session.view.read_mode {
-        // A finger's horizontal travel turns reading columns like a touchpad's — but a dialog
-        // owns the pointer, and a swipe must not turn the page behind it.
-        if app.dialog.is_some() {
-            app.canvas.touch.cancel();
-            touch_delta = egui::Vec2::ZERO;
-        } else if touch_delta != egui::Vec2::ZERO {
+        // A finger's horizontal travel turns reading columns like a touchpad's; a dialog
+        // opening over one was handled above, so it never turns the page behind it.
+        if touch_delta != egui::Vec2::ZERO {
             let turns = read_touch_turns(touch_delta.x, &mut app.canvas.read_wheel_accum);
             for _ in 0..turns.unsigned_abs() {
                 turn_read_page(app, turns.signum() as f32);
