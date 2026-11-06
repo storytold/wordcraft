@@ -1,5 +1,7 @@
 # WordCraft roadmap
 
+> **Cursor update:** 2026-11-05 · Windows uses a cached native contrasting I-beam for Magnifier mouse tracking. Live fractional-DPI and accessibility-preference validation remain open; readiness estimates are unchanged.
+
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -138,6 +140,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
    (20–30 h).
 
 ## Progress log
+
+- 2026-11-05: Windows' contrasting I-beam is a native RGBA cursor rather than a hidden system pointer with a canvas-painted replacement. A controlled original/disabled/original experiment isolated centered Magnifier panning jumps to pointer replacement; a native-cursor prototype passed light/dark page, text/table selection and border-resizing checks at 100% display scale and 400% Magnifier. Live 125%/150% display scaling, enlarged pointers, custom colors, High Contrast and native allocation-failure recovery remain unverified. Caret accessibility is unchanged.
 
 - 2026-10-28: Ink replay, eraser picking, lasso selection and arrow-candidate discovery reuse the paragraph prefixes they have already scanned (#3614). Page item order, stroke geometry and saved data retain their behavior. This narrows the stability work; ink import fidelity, native pen input and broader corpus qualification remain open.
 
@@ -761,6 +765,8 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 Section page-numbering settings preserve `w:chapStyle` values across the full unsigned-byte range.
 
 ## Revision history
+
+> 2026-11-05 · Native contrasting Windows I-beam and centered Magnifier prototype evidence; fractional-DPI, preference and failure-path acceptance remain open. Readiness unchanged.
 
 > 2026-11-03 · Arabic dialogs read right to left (rtl::Table); recorded in the progress log, readiness unchanged.
 >

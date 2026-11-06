@@ -1072,15 +1072,17 @@ fn an_armed_format_painter_changes_the_pointer() {
         h.step();
         h.output().platform_output.cursor_icon
     };
-    // Where the I-beam is drawn (Windows, #1746) the system pointer over the text is hidden.
-    let ibeam = if h.state().canvas.drawn_ibeam { egui::CursorIcon::None } else { egui::CursorIcon::Text };
+    // The contrasting Windows bitmap retains the native Text cursor.
+    let ibeam = egui::CursorIcon::Text;
     assert_eq!(pointer_after(&mut h, None), ibeam, "no painter yet");
     assert_eq!(pointer_after(&mut h, Some("edit.formatPainter")), egui::CursorIcon::Copy, "armed");
+    assert!(h.output().platform_output.cursor_image.is_none(), "the I-beam must not mask Format Painter");
     assert_eq!(pointer_after(&mut h, Some("edit.formatPainter")), ibeam, "turned off");
     h.state_mut().run("edit.formatPainter", json!({})).unwrap();
     h.event(egui::Event::PointerMoved(over_bar));
     h.step();
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "the selection bar keeps its arrow");
+    assert!(h.output().platform_output.cursor_image.is_none(), "the I-beam must not mask the selection bar");
 }
 
 /// #4410: with the Format Painter armed, a double-click on a word paints that word, and the

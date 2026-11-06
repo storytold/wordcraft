@@ -421,6 +421,8 @@ impl WordApp {
     /// Switch Windows) ends this window's drawing for the frame: the rest would be the other
     /// window's.
     pub(crate) fn window_ui(&mut self, ui: &mut egui::Ui) {
+        #[cfg(any(target_os = "windows", test))]
+        crate::ibeam::begin_frame(ui.ctx());
         let window = self.windows.shown();
         let moved = |app: &WordApp| app.windows.shown() != window;
         let t0 = now_ms();
@@ -458,6 +460,8 @@ impl WordApp {
             self.sync_title_and_frame(&ctx, t0);
         }
         // The synthetic step this frame took is done even when drawing ended early.
+        #[cfg(any(target_os = "windows", test))]
+        crate::ibeam::finish_frame(&ctx);
         self.flush_shot_and_synthetic(&ctx);
     }
 }
