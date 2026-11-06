@@ -134,6 +134,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("insert.textFromFile", "Text from File", "Insert › Text › Object", |s, v| {
             let path = p::req_str(v, "path")?;
             let doc = crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?;
+            s.claim_fonts_of(&doc);
             // The file's pictures, lists and styles come along (its own keys and ids mean nothing here).
             let mut frag = s.doc.adopt(doc);
             super::paste::unlink_sections(&mut frag.blocks);

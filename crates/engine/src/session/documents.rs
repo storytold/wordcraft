@@ -24,31 +24,49 @@ pub(super) fn next_document_id() -> u64 {
     NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-/// The open documents of a session whose embedded fonts it claims: they stay while an open
-/// document embeds them, and leave the font list when the last one closes (#3687). A session that
-/// is dropped releases the documents still open in it, so it leaves no fonts behind.
+/// The open documents of a session and the embedded fonts each claims: they stay while an open
+/// document claims them, and leave the font list when the last one closes (#3687). A document
+/// claims the fonts of its own file and of every file it took content from while open (Compare's
+/// original and revised documents, Insert ▸ Text from File, styles from another document): each
+/// such file's claim is kept under an owner key of its own until the document closes, so undoing
+/// back to earlier content never leaves it without its fonts. A session that is dropped releases
+/// the documents still open in it, so it leaves no fonts behind.
 #[derive(Default)]
-pub(super) struct FontClaims(std::collections::HashSet<u64>);
+pub(super) struct FontClaims(std::collections::HashMap<u64, Vec<u64>>);
 
 impl FontClaims {
-    /// Claim the fonts `doc` embeds for open document `id`.
+    /// Claim the fonts `doc` embeds for open document `id`, in place of anything it claimed before
+    /// (a document opened or made new).
     pub(super) fn claim(&mut self, id: u64, doc: &Document) {
-        self.0.insert(id);
+        self.release(id);
+        self.0.insert(id, vec![id]);
         wordcraft_fonts::FontDb::global().set_document_fonts(id, crate::io::embedded_font_files(doc));
     }
 
-    /// Document `id` is closed or replaced: its fonts go unless another open document embeds them.
+    /// Open document `id` takes in content from `doc`: the fonts `doc` embeds are claimed for it
+    /// too, beside what it claims already.
+    pub(super) fn claim_also(&mut self, id: u64, doc: &Document) {
+        let files = crate::io::embedded_font_files(doc);
+        if files.is_empty() {
+            return;
+        }
+        let owner = next_document_id();
+        self.0.entry(id).or_default().push(owner);
+        wordcraft_fonts::FontDb::global().set_document_fonts(owner, files);
+    }
+
+    /// Document `id` is closed or replaced: its fonts go unless another open document claims them.
     pub(super) fn release(&mut self, id: u64) {
-        if self.0.remove(&id) {
-            wordcraft_fonts::FontDb::global().set_document_fonts(id, Vec::new());
+        for owner in self.0.remove(&id).unwrap_or_default() {
+            wordcraft_fonts::FontDb::global().set_document_fonts(owner, Vec::new());
         }
     }
 }
 
 impl Drop for FontClaims {
     fn drop(&mut self) {
-        for id in std::mem::take(&mut self.0) {
-            wordcraft_fonts::FontDb::global().set_document_fonts(id, Vec::new());
+        for owner in std::mem::take(&mut self.0).into_values().flatten() {
+            wordcraft_fonts::FontDb::global().set_document_fonts(owner, Vec::new());
         }
     }
 }

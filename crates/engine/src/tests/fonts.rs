@@ -225,6 +225,42 @@ fn embedded_fonts_leave_with_the_last_document_that_embeds_them() {
     assert!((x - missing).abs() < 0.01, "the last document that embeds it closed: {x} vs {missing} (with the font {mono})");
 }
 
+/// Content a document takes in from another file (Compare's original, Insert ▸ Text from File)
+/// keeps that file's embedded fonts while the document is open, even after another open document
+/// that embeds them closes; the document releases them when it goes (#3687).
+#[test]
+fn fonts_of_a_file_a_document_takes_content_from_stay_while_it_is_open() {
+    const TEXT: &str = "illicit little lilies fill tiny jill";
+    const FAMILY: &str = "JetBrains Took";
+    const KEY: &str = "{5E1A7C39-2B4D-4F6E-9A08-C3D7B1E5F264}";
+    let open = |family: &str, font: Option<(&[u8], &str)>| crate::io::open_bytes("e.docx", &docx_embedding(family, font, TEXT)).unwrap();
+    let end_x = |s: &mut Session| s.layout().caret_on(&Pos::body(0, TEXT.len()), 0).unwrap().x;
+    let mono = end_x(&mut Session::new(open("JetBrains Mono", None)));
+    let missing = end_x(&mut Session::new(open(FAMILY, None)));
+    assert!((missing - mono).abs() > 1.0, "not embedded anywhere, the text falls back: {missing} vs {mono}");
+    let font = renamed("JetBrainsMono-Regular.ttf", "JetBrains Mono", FAMILY);
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-fonts-taken-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("embeds.docx");
+    std::fs::write(&file, docx_embedding(FAMILY, Some((&font, KEY)), TEXT)).unwrap();
+    let path = file.to_string_lossy().to_string();
+
+    for (id, params) in [("review.compare", json!({"original": path, "path": path})), ("insert.textFromFile", json!({"path": path}))] {
+        let mut s = Session::new(open(FAMILY, None));
+        let home = s.document_id();
+        let other = s.add_document(open(FAMILY, Some((&font, KEY))));
+        s.activate(home).unwrap();
+        s.run(id, &params).unwrap();
+        s.close_document(other).unwrap();
+        let x = end_x(&mut s);
+        assert!((x - mono).abs() < 0.01, "{id}: the document holds content from the file that embeds the font: {x} vs {mono}");
+        drop(s);
+        let x = end_x(&mut Session::new(open(FAMILY, None)));
+        assert!((x - missing).abs() < 0.01, "{id}: the document that took it in is gone: {x} vs {missing} (with the font {mono})");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A session dropped with documents still open in it (an agent's run, a test) releases their
 /// fonts as closing them would: a document opened later that asks for the family without
 /// embedding it falls back (#3687).

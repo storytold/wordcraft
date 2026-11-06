@@ -94,6 +94,8 @@ fn update_styles(s: &mut Session, v: &Value) -> CmdResult {
     let path = p::str(v, "path").map(str::to_string).or(attached).ok_or_else(|| CmdError::Params("no template is attached; give `path`".into()))?;
     let base = s.path.clone();
     let src = load_other(&path, p::str(v, "data"), base.as_deref())?;
+    // The styles taken in may be set in fonts the file embeds: the document claims them (#3687).
+    s.claim_fonts_of(&src);
     let report = apply_template_styles(&mut s.doc, &src);
     touch_all(s);
     Ok(report)
@@ -150,6 +152,7 @@ fn copy_from(s: &mut Session, v: &Value) -> CmdResult {
     }
     let base = s.path.clone();
     let src = load_other(path, p::str(v, "data"), base.as_deref())?;
+    s.claim_fonts_of(&src);
     let mut ids = Vec::new();
     for n in names {
         let st = src.styles.find(n).ok_or_else(|| CmdError::Params(format!("`{path}` has no style `{n}`")))?;
