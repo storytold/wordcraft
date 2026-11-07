@@ -308,3 +308,24 @@ fn two_names_for_one_style_both_stay_when_it_is_edited() {
         assert!(def.contains(r#"fo:font-size="21pt""#), "{name}: {def}");
     }
 }
+
+/// A parent's name goes by its family: a text style's other name isn't a paragraph style's.
+#[test]
+fn a_rewritten_styles_parent_keeps_its_own_familys_name() {
+    use std::sync::Arc;
+    let s = r#"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="BaseStyle" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="30pt"/></style:style><style:style style:name="Base_20_Style" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style><style:style style:name="My_20_Custom" style:family="paragraph" style:parent-style-name="BaseStyle"><style:text-properties fo:font-weight="bold"/></style:style>"#;
+    let styles = format!(r#"<office:document-styles {NS_T}><office:styles>{s}</office:styles></office:document-styles>"#);
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="My_20_Custom">One</text:p><text:p>Two <text:span text:style-name="Base_20_Style">three</text:span></text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+    Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.italic = Some(true);
+    let bytes = export(&d).unwrap();
+    let saved = styles_of(&bytes);
+    let mine = saved.split("<style:style ").find(|t| t.starts_with(r#"style:name="My_20_Custom""#)).and_then(|t| t.split('>').next()).unwrap();
+    assert!(mine.contains(r#"style:parent-style-name="BaseStyle""#), "{mine}");
+    let back = import(&bytes).unwrap();
+    let p = back.body[0].as_para().unwrap();
+    assert_eq!(back.styles.resolve_char(p.props.style.as_deref(), &Default::default()).size, 30.0, "inherited");
+}

@@ -316,8 +316,9 @@ pub(super) fn rewritten_defs(
             None => (!rest.contains('|')).then(|| (rest.to_string(), "")),
         }
     };
-    let names: Vec<(String, String)> =
-        defs.keys().filter_map(|k| style_of(k)).map(|(name, _)| (ours(&name), name)).filter(|(mine, name)| mine != name).collect();
+    // By family: a text style's other name isn't a paragraph style's.
+    let names: Vec<(&str, String, String)> =
+        defs.keys().filter_map(|k| style_of(k)).map(|(name, family)| (family, ours(&name), name)).filter(|(_, mine, name)| mine != name).collect();
     let (kids, _) = children(now, "office:styles", "common");
     let (written, _) = children(styles, "office:styles", "common");
     let mut out = BTreeMap::new();
@@ -330,7 +331,7 @@ pub(super) fn rewritten_defs(
         let def = kids.iter().find(|(k, _)| *k == mine).and_then(|(_, (a, b))| now.get(*a..*b)).map(|d| {
             let mut d = d.to_string();
             let own = ours(&name);
-            for (from, to) in &names {
+            for (_, from, to) in names.iter().filter(|(family, _, _)| *family == suffix) {
                 // Two of the file's names can be one of WordCraft's: a style keeps its own.
                 let to = if *from == own { &name } else { to };
                 for attr in ["style:name", "style:parent-style-name", "style:next-style-name"] {
