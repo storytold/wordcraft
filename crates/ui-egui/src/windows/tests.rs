@@ -21,6 +21,8 @@ thread_local! {
     static UPLOADS: RefCell<usize> = const { RefCell::new(0) };
     /// Each viewport's last input-method output.
     static IME: RefCell<HashMap<ViewportId, Option<egui::output::IMEOutput>>> = RefCell::new(HashMap::new());
+    /// Where the app asked each viewport's window to open.
+    static PLACES: RefCell<HashMap<ViewportId, egui::Pos2>> = RefCell::new(HashMap::new());
 }
 
 fn input(id: ViewportId) -> RawInput {
@@ -49,10 +51,14 @@ fn backend() -> egui::Context {
     EVENTS.with(|e| e.borrow_mut().clear());
     COMMANDS.with(|c| c.borrow_mut().clear());
     UPLOADS.with(|u| *u.borrow_mut() = 0);
+    PLACES.with(|p| p.borrow_mut().clear());
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
     egui::Context::set_immediate_viewport_renderer(|ctx, viewport| {
         let id = viewport.ids.this;
+        if let Some(place) = viewport.builder.position {
+            PLACES.with(|p| p.borrow_mut().insert(id, place));
+        }
         let mut raw = input(id);
         raw.viewports.entry(id).or_default().parent = Some(viewport.ids.parent);
         let mut cb = viewport.viewport_ui_cb;
@@ -107,6 +113,153 @@ fn text(a: &WordApp) -> String {
 
 fn prompt(a: &WordApp) -> Option<&'static str> {
     a.dialog.as_ref().map(|d| d.name())
+}
+
+/// A window that opens beside a maximized one, whose corner Windows puts a few pixels outside its
+/// monitor, stays on that monitor and is focused. It used to open on an imaginary monitor up and to
+/// the left, off screen, and quitting saved the place, so the next start opened there as well.
+#[test]
+fn a_window_opened_beside_a_maximized_one_stays_on_its_monitor() {
+    let ctx = backend();
+    let monitors = Box::new(|| vec![egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(3840.0, 1600.0))]);
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services { monitors: Some(monitors), ..Default::default() });
+    INFOS.with(|i| {
+        let mut i = i.borrow_mut();
+        let root = i.entry(ViewportId::ROOT).or_default();
+        root.outer_rect = Some(egui::Rect::from_min_size(egui::pos2(-8.0, -8.0), egui::vec2(3856.0, 1576.0)));
+        root.inner_rect = Some(egui::Rect::from_min_size(egui::pos2(0.0, 23.0), egui::vec2(3840.0, 1545.0)));
+        root.monitor_size = Some(egui::vec2(3840.0, 1600.0));
+    });
+    frames(&ctx, &mut a, 3);
+    a.run("file.new", json!({})).unwrap();
+    frames(&ctx, &mut a, 3);
+    let child = a.active_viewport();
+    assert_ne!(child, ViewportId::ROOT);
+    assert_eq!(PLACES.with(|p| p.borrow().get(&child).copied()), Some(egui::pos2(20.0, 20.0)));
+    assert!(sent(child, &ViewportCommand::Focus), "the new window is focused");
+}
+
+/// Each window reports its rectangle in points of its own scale. A window opened from a second
+/// window, on a monitor scaled differently from the root window's, cascades on that monitor: read
+/// with the root's scale, the second window's rectangle looks as if it is on the root's monitor.
+#[test]
+fn a_window_opened_from_a_window_on_a_scaled_monitor_stays_on_that_monitor() {
+    let ctx = backend();
+    let rect = |x, y, w, h| egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h));
+    let monitors = Box::new(move || vec![rect(0.0, 0.0, 1920.0, 1080.0), rect(1920.0, 0.0, 3840.0, 2160.0)]);
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services { monitors: Some(monitors), ..Default::default() });
+    INFOS.with(|i| {
+        let mut i = i.borrow_mut();
+        let root = i.entry(ViewportId::ROOT).or_default();
+        root.outer_rect = Some(rect(100.0, 100.0, 1200.0, 800.0));
+        root.inner_rect = root.outer_rect;
+        root.monitor_size = Some(egui::vec2(1920.0, 1080.0));
+    });
+    frames(&ctx, &mut a, 3);
+    a.run("file.new", json!({})).unwrap();
+    frames(&ctx, &mut a, 3);
+    let second = a.active_viewport();
+    // At twice the scale, on the second monitor: physically at (1920, 0), 2000 × 1000.
+    INFOS.with(|i| {
+        let mut i = i.borrow_mut();
+        let window = i.entry(second).or_default();
+        window.native_pixels_per_point = Some(2.0);
+        window.outer_rect = Some(rect(960.0, 0.0, 1000.0, 500.0));
+        window.inner_rect = window.outer_rect;
+        window.monitor_size = Some(egui::vec2(1920.0, 1080.0));
+    });
+    focus(second);
+    frames(&ctx, &mut a, 3);
+    a.run("file.new", json!({})).unwrap();
+    frames(&ctx, &mut a, 3);
+    let third = a.active_viewport();
+    assert_ne!(third, second);
+    // One step on from the second window, in its points: the monitor's bounds hold it.
+    assert_eq!(PLACES.with(|p| p.borrow().get(&third).copied()), Some(egui::pos2(988.0, 28.0)));
+}
+
+/// On multi-monitor setups where a secondary monitor has non-uniform dimensions or starts at an
+/// arbitrary offset (e.g. 1920x1080 display at x: 1280 beside a 1280-wide laptop screen),
+/// cascading from a maximized window on that secondary display stays within the secondary
+/// monitor's bounds rather than snapping to an assumed uniform grid or primary monitor size.
+#[test]
+fn cascading_from_maximized_window_on_secondary_monitor_with_offset() {
+    let ctx = backend();
+    let rect = |x, y, w, h| egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h));
+    let monitors = Box::new(move || vec![rect(0.0, 0.0, 1280.0, 800.0), rect(1280.0, 0.0, 1920.0, 1080.0)]);
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services { monitors: Some(monitors), ..Default::default() });
+    INFOS.with(|i| {
+        let mut map = i.borrow_mut();
+        let root_info = map.entry(ViewportId::ROOT).or_default();
+        root_info.monitor_size = Some(egui::vec2(1280.0, 800.0));
+        root_info.outer_rect = Some(rect(0.0, 0.0, 1280.0, 800.0));
+        root_info.inner_rect = Some(rect(0.0, 0.0, 1280.0, 800.0));
+    });
+    frames(&ctx, &mut a, 2);
+
+    // Open a second window on the secondary display (1280, 0, 1920, 1080).
+    a.run("file.new", json!({})).unwrap();
+    frames(&ctx, &mut a, 2);
+
+    let second = a.active_viewport();
+    assert_ne!(second, ViewportId::ROOT);
+
+    // Simulate the second window being maximized on the secondary monitor (1280, 0).
+    INFOS.with(|i| {
+        let mut map = i.borrow_mut();
+        let info = map.entry(second).or_default();
+        info.monitor_size = Some(egui::vec2(1920.0, 1080.0));
+        info.outer_rect = Some(rect(1272.0, -8.0, 1936.0, 1096.0));
+        info.inner_rect = Some(rect(1280.0, 0.0, 1920.0, 1080.0));
+        info.maximized = Some(true);
+    });
+    focus(second);
+    frames(&ctx, &mut a, 2);
+
+    // Open a third window from the second window on the secondary monitor.
+    a.run("file.new", json!({})).unwrap();
+    frames(&ctx, &mut a, 2);
+
+    let third = a.active_viewport();
+    assert_ne!(third, second);
+    assert_ne!(third, ViewportId::ROOT);
+
+    let pos = PLACES.with(|p| p.borrow().get(&third).copied()).expect("third viewport must have an explicit cascade position");
+    assert!(pos.x >= 1280.0, "cascaded window x ({pos:?}) must stay on secondary monitor (>= 1280)");
+    assert!(pos.x + 1440.0 <= 3200.0, "cascaded window right edge must stay within secondary monitor (<= 3200)");
+    assert!(pos.y >= 0.0, "cascaded window y must stay within secondary monitor (>= 0)");
+    assert!(pos.y + 920.0 <= 1080.0, "cascaded window bottom edge must stay within secondary monitor (<= 1080)");
+}
+
+/// Cascading from a maximized window on a secondary monitor with negative vertical offset
+/// (e.g. at x: 1280, y: -400) places the child within the display bounds [1280..3200, -400..680].
+#[test]
+fn cascading_from_maximized_window_with_negative_vertical_offset() {
+    let ctx = backend();
+    let rect = |x, y, w, h| egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h));
+    let monitors = Box::new(move || vec![rect(0.0, 0.0, 1920.0, 1080.0), rect(1280.0, -400.0, 1920.0, 1080.0)]);
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services { monitors: Some(monitors), ..Default::default() });
+    INFOS.with(|i| {
+        let mut map = i.borrow_mut();
+        let root_info = map.entry(ViewportId::ROOT).or_default();
+        root_info.monitor_size = Some(egui::vec2(1920.0, 1080.0));
+        root_info.outer_rect = Some(rect(1272.0, -408.0, 1936.0, 1096.0));
+        root_info.inner_rect = Some(rect(1280.0, -400.0, 1920.0, 1080.0));
+        root_info.maximized = Some(true);
+    });
+    frames(&ctx, &mut a, 2);
+
+    a.run("file.new", json!({})).unwrap();
+    frames(&ctx, &mut a, 2);
+
+    let child = a.active_viewport();
+    assert_ne!(child, ViewportId::ROOT);
+
+    let pos = PLACES.with(|p| p.borrow().get(&child).copied()).expect("child viewport must have an explicit cascade position");
+    assert!(pos.x >= 1280.0, "cascaded window x ({pos:?}) must stay on secondary monitor (>= 1280)");
+    assert!(pos.x + 1440.0 <= 3200.0, "cascaded window right edge must stay within secondary monitor (<= 3200)");
+    assert!(pos.y >= -400.0, "cascaded window y must stay on secondary monitor (>= -400)");
+    assert!(pos.y + 920.0 <= 680.0, "cascaded window bottom edge must stay within secondary monitor (<= 680)");
 }
 
 /// New opens the document in a second native window, focused, with a fresh interface; the

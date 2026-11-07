@@ -85,6 +85,23 @@ pub fn reachable(window: egui::Rect, monitors: &[egui::Rect]) -> bool {
     })
 }
 
+/// The monitor `window` is on: the one showing most of it or, when none shows it, the nearest.
+/// By area, not by a corner: on Windows a maximized window's corner is outside its monitor. `None`
+/// only when there are no monitors.
+pub fn monitor_of(window: egui::Rect, monitors: &[egui::Rect]) -> Option<egui::Rect> {
+    let shown = |m: &egui::Rect| {
+        let width = window.max.x.min(m.max.x) - window.min.x.max(m.min.x);
+        let height = window.max.y.min(m.max.y) - window.min.y.max(m.min.y);
+        width.max(0.0) * height.max(0.0)
+    };
+    let gap = |m: &egui::Rect| {
+        let across = (m.min.x - window.max.x).max(window.min.x - m.max.x).max(0.0);
+        let down = (m.min.y - window.max.y).max(window.min.y - m.max.y).max(0.0);
+        across * across + down * down
+    };
+    monitors.iter().copied().max_by(|a, b| shown(a).total_cmp(&shown(b)).then_with(|| gap(b).total_cmp(&gap(a))))
+}
+
 /// The window as it was when the app last closed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -566,5 +583,39 @@ mod tests {
         assert_eq!(system.fit_on_monitor(&i), None);
         // Wayland reports no rects.
         assert_eq!(system.fit_on_monitor(&RawWindowState { monitor_size: Some(laptop), ..Default::default() }), None);
+    }
+
+    /// The monitor a window is on goes by area: a maximized window's corner is outside it.
+    #[test]
+    fn a_window_belongs_to_the_monitor_showing_most_of_it() {
+        let screen = |x, y, w, h| egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h));
+        let left = screen(-1920.0, 200.0, 1920.0, 1080.0);
+        let main = screen(0.0, 0.0, 3840.0, 1600.0);
+        let below = screen(718.0, 1600.0, 1280.0, 720.0);
+        let desktop = [left, main, below];
+        assert_eq!(monitor_of(screen(-8.0, -8.0, 3856.0, 1576.0), &desktop), Some(main), "maximized, its corner outside");
+        assert_eq!(monitor_of(screen(-1928.0, 192.0, 1936.0, 1056.0), &desktop), Some(left), "maximized, on the left");
+        assert_eq!(monitor_of(screen(800.0, 1700.0, 400.0, 300.0), &desktop), Some(below), "offset and smaller");
+        assert_eq!(monitor_of(screen(-100.0, 300.0, 1000.0, 500.0), &desktop), Some(main), "across two, mostly on one");
+        assert_eq!(monitor_of(screen(3400.0, 100.0, 800.0, 600.0), &[main]), Some(main), "past the right edge");
+    }
+
+    /// When a window is completely off-screen, it falls back to the nearest monitor by Euclidean distance.
+    #[test]
+    fn a_window_no_monitor_shows_goes_to_the_nearest() {
+        let screen = |x, y, w, h| egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h));
+        let main = screen(0.0, 0.0, 1920.0, 1080.0);
+        let right = screen(1920.0, 0.0, 1920.0, 1080.0);
+        assert_eq!(monitor_of(screen(-3840.0, -1600.0, 1456.0, 959.0), &[right, main]), Some(main));
+        assert_eq!(monitor_of(screen(5000.0, 100.0, 800.0, 600.0), &[main, right]), Some(right));
+        assert_eq!(monitor_of(screen(0.0, 0.0, 800.0, 600.0), &[]), None);
+    }
+
+    /// Non-finite or corrupt coordinates do not panic and pick a monitor when available.
+    #[test]
+    fn nonsense_numbers_still_give_a_monitor() {
+        let screen = |x, y, w, h| egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h));
+        let main = screen(0.0, 0.0, 1920.0, 1080.0);
+        assert_eq!(monitor_of(screen(f32::NAN, f32::INFINITY, f32::NAN, 1.0), &[main]), Some(main));
     }
 }
