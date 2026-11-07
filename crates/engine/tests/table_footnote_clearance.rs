@@ -146,3 +146,32 @@ fn split_rows_reserve_only_the_notes_of_retained_lines() {
     assert!(reference_page > 0, "the large cell must split before its reference");
     assert_eq!(first_note_page, reference_page, "no note on a fragment without its reference");
 }
+
+/// Fitting and rejected row trials must not consume list numbers from a note or later body text.
+#[test]
+fn measuring_table_notes_does_not_advance_list_counters() {
+    let mut s = fixture(2, 35.45, 1, "A numbered note paragraph.");
+    let note = s.sel.focus.story;
+    s.run("para.numbering", &json!({})).unwrap();
+    let numbering = s.doc.para(note, &Path::top(0)).unwrap().props.numbering;
+    let after = s.doc.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+    after.props.numbering = numbering;
+    after.insert_text(0, "After the table.", &Default::default()).unwrap();
+    s.touch();
+    let l = s.layout();
+    let labels = |story, path: &Path| {
+        l.pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .filter_map(|it| match it {
+                Placed::Lines { story: own, path: at, para, l0: 0, .. } if *own == story && at == path => {
+                    para.label.as_ref().map(|label| label.text.trim().to_string())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(labels(note, &Path::top(0)), ["1."]);
+    assert_eq!(labels(StoryRef::Body, &Path::top(1)), ["2."]);
+    assert_clear(&mut s);
+}
