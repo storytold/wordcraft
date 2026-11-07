@@ -59,6 +59,8 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     };
     wr.assign_media();
     wr.embeds.reserve_media(wr.media_files.values());
+    // Kept parts don't carry a VBA project into a package that can't hold one (#3629).
+    wr.embeds.drop_macros = !flavor.macros();
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
     let mut overrides: Vec<(String, String)> = Vec::new();
     let mut rels = PartRels::default();

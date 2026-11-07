@@ -29,6 +29,9 @@ const PART_COST: u64 = 4096;
 /// Where the stories' parts live: every story this writer makes is a part in `word/`.
 const STORY_PART: &str = "word/document.xml";
 
+/// The content type of a VBA project part.
+const VBA_CONTENT_TYPE: &str = "application/vnd.ms-office.vbaProject";
+
 /// The embedded-object parts of a package being written.
 pub(crate) struct EmbedWriter<'d> {
     manifest: EmbeddedManifest,
@@ -51,6 +54,12 @@ pub(crate) struct EmbedWriter<'d> {
     scrubbed: HashMap<String, Vec<u8>>,
     /// A chart past the chart limits has been written (and the loss logged, once per save).
     chart_cut: bool,
+    /// Leave out every relationship to a VBA project, from a story, the package or a kept part,
+    /// and every kept part with a VBA project's content type, as the main document's own project
+    /// is left out of a package that can't hold macros (#3629).
+    pub drop_macros: bool,
+    /// A VBA project has been left out of a kept part tree (and the loss logged, once per save).
+    macros_dropped: bool,
 }
 
 impl<'d> EmbedWriter<'d> {
@@ -98,6 +107,8 @@ impl<'d> EmbedWriter<'d> {
             drop_glossary: false,
             scrubbed: HashMap::new(),
             chart_cut: false,
+            drop_macros: false,
+            macros_dropped: false,
         }
     }
 
@@ -105,7 +116,7 @@ impl<'d> EmbedWriter<'d> {
     pub fn font_table(&mut self, rels: &mut PartRels) {
         let mut written = Vec::new();
         let Some(root) = crate::package::font_table_key(self.passthrough).map(str::to_string) else { return };
-        if let Some(name) = self.copy_tree(&root, &mut HashMap::new(), &mut written) {
+        if let Some(name) = self.copy_tree(rt::FONT_TABLE, &root, &mut HashMap::new(), &mut written) {
             rels.add(rt::FONT_TABLE, &relative(STORY_PART, &name), false);
         }
     }
@@ -188,6 +199,25 @@ impl<'d> EmbedWriter<'d> {
         self.manifest.parts.contains_key(name) && self.passthrough.contains_key(name)
     }
 
+    /// Does [`Self::drop_macros`] leave out a relationship of type `kind` to `target` (from a
+    /// story, the package or a kept part): one to a VBA project, or to a kept part with a VBA
+    /// project's content type?
+    fn dropped_macro(&self, kind: &str, target: &str, external: bool) -> bool {
+        self.drop_macros && (rel_is(kind, rt::VBA_PROJECT) || (!external && self.vba_part(target)))
+    }
+
+    /// Does kept part `name` have a VBA project's content type?
+    fn vba_part(&self, name: &str) -> bool {
+        self.manifest.parts.get(name).is_some_and(|p| p.content_type.trim().eq_ignore_ascii_case(VBA_CONTENT_TYPE))
+    }
+
+    /// Log, once per save, that a VBA project kept with `part` is left out.
+    fn note_macros_dropped(&mut self, part: &str) {
+        if !std::mem::replace(&mut self.macros_dropped, true) {
+            log::warn!("docx: this package can't hold macros; a VBA project kept with {part} is left out");
+        }
+    }
+
     /// Reattach implicit custom XML roots, sharing their kept parts across both owners.
     pub fn custom_xml_rels(&mut self, owner: &str, rels: &mut PartRels) {
         let Some(roots) = self.passthrough.get(CUSTOM_XML_ROOTS).cloned() else { return };
@@ -199,7 +229,7 @@ impl<'d> EmbedWriter<'d> {
             if *source != owner || !rel_is(kind, rt::CUSTOM_XML) {
                 continue;
             }
-            if let Some(name) = self.copy_tree(target, &mut memo, &mut written) {
+            if let Some(name) = self.copy_tree(kind, target, &mut memo, &mut written) {
                 let source_part = if owner == "P" { "" } else { STORY_PART };
                 rels.add(kind, &relative(source_part, &name), false);
             }
@@ -219,7 +249,7 @@ impl<'d> EmbedWriter<'d> {
             if *source != owner || (self.drop_glossary && owner == "D" && rel_is(kind, rt::GLOSSARY)) {
                 continue;
             }
-            if let Some(name) = self.copy_tree(target, &mut memo, &mut written) {
+            if let Some(name) = self.copy_tree(kind, target, &mut memo, &mut written) {
                 let source_part = if owner == "P" { "" } else { STORY_PART };
                 rels.add(kind, &relative(source_part, &name), false);
             }
@@ -291,10 +321,16 @@ impl<'d> EmbedWriter<'d> {
         cost
     }
 
-    /// Write part `root` and the parts it reaches, naming them through `memo` (original → written
-    /// name; parts already in it aren't written again). Returns `root`'s written name and adds
-    /// the indices of the parts written to `written`.
-    fn copy_tree(&mut self, root: &str, memo: &mut HashMap<String, String>, written: &mut Vec<usize>) -> Option<String> {
+    /// Write part `root`, the target of a relationship of type `kind`, and the parts it reaches,
+    /// naming them through `memo` (original → written name; parts already in it aren't written
+    /// again). Returns `root`'s written name and adds the indices of the parts written to
+    /// `written`. `None` when `root` isn't kept, or when [`Self::drop_macros`] leaves out the
+    /// relationship to it (judged as the relationships between kept parts are, below).
+    fn copy_tree(&mut self, kind: &str, root: &str, memo: &mut HashMap<String, String>, written: &mut Vec<usize>) -> Option<String> {
+        if self.dropped_macro(kind, root, false) {
+            self.note_macros_dropped(root);
+            return None;
+        }
         if let Some(n) = memo.get(root) {
             return Some(n.clone());
         }
@@ -309,6 +345,10 @@ impl<'d> EmbedWriter<'d> {
             let Some(new) = memo.get(&orig).cloned() else { continue };
             let mut rels = PartRels::default();
             for r in &info.rels {
+                if self.dropped_macro(&r.kind, &r.target, r.external) {
+                    self.note_macros_dropped(&orig);
+                    continue;
+                }
                 if r.external {
                     rels.add_with_id(&r.id, &r.kind, &r.target, true);
                     continue;
@@ -361,6 +401,13 @@ impl super::Writer<'_> {
             log::warn!("docx: an embedded object's parts are missing; it is left out");
             return None;
         }
+        // Nor can the markup use a relationship that a package without macros leaves out (to a VBA
+        // project, external or not, or to a part with a VBA project's content type, #3629): the
+        // object is left out before any of its parts is written.
+        if src.refs.iter().any(|r| used.contains(&r.id) && self.embeds.dropped_macro(&r.kind, &r.target, r.external)) {
+            log::warn!("docx: this package can't hold macros; an embedded object that uses a VBA project is left out");
+            return None;
+        }
         let roots: Vec<&str> = src.refs.iter().filter(|r| !r.external).map(|r| r.target.as_str()).collect();
         // Written before (a copy of this object): give this one its own parts while the budget lasts.
         let again = roots.iter().any(|r| self.embeds.first.contains_key(*r));
@@ -373,10 +420,13 @@ impl super::Writer<'_> {
         let mut written = Vec::new();
         let mut ids: HashMap<String, String> = HashMap::new();
         for r in &src.refs {
-            let new_id = if r.external {
-                Some(rels.add(&r.kind, &r.target, true))
+            let new_id = if !r.external {
+                self.embeds.copy_tree(&r.kind, &r.target, &mut memo, &mut written).map(|name| rels.add(&r.kind, &relative(STORY_PART, &name), false))
+            } else if self.embeds.dropped_macro(&r.kind, &r.target, true) {
+                self.embeds.note_macros_dropped(STORY_PART);
+                None
             } else {
-                self.embeds.copy_tree(&r.target, &mut memo, &mut written).map(|name| rels.add(&r.kind, &relative(STORY_PART, &name), false))
+                Some(rels.add(&r.kind, &r.target, true))
             };
             if let Some(id) = new_id {
                 ids.insert(r.id.clone(), id);

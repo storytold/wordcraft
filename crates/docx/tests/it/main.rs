@@ -21,6 +21,7 @@ mod heading_levels;
 mod legacy_forms;
 mod ligatures;
 mod malformed;
+mod nested_macro_parts;
 mod note_comments;
 mod passthrough;
 mod positional_tabs;
