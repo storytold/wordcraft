@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **Fork update — 2026-11-06:** AppKit menus and standard Mac shortcuts are implemented on `mac-native`; see [scope and validation](docs/mac-native.md). Upstream parity estimates below are unchanged.
+> **UI update — 2026-11-06:** AppKit menus expose native Mac shortcuts, focused-field editing, Settings, and guarded Quit; see [scope and validation](docs/native-menus-macos.md). Parity estimates below are unchanged.
 
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
@@ -798,7 +798,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 ## Revision history
 
-Fork revision 2026-11-06: native menu bar, focused editing shortcuts, Settings, and guarded Quit; upstream assessments retained.
+2026-11-06: native menu bar, focused editing shortcuts, Settings, and guarded Quit; existing parity assessments retained.
 
 > 2026-11-03 · Arabic dialogs read right to left (rtl::Table); recorded in the progress log, readiness unchanged.
 >
