@@ -564,7 +564,7 @@ pub(super) fn turned(f: &Float) -> bool {
 /// `style:graphic-properties` attributes, and the frame's `svg:x`/`svg:y` attributes, or its
 /// `draw:transform` when it is turned (`w` × `h` its size).
 pub(super) fn frame_of(f: &Float, w: f32, h: f32) -> (&'static str, String, String) {
-    let anchor = if f.h_rel == Anchor::Page && f.v_rel == Anchor::Page {
+    let anchor = if f.h_rel == Anchor::Page || f.v_rel == Anchor::Page {
         "page"
     } else if f.v_rel == Anchor::Line {
         "char"
@@ -592,14 +592,17 @@ pub(super) fn frame_of(f: &Float, w: f32, h: f32) -> (&'static str, String, Stri
         Anchor::Margin | Anchor::InsideMargin | Anchor::OutsideMargin => "page-content",
         Anchor::LeftMargin => "page-start-margin",
         Anchor::RightMargin => "page-end-margin",
+        Anchor::Column if anchor == "page" => "page",
         Anchor::Column => "paragraph-content",
         Anchor::Character => "char",
+        _ if anchor == "page" => "page",
         _ => "paragraph",
     };
     let vrel = match f.v_rel {
         Anchor::Page | Anchor::TopMargin | Anchor::BottomMargin => "page",
         Anchor::Margin => "page-content",
         Anchor::Line => "line",
+        _ if anchor == "page" => "page",
         _ => "paragraph",
     };
     let hpos = match f.h_align {

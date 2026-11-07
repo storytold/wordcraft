@@ -1157,6 +1157,45 @@ fn header_pictures_can_be_resized_and_dragged() {
     s.run("edit.undo", &json!({})).unwrap();
     let u = s.layout().object(&selected(&s).unwrap().0, 0).expect("laid out");
     assert!((u.rect.x - 200.0).abs() < 1.0 && (u.rect.y - 60.0).abs() < 1.0, "{:?}", u.rect);
+    let float = selected(&s).unwrap().1.frame().unwrap().2.clone();
+    assert_eq!((float.h_rel, float.v_rel), (wordcraft_doc::para::Anchor::Page, wordcraft_doc::para::Anchor::Page));
+    assert_eq!((float.x, float.y), (200.0, 60.0));
+}
+
+/// #5812: arrange.bounds on a header picture (or after moveWithText false) keeps page anchoring
+/// and exports a page-anchored frame in .odt with coordinates relative to the page.
+#[test]
+fn arrange_bounds_on_header_picture_writes_page_anchored_odt_frame() {
+    use wordcraft_doc::para::Anchor;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.editHeader", &json!({})).unwrap();
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data, "width": 100})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"x": 0.0, "y": 0.0, "page": 0})).unwrap();
+    let float = selected(&s).unwrap().1.frame().unwrap().2.clone();
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Page, Anchor::Page));
+    assert_eq!((float.x, float.y), (0.0, 0.0));
+
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_formats::odt::export(&s.doc).unwrap())).unwrap();
+    let mut styles = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("styles.xml").unwrap(), &mut styles).unwrap();
+    assert!(styles.contains(r#"text:anchor-type="page""#), "frame should be page-anchored: {styles}");
+    assert!(styles.contains(r#"svg:x="0pt""#) && styles.contains(r#"svg:y="0pt""#), "offsets should be 0pt: {styles}");
+    assert!(!styles.contains(r#"text:anchor-type="paragraph""#), "frame should not be paragraph-anchored: {styles}");
+
+    // Also test after arrange.moveWithText false
+    s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
+    s.run("arrange.bounds", &json!({"x": 10.0, "y": 20.0, "page": 0})).unwrap();
+    let float = selected(&s).unwrap().1.frame().unwrap().2.clone();
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Page, Anchor::Page));
+    assert_eq!((float.x, float.y), (10.0, 20.0));
+
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_formats::odt::export(&s.doc).unwrap())).unwrap();
+    let mut styles = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("styles.xml").unwrap(), &mut styles).unwrap();
+    assert!(styles.contains(r#"text:anchor-type="page""#), "{styles}");
+    assert!(styles.contains(r#"svg:x="10pt""#) && styles.contains(r#"svg:y="20pt""#), "{styles}");
 }
 
 /// Shape Format › Text (#369): direction and alignment on the box the caret is in, then
