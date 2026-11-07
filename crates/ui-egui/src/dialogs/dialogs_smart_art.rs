@@ -282,7 +282,7 @@ pub fn items_with(g: &SmartArtSpec, i: usize, text: &str) -> Value {
         .items
         .iter()
         .enumerate()
-        .map(|(j, it)| json!({"text": if j == i { text } else { it.text.as_str() }, "level": it.level, "color": it.color.map(|c| c.hex())}))
+        .map(|(j, it)| json!({"text": if j == i { text } else { it.text.as_str() }, "level": it.level, "color": it.color.map(|c| c.hex()), "opacity": it.opacity}))
         .collect();
     json!({"items": items})
 }
@@ -296,7 +296,7 @@ pub fn items_without(g: &SmartArtSpec, i: usize) -> Value {
         .enumerate()
         .filter(|(j, _)| *j != i)
         .map(|(j, it)| {
-            json!({"text": it.text, "level": if under.contains(&j) { it.level.saturating_sub(1) } else { it.level }, "color": it.color.map(|c| c.hex())})
+            json!({"text": it.text, "level": if under.contains(&j) { it.level.saturating_sub(1) } else { it.level }, "color": it.color.map(|c| c.hex()), "opacity": it.opacity})
         })
         .collect();
     json!({"items": items})
@@ -398,14 +398,28 @@ fn color_button(app: &mut WordApp, ui: &mut Ui, g: &SmartArtSpec, i: usize) {
     let Some(accent_n) = g.style_accent(i) else { return };
     let theme = app.session.doc.settings.theme_colors.clone();
     let own = g.items.get(i).and_then(|it| it.color);
-    let fill = own.map_or_else(|| accent(&theme, accent_n), c32);
+    let solid = own.map_or_else(|| accent(&theme, accent_n), c32);
+    let style_opacity = if g.layout == SmartArtLayout::Venn { 60 } else { 100 };
+    let opacity = g.items.get(i).and_then(|it| it.opacity);
+    let fill = solid.gamma_multiply(f32::from(opacity.unwrap_or(style_opacity)) / 100.0);
+    ui.painter().rect_filled(rect, 3.0, t.panel);
     ui.painter().rect_filled(rect, 3.0, fill);
     let line = if resp.hovered() { t.accent } else { t.border_strong };
     ui.painter().rect_stroke(rect, 3.0, Stroke::new(1.0, line), egui::StrokeKind::Inside);
     let resp = resp.on_hover_text(tl!("Shape color"));
     egui::Popup::menu(&resp).show(|ui| {
-        let mut pick = widgets::color_grid(ui, &theme).map(|hex| json!({"index": i, "color": hex}));
+        let mut pick = widgets::color_grid(ui, &theme).map(|hex| json!({"index": i, "color": hex, "opacity": opacity}));
         ui.add_space(2.0);
+        ui.separator();
+        let mut pct = opacity.unwrap_or(style_opacity);
+        let slider = ui.add(egui::Slider::new(&mut pct, 0..=100).suffix("%").text(tl!("Opacity")));
+        if slider.changed() {
+            if !slider.drag_started() {
+                app.session.join_next_undo();
+            }
+            let hex = own.unwrap_or(Rgb(solid.r(), solid.g(), solid.b())).hex();
+            let _ = app.run("smartArt.itemColor", json!({"index": i, "color": hex, "opacity": pct}));
+        }
         ui.separator();
         if ui.add_enabled(own.is_some(), egui::Button::new(tl!("Style Color")).frame(false)).clicked() {
             pick = Some(json!({"index": i}));
@@ -416,6 +430,56 @@ fn color_button(app: &mut WordApp, ui: &mut Ui, g: &SmartArtSpec, i: usize) {
             ui.close();
         }
     });
+}
+
+/// Indent per level in the Text Pane, points.
+const LEVEL_INDENT: f32 = 16.0;
+
+/// Where dropping item `src` lands: its slot among the other items, the slot among all rows (for
+/// the drop line) and its new level. `rows` are the row rectangles, `y` the pointer's height and
+/// `dx` how far the pointer moved sideways since the drag began.
+fn drop_target(g: &SmartArtSpec, rows: &[Rect], src: usize, y: f32, dx: f32) -> (usize, usize, u8) {
+    let block = src..g.descendants(src).end;
+    let mut row_slot = rows.iter().position(|r| y < r.center().y).unwrap_or(rows.len());
+    let slot = if (block.start..=block.end).contains(&row_slot) {
+        row_slot = block.start;
+        block.start
+    } else {
+        if row_slot < block.start { row_slot } else { row_slot.saturating_sub(block.len()) }
+    };
+    let before = g.items.iter().enumerate().filter(|(j, _)| !block.contains(j)).map(|(_, it)| it.level).nth(slot.wrapping_sub(1));
+    let most = before.map_or(0, |l| l.saturating_add(1)).min(wordcraft_doc::smart_art::MAX_LEVEL);
+    let want = (g.items.get(src).map_or(0.0, |it| f32::from(it.level)) + (dx / LEVEL_INDENT).round()).max(0.0);
+    let level = u8::try_from(want as u32).unwrap_or(u8::MAX).min(most);
+    (slot, row_slot, level)
+}
+
+/// The focused row index after moving the block `src..end` to `slot`.
+fn moved_focus_index(focused: Option<usize>, src: usize, end: usize, slot: usize) -> Option<usize> {
+    let len = end.saturating_sub(src);
+    focused.map(|i| {
+        if (src..end).contains(&i) {
+            slot + (i - src)
+        } else if i < src {
+            if slot <= i { i + len } else { i }
+        } else {
+            let after_remove = i - len;
+            if slot <= after_remove { i } else { after_remove }
+        }
+    })
+}
+
+/// The grip at the left of an item's row: drag it to move the item (with the items under it) up or
+/// down, and sideways to change its level.
+fn grip(ui: &mut Ui, t: &Tokens) -> egui::Response {
+    let (rect, r) = ui.allocate_exact_size(vec2(12.0, 18.0), Sense::drag());
+    let c = if r.hovered() || r.dragged() { t.text } else { t.text_dim };
+    for dy in [-5.0, 0.0, 5.0] {
+        for dx in [-2.5, 2.5] {
+            ui.painter().circle_filled(rect.center() + vec2(dx, dy), 1.2, c);
+        }
+    }
+    r.on_hover_cursor(egui::CursorIcon::Grab).on_hover_text(tl!("Drag to move the item or change its level"))
 }
 
 /// The Text Pane: a row per item, indented by level. Typing changes the graphic as you go (one
@@ -429,12 +493,22 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
     let focus_id = egui::Id::unique("smart_art_focus");
     let want_focus: Option<usize> = ui.data_mut(|d| d.remove_temp(focus_id));
     let mut typed = false;
+    let drag_id = egui::Id::unique("smart_art_drag");
+    let mut dropped = false;
+    let mut rows: Vec<Rect> = Vec::new();
     app.smart_art_row_focused = false;
     egui::ScrollArea::vertical().id_salt("smart_art_items").max_height((ui.available_height() - 40.0).max(60.0)).show(ui, |ui| {
         for (i, it) in g.items.iter().enumerate() {
-            ui.horizontal(|ui| {
-                ui.add_space(f32::from(it.level) * 16.0);
-                ui.label(egui::RichText::new("•").color(t.text_dim));
+            let row = ui.horizontal(|ui| {
+                ui.add_space(f32::from(it.level) * LEVEL_INDENT);
+                let handle = grip(ui, &t);
+                if handle.drag_started() {
+                    let x = ui.input(|inp| inp.pointer.interact_pos()).map_or(0.0, |p| p.x);
+                    ui.data_mut(|d| d.insert_temp(drag_id, (i, x)));
+                }
+                if handle.drag_stopped() {
+                    dropped = true;
+                }
                 let mut text = it.text.clone();
                 let item_name = format!("{} {}", tl!("Text Pane"), i + 1);
                 let width = (ui.available_width() - SWATCH - ui.spacing().item_spacing.x).max(40.0);
@@ -466,6 +540,28 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
                     }
                 }
             });
+            rows.push(row.response.rect);
+        }
+        let dragging: Option<(usize, f32)> = ui.data(|d| d.get_temp(drag_id));
+        if let (Some((src, x0)), Some(p)) = (dragging, ui.input(|inp| inp.pointer.interact_pos())) {
+            let (slot, row_slot, level) = drop_target(&g, &rows, src, p.y, p.x - x0);
+            let y = if row_slot == 0 { rows.first().map(|r| r.top()) } else { rows.get(row_slot - 1).map(|r| r.bottom()) };
+            if let (Some(y), Some(first)) = (y, rows.first()) {
+                let x = first.left() + f32::from(level) * LEVEL_INDENT;
+                ui.painter().line_segment([pos2(x, y), pos2(first.right(), y)], Stroke::new(2.0, t.accent));
+            }
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            if dropped {
+                ui.data_mut(|d| d.remove_temp::<(usize, f32)>(drag_id));
+                app.smart_art_typing = None;
+                let end = g.descendants(src).end;
+                let len = end.saturating_sub(src);
+                let destination = slot.min(g.items.len().saturating_sub(len));
+                let focused = app.smart_art_item;
+                if app.run("smartArt.moveItem", json!({"index": src, "slot": destination, "level": level})).is_ok() {
+                    app.smart_art_item = moved_focus_index(focused, src, end, destination);
+                }
+            }
         }
     });
     if !typed && !ui.ctx().memory(|m| m.focused().is_some()) {
@@ -583,5 +679,58 @@ mod tests {
         })
         .drop_without_applying_deltas();
         assert!(height <= PICKER_HEIGHT + 1.0, "the row is {height} pt tall");
+    }
+}
+
+#[cfg(test)]
+mod drag_tests {
+    use super::*;
+
+    fn rows(n: usize) -> Vec<Rect> {
+        (0..n).map(|i| Rect::from_min_size(pos2(0.0, i as f32 * 20.0), vec2(100.0, 20.0))).collect()
+    }
+
+    #[test]
+    fn moving_a_block_remaps_the_focused_item() {
+        assert_eq!(moved_focus_index(Some(4), 3, 6, 1), Some(2));
+        assert_eq!(moved_focus_index(Some(1), 3, 6, 1), Some(4));
+        assert_eq!(moved_focus_index(Some(1), 3, 6, 2), Some(1));
+        assert_eq!(moved_focus_index(Some(7), 3, 6, 4), Some(7));
+        assert_eq!(moved_focus_index(Some(7), 3, 6, 5), Some(4));
+        assert_eq!(moved_focus_index(None, 3, 6, 1), None);
+    }
+
+    #[test]
+    fn dropping_below_the_last_row_moves_the_block_to_the_end() {
+        let g = SmartArtSpec::sample(SmartArtLayout::Hierarchy);
+        let (slot, row_slot, level) = drop_target(&g, &rows(6), 1, 500.0, -16.0);
+        assert_eq!((slot, row_slot, level), (4, 6, 0));
+    }
+
+    #[test]
+    fn dropping_above_a_block_keeps_the_row_slot() {
+        let g = SmartArtSpec::sample(SmartArtLayout::Hierarchy);
+        let (slot, row_slot, level) = drop_target(&g, &rows(6), 3, 35.0, 0.0);
+        assert_eq!((slot, row_slot, level), (2, 2, 1));
+    }
+
+    #[test]
+    fn dropping_on_itself_keeps_the_place_and_sideways_changes_the_level() {
+        let g = SmartArtSpec::sample(SmartArtLayout::Hierarchy);
+        let (slot, _, level) = drop_target(&g, &rows(6), 3, 70.0, 16.0);
+        assert_eq!((slot, level), (3, 2));
+    }
+
+    #[test]
+    fn opacity_needs_a_colour_and_is_kept_in_the_model() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("insert.smartArt", json!({"layout": "venn"})).unwrap();
+        assert!(a.run("smartArt.itemColor", json!({"index": 0, "opacity": 40})).is_err());
+        a.run("smartArt.itemColor", json!({"index": 0, "color": "FF0000", "opacity": 40})).unwrap();
+        let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).unwrap();
+        assert_eq!(g.items[0].opacity, Some(40));
+        a.run("smartArt.moveItem", json!({"index": 0, "slot": 2, "level": 0})).unwrap();
+        let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).unwrap();
+        assert_eq!(g.items[2].opacity, Some(40));
     }
 }

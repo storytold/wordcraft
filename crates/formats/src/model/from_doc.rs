@@ -713,9 +713,14 @@ fn graphic_group(
         .iter()
         .take(10_000)
         .filter_map(|item| match item {
-            GraphicItem::Shape { rect, kind, fill, stroke, stroke_width } if finite(rect) => {
+            GraphicItem::Shape { rect, kind, fill, stroke, stroke_width, alpha } if finite(rect) => {
                 let look = BoxLook {
-                    fill: fill.map(wordcraft_doc::fill::Fill::solid).filter(|_| *kind != ShapeKind::Line),
+                    fill: fill
+                        .map(|color| wordcraft_doc::fill::Fill::Solid {
+                            color,
+                            transparency: (1.0 - if alpha.is_finite() { alpha.clamp(0.0, 1.0) } else { 1.0 }) * 100.0,
+                        })
+                        .filter(|_| *kind != ShapeKind::Line),
                     line: stroke.filter(|_| stroke_width.is_finite() && *stroke_width > 0.0).map(|c| (c, stroke_width.min(12.0))),
                     ..plain.clone()
                 };

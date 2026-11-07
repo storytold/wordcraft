@@ -64,7 +64,14 @@ pub(super) fn stroke(out: &mut Vec<GraphicItem>, segs: Vec<PathSeg>, color: Rgb,
 }
 
 fn swatch(out: &mut Vec<GraphicItem>, x: f32, y: f32, color: Rgb) {
-    out.push(GraphicItem::Shape { rect: [x, y, SWATCH, SWATCH], kind: ShapeKind::Rectangle, fill: Some(color), stroke: None, stroke_width: 0.0 });
+    out.push(GraphicItem::Shape {
+        rect: [x, y, SWATCH, SWATCH],
+        kind: ShapeKind::Rectangle,
+        fill: Some(color),
+        stroke: None,
+        stroke_width: 0.0,
+        alpha: 1.0,
+    });
 }
 
 pub(super) fn seg(x0: f32, y0: f32, x1: f32, y1: f32) -> Vec<PathSeg> {
