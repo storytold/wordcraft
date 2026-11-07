@@ -523,6 +523,7 @@ Editing|Fields|Unlock Fields|fields.unlock
 Editing|Fields|Next Field|fields.next
 Editing|Fields|Previous Field|fields.previous
 Tools|Proofing|AutoCorrect Options|tools.autocorrect
+Tools|Format|AutoFormat Now|format.autoFormatNow
 Tools|Proofing|Set Proofing Language|review.language
 Tools|Customize|Customize Ribbon|tools.customizeRibbon
 Tools|Customize|Customize Keyboard|tools.customizeKeyboard
