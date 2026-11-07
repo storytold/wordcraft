@@ -115,6 +115,9 @@ pub enum InlineObject {
         /// `w:dirty` on the begin marker, as [`InlineObject::Field::dirty`].
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         dirty: bool,
+        /// A legacy form field's definition (`w:ffData`), as [`InlineObject::Field::form`].
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        form: String,
     },
     /// The end of the innermost open [`InlineObject::FieldStart`].
     FieldEnd,

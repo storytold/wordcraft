@@ -3856,7 +3856,12 @@ fn imported_range_toc_is_refreshed_in_place() {
             let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
             let n = p.len();
             p.insert_object(n, InlineObject::FieldEnd, &CharProps::default()).unwrap();
-            p.insert_object(0, InlineObject::FieldStart { instr: r#"TOC \o "1-2" \h"#.into(), locked, dirty: false }, &CharProps::default()).unwrap();
+            p.insert_object(
+                0,
+                InlineObject::FieldStart { instr: r#"TOC \o "1-2" \h"#.into(), locked, dirty: false, form: String::new() },
+                &CharProps::default(),
+            )
+            .unwrap();
         }
         let mut s = Session::new(d);
         for (i, style) in [(2, "Heading 1"), (3, "Heading 2")] {
@@ -3905,8 +3910,12 @@ fn toc_menu_offers_update_field_after_save_and_reopen() {
         let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
         let n = p.len();
         p.insert_object(n, InlineObject::FieldEnd, &CharProps::default()).unwrap();
-        p.insert_object(0, InlineObject::FieldStart { instr: r#"TOC \o "1-2" \h"#.into(), locked: false, dirty: false }, &CharProps::default())
-            .unwrap();
+        p.insert_object(
+            0,
+            InlineObject::FieldStart { instr: r#"TOC \o "1-2" \h"#.into(), locked: false, dirty: false, form: String::new() },
+            &CharProps::default(),
+        )
+        .unwrap();
     }
     let mut s = Session::new(d);
     for (i, style) in [(2, "Heading 1"), (3, "Heading 2")] {
@@ -4299,7 +4308,8 @@ fn toc_menu_targets_the_toc_update_table_refreshes() {
         let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(para)).unwrap();
         let n = p.len();
         p.insert_object(n, InlineObject::FieldEnd, &CharProps::default()).unwrap();
-        p.insert_object(0, InlineObject::FieldStart { instr: instr.into(), locked: false, dirty: false }, &CharProps::default()).unwrap();
+        p.insert_object(0, InlineObject::FieldStart { instr: instr.into(), locked: false, dirty: false, form: String::new() }, &CharProps::default())
+            .unwrap();
     }
     let mut s = Session::new(d);
     let at = |s: &mut Session, block: usize| {
@@ -4416,7 +4426,7 @@ fn imported_dirty_toc_updates_in_place_and_clears() {
         p.insert_object(n, wordcraft_doc::InlineObject::FieldEnd, &wordcraft_doc::props::CharProps::default()).unwrap();
         p.insert_object(
             0,
-            wordcraft_doc::InlineObject::FieldStart { instr: r#"TOC \o "1-3" \h \z \u"#.into(), locked: false, dirty: true },
+            wordcraft_doc::InlineObject::FieldStart { instr: r#"TOC \o "1-3" \h \z \u"#.into(), locked: false, dirty: true, form: String::new() },
             &wordcraft_doc::props::CharProps::default(),
         )
         .unwrap();
@@ -4475,8 +4485,12 @@ fn toc_page_numbers_reach_the_right_margin() {
         toc2.para.indent_left = Some(36.9);
         toc2.para.indent_first = Some(-22.7);
         let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
-        p.insert_object(0, InlineObject::FieldStart { instr: r#"TOC \o "1-3" \h \z \u"#.into(), locked: false, dirty: false }, &CharProps::default())
-            .unwrap();
+        p.insert_object(
+            0,
+            InlineObject::FieldStart { instr: r#"TOC \o "1-3" \h \z \u"#.into(), locked: false, dirty: false, form: String::new() },
+            &CharProps::default(),
+        )
+        .unwrap();
         let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(3)).unwrap();
         p.insert_object(0, InlineObject::FieldEnd, &CharProps::default()).unwrap();
     }
@@ -12902,4 +12916,56 @@ fn resolving_away_an_empty_paragraph_with_a_section_break_keeps_the_next_paragra
         assert_eq!(s.doc.sections().len(), 1, "{cmd}");
         assert_eq!(s.doc.last_section.margin_left, 72.0, "{cmd}: the following section's setup stays");
     }
+}
+
+#[test]
+fn range_field_update_and_tracked_changes_preserved_on_open() {
+    use wordcraft_doc::para::InlineObject;
+    use wordcraft_doc::props::CharProps;
+    use wordcraft_doc::{Revision, RevisionKind};
+
+    let mut p = wordcraft_doc::Paragraph::new();
+    p.insert_object(0, InlineObject::BookmarkStart { name: "bm".into() }, &CharProps::default()).unwrap();
+    p.insert_text(p.len(), "Updated", &CharProps::default()).unwrap();
+    p.insert_object(p.len(), InlineObject::BookmarkEnd { name: "bm".into() }, &CharProps::default()).unwrap();
+    p.insert_object(
+        p.len(),
+        InlineObject::FieldStart { instr: " REF bm ".into(), locked: false, dirty: true, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    p.insert_text(p.len(), "Stale", &CharProps::default()).unwrap();
+    p.insert_object(p.len(), InlineObject::FieldEnd, &CharProps::default()).unwrap();
+
+    let mut d = wordcraft_doc::Document::new();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let mut s = Session::new(d);
+    run(&mut s, "references.updateFields", json!({"all": true}));
+    let para = s.doc.body[0].as_para().unwrap();
+    assert_eq!(para.plain_text(), "UpdatedUpdated");
+    assert!(matches!(&para.objects[2], InlineObject::FieldStart { dirty: false, .. }));
+
+    // Range DATE field with tracked insertion and deletion in its result: refresh_date_fields on
+    // open (and fields.updateAll) must not wipe the tracked revisions.
+    let mut dp = wordcraft_doc::Paragraph::new();
+    dp.insert_object(
+        0,
+        InlineObject::FieldStart { instr: r#" DATE \@ "yyyy" "#.into(), locked: false, dirty: true, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    dp.insert_text(dp.len(), "2025", &CharProps { ins: Some(0), ..Default::default() }).unwrap();
+    dp.insert_text(dp.len(), "2024", &CharProps { del: Some(1), ..Default::default() }).unwrap();
+    dp.insert_object(dp.len(), InlineObject::FieldEnd, &CharProps::default()).unwrap();
+
+    let mut d2 = wordcraft_doc::Document::new();
+    d2.revisions.push(Revision { kind: RevisionKind::Insert, author: "Alice".into(), date: String::new(), move_name: None });
+    d2.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: String::new(), move_name: None });
+    d2.body = vec![wordcraft_doc::para_block(dp)];
+    crate::cmd::references::refresh_date_fields(&mut d2);
+    let mut s2 = Session::new(d2);
+    run(&mut s2, "references.updateFields", json!({"all": true}));
+    let para2 = s2.doc.body[0].as_para().unwrap();
+    assert!(para2.run_ranges().any(|(rng, p)| p.ins == Some(0) && &para2.text[rng] == "2025"));
+    assert!(para2.run_ranges().any(|(rng, p)| p.del == Some(1) && &para2.text[rng] == "2024"));
 }
