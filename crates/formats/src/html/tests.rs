@@ -752,3 +752,12 @@ fn hostile_style_sheets_never_panic() {
         let _ = parse_in(&format!("<style>{css}</style><p class='a é'>x</p><td style='width: 1e40px'>y</td>"), &|_| None, true);
     }
 }
+
+#[test]
+fn trailing_space_survives_round_trip() {
+    for text in ["Total: ", "a b "] {
+        let doc = Document::from_text(text);
+        let back = import(&export(&doc));
+        assert_eq!(back.plain_text(Default::default()).replace('\u{a0}', " "), text);
+    }
+}
