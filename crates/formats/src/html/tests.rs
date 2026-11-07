@@ -241,6 +241,19 @@ fn rtl_paragraphs_read_and_keep_their_direction() {
 }
 
 #[test]
+fn paragraph_direction_set_by_its_style_is_kept_on_export() {
+    let mut doc = model::to_doc(&parse("<p>abc</p>"));
+    std::sync::Arc::make_mut(&mut doc.styles).get_mut("Heading1").expect("builtin style").para.bidi = Some(true);
+    for b in doc.body.iter_mut() {
+        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+            p.props.style = Some("Heading1".into());
+            assert!(p.props.bidi.is_none());
+        }
+    }
+    assert!(export_fragment(&doc).contains("dir=\"rtl\""));
+}
+
+#[test]
 fn paragraph_direction_comes_from_the_nearest_block_cell_and_list_item() {
     fn flags(f: &Flow) -> Vec<bool> {
         f.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.rtl) } else { None }).collect()
