@@ -1,5 +1,17 @@
 use super::*;
 
+#[test]
+fn a_toc_title_is_capped() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let before = s.doc.body.len();
+    let long = "x".repeat(super::toc::MAX_TOC_TITLE + 1);
+    let r = s.run("references.toc", &json!({"title": long}));
+    assert!(matches!(r, Err(crate::CmdError::Params(_))), "{r:?}");
+    assert_eq!(s.doc.body.len(), before, "a rejected title changes nothing");
+    let at_cap = "x".repeat(super::toc::MAX_TOC_TITLE);
+    s.run("references.toc", &json!({"title": at_cap})).unwrap();
+}
+
 fn fields(s: &Session) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for path in s.doc.para_paths(StoryRef::Body) {
