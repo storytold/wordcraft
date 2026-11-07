@@ -393,4 +393,6 @@ fn range_toc_without_control_stays_unwrapped_and_section_break_toc_control_hands
     let d_sect = read(&package(&format!("{}{}", sdt(pr, &sect_toc), p(&t("Chapter One"))))).unwrap();
     assert!(controls(&d_sect).is_empty());
     assert!(d_sect.body[0].as_para().unwrap().section.is_some());
+    let xml_sect = document_xml(&write(&d_sect).unwrap());
+    assert!(xml_sect.contains("Chapter One") && xml_sect.contains("Section"), "{xml_sect}");
 }
