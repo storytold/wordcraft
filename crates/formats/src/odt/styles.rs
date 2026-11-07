@@ -123,14 +123,10 @@ fn script_properties(a: &Attrs, x: &mut wordcraft_doc::props::CharProps, faces: 
     if let Some(s) = get(a, "style:font-style-complex") {
         x.italic_cs = Some(matches!(s.trim(), "italic" | "oblique"));
     }
-    fn tag(v: Option<&str>) -> Option<&str> {
-        v.map(str::trim).filter(|v| (1..=8).contains(&v.len()) && v.chars().all(|c| c.is_ascii_alphanumeric()) && *v != "none" && *v != "zxx")
-    }
-    let lang = |l: &str, c: &str| tag(get(a, l)).map(|l| tag(get(a, c)).map_or_else(|| l.to_string(), |c| format!("{l}-{c}")));
-    if let Some(l) = lang("style:language-asian", "style:country-asian") {
+    if let Some(l) = language_tag(a, "style:language-asian", "style:script-asian", "style:country-asian") {
         x.lang_ea = Some(l);
     }
-    if let Some(l) = lang("style:language-complex", "style:country-complex") {
+    if let Some(l) = language_tag(a, "style:language-complex", "style:script-complex", "style:country-complex") {
         x.lang_bidi = Some(l);
     }
 }
@@ -203,15 +199,26 @@ fn extra_text_properties(a: &Attrs, d: &mut FmtDelta) {
     if let Some(v) = get(a, "style:font-relief") {
         (x.emboss, x.engrave) = (Some(v.trim() == "embossed"), Some(v.trim() == "engraved"));
     }
+    if let Some(l) = language(a) {
+        x.lang = Some(l);
+    }
+}
+
+/// The language `fo:language`, `fo:script` and `fo:country` state: see [`language_tag`].
+fn language(a: &Attrs) -> Option<String> {
+    language_tag(a, "fo:language", "fo:script", "fo:country")
+}
+
+/// The language the attributes `language`, `script` and `country` state, as a tag (`de-DE`,
+/// `sr-Latn-RS`); `None` when they state none, or no language at all (`none`, `zxx`). A script of
+/// any other shape than a script's is left out: written back, it would read as a country.
+fn language_tag(a: &Attrs, language: &str, script: &str, country: &str) -> Option<String> {
     fn tag(v: Option<&str>) -> Option<&str> {
-        v.map(str::trim).filter(|v| (1..=8).contains(&v.len()) && v.chars().all(|c| c.is_ascii_alphanumeric()))
+        v.map(str::trim).filter(|v| (1..=8).contains(&v.len()) && v.chars().all(|c| c.is_ascii_alphanumeric()) && *v != "none")
     }
-    if let Some(l) = tag(get(a, "fo:language")).filter(|l| *l != "none" && *l != "zxx") {
-        x.lang = Some(match tag(get(a, "fo:country")).filter(|c| *c != "none") {
-            Some(c) => format!("{l}-{c}"),
-            None => l.to_string(),
-        });
-    }
+    let language = tag(get(a, language)).filter(|l| *l != "zxx")?;
+    let script = tag(get(a, script)).filter(|s| super::writer::is_script(s));
+    Some([Some(language), script, tag(get(a, country))].into_iter().flatten().collect::<Vec<_>>().join("-"))
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1034,6 +1041,8 @@ pub(super) struct Styles {
     pub(super) default_tab: Option<f32>,
     /// The Asian and complex-script fonts and languages of `style:default-style` for paragraphs.
     pub(super) default_scripts: wordcraft_doc::props::CharProps,
+    /// The language the default paragraph style states.
+    pub(super) default_lang: Option<String>,
     /// Pair kerning of `style:default-style` for paragraphs (`style:letter-kerning`, §20.317;
     /// off unless it says so).
     pub(super) default_kern: bool,
@@ -1093,6 +1102,7 @@ impl Styles {
                     self.default_kern = get(&a, "style:letter-kerning").is_some_and(|k| k.trim() == "true");
                     self.default_color = get(&a, "fo:color").and_then(model::parse_color);
                     script_properties(&a, &mut self.default_scripts, &self.faces);
+                    self.default_lang = language(&a);
                 }
                 "paragraph-properties" if in_default && cur.is_none() => {
                     paragraph_spacing(&a, &mut self.default_spacing);
@@ -1188,6 +1198,12 @@ impl Styles {
             .or(self.default_size)
             .filter(|v| v.is_finite() && *v >= 1.0)
             .map(|v| v.min(1638.0))
+    }
+
+    /// The document's language: its Standard style's, else its default paragraph style's. (Written
+    /// from the model, Standard is empty and the default style says it for both.)
+    pub(super) fn document_lang(&self) -> Option<String> {
+        self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.fmt.extra.lang.clone()).or_else(|| self.default_lang.clone())
     }
 
     /// The document's default font: the Standard paragraph style's, else the default style's.
@@ -1466,6 +1482,13 @@ impl Styles {
         // defaults here): its size, when Standard's differs.
         if s.parent.is_none() && fmt.size.is_none() && self.doc_size() != self.default_size {
             fmt.size = self.default_size;
+        }
+        // And its language, likewise.
+        if s.parent.is_none()
+            && let Some(lang) = self.default_lang.as_ref().filter(|l| self.document_lang().as_ref() != Some(*l))
+            && fmt.extra.as_ref().is_none_or(|x| x.lang.is_none())
+        {
+            fmt.extra.get_or_insert_with(Default::default).lang = Some(lang.clone());
         }
         let look = ParaLook {
             align: s.align,
