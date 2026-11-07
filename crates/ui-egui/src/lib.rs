@@ -645,6 +645,10 @@ pub struct WordApp {
     pub mac_titlebar: chrome::MacTitleBar,
     /// Focus (#1678): the ribbon is dropped down from the Focus bar, over the page.
     pub(crate) focus_ribbon: bool,
+    /// The ribbon's tab strip was laid out this frame, so its keytip badges have rects to hang on.
+    /// Keytips in Focus and Full Screen View lay theirs along the slim bar instead, but only when
+    /// this is false: with the ribbon dropped over the page the two would double up.
+    pub(crate) ribbon_tabs_shown: bool,
     pub(crate) updates_rt: updates_ui::Runtime,
     /// Language pack installs, the missing-pack bar ([`language_packs`]).
     pub(crate) packs_rt: language_packs::Runtime,

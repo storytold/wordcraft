@@ -86,7 +86,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("edit.pasteMerge", "Paste: Merge Formatting", "Home › Clipboard › Paste", paste_merge)
             .params(r#"{"text"?: string, "html"?: string, "rtf"?: string}"#),
         CommandSpec::new("edit.clipboardPane", "Clipboard Pane", "Home › Clipboard", |s, v| {
-            let on = p::bool(v, "value").unwrap_or(!s.view.clipboard_pane);
+            let on = p::toggle(v, s.view.clipboard_pane)?;
             s.view.clipboard_pane = on;
             Ok(json!({"value": on, "count": s.clip_history.len()}))
         })

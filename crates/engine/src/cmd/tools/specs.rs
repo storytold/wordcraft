@@ -142,7 +142,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"path": string}"#)
         .pure(),
         CommandSpec::new("file.autosave", "AutoSave", "Quick Access Toolbar", |s, v| {
-            s.autosave = p::bool(v, "value").unwrap_or(!s.autosave);
+            s.autosave = p::toggle(v, s.autosave)?;
             Ok(json!({"value": s.autosave}))
         })
         .pure(),
@@ -346,7 +346,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"lang": "en-US|en-GB|pl-PL|nl-NL|…" (BCP 47)} — only the saved default proofing language, what future blank documents are written in, as Options › Language › Set as default does; the open document, the selection and the undo history don't change. Returns {"preferred": tag}."#)
             .pure(),
         CommandSpec::new("review.showMarkup", "Show Markup", "Review › Tracking", |s, v| {
-            s.view.show_markup = p::bool(v, "value").unwrap_or(!s.view.show_markup);
+            s.view.show_markup = p::toggle(v, s.view.show_markup)?;
             s.relayout();
             Ok(json!({"value": s.view.show_markup}))
         })

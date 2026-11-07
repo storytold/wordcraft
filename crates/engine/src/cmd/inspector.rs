@@ -20,7 +20,7 @@ const PARA_SKIP: [&str; 4] = ["style", "numbering", "numChange", "fmtChange"];
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("styles.inspector", "Style Inspector", "Home › Styles", |s, v| {
-            s.view.style_inspector = p::bool(v, "value").unwrap_or(!s.view.style_inspector);
+            s.view.style_inspector = p::toggle(v, s.view.style_inspector)?;
             let mut out = inspect(s);
             if let Value::Object(m) = &mut out {
                 m.insert("pane".into(), json!(s.view.style_inspector));
