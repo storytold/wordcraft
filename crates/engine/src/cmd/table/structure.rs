@@ -45,7 +45,8 @@ pub(super) fn del_row(s: &mut Session, _: &Value) -> CmdResult {
     }
     let prefixes: Vec<Vec<u32>> = rows.iter().map(|rr| tp.0.iter().copied().chain([*rr as u32]).collect()).collect();
     let spans = text_spans(s, story, &prefixes);
-    if let Some(done) = guard_delete(s, &spans)? {
+    let marked: Vec<_> = rows.iter().map(|rr| (tp.clone(), *rr)).collect();
+    if let Some(done) = guard_delete(s, &spans, &marked)? {
         return Ok(done);
     }
     let t = s.doc.table_mut(story, &tp)?;
@@ -89,7 +90,7 @@ pub(super) fn del_col(s: &mut Session, _: &Value) -> CmdResult {
         }
     }
     let spans = text_spans(s, story, &prefixes);
-    if let Some(done) = guard_delete(s, &spans)? {
+    if let Some(done) = guard_delete(s, &spans, &[])? {
         return Ok(done);
     }
     let t = s.doc.table_mut(story, &tp)?;
@@ -126,7 +127,8 @@ pub(in crate::cmd) fn delete_table_at(s: &mut Session, tp: &Path) -> CmdResult {
     let tp = tp.clone();
     let story = s.sel.focus.story;
     let spans = text_spans(s, story, std::slice::from_ref(&tp.0));
-    if let Some(done) = guard_delete(s, &spans)? {
+    let marked: Vec<_> = (0..s.doc.table(story, &tp).map_or(0, |t| t.rows.len())).map(|r| (tp.clone(), r)).collect();
+    if let Some(done) = guard_delete(s, &spans, &marked)? {
         return Ok(done);
     }
     s.doc.remove_block(story, &tp)?;
