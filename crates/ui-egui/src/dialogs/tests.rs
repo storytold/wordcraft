@@ -1019,6 +1019,49 @@ fn page_setup_number_fields_do_not_expand_after_paste() {
     }
 }
 
+/// A finite value can outgrow DragValue's unfocused button even when its editor clips.
+#[test]
+fn page_setup_large_numeric_margins_do_not_expand_after_leaving_field() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    for label in ["Bottom:", "Top:", "Left:", "Right:"] {
+        let mut h = app_harness(app_with("Page"));
+        h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+        h.run_steps(3);
+        let width =
+            |h: &egui_kittest::Harness<'_, WordApp>| h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Page Setup")))).unwrap().width();
+        let before = width(&h);
+        h.get_by_role_and_label(Role::SpinButton, label).click();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Paste(format!("1{}", "0".repeat(36))));
+        h.run_steps(3);
+        let Some(Dialog::PageSetup { top, bottom, left, right, .. }) = h.state().dialog.as_ref() else { panic!("no page setup dialog") };
+        let value = match label {
+            "Bottom:" => *bottom,
+            "Top:" => *top,
+            "Left:" => *left,
+            _ => *right,
+        };
+        assert!(value.is_finite() && value > 1e35, "{label}: the large finite paste was accepted: {value}");
+        assert!(width(&h) <= before + 2.0, "{label}: editing grew the dialog from {before} to {}", width(&h));
+        h.key_press(egui::Key::Tab);
+        h.run_steps(3);
+        let Some(Dialog::PageSetup { top, bottom, left, right, .. }) = h.state().dialog.as_ref() else { panic!("no page setup dialog") };
+        let after = match label {
+            "Bottom:" => *bottom,
+            "Top:" => *top,
+            "Left:" => *left,
+            _ => *right,
+        };
+        assert_eq!(after, value, "{label}: leaving the field keeps the accepted value");
+        assert!(width(&h) <= before + 2.0, "{label}: leaving the large numeric field grew the dialog from {before} to {}", width(&h));
+        h.get_by_role_and_label(Role::Button, "Cancel").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+    }
+}
+
 /// #1433: Page Setup's Paper size shows the named size the section has, in either
 /// orientation, and Custom size (None) for anything else.
 #[test]

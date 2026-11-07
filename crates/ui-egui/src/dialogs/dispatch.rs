@@ -581,8 +581,20 @@ fn insert_table_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
 }
 
 /// A margin's number box, in the unit the interface measures in.
-fn margin(value: &mut f32) -> egui::DragValue<'_> {
-    egui::DragValue::new(value).speed(3.6 / crate::options::unit().pt_per_unit()).measure(crate::options::unit()).max_decimals(2).clip_text(true)
+fn margin(value: &mut f32) -> impl egui::Widget + '_ {
+    move |ui: &mut Ui| {
+        // DragValue's unfocused button extends to fit its value; keep it inside the field too.
+        let (_, rect) = ui.allocate_space(egui::vec2(80.0, ui.spacing().interact_size.y));
+        let mut field = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(crate::rtl::row_layout(ui, egui::Align::Center)));
+        field.shrink_clip_rect(rect);
+        field.add(
+            egui::DragValue::new(value)
+                .speed(3.6 / crate::options::unit().pt_per_unit())
+                .measure(crate::options::unit())
+                .max_decimals(2)
+                .clip_text(true),
+        )
+    }
 }
 
 fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
