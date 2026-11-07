@@ -1,11 +1,13 @@
 //! Text clusters for complex scripts (Myanmar, Khmer, Tai Tham, the Indic scripts): where the
-//! caret may stop, what Backspace removes, and where Myanmar text may wrap.
+//! caret may stop, what Backspace removes, and where Myanmar / Thai / Lao text may wrap.
 //!
 //! Extended grapheme clusters (UAX #29) split some syllables that a shaper draws as one unit: a
 //! Myanmar consonant stacked under a virama (`မ္ဘ`), the Myanmar vowel signs U+102B/U+102C and
 //! the visarga U+1038 (excluded from the grapheme `SpacingMark` class), Khmer subscript
 //! consonants after the coeng. A caret between those would sit inside a glyph cluster, so the
 //! caret steps and layout clusters both use [`joins_cluster`] on top of the grapheme rules.
+
+use std::sync::OnceLock;
 
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -174,6 +176,37 @@ pub fn myanmar_breaks(text: &str) -> Vec<usize> {
     out
 }
 
+/// Whether `c` is a Thai or Lao character (U+0E00–U+0EFF).
+pub fn is_thai_lao(c: char) -> bool {
+    matches!(u32::from(c), 0x0E00..=0x0EFF)
+}
+
+/// Returns the shared ICU4X dictionary `LineSegmenter`, built once on first use.
+fn line_segmenter() -> &'static icu_segmenter::LineSegmenterBorrowed<'static> {
+    static S: OnceLock<icu_segmenter::LineSegmenterBorrowed<'static>> = OnceLock::new();
+    S.get_or_init(|| icu_segmenter::LineSegmenter::new_dictionary(icu_segmenter::options::LineBreakOptions::default()))
+}
+
+/// Line-break opportunities within Thai and Lao text, which have no spaces between words.
+///
+/// UAX #14 (`unicode_linebreak`) gives these scripts class SA, which without a dictionary
+/// resolves to AL (LB1), so it finds no breaks inside a Thai or Lao run at all. This function
+/// uses the ICU4X dictionary segmenter to find the word boundaries. Only breaks between two consecutive
+/// Thai/Lao characters are returned so that Latin/Thai mixed text is unaffected outside the
+/// Thai/Lao spans.
+///
+/// Returns sorted byte offsets into `text`.
+pub fn thai_lao_breaks(text: &str) -> Vec<usize> {
+    line_segmenter()
+        .segment_str(text)
+        .filter(|&i| {
+            i < text.len()
+                && text.get(..i).and_then(|s| s.chars().next_back()).is_some_and(is_thai_lao)
+                && text.get(i..).and_then(|s| s.chars().next()).is_some_and(is_thai_lao)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +298,49 @@ mod tests {
         assert!(backspaces_by_char('\u{064E}') && backspaces_by_char('\u{06E7}') && backspaces_by_char('\u{10EFF}'));
         assert!(!backspaces_by_char('\u{301}') && !backspaces_by_char('a') && !backspaces_by_char('語'));
         assert!(!backspaces_by_char('ب') && !backspaces_by_char('\u{06E5}') && !backspaces_by_char('\u{08E2}'));
+    }
+
+    /// Checks dictionary breaks by behaviour, not by exact ICU4X offsets (which move when the
+    /// segmenter data is updated): there is at least one break, far fewer than one per
+    /// character, each on a grapheme boundary between two Thai/Lao characters, and never right
+    /// after a leading vowel (which belongs to the following consonant).
+    fn assert_word_breaks(text: &str, leading_vowels: &[char]) -> Vec<usize> {
+        let breaks = thai_lao_breaks(text);
+        let graphemes: Vec<usize> = text.grapheme_indices(true).map(|(i, _)| i).collect();
+        assert!(!breaks.is_empty(), "{text:?}: expected at least one word break");
+        assert!(breaks.len() * 2 < graphemes.len(), "{text:?}: breaks look per-character: {breaks:?}");
+        for &b in &breaks {
+            assert!(b > 0 && b < text.len(), "{text:?}: break at an edge: {b}");
+            assert!(graphemes.contains(&b), "{text:?}: break at {b} splits a grapheme");
+            let prev = text.get(..b).and_then(|s| s.chars().next_back()).unwrap();
+            let next = text.get(b..).and_then(|s| s.chars().next()).unwrap();
+            assert!(is_thai_lao(prev) && is_thai_lao(next), "{text:?}: break at {b} leaves Thai/Lao");
+            assert!(!leading_vowels.contains(&prev), "{text:?}: break at {b} follows a leading vowel");
+        }
+        breaks
+    }
+
+    #[test]
+    fn thai_wraps_at_word_boundaries() {
+        const LEADING: [char; 5] = ['เ', 'แ', 'โ', 'ใ', 'ไ'];
+        assert_word_breaks("ภาคภูมิใจในภาษาไทย", &LEADING);
+        assert_word_breaks("แมวกินปลาที่ตลาดเมื่อวานนี้", &LEADING);
+        // Latin text: no breaks injected (UAX #14 handles Latin; this function is Thai/Lao only).
+        assert!(thai_lao_breaks("Hello world").is_empty());
+        assert!(thai_lao_breaks("").is_empty());
+        // Mixed: breaks are only between Thai characters, not at the Thai–Latin boundary.
+        let mixed = "testภาษาไทยtest";
+        for &b in &thai_lao_breaks(mixed) {
+            let prev = mixed.get(..b).and_then(|s| s.chars().next_back()).unwrap();
+            let next = mixed.get(b..).and_then(|s| s.chars().next()).unwrap();
+            assert!(is_thai_lao(prev) && is_thai_lao(next), "break at {b} crosses script boundary");
+        }
+    }
+
+    #[test]
+    fn lao_wraps_at_word_boundaries() {
+        const LEADING: [char; 5] = ['ເ', 'ແ', 'ໂ', 'ໃ', 'ໄ'];
+        assert_word_breaks("ໂລກໃໝ່ທີ່ສວຍງາມ", &LEADING);
+        assert!(thai_lao_breaks("").is_empty());
     }
 }

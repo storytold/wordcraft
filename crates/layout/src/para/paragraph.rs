@@ -805,8 +805,16 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
         found.sort_unstable();
         found.dedup();
     }
+    // Thai and Lao have no spaces between words. UAX #14 gives no breaks inside them
+    // (`unicode_linebreak` resolves class SA to AL, LB1), so add word boundaries from the ICU4X
+    // dictionary segmenter.
+    if text.chars().any(wordcraft_doc::cluster::is_thai_lao) {
+        found.extend(wordcraft_doc::cluster::thai_lao_breaks(text));
+        found.sort_unstable();
+        found.dedup();
+    }
     // Asian typography: kinsoku and breaking Latin words anywhere.
-    crate::kinsoku::apply(text, &mut found, rp.kinsoku, rp.word_wrap);
+    crate::kinsoku::apply(text, &mut found, rp.kinsoku, rp.word_wrap, rp.force_char_break);
     found
 }
 
