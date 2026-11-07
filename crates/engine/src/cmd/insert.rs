@@ -14,9 +14,9 @@ mod items;
 mod links;
 mod objects;
 
-pub(crate) use header_footer::saved_copy;
 pub(crate) use footer_page::page_footer_visible;
 pub use footer_page::{PageFooterInfo, blocks_blank, footer_visible, header_visible, page_footer_info, page_footers};
+pub(crate) use header_footer::saved_copy;
 use header_footer::{create_hf, edit_hf, header_footer, new_empty_headers, strip_headers};
 pub use items::{DropCapState, drop_cap_state, format_date, format_date_at, format_date_parts};
 use items::{cover_page, date_time, drop_cap, drop_cap_off, field, page_number, symbol};

@@ -58,6 +58,7 @@ pub fn blocks_blank(blocks: &[Arc<Block>]) -> bool {
     blank_at(blocks, 0)
 }
 
+/// Whether the blocks hold nothing visible: only whitespace, no objects, and tables whose cells are blank too, down to `BLANK_DEPTH`.
 fn blank_at(blocks: &[Arc<Block>], depth: usize) -> bool {
     blocks.iter().all(|b| match &**b {
         Block::Para(p) => p.objects.is_empty() && p.text.chars().all(char::is_whitespace),
@@ -65,6 +66,7 @@ fn blank_at(blocks: &[Arc<Block>], depth: usize) -> bool {
     })
 }
 
+/// The blocks of the part with this id, if the id is set and the part exists.
 fn blocks_of(doc: &Document, id: Option<u32>) -> Option<&Blocks> {
     id.and_then(|id| doc.parts.get(&id)).map(|part| &part.blocks)
 }
@@ -92,6 +94,7 @@ pub fn page_footer_info(s: &mut Session, idx: usize) -> Option<PageFooterInfo> {
     info_of(&s.doc, &layout, idx)
 }
 
+/// The footer and header state of page `i`, and why its footer cannot be changed alone, if so.
 fn info_of(doc: &Document, layout: &DocLayout, i: usize) -> Option<PageFooterInfo> {
     let pg = layout.pages.get(i)?;
     let blocked = match PageUse::of(doc, layout, i) {
@@ -178,6 +181,7 @@ fn can_split_after_break(doc: &Document, block: usize, off: usize) -> bool {
 }
 
 impl PageUse {
+    /// How page `idx` relates to the paragraphs and tables that touch it, or `None` when the page has no text of its own.
     fn of(doc: &Document, layout: &DocLayout, idx: usize) -> Option<PageUse> {
         let here = blocks_on(layout.pages.get(idx)?);
         let (&first, &last) = (here.keys().next()?, here.keys().next_back()?);
@@ -240,6 +244,7 @@ fn reason(e: CmdError) -> String {
     }
 }
 
+/// The refusal for a page with no text of its own, where a section break cannot be placed.
 fn no_text(n: usize) -> CmdError {
     CmdError::Disabled(format!("page {n} has no text of its own, so there is nothing to put a section break around"))
 }
@@ -252,6 +257,7 @@ fn first_of_section(layout: &DocLayout, idx: usize) -> bool {
     }
 }
 
+/// The part id stored in one slot (first, even or default) of a header or footer set.
 fn slot_get(set: &HeaderSet, slot: HfSlot) -> Option<u32> {
     match slot {
         HfSlot::First => set.first,
@@ -260,6 +266,7 @@ fn slot_get(set: &HeaderSet, slot: HfSlot) -> Option<u32> {
     }
 }
 
+/// Stores a part id in one slot (first, even or default) of a header or footer set.
 fn slot_set(set: &mut HeaderSet, slot: HfSlot, id: Option<u32>) {
     match slot {
         HfSlot::First => set.first = id,
@@ -300,10 +307,12 @@ fn plain_copy(sec: &SectionProps) -> SectionProps {
     c
 }
 
+/// A footer with one empty paragraph in the "Footer" style.
 fn blank_footer() -> Blocks {
     vec![para_block(Paragraph::new().styled("Footer"))]
 }
 
+/// Adds a part of the given kind to the document, mapping the error to a command error.
 fn add_part(s: &mut Session, kind: PartKind, blocks: Blocks) -> Result<u32, CmdError> {
     Ok(s.doc.try_add_part(kind, blocks)?)
 }
@@ -340,6 +349,7 @@ fn shown_blocks(doc: &Document, id: Option<u32>) -> Option<Blocks> {
 /// every page but the one changed.
 type View = Vec<(u32, Option<Blocks>, Option<Blocks>)>;
 
+/// A snapshot of every page: its number, shown header blocks and shown footer blocks, used to check that nothing else changed.
 fn view_of(doc: &Document, layout: &DocLayout) -> View {
     layout.pages.iter().map(|pg| (pg.number, shown_blocks(doc, pg.header_story), shown_blocks(doc, pg.footer_story))).collect()
 }
@@ -364,7 +374,9 @@ fn verify(s: &mut Session, before: &View, idx: usize, want_visible: bool) -> Res
 /// `layout.pageFooterVisible`: hide or show the footer on one page of the current layout.
 pub(crate) fn page_footer_visible(s: &mut Session, v: &serde_json::Value) -> CmdResult {
     let layout = s.layout();
+    let given = v.get("page").is_some_and(|x| !x.is_null());
     let idx = match p::u64(v, "page") {
+        None if given => return Err(CmdError::Params("page must be a whole number from 1".into())),
         Some(n) => {
             let n = usize::try_from(n).unwrap_or(usize::MAX);
             if n == 0 || n > layout.pages.len() {
@@ -396,6 +408,7 @@ pub(crate) fn page_footer_visible(s: &mut Session, v: &serde_json::Value) -> Cmd
     result(true)
 }
 
+/// Shows the footer on page `idx`: it gets the neighbour's footer, or a page number, and the result is verified by laying out again.
 fn show(s: &mut Session, layout: &DocLayout, idx: usize, before: &View) -> Result<(), CmdError> {
     let Some(pg) = layout.pages.get(idx) else { return Ok(()) };
     let content = match neighbour_footer(&s.doc, layout, idx) {

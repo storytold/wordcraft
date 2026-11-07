@@ -165,6 +165,18 @@ fn bad_pages_are_params_errors() {
 }
 
 #[test]
+fn an_unreadable_page_is_an_error_and_a_null_page_means_the_caret_page() {
+    let mut s = book(2);
+    let before = shown(&mut s);
+    for page in [json!(-1), json!("2"), json!(true)] {
+        let e = s.run("layout.pageFooterVisible", &json!({"page": page.clone(), "visible": false})).unwrap_err();
+        assert!(matches!(e, CmdError::Params(_)), "{page}: {e:?}");
+    }
+    assert_eq!(shown(&mut s), before, "a refused call changes nothing");
+    assert!(s.run("layout.pageFooterVisible", &json!({"page": null, "visible": true})).is_ok());
+}
+
+#[test]
 fn a_page_without_a_footer_gets_the_neighbours_when_shown() {
     let mut s = book(3);
     s.run("insert.removeFooter", &json!({})).unwrap();
