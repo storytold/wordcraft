@@ -45,6 +45,7 @@ const ALL_CHECKS: &[&str] = &[
     "REL-TYPED",
     "REL-REF-MISSING",
     "CT-MISMATCH",
+    "CONTENTPART-TYPE",
     "COMMENT-RANGE-COUNT",
     "ID-COMMENT-DUP",
     "ID-COMMENT-REF",
@@ -1506,6 +1507,103 @@ fn math_placement_header_root_direct_child() {
     let report = validate(&d);
     assert_finding(&report, "MATH-PLACEMENT", Some("word/header1.xml"));
     assert_eq!(math_findings(&report), 2, "{:?}", report.findings);
+}
+
+/// A document whose main part holds `markup` (SDT-wrapped contentPart
+/// elements), with document relationships `rels` and one extra part at
+/// `target` typed `target_ct`.
+fn content_part_doc(markup: &str, rels: &str, target: &str, target_ct: &str) -> Doc {
+    let mut d = Doc::minimal();
+    d.set_document(markup);
+    d.set("word/_rels/document.xml.rels", rels_xml(rels));
+    d.add_with_override(target, target_ct, b"<root/>".to_vec());
+    d
+}
+
+/// The SDT markup holding one contentPart with relationship id `rid`.
+fn one_content_part(rid: &str) -> String {
+    format!("<w:p><w:sdt><w:sdtContent><w:r><w:contentPart r:id=\"{rid}\"/></w:r></w:sdtContent></w:sdt></w:p>")
+}
+
+/// A contentPart whose target is an image: Word fails to load the document,
+/// because the target's content type is not text/xml.
+#[test]
+fn contentpart_type_image_target() {
+    let d = content_part_doc(
+        &one_content_part("rIdCP"),
+        r#"<Relationship Id="rIdCP" Type="http://example.com/contentPartTarget" Target="data/blob.bin"/>"#,
+        "word/data/blob.bin",
+        "image/png",
+    );
+    let report = validate(&d);
+    assert_finding(&report, "CONTENTPART-TYPE", Some("word/document.xml"));
+}
+
+/// application/xml is likewise not text/xml — the near miss the note is about.
+#[test]
+fn contentpart_type_application_xml_target() {
+    let d = content_part_doc(
+        &one_content_part("rIdCP"),
+        r#"<Relationship Id="rIdCP" Type="http://example.com/contentPartTarget" Target="data/item.xml"/>"#,
+        "word/data/item.xml",
+        "application/xml",
+    );
+    let report = validate(&d);
+    assert_finding(&report, "CONTENTPART-TYPE", Some("word/document.xml"));
+}
+
+/// A text/xml target is the one type Word loads. This fixture's
+/// [Content_Types].xml also carries the standard Default for the xml
+/// extension (application/xml): the part's Override wins over the
+/// extension Default (OPC §9.1.2), so the target resolves as text/xml.
+#[test]
+fn contentpart_type_text_xml_is_clean() {
+    let d = content_part_doc(
+        &one_content_part("rIdCP"),
+        r#"<Relationship Id="rIdCP" Type="http://example.com/contentPartTarget" Target="data/item.xml"/>"#,
+        "word/data/item.xml",
+        "text/xml",
+    );
+    let report = validate(&d);
+    assert_clean(&report);
+    assert!(!has(&report, "CONTENTPART-TYPE"));
+}
+
+/// An undefined relationship id is REL-REF-MISSING's finding, not this
+/// rule's; and two elements naming the same bad target report it once.
+#[test]
+fn contentpart_type_unknown_rel_and_dedup() {
+    let d = content_part_doc(
+        &one_content_part("rIdNope"),
+        r#"<Relationship Id="rIdOther" Type="http://example.com/contentPartTarget" Target="data/item.xml"/>"#,
+        "word/data/item.xml",
+        "image/png",
+    );
+    let report = validate(&d);
+    assert!(!has(&report, "CONTENTPART-TYPE"), "{:?}", report.findings);
+    assert!(has(&report, "REL-REF-MISSING"), "{:?}", report.findings);
+    let two = format!("{}{}", one_content_part("rIdCP"), one_content_part("rIdCP"));
+    let d = content_part_doc(
+        &two,
+        r#"<Relationship Id="rIdCP" Type="http://example.com/contentPartTarget" Target="data/blob.bin"/>"#,
+        "word/data/blob.bin",
+        "image/png",
+    );
+    let report = validate(&d);
+    assert_eq!(report.findings.iter().filter(|f| f.rule == "CONTENTPART-TYPE").count(), 1, "{:?}", report.findings);
+}
+
+/// A contentPart with no relationship id at all is not this rule's business.
+#[test]
+fn contentpart_type_no_rel_id() {
+    let d = content_part_doc(
+        "<w:p><w:sdt><w:sdtContent><w:r><w:contentPart/></w:r></w:sdtContent></w:sdt></w:p>",
+        r#"<Relationship Id="rIdCP" Type="http://example.com/contentPartTarget" Target="data/item.xml"/>"#,
+        "word/data/item.xml",
+        "image/png",
+    );
+    let report = validate(&d);
+    assert!(!has(&report, "CONTENTPART-TYPE"), "{:?}", report.findings);
 }
 
 /// A main part whose single paragraph holds `starts` comment range starts.

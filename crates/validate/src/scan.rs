@@ -99,6 +99,8 @@ pub(crate) struct PartScan {
     /// Every `r:id`/`r:embed`/`r:link` value in the part, with element identity.
     pub refs: Vec<RefFact>,
     pub facts: StoryFacts,
+    /// Relationship ids named by `w:contentPart` elements in this part.
+    pub content_parts: Vec<String>,
 }
 
 struct ElemId {
@@ -461,7 +463,8 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
     let mut reader = NsReader::from_reader(text.as_bytes());
     let mut buf = Vec::new();
     let mut state = State { fact_cap: acc.limits.facts, ..State::default() };
-    let mut out = PartScan { malformed: None, unknown_prefixes: Vec::new(), refs: Vec::new(), facts: StoryFacts::default() };
+    let mut out =
+        PartScan { malformed: None, unknown_prefixes: Vec::new(), refs: Vec::new(), facts: StoryFacts::default(), content_parts: Vec::new() };
     let mut root_count = 0usize;
     let mut events = 0usize;
     let mut budget_stopped = false;
@@ -506,6 +509,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 check_prefixes(&state.declared, &attrs, reader.resolver(), &[], &mut out);
                 if !was_suppressed {
                     collect_refs(&id, &attrs, reader.resolver(), &mut out.refs, acc.limits.facts, &mut state.refs_capped);
+                    collect_content_part(&id, &attrs, reader.resolver(), &mut out.content_parts);
                     on_open(&mut state, &id, &attrs, reader.resolver(), role, part, acc);
                 }
                 let frame = Frame { alt: is_alt, suppressed: was_suppressed, ..frame_for(&id) };
@@ -531,6 +535,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 check_prefixes(&state.declared, &attrs, reader.resolver(), &decls, &mut out);
                 if !was_suppressed {
                     collect_refs(&id, &attrs, reader.resolver(), &mut out.refs, acc.limits.facts, &mut state.refs_capped);
+                    collect_content_part(&id, &attrs, reader.resolver(), &mut out.content_parts);
                     on_empty(&mut state, &id, &attrs, reader.resolver(), role, part, acc);
                 }
                 if is_alt {
@@ -1102,6 +1107,15 @@ fn record_structure(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &N
 const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
 /// The VML namespace (`v:imagedata`).
 const NS_V: &str = "urn:schemas-microsoft-com:vml";
+
+/// Collect the relationship id named by a `w:contentPart` element, if any.
+fn collect_content_part(id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, out: &mut Vec<String>) {
+    if id.w() && id.local == "contentPart" {
+        if let Some(v) = attr_ns(attrs, res, NS_R, b"id") {
+            out.push(v);
+        }
+    }
+}
 
 /// Collect relationship references (`r:id`, `r:embed`, `r:link`) from element attributes up to the fact limit.
 fn collect_refs(id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, out: &mut Vec<RefFact>, cap: usize, capped: &mut bool) {

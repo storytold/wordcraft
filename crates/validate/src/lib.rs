@@ -291,6 +291,11 @@ pub(crate) const COMMENT_RANGE_COUNT: RuleSpec = RuleSpec { id: "COMMENT-RANGE-C
 /// note (c): if any AG_Password attribute is present, Word requires those
 /// three, and otherwise will not open the file.
 pub(crate) const PROTECTION_PASSWORD: RuleSpec = RuleSpec { id: "PROTECTION-PASSWORD", severity: Severity::Error, evidence: Evidence::MsDocumented };
+/// `CONTENTPART-TYPE`: a `w:contentPart` element whose relationship target's
+/// effective content type is not `text/xml`. MS-OI29500 Part 1 §17.3.3.2
+/// note (a): "Word will fail to load the document if the content part's
+/// content type is not text/xml."
+pub(crate) const CONTENTPART_TYPE: RuleSpec = RuleSpec { id: "CONTENTPART-TYPE", severity: Severity::Error, evidence: Evidence::MsDocumented };
 /// `STRUCT-DELTEXT`: a `w:t` inside `w:del`, or a `w:delText` outside one. Observed (web): lenient
 /// recovery, the text renders as a tracked deletion anyway, so Warning.
 pub(crate) const STRUCT_DELTEXT: RuleSpec = RuleSpec { id: "STRUCT-DELTEXT", severity: Severity::Warning, evidence: Evidence::Observed };
@@ -323,6 +328,7 @@ pub(crate) const RULES: &[RuleSpec] = &[
     MATH_PLACEMENT,
     COMMENT_RANGE_COUNT,
     PROTECTION_PASSWORD,
+    CONTENTPART_TYPE,
     REL_DUP_ID,
     REL_DANGLING,
     REL_TYPED,
@@ -514,6 +520,7 @@ pub(crate) fn validate_bytes_limited(bytes: &[u8], limits: Limits) -> Report {
     check_content_types(&pkg, &mut acc);
     let xml = check_xml(&pkg, &mut acc);
     check_rels(&pkg, &xml.refs, &mut acc);
+    check_content_part_types(&pkg, &xml.content_parts, &mut acc);
     check_story(&pkg, &xml.facts, &mut acc);
     check_media(&pkg, &mut acc);
     acc.finish()
@@ -625,6 +632,8 @@ fn check_dup_main(pkg: &Package, acc: &mut Acc) {
 struct XmlScan {
     facts: scan::StoryFacts,
     refs: Vec<(String, Vec<RefFact>)>,
+    /// `w:contentPart` relationship ids per owning part (for `CONTENTPART-TYPE`).
+    content_parts: Vec<(String, Vec<String>)>,
 }
 
 /// Scan all XML parts for well-formedness, undeclared prefixes, illegal characters, and extract story facts.
@@ -638,6 +647,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     let roles = story_roles(pkg);
     let mut facts = scan::StoryFacts::default();
     let mut refs: Vec<(String, Vec<RefFact>)> = Vec::new();
+    let mut content_parts: Vec<(String, Vec<String>)> = Vec::new();
     let mut pooled_capped = false;
     let mut facts_pooled_part: Option<String> = None;
     let mut pooled_refs = 0usize;
@@ -679,6 +689,9 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
                 facts_pooled_part = Some(e.name.clone());
             }
         }
+        if !scanned.content_parts.is_empty() {
+            content_parts.push((e.name.clone(), scanned.content_parts));
+        }
         if !scanned.refs.is_empty() && !refs_pooled_capped {
             if pooled_refs.saturating_add(scanned.refs.len()) > acc.limits.facts {
                 refs_pooled_capped = true;
@@ -704,7 +717,39 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
         acc.note(format!("the package's relationship references exceeded {} entries at {part}; later ones were not recorded", acc.limits.facts));
         acc.set_incomplete();
     }
-    XmlScan { facts, refs }
+    XmlScan { facts, refs, content_parts }
+}
+
+/// `CONTENTPART-TYPE` (MS-OI29500 Part 1 §17.3.3.2 note (a)): each
+/// `w:contentPart` element's relationship must reach a part whose effective
+/// content type is `text/xml`; Word fails to load the document otherwise.
+/// The effective type comes from `ContentTypes::of`, where a part Override
+/// beats the extension Default (OPC §9.1.2). A relationship id the owner
+/// does not define is REL-REF-MISSING's finding, and an undeclared target
+/// is CT-UNDECLARED's; this check judges only a resolved, declared type.
+fn check_content_part_types(pkg: &Package, content_parts: &[(String, Vec<String>)], acc: &mut Acc) {
+    acc.ran("CONTENTPART-TYPE");
+    for (owner, ids) in content_parts {
+        let rels_name = package::rels_part_name(owner);
+        let Some(rp) = pkg.rels.iter().find(|rp| rp.name.eq_ignore_ascii_case(&rels_name)) else { continue };
+        let mut seen: Vec<&String> = Vec::new();
+        for id in ids {
+            if seen.contains(&id) {
+                continue;
+            }
+            seen.push(id);
+            let Some(rel) = rp.rels.iter().find(|r| &r.id == id) else { continue };
+            let Some(target) = &rel.target_abs else { continue };
+            let Some(ct) = pkg.content_types.of(target) else { continue };
+            if !ct.eq_ignore_ascii_case("text/xml") {
+                acc.add(
+                    "CONTENTPART-TYPE",
+                    Some(owner.clone()),
+                    format!("w:contentPart in {owner} references {target} (relationship {id}), whose content type is {ct}, not text/xml"),
+                );
+            }
+        }
+    }
 }
 
 /// Report an `XML-MALFORMED` finding with severity graded by whether the malformed part is main, reachable, or unused.
