@@ -344,7 +344,8 @@ pub(super) fn customize_ribbon(s: &mut Session, v: &Value) -> CmdResult {
 
 /// The rows of an `insert.spreadsheet` call: `values` (a rectangular array of cells) or `csv`.
 pub(super) fn spreadsheet_rows(v: &Value) -> Result<Vec<Vec<String>>, CmdError> {
-    let Some(values) = v.get("values").filter(|x| !x.is_null()) else {
+    // The CSV fallback is for an absent `values`; an explicit null is a malformed argument.
+    let Some(values) = v.get("values") else {
         return Ok(crate::cmd::mailings::parse_csv(p::str(v, "csv").unwrap_or("A,B,C\n1,2,3\n4,5,6")));
     };
     let list = values.as_array().ok_or_else(|| CmdError::Params("`values` must be an array of rows".into()))?;

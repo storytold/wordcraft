@@ -267,6 +267,23 @@ fn spreadsheet_takes_values_header_and_style() {
     assert_eq!(t.props.style.as_deref(), Some("TableGrid"));
 }
 
+/// An explicit `values: null` is a parameter error, not the legacy CSV sample table: the document
+/// and the undo history stay as they were. Only an absent `values` falls back to `csv`.
+#[test]
+fn spreadsheet_rejects_an_explicit_null_values_without_changing_anything() {
+    let mut s = Session::new(Document::from_text("keep"));
+    let depth = s.undo_depth();
+    for args in [json!({"values": null}), json!({"values": null, "csv": "a,b\n1,2"})] {
+        assert!(s.run("insert.spreadsheet", &args).is_err(), "{args}");
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "keep");
+        assert!(!s.doc.body.iter().any(|b| matches!(&**b, Block::Table(_))));
+        assert_eq!(s.undo_depth(), depth, "{args}: no undo step");
+    }
+    s.run("insert.spreadsheet", &json!({"csv": "a,b\n1,2"})).unwrap();
+    let Some(Block::Table(t)) = s.doc.body.iter().map(|b| &**b).find(|b| matches!(b, Block::Table(_))) else { panic!("no table") };
+    assert_eq!((t.rows.len(), t.rows[0].cells.len()), (2, 2), "an absent `values` still takes the csv");
+}
+
 /// #2242: malformed `values` is an error, never a panic, and leaves the document alone.
 #[test]
 fn spreadsheet_rejects_hostile_values() {

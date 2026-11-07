@@ -404,6 +404,22 @@ fn insert_table_rejects_hostile_values() {
     }
 }
 
+/// An explicit `values: null` is a tool error and changes nothing: no table, and the undo history
+/// still ends with the earlier edit (one Undo takes that back, not a phantom table insertion).
+#[test]
+fn insert_table_rejects_null_values_without_changing_the_document() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "new_document", json!({}));
+    tool(&mut s, "type_text", json!({"text": "keep"}));
+    let r = call(&mut s, 13, "tools/call", json!({"name": "insert_table", "arguments": {"values": null}}));
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    assert_eq!(paragraphs(&mut s).len(), 1, "no table or paragraph added");
+    assert_eq!(tool(&mut s, "get_text", json!({}))["text"].as_str().unwrap(), "keep");
+    assert!(!tool(&mut s, "inspect_document", json!({}))["blocks"].to_string().contains("table"));
+    tool(&mut s, "execute", json!({"command": "edit.undo"}));
+    assert_eq!(tool(&mut s, "get_text", json!({}))["text"].as_str().unwrap(), "", "the undo step is the typing, not an insert");
+}
+
 /// #3676: a page number that cannot fit an index is rejected, not silently rendered as
 /// page 1 (the old cast truncated 2^32 to 0 on 32-bit and wasm).
 #[test]
