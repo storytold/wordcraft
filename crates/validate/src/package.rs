@@ -629,44 +629,46 @@ pub(crate) fn rels_part_name(part: &str) -> String {
     }
 }
 
-/// Find the stored case-preserving entry name matching `name` (case-insensitive, leading slash stripped).
-fn canonical(entries: &[Entry], name: &str) -> Option<String> {
+/// Match an entry by name, trying exact case-insensitive match first, then unambiguous percent-decoded equivalence.
+fn find_entry<'a>(entries: &'a [Entry], name: &str) -> Option<&'a Entry> {
     let n = name.trim_start_matches('/');
     if let Some(e) = entries.iter().find(|e| !e.is_dir && e.name.eq_ignore_ascii_case(n)) {
-        return Some(e.name.clone());
+        return Some(e);
     }
-    let n_decoded = percent_decode(n);
-    entries
-        .iter()
-        .find(|e| {
-            if e.is_dir {
-                return false;
-            }
+    let n_has_pct = n.contains('%');
+    let n_decoded = if n_has_pct { percent_decode(n) } else { String::new() };
+    let mut matches = entries.iter().filter(|e| {
+        if e.is_dir {
+            return false;
+        }
+        if n_has_pct && e.name.eq_ignore_ascii_case(&n_decoded) {
+            return true;
+        }
+        if e.name.contains('%') {
             let e_decoded = percent_decode(&e.name);
-            e_decoded.eq_ignore_ascii_case(n) || e_decoded.eq_ignore_ascii_case(&n_decoded) || e.name.eq_ignore_ascii_case(&n_decoded)
-        })
-        .map(|e| e.name.clone())
+            if e_decoded.eq_ignore_ascii_case(n) || (n_has_pct && e_decoded.eq_ignore_ascii_case(&n_decoded)) {
+                return true;
+            }
+        }
+        false
+    });
+    let first = matches.next()?;
+    if matches.next().is_none() { Some(first) } else { None }
+}
+
+/// Find the stored case-preserving entry name matching `name` (case-insensitive, leading slash stripped).
+fn canonical(entries: &[Entry], name: &str) -> Option<String> {
+    find_entry(entries, name).map(|e| e.name.clone())
 }
 
 /// The stored spelling of the part at `name` (case-insensitive, leading `/` ignored), if present.
 pub(crate) fn canonical_entry(pkg: &Package, name: &str) -> Option<String> {
-    canonical(&pkg.entries, name)
+    find_entry(&pkg.entries, name).map(|e| e.name.clone())
 }
 
 /// The entry at `name` (case-insensitive, leading `/` ignored), if present.
 pub(crate) fn entry_by_name<'a>(pkg: &'a Package, name: &str) -> Option<&'a Entry> {
-    let n = name.trim_start_matches('/');
-    if let Some(e) = pkg.entries.iter().find(|e| !e.is_dir && e.name.eq_ignore_ascii_case(n)) {
-        return Some(e);
-    }
-    let n_decoded = percent_decode(n);
-    pkg.entries.iter().find(|e| {
-        if e.is_dir {
-            return false;
-        }
-        let e_decoded = percent_decode(&e.name);
-        e_decoded.eq_ignore_ascii_case(n) || e_decoded.eq_ignore_ascii_case(&n_decoded) || e.name.eq_ignore_ascii_case(&n_decoded)
-    })
+    find_entry(&pkg.entries, name)
 }
 
 /// Whether the part at `name` is present in the package but its content could not be read. A
