@@ -8,6 +8,7 @@
 //! capped), so hostile input yields an error or a best-effort document, never a panic.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod annotations;
 mod crypt;
 mod drawing;
 mod fib;
@@ -36,7 +37,7 @@ use wordcraft_doc::props::CharProps;
 use wordcraft_doc::props::NumRef;
 use wordcraft_doc::section::HeaderSet;
 use wordcraft_doc::styles::StyleSheet;
-use wordcraft_doc::{Document, PartKind};
+use wordcraft_doc::{Comment, Document, PartKind};
 
 use fkp::Bins;
 use piece::{PieceTable, PrmRef};
@@ -374,7 +375,27 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     }
     // Sorted so the main walk finds each reference by binary search.
     note_links.sort_by_key(|(cp, _, _)| *cp);
-    let marks = notes::parse_bookmarks(&table, &fib);
+    let mut marks = notes::parse_bookmarks(&table, &fib);
+    // Comment stories: each text range becomes a comment's part, and the comment's range is
+    // marked in the main document like a bookmark's. A comment on an empty range, or whose range
+    // is missing or not in the main document, is marked at its reference (0x05, which the walk
+    // drops, as it does the reference mark that starts each comment's own text). A range must end
+    // before the text does: the walk stops there, and the comment would be left without its end.
+    let atn_base = hdd_base.saturating_add(fib.ccp.hdd);
+    for a in annotations::parse(&table, &fib) {
+        let Some((from, to)) = story(atn_base, fib.ccp.atn, a.story) else { continue };
+        if doc.parts.len() >= MAX_PARTS {
+            break;
+        }
+        let blocks = story_blocks(&ctx, from, to, &mut pics, max_paragraphs)?;
+        let part = doc.add_part(PartKind::Comment, blocks);
+        let id = doc.comments.len() as u32;
+        doc.comments.insert(id, Comment { author: a.author, initials: a.initials, part, ..Default::default() });
+        let (start, end) = a.range.filter(|(s, e)| s <= e && *e < fib.ccp.text).unwrap_or((a.ref_cp, a.ref_cp));
+        marks.push((start, notes::Mark::CommentStart(id)));
+        marks.push((end, notes::Mark::CommentEnd(id)));
+    }
+    marks.sort_by_key(|(cp, m)| (*cp, matches!(m, notes::Mark::End(_) | notes::Mark::CommentEnd(_))));
     let mut sect_ends: Vec<u32> = sects.iter().map(|s| s.end_cp).collect();
     sect_ends.sort_unstable();
     let ctx = WalkCtx { notes: &note_links, marks: &marks, sect_ends: &sect_ends, ..ctx };
@@ -563,6 +584,8 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 let obj = match m {
                     notes::Mark::Start(name) => InlineObject::BookmarkStart { name: name.clone() },
                     notes::Mark::End(name) => InlineObject::BookmarkEnd { name: name.clone() },
+                    notes::Mark::CommentStart(id) => InlineObject::CommentStart { id: *id },
+                    notes::Mark::CommentEnd(id) => InlineObject::CommentEnd { id: *id },
                 };
                 pb.push('\u{FFFC}', CharProps::default());
                 pb.objects.push(obj);
@@ -721,8 +744,8 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
             '\u{E}' => push_formatted(&mut pb, cp, '\u{E}', ctx, field.as_mut(), &mut memo),
             '\u{1E}' => push_formatted(&mut pb, cp, '\u{2011}', ctx, field.as_mut(), &mut memo),
             '\u{1F}' => push_formatted(&mut pb, cp, '\u{AD}', ctx, field.as_mut(), &mut memo),
-            // Object anchors, comment references and other special characters are dropped
-            // (or handled by later passes).
+            // Object anchors, comment references (their ranges are marks) and other special
+            // characters are dropped (or handled by later passes).
             c if (c as u32) < 0x20 => {}
             c => push_formatted(&mut pb, cp, c, ctx, field.as_mut(), &mut memo),
         }

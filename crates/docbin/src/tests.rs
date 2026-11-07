@@ -7,6 +7,7 @@ use proptest::prelude::*;
 
 use super::read;
 
+mod annotations;
 mod drawing;
 mod encrypted;
 mod metadata;
@@ -33,6 +34,7 @@ pub(crate) struct FibSpec {
     pub(crate) ccp_text: u32,
     pub(crate) ccp_ftn: u32,
     pub(crate) ccp_hdd: u32,
+    pub(crate) ccp_atn: u32,
     pub(crate) ccp_edn: u32,
     /// (pair index, fc, lcb) entries to poke into the RgFcLcb blob.
     pub(crate) pairs: Vec<(usize, u32, u32)>,
@@ -40,7 +42,7 @@ pub(crate) struct FibSpec {
 
 impl Default for FibSpec {
     fn default() -> Self {
-        FibSpec { nfib: 0x00C1, flags: 0x1000, ccp_text: 0, ccp_ftn: 0, ccp_hdd: 0, ccp_edn: 0, pairs: Vec::new() }
+        FibSpec { nfib: 0x00C1, flags: 0x1000, ccp_text: 0, ccp_ftn: 0, ccp_hdd: 0, ccp_atn: 0, ccp_edn: 0, pairs: Vec::new() }
     }
 }
 
@@ -63,6 +65,7 @@ pub(crate) fn fib_bytes(spec: &FibSpec) -> Vec<u8> {
     put32(&mut v, 0x4C, spec.ccp_text); // rglw[3] = ccpText
     put32(&mut v, 0x50, spec.ccp_ftn); // rglw[4] = ccpFtn
     put32(&mut v, 0x54, spec.ccp_hdd); // rglw[5] = ccpHdd
+    put32(&mut v, 0x5C, spec.ccp_atn); // rglw[7] = ccpAtn
     put32(&mut v, 0x60, spec.ccp_edn); // rglw[8] = ccpEdn
     put16(&mut v, 0x98, 0x005D);
     for (i, fc, lcb) in &spec.pairs {
@@ -916,6 +919,12 @@ struct StructSpec {
 }
 
 fn struct_doc(spec: &StructSpec) -> Vec<u8> {
+    struct_doc_with(spec, &[])
+}
+
+/// [`struct_doc`] with comment (annotation) subdocument stories, placed after the header
+/// stories and before the endnote stories.
+fn struct_doc_with(spec: &StructSpec, comment_stories: &[&str]) -> Vec<u8> {
     let text: String = spec.text.into();
     let ccp = text.chars().count() as u32;
     let mut all: Vec<Piece> = vec![Piece { compressed: false, text: text.clone() }];
@@ -931,6 +940,12 @@ fn struct_doc(spec: &StructSpec) -> Vec<u8> {
         let t: String = (*s).into();
         hdd_len += t.chars().count() as u32;
         story_ends.push(hdd_len);
+        all.push(Piece { compressed: false, text: t });
+    }
+    let mut atn_len = 0u32;
+    for s in comment_stories {
+        let t: String = (*s).into();
+        atn_len += t.chars().count() as u32;
         all.push(Piece { compressed: false, text: t });
     }
     let mut edn_len = 0u32;
@@ -1043,7 +1058,7 @@ fn struct_doc(spec: &StructSpec) -> Vec<u8> {
         pairs.push((74, lfo_at as u32, spec.plf_lfo.len() as u32));
     }
     pairs.extend(extra_at);
-    let spec_fib = FibSpec { ccp_text: ccp, ccp_ftn: ftn_len, ccp_hdd: hdd_len, ccp_edn: edn_len, pairs, ..Default::default() };
+    let spec_fib = FibSpec { ccp_text: ccp, ccp_ftn: ftn_len, ccp_hdd: hdd_len, ccp_atn: atn_len, ccp_edn: edn_len, pairs, ..Default::default() };
     let fib = fib_bytes(&spec_fib);
     word[..fib.len()].copy_from_slice(&fib);
     word.extend(std::iter::repeat_n(0, first_sepx - word.len()));
