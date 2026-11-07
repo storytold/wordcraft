@@ -32,6 +32,13 @@ pub(crate) struct StoryFacts {
     /// `w:commentRangeStart` occurrences across this part. A plain counter, not
     /// a pooled fact: 32k ranges must not consume the pooled fact budget.
     pub comment_range_starts: usize,
+    /// `w:bookmarkStart` occurrences in this part (compat-count counter).
+    pub bookmark_starts: usize,
+    /// `w:permStart` occurrences in this part (compat-count counter).
+    pub perm_starts: usize,
+    /// `w:moveFromRangeStart` + `w:moveToRangeStart` occurrences in this part
+    /// (compat-count counter).
+    pub move_range_starts: usize,
     /// `w14:paraId` values on paragraphs in comments.xml (for `COMMENTEX-LINK`).
     pub comment_para_ids: Vec<(String, String)>,
     pub docpr: Vec<(String, String)>,
@@ -60,9 +67,12 @@ pub(crate) struct RefFact {
 /// Pool another part's story facts into the document-wide collection, honouring the per-category
 /// budget. Returns `true` when the budget stopped a category from taking more.
 pub(crate) fn merge_facts(into: &mut StoryFacts, from: StoryFacts, cap: usize) -> bool {
-    // The range counter is summed unconditionally: it is not a pooled fact and
+    // The counters are summed unconditionally: they are not pooled facts and
     // must stay exact even when a fact set caps out.
     into.comment_range_starts += from.comment_range_starts;
+    into.bookmark_starts += from.bookmark_starts;
+    into.perm_starts += from.perm_starts;
+    into.move_range_starts += from.move_range_starts;
     let mut capped = false;
     macro_rules! pool {
         ($field:ident) => {{
@@ -101,6 +111,8 @@ pub(crate) struct PartScan {
     pub facts: StoryFacts,
     /// Relationship ids named by `w:contentPart` elements in this part.
     pub content_parts: Vec<String>,
+    /// This (settings) part carries `w:uiCompat97to2003`.
+    pub compat_97_2003: bool,
 }
 
 struct ElemId {
@@ -305,6 +317,9 @@ struct Frame {
 
 #[derive(Default)]
 struct State {
+    /// This settings part carries `w:uiCompat97to2003` (the Word 97–2003
+    /// compatibility flag the count limits key on).
+    compat_97: bool,
     declared: Vec<Vec<String>>,
     frames: Vec<Frame>,
     del_depth: i64,
@@ -463,8 +478,14 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
     let mut reader = NsReader::from_reader(text.as_bytes());
     let mut buf = Vec::new();
     let mut state = State { fact_cap: acc.limits.facts, ..State::default() };
-    let mut out =
-        PartScan { malformed: None, unknown_prefixes: Vec::new(), refs: Vec::new(), facts: StoryFacts::default(), content_parts: Vec::new() };
+    let mut out = PartScan {
+        malformed: None,
+        unknown_prefixes: Vec::new(),
+        refs: Vec::new(),
+        facts: StoryFacts::default(),
+        content_parts: Vec::new(),
+        compat_97_2003: false,
+    };
     let mut root_count = 0usize;
     let mut events = 0usize;
     let mut budget_stopped = false;
@@ -612,6 +633,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
         acc.set_incomplete();
     }
     out.facts = state.facts;
+    out.compat_97_2003 = state.compat_97;
     out.unknown_prefixes.sort_unstable();
     out.unknown_prefixes.dedup();
     out
@@ -874,10 +896,24 @@ fn check_protection(id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, r
 }
 
 /// Handle element start tags: update structural flags, deletion depth, IDs, and element structure.
+/// Record the Word 97–2003 compatibility flag from a settings part. The
+/// `w:uiCompat97to2003` element is an on/off setting (ST_OnOff): presence
+/// with no `w:val`, or a val of true/1/on, sets it; an explicit false/0/off
+/// leaves it unset.
+fn record_compat_flag(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole) {
+    if role.is_settings && id.w() && id.local == "uiCompat97to2003" {
+        let off = matches!(attr_ns(attrs, res, NS_W, b"val").as_deref(), Some(v) if v.eq_ignore_ascii_case("false") || v == "0" || v.eq_ignore_ascii_case("off"));
+        if !off {
+            state.compat_97 = true;
+        }
+    }
+}
+
 fn on_open(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole, part: &str, acc: &mut Acc) {
     mark_block_content(state, id);
     check_math_placement(state, id, role, part, acc);
     check_protection(id, attrs, res, role, part, acc);
+    record_compat_flag(state, id, attrs, res, role);
     if id.w() && id.local == "del" {
         state.del_depth += 1;
     }
@@ -890,6 +926,7 @@ fn on_empty(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &Namespace
     mark_block_content(state, id);
     check_math_placement(state, id, role, part, acc);
     check_protection(id, attrs, res, role, part, acc);
+    record_compat_flag(state, id, attrs, res, role);
     if id.w() && id.local == "tc" && role.is_main {
         acc.add("STRUCT-TC-NO-P", Some(part.to_string()), format!("w:tc in {part} has no block-level content"));
     }
@@ -905,6 +942,9 @@ fn record_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &Namespa
     record_comment_ids(state, id, attrs, res, role, part);
     record_note_ids(state, id, attrs, res, role, part);
     record_bookmark_ids(state, id, attrs, res, part);
+    if id.w() && id.local == "permStart" {
+        state.facts.perm_starts += 1;
+    }
     record_revision_ids(state, id, attrs, res, part);
     record_reference_ids(state, id, attrs, res, role, part);
     if id.wp() && id.local == "docPr" {
@@ -957,6 +997,9 @@ fn record_note_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &Na
 fn record_bookmark_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, part: &str) {
     match id.local.as_str() {
         "bookmarkStart" if id.w() => {
+            // Counted before any budget logic: the compat counter must be exact
+            // even when the paired-id set caps out.
+            state.facts.bookmark_starts += 1;
             if state.bookmark_starts.len() >= state.fact_cap {
                 state.fact_capped = true;
                 return;
@@ -1052,6 +1095,7 @@ fn record_structure(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &N
             }
         }
         "moveFromRangeStart" => {
+            state.facts.move_range_starts += 1;
             if let Some(x) = attr_ns(attrs, res, NS_W, b"id") {
                 if state.move_from_start.len() >= state.fact_cap || state.move_start_ids.len() >= state.fact_cap {
                     state.fact_capped = true;
@@ -1066,6 +1110,7 @@ fn record_structure(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &N
             insert_name(&mut state.move_from_end, state.fact_cap, &mut state.fact_capped, attr_ns(attrs, res, NS_W, b"id"));
         }
         "moveToRangeStart" => {
+            state.facts.move_range_starts += 1;
             if let Some(x) = attr_ns(attrs, res, NS_W, b"id") {
                 if state.move_to_start.len() >= state.fact_cap || state.move_start_ids.len() >= state.fact_cap {
                     state.fact_capped = true;

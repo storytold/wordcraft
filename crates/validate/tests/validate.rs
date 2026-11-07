@@ -47,6 +47,9 @@ const ALL_CHECKS: &[&str] = &[
     "CT-MISMATCH",
     "CONTENTPART-TYPE",
     "COMMENT-RANGE-COUNT",
+    "BOOKMARK-COUNT",
+    "PERM-COUNT",
+    "MOVE-RANGE-COUNT",
     "ID-COMMENT-DUP",
     "ID-COMMENT-REF",
     "ID-DOCPR-DUP",
@@ -1655,6 +1658,178 @@ fn comment_range_count_sums_across_stories() {
     let report = validate(&d);
     assert_finding(&report, "COMMENT-RANGE-COUNT", None);
     assert_eq!(range_count_findings(&report), 1, "{:?}", report.findings);
+}
+
+/// A document with body `body`; with `compat`, its settings carry the
+/// Word 97–2003 compatibility flag the count limits key on.
+fn counted_doc(body: &str, compat: bool) -> Doc {
+    let mut d = Doc::minimal();
+    d.set_document(body);
+    if compat {
+        d.add_with_override(
+            "word/settings.xml",
+            CT_SETTINGS,
+            format!("<?xml version=\"1.0\"?><w:settings xmlns:w=\"{W_NS}\"><w:uiCompat97to2003/></w:settings>"),
+        );
+    }
+    d
+}
+
+/// A document with body `body` whose settings carry the compat flag with an
+/// explicit `w:val` of `val`.
+fn counted_doc_val(body: &str, val: &str) -> Doc {
+    let mut d = Doc::minimal();
+    d.set_document(body);
+    d.add_with_override(
+        "word/settings.xml",
+        CT_SETTINGS,
+        format!("<?xml version=\"1.0\"?><w:settings xmlns:w=\"{W_NS}\"><w:uiCompat97to2003 w:val=\"{val}\"/></w:settings>"),
+    );
+    d
+}
+
+/// A paragraph holding `n` uniquely named, paired bookmarks.
+fn bookmark_body(n: usize) -> String {
+    let mut body = String::from("<w:p>");
+    for i in 0..n {
+        body.push_str(&format!("<w:bookmarkStart w:id=\"{i}\" w:name=\"b{i}\"/><w:bookmarkEnd w:id=\"{i}\"/>"));
+    }
+    body.push_str("</w:p>");
+    body
+}
+
+/// A paragraph holding `n` paired range permissions.
+fn perm_body(n: usize) -> String {
+    let mut body = String::from("<w:p>");
+    for i in 0..n {
+        body.push_str(&format!("<w:permStart w:id=\"{i}\" w:ed=\"editor\"/><w:permEnd w:id=\"{i}\"/>"));
+    }
+    body.push_str("</w:p>");
+    body
+}
+
+/// A paragraph holding `from` paired move-from ranges and `to` paired
+/// move-to ranges.
+fn move_body(from: usize, to: usize) -> String {
+    let mut body = String::from("<w:p>");
+    for i in 0..from {
+        body.push_str(&format!("<w:moveFromRangeStart w:id=\"{i}\" w:name=\"f{i}\"/><w:moveFromRangeEnd w:id=\"{i}\" w:name=\"f{i}\"/>"));
+    }
+    for i in 0..to {
+        body.push_str(&format!("<w:moveToRangeStart w:id=\"{i}\" w:name=\"t{i}\"/><w:moveToRangeEnd w:id=\"{i}\" w:name=\"t{i}\"/>"));
+    }
+    body.push_str("</w:p>");
+    body
+}
+
+/// The bookmark boundary pair under compat mode: 16,380 is the most Word
+/// opens with uiCompat97to2003 set; 16,381 fails to open.
+#[test]
+fn bookmark_count_compat_boundary() {
+    let report = validate(&counted_doc(&bookmark_body(16_380), true));
+    assert!(!has(&report, "BOOKMARK-COUNT"), "{:?}", report.findings);
+    let report = validate(&counted_doc(&bookmark_body(16_381), true));
+    assert_finding(&report, "BOOKMARK-COUNT", None);
+    assert_eq!(report.findings.iter().filter(|f| f.rule == "BOOKMARK-COUNT").count(), 1, "{:?}", report.findings);
+}
+
+/// Without the compat flag the documented bookmark limit is 2,147,483,647:
+/// 16,381 bookmarks are nothing.
+#[test]
+fn bookmark_count_no_compat_no_limit() {
+    let report = validate(&counted_doc(&bookmark_body(16_381), false));
+    assert!(!has(&report, "BOOKMARK-COUNT"), "{:?}", report.findings);
+}
+
+/// The range-permission boundary pair under compat mode: 32,752 opens,
+/// 32,753 does not.
+#[test]
+fn perm_count_compat_boundary() {
+    let report = validate(&counted_doc(&perm_body(32_752), true));
+    assert!(!has(&report, "PERM-COUNT"), "{:?}", report.findings);
+    let report = validate(&counted_doc(&perm_body(32_753), true));
+    assert_finding(&report, "PERM-COUNT", None);
+}
+
+/// Move ranges are counted by their start markers, from-ranges and
+/// to-ranges together: 32,751 markers open under compat mode; a split
+/// 16,376 + 16,376 crosses the limit.
+#[test]
+fn move_range_count_compat_boundary() {
+    let report = validate(&counted_doc(&move_body(32_751, 0), true));
+    assert!(!has(&report, "MOVE-RANGE-COUNT"), "{:?}", report.findings);
+    let report = validate(&counted_doc(&move_body(16_376, 16_376), true));
+    assert_finding(&report, "MOVE-RANGE-COUNT", None);
+}
+
+/// The flag is an on/off setting: an explicit w:val of false or 0 leaves
+/// it unset (no limits apply), while true sets it.
+#[test]
+fn compat_flag_explicit_val() {
+    let report = validate(&counted_doc_val(&bookmark_body(16_381), "false"));
+    assert!(!has(&report, "BOOKMARK-COUNT"), "{:?}", report.findings);
+    let report = validate(&counted_doc_val(&bookmark_body(16_381), "0"));
+    assert!(!has(&report, "BOOKMARK-COUNT"), "{:?}", report.findings);
+    let report = validate(&counted_doc_val(&bookmark_body(16_381), "true"));
+    assert_finding(&report, "BOOKMARK-COUNT", None);
+}
+
+/// A flag seen inside a settings part that then proves malformed
+/// establishes nothing: the state is Unknown, not On.
+#[test]
+fn compat_flag_in_malformed_settings_is_unknown() {
+    let mut d = counted_doc(&bookmark_body(16_381), false);
+    d.add_with_override("word/settings.xml", CT_SETTINGS, format!("<w:settings xmlns:w=\"{W_NS}\"><w:uiCompat97to2003/></w:wrong>"));
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    assert!(!has(&report, "BOOKMARK-COUNT"), "{:?}", report.findings);
+}
+
+/// But a second, readable settings part carrying the flag establishes On
+/// even when another settings part is malformed.
+#[test]
+fn compat_flag_readable_part_wins() {
+    let mut d = counted_doc(&bookmark_body(16_381), false);
+    d.add_with_override("word/settings.xml", CT_SETTINGS, format!("<w:settings xmlns:w=\"{W_NS}\"><w:uiCompat97to2003/></w:wrong>"));
+    d.add_with_override(
+        "word/settings2.xml",
+        CT_SETTINGS,
+        format!("<?xml version=\"1.0\"?><w:settings xmlns:w=\"{W_NS}\"><w:uiCompat97to2003/></w:settings>"),
+    );
+    let report = validate(&d);
+    assert_finding(&report, "BOOKMARK-COUNT", None);
+}
+
+/// The counters sum across story parts, like the comment-range count:
+/// 10,000 bookmarks in the main story and 6,381 in a header cross the
+/// compat limit together.
+#[test]
+fn bookmark_count_sums_across_stories() {
+    let mut d = counted_doc(&bookmark_body(10_000), true);
+    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/header1.xml", CT_HEADER), ("/word/settings.xml", CT_SETTINGS)]));
+    let mut hdr = String::from("<w:hdr xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">");
+    hdr.push_str(&bookmark_body(6_381));
+    hdr.push_str("</w:hdr>");
+    d.set("word/header1.xml", hdr.into_bytes());
+    let report = validate(&d);
+    assert_finding(&report, "BOOKMARK-COUNT", None);
+}
+
+/// A settings part that cannot be read leaves the compat state unknown:
+/// the limits are not applied, and the run is INCOMPLETE with a coverage
+/// note rather than a guessed verdict.
+#[test]
+fn compat_counts_unknown_settings_incomplete() {
+    let mut d = counted_doc(&bookmark_body(16_381), false);
+    d.add_with_override(
+        "word/settings.xml",
+        CT_SETTINGS,
+        "<w:settings xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:compat>".to_string(),
+    );
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    assert!(!has(&report, "BOOKMARK-COUNT"), "{:?}", report.findings);
+    assert!(report.coverage_notes.iter().any(|n| n.contains("compatibility limits")), "{:?}", report.coverage_notes);
 }
 
 /// A settings part whose `w:settings` holds `inner`.

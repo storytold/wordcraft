@@ -296,6 +296,18 @@ pub(crate) const PROTECTION_PASSWORD: RuleSpec = RuleSpec { id: "PROTECTION-PASS
 /// note (a): "Word will fail to load the document if the content part's
 /// content type is not text/xml."
 pub(crate) const CONTENTPART_TYPE: RuleSpec = RuleSpec { id: "CONTENTPART-TYPE", severity: Severity::Error, evidence: Evidence::MsDocumented };
+/// `BOOKMARK-COUNT`: more than 16,380 bookmarks while settings carries
+/// `w:uiCompat97to2003`. MS-OI29500 Part 1 §17.13.6 note (b): Word fails to
+/// open such a file (the limit without the flag is 2,147,483,647).
+pub(crate) const BOOKMARK_COUNT: RuleSpec = RuleSpec { id: "BOOKMARK-COUNT", severity: Severity::Error, evidence: Evidence::MsDocumented };
+/// `PERM-COUNT`: more than 32,752 range permissions while settings carries
+/// `w:uiCompat97to2003`. MS-OI29500 Part 1 §17.13.7.1 note (b) and
+/// §17.13.7.2 note (d).
+pub(crate) const PERM_COUNT: RuleSpec = RuleSpec { id: "PERM-COUNT", severity: Severity::Error, evidence: Evidence::MsDocumented };
+/// `MOVE-RANGE-COUNT`: more than 32,751 moveFrom/moveTo ranges while
+/// settings carries `w:uiCompat97to2003`. MS-OI29500 Part 1 §17.13.5.24
+/// note (a).
+pub(crate) const MOVE_RANGE_COUNT: RuleSpec = RuleSpec { id: "MOVE-RANGE-COUNT", severity: Severity::Error, evidence: Evidence::MsDocumented };
 /// `STRUCT-DELTEXT`: a `w:t` inside `w:del`, or a `w:delText` outside one. Observed (web): lenient
 /// recovery, the text renders as a tracked deletion anyway, so Warning.
 pub(crate) const STRUCT_DELTEXT: RuleSpec = RuleSpec { id: "STRUCT-DELTEXT", severity: Severity::Warning, evidence: Evidence::Observed };
@@ -327,6 +339,9 @@ pub(crate) const RULES: &[RuleSpec] = &[
     STRUCT_END_P,
     MATH_PLACEMENT,
     COMMENT_RANGE_COUNT,
+    BOOKMARK_COUNT,
+    PERM_COUNT,
+    MOVE_RANGE_COUNT,
     PROTECTION_PASSWORD,
     CONTENTPART_TYPE,
     REL_DUP_ID,
@@ -521,7 +536,7 @@ pub(crate) fn validate_bytes_limited(bytes: &[u8], limits: Limits) -> Report {
     let xml = check_xml(&pkg, &mut acc);
     check_rels(&pkg, &xml.refs, &mut acc);
     check_content_part_types(&pkg, &xml.content_parts, &mut acc);
-    check_story(&pkg, &xml.facts, &mut acc);
+    check_story(&pkg, &xml.facts, xml.compat, &mut acc);
     check_media(&pkg, &mut acc);
     acc.finish()
 }
@@ -629,11 +644,23 @@ fn check_dup_main(pkg: &Package, acc: &mut Acc) {
 
 /// What the XML pass gathered: pooled story facts, and every `r:id`/`r:embed`/`r:link` value seen
 /// per part (for `REL-REF-MISSING`).
+/// Whether settings carries `w:uiCompat97to2003`, the flag the compat count
+/// limits (BOOKMARK-COUNT, PERM-COUNT, MOVE-RANGE-COUNT) key on. `Unknown`
+/// when a settings part exists but could not be read: the limits then cannot
+/// be applied either way, and the run reports INCOMPLETE rather than guess.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Compat {
+    Off,
+    On,
+    Unknown,
+}
+
 struct XmlScan {
     facts: scan::StoryFacts,
     refs: Vec<(String, Vec<RefFact>)>,
     /// `w:contentPart` relationship ids per owning part (for `CONTENTPART-TYPE`).
     content_parts: Vec<(String, Vec<String>)>,
+    compat: Compat,
 }
 
 /// Scan all XML parts for well-formedness, undeclared prefixes, illegal characters, and extract story facts.
@@ -648,6 +675,8 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     let mut facts = scan::StoryFacts::default();
     let mut refs: Vec<(String, Vec<RefFact>)> = Vec::new();
     let mut content_parts: Vec<(String, Vec<String>)> = Vec::new();
+    let mut compat_on = false;
+    let mut compat_unknown = false;
     let mut pooled_capped = false;
     let mut facts_pooled_part: Option<String> = None;
     let mut pooled_refs = 0usize;
@@ -658,6 +687,10 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
             continue;
         }
         let l = e.name.to_ascii_lowercase();
+        let role = roles.get(&l).copied().unwrap_or_default();
+        if role.is_settings && e.decode_error.is_some() {
+            compat_unknown = true;
+        }
         if let Some(err) = &e.decode_error {
             match err {
                 DecodeError::Malformed(msg) => {
@@ -675,8 +708,17 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
             continue;
         }
         let Some(text) = &e.decoded else { continue };
-        let role = roles.get(&l).copied().unwrap_or_default();
         let scanned = scan::scan_part(&e.name, text, role, acc);
+        if role.is_settings {
+            if scanned.malformed.is_some() {
+                compat_unknown = true;
+            }
+            // Only a settings part that scanned clean establishes On: a flag
+            // seen before a malformation proves nothing about the document.
+            if scanned.compat_97_2003 && scanned.malformed.is_none() {
+                compat_on = true;
+            }
+        }
         if let Some(err) = &scanned.malformed {
             report_malformed(pkg, &e.name, err, acc);
         }
@@ -717,7 +759,14 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
         acc.note(format!("the package's relationship references exceeded {} entries at {part}; later ones were not recorded", acc.limits.facts));
         acc.set_incomplete();
     }
-    XmlScan { facts, refs, content_parts }
+    let compat = if compat_on {
+        Compat::On
+    } else if compat_unknown {
+        Compat::Unknown
+    } else {
+        Compat::Off
+    };
+    XmlScan { facts, refs, content_parts, compat }
 }
 
 /// `CONTENTPART-TYPE` (MS-OI29500 Part 1 §17.3.3.2 note (a)): each
@@ -1089,7 +1138,7 @@ fn check_typed_content(pkg: &Package, acc: &mut Acc) {
 }
 
 /// Check cross-document story identifier families (comments, docPr, bookmarks, revisions, notes, styles, headers).
-fn check_story(pkg: &Package, facts: &scan::StoryFacts, acc: &mut Acc) {
+fn check_story(pkg: &Package, facts: &scan::StoryFacts, compat: Compat, acc: &mut Acc) {
     acc.ran("COMMENT-RANGE-COUNT");
     if facts.comment_range_starts > 32_767 {
         acc.add(
@@ -1097,6 +1146,45 @@ fn check_story(pkg: &Package, facts: &scan::StoryFacts, acc: &mut Acc) {
             None,
             format!("the document contains {} comment ranges (w:commentRangeStart), more than the 32767 Word will open", facts.comment_range_starts),
         );
+    }
+    acc.ran("BOOKMARK-COUNT");
+    acc.ran("PERM-COUNT");
+    acc.ran("MOVE-RANGE-COUNT");
+    match compat {
+        Compat::Unknown => {
+            acc.note("a settings part could not be read, so the Word 97-2003 compatibility limits on bookmarks, range permissions, and move ranges could not be applied".to_string());
+            acc.set_incomplete();
+        }
+        Compat::On => {
+            if facts.bookmark_starts > 16_380 {
+                acc.add(
+                    "BOOKMARK-COUNT",
+                    None,
+                    format!("the document contains {} bookmarks, more than the 16380 Word opens when uiCompat97to2003 is set", facts.bookmark_starts),
+                );
+            }
+            if facts.perm_starts > 32_752 {
+                acc.add(
+                    "PERM-COUNT",
+                    None,
+                    format!(
+                        "the document contains {} range permissions, more than the 32752 Word opens when uiCompat97to2003 is set",
+                        facts.perm_starts
+                    ),
+                );
+            }
+            if facts.move_range_starts > 32_751 {
+                acc.add(
+                    "MOVE-RANGE-COUNT",
+                    None,
+                    format!(
+                        "the document contains {} move ranges, more than the 32751 Word opens when uiCompat97to2003 is set",
+                        facts.move_range_starts
+                    ),
+                );
+            }
+        }
+        Compat::Off => {}
     }
     acc.ran("ID-COMMENT-DUP");
     report_dups(acc, "ID-COMMENT-DUP", &facts.comment_defs, "w:comment id");
