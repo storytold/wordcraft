@@ -3,7 +3,7 @@ use super::ctx::{Ctx, with_pct_base};
 use super::floats::{WrapArea, align_in, body_wraps};
 use super::flow::again;
 use super::headers::{header_items_cap, header_table_areas, placed_cost};
-use super::notes::{NoteBox, keep_table_notes, table_note_ids, table_notes};
+use super::notes::{NoteBox, keep_table_notes, measure_table_notes, table_note_ids, table_notes};
 use super::page::{PageBuilder, PageFrame, page_frame};
 use super::placed::Placed;
 use super::{Anchor, Arc, HeightRule, Path, Rect, StoryRef, TableFloat, ViewMode, WrapText, table};
@@ -261,7 +261,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         // Each pass places the part of the row that fits, then breaks the page.
         for _ in 0..1000 {
             let cur = rest.as_ref().unwrap_or(row);
-            let notes = table_notes(ctx, pb, &cur.items);
+            let notes = measure_table_notes(ctx, pb, &cur.items);
             // A fitting kept row follows the next row when that row cannot start below it.
             // Move only the prefix's start; an oversized follower cannot separate its kept rows.
             let defer_kept = pb.y + cur.height <= pb.bottom + 0.01

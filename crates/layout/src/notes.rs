@@ -397,7 +397,20 @@ pub(crate) fn table_note_ids(items: &[Placed]) -> Vec<u32> {
     ids
 }
 
-/// Measure new table notes before fitting the row; a rejected trial must not reserve them.
+/// Trial measurement must not consume list or automatic-equation numbers, even if the row moves on.
+pub(crate) fn measure_table_notes(ctx: &mut Ctx, pb: &PageBuilder, items: &[Placed]) -> Vec<NoteBox> {
+    if pb.web || table_note_ids(items).iter().all(|id| pb.notes.iter().any(|n| n.id == *id)) {
+        return Vec::new();
+    }
+    let counters = ctx.counters.clone();
+    let eq_count = ctx.eq_count;
+    let notes = table_notes(ctx, pb, items);
+    ctx.counters = counters;
+    ctx.eq_count = eq_count;
+    notes
+}
+
+/// Lay out new notes once from committed counter state when their reference lines are placed.
 pub(crate) fn table_notes(ctx: &mut Ctx, pb: &PageBuilder, items: &[Placed]) -> Vec<NoteBox> {
     if pb.web {
         return Vec::new();
