@@ -290,6 +290,8 @@ struct Frame {
     is_p: bool,
     /// A `w:footnotePr` frame: its `w:footnote` children are listing entries.
     is_footnote_pr: bool,
+    /// A `w:mailMerge` frame: a `w:headerSource` child is HEADERSOURCE-PRESENT.
+    is_mail_merge: bool,
     /// A `w:endnotePr` frame: its `w:endnote` children are listing entries.
     is_endnote_pr: bool,
     /// Any Office Math element: an `m:oMathPara` must not descend from one.
@@ -713,6 +715,7 @@ fn frame_for(id: &ElemId) -> Frame {
         is_tc: w && local == "tc",
         is_p: w && local == "p",
         is_footnote_pr: w && local == "footnotePr",
+        is_mail_merge: w && local == "mailMerge",
         is_endnote_pr: w && local == "endnotePr",
         is_math: id.m(),
         is_omath: id.m() && local == "oMath",
@@ -977,10 +980,26 @@ fn record_note_pr(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &Nam
     }
 }
 
+/// `HEADERSOURCE-PRESENT` (MS-OI29500 §17.14.16 note (a)): a
+/// `w:headerSource` under `w:mailMerge` in a settings part — "Word
+/// fails to open WordprocessingML documents in which this element is
+/// present." The element's only schema location is as a mailMerge
+/// child, so presence is judged there.
+fn check_header_source(state: &State, id: &ElemId, role: PartRole, part: &str, acc: &mut Acc) {
+    if role.is_settings && id.w() && id.local == "headerSource" && state.frames.last().is_some_and(|f| f.is_mail_merge) {
+        acc.add(
+            "HEADERSOURCE-PRESENT",
+            Some(part.to_string()),
+            format!("w:headerSource is present under w:mailMerge in {part}; Word fails to open documents in which this element is present"),
+        );
+    }
+}
+
 fn on_open(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole, part: &str, acc: &mut Acc) {
     mark_block_content(state, id);
     check_math_placement(state, id, role, part, acc);
     check_protection(id, attrs, res, role, part, acc);
+    check_header_source(state, id, role, part, acc);
     record_compat_flag(state, id, attrs, res, role);
     record_note_pr(state, id, attrs, res, role);
     if id.w() && id.local == "del" {
@@ -995,6 +1014,7 @@ fn on_empty(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &Namespace
     mark_block_content(state, id);
     check_math_placement(state, id, role, part, acc);
     check_protection(id, attrs, res, role, part, acc);
+    check_header_source(state, id, role, part, acc);
     record_compat_flag(state, id, attrs, res, role);
     record_note_pr(state, id, attrs, res, role);
     if id.w() && id.local == "tc" && role.is_main {

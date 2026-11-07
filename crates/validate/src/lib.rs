@@ -291,6 +291,11 @@ pub(crate) const COMMENT_RANGE_COUNT: RuleSpec = RuleSpec { id: "COMMENT-RANGE-C
 /// note (c): if any AG_Password attribute is present, Word requires those
 /// three, and otherwise will not open the file.
 pub(crate) const PROTECTION_PASSWORD: RuleSpec = RuleSpec { id: "PROTECTION-PASSWORD", severity: Severity::Error, evidence: Evidence::MsDocumented };
+/// `HEADERSOURCE-PRESENT`: a `w:headerSource` element under `w:mailMerge`
+/// in a settings part. MS-OI29500 Part 1 §17.14.16 note (a): "Word fails
+/// to open WordprocessingML documents in which this element is present."
+pub(crate) const HEADERSOURCE_PRESENT: RuleSpec =
+    RuleSpec { id: "HEADERSOURCE-PRESENT", severity: Severity::Error, evidence: Evidence::MsDocumented };
 /// `CONTENTPART-TYPE`: a `w:contentPart` element whose relationship target's
 /// effective content type is not `text/xml`. MS-OI29500 Part 1 §17.3.3.2
 /// note (a): "Word will fail to load the document if the content part's
@@ -358,6 +363,7 @@ pub(crate) const RULES: &[RuleSpec] = &[
     NOTE_PR_LISTING,
     NOTE_PR_DANGLING,
     PROTECTION_PASSWORD,
+    HEADERSOURCE_PRESENT,
     CONTENTPART_TYPE,
     REL_DUP_ID,
     REL_DANGLING,
@@ -700,6 +706,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     acc.ran("STRUCT-END-P");
     acc.ran("MATH-PLACEMENT");
     acc.ran("PROTECTION-PASSWORD");
+    acc.ran("HEADERSOURCE-PRESENT");
     let roles = story_roles(pkg);
     let mut facts = scan::StoryFacts::default();
     let mut refs: Vec<(String, Vec<RefFact>)> = Vec::new();

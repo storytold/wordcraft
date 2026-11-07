@@ -40,6 +40,7 @@ const ALL_CHECKS: &[&str] = &[
     "STRUCT-END-P",
     "MATH-PLACEMENT",
     "PROTECTION-PASSWORD",
+    "HEADERSOURCE-PRESENT",
     "REL-DUP-ID",
     "REL-DANGLING",
     "REL-TYPED",
@@ -1869,6 +1870,37 @@ fn note_pr_unknown_when_settings_unreadable() {
     assert!(report.coverage_notes.iter().any(|n| n.contains("footnotePr")), "{:?}", report.coverage_notes);
 }
 
+/// Settings carrying the given inner XML.
+fn settings_doc(inner: &str) -> Doc {
+    let mut d = Doc::minimal();
+    d.add_with_override(
+        "word/settings.xml",
+        CT_SETTINGS,
+        format!("<?xml version=\"1.0\"?><w:settings xmlns:w=\"{W_NS}\" xmlns:r=\"{R_NS}\">{inner}</w:settings>"),
+    );
+    d
+}
+
+/// HEADERSOURCE-PRESENT: a w:headerSource under w:mailMerge in settings
+/// is an Error — Word fails to open such documents (§17.14.16 (a)).
+#[test]
+fn header_source_present_fires() {
+    let d = settings_doc(r#"<w:mailMerge><w:mainDocumentType w:val="formLetters"/><w:headerSource r:id="rId1"/></w:mailMerge>"#);
+    let report = validate(&d);
+    let f = assert_finding(&report, "HEADERSOURCE-PRESENT", Some("word/settings.xml"));
+    assert_eq!(f.evidence, wordcraft_validate::Evidence::MsDocumented);
+}
+
+/// A mailMerge without headerSource is clean, and a headerSource
+/// outside mailMerge (not its schema location) does not fire.
+#[test]
+fn header_source_absent_or_misplaced_is_clean() {
+    let d = settings_doc(r#"<w:mailMerge><w:mainDocumentType w:val="formLetters"/><w:dataType w:val="textFile"/></w:mailMerge>"#);
+    assert!(!has(&validate(&d), "HEADERSOURCE-PRESENT"));
+    let d2 = settings_doc(r#"<w:headerSource r:id="rId1"/>"#);
+    assert!(!has(&validate(&d2), "HEADERSOURCE-PRESENT"));
+}
+
 /// A document with body `body`; with `compat`, its settings carry the
 /// Word 97–2003 compatibility flag the count limits key on.
 fn counted_doc(body: &str, compat: bool) -> Doc {
@@ -2041,12 +2073,8 @@ fn compat_counts_unknown_settings_incomplete() {
     assert!(report.coverage_notes.iter().any(|n| n.contains("compatibility limits")), "{:?}", report.coverage_notes);
 }
 
-/// A settings part whose `w:settings` holds `inner`.
-fn settings_doc(inner: &str) -> Doc {
-    let mut d = Doc::minimal();
-    d.add_with_override("word/settings.xml", CT_SETTINGS, format!("<?xml version=\"1.0\"?><w:settings xmlns:w=\"{W_NS}\">{inner}</w:settings>"));
-    d
-}
+/// A settings part whose `w:settings` holds `inner` — `settings_doc`
+/// (defined with the note-Pr tests above) builds it.
 
 /// A protection element carrying a password hash but not the full required
 /// trio: Word will not open the file.
