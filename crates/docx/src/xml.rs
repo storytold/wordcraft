@@ -430,8 +430,11 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
             }
             Event::CData(t) => {
                 if let Some(top) = stack.last_mut() {
-                    let s =
-                        t.xml_content(XmlVersion::Explicit1_0).map(|s| s.into_owned()).unwrap_or_else(|_| String::from_utf8_lossy(&t).into_owned());
+                    // CDATA that isn't UTF-8 is decoded lossily, with its line ends normalised the same way.
+                    let s = t
+                        .xml_content(XmlVersion::Explicit1_0)
+                        .map(|s| s.into_owned())
+                        .unwrap_or_else(|_| String::from_utf8_lossy(&t).replace("\r\n", "\n").replace('\r', "\n"));
                     push_text(top, &s);
                 }
             }
@@ -649,6 +652,15 @@ mod tests {
         assert_eq!(t.attr("xml:space"), Some("preserve"));
     }
 
+    /// CDATA that isn't UTF-8 is decoded lossily, and its line ends are still normalised.
+    #[test]
+    fn line_ends_in_cdata_that_isnt_utf8_are_normalised() {
+        let x =
+            b"<x:document xmlns:x=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><x:t><![CDATA[a\xff\r\nb\rc]]></x:t></x:document>";
+        assert_eq!(parse(x).unwrap().child("w:t").unwrap().text(), "a\u{FFFD}\nb\nc");
+    }
+
+    /// XML 1.0 §2.11: CR LF and a lone CR in text and CDATA are read as LF; `&#13;` stays a CR.
     #[test]
     fn line_ends_in_text_are_normalised_but_a_cr_reference_stays() {
         let x = b"<x:document xmlns:x=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><x:t>a\r\nb\rc&#13;d<![CDATA[e\r\nf]]></x:t></x:document>";
