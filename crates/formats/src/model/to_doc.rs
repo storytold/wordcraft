@@ -98,7 +98,10 @@ fn code_style() -> Style {
 }
 
 fn rule_borders() -> Borders {
-    Borders { bottom: Some(Border { style: BorderStyle::Single, width: 0.75, color: Some(Rgb(0xA0, 0xA0, 0xA0)), space: 1.0 }), ..Default::default() }
+    Borders {
+        bottom: Some(Border { style: BorderStyle::Single, width: 0.75, color: Some(Rgb(0xA0, 0xA0, 0xA0)), space: 1.0, ..Default::default() }),
+        ..Default::default()
+    }
 }
 
 /// Append text (without object characters) or one inline object to the end of `p`.

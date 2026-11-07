@@ -51,7 +51,7 @@ impl Default for BorderPen {
 
 impl BorderPen {
     fn line(&self) -> Border {
-        Border { style: self.style, width: self.width, color: Rgb::parse(&self.color), space: 0.0 }
+        Border { style: self.style, width: self.width, color: Rgb::parse(&self.color), space: 0.0, ..Default::default() }
     }
 }
 
@@ -215,7 +215,7 @@ pub fn region_changes(r: &TableRegion, basis: &TableRegion) -> Value {
 /// Apply the border picker's `edges` choice to `b` with `pen`: All, None, Outside and Inside set
 /// their edges; a single edge toggles.
 pub fn pick_edges(b: &mut Borders, edges: &str, pen: &BorderPen) {
-    let none = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 };
+    let none = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0, ..Default::default() };
     let line = pen.line();
     let toggle = |e: &mut Option<Border>| *e = Some(if e.is_some_and(|x| x.is_visible()) { none } else { line });
     match edges {

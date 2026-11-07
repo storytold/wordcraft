@@ -275,7 +275,7 @@ pub(super) fn border_line(s: &Session, at: &Pos) -> Option<Border> {
         '#' => (BorderStyle::Triple, 0.75),
         _ => return None,
     };
-    Some(Border { style, width, color: None, space: 1.0 })
+    Some(Border { style, width, color: None, space: 1.0, ..Default::default() })
 }
 
 /// AutoFormat tables: a body paragraph that is exactly "+---+-----+" (plus signs around runs

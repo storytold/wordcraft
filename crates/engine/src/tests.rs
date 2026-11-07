@@ -7225,6 +7225,103 @@ fn border_sides_apply_exactly() {
     assert!(s.doc.last_section.page_borders.is_none());
 }
 
+#[test]
+fn border_side_updates_preserve_flags_per_target() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("one\ntwo"));
+    for (index, shadow, frame) in [(0, false, true), (1, true, false)] {
+        let side = wordcraft_doc::props::Border { shadow: Some(shadow), frame: Some(frame), ..wordcraft_doc::props::Border::single(0.5) };
+        s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(index)).unwrap().props.borders =
+            Some(wordcraft_doc::props::Borders { top: Some(side), ..Default::default() });
+    }
+    s.sel = crate::Selection { anchor: Pos::body(0, 0), focus: Pos::body(1, 3) };
+
+    run(&mut s, "para.borders", json!({"sides": {"top": {"style": "double", "width": 2.0}}}));
+    for (index, shadow, frame) in [(0, false, true), (1, true, false)] {
+        let side = s.doc.para_at(&Pos::body(index, 0)).and_then(|p| p.props.borders).and_then(|b| b.top).unwrap();
+        assert_eq!((side.style, side.width), (BorderStyle::Double, 2.0));
+        assert_eq!((side.shadow, side.frame), (Some(shadow), Some(frame)));
+    }
+
+    run(&mut s, "para.borders", json!({"sides": {"top": {"style": "single", "shadow": true, "frame": null}}}));
+    for index in 0..2 {
+        let side = s.doc.para_at(&Pos::body(index, 0)).and_then(|p| p.props.borders).and_then(|b| b.top).unwrap();
+        assert_eq!((side.shadow, side.frame), (Some(true), None), "explicit flags apply to each target");
+    }
+}
+
+#[test]
+fn border_side_updates_preserve_flags_inherited_from_a_style() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("styled"));
+    let inherited = wordcraft_doc::props::Border { shadow: Some(true), frame: Some(false), ..wordcraft_doc::props::Border::single(0.5) };
+    let para = wordcraft_doc::props::ParaProps {
+        borders: Some(wordcraft_doc::props::Borders { top: Some(inherited), ..Default::default() }),
+        ..Default::default()
+    };
+    Arc::make_mut(&mut s.doc.styles).upsert(wordcraft_doc::Style { id: "Bordered".into(), name: "Bordered".into(), para, ..Default::default() });
+    s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.style = Some("Bordered".into());
+
+    run(&mut s, "para.borders", json!({"sides": {"top": {"style": "double", "width": 2.0}}}));
+    let top = s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props.borders).and_then(|b| b.top).unwrap();
+    assert_eq!((top.style, top.width), (BorderStyle::Double, 2.0));
+    assert_eq!((top.shadow, top.frame), (Some(true), Some(false)));
+}
+
+#[test]
+fn border_kind_updates_preserve_existing_side_flags() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("one"));
+    let top = wordcraft_doc::props::Border { shadow: Some(false), frame: Some(true), ..wordcraft_doc::props::Border::single(0.5) };
+    s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.borders =
+        Some(wordcraft_doc::props::Borders { top: Some(top), ..Default::default() });
+
+    run(&mut s, "para.borders", json!({"kind": "all"}));
+    let borders = s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props.borders).unwrap();
+    let top = borders.top.unwrap();
+    assert_eq!((top.shadow, top.frame), (Some(false), Some(true)));
+}
+
+#[test]
+fn text_border_format_keeps_flags_per_run() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("ab"));
+    for (from, to, shadow, frame) in [(0, 1, false, true), (1, 2, true, false)] {
+        let border = wordcraft_doc::props::Border { shadow: Some(shadow), frame: Some(frame), ..wordcraft_doc::props::Border::single(0.5) };
+        s.doc.format_range(&Pos::body(0, from), &Pos::body(0, to), &|props| props.border = Some(border)).unwrap();
+    }
+    s.sel = crate::Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 2) };
+    let border = wordcraft_doc::props::Border { width: 1.0, ..wordcraft_doc::props::Border::single(1.0) };
+    run(&mut s, "format.set", json!({"props": {"border": border}, "preserveBorderFlags": true}));
+
+    let para = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    let flags = para.runs.iter().filter_map(|r| r.props.border.map(|b| (b.shadow, b.frame))).collect::<Vec<_>>();
+    assert_eq!(flags, [(Some(false), Some(true)), (Some(true), Some(false))]);
+}
+
+#[test]
+fn document_page_border_updates_preserve_flags_per_section() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("one\ntwo"));
+    run(&mut s, "select.text", json!({"text": "one"}));
+    run(&mut s, "layout.break", json!({"kind": "continuous"}));
+    let sections = s.doc.sections().iter().map(|(end, _)| *end).collect::<Vec<_>>();
+    assert_eq!(sections.len(), 2);
+    for (block, shadow, frame) in [(sections[0], false, true), (sections[1], true, false)] {
+        let side = wordcraft_doc::props::Border { shadow: Some(shadow), frame: Some(frame), ..wordcraft_doc::props::Border::single(0.5) };
+        s.doc.section_mut(block).page_borders = Some(wordcraft_doc::props::Borders { top: Some(side), ..Default::default() });
+    }
+
+    run(
+        &mut s,
+        "design.pageBorders",
+        json!({
+            "sides": {"top": {"style": "dashed", "width": 2.0}},
+            "applyTo": "document"
+        }),
+    );
+    for (block, shadow, frame) in [(sections[0], false, true), (sections[1], true, false)] {
+        let side = s.doc.section_mut(block).page_borders.unwrap().top.unwrap();
+        assert_eq!((side.style, side.width), (BorderStyle::Dashed, 2.0));
+        assert_eq!((side.shadow, side.frame), (Some(shadow), Some(frame)));
+    }
+}
+
 /// Encrypt with Password (#55): a document saved with a password opens only with it, keeps it
 /// for the next save, and saves unencrypted once the password is removed.
 #[cfg(not(target_arch = "wasm32"))]

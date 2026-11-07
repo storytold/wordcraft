@@ -139,7 +139,7 @@ pub(crate) fn brc80(op: &[u8]) -> Option<Border> {
     if [*dpt, *ty, *ico_index, *tail] == [0xFF; 4] {
         return Some(Border::default());
     }
-    Some(Border { style: brc_style(*ty), width: brc_width(*ty, *dpt), color: ico(*ico_index), space: f32::from(tail & 0x1F) })
+    Some(Border { style: brc_style(*ty), width: brc_width(*ty, *dpt), color: ico(*ico_index), space: f32::from(tail & 0x1F), ..Default::default() })
 }
 
 /// One border from a `BrcOperand` ([MS-DOC] §2.9.21): cb(1, MUST be 8) + Brc(8).
@@ -156,7 +156,7 @@ fn brc(op: &[u8]) -> Option<Border> {
         Some(px) => Some(Rgb(px[0], px[1], px[2])),
         None => None,
     };
-    Some(Border { style: brc_style(b[5]), width: brc_width(b[5], b[4]), color, space: f32::from(b[6] & 0x1F) })
+    Some(Border { style: brc_style(b[5]), width: brc_width(b[5], b[4]), color, space: f32::from(b[6] & 0x1F), ..Default::default() })
 }
 
 /// Put a decoded border on the side its sprm names (`between` = the border between this

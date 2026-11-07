@@ -70,7 +70,7 @@ mod tests {
     fn borders_overlay_per_side() {
         let thin = Border::single(0.5);
         let thick = Border::single(2.0);
-        let nil = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 };
+        let nil = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0, ..Default::default() };
         let mut b = Borders::all(thin);
         b.overlay(&Borders { top: Some(thick), ..Default::default() });
         assert_eq!(b.top, Some(thick));

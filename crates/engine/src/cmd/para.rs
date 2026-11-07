@@ -25,6 +25,7 @@ pub(crate) use outline::{ensure_heading_style, set_heading};
 use outline::{move_paras, outline_step, sort};
 use styles::{apply_style, apply_styles, create_style, delete_style, modify_style, set_visibility, style_id, update_to_match};
 pub use tabs_borders::border_sides;
+pub(crate) use tabs_borders::preserve_unspecified_border_flags;
 use tabs_borders::{borders, tabs};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -187,7 +188,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"color": "RRGGBB" | null}"#),
         CommandSpec::new("para.borders", "Borders", "Home › Paragraph", borders).params(
-            r#"{"kind": "bottom|top|left|right|none|all|outside|inside|horizontalLine", "width"?: pt, "color"?: "RRGGBB", "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "sides"?: Sides} where Sides = {"top"|"left"|"bottom"|"right"|"between": {"style"?, "width"?: pt, "color"?: "RRGGBB"} | null}: exactly these sides (others off), instead of `kind`"#,
+            r#"{"kind": "bottom|top|left|right|none|all|outside|inside|horizontalLine", "width"?: pt, "color"?: "RRGGBB", "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "sides"?: Sides} where Sides = {"top"|"left"|"bottom"|"right"|"between": {"style"?, "width"?: pt, "color"?: "RRGGBB", "shadow"?: bool, "frame"?: bool} | null}: exactly these sides (others off), instead of `kind`"#,
         ),
         CommandSpec::new("para.sort", "Sort", "Home › Paragraph", sort).params(r#"{"descending"?: bool}"#),
         CommandSpec::new("para.keepNext", "Keep with Next", "Home › Paragraph › Line and Page Breaks", |s, v| tog(s, v, |p| p.keep_next, |p, b| p.keep_next = Some(b)))

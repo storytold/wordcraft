@@ -68,14 +68,21 @@ pub(super) fn tabs(s: &mut Session, v: &Value) -> CmdResult {
     })
 }
 
-/// A `sides` object: exactly the sides it names, each `{"style", "width", "color"}`.
+/// A `sides` object: exactly the sides it names, each with optional style, width, colour and flags.
 pub fn border_sides(v: &Value, space_tb: f32, space_lr: f32) -> Result<Borders, CmdError> {
     let obj = v.as_object().ok_or_else(|| CmdError::Params("`sides` is an object".into()))?;
     let side = |k: &str, space: f32| -> Option<Border> {
         let x = obj.get(k).filter(|x| x.is_object())?;
         let style = p::str(x, "style").map(BorderStyle::from_ooxml).unwrap_or(BorderStyle::Single);
         let width = p::f32(x, "width").unwrap_or(0.5).clamp(0.25, 6.0);
-        Some(Border { style, width, color: p::str(x, "color").and_then(Rgb::parse), space })
+        Some(Border {
+            style,
+            width,
+            color: p::str(x, "color").and_then(Rgb::parse),
+            space,
+            shadow: x.get("shadow").and_then(Value::as_bool),
+            frame: x.get("frame").and_then(Value::as_bool),
+        })
     };
     Ok(Borders {
         top: side("top", space_tb),
@@ -87,22 +94,68 @@ pub fn border_sides(v: &Value, space_tb: f32, space_lr: f32) -> Result<Borders, 
     })
 }
 
+/// Keep each target's existing border flags when a sides update does not explicitly name them.
+pub(crate) fn preserve_unspecified_border_flags(updated: &mut Borders, existing: Borders, input: &Value) {
+    preserve_unspecified_border_flags_with_style(updated, existing, Borders::default(), input);
+}
+
+fn preserve_unspecified_border_flags_with_style(updated: &mut Borders, direct: Borders, style: Borders, input: &Value) {
+    fn preserve(updated: &mut Option<Border>, direct: Option<Border>, style: Option<Border>, input: Option<&Value>) {
+        let Some(updated) = updated else { return };
+        if input.and_then(|side| side.get("shadow")).is_none() {
+            updated.shadow = direct.and_then(|border| border.shadow).or_else(|| style.and_then(|border| border.shadow));
+        }
+        if input.and_then(|side| side.get("frame")).is_none() {
+            updated.frame = direct.and_then(|border| border.frame).or_else(|| style.and_then(|border| border.frame));
+        }
+    }
+
+    preserve(&mut updated.top, direct.top, style.top, input.get("top"));
+    preserve(&mut updated.bottom, direct.bottom, style.bottom, input.get("bottom"));
+    preserve(&mut updated.left, direct.left, style.left, input.get("left"));
+    preserve(&mut updated.right, direct.right, style.right, input.get("right"));
+    preserve(&mut updated.between, direct.between, style.between, input.get("between"));
+    preserve(&mut updated.inside_v, direct.inside_v, style.inside_v, input.get("insideV"));
+}
+
 pub(super) fn borders(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(sides) = v.get("sides") {
         let b = border_sides(sides, 1.0, 4.0)?;
+        let styles = s.doc.styles.clone();
         // An explicit empty set keeps a style's borders off.
-        return fmt(s, &|p| p.borders = Some(b));
+        return fmt(s, &|p| {
+            let mut style_props = p.clone();
+            style_props.borders = None;
+            let inherited = styles.resolve_para(&style_props).borders.unwrap_or_default();
+            let mut b = b;
+            preserve_unspecified_border_flags_with_style(&mut b, p.borders.unwrap_or_default(), inherited, sides);
+            p.borders = Some(b);
+        });
     }
     let kind = p::str(v, "kind").unwrap_or("bottom");
     let width = p::f32(v, "width").unwrap_or(0.5).clamp(0.25, 6.0);
     let color = p::str(v, "color").and_then(Rgb::parse);
     let style = p::str(v, "style").map(BorderStyle::from_ooxml).unwrap_or(BorderStyle::Single);
-    let b = Border { style, width, color, space: if kind == "left" || kind == "right" { 4.0 } else { 1.0 } };
+    let b = Border { style, width, color, space: if kind == "left" || kind == "right" { 4.0 } else { 1.0 }, ..Default::default() };
     if kind == "horizontalLine" {
         // A paragraph with a bottom border, like Word's Horizontal Line.
-        return fmt(s, &|p| p.borders = Some(Borders { bottom: Some(Border { width: 1.5, ..b }), ..Default::default() }));
+        let styles = s.doc.styles.clone();
+        let no_explicit_flags = Value::Null;
+        return fmt(s, &|p| {
+            let mut style_props = p.clone();
+            style_props.borders = None;
+            let inherited = styles.resolve_para(&style_props).borders.unwrap_or_default();
+            let mut updated = Borders { bottom: Some(Border { width: 1.5, ..b }), ..Default::default() };
+            preserve_unspecified_border_flags_with_style(&mut updated, p.borders.unwrap_or_default(), inherited, &no_explicit_flags);
+            p.borders = Some(updated);
+        });
     }
+    let styles = s.doc.styles.clone();
+    let no_explicit_flags = Value::Null;
     fmt(s, &|p| {
+        let mut style_props = p.clone();
+        style_props.borders = None;
+        let inherited = styles.resolve_para(&style_props).borders.unwrap_or_default();
         let mut cur = p.borders.unwrap_or_default();
         match kind {
             "none" => cur = Borders::default(),
@@ -120,6 +173,7 @@ pub(super) fn borders(s: &mut Session, v: &Value) -> CmdResult {
             "right" => cur.right = if cur.right.is_some_and(|x| x.is_visible()) { None } else { Some(b) },
             _ => {}
         }
+        preserve_unspecified_border_flags_with_style(&mut cur, p.borders.unwrap_or_default(), inherited, &no_explicit_flags);
         p.borders = if cur.any_visible() { Some(cur) } else { Some(Borders::default()) };
     })
 }

@@ -79,7 +79,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"color": "RRGGBB" | null}"#),
         CommandSpec::new("design.pageBorders", "Page Borders", "Design › Page Background", page_borders).params(
-            r#"{"kind"?: "box|none", "width"?: pt, "color"?: "RRGGBB", "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "sides"?: {"top"|"left"|"bottom"|"right": {"style"?, "width"?: pt, "color"?: "RRGGBB"} | null} (exactly these sides, instead of `kind`), "applyTo"?: "section|document"}"#,
+            r#"{"kind"?: "box|none", "width"?: pt, "color"?: "RRGGBB", "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "sides"?: {"top"|"left"|"bottom"|"right": {"style"?, "width"?: pt, "color"?: "RRGGBB", "shadow"?: bool, "frame"?: bool} | null} (exactly these sides, instead of `kind`), "applyTo"?: "section|document"}"#,
         ),
         CommandSpec::new("design.setDefault", "Set as Default", "Design › Document Formatting", |s, _| {
             s.status = "These settings will be used for new documents.".into();
@@ -148,7 +148,7 @@ fn style_set(s: &mut Session, v: &Value) -> CmdResult {
     let name = p::req_str(v, "name")?;
     let accent = s.doc.settings.theme_colors.get(4).copied().unwrap_or(styles::HEADING_BLUE);
     let mut fresh = wordcraft_doc::StyleSheet::builtin();
-    let line = Border { style: BorderStyle::Single, width: 0.75, color: Some(accent), space: 1.0 };
+    let line = Border { style: BorderStyle::Single, width: 0.75, color: Some(accent), space: 1.0, ..Default::default() };
     for st in &mut fresh.styles {
         let heading = st.id.starts_with("Heading") || st.id == "Title";
         match name {
@@ -275,7 +275,7 @@ fn page_borders(s: &mut Session, v: &Value) -> CmdResult {
             let width = p::f32(v, "width").unwrap_or(1.0).clamp(0.25, 6.0);
             let color = p::str(v, "color").and_then(Rgb::parse);
             let style = p::str(v, "style").map(BorderStyle::from_ooxml).unwrap_or(BorderStyle::Single);
-            (kind != "none").then(|| Borders::box_(Border { style, width, color, space: 24.0 }))
+            (kind != "none").then(|| Borders::box_(Border { style, width, color, space: 24.0, ..Default::default() }))
         }
     };
     let blocks: Vec<usize> = match p::str(v, "applyTo") {
@@ -284,7 +284,12 @@ fn page_borders(s: &mut Session, v: &Value) -> CmdResult {
         Some(x) => return Err(CmdError::Params(format!("unknown `applyTo` `{x}`"))),
     };
     for block in blocks {
-        s.doc.section_mut(block).page_borders = borders;
+        let mut updated = borders;
+        if let Some(updated) = updated.as_mut() {
+            let existing = s.doc.section_mut(block).page_borders.unwrap_or_default();
+            super::para::preserve_unspecified_border_flags(updated, existing, v.get("sides").unwrap_or(&Value::Null));
+        }
+        s.doc.section_mut(block).page_borders = updated;
     }
     sel_result(s)
 }

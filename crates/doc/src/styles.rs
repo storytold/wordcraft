@@ -631,7 +631,7 @@ impl StyleSheet {
             quick: true,
             ..p_style()
         });
-        let blue_line = Border { style: BorderStyle::Single, width: 0.5, color: Some(HEADING_BLUE), space: 10.0 };
+        let blue_line = Border { style: BorderStyle::Single, width: 0.5, color: Some(HEADING_BLUE), space: 10.0, ..Default::default() };
         add(Style {
             id: "IntenseQuote".into(),
             name: "Intense Quote".into(),
@@ -892,7 +892,7 @@ fn p_style() -> Style {
 
 /// A few table styles of our own (grid, plain, light/medium accents).
 fn table_styles() -> Vec<Style> {
-    let thin = |c: Rgb| Border { style: BorderStyle::Single, width: 0.5, color: Some(c), space: 0.0 };
+    let thin = |c: Rgb| Border { style: BorderStyle::Single, width: 0.5, color: Some(c), space: 0.0, ..Default::default() };
     // Bands of one row and one column, written out so Word bands them too (#3415).
     let mk = |id: &str, name: &str, parts: TableStyleParts| Style {
         id: id.into(),

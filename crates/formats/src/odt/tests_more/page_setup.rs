@@ -223,7 +223,13 @@ fn a_page_borders_padding_keeps_the_text_where_it_was() {
     // differently): the text stays 72 pt from the edge, written and read back.
     let mut d = Document::new();
     d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("x", Default::default()))];
-    let edge = wordcraft_doc::props::Border { style: BorderStyle::Single, width: 3.0, color: Some(Rgb(0x2f, 0x55, 0x97)), space: 24.0 };
+    let edge = wordcraft_doc::props::Border {
+        style: BorderStyle::Single,
+        width: 3.0,
+        color: Some(Rgb(0x2f, 0x55, 0x97)),
+        space: 24.0,
+        ..Default::default()
+    };
     d.last_section.page_borders =
         Some(wordcraft_doc::props::Borders { top: Some(edge), bottom: Some(edge), left: Some(edge), right: Some(edge), ..Default::default() });
     let back = crate::odt::import(&crate::odt::export(&d).unwrap()).unwrap();

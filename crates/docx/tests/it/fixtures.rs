@@ -1235,7 +1235,10 @@ fn char_border_reads_and_nil_resolves_off() {
         r#"<w:p><w:r><w:rPr><w:bdr w:val="single" w:sz="8" w:space="1" w:color="FF0000"/></w:rPr><w:t>a</w:t></w:r><w:r><w:rPr><w:bdr w:val="nil"/></w:rPr><w:t>b</w:t></w:r></w:p>"#,
     );
     let p = paras(&d)[0];
-    assert_eq!(p.props_of_char(0).border, Some(Border { style: BorderStyle::Single, width: 1.0, color: Some(Rgb(0xFF, 0, 0)), space: 1.0 }));
+    assert_eq!(
+        p.props_of_char(0).border,
+        Some(Border { style: BorderStyle::Single, width: 1.0, color: Some(Rgb(0xFF, 0, 0)), space: 1.0, ..Default::default() })
+    );
     let nil = p.props_of_char(1);
     assert_eq!(nil.border.map(|b| b.style), Some(BorderStyle::None));
     assert_eq!(d.styles.resolve_char(None, nil).border, None);

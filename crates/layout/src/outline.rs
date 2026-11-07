@@ -180,7 +180,7 @@ pub(crate) fn symbol_items(pl: &Arc<ParaLayout>, x: f32, y: f32, level: u8, chil
         object: None,
         alt: String::new(),
     };
-    let white = Border { style: BorderStyle::Single, width: 1.1, color: Some(Rgb(0xFF, 0xFF, 0xFF)), space: 0.0 };
+    let white = Border { style: BorderStyle::Single, width: 1.1, color: Some(Rgb(0xFF, 0xFF, 0xFF)), space: 0.0, ..Default::default() };
     if level >= BODY {
         out.push(disc(2.0));
         return out;
@@ -199,7 +199,7 @@ pub(crate) fn symbol_items(pl: &Arc<ParaLayout>, x: f32, y: f32, level: u8, chil
             y0: by,
             x1: x + w,
             y1: by,
-            border: Border { style: BorderStyle::Wave, width: 0.75, color: Some(SYMBOL_GREY), space: 0.0 },
+            border: Border { style: BorderStyle::Wave, width: 0.75, color: Some(SYMBOL_GREY), space: 0.0, ..Default::default() },
         });
     }
     out

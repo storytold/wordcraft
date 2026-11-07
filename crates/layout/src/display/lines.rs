@@ -453,7 +453,7 @@ fn character_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         }
         let border = style.rc.border;
         if let Some((open_border, x0, x1)) = open.as_mut()
-            && Some(*open_border) == border
+            && border.is_some_and(|border| open_border.same_look(&border))
         {
             *x0 = x0.min(ctx.x + left);
             *x1 = x1.max(ctx.x + right);

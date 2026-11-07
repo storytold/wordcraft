@@ -130,7 +130,7 @@ pub fn sample_document() -> Document {
     d.last_section.footers.default = Some(fid);
     let mut hd = styled("The Open Studio Handbook\t\tSpring edition", "Header");
     hd.props.borders = Some(Borders {
-        bottom: Some(Border { style: BorderStyle::Single, width: 0.5, color: Some(Rgb(0xBF, 0xBF, 0xBF)), space: 4.0 }),
+        bottom: Some(Border { style: BorderStyle::Single, width: 0.5, color: Some(Rgb(0xBF, 0xBF, 0xBF)), space: 4.0, ..Default::default() }),
         ..Default::default()
     });
     let hid = d.add_part(PartKind::Header, vec![para_block(hd)]);

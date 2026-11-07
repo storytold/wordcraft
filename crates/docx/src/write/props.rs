@@ -217,7 +217,16 @@ fn border_el(w: &mut W, name: &str, b: &Border) {
     let space = n(round(b.space.clamp(0.0, 31.0)));
     let color = b.color.map(|c| c.hex()).unwrap_or_else(|| "auto".into());
     let style = if b.style == BorderStyle::None { "nil" } else { b.style.ooxml() };
-    w.empty(name, &[("w:val", style), ("w:sz", &sz), ("w:space", &space), ("w:color", &color)]);
+    let mut attrs = vec![("w:val", style), ("w:sz", sz.as_str()), ("w:space", space.as_str()), ("w:color", color.as_str())];
+    let shadow = b.shadow.map(|v| if v { "1" } else { "0" });
+    let frame = b.frame.map(|v| if v { "1" } else { "0" });
+    if let Some(v) = shadow {
+        attrs.push(("w:shadow", v));
+    }
+    if let Some(v) = frame {
+        attrs.push(("w:frame", v));
+    }
+    w.empty(name, &attrs);
 }
 
 /// Borders element. `inner` names the between/insideH element (`w:between` for paragraphs,

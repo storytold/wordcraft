@@ -228,7 +228,8 @@ fn aligned_rows(t: &Table, a: &Logical, b: &Logical) -> Option<(usize, usize)> {
 /// `vertical`: the line sits left of grid column `line` and the edge covers rows `lo..=hi`;
 /// otherwise it sits above row `line` and covers grid columns `lo..hi`.
 fn hide_edge(t: &mut Table, vertical: bool, line: usize, (lo, hi): (usize, usize)) {
-    let nil = wordcraft_doc::props::Border { style: wordcraft_doc::props::BorderStyle::None, width: 0.0, color: None, space: 0.0 };
+    let nil =
+        wordcraft_doc::props::Border { style: wordcraft_doc::props::BorderStyle::None, width: 0.0, color: None, space: 0.0, ..Default::default() };
     // Only a cell whose edge lies on the line is touched.
     let set_v = |t: &mut Table, r: usize, g: usize, before: bool| {
         let Some(ci) = t.cell_at_grid(r, g) else { return };

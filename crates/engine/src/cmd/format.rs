@@ -150,7 +150,8 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"mark"?: "none" | "dot" | "comma" | "circle" | "underDot"}"#),
         CommandSpec::new("format.charStyle", "Apply Character Style", "Home › Styles", char_style).params(r#"{"style": string}"#),
-        CommandSpec::new("format.set", "Set Character Formatting", "Home › Font › Font", set).params(r#"{"props": CharProps}"#),
+        CommandSpec::new("format.set", "Set Character Formatting", "Home › Font › Font", set)
+            .params(r#"{"props": CharProps, "preserveBorderFlags"?: bool}"#),
         CommandSpec::new("format.fontDialog", "Font Dialog", "Home › Font", |s, _| {
             s.push_ui_request(json!({"open": "font"}));
             sel_result(s)
@@ -861,7 +862,61 @@ fn set(s: &mut Session, v: &Value) -> CmdResult {
     props.size_cs = props.size_cs.or(props.size);
     props.bold_cs = props.bold_cs.or(props.bold);
     props.italic_cs = props.italic_cs.or(props.italic);
+    if p::bool(v, "preserveBorderFlags") == Some(true) && props.border.is_some() {
+        return set_preserving_border_flags(s, &props);
+    }
     apply(s, &|c| c.overlay(&props))
+}
+
+/// Applies a border format while retaining each run's effective shadow and frame flags.
+fn set_preserving_border_flags(s: &mut Session, props: &CharProps) -> CmdResult {
+    let styles = s.doc.styles.clone();
+    let update = |para_style: Option<&str>, c: &mut CharProps| {
+        let mut patch = props.clone();
+        if let Some(mut border) = patch.border {
+            let old = styles.resolve_char(para_style, c).border;
+            border.shadow = old.and_then(|x| x.shadow);
+            border.frame = old.and_then(|x| x.frame);
+            patch.border = Some(border);
+        }
+        c.overlay(&patch);
+    };
+    let ranges = column_rows(s).unwrap_or_else(|| selected_text_box(s).or_else(|| target(s)).into_iter().collect());
+    if ranges.is_empty() {
+        let focus = s.sel.focus.clone();
+        let para_style = s.doc.para_at(&focus).and_then(|p| p.props.style.clone());
+        let mut pending = s.typing_props();
+        update(para_style.as_deref(), &mut pending);
+        s.pending = Some(pending);
+        if s.doc.para_at(&focus).is_some_and(|p| p.is_empty())
+            && let Ok(para) = s.doc.para_mut(focus.story, &focus.path)
+        {
+            update(para_style.as_deref(), &mut para.mark);
+            para.touch();
+        }
+        return sel_result(s);
+    }
+    for (a, b) in ranges {
+        for path in s.doc.para_paths_in(&a, &b) {
+            let at = Pos { path: path.clone(), off: 0, ..a.clone() };
+            let Some(para) = s.doc.para_at(&at) else { continue };
+            let para_style = para.props.style.clone();
+            let len = para.len();
+            let from = if path == a.path { a.off } else { 0 };
+            let to = if path == b.path { b.off } else { len };
+            let start = Pos { path: path.clone(), off: from, ..a.clone() };
+            let end = Pos { path, off: to, ..b.clone() };
+            s.doc.format_range(&start, &end, &|c| update(para_style.as_deref(), c))?;
+        }
+    }
+    if s.sel.is_collapsed()
+        && let Some(pending) = s.pending.as_mut()
+    {
+        let focus = s.sel.focus.clone();
+        let para_style = s.doc.para_at(&focus).and_then(|p| p.props.style.clone());
+        update(para_style.as_deref(), pending);
+    }
+    sel_result(s)
 }
 
 /// What the ribbon shows: the formatting at the selection (mixed values are null).

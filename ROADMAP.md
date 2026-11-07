@@ -812,6 +812,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-06 | trivial | Windows print submissions isolated per helper process; cancelled driver work cannot block a retry (#5710) |
 | 2026-11-06 | trivial | Progress log: print cancellation before sending, including without a document, and the Windows repeated-conversion limitation (#5710) |
 | 2026-11-06 | trivial | Progress log: the printer list no longer waits on printer drivers (#5710) |
+| 2026-11-05 | trivial | Paragraph, page and text border edits retain per-target Shadow and Frame flags; omitted and explicit off flags group alike |
 | 2026-11-05 | trivial | PR #4545: eligible cell floats retain in-bounds offsets and touch the outer cell edge only on overflow, ignoring wrap distances for object placement. Front-of-text, turned-cell and outside-cell opt-outs remain. Synthetic geometry controls; native front/behind-text parity remains unqualified. |
 | 2026-11-04 | trivial | Progress log: CLI convert format options; readiness estimates unchanged |
 | 2026-11-04 | trivial | Progress log: MHT quoted MIME parameters; readiness estimates unchanged |

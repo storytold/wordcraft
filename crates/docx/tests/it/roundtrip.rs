@@ -84,7 +84,7 @@ fn every_char_prop_round_trips() {
         color: Some(TextColor::Rgb(Rgb(0xAA, 0x10, 0x20))),
         highlight: Some(Highlight::Turquoise),
         shading: Some(Rgb(0xEE, 0xEE, 0x00)),
-        border: Some(Border { style: BorderStyle::Double, width: 1.5, color: Some(Rgb(0xC0, 0, 0)), space: 2.0 }),
+        border: Some(Border { style: BorderStyle::Double, width: 1.5, color: Some(Rgb(0xC0, 0, 0)), space: 2.0, ..Default::default() }),
         vert_align: Some(VertAlign::Superscript),
         caps: Some(true),
         small_caps: Some(false),
@@ -158,8 +158,52 @@ fn every_char_prop_round_trips() {
 }
 
 #[test]
+fn border_shadow_and_frame_survive_json_and_two_docx_saves() {
+    let enabled = Border { shadow: Some(true), frame: Some(true), ..Border::single(1.0) };
+    let disabled = Border { shadow: Some(false), frame: Some(false), ..Border::single(0.5) };
+    let absent = Border::single(0.75);
+    let mut d = Document::new();
+    let mut style = Style { id: "Bordered".into(), name: "Bordered".into(), ..Default::default() };
+    style.para.borders = Some(Borders { top: Some(enabled), ..Default::default() });
+    Arc::make_mut(&mut d.styles).styles.push(style);
+
+    let mut p = Paragraph::with_text("survives", CharProps { style: Some("Bordered".into()), border: Some(enabled), ..Default::default() });
+    p.props.borders = Some(Borders { bottom: Some(disabled), right: Some(Border::single(0.75)), ..Default::default() });
+    let mut table = Table::new(1, 1, 100.0);
+    if let Some(cell) = table.rows.get_mut(0).and_then(|r| r.cells.get_mut(0)) {
+        cell.props.borders = Some(Borders { right: Some(enabled), ..Default::default() });
+    }
+    d.body = vec![para_block(p), Arc::new(Block::Table(table))];
+    d.last_section.page_borders = Some(Borders { left: Some(enabled), ..Default::default() });
+
+    let json = serde_json::to_vec(&d).expect("serialize document");
+    let mut got: Document = serde_json::from_slice(&json).expect("deserialize document");
+    for _ in 0..2 {
+        got = rt(&got);
+        let para = paras(&got).first().copied().expect("paragraph");
+        assert_eq!(para.plain_text(), "survives");
+        assert_eq!(para.props_of_char(0).border, Some(enabled));
+        assert_eq!(got.styles.styles.iter().find(|s| s.id == "Bordered").and_then(|s| s.para.borders).and_then(|b| b.top), Some(enabled));
+        assert_eq!(para.props.borders.and_then(|b| b.bottom), Some(disabled));
+        assert_eq!(para.props.borders.and_then(|b| b.right), Some(absent));
+        let cell_border = got
+            .body
+            .get(1)
+            .and_then(|b| b.as_table())
+            .and_then(|t| t.rows.first())
+            .and_then(|r| r.cells.first())
+            .and_then(|c| c.props.borders)
+            .and_then(|b| b.right);
+        assert_eq!(cell_border, Some(enabled));
+        assert_eq!(got.last_section.page_borders.and_then(|b| b.left), Some(enabled));
+    }
+    assert_eq!(absent.shadow, None);
+    assert_eq!(absent.frame, None);
+}
+
+#[test]
 fn every_para_prop_round_trips() {
-    let b = Border { style: BorderStyle::Double, width: 0.75, color: Some(Rgb(9, 8, 7)), space: 4.0 };
+    let b = Border { style: BorderStyle::Double, width: 0.75, color: Some(Rgb(9, 8, 7)), space: 4.0, ..Default::default() };
     let pp = ParaProps {
         style: Some("Heading1".into()),
         align: Some(Align::Justify),
@@ -328,7 +372,8 @@ fn tables_with_merges_round_trip() {
         c.props.margins = Some([2.0, 3.0, 4.0, 5.0]);
         c.props.width = None;
         c.props.width_pct = Some(40.0);
-        c.props.borders = Some(Borders::box_(Border { style: BorderStyle::Dashed, width: 1.0, color: Some(Rgb(0, 0, 255)), space: 0.0 }));
+        c.props.borders =
+            Some(Borders::box_(Border { style: BorderStyle::Dashed, width: 1.0, color: Some(Rgb(0, 0, 255)), space: 0.0, ..Default::default() }));
         c.blocks = vec![para_block(Paragraph::with_text("red", CharProps::default()))];
     }
     // Nested table in a cell (followed by the required paragraph).
@@ -571,7 +616,7 @@ fn table_style_formatting_round_trips() {
         header_borders: Some(Borders::all(Border::single(1.5))),
         band_fill: Some(Rgb(0xF2, 0xF2, 0xF2)),
         band_chr: CharProps { bold: Some(true), color: Some(TextColor::Rgb(Rgb(0, 0x70, 0xC0))), ..Default::default() },
-        band_borders: Some(Borders::box_(Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 })),
+        band_borders: Some(Borders::box_(Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0, ..Default::default() })),
         band_size: Some(3),
         ..Default::default()
     };
@@ -617,9 +662,9 @@ fn every_table_style_part_round_trips() {
             },
             fill: Some(Rgb(0x10 + n, 0x80, 0xF0 - n)),
             borders: Some(Borders {
-                top: Some(Border { style: BorderStyle::Double, width: 1.5, color: Some(Rgb(n, 0, 0)), space: 0.0 }),
+                top: Some(Border { style: BorderStyle::Double, width: 1.5, color: Some(Rgb(n, 0, 0)), space: 0.0, ..Default::default() }),
                 bottom: Some(Border::single(0.5 + i as f32 / 4.0)),
-                left: Some(Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 }),
+                left: Some(Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0, ..Default::default() }),
                 inside_v: (i % 2 == 1).then(|| Border::single(0.25)),
                 ..Default::default()
             }),

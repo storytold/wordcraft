@@ -212,14 +212,44 @@ pub struct Border {
     pub color: Option<Rgb>,
     /// Distance from the text, points.
     pub space: f32,
+    /// Whether Word draws the border with a shadow. `None` preserves an omitted attribute.
+    pub shadow: Option<bool>,
+    /// Whether Word draws the border as a frame. `None` preserves an omitted attribute.
+    pub frame: Option<bool>,
 }
 
 impl Border {
     pub fn single(width: f32) -> Border {
-        Border { style: BorderStyle::Single, width, color: None, space: 0.0 }
+        Border { style: BorderStyle::Single, width, color: None, space: 0.0, shadow: None, frame: None }
     }
     pub fn is_visible(&self) -> bool {
         self.style != BorderStyle::None && self.width > 0.0
+    }
+
+    /// Compare the appearance of two borders; an omitted shadow or frame flag means off.
+    pub fn same_look(&self, other: &Self) -> bool {
+        self.style == other.style
+            && self.width == other.width
+            && self.color == other.color
+            && self.space == other.space
+            && self.shadow.unwrap_or(false) == other.shadow.unwrap_or(false)
+            && self.frame.unwrap_or(false) == other.frame.unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod border_tests {
+    use super::Border;
+
+    #[test]
+    fn omitted_shadow_and_frame_match_explicit_off() {
+        let omitted = Border::single(1.0);
+        let mut off = omitted;
+        off.shadow = Some(false);
+        off.frame = Some(false);
+        assert!(omitted.same_look(&off));
+        off.frame = Some(true);
+        assert!(!omitted.same_look(&off));
     }
 }
 

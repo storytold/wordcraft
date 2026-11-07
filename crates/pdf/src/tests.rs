@@ -854,7 +854,8 @@ fn triple_borders_export_three_lines() {
     use wordcraft_doc::props::{Border, BorderStyle, Borders};
     let pdf = |style: BorderStyle| {
         let mut p = Paragraph::with_text("Ruled", CharProps::default());
-        p.props.borders = Some(Borders { bottom: Some(Border { style, width: 0.75, color: None, space: 1.0 }), ..Default::default() });
+        p.props.borders =
+            Some(Borders { bottom: Some(Border { style, width: 0.75, color: None, space: 1.0, ..Default::default() }), ..Default::default() });
         let mut d = Document::new();
         d.body = vec![para_block(p)];
         export(&d, &PdfOptions { tagged: false, ..Default::default() }).unwrap()
