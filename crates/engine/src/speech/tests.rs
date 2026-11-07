@@ -287,7 +287,7 @@ fn finishing_a_worker_keeps_a_reading_started_during_shutdown() {
         state: State::Playing,
         rate: 1.0,
         generation: 0,
-        reading: 7,
+        readings: 7,
         error: None,
         running: true,
     });
@@ -300,7 +300,7 @@ fn finishing_a_worker_keeps_a_reading_started_during_shutdown() {
         state: State::Stopped,
         rate: 1.0,
         generation: 0,
-        reading: 7,
+        readings: 7,
         error: None,
         running: true,
     });

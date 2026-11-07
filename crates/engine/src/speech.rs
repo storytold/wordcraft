@@ -938,7 +938,7 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
             }
             if s.state == State::Stopped {
                 if let Some(now) = finish_worker(m, s, speaker) {
-                    reading = now;
+                    reading = Some(now);
                     speaker = SystemSpeaker::new();
                     continue;
                 }
@@ -949,7 +949,7 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
                 None => {
                     s.state = State::Stopped;
                     if let Some(now) = finish_worker(m, s, speaker) {
-                        reading = now;
+                        reading = Some(now);
                         speaker = SystemSpeaker::new();
                         continue;
                     }
@@ -987,7 +987,7 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
                 if s.index >= s.queue.len() {
                     s.state = State::Stopped;
                     if let Some(now) = finish_worker(m, s, speaker) {
-                        reading = now;
+                        reading = Some(now);
                         speaker = SystemSpeaker::new();
                         continue;
                     }
@@ -1003,7 +1003,7 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
                 s.state = State::Stopped;
                 s.error = Some(e);
                 if let Some(now) = finish_worker(m, s, speaker) {
-                    reading = now;
+                    reading = Some(now);
                     speaker = SystemSpeaker::new();
                     continue;
                 }
@@ -1025,7 +1025,11 @@ fn finish_worker(m: &Mutex<Shared>, s: MutexGuard<Shared>, speaker: SystemSpeake
     drop(speaker);
     let mut state = lock(m);
     if state.state == State::Playing && !state.queue.is_empty() {
-        Some(state.reading)
+        // The worker will continue with this reading: it must ask the system afresh which speech
+        // programs it has, like the normal new-reading path above.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        NO_ESPEAK.set(false);
+        Some(state.readings)
     } else {
         state.running = false;
         None
