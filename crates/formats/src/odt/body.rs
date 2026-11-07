@@ -80,7 +80,7 @@ pub(super) struct Body<'a> {
     loose_open: Option<(usize, usize, usize)>,
     fmt: Vec<Fmt>,
     /// For each paragraph being read: the size its heading, title or code style gives its text.
-    para_sizes: Vec<Option<f32>>,
+    para_sizes: Vec<(Option<f32>, bool)>,
     /// That size for the paragraph being finished.
     para_size: Option<f32>,
     para: Option<Para>,
@@ -959,7 +959,7 @@ impl Body<'_> {
             self.para_cont = false;
         }
         let kind_size = matches!(kind, Kind::Code | Kind::Heading(_) | Kind::Title).then(|| style.and_then(|s| self.styles.named_size(s))).flatten();
-        self.para_sizes.push(kind_size);
+        self.para_sizes.push((kind_size, style.is_some_and(|s| self.styles.states_size(s))));
         self.fmt.push(base);
         // Drawings waiting outside a paragraph come first in it, when it is the text's own (not
         // a text box's, a note's or a cell's).
@@ -978,7 +978,7 @@ impl Body<'_> {
         self.index_marks.clear();
         let Some(mut p) = self.para.take() else { return };
         self.glue_connectors(&mut p);
-        self.para_size = self.para_sizes.pop().flatten();
+        self.para_size = self.para_sizes.pop().and_then(|(size, stated)| size.filter(|_| stated));
         // A paragraph without text has its own text formatting as its mark's: its size is its
         // height, and its drawings' runs have it.
         if let Some(base) = self.fmt.pop()
@@ -1542,7 +1542,7 @@ impl Body<'_> {
                 let base = self.cur_fmt();
                 // A size in percent is of the size it is in: its heading's, where nothing nearer
                 // states one.
-                let sized = Fmt { size: base.size.or(self.para_sizes.last().copied().flatten()), ..base.clone() };
+                let sized = Fmt { size: base.size.or(self.para_sizes.last().and_then(|(size, _)| *size)), ..base.clone() };
                 let fmt = get(a, "text:style-name").map_or_else(|| base.clone(), |s| self.styles.span_fmt(s, &sized));
                 self.fmt.push(fmt);
             }

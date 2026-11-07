@@ -1273,6 +1273,12 @@ impl Styles {
         f.size
     }
 
+    /// Whether paragraph style `name`'s named styles state a size. Those that don't leave the size
+    /// to WordCraft's style for its kind, so text of any size isn't known to be the style's.
+    pub(super) fn states_size(&self, name: &str) -> bool {
+        self.chain(name).iter().any(|(_, s)| !s.auto && (s.fmt.size.is_some() || s.fmt.size_pct.is_some()))
+    }
+
     pub(super) fn span_fmt(&self, name: &str, base: &Fmt) -> Fmt {
         let chain = self.chain(name);
         let Some(at) = chain.iter().position(|(n, _)| self.is_named_text(n)) else { return self.text_fmt(name, base) };

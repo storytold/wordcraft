@@ -306,6 +306,34 @@ fn a_headings_text_of_another_size_keeps_it() {
     check(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap(), "written from the model");
 }
 
+/// In a heading style with no parent, where Standard's size and the default's differ, text stating
+/// a size keeps that size.
+#[test]
+fn a_parentless_headings_text_keeps_its_size() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="10pt"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"><style:text-properties fo:font-size="14pt"/></style:style><style:style style:name="H" style:family="paragraph" style:default-outline-level="1"/></office:styles></office:document-styles>"#
+    );
+    for size in ["10pt", "14pt"] {
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties fo:font-size="{size}"/></style:style></office:automatic-styles><office:body><office:text><text:h text:style-name="H" text:outline-level="1"><text:span text:style-name="T1">One</text:span></text:h></office:text></office:body></office:document-content>"#
+        );
+        let want: f32 = size.trim_end_matches("pt").parse().unwrap();
+        let check = |d: &Document, what: &str| {
+            let p = d.body[0].as_para().unwrap();
+            assert_eq!(
+                d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).size,
+                want,
+                "{size} {what}: {:?} {:?}",
+                p.props.style,
+                p.runs[0].props.size
+            );
+        };
+        let d = import(&package(&content, Some(&styles))).unwrap();
+        check(&d, "read");
+        check(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap(), "written from the model");
+    }
+}
+
 /// Text at its heading's size goes with the heading style, stated or not, and a size in percent
 /// is of the heading's size; text of another size keeps it, and so does a paragraph's own.
 #[test]
