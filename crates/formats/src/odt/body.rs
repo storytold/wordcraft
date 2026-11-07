@@ -208,6 +208,15 @@ pub(super) struct Body<'a> {
     next_comment: u32,
 }
 
+/// `p`, read as a list's paragraph, as one the list doesn't number (a list item's second paragraph,
+/// a list header's): a paragraph of its own at the level's text indent.
+fn unnumbered(p: &mut Para) {
+    let Some(li) = p.list.take() else { return };
+    let indent = li.label.and_then(|l| l.indent).map_or((f32::from(li.level) + 1.0) * 36.0, |i| f32::from(i) / 20.0);
+    p.spacing.left = p.spacing.left.or(Some(indent));
+    p.spacing.first = p.spacing.first.or(Some(0.0));
+}
+
 impl<'a> Body<'a> {
     pub(super) fn new(styles: &'a Styles, pages: &'a Pages, zip: &'a mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Self {
         let page = pages.first.clone().unwrap_or_default();
@@ -400,6 +409,14 @@ impl<'a> Body<'a> {
                         && let Some(FBlock::Para(p)) = blocks.get_mut(k.done)
                     {
                         p.index = Some(Box::new((std::sync::Arc::from(xml), n)));
+                    }
+                    // The list kept whole or not, an unnumbered paragraph's markup is only for it.
+                    for b in blocks.iter_mut().skip(k.done) {
+                        if let FBlock::Para(p) = b
+                            && p.list.is_none()
+                        {
+                            p.kept = None;
+                        }
                     }
                 }
                 None
@@ -1031,21 +1048,15 @@ impl Body<'_> {
             }
         }
         self.paras_done += 1;
-        let cont = std::mem::take(&mut self.para_cont);
-        let level = p.list.map(|l| l.level);
-        let c = self.container();
-        if cont
-            && let Some(FBlock::Para(prev)) = c.last_mut()
-            && prev.list.is_some()
-            && prev.list.map(|l| l.level) == level
-        {
-            prev.push_text("\n", &Fmt::default());
-            prev.inlines.extend(p.inlines);
-            // Two elements made one paragraph: neither's markup is it.
-            prev.kept = None;
-            return;
+        if std::mem::take(&mut self.para_cont) {
+            unnumbered(&mut p);
+            // Its markup means nothing outside its list: only a list kept whole may keep it, and
+            // that is seen when the list ends.
+            if self.kept_list.is_none() {
+                p.kept = None;
+            }
         }
-        c.push(FBlock::Para(p));
+        self.container().push(FBlock::Para(p));
     }
 
     fn push_text(&mut self, t: &str) {
@@ -1638,6 +1649,7 @@ impl Body<'_> {
                 }
             }
             "list-item" | "list-header" => {
+                let header = local(q) == "list-header";
                 // An item restarting the numbering begins a list of its own from there.
                 if let Some(v) = get(a, "text:start-value").and_then(|v| v.trim().parse::<u32>().ok()) {
                     self.list_id = self.new_list_id();
@@ -1647,8 +1659,9 @@ impl Body<'_> {
                 if let Some(l) = self.lists.last_mut() {
                     l.1 = true;
                 }
+                // A list header's paragraphs have no number (§5.3.3), as an item's after its first.
                 if let Some(u) = self.item_used.last_mut() {
-                    *u = false;
+                    *u = header;
                 }
             }
             _ => return false,

@@ -166,3 +166,89 @@ fn list_level_positions_are_read_and_written() {
     assert_eq!((c.indent, c.hanging, c.align), (a.indent, a.hanging, a.align));
     assert!((e.indent - b.indent).abs() < 0.01 && (e.hanging - b.hanging).abs() < 0.01);
 }
+
+#[test]
+fn a_list_items_further_paragraphs_are_paragraphs_with_no_number() {
+    // LibreOffice writes an unnumbered entry as an item's second paragraph. It was joined to the
+    // first by a line break, losing its paragraph, and so the first's markup too.
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><text:list-style style:name="L"><text:list-level-style-number text:level="1" style:num-format="1"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment fo:margin-left="1in" fo:text-indent="-0.25in"/></style:list-level-properties></text:list-level-style-number></text:list-style></office:styles></office:document-styles>"#
+    );
+    let body = r#"<text:list text:style-name="L"><text:list-header><text:p>Header</text:p></text:list-header><text:list-item><text:p>One</text:p><text:p>Still one</text:p><text:p>And again</text:p></text:list-item><text:list-item><text:p>Two</text:p></text:list-item></text:list><text:p>After</text:p>"#;
+    let content = format!("<office:document-content {NS_T}><office:body><office:text>{body}</office:text></office:body></office:document-content>");
+    let shape = |d: &wordcraft_doc::Document| {
+        d.body.iter().filter_map(|b| b.as_para()).map(|p| (p.text.clone(), p.props.numbering.is_some(), p.props.indent_left)).collect::<Vec<_>>()
+    };
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let want = |a: &[(String, bool, Option<f32>)]| {
+        let row = |t: &str| a.iter().find(|r| r.0 == t).unwrap_or_else(|| panic!("{t} in {a:?}"));
+        assert_eq!(a.len(), 6, "each its own paragraph: {a:?}");
+        for t in ["Header", "Still one", "And again"] {
+            assert!(!row(t).1, "{t} has no number: {a:?}");
+            assert_eq!(row(t).2, Some(72.0), "{t} at the item's text: {a:?}");
+        }
+        for t in ["One", "Two"] {
+            assert!(row(t).1, "{t} is numbered: {a:?}");
+        }
+        assert!(!row("After").1);
+    };
+    want(&shape(&d));
+    // The numbers go on past the unnumbered paragraph: one list.
+    let nums: Vec<u32> = d.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.props.numbering.map(|n| n.num)).collect();
+    assert_eq!(nums.len(), 2);
+    assert_eq!(nums[0], nums[1], "{nums:?}");
+    // And so do they written from the model, and written as read.
+    for saved in [crate::odt::tests::export_model(&d).unwrap(), export(&d).unwrap()] {
+        let back = import(&saved).unwrap();
+        want(&shape(&back));
+        let nums: Vec<u32> = back.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.props.numbering.map(|n| n.num)).collect();
+        assert_eq!(nums[0], nums[1], "{nums:?}");
+    }
+    // Edited, an unnumbered paragraph is saved as edited, not as the list's kept markup said, and
+    // the list around it stays one.
+    for t in ["Header", "Still one"] {
+        let mut d = import(&package(&content, Some(&styles))).unwrap();
+        let i = d.body.iter().position(|b| b.as_para().is_some_and(|p| p.text == t)).unwrap();
+        d.insert_text(&wordcraft_doc::Pos::body(i, 0), "Edited ", &Default::default()).unwrap();
+        let back = import(&export(&d).unwrap()).unwrap();
+        let rows = shape(&back);
+        assert_eq!(rows.len(), 6, "each its own paragraph: {rows:?}");
+        assert!(!rows.iter().any(|r| r.0 == t), "{t} was edited: {rows:?}");
+        let row = rows.iter().find(|r| r.0 == format!("Edited {t}")).unwrap_or_else(|| panic!("the edit: {rows:?}"));
+        assert_eq!((row.1, row.2), (false, Some(72.0)), "{t}: no number, at the item's text: {rows:?}");
+        let nums: Vec<u32> = back.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.props.numbering.map(|n| n.num)).collect();
+        assert_eq!(nums.len(), 2, "{rows:?}");
+        assert_eq!(nums[0], nums[1], "{nums:?}");
+    }
+}
+
+/// A level first used after an unnumbered paragraph is still the file's: a bulleted sublist stays
+/// bulleted, a numbered one under bullets stays numbered, read and written from the model.
+#[test]
+fn a_sublist_after_an_unnumbered_paragraph_keeps_its_levels() {
+    let open = |first: &str, second: &str| {
+        let styles = format!(
+            r#"<office:document-styles {NS_T}><office:styles><text:list-style style:name="L">{first}{second}</text:list-style></office:styles></office:document-styles>"#
+        );
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:body><office:text><text:list text:style-name="L"><text:list-item><text:p>One</text:p><text:p>More</text:p><text:list><text:list-item><text:p>Sub</text:p></text:list-item></text:list></text:list-item></text:list></office:text></office:body></office:document-content>"#
+        );
+        import(&package(&content, Some(&styles))).unwrap()
+    };
+    let sub = |d: &Document| {
+        let p = d.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == "Sub").unwrap();
+        let n = p.props.numbering.unwrap();
+        d.numbering.level(n.num, n.level).map(|l| (n.level, l.format, l.text.clone(), l.start)).unwrap()
+    };
+    let number = |level: u8, format: &str, start: u8| {
+        format!(r#"<text:list-level-style-number text:level="{level}" style:num-format="{format}" style:num-suffix="." text:start-value="{start}"/>"#)
+    };
+    let bullet = |level: u8| format!(r#"<text:list-level-style-bullet text:level="{level}" text:bullet-char="–"/>"#);
+    let d = open(&number(1, "1", 1), &bullet(2));
+    assert_eq!(sub(&d), (1, NumFormat::Bullet, "–".to_string(), 1));
+    assert_eq!(sub(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()), sub(&d), "written from the model");
+    let d = open(&bullet(1), &number(2, "i", 3));
+    let (level, format, _, start) = sub(&d);
+    assert_eq!((level, format, start), (1, NumFormat::LowerRoman, 3));
+    assert_eq!(sub(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()), sub(&d), "written from the model");
+}
