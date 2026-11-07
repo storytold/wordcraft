@@ -304,15 +304,21 @@ fn ink_columns(img: &Rendered) -> (usize, usize) {
 
 #[test]
 fn hinting_sharpens_screen_text_without_making_it_bolder_or_moving_it() {
-    let d = Document::from_text("Every Thursday evening the old print shop fills with people who make things. Painters set up by the north windows.");
+    let mut d =
+        Document::from_text("Every Thursday evening the old print shop fills with people who make things. Painters set up by the north windows.");
+    // A bundled face at a fixed size, so the pixel thresholds below do not follow the machine's
+    // default-font substitution.
+    let styles = std::sync::Arc::make_mut(&mut d.styles);
+    styles.default_chr.font = Some("Source Sans 3".into());
+    styles.default_chr.size = Some(12.0);
     let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
     // 100 % zoom on a 145 % desktop: glyph edges land between pixels.
     let scale = 96.0 / 72.0 * 1.45;
     let plain = render_page(&d, &l.pages[0], scale, &RenderOptions::default());
     let hinted = render_page(&d, &l.pages[0], scale, &RenderOptions { hinting: true, ..Default::default() });
     // Fewer grey pixels: the baseline, x-height and cap height fill whole pixel rows. Only
-    // horizontal edges snap (the vertical stems stay put), so on the fonts the tests resolve
-    // to (system or bundled) the drop is 4 to 5 %: asked for at least 3 %.
+    // horizontal edges snap (the vertical stems stay put), so on the bundled face the drop is
+    // 4 to 5 %: asked for at least 3 %.
     let (g0, g1) = (grey(&plain), grey(&hinted));
     assert!((g1 as f64) < g0 as f64 * 0.97, "grey pixels: plain {g0}, hinted {g1}");
     // The same weight, as FreeType's light hinting draws it: no darker than a few percent.
