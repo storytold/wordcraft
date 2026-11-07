@@ -198,6 +198,8 @@ fn mod_v_released_mod_first_pastes_the_clipboard_picture() {
     assert_eq!(pictures(&mut a), 1);
 }
 
+/// Mod+V key release pastes WordCraft's internal clipboard copy when system clipboard text and
+/// picture are absent.
 #[test]
 fn mod_v_release_pastes_clipboard_copy_when_no_clipboard_text_or_picture() {
     let ctx = egui::Context::default();

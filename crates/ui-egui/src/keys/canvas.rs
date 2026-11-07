@@ -258,7 +258,7 @@ fn prefilter(app: &mut WordApp, ctx: &egui::Context, e: &egui::Event, alt_codes:
     false
 }
 
-/// Mod+V with no clipboard text sends only the key's release: paste the picture then.
+/// Mod+V with no clipboard text sends only the key's release: paste the picture or session copy then.
 fn paste_release(app: &mut WordApp, e: &egui::Event) -> bool {
     // Desktop: Mod+V with no text on the clipboard sends no paste event, only the key's
     // release; paste the clipboard's picture then (#45). A paste event before the release

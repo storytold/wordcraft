@@ -4979,6 +4979,8 @@ fn copy_paste_text_box_makes_an_independent_copy() {
     assert_eq!(s.doc.parts.len(), parts);
 }
 
+/// Copying and pasting a selected custom text box duplicates its dimensions, styling, and text
+/// while giving the copy an independent story ID.
 #[test]
 fn copy_and_paste_selected_custom_text_box_duplicates_dimensions_styling_and_text() {
     let mut s = s();

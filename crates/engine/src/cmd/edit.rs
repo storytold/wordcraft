@@ -172,6 +172,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// Copy the selected text, object, or table cells to the clipboard.
 fn copy(s: &mut Session, _: &Value) -> CmdResult {
     let whole = super::table::selected_table(s);
     copy_with(s, whole.as_ref())
@@ -232,6 +233,7 @@ pub(crate) fn copy_result(s: &mut Session) -> Value {
     r
 }
 
+/// Cut the selection, selected object, or whole table cells to the clipboard and remove it from the document.
 fn cut(s: &mut Session, _: &Value) -> CmdResult {
     let whole = super::table::selected_table(s);
     if whole.is_none()

@@ -23,6 +23,8 @@ pub struct Fragment {
 }
 
 impl Fragment {
+    /// The plain text representation of the fragment's body, falling back to text box part stories
+    /// when the body text is empty.
     pub fn plain_text(&self) -> String {
         let d = self.to_document();
         let text = d.plain_text(crate::StoryRef::Body);
