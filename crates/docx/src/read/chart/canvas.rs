@@ -66,14 +66,20 @@ pub(super) fn stroke(out: &mut Vec<GraphicItem>, segs: Vec<PathSeg>, color: Rgb,
 /// A line through `pts` drawn one segment at a time, each in the colour of the point it ends at
 /// (`colour(i)` for the segment into point `i`), as Word draws a series that varies colours by
 /// point. A missing point breaks the line. `close` adds the segment from the last point back to
-/// the first, in the first point's colour (radar).
+/// the first, in the first point's colour (radar). Word draws that one first, so with two points
+/// it lies under the segment from the first point to the second.
 pub(super) fn point_segments(out: &mut Vec<GraphicItem>, pts: &[Option<(f32, f32)>], close: bool, colour: impl Fn(usize) -> Rgb, width: f32) {
     let n = pts.len();
-    let ends = if close && n > 2 { n + 1 } else { n };
-    for k in 1..ends {
-        if let (Some(Some((x0, y0))), Some(Some((x1, y1)))) = (pts.get(k - 1), pts.get(k % n)) {
-            stroke(out, vec![PathSeg::Move(*x0, *y0), PathSeg::Line(*x1, *y1)], colour(k % n), width);
+    let mut segment = |from: usize, to: usize| {
+        if let (Some(Some((x0, y0))), Some(Some((x1, y1)))) = (pts.get(from), pts.get(to)) {
+            stroke(out, vec![PathSeg::Move(*x0, *y0), PathSeg::Line(*x1, *y1)], colour(to), width);
         }
+    };
+    if close && n >= 2 {
+        segment(n - 1, 0);
+    }
+    for k in 1..n {
+        segment(k - 1, k);
     }
 }
 

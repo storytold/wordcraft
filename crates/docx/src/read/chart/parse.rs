@@ -129,6 +129,8 @@ impl Chart {
         self.point(j, i).and_then(|p| p.fill.or(p.marker).or(p.line)).unwrap_or_else(|| self.auto_point_colour(j, i))
     }
 
+    /// The `c:dPt` colours read for point `i` of series `j` (each `None` that the file doesn't
+    /// set); `None` for a series or point that doesn't exist.
     fn point(&self, j: usize, i: usize) -> Option<&PointFmt> {
         self.series.get(j).and_then(|s| s.points.get(i))
     }

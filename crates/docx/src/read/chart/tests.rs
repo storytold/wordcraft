@@ -204,8 +204,8 @@ fn radar_charts_draw_spokes_grid_and_series_polygons() {
 #[test]
 fn radar_charts_show_a_legend() {
     let cats = ["a", "b", "c"];
-    // `val="0"`, as Word writes it: with no `c:varyColors`, one series varies by point and the
-    // legend lists the categories instead.
+    // `c:varyColors val="0"`, as Word writes it, so the legend lists the series, "Team". Without
+    // the element a lone series would vary by point and the legend would list the categories.
     let plot = format!(r#"<c:radarChart><c:varyColors val="0"/>{}</c:radarChart>"#, ser(0, "Team", None, &cats, &["1", "2", "3"]));
     let items = with_legend(&plot, "r", 300.0, 200.0);
     assert!(texts(&items).contains(&"Team"), "{:?}", texts(&items));
@@ -663,8 +663,14 @@ fn varied_radar_charts_colour_markers_and_segments_by_point() {
     let plot = format!(r#"<c:radarChart><c:radarStyle val="marker"/><c:varyColors val="1"/>{one}</c:radarChart><c:valAx/>"#);
     let items = chart_items(&space(&plot), &theme(), 300.0, 220.0);
     assert_eq!(marker_colours(&items), [accent(0), accent(1), accent(2)]);
-    // Segments a→b, b→c, then the closing c→a, each in the colour of the point it ends at.
-    assert_eq!(line_colours(&items), [accent(1), accent(2), accent(0)]);
+    // Each segment in the colour of the point it ends at. Word draws the closing c→a first, then
+    // a→b and b→c.
+    assert_eq!(line_colours(&items), [accent(0), accent(1), accent(2)]);
+    // Two points: Word still draws the closing b→a, under a→b, so b's colour shows.
+    let two = ser(0, "S", None, &CATS[..2], &["1", "2"]);
+    let plot = format!(r#"<c:radarChart><c:radarStyle val="marker"/><c:varyColors val="1"/>{two}</c:radarChart><c:valAx/>"#);
+    let items = chart_items(&space(&plot), &theme(), 300.0, 220.0);
+    assert_eq!(line_colours(&items), [accent(0), accent(1)]);
 }
 
 // `c:dPt` line and marker colours (#5960): Word saves a varied line, scatter or radar chart with
@@ -741,8 +747,8 @@ fn radar_points_take_their_marker_and_line_colours() {
     let plot = format!(r#"<c:radarChart><c:radarStyle val="marker"/><c:varyColors val="1"/>{s}</c:radarChart><c:valAx/>"#);
     let items = chart_items(&space(&plot), &theme(), 300.0, 220.0);
     assert_eq!(marker_colours(&items), [RED, GREEN, BLUE]);
-    // a→b, b→c, then the closing c→a.
-    assert_eq!(strokes_in(&items, &[RED, GREEN, BLUE]), [GREEN, BLUE, RED]);
+    // The closing c→a first, then a→b and b→c.
+    assert_eq!(strokes_in(&items, &[RED, GREEN, BLUE]), [RED, GREEN, BLUE]);
     // A filled radar ignores its points' colours in Word: one fill and outline.
     let filled_radar = plot.replace(r#"val="marker""#, r#"val="filled""#);
     let items = chart_items(&space(&filled_radar), &theme(), 300.0, 220.0);
