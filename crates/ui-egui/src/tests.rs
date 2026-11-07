@@ -5728,7 +5728,7 @@ fn auto_cap_follows_the_smallest_window_screen_and_the_zoom_of_its_points() {
     let large = auto_scale_limit_over([((3840.0, 2160.0), 1.0)], 1.0);
     assert!(small < large);
     assert_eq!(auto_scale_limit_over([((3840.0, 2160.0), 1.0), ((1366.0, 768.0), 1.0)], 1.0), small);
-    // A 1366x768 panel at native scale 3: the points are 455x256 at zoom 1, 683x384 at zoom 1.5.
+    // A 1366x768 panel at native scale 3: the points are 455x256 at zoom 1, 304x171 at zoom 1.5.
     // The pixels, and so the cap, don't depend on which zoom made the points.
     let a = auto_scale_limit_over([((1366.0 / 3.0, 768.0 / 3.0), 3.0)], 1.0);
     let b = auto_scale_limit_over([((1366.0 / 4.5, 768.0 / 4.5), 3.0)], 1.5);
