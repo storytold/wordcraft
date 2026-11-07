@@ -396,3 +396,12 @@ fn range_toc_without_control_stays_unwrapped_and_section_break_toc_control_hands
     let xml_sect = document_xml(&write(&d_sect).unwrap());
     assert!(xml_sect.contains("Chapter One") && xml_sect.contains("Section"), "{xml_sect}");
 }
+
+#[test]
+fn table_revisions_round_trip() {
+    let tbl = r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2880"/></w:tblGrid><w:tr><w:tblPrEx><w:tblW w:w="2880" w:type="dxa"/><w:tblPrExChange w:id="1" w:author="Alice"><w:tblPrEx><w:tblW w:w="1440" w:type="dxa"/></w:tblPrEx></w:tblPrExChange></w:tblPrEx><w:trPr><w:ins w:id="2" w:author="Bob"/></w:trPr><w:tc><w:tcPr><w:tcW w:w="2880" w:type="dxa"/><w:cellIns w:id="3" w:author="Carol"/></w:tcPr><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+    let d = read(&package(tbl)).unwrap();
+    let xml = document_xml(&write(&d).unwrap());
+    assert!(xml.contains("<w:tblPrExChange "), "{xml}");
+    assert!(xml.contains("<w:cellIns "), "{xml}");
+}

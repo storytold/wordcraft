@@ -12903,3 +12903,53 @@ fn resolving_away_an_empty_paragraph_with_a_section_break_keeps_the_next_paragra
         assert_eq!(s.doc.last_section.margin_left, 72.0, "{cmd}: the following section's setup stays");
     }
 }
+
+#[test]
+fn review_changes_and_accept_reject_cover_row_cell_ins_del_and_tbl_pr_ex_change() {
+    use wordcraft_doc::props::{PropChange, TableProps};
+    use wordcraft_doc::{Revision, RevisionKind, Table};
+
+    let mut d = wordcraft_doc::Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Format, author: "Alice".into(), date: String::new(), move_name: None });
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: String::new(), move_name: None });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Carol".into(), date: String::new(), move_name: None });
+
+    let mut t = Table::new(2, 2, 200.0);
+    t.rows[0].props.exceptions = Some(Box::new(TableProps {
+        width: Some(180.0),
+        fmt_change: Some(Box::new(PropChange { rev: 0, old: TableProps { width: Some(120.0), ..Default::default() } })),
+        ..Default::default()
+    }));
+    t.rows[0].cells[1].props.del = Some(1);
+    t.rows[1].props.ins = Some(2);
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+
+    assert!(crate::cmd::review::has_format_changes(&d));
+    assert!(crate::cmd::review::has_deletions(&d));
+
+    let mut s = Session::new(d);
+    let listed = s.run("review.changes", &json!({})).unwrap();
+    let arr = listed.as_array().unwrap();
+    assert_eq!(arr.len(), 3, "{arr:?}");
+    assert_eq!(arr[0]["kind"], "format");
+    assert_eq!(arr[1]["kind"], "delete");
+    assert_eq!(arr[2]["kind"], "insert");
+
+    // Reject row 0's tblPrExChange at (0, 0).
+    s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 0, 0]), off: 0 });
+    run(&mut s, "review.reject", json!({}));
+    assert!(!crate::cmd::review::has_format_changes(&s.doc));
+    let tbl = s.doc.body[0].as_table().unwrap();
+    assert_eq!(tbl.rows[0].props.exceptions.as_ref().and_then(|e| e.width), Some(120.0));
+
+    // Accept cell (0, 1)'s deletion -> removes cell 1 from row 0.
+    s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 1, 0]), off: 0 });
+    run(&mut s, "review.accept", json!({}));
+    assert!(!crate::cmd::review::has_deletions(&s.doc));
+    assert_eq!(s.doc.body[0].as_table().unwrap().rows[0].cells.len(), 1);
+
+    // Reject row 1's insertion -> removes row 1 from the table.
+    s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 1, 0, 0]), off: 0 });
+    run(&mut s, "review.reject", json!({}));
+    assert_eq!(s.doc.body[0].as_table().unwrap().rows.len(), 1);
+}

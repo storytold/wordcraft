@@ -248,6 +248,11 @@ pub struct RowProps {
     /// Tracked formatting change (`w:trPrChange`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fmt_change: Option<Box<PropChange<RowProps>>>,
+    /// Tracked row insertion (`w:ins` in `w:trPr`) / deletion (`w:del` in `w:trPr`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ins: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub del: Option<u32>,
 }
 
 fn is_zero(v: &u32) -> bool {
@@ -304,6 +309,11 @@ pub struct CellProps {
     /// none).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub picture: Option<Box<CellPicture>>,
+    /// Tracked cell insertion (`w:cellIns`) / deletion (`w:cellDel`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ins: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub del: Option<u32>,
 }
 
 /// A cell's background picture: drawn at its own size where `align` puts it, tiled, or stretched
