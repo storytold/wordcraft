@@ -38,6 +38,7 @@ const ALL_CHECKS: &[&str] = &[
     "XML-UNDECLARED-PREFIX",
     "XML-INVALID-CHAR",
     "STRUCT-END-P",
+    "MATH-PLACEMENT",
     "REL-DUP-ID",
     "REL-DANGLING",
     "REL-TYPED",
@@ -1328,6 +1329,202 @@ fn struct_end_p_skipped_terminal_block_is_unknown() {
     assert_clean(&report);
     assert!(!has(&report, "STRUCT-END-P"));
     assert!(report.coverage_notes.iter().any(|note| note.contains("AlternateContent")));
+}
+
+/// The Office Math namespace, for the MATH-PLACEMENT fixtures.
+const M_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/math";
+
+/// A document whose main part declares the math namespace, with `body` inside `w:body`.
+fn math_doc(body: &str) -> Doc {
+    let mut d = Doc::minimal();
+    d.set(
+        "word/document.xml",
+        format!("<?xml version=\"1.0\"?><w:document xmlns:w=\"{W_NS}\" xmlns:m=\"{M_NS}\"><w:body>{body}</w:body></w:document>").into_bytes(),
+    );
+    d
+}
+
+/// How many MATH-PLACEMENT findings a report carries.
+fn math_findings(report: &Report) -> usize {
+    report.findings.iter().filter(|f| f.rule == "MATH-PLACEMENT").count()
+}
+
+/// Valid math placements: an oMath inside a paragraph, and an oMathPara inside a
+/// paragraph holding an oMath, are both clean.
+#[test]
+fn math_placement_valid_controls() {
+    let d = math_doc(
+        "<w:p><m:oMath><m:r><m:t>a</m:t></m:r></m:oMath></w:p><w:p><m:oMathPara><m:oMath><m:r><m:t>b</m:t></m:r></m:oMath></m:oMathPara></w:p>",
+    );
+    let report = validate(&d);
+    assert_clean(&report);
+    assert!(!has(&report, "MATH-PLACEMENT"));
+}
+
+/// An oMath nested inside another oMath (here inside a math run's argument chain)
+/// is refused by Word: exactly one finding, Error severity.
+#[test]
+fn math_placement_nested_omath() {
+    let d = math_doc("<w:p><m:oMath><m:r><m:t>a</m:t></m:r><m:oMath/></m:oMath></w:p>");
+    let report = validate(&d);
+    assert_finding(&report, "MATH-PLACEMENT", Some("word/document.xml"));
+    assert_eq!(math_findings(&report), 1, "{:?}", report.findings);
+}
+
+/// A stray math island — math content with no oMath ancestor — is reported once,
+/// at its root element, not once per descendant.
+#[test]
+fn math_placement_stray_island_reported_once() {
+    let d = math_doc("<w:p><m:f><m:num><m:r><m:t>1</m:t></m:r></m:num></m:f></w:p>");
+    let report = validate(&d);
+    assert_finding(&report, "MATH-PLACEMENT", Some("word/document.xml"));
+    assert_eq!(math_findings(&report), 1, "{:?}", report.findings);
+}
+
+/// An oMath directly under the body breaks two documented rules at once: it
+/// occurs outside any w:p, and body is a prohibited direct parent. Two findings.
+#[test]
+fn math_placement_omath_outside_paragraph() {
+    let d = math_doc("<m:oMath><m:r><m:t>a</m:t></m:r></m:oMath>");
+    let report = validate(&d);
+    assert_finding(&report, "MATH-PLACEMENT", Some("word/document.xml"));
+    assert_eq!(math_findings(&report), 2, "{:?}", report.findings);
+}
+
+/// An oMathPara descended from a math element is refused by Word, even inside a
+/// paragraph; the enclosing oMath itself is fine.
+#[test]
+fn math_placement_omathpara_descendant_of_math() {
+    let d = math_doc("<w:p><m:oMath><m:oMathPara/></m:oMath></w:p>");
+    let report = validate(&d);
+    assert_finding(&report, "MATH-PLACEMENT", Some("word/document.xml"));
+    assert_eq!(math_findings(&report), 1, "{:?}", report.findings);
+}
+
+/// An oMathPara outside any paragraph is refused on two grounds (outside any
+/// w:p; body is a prohibited direct parent) — and so is the oMath inside it,
+/// which is likewise outside any w:p: three findings.
+#[test]
+fn math_placement_omathpara_outside_paragraph() {
+    let d = math_doc("<m:oMathPara><m:oMath><m:r/></m:oMath></m:oMathPara>");
+    let report = validate(&d);
+    assert_finding(&report, "MATH-PLACEMENT", Some("word/document.xml"));
+    assert_eq!(math_findings(&report), 3, "{:?}", report.findings);
+}
+
+/// Paragraph properties are a legal child of oMathPara: neither the properties
+/// element nor its children are stray math content. Empty and populated forms.
+#[test]
+fn math_placement_omathparapr_is_legal() {
+    let d = math_doc(
+        "<w:p><m:oMathPara><m:oMathParaPr><m:jc m:val=\"center\"/></m:oMathParaPr><m:oMath><m:r><m:t>x</m:t></m:r></m:oMath></m:oMathPara></w:p><w:p><m:oMathPara><m:oMathParaPr/><m:oMath/></m:oMathPara></w:p>",
+    );
+    let report = validate(&d);
+    assert_clean(&report);
+    assert!(!has(&report, "MATH-PLACEMENT"));
+}
+
+/// A text box anchored in a paragraph still makes txbxContent a prohibited
+/// direct parent: the outer paragraph does not rescue an oMath or oMathPara
+/// placed directly in the text box's content.
+#[test]
+fn math_placement_txbxcontent_direct_child() {
+    let d = math_doc("<w:p><w:r><w:pict><w:txbxContent><m:oMath/></w:txbxContent></w:pict></w:r></w:p>");
+    let report = validate(&d);
+    assert_finding(&report, "MATH-PLACEMENT", Some("word/document.xml"));
+    assert_eq!(math_findings(&report), 1, "{:?}", report.findings);
+    let d = math_doc("<w:p><w:r><w:pict><w:txbxContent><m:oMathPara><m:oMath/></m:oMathPara></w:txbxContent></w:pict></w:r></w:p>");
+    let report = validate(&d);
+    assert_eq!(math_findings(&report), 1, "{:?}", report.findings);
+}
+
+/// But math inside a real paragraph inside the text box is fine.
+#[test]
+fn math_placement_txbxcontent_inner_paragraph_is_legal() {
+    let d = math_doc("<w:p><w:r><w:pict><w:txbxContent><w:p><m:oMath><m:r/></m:oMath></w:p></w:txbxContent></w:pict></w:r></w:p>");
+    let report = validate(&d);
+    assert_clean(&report);
+    assert!(!has(&report, "MATH-PLACEMENT"));
+}
+
+/// A run-level content control inside a paragraph is not a prohibited parent:
+/// the listed sdtContent parents are the block, cell, and row levels only.
+#[test]
+fn math_placement_run_level_sdt_is_legal() {
+    let d = math_doc("<w:p><w:sdt><w:sdtContent><m:oMath/></w:sdtContent></w:sdt></w:p>");
+    let report = validate(&d);
+    assert_clean(&report);
+    assert!(!has(&report, "MATH-PLACEMENT"));
+}
+
+/// A block-level content control is a prohibited parent — and with no paragraph
+/// anywhere, the outside-any-p ground fires too: two findings.
+#[test]
+fn math_placement_block_level_sdt() {
+    let d = math_doc("<w:sdt><w:sdtContent><m:oMath/></w:sdtContent></w:sdt>");
+    let report = validate(&d);
+    assert_finding(&report, "MATH-PLACEMENT", Some("word/document.xml"));
+    assert_eq!(math_findings(&report), 2, "{:?}", report.findings);
+}
+
+/// A run-level customXml wrapper inside a paragraph is not a prohibited parent
+/// either — for oMath directly, for oMathPara, and for math inside a run-level
+/// content control nested in the wrapper.
+#[test]
+fn math_placement_run_level_customxml_is_legal() {
+    let d = math_doc("<w:p><w:customXml><m:oMath><m:r><m:t>x</m:t></m:r></m:oMath></w:customXml></w:p>");
+    let report = validate(&d);
+    assert_clean(&report);
+    assert!(!has(&report, "MATH-PLACEMENT"));
+    let d = math_doc("<w:p><w:customXml><m:oMathPara><m:oMath/></m:oMathPara></w:customXml></w:p>");
+    let report = validate(&d);
+    assert!(!has(&report, "MATH-PLACEMENT"), "{:?}", report.findings);
+    let d = math_doc("<w:p><w:customXml><w:sdt><w:sdtContent><m:oMath/></w:sdtContent></w:sdt></w:customXml></w:p>");
+    let report = validate(&d);
+    assert!(!has(&report, "MATH-PLACEMENT"), "{:?}", report.findings);
+}
+
+/// A block-level customXml wrapper is a prohibited parent: two findings with
+/// the outside-any-p ground.
+#[test]
+fn math_placement_block_level_customxml() {
+    let d = math_doc("<w:customXml><m:oMath/></w:customXml>");
+    let report = validate(&d);
+    assert_finding(&report, "MATH-PLACEMENT", Some("word/document.xml"));
+    assert_eq!(math_findings(&report), 2, "{:?}", report.findings);
+}
+
+/// A math element placed directly under a header root draws both grounds at
+/// the header part.
+#[test]
+fn math_placement_header_root_direct_child() {
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/header1.xml", CT_HEADER)]));
+    d.set("word/header1.xml", format!("<w:hdr xmlns:w=\"{W_NS}\" xmlns:m=\"{M_NS}\"><m:oMath/></w:hdr>").into_bytes());
+    let report = validate(&d);
+    assert_finding(&report, "MATH-PLACEMENT", Some("word/header1.xml"));
+    assert_eq!(math_findings(&report), 2, "{:?}", report.findings);
+}
+
+/// Math content placed directly inside an oMathPara, with no oMath around it, is
+/// math content outside any oMath: reported once, at the run.
+#[test]
+fn math_placement_content_directly_in_omathpara() {
+    let d = math_doc("<w:p><m:oMathPara><m:r><m:t>x</m:t></m:r></m:oMathPara></w:p>");
+    let report = validate(&d);
+    assert_finding(&report, "MATH-PLACEMENT", Some("word/document.xml"));
+    assert_eq!(math_findings(&report), 1, "{:?}", report.findings);
+}
+
+/// The rule applies in every story part, not just the main part: stray math in a
+/// header is flagged there.
+#[test]
+fn math_placement_header_story_part() {
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/header1.xml", CT_HEADER)]));
+    d.set("word/header1.xml", format!("<w:hdr xmlns:w=\"{W_NS}\" xmlns:m=\"{M_NS}\"><w:p><m:f/></w:p></w:hdr>").into_bytes());
+    let report = validate(&d);
+    assert_finding(&report, "MATH-PLACEMENT", Some("word/header1.xml"));
 }
 
 /// Story parts other than the main part retain their PR-1 scope.

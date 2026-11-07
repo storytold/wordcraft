@@ -10,7 +10,7 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::{Namespace, NamespaceResolver, QName, ResolveResult};
 use quick_xml::reader::NsReader;
 
-use crate::{Acc, NS_DS, NS_MC, NS_R, NS_W, NS_W14, NS_W15, NS_W16CID, NS_WP};
+use crate::{Acc, NS_DS, NS_M, NS_MC, NS_R, NS_W, NS_W14, NS_W15, NS_W16CID, NS_WP};
 
 /// What a part is, for the checks that apply to it.
 #[derive(Clone, Copy, Default)]
@@ -107,6 +107,10 @@ impl ElemId {
     /// Whether this element belongs to the drawing namespace (`wp:`).
     fn wp(&self) -> bool {
         self.local_w(NS_WP)
+    }
+    /// Whether this element belongs to the Office Math namespace (`m:`).
+    fn m(&self) -> bool {
+        self.local_w(NS_M)
     }
     /// Whether this element's namespace URI matches `uri`.
     fn local_w(&self, uri: &str) -> bool {
@@ -252,6 +256,31 @@ enum TcEnd {
 
 struct Frame {
     is_tc: bool,
+    /// A `w:p` frame: math placement is judged against paragraph ancestry.
+    is_p: bool,
+    /// Any Office Math element: an `m:oMathPara` must not descend from one.
+    is_math: bool,
+    /// An `m:oMath` frame: math content and nested `m:oMath` are judged against it.
+    is_omath: bool,
+    /// An `m:oMathPara` frame: a legal container whose non-`oMath` math children are
+    /// still math content outside any `m:oMath`.
+    is_omath_para: bool,
+    /// An `m:oMathParaPr` frame: paragraph properties, a legal child of `m:oMathPara`
+    /// whose own children (`m:jc` and friends) are not stray math content.
+    is_omath_parapr: bool,
+    /// This frame's element is one of the block containers `m:oMath` and
+    /// `m:oMathPara` must not be a direct child of (MS-OI29500 §22.1.2.77 (f) and
+    /// §22.1.2.78 (c)); the value is the element's local name for messages. Only
+    /// the inherently block-level names are here: `customXml` and `sdtContent`
+    /// are listed at block, cell, and row level only, so they are judged by
+    /// context instead (see `wrapper_is_block_level`).
+    block_parent_name: Option<&'static str>,
+    /// A `w:sdtContent` frame: a prohibited direct parent only at block, cell, or
+    /// row level — a run-level `sdtContent` inside a paragraph is not listed.
+    is_sdt_content: bool,
+    /// A `w:customXml` frame: likewise a prohibited direct parent only at block,
+    /// cell, or row level — a run-level `customXml` inside a paragraph is not.
+    is_custom_xml: bool,
     tc_has_block: bool,
     /// None also represents an unknown last block in skipped AlternateContent.
     tc_last_block: Option<TcEnd>,
@@ -619,6 +648,31 @@ fn frame_for(id: &ElemId) -> Frame {
     let local = id.local.as_str();
     Frame {
         is_tc: w && local == "tc",
+        is_p: w && local == "p",
+        is_math: id.m(),
+        is_omath: id.m() && local == "oMath",
+        is_omath_para: id.m() && local == "oMathPara",
+        is_omath_parapr: id.m() && local == "oMathParaPr",
+        block_parent_name: if w {
+            match local {
+                "body" => Some("body"),
+                "comment" => Some("comment"),
+                "docPartBody" => Some("docPartBody"),
+                "endnote" => Some("endnote"),
+                "footnote" => Some("footnote"),
+                "ftr" => Some("ftr"),
+                "hdr" => Some("hdr"),
+                "tbl" => Some("tbl"),
+                "tc" => Some("tc"),
+                "tr" => Some("tr"),
+                "txbxContent" => Some("txbxContent"),
+                _ => None,
+            }
+        } else {
+            None
+        },
+        is_sdt_content: w && local == "sdtContent",
+        is_custom_xml: w && local == "customXml",
         tc_has_block: false,
         tc_last_block: None,
         is_del: w && local == "del",
@@ -667,9 +721,96 @@ fn mark_block_content(state: &mut State, id: &ElemId) {
     }
 }
 
+/// Whether the wrapper frame at `idx` (a `w:sdtContent` or `w:customXml`) sits
+/// at block level: walking outward past it, an inherently block-level container
+/// is met before any `w:p` (or no `w:p` is met at all). Wrapper frames
+/// themselves are transparent to the walk — a run-level wrapper inside a
+/// paragraph does not make a nested wrapper block-level. MS-OI29500
+/// §22.1.2.77 (f) / §22.1.2.78 (c) list these parents at block, cell, and row
+/// level only.
+fn wrapper_is_block_level(frames: &[Frame], idx: usize) -> bool {
+    for f in frames[..idx].iter().rev() {
+        if f.is_p {
+            return false;
+        }
+        if f.block_parent_name.is_some() {
+            return true;
+        }
+    }
+    true
+}
+
+/// The prohibited direct parent of an `m:oMath` or `m:oMathPara`, when the
+/// innermost open frame is one: an inherently block-level container, or a
+/// `w:sdtContent` / `w:customXml` sitting at block level. Returns the parent's
+/// local name for the finding message.
+fn prohibited_parent(state: &State) -> Option<&'static str> {
+    let parent = state.frames.last()?;
+    if let Some(name) = parent.block_parent_name {
+        return Some(name);
+    }
+    let idx = state.frames.len() - 1;
+    if parent.is_sdt_content && wrapper_is_block_level(&state.frames, idx) {
+        return Some("sdtContent");
+    }
+    if parent.is_custom_xml && wrapper_is_block_level(&state.frames, idx) {
+        return Some("customXml");
+    }
+    None
+}
+
+/// `MATH-PLACEMENT` (MS-OI29500 Part 1 §22.1.2.77 notes (b), (d), (e), (f) and
+/// §22.1.2.78 notes (b), (c), (d)): judge a math element against its ancestors,
+/// which are exactly the frames already open — this runs before the element's own
+/// frame is pushed. Story parts only: the documented refusals concern document
+/// content. A stray math island (math content with no `m:oMath` anywhere above it)
+/// is reported once, at its root element, not once per descendant.
+fn check_math_placement(state: &State, id: &ElemId, role: PartRole, part: &str, acc: &mut Acc) {
+    if !role.is_story || !id.m() {
+        return;
+    }
+    let in_omath = state.frames.iter().any(|f| f.is_omath);
+    let in_math = state.frames.iter().any(|f| f.is_math);
+    let in_stray = state.frames.iter().any(|f| f.is_math && !f.is_omath && !f.is_omath_para);
+    let in_omath_para = state.frames.iter().any(|f| f.is_omath_para);
+    let in_parapr = state.frames.iter().any(|f| f.is_omath_parapr);
+    let in_p = state.frames.iter().any(|f| f.is_p);
+    match id.local.as_str() {
+        "oMath" => {
+            if in_omath {
+                acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:oMath in {part} is nested inside another m:oMath"));
+            }
+            if !in_p {
+                acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:oMath in {part} occurs outside any w:p"));
+            }
+            if let Some(parent) = prohibited_parent(state) {
+                acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:oMath in {part} is a direct child of w:{parent}"));
+            }
+        }
+        "oMathPara" => {
+            if in_math {
+                acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:oMathPara in {part} is a descendant of a math element"));
+            }
+            if !in_p {
+                acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:oMathPara in {part} occurs outside any w:p"));
+            }
+            if let Some(parent) = prohibited_parent(state) {
+                acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:oMathPara in {part} is a direct child of w:{parent}"));
+            }
+        }
+        // Paragraph properties are a legal child of oMathPara, not stray content.
+        "oMathParaPr" if in_omath_para => {}
+        _ if !in_omath && !in_stray && !in_parapr => {
+            acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:{} in {part} is math content outside any m:oMath", id.local));
+        }
+        _ => {}
+    }
+}
+
 /// Handle element start tags: update structural flags, deletion depth, IDs, and element structure.
 fn on_open(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole, part: &str, acc: &mut Acc) {
     mark_block_content(state, id);
+    check_math_placement(state, id, role, part, acc);
     if id.w() && id.local == "del" {
         state.del_depth += 1;
     }
@@ -680,6 +821,7 @@ fn on_open(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceR
 /// Handle self-closing/empty tags: check structural requirements like non-empty table cells, and record IDs.
 fn on_empty(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole, part: &str, acc: &mut Acc) {
     mark_block_content(state, id);
+    check_math_placement(state, id, role, part, acc);
     if id.w() && id.local == "tc" && role.is_main {
         acc.add("STRUCT-TC-NO-P", Some(part.to_string()), format!("w:tc in {part} has no block-level content"));
     }

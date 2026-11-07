@@ -43,6 +43,8 @@ pub(crate) const NS_R: &str = "http://schemas.openxmlformats.org/officeDocument/
 pub(crate) const NS_WP: &str = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
 /// The markup-compatibility namespace.
 pub(crate) const NS_MC: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+/// The Office Math namespace (`m:oMath` and friends).
+pub(crate) const NS_M: &str = "http://schemas.openxmlformats.org/officeDocument/2006/math";
 /// The Word 2010 wordml namespace (`w14:paraId`).
 pub(crate) const NS_W14: &str = "http://schemas.microsoft.com/office/word/2010/wordml";
 /// The Word 2012 wordml namespace (`w15:commentEx`).
@@ -270,6 +272,13 @@ pub(crate) const STRUCT_TC_NO_P: RuleSpec = RuleSpec { id: "STRUCT-TC-NO-P", sev
 /// hold a terminal paragraph, so their ending is treated as unknown. Desktop behaviour
 /// unrecorded.
 pub(crate) const STRUCT_END_P: RuleSpec = RuleSpec { id: "STRUCT-END-P", severity: Severity::Error, evidence: Evidence::Observed };
+/// `MATH-PLACEMENT`: math elements where Word refuses them — an `m:oMath` nested in
+/// another `m:oMath`, math content outside any `m:oMath`, an `m:oMath` or `m:oMathPara`
+/// outside any `w:p`, or an `m:oMathPara` descended from a math element. MS-OI29500
+/// Part 1 §22.1.2.77 notes (b), (d), (e), (f) and §22.1.2.78 notes (b), (c), (d) each
+/// state Word fails to open the file; the base standard allows every one of these
+/// constructs, so this is a documented-divergence rule with no oracle run yet.
+pub(crate) const MATH_PLACEMENT: RuleSpec = RuleSpec { id: "MATH-PLACEMENT", severity: Severity::Error, evidence: Evidence::MsDocumented };
 /// `STRUCT-DELTEXT`: a `w:t` inside `w:del`, or a `w:delText` outside one. Observed (web): lenient
 /// recovery, the text renders as a tracked deletion anyway, so Warning.
 pub(crate) const STRUCT_DELTEXT: RuleSpec = RuleSpec { id: "STRUCT-DELTEXT", severity: Severity::Warning, evidence: Evidence::Observed };
@@ -299,6 +308,7 @@ pub(crate) const RULES: &[RuleSpec] = &[
     XML_UNDECLARED_PREFIX,
     XML_INVALID_CHAR,
     STRUCT_END_P,
+    MATH_PLACEMENT,
     REL_DUP_ID,
     REL_DANGLING,
     REL_TYPED,
@@ -609,6 +619,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     acc.ran("XML-UNDECLARED-PREFIX");
     acc.ran("XML-INVALID-CHAR");
     acc.ran("STRUCT-END-P");
+    acc.ran("MATH-PLACEMENT");
     let roles = story_roles(pkg);
     let mut facts = scan::StoryFacts::default();
     let mut refs: Vec<(String, Vec<RefFact>)> = Vec::new();
