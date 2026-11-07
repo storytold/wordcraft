@@ -5,10 +5,11 @@
 //! older readers), document info, page setup, paragraph formatting (`\pard`, alignment, page
 //! break before), character formatting (`\b \i \ul \strike \super \sub \f \fs \cf \chcbpat`),
 //! hyperlinks as `HYPERLINK` fields, bookmarks, pictures (`\pngblip` / `\jpegblip`) and tables
-//! (`\trowd … \cellx … \cell … \row`, header rows, vertical merges, shading).
+//! (`\trowd … \cellx … \cell … \row`, header rows, vertical merges, shading), and per-section
+//! header/footer stories (default, first-page and even-page destinations).
 //!
-//! Import: a tolerant reader for groups and destinations (unknown `\*` destinations, headers,
-//! footers, notes and objects are skipped), `\par \line \tab \page`, `\uN` with `\ucN`
+//! Import: a tolerant reader for groups and destinations (headers and footers become their own
+//! stories; unknown `\*` destinations, notes and objects are skipped), `\par \line \tab \page`, `\uN` with `\ucN`
 //! fallback skipping, `\'hh` and 8-bit text in the document's code page (`\ansicpg`, `\mac`, `\pc`, `\pca`) or
 //! the current font's (`\fcharset`, `\cpg`: Cyrillic, Central European, Greek, Mac OS Roman, the
 //! East Asian multibyte pages 932/936/949/950…; Windows-1252 when none is named). A multibyte
