@@ -919,20 +919,54 @@ fn with_kept_defs(
 }
 
 /// `xml` (a part WordCraft wrote) with each font it declares that `faces` declare too (the file's
-/// own `style:font-face` elements) as `faces` has it.
+/// own `style:font-face` elements) as `faces` has it: under that name, or else of that family (a
+/// face named `F1` of the family `Mystery`, which WordCraft names by its family), then keeping
+/// WordCraft's name for it.
 fn with_file_faces(xml: &mut String, faces: &[&str]) {
+    use super::kept::{attr_text, raw_attr};
+    let mut named = std::collections::HashMap::new();
+    let mut of_family = std::collections::HashMap::new();
     for face in faces {
-        let Some(name) = face.split('>').next().and_then(|head| super::kept::raw_attr(head, "style:name")) else { continue };
-        let name = super::kept::attr_text(name);
-        let names_it = |at: &usize| {
-            let tag = xml.get(*at..).and_then(|t| t.split('>').next());
-            tag.and_then(|tag| super::kept::raw_attr(tag, "style:name")).is_some_and(|n| super::kept::attr_text(n) == name)
-        };
-        let Some(at) = xml.match_indices("<style:font-face ").map(|(i, _)| i).find(names_it) else { continue };
-        // WordCraft's own declarations are empty elements.
-        let Some(end) = xml.get(at..).and_then(|r| r.find("/>")).map(|e| at + e + 2) else { continue };
-        xml.replace_range(at..end, face);
+        let Some(head) = face.split('>').next() else { continue };
+        if let Some(name) = raw_attr(head, "style:name") {
+            named.entry(attr_text(name).into_owned()).or_insert(*face);
+        }
+        if let Some(family) = raw_attr(head, "svg:font-family") {
+            let family = attr_text(family);
+            let first = family.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']);
+            if let Some(font) = model::kept_font(first) {
+                of_family.entry(font).or_insert(*face);
+            }
+        }
     }
+    let mut out = String::with_capacity(xml.len());
+    let mut rest = xml.as_str();
+    while let Some(at) = rest.find("<style:font-face ") {
+        let (before, from) = rest.split_at(at);
+        out.push_str(before);
+        // WordCraft's own declarations are empty elements.
+        let Some(end) = from.find("/>").map(|e| e + 2) else {
+            rest = from;
+            break;
+        };
+        let (tag, after) = from.split_at(end);
+        let name = raw_attr(tag, "style:name").map(attr_text);
+        let same = name.as_deref().and_then(|n| named.get(n)).map(|face| face.to_string());
+        let family = || name.as_deref().and_then(|n| of_family.get(n).and_then(|face| face_named(face, n)));
+        out.push_str(same.or_else(family).as_deref().unwrap_or(tag));
+        rest = after;
+    }
+    out.push_str(rest);
+    *xml = out;
+}
+
+/// `face` (a `style:font-face` element) with the name `name`.
+fn face_named(face: &str, name: &str) -> Option<String> {
+    let head = face.split('>').next()?;
+    let was = super::kept::raw_attr(head, "style:name")?;
+    let attr = head.find("style:name")?;
+    let at = attr + head.get(attr..)?.find(was)?;
+    Some(format!("{}{}{}", face.get(..at)?, x(name), face.get(at + was.len()..)?))
 }
 
 /// An OpenDocument text document's media type, and a template's (ODF 1.3 Part 2 §3.3, Appendix C).

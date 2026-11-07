@@ -27,6 +27,7 @@ pub(super) fn defs(xml: &[u8], content: bool) -> Vec<(String, Arc<str>)> {
     let mut path: Vec<String> = Vec::new();
     let mut open: Option<(String, usize, usize)> = None;
     let mut before_1_3 = false;
+    let mut prefixes = std::collections::BTreeSet::new();
     events_at(xml, |ev, at| match ev {
         Ev::Start(q, a) => {
             path.push(q.clone());
@@ -39,6 +40,7 @@ pub(super) fn defs(xml: &[u8], content: bool) -> Vec<(String, Arc<str>)> {
                     if let Some(p) = k.strip_prefix("xmlns:").filter(|p| !p.is_empty() && p.len() <= 64)
                         && out.len() < MAX_DEFS
                     {
+                        prefixes.insert(p.to_string());
                         out.push((format!("ns:{p}"), Arc::from(v.as_str())));
                     }
                 }
@@ -49,7 +51,7 @@ pub(super) fn defs(xml: &[u8], content: bool) -> Vec<(String, Arc<str>)> {
                 for (k, v) in &a {
                     if let Some(p) = k.strip_prefix("xmlns:").filter(|p| !p.is_empty() && p.len() <= 64)
                         && out.len() < MAX_DEFS
-                        && !out.iter().any(|(key, _)| key.strip_prefix("ns:") == Some(p))
+                        && prefixes.insert(p.to_string())
                     {
                         out.push((format!("ns:{p}"), Arc::from(v.as_str())));
                     }

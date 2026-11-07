@@ -223,6 +223,33 @@ fn a_fonts_name_spelled_another_way_is_declared_once_as_the_file_has_it() {
     }
 }
 
+/// A face named other than its family (`F1`, `Mystery`): text written from the model names the
+/// family, and that declaration says what the file's does, not WordCraft's guess at the font's kind.
+#[test]
+fn a_face_named_other_than_its_family_gives_the_family_the_files_declaration() {
+    let face =
+        r#"<style:font-face style:name="F1" svg:font-family="&apos;Mystery&apos;" style:font-family-generic="roman" style:font-pitch="variable"/>"#;
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:font-face-decls>{face}</office:font-face-decls><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="12pt"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:font-face-decls>{face}</office:font-face-decls><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties style:font-name="F1"/></style:style></office:automatic-styles><office:body><office:text><text:p><text:span text:style-name="T1">One</text:span></text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.text.push('!');
+        if let Some(r) = p.runs.last_mut() {
+            r.len += 1;
+        }
+    }
+    let saved = export(&d).unwrap();
+    let part = content_of(&saved);
+    assert!(part.contains(r#"style:font-name="Mystery""#), "{part}");
+    let mystery = part.split("<style:font-face ").find(|t| t.starts_with(r#"style:name="Mystery""#)).and_then(|t| t.split("/>").next());
+    let mystery = mystery.unwrap_or_else(|| panic!("declared: {part}"));
+    assert!(mystery.contains(r#"style:font-family-generic="roman""#), "{mystery}");
+}
+
 /// A font declaration in single quotes is the file's too: it replaces WordCraft's, and isn't
 /// declared a second time.
 #[test]
