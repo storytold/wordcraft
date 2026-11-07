@@ -57,6 +57,8 @@ impl Chart {
             val.fmt.clone().or_else(|| series.iter().find_map(|s| s.fmt.clone())).unwrap_or_else(|| "General".to_string())
         };
         let num = |n: &str| ty.child(n).and_then(|g| g.attr("val")).and_then(int);
+        let can_vary = varies(kind, radar_style, series.len());
+        let vary = can_vary && ty.child("c:varyColors").and_then(|v| v.attr("val")).is_none_or(truthy);
         Some(Chart {
             kind,
             horizontal: kind == Kind::Bar && ty.child("c:barDir").and_then(|d| d.attr("val")) == Some("bar"),
@@ -67,7 +69,10 @@ impl Chart {
             first_angle: num("c:firstSliceAng").unwrap_or(0).clamp(0, 360) as f64,
             radar_fill: radar_style == Some("filled"),
             radar_marks: radar_style == Some("marker"),
-            vary: varies(kind, radar_style, series.len()) && ty.child("c:varyColors").and_then(|v| v.attr("val")).is_none_or(truthy),
+            vary,
+            point_legend: matches!(kind, Kind::Pie | Kind::Doughnut)
+                || vary
+                || (can_vary && series.iter().any(|s| s.points.iter().any(PointFmt::coloured))),
             n,
             cats,
             title: title_of(chart, &series),
@@ -146,12 +151,13 @@ impl Chart {
         if self.vary && self.series.get(j).is_some_and(|s| s.color.is_none()) { self.accent(i) } else { self.series_colour(j) }
     }
 
-    /// The legend: one entry per category, in its point's colour, for pie and doughnut charts
-    /// and for any chart that varies colours by point (even when a series colour keeps the
-    /// points one colour, as Word does); else one entry per series. Points without a category
-    /// name (scatter) are numbered.
+    /// The legend: one entry per category, in its point's colour, for pie and doughnut charts,
+    /// for any chart that varies colours by point (even when a series colour keeps the points one
+    /// colour, as Word does), and for a one-series chart that could vary with a point coloured on
+    /// its own (#5978); else one entry per series. Points without a category name (scatter) are
+    /// numbered.
     pub(super) fn legend_entries(&self) -> Vec<(String, Rgb)> {
-        if matches!(self.kind, Kind::Pie | Kind::Doughnut) || self.vary {
+        if self.point_legend {
             let n = if self.cats.is_empty() { self.n } else { self.cats.len() };
             return (0..n)
                 .map(|i| {

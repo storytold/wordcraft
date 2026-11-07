@@ -809,3 +809,52 @@ fn a_fill_alone_colours_no_line_scatter_or_radar_marker_or_key() {
     let items = with_legend(&line_chart(vary, &s), "r", 300.0, 200.0);
     assert_eq!(swatch_colours(&items), [accent(0), RED, accent(2)]);
 }
+
+// A formatted point and the legend (#5978): in Word, a one-series chart of a kind that can vary
+// by point lists its categories in the legend once a point has a colour of its own, even with
+// `c:varyColors val="0"`. The other keys keep the series colour.
+
+const OFF: &str = r#"<c:varyColors val="0"/>"#;
+
+/// A red fill for point `idx`, as Word writes it for a bar or column.
+fn dpt_fill(idx: usize) -> String {
+    format!(
+        r#"<c:dPt><c:idx val="{idx}"/><c:invertIfNegative val="0"/><c:bubble3D val="0"/><c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></c:spPr></c:dPt>"#
+    )
+}
+
+#[test]
+fn a_point_with_its_own_colour_makes_the_legend_list_the_categories() {
+    let s = ser(0, "Sales", None, &CATS, &["1", "2", "3"]);
+    let items = with_legend(&column_chart(OFF, &[with_dpts(&s, &dpt_fill(1))]), "r", 300.0, 200.0);
+    assert_eq!(swatch_colours(&items), [accent(0), RED, accent(0)]);
+    assert!(CATS.iter().all(|c| texts(&items).contains(c)) && !texts(&items).contains(&"Sales"), "{:?}", texts(&items));
+    // A line chart's point, coloured in its marker and line.
+    let items = with_legend(&line_chart(OFF, &with_dpts(&s, &dpt_point(1, "FF0000"))), "r", 300.0, 200.0);
+    assert_eq!(swatch_colours(&items), [accent(0), RED, accent(0)]);
+    assert!(!texts(&items).contains(&"Sales"), "{:?}", texts(&items));
+}
+
+#[test]
+fn a_formatted_point_leaves_the_series_legend_where_word_does() {
+    let s = ser(0, "Sales", None, &CATS, &["1", "2", "3"]);
+    let red = with_dpts(&s, &dpt_fill(1));
+    // One key, the series (the categories are also axis labels, so count keys, not texts).
+    let series_legend = |plot: &str| {
+        let items = with_legend(plot, "r", 300.0, 200.0);
+        swatch_colours(&items).len() == 1 && texts(&items).contains(&"Sales")
+    };
+    // Area and filled radar charts never vary by point.
+    let area = format!(
+        r#"<c:areaChart><c:grouping val="standard"/>{OFF}{red}<c:axId val="1"/><c:axId val="2"/></c:areaChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#
+    );
+    assert!(series_legend(&area));
+    assert!(series_legend(&format!(r#"<c:radarChart><c:radarStyle val="filled"/>{OFF}{red}</c:radarChart><c:valAx/>"#)));
+    // A `c:dPt` without a colour.
+    let plain = r#"<c:dPt><c:idx val="1"/><c:invertIfNegative val="0"/><c:bubble3D val="0"/></c:dPt>"#;
+    assert!(series_legend(&column_chart(OFF, &[with_dpts(&s, plain)])));
+    // Two series.
+    let items = with_legend(&column_chart(OFF, &[red, ser(1, "Costs", None, &CATS, &["2", "1", "3"])]), "r", 300.0, 200.0);
+    assert_eq!(swatch_colours(&items).len(), 2);
+    assert!(texts(&items).contains(&"Sales") && texts(&items).contains(&"Costs"), "{:?}", texts(&items));
+}

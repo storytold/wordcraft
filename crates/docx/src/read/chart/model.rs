@@ -73,6 +73,13 @@ pub(super) struct PointFmt {
     pub(super) marker: Option<Rgb>,
 }
 
+impl PointFmt {
+    /// Whether the point has a colour of its own (fill, line or marker).
+    pub(super) fn coloured(&self) -> bool {
+        self.fill.is_some() || self.line.is_some() || self.marker.is_some()
+    }
+}
+
 pub(super) struct Series {
     pub(super) name: String,
     pub(super) color: Option<Rgb>,
