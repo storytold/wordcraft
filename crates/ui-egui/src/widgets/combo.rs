@@ -352,7 +352,7 @@ fn handle_search_interactions(
 /// Refreshes the filtered list matches and updates keyboard navigation position.
 fn update_search_matches(s: &mut ComboSearch, text: &str, items: &[String], recent_shown: &[String], current: &str, step: i32) {
     if !s.typed {
-        if s.matches.len() != items.len() || s.items_len != items.len() {
+        if !s.query.is_empty() || s.matches.len() != items.len() || s.items_len != items.len() {
             s.matches = std::sync::Arc::new((0..items.len()).collect());
             s.query.clear();
             s.items_len = items.len();
@@ -360,7 +360,7 @@ fn update_search_matches(s: &mut ComboSearch, text: &str, items: &[String], rece
         if !s.moved {
             if let Some(pos) = recent_shown.iter().position(|r| r == current) {
                 s.highlight = pos;
-            } else if let Some(pos) = items.iter().position(|it| it == current) {
+            } else if let Some(pos) = s.matches.iter().position(|&i| items.get(i).is_some_and(|it| it == current)) {
                 s.highlight = recent_shown.len().saturating_add(pos);
             }
         }
