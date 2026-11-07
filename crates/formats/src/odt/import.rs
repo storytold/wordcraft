@@ -327,7 +327,7 @@ fn turned_off(mut chr: wordcraft_doc::props::CharProps, off: [bool; 4]) -> wordc
         chr.underline = Some(wordcraft_doc::props::Underline::None);
     }
     if strike {
-        chr.strike = Some(false);
+        (chr.strike, chr.double_strike) = (Some(false), Some(false));
     }
     chr
 }

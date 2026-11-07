@@ -366,3 +366,28 @@ fn an_asian_or_complex_normal_doesnt_turn_latin_text_off() {
     assert_eq!(run(&open(r#"fo:font-weight="normal""#)).bold, Some(false));
     assert_eq!(run(&open(r#"fo:font-style="normal""#)).italic, Some(false));
 }
+
+/// Strike-through turned off over a double one is off, not the double one again.
+#[test]
+fn strike_turned_off_over_a_double_strike_stays_off() {
+    let double = r#"<style:text-properties style:text-line-through-style="solid" style:text-line-through-type="double"/>"#;
+    let none = r#"<style:text-properties style:text-line-through-style="none"/>"#;
+    let check = |d: &Document, what: &str| {
+        let p = d.body[0].as_para().unwrap();
+        let c = d.styles.resolve_char(p.props.style.as_deref(), &p.runs.last().unwrap().props);
+        assert_eq!((c.strike, c.double_strike), (false, false), "{what}");
+    };
+    // A style over its parent.
+    let styles = format!(
+        r#"<style:style style:name="Parent" style:family="paragraph">{double}</style:style><style:style style:name="Kid" style:family="paragraph" style:parent-style-name="Parent">{none}</style:style>"#
+    );
+    let d = off_doc(&styles, "Kid", "", "One");
+    check(&d, "a style, read");
+    check(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap(), "a style, written from the model");
+    // A span over its paragraph's style.
+    let styles = format!(r#"<style:style style:name="Parent" style:family="paragraph">{double}</style:style>"#);
+    let auto = format!(r#"<style:style style:name="T1" style:family="text">{none}</style:style>"#);
+    let d = off_doc(&styles, "Parent", &auto, r#"<text:span text:style-name="T1">One</text:span>"#);
+    check(&d, "a span, read");
+    check(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap(), "a span, written from the model");
+}

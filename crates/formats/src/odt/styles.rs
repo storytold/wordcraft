@@ -44,6 +44,9 @@ impl FmtDelta {
         if self.bold.is_some() || self.italic.is_some() || self.underline.is_some() || self.strike.is_some() {
             use wordcraft_doc::props::Underline;
             let mut x = f.extra.take().map(|b| *b).unwrap_or_default();
+            if self.strike == Some(false) {
+                x.double_strike = None;
+            }
             for (state, said) in [(self.bold, &mut x.bold), (self.italic, &mut x.italic), (self.strike, &mut x.strike)] {
                 if let Some(on) = state {
                     *said = (!on).then_some(false);
@@ -80,6 +83,9 @@ impl FmtDelta {
             }
             // An explicit "off" only cancels what a parent style set (capitals are kept: a
             // paragraph's or span's style may set them too).
+            if self.strike == Some(false) {
+                x.double_strike = None;
+            }
             for b in [&mut x.double_strike, &mut x.hidden, &mut x.outline, &mut x.shadow, &mut x.emboss, &mut x.engrave] {
                 if *b == Some(false) {
                     *b = None;

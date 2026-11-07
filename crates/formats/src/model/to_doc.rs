@@ -58,7 +58,8 @@ impl WithExtra for CharProps {
             self.italic = Some(false);
         }
         if !f.strike && x.strike == Some(false) {
-            self.strike = Some(false);
+            // A double strike under it goes too.
+            (self.strike, self.double_strike) = (Some(false), Some(false));
         }
         if !f.underline && x.underline == Some(Underline::None) {
             self.underline = Some(Underline::None);
