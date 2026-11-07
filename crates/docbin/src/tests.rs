@@ -338,6 +338,15 @@ fn empty_document_gets_a_paragraph() {
 }
 
 #[test]
+fn a_doc_opens_in_word_97_2003_compatibility_mode() {
+    let f = text_doc(&[Piece { compressed: false, text: "body\r".into() }], &[], 0);
+    let doc = read(&f).expect("opens");
+    // Word 97-2003 files are mode 11 in Word 2013+; mode 15 would change justification and
+    // line breaking.
+    assert_eq!(doc.settings.compat_mode, 11);
+}
+
+#[test]
 fn header_text_stays_out_of_body() {
     let f = text_doc(
         &[Piece { compressed: false, text: "body\r".into() }],
