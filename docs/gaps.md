@@ -178,6 +178,8 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | trivial | Field argument import and page-format-aware layout/cache follow-ups; no ranked gap changed |
+| 2026-11-03 | trivial | Field argument parsing follows Word quoted backslash escapes; body PAGE formatting follows the active section in paragraphs and tables; no ranked gap changed |
 | 2026-11-06 | trivial | Print helpers remove loaded PDF/settings files before driver work, tolerate prior removal and report cleanup errors; a held-driver regression checks the files are already absent (#5710) |
 | 2026-11-06 | trivial | Windows print submissions use a separate helper per job, preserving provider serialization inside the helper. An acknowledged cancellation stops that helper, so a stalled cancelled driver cannot block a later job; normal shutdown reaps helpers and removes temporary PDFs. The helper erases its plaintext inputs before driver work; a hard app crash during startup can still leave private temporary files. Startup requires an explicit start grant; after sending begins, jobs complete (#5710) |
 | 2026-11-06 | trivial | Gap 6: File › Print: before sending starts, Cancel printing (`ui.printCancel`) stops a waiting job and frees the Print page while keeping its settings, including after the last document closes; a successfully cancelled job is never sent. Quitting cancels waiting jobs and joins jobs already sending (#5710). On Windows, winprint repeats the DEVMODE conversion after sending starts. A stall during that repeat prevents cancellation and can keep shutdown waiting, even before a native job exists. No ranked gap changed; readiness estimates unchanged |

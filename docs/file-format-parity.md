@@ -307,6 +307,10 @@ position with that tag. Tag case, unknown-source caches, source records, field i
 flags, style sorting and native/DOCX save behavior remain unchanged. Multi-source discovery,
 CSL and library import are separate work.
 
+## Field arguments
+
+For field results, the engine parser treats a backslash in quoted arguments as escaping the next character, as Word does. The DOCX HYPERLINK target reader applies the same rule; escaped asterisks remain argument text instead of starting a format switch. Engine parser and DOCX import tests cover these cases.
+
 ## Revision history
 
 > 2026-11-03 · Section `w:chapStyle` values preserve the full unsigned-byte range, including 10, while values above 255 are rejected.
@@ -320,6 +324,8 @@ CSL and library import are separate work.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | trivial | Engine field parsing and DOCX HYPERLINK targets consume quoted backslash escapes consistently |
+| 2026-11-03 | trivial | Quoted field arguments honor Word backslash escapes, including literal asterisks |
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` keeps its default and explicit values in schema-ordered repeated saves |
 | 2026-11-04 | trivial | REF context update: 2026-11-04 · #4609 retains the label and template actually rendered by an ancestor list instance; implicitly counted levels remain distinct from explicitly rendered paragraphs. Synthetic instance-override and field-update regressions; no new native Word qualification or readiness change. |
 | 2026-11-04 | trivial | PR #4609: relative REF keeps context already displayed by the own or a needed ancestor label; six synthetic legal-template cases and separate-list context follow the Word for Windows measurements reported by @pakiat in PR discussion. Existing unknown-switch/cache boundaries and readiness estimates unchanged; no new native Word run. |
