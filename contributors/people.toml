@@ -197,3 +197,7 @@ display_name = "entropybeater"
 
 [people.helenkwok]
 real_name = "Helen Kwok"
+
+[people.batistalucasv]
+sync_github_name = true
+
