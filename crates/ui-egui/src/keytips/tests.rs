@@ -126,6 +126,33 @@ fn every_keytip_command_is_registered() {
     assert!(missing.is_empty(), "unregistered: {missing:#?}");
 }
 
+/// Review's Accept and Reject keytips run the buttons' main action, Accept and Move to Next
+/// (Reject and Move to Next): the change at the caret is resolved and the next one selected.
+#[test]
+fn accept_and_reject_keytips_move_to_the_next_change() {
+    for (tip, text) in [("Accept", "new one two three end"), ("Reject", "one two three end")] {
+        let mut a = app();
+        a.session.view.proofing = false;
+        a.session.author = "Ana".into();
+        for (id, params) in [
+            ("document.setText", serde_json::json!({"text": "one two three"})),
+            ("review.trackChanges", serde_json::json!({"value": true})),
+            ("caret.docStart", serde_json::json!({})),
+            ("text.insert", serde_json::json!({"text": "new "})),
+            ("caret.docEnd", serde_json::json!({})),
+            ("text.insert", serde_json::json!({"text": " end"})),
+            ("caret.docStart", serde_json::json!({})),
+        ] {
+            a.run(id, params).unwrap();
+        }
+        let ctrl = controls("Review").into_iter().find(|c| c.tip == tip).unwrap();
+        ctrl.target.run(&mut a);
+        assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), text, "{tip}");
+        let (s, e) = a.session.sel.ordered();
+        assert_eq!((s.off, e.off), (text.len() - 4, text.len()), "{tip}: the insertion at the end is selected");
+    }
+}
+
 #[test]
 fn letters_are_unique_inside_every_tab() {
     let a = app();
