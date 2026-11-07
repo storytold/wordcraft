@@ -710,3 +710,115 @@ fn many_failed_fonts_end_with_a_count() {
     let msg = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
     assert_eq!(msg, "Added 0 fonts; 5 couldn't be read: f0.ttf, f1.ttf, f2.ttf and 2 more");
 }
+
+/// #5368: a name typed without an extension WordCraft saves is saved in the suggested format, as
+/// Word adds .docx, instead of failing (the format is chosen by extension); a template keeps
+/// .dotx and an export its own format.
+#[test]
+fn save_as_adds_the_format_to_a_name_without_one() {
+    let dir = scratch("save-as-ext");
+    let (mut a, shown) = async_app();
+    typed(&mut a);
+    for (name, saved) in [("Report", "Report.docx"), ("Report v1.2", "Report v1.2.docx"), ("Notes.", "Notes.docx"), ("Kept.DOCX", "Kept.DOCX")] {
+        a.save_as_dialog();
+        answer(&shown, Some(&dir.join(name).to_string_lossy()));
+        assert_eq!(a.poll_file_dialog().unwrap().unwrap()["saved"], true, "{name}");
+        let path = dir.join(saved);
+        assert_eq!(a.session.path.as_deref(), Some(path.as_path()), "{name}");
+        assert_eq!(saved_text(&path), UNSAVED, "{name}");
+    }
+
+    a.services.templates_dir = Some(dir.join("Templates"));
+    a.run("ui.saveAsTemplate", json!({})).unwrap();
+    answer(&shown, Some(&dir.join("Templates").join("Memo").to_string_lossy()));
+    assert_eq!(a.poll_file_dialog().unwrap().unwrap()["saved"], true);
+    assert!(dir.join("Templates").join("Memo.dotx").is_file(), "a template stays a template");
+
+    a.export_dialog("pdf");
+    answer(&shown, Some(&dir.join("Handout").to_string_lossy()));
+    assert!(a.poll_file_dialog().unwrap().is_ok());
+    assert!(std::fs::read(dir.join("Handout.pdf")).unwrap().starts_with(b"%PDF"), "an export keeps its format");
+    // A name with another format's extension is still a PDF.
+    a.export_dialog("pdf");
+    answer(&shown, Some(&dir.join("Handout.docx").to_string_lossy()));
+    assert!(a.poll_file_dialog().unwrap().is_ok());
+    assert!(std::fs::read(dir.join("Handout.docx.pdf")).unwrap().starts_with(b"%PDF"));
+    assert!(!dir.join("Handout.docx").exists(), "no Word file written for a PDF export");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #5368 (review): the system dialog asks only about the name it returns. When the save adds an
+/// extension to it and a file of that name exists, the built-in browser asks before replacing
+/// it: Cancel leaves the file alone, OK replaces it. A new name is written straight away.
+#[test]
+fn a_name_the_save_extends_asks_before_replacing_its_file() {
+    use crate::file_browser::Step;
+    let dir = scratch("save-as-ext-replace");
+    let (mut a, shown) = async_app();
+    typed(&mut a);
+    let target = dir.join("Handout.docx.pdf");
+    std::fs::write(&target, b"old").unwrap();
+    let export = |a: &mut WordApp| {
+        a.export_dialog("pdf");
+        answer(&shown, Some(&dir.join("Handout.docx").to_string_lossy()));
+        a.poll_file_dialog()
+    };
+    assert!(export(&mut a).is_none(), "nothing written yet: the question is open");
+    assert_eq!(std::fs::read(&target).unwrap(), b"old");
+    assert!(a.file_browser.open.is_some(), "the built-in browser asks");
+    a.close_file_browser(None);
+    assert_eq!(std::fs::read(&target).unwrap(), b"old", "Cancel keeps the file");
+    assert!(export(&mut a).is_none());
+    let step = a.file_browser.open.as_mut().map(|b| b.accept());
+    assert_eq!(step, Some(Step::Pick(target.clone())), "OK on the name asked about replaces it");
+    a.close_file_browser(Some(target.clone()));
+    assert!(std::fs::read(&target).unwrap().starts_with(b"%PDF"), "replaced by the export");
+    // A name whose extended form doesn't exist yet: no question.
+    a.export_dialog("pdf");
+    answer(&shown, Some(&dir.join("Fresh.docx").to_string_lossy()));
+    assert!(a.poll_file_dialog().is_some_and(|r| r.is_ok()));
+    assert!(std::fs::read(dir.join("Fresh.docx.pdf")).unwrap().starts_with(b"%PDF"));
+    assert!(a.file_browser.open.is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #1399: the Save dialog's type list has one named entry per format, the suggested one first,
+/// every savable extension exactly once.
+#[test]
+fn save_dialog_lists_one_named_type_per_format() {
+    let filters = save_filters("report.odt");
+    assert_eq!(filters.len(), wordcraft_engine::io::SAVE_EXTS.len());
+    assert_eq!(filters[0].1, vec!["odt".to_string()]);
+    assert!(filters[0].0.contains("OpenDocument"), "{}", filters[0].0);
+    let all: Vec<&String> = filters.iter().flat_map(|(_, e)| e).collect();
+    for e in wordcraft_engine::io::SAVE_EXTS {
+        assert_eq!(all.iter().filter(|x| x.as_str() == *e).count(), 1, "{e}");
+    }
+    assert!(filters.iter().all(|(l, e)| !l.trim().is_empty() && e.len() == 1));
+    let mut labels: Vec<&String> = filters.iter().map(|(l, _)| l).collect();
+    labels.sort();
+    labels.dedup();
+    assert_eq!(labels.len(), filters.len(), "labels are distinct");
+    // Unknown names fall back to Word's format first.
+    assert_eq!(save_filters("no extension")[0].1, vec!["docx".to_string()]);
+    // The OpenDocument template and flat file have their own names.
+    assert!(save_filters("plan.fodt")[0].0.starts_with("Flat OpenDocument Text"));
+    assert!(save_filters("form.ott")[0].0.starts_with("OpenDocument Text Template"));
+}
+
+/// #689: the Save dialog's default extension is the suggested name's own format, so a file
+/// name the user types without one is saved in the document's format instead of coming back
+/// bare and failing.
+#[test]
+fn save_dialog_defaults_to_the_suggested_format() {
+    assert_eq!(save_exts("novel.docx")[0], "docx");
+    assert_eq!(save_exts("report.odt")[0], "odt");
+    assert_eq!(save_exts("annual report.pdf")[0], "pdf");
+    // A suggested name always has an extension; anything unreadable falls back to Word's.
+    assert_eq!(save_exts("no extension")[0], "docx");
+    assert_eq!(save_exts("mystery.rtf2")[0], "docx");
+    // Every savable format is still offered, once.
+    let exts = save_exts("novel.docx");
+    assert!(wordcraft_engine::io::SAVE_EXTS.iter().all(|e| exts.iter().any(|x| x == e)));
+    assert_eq!(exts.len(), wordcraft_engine::io::SAVE_EXTS.len());
+}
