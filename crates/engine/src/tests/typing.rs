@@ -10,6 +10,7 @@ use wordcraft_doc::{Pos, StoryRef};
 use crate::Session;
 
 /// Leaf #152: deleting the empty heading above body text must not promote that text to a heading.
+/// Deleting the empty heading mark keeps the next paragraph as body text.
 #[test]
 fn deleting_a_preceding_empty_heading_keeps_the_body_paragraph_style() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("\nBody paragraph."));
