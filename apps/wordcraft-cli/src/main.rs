@@ -43,6 +43,7 @@ USAGE:
                                               documents and with {\"id\": N} makes one active
   wordcraft-cli commands [--json]             list every command
   wordcraft-cli parity [--markdown]           feature-catalog parity
+  wordcraft-cli validate <file> [--json]      structural integrity check (exit 0 pass, 1 fail, 2 incomplete, 3 usage/IO)
   wordcraft-cli mcp [--connect HOST:PORT | --author NAME] [--automation-read-root DIR] [--automation-write-root DIR]
                                               MCP server on stdio (headless, or bridged to the app).
                                               --automation-read-root / --automation-write-root confine
@@ -71,7 +72,7 @@ same output on every machine.
 ";
 
 /// The subcommands, in `USAGE` order; `--help` or `-h` after any of them prints `USAGE` (#968).
-const SUBCOMMANDS: &[&str] = &["convert", "info", "text", "inspect", "render", "run", "commands", "parity", "mcp", "zotero"];
+const SUBCOMMANDS: &[&str] = &["convert", "info", "text", "inspect", "render", "run", "commands", "parity", "validate", "mcp", "zotero"];
 
 fn wants_help(cmd: &str, rest: &[String]) -> bool {
     SUBCOMMANDS.contains(&cmd) && rest.iter().any(|a| a == "--help" || a == "-h")
@@ -323,6 +324,7 @@ const RUN_OPTIONS: &[OptionSpec] = &[
 ];
 const COMMANDS_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--json", takes_value: false }];
 const PARITY_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--markdown", takes_value: false }];
+const VALIDATE_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--json", takes_value: false }];
 const MCP_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--connect", takes_value: true }, OptionSpec { name: "--author", takes_value: true }];
 const ZOTERO_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--cmd", takes_value: true },
@@ -339,6 +341,8 @@ enum Failure {
     /// Whoever read stdout closed it (`wordcraft-cli commands --json | head`): there is nobody left
     /// to write to, so stop quietly and exit 0 like other command-line tools.
     StdoutClosed,
+    /// The subcommand has already written its output and decided its own exit status (`validate`).
+    Status(u8),
 }
 
 impl fmt::Display for Failure {
@@ -346,6 +350,7 @@ impl fmt::Display for Failure {
         match self {
             Failure::Error(e) => f.write_str(e),
             Failure::StdoutClosed => f.write_str("stdout closed"),
+            Failure::Status(code) => write!(f, "exit {code}"),
         }
     }
 }
@@ -600,6 +605,35 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 write_stdout(|o| writeln!(o, "{}", serde_json::to_string_pretty(&p).unwrap_or_default()))
             }
         }
+        "validate" => {
+            if let Err(e) = validate_options("validate", &rest, VALIDATE_OPTIONS) {
+                eprintln!("wordcraft-cli: {e}");
+                return Err(Failure::Status(3));
+            }
+            let paths = positionals(&rest, VALIDATE_OPTIONS);
+            let Some(path) = paths.first() else {
+                eprintln!("wordcraft-cli: missing argument\n\n{USAGE}");
+                return Err(Failure::Status(3));
+            };
+            let report = match wordcraft_validate::validate_path(Path::new(path)) {
+                Ok(report) => report,
+                Err(e) => {
+                    eprintln!("wordcraft-cli: {path}: {e}");
+                    return Err(Failure::Status(3));
+                }
+            };
+            if rest.iter().any(|a| a == "--json") {
+                let json = serde_json::to_string_pretty(&report).unwrap_or_default();
+                write_stdout(|o| writeln!(o, "{json}"))?;
+            } else {
+                write_stdout(|o| write_validate_report(o, &report))?;
+            }
+            match report.verdict {
+                wordcraft_validate::Verdict::Pass => Ok(()),
+                wordcraft_validate::Verdict::Fail => Err(Failure::Status(1)),
+                wordcraft_validate::Verdict::Incomplete => Err(Failure::Status(2)),
+            }
+        }
         "mcp" => {
             let (roots, rest) = automation_roots("mcp", &rest)?;
             validate_options("mcp", &rest, MCP_OPTIONS)?;
@@ -761,6 +795,39 @@ fn parity_markdown(p: &Value) -> String {
     s
 }
 
+/// Write a `validate` report for people: the verdict, then one line per finding
+/// (`SEVERITY RULE [part] message`), then the coverage notes.
+fn write_validate_report(o: &mut std::io::StdoutLock<'static>, report: &wordcraft_validate::Report) -> std::io::Result<()> {
+    writeln!(o, "{}", verdict_label(report.verdict))?;
+    for f in &report.findings {
+        let severity = severity_label(f.severity);
+        match &f.part {
+            Some(part) => writeln!(o, "{severity} {} [{part}] {}", f.rule, f.message)?,
+            None => writeln!(o, "{severity} {} {}", f.rule, f.message)?,
+        }
+    }
+    for note in &report.coverage_notes {
+        writeln!(o, "note: {note}")?;
+    }
+    Ok(())
+}
+
+fn verdict_label(v: wordcraft_validate::Verdict) -> &'static str {
+    match v {
+        wordcraft_validate::Verdict::Pass => "PASS",
+        wordcraft_validate::Verdict::Fail => "FAIL",
+        wordcraft_validate::Verdict::Incomplete => "INCOMPLETE",
+    }
+}
+
+fn severity_label(s: wordcraft_validate::Severity) -> &'static str {
+    match s {
+        wordcraft_validate::Severity::Corrupt => "CORRUPT",
+        wordcraft_validate::Severity::Error => "ERROR",
+        wordcraft_validate::Severity::Warning => "WARNING",
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     // Language packs installed in the suite's font store are used; `proof.installPack` installs
@@ -771,6 +838,7 @@ fn main() -> ExitCode {
     }
     match run(&args) {
         Ok(()) | Err(Failure::StdoutClosed) => ExitCode::SUCCESS,
+        Err(Failure::Status(code)) => ExitCode::from(code),
         Err(Failure::Error(e)) => {
             eprintln!("wordcraft-cli: {e}");
             ExitCode::FAILURE
