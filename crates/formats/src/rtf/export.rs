@@ -153,6 +153,15 @@ fn rtf_border_style(s: wordcraft_doc::props::BorderStyle) -> &'static str {
         BorderStyle::Triple => "\\brdrtriple",
         BorderStyle::DotDash => "\\brdrdashd",
         BorderStyle::Wave => "\\brdrwavy",
+        BorderStyle::ThinThickSmallGap => "\\brdrtnthsg",
+        BorderStyle::ThickThinSmallGap => "\\brdrthtnsg",
+        BorderStyle::ThinThickThinSmallGap => "\\brdrtnthtnsg",
+        BorderStyle::ThinThickMediumGap => "\\brdrtnthmg",
+        BorderStyle::ThickThinMediumGap => "\\brdrthtnmg",
+        BorderStyle::ThinThickThinMediumGap => "\\brdrtnthtnmg",
+        BorderStyle::ThinThickLargeGap => "\\brdrtnthlg",
+        BorderStyle::ThickThinLargeGap => "\\brdrthtnlg",
+        BorderStyle::ThinThickThinLargeGap => "\\brdrtnthtnlg",
     }
 }
 
@@ -407,7 +416,20 @@ impl Writer {
                 }
                 // RTF keeps no ruby yet: its base text, in the run's formatting.
                 Inline::Ruby { base, fmt, .. } => self.run(base, fmt, out),
-                Inline::Figure(_) | Inline::Equation { .. } => {}
+                // ASK and SET show nothing (see `model::shows_nothing`).
+                Inline::Field { instr, .. } if model::shows_nothing(instr) => {}
+                Inline::Field { result, fmt, .. } | Inline::Control { text: result, fmt, .. } => self.run(result, fmt, out),
+                Inline::Figure(_)
+                | Inline::Chart(_)
+                | Inline::Equation { .. }
+                | Inline::Note { .. }
+                | Inline::Comment { .. }
+                | Inline::CommentEnd(_)
+                | Inline::Shape { .. }
+                | Inline::Group { .. }
+                | Inline::FieldStart(_)
+                | Inline::FieldEnd
+                | Inline::AnchorEnd(_) => {}
             }
         }
     }

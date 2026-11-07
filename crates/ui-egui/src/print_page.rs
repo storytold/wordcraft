@@ -154,6 +154,22 @@ fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &DocLayout, page: usize
     Some(tex)
 }
 
+/// Return pressed with nothing else to take it: no field or list open and no control focused (a
+/// focused button takes Return itself). Consumes it when so.
+fn return_prints(ctx: &egui::Context) -> bool {
+    !ctx.text_edit_focused()
+        && !egui::Popup::is_any_open(ctx)
+        && ctx.memory(|m| m.focused().is_none())
+        && ctx.input_mut(|i| {
+            // A fresh press only: `consume_key` also takes key repeats, so holding Return would
+            // send a job per repeat once the first is handed off.
+            let at = i.events.iter().position(
+                |e| matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, repeat: false, modifiers, .. } if modifiers.is_none()),
+            );
+            at.map(|k| i.events.remove(k)).is_some()
+        })
+}
+
 /// The Print page: settings on the left, the preview on the right.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
@@ -179,10 +195,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 // #2958: as in Word, the page's action leads the settings, in the accent the app
                 // gives a dialog's primary button: the first thing seen, and plainly a button
                 // that prints now rather than one more setting in the list below.
+                let ready = !native || app.printing.ready();
+                // Return prints too, as in Word, whose ⌘P opens on Print as the default button.
                 if hook
-                    && ui
-                        .add_enabled(!native || app.printing.ready(), crate::widgets::primary_button(ui, tl!("Print")).min_size(vec2(320.0, 34.0)))
-                        .clicked()
+                    && (ui.add_enabled(ready, crate::widgets::primary_button(ui, tl!("Print")).min_size(vec2(320.0, 34.0))).clicked()
+                        || (ready && app.dialog.is_none() && !app.file_dialog_open() && return_prints(ui.ctx())))
                 {
                     let params = app.ui.print.params();
                     let _ = app.run("ui.print", params);
@@ -190,6 +207,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 if native {
                     if let Some(discover) = &app.services.printers {
                         crate::printing::show(&mut app.printing, ui, discover, |label| crate::i18n::t(label).to_owned());
+                    }
+                    // A job can wait long on a sleeping printer's driver; Cancel frees the page.
+                    if app.printing.busy() && app.services.cancel_print.is_some() && ui.button(tl!("Cancel printing")).clicked() {
+                        let _ = app.run("ui.printCancel", serde_json::json!({}));
                     }
                     app.ui.print.copies = app.printing.settings.copies;
                 } else if hook {
@@ -441,6 +462,8 @@ pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
         ("Word XML Document (*.xml)", "xml"),
         ("Word 2003 XML Document (*.xml)", EXPORT_WORD_2003),
         ("OpenDocument Text (*.odt)", "odt"),
+        ("OpenDocument Text Template (*.ott)", "ott"),
+        ("Flat OpenDocument Text (*.fodt)", "fodt"),
         ("Rich Text Format (*.rtf)", "rtf"),
         ("Web page (*.html)", "html"),
         ("Markdown (*.md)", "md"),
