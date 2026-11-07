@@ -145,6 +145,60 @@ fn letters_are_unique_inside_every_tab() {
     }
 }
 
+/// #4498: no badge is the start of another, on any tab, or the short one runs as soon as its
+/// letter is typed and the long one can never be reached.
+#[test]
+fn no_badge_starts_another_badge() {
+    let mut a = app();
+    a.run("insert.table", serde_json::json!({"rows": 2, "cols": 2})).unwrap();
+    let (_, cmds) = letters(&a);
+    let mut two_letter = 0;
+    for (tab, ls) in &cmds {
+        for l in ls {
+            assert!(!l.is_empty() && !l.starts_with('?'), "{tab}: a control without a badge ({l:?})");
+            two_letter += usize::from(l.chars().count() > 1);
+            let others = ls.iter().filter(|o| *o != l && o.starts_with(l.as_str())).count();
+            assert_eq!(others, 0, "{tab}: badge {l} starts another badge in {ls:?}");
+        }
+    }
+    assert!(two_letter > 0, "Home has more controls than letters, so some badges take two");
+}
+
+/// #4498: the first letter of a two-letter badge keeps KeyTips on and waits; the second runs
+/// the command. A letter that completes nothing ends KeyTips and runs nothing.
+#[test]
+fn a_two_letter_badge_is_completed_by_its_second_letter() {
+    let key = |c: char| egui::Key::from_name(&c.to_string()).unwrap();
+    let mut a = app();
+    a.canvas.focused = false;
+    a.run("ui.tab", serde_json::json!({"tab": "Home"})).unwrap();
+    let ls = letters_for(&a, "Home");
+    let long: Vec<&String> = ls.iter().filter(|l| l.chars().count() == 2).collect();
+    let target = *long.first().expect("Home has two-letter badges");
+    let (first, second) = (target.chars().next().unwrap(), target.chars().nth(1).unwrap());
+    let sibling = long.iter().find(|l| l.starts_with(first) && *l != &target).map(|l| l.chars().nth(1).unwrap());
+    let before = a.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    activate(&mut a);
+    assert!(handle_key(&mut a, egui::Key::H));
+    assert_eq!(a.ui.keytips, Phase::Commands);
+    assert!(handle_key(&mut a, key(first)));
+    assert_eq!((a.ui.keytips, a.ui.keytip_prefix.as_str()), (Phase::Commands, first.to_string().as_str()), "waits for the second letter");
+    assert!(handle_key(&mut a, key(second)));
+    assert_eq!(a.ui.keytips, Phase::Off, "the second letter completes it");
+    assert!(a.ui.keytip_prefix.is_empty());
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), before, "no letter reached the document");
+    // The first letter then a second that completes nothing: off, and nothing runs.
+    let unused = ('A'..='Z').find(|c| !ls.contains(&format!("{first}{c}"))).unwrap();
+    a.run("ui.tab", serde_json::json!({"tab": "Home"})).unwrap();
+    activate(&mut a);
+    handle_key(&mut a, egui::Key::H);
+    handle_key(&mut a, key(first));
+    assert!(handle_key(&mut a, key(unused)));
+    assert_eq!((a.ui.keytips, a.ui.keytip_prefix.as_str()), (Phase::Off, ""));
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), before);
+    assert!(sibling.is_none() || sibling != Some(second), "siblings of a prefix have distinct second letters");
+}
+
 #[test]
 fn keytips_never_reuse_another_commands_shortcut_letter() {
     let a = app();
