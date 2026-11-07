@@ -7,8 +7,9 @@ pub(super) fn has_picture(s: &Session) -> Option<&'static str> {
     }
 }
 
+/// Guard returning `None` when a picture, shape, or active text box is selected.
 pub(super) fn has_object(s: &Session) -> Option<&'static str> {
-    if selected(s).is_some() { None } else { Some("select a picture or shape first") }
+    if selected(s).is_some() || super::shape::text_box_target(s).is_some() { None } else { Some("select a picture or shape first") }
 }
 
 pub(super) fn has_floating(s: &Session) -> Option<&'static str> {
@@ -94,10 +95,15 @@ pub(super) fn can_group(s: &Session) -> Option<&'static str> {
     if picked_objects(s).len() >= 2 { None } else { Some("select two or more pictures or shapes first (Shift+click)") }
 }
 
+/// Guard returning `None` when a shape or active text box is selected.
 pub(super) fn has_shape(s: &Session) -> Option<&'static str> {
     match selected(s) {
         Some((_, InlineObject::Shape { .. })) => None,
-        _ => Some("select a shape first"),
+        Some(_) => Some("select a shape first"),
+        None => match super::shape::text_box_target(s) {
+            Some(_) => None,
+            None => Some("select a shape first"),
+        },
     }
 }
 
@@ -187,8 +193,11 @@ pub(super) fn alt_text(s: &mut Session, v: &Value) -> CmdResult {
     })
 }
 
+/// Mutates the selected picture or shape, or the active text box containing the caret.
 pub(super) fn with_obj(s: &mut Session, f: impl Fn(&mut InlineObject)) -> CmdResult {
-    let (pos, _) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
+    let (pos, _) = selected(s)
+        .or_else(|| super::shape::text_box_target(s).and_then(|(p, _)| s.doc.para_at(&p).and_then(|q| q.object_at(p.off)).map(|o| (p, o.clone()))))
+        .ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
     let o = edit_obj(s, &pos, f)?;
     Ok(json!({"object": serde_json::to_value(o).unwrap_or(Value::Null)}))
 }

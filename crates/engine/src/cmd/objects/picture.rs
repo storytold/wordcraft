@@ -74,7 +74,9 @@ pub fn cropped_original_size(s: &Session, o: &InlineObject) -> Option<(f32, f32)
 /// of the original size (`original` alone gives that back: the Size dialog's Reset); then `width`
 /// and `height`, where one alone keeps the proportions unless `lockAspect` is false.
 pub(super) fn size(s: &mut Session, v: &Value) -> CmdResult {
-    let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no object".into()))?;
+    let (_, o) = selected(s)
+        .or_else(|| super::shape::text_box_target(s).and_then(|(p, _)| s.doc.para_at(&p).and_then(|q| q.object_at(p.off)).map(|o| (p, o.clone()))))
+        .ok_or_else(|| CmdError::Disabled("no object".into()))?;
     let lock = p::bool(v, "lockAspect").unwrap_or(true);
     let (mut w, mut h) = obj_size(&o);
     let scale = p::f32(v, "scale");
@@ -113,7 +115,11 @@ pub(super) fn size(s: &mut Session, v: &Value) -> CmdResult {
         (None, None) => true,
         _ => lock,
     };
-    let (w, h) = fit_size(w, h, keep);
+    let (w, h) = match (nw, nh) {
+        (Some(_), None) if !lock => (fit_size(w, 1.0, false).0, h),
+        (None, Some(_)) if !lock => (w, fit_size(1.0, h, false).1),
+        _ => fit_size(w, h, keep),
+    };
     // Any drawing: a group's members scale with its frame (its child space is kept); a chart or
     // SmartArt graphic lays itself out again at the new size.
     let theme = s.doc.settings.theme_colors.clone();
@@ -124,11 +130,19 @@ pub(super) fn size(s: &mut Session, v: &Value) -> CmdResult {
     })
 }
 
-/// An object size within 1–4000 pt. With `keep`, both sides scale by one factor, the one nearest
-/// 1 that brings them within the limits, so the proportions hold; a shape too long and thin for any
-/// such factor is clamped side by side.
+/// An object size within 1–4000 pt (or 0 pt on an axis for a flat line or connector). With `keep`,
+/// both sides scale by one factor, the one nearest 1 that brings them within the limits, so the
+/// proportions hold; a shape too long and thin for any such factor is clamped side by side.
 pub fn fit_size(w: f32, h: f32, keep: bool) -> (f32, f32) {
-    let side = |x: f32| if x.is_nan() { 1.0 } else { x.clamp(1.0, 4000.0) };
+    let side = |x: f32| {
+        if x.is_nan() {
+            1.0
+        } else if x == 0.0 {
+            0.0
+        } else {
+            x.clamp(1.0, 4000.0)
+        }
+    };
     if keep && w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 {
         let (lo, hi) = ((1.0 / w).max(1.0 / h), (4000.0 / w).min(4000.0 / h));
         if lo <= hi {

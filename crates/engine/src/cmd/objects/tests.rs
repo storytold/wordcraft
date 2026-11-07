@@ -1440,3 +1440,69 @@ fn only_ink_members_pin_a_group() {
     }
     assert!(!holds_ink(&group), "a group of charts is not pinned");
 }
+
+/// Issue #5896: shape.outline can remove the frame (color: null), change width without
+/// erasing stroke color, set dash and cap, and acts on a text box while typing inside it.
+#[test]
+fn shape_outline_and_fill_on_text_box() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.textBox", &json!({"text": "A text box with a frame"})).unwrap();
+    // While typing inside the text box:
+    // 1. shape.outline with {"color": null} removes the frame (stroke is None).
+    s.run("shape.outline", &json!({"color": null})).unwrap();
+    let (pos, _id) = text_box_target(&s).unwrap();
+    let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let InlineObject::Shape { stroke, .. } = o else { panic!("{o:?}") };
+    assert_eq!(*stroke, None, "frame removed");
+
+    // 2. shape.outline can restore the frame with color, width, dash and cap:
+    s.run("shape.outline", &json!({"color": "156082", "width": 1.5, "dash": "dash", "cap": "rnd"})).unwrap();
+    let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let InlineObject::Shape { stroke, stroke_width, extra, .. } = o else { panic!("{o:?}") };
+    assert_eq!(*stroke, Some(Rgb(0x15, 0x60, 0x82)));
+    assert_eq!(*stroke_width, 1.5);
+    assert_eq!(extra.dash, wordcraft_doc::line_dash::LineDash::Dash);
+    assert_eq!(extra.cap, wordcraft_doc::connector::LineCap::Round);
+
+    // 3. Changing only the width preserves the stroke color:
+    s.run("shape.outline", &json!({"width": 3.0})).unwrap();
+    let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let InlineObject::Shape { stroke, stroke_width, .. } = o else { panic!("{o:?}") };
+    assert_eq!(*stroke, Some(Rgb(0x15, 0x60, 0x82)), "color kept when width changed");
+    assert_eq!(*stroke_width, 3.0);
+
+    // 4. Malformed non-null colors are rejected before mutation:
+    assert!(matches!(s.run("shape.outline", &json!({"color": 123})), Err(CmdError::Params(_))));
+    assert!(matches!(s.run("shape.outline", &json!({"color": "not-a-hex"})), Err(CmdError::Params(_))));
+    let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let InlineObject::Shape { stroke, .. } = o else { panic!("{o:?}") };
+    assert_eq!(*stroke, Some(Rgb(0x15, 0x60, 0x82)), "color preserved on error");
+
+    // 5. Unlocked size edits preserve the other dimension, including zero:
+    s.run("picture.size", &json!({"width": 100.0, "height": 0.0, "lockAspect": false})).unwrap();
+    s.run("picture.size", &json!({"width": 250.0, "lockAspect": false})).unwrap();
+    let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let (w, h) = obj_size(o);
+    assert_eq!((w, h), (250.0, 0.0), "height preserved at 0.0 on width edit");
+
+    s.run("picture.size", &json!({"height": 150.0, "lockAspect": false})).unwrap();
+    let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let (w, h) = obj_size(o);
+    assert_eq!((w, h), (250.0, 150.0), "width preserved on height edit");
+
+    // 6. shape.effects targets the active text box when typing inside it:
+    s.run("shape.effects", &json!({"shadow": "offsetBottomRight"})).unwrap();
+    let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let InlineObject::Shape { effects, .. } = o else { panic!("{o:?}") };
+    assert!(effects.shadow.is_some(), "shadow applied to text box");
+
+    // 7. When a picture is selected, shape.fill and shape.effects do not target the text box:
+    let data = super::super::insert::base64_encode(&png(10, 10));
+    s.run("insert.picture", &json!({"data": data})).unwrap();
+    assert!(matches!(s.run("shape.fill", &json!({"color": "FF0000"})), Err(CmdError::Disabled(_))));
+    assert!(matches!(s.run("shape.effects", &json!({"shadow": "none"})), Err(CmdError::Disabled(_))));
+
+    // 8. fit_size normalizes NaN and negatives to 1 pt while keeping 0.0:
+    assert_eq!(super::picture::fit_size(f32::NAN, 0.0, false), (1.0, 0.0));
+    assert_eq!(super::picture::fit_size(-50.0, 0.0, false), (1.0, 0.0));
+}

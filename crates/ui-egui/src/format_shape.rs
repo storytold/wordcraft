@@ -1,11 +1,11 @@
 //! The Format Shape pane (Shape Fill › More Gradients…, a shape's Format Shape…): the selected
-//! shapes' fill, as Word's Fill section: no fill, a solid colour with its transparency, or a
-//! gradient (preset, type, direction, angle, stops, rotate with shape). Every change runs
-//! `shape.fill` with the whole fill; a drag applies as it goes and undoes in one step.
+//! shapes' fill, outline, and layout settings (size, rotation, text direction, and alignment).
+//! Every change runs the corresponding shape command; a drag applies as it goes and undoes in one step.
 
 use std::sync::Arc;
 
 use egui::{Color32, Id, Mesh, Pos2, Rect, Response, Sense, Stroke, Ui, pos2, vec2};
+use serde_json::json;
 use wordcraft_doc::Rgb;
 use wordcraft_doc::fill::{Fill, Gradient, GradientKind, PathShape};
 use wordcraft_doc::para::InlineObject;
@@ -21,6 +21,16 @@ fn mark_id() -> Id {
     Id::unique("format_shape.drag_mark")
 }
 
+/// Stable storage id for a line drag's undo mark.
+fn line_mark_id() -> Id {
+    Id::unique("format_shape.line_drag_mark")
+}
+
+/// Stable storage id for a layout (width, height, rotation) drag's undo mark.
+fn layout_mark_id() -> Id {
+    Id::unique("format_shape.layout_drag_mark")
+}
+
 /// Stable storage id for the gradient stop being edited.
 fn stop_id() -> Id {
     Id::unique("format_shape.stop")
@@ -29,7 +39,11 @@ fn stop_id() -> Id {
 /// Forgets a drag's undo mark: called while the pane is closed, so a drag cut short by closing
 /// it never merges later undo steps.
 pub fn forget_drag(ctx: &egui::Context) {
-    ctx.data_mut(|d| d.remove::<u64>(mark_id()));
+    ctx.data_mut(|d| {
+        d.remove::<u64>(mark_id());
+        d.remove::<u64>(line_mark_id());
+        d.remove::<u64>(layout_mark_id());
+    });
 }
 
 /// The gradient a variation applied to the object at a position, and the colour it was built
@@ -59,12 +73,79 @@ pub fn remember_variation(ctx: &egui::Context, pos: wordcraft_doc::Pos, fill: Fi
     ctx.data_mut(|d| d.insert_temp(variation_id(), Variation(pos, fill, base)));
 }
 
+/// The first selected shape's or canvas's object: `None` with no shape or canvas active.
+pub(crate) fn current_object(app: &WordApp) -> Option<(wordcraft_doc::Pos, InlineObject)> {
+    if let Some((pos, o)) = wordcraft_engine::cmd::objects::selected(&app.session) {
+        return Some((pos, o));
+    }
+    let (pos, _) = wordcraft_engine::cmd::objects::text_box_target(&app.session)?;
+    let o = app.session.doc.para_at(&pos)?.object_at(pos.off)?;
+    Some((pos, o.clone()))
+}
+
 /// The first selected shape's or canvas's fill: `None` with no shape selected.
 pub(crate) fn current(app: &WordApp) -> Option<Option<Fill>> {
-    let (_, o) = wordcraft_engine::cmd::objects::selected(&app.session)?;
+    let (_, o) = current_object(app)?;
     match o {
         InlineObject::Shape { fill, .. } => Some(fill),
         o => o.canvas_style().map(|c| c.fill.clone()),
+    }
+}
+
+/// The selected shape's outline properties.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CurrentLine {
+    /// The stroke colour (`None` when there is no outline / no line).
+    pub stroke: Option<Rgb>,
+    /// The stroke width in points.
+    pub width: f32,
+    /// The dash style.
+    pub dash: wordcraft_doc::line_dash::LineDash,
+    /// The line cap style.
+    pub cap: wordcraft_doc::connector::LineCap,
+}
+
+/// The selected shape's or canvas's outline: `None` when no shape or canvas is selected.
+pub(crate) fn current_line(app: &WordApp) -> Option<CurrentLine> {
+    let (_, o) = current_object(app)?;
+    match o {
+        InlineObject::Shape { stroke, stroke_width, extra, .. } => {
+            Some(CurrentLine { stroke, width: stroke_width, dash: extra.dash, cap: extra.cap })
+        }
+        o => o.canvas_style().map(|c| CurrentLine {
+            stroke: c.stroke,
+            width: c.stroke_width,
+            dash: wordcraft_doc::line_dash::LineDash::Solid,
+            cap: wordcraft_doc::connector::LineCap::Flat,
+        }),
+    }
+}
+
+/// The selected shape's or text box's layout properties.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CurrentLayout {
+    /// Width in points.
+    pub width: f32,
+    /// Height in points.
+    pub height: f32,
+    /// Rotation in degrees.
+    pub rotation: f32,
+    /// Whether the object is a text box.
+    pub is_text_box: bool,
+    /// The text body properties if it is a text box.
+    pub text_body: Option<wordcraft_doc::TextBody>,
+}
+
+/// The selected shape's or text box's layout: size, rotation, and text body settings.
+pub(crate) fn current_layout(app: &WordApp) -> Option<CurrentLayout> {
+    let (_, o) = current_object(app)?;
+    match o {
+        InlineObject::Shape { w, h, float, story, .. } => {
+            let is_text_box = story.is_some_and(|id| app.session.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox));
+            let text_body = story.and_then(|id| app.session.doc.parts.get(&id).map(|p| p.body));
+            Some(CurrentLayout { width: w, height: h, rotation: float.spin().deg, is_text_box, text_body })
+        }
+        o => o.frame().map(|(w, h, float)| CurrentLayout { width: w, height: h, rotation: float.spin().deg, is_text_box: false, text_body: None }),
     }
 }
 
@@ -81,17 +162,31 @@ fn apply(app: &mut WordApp, ui: &Ui, fill: Option<&Fill>, resp: Option<&Response
 /// The pane, while open.
 pub fn pane(app: &mut WordApp, ui: &mut Ui) {
     // A drag that applied as it went ends as one undo step.
-    if !ui.input(|i| i.pointer.any_down())
-        && let Some(mark) = ui.data_mut(|d| {
+    if !ui.input(|i| i.pointer.any_down()) {
+        if let Some(mark) = ui.data_mut(|d| {
             let m = d.get_temp::<u64>(mark_id());
             d.remove::<u64>(mark_id());
             m
-        })
-    {
-        app.session.merge_undo_since(mark);
+        }) {
+            app.session.merge_undo_since(mark);
+        }
+        if let Some(mark) = ui.data_mut(|d| {
+            let m = d.get_temp::<u64>(line_mark_id());
+            d.remove::<u64>(line_mark_id());
+            m
+        }) {
+            app.session.merge_undo_since(mark);
+        }
+        if let Some(mark) = ui.data_mut(|d| {
+            let m = d.get_temp::<u64>(layout_mark_id());
+            d.remove::<u64>(layout_mark_id());
+            m
+        }) {
+            app.session.merge_undo_since(mark);
+        }
     }
     let Some(fill) = current(app) else {
-        ui.label(egui::RichText::new(tl!("Select a shape, text box or drawing canvas to format its fill.")).weak());
+        ui.label(egui::RichText::new(tl!("Select a shape, text box or drawing canvas to format it.")).weak());
         return;
     };
     let theme = app.session.doc.settings.theme_colors.clone();
@@ -122,6 +217,195 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
         Some(Fill::Solid { color, transparency }) => solid(app, ui, &theme, color, transparency),
         Some(Fill::Gradient(g)) => gradient(app, ui, &theme, &g),
         None => {}
+    }
+
+    if let Some(line) = current_line(app) {
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(4.0);
+        line_section(app, ui, &theme, &line);
+    }
+
+    if let Some(layout) = current_layout(app) {
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(4.0);
+        layout_section(app, ui, &layout);
+    }
+}
+
+/// Draws the Line section: No line or Solid line (color, width, dash type, cap type).
+fn line_section(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], line: &CurrentLine) {
+    ui.label(egui::RichText::new(tl!("Line")).strong());
+    ui.add_space(2.0);
+    let kind = if line.stroke.is_some() { 1 } else { 0 };
+    let mut pick = kind;
+    ui.radio_value(&mut pick, 0, tl!("No line"));
+    ui.radio_value(&mut pick, 1, tl!("Solid line"));
+    if pick != kind {
+        if pick == 0 {
+            let _ = app.run("shape.outline", json!({"color": null}));
+        } else {
+            let accent1 = theme.get(4).copied().unwrap_or(Rgb(68, 114, 196));
+            let w = if line.width > 0.0 { line.width } else { 0.75 };
+            let _ = app.run("shape.outline", json!({"color": accent1.hex(), "width": w}));
+        }
+        return;
+    }
+    if let Some(color) = line.stroke {
+        ui.add_space(6.0);
+        let mut c = color;
+        if color_field(ui, theme, Id::unique("format_shape.line_color"), &mut c) {
+            let _ = app.run("shape.outline", json!({"color": c.hex()}));
+        }
+        ui.horizontal(|ui| {
+            ui.label(tl!("Width"));
+            let mut w = line.width;
+            let r =
+                ui.add(egui::DragValue::new(&mut w).range(0.25..=72.0).clamp_existing_to_range(false).suffix(" pt").speed(0.25).fixed_decimals(2));
+            if r.changed() {
+                if r.dragged() && ui.data(|d| d.get_temp::<u64>(line_mark_id())).is_none() {
+                    let mark = app.session.undo_mark();
+                    ui.data_mut(|d| d.insert_temp(line_mark_id(), mark));
+                }
+                let _ = app.run("shape.outline", json!({"width": w}));
+            }
+        });
+
+        const DASHES: [(&str, &str); 8] = [
+            ("Solid", "solid"),
+            ("Round Dot", "dot"),
+            ("Square Dot", "sysDot"),
+            ("Dash", "dash"),
+            ("Dash Dot", "dashDot"),
+            ("Long Dash", "lgDash"),
+            ("Long Dash Dot", "lgDashDot"),
+            ("Long Dash Dot Dot", "lgDashDotDot"),
+        ];
+        let current_dash_str = line.dash.ooxml().unwrap_or("solid");
+        let mut dash_idx = DASHES.iter().position(|(_, k)| *k == current_dash_str).unwrap_or(0);
+        let orig_dash_idx = dash_idx;
+        ui.horizontal(|ui| {
+            let label = ui.label(tl!("Dash type"));
+            let combo = craft_ui::ComboBox::from_id_salt("format_shape.dash_type").selected_text(tl!(DASHES[dash_idx].0)).show_ui(ui, |ui| {
+                for (i, (label, _)) in DASHES.iter().enumerate() {
+                    ui.selectable_value(&mut dash_idx, i, tl!(label));
+                }
+            });
+            combo.response.labelled_by(label.id);
+        });
+        if dash_idx != orig_dash_idx {
+            let _ = app.run("shape.outline", json!({"dash": DASHES[dash_idx].1}));
+        }
+
+        const CAPS: [(&str, &str); 3] = [("Flat", "flat"), ("Round", "rnd"), ("Square", "sq")];
+        let current_cap_str = line.cap.ooxml();
+        let mut cap_idx = CAPS.iter().position(|(_, k)| *k == current_cap_str).unwrap_or(0);
+        let orig_cap_idx = cap_idx;
+        ui.horizontal(|ui| {
+            let label = ui.label(tl!("Cap type"));
+            let combo = craft_ui::ComboBox::from_id_salt("format_shape.cap_type").selected_text(tl!(CAPS[cap_idx].0)).show_ui(ui, |ui| {
+                for (i, (label, _)) in CAPS.iter().enumerate() {
+                    ui.selectable_value(&mut cap_idx, i, tl!(label));
+                }
+            });
+            combo.response.labelled_by(label.id);
+        });
+        if cap_idx != orig_cap_idx {
+            let _ = app.run("shape.outline", json!({"cap": CAPS[cap_idx].1}));
+        }
+    }
+}
+
+/// Draws the Size & Properties / Text Box layout section.
+fn layout_section(app: &mut WordApp, ui: &mut Ui, layout: &CurrentLayout) {
+    ui.label(egui::RichText::new(tl!("Layout & Properties")).strong());
+    ui.add_space(2.0);
+
+    ui.horizontal(|ui| {
+        ui.label(tl!("Width"));
+        let mut w = layout.width;
+        let r = ui.add(egui::DragValue::new(&mut w).range(0.0..=4000.0).clamp_existing_to_range(false).suffix(" pt").speed(1.0).fixed_decimals(1));
+        if r.changed() {
+            if r.dragged() && ui.data(|d| d.get_temp::<u64>(layout_mark_id())).is_none() {
+                let mark = app.session.undo_mark();
+                ui.data_mut(|d| d.insert_temp(layout_mark_id(), mark));
+            }
+            let _ = app.run("picture.size", json!({"width": w, "lockAspect": false}));
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(tl!("Height"));
+        let mut h = layout.height;
+        let r = ui.add(egui::DragValue::new(&mut h).range(0.0..=4000.0).clamp_existing_to_range(false).suffix(" pt").speed(1.0).fixed_decimals(1));
+        if r.changed() {
+            if r.dragged() && ui.data(|d| d.get_temp::<u64>(layout_mark_id())).is_none() {
+                let mark = app.session.undo_mark();
+                ui.data_mut(|d| d.insert_temp(layout_mark_id(), mark));
+            }
+            let _ = app.run("picture.size", json!({"height": h, "lockAspect": false}));
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(tl!("Rotation"));
+        let mut rot = layout.rotation;
+        let r = ui.add(egui::DragValue::new(&mut rot).range(0.0..=360.0).clamp_existing_to_range(false).suffix("°").speed(1.0).fixed_decimals(1));
+        if r.changed() {
+            if r.dragged() && ui.data(|d| d.get_temp::<u64>(layout_mark_id())).is_none() {
+                let mark = app.session.undo_mark();
+                ui.data_mut(|d| d.insert_temp(layout_mark_id(), mark));
+            }
+            let _ = app.run("arrange.rotation", json!({"degrees": rot}));
+        }
+    });
+
+    if layout.is_text_box || layout.text_body.is_some() {
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new(tl!("Text Box")).strong());
+        ui.add_space(2.0);
+
+        let body = layout.text_body.unwrap_or_default();
+
+        const VALIGNS: [(&str, wordcraft_doc::props::VAlign, &str); 3] = [
+            ("Top", wordcraft_doc::props::VAlign::Top, "t"),
+            ("Middle", wordcraft_doc::props::VAlign::Center, "ctr"),
+            ("Bottom", wordcraft_doc::props::VAlign::Bottom, "b"),
+        ];
+        let mut valign_idx = VALIGNS.iter().position(|(_, a, _)| *a == body.anchor).unwrap_or(0);
+        let orig_valign_idx = valign_idx;
+        ui.horizontal(|ui| {
+            let label = ui.label(tl!("Vertical alignment"));
+            let combo = craft_ui::ComboBox::from_id_salt("format_shape.valign").selected_text(tl!(VALIGNS[valign_idx].0)).show_ui(ui, |ui| {
+                for (i, (label, _, _)) in VALIGNS.iter().enumerate() {
+                    ui.selectable_value(&mut valign_idx, i, tl!(label));
+                }
+            });
+            combo.response.labelled_by(label.id);
+        });
+        if valign_idx != orig_valign_idx {
+            let _ = app.run("shape.alignText", json!({"anchor": VALIGNS[valign_idx].2}));
+        }
+
+        const DIRS: [(&str, wordcraft_doc::props::TextVert, &str); 4] = [
+            ("Horizontal", wordcraft_doc::props::TextVert::Horz, "horz"),
+            ("Rotate all text 90°", wordcraft_doc::props::TextVert::Vert, "vert"),
+            ("Rotate all text 270°", wordcraft_doc::props::TextVert::Vert270, "vert270"),
+            ("Stacked", wordcraft_doc::props::TextVert::Stacked, "wordArtVert"),
+        ];
+        let mut dir_idx = DIRS.iter().position(|(_, d, _)| *d == body.vert).unwrap_or(0);
+        let orig_dir_idx = dir_idx;
+        ui.horizontal(|ui| {
+            let label = ui.label(tl!("Text direction"));
+            let combo = craft_ui::ComboBox::from_id_salt("format_shape.text_direction").selected_text(tl!(DIRS[dir_idx].0)).show_ui(ui, |ui| {
+                for (i, (label, _, _)) in DIRS.iter().enumerate() {
+                    ui.selectable_value(&mut dir_idx, i, tl!(label));
+                }
+            });
+            combo.response.labelled_by(label.id);
+        });
+        if dir_idx != orig_dir_idx {
+            let _ = app.run("shape.textDirection", json!({"dir": DIRS[dir_idx].2}));
+        }
     }
 }
 
@@ -556,6 +840,84 @@ mod tests {
         assert_eq!(g.kind, wordcraft_doc::fill::GradientKind::Linear { angle: 359.95, scaled: false });
         assert!(h.state().session.doc == doc);
         assert_eq!(h.state().session.undo_depth(), depth);
+    }
+
+    fn stroke(app: &WordApp) -> Option<wordcraft_doc::Rgb> {
+        match super::current_object(app) {
+            Some((_, InlineObject::Shape { stroke, .. })) => stroke,
+            o => panic!("{o:?}"),
+        }
+    }
+
+    /// Issue #5896: Format Shape pane provides Line settings: "No line" removes the frame,
+    /// and "Solid line" restores it with color and width.
+    #[test]
+    fn format_shape_pane_removes_and_restores_line() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.textBox", json!({"text": "Hello"})).unwrap();
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        assert_eq!(stroke(h.state()), Some(wordcraft_doc::Rgb::BLACK), "default textbox has black frame");
+
+        // Click "No line" in the Format Shape pane:
+        h.get_by_label("No line").click();
+        h.run_steps(3);
+        assert_eq!(stroke(h.state()), None, "No line removes the frame");
+
+        // Click "Solid line" in the Format Shape pane:
+        h.get_by_label("Solid line").click();
+        h.run_steps(3);
+        assert!(stroke(h.state()).is_some(), "Solid line restores the frame");
+    }
+
+    /// Format Shape pane displays layout and text box sections, allowing layout adjustments.
+    #[test]
+    fn format_shape_pane_exposes_layout_and_text_box() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.textBox", json!({"text": "Box content"})).unwrap();
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        assert!(h.query_by_label("Layout & Properties").is_some());
+        assert!(h.query_by_label("Text Box").is_some());
+        assert!(h.query_by_label("Vertical alignment").is_some());
+        assert!(h.query_by_label("Text direction").is_some());
+    }
+
+    /// Showing the pane leaves a shape with dimensions outside the DragValue range alone.
+    #[test]
+    fn format_shape_pane_leaves_out_of_range_layout_alone() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
+        a.run("picture.size", json!({"width": 2500.0, "lockAspect": false})).unwrap();
+        let (doc, depth) = (a.session.doc.clone(), a.session.undo_depth());
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        assert_eq!(h.state().session.undo_depth(), depth, "opening pane does not mutate size");
+        assert!(h.state().session.doc == doc);
     }
 }
 
