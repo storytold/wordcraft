@@ -429,9 +429,15 @@ fn images_round_trip() {
         w: 72.0,
         h: 48.0,
         alt: "A tiny picture".into(),
-        // Room for a shadow: kept through save and load.
-        float: Float { effect: [12.0, 12.0, 27.0, 27.0], ..Default::default() },
-        crop: [0.1, 0.0, 0.25, 0.05],
+        // Room for a shadow: kept through save and load; picture paint/effects are kept too.
+        float: Float {
+            effect: [12.0, 12.0, 27.0, 27.0],
+            pic_stroke: Some(Rgb(0x20, 0x40, 0x60)),
+            pic_stroke_width: 1.0,
+            pic_effects: wordcraft_doc::effects::ShapeEffects { soft_edge: Some(2.0), ..Default::default() },
+            ..Default::default()
+        },
+        crop: [-0.25, 0.0, 0.25, -0.05],
         fx: Default::default(),
         ole: None,
     };
@@ -2842,4 +2848,47 @@ fn drop_cap_options_round_trip() {
         (b.props.drop_cap, b.props.drop_cap_margin, b.props.drop_cap_distance, b.props.drop_cap_font.as_deref()),
         (Some(4), Some(true), None, None)
     );
+}
+
+#[test]
+fn linked_pictures_out_of_unit_crops_effect_alpha_mods_and_deep_groups_round_trip() {
+    let mut group_xml = r#"<wps:wsp><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="127000" cy="127000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:bodyPr/></wps:wsp>"#.to_string();
+    for _ in 0..4 {
+        group_xml = format!(
+            r#"<wpg:wgp><wpg:cNvGrpSpPr/><wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="127000" cy="127000"/><a:chOff x="0" y="0"/><a:chExt cx="127000" cy="127000"/></a:xfrm></wpg:grpSpPr>{group_xml}</wpg:wgp>"#
+        );
+    }
+    let doc_xml = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:drawing><wp:inline><wp:extent cx="914400" cy="457200"/><wp:docPr id="1" name="Linked"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="Linked"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:link="rIdLink"/><a:srcRect l="-25000" t="150000" r="-10000" b="25000"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:effectLst><a:outerShdw blurRad="50800" dist="25400" dir="5400000"><a:srgbClr val="112233"><a:alpha val="80000"/><a:alphaMod val="50000"/><a:alphaOff val="10000"/></a:srgbClr></a:outerShdw></a:effectLst></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r><w:r><w:drawing><wp:inline><wp:extent cx="127000" cy="127000"/><wp:docPr id="2" name="DeepGroup"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup">{group_xml}</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:body></w:document>"#
+    );
+    let rels_xml = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdLink" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="https://example.com/banner.png" TargetMode="External"/></Relationships>"#;
+    let root_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="main" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, val) in [("word/document.xml", doc_xml.as_str()), ("word/_rels/document.xml.rels", rels_xml), ("_rels/.rels", root_rels)] {
+        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut zip, val.as_bytes()).unwrap();
+    }
+    let bytes = zip.finish().unwrap().into_inner();
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    assert!(d.media.is_empty(), "external linked pictures must not populate doc.media");
+    let r = rt(&d);
+    assert!(r.media.is_empty());
+    let objs = &paras(&r)[0].objects;
+    assert_eq!(objs.len(), 2, "{objs:?}");
+    match &objs[0] {
+        InlineObject::Image { media, crop, float, .. } => {
+            assert_eq!(media, "link:https://example.com/banner.png");
+            assert_eq!(*crop, [-0.25, 1.5, -0.1, 0.25]);
+            let sh = float.pic_effects.shadow.as_ref().expect("shadow");
+            assert_eq!(sh.color, Rgb(0x11, 0x22, 0x33));
+            assert!((sh.transparency - 50.0).abs() < 0.01, "expected 50% transparency, got {}", sh.transparency);
+        }
+        other => panic!("expected linked Image, got {other:?}"),
+    }
+    match &objs[1] {
+        InlineObject::Group { children, .. } => {
+            assert_eq!(children.len(), 1, "grouped member preserved");
+        }
+        other => panic!("expected Group, got {other:?}"),
+    }
 }

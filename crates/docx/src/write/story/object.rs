@@ -269,7 +269,7 @@ impl Writer<'_> {
             self.rev_close(w, props);
             return;
         }
-        let Some(file) = self.media_files.get(media).cloned() else { return };
+        let Some(file) = self.media_files.get(media).cloned().or_else(|| media.strip_prefix("link:").map(str::to_string)) else { return };
         self.rev_open(w, props);
         w.open("w:r", &[]);
         self.rpr(w, props);
@@ -277,6 +277,11 @@ impl Writer<'_> {
         let docpr = self.next_docpr();
         let link = Self::drawing_link(props, rels);
         let name = format!("Picture {docpr}");
+        let mut float = float.clone();
+        for (e, fx) in float.effect.iter_mut().zip(float.pic_effects.extent()) {
+            *e = wordcraft_geom::finite(*e).max(fx);
+        }
+        let float = &float;
         self.drawing_open(w, DrawingInfo { float, size: (*iw, *ih), docpr: &docpr, name: &name, alt, link: link.as_deref() });
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.open("a:graphic", &[]);
@@ -445,7 +450,7 @@ impl Writer<'_> {
             let at = (c.x, c.y);
             match &c.obj {
                 InlineObject::Image { media, .. } => {
-                    if let Some(file) = self.media_files.get(media).cloned() {
+                    if let Some(file) = self.media_files.get(media).cloned().or_else(|| media.strip_prefix("link:").map(str::to_string)) {
                         self.pic(w, &c.obj, &file, at, rels);
                     }
                 }

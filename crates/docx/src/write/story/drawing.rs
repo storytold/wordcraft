@@ -26,11 +26,16 @@ impl Writer<'_> {
     /// A picture's `pic:pic` (the image in `media/{file}`), at `off` in its group (or 0, 0).
     pub(super) fn pic(&mut self, w: &mut W, o: &InlineObject, file: &str, off: (f32, f32), rels: &mut PartRels) {
         let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, fx, .. } = o else { return };
-        let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
-        self.used_media.insert(media.clone());
+        let (rid, cnv_name, blip_attr) = match media.strip_prefix("link:") {
+            Some(url) => (rels.add(rt::IMAGE, url, true), "Picture", "r:link"),
+            None => {
+                self.used_media.insert(media.clone());
+                (rels.add(rt::IMAGE, &format!("media/{file}"), false), file, "r:embed")
+            }
+        };
         w.open("pic:pic", &[]);
         w.open("pic:nvPicPr", &[]);
-        nv_props(w, "pic:cNvPr", ("0", file), alt, &float.alt, float.hidden, None);
+        nv_props(w, "pic:cNvPr", ("0", cnv_name), alt, &float.alt, float.hidden, None);
         w.open("pic:cNvPicPr", &[]);
         w.empty("a:picLocks", &[("noChangeAspect", "1"), ("noChangeArrowheads", "1")]);
         w.close("pic:cNvPicPr");
@@ -40,9 +45,9 @@ impl Writer<'_> {
         // §20.1.8.13 CT_Blip: an unbounded choice of effects, in any order).
         let fx = fx.clamped();
         if fx.is_identity() {
-            w.empty("a:blip", &[("r:embed", &rid)]);
+            w.empty("a:blip", &[(blip_attr, &rid)]);
         } else {
-            w.open("a:blip", &[("r:embed", &rid)]);
+            w.open("a:blip", &[(blip_attr, &rid)]);
             if fx.transparency != 0 {
                 w.empty("a:alphaModFix", &[("amt", &n(i64::from(100_000 - fx.transparency)))]);
             }
@@ -51,8 +56,8 @@ impl Writer<'_> {
             }
             w.close("a:blip");
         }
-        if crop.iter().any(|c| *c > 0.0) {
-            let c = |v: f32| n((wordcraft_geom::finite(v).clamp(0.0, 1.0) * 100_000.0).round() as i64);
+        if crop.iter().any(|c| *c != 0.0) {
+            let c = |v: f32| n((wordcraft_geom::finite(v).clamp(-1000.0, 1000.0) * 100_000.0).round() as i64);
             w.empty("a:srcRect", &[("l", &c(crop[0])), ("t", &c(crop[1])), ("r", &c(crop[2])), ("b", &c(crop[3]))]);
         }
         w.open("a:stretch", &[]);
@@ -64,6 +69,14 @@ impl Writer<'_> {
         w.open("a:prstGeom", &[("prst", "rect")]);
         w.empty("a:avLst", &[]);
         w.close("a:prstGeom");
+        if let Some(c) = float.pic_stroke {
+            w.open("a:ln", &[("w", &emu(float.pic_stroke_width.clamp(0.0, 100.0)))]);
+            w.open("a:solidFill", &[]);
+            w.empty("a:srgbClr", &[("val", &c.hex())]);
+            w.close("a:solidFill");
+            w.close("a:ln");
+        }
+        effect_list(w, &float.pic_effects);
         w.close("pic:spPr");
         w.close("pic:pic");
     }
