@@ -259,7 +259,7 @@ impl Graphic {
     /// colours and line width (nor do `draw:fill-color`, `svg:stroke-color` and
     /// `svg:stroke-width` have defaults); a line has no fill.
     pub(super) fn shape_look(&self, kind: ShapeKind, defs: &Defs) -> BoxLook {
-        let fill = if kind == ShapeKind::Line {
+        let fill = if kind.is_open() {
             None
         } else {
             let mut g = self.clone();

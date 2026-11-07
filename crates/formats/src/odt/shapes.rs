@@ -111,8 +111,14 @@ pub(super) fn element_of(kind: ShapeKind) -> (&'static str, Option<&'static str>
     let custom = |t| ("draw:custom-shape", Some(t));
     match kind {
         ShapeKind::Ellipse => ("draw:ellipse", None),
-        ShapeKind::Line => ("draw:line", None),
-        ShapeKind::StraightConnector | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector => ("draw:connector", None),
+        ShapeKind::Line | ShapeKind::DoubleArrow => ("draw:line", None),
+        ShapeKind::StraightConnector
+        | ShapeKind::ElbowConnector
+        | ShapeKind::ElbowArrow
+        | ShapeKind::ElbowDoubleArrow
+        | ShapeKind::CurvedConnector
+        | ShapeKind::CurvedArrow
+        | ShapeKind::CurvedDoubleArrow => ("draw:connector", None),
         ShapeKind::RoundedRectangle => custom("round-rectangle"),
         ShapeKind::FlowchartOr => custom("flowchart-or"),
         ShapeKind::Triangle => custom("isosceles-triangle"),
@@ -126,6 +132,7 @@ pub(super) fn element_of(kind: ShapeKind) -> (&'static str, Option<&'static str>
         ShapeKind::Heart => custom("heart"),
         ShapeKind::Freeform => ("draw:path", None),
         ShapeKind::Rectangle | ShapeKind::TextBox => ("draw:rect", None),
+        _ => ("draw:custom-shape", None),
     }
 }
 

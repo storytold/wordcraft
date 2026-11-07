@@ -200,14 +200,16 @@ pub(super) fn icon(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 pub(super) fn shape(s: &mut Session, v: &Value) -> CmdResult {
-    let kind: ShapeKind =
-        serde_json::from_value(v.get("kind").cloned().unwrap_or(json!("rectangle"))).map_err(|e| CmdError::Params(e.to_string()))?;
+    let kind: ShapeKind = match v.get("kind") {
+        Some(Value::String(k_str)) => serde_json::from_value(Value::String(k_str.clone())).unwrap_or_else(|_| ShapeKind::from_ooxml_prst(k_str)),
+        Some(val) => serde_json::from_value(val.clone()).map_err(|e| CmdError::Params(e.to_string()))?,
+        None => ShapeKind::Rectangle,
+    };
     let w = p::f32(v, "width").unwrap_or(108.0).clamp(4.0, 2000.0);
-    let h =
-        p::f32(v, "height").unwrap_or(if kind == ShapeKind::Line { 1.0 } else { 72.0 }).clamp(if kind.is_connector() { 0.0 } else { 1.0 }, 2000.0);
+    let h = p::f32(v, "height").unwrap_or(if kind.is_line_like() { 1.0 } else { 72.0 }).clamp(if kind.is_connector() { 0.0 } else { 1.0 }, 2000.0);
     let fill = match p::str(v, "fill") {
         Some(c) => Rgb::parse(c),
-        None if kind.is_open() => None,
+        None if kind.is_open() || kind.is_line_like() => None,
         None => Some(Rgb(0x15, 0x60, 0x82)),
     };
     // Arrowheads on lines and connectors.
@@ -219,12 +221,37 @@ pub(super) fn shape(s: &mut Session, v: &Value) -> CmdResult {
         Some(x) => return Err(CmdError::Params(format!("`arrow`: none, start, end or both, not `{x}`"))),
     };
     let extra = wordcraft_doc::connector::ShapeExtra { arrow_start, arrow_end, ..Default::default() };
-    // Connectors float in front of the text, so they can be glued to floating shapes.
-    let float = if kind.is_connector() {
-        Float { wrap: Wrap::InFrontOfText, ..Default::default() }
-    } else {
-        Float { wrap: Wrap::Inline, ..Default::default() }
+    let (x, y) = (p::f32(v, "x"), p::f32(v, "y"));
+    let anchor = match p::str(v, "anchor") {
+        Some("page") => wordcraft_doc::para::Anchor::Page,
+        Some("paragraph") => wordcraft_doc::para::Anchor::Paragraph,
+        _ => wordcraft_doc::para::Anchor::Margin,
     };
+    let float = match (x, y) {
+        (Some(x), Some(y)) => {
+            let wrap = match p::str(v, "wrap") {
+                Some(w) => serde_json::from_value::<Wrap>(json!(w)).unwrap_or(Wrap::Square),
+                None if kind.is_line_like() || kind.is_connector() => Wrap::InFrontOfText,
+                None => Wrap::Square,
+            };
+            Float { wrap, h_rel: anchor, v_rel: anchor, x: x.clamp(-5000.0, 5000.0), y: y.clamp(-5000.0, 5000.0), dist: 0.0, ..Default::default() }
+        }
+        _ => {
+            // Connectors float in front of the text, so they can be glued to floating shapes.
+            if kind.is_connector() || kind.is_line_like() {
+                Float { wrap: Wrap::InFrontOfText, ..Default::default() }
+            } else {
+                Float { wrap: Wrap::Inline, ..Default::default() }
+            }
+        }
+    };
+    // A line's direction: a drag from bottom-right to top-left mirrors it (the frame is the
+    // same for both slopes, so the flips are what tell them apart).
+    let (mut float, flip_h, flip_v) = (float, p::bool(v, "flipH") == Some(true), p::bool(v, "flipV") == Some(true));
+    if kind.is_line_like() || kind.is_connector() {
+        float.flip_h = flip_h;
+        float.flip_v = flip_v;
+    }
     let stroke = p::str(v, "stroke").and_then(Rgb::parse).or(Some(Rgb(0x0E, 0x40, 0x5A)));
     let obj = InlineObject::Shape {
         kind,
@@ -241,6 +268,10 @@ pub(super) fn shape(s: &mut Session, v: &Value) -> CmdResult {
     };
     // A selected Drawing Canvas takes it in (and stays selected for the next one).
     if crate::cmd::canvas::add_member(s, obj.clone())?.is_some() {
+        return sel_result(s);
+    }
+    // Drawn on the page (the shape tool): anchored under the pointer's page point.
+    if crate::cmd::insert::place_dragged(s, v, obj.clone())? {
         return sel_result(s);
     }
     // Word draws a new shape beside what is selected and never deletes it: the shape just
@@ -265,7 +296,7 @@ pub(super) fn text_box(s: &mut Session, v: &Value) -> CmdResult {
         fill: Some(wordcraft_doc::fill::Fill::solid(Rgb::WHITE)),
         stroke: Some(Rgb::BLACK),
         stroke_width: 0.75,
-        float: Float::default(),
+        float: Float { wrap: crate::cmd::insert::dragged_wrap(v), ..Float::default() },
         story: Some(id),
         freeform: None,
         effects: Default::default(),
@@ -273,9 +304,12 @@ pub(super) fn text_box(s: &mut Session, v: &Value) -> CmdResult {
     };
     // A selected Drawing Canvas takes it in; otherwise it goes at the caret.
     if crate::cmd::canvas::add_member(s, obj.clone())?.is_none() {
-        let props = s.typing_props();
-        let at = delete_selection(s)?;
-        s.doc.insert_object(&at, obj, &props)?;
+        // Dragged out on the page: where the pointer put it.
+        if !crate::cmd::insert::place_dragged(s, v, obj.clone())? {
+            let props = s.typing_props();
+            let at = delete_selection(s)?;
+            s.doc.insert_object(&at, obj, &props)?;
+        }
     }
     // Like Word, type straight into the new box.
     s.sel = Selection::caret(s.doc.end_of(StoryRef::Part(id)));
