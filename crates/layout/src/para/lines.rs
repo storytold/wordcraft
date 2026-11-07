@@ -168,6 +168,7 @@ pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, l
 }
 
 impl<'e> Breaker<'e> {
+    /// Create a line breaker for laying out `pl` within the given environment and exclusions.
     fn new(pl: &ParaLayout, (env, exclusions): (&'e ParaEnv<'e>, &'e [Exclusion]), mark_style: u32, level: Option<&'e Level>) -> Self {
         let rp = pl.rp.clone();
         let width = env.width.max(MIN_LINE_WIDTH);

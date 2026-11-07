@@ -45,6 +45,7 @@ struct Slot {
 }
 
 impl Slot {
+    /// Build a cluster spanning this slot with the given kind and dimensions.
     fn cluster(self, kind: ClKind, adv: f32, (obj_h, obj_d): (f32, f32)) -> Cluster {
         Cluster {
             start: self.start,
@@ -412,6 +413,7 @@ impl<'a> Shaped<'a> {
         self.check_boxes.push(k);
     }
 
+    /// Shape a field result or overstrike equation into paragraph clusters.
     fn field_result(&mut self, cx: &Cx, (instr, result): (&str, &str), slot: Slot, rc: &Arc<ResolvedChar>) {
         let (start, end) = (slot.start, slot.end);
         match wordcraft_doc::eq::parse_overstrike(instr) {
@@ -758,6 +760,7 @@ fn break_text<'a>(source: &'a str, skip: &[std::ops::Range<usize>]) -> (std::bor
     }
 }
 
+/// Compute UAX #14 line break opportunities in `text`, respecting slash-break rules.
 pub(super) fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec<usize> {
     let mut found = Vec::new();
     for (i, o) in unicode_linebreak::linebreaks(text) {

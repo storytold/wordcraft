@@ -30,6 +30,7 @@ fn doc(paras: &[(&str, &str, bool)], codes: &[&str]) -> Document {
     d
 }
 
+/// Collect the concatenated shown strings of each laid-out paragraph.
 fn shown(items: &[Placed]) -> Vec<String> {
     items
         .iter()
