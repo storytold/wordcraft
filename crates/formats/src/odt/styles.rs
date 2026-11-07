@@ -803,13 +803,18 @@ fn text_properties(a: &Attrs, style: &mut StyleInfo, faces: &HashMap<String, Str
         let weight = weight.trim();
         weight.eq_ignore_ascii_case("bold") || weight.parse::<u32>().is_ok_and(|n| n >= 600)
     };
-    // Latin attributes take precedence; Asian and complex-script attributes are fallbacks.
-    if let Some(weight) = get(a, "fo:font-weight").or_else(|| get(a, "style:font-weight-asian")).or_else(|| get(a, "style:font-weight-complex")) {
+    // Latin attributes take precedence; Asian and complex-script attributes are fallbacks, to turn
+    // it on: one of those saying normal says nothing of Latin text.
+    if let Some(weight) = get(a, "fo:font-weight") {
         fmt.bold = Some(is_bold(weight));
+    } else if get(a, "style:font-weight-asian").or_else(|| get(a, "style:font-weight-complex")).is_some_and(is_bold) {
+        fmt.bold = Some(true);
     }
     let is_italic = |value: &str| value.trim().eq_ignore_ascii_case("italic") || value.trim().eq_ignore_ascii_case("oblique");
-    if let Some(value) = get(a, "fo:font-style").or_else(|| get(a, "style:font-style-asian")).or_else(|| get(a, "style:font-style-complex")) {
+    if let Some(value) = get(a, "fo:font-style") {
         fmt.italic = Some(is_italic(value));
+    } else if get(a, "style:font-style-asian").or_else(|| get(a, "style:font-style-complex")).is_some_and(is_italic) {
+        fmt.italic = Some(true);
     }
     let is_not_none = |value: &str| !value.trim().eq_ignore_ascii_case("none");
     if let Some(value) = get(a, "style:text-underline-style").or_else(|| get(a, "style:text-underline-type")) {

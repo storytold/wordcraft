@@ -337,3 +337,32 @@ fn text_turning_off_what_its_style_turns_on_stays_off() {
     let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
     assert!(!c.contains(r#"fo:font-weight="normal""#) && !c.contains(r#"style:text-underline-style="none""#), "{c}");
 }
+
+/// A weight or slant only for Asian or complex-script text says nothing of Latin text when it is
+/// normal: the heading's bold stays, on screen and saved. Latin text's own "normal" still counts.
+#[test]
+fn an_asian_or_complex_normal_doesnt_turn_latin_text_off() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:default-outline-level="1"><style:text-properties fo:font-weight="bold" fo:font-style="italic"/></style:style></office:styles></office:document-styles>"#
+    );
+    let open = |attr: &str| {
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties {attr}/></style:style></office:automatic-styles><office:body><office:text><text:h text:style-name="Heading_20_1" text:outline-level="1">Bold <text:span text:style-name="T1">word</text:span></text:h></office:text></office:body></office:document-content>"#
+        );
+        import(&package(&content, Some(&styles))).unwrap()
+    };
+    let run = |d: &Document| d.body[0].as_para().unwrap().runs.last().unwrap().props.clone();
+    for attr in [
+        r#"style:font-weight-complex="normal""#,
+        r#"style:font-weight-asian="normal""#,
+        r#"style:font-style-complex="normal""#,
+        r#"style:font-style-asian="normal""#,
+    ] {
+        let d = open(attr);
+        assert_eq!((run(&d).bold, run(&d).italic), (None, None), "{attr}");
+        let saved = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+        assert!(!saved.contains(r#"fo:font-weight="normal""#) && !saved.contains(r#"fo:font-style="normal""#), "{attr}: {saved}");
+    }
+    assert_eq!(run(&open(r#"fo:font-weight="normal""#)).bold, Some(false));
+    assert_eq!(run(&open(r#"fo:font-style="normal""#)).italic, Some(false));
+}
