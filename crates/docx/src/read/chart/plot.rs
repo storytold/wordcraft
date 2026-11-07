@@ -404,8 +404,8 @@ fn lines(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<Data
                 labels.push(DataLabel { x: *x, y: *y, text, inside: false });
             }
         }
-        if c.vary {
-            point_segments(out, &pts, false, |i| c.point_colour(j, i), s.line_w);
+        if c.segmented(j) {
+            point_segments(out, &pts, false, |i| c.line_colour(j, i), s.line_w);
         } else {
             stroke(out, runs(pts.into_iter()), c.series_colour(j), s.line_w);
         }
@@ -456,8 +456,8 @@ fn draw_scatter(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut V
             }
         }
         if s.line {
-            if c.vary {
-                point_segments(out, &pts, false, |i| c.point_colour(j, i), s.line_w);
+            if c.segmented(j) {
+                point_segments(out, &pts, false, |i| c.line_colour(j, i), s.line_w);
             } else {
                 stroke(out, runs(pts.iter().copied()), c.series_colour(j), s.line_w);
             }
@@ -465,7 +465,7 @@ fn draw_scatter(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut V
         }
         for (i, (x, y)) in pts.iter().enumerate().filter_map(|(i, p)| p.map(|p| (i, p))) {
             let rect = [x - MARKER / 2.0, y - MARKER / 2.0, MARKER, MARKER];
-            out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(c.point_colour(j, i)), stroke: None, stroke_width: 0.0 });
+            out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(c.marker_colour(j, i)), stroke: None, stroke_width: 0.0 });
         }
     }
 }

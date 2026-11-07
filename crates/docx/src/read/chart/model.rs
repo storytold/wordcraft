@@ -64,6 +64,15 @@ pub(super) struct Axis {
     pub(super) fmt: Option<String>,
 }
 
+/// One point's own colours, from its `c:dPt`: the fill (bars, slices, bubbles), the line into
+/// it (line, scatter and radar: `c:spPr/a:ln`) and its marker (`c:marker/c:spPr`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct PointFmt {
+    pub(super) fill: Option<Rgb>,
+    pub(super) line: Option<Rgb>,
+    pub(super) marker: Option<Rgb>,
+}
+
 pub(super) struct Series {
     pub(super) name: String,
     pub(super) color: Option<Rgb>,
@@ -74,7 +83,7 @@ pub(super) struct Series {
     /// Scatter x values (index + 1 when the file has none).
     pub(super) xs: Vec<Option<f64>>,
     /// Per-point colours from `c:dPt`.
-    pub(super) points: Vec<Option<Rgb>>,
+    pub(super) points: Vec<PointFmt>,
     pub(super) fmt: Option<String>,
     /// Format code of the scatter x values' cache.
     pub(super) x_fmt: Option<String>,

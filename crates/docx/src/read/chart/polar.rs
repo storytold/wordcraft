@@ -92,16 +92,16 @@ pub(super) fn radar(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
         if c.radar_fill {
             fill(out, segs.clone(), col);
         }
-        if c.vary {
+        if c.segmented(j) {
             let pts: Vec<Option<(f32, f32)>> = ring.iter().map(|p| Some((p.0 as f32, p.1 as f32))).collect();
-            point_segments(out, &pts, true, |i| c.point_colour(j, i), s.line_w);
+            point_segments(out, &pts, true, |i| c.line_colour(j, i), s.line_w);
         } else {
             stroke(out, segs, col, s.line_w);
         }
         for (i, p) in ring.iter().enumerate() {
             if c.radar_marks && s.values.get(i).copied().flatten().is_some() {
                 let rect = [p.0 as f32 - MARKER / 2.0, p.1 as f32 - MARKER / 2.0, MARKER, MARKER];
-                out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(c.point_colour(j, i)), stroke: None, stroke_width: 0.0 });
+                out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(c.marker_colour(j, i)), stroke: None, stroke_width: 0.0 });
             }
             if let Some(text) = label_of(s, i) {
                 labels.push(DataLabel { x: p.0 as f32, y: p.1 as f32, text, inside: false });

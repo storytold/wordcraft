@@ -1,5 +1,5 @@
 use super::format::{date_text, excel_stamp, format_value, is_date_code};
-use super::model::{Axis, Grouping, Kind, Pos, Series};
+use super::model::{Axis, Grouping, Kind, PointFmt, Pos, Series};
 use super::plot::label;
 use super::{Chart, El, FONT, LINE_W, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, fill_colour, int, measure, slot};
 
@@ -95,15 +95,47 @@ impl Chart {
         self.series.get(j).and_then(|s| s.color).unwrap_or_else(|| self.accent(j))
     }
 
-    /// Colour of point `i` of series `j`: its `c:dPt` override, else the varied accent when the
+    /// Colour of point `i` of series `j`: its `c:dPt` fill, else the varied accent when the
     /// chart varies and the series has no colour of its own (Word lets a series' `c:spPr` colour
     /// win over `c:varyColors`), else the series colour.
     pub(super) fn point_colour(&self, j: usize, i: usize) -> Rgb {
-        let s = self.series.get(j);
-        if let Some(Some(c)) = s.and_then(|s| s.points.get(i)) {
-            return *c;
-        }
-        if self.vary && s.is_some_and(|s| s.color.is_none()) { self.accent(i) } else { self.series_colour(j) }
+        self.point(j, i).and_then(|p| p.fill).unwrap_or_else(|| self.auto_point_colour(j, i))
+    }
+
+    /// Colour of the line segment into point `i` of series `j` (line, scatter, radar): its
+    /// `c:dPt` line colour, else the varied accent or the series colour. A point's fill doesn't
+    /// colour a line.
+    pub(super) fn line_colour(&self, j: usize, i: usize) -> Rgb {
+        self.point(j, i).and_then(|p| p.line).unwrap_or_else(|| self.auto_point_colour(j, i))
+    }
+
+    /// Colour of the marker of point `i` of series `j`: its `c:dPt` marker colour, else as
+    /// [`Self::point_colour`].
+    pub(super) fn marker_colour(&self, j: usize, i: usize) -> Rgb {
+        self.point(j, i).and_then(|p| p.marker).unwrap_or_else(|| self.point_colour(j, i))
+    }
+
+    /// Whether series `j`'s line is drawn a segment at a time: the chart varies colours by point,
+    /// or a point has a line colour of its own. Never for a filled radar, whose points' colours
+    /// Word ignores.
+    pub(super) fn segmented(&self, j: usize) -> bool {
+        !self.radar_fill && (self.vary || self.series.get(j).is_some_and(|s| s.points.iter().any(|p| p.line.is_some())))
+    }
+
+    /// Colour of point `i`'s legend key: whichever of its own fill, marker or line colour it
+    /// has (bars and slices have a fill; Word saves line, scatter and radar points with a marker
+    /// and line colour), else the varied accent or the series colour.
+    fn key_colour(&self, j: usize, i: usize) -> Rgb {
+        self.point(j, i).and_then(|p| p.fill.or(p.marker).or(p.line)).unwrap_or_else(|| self.auto_point_colour(j, i))
+    }
+
+    fn point(&self, j: usize, i: usize) -> Option<&PointFmt> {
+        self.series.get(j).and_then(|s| s.points.get(i))
+    }
+
+    /// A point's colour when it has none of its own: the varied accent, or the series colour.
+    fn auto_point_colour(&self, j: usize, i: usize) -> Rgb {
+        if self.vary && self.series.get(j).is_some_and(|s| s.color.is_none()) { self.accent(i) } else { self.series_colour(j) }
     }
 
     /// The legend: one entry per category, in its point's colour, for pie and doughnut charts
@@ -116,7 +148,7 @@ impl Chart {
             return (0..n)
                 .map(|i| {
                     let name = self.cats.get(i).filter(|c| !c.is_empty()).cloned().unwrap_or_else(|| (i + 1).to_string());
-                    (name, self.point_colour(0, i))
+                    (name, self.key_colour(0, i))
                 })
                 .collect();
         }
@@ -217,12 +249,17 @@ impl Series {
         if scatter && xs.is_empty() {
             xs = (1..=values.len()).map(|i| Some(i as f64)).collect();
         }
-        let mut points = vec![None; values.len()];
+        let mut points = vec![PointFmt::default(); values.len()];
         for dpt in ser.children("c:dPt") {
             let i = dpt.child("c:idx").and_then(|e| e.attr("val")).and_then(int).and_then(|i| usize::try_from(i).ok());
-            let c = dpt.child("c:spPr").and_then(|p| fill_colour(p, theme));
+            let sp = dpt.child("c:spPr");
+            let fmt = PointFmt {
+                fill: sp.and_then(|p| fill_colour(p, theme)),
+                line: sp.and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)),
+                marker: dpt.child("c:marker").and_then(|m| m.child("c:spPr")).and_then(|p| fill_colour(p, theme)),
+            };
             if let Some(slot) = i.and_then(|i| points.get_mut(i)) {
-                *slot = c;
+                *slot = fmt;
             }
         }
         let labels = show_values(ser.child("c:dLbls"));
