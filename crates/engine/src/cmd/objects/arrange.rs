@@ -207,8 +207,12 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
     Ok(at)
 }
 
-/// Turn the selected floating object's alignment (left, centred, …) into an offset from its
-/// column / paragraph that keeps it where it is, so it can be moved by an offset.
+/// Turn the selected floating object's alignment (left, centred, …) into an explicit offset
+/// that keeps it where it is, so it can be moved by an offset.
+///
+/// For objects inside a table cell (`pos.path.depth() > 0`), resets page anchors to
+/// `Anchor::Column` horizontally and `Anchor::Paragraph` vertically with a cell-relative offset.
+/// Outside a cell, preserves `Anchor::Page` with a page-coordinate offset.
 pub(super) fn unalign(s: &mut Session) -> Result<(), CmdError> {
     use wordcraft_doc::para::Anchor;
     let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
@@ -217,16 +221,29 @@ pub(super) fn unalign(s: &mut Session) -> Result<(), CmdError> {
         return Ok(());
     }
     let hit = s.layout().object(&pos, s.page_hint).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?;
-    let (ox, oy) = (hit.rect.x - hit.origin.x, hit.rect.y - hit.origin.y);
+    let in_cell = pos.path.depth() > 0;
+    // When an object is inside a table cell, layout falls back to the enclosing cell box
+    // for page-anchored axes. Preserving `Anchor::Page` would re-add the cell origin on the
+    // next layout or nudge, so inside cells we convert page anchors to Column/Paragraph and
+    // compute cell-relative offsets (`hit.rect - hit.origin`). Outside cells, page anchors
+    // and absolute page coordinates are preserved.
+    let (ox, oy) = (
+        if float.h_rel == Anchor::Page && !in_cell { hit.rect.x } else { hit.rect.x - hit.origin.x },
+        if float.v_rel == Anchor::Page && !in_cell { hit.rect.y } else { hit.rect.y - hit.origin.y },
+    );
     edit_float(s, &pos, |f| {
         if f.h_align.is_some() {
             f.h_align = None;
-            f.h_rel = Anchor::Column;
+            if f.h_rel != Anchor::Page || in_cell {
+                f.h_rel = Anchor::Column;
+            }
             f.x = ox.clamp(-MAX_OFFSET, MAX_OFFSET);
         }
         if f.v_align.is_some() {
             f.v_align = None;
-            f.v_rel = Anchor::Paragraph;
+            if f.v_rel != Anchor::Page || in_cell {
+                f.v_rel = Anchor::Paragraph;
+            }
             f.y = oy.clamp(-MAX_OFFSET, MAX_OFFSET);
         }
     })?;

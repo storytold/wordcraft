@@ -1440,3 +1440,297 @@ fn only_ink_members_pin_a_group() {
     }
     assert!(!holds_ink(&group), "a group of charts is not pinned");
 }
+
+/// #5970: unalign on a page-anchored object inside a table cell uses cell-relative offsets
+/// so arrange.nudge shifts only by (dx, dy) without adding cell origin.
+#[test]
+fn unalign_in_table_cell_uses_cell_origin_for_page_anchored_axes() {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.table", &json!({"rows": 2, "cols": 2})).unwrap();
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data, "width": 50, "height": 30})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+
+    let (pos, _) = selected(&s).unwrap();
+    assert!(pos.path.depth() > 0, "object is inside a table cell");
+
+    super::select::edit_float(&mut s, &pos, |f| {
+        f.h_rel = Anchor::Page;
+        f.h_align = Some(FloatAlign::Center);
+        f.v_rel = Anchor::Page;
+        f.v_align = Some(FloatAlign::Center);
+    })
+    .unwrap();
+    s.touch();
+
+    let hit_before = s.layout().object(&pos, 0).unwrap();
+    assert!(hit_before.origin.x > 0.0, "cell origin.x should be positive: {:?}", hit_before.origin);
+    assert!(hit_before.origin.y > 0.0, "cell origin.y should be positive: {:?}", hit_before.origin);
+
+    // Verify unalign alone does not displace the object before nudging
+    super::arrange::unalign(&mut s).unwrap();
+    s.touch();
+
+    let (pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!(float.h_rel, Anchor::Column, "page anchor should convert to column in cell");
+    assert_eq!(float.v_rel, Anchor::Paragraph, "page anchor should convert to paragraph in cell");
+    assert_eq!(float.h_align, None, "h_align should be cleared");
+    assert_eq!(float.v_align, None, "v_align should be cleared");
+
+    let hit_unaligned = s.layout().object(&pos, 0).unwrap();
+    assert!(
+        (hit_unaligned.rect.x - hit_before.rect.x).abs() < 0.5,
+        "unalign alone should not displace horizontal position: expected {}, got {}",
+        hit_before.rect.x,
+        hit_unaligned.rect.x
+    );
+    assert!(
+        (hit_unaligned.rect.y - hit_before.rect.y).abs() < 0.5,
+        "unalign alone should not displace vertical position: expected {}, got {}",
+        hit_before.rect.y,
+        hit_unaligned.rect.y
+    );
+
+    // arrange.nudge adds dx=5, dy=2
+    s.run("arrange.nudge", &json!({"dx": 5.0, "dy": 2.0})).unwrap();
+    s.touch();
+
+    let hit_after = s.layout().object(&pos, 0).unwrap();
+    assert!(
+        (hit_after.rect.x - (hit_before.rect.x + 5.0)).abs() < 0.5,
+        "nudge should shift by dx without adding cell origin: expected {}, got {}",
+        hit_before.rect.x + 5.0,
+        hit_after.rect.x
+    );
+    assert!(
+        (hit_after.rect.y - (hit_before.rect.y + 2.0)).abs() < 0.5,
+        "nudge should shift by dy without adding cell origin: expected {}, got {}",
+        hit_before.rect.y + 2.0,
+        hit_after.rect.y
+    );
+}
+
+/// #5970: unalign on a page-anchored object outside table cells preserves Anchor::Page
+/// and page-coordinate offsets.
+#[test]
+fn unalign_outside_table_cell_preserves_page_anchor_and_coordinates() {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "First body paragraph with text.\n"})).unwrap();
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data, "width": 50, "height": 30})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+
+    let (pos, _) = selected(&s).unwrap();
+    assert_eq!(pos.path.depth(), 0, "object is in body story");
+
+    super::select::edit_float(&mut s, &pos, |f| {
+        f.h_rel = Anchor::Page;
+        f.h_align = Some(FloatAlign::Center);
+        f.v_rel = Anchor::Page;
+        f.v_align = Some(FloatAlign::Center);
+    })
+    .unwrap();
+    s.touch();
+
+    let hit_before = s.layout().object(&pos, 0).unwrap();
+
+    // Verify unalign alone does not displace the object before nudging
+    super::arrange::unalign(&mut s).unwrap();
+    s.touch();
+
+    let (pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!(float.h_rel, Anchor::Page, "page anchor should be preserved outside cells");
+    assert_eq!(float.v_rel, Anchor::Page, "page anchor should be preserved outside cells");
+    assert_eq!(float.h_align, None, "h_align should be cleared");
+    assert_eq!(float.v_align, None, "v_align should be cleared");
+
+    let hit_unaligned = s.layout().object(&pos, 0).unwrap();
+    assert!(
+        (hit_unaligned.rect.x - hit_before.rect.x).abs() < 0.5,
+        "unalign alone should not displace horizontal position: expected {}, got {}",
+        hit_before.rect.x,
+        hit_unaligned.rect.x
+    );
+    assert!(
+        (hit_unaligned.rect.y - hit_before.rect.y).abs() < 0.5,
+        "unalign alone should not displace vertical position: expected {}, got {}",
+        hit_before.rect.y,
+        hit_unaligned.rect.y
+    );
+
+    // arrange.nudge adds dx=4, dy=3
+    s.run("arrange.nudge", &json!({"dx": 4.0, "dy": 3.0})).unwrap();
+    s.touch();
+
+    let hit_after = s.layout().object(&pos, 0).unwrap();
+    assert!(
+        (hit_after.rect.x - (hit_before.rect.x + 4.0)).abs() < 0.5,
+        "nudge should shift by dx from page position: expected {}, got {}",
+        hit_before.rect.x + 4.0,
+        hit_after.rect.x
+    );
+    assert!(
+        (hit_after.rect.y - (hit_before.rect.y + 3.0)).abs() < 0.5,
+        "nudge should shift by dy from page position: expected {}, got {}",
+        hit_before.rect.y + 3.0,
+        hit_after.rect.y
+    );
+}
+
+/// #5970: unalign handles mixed anchor axes and single-axis alignment inside a table cell,
+/// unaligning only the aligned axis while leaving the unaligned axis untouched.
+#[test]
+fn unalign_in_table_cell_mixed_axes_and_single_alignment() {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.table", &json!({"rows": 2, "cols": 2})).unwrap();
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data, "width": 50, "height": 30})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+
+    let (pos, _) = selected(&s).unwrap();
+    assert!(pos.path.depth() > 0, "object is inside a table cell");
+
+    // Horizontal: Page anchor with alignment Center.
+    // Vertical: Paragraph anchor with NO alignment, explicit offset 12.0.
+    super::select::edit_float(&mut s, &pos, |f| {
+        f.h_rel = Anchor::Page;
+        f.h_align = Some(FloatAlign::Center);
+        f.v_rel = Anchor::Paragraph;
+        f.v_align = None;
+        f.y = 12.0;
+    })
+    .unwrap();
+    s.touch();
+
+    let hit_before = s.layout().object(&pos, 0).unwrap();
+
+    super::arrange::unalign(&mut s).unwrap();
+    s.touch();
+
+    let (pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    // Horizontal had h_align=Some, so inside cell it converted to Column with cell-relative offset
+    assert_eq!(float.h_rel, Anchor::Column);
+    assert_eq!(float.h_align, None);
+    // Vertical had v_align=None, so it was untouched
+    assert_eq!(float.v_rel, Anchor::Paragraph);
+    assert_eq!(float.v_align, None);
+    assert!((float.y - 12.0).abs() < 0.01);
+
+    let hit_unaligned = s.layout().object(&pos, 0).unwrap();
+    assert!((hit_unaligned.rect.x - hit_before.rect.x).abs() < 0.5, "unalign alone should not displace horizontal position");
+    assert!((hit_unaligned.rect.y - hit_before.rect.y).abs() < 0.5, "unalign alone should not displace vertical position");
+
+    s.run("arrange.nudge", &json!({"dx": 6.0, "dy": 4.0})).unwrap();
+    s.touch();
+
+    let hit_after = s.layout().object(&pos, 0).unwrap();
+    assert!((hit_after.rect.x - (hit_before.rect.x + 6.0)).abs() < 0.5);
+    assert!((hit_after.rect.y - (hit_before.rect.y + 4.0)).abs() < 0.5);
+}
+
+/// #5970: unalign handles mixed anchor axes when both are aligned inside a table cell.
+#[test]
+fn unalign_in_table_cell_mixed_axes_both_aligned() {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.table", &json!({"rows": 2, "cols": 2})).unwrap();
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data, "width": 50, "height": 30})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+
+    let (pos, _) = selected(&s).unwrap();
+    assert!(pos.path.depth() > 0, "object is inside a table cell");
+
+    // Horizontal: Page anchor with Center alignment.
+    // Vertical: Paragraph anchor with Center alignment.
+    super::select::edit_float(&mut s, &pos, |f| {
+        f.h_rel = Anchor::Page;
+        f.h_align = Some(FloatAlign::Center);
+        f.v_rel = Anchor::Paragraph;
+        f.v_align = Some(FloatAlign::Center);
+    })
+    .unwrap();
+    s.touch();
+
+    let hit_before = s.layout().object(&pos, 0).unwrap();
+
+    super::arrange::unalign(&mut s).unwrap();
+    s.touch();
+
+    let (pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    assert_eq!(float.h_rel, Anchor::Column);
+    assert_eq!(float.h_align, None);
+    assert_eq!(float.v_rel, Anchor::Paragraph);
+    assert_eq!(float.v_align, None);
+
+    let hit_unaligned = s.layout().object(&pos, 0).unwrap();
+    assert!((hit_unaligned.rect.x - hit_before.rect.x).abs() < 0.5);
+    assert!((hit_unaligned.rect.y - hit_before.rect.y).abs() < 0.5);
+
+    s.run("arrange.nudge", &json!({"dx": 3.0, "dy": 7.0})).unwrap();
+    s.touch();
+
+    let hit_after = s.layout().object(&pos, 0).unwrap();
+    assert!((hit_after.rect.x - (hit_before.rect.x + 3.0)).abs() < 0.5);
+    assert!((hit_after.rect.y - (hit_before.rect.y + 7.0)).abs() < 0.5);
+}
+
+/// #5970: unalign handles mixed anchor axes and single-axis alignment outside table cells,
+/// preserving Anchor::Page on the horizontal axis while leaving the unaligned vertical axis untouched.
+#[test]
+fn unalign_outside_table_cell_mixed_axes_and_single_alignment() {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "First body paragraph with text.\n"})).unwrap();
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data, "width": 50, "height": 30})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+
+    let (pos, _) = selected(&s).unwrap();
+    assert_eq!(pos.path.depth(), 0, "object is in body story");
+
+    // Horizontal: Page anchor with Center alignment.
+    // Vertical: Paragraph anchor with NO alignment, explicit offset 15.0.
+    super::select::edit_float(&mut s, &pos, |f| {
+        f.h_rel = Anchor::Page;
+        f.h_align = Some(FloatAlign::Center);
+        f.v_rel = Anchor::Paragraph;
+        f.v_align = None;
+        f.y = 15.0;
+    })
+    .unwrap();
+    s.touch();
+
+    let hit_before = s.layout().object(&pos, 0).unwrap();
+
+    super::arrange::unalign(&mut s).unwrap();
+    s.touch();
+
+    let (pos, obj) = selected(&s).unwrap();
+    let float = obj.frame().unwrap().2;
+    // Outside cell, Page anchor is preserved
+    assert_eq!(float.h_rel, Anchor::Page);
+    assert_eq!(float.h_align, None);
+    // Vertical was not aligned, so untouched
+    assert_eq!(float.v_rel, Anchor::Paragraph);
+    assert_eq!(float.v_align, None);
+    assert!((float.y - 15.0).abs() < 0.01);
+
+    let hit_unaligned = s.layout().object(&pos, 0).unwrap();
+    assert!((hit_unaligned.rect.x - hit_before.rect.x).abs() < 0.5);
+    assert!((hit_unaligned.rect.y - hit_before.rect.y).abs() < 0.5);
+
+    s.run("arrange.nudge", &json!({"dx": 2.0, "dy": 5.0})).unwrap();
+    s.touch();
+
+    let hit_after = s.layout().object(&pos, 0).unwrap();
+    assert!((hit_after.rect.x - (hit_before.rect.x + 2.0)).abs() < 0.5);
+    assert!((hit_after.rect.y - (hit_before.rect.y + 5.0)).abs() < 0.5);
+}
