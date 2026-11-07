@@ -159,3 +159,103 @@ fn a_table_starting_a_page_starts_it() {
     let c = content_of(&crate::odt::tests::export_model(&d).unwrap());
     assert_eq!(c.matches(r#"fo:break-before="page""#).count(), 2, "{c}");
 }
+
+#[test]
+fn columns_stating_only_their_shares_keep_their_proportions() {
+    // LibreOffice's CV template: a table filling the margins whose columns give only
+    // `style:rel-column-width`. They were read as equal.
+    let column = |name: &str, share: &str| {
+        format!(
+            r#"<style:style style:name="{name}" style:family="table-column"><style:table-column-properties style:rel-column-width="{share}"/></style:style>"#
+        )
+    };
+    let table = r#"<table:table><table:table-column table:style-name="A"/><table:table-column table:style-name="B"/><table:table-row><table:table-cell><text:p>a</text:p></table:table-cell><table:table-cell><text:p>b</text:p></table:table-cell></table:table-row></table:table>"#;
+    let grid = |d: &wordcraft_doc::Document| d.body.iter().find_map(|b| b.as_table()).map(|t| t.grid.clone()).unwrap_or_default();
+    let d = doc(&format!("{}{}", column("A", "1000*"), column("B", "3000*")), table);
+    let g = grid(&d);
+    assert_eq!(g.len(), 2, "{g:?}");
+    assert!((g[1] / g[0] - 3.0).abs() < 0.01, "{g:?}");
+    // Rewritten from the model, the proportions stay.
+    let back = import(&crate::odt::tests::export_model(&d).unwrap()).unwrap();
+    let g = grid(&back);
+    assert!((g[1] / g[0] - 3.0).abs() < 0.01, "{g:?}");
+    // A column without a share leaves the equal split, and junk shares are none.
+    for junk in ["0*", "-1*", "NaN*", "1e39*", "abc"] {
+        let d = doc(&format!("{}{}", column("A", "1000*"), column("B", junk)), table);
+        let g = grid(&d);
+        assert_eq!(g.len(), 2, "{junk}: {g:?}");
+        assert!((g[0] - g[1]).abs() < 0.01, "{junk}: {g:?}");
+    }
+    // A width stated beside a share is the width.
+    let stated = r#"<style:style style:name="A" style:family="table-column"><style:table-column-properties style:column-width="2in" style:rel-column-width="1*"/></style:style><style:style style:name="B" style:family="table-column"><style:table-column-properties style:column-width="1in" style:rel-column-width="1*"/></style:style>"#;
+    let g = grid(&doc(stated, table));
+    assert!((g[0] / g[1] - 2.0).abs() < 0.01, "{g:?}");
+}
+
+/// A share-only table wider than the text keeps its stated width, as in LibreOffice; a column with
+/// only a width takes it first, and the shares divide the rest; a column with no share of its own
+/// takes the default style's.
+#[test]
+fn columns_by_shares_divide_the_right_width() {
+    let column = |name: &str, props: &str| {
+        format!(r#"<style:style style:name="{name}" style:family="table-column"><style:table-column-properties {props}/></style:style>"#)
+    };
+    let table_style = |props: &str| format!(r#"<style:style style:name="T" style:family="table"><style:table-properties {props}/></style:style>"#);
+    let table = |names: &[&str]| {
+        let columns: String = names
+            .iter()
+            .map(|n| if n.is_empty() { "<table:table-column/>".to_string() } else { format!(r#"<table:table-column table:style-name="{n}"/>"#) })
+            .collect();
+        let cells: String = names.iter().map(|_| "<table:table-cell><text:p>x</text:p></table:table-cell>").collect();
+        format!(r#"<table:table table:style-name="T">{columns}<table:table-row>{cells}</table:table-row></table:table>"#)
+    };
+    let grid = |d: &wordcraft_doc::Document| d.body.iter().find_map(|b| b.as_table()).map(|t| t.grid.clone()).unwrap_or_default();
+    let near = |got: &[f32], want: &[f32]| {
+        assert!(got.len() == want.len() && got.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.5), "{got:?}, not {want:?}")
+    };
+    // 576 pt, aligned, in a narrower text area.
+    let d = doc(
+        &format!(
+            "{}{}{}",
+            table_style(r#"style:width="8in" table:align="left""#),
+            column("A", r#"style:rel-column-width="1000*""#),
+            column("B", r#"style:rel-column-width="3000*""#)
+        ),
+        &table(&["A", "B"]),
+    );
+    near(&grid(&d), &[144.0, 432.0]);
+    near(&grid(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()), &[144.0, 432.0]);
+    // 72 pt stated, the other 300 by shares.
+    let d = doc(
+        &format!(
+            "{}{}{}{}",
+            table_style(r#"style:width="372pt" table:align="left""#),
+            column("A", r#"style:column-width="72pt""#),
+            column("B", r#"style:rel-column-width="1000*""#),
+            column("C", r#"style:rel-column-width="3000*""#)
+        ),
+        &table(&["A", "B", "C"]),
+    );
+    near(&grid(&d), &[72.0, 75.0, 225.0]);
+    // A share on every column goes before a stated width, as in LibreOffice.
+    let d = doc(
+        &format!(
+            "{}{}{}",
+            table_style(r#"style:width="400pt" table:align="left""#),
+            column("A", r#"style:column-width="72pt" style:rel-column-width="1000*""#),
+            column("B", r#"style:rel-column-width="3000*""#)
+        ),
+        &table(&["A", "B"]),
+    );
+    near(&grid(&d), &[100.0, 300.0]);
+    // The default style's share, for a column with none and one whose style says none.
+    let styles = r#"<office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"><office:styles><style:default-style style:family="table-column"><style:table-column-properties style:rel-column-width="1000*"/></style:default-style></office:styles></office:document-styles>"#;
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles>{}{}{}</office:automatic-styles><office:body><office:text>{}</office:text></office:body></office:document-content>"#,
+        table_style(r#"style:width="400pt" table:align="left""#),
+        column("B", r#"style:rel-column-width="3000*""#),
+        column("E", r#"style:use-optimal-column-width="false""#),
+        table(&["", "B"])
+    );
+    near(&grid(&import(&package(&content, Some(styles))).unwrap()), &[100.0, 300.0]);
+}

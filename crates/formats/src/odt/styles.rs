@@ -242,6 +242,8 @@ struct StyleInfo {
     cell_padding: [Option<f32>; 4],
     /// `style:column-width` of a table-column style's `style:table-column-properties`, in points.
     column_width: Option<f32>,
+    /// `style:rel-column-width` of the same: its share of the table (`1*`).
+    column_share: Option<f32>,
     /// A table style's `style:table-properties`: `table:align`, and its width (`style:width`,
     /// points, or `style:rel-width`, percent of the text width).
     table_align: Option<Align>,
@@ -571,6 +573,11 @@ pub(super) fn parse_border(v: &str) -> Option<Border> {
 
 /// A property element `name` (`q` in full) of the style being read, into `s`: true when it is
 /// one (paragraph, table, column, cell, section and graphic properties, tab stops).
+/// A table column's share of its table (`style:rel-column-width`, `1*`).
+fn column_share_of(a: &Attrs) -> Option<f32> {
+    get(a, "style:rel-column-width").and_then(|v| v.trim().strip_suffix('*')?.trim().parse::<f32>().ok()).filter(|r| r.is_finite() && *r > 0.0)
+}
+
 fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
     match name {
         "paragraph-properties" => paragraph_properties(a, s),
@@ -627,6 +634,9 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
         "table-column-properties" => {
             if let Some(w) = get(a, "style:column-width").and_then(length) {
                 s.column_width = Some(w);
+            }
+            if let Some(r) = column_share_of(a) {
+                s.column_share = Some(r);
             }
         }
         "table-cell-properties" => table_cell_properties(a, s),
@@ -1043,6 +1053,8 @@ pub(super) struct Styles {
     default_color: Option<wordcraft_doc::props::Rgb>,
     /// `style:default-style` for graphics: what every drawing shape's style falls back on.
     default_graphic: super::frames::Graphic,
+    /// `style:default-style` for table columns: the share of a column whose style gives none.
+    default_column_share: Option<f32>,
     /// The named dashes and gradients graphic styles use.
     pub(super) defs: super::strokes::Defs,
     /// Date and time styles (`number:date-style`, `number:time-style`) as Word pictures.
@@ -1055,6 +1067,7 @@ impl Styles {
         let mut cur: Option<(String, StyleInfo)> = None;
         let mut in_default = false;
         let mut in_graphic_default = false;
+        let mut in_column_default = false;
         let mut dates = DateStyles::default();
         let mut list: Option<(String, Vec<ListLevel>)> = None;
         // The list or outline level being read.
@@ -1083,8 +1096,10 @@ impl Styles {
                 "default-style" if q.starts_with("style:") => {
                     in_default = get(&a, "style:family") == Some("paragraph");
                     in_graphic_default = get(&a, "style:family") == Some("graphic");
+                    in_column_default = get(&a, "style:family") == Some("table-column");
                 }
                 "graphic-properties" if in_graphic_default && cur.is_none() => self.default_graphic = super::frames::Graphic::read(&a),
+                "table-column-properties" if in_column_default && cur.is_none() => self.default_column_share = column_share_of(&a),
                 "text-properties" if in_default && cur.is_none() => {
                     self.default_font = default_font(&a, &self.faces);
                     if let Some(sz) = get(&a, "fo:font-size").and_then(length).filter(|v| v.is_finite() && *v >= 1.0) {
@@ -1151,7 +1166,7 @@ impl Styles {
             },
             Ev::End(q) => match local(&q) {
                 "automatic-styles" => in_auto = false,
-                "default-style" if q.starts_with("style:") => (in_default, in_graphic_default) = (false, false),
+                "default-style" if q.starts_with("style:") => (in_default, in_graphic_default, in_column_default) = (false, false, false),
                 "style" if q.starts_with("style:") => {
                     if let Some((n, s)) = cur.take()
                         && self.map.len() < 100_000
@@ -1308,6 +1323,12 @@ impl Styles {
     /// Width in points of a table-column style (whole chain).
     pub(super) fn column_width(&self, name: &str) -> Option<f32> {
         self.chain(name).iter().find_map(|(_, s)| s.column_width)
+    }
+
+    /// A table column's share of its table (`style:rel-column-width`): its style's, whole chain,
+    /// else the default style's.
+    pub(super) fn column_share(&self, name: Option<&str>) -> Option<f32> {
+        name.and_then(|n| self.chain(n).iter().find_map(|(_, s)| s.column_share)).or(self.default_column_share)
     }
 
     /// A table style's alignment, width (points) and relative width (percent), whole chain.
