@@ -1470,4 +1470,11 @@ fn shape_outline_and_fill_on_text_box() {
     let InlineObject::Shape { stroke, stroke_width, .. } = o else { panic!("{o:?}") };
     assert_eq!(*stroke, Some(Rgb(0x15, 0x60, 0x82)), "color kept when width changed");
     assert_eq!(*stroke_width, 3.0);
+
+    // 4. Malformed non-null colors are rejected before mutation:
+    assert!(matches!(s.run("shape.outline", &json!({"color": 123})), Err(CmdError::Params(_))));
+    assert!(matches!(s.run("shape.outline", &json!({"color": "not-a-hex"})), Err(CmdError::Params(_))));
+    let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let InlineObject::Shape { stroke, .. } = o else { panic!("{o:?}") };
+    assert_eq!(*stroke, Some(Rgb(0x15, 0x60, 0x82)), "color preserved on error");
 }

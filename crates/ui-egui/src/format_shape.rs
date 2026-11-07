@@ -26,6 +26,11 @@ fn line_mark_id() -> Id {
     Id::unique("format_shape.line_drag_mark")
 }
 
+/// Stable storage id for a layout (width, height, rotation) drag's undo mark.
+fn layout_mark_id() -> Id {
+    Id::unique("format_shape.layout_drag_mark")
+}
+
 /// Stable storage id for the gradient stop being edited.
 fn stop_id() -> Id {
     Id::unique("format_shape.stop")
@@ -37,6 +42,7 @@ pub fn forget_drag(ctx: &egui::Context) {
     ctx.data_mut(|d| {
         d.remove::<u64>(mark_id());
         d.remove::<u64>(line_mark_id());
+        d.remove::<u64>(layout_mark_id());
     });
 }
 
@@ -167,6 +173,13 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
         if let Some(mark) = ui.data_mut(|d| {
             let m = d.get_temp::<u64>(line_mark_id());
             d.remove::<u64>(line_mark_id());
+            m
+        }) {
+            app.session.merge_undo_since(mark);
+        }
+        if let Some(mark) = ui.data_mut(|d| {
+            let m = d.get_temp::<u64>(layout_mark_id());
+            d.remove::<u64>(layout_mark_id());
             m
         }) {
             app.session.merge_undo_since(mark);
@@ -313,6 +326,10 @@ fn layout_section(app: &mut WordApp, ui: &mut Ui, layout: &CurrentLayout) {
         let mut w = layout.width;
         let r = ui.add(egui::DragValue::new(&mut w).range(4.0..=2000.0).suffix(" pt").speed(1.0).fixed_decimals(1));
         if r.changed() {
+            if r.dragged() && ui.data(|d| d.get_temp::<u64>(layout_mark_id())).is_none() {
+                let mark = app.session.undo_mark();
+                ui.data_mut(|d| d.insert_temp(layout_mark_id(), mark));
+            }
             let _ = app.run("picture.size", json!({"width": w, "lockAspect": false}));
         }
     });
@@ -321,6 +338,10 @@ fn layout_section(app: &mut WordApp, ui: &mut Ui, layout: &CurrentLayout) {
         let mut h = layout.height;
         let r = ui.add(egui::DragValue::new(&mut h).range(1.0..=2000.0).suffix(" pt").speed(1.0).fixed_decimals(1));
         if r.changed() {
+            if r.dragged() && ui.data(|d| d.get_temp::<u64>(layout_mark_id())).is_none() {
+                let mark = app.session.undo_mark();
+                ui.data_mut(|d| d.insert_temp(layout_mark_id(), mark));
+            }
             let _ = app.run("picture.size", json!({"height": h, "lockAspect": false}));
         }
     });
@@ -329,6 +350,10 @@ fn layout_section(app: &mut WordApp, ui: &mut Ui, layout: &CurrentLayout) {
         let mut rot = layout.rotation;
         let r = ui.add(egui::DragValue::new(&mut rot).range(0.0..=360.0).suffix("°").speed(1.0).fixed_decimals(1));
         if r.changed() {
+            if r.dragged() && ui.data(|d| d.get_temp::<u64>(layout_mark_id())).is_none() {
+                let mark = app.session.undo_mark();
+                ui.data_mut(|d| d.insert_temp(layout_mark_id(), mark));
+            }
             let _ = app.run("arrange.rotation", json!({"degrees": rot}));
         }
     });

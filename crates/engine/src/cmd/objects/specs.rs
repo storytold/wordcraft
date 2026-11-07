@@ -286,14 +286,22 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"index"?: n}"#)
         .pure(),
         CommandSpec::new("shape.outline", "Shape Outline", "Shape Format › Shape Styles", |s, v| {
-            let has_color = v.get("color").is_some();
-            let c = p::str(v, "color").and_then(Rgb::parse);
+            let color = match v.get("color") {
+                None => None,
+                Some(serde_json::Value::Null) => Some(None),
+                Some(_) => {
+                    let hex = p::str(v, "color")
+                        .and_then(Rgb::parse)
+                        .ok_or_else(|| CmdError::Params("`color`: \"RRGGBB\" or null".into()))?;
+                    Some(Some(hex))
+                }
+            };
             let w = p::f32(v, "width").map(|w| w.clamp(0.0, 72.0));
             let dash = p::str(v, "dash").map(wordcraft_doc::line_dash::LineDash::from_ooxml);
             let cap = p::str(v, "cap").map(wordcraft_doc::connector::LineCap::from_ooxml);
             with_obj(s, |o| {
                 if let InlineObject::Shape { stroke, stroke_width, extra, .. } = o {
-                    if has_color {
+                    if let Some(c) = color {
                         *stroke = c;
                         // A colour chosen here replaces an outline gradient from a file.
                         extra.outline_fill = None;
@@ -308,7 +316,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         extra.cap = cp;
                     }
                 } else if let Some(style) = crate::cmd::canvas::style_mut(o) {
-                    if has_color {
+                    if let Some(c) = color {
                         style.stroke = c;
                     }
                     if let Some(w) = w {
