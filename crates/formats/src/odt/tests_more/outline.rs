@@ -390,6 +390,33 @@ fn a_heading_past_level_six_keeps_its_list() {
     }
 }
 
+/// A heading past level six numbered through its style keeps its list too, as the outline written
+/// numbers only six: read, written from the model and with its style edited.
+#[test]
+fn a_heading_past_level_six_numbered_by_its_style_keeps_its_list() {
+    use std::sync::Arc;
+    for level in 7..=9u8 {
+        let styles = format!(
+            r#"<style:style style:name="Deep" style:family="paragraph" style:parent-style-name="Standard" style:default-outline-level="{level}"/><text:outline-style style:name="Outline"><text:outline-level-style text:level="{level}" style:num-format="1" style:num-suffix="."/></text:outline-style>"#
+        );
+        let body = format!(r#"<text:h text:style-name="Deep" text:outline-level="{level}">x</text:h>"#);
+        let mut d = in_custom_style(&styles, &body);
+        let check = |saved: &[u8], what: &str| {
+            let c = crate::odt::tests::content_of(saved);
+            assert!(c.contains("<text:list"), "level {level}, {what}: {c}");
+        };
+        check(&crate::odt::tests::export_model(&d).unwrap(), "from the model");
+        let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+        Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.italic = Some(true);
+        let saved = export(&d).unwrap();
+        check(&saved, "style edited");
+        let back = import(&saved).unwrap();
+        let p = back.body[0].as_para().unwrap();
+        let n = p.props.numbering.or_else(|| back.styles.para_style_props(p.props.style.as_deref().unwrap_or("Normal")).0.numbering);
+        assert_eq!(n.map(|n| n.level), Some(level - 1), "level {level}, reopened");
+    }
+}
+
 /// A style at an unnumbered level with a heading numbered by its own level stays on the outline,
 /// or LibreOffice shows that heading no number; with none, it comes off, for the level's indent.
 #[test]

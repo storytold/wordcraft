@@ -429,12 +429,12 @@ fn numbered_by_outline(doc: &Document, p: &Paragraph, li: &ListInfo) -> bool {
 /// A paragraph's list membership as the flow keeps it: without the list's identity and label
 /// unless `opts` asks for them, and none for a heading numbered only through its style or
 /// [`numbered_by_outline`], which a format with heading numbering of its own (ODT's outline style)
-/// numbers instead.
+/// numbers instead, in its first six levels.
 fn flow_list(doc: &Document, kind: Kind, list: Option<ListInfo>, p: &Paragraph, opts: FlowOpts) -> Option<ListInfo> {
     let mut li = list?;
     if !opts.lists {
         (li.list, li.label) = (0, None);
-    } else if matches!(kind, Kind::Heading(_)) && (p.props.numbering.is_none() || numbered_by_outline(doc, p, &li)) {
+    } else if matches!(kind, Kind::Heading(_)) && li.level < 6 && (p.props.numbering.is_none() || numbered_by_outline(doc, p, &li)) {
         return None;
     }
     Some(li)
