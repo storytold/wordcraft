@@ -415,6 +415,16 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
         if !open {
             open = true;
         }
+        // Adjacent rows whose direction differs are different tables ([MS-DOC] §2.4.3). A
+        // row's direction is on its row-end mark, so the rows before it close as their own
+        // table and this row (its cells already gathered) starts the next one.
+        if info.ttp && !rows.is_empty() && info.bidi != props.bidi_visual {
+            let (mut no_cells, mut no_cell) = (Vec::new(), Vec::new());
+            flush_table(&mut out, &mut rows, &mut no_cells, &mut no_cell, &grid, &props, depth_seen > 1);
+            grid.clear();
+            props = TableProps::default();
+            depth_seen = 0;
+        }
         depth_seen = depth_seen.max(info.depth);
         if grid.is_empty() {
             // Column widths from the table's first `sprmTDefTable`.

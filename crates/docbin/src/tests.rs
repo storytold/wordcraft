@@ -2594,6 +2594,47 @@ fn a_logical_table_justification_wins_over_the_physical_one() {
 }
 
 #[test]
+fn rows_of_different_directions_are_different_tables() {
+    // [MS-DOC] §2.4.3: adjacent rows that differ in sprmTFBiDi belong to different tables, so a
+    // right-to-left row doesn't turn the left-to-right table above it right to left.
+    let text = "a\u{7}\u{7}b\u{7}\u{7}c\u{7}\u{7}tail\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01]), (0x6649, &[1, 0, 0, 0])]);
+    let ttp = |bidi: bool| {
+        let mut prls = grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01]), (0x6649, &[1, 0, 0, 0])]);
+        if bidi {
+            prls.extend(grpprl(&[(0x560B, &1u16.to_le_bytes())]));
+        }
+        [prls, t_def_edges(&[0, 1440])].concat()
+    };
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![
+            (0, 0, in_tbl.clone()),
+            (2, 0, ttp(false)),
+            (3, 0, in_tbl.clone()),
+            (5, 0, ttp(true)),
+            (6, 0, in_tbl),
+            (8, 0, ttp(true)),
+            (9, 0, Vec::new()),
+        ],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tables: Vec<_> = doc.body.iter().filter_map(|b| b.as_table()).collect();
+    let shape: Vec<_> = tables.iter().map(|t| (t.props.bidi_visual, t.rows.len())).collect();
+    assert_eq!(shape, [(false, 1), (true, 2)], "one left-to-right row, then two right-to-left rows");
+    assert_eq!(tables[1].grid, vec![72.0], "the second table has its own grid");
+}
+
+#[test]
 fn repeated_cell_sprms_keep_one_override_per_cell() {
     // A PAPX repeating cell-range sprms (shared by every paragraph mark that names it) keeps one
     // slot per cell, the last value winning, instead of a copy per repetition.
