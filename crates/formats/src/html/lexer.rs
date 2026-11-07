@@ -6,16 +6,34 @@ use super::entity::unescape;
 #[derive(Debug)]
 pub(super) enum Tok {
     Text(String),
-    Start { name: String, attrs: Vec<(String, String)>, self_close: bool },
+    Start {
+        name: String,
+        attrs: Vec<(String, String)>,
+        self_close: bool,
+    },
     End(String),
+    /// The markup inside an `<!--[if gte msEquation 12]>…<![endif]-->` conditional comment: Word's
+    /// Office Math for readers that understand it (#5582).
+    OfficeMath(String),
+    /// The markup inside an `<!--[if supportFields]>…<![endif]-->` conditional comment: Word's
+    /// field marks, codes and (from Better Notes for Zotero) results (#5581).
+    SupportFields(String),
 }
 
 pub(super) struct Lexer<'a> {
     pub(super) s: &'a str,
     pub(super) pos: usize,
+    /// Bytes [`skip_math_fallback`] may still search for a fallback's end. A fallback that is
+    /// never closed is searched to the end of the input, so repeating one would make the import
+    /// quadratic; past this budget (twice the input, plenty for real fallbacks) one is kept.
+    fallback_budget: usize,
 }
 
-impl Lexer<'_> {
+impl<'a> Lexer<'a> {
+    pub(super) fn new(s: &'a str) -> Self {
+        Lexer { s, pos: 0, fallback_budget: s.len().saturating_mul(2).saturating_add(64 * 1024) }
+    }
+
     fn rest(&self) -> &str {
         self.s.get(self.pos..).unwrap_or("")
     }
@@ -31,6 +49,22 @@ impl Lexer<'_> {
             None => self.pos = self.s.len(),
         }
         found.map(|k| start + k).unwrap_or(self.s.len())
+    }
+
+    /// Skip the end tag of `tag` (ASCII case-insensitive) when it comes next, past white space
+    /// only; whether it did.
+    pub(super) fn skip_end_tag_here(&mut self, tag: &str) -> bool {
+        let rest = self.rest();
+        let ws = rest.len() - rest.trim_start().len();
+        let after = rest.as_bytes().get(ws..).unwrap_or(&[]);
+        let end = 2usize.saturating_add(tag.len());
+        let named = after.get(..2) == Some(b"</".as_slice()) && after.get(2..end).is_some_and(|n| n.eq_ignore_ascii_case(tag.as_bytes()));
+        if !named || !after.get(end).is_some_and(|c| c.is_ascii_whitespace() || *c == b'>') {
+            return false;
+        }
+        self.pos += ws + end;
+        self.skip_past(">");
+        true
     }
 
     /// Skip past the next matching end tag `</tag...>` (ASCII case-insensitive), or to the end.
@@ -78,7 +112,15 @@ impl Lexer<'_> {
                 self.pos += 6;
             } else {
                 self.pos += 4;
-                self.skip_past("-->");
+                let from = self.pos;
+                let to = self.skip_past("-->");
+                let body = self.s.get(from..to).unwrap_or("");
+                if let Some(math) = conditional(body, "[if gte msequation") {
+                    return Some(Tok::OfficeMath(math.to_string()));
+                }
+                if let Some(fields) = conditional(body, "[if supportfields]") {
+                    return Some(Tok::SupportFields(fields.to_string()));
+                }
             }
             return Some(Tok::Text(String::new()));
         }
@@ -173,4 +215,65 @@ impl Lexer<'_> {
         self.pos += i.min(rest.len());
         Some(Tok::Start { name, attrs, self_close })
     }
+}
+
+/// The markup of a comment body that is a Word conditional section opening with `open` (lower
+/// case: `[if gte msequation`, `[if supportfields]`), up to its `<![endif]` (an unclosed one runs
+/// to the comment's end).
+fn conditional<'a>(body: &'a str, open: &str) -> Option<&'a str> {
+    let head = body.get(..open.len())?;
+    if !head.eq_ignore_ascii_case(open) {
+        return None;
+    }
+    let inner = body.get(body.find(']')?.checked_add(1)?..)?;
+    let inner = inner.strip_prefix('>').unwrap_or(inner);
+    let end = inner.as_bytes().windows(9).rposition(|w| w.eq_ignore_ascii_case(b"<![endif]")).unwrap_or(inner.len());
+    inner.get(..end)
+}
+
+/// Skip a Word fallback for Office Math right after it (`<![if !msEquation]>…<![endif]>`: the
+/// picture written for readers without math), leaving `lx` past it. Its end is the `<![endif]>`
+/// that matches it, conditional sections inside (`<![if !vml]>…<![endif]>`) counted; anything
+/// else, and a fallback that is never closed, is left alone.
+pub(super) fn skip_math_fallback(lx: &mut Lexer) {
+    const OPEN: &[u8] = b"<![if !msequation]>";
+    let rest = lx.rest();
+    let ws = rest.len() - rest.trim_start().len();
+    let after = rest.as_bytes().get(ws..).unwrap_or(&[]);
+    if !after.get(..OPEN.len()).is_some_and(|h| h.eq_ignore_ascii_case(OPEN)) {
+        return;
+    }
+    let body = after.get(OPEN.len()..).unwrap_or(&[]);
+    let body = body.get(..lx.fallback_budget.min(body.len())).unwrap_or(body);
+    let end = matching_endif(body);
+    lx.fallback_budget = lx.fallback_budget.saturating_sub(end.unwrap_or(body.len()));
+    if let Some(end) = end {
+        lx.pos += ws + OPEN.len() + end;
+    }
+}
+
+/// Where the `<![endif]>` closing a conditional section that `body` is the inside of ends
+/// (nested `<![if …]>` sections counted); `None` when it is never closed.
+fn matching_endif(body: &[u8]) -> Option<usize> {
+    const IF: &[u8] = b"<![if";
+    const END: &[u8] = b"<![endif]>";
+    let mut depth = 0usize;
+    let mut i = 0usize;
+    while let Some(k) = body.get(i..)?.iter().position(|&c| c == b'<') {
+        i += k;
+        let at = body.get(i..)?;
+        if at.get(..END.len()).is_some_and(|h| h.eq_ignore_ascii_case(END)) {
+            if depth == 0 {
+                return Some(i + END.len());
+            }
+            depth -= 1;
+            i += END.len();
+        } else if at.get(..IF.len()).is_some_and(|h| h.eq_ignore_ascii_case(IF)) {
+            depth = depth.saturating_add(1);
+            i += IF.len();
+        } else {
+            i += 1;
+        }
+    }
+    None
 }

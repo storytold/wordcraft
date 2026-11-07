@@ -752,3 +752,284 @@ fn hostile_style_sheets_never_panic() {
         let _ = parse_in(&format!("<style>{css}</style><p class='a é'>x</p><td style='width: 1e40px'>y</td>"), &|_| None, true);
     }
 }
+
+/// Each paragraph's inlines as text, equations as `[linear]` (`[[linear]]` for display ones),
+/// pictures as `<img>`.
+fn inline_marks(f: &Flow) -> Vec<String> {
+    f.blocks
+        .iter()
+        .filter_map(|b| match b {
+            FBlock::Para(p) => Some(p),
+            FBlock::Table(_) => None,
+        })
+        .map(|p| {
+            p.inlines
+                .iter()
+                .map(|i| match i {
+                    Inline::Text(t, _) => t.clone(),
+                    Inline::Equation { linear, display: false } => format!("[{linear}]"),
+                    Inline::Equation { linear, display: true } => format!("[[{linear}]]"),
+                    Inline::Image(_) => "<img>".into(),
+                    Inline::FieldStart(code) => format!("{{{code}|"),
+                    Inline::FieldEnd => "}".into(),
+                    _ => String::new(),
+                })
+                .collect::<String>()
+        })
+        .collect()
+}
+
+#[test]
+fn ms_equation_comments_import_their_office_math() {
+    // #5582's reproduction: the conditional comment's equation stands where the comment does,
+    // and MathML beside it still imports.
+    let html = r#"<!DOCTYPE html><html xmlns:m="http://schemas.microsoft.com/office/2004/12/omml"><body>
+<p>Before <!--[if gte msEquation 12]><m:oMath><m:r><m:t>x=1</m:t></m:r></m:oMath><![endif]--> after</p>
+<p>Math <math xmlns="http://www.w3.org/1998/Math/MathML"><mi>y</mi><mo>=</mo><mn>2</mn></math> end</p>
+</body></html>"#;
+    assert_eq!(inline_marks(&parse(html)), ["Before [x=1] after", "Math [y=2] end"]);
+}
+
+#[test]
+fn ms_equation_fallback_picture_is_not_imported_too() {
+    // Word writes a picture for readers without Office Math right after the comment.
+    let html = r#"<p class=MsoNormal><!--[if gte msEquation 12]><m:oMathPara><m:oMath><m:f><m:num><m:r><m:t>a</m:t></m:r></m:num><m:den><m:r><m:t>b</m:t></m:r></m:den></m:f></m:oMath></m:oMathPara><![endif]--><![if !msEquation]><img width=20 height=30 src="data:image/png;base64,iVBORw0KGgo="><![endif]></p><p>next</p>"#;
+    assert_eq!(inline_marks(&parse(html)), ["[[a/b]]", "next"]);
+}
+
+#[test]
+fn ms_equation_para_reads_as_one_display_equation_per_o_math() {
+    // As the DOCX reader: `a=bc=d` is no equation of the file's, and the fallback still goes.
+    let html = r#"<p><!--[if gte msEquation 12]><m:oMathPara><m:oMathParaPr><m:jc m:val="center"/></m:oMathParaPr><m:oMath><m:r><m:t>a=b</m:t></m:r></m:oMath><m:oMath><m:r><m:t>c=d</m:t></m:r></m:oMath></m:oMathPara><![endif]--><![if !msEquation]>gone<![endif]></p>"#;
+    assert_eq!(inline_marks(&parse(html)), ["[[a=b]][[c=d]]"]);
+}
+
+#[test]
+fn ms_equation_fallback_stays_when_the_equations_are_not_all_read() {
+    const FALLBACK: &str = "<![if !msEquation]>kept<![endif]>";
+    let q = "<m:oMath><m:r><m:t>q</m:t></m:r></m:oMath>";
+    let page = |math: &str| format!("<p><!--[if gte msEquation 12]>{math}<![endif]-->{FALLBACK}</p>");
+    // One of several reads as nothing.
+    assert_eq!(inline_marks(&parse(&page(&format!("{q}<m:oMath></m:oMath>")))), ["[q]kept"]);
+    let para = format!("<m:oMathPara>{q}<m:oMath></m:oMath></m:oMathPara>");
+    assert_eq!(inline_marks(&parse(&page(&para))), ["[[q]]kept"]);
+    // More equations than one comment brings in.
+    let many = q.repeat(crate::omml::MAX_EQUATIONS + 1);
+    let marks = inline_marks(&parse(&page(&many)));
+    assert_eq!(marks, [format!("{}kept", "[q]".repeat(crate::omml::MAX_EQUATIONS))]);
+    // As many as it can, in one `m:oMathPara`.
+    let many = format!("<m:oMathPara>{}</m:oMathPara>", q.repeat(crate::omml::MAX_EQUATIONS + 1));
+    let marks = inline_marks(&parse(&page(&many)));
+    assert_eq!(marks, [format!("{}kept", "[[q]]".repeat(crate::omml::MAX_EQUATIONS))]);
+    // Exactly the cap is all of them.
+    let all = inline_marks(&parse(&page(&q.repeat(crate::omml::MAX_EQUATIONS))));
+    assert_eq!(all, ["[q]".repeat(crate::omml::MAX_EQUATIONS)]);
+    // An equation too long to read whole.
+    let long = format!("<m:oMath><m:r><m:t>q</m:t></m:r>{}</m:oMath>", "<m:r></m:r>".repeat(crate::mathml::MAX_NODES));
+    let marks = inline_marks(&parse(&page(&long)));
+    assert!(marks.first().is_some_and(|m| m.ends_with("]kept")), "{marks:?}");
+}
+
+#[test]
+fn other_comments_and_hostile_ms_equation_comments_stay_harmless() {
+    assert_eq!(inline_marks(&parse("<p>a<!-- [if gte msEquation 12] not math -->b</p>")), ["ab"]);
+    assert_eq!(inline_marks(&parse("<p>a<!--[if gte mso 9]><xml><w:WordDocument/></xml><![endif]-->b</p>")), ["ab"]);
+    // Unclosed comment, unclosed section, empty equation, junk: nothing panics, no stray text.
+    for html in [
+        "<p>a<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q",
+        "<p>a<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q</m:t></m:r></m:oMath>-->b</p>",
+        "<p>a<!--[if gte msEquation 12]><![endif]-->b</p>",
+        "<p>a<!--[if gte msEquation-->b</p>",
+        "<p>a<!--[if gte msEquation 12]><m:oMath></m:oMath><![endif]-->b</p>",
+        "<p>a<!--[if gte msEquation 12]>]]]><<<>>>&amp;<![endif]-->b</p>",
+        "<p>a<!--[if gte msEquation 12]><m:oMath><m:r><m:t>é</m:t></m:r></m:oMath><![endif]--><![if !msEquation]>",
+    ] {
+        let marks = inline_marks(&parse(html));
+        assert!(marks.iter().all(|m| !m.contains("m:") && !m.contains("endif")), "{html}: {marks:?}");
+    }
+    assert_eq!(inline_marks(&parse("<p>a<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q</m:t></m:r></m:oMath>-->b</p>")), ["a[q]b"]);
+    // In the head, it is not body content.
+    let head = "<html><head><!--[if gte msEquation 12]><m:oMath><m:r><m:t>h</m:t></m:r></m:oMath><![endif]--></head><body><p>x</p></body></html>";
+    assert_eq!(inline_marks(&parse(head)), ["x"]);
+}
+
+#[test]
+fn ms_equation_fallback_stays_when_no_equation_is_read_or_it_is_unclosed() {
+    // An Office Math comment that reads as nothing leaves the fallback picture in its place.
+    let empty = r#"<p>a<!--[if gte msEquation 12]><m:oMath></m:oMath><![endif]--><![if !msEquation]><img width=20 height=30 src="data:image/png;base64,iVBORw0KGgo="><![endif]>b</p>"#;
+    assert_eq!(inline_marks(&parse(empty)), ["a<img>b"]);
+    // A fallback opener without its end doesn't swallow the rest of the page.
+    let unclosed = "<p>a<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q</m:t></m:r></m:oMath><![endif]--><![if !msEquation]>b</p><p>c</p>";
+    assert_eq!(inline_marks(&parse(unclosed)), ["a[q]b", "c"]);
+}
+
+#[test]
+fn support_fields_comments_import_as_fields_around_their_result() {
+    // #5581's reproduction (Better Notes for Zotero): the whole field in one comment.
+    let html = r#"<!DOCTYPE html><html><body>
+<p>Before <!--[if supportFields]>
+<span style='mso-element:field-begin'></span>
+ADDIN ZOTERO_ITEM CSL_CITATION {&quot;citationID&quot;:&quot;a&quot;,&quot;citationItems&quot;:[]}
+<span style='mso-element:field-separator'></span>
+<span>(Cached, 2021)</span>
+<span style='mso-element:field-end'></span>
+<![endif]--> after</p>
+</body></html>"#;
+    let marks = inline_marks(&parse(html));
+    assert_eq!(marks.len(), 1, "{marks:?}");
+    let m = &marks[0];
+    assert!(m.starts_with("Before {ADDIN ZOTERO_ITEM CSL_CITATION {\"citationID\":\"a\",\"citationItems\":[]}|"), "{m}");
+    assert!(m.contains("(Cached, 2021)") && m.ends_with("} after"), "{m}");
+}
+
+#[test]
+fn word_pages_keep_a_fields_result_between_two_comments() {
+    // Word's own web pages: the result is ordinary HTML between the comments, with its formatting.
+    let html = "<p>Page <!--[if supportFields]><span style='mso-element:field-begin'></span><span style='mso-spacerun:yes'> </span>PAGE <span style='mso-element:field-separator'></span><![endif]--><b>3</b><!--[if supportFields]><span style='mso-element:field-end'></span><![endif]--> of</p>";
+    let f = parse(html);
+    assert_eq!(inline_marks(&f), ["Page {PAGE|3} of"]);
+    let Some(FBlock::Para(p)) = f.blocks.first() else { panic!("no paragraph") };
+    assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, fmt) if t == "3" && fmt.bold)), "{:?}", p.inlines);
+}
+
+#[test]
+fn support_fields_edge_cases_stay_balanced() {
+    // A field without a separator has an empty result; one nested in another's code is part of
+    // that code; a field the page leaves open ends with it; a mark's empty span doesn't close an
+    // enclosing span.
+    let no_sep =
+        "<p>a<!--[if supportFields]><span style='mso-element:field-begin'></span>AUTHOR<span style='mso-element:field-end'></span><![endif]-->b</p>";
+    assert_eq!(inline_marks(&parse(no_sep)), ["a{AUTHOR|}b"]);
+    let nested = "<p><!--[if supportFields]><span style='mso-element:field-begin'></span>IF <span style='mso-element:field-begin'></span>PAGE<span style='mso-element:field-separator'></span>2<span style='mso-element:field-end'></span> = 2 yes<span style='mso-element:field-separator'></span><![endif]-->yes<!--[if supportFields]><span style='mso-element:field-end'></span><![endif]--></p>";
+    assert_eq!(inline_marks(&parse(nested)), ["{IF PAGE2 = 2 yes|yes}"]);
+    let open = "<p>a<!--[if supportFields]><span style='mso-element:field-begin'></span>DATE<span style='mso-element:field-separator'></span><![endif]-->today</p>";
+    assert_eq!(inline_marks(&parse(open)), ["a{DATE|today}"]);
+    let wrapped = "<p><i>x<!--[if supportFields]><span style='mso-element:field-begin'></span>PAGE<span style='mso-element:field-separator'></span><![endif]-->1<!--[if supportFields]><span style='mso-element:field-end'></span><![endif]-->y</i></p>";
+    let f = parse(wrapped);
+    assert_eq!(inline_marks(&f), ["x{PAGE|1}y"]);
+    let Some(FBlock::Para(p)) = f.blocks.first() else { panic!("no paragraph") };
+    assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, fmt) if t == "y" && fmt.italic)), "{:?}", p.inlines);
+    // Junk: stray ends and separators, no code, unclosed comments, many begins.
+    for html in [
+        "<p>a<!--[if supportFields]><span style='mso-element:field-end'></span><span style='mso-element:field-separator'></span><![endif]-->b</p>",
+        "<p>a<!--[if supportFields]><span style='mso-element:field-begin'></span><span style='mso-element:field-separator'></span>r<span style='mso-element:field-end'></span><![endif]-->b</p>",
+        "<p>a<!--[if supportFields]><span style='mso-element:field-begin'></span>PAGE",
+        "<p>a<!--[if supportFields]>",
+    ] {
+        let marks = inline_marks(&parse(html));
+        let opens = marks.iter().map(|m| m.matches('{').count()).sum::<usize>();
+        let closes = marks.iter().map(|m| m.matches('}').count()).sum::<usize>();
+        assert_eq!(opens, closes, "{html}: {marks:?}");
+    }
+    let many = format!(
+        "<p><!--[if supportFields]>{}<![endif]-->z</p>",
+        "<span style='mso-element:field-begin'></span>F<span style='mso-element:field-separator'></span>".repeat(200)
+    );
+    let marks = inline_marks(&parse(&many));
+    assert_eq!(marks.iter().map(|m| m.matches('{').count()).sum::<usize>(), 64);
+    assert_eq!(marks.iter().map(|m| m.matches('}').count()).sum::<usize>(), 64);
+}
+
+#[test]
+fn field_marks_never_take_page_text() {
+    // A field that never gets past its begin mark leaves the page as it was: only a comment
+    // holds a code's text.
+    let lone = "<!--[if supportFields]><span style='mso-element:field-begin'></span><![endif]--><p>Para 1</p><p>Para 2</p>";
+    assert_eq!(inline_marks(&parse(lone)), ["Para 1", "Para 2"]);
+    let coded = "<p><!--[if supportFields]><span style='mso-element:field-begin'></span>PAGE<![endif]-->text</p><p>more</p>";
+    assert_eq!(inline_marks(&parse(coded)), ["{PAGE|}text", "more"]);
+    // A code can span comments (Word puts other comments between them).
+    let spanned = r"<p><!--[if supportFields]><span style='mso-element:field-begin'></span>PAGE <![endif]--> <!--[if gte mso 9]><xml></xml><![endif]--><!--[if supportFields]>\* ARABIC<span style='mso-element:field-separator'></span><![endif]-->1<!--[if supportFields]><span style='mso-element:field-end'></span><![endif]--></p>";
+    assert_eq!(inline_marks(&parse(spanned)), [r"{PAGE \* ARABIC|1}"]);
+    // A mark on an element with no end tag, or with content, doesn't skip the page after it.
+    let void = r#"<p>a<br style="mso-element:field-end">b</p><p>c</p>"#;
+    let marks = inline_marks(&parse(void));
+    assert_eq!(marks.last().map(String::as_str), Some("c"));
+    assert!(marks.concat().contains('b'), "{marks:?}");
+    let content = "<p><span style='mso-element:field-separator'>Smith 2020</span> after</p>";
+    assert_eq!(inline_marks(&parse(content)), ["Smith 2020 after"]);
+    // The mark's own end tag is skipped through white space, and closes nothing else.
+    let spaced = "<p><b>x<span style='mso-element:field-end'> </span >y</b></p>";
+    let f = parse(spaced);
+    assert_eq!(inline_marks(&f), ["xy"]);
+}
+
+#[test]
+fn support_fields_comments_read_raw_text_as_the_page_does() {
+    let f = parse("<p>a<!--[if supportFields]><style>p{color:#ff0000}</style><script>hidden()</script><![endif]-->b</p>");
+    assert_eq!(inline_marks(&f), ["ab"]);
+}
+
+#[test]
+fn support_fields_result_keeps_its_own_spaces() {
+    let mark = |m: &str| format!("<span style='mso-element:field-{m}'></span>");
+    let one = |r: &str| format!("<p>a<!--[if supportFields]>{}F{}{r}{}<![endif]-->b</p>", mark("begin"), mark("separator"), mark("end"));
+    assert_eq!(inline_marks(&parse(&one(" "))), ["a{F| }b"]);
+    assert_eq!(inline_marks(&parse(&one("<b>x</b> <b>y</b>"))), ["a{F|x y}b"]);
+    // Line breaks around a mark are the source's layout.
+    assert_eq!(inline_marks(&parse(&one("\n<b>x</b>\n"))), ["a{F|x}b"]);
+}
+
+#[test]
+fn nested_support_fields_openers_dont_exhaust_the_stack() {
+    // Comments don't nest: each opener inside runs to the end, and is read on in a loop.
+    let deep = format!("<p>a<!--{}x-->b</p>", "[if supportFields]><span style='mso-element:field-begin'></span>F<!--".repeat(200_000));
+    let marks = inline_marks(&parse(&deep));
+    let opens = marks.iter().map(|m| m.matches('{').count()).sum::<usize>();
+    assert_eq!(opens, marks.iter().map(|m| m.matches('}').count()).sum::<usize>());
+    // A field never separated keeps the code its comment holds, and
+    // only the first openers are read.
+    assert!(marks.concat().matches('F').count() <= 17, "{marks:?}");
+    // One nested opener: what follows it is still read.
+    let one = "<p>a<!--[if supportFields]><span style='mso-element:field-begin'></span>PAGE<span style='mso-element:field-separator'></span><!--[if supportFields]>1<span style='mso-element:field-end'></span><![endif]-->b</p>";
+    assert_eq!(inline_marks(&parse(one)), ["a{PAGE|1}b"]);
+}
+
+#[test]
+fn ms_equation_fallback_ends_at_its_own_endif() {
+    // Word's fallback holds a VML section of its own: the fallback ends at the endif matching it.
+    let vml = r#"<p>a<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q</m:t></m:r></m:oMath><![endif]--><![if !msEquation]><span><![if !vml]><img width=20 height=30 src="data:image/png;base64,iVBORw0KGgo="><![endif]>v</span><![endif]>b</p>"#;
+    assert_eq!(inline_marks(&parse(vml)), ["a[q]b"]);
+    // An unclosed fallback doesn't take a later, unrelated section's endif as its own.
+    let other = r#"<p>a<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q</m:t></m:r></m:oMath><![endif]--><![if !msEquation]>b</p><p>c<![if !vml]>d<![endif]>e</p>"#;
+    assert_eq!(inline_marks(&parse(other)), ["a[q]b", "cde"]);
+}
+
+#[test]
+fn many_unclosed_ms_equation_fallbacks_import_quickly() {
+    // Each unclosed fallback opener searched the rest of the page for its end, so a page of
+    // equations each followed by one took quadratic time: about a minute here, now well under a
+    // second.
+    let one = "<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q</m:t></m:r></m:oMath><![endif]--><![if !msEquation]>";
+    let html = format!("<p>a{}b</p>", one.repeat(40_000));
+    let t = std::time::Instant::now();
+    let f = parse(&html);
+    assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+    let marks = inline_marks(&f);
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0].matches("[q]").count(), 40_000);
+    assert!(marks[0].starts_with("a[q]") && marks[0].ends_with("[q]b"), "{}", marks[0].get(..40).unwrap_or(""));
+}
+
+#[test]
+fn an_unclosed_field_result_ends_with_its_paragraph() {
+    // No field-end: updating the field must not replace the paragraphs after it.
+    let html = "<p>a<!--[if supportFields]><span style='mso-element:field-begin'></span>DATE<span style='mso-element:field-separator'></span><![endif]-->today</p><p>next</p><p>last</p>";
+    assert_eq!(inline_marks(&parse(html)), ["a{DATE|today}", "next", "last"]);
+    // Nested in one paragraph, and a closed field spanning paragraphs stays whole.
+    let begin = |c: &str| format!("<span style='mso-element:field-begin'></span>{c}<span style='mso-element:field-separator'></span>");
+    let nested = format!("<p><!--[if supportFields]>{}{}<![endif]-->x</p><p>y</p>", begin("A"), begin("B"));
+    assert_eq!(inline_marks(&parse(&nested)), ["{A|{B|x}}", "y"]);
+    let whole = format!(
+        "<p><!--[if supportFields]>{}<![endif]-->x</p><p>y<!--[if supportFields]><span style='mso-element:field-end'></span><![endif]--></p>",
+        begin("BIBLIOGRAPHY")
+    );
+    assert_eq!(inline_marks(&parse(&whole)), ["{BIBLIOGRAPHY|x", "y}"]);
+}
+
+#[test]
+fn a_field_codes_data_keeps_its_spaces() {
+    // Only the source's line breaks go: a double space can be data in a citation's JSON.
+    let html = "<p><!--[if supportFields]><span style='mso-element:field-begin'></span>\nADDIN ZOTERO_ITEM\n  CSL_CITATION {&quot;t&quot;:&quot;a  b&quot;}\n<span style='mso-element:field-separator'></span>r<span style='mso-element:field-end'></span><![endif]--></p>";
+    assert_eq!(inline_marks(&parse(html)), ["{ADDIN ZOTERO_ITEM CSL_CITATION {\"t\":\"a  b\"}|r}"]);
+}

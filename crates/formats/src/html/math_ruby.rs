@@ -40,6 +40,7 @@ pub(super) fn read_math(lx: &mut Lexer, name: String, attrs: Vec<(String, String
                     stack.push(el);
                 }
             }
+            Tok::OfficeMath(_) | Tok::SupportFields(_) => {}
             Tok::End(name) => {
                 let name = local(&name).to_string();
                 // Close up to the matching open element; a stray end tag is ignored.
@@ -104,7 +105,7 @@ enum RubyPart {
 fn ends_ruby(t: &Tok) -> bool {
     match t {
         Tok::Start { name, .. } | Tok::End(name) => block_kind(name).is_some(),
-        Tok::Text(_) => false,
+        Tok::Text(_) | Tok::OfficeMath(_) | Tok::SupportFields(_) => false,
     }
 }
 
@@ -144,6 +145,7 @@ pub(super) fn read_ruby(lx: &mut Lexer) -> RubyText {
                 "ruby" if !self_close => nested += 1,
                 _ => {}
             },
+            Tok::OfficeMath(_) | Tok::SupportFields(_) => {}
             Tok::End(name) => match name.as_str() {
                 "rb" | "rt" | "rp" => part = RubyPart::Base,
                 "ruby" if nested > 0 => nested -= 1,

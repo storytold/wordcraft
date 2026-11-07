@@ -30,6 +30,7 @@ mod builder;
 mod css;
 mod entity;
 mod export;
+mod fields;
 mod import;
 mod lexer;
 mod math_ruby;
@@ -40,6 +41,8 @@ pub use entity::{decode, decode_as, decode_entity, unescape};
 pub use export::{esc, export, export_flow, export_fragment, inlines_html};
 #[cfg(test)]
 use import::parse_in;
+#[cfg(test)]
+pub(crate) use import::parse_office_math;
 pub use import::{PAGE_FONT, import, import_on, import_page, import_with, parse, parse_with};
 
 #[cfg(test)]
