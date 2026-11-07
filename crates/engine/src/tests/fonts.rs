@@ -504,5 +504,8 @@ fn libreoffice_font_fallback_lists_are_not_reported_as_missing_when_installed() 
     assert_eq!(m.len(), 1);
     assert_eq!(m[0].font, "NonExistentSans123;NonExistentSerif123");
     let drawn = m[0].shown_as.first().expect("drawn face");
-    assert!(drawn.contains("Serif") || drawn == "Times" || drawn == "Tinos" || drawn == "Caladea" || drawn == "Georgia", "drawn: {drawn}");
+    assert!(
+        drawn.contains("Serif") || drawn == "Times" || drawn == "Times New Roman" || drawn == "Tinos" || drawn == "Caladea" || drawn == "Georgia",
+        "drawn: {drawn}"
+    );
 }

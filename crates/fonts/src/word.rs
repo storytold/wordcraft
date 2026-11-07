@@ -445,8 +445,8 @@ struct FallbackListMemo {
     generation: u64,
     families: std::collections::HashSet<String>,
     probed: HashMap<String, bool>,
-    lists: HashMap<(u64, usize), (String, bool)>,
-    long_resolved: HashMap<(u64, usize, bool, bool), Resolved>,
+    lists: HashMap<(u64, usize), (String, (String, bool))>,
+    long_resolved: HashMap<(u64, usize, bool, bool), (String, Resolved)>,
 }
 
 /// Shared cache for fallback-list resolutions and candidate availability checks.
@@ -503,13 +503,13 @@ fn candidate_has_family(db: &FontDb, cand: &str, direct_probes: &mut usize) -> b
 }
 
 /// Record a resolved `(family, substituted)` pair for a semicolon-separated fallback list.
-fn remember_list_resolution(generation: u64, key: (u64, usize), result: (String, bool)) -> (String, bool) {
+fn remember_list_resolution(generation: u64, key: (u64, usize), family: &str, result: (String, bool)) -> (String, bool) {
     let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if c.generation == generation {
         if c.lists.len() >= FAMILY_CACHE_MAX {
             c.lists.clear();
         }
-        c.lists.insert(key, result.clone());
+        c.lists.insert(key, (family.to_string(), result.clone()));
     }
     result
 }
@@ -533,14 +533,16 @@ fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
         let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if c.generation != generation {
             *c = FallbackListMemo { generation, ..Default::default() };
-        } else if let Some(r) = c.lists.get(&list_key) {
+        } else if let Some((cached_family, r)) = c.lists.get(&list_key)
+            && cached_family == family
+        {
             return r.clone();
         }
     }
 
     let candidates: Vec<&str> = family.split(';').map(str::trim).filter(|s| !s.is_empty() && s.len() <= FAMILY_KEY_MAX).collect();
     if candidates.is_empty() {
-        return remember_list_resolution(generation, list_key, (crate::FALLBACK_FAMILY.to_string(), true));
+        return remember_list_resolution(generation, list_key, family, (crate::FALLBACK_FAMILY.to_string(), true));
     }
 
     let mut direct_probes = MAX_DIRECT_CANDIDATE_PROBES;
@@ -549,10 +551,10 @@ fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
     for &cand in &candidates {
         let base = if cand.eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(cand) };
         if candidate_has_family(db, cand, &mut direct_probes) {
-            return remember_list_resolution(generation, list_key, (cand.to_string(), false));
+            return remember_list_resolution(generation, list_key, family, (cand.to_string(), false));
         }
         if base != cand && candidate_has_family(db, base, &mut direct_probes) {
-            return remember_list_resolution(generation, list_key, (base.to_string(), false));
+            return remember_list_resolution(generation, list_key, family, (base.to_string(), false));
         }
     }
 
@@ -563,11 +565,11 @@ fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
         if is_thai_family(base)
             && let Some(sub) = substitute(db, base)
         {
-            return remember_list_resolution(generation, list_key, (sub.to_string(), true));
+            return remember_list_resolution(generation, list_key, family, (sub.to_string(), true));
         }
         let mut twin_probes = MAX_DIRECT_CANDIDATE_PROBES;
         if let Some(twin) = metric_twins(base).find(|t| candidate_has_family(db, t, &mut twin_probes)) {
-            return remember_list_resolution(generation, list_key, (twin.to_string(), true));
+            return remember_list_resolution(generation, list_key, family, (twin.to_string(), true));
         }
     }
 
@@ -578,7 +580,7 @@ fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
         if (named || is_thai_family(base) || subs != SANS)
             && let Some(sub) = substitute(db, base)
         {
-            return remember_list_resolution(generation, list_key, (sub.to_string(), true));
+            return remember_list_resolution(generation, list_key, family, (sub.to_string(), true));
         }
     }
 
@@ -586,11 +588,11 @@ fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
     if let Some(&first) = candidates.first() {
         let base = if first.eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(first) };
         if let Some(sub) = substitute(db, base) {
-            return remember_list_resolution(generation, list_key, (sub.to_string(), true));
+            return remember_list_resolution(generation, list_key, family, (sub.to_string(), true));
         }
     }
 
-    remember_list_resolution(generation, list_key, (crate::FALLBACK_FAMILY.to_string(), true))
+    remember_list_resolution(generation, list_key, family, (crate::FALLBACK_FAMILY.to_string(), true))
 }
 
 /// Resolve `family` with bold/italic to a face (memoised until user fonts are added or removed,
@@ -618,7 +620,9 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
         let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if c.generation != generation {
             *c = FallbackListMemo { generation, ..Default::default() };
-        } else if let Some(r) = c.long_resolved.get(&lk) {
+        } else if let Some((cached_family, r)) = c.long_resolved.get(&lk)
+            && cached_family == family
+        {
             return *r;
         }
     }
@@ -639,7 +643,7 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
             if c.long_resolved.len() >= FAMILY_CACHE_MAX {
                 c.long_resolved.clear();
             }
-            c.long_resolved.insert(lk, r);
+            c.long_resolved.insert(lk, (family.to_string(), r));
         }
     }
     r
@@ -1006,6 +1010,7 @@ mod tests {
         assert!(
             r.face.family.contains("Serif")
                 || r.face.family == "Times"
+                || r.face.family == "Times New Roman"
                 || r.face.family == "Tinos"
                 || r.face.family == "Caladea"
                 || r.face.family == "Georgia",
