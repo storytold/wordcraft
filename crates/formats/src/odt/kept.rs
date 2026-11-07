@@ -329,7 +329,10 @@ pub(super) fn rewritten_defs(
         }
         let def = kids.iter().find(|(k, _)| *k == mine).and_then(|(_, (a, b))| now.get(*a..*b)).map(|d| {
             let mut d = d.to_string();
+            let own = ours(&name);
             for (from, to) in &names {
+                // Two of the file's names can be one of WordCraft's: a style keeps its own.
+                let to = if *from == own { &name } else { to };
                 for attr in ["style:name", "style:parent-style-name", "style:next-style-name"] {
                     d = d.replace(&format!("{attr}=\"{from}\""), &format!("{attr}=\"{to}\""));
                 }

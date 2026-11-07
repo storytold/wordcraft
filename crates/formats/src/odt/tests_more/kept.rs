@@ -287,3 +287,22 @@ fn a_style_named_with_a_space_is_the_files_style() {
     let saved = styles_of(&export(&d).unwrap());
     assert!(def(&saved, "My_20_Custom").is_some_and(|m| m.contains(r#"fo:font-size="21pt""#)), "{saved}");
 }
+
+/// Two of the file's names WordCraft has as one style (`My_20_Custom` and `My_Custom` are both
+/// `MyCustom`): edited, each is written under its own name, neither lost nor doubled.
+#[test]
+fn two_names_for_one_style_both_stay_when_it_is_edited() {
+    use std::sync::Arc;
+    let s = r#"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="My_20_Custom" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="9pt"/></style:style><style:style style:name="My_Custom" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="9pt"/></style:style>"#;
+    let styles = format!(r#"<office:document-styles {NS_T}><office:styles>{s}</office:styles></office:document-styles>"#);
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="My_20_Custom">One</text:p><text:p text:style-name="My_Custom">Two</text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+    Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(21.0);
+    let saved = styles_of(&export(&d).unwrap());
+    for name in ["My_20_Custom", "My_Custom"] {
+        assert_eq!(saved.matches(&format!(r#"style:name="{name}""#)).count(), 1, "{name}: {saved}");
+    }
+}
