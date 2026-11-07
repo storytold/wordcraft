@@ -181,6 +181,18 @@ impl Windows {
         }
     }
 
+    /// The viewports the open windows draw in, the root's included.
+    pub(crate) fn viewport_ids(&self) -> Vec<ViewportId> {
+        let mut ids = vec![ViewportId::ROOT];
+        for w in &self.open {
+            let v = self.viewport(w.key);
+            if !ids.contains(&v) {
+                ids.push(v);
+            }
+        }
+        ids
+    }
+
     /// The title View › Window › Switch Windows gives the window, as the frame started.
     fn menu_title(&self, key: u64) -> Option<&str> {
         self.menu.title(self.get(key)?.id?)

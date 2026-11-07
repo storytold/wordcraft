@@ -753,8 +753,8 @@ fn interface_size_picker(app: &mut WordApp, ui: &mut Ui) {
     let native = ui.ctx().native_pixels_per_point().unwrap_or(1.0);
     // The template keeps the percent sign outside its placeholder, so `fmt` isolates the number
     // without it and a right-to-left line draws "(%200)": the sign goes inside the isolate.
-    let auto = crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &InterfaceSize::AUTO.drawn_percent(native).to_string())])
-        .replace("\u{2069}%", "%\u{2069}");
+    let drawn = InterfaceSize::AUTO.drawn_percent_within(native, app.auto_scale_limit);
+    let auto = crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &drawn.to_string())]).replace("\u{2069}%", "%\u{2069}");
     let selected = size.percent().map_or_else(|| auto.clone(), |pct| format!("{pct}%"));
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Interface size:"));
