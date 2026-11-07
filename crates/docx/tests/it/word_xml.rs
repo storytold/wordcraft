@@ -285,8 +285,18 @@ fn word_2003_xml_reads_settings_and_the_font_table() {
     assert_eq!(s.compat_mode, 11);
     assert!(s.do_not_expand_shift_return && s.sum_paragraph_spacing);
     assert_eq!(s.roman_fonts, ["Brand Ming"]);
-    // Saved as DOCX, they are kept.
-    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    // Saved as DOCX, they are kept, the switches WordCraft doesn't read too, and the font table.
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut part = |name: &str| {
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut z.by_name(name).unwrap(), &mut s).unwrap();
+        s
+    };
+    let settings = part("word/settings.xml");
+    assert!(settings.contains("<w:spaceForUL/>") && settings.contains("<w:useFELayout/>"), "{settings}");
+    assert!(part("word/fontTable.xml").contains(r#"<w:altName w:val="BrandKai"/>"#));
+    let again = wordcraft_docx::read(&bytes).unwrap();
     assert_eq!(again.settings.compat_mode, 11);
     assert!(again.settings.do_not_expand_shift_return && (again.settings.default_tab - 24.0).abs() < 0.01);
     // Without `w:docPr` or `w:fonts` it is still mode 11, with the default tab stop.
