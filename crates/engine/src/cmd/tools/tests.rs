@@ -9,6 +9,163 @@ fn compare_marks_changes() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), "The dog sat.\nKeep this.\nNew line here.");
 }
 
+/// Top-level body blocks that are empty paragraphs.
+fn empty_paras(s: &Session) -> usize {
+    s.doc.body.iter().filter(|b| matches!(b.as_para(), Some(p) if p.is_empty())).count()
+}
+
+#[test]
+fn compare_marks_a_whole_paragraph_and_its_mark() {
+    // A whole inserted paragraph carries the insertion on its mark, not just on its runs.
+    let mut s = Session::new(Document::from_text("A\nB"));
+    s.run("review.compare", &json!({"text": "A\nNEW\nB"})).unwrap();
+    assert_eq!(s.doc.body.len(), 3);
+    let mid = s.doc.body[1].as_para().unwrap();
+    assert_eq!(mid.plain_text(), "NEW");
+    assert!(mid.mark.ins.is_some(), "the inserted paragraph's mark is not marked inserted");
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "A\nB");
+    assert_eq!(s.doc.body.len(), 2);
+    assert_eq!(empty_paras(&s), 0, "rejecting an inserted paragraph left an empty paragraph behind");
+    let mut s = Session::new(Document::from_text("A\nB"));
+    s.run("review.compare", &json!({"text": "A\nNEW\nB"})).unwrap();
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "A\nNEW\nB");
+    assert_eq!(s.doc.body.len(), 3);
+    assert_eq!(empty_paras(&s), 0, "accepting an inserted paragraph left an empty paragraph behind");
+
+    // A whole deleted paragraph carries the deletion on its mark.
+    let mut s = Session::new(Document::from_text("A\nOLD\nB"));
+    s.run("review.compare", &json!({"text": "A\nB"})).unwrap();
+    assert_eq!(s.doc.body.len(), 3);
+    let mid = s.doc.body[1].as_para().unwrap();
+    assert_eq!(mid.plain_text(), "OLD");
+    assert!(mid.mark.del.is_some(), "the deleted paragraph's mark is not marked deleted");
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "A\nB");
+    assert_eq!(s.doc.body.len(), 2);
+    assert_eq!(empty_paras(&s), 0, "accepting a deleted paragraph left an empty paragraph behind");
+    let mut s = Session::new(Document::from_text("A\nOLD\nB"));
+    s.run("review.compare", &json!({"text": "A\nB"})).unwrap();
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "A\nOLD\nB");
+    assert_eq!(s.doc.body.len(), 3);
+    assert_eq!(empty_paras(&s), 0, "rejecting a deleted paragraph left an empty paragraph behind");
+}
+
+#[test]
+fn compare_marks_an_empty_paragraphs_mark() {
+    // An empty inserted paragraph is stamped on its mark, though `format` skips its empty range.
+    let mut s = Session::new(Document::from_text("A\nB"));
+    s.run("review.compare", &json!({"text": "A\n\nB"})).unwrap();
+    assert_eq!(s.doc.body.len(), 3);
+    let empty = s.doc.body[1].as_para().unwrap();
+    assert!(empty.is_empty());
+    assert!(empty.mark.ins.is_some(), "the empty inserted paragraph's mark is not marked inserted");
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "A\nB");
+    assert_eq!(s.doc.body.len(), 2);
+    assert_eq!(empty_paras(&s), 0, "rejecting an empty inserted paragraph left it behind");
+
+    // An empty deleted paragraph is stamped on its mark too.
+    let mut s = Session::new(Document::from_text("A\n\nB"));
+    s.run("review.compare", &json!({"text": "A\nB"})).unwrap();
+    assert_eq!(s.doc.body.len(), 3);
+    let empty = s.doc.body[1].as_para().unwrap();
+    assert!(empty.is_empty());
+    assert!(empty.mark.del.is_some(), "the empty deleted paragraph's mark is not marked deleted");
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "A\nB");
+    assert_eq!(s.doc.body.len(), 2);
+    assert_eq!(empty_paras(&s), 0, "accepting an empty deleted paragraph left it behind");
+}
+
+#[test]
+fn compare_keeps_another_authors_deletion_stamp() {
+    // A paragraph the original already carries as a tracked deletion by another author: Compare
+    // must keep that author's revision on its runs and on its paragraph mark, not re-attribute
+    // the block to its own deletion revision.
+    let mut doc = Document::from_text("A\nOLD\nB");
+    doc.revisions.push(wordcraft_doc::Revision::new(RevisionKind::Delete, "Alice", ""));
+    let p = doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
+    for r in &mut p.runs {
+        r.props.del = Some(0);
+    }
+    p.mark.del = Some(0);
+    let mut s = Session::new(doc);
+    s.run("review.compare", &json!({"text": "A\nB", "author": "Bob"})).unwrap();
+    assert_eq!(s.doc.body.len(), 3);
+    let mid = s.doc.body[1].as_para().unwrap();
+    assert_eq!(mid.plain_text(), "OLD");
+    assert!(mid.runs.iter().all(|r| r.props.del == Some(0)), "the runs' deletion was re-stamped: {:?}", mid.runs);
+    assert_eq!(mid.mark.del, Some(0), "the paragraph mark's deletion was re-stamped");
+    assert_eq!(s.doc.revisions.first().map(|r| (r.kind, r.author.as_str())), Some((RevisionKind::Delete, "Alice")));
+}
+
+#[test]
+fn compare_pins_the_terminal_inserted_paragraph_limitation() {
+    // Characterizes the limitation documented on `mark_block` (compare.rs): resolving a revision
+    // needs a following paragraph, so a paragraph inserted at the very end is rejected but leaves
+    // one empty paragraph behind. Flip this test when the follow-up fix lands.
+    let mut s = Session::new(Document::from_text("A\nB"));
+    s.run("review.compare", &json!({"text": "A\nB\nC"})).unwrap();
+    assert_eq!(s.doc.body.len(), 3);
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "A\nB\n", "the rejected terminal paragraph still leaves a line");
+    assert_eq!(s.doc.body.len(), 3);
+    assert_eq!(empty_paras(&s), 1, "the rejected terminal paragraph is left as one empty paragraph");
+}
+
+#[test]
+fn compare_pins_the_terminal_deleted_paragraph_limitation() {
+    // The mirror of `compare_pins_the_terminal_inserted_paragraph_limitation`: a paragraph deleted
+    // from the very end is accepted but still leaves one empty paragraph. Characterizes the
+    // limitation documented on `mark_block` (compare.rs); flip when the follow-up fix lands.
+    let mut s = Session::new(Document::from_text("A\nB\nC"));
+    s.run("review.compare", &json!({"text": "A\nB"})).unwrap();
+    assert_eq!(s.doc.body.len(), 3);
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "A\nB\n", "the accepted terminal deletion still leaves a line");
+    assert_eq!(s.doc.body.len(), 3);
+    assert_eq!(empty_paras(&s), 1, "the accepted terminal deletion is left as one empty paragraph");
+}
+
+#[test]
+fn compare_pins_rejecting_an_inserted_section_restyles_the_next_paragraph() {
+    // Characterizes a known limitation recorded on `mark_block` (compare.rs): rejecting an
+    // inserted paragraph that carries a section break. `resolve`'s `remove_empty_para` refuses
+    // paragraphs carrying a section, so once the inserted paragraph's text is rejected the empty
+    // paragraph is joined into the next one, which takes its properties. Here the original "Body"
+    // is Heading 1; after Reject All it carries the inserted paragraph's Normal properties. The
+    // real fix belongs to `resolve` (`remove_empty_para`/`join_next_para`): flip this test when it
+    // lands.
+    let mut original = Document::from_text("Intro\nBody");
+    original.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().props.style = Some("Heading1".into());
+    let mut s = Session::new(original);
+
+    let mut rev = Document::from_text("Intro\nAppendix\nBody");
+    {
+        let p = rev.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
+        p.props.style = Some("Normal".into());
+        p.section = Some(Box::new(wordcraft_doc::section::SectionProps::default()));
+    }
+    rev.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap().props.style = Some("Heading1".into());
+    let path = std::env::temp_dir().join(format!("wc-compare-section-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Intro\nBody");
+    assert_eq!(s.doc.body.len(), 2);
+    let body = s.doc.body[1].as_para().unwrap();
+    assert_eq!(body.plain_text(), "Body");
+    assert_eq!(
+        body.props.style.as_deref(),
+        Some("Normal"),
+        "the current (wrong) outcome: the following paragraph took the inserted sectioned paragraph's properties"
+    );
+}
+
 #[test]
 fn compare_options_ignore_case_and_white_space() {
     let original = "The Cat sat.\nTwo  spaces here.";
