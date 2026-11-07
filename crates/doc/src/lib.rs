@@ -79,6 +79,7 @@ mod parts;
 mod position;
 mod settings;
 mod text_walk;
+mod word_count;
 
 pub use block::{Block, Blocks, BoxBudget, MAX_TEXT_BOX_DEPTH};
 pub use compare::para_block;
@@ -91,7 +92,8 @@ pub use settings::{
     THEME_COLORS, Watermark, Zoom, ZoomFit,
 };
 pub(crate) use text_walk::{PARA_WALK_DEPTH, walk_between};
-pub use text_walk::{count_chars, count_chars_no_spaces, count_words};
+pub use text_walk::{count_chars, count_chars_no_spaces};
+pub use word_count::count_words;
 
 /// A document.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

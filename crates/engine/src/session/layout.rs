@@ -5,6 +5,15 @@ use super::view::DRAFT_WIDTH;
 use super::{Arc, DocLayout, Document, LayoutCache, LayoutOptions, Session, StoryRef, Value, ViewMode};
 
 impl Session {
+    /// Geometry for the active caret, including the preceding line's end at an unspaced wrap.
+    pub fn caret_geometry(&self, layout: &DocLayout, pos: &wordcraft_doc::Pos) -> Option<wordcraft_layout::hit::Caret> {
+        self.line_end
+            .as_ref()
+            .filter(|p| *p == pos && self.sel.focus == **p)
+            .and_then(|p| layout.caret_at_line_end(p, self.page_hint))
+            .or_else(|| layout.caret_on(pos, self.page_hint))
+    }
+
     /// The current layout (recomputed when the document or view changed).
     pub fn layout(&mut self) -> Arc<DocLayout> {
         let typing = self.typing_word();
@@ -31,7 +40,7 @@ impl Session {
         // any other) proofs it again, open or parked.
         let rev = (self.rev, wordcraft_proof::dictionary_generation());
         let (proofing, numeral) = (self.view.proofing, self.view.numeral);
-        let fits = |e: &Option<LayoutEntry>| {
+        let fits = |e: &Option<LayoutEntry>, include_typing: bool| {
             e.as_ref().is_some_and(|(r, w, h, m, sp, _, pf, o, hd, n, t, sh)| {
                 *r == rev
                     && (*w == width || mode == ViewMode::Print)
@@ -42,14 +51,19 @@ impl Session {
                     && *n == numeral
                     && *hd == deleted
                     && *o == outline
-                    && *t == typing
+                    && (!include_typing || *t == typing)
                     && *sh == shown
             })
         };
-        if !fits(&self.layout[0]) && fits(&self.layout[1]) {
+        // Ending typing refreshes proofing, but does not move the visual wrap boundary.
+        // All other key changes still invalidate affinity, including cached reflows.
+        if !fits(&self.layout[0], false) {
+            self.line_end = None;
+        }
+        if !fits(&self.layout[0], true) && fits(&self.layout[1], true) {
             self.layout.swap(0, 1);
         }
-        if fits(&self.layout[0])
+        if fits(&self.layout[0], true)
             && let Some(e) = &self.layout[0]
         {
             return e.5.clone();
@@ -213,6 +227,30 @@ impl Session {
                 self.made_rev = self.rev;
             }
             self.relayout();
+        }
+    }
+}
+
+#[cfg(test)]
+mod edge_case_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Logical arrows in unrelated scripts must not lay out and proof the whole document.
+    #[test]
+    fn ordinary_left_right_keeps_layout_lazy() {
+        for text in ["English words", "Français naïf", "Deutsch Wörter", "日本語の文章", "ภาษาไทย", "English\nខ្មែរ"]
+        {
+            let mut s = Session::new(Document::from_text(text));
+            for command in ["caret.right", "caret.left"] {
+                s.run(command, &json!({})).unwrap();
+                assert!(s.layout.iter().all(Option::is_none), "{command} forced a full layout for {text:?}");
+            }
+        }
+        if !wordcraft_proof::khmer::data_available() {
+            let mut s = Session::new(Document::from_text("ភាសាខ្មែរ"));
+            s.run("caret.right", &json!({})).unwrap();
+            assert!(s.layout.iter().all(Option::is_none), "no-data Khmer keeps logical navigation");
         }
     }
 }

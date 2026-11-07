@@ -17,6 +17,7 @@ pub struct WindowView {
     view: ViewState,
     pending: Option<CharProps>,
     goal_x: Option<f32>,
+    line_end: Option<Pos>,
     page_hint: usize,
     hf_return: Option<Selection>,
     typing_open: bool,
@@ -63,6 +64,7 @@ impl Session {
             view: take(&mut self.view),
             pending: self.pending.take(),
             goal_x: self.goal_x.take(),
+            line_end: self.line_end.take(),
             page_hint: take(&mut self.page_hint),
             hf_return: self.hf_return.take(),
             typing_open: take(&mut self.typing_open),
@@ -87,6 +89,7 @@ impl Session {
             view: self.view.clone(),
             pending: self.pending.clone(),
             goal_x: self.goal_x,
+            line_end: self.line_end.clone(),
             page_hint: self.page_hint,
             hf_return: self.hf_return.clone(),
             // The new window hasn't typed: its first key starts an undo step of its own.
@@ -117,6 +120,7 @@ impl Session {
             view,
             pending,
             goal_x,
+            line_end,
             page_hint,
             hf_return,
             typing_open,
@@ -138,6 +142,7 @@ impl Session {
         self.view.read_page_color = self.prefs.read_page_color;
         self.pending = pending;
         self.goal_x = goal_x;
+        self.line_end = if current { line_end } else { None };
         self.page_hint = page_hint;
         self.column_mode = column_mode;
         self.math = math;

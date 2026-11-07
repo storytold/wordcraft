@@ -11,10 +11,12 @@ use wordcraft_doc::{Pos, StoryRef};
 use crate::{Session, cmd};
 
 mod bidi;
+mod caret_affinity;
 mod documents;
 mod font_sizes;
 mod fonts;
 mod ime_noop;
+mod khmer_stats;
 mod revision_checks;
 mod typing;
 mod wordart;
@@ -9507,8 +9509,9 @@ fn review_language_validates_tags_and_marks_text_unchecked() {
     assert_eq!(run(&mut s, "format.state", json!({}))["lang"], "pl");
     run(&mut s, "review.language", json!({}));
     assert_eq!(run(&mut s, "format.state", json!({}))["lang"], "en-US");
-    // A language without proofing tools: no marks.
-    run(&mut s, "review.language", json!({"lang": "fr-FR"}));
+    // Non-linguistic content is unchecked even on machines with installed
+    // language packs. French is now proofable and is not an absence fixture.
+    run(&mut s, "review.language", json!({"lang": "zxx"}));
     assert_eq!(run(&mut s, "review.issues", json!({})), json!([]));
 }
 
@@ -12496,4 +12499,80 @@ fn page_down_extends_a_selection_that_ends_in_collapsed_outline_text() {
     assert_eq!(s.sel.anchor, anchor, "the anchor stays");
     assert!(s.sel.focus.path.0[0] > 6, "Page Down extends the selection a page on: {:?}", s.sel.focus);
     assert!(s.layout().caret(&s.sel.focus).is_some(), "to a place the outline shows");
+}
+
+/// Khmer proofing uses original byte offsets across formatting runs and preserves punctuation
+/// when applying the standard spelling through the same command the native pane uses.
+#[test]
+fn khmer_native_proofing_corrects_a_formatted_word() {
+    if !wordcraft_proof::khmer::data_available() {
+        eprintln!("skipped: CRAFT_KHMER_DIR was not supplied at build time");
+        return;
+    }
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Hello «សំដី»។ world"}));
+    // Split the Khmer word across different formatting runs.
+    run(&mut s, "select.text", json!({"text": "សំ"}));
+    run(&mut s, "format.bold", json!({}));
+    let issues = run(&mut s, "review.issues", json!({}));
+    let grammar = issues.as_array().unwrap().iter().find(|i| i["kind"] == "grammar" && i["lang"] == "km").unwrap();
+    assert_eq!(grammar["text"], "សំដី");
+    assert_eq!(grammar["suggestions"][0], "សម្ដី");
+    assert_eq!(grammar["start"]["off"], "Hello «".len());
+    let original = serde_json::to_value(&s.doc).unwrap();
+    run(&mut s, "select.text", json!({"text": "សំដី"}));
+    run(&mut s, "review.applySuggestion", json!({"text": "សម្ដី"}));
+    assert_eq!(text(&s), "Hello «សម្ដី»។ world");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), "Hello «សំដី»។ world");
+    assert_eq!(serde_json::to_value(&s.doc).unwrap(), original, "undo restores formatting as well as raw text");
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "review.language", json!({"lang": "km_KH", "default": true}));
+    assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("km-KH"));
+    run(&mut s, "review.language", json!({"noProof": true}));
+    assert!(run(&mut s, "review.issues", json!({})).as_array().unwrap().is_empty());
+}
+
+#[test]
+fn khmer_repetition_corrections_preserve_suffix_formatting_and_undo() {
+    if !wordcraft_proof::khmer::data_available() {
+        return;
+    }
+    for (word, replacement) in [("ខ្មែ", "ខ្មែរ"), ("សំដី", "សម្ដី")] {
+        let mut s = s();
+        let original_text = format!("«{word}ៗ»។");
+        run(&mut s, "document.setText", json!({"text": original_text}));
+        run(&mut s, "select.text", json!({"text": "ៗ"}));
+        run(&mut s, "format.bold", json!({}));
+        let original = serde_json::to_value(&s.doc).unwrap();
+        let issues = run(&mut s, "review.issues", json!({}));
+        let issue = issues.as_array().unwrap().iter().find(|i| i["text"] == word).unwrap();
+        assert!(issue["suggestions"].as_array().unwrap().iter().any(|v| v == replacement));
+        run(&mut s, "select.text", json!({"text": word}));
+        run(&mut s, "review.applySuggestion", json!({"text": replacement}));
+        assert_eq!(text(&s), format!("«{replacement}ៗ»។"));
+        let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+        assert_eq!(p.props_of_char(format!("«{replacement}").len()).bold, Some(true));
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(serde_json::to_value(&s.doc).unwrap(), original);
+        assert_eq!(text(&s), original_text);
+    }
+}
+
+/// Detecting Vietnamese must not disable Khmer rules or suppress adjacent English grammar.
+#[test]
+fn mixed_khmer_language_boundaries_keep_independent_proofing() {
+    if !wordcraft_proof::khmer::data_available() {
+        return;
+    }
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "hello  ខ្មែរ"}));
+    let issues = run(&mut s, "review.issues", json!({}));
+    assert!(issues.as_array().unwrap().iter().any(|i| i["suggestions"] == json!(["Hello"])), "{issues}");
+    run(&mut s, "document.setText", json!({"text": "Tôi yêu tiếng Việt ពាក្យសំដី"}));
+    let issues = run(&mut s, "review.issues", json!({}));
+    assert!(issues.as_array().unwrap().iter().any(|i| i["lang"] == "km" && i["suggestions"] == json!(["ពាក្យសម្ដី"])), "{issues}");
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "review.language", json!({"noProof": true}));
+    assert_eq!(run(&mut s, "review.issues", json!({})), json!([]));
 }

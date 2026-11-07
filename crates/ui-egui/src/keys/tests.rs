@@ -1335,3 +1335,26 @@ fn typing_with_smart_art_selected_types_into_an_item() {
     let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).expect("still there");
     assert_eq!(g.items[0].text, "Ada", "one undo step for the typing");
 }
+
+/// Khmer proofing never rewrites document text while the input method composes it.
+/// Lexical boundaries never insert ZWSPs or require caret remapping.
+#[test]
+fn khmer_ime_and_proofing_preserve_caret_and_commit_once() {
+    let (ctx, mut app) = alt_frame_app();
+    app.run("document.setText", json!({"text": "Hello "})).unwrap();
+    app.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, "Hello ".len()));
+    alt_frame(&ctx, &mut app, vec![egui::Event::Ime(egui::ImeEvent::Preedit { text: "ខ\u{17d2}មែ".into(), active_range_chars: None })]);
+    let selection = app.session.sel.clone();
+    app.run("review.issues", json!({})).unwrap();
+    assert_eq!(body(&app), "Hello ");
+    assert_eq!(app.session.sel, selection);
+    alt_frame(&ctx, &mut app, vec![egui::Event::Ime(egui::ImeEvent::Commit("ខ\u{17d2}មែរ".into()))]);
+    assert_eq!(body(&app), "Hello ខ\u{17d2}មែរ");
+    assert_eq!(app.session.sel.focus.off, "Hello ខ\u{17d2}មែរ".len());
+    let selection = app.session.sel.clone();
+    app.run("review.issues", json!({})).unwrap();
+    assert_eq!(app.session.sel, selection);
+    assert!(!body(&app).contains('\u{200b}'));
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(body(&app), "Hello ");
+}

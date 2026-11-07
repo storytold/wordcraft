@@ -492,11 +492,18 @@ impl<'a> BreakText<'a> {
 }
 
 /// Mark the clusters a line may break after.
-fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &ResolvedPara) {
-    let opps: std::collections::HashSet<usize> = break_positions(&bt.text, rp).into_iter().filter_map(|i| bt.to_para(i)).collect();
+fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &ResolvedPara) -> Vec<usize> {
+    let mut dictionary = crate::dictionary::breaks(&bt.text);
+    if !dictionary.is_empty() {
+        crate::dictionary::retain_safe(&bt.text, &mut dictionary);
+    }
+    let opps: std::collections::HashSet<usize> = break_positions(&bt.text, rp, &dictionary).into_iter().filter_map(|i| bt.to_para(i)).collect();
     for c in clusters {
         c.break_after = opps.contains(&c.end) || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);
     }
+    // The shared API also supplies authored ZWSP opportunities, including in
+    // other scripts. They must not enable the new dictionary-wrap caret policy.
+    dictionary.into_iter().filter(|&i| !bt.text.get(..i).is_some_and(|s| s.ends_with('\u{200b}'))).filter_map(|i| bt.to_para(i)).collect()
 }
 
 /// The list label, shaped; none on a paragraph containing only a page break: Word hides it there.
@@ -624,7 +631,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut skip = sh.left.clone();
     skip.extend(sh.bare.iter().cloned());
     let bt = BreakText::new(&p.text, skip);
-    mark_break_opportunities(&mut sh.b.clusters, &bt, &rp);
+    let dictionary_wraps = mark_break_opportunities(&mut sh.b.clusters, &bt, &rp);
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
     let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, check_boxes, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
@@ -640,6 +647,8 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         height: 0.0,
         text_len: p.text.len(),
         joined_cluster_starts,
+        dictionary_wraps,
+        joined_wrap_starts: crate::dictionary::joined_boundaries(&bt.text).into_iter().filter_map(|i| bt.to_para(i)).collect(),
         has_page_fields,
         notes,
         issues: env.proofing.map(|o| proof_issues(p, &runs, &o, env.typing_word, is_list_item(doc, p))).unwrap_or_default(),
@@ -676,9 +685,13 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
 /// Neither ordinary nor hyphenated wrapping may split a drawing group inside a grapheme.
 fn keep_graphemes_whole(pl: &mut ParaLayout) {
     for c in &mut pl.clusters {
-        c.break_after &= pl.joined_cluster_starts.binary_search(&c.end).is_err();
+        c.break_after &= pl.joined_cluster_starts.binary_search(&c.end).is_err() && pl.joined_wrap_starts.binary_search(&c.end).is_err();
     }
-    pl.hyph_after.retain(|&k| pl.clusters.get(k as usize).is_some_and(|c| pl.joined_cluster_starts.binary_search(&c.end).is_err()));
+    pl.hyph_after.retain(|&k| {
+        pl.clusters
+            .get(k as usize)
+            .is_some_and(|c| pl.joined_cluster_starts.binary_search(&c.end).is_err() && pl.joined_wrap_starts.binary_search(&c.end).is_err())
+    });
     for k in pl.hyph_after.clone() {
         if let Some(c) = pl.clusters.get_mut(k as usize) {
             c.break_after = true;
@@ -757,7 +770,7 @@ fn break_text<'a>(source: &'a str, skip: &[std::ops::Range<usize>]) -> (std::bor
     }
 }
 
-fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec<usize> {
+fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara, dictionary: &[usize]) -> Vec<usize> {
     let mut found = Vec::new();
     for (i, o) in unicode_linebreak::linebreaks(text) {
         // Word keeps "and/or" and web addresses whole: no break right after a slash (a word
@@ -807,6 +820,11 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
     }
     // Asian typography: kinsoku and breaking Latin words anywhere.
     crate::kinsoku::apply(text, &mut found, rp.kinsoku, rp.word_wrap);
+    // Khmer class SA needs lexical boundaries, calculated on the visible paragraph as a
+    // whole, independently of style runs. Offsets continue to address the original text:
+    // no ZWSP or other segmentation marker is inserted into the document or shaped glyphs.
+    found.extend_from_slice(dictionary);
+    crate::dictionary::retain_safe(text, &mut found);
     found
 }
 

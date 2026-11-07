@@ -408,3 +408,111 @@ fn named_instances_and_collection_members_are_capped() {
     // (under 0.1 s on a loaded machine) only backs up "read once", with room for a busy CI.
     assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
 }
+
+/// A preloaded face with coverage but no GSUB must not hide an installed shaping face.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn loaded_unshaped_khmer_does_not_mask_a_system_shaping_font() {
+    let probe = FontDb::with_font_dirs(system_font_dirs());
+    let shaping = crate::script_fallbacks('ខ').iter().find_map(|name| {
+        let face = probe.face(name, "Regular");
+        (face.covers('ខ') && face.has_layout_tables()).then_some(face)
+    });
+    let Some(shaping) = shaping else {
+        eprintln!("skipped: no installed Khmer OpenType font");
+        return;
+    };
+    // An in-memory fixture keeps the installed face's cmap but hides its GSUB directory tag,
+    // reproducing an AAT-only coverage match without depending on one being installed.
+    let mut bytes = shaping.data().to_vec();
+    for i in 0..bytes.len().saturating_sub(3) {
+        if bytes.get(i..i + 4) == Some(b"GSUB") {
+            bytes.get_mut(i..i + 4).unwrap().copy_from_slice(b"TEST");
+        }
+    }
+    let db = FontDb::with_font_dirs(system_font_dirs());
+    db.faces.write().unwrap().retain(|f| !f.covers('ខ'));
+    assert!(db.add_font(bytes.clone()) > 0);
+    assert!(db.read_faces().iter().any(|f| f.covers('ខ') && !f.has_layout_tables()), "fixture has coverage without shaping");
+    let found = db.fallback_for('ខ', 0).expect("installed Khmer shaping face");
+    assert!(found.has_layout_tables(), "{} masks the installed shaping face", found.family);
+    let run_db = FontDb::with_font_dirs(system_font_dirs());
+    run_db.faces.write().unwrap().retain(|f| !f.covers('ខ'));
+    assert!(run_db.add_font(bytes) > 0);
+    let run = run_db.fallback_for_run(&['ខ', '្', 'ម', 'ែ'], 0, false, false).expect("installed Khmer run face");
+    assert!(run.has_layout_tables(), "{} masks the installed run shaping face", run.family);
+}
+
+/// Script-family preference must never outrank the ability to shape Arabic.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn unshaped_rtl_preference_does_not_reload_fonts_for_each_letter() {
+    let probe = FontDb::with_font_dirs(system_font_dirs());
+    let Some(shaping) = probe.fallback_for('ا', u32::MAX).filter(|f| f.has_layout_tables()) else {
+        eprintln!("skipped: no installed Arabic OpenType font");
+        return;
+    };
+    let letters: Vec<char> = "ابتثجحخدذرزسشصضطظ".chars().filter(|&c| shaping.covers(c)).collect();
+    assert!(letters.len() >= 8);
+    let mut unshaped = shaping.data().to_vec();
+    for i in 0..unshaped.len().saturating_sub(3) {
+        if unshaped.get(i..i + 4) == Some(b"GSUB") {
+            unshaped.get_mut(i..i + 4).unwrap().copy_from_slice(b"TEST");
+        }
+    }
+    let db = FontDb::with_font_dirs(system_font_dirs());
+    db.faces.write().unwrap().retain(|f| !letters.iter().any(|&c| f.covers(c)));
+    let preferred = super::fallback_data::RTL_FALLBACKS[0];
+    assert!(db.add_fonts(vec![(unshaped, Some(preferred.into())), (shaping.data().to_vec(), Some("Shaping fixture".into()))]) >= 2);
+    assert!(db.read_faces().iter().any(|f| f.family == preferred && !f.has_layout_tables()));
+    let loaded = db.read_faces().len();
+    for c in letters {
+        let face = db.fallback_for(c, u32::MAX).unwrap();
+        assert!(face.has_layout_tables(), "{} must shape {c}", face.family);
+        let run = db.fallback_for_run(&[c, 'ا'], u32::MAX, false, false).unwrap();
+        assert!(run.has_layout_tables(), "{} must shape the whole run", run.family);
+        assert_eq!(db.read_faces().len(), loaded, "no system search while a loaded face shapes {c}");
+    }
+}
+
+/// Requesting a style must not lose shaping found by the initial fallback search.
+#[test]
+fn styled_fallback_preserves_required_shaping() {
+    let probe = FontDb::with_font_dirs(system_font_dirs());
+    for c in ['ا', 'ខ', 'क', 'ก', 'A'] {
+        let Some(shaping) = probe.fallback_for(c, u32::MAX).filter(|f| f.has_layout_tables()) else { continue };
+        let db = FontDb::with_font_dirs(vec![]);
+        db.faces.write().unwrap().clear();
+        let family = "Styled shaping fixture";
+        let face = |bytes, style: &str, weight, italic| {
+            let mut f = make_face(FontBytes::Owned(Arc::new(bytes)), shaping.index, family.into(), style.into(), family.into(), Vec::new()).unwrap();
+            f.weight = weight;
+            f.italic = italic;
+            Arc::new(f)
+        };
+        let base = face(shaping.data().to_vec(), "Regular", 400.0, false);
+        let mut unshaped = shaping.data().to_vec();
+        for i in 0..unshaped.len().saturating_sub(3) {
+            if unshaped.get(i..i + 4) == Some(b"GSUB") {
+                unshaped.get_mut(i..i + 4).unwrap().copy_from_slice(b"TEST");
+            }
+        }
+        db.faces.write().unwrap().extend([
+            base.clone(),
+            face(unshaped.clone(), "Bold", 700.0, false),
+            face(unshaped.clone(), "Italic", 400.0, true),
+            face(unshaped, "Bold Italic", 700.0, true),
+        ]);
+        for (bold, italic) in [(true, false), (false, true), (true, true)] {
+            for found in [db.fallback_styled(c, u32::MAX, bold, italic), db.fallback_for_run(&[c], u32::MAX, bold, italic)] {
+                let found = found.unwrap();
+                if crate::needs_layout_tables(c) {
+                    assert!(found.has_layout_tables(), "style lost shaping for {c}");
+                    assert_eq!(found.id, base.id);
+                } else {
+                    assert_ne!(found.id, base.id, "Latin styling must keep working without GSUB");
+                }
+            }
+        }
+    }
+}

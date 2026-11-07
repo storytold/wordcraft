@@ -593,7 +593,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     } else if app.session.selects_whole_story() {
                         app.session.page_hint.min(l.pages.len().saturating_sub(1)) + 1
                     } else {
-                        l.caret_on(&app.session.sel.focus, app.session.page_hint).map(|c| c.page + 1).unwrap_or(1)
+                        app.session.caret_geometry(&l, &app.session.sel.focus).map(|c| c.page + 1).unwrap_or(1)
                     };
                     // A status item: its text, after an icon when it has one (one click target).
                     let st_icon = |ui: &mut Ui, icon: Option<&str>, s: &str| {
@@ -635,7 +635,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     let wtxt = if app.session.sel.is_collapsed() || crate::objects::selected(app).is_some() {
                         status_count_text(unit, counts.in_unit(unit), None)
                     } else {
-                        let selected = crate::count_in_unit(&app.session.selected_text(), unit);
+                        let selected = app.selected_word_count.get(&app.session, unit);
                         status_count_text(unit, counts.in_unit(unit), Some(selected))
                     };
                     let counted = st(ui, &wtxt);
@@ -849,6 +849,53 @@ fn small_icon(ui: &mut Ui, icon: &str, tip: &str) -> bool {
     resp.on_hover_text(tip).clicked()
 }
 
+/// One selection count per document revision, selection and status-bar unit
+/// ([`crate::StatusCount`]), including paragraphs too large for the shared paragraph
+/// cache. Keep this with each window's UI.
+#[derive(Default)]
+pub(crate) struct SelectedWordCount {
+    cached: Option<(SelectionCountKey, usize)>,
+    #[cfg(test)]
+    computations: usize,
+}
+struct SelectionCountKey {
+    document: u64,
+    revision: u64,
+    selection: wordcraft_engine::Selection,
+    unit: crate::StatusCount,
+    // Column blocks and noncontiguous table selections can have the same corners
+    // but select different text. Compare their actual pieces without extracting it.
+    segments: Option<Vec<(wordcraft_doc::Pos, wordcraft_doc::Pos)>>,
+}
+impl SelectedWordCount {
+    fn get(&mut self, session: &wordcraft_engine::Session, unit: crate::StatusCount) -> usize {
+        let id = session.document_id();
+        let rev = session.rev();
+        if let Some((key, count)) = &self.cached
+            && key.document == id
+            && key.revision == rev
+            && key.selection == session.sel
+            && key.unit == unit
+            && key.segments.as_deref() == session.column_segments()
+        {
+            return *count;
+        }
+        let count = crate::count_in_unit(&session.selected_text(), unit);
+        let key = SelectionCountKey {
+            document: id,
+            revision: rev,
+            selection: session.sel.clone(),
+            unit,
+            segments: session.column_segments().map(<[_]>::to_vec),
+        };
+        self.cached = Some((key, count));
+        #[cfg(test)]
+        {
+            self.computations += 1;
+        }
+        count
+    }
+}
 /// [`WordApp::cached_missing_fonts`]: the list, and the warnings by font key.
 pub type MissingFontsCache =
     (std::sync::Arc<Vec<wordcraft_engine::cmd::font::MissingFont>>, std::sync::Arc<std::collections::HashMap<String, String>>);

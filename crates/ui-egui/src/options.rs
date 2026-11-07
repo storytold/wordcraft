@@ -374,6 +374,11 @@ fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
     });
     ui.data_mut(|d| d.insert_temp(id, folder));
     note(ui, "Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.");
+    if wordcraft_engine::proof::khmer::data_available() {
+        note(ui, "Khmer: built-in Aksara dictionary and preferred-spelling rules (available offline).");
+    } else {
+        note(ui, "Khmer proofing data was not included in this build.");
+    }
     note(ui, "An installed Language pack is used after this folder.");
     ui.add_space(6.0);
     ui.label(RichText::new(tl!("Dictionary files")).strong());
@@ -425,6 +430,7 @@ fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
         ProofLang::Tr => tl!("Turkish"),
         ProofLang::Ru => tl!("Russian"),
         ProofLang::Cs => tl!("Czech"),
+        ProofLang::Km => tl!("Khmer"),
         ProofLang::Id => tl!("Indonesian"),
         ProofLang::Es => tl!("Spanish (Spain)"),
         ProofLang::EsMx => tl!("Spanish (Mexico)"),

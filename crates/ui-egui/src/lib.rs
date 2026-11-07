@@ -734,6 +734,7 @@ pub struct WordApp {
     pub missing_fonts: crate::chrome::MissingFontsMemo,
     /// The document's [`StatusCounts`] and the key they were computed for; see [`WordApp::cached_status_counts`].
     pub status_counts: (u64, StatusCounts),
+    pub(crate) selected_word_count: chrome::SelectedWordCount,
     last_autosave: f64,
     /// The tab shown before the Equation tab came up (restored when editing ends).
     pub(crate) equation_prev_tab: Option<String>,

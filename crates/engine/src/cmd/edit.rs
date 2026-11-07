@@ -776,7 +776,8 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
     // Relative pages, Go To's "+2" / "-1": from the page the caret is on.
     let by = v.get("pageBy").and_then(Value::as_i64);
     let rel = by.map(|by| {
-        let here = s.layout().caret_on(&s.sel.focus, s.page_hint).map_or(0, |c| c.page) as i64;
+        let layout = s.layout();
+        let here = s.caret_geometry(&layout, &s.sel.focus).map_or(0, |c| c.page) as i64;
         (here + 1).saturating_add(by).max(1) as u64
     });
     if let Some(pg) = rel.or_else(|| p::u64(v, "page")) {
@@ -793,6 +794,9 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
         if let Some(t) = target {
             s.sel = Selection::caret(t);
             s.page_hint = idx;
+            // A new page can start at the same text offset as the previous
+            // page's line-end caret. Go To chooses the new page's side.
+            s.line_end = None;
         }
         s.push_ui_request(json!({"scrollTo": "caret"}));
         return sel_result(s);
@@ -801,17 +805,20 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
         // Word's built-in bookmark: the top of the document.
         if name == "_top" {
             s.sel = Selection::caret(Pos::body(0, 0));
+            s.line_end = None;
             return sel_result(s);
         }
         // As in Word, the bookmark's text is selected (a caret for an empty bookmark).
         let (from, to) = super::insert::bookmark_range(&s.doc, name).ok_or_else(|| CmdError::Failed(format!("no bookmark `{name}`")))?;
         s.sel = Selection { anchor: from, focus: to };
+        s.line_end = None;
         return sel_result(s);
     }
     if let Some(n) = p::u64(v, "paragraph") {
         let paths = s.doc.para_paths(StoryRef::Body);
         if let Some(path) = paths.get((n.max(1) - 1) as usize) {
             s.sel = Selection::caret(Pos { story: StoryRef::Body, path: path.clone(), off: 0 });
+            s.line_end = None;
         }
         return sel_result(s);
     }

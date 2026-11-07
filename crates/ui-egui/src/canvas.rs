@@ -573,7 +573,8 @@ fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> C
             app.canvas.scroll_to_caret = true;
         }
     }
-    let caret = layout.caret_on(&preview_sel(app).unwrap_or(app.session.sel_ends()).focus, app.session.page_hint);
+    let caret = preview_sel(app)
+        .map_or_else(|| app.session.caret_geometry(layout, &app.session.sel_ends().focus), |sel| layout.caret_on(&sel.focus, app.session.page_hint));
     let dim_body = dims_body(app, layout);
     let grid_story = text_box_host(app, layout).unwrap_or(app.session.sel.focus.story);
     let grid_story = matches!(part_kind(app, grid_story), Some(PartKind::Header | PartKind::Footer)).then_some(grid_story);
@@ -1142,7 +1143,7 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
         let on_cells =
             wordcraft_engine::cmd::table_mouse::cell_rects(layout, &app.session.doc, range).iter().any(|(pi, r)| *pi == page && r.contains(at));
         if !on_cells && let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story) {
-            app.session.sel = wordcraft_engine::Selection::caret(pos);
+            let _ = app.run("caret.set", json!({"pos": pos, "page": page, "y": y}));
         }
     }
     // Right-click: move the caret there (unless inside the selection), then the context menu.
@@ -1153,7 +1154,7 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
     {
         match layout.equation_hit(page, x, y, app.session.sel.focus.story) {
             Some((at, inner)) => {
-                app.session.sel = wordcraft_engine::Selection::caret(at);
+                let _ = app.run("caret.set", json!({"pos": at, "page": page, "y": y}));
                 let _ = app.run("equation.edit", json!({"pos": serde_json::to_value(&inner).unwrap_or_default()}));
             }
             None if app.session.math.is_some() => {
@@ -1174,7 +1175,7 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
         } else if let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story) {
             let (a, b) = app.session.sel.ordered();
             if !(a <= pos && pos <= b) || app.session.sel.is_collapsed() {
-                app.session.sel = wordcraft_engine::Selection::caret(pos);
+                let _ = app.run("caret.set", json!({"pos": pos, "page": page, "y": y}));
             }
             context_suggestions(app);
         }
@@ -1228,11 +1229,15 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     if open {
         app.escape_free = false;
     }
+    let fonts_ready = !open || app.prepare_context_menu_fonts(ui.ctx());
     let menu = crate::rtl::menu(&resp).open_bool(&mut shown);
     let menu = menu.at_position(app.canvas.context_menu_at.unwrap_or(out.inner_rect.left_top()));
     let with_toolbar = crate::mini_toolbar::context_menu_visible(app);
     let menu = if with_toolbar { menu.frame(egui::Frame::NONE).close_behavior(egui::PopupCloseBehavior::IgnoreClicks) } else { menu };
     menu.show(|ui| {
+        if !fonts_ready {
+            return;
+        }
         if with_toolbar {
             crate::mini_toolbar::show_in_context_menu(app, ui);
             ui.add_space(4.0);
@@ -1589,7 +1594,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
         }
         if !math_caret
-            && let Some(c) = layout.caret_on(&preview_sel(app).unwrap_or(&app.session.sel).focus, app.session.page_hint)
+            && let Some(c) = preview_sel(app)
+                .map_or_else(|| app.session.caret_geometry(&layout, &app.session.sel.focus), |sel| layout.caret_on(&sel.focus, app.session.page_hint))
             && let Some(pr) = rects.get(c.page)
         {
             let scale = layout.pages.get(c.page).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));

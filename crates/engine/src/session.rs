@@ -79,6 +79,8 @@ pub struct Session {
     pub find: FindState,
     /// Page x the caret tries to keep on Up/Down.
     pub goal_x: Option<f32>,
+    /// Upstream caret at an unspaced wrap; meaningful only at the current focus.
+    pub line_end: Option<Pos>,
     /// Page the caret was last on (headers/footers repeat on many pages).
     pub page_hint: usize,
     pub registry: Arc<Registry>,

@@ -192,6 +192,9 @@ sync_github_name = true
 [people.dylanmtaylor]
 sync_github_name = true
 
+[people.sungkhum]
+real_name = "Nathan Wells"
+
 [people.entropybeater]
 display_name = "entropybeater"
 

@@ -1,0 +1,486 @@
+{
+  "scope": "current publication core and proof before/after general short-word refinement; preservation, not linguistic accuracy",
+  "real_documents": {
+    "scope": "Real Khmer book text extracted from InDesign files. Word counts are model-produced Khmer spans, not independently annotated linguistic words.",
+    "paragraphs": 3331,
+    "before_word_occurrences": 302428,
+    "after_word_occurrences": 302429,
+    "unchanged_original_word_occurrences": 302427,
+    "split_original_word_occurrences": 1,
+    "added_boundaries": 1,
+    "removed_boundaries": 0,
+    "distinct_original_model_tokens": 4171,
+    "corpus_sha256": "2e62f248cd15b461986f6311f437951c9d682dcb865772a7d4b6ca36d43558a4"
+  },
+  "fixture_results": {
+    "regression": {
+      "total": 18749,
+      "unchanged": 18743,
+      "changed": 6,
+      "removed_breaks": 0,
+      "groups": {
+        "core": {
+          "total": 17168,
+          "changed": 6
+        },
+        "proof": {
+          "total": 1305,
+          "changed": 0
+        },
+        "suggest": {
+          "total": 276,
+          "changed": 0
+        }
+      },
+      "sha256": "efd87a9a6f08243b8d10f1ee98ccb798586deff23d5ada2ea6152d6364b7e848"
+    },
+    "upstream": {
+      "total": 15344,
+      "unchanged": 15338,
+      "changed": 6,
+      "removed_breaks": 0,
+      "groups": {
+        "core": {
+          "total": 15344,
+          "changed": 6
+        }
+      },
+      "sha256": "ddf2a2a10e2a620927388c76446d89dd02552ee62a8baf356e793e0a2bac9786"
+    },
+    "local-idml": {
+      "total": 3331,
+      "unchanged": 3330,
+      "changed": 1,
+      "removed_breaks": 0,
+      "groups": {
+        "core": {
+          "total": 3331,
+          "changed": 1
+        }
+      },
+      "sha256": "2e62f248cd15b461986f6311f437951c9d682dcb865772a7d4b6ca36d43558a4"
+    },
+    "research": {
+      "total": 11,
+      "unchanged": 10,
+      "changed": 1,
+      "removed_breaks": 0,
+      "groups": {
+        "core": {
+          "total": 11,
+          "changed": 1
+        }
+      },
+      "sha256": "a34b0a5cc14aa51d9c1918b7be4cbab77e6fd0872b9270eaa834458c41de9d73"
+    }
+  },
+  "public_changes": [
+    {
+      "id": "regression:3945",
+      "op": "core",
+      "text": "អគ្គិសនីប្លា",
+      "before": {
+        "breaks": [],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [0, 36]
+        ]
+      },
+      "after": {
+        "breaks": [24],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [0, 24],
+          [24, 36]
+        ]
+      }
+    },
+    {
+      "id": "regression:5265",
+      "op": "core",
+      "text": "ទូលាយកជើង",
+      "before": {
+        "breaks": [18],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [0, 18],
+          [18, 27]
+        ]
+      },
+      "after": {
+        "breaks": [15, 18],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [0, 15],
+          [15, 18],
+          [18, 27]
+        ]
+      }
+    },
+    {
+      "id": "regression:6004",
+      "op": "core",
+      "text": "កតិកាលី",
+      "before": {
+        "breaks": [],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [0, 21]
+        ]
+      },
+      "after": {
+        "breaks": [15],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [0, 15],
+          [15, 21]
+        ]
+      }
+    },
+    {
+      "id": "regression:6006",
+      "op": "core",
+      "text": "Latin 🦀 កតិកាលី ១២៣!",
+      "before": {
+        "breaks": [],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [11, 32]
+        ]
+      },
+      "after": {
+        "breaks": [26],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [11, 26],
+          [26, 32]
+        ]
+      }
+    },
+    {
+      "id": "regression:8052",
+      "op": "core",
+      "text": "ជជែកលា",
+      "before": {
+        "breaks": [],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [0, 18]
+        ]
+      },
+      "after": {
+        "breaks": [12],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [0, 12],
+          [12, 18]
+        ]
+      }
+    },
+    {
+      "id": "regression:8054",
+      "op": "core",
+      "text": "Latin 🦀 ជជែកលា ១២៣!",
+      "before": {
+        "breaks": [],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [11, 29]
+        ]
+      },
+      "after": {
+        "breaks": [23],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [11, 23],
+          [23, 29]
+        ]
+      }
+    },
+    {
+      "id": "upstream:3945",
+      "op": "core",
+      "text": "អគ្គិសនីប្លា",
+      "before": {
+        "breaks": [],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [0, 36]
+        ]
+      },
+      "after": {
+        "breaks": [24],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [0, 24],
+          [24, 36]
+        ]
+      }
+    },
+    {
+      "id": "upstream:5265",
+      "op": "core",
+      "text": "ទូលាយកជើង",
+      "before": {
+        "breaks": [18],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [0, 18],
+          [18, 27]
+        ]
+      },
+      "after": {
+        "breaks": [15, 18],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [0, 15],
+          [15, 18],
+          [18, 27]
+        ]
+      }
+    },
+    {
+      "id": "upstream:6004",
+      "op": "core",
+      "text": "កតិកាលី",
+      "before": {
+        "breaks": [],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [0, 21]
+        ]
+      },
+      "after": {
+        "breaks": [15],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [0, 15],
+          [15, 21]
+        ]
+      }
+    },
+    {
+      "id": "upstream:6006",
+      "op": "core",
+      "text": "Latin 🦀 កតិកាលី ១២៣!",
+      "before": {
+        "breaks": [],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [11, 32]
+        ]
+      },
+      "after": {
+        "breaks": [26],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [11, 26],
+          [26, 32]
+        ]
+      }
+    },
+    {
+      "id": "upstream:8052",
+      "op": "core",
+      "text": "ជជែកលា",
+      "before": {
+        "breaks": [],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [0, 18]
+        ]
+      },
+      "after": {
+        "breaks": [12],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [0, 12],
+          [12, 18]
+        ]
+      }
+    },
+    {
+      "id": "upstream:8054",
+      "op": "core",
+      "text": "Latin 🦀 ជជែកលា ១២៣!",
+      "before": {
+        "breaks": [],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [11, 29]
+        ]
+      },
+      "after": {
+        "breaks": [23],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [11, 23],
+          [23, 29]
+        ]
+      }
+    },
+    {
+      "id": "research:3",
+      "op": "core",
+      "text": "សណ្ដូកកបណ្ដែតខ្លួន",
+      "before": {
+        "breaks": [21, 39],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [0, 21],
+          [21, 39],
+          [39, 54]
+        ]
+      },
+      "after": {
+        "breaks": [18, 21, 39],
+        "correct": false,
+        "grammar": [],
+        "standard": null,
+        "words": [
+          [0, 18],
+          [18, 21],
+          [21, 39],
+          [39, 54]
+        ]
+      }
+    }
+  ],
+  "proof_checks": {
+    "mutated_and_edge_inputs": 276,
+    "changed_proof_results": 0,
+    "changed_ids": [],
+    "target": {
+      "requested": {
+        "before": [
+          [
+            0,
+            21,
+            "Spelling",
+            "Km",
+            "អាចមានកំហុសអក្ខរាវិរុទ្ធ",
+            []
+          ]
+        ],
+        "after": []
+      },
+      "accepted": {
+        "before": [],
+        "after": []
+      }
+    }
+  },
+  "performance": {
+    "ordinary": {
+      "before": {
+        "cold_median_us": 13754.291,
+        "warm_median_us": 38.896
+      },
+      "after": {
+        "cold_median_us": 14310.666,
+        "warm_median_us": 39.6875
+      }
+    },
+    "short_word": {
+      "before": {
+        "cold_median_us": 13524.5,
+        "warm_median_us": 9.875
+      },
+      "after": {
+        "cold_median_us": 29160.167,
+        "warm_median_us": 892.375
+      }
+    },
+    "repeated_short_word": {
+      "before": {
+        "cold_median_us": 14491.75,
+        "warm_median_us": 957.8544999999999
+      },
+      "after": {
+        "cold_median_us": 30663.040999999997,
+        "warm_median_us": 2367.1875
+      }
+    }
+  },
+  "performance_scope": "identical optimized dev probes: opt-level 1, dependencies 2; not packaged app typing latency",
+  "binary_sha256": {
+    "before": "f2c585775cdba3be4e9dc68d296279b716ff208c81e01250cbdbc66b05516920",
+    "after": "0376d30a44f5bd26e23bc363d4691b15a76d1c65f314dd6bb85ed70a3e356942"
+  },
+  "source_sha256": {
+    "crates/khmer/src/lib.rs": "b338de808f9c09e5be6b0b1b63af2ea1f9c2f23630b8bb26085b265ca130b11e",
+    "crates/khmer/src/refine.rs": "f93bb42b24c93a16e018de4fa1bdedeb40c26c544f33490bec6b18c4141e205d"
+  },
+  "automatic_real_documents": {
+    "scope": "Same real-document corpus with U+200B removed; other text and controls unchanged. Counts are model spans, not a linguistic gold annotation.",
+    "paragraphs": 3331,
+    "before_word_occurrences": 302020,
+    "after_word_occurrences": 302022,
+    "unchanged_original_word_occurrences": 302018,
+    "changed_paragraphs": 2,
+    "changed_original_word_occurrences": 2,
+    "added_boundaries": 2,
+    "removed_boundaries": 0,
+    "authored_zwsp_removed": 256278,
+    "corpus_sha256": "2e62f248cd15b461986f6311f437951c9d682dcb865772a7d4b6ca36d43558a4",
+    "added_boundaries_matching_authored_zwsp": 1
+  },
+  "contextual_human_review": {
+    "scope": "human follow-up on the real-document short-word refinement",
+    "reviewer": "@sungkhum",
+    "verdict": "acceptable",
+    "source": "Contextual LOCAL review shown in this conversation",
+    "private_text_included": false,
+    "does_not_approve_unrated_synthetic_examples": true
+  }
+}

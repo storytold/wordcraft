@@ -1,6 +1,82 @@
 use super::*;
 use crate::table_resize::tests::{H, cell, screen, steps, table_window};
 
+/// A secondary click at the other visual side of a wrap updates affinity even at the same offset.
+#[test]
+fn right_click_moves_between_dictionary_wrap_sides() {
+    if !wordcraft_engine::proof::khmer::data_available() {
+        return;
+    }
+    let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(&"ភាសា".repeat(100))), Default::default());
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let layout = h.state_mut().session.layout();
+    let (pos, end) = (1.."ភាសា".len() * 100)
+        .find_map(|off| {
+            let pos = Pos::body(0, off);
+            layout.caret_at_line_end(&pos, 0).map(|c| (pos, c))
+        })
+        .unwrap();
+    let start = layout.caret_on(&pos, 0).unwrap();
+    h.state_mut().run("caret.set", json!({"pos": pos, "page": end.page, "y": end.top + end.height / 2.0})).unwrap();
+    assert_eq!(h.state().session.line_end, Some(pos.clone()));
+    let at = page_to_screen(h.state_mut(), start.page, start.x + 0.1, start.top + start.height / 2.0).unwrap();
+    h.event(egui::Event::PointerMoved(at));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+        h.step();
+    }
+    assert_eq!(h.state().session.sel.focus, pos);
+    assert_eq!(h.state().session.line_end, None);
+    assert_eq!(h.state().session.caret_geometry(&layout, &pos), Some(start));
+}
+
+/// Right-clicking inside the equation being edited stays in that equation: going through
+/// `caret.set` must not change the document, its history, or which equation is open.
+#[test]
+fn right_click_inside_an_equation_keeps_editing_it() {
+    let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("")), Default::default());
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        app,
+    );
+    h.state_mut().run("insert.equation", json!({"linear": "x+y+z"})).unwrap();
+    for _ in 0..6 {
+        h.step();
+    }
+    let open = h.state().session.math.clone().expect("the equation is being edited");
+    let (doc, rev, undo) = (h.state().session.doc.clone(), h.state().session.rev(), h.state().session.undo_depth());
+    let layout = h.state_mut().session.layout();
+    let story = h.state().session.sel.focus.story;
+    let equation = layout.equation_box(&open.at, 0).expect("the open equation has layout geometry");
+    let (x, y) = (equation.x + equation.math.width / 2.0, equation.base);
+    let (at, inner) = layout.equation_hit(equation.page, x, y, story).expect("the equation's midpoint is hittable");
+    let screen = page_to_screen(h.state_mut(), equation.page, x, y).unwrap();
+    h.event(egui::Event::PointerMoved(screen));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: screen, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+        h.step();
+    }
+    let edited = h.state().session.math.clone().expect("the right-click keeps the equation open");
+    assert_eq!((edited.at.clone(), at.clone()), (open.at.clone(), open.at));
+    assert_eq!(edited.pos, inner, "the caret is where the click landed");
+    assert_eq!(h.state().session.sel.focus, at);
+    assert!(h.state().session.doc == doc, "a right-click does not edit");
+    assert_eq!(h.state().session.rev(), rev);
+    assert_eq!(h.state().session.undo_depth(), undo, "nor does it add to the history");
+}
+
 /// #3931: while Insert › Table's grid asks for a preview the page is laid out with that
 /// table; the document, its revision and undo history stay as they were, and without a
 /// request the page is the document's own again.
