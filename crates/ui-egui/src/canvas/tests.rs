@@ -821,6 +821,72 @@ fn clicking_vertical_scrollbar_track_advances_one_screen() {
     assert!(after_click_up.abs() < 2.0, "advances one screen up back to top: expected ~0.0, got {after_click_up}");
 }
 
+/// #5853: clicks and drags on page content just outside the vertical scrollbar track do not trigger
+/// paging and can place the caret or start a selection.
+#[test]
+fn clicking_and_dragging_outside_scrollbar_does_not_page() {
+    use egui::accesskit::Role;
+    use egui::{Event, PointerButton};
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    for _ in 0..11 {
+        a.run("text.insert", json!({"text": "A long line of sample text that fills across the page for testing selections."})).unwrap();
+        a.run("layout.break", json!({"kind": "page"})).unwrap();
+    }
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    a.run("caret.docStart", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let bar = h
+        .query_all_by_role(Role::ScrollBar)
+        .map(|n| n.rect())
+        .filter(|r| r.height() > r.width())
+        .max_by(|a, b| a.height().total_cmp(&b.height()))
+        .expect("the canvas's vertical scrollbar");
+
+    let button = |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+
+    // Point just to the left of the scrollbar track (outside egui's scrollbar hit rect).
+    let just_outside = pos2(bar.min.x - 2.0, bar.bottom() - 20.0);
+    h.event(Event::PointerMoved(just_outside));
+    h.step();
+    h.event(button(just_outside, true));
+    h.step();
+    h.event(button(just_outside, false));
+    for _ in 0..3 {
+        h.step();
+    }
+
+    assert_eq!(h.state().canvas.scroll_offset.y, 0.0, "clicking outside the scrollbar track does not page");
+
+    // Dragging just outside the scrollbar does not page.
+    let drag_from = pos2(bar.min.x - 3.0, 300.0);
+    let drag_to = pos2(bar.min.x - 3.0, 350.0);
+    h.event(Event::PointerMoved(drag_from));
+    h.step();
+    h.event(button(drag_from, true));
+    h.step();
+    for k in 1..=4 {
+        h.event(Event::PointerMoved(drag_from + (drag_to - drag_from) * (k as f32 / 4.0)));
+        h.step();
+    }
+    h.event(button(drag_to, false));
+    for _ in 0..3 {
+        h.step();
+    }
+
+    assert_eq!(h.state().canvas.scroll_offset.y, 0.0, "dragging outside the scrollbar track does not page");
+}
+
 /// #3880: the status bar names the page being looked at. With the caret scrolled out of view, that
 /// is the page at the top of the window; while the caret is on screen, its page.
 #[test]

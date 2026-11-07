@@ -762,6 +762,7 @@ struct CanvasFinish<'a> {
     vruler: Option<Rect>,
 }
 
+/// Update scroll offset, scrollbar tip, and current viewed page state for the canvas frame.
 fn update_canvas_scroll_state(
     app: &mut WordApp,
     ui: &mut Ui,
@@ -814,8 +815,16 @@ fn scrollbar_track_paging(app: &mut WordApp, ui: &mut Ui, out: &egui::scroll_are
         return;
     }
     let inner_rect = out.inner_rect;
-    let bar_left = inner_rect.max.x - SCROLLBAR;
-    let bar_right = inner_rect.max.x + SCROLLBAR;
+    let scroll_style = ui.spacing().scroll;
+    let full_width = scroll_style.bar_width;
+    let outer_margin = scroll_style.bar_outer_margin;
+    let outer_edge =
+        (inner_rect.max.x + if scroll_style.floating { 0.0 } else { scroll_style.allocated_width() }).min(ui.clip_rect().max.x) - outer_margin;
+    let bar_left = outer_edge - full_width;
+    let bar_right = outer_edge;
+    if !bar_left.is_finite() || !bar_right.is_finite() || bar_right <= bar_left {
+        return;
+    }
     let handle_min_length = ui.spacing().scroll.handle_min_length;
     let content_h = out.content_size.y;
     let offset_y = app.canvas.scroll_offset.y;
@@ -833,7 +842,7 @@ fn scrollbar_track_paging(app: &mut WordApp, ui: &mut Ui, out: &egui::scroll_are
     let track_above = Rect::from_min_max(pos2(bar_left, inner_rect.min.y), pos2(bar_right, handle_start));
     if track_above.height() > 0.0 {
         let resp = ui.interact(track_above, out.id.with("track_above"), Sense::click_and_drag());
-        if resp.clicked() {
+        if resp.clicked() && resp.interact_pointer_pos().is_some_and(|p| track_above.contains(p)) {
             let target_y = (offset_y - step).max(0.0);
             app.canvas.scroll_request = Some(vec2(app.canvas.scroll_offset.x, target_y));
             app.canvas.scroll_offset.y = target_y;
@@ -844,7 +853,7 @@ fn scrollbar_track_paging(app: &mut WordApp, ui: &mut Ui, out: &egui::scroll_are
     let track_below = Rect::from_min_max(pos2(bar_left, handle_end), pos2(bar_right, inner_rect.max.y));
     if track_below.height() > 0.0 {
         let resp = ui.interact(track_below, out.id.with("track_below"), Sense::click_and_drag());
-        if resp.clicked() {
+        if resp.clicked() && resp.interact_pointer_pos().is_some_and(|p| track_below.contains(p)) {
             let target_y = (offset_y + step).min(max_offset_y);
             app.canvas.scroll_request = Some(vec2(app.canvas.scroll_offset.x, target_y));
             app.canvas.scroll_offset.y = target_y;
