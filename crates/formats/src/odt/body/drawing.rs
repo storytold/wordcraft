@@ -108,6 +108,10 @@ impl Body<'_> {
                 self.frame = None;
                 return;
             }
+            // In line with no stated size, a picture comes at its own: fitted to the text, as
+            // other formats' pictures are. A stated size is the file's.
+            let room = self.sec.text_width();
+            let fit = (w.is_none() && h.is_none() && float.is_none() && room.is_finite() && room > 0.0).then_some(room);
             let inline = match (boxed, eq) {
                 (Some(blocks), _) => {
                     let mut look = std::mem::take(&mut self.frame_look);
@@ -146,19 +150,14 @@ impl Body<'_> {
                         .and_then(|data| picture(data, w, h, alt.trim()))
                         .or_else(|| crate::odt::objects::placeholder(&o.mime).and_then(|p| make_img(p, w, h, alt.trim())));
                     shown.map(|mut img| {
+                        fit_to(&mut img, fit);
                         img.float = float.map(Box::new);
                         img.object = Some(std::sync::Arc::new(o));
                         Inline::Image(img)
                     })
                 }
                 (None, None) => img.and_then(|data| picture(data, w, h, alt.trim())).map(|mut img| {
-                    // In line with no stated size, it comes at its own: fitted to the text, as
-                    // other formats' pictures are. A stated size is the file's.
-                    let room = self.sec.text_width();
-                    if w.is_none() && h.is_none() && float.is_none() && room.is_finite() && room > 0.0 && img.w > room {
-                        img.h = (img.h * room / img.w).max(1.0);
-                        img.w = room.max(1.0);
-                    }
+                    fit_to(&mut img, fit);
                     img.float = float.map(Box::new);
                     if let Some(clip) = self.frame_clip.take() {
                         img.crop = crop_fractions(clip, &img.data);
@@ -412,8 +411,8 @@ pub(in crate::odt) fn picture(data: Vec<u8>, w: Option<f32>, h: Option<f32>, alt
     // picture's proportions.
     let (w, h) = match (w, h) {
         (Some(w), Some(h)) => (w, h),
-        (Some(w), None) => (w, w * img.h / img.w),
-        (None, Some(h)) => (h * img.w / img.h, h),
+        (Some(w), None) => (w, w * height_per_width(&img.data)),
+        (None, Some(h)) => (h / height_per_width(&img.data), h),
         (None, None) => return Some(img),
     };
     // Past what a document holds, it shrinks in proportion.
@@ -424,6 +423,21 @@ pub(in crate::odt) fn picture(data: Vec<u8>, w: Option<f32>, h: Option<f32>, alt
     };
     (img.w, img.h) = (w.max(1.0), h.max(1.0));
     Some(img)
+}
+
+/// `img` shrunk in proportion to `room` points wide, when it's given and the picture is wider.
+fn fit_to(img: &mut model::Img, room: Option<f32>) {
+    if let Some(room) = room.filter(|room| img.w > *room) {
+        img.h = (img.h * room / img.w).max(1.0);
+        img.w = room.max(1.0);
+    }
+}
+
+/// A picture's height for each point of its width, by its own size, before anything caps it (1
+/// when it doesn't say).
+fn height_per_width(data: &[u8]) -> f32 {
+    let own = if wordcraft_metafile::is_metafile(data) { metafile_size(data) } else { model::image_px(data).map(|(w, h)| (w as f32, h as f32)) };
+    own.filter(|(w, h)| w.is_finite() && h.is_finite() && *w > 0.0 && *h > 0.0).map_or(1.0, |(w, h)| h / w)
 }
 
 /// A metafile's own size, points, from its header: a placeable WMF's bounding box in its units
