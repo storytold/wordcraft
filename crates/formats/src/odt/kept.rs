@@ -282,13 +282,63 @@ fn drawing_def(xml: &str) -> bool {
 /// definition both have stays WordCraft's (see [`drawing_def`]), as does one in `changed`, which
 /// the document has changed since it was read. One in `changed` that WordCraft no longer writes
 /// (a deleted style) goes.
-pub(super) fn with_common_as_read(styles: &str, defs: &BTreeMap<String, Arc<str>>, order: &[String], changed: &BTreeSet<String>) -> String {
+pub(super) fn with_common_as_read(
+    styles: &str,
+    defs: &BTreeMap<String, Arc<str>>,
+    order: &[String],
+    changed: &BTreeSet<String>,
+    rewritten: &BTreeMap<String, Option<String>>,
+) -> String {
     with_as_read(styles, "office:styles", "common", defs, order, &|k, d, ours| match ours {
+        _ if rewritten.contains_key(k) => rewritten.get(k).cloned().flatten(),
         Some(o) if drawing_def(o) || changed.contains(k) => Some(o.to_string()),
         None if changed.contains(k) => None,
         // (The default graphic style is the file's: WordCraft's drawings say what they need.)
         _ => Some(d.to_string()),
     })
+}
+
+/// What becomes of the file's styles (`defs`) that `changed` touches but `styles` (the part being
+/// written) doesn't have under the file's key, by those keys: WordCraft's definition from `now`
+/// (all it would write) under the file's names, or `None` for a style it no longer has. `ours`
+/// gives the name WordCraft has a file's style under: paragraphs written as read name the file's.
+pub(super) fn rewritten_defs(
+    styles: &str,
+    now: &str,
+    defs: &BTreeMap<String, Arc<str>>,
+    changed: &BTreeSet<String>,
+    ours: &dyn Fn(&str) -> String,
+) -> BTreeMap<String, Option<String>> {
+    let style_of = |key: &str| {
+        let rest = key.strip_prefix("common:")?;
+        match rest.strip_suffix("|text") {
+            Some(name) => Some((name.to_string(), "|text")),
+            None => (!rest.contains('|')).then(|| (rest.to_string(), "")),
+        }
+    };
+    let names: Vec<(String, String)> =
+        defs.keys().filter_map(|k| style_of(k)).map(|(name, _)| (ours(&name), name)).filter(|(mine, name)| mine != name).collect();
+    let (kids, _) = children(now, "office:styles", "common");
+    let (written, _) = children(styles, "office:styles", "common");
+    let mut out = BTreeMap::new();
+    for key in defs.keys() {
+        let Some((name, suffix)) = style_of(key) else { continue };
+        let mine = format!("common:{}{suffix}", ours(&name));
+        if !changed.contains(&mine) || (mine == *key && written.iter().any(|(k, _)| k == key)) {
+            continue;
+        }
+        let def = kids.iter().find(|(k, _)| *k == mine).and_then(|(_, (a, b))| now.get(*a..*b)).map(|d| {
+            let mut d = d.to_string();
+            for (from, to) in &names {
+                for attr in ["style:name", "style:parent-style-name", "style:next-style-name"] {
+                    d = d.replace(&format!("{attr}=\"{from}\""), &format!("{attr}=\"{to}\""));
+                }
+            }
+            d
+        });
+        out.insert(key.clone(), def);
+    }
+    out
 }
 
 /// Each child of `office:styles` in `styles` (a `styles.xml` WordCraft wrote), as a hash by its

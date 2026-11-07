@@ -237,3 +237,53 @@ fn a_deleted_style_stays_deleted() {
     assert!(!crate::odt::tests::entry(&saved, "content.xml").contains("Eigen"));
     assert!(crate::odt::import(&saved).unwrap().styles.get("Eigen").is_none());
 }
+
+/// A file's style whose name has a space (`My_20_Custom`, WordCraft's `MyCustom`) is one style. An
+/// edit reaches its definition under the file's name, a deletion removes it, and left alone it
+/// stays as read with no second definition. A style nothing uses any more keeps its edit.
+#[test]
+fn a_style_named_with_a_space_is_the_files_style() {
+    use std::sync::Arc;
+    let s = r#"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="Base_20_Style" style:display-name="Base Style" style:family="paragraph" style:parent-style-name="Standard"/><style:style style:name="My_20_Custom" style:display-name="My Custom" style:family="paragraph" style:parent-style-name="Base_20_Style"><style:text-properties fo:font-size="9pt"/></style:style>"#;
+    let styles = format!(r#"<office:document-styles {NS_T}><office:styles>{s}</office:styles></office:document-styles>"#);
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="My_20_Custom">One</text:p><text:p text:style-name="My_20_Custom">Two</text:p><text:p text:style-name="Base_20_Style">Three</text:p></office:text></office:body></office:document-content>"#
+    );
+    let bytes = package(&content, Some(&styles));
+    let open = || import(&bytes).unwrap();
+    let def = |xml: &str, name: &str| xml.split("<style:style ").find(|d| d.starts_with(&format!(r#"style:name="{name}""#))).map(String::from);
+    let id = open().body[0].as_para().unwrap().props.style.clone().unwrap();
+
+    let saved = styles_of(&export(&open()).unwrap());
+    assert!(def(&saved, "My_20_Custom").is_some_and(|d| d.contains(r#"fo:font-size="9pt""#)), "as read: {saved}");
+    assert!(def(&saved, "MyCustom").is_none(), "no second one: {saved}");
+
+    // Edited: the paragraphs written as read name the file's definition, so that takes the edit.
+    let mut d = open();
+    Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(21.0);
+    let bytes_saved = export(&d).unwrap();
+    let saved = styles_of(&bytes_saved);
+    let mine = def(&saved, "My_20_Custom").unwrap_or_else(|| panic!("the file's name: {saved}"));
+    assert!(mine.contains(r#"fo:font-size="21pt""#) && !saved.contains(r#"fo:font-size="9pt""#), "{saved}");
+    assert!(mine.contains(r#"style:parent-style-name="Base_20_Style""#), "its parent, by the file's name: {mine}");
+    assert!(content_of(&bytes_saved).contains(r#"text:style-name="My_20_Custom""#));
+    let back = import(&bytes_saved).unwrap();
+    assert_eq!(back.styles.resolve_char(back.body[0].as_para().unwrap().props.style.as_deref(), &Default::default()).size, 21.0);
+
+    // Deleted: it stays deleted.
+    let mut d = open();
+    Arc::make_mut(&mut d.styles).remove(&id);
+    d.restyle(&id, None);
+    let bytes_saved = export(&d).unwrap();
+    let saved = styles_of(&bytes_saved);
+    assert!(def(&saved, "My_20_Custom").is_none() && def(&saved, "MyCustom").is_none(), "{saved}");
+    assert!(def(&saved, "Base_20_Style").is_some(), "the others stay: {saved}");
+    assert!(import(&bytes_saved).unwrap().styles.get(&id).is_none());
+
+    // Nothing uses it any more, and it is edited: the edit is saved, not the style lost.
+    let mut d = open();
+    d.restyle(&id, None);
+    Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(21.0);
+    let saved = styles_of(&export(&d).unwrap());
+    assert!(def(&saved, "My_20_Custom").is_some_and(|m| m.contains(r#"fo:font-size="21pt""#)), "{saved}");
+}

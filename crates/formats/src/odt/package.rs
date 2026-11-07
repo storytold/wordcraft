@@ -769,11 +769,16 @@ fn conn_kinds(blocks: &[FBlock]) -> super::HashMap<u32, wordcraft_doc::para::Sha
 
 /// What WordCraft would write for each child of `office:styles` in `doc`, as hashes by its key.
 pub(super) fn style_prints(doc: &Document) -> std::collections::BTreeMap<String, u64> {
+    super::kept::prints(&model_styles(doc))
+}
+
+/// What WordCraft would write of `doc`'s style definitions: all of them, used or not.
+fn model_styles(doc: &Document) -> String {
     let ids = |custom: fn(&Document, &str) -> bool| doc.styles.styles.iter().filter(|s| custom(doc, &s.id)).map(|s| s.id.clone()).collect();
     let page = [(String::new(), doc.last_section.clone())];
     let xml = styles_xml(doc, &page, &[], "", &ids(model::is_custom_style));
     let text = char_styles(doc, &ids(model::is_custom_char_style));
-    super::kept::prints(&xml.replacen("</office:styles>", &format!("{text}</office:styles>"), 1))
+    xml.replacen("</office:styles>", &format!("{text}</office:styles>"), 1)
 }
 
 /// `styles` with the file's own style definitions except those `doc` has since changed (see
@@ -788,7 +793,12 @@ fn styles_as_read(doc: &Document, kept: Option<&wordcraft_doc::kept::KeptXml>, s
             used.2.entry(name.to_string()).or_insert_with(|| d.clone());
         }
     }
-    super::kept::with_common_as_read(&styles, &k.defs, &k.order, &super::kept::changed(&k.style_prints, &style_prints(doc)))
+    let now = model_styles(doc);
+    let changed = super::kept::changed(&k.style_prints, &super::kept::prints(&now));
+    // The name WordCraft has a style of the file's under (`My_20_Custom` is `MyCustom`).
+    let ours = |name: &str| super::writer::odf_name(&super::styles::style_id(name));
+    let rewritten = super::kept::rewritten_defs(&styles, &now, &k.defs, &changed, &ours);
+    super::kept::with_common_as_read(&styles, &k.defs, &k.order, &changed, &rewritten)
 }
 
 /// The package files the file's own definitions refer to, and those the markup written as read
