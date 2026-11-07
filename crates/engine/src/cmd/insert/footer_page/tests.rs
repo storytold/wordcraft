@@ -331,3 +331,32 @@ fn a_heading_or_list_item_is_not_cut_in_two() {
         assert_eq!(s.doc, before, "{style}");
     }
 }
+
+/// A document whose first page already has its own first-page footer (Different First Page).
+fn book_with_own_first_footer(pages: usize) -> Session {
+    let mut s = book(pages);
+    let own = vec![para_block(Paragraph::with_text("Own first page footer", Default::default()).styled("Footer"))];
+    let id = s.doc.try_add_part(PartKind::Footer, own).unwrap();
+    s.doc.last_section.title_page = true;
+    s.doc.last_section.footers.first = Some(id);
+    s.touch();
+    s
+}
+
+fn first_page_footer(s: &mut Session) -> Option<String> {
+    let l = s.layout();
+    let blocks = l.pages.first().and_then(|pg| shown_blocks(&s.doc, pg.footer_story))?;
+    Some(blocks.iter().filter_map(|b| if let Block::Para(p) = &**b { Some(p.text.clone()) } else { None }).collect::<Vec<_>>().join("\n"))
+}
+
+#[test]
+fn showing_the_first_page_again_brings_back_its_own_footer() {
+    let mut s = book_with_own_first_footer(3);
+    let own = Some("Own first page footer".to_string());
+    assert_eq!(first_page_footer(&mut s), own);
+    hide(&mut s, 1).unwrap();
+    assert_eq!(shown(&mut s), vec![false, true, true]);
+    show(&mut s, 1).unwrap();
+    assert_eq!(shown(&mut s), vec![true; 3]);
+    assert_eq!(first_page_footer(&mut s), own, "the page shows its own footer, not a neighbour's");
+}

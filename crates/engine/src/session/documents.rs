@@ -71,6 +71,7 @@ pub struct DocState {
     pub(super) typing: Option<TypedWord>,
     pub(super) originals: std::collections::HashMap<String, String>,
     pub(super) picture_looks: std::collections::HashMap<String, crate::cmd::objects::PictureLook>,
+    pub(super) hidden_first_footers: std::collections::BTreeMap<u32, wordcraft_doc::Blocks>,
     pub(super) versions: Vec<(String, String, Document)>,
     pub(super) autosave: bool,
     pub(super) bib_style: String,
@@ -125,6 +126,7 @@ impl DocState {
             typing: None,
             originals: Default::default(),
             picture_looks: Default::default(),
+            hidden_first_footers: Default::default(),
             versions: Vec::new(),
             autosave: true,
             bib_style,
@@ -225,6 +227,7 @@ impl Session {
             typing: _,
             originals: _,
             picture_looks: _,
+            hidden_first_footers: _,
             versions: _,
             autosave: _,
             bib_style: _,
@@ -317,6 +320,7 @@ impl Session {
             typing,
             originals,
             picture_looks,
+            hidden_first_footers,
             versions,
             autosave,
             bib_style,
@@ -364,6 +368,7 @@ impl Session {
         swap(&mut self.typing, typing);
         swap(&mut self.originals, originals);
         swap(&mut self.picture_looks, picture_looks);
+        swap(&mut self.hidden_first_footers, hidden_first_footers);
         swap(&mut self.versions, versions);
         swap(&mut self.autosave, autosave);
         swap(&mut self.bib_style, bib_style);

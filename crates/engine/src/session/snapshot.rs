@@ -111,6 +111,7 @@ impl Session {
             typing: _,
             originals: _,
             picture_looks: _,
+            hidden_first_footers: _,
             last_command: _,
             recording: _,
             macros: _,

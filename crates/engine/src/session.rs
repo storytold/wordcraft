@@ -167,6 +167,9 @@ pub struct Session {
     /// Picture effects, styles and borders: drawn media key → what was drawn on which bitmap,
     /// so the next one replaces them instead of drawing over them (#2052).
     pub picture_looks: std::collections::HashMap<String, crate::cmd::objects::PictureLook>,
+    /// Own first-page footers that `layout.pageFooterVisible` replaced by an empty one: the empty
+    /// part's id → what the page showed, so showing the page again brings it back.
+    pub(crate) hidden_first_footers: std::collections::BTreeMap<u32, wordcraft_doc::Blocks>,
     /// Last mutating command (Repeat).
     pub last_command: Option<(String, Value)>,
     /// Macro being recorded: (name, steps).

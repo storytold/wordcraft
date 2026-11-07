@@ -419,12 +419,15 @@ fn show(s: &mut Session, layout: &DocLayout, idx: usize, before: &View) -> Resul
     let orig = blocks_of(&s.doc, pg.footer_story).cloned().unwrap_or_else(blank_footer);
     // First the simple way back: undo what hiding did, which leaves the file as it was.
     let backup = s.doc.clone();
-    let undone = if first_of_section(layout, idx) { drop_first_page(s, layout, idx) } else { relink(s, layout, idx) };
+    let stash = s.hidden_first_footers.clone();
+    let undone =
+        if first_of_section(layout, idx) { restore_first_page(s, layout, idx) || drop_first_page(s, layout, idx) } else { relink(s, layout, idx) };
     if undone {
         if verify(s, before, idx, true).is_ok() {
             return Ok(());
         }
         s.doc = backup;
+        s.hidden_first_footers = stash;
     }
     set_page_footer(s, layout, idx, content, orig)?;
     verify(s, before, idx, true)
@@ -482,8 +485,22 @@ fn set_first_page(s: &mut Session, layout: &DocLayout, idx: usize, content: Bloc
             break;
         }
     }
+    // Hiding a page that had its own first-page footer: keep what it showed, to bring it back
+    // when the page is shown again (the file only has the empty footer in the meantime).
+    if let Some(old) = replaced {
+        let kept = blocks_of(&s.doc, Some(old)).filter(|b| !blocks_blank(b)).cloned();
+        if let Some(blocks) = kept.filter(|_| sec.title_page && blocks_blank(&content_of(&s.doc, id))) {
+            s.hidden_first_footers.insert(id, blocks);
+        }
+        s.hidden_first_footers.remove(&old);
+    }
     drop_if_unreferenced(&mut s.doc, replaced);
     Ok(())
+}
+
+/// The blocks of footer part `id`, empty if it is gone.
+fn content_of(doc: &Document, id: u32) -> Blocks {
+    blocks_of(doc, Some(id)).cloned().unwrap_or_default()
 }
 
 /// Any other page: alone in a section of its own, see the module docs.
@@ -552,6 +569,24 @@ fn pin_next_section(s: &mut Session, sections: &[(usize, SectionProps)], sidx: u
         slot_set(&mut s.doc.section_mut(*n_end).footers, slot, Some(copy));
     }
     Ok(())
+}
+
+/// The first page was hidden over an own first-page footer that was kept aside (see
+/// [`set_first_page`]): put that footer back in place of the empty one. Whether anything changed.
+fn restore_first_page(s: &mut Session, layout: &DocLayout, idx: usize) -> bool {
+    let Some(pg) = layout.pages.get(idx) else { return false };
+    let sections = s.doc.sections();
+    let sidx = pg.section.min(sections.len().saturating_sub(1));
+    let Some((end, sec)) = sections.get(sidx).map(|(e, p)| (*e, (*p).clone())) else { return false };
+    let Some(own) = sec.footers.first else { return false };
+    if !sec.title_page || !blocks_blank(&content_of(&s.doc, own)) {
+        return false;
+    }
+    let Some(kept) = s.hidden_first_footers.remove(&own) else { return false };
+    let Ok(id) = add_part(s, PartKind::Footer, kept) else { return false };
+    s.doc.section_mut(end).footers.first = Some(id);
+    drop_if_unreferenced(&mut s.doc, Some(own));
+    true
 }
 
 /// Hiding a first page left Different First Page on with an empty first-page footer: turn both
