@@ -38,6 +38,7 @@ fn in_table(s: &Session) -> Option<&'static str> {
     if s.sel.focus.path.cell().is_some() { None } else { Some("the cursor isn't in a table") }
 }
 
+/// Register Table Design and Table Layout commands (including text wrapping options in Table Properties), their parameters and ribbon locations.
 pub fn specs() -> Vec<CommandSpec> {
     let t = |c: CommandSpec| c.when(in_table);
     vec![
@@ -225,7 +226,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"value"?: bool} (true: the first column stands at the right; without a value it toggles)"#)),
         t(CommandSpec::new("table.properties", "Properties", "Table Layout › Table", properties).params(
-            r#"{"align"?: "left|center|right", "rtl"?: bool, "width"?: pt|null, "widthPct"?: percent, "indent"?: pt, "rowHeight"?: pt|null, "rowHeightRule"?: "atLeast|exact", "allowBreak"?: bool, "headerRow"?: bool, "columnWidth"?: pt, "cellWidth"?: pt|null, "valign"?: "top|center|bottom"} (row, column and cell settings apply to the selected rows, columns and cells, or the caret's; without settings it returns the caret's current ones)"#,
+            r#"{"align"?: "left|center|right", "rtl"?: bool, "width"?: pt|null, "widthPct"?: percent, "indent"?: pt, "rowHeight"?: pt|null, "rowHeightRule"?: "atLeast|exact", "allowBreak"?: bool, "headerRow"?: bool, "columnWidth"?: pt, "cellWidth"?: pt|null, "valign"?: "top|center|bottom", "wrapping"?: "none|around"} (row, column and cell settings apply to the selected rows, columns and cells, or the caret's; without settings it returns the caret's current ones)"#,
         )),
         CommandSpec::new("table.fromText", "Convert Text to Table", "Insert › Tables", from_text)
             .params(r#"{"separator"?: "tab|comma|paragraph|other", "char"?: string (with other), "columns"?: n, "autofit"?: "initial|fixed|contents|window", "width"?: pt (initial column width, 0 = Auto, at most 1584)}"#),

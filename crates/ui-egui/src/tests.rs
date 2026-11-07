@@ -991,6 +991,29 @@ fn table_properties_button_opens_the_dialog() {
     let basis = g.clone();
     g.rtl = true;
     assert_eq!(g.changes(&basis), json!({"rtl": true}));
+    // Text wrapping (#5884): None (inline) vs Around (floating).
+    assert!(basis.can_wrap, "top-level body table can wrap text");
+    assert_eq!(basis.wrapping, "none");
+    let mut w = basis.clone();
+    w.wrapping = "around".into();
+    assert_eq!(w.changes(&basis), json!({"wrapping": "around"}));
+    a.run("table.properties", json!({"wrapping": "around"})).unwrap();
+    let t = a.session.doc.table(a.session.sel.focus.story, &tp).unwrap();
+    assert!(t.props.float.is_some(), "around wrapping floats the table");
+    assert_eq!(dialogs::TableForm::read(&a).unwrap().wrapping, "around");
+    a.run("table.properties", json!({"wrapping": "none"})).unwrap();
+    let t = a.session.doc.table(a.session.sel.focus.story, &tp).unwrap();
+    assert!(t.props.float.is_none(), "none wrapping places the table inline");
+    assert_eq!(dialogs::TableForm::read(&a).unwrap().wrapping, "none");
+
+    // Nested table cannot wrap around.
+    a.run("insert.table", json!({"rows": 1, "cols": 1})).unwrap();
+    let f_nested = dialogs::TableForm::read(&a).unwrap();
+    assert!(!f_nested.can_wrap, "nested table cannot wrap text");
+    assert_eq!(f_nested.wrapping, "none");
+    let mut w_nested = f_nested.clone();
+    w_nested.wrapping = "around".into();
+    assert_eq!(w_nested.changes(&f_nested), json!({}), "disabled wrapping produces no command parameter");
 }
 
 /// #4857: with the whole table selected, a row check box the rows differ in shows as mixed and

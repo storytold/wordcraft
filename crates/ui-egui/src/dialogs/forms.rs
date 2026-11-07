@@ -176,6 +176,10 @@ pub struct TableForm {
     /// `left`, `center` or `right`.
     pub align: String,
     pub indent: f32,
+    /// Text wrapping: `none` or `around`.
+    pub wrapping: String,
+    /// Whether text wrapping can be changed (only top-level tables in the body text).
+    pub can_wrap: bool,
     /// Table direction: right to left (`w:bidiVisual`).
     pub rtl: bool,
     pub row_height_on: bool,
@@ -268,6 +272,8 @@ impl TableForm {
             }
             .into(),
             indent: fin(t.props.indent.unwrap_or(0.0)) / k,
+            wrapping: if t.props.float.is_some() { "around" } else { "none" }.into(),
+            can_wrap: s.sel.focus.story == wordcraft_doc::StoryRef::Body && tp.0.len() == 1,
             rtl: t.props.bidi_visual,
             row_height_on: row.height.is_some() && row.height_rule != HeightRule::Auto,
             row_height: fin(row.height.unwrap_or(18.0)) / k,
@@ -300,6 +306,9 @@ impl TableForm {
         }
         if moved(self.indent, basis.indent) {
             v.insert("indent".into(), json!(self.indent * k));
+        }
+        if self.wrapping != basis.wrapping && self.can_wrap {
+            v.insert("wrapping".into(), json!(self.wrapping));
         }
         if self.rtl != basis.rtl {
             v.insert("rtl".into(), json!(self.rtl));
@@ -382,6 +391,7 @@ pub fn table_grid_picker(ui: &mut Ui, app: &mut WordApp) {
 /// The Table Properties dialog's fields: Table, Row, Column and Cell sections.
 pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
     let unit = crate::options::unit();
+    /// Format a length field in the user's unit.
     fn len(v: &mut f32, lo: f32, unit: wordcraft_geom::Unit) -> egui::DragValue<'_> {
         egui::DragValue::new(v).speed(0.01).range(lo..=22.0).measure(unit).max_decimals(2)
     }
@@ -409,6 +419,17 @@ pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
             r.cell(|ui| ui.label(tl!("Indent from left:")));
             r.cell(|ui| {
                 ui.add_enabled(f.align == "left", egui::DragValue::new(&mut f.indent).speed(0.01).range(-11.0..=22.0).measure(unit).max_decimals(2))
+            });
+        });
+        t.row(|r| {
+            r.cell(|ui| ui.label(tl!("Text wrapping:")));
+            r.cell(|ui| {
+                ui.horizontal(|ui| {
+                    for (v, l) in [("none", "None"), ("around", "Around")] {
+                        let enabled = v == "none" || f.can_wrap;
+                        ui.add_enabled(enabled, egui::RadioButton::new(f.wrapping == v, tl!(l))).clicked().then(|| f.wrapping = v.into());
+                    }
+                });
             });
         });
         t.row(|r| {
