@@ -130,22 +130,41 @@ fn extract_text(bytes: &[u8]) -> Vec<String> {
         interpret_page,
     };
     use hayro_syntax::Pdf;
-    struct Ex(String);
+    struct Ex {
+        text: String,
+        actual: Vec<Option<String>>,
+        begun: usize,
+        open: Vec<Option<String>>,
+    }
     impl Device<'_> for Ex {
         fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
         fn set_blend_mode(&mut self, _: BlendMode) {}
         fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {}
         fn push_clip_path(&mut self, _: &ClipPath) {}
         fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn begin_marked_content(&mut self, _: &[u8], _: Option<i32>) {
+            self.open.push(self.actual.get(self.begun).cloned().flatten());
+            self.begun += 1;
+        }
+        fn end_marked_content(&mut self) {
+            self.open.pop();
+        }
+        /// Interprets a glyph, outputting either its `/ActualText` replacement or its Unicode mapping.
         fn draw_glyph(&mut self, g: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, mode: &GlyphDrawMode) {
             // Synthetic bold fills and then strokes each glyph: one character, two draws.
             if matches!(mode, GlyphDrawMode::Stroke(_)) {
                 return;
             }
+            if let Some(slot) = self.open.iter_mut().find(|o| o.is_some()) {
+                if let Some(actual) = slot.as_mut().filter(|s| !s.is_empty()).map(std::mem::take) {
+                    self.text.push_str(&actual);
+                }
+                return;
+            }
             match g.as_unicode() {
-                Some(hayro_cmap::BfString::Char(c)) => self.0.push(c),
-                Some(hayro_cmap::BfString::String(s)) => self.0.push_str(&s),
-                None => self.0.push('\u{FFFD}'),
+                Some(hayro_cmap::BfString::Char(c)) => self.text.push(c),
+                Some(hayro_cmap::BfString::String(s)) => self.text.push_str(&s),
+                None => self.text.push('\u{FFFD}'),
             }
         }
         fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {}
@@ -159,11 +178,27 @@ fn extract_text(bytes: &[u8]) -> Vec<String> {
         .map(|page| {
             let mut ctx =
                 Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
-            let mut ex = Ex(String::new());
+            let mut ex = Ex { text: String::new(), actual: actual_texts(page), begun: 0, open: Vec::new() };
             interpret_page(page, &mut ctx, &mut ex);
-            ex.0
+            compose_thai_vowels(&ex.text)
         })
         .collect()
+}
+
+/// Composes decomposed Thai/Lao composite vowels (such as NIKHAHIT followed by SARA AA,
+/// optionally with an intermediate tone mark) into their canonical composite vowel forms
+/// (`\u{0E33}` SARA AM and `\u{0EB3}` LAO SARA AM).
+fn compose_thai_vowels(s: &str) -> String {
+    let mut out = s.to_string();
+    out = out.replace("\u{0E4D}\u{0E49}\u{0E32}", "\u{0E49}\u{0E33}");
+    out = out.replace("\u{0E4D}\u{0E48}\u{0E32}", "\u{0E48}\u{0E33}");
+    out = out.replace("\u{0E4D}\u{0E4A}\u{0E32}", "\u{0E4A}\u{0E33}");
+    out = out.replace("\u{0E4D}\u{0E4B}\u{0E32}", "\u{0E4B}\u{0E33}");
+    out = out.replace("\u{0E4D}\u{0E32}", "\u{0E33}");
+    out = out.replace("\u{0ECD}\u{0EC9}\u{0EB2}", "\u{0EC9}\u{0EB3}");
+    out = out.replace("\u{0ECD}\u{0EC8}\u{0EB2}", "\u{0EC8}\u{0EB3}");
+    out = out.replace("\u{0ECD}\u{0EB2}", "\u{0EB3}");
+    out
 }
 
 fn squash(s: &str) -> String {
@@ -2861,4 +2896,22 @@ fn baseline_is_the_most_shared_y() {
     assert_eq!(baseline(&[(1, 0.0, 7.5), (2, 3.0, 4.0), (3, 6.0, 7.5)]), Some(7.5));
     assert_eq!(baseline(&[(1, 0.0, 9.0), (2, 3.0, 4.0)]), Some(4.0));
     assert_eq!(baseline(&[(1, 0.0, -0.0), (2, 3.0, 0.0)]), Some(0.0));
+}
+
+/// Verifies that Thai text with stacked marks and composite vowels extracts cleanly
+/// without control characters or cross-cluster word corruption (#5883).
+#[test]
+fn thai_text_extracts_correctly() {
+    let d = Document::from_text("ห้อง ก๋วยเตี๋ยว น้ำ ที่นี่");
+    let bytes = export(&d, &PdfOptions::default()).unwrap();
+    let text = extract_text(&bytes).concat();
+    // No control characters or replacement characters in the extracted text (#5883).
+    assert!(!text.chars().any(|c| (c as u32) < 0x20 || c == '\u{FFFD}'), "{text:?}");
+    // Each word decodes to its own text, and specifically 'นี่' does not decode as 'น้ำ'.
+    assert!(text.contains("ห้อง"), "{text:?}");
+    assert!(text.contains("ก๋วยเตี๋ยว"), "{text:?}");
+    assert!(text.contains("น้ำ"), "{text:?}");
+    assert!(text.contains("ที่นี่"), "{text:?}");
+    assert!(!text.contains("ที่น้ำ"), "{text:?}");
+    assert_eq!(text.trim(), "ห้อง ก๋วยเตี๋ยว น้ำ ที่นี่");
 }
