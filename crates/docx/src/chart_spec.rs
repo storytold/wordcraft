@@ -224,6 +224,9 @@ fn series(w: &mut W, spec: &ChartSpec, i: usize, s: &ChartSeries) {
     }
     series_props(w, s);
     series_marker(w, k, s);
+    if matches!(k, ChartType::Column | ChartType::ColumnStacked | ChartType::Bar | ChartType::BarStacked) {
+        w.empty("c:invertIfNegative", &[("val", "0")]);
+    }
     if let Some(on) = s.labels {
         w.open("c:dLbls", &[]);
         for (name, show) in [
@@ -237,9 +240,6 @@ fn series(w: &mut W, spec: &ChartSpec, i: usize, s: &ChartSeries) {
             w.empty(name, &[("val", if show { "1" } else { "0" })]);
         }
         w.close("c:dLbls");
-    }
-    if matches!(k, ChartType::Column | ChartType::ColumnStacked | ChartType::Bar | ChartType::BarStacked) {
-        w.empty("c:invertIfNegative", &[("val", "0")]);
     }
     let code = s.fmt.as_deref().unwrap_or("General");
     if k == ChartType::Scatter {
@@ -673,6 +673,11 @@ mod tests {
             ["c:barDir", "c:grouping", "c:varyColors", "c:ser", "c:ser", "c:ser", "c:dLbls", "c:gapWidth", "c:overlap", "c:axId", "c:axId"]
         );
         assert_eq!(names(bar.child("c:ser").unwrap()), ["c:idx", "c:order", "c:tx", "c:invertIfNegative", "c:cat", "c:val"]);
+        // A series with its own labels keeps `c:invertIfNegative` ahead of `c:dLbls` (CT_BarSer).
+        spec.series[0].labels = Some(true);
+        let labelled = parse(&spec);
+        let ser = labelled.child("c:chart").unwrap().child("c:plotArea").unwrap().child("c:barChart").unwrap().child("c:ser").unwrap();
+        assert_eq!(names(ser), ["c:idx", "c:order", "c:tx", "c:invertIfNegative", "c:dLbls", "c:cat", "c:val"]);
         let val_ax = plot.child("c:valAx").unwrap();
         assert_eq!(
             names(val_ax),
