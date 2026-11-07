@@ -51,7 +51,11 @@ pub fn is_east_asian(c: char) -> bool {
 
 /// Adjust the break opportunities `opps` (byte offsets into `text`: a line may start there) for
 /// the paragraph's kinsoku and word-wrap settings. The result is sorted and has no duplicates.
-pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool) {
+///
+/// `force_char_break` is set only for vertically stacked text (every character on its own line);
+/// it extends the `!word_wrap` breaks to Thai and Lao characters as well. For ordinary paragraphs
+/// with `word_wrap = false`, Thai/Lao text keeps its ICU4X dictionary boundaries instead.
+pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool, force_char_break: bool) {
     let next_char = |i: usize| text.get(i..).and_then(|t| t.chars().next());
     let prev_char = |i: usize| text.get(..i).and_then(|t| t.chars().next_back());
     if kinsoku {
@@ -64,10 +68,16 @@ pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool) 
             }
         }
     }
-    if !word_wrap {
+    if !word_wrap || force_char_break {
         // Between any two letters or digits that are not East Asian (whole graphemes, so accents
-        // stay with their letters).
-        let latin = |g: &str| g.chars().next().is_some_and(|c| c.is_alphanumeric() && !is_east_asian(c));
+        // stay with their letters). Thai/Lao are excluded from the ordinary word_wrap=false path
+        // so ICU4X dictionary boundaries are preserved; force_char_break (stacked text) includes
+        // them to get one character per line.
+        let latin = |g: &str| {
+            g.chars()
+                .next()
+                .is_some_and(|c| c.is_alphanumeric() && !is_east_asian(c) && (force_char_break || !wordcraft_doc::cluster::is_thai_lao(c)))
+        };
         let mut prev: Option<&str> = None;
         for (i, g) in text.grapheme_indices(true) {
             if prev.is_some_and(latin) && latin(g) {
@@ -134,7 +144,7 @@ mod tests {
     /// Where a line may start, as the text from there to the next opportunity.
     fn breaks(text: &str, kinsoku: bool, word_wrap: bool) -> Vec<String> {
         let mut opps: Vec<usize> = unicode_linebreak::linebreaks(text).map(|(i, _)| i).filter(|&i| i < text.len()).collect();
-        apply(text, &mut opps, kinsoku, word_wrap);
+        apply(text, &mut opps, kinsoku, word_wrap, false);
         opps.iter().map(|&i| text.get(i..).and_then(|t| t.chars().next()).map(String::from).unwrap_or_default()).collect()
     }
 
@@ -190,4 +200,5 @@ mod tests {
             assert!(super::NO_START.contains(c), "NO_START (行頭禁則) must hold U+{:04X} {c}", c as u32);
         }
     }
+
 }
