@@ -901,9 +901,26 @@ pub fn split_row_keeping_cells(row: &RowLayout, cut: f32) -> Option<(RowLayout, 
 }
 
 fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLayout, RowLayout)> {
+    try_split_row(row, cut, whole_cells).ok()
+}
+
+/// The nearest possible split at or below `cut`, skipping intervals through a cell's first line.
+pub(crate) fn split_row_before(row: &RowLayout, mut cut: f32, whole_cells: bool) -> Option<(RowLayout, RowLayout, f32)> {
+    for _ in 0..=row.cells.len() {
+        match try_split_row(row, cut, whole_cells) {
+            Ok((a, b)) => return Some((a, b, cut)),
+            Err(before) if before > 0.0 && before < cut - 0.01 => cut = before,
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// A rejected split supplies the cut before its blocking first line, or zero when nothing fits.
+fn try_split_row(row: &RowLayout, cut: f32, whole_cells: bool) -> Result<(RowLayout, RowLayout), f32> {
     // Also rejects a NaN cut.
     if !(cut > 0.0 && cut < row.height) {
-        return None;
+        return Err(0.0);
     }
     let limit = cut - row.bottom.clamp(0.0, cut);
     let fits = |bottom: f32| bottom <= limit + 0.01;
@@ -949,7 +966,7 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
             && crate::item_bottom(y, para, l0, l1).is_some_and(|bottom| !fits(bottom))
             && para.lines.get(l0).is_some_and(|l| fits(y + l.top - para.lines.get(l0).map_or(0.0, |f| f.top) + l.height))
         {
-            return None;
+            return Err(y + row.bottom);
         }
     }
     align_in_part(row, &mut cells, &splits, &realign, &mut ends, cut);
@@ -1011,11 +1028,17 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     let kept_any = kept_cells.iter().any(|&k| k);
     let first_moved = moved.iter().copied().fold(f32::MAX, f32::min);
     if !kept_any || first_moved == f32::MAX {
-        return None;
+        return Err(0.0);
     }
     // A cell left with nothing here because its first line or picture runs below the cut.
     if whole_cells && kept_cells.iter().zip(&cut_through).any(|(&kept, &through)| !kept && through) {
-        return None;
+        let before = kept_cells
+            .iter()
+            .zip(&cut_through)
+            .zip(&moved)
+            .filter_map(|((&kept, &through), &top)| (!kept && through).then_some(top))
+            .fold(f32::MAX, f32::min);
+        return Err(before + row.bottom);
     }
     // Each cell resumes below its own top margin and border band.
     let shifts: Vec<f32> = moved.iter().zip(&row.cells).map(|(&m, c)| ((if m < f32::MAX { m } else { first_moved }) - c.top).max(0.0)).collect();
@@ -1150,7 +1173,7 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
         parts.push(CellPart { top: c.top, items: start..b.len(), end: end.map(|e| e - shift), align: None });
     }
     // The part left on the page is placed and never split again.
-    Some((
+    Ok((
         RowLayout { height: cut, items: a, bottom: row.bottom, edge: 0.0, cells: Vec::new() },
         RowLayout { height, items: b, bottom: row.bottom, edge: row.edge, cells: parts },
     ))

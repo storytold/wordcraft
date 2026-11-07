@@ -140,8 +140,9 @@ fn split_noted_row(
     if notes.is_empty() {
         return None;
     }
-    // Fitting prefixes only gain reference lines as they grow. A bounded search avoids
-    // repeatedly moving a note-bearing row or scanning every possible cut of a tall cell.
+    // Prefixes only gain reference lines as they grow. Skip invalid cut intervals before
+    // testing note clearance, so a cut through another cell's first line can't hide a fit.
+    // The bounded search avoids scanning every possible cut of a tall cell.
     let (mut lo, mut hi) = (0.0, room.min(row.height - 0.02));
     let mut best = None;
     for _ in 0..24 {
@@ -149,13 +150,13 @@ fn split_noted_row(
             break;
         }
         let cut = (lo + hi) * 0.5;
-        match split(cut) {
+        match table::split_row_before(row, cut, whole_cells) {
             None => lo = cut,
-            Some((a, b)) if row_fits_notes(pb, &a, &measure_table_notes(ctx, pb, &a.items), false) => {
+            Some((a, b, _)) if row_fits_notes(pb, &a, &measure_table_notes(ctx, pb, &a.items), false) => {
                 lo = cut;
                 best = Some((a, b));
             }
-            Some(_) => hi = cut,
+            Some((_, _, used)) => hi = used,
         }
     }
     best
