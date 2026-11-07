@@ -1,7 +1,7 @@
 #[cfg(test)]
 use super::TALL_GROUPS;
 use super::buttons::{BIG_ICON_Y, BIG_LABEL_Y, CONTENT_H, DROPDOWN, LABEL_H, bg, label_line};
-use super::{Align2, Rect, Response, Sense, Stroke, Tokens, Ui, WordApp, icons, pos2, regular, vec2};
+use super::{Align2, Color32, Rect, Response, Sense, Stroke, Tokens, Ui, WordApp, icons, pos2, regular, vec2};
 
 /// A ribbon group: content, a centred label below and a divider on the right.
 pub fn group(ui: &mut Ui, title: &str, launcher: Option<&str>, app: &mut WordApp, add: impl FnOnce(&mut Ui, &mut WordApp)) {
@@ -26,6 +26,8 @@ pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&
         // Not folded: a drop-down left open while it was folded doesn't come back by itself.
         ui.data_mut(|d| d.remove::<bool>(collapsed_open_id(ui, id_title, position)));
         let label_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(title.to_string(), regular(11.0), t.group_label).size().x);
+        // Reserve the paint slot before children so the glow stays beneath the controls.
+        let glow = ui.painter().add(egui::Shape::Noop);
         let inner = crate::rtl::vertical(ui, |ui| {
             ui.set_min_width(label_w + if launcher.is_some() { 22.0 } else { 10.0 });
             crate::ribbon_fit::set_compact(ui.ctx(), level == crate::ribbon_fit::COMPACT);
@@ -42,6 +44,13 @@ pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&
             let _ = content;
         });
         let r = inner.response.rect;
+        let area = Rect::from_min_max(start, pos2(r.max.x, start.y + CONTENT_H + LABEL_H));
+        let over = ui.rect_contains_pointer(area);
+        // Position is part of identity because duplicate custom group names can appear in tabs.
+        let lit = ui.ctx().animate_bool_responsive(ui.scope_id().with(("group_glow", id_title, position)), over);
+        if lit > 0.0 {
+            ui.painter().set(glow, group_glow(area, t.accent, lit));
+        }
         title_row(
             ui,
             Rect::from_min_max(pos2(if rtl { r.min.x } else { start.x }, start.y + CONTENT_H), pos2(r.max.x, start.y + CONTENT_H + LABEL_H)),
@@ -63,6 +72,25 @@ pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&
 /// so there the width is how far the right edge moved.
 fn group_width(rtl: bool, before: Rect, after: Rect) -> f32 {
     if rtl { before.max.x - after.max.x } else { after.min.x - before.min.x }
+}
+
+/// A soft accent glow along the bottom of a hovered ribbon group.
+fn group_glow(area: Rect, accent: Color32, strength: f32) -> egui::Shape {
+    let color = |alpha: f32| Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), (alpha * strength * 255.0) as u8);
+    let r = Rect::from_min_max(pos2(area.min.x, area.max.y - 7.0), pos2(area.max.x, area.max.y + 2.0));
+    let soft = (r.width() * 0.3).min(22.0);
+    let xs = [r.min.x, r.min.x + soft, r.max.x - soft, r.max.x];
+    let mut mesh = egui::epaint::Mesh::default();
+    for (y, alpha) in [(r.max.y, 0.3), (r.min.y, 0.0)] {
+        for (i, x) in xs.iter().enumerate() {
+            mesh.colored_vertex(pos2(*x, y), color(if i == 0 || i == 3 { 0.0 } else { alpha }));
+        }
+    }
+    for i in 0..3u32 {
+        mesh.add_triangle(i, i + 1, i + 5);
+        mesh.add_triangle(i, i + 5, i + 4);
+    }
+    egui::Shape::mesh(mesh)
 }
 
 /// A group's title row (`r`): the centred title and, with a `launcher`, its dialog launcher.
