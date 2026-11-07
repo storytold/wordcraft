@@ -19,6 +19,9 @@ pub(super) struct Reader {
     pub(super) ansicpg: u16,
     /// The default font (`\deff`), whose charset applies before any `\f`.
     pub(super) deff: i32,
+    /// The default languages (`\deflang`, `\deflangfe`, `\adeflang`): text, East Asian text,
+    /// right-to-left and complex-script text.
+    pub(super) deflang: [Option<&'static str>; 3],
     /// The document's page (`\paperw`, `\margl`…) and the current section's formatting.
     pub(super) page: PageGeom,
     pub(super) sec: SecFmt,
