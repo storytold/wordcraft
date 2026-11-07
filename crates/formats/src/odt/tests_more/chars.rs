@@ -284,3 +284,108 @@ fn objects_in_hidden_text_are_kept() {
     assert!(p.text.contains("Hidden"), "{:?}", p.text);
     assert!(p.objects.iter().any(|o| matches!(o, wordcraft_doc::para::InlineObject::BookmarkStart { name } if name == "Secret")), "{:?}", p.objects);
 }
+
+#[test]
+fn a_size_is_every_scripts_size() {
+    // Chinese text set to 24 pt stayed at the default size in LibreOffice: only the Latin size was
+    // written.
+    let mut d = Document::new();
+    let mut p = Paragraph::with_text("漢字", CharProps { size: Some(24.0), ..Default::default() });
+    p.props = Default::default();
+    d.body = vec![para_block(p)];
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let c = crate::odt::tests::content_of(&saved);
+    assert!(c.contains(r#"fo:font-size="24pt" style:font-size-asian="24pt" style:font-size-complex="24pt""#), "{c}");
+    let styles = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(
+        styles.contains(r#"fo:font-size="12pt" style:font-size-asian="12pt" style:font-size-complex="12pt""#)
+            || styles.contains("style:font-size-asian"),
+        "{styles}"
+    );
+    // Read back every script has it.
+    let back = import(&saved).unwrap();
+    let run = &back.body[0].as_para().unwrap().runs[0].props;
+    assert_eq!(back.styles.resolve_char(None, run).size_cs, 24.0);
+    // A complex-script size of its own stays its own, written once.
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text("x", CharProps { size: Some(24.0), size_cs: Some(30.0), ..Default::default() }))];
+    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    assert_eq!(c.matches("style:font-size-complex").count(), 1, "{c}");
+    assert!(c.contains(r#"style:font-size-complex="30pt""#), "{c}");
+}
+
+/// Text and its complex-script size stated alike, over a default style with a smaller one (as
+/// LibreOffice's files have): that size stays, on screen and saved, for a run and for a heading.
+#[test]
+fn a_complex_size_like_the_texts_stays_over_the_default() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="12pt" style:font-size-complex="14pt"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:default-outline-level="1"><style:text-properties fo:font-size="18pt" style:font-size-complex="18pt"/></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties fo:font-size="24pt" style:font-size-complex="24pt"/></style:style></office:automatic-styles><office:body><office:text><text:p>a <text:span text:style-name="T1">big</text:span></text:p><text:h text:style-name="Heading_20_1" text:outline-level="1">h</text:h></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let check = |d: &Document| {
+        let p = d.body[0].as_para().unwrap();
+        let c = d.styles.resolve_char(p.props.style.as_deref(), &p.runs.last().unwrap().props);
+        assert_eq!((c.size, c.size_cs), (24.0, 24.0));
+        let h = d.body[1].as_para().unwrap();
+        let c = d.styles.resolve_char(h.props.style.as_deref(), &h.runs[0].props);
+        assert_eq!((c.size, c.size_cs), (18.0, 18.0));
+    };
+    check(&d);
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let written = crate::odt::tests::entry(&saved, "styles.xml");
+    let heading = written.split(r#"style:name="Heading_20_1""#).nth(1).and_then(|t| t.split("</style:style>").next()).unwrap();
+    assert!(heading.contains(r#"style:font-size-complex="18pt""#) && !heading.contains(r#"style:font-size-complex="14pt""#), "{heading}");
+    check(&import(&saved).unwrap());
+
+    // A default stating one size for all goes with that size: Normal changed takes it along.
+    let same = styles.replace(r#"style:font-size-complex="14pt""#, r#"style:font-size-complex="12pt""#);
+    let d = import(&package(&content, Some(&same))).unwrap();
+    assert_eq!(d.styles.default_chr.size_cs, None);
+}
+
+/// A complex size equal to the text's goes only where no run's complex size changes without it:
+/// not under a character style over another size, nor under a size stated alone.
+#[test]
+fn a_complex_size_something_shows_stays() {
+    let open = |s: &str, auto: &str, body: &str| {
+        let styles = format!(
+            r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="12pt" style:font-size-complex="12pt"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"/>{s}</office:styles></office:document-styles>"#
+        );
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:automatic-styles>{auto}</office:automatic-styles><office:body><office:text>{body}</office:text></office:body></office:document-content>"#
+        );
+        import(&package(&content, Some(&styles))).unwrap()
+    };
+    let sizes = |d: &Document| {
+        let p = d.body[0].as_para().unwrap();
+        let c = d.styles.resolve_char(p.props.style.as_deref(), &p.runs.last().unwrap().props);
+        (c.size, c.size_cs)
+    };
+    // A character style's, over a paragraph style with another complex size.
+    let d = open(
+        r#"<style:style style:name="P" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="12pt" style:font-size-complex="18pt"/></style:style><style:style style:name="C" style:family="text"><style:text-properties fo:font-size="24pt" style:font-size-complex="24pt"/></style:style>"#,
+        "",
+        r#"<text:p text:style-name="P"><text:span text:style-name="C">One</text:span></text:p>"#,
+    );
+    assert_eq!(sizes(&d), (24.0, 24.0));
+    let parent = r#"<style:style style:name="Parent" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="16pt" style:font-size-complex="16pt"/></style:style>"#;
+    // A parent's, under a child stating only a size.
+    let kid = format!(
+        r#"{parent}<style:style style:name="Kid" style:family="paragraph" style:parent-style-name="Parent"><style:text-properties fo:font-size="20pt"/></style:style>"#
+    );
+    assert_eq!(sizes(&open(&kid, "", r#"<text:p text:style-name="Kid">One</text:p>"#)), (20.0, 16.0));
+    // A style's, under a run stating only a size.
+    let d = open(
+        parent,
+        r#"<style:style style:name="T1" style:family="text"><style:text-properties fo:font-size="30pt"/></style:style>"#,
+        r#"<text:p text:style-name="Parent"><text:span text:style-name="T1">One</text:span></text:p>"#,
+    );
+    assert_eq!(sizes(&d), (30.0, 16.0));
+    // Nothing shows it: one size for all, so a change of size takes it along.
+    let d = open(parent, "", r#"<text:p text:style-name="Parent">One</text:p>"#);
+    assert_eq!(sizes(&d), (16.0, 16.0));
+    assert_eq!(d.styles.get("Parent").unwrap().chr.size_cs, None);
+}
