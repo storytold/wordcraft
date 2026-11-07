@@ -39,6 +39,26 @@ impl FmtDelta {
             ($($k:ident),*) => { $( if let Some(v) = self.$k.clone() { f.$k = v; } )* };
         }
         set!(bold, italic, underline, strike, sup, sub, code);
+        // What this turns off stays said on the text, or the style of its paragraph or span would
+        // show through; turned back on, it no longer is.
+        if self.bold.is_some() || self.italic.is_some() || self.underline.is_some() || self.strike.is_some() {
+            use wordcraft_doc::props::Underline;
+            let mut x = f.extra.take().map(|b| *b).unwrap_or_default();
+            if self.strike == Some(false) {
+                x.double_strike = None;
+            }
+            for (state, said) in [(self.bold, &mut x.bold), (self.italic, &mut x.italic), (self.strike, &mut x.strike)] {
+                if let Some(on) = state {
+                    *said = (!on).then_some(false);
+                }
+            }
+            match self.underline {
+                Some(false) => x.underline = Some(Underline::None),
+                Some(true) if x.underline == Some(Underline::None) => x.underline = None,
+                _ => {}
+            }
+            f.extra = (x != wordcraft_doc::props::CharProps::default()).then(|| Box::new(x));
+        }
         if self.color.is_some() {
             f.color = self.color;
         }
@@ -61,10 +81,12 @@ impl FmtDelta {
                 let size = f.size.unwrap_or(12.0);
                 x.position = Some((r / 100.0 * size).clamp(-1584.0, 1584.0)).filter(|p| *p != 0.0);
             }
-            // An explicit "off" only cancels what a parent style set.
-            for b in
-                [&mut x.double_strike, &mut x.caps, &mut x.small_caps, &mut x.hidden, &mut x.outline, &mut x.shadow, &mut x.emboss, &mut x.engrave]
-            {
+            // An explicit "off" only cancels what a parent style set (capitals are kept: a
+            // paragraph's or span's style may set them too).
+            if self.strike == Some(false) {
+                x.double_strike = None;
+            }
+            for b in [&mut x.double_strike, &mut x.hidden, &mut x.outline, &mut x.shadow, &mut x.emboss, &mut x.engrave] {
                 if *b == Some(false) {
                     *b = None;
                 }
@@ -787,13 +809,18 @@ fn text_properties(a: &Attrs, style: &mut StyleInfo, faces: &HashMap<String, Str
         let weight = weight.trim();
         weight.eq_ignore_ascii_case("bold") || weight.parse::<u32>().is_ok_and(|n| n >= 600)
     };
-    // Latin attributes take precedence; Asian and complex-script attributes are fallbacks.
-    if let Some(weight) = get(a, "fo:font-weight").or_else(|| get(a, "style:font-weight-asian")).or_else(|| get(a, "style:font-weight-complex")) {
+    // Latin attributes take precedence; Asian and complex-script attributes are fallbacks, to turn
+    // it on: one of those saying normal says nothing of Latin text.
+    if let Some(weight) = get(a, "fo:font-weight") {
         fmt.bold = Some(is_bold(weight));
+    } else if get(a, "style:font-weight-asian").or_else(|| get(a, "style:font-weight-complex")).is_some_and(is_bold) {
+        fmt.bold = Some(true);
     }
     let is_italic = |value: &str| value.trim().eq_ignore_ascii_case("italic") || value.trim().eq_ignore_ascii_case("oblique");
-    if let Some(value) = get(a, "fo:font-style").or_else(|| get(a, "style:font-style-asian")).or_else(|| get(a, "style:font-style-complex")) {
+    if let Some(value) = get(a, "fo:font-style") {
         fmt.italic = Some(is_italic(value));
+    } else if get(a, "style:font-style-asian").or_else(|| get(a, "style:font-style-complex")).is_some_and(is_italic) {
+        fmt.italic = Some(true);
     }
     let is_not_none = |value: &str| !value.trim().eq_ignore_ascii_case("none");
     if let Some(value) = get(a, "style:text-underline-style").or_else(|| get(a, "style:text-underline-type")) {
