@@ -262,7 +262,7 @@ fn shape_section(ui: &mut Ui, app: &mut WordApp, title: &str, shapes: &[ShapeKin
     let t = Tokens::get(ui.ctx());
     ui.add_space(2.0);
     ui.label(egui::RichText::new(tl!(title)).font(regular(11.0)).color(t.text_dim));
-    egui::Grid::new(title).spacing(egui::vec2(2.0, 2.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new(title).spacing(egui::vec2(2.0, 2.0)), |ui| {
         for (i, &k) in shapes.iter().enumerate() {
             let (r, resp) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
             let name = tl!(k.label());

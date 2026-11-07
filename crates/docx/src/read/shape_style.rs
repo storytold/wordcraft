@@ -463,8 +463,8 @@ mod tests {
         // star, rounded callout, elbow connector, a bevel (its box).
         assert_eq!(vml_preset_kind(66), Some(ShapeKind::ArrowLeft));
         assert_eq!(vml_preset_kind(6), Some(ShapeKind::RightTriangle));
-        assert_eq!(vml_preset_kind(187), Some(ShapeKind::Star));
-        assert_eq!(vml_preset_kind(62), Some(ShapeKind::RoundedRectangle));
+        assert_eq!(vml_preset_kind(187), Some(ShapeKind::Star4));
+        assert_eq!(vml_preset_kind(62), Some(ShapeKind::RoundedRectangularCallout));
         assert_eq!(vml_preset_kind(34), Some(ShapeKind::ElbowConnector));
         assert_eq!(vml_preset_kind(84), Some(ShapeKind::Rectangle));
         // No preset geometry: freeform, WordArt text, picture frame, host control, out of range.
