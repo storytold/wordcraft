@@ -124,6 +124,16 @@ fn mark_change(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Opti
     Some(Change { a, b, kind, rev: p.mark.ins.or(p.mark.del), props: Vec::new() })
 }
 
+/// A deletion inside another revision's insertion (or move destination): a change of its own, by
+/// its own author, over the same text (Word's Reviewing Pane lists both). Its revision and kind:
+/// `delete`, or `moveFrom` when that text was moved away. It is listed right after the change it
+/// sits in.
+fn nested_deletion(doc: &wordcraft_doc::Document, ins: Option<u32>, del: Option<u32>) -> Option<(u32, &'static str)> {
+    let rev = del?;
+    let kind = if doc.move_name(del).is_some() { "moveFrom" } else { "delete" };
+    (ins.is_some() && del != ins).then_some((rev, kind))
+}
+
 /// The kind of an insertion / deletion change: `insert`, `delete`, or for one end of a move
 /// `moveTo` / `moveFrom`; empty when neither.
 fn run_kind(doc: &wordcraft_doc::Document, ins: Option<u32>, del: Option<u32>) -> &'static str {
@@ -339,6 +349,9 @@ fn changes(s: &Session) -> Vec<Change> {
             if !kind.is_empty() {
                 out.push(Change { a: mk(&path, r.start), b: mk(&path, r.end), kind, rev: c.ins.or(c.del), props: Vec::new() });
             }
+            if let Some((rev, kind)) = nested_deletion(&s.doc, c.ins, c.del) {
+                out.push(Change { a: mk(&path, r.start), b: mk(&path, r.end), kind, rev: Some(rev), props: Vec::new() });
+            }
             let Some(ch) = &c.fmt_change else { continue };
             let props = fmt_revisions::char_diff(c);
             // Neighbouring runs changed the same way by the same revision are one change.
@@ -354,7 +367,17 @@ fn changes(s: &Session) -> Vec<Change> {
             let end = mk(&path, p.len());
             out.push(Change::format(end.clone(), end, ch.rev, fmt_revisions::char_diff(&p.mark)));
         }
-        out.extend(mark_change(s, StoryRef::Body, &path));
+        if let Some(m) = mark_change(s, StoryRef::Body, &path) {
+            let nested = nested_deletion(&s.doc, p.mark.ins, p.mark.del).map(|(rev, kind)| Change {
+                a: m.a.clone(),
+                b: m.b.clone(),
+                kind,
+                rev: Some(rev),
+                props: Vec::new(),
+            });
+            out.push(m);
+            out.extend(nested);
+        }
         if let Some(ch) = p.section.as_ref().and_then(|x| x.fmt_change.as_ref().map(|ch| (ch.rev, x))) {
             let end = mk(&path, p.len());
             out.push(Change::format(end.clone(), end, ch.0, fmt_revisions::section_diff(ch.1)));
