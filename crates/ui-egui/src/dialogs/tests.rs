@@ -1062,6 +1062,68 @@ fn page_setup_large_numeric_margins_do_not_expand_after_leaving_field() {
     }
 }
 
+/// A clipped wide number in a mirrored form can still be clicked where it is visible.
+#[test]
+fn page_setup_rtl_large_margin_can_be_edited_again_after_blur() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut app = app_with("Page");
+    app.run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+    let ar = crate::i18n::fixture_lang("ar", "\tMargins\tMargins\n");
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            // Draw the actual dialog in a fixture language even without embedded catalogs.
+            crate::i18n::set_current(ar);
+            crate::rtl::sync(&ctx);
+            assert!(crate::rtl::on() && ctx.global_style().right_to_left);
+            show(app, &ctx);
+            crate::i18n::set_current(crate::i18n::Lang::EN);
+        },
+        app,
+    );
+    h.run_steps(4);
+    let initial = h.get_by_role_and_label(Role::SpinButton, "Bottom:").rect();
+    assert!(h.get_by_role_and_label(Role::SpinButton, "Top:").rect().center().x > initial.center().x, "the form is mirrored");
+    let window = |h: &egui_kittest::Harness<'_, WordApp>| h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Page Setup")))).unwrap();
+    let before = window(&h).width();
+    h.get_by_role_and_label(Role::SpinButton, "Bottom:").click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Paste(format!("1{}", "0".repeat(36))));
+    h.run_steps(3);
+    let value = match h.state().dialog.as_ref() {
+        Some(Dialog::PageSetup { bottom, .. }) => *bottom,
+        _ => panic!("no page setup dialog"),
+    };
+    assert!(value.is_finite() && value > 1e35);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert!(matches!(h.state().dialog.as_ref(), Some(Dialog::PageSetup { bottom, .. }) if *bottom == value));
+    let field = h.get_by_role_and_label(Role::SpinButton, "Bottom:");
+    assert!(!field.is_focused());
+    let wide = field.rect();
+    let visible = wide.intersect(initial).intersect(window(&h));
+    assert!(wide.width() > 80.0 && visible.is_positive() && !visible.contains(wide.center()));
+    assert!(window(&h).width() <= before + 2.0);
+    // The AccessKit bounds include clipped text: click the visible part, not their centre.
+    let pos = visible.center();
+    h.event(egui::Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    h.run_steps(3);
+    assert!(h.get_by_role_and_label(Role::SpinButton, "Bottom:").is_focused(), "the visible field enters editing");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Paste("2.5".into()));
+    h.run_steps(3);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert!(matches!(h.state().dialog.as_ref(), Some(Dialog::PageSetup { bottom, .. }) if *bottom == 2.5), "the field accepts a normal value again");
+    assert!(window(&h).width() <= before + 2.0);
+}
+
 /// #1433: Page Setup's Paper size shows the named size the section has, in either
 /// orientation, and Custom size (None) for anything else.
 #[test]
