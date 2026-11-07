@@ -111,6 +111,9 @@ impl FontDb {
     fn loaded_fallback(&self, c: char, exclude: u32) -> (Option<Arc<FontFace>>, usize) {
         let faces = self.read_faces();
         let mut order: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.id != exclude).collect();
+        let primary = faces.iter().find(|f| f.id == exclude);
+        let prefer_serif = primary.is_some_and(|p| p.is_serif());
+        let serif_mismatch = |f: &FontFace| primary.is_some() && f.is_serif() != prefer_serif;
         // Right-to-left letters prefer a font made for the script, so a word isn't split across
         // fonts (that breaks Arabic joining). Emoji prefer a colour emoji font.
         let rank = |f: &FontFace| {
@@ -126,7 +129,9 @@ impl FontDb {
         // the script's own families, so syllables reorder and stack (#604).
         let complex = crate::needs_layout_tables(c);
         let shaping = |f: &FontFace| if complex { (!f.has_layout_tables(), crate::fallback_rank(c, &f.family)) } else { (false, 0) };
-        order.sort_by_key(|f| (rank(f), shaping(f), !f.family.eq_ignore_ascii_case(FALLBACK_FAMILY), f.italic, (f.weight - 400.0).abs() as i32));
+        order.sort_by_key(|f| {
+            (rank(f), shaping(f), !f.family.eq_ignore_ascii_case(FALLBACK_FAMILY), serif_mismatch(f), f.italic, (f.weight - 400.0).abs() as i32)
+        });
         (order.into_iter().find(|f| f.covers(c)).cloned(), faces.len())
     }
 
