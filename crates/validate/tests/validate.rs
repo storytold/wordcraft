@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use common::{
     CT_CHART, CT_COMMENTS, CT_COMMENTS_EXT, CT_COMMENTS_IDS, CT_CUSTOMXML_PROPS, CT_ENDNOTES, CT_FOOTER, CT_FOOTNOTES, CT_GLOSSARY, CT_HEADER,
     CT_MAIN, CT_NUMBERING, CT_PEOPLE, CT_SETTINGS, CT_STYLES, CT_TEMPLATE_MAIN, CT_WEB_SETTINGS, Doc, add_header, claim_entry_method,
-    content_types_xml, corrupt_entry_data, ns, rels_xml, replace_all, rich_content_types, utf16_le_with_bom,
+    content_types_xml, corrupt_entry_data, document_xml, ns, rels_xml, replace_all, rich_content_types, utf16_le_with_bom,
 };
 use wordcraft_validate::{Finding, Report, Severity, Verdict, validate_bytes, validate_path};
 
@@ -160,6 +160,45 @@ fn pkg_dup_entry() {
     let report = validate_bytes(&zip);
     assert_eq!(report.verdict, Verdict::Fail);
     assert_finding(&report, "PKG-DUP-ENTRY", None);
+}
+
+/// Two byte-distinct legacy-encoded entry names that map to the same UTF-8 replacement character must not trigger `PKG-DUP-ENTRY`.
+#[test]
+fn legacy_encoded_distinct_names_do_not_fire_pkg_dup_entry() {
+    let mut d = Doc::minimal();
+    d.set("word/dA.xml", b"<a/>".to_vec());
+    d.set("word/dB.xml", b"<b/>".to_vec());
+    let zip = replace_all(&d.build(), b"word/dA.xml", b"word/d\x80.xml");
+    let zip = replace_all(&zip, b"word/dB.xml", b"word/d\x81.xml");
+    let report = validate_bytes(&zip);
+    assert!(
+        !report.findings.iter().any(|f| f.rule == "PKG-DUP-ENTRY"),
+        "distinct byte sequences must not be reported as duplicates: {:?}",
+        report.findings
+    );
+}
+
+/// Two identical legacy-encoded entry names must trigger `PKG-DUP-ENTRY`.
+#[test]
+fn legacy_encoded_duplicate_names_fire_pkg_dup_entry() {
+    let mut d = Doc::minimal();
+    d.set("word/dA.xml", b"<a/>".to_vec());
+    d.set("word/dB.xml", b"<b/>".to_vec());
+    let zip = replace_all(&d.build(), b"word/dA.xml", b"word/d\x80.xml");
+    let zip = replace_all(&zip, b"word/dB.xml", b"word/d\x80.xml");
+    let report = validate_bytes(&zip);
+    assert_eq!(report.verdict, Verdict::Fail);
+    assert_finding(&report, "PKG-DUP-ENTRY", None);
+}
+
+/// Part names differing only by ASCII case trigger `PKG-CASE-COLLISION`.
+#[test]
+fn case_variant_duplicate_document_part() {
+    let mut d = Doc::minimal();
+    d.set("Word/document.xml", document_xml(r#"<w:p><w:r><w:t>Hello</w:t></w:r></w:p>"#));
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Fail);
+    assert_finding(&report, "PKG-CASE-COLLISION", None);
 }
 
 /// §2 canary: an archive the zip reader accepts but the raw central-directory parser rejects must be
@@ -437,6 +476,30 @@ fn percent_encoded_target_resolves() {
     );
     let report = validate(&d);
     assert!(!has(&report, "REL-DANGLING"), "{:?}", report.findings);
+}
+
+/// An entry stored with percent-encoded path segments matches a decoded internal relationship target and an encoded Override.
+#[test]
+fn percent_encoded_zip_entry_matches_relationship_and_override() {
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[("png", "image/png")], &[("/word/media/my%20image.png", "image/png")]));
+    d.set("word/media/my%20image.png", b"\x89PNG\r\n\x1a\npng body".to_vec());
+    d.set_doc_rels(
+        r#"<Relationship Id="rIdI" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/my%20image.png"/>"#,
+    );
+    let report = validate(&d);
+    assert!(!has(&report, "REL-DANGLING"), "{:?}", report.findings);
+    assert!(!has(&report, "CT-UNDECLARED"), "{:?}", report.findings);
+}
+
+/// An Override declared with percent-encoded path segments matches a decoded entry name in the ZIP archive.
+#[test]
+fn percent_encoded_override_matches_decoded_zip_entry() {
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/my%20custom.xml", "application/xml")]));
+    d.set("word/my custom.xml", "<root/>".as_bytes().to_vec());
+    let report = validate(&d);
+    assert!(!has(&report, "CT-UNDECLARED"), "{:?}", report.findings);
 }
 
 #[test]
