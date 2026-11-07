@@ -16,6 +16,18 @@ use wordcraft_doc::section::{
 use super::drawing_color::adjust_lum;
 use crate::units::{int, line_multiple, measure, on_off, tw, u32_of};
 
+pub(super) fn band_size(value: &str) -> Option<u32> {
+    let value = value.trim();
+    if let Some(digits) = value.strip_prefix('-') {
+        return (!digits.is_empty() && digits.bytes().all(|byte| byte == b'0')).then_some(0);
+    }
+    let digits = value.strip_prefix('+').unwrap_or(value);
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some(digits.bytes().fold(0u32, |n, byte| (n * 10 + u32::from(byte - b'0')).min(1000)))
+}
+
 /// A text frame (`w:framePr` without a drop cap, ECMA-376 §17.3.1.11), sizes and offsets in
 /// points (clamped), names kept as OOXML writes them.
 fn text_frame(k: &El) -> wordcraft_doc::props::TextFrame {
@@ -548,6 +560,8 @@ impl PropCtx {
                 "w:tblLayout" => t.fixed = k.attr("w:type") == Some("fixed"),
                 "w:bidiVisual" => t.bidi_visual = on_off(k),
                 "w:tblCellMar" => t.cell_margins = Some(margins(k)),
+                "w:tblStyleRowBandSize" => t.band_size = k.attr("w:val").and_then(band_size),
+                "w:tblStyleColBandSize" => t.col_band_size = k.attr("w:val").and_then(band_size),
                 "w:tblLook" => t.look = look(k),
                 "w:tblpPr" => t.float = Some(table_float(k)),
                 "w:tblOverlap" => {
