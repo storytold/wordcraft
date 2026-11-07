@@ -413,7 +413,7 @@ impl P {
                     self.i += 1;
                 }
                 let e = if self.peek().is_some_and(|c| c == ' ') { Vec::new() } else { self.operand(stops) };
-                MNode::Nary { chr: c, lim_loc: None, grow: false, sub_hide: !has_sub, sup_hide: !has_sup, sub, sup, e }
+                MNode::Nary { chr: c, lim_loc: None, grow: None, sub_hide: !has_sub, sup_hide: !has_sup, sub, sup, e }
             }
         }
     }

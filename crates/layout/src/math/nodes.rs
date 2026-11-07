@@ -227,7 +227,7 @@ impl Ctx {
     }
 
     /// N-ary operators and functions: the operator atom (class Op) then the operand.
-    fn op_atoms(&mut self, n: &MNode, st: St, depth: usize) -> Vec<Bx> {
+    pub(super) fn op_atoms(&mut self, n: &MNode, st: St, depth: usize) -> Vec<Bx> {
         match n {
             MNode::Nary { chr, lim_loc, grow, sub_hide, sup_hide, sub, sup, e } => {
                 let e = self.sub(2, e, st, depth);
@@ -242,29 +242,43 @@ impl Ctx {
                         None => size * 1.5,
                     };
                 }
-                if *grow {
+                // Word grows a display operator to match a taller operand (a stacked fraction, say)
+                // when `m:grow` is absent: observed against real Word on files this project itself
+                // writes without it (#3208). An explicit `m:grow` (on or off) is followed; for an
+                // inline (non-display) operator absent means off, where this hasn't been verified.
+                let grow = grow.unwrap_or(st.display);
+                if grow {
                     target = target.max(e.a + e.d);
                 }
                 let op = if base_gid == 0 {
                     // The math font lacks the operator: a fallback font's glyph, display-sized.
                     let s = if st.display { size * 1.4 } else { size };
                     self.char_glyphs(*chr, s, 0)
-                } else if *grow && target > 0.0 && self.t.is_some() {
-                    self.stretch_v(base_gid, target, size).unwrap_or_else(|| self.glyph_id(base_gid, size, self.color))
+                } else if grow && target > 0.0 {
+                    self.stretch_v(base_gid, target, size).unwrap_or_else(|| self.scaled_fallback(base_gid, target, size))
                 } else if target > 0.0 && self.t.is_some() {
                     // Word sets display operators about 1.2 em tall: the size variant nearest that.
-                    let want = target.min(size * 1.2) * self.upem / size;
-                    let (g, adv) = self
+                    let capped = target.min(size * 1.2);
+                    let want = capped * self.upem / size;
+                    let variant = self
                         .t
                         .as_ref()
                         .and_then(|t| t.vert.get(&base_gid))
                         .and_then(|c| c.variants.iter().min_by(|a, b| (a.1 - want).abs().total_cmp(&(b.1 - want).abs())))
-                        .copied()
-                        .unwrap_or((base_gid, want));
-                    // A font without a variant near that size: scale the nearest one.
-                    let f = if adv > 0.0 { (want / adv).clamp(0.6, 1.5) } else { 1.0 };
-                    let f = if (0.9..=1.1).contains(&f) { 1.0 } else { f };
-                    self.glyph_id(g, size * f, self.color)
+                        .copied();
+                    match variant {
+                        // A real variant already near the mark: keep its own design rather than
+                        // rescale it.
+                        Some((g, adv)) => {
+                            let f = if adv > 0.0 { (want / adv).clamp(0.6, 1.5) } else { 1.0 };
+                            let f = if (0.9..=1.1).contains(&f) { 1.0 } else { f };
+                            self.glyph_id(g, size * f, self.color)
+                        }
+                        // No cataloged size variant for this glyph at all (the font's MATH table
+                        // has no vertical construction for it, unlike e.g. ∑/∏): scale the base
+                        // glyph by its own measured height instead of leaving it unscaled.
+                        None => self.scaled_fallback(base_gid, capped, size),
+                    }
                 } else {
                     self.glyph_id(base_gid, size, self.color)
                 };
