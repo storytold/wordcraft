@@ -22,7 +22,7 @@ check applies to user actions and direct UI commands, and leaves an existing
 dialog in place when the requested editing dialog is refused.
 The mail-merge record dialogs are also refused before opening. The Styles gallery
 and Styles pane disable Modify while Viewing is active; an already-open Manage Styles
-dialog also refuses its Modify button and style double-click. Leaving Viewing restores
+dialog also disables Modify, style double-click, and New Style. Leaving Viewing restores
 these actions. Closing a dialog restores keyboard focus for navigation in Viewing,
 without enabling IME input.
 

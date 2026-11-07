@@ -91,7 +91,7 @@ pub(super) fn manage_styles(app: &mut WordApp, ui: &mut Ui, alphabetical: &mut b
         {
             app.dialog = Some(Dialog::ModifyStyle { back: true, resume: None, id, name, font, size, bold, italic, color, before, after });
         }
-        if ui.button(tl!("New Style…")).clicked() {
+        if ui.add_enabled(!app.session.view.viewing, egui::Button::new(tl!("New Style…"))).clicked() {
             app.dialog = Some(Dialog::NewStyle { name: "Style1".into(), based_on: str_of(&cur, "name"), back: true });
         }
         let del = ui.add_enabled(!builtin, egui::Button::new(tl!("Delete")));

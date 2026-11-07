@@ -1954,12 +1954,13 @@ fn font_dialog_opens_at_its_final_size() {
     assert!(widths[2..].windows(2).all(|w| w[0] == w[1]), "the dialog keeps growing: {widths:?}");
 }
 
-/// Both Manage Styles editor entrypoints respect Viewing, including a dialog already open before the mode changed.
+/// Manage Styles respects Viewing for Modify, double-click, and New Style, even if it was already open.
 #[test]
-fn viewing_blocks_manage_styles_modify_button_and_double_click() {
+fn viewing_blocks_manage_styles_editor_entrypoints() {
     use egui_kittest::kittest::{NodeT, Queryable};
+    let actions = [("Modify…", true, "modifyStyle"), ("Modify…", false, "modifyStyle"), ("New Style…", false, "newStyle")];
     for viewing in [true, false] {
-        for double_click in [true, false] {
+        for (button, double_click, editor) in actions {
             let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default());
             app.ui.language = "en".into();
             app.run("view.viewing", json!({"value": viewing})).unwrap();
@@ -1980,16 +1981,16 @@ fn viewing_blocks_manage_styles_modify_button_and_double_click() {
                 app,
             );
             h.run_steps(4);
-            assert_eq!(h.get_by_label("Modify…").accesskit_node().is_disabled(), viewing);
+            assert_eq!(h.get_by_label(button).accesskit_node().is_disabled(), viewing);
             if double_click {
                 h.get_by_label("¶  Normal").click();
                 h.run_steps(2);
                 h.get_by_label("¶  Normal").click();
             } else {
-                h.get_by_label("Modify…").click();
+                h.get_by_label(button).click();
             }
             h.run_steps(2);
-            assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), if viewing { None } else { Some("modifyStyle") });
+            assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), if viewing { None } else { Some(editor) });
             assert!(h.state().session.doc.same_content(&before));
             assert_eq!(h.state().session.undo_depth(), depth);
         }
