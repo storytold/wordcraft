@@ -175,7 +175,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("file.privacy", "Privacy Settings", "File › Options › Save", |s, _| Ok(privacy(s)))
             .params(r#"{} → {"removePersonalInfo": bool, "removeDateTime": bool} (file.privacyOptions changes them)"#)
             .pure(),
-        CommandSpec::new("document.inspect", "Inspect Document", "Agents", inspect).params(r#"{"text"?: bool}"#).pure(),
+        CommandSpec::new("document.inspect", "Inspect Document", "Agents", inspect).params(r#"{"text"?: bool, "raw"?: bool (the stored text, tracked deletions included)} — the text is what the document reads with every change accepted; raw gives the stored text with the deletions back"#).pure(),
         CommandSpec::new("document.text", "Document Text", "Agents", |s, v| {
             let story = super::story_param(s, v);
             Ok(json!({"text": s.doc.final_text(story)}))
@@ -546,6 +546,13 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
 /// Structure for agents: blocks with text and formatting summary, selection, stats.
 fn inspect(s: &mut Session, v: &Value) -> CmdResult {
     let with_text = p::bool(v, "text").unwrap_or(true);
+    // The text the document reads (tracked deletions dropped) unless raw asks for the
+    // stored text: an agent that verifies what a document holds must not be told of text
+    // that a rejected change removed.
+    let raw = p::bool(v, "raw").unwrap_or(false);
+    let para_text = |p: &wordcraft_doc::Paragraph| {
+        if raw { p.plain_text() } else { p.final_text() }
+    };
     let mut blocks = Vec::new();
     for (i, b) in s.doc.body.iter().enumerate().take(2000) {
         match &**b {
@@ -553,7 +560,7 @@ fn inspect(s: &mut Session, v: &Value) -> CmdResult {
                 let style = p.props.style.clone().unwrap_or_else(|| "Normal".into());
                 let mut o = json!({"index": i, "type": "paragraph", "style": style, "len": p.len()});
                 if with_text {
-                    o["text"] = json!(p.plain_text());
+                    o["text"] = json!(para_text(p));
                 }
                 if let Some(n) = p.props.numbering.filter(|n| n.num != 0) {
                     o["list"] = json!({"num": n.num, "level": n.level});
@@ -583,10 +590,7 @@ fn inspect(s: &mut Session, v: &Value) -> CmdResult {
                     .rows
                     .iter()
                     .map(|r| {
-                        r.cells
-                            .iter()
-                            .map(|c| c.blocks.iter().filter_map(|b| b.as_para().map(|p| p.plain_text())).collect::<Vec<_>>().join("\n"))
-                            .collect()
+                        r.cells.iter().map(|c| c.blocks.iter().filter_map(|b| b.as_para().map(para_text)).collect::<Vec<_>>().join("\n")).collect()
                     })
                     .collect();
                 blocks.push(json!({"index": i, "type": "table", "rows": t.rows.len(), "cols": t.cols(), "style": t.props.style, "cells": cells}));
@@ -594,8 +598,7 @@ fn inspect(s: &mut Session, v: &Value) -> CmdResult {
         }
     }
     let l = s.layout();
-    let parts: Vec<Value> =
-        s.doc.parts.iter().map(|(id, p)| json!({"id": id, "kind": p.kind, "text": s.doc.plain_text(StoryRef::Part(*id))})).collect();
+    let parts: Vec<Value> = s.doc.parts.iter().map(|(id, p)| json!({"id": id, "kind": p.kind, "text": if raw { s.doc.plain_text(StoryRef::Part(*id)) } else { s.doc.final_text(StoryRef::Part(*id)) }})).collect();
     Ok(json!({
         "blocks": blocks,
         "parts": parts,
@@ -631,4 +634,33 @@ fn layout_summary(s: &mut Session, _: &Value) -> CmdResult {
         .collect();
     let caret = l.caret_on(&s.sel.focus, s.page_hint).map(|c| json!({"page": c.page, "x": c.x, "y": c.top, "h": c.height}));
     Ok(json!({"pages": pages, "caret": caret, "ms": l.ms}))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+    use wordcraft_doc::Document;
+
+    use crate::Session;
+
+    /// A tracked-deleted text is not in the document as it reads; the inspection reports
+    /// what the document holds, and `raw` gives the stored text with the deletions back.
+    #[test]
+    fn a_tracked_deleted_text_is_not_in_the_inspection_unless_raw() {
+        let mut s = Session::new(Document::new());
+        s.run("document.setText", &json!({"text": "Visible text.\nDELETED-SECRET-TEXT\n"})).unwrap();
+        s.run("file.setAuthor", &json!({"name": "Ana"})).unwrap();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        let n = "DELETED-SECRET-TEXT".len();
+        s.run("select.range", &json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 1, "off": n}})).unwrap();
+        s.run("text.delete", &json!({})).unwrap();
+
+        let out = s.run("document.inspect", &json!({})).unwrap();
+        let dumped = out.to_string();
+        assert!(!dumped.contains("DELETED-SECRET-TEXT"), "the inspection leaks tracked-deleted text: {dumped}");
+        assert!(dumped.contains("Visible text."), "the visible text is still in the inspection");
+
+        let raw: Value = s.run("document.inspect", &json!({"raw": true})).unwrap();
+        assert!(raw.to_string().contains("DELETED-SECRET-TEXT"), "raw gives the stored text back");
+    }
 }
