@@ -176,6 +176,8 @@ pub struct TableForm {
     /// `left`, `center` or `right`.
     pub align: String,
     pub indent: f32,
+    /// Text wrapping: `none` or `around`.
+    pub wrapping: String,
     /// Table direction: right to left (`w:bidiVisual`).
     pub rtl: bool,
     pub row_height_on: bool,
@@ -268,6 +270,7 @@ impl TableForm {
             }
             .into(),
             indent: fin(t.props.indent.unwrap_or(0.0)) / k,
+            wrapping: if t.props.float.is_some() { "around" } else { "none" }.into(),
             rtl: t.props.bidi_visual,
             row_height_on: row.height.is_some() && row.height_rule != HeightRule::Auto,
             row_height: fin(row.height.unwrap_or(18.0)) / k,
@@ -300,6 +303,9 @@ impl TableForm {
         }
         if moved(self.indent, basis.indent) {
             v.insert("indent".into(), json!(self.indent * k));
+        }
+        if self.wrapping != basis.wrapping {
+            v.insert("wrapping".into(), json!(self.wrapping));
         }
         if self.rtl != basis.rtl {
             v.insert("rtl".into(), json!(self.rtl));
@@ -409,6 +415,16 @@ pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
             r.cell(|ui| ui.label(tl!("Indent from left:")));
             r.cell(|ui| {
                 ui.add_enabled(f.align == "left", egui::DragValue::new(&mut f.indent).speed(0.01).range(-11.0..=22.0).measure(unit).max_decimals(2))
+            });
+        });
+        t.row(|r| {
+            r.cell(|ui| ui.label(tl!("Text wrapping:")));
+            r.cell(|ui| {
+                ui.horizontal(|ui| {
+                    for (v, l) in [("none", "None"), ("around", "Around")] {
+                        ui.radio_value(&mut f.wrapping, v.to_string(), tl!(l));
+                    }
+                });
             });
         });
         t.row(|r| {

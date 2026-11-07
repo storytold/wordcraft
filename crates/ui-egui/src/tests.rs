@@ -923,6 +923,19 @@ fn table_properties_button_opens_the_dialog() {
     let basis = g.clone();
     g.rtl = true;
     assert_eq!(g.changes(&basis), json!({"rtl": true}));
+    // Text wrapping (#5884): None (inline) vs Around (floating).
+    assert_eq!(basis.wrapping, "none");
+    let mut w = basis.clone();
+    w.wrapping = "around".into();
+    assert_eq!(w.changes(&basis), json!({"wrapping": "around"}));
+    a.run("table.properties", json!({"wrapping": "around"})).unwrap();
+    let t = a.session.doc.table(a.session.sel.focus.story, &tp).unwrap();
+    assert!(t.props.float.is_some(), "around wrapping floats the table");
+    assert_eq!(dialogs::TableForm::read(&a).unwrap().wrapping, "around");
+    a.run("table.properties", json!({"wrapping": "none"})).unwrap();
+    let t = a.session.doc.table(a.session.sel.focus.story, &tp).unwrap();
+    assert!(t.props.float.is_none(), "none wrapping places the table inline");
+    assert_eq!(dialogs::TableForm::read(&a).unwrap().wrapping, "none");
 }
 
 /// #4857: with the whole table selected, a row check box the rows differ in shows as mixed and
