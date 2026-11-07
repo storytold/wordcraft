@@ -2073,6 +2073,37 @@ fn copy_whole_table_pastes_a_table() {
     assert_eq!(body_table_cells(&s), vec![want.clone(), want]);
 }
 
+/// #5906: Copying select-all in a document starting with a table must preserve the table.
+#[test]
+fn select_all_in_document_starting_with_table_preserves_table() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "text.insert", json!({"text": "A1"}));
+    run(&mut s, "select.all", json!({"whole": true}));
+    run(&mut s, "edit.copy", json!({}));
+    let clip = s.clipboard.as_ref().unwrap();
+    assert!(
+        clip.blocks.iter().any(|b| matches!(b, wordcraft_doc::Block::Table(_))),
+        "copying select-all in a document starting with a table must preserve table structure, got {:?}",
+        clip.blocks
+    );
+    let table = clip
+        .blocks
+        .iter()
+        .find_map(|b| match b {
+            wordcraft_doc::Block::Table(t) => Some(t),
+            _ => None,
+        })
+        .expect("table block in clipboard");
+    assert_eq!(table.rows.len(), 2, "copied table row count");
+    assert_eq!(table.cols(), 2, "copied table col count");
+    let c00 = table.rows[0].cells[0].blocks.first().and_then(|b| match &**b {
+        wordcraft_doc::Block::Para(p) => Some(p.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(c00, Some("A1"), "cell (0, 0) text");
+}
+
 /// #1744: Select Table → Cut removes the whole table, and one Undo brings it back.
 #[test]
 fn cut_whole_table_removes_it_and_undoes() {

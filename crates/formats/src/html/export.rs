@@ -211,8 +211,16 @@ fn para_html(p: &Para) -> String {
     }
 }
 
+/// Render an HTML table element, emitting `<colgroup>` column widths and cell attributes.
 fn table_html(t: &FTable, out: &mut String, depth: usize) {
     out.push_str("<table style=\"border-collapse:collapse\">\n");
+    if !t.widths.is_empty() {
+        out.push_str("<colgroup>\n");
+        for w in &t.widths {
+            out.push_str(&format!("<col style=\"width:{w:.2}pt\">\n"));
+        }
+        out.push_str("</colgroup>\n");
+    }
     for row in &t.rows {
         out.push_str("<tr>");
         for c in row {
@@ -235,6 +243,9 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
             let mut css = vec!["padding:4px 6px".to_string(), v_css.to_string()];
             if !t.borderless {
                 css.insert(0, "border:1px solid #999".to_string());
+            }
+            if let Some(w) = c.width {
+                css.push(format!("width:{w:.2}pt"));
             }
             if let Some(s) = c.shading {
                 css.push(format!("background-color:#{}", s.hex()));
