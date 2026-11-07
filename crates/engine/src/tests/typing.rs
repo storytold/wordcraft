@@ -9,6 +9,18 @@ use wordcraft_doc::{Pos, StoryRef};
 
 use crate::Session;
 
+/// Leaf #152: deleting the empty heading above body text must not promote that text to a heading.
+#[test]
+fn deleting_a_preceding_empty_heading_keeps_the_body_paragraph_style() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("\nBody paragraph."));
+    run(&mut s, "para.style", json!({"style": "Heading1"}));
+    run(&mut s, "text.delete", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.text, "Body paragraph.");
+    assert_eq!(p.props.style, None);
+    assert_eq!(wordcraft_layout::outline::levels(&s.doc), [wordcraft_layout::outline::BODY]);
+}
+
 /// Create an empty session for command-driven typing fixtures.
 fn s() -> Session {
     Session::new(wordcraft_doc::Document::new())
