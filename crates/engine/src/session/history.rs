@@ -1,6 +1,27 @@
 use super::doc_state::{MAX_UNDO, Selection, UNDO_LIST_MAX, Undo, next_math_session};
 use super::{Arc, Document, Session};
 
+/// Identity of an actual retained undo checkpoint. Unlike a depth/mark, it cannot match a
+/// replacement checkpoint after Undo followed by an unrelated edit at the same depth.
+#[derive(Clone)]
+pub struct UndoToken(Arc<Undo>);
+
+impl PartialEq for UndoToken {
+    /// Compare retained allocation identity, so an unrelated checkpoint at the same depth differs.
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for UndoToken {}
+
+impl std::fmt::Debug for UndoToken {
+    /// Keep checkpoint pointers and document contents out of diagnostic output.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("UndoToken(..)")
+    }
+}
+
 impl Session {
     /// Snapshot for undo before a change. Returns whether it took a step: typing that is
     /// already in an open step is not a new one.
@@ -43,6 +64,11 @@ impl Session {
     /// except the first; it is consumed by the next `run`.
     pub fn join_next_undo(&mut self) {
         self.join_next = true;
+    }
+
+    /// Drop a scoped join when a front-end refuses a command before the engine consumes it.
+    pub fn cancel_undo_join(&mut self) {
+        self.join_next = false;
     }
 
     /// Make the next equation typing command (`equation.type` or `equation.backspace`) join the
@@ -137,6 +163,11 @@ impl Session {
     /// The number of undo steps.
     pub fn undo_depth(&self) -> usize {
         self.history.len()
+    }
+
+    /// Opaque identity of the current checkpoint, without exposing its address or document text.
+    pub fn undo_token(&self) -> Option<UndoToken> {
+        self.history.last().cloned().map(UndoToken)
     }
 
     /// Where the undo history stands, for [`Session::merge_undo_since`].

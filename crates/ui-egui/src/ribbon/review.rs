@@ -171,6 +171,7 @@ pub(super) fn developer(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+/// Expose the app's help and connected-agent commands, including the native Ask Agent entry point.
 pub(super) fn help(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Help", None, app, |ui, app| {
         big(ui, app, "help", "Help", "ui.dialog", json!({"name": "about"}), false);
@@ -179,5 +180,7 @@ pub(super) fn help(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Agents", None, app, |ui, app| {
         big(ui, app, "macros", "Commands", "ui.dialog", json!({"name": "commands"}), false);
+        // An agent connected to the control channel takes the request (`ask_agent`).
+        big(ui, app, "askAgent", "Ask\nAgent", "ui.askAgent", json!({}), false);
     });
 }

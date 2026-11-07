@@ -10,10 +10,20 @@ fn ok(v: Value) -> Outcome {
     Outcome::Done(json!({"ok": true, "result": v}))
 }
 
+/// Separate an uppercase machine-readable code from its displayed explanation while
+/// leaving ordinary errors untouched; punctuation in prose is not a code.
 fn err(e: impl std::fmt::Display) -> Outcome {
-    Outcome::Done(json!({"ok": false, "error": e.to_string()}))
+    let message = e.to_string();
+    match message.split_once(':') {
+        Some((code, rest)) if !code.is_empty() && code.chars().all(|ch| ch.is_ascii_uppercase() || ch == '_') => {
+            Outcome::Done(json!({"ok": false, "error": rest.trim_start(), "errorCode": code}))
+        }
+        _ => Outcome::Done(json!({"ok": false, "error": message})),
+    }
 }
 
+/// Report the active native window and selection geometry for inspection, including conversation visibility.
+/// These observations do not grant permission to mutate a captured selection.
 pub fn inspect(app: &mut WordApp, ctx: &egui::Context) -> Value {
     let r = ctx.input_for(app.active_viewport(), |i| i.content_rect());
     let caret = crate::canvas::caret_screen(app).map(|(p, h)| json!({"x": p.x, "y": p.y, "h": h}));
@@ -32,6 +42,7 @@ pub fn inspect(app: &mut WordApp, ctx: &egui::Context) -> Value {
         "focused": app.canvas.focused,
         "title": app.title_stem(),
         "dirty": app.session.dirty,
+        "askAgent": json!({"open": app.ask_agent.open.is_some()}),
         "document": app.session.document_id(),
         "documents": app.session.documents(),
         "perf": {"frameMs": app.frame_ms, "renderMs": app.canvas.render_ms, "layoutMs": app.session.layout().ms},
@@ -162,9 +173,14 @@ fn reply<E: std::fmt::Display, F: std::fmt::Display>(r: Result<Result<Value, E>,
     }
 }
 
+/// Absence is distinct from an explicitly malformed request tag (including null).
+fn request_tag(outer: &Value, params: &Value) -> Value {
+    outer.get("request").or(params.get("request")).map_or_else(|| json!({}), |request| json!({"request":request}))
+}
+
 /// A document method addressed to open document `doc`, which isn't the active one: it runs on
 /// that document, and the window keeps showing the active one.
-fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
+fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value, connection: Option<u64>) -> Outcome {
     if app.no_document == Some(doc) {
         return err(NO_DOCUMENT);
     }
@@ -183,6 +199,10 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
         _ => {
             let Some(id) = p.get("command").or(p.get("id")).and_then(Value::as_str) else { return err("missing `command`") };
             let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
+            let checked = request_tag(p, &params);
+            if let Err(error) = crate::ask_agent::guard_addressed(app, connection, doc, id, &checked) {
+                return err(error);
+            }
             if id.starts_with("ui.") {
                 return err(format!("`{id}` works on the window: make the document active first (view.switchWindows {{\"id\": {doc}}})"));
             }
@@ -226,9 +246,28 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
 /// ids as commands. It refuses closing unsaved work and document operations without a document.
 pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
+    if req.connection.is_some()
+        && matches!(
+            req.method.as_str(),
+            "ui.click"
+                | "ui.drag"
+                | "ui.clickText"
+                | "ui.key"
+                | "ui.text"
+                | "ui.press"
+                | "ui.release"
+                | "ui.move"
+                | "ui.wheel"
+                | "ui.resize"
+                | "ui.focus"
+        )
+        && let Err(error) = crate::ask_agent::guard_input(app)
+    {
+        return err(error);
+    }
     if DOC_METHODS.contains(&req.method.as_str()) {
         match addressed(app, p) {
-            Ok(Some(doc)) => return handle_in(app, doc, &req.method, p),
+            Ok(Some(doc)) => return handle_in(app, doc, &req.method, p, req.connection),
             Ok(None) => {}
             Err(e) => return err(e),
         }
@@ -236,13 +275,18 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
     let s = |k: &str| p.get(k).and_then(Value::as_str);
     let f = |k: &str| p.get(k).and_then(Value::as_f64).map(|v| v as f32);
     match req.method.as_str() {
+        "agent.reply" => match crate::ask_agent::reply(app, req.connection, p) {
+            Ok(response) => Outcome::Done(response),
+            Err(error) => err(error),
+        },
         "engine.execute" | "command" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
             if let Some(e) = close_refused(app, id, &params) {
                 return err(e);
             }
-            match app.execute(id, params) {
+            let request = request_tag(p, &params);
+            match crate::ask_agent::as_agent(app, req.connection, id, &request, |app| app.execute(id, params)) {
                 Ok(v) => ok(v),
                 Err(e) => err(e),
             }
@@ -406,10 +450,28 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
             if let Some(e) = close_refused(app, other, p) {
                 return err(e);
             }
-            match app.execute(other, p.clone()) {
+            match crate::ask_agent::as_agent(app, req.connection, other, p, |app| app.execute(other, p.clone())) {
                 Ok(v) => ok(v),
                 Err(e) => err(e),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn err_strips_code_prefix_and_emits_error_code_only_when_uppercase() {
+        let Outcome::Done(v1) = err("NO_REQUEST: no Ask Agent request 5") else { panic!() };
+        assert_eq!(v1["ok"], false);
+        assert_eq!(v1["error"], "no Ask Agent request 5");
+        assert_eq!(v1["errorCode"], "NO_REQUEST");
+
+        let Outcome::Done(v2) = err("no document is open") else { panic!() };
+        assert_eq!(v2["ok"], false);
+        assert_eq!(v2["error"], "no document is open");
+        assert!(v2.get("errorCode").is_none());
     }
 }

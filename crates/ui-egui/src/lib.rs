@@ -24,6 +24,7 @@ macro_rules! tl {
 
 pub mod a11y;
 pub mod a11y_pane;
+pub mod ask_agent;
 pub mod async_saves;
 pub mod autoscroll;
 pub mod backstage;
@@ -88,6 +89,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use wordcraft_engine::Session;
 
+pub use ask_agent::AgentHub;
 pub use control::ControlRequest;
 pub use dialogs::dialogs_chart;
 pub use dialogs::dialogs_controls;
@@ -649,6 +651,8 @@ pub struct WordApp {
     /// Language pack installs, the missing-pack bar ([`language_packs`]).
     pub(crate) packs_rt: language_packs::Runtime,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
+    /// Ask Agent: the control channel's request queue and the instruction box (`ui.askAgent`).
+    pub ask_agent: ask_agent::AskAgent,
     /// Admitted `ui.screenshot` requests: count/byte budgets, retries and completion slots.
     shots: control::Shots,
     /// Monotonic geometry epoch; any size/DPI/zoom/surface/document change increments it,
