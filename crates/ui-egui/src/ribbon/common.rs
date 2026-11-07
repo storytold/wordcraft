@@ -120,10 +120,15 @@ pub(super) fn size_field(ui: &mut Ui, app: &mut WordApp, label: &str, pt: f32, i
 }
 
 pub(super) fn stack(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
-    crate::rtl::vertical(ui, |ui| {
+    let stack = |ui: &mut Ui| {
         ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
         add(ui);
-    });
+    };
+    if crate::widgets::single_line(ui) {
+        crate::rtl::horizontal_top(ui, stack);
+    } else {
+        crate::rtl::vertical(ui, stack);
+    }
 }
 
 /// Layout › Size: the named paper sizes, then More Paper Sizes… for a custom size in Page
