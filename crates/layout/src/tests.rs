@@ -5878,6 +5878,135 @@ fn justified_spaces_shrink_a_quarter_at_most_and_by_the_word() {
     }
 }
 
+/// Measured in Word for Mac (compatibility mode 15, synthetic justified paragraphs that start
+/// with a label and a tab, or with words and then a left tab): a line with a tab shrinks its
+/// spaces too, but only those after its last tab. WordCraft never shrank a line with a tab, so a
+/// numbered paragraph's first line wrapped a word earlier than Word's (#4845, #5847).
+#[test]
+fn justified_line_with_a_tab_shrinks_only_the_spaces_after_it() {
+    use wordcraft_doc::props::{TabAlign, TabStop};
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let word = "nnnn";
+    let (lead, n) = ("n n n n n n n n n n n n", 12);
+    let tab_at = 200.0;
+    let para = |text: &str, right: f32| {
+        let mut d = Document::new();
+        d.settings.compat_mode = 15;
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props = ParaProps {
+            align: Some(Align::Justify),
+            indent_right: Some(right),
+            tabs: Some(vec![TabStop { pos: tab_at, align: TabAlign::Left, leader: Default::default() }]),
+            ..Default::default()
+        };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d
+    };
+    // Words after the tab on the first line.
+    let after_tab = |d: &Document| {
+        let l = lay(d);
+        let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+        let line = &pl.lines[0];
+        let text = &d.para(StoryRef::Body, &Path::top(0)).unwrap().text[line.start..line.stop];
+        text.split('\t').nth(1).unwrap_or("").split_whitespace().count()
+    };
+    let probe = para(&format!("{word} {word}"), 0.0);
+    let l = lay(&probe);
+    let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let w = pl.x_of(0, word.len()).unwrap() - pl.x_of(0, 0).unwrap();
+    let sw = pl.x_of(0, word.len() + 1).unwrap() - pl.x_of(0, word.len()).unwrap();
+    // Room from the n spaces after the tab alone; the eleven before it would allow more.
+    let room = (0.25 * n as f32 * sw).min(0.355 * (w + sw));
+    let all_room = (0.25 * (n + 11) as f32 * sw).min(0.355 * (w + sw));
+    assert!(all_room > room + 0.5, "the test needs the spaces before the tab to matter: {room} vs {all_room}");
+    let text = format!("{lead}\t{}", vec![word; 3 * n].join(" "));
+    let full = probe.last_section.text_width();
+    let width = |overrun: f32| tab_at + (n + 1) as f32 * w + n as f32 * sw - overrun;
+    for (overrun, words) in [(room - 0.1, n + 1), (room + 0.1, n)] {
+        let d = para(&text, full - width(overrun));
+        assert_eq!(after_tab(&d), words, "overrun {overrun:.2} of {room:.2} allowed");
+    }
+
+    // Verify rendered positions: spaces after the tab shrink in the allowed-overrun case,
+    // while positions before the tab remain unchanged.
+    let shrunk_doc = para(&text, full - width(room - 0.1));
+    let unconstrained_doc = para(&text, 0.0);
+    let l_shrunk = lay(&shrunk_doc);
+    let l_unconstrained = lay(&unconstrained_doc);
+    let pl_shrunk = l_shrunk.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let pl_unconstrained =
+        l_unconstrained.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+
+    // Characters in `lead` and the tab's start position must have identical positions.
+    for k in 0..=lead.len() {
+        assert_eq!(pl_shrunk.x_of(0, k), pl_unconstrained.x_of(0, k), "char {k} before tab must not move when spaces after tab shrink");
+    }
+    // Text after the tab starts at tab_at.
+    assert!((pl_shrunk.x_of(0, lead.len() + 1).unwrap() - tab_at).abs() < 0.01, "tab position");
+    // Text after the tab is shifted left compared to its natural (un-shrunk) positions:
+    // for each word k after the tab on line 0, natural position is tab_at + k * (w + sw).
+    let natural_x = |k: usize| tab_at + k as f32 * (w + sw);
+    for k in 1..=n {
+        let char_pos = lead.len() + 1 + k * (word.len() + 1);
+        if let Some(x) = pl_shrunk.x_of(0, char_pos) {
+            assert!(x < natural_x(k), "word {k} after tab at {x} must be shifted left from natural {}", natural_x(k));
+        }
+    }
+}
+
+/// #5847: justified paragraphs starting with a tab shrink spaces on the first line in Word 2013+
+/// mode, fitting more text than legacy mode 14 just as non-tab lines do.
+#[test]
+fn justified_lines_with_tab_shrink_spaces_in_word_2013_mode() {
+    let text = format!("\t{}", "We tie the spend to a pipe and to the books, so it is in an ad hoc view of all of it. ".repeat(40));
+    let (modern, ends) = justified_lines(&text, 15, Align::Justify);
+    let (legacy, legacy_ends) = justified_lines(&text, 14, Align::Justify);
+    assert!(modern < legacy, "mode 15 with leading tab fits more per line: {modern} vs {legacy} lines");
+    for e in ends.iter().chain(&legacy_ends) {
+        assert!(*e <= 540.0 + 0.05, "line ends past the right margin: {e}");
+    }
+    for e in &ends[..ends.len() - 1] {
+        assert!((*e - 540.0).abs() < 0.05, "justified line ends at {e}");
+    }
+}
+
+/// #5847: leading tab on a justified line shrinks spaces after the tab when fitting words.
+#[test]
+fn justified_line_with_leading_tab_shrinks_spaces() {
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let word = "nnnn";
+    let n = 12;
+    let tab_at = 36.0; // default 0.5" tab stop
+    let para = |text: &str, right: f32| {
+        let mut d = Document::new();
+        d.settings.compat_mode = 15;
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props = ParaProps { align: Some(Align::Justify), indent_right: Some(right), ..Default::default() };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d
+    };
+    let first = |d: &Document| {
+        let l = lay(d);
+        let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+        let line = &pl.lines[0];
+        let text = &d.para(StoryRef::Body, &Path::top(0)).unwrap().text[line.start..line.stop];
+        text.split('\t').nth(1).unwrap_or("").split_whitespace().count()
+    };
+    let probe = para(&format!("{word} {word}"), 0.0);
+    let l = lay(&probe);
+    let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let w = pl.x_of(0, word.len()).unwrap() - pl.x_of(0, 0).unwrap();
+    let sw = pl.x_of(0, word.len() + 1).unwrap() - pl.x_of(0, word.len()).unwrap();
+    let room = (0.25 * n as f32 * sw).min(0.355 * (w + sw));
+    let text = format!("\t{}", vec![word; 3 * n].join(" "));
+    let full = probe.last_section.text_width();
+    let width = |overrun: f32| tab_at + (n + 1) as f32 * w + n as f32 * sw - overrun;
+    for (overrun, words) in [(room - 0.1, n + 1), (room + 0.1, n)] {
+        let d = para(&text, full - width(overrun));
+        assert_eq!(first(&d), words, "leading tab overrun {overrun:.2} of {room:.2} allowed");
+    }
+}
+
 #[test]
 fn space_shrinking_is_only_for_justified_text() {
     let text = "We tie the spend to a pipe and to the books, so it is in an ad hoc view of all of it. ".repeat(40);
