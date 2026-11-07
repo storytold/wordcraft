@@ -86,6 +86,37 @@ fn uppercase_first(s: &str) -> String {
     }
 }
 
+/// Whether `token` is a known German abbreviation ending with a period that does not terminate a sentence.
+fn is_german_abbreviation(token: &str) -> bool {
+    let lower = token.to_lowercase();
+    matches!(
+        lower.as_str(),
+        "bzw." | "z.b." | "u.a." | "d.h." | "usw." | "etc." | "evtl." | "ggf." | "v.a." | "insb." | "ca." | "sog." | "inkl." | "exkl." | "bzgl."
+    )
+}
+
+/// Whether `s` starts with a known German abbreviation ending with a period.
+fn starts_with_german_abbreviation(s: &str) -> bool {
+    let s_lower = s.to_lowercase();
+    for abbr in &["bzw.", "z.b.", "u.a.", "d.h.", "usw.", "etc.", "evtl.", "ggf.", "v.a.", "insb.", "ca.", "sog.", "inkl.", "exkl.", "bzgl."] {
+        if s_lower.starts_with(abbr) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether `s` ends with a known German abbreviation ending with a period.
+fn ends_with_german_abbreviation(s: &str) -> bool {
+    let s_lower = s.to_lowercase();
+    for abbr in &["bzw.", "z.b.", "u.a.", "d.h.", "usw.", "etc.", "evtl.", "ggf.", "v.a.", "insb.", "ca.", "sog.", "inkl.", "exkl.", "bzgl."] {
+        if s_lower.ends_with(abbr) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Whether `token` is a German coordination conjunction, separator, or article that can appear
 /// between constituents of a coordinated compound.
 fn is_german_connector(token: &str) -> bool {
@@ -182,17 +213,22 @@ fn is_forward_coordinated_compound(
     let mut saw_connector = false;
     let mut modifier_count: usize = 0;
     let mut remainder = after_hyphen;
-    for _ in 0..64 {
+    while !remainder.is_empty() {
+        let prev_len = remainder.len();
         remainder = remainder.trim_start();
         if remainder.is_empty() {
             break;
         }
-        if remainder.starts_with(['.', '!', '?', ';', ':', '\n']) && !remainder.starts_with("bzw.") {
+        if remainder.starts_with(['.', '!', '?', ';', ':', '\n']) && !starts_with_german_abbreviation(remainder) {
             break;
         }
         if remainder.starts_with('/') || remainder.starts_with(',') {
             saw_connector = true;
-            remainder = remainder.get(1..).unwrap_or("");
+            let first_char_len = remainder.chars().next().map_or(1, |c| c.len_utf8());
+            remainder = remainder.get(first_char_len..).unwrap_or("");
+            if remainder.len() >= prev_len {
+                break;
+            }
             continue;
         }
 
@@ -201,9 +237,17 @@ fn is_forward_coordinated_compound(
             break;
         };
         remainder = remainder.get(token_end..).unwrap_or("");
+        if remainder.len() >= prev_len {
+            break;
+        }
+
+        let has_sentence_punct = raw_token.ends_with(['.', '!', '?', ';', ':']) && !is_german_abbreviation(raw_token);
 
         let token = raw_token.trim_end_matches(|c: char| !c.is_alphabetic() && !is_hyphen(c));
         if token.is_empty() {
+            if has_sentence_punct {
+                break;
+            }
             continue;
         }
 
@@ -215,6 +259,9 @@ fn is_forward_coordinated_compound(
         let lower = token.to_lowercase();
         if is_german_connector(&lower) {
             saw_connector = true;
+            if has_sentence_punct {
+                break;
+            }
             continue;
         }
 
@@ -225,11 +272,15 @@ fn is_forward_coordinated_compound(
             }
 
             let is_lowercase = token.chars().next().is_some_and(|c| c.is_lowercase());
-            if is_lowercase && modifier_count < 2 {
+            if !has_sentence_punct && is_lowercase && modifier_count < 2 {
                 modifier_count = modifier_count.saturating_add(1);
                 continue;
             }
 
+            break;
+        }
+
+        if has_sentence_punct {
             break;
         }
     }
@@ -300,17 +351,22 @@ fn is_backward_coordinated_compound(
     let mut saw_connector = false;
     let mut modifier_count: usize = 0;
     let mut remainder = before_hyphen;
-    for _ in 0..64 {
+    while !remainder.is_empty() {
+        let prev_len = remainder.len();
         remainder = remainder.trim_end();
         if remainder.is_empty() {
             break;
         }
-        if remainder.ends_with(['.', '!', '?', ';', ':', '\n']) && !remainder.ends_with("bzw.") {
+        if remainder.ends_with(['.', '!', '?', ';', ':', '\n']) && !ends_with_german_abbreviation(remainder) {
             break;
         }
         if remainder.ends_with('/') || remainder.ends_with(',') {
             saw_connector = true;
-            remainder = remainder.get(..remainder.len().saturating_sub(1)).unwrap_or("");
+            let last_char_len = remainder.chars().next_back().map_or(1, |c| c.len_utf8());
+            remainder = remainder.get(..remainder.len().saturating_sub(last_char_len)).unwrap_or("");
+            if remainder.len() >= prev_len {
+                break;
+            }
             continue;
         }
 
@@ -323,20 +379,35 @@ fn is_backward_coordinated_compound(
             break;
         };
         remainder = remainder.get(..prev_end).unwrap_or("");
+        if remainder.len() >= prev_len {
+            break;
+        }
+
+        let has_sentence_punct = raw_token.ends_with(['.', '!', '?', ';', ':']) && !is_german_abbreviation(raw_token);
 
         let token = raw_token.trim_start_matches(|c: char| !c.is_alphabetic() && !is_hyphen(c));
+        let token = token.trim_end_matches(|c: char| !c.is_alphabetic() && !is_hyphen(c));
         if token.is_empty() {
+            if has_sentence_punct {
+                break;
+            }
             continue;
         }
 
         if token.starts_with(is_hyphen) {
             saw_connector = true;
+            if has_sentence_punct {
+                break;
+            }
             continue;
         }
 
         let lower = token.to_lowercase();
         if is_german_connector(&lower) {
             saw_connector = true;
+            if has_sentence_punct {
+                break;
+            }
             continue;
         }
 
@@ -347,11 +418,15 @@ fn is_backward_coordinated_compound(
             }
 
             let is_lowercase = token.chars().next().is_some_and(|c| c.is_lowercase());
-            if is_lowercase && modifier_count < 2 {
+            if !has_sentence_punct && is_lowercase && modifier_count < 2 {
                 modifier_count = modifier_count.saturating_add(1);
                 continue;
             }
 
+            break;
+        }
+
+        if has_sentence_punct {
             break;
         }
     }
@@ -522,7 +597,7 @@ mod tests {
         } else {
             let _ = std::fs::create_dir_all(&temp_dir);
             let aff = "SET UTF-8\nCOMPOUNDFLAG X\n";
-            let dic = "36\nHandlung/X\nHandlungssatz/X\nZustandssatz/X\nSchulbetrieb/X\nUniversitätsbetrieb/X\nArbeitsrecht/X\nSozialrecht/X\nFamilienrecht/X\nSteuerrecht/X\nVertragsrecht/X\nVersicherungsrecht/X\nVerkehrsrecht/X\nMietrecht/X\nForschungsabteilung/X\nEntwicklungsabteilung/X\nWirtschaftspolitik/X\nFinanzpolitik/X\nBildungsauftrag/X\nErziehungsauftrag/X\nBewegungsverb/X\nWahrnehmungsverb/X\nOrdnungsdienst/X\nSicherheitsdienst/X\nGestaltungssatz/X\nWasserverbrauch/X\nWasserqualität/X\nFriedensforschung/X\nKonfliktforschung/X\nLiebesbeziehung/X\nEhebeziehung/X\nLebensbedingungen/X\nArbeitsbedingungen/X\nund/X\noder/X\nder/X\nneue/X\n";
+            let dic = "38\nHandlung/X\nHandlungssatz/X\nZustandssatz/X\nSchulbetrieb/X\nUniversitätsbetrieb/X\nArbeitsrecht/X\nSozialrecht/X\nFamilienrecht/X\nSteuerrecht/X\nVertragsrecht/X\nVersicherungsrecht/X\nVerkehrsrecht/X\nMietrecht/X\nForschungsabteilung/X\nEntwicklungsabteilung/X\nWirtschaftspolitik/X\nFinanzpolitik/X\nBildungsauftrag/X\nErziehungsauftrag/X\nBewegungsverb/X\nWahrnehmungsverb/X\nOrdnungsdienst/X\nSicherheitsdienst/X\nGestaltungssatz/X\nWasserverbrauch/X\nWasserqualität/X\nFriedensforschung/X\nKonfliktforschung/X\nLiebesbeziehung/X\nEhebeziehung/X\nLebensbedingungen/X\nArbeitsbedingungen/X\nund\noder\nder\nneue\nsehr\ngut\n";
             let _ = std::fs::write(temp_dir.join("de_DE.aff"), aff);
             let _ = std::fs::write(temp_dir.join("de_DE.dic"), dic);
             wordcraft_proof::set_dictionaries_folder(Some(temp_dir));
@@ -558,6 +633,27 @@ mod tests {
             let spelling_issues: Vec<_> = issues.iter().filter(|i| i.kind == wordcraft_proof::IssueKind::Spelling).collect();
             assert!(spelling_issues.is_empty(), "expected no spelling issues for {text:?}, got: {spelling_issues:?}");
         }
+
+        // Coordinated lists beyond the previous 64-token scan limit are supported.
+        let long_list = format!("{}und Sozialrecht", "Arbeits-, ".repeat(70));
+        let mut d = Document::from_text(&long_list);
+        d.format_range(&wordcraft_doc::Pos::body(0, 0), &wordcraft_doc::Pos::body(0, long_list.len()), &|c| c.lang = Some("de-DE".into())).unwrap();
+        let p = d.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+        let issues = paragraph_issues(p, &proof_runs(&d, p, None), &Default::default(), true, false);
+        let spelling_issues: Vec<_> = issues.iter().filter(|i| i.kind == wordcraft_proof::IssueKind::Spelling).collect();
+        assert!(spelling_issues.is_empty(), "expected long coordinated list beyond 64 tokens to be accepted, got: {spelling_issues:?}");
+
+        // Sentence boundaries on modifiers must not allow matching across sentences.
+        let invalid_sentence = "Handlungs- und sehr gut. Der Zustandssatz.";
+        let mut d = Document::from_text(invalid_sentence);
+        d.format_range(&wordcraft_doc::Pos::body(0, 0), &wordcraft_doc::Pos::body(0, invalid_sentence.len()), &|c| c.lang = Some("de-DE".into()))
+            .unwrap();
+        let p = d.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+        let issues = paragraph_issues(p, &proof_runs(&d, p, None), &Default::default(), true, false);
+        assert!(
+            issues.iter().any(|i| i.kind == wordcraft_proof::IssueKind::Spelling && p.text.get(i.start..i.end) == Some("Handlungs")),
+            "expected Handlungs- not to match across sentence boundaries, got issues: {issues:?}"
+        );
 
         // Invalid compounds must still be flagged.
         let invalid = "Xyzqwe- und Zustandssatz";
