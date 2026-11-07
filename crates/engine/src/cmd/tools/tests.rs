@@ -290,3 +290,167 @@ fn inspect_removals_work_when_the_document_does_not_track_changes() {
     assert!(!text.contains("Hidden"), "the hidden text is still there: {text}");
     assert!(text.contains("Visible text."), "{text}");
 }
+
+/// #5861: When an edit run contains inserted or deleted paragraphs, blocks are aligned by
+/// text similarity rather than naive positional zipping, so edited paragraphs retain their
+/// partner and are diffed within rather than restructured wholesale.
+#[test]
+fn compare_pairs_paragraphs_across_insertions_and_deletions_retaining_within_diff() {
+    // 1. Insertion before a modified paragraph:
+    let original = "The supplier agrees to deliver the items on time every week.\nKeep this anchor.";
+    let revised = "A brand new preamble paragraph.\nThe vendor agrees to deliver the items on time every week.\nKeep this anchor.";
+    let mut s = Session::new(Document::from_text(original));
+    s.run("review.compare", &json!({"text": revised})).unwrap();
+    // The revised paragraph must be diffed within rather than replaced wholesale:
+    // "agrees to deliver the items on time every week." must survive as unmarked unchanged text.
+    let para = s.doc.body[1].as_para().unwrap();
+    let unmarked: String = para.run_ranges().filter(|(_, c)| c.del.is_none() && c.ins.is_none()).map(|(r, _)| para.text[r].to_string()).collect();
+    assert!(unmarked.contains("agrees to deliver the items on time every week."), "unchanged text must survive as unmarked text; got: {unmarked}");
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), revised);
+
+    // 2. Deletion before a modified paragraph:
+    let original = "Obsolete preamble paragraph to be deleted.\nThe supplier agrees to deliver the items on time every week.\nKeep this anchor.";
+    let revised = "The contractor agrees to deliver the items on time every week.\nKeep this anchor.";
+    let mut s = Session::new(Document::from_text(original));
+    s.run("review.compare", &json!({"text": revised})).unwrap();
+    let para = s.doc.body[1].as_para().unwrap();
+    let unmarked: String = para.run_ranges().filter(|(_, c)| c.del.is_none() && c.ins.is_none()).map(|(r, _)| para.text[r].to_string()).collect();
+    assert!(
+        unmarked.contains("agrees to deliver the items on time every week."),
+        "unchanged text must survive as unmarked text after deletion; got: {unmarked}"
+    );
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), original);
+
+    // 3. Insertion between two modified paragraphs:
+    let original = "Clause 1. Definitions of the agreement terms.\nClause 2. Obligations of the supplier.\nKeep anchor.";
+    let revised = "Clause 1. Definitions of the contract terms.\nClause 1.5. Special rules.\nClause 2. Obligations of the vendor.\nKeep anchor.";
+    let mut s = Session::new(Document::from_text(original));
+    s.run("review.compare", &json!({"text": revised})).unwrap();
+    // Both Clause 1 and Clause 2 must be diffed within and retain their unmarked text:
+    let p_c1 = s.doc.body[0].as_para().unwrap();
+    let p_c2 = s.doc.body[2].as_para().unwrap();
+    let unmarked_c1: String = p_c1.run_ranges().filter(|(_, c)| c.del.is_none() && c.ins.is_none()).map(|(r, _)| p_c1.text[r].to_string()).collect();
+    let unmarked_c2: String = p_c2.run_ranges().filter(|(_, c)| c.del.is_none() && c.ins.is_none()).map(|(r, _)| p_c2.text[r].to_string()).collect();
+    assert!(unmarked_c1.contains("Definitions of the"), "Clause 1 within-paragraph diff: {unmarked_c1}");
+    assert!(unmarked_c2.contains("Obligations of the"), "Clause 2 within-paragraph diff: {unmarked_c2}");
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), revised);
+
+    // 4. Chinese text across an insertion:
+    let original = "会议改到周三下午。\n保持此段。";
+    let revised = "新插入的段落。\n会议改到周四下午。\n保持此段。";
+    let mut s = Session::new(Document::from_text(original));
+    s.run("review.compare", &json!({"text": revised, "level": "character"})).unwrap();
+    let p_cjk = s.doc.body[1].as_para().unwrap();
+    let unmarked_cjk: String =
+        p_cjk.run_ranges().filter(|(_, c)| c.del.is_none() && c.ins.is_none()).map(|(r, _)| p_cjk.text[r].to_string()).collect();
+    assert!(unmarked_cjk.contains("会议改到周"), "Chinese within-paragraph diff: {unmarked_cjk}");
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), revised);
+}
+
+/// #5861: Sentences sharing only sparse stop words (such as "the" twice) score below
+/// SIMILARITY_THRESHOLD and are not paired across an edit run, leaving them as clean
+/// wholesale deletions and insertions rather than an interleaved within-paragraph diff.
+#[test]
+fn compare_leaves_unrelated_sentences_with_sparse_common_words_unpaired() {
+    let original = "The red car parked by the house.\nKeep anchor.";
+    let revised = "Preamble insertion.\nThe blue dog jumped over the river.\nKeep anchor.";
+    let mut s = Session::new(Document::from_text(original));
+    s.run("review.compare", &json!({"text": revised})).unwrap();
+    // The original paragraph and the revised sentence must not be paired into an interleaved diff.
+    // The original paragraph must be deleted wholesale (every run marked del):
+    let p_del = s.doc.body[0].as_para().unwrap();
+    assert_eq!(p_del.plain_text(), "The red car parked by the house.");
+    assert!(p_del.runs.iter().all(|r| r.props.del.is_some()), "unrelated paragraph must be deleted wholesale");
+    let p_ins1 = s.doc.body[1].as_para().unwrap();
+    assert_eq!(p_ins1.plain_text(), "Preamble insertion.");
+    assert!(p_ins1.runs.iter().all(|r| r.props.ins.is_some()), "preamble must be inserted wholesale");
+    // And the revised sentence inserted wholesale:
+    let p_ins2 = s.doc.body[2].as_para().unwrap();
+    assert_eq!(p_ins2.plain_text(), "The blue dog jumped over the river.");
+    assert!(p_ins2.runs.iter().all(|r| r.props.ins.is_some()), "unrelated paragraph must be inserted wholesale");
+    // Anchor paragraph must remain unmarked:
+    let p_anchor = s.doc.body[3].as_para().unwrap();
+    assert_eq!(p_anchor.plain_text(), "Keep anchor.");
+    assert!(p_anchor.runs.iter().all(|r| r.props.del.is_none() && r.props.ins.is_none()));
+    let mut s_accept = Session::new(s.doc.clone());
+    s_accept.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s_accept.doc.plain_text(StoryRef::Body), revised);
+    let mut s_reject = Session::new(s.doc.clone());
+    s_reject.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s_reject.doc.plain_text(StoryRef::Body), original);
+}
+
+/// #5861: Runs of unrelated single-token paragraphs across unequal counts score below
+/// SIMILARITY_THRESHOLD and are left unpaired as clean deletions and insertions.
+#[test]
+fn compare_leaves_unrelated_single_token_paragraphs_unpaired() {
+    let original = "First\nSecond\nKeep anchor.";
+    let revised = "Third\nFourth\nFifth\nKeep anchor.";
+    let mut s = Session::new(Document::from_text(original));
+    s.run("review.compare", &json!({"text": revised})).unwrap();
+    // Old paragraphs (First, Second) must be deleted wholesale; new ones (Third, Fourth, Fifth) inserted wholesale:
+    let p_del1 = s.doc.body[0].as_para().unwrap();
+    let p_del2 = s.doc.body[1].as_para().unwrap();
+    assert_eq!(p_del1.plain_text(), "First");
+    assert!(p_del1.runs.iter().all(|r| r.props.del.is_some()), "First deleted wholesale");
+    assert_eq!(p_del2.plain_text(), "Second");
+    assert!(p_del2.runs.iter().all(|r| r.props.del.is_some()), "Second deleted wholesale");
+    let p_ins1 = s.doc.body[2].as_para().unwrap();
+    let p_ins2 = s.doc.body[3].as_para().unwrap();
+    let p_ins3 = s.doc.body[4].as_para().unwrap();
+    assert_eq!(p_ins1.plain_text(), "Third");
+    assert!(p_ins1.runs.iter().all(|r| r.props.ins.is_some()), "Third inserted wholesale");
+    assert_eq!(p_ins2.plain_text(), "Fourth");
+    assert!(p_ins2.runs.iter().all(|r| r.props.ins.is_some()), "Fourth inserted wholesale");
+    assert_eq!(p_ins3.plain_text(), "Fifth");
+    assert!(p_ins3.runs.iter().all(|r| r.props.ins.is_some()), "Fifth inserted wholesale");
+    let p_anchor = s.doc.body[5].as_para().unwrap();
+    assert_eq!(p_anchor.plain_text(), "Keep anchor.");
+    assert!(p_anchor.runs.iter().all(|r| r.props.del.is_none() && r.props.ins.is_none()));
+    let mut s_accept = Session::new(s.doc.clone());
+    s_accept.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s_accept.doc.plain_text(StoryRef::Body), revised);
+    let mut s_reject = Session::new(s.doc.clone());
+    s_reject.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s_reject.doc.plain_text(StoryRef::Body), original);
+}
+
+/// #5861: Runs of unrelated CJK paragraphs across unequal counts score below
+/// SIMILARITY_THRESHOLD and are left unpaired as clean deletions and insertions.
+#[test]
+fn compare_leaves_unrelated_cjk_paragraphs_unpaired() {
+    let original = "会议安排\n财务预算\n保持锚点。";
+    let revised = "人事变动\n安全检查\n年终总结\n保持锚点。";
+    let mut s = Session::new(Document::from_text(original));
+    s.run("review.compare", &json!({"text": revised, "level": "character"})).unwrap();
+    // Even though "会议安排" and "安全检查" share the character '安', similarity is below threshold.
+    // They must not be paired; each old paragraph is deleted wholesale and each new is inserted wholesale:
+    let p_cjk_del1 = s.doc.body[0].as_para().unwrap();
+    let p_cjk_del2 = s.doc.body[1].as_para().unwrap();
+    assert_eq!(p_cjk_del1.plain_text(), "会议安排");
+    assert!(p_cjk_del1.runs.iter().all(|r| r.props.del.is_some()), "CJK para 1 deleted wholesale");
+    assert_eq!(p_cjk_del2.plain_text(), "财务预算");
+    assert!(p_cjk_del2.runs.iter().all(|r| r.props.del.is_some()), "CJK para 2 deleted wholesale");
+    let p_cjk_ins1 = s.doc.body[2].as_para().unwrap();
+    let p_cjk_ins2 = s.doc.body[3].as_para().unwrap();
+    let p_cjk_ins3 = s.doc.body[4].as_para().unwrap();
+    assert_eq!(p_cjk_ins1.plain_text(), "人事变动");
+    assert!(p_cjk_ins1.runs.iter().all(|r| r.props.ins.is_some()), "CJK para 1 inserted wholesale");
+    assert_eq!(p_cjk_ins2.plain_text(), "安全检查");
+    assert!(p_cjk_ins2.runs.iter().all(|r| r.props.ins.is_some()), "CJK para 2 inserted wholesale");
+    assert_eq!(p_cjk_ins3.plain_text(), "年终总结");
+    assert!(p_cjk_ins3.runs.iter().all(|r| r.props.ins.is_some()), "CJK para 3 inserted wholesale");
+    let p_anchor_cjk = s.doc.body[5].as_para().unwrap();
+    assert_eq!(p_anchor_cjk.plain_text(), "保持锚点。");
+    assert!(p_anchor_cjk.runs.iter().all(|r| r.props.del.is_none() && r.props.ins.is_none()));
+    let mut s_accept = Session::new(s.doc.clone());
+    s_accept.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s_accept.doc.plain_text(StoryRef::Body), revised);
+    let mut s_reject = Session::new(s.doc.clone());
+    s_reject.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s_reject.doc.plain_text(StoryRef::Body), original);
+}
