@@ -1,3 +1,7 @@
+> **Mac-native fork:** The `mac-native` branch adds system menus, Mac keyboard
+> shortcuts, Settings, recent documents, and guarded Quit. See
+> [Mac-native development and local builds](docs/mac-native.md).
+
 <p align="center">
   <a href="https://getartcraft.com/">
     <picture>

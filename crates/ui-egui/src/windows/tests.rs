@@ -382,6 +382,26 @@ fn control_typing_reaches_the_active_window() {
     assert_eq!(text(&a), "First", "the other window got none of it");
 }
 
+#[test]
+fn route_input_reaches_the_active_window() {
+    let ctx = backend();
+    let mut a = app("First");
+    frames(&ctx, &mut a, 2);
+    a.run("file.new", json!({})).unwrap();
+    let child = a.active_viewport();
+    focus(child);
+    frames(&ctx, &mut a, 8);
+    assert!(a.canvas.focused, "the new window's page has the keyboard");
+    let mut raw = input(ViewportId::ROOT);
+    a.route_input(&ctx, &mut raw, vec![egui::Event::Paste("Pasted".into())]);
+    assert!(raw.events.is_empty(), "events did not go to root");
+    frames(&ctx, &mut a, 4);
+    assert_eq!(text(&a), "Pasted");
+    focus(ViewportId::ROOT);
+    frames(&ctx, &mut a, 2);
+    assert_eq!(text(&a), "First", "the root window was untouched");
+}
+
 /// `ui.screenshot` captures the active window: the capture is sized from its viewport and the
 /// command goes to that viewport. A capture still pending when another window comes forward
 /// fails with an error instead of capturing that window.
