@@ -253,7 +253,7 @@ fn symbols(ui: &mut Ui, app: &mut WordApp) {
     let all: Vec<char> = chars.chars().collect();
     let start = ui.data(|d| d.get_temp::<usize>(start_id)).unwrap_or(0).min(all.len().saturating_sub(1));
     let t = Tokens::get(ui.ctx());
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
         for row in 0..rows {
             ui.horizontal(|ui| {
@@ -272,7 +272,7 @@ fn symbols(ui: &mut Ui, app: &mut WordApp) {
             });
         }
     });
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         ui.spacing_mut().item_spacing = vec2(0.0, 1.0);
         let page = per_row * rows;
         if ui.add_enabled(start > 0, egui::Button::new("▲").min_size(vec2(16.0, 22.0))).clicked() {
@@ -341,7 +341,7 @@ fn symbol_tooltip(c: char, display: &str) -> String {
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Tools", None, app, |ui, app| {
         math_menu_button(ui, app, EQUATION_PICTURE, "Equation", builtin_menu);
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
             let latex = app.session.math_latex;
             small(
@@ -386,7 +386,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 },
             );
         });
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
             let normal = app.session.math_normal_text;
             small(
@@ -407,7 +407,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         }
     });
     group(ui, "Equation Options", None, app, |ui, app| {
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
             let info = app.session.run("equation.get", &json!({})).ok();
             let display = info.as_ref().and_then(|v| v.get("display")).and_then(|v| v.as_bool()).unwrap_or(false);
@@ -437,7 +437,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 crate::widgets::ButtonAction::new("equation.number", json!({}), numbered),
             );
         });
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
             crate::widgets::menu_button(
                 ui,
