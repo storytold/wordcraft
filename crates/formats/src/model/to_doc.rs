@@ -806,6 +806,7 @@ impl<'a> Builder<'a> {
         out
     }
 
+    /// Convert a flow table into a document table model, resolving grid column widths and vertical merges.
     fn table(&mut self, t: &FTable, depth: usize) -> Option<Table> {
         let rows: Vec<(usize, &Vec<Cell>)> = t.rows.iter().enumerate().filter(|(_, r)| !r.is_empty()).take(wordcraft_doc::table::MAX_ROWS).collect();
         if rows.is_empty() {
@@ -886,6 +887,22 @@ impl<'a> Builder<'a> {
                 row.cells.push(wordcraft_doc::Cell::empty());
             }
             tb.rows.push(row);
+        }
+        for r in 1..tb.rows.len() {
+            for ci in 0..tb.rows[r].cells.len() {
+                if tb.rows[r].cells[ci].props.vmerge == VMerge::Continue {
+                    let g = tb.grid_col(r, ci);
+                    let prev_r = r - 1;
+                    if let Some(up_ci) = tb.cell_at_grid(prev_r, g)
+                        && tb.grid_col(prev_r, up_ci) == g
+                    {
+                        let up_cell = &mut tb.rows[prev_r].cells[up_ci];
+                        if up_cell.props.vmerge == VMerge::None {
+                            up_cell.props.vmerge = VMerge::Restart;
+                        }
+                    }
+                }
+            }
         }
         // Its markup kept for the writer, by its place among the top's tables.
         if depth == 0 {
