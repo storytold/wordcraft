@@ -112,7 +112,9 @@ impl Body<'_> {
             // other formats' pictures are. A stated size is the file's.
             let room = self.sec.text_width();
             let says = |v: Option<f32>| v.is_some_and(|v| v.is_finite() && v > 0.0);
-            let fit = (!says(w) && !says(h) && float.is_none() && room.is_finite() && room > 0.0).then_some(room);
+            // (Still in line when raised, turned or mirrored.)
+            let in_line = float.as_ref().is_none_or(|f| f.wrap == wordcraft_doc::para::Wrap::Inline);
+            let fit = (!says(w) && !says(h) && in_line && room.is_finite() && room > 0.0).then_some(room);
             let inline = match (boxed, eq) {
                 (Some(blocks), _) => {
                     let mut look = std::mem::take(&mut self.frame_look);

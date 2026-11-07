@@ -262,6 +262,24 @@ fn a_frame_stating_a_size_of_nothing_is_fitted_to_the_text() {
     assert!((img.w - 306.14).abs() < 0.5 && (img.h - 153.07).abs() < 0.5, "{} {}", img.w, img.h);
 }
 
+#[test]
+fn a_picture_in_line_raised_or_turned_with_no_size_is_fitted_to_the_text() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pm"><style:page-layout-properties fo:page-width="14.8cm" fo:page-height="21cm" fo:margin-left="2cm" fo:margin-right="2cm" fo:margin-top="2cm" fo:margin-bottom="2cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm"/></office:master-styles></office:document-styles>"#
+    );
+    let auto = r#"<office:automatic-styles><style:style style:name="fr1" style:family="graphic"><style:graphic-properties style:vertical-pos="middle" style:vertical-rel="char"/></style:style></office:automatic-styles>"#;
+    for attrs in [r#" draw:style-name="fr1""#, r#" draw:transform="rotate (0.5) translate (0cm 0cm)""#] {
+        let frame = format!(r#"<draw:frame text:anchor-type="as-char"{attrs}><draw:image xlink:href="Pictures/a.png"/></draw:frame>"#);
+        let content = format!(
+            r#"<office:document-content {NS_T}>{auto}<office:body><office:text><text:p>{frame}</text:p></office:text></office:body></office:document-content>"#
+        );
+        let pkg = zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/a.png", &png_of(1000, 500))]);
+        let flow = parse(&pkg).unwrap();
+        let img = paras(&flow).into_iter().flat_map(|p| &p.inlines).find_map(|i| if let Inline::Image(img) = i { Some(img) } else { None }).unwrap();
+        assert!(img.w <= 306.5, "{attrs}: {} {}", img.w, img.h);
+    }
+}
+
 pub(super) const NS_T: &str = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0""#;
 
 /// A package with `content.xml` and, when given, `styles.xml`.
