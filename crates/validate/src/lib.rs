@@ -713,6 +713,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     let mut facts = scan::StoryFacts::default();
     let mut refs: Vec<(String, Vec<RefFact>)> = Vec::new();
     let mut content_parts: Vec<(String, Vec<String>)> = Vec::new();
+    let mut content_part_total = 0usize;
     let mut content_part_capped_any = false;
     let mut compat_on = false;
     let mut compat_unknown = false;
@@ -762,10 +763,8 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
         if scanned.note_capped {
             note_capped_any = true;
         }
-        note_listings.0.extend(scanned.note_listings.0);
-        note_listings.1.extend(scanned.note_listings.1);
-        for (id, is_end, t) in scanned.special_notes {
-            special_notes.push((e.name.clone(), id, is_end, t));
+        if append_note_items(&mut note_listings, &mut special_notes, &e.name, scanned.note_listings, scanned.special_notes, acc.limits.facts) {
+            note_capped_any = true;
         }
         if (role.is_footnotes || role.is_endnotes) && (scanned.malformed.is_some() || scanned.fact_capped) {
             defs_ok_parts = false;
@@ -799,8 +798,10 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
         if scanned.content_part_capped {
             content_part_capped_any = true;
         }
-        if !scanned.content_parts.is_empty() {
-            content_parts.push((e.name.clone(), scanned.content_parts));
+        if !scanned.content_parts.is_empty()
+            && append_content_parts(&mut content_parts, &mut content_part_total, &e.name, scanned.content_parts, acc.limits.facts)
+        {
+            content_part_capped_any = true;
         }
         if !scanned.refs.is_empty() && !refs_pooled_capped {
             if pooled_refs.saturating_add(scanned.refs.len()) > acc.limits.facts {
@@ -834,31 +835,10 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     } else {
         Compat::Off
     };
-    // The note collections are also pooled-budgeted at the package
-    // level: any number of parts can carry the settings or notes roles
-    // in a malformed package, so per-part caps alone do not bound them.
-    let listing_total = note_listings.0.len() + note_listings.1.len();
-    if listing_total > acc.limits.facts {
-        let keep_f = acc.limits.facts.min(note_listings.0.len());
-        note_listings.0.truncate(keep_f);
-        note_listings.1.truncate(acc.limits.facts - keep_f);
-        note_capped_any = true;
-    }
-    if special_notes.len() > acc.limits.facts {
-        special_notes.truncate(acc.limits.facts);
-        note_capped_any = true;
-    }
-    // The contentPart ids are pooled-budgeted across owners too.
-    let cp_total: usize = content_parts.iter().map(|(_, ids)| ids.len()).sum();
-    if cp_total > acc.limits.facts {
-        let mut budget = acc.limits.facts;
-        for (_, ids) in &mut content_parts {
-            let keep = budget.min(ids.len());
-            ids.truncate(keep);
-            budget -= keep;
-        }
-        content_part_capped_any = true;
-    }
+    // The note collections and the contentPart ids are pooled-budgeted
+    // across parts as well as per part; the allowances were enforced
+    // while appending in the loop above, so the accumulated collections
+    // never exceeded the fact budget at any point.
     let defs_complete = defs_ok_parts && !pooled_capped;
     XmlScan {
         facts,
@@ -873,6 +853,53 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
         notes_unreadable,
         defs_complete,
     }
+}
+
+/// Append one part's note listings and special definitions under the
+/// pooled fact budget, enforcing the allowance while appending: the
+/// accumulated collections never exceed `cap`, however many parts
+/// contribute. Returns true when any entry was discarded.
+fn append_note_items(
+    note_listings: &mut (Vec<String>, Vec<String>),
+    special_notes: &mut Vec<(String, String, bool, String)>,
+    part: &str,
+    listings: (Vec<String>, Vec<String>),
+    specials: Vec<(String, bool, String)>,
+    cap: usize,
+) -> bool {
+    let mut capped = false;
+    let room = cap.saturating_sub(note_listings.0.len() + note_listings.1.len());
+    let take_f = room.min(listings.0.len());
+    let take_e = (room - take_f).min(listings.1.len());
+    if take_f < listings.0.len() || take_e < listings.1.len() {
+        capped = true;
+    }
+    note_listings.0.extend(listings.0.into_iter().take(take_f));
+    note_listings.1.extend(listings.1.into_iter().take(take_e));
+    for (id, is_end, t) in specials {
+        if special_notes.len() >= cap {
+            capped = true;
+            break;
+        }
+        special_notes.push((part.to_string(), id, is_end, t));
+    }
+    capped
+}
+
+/// Append one part's `w:contentPart` ids under the pooled fact
+/// budget, enforcing the allowance while appending (see
+/// `append_note_items`). Returns true when any id was discarded.
+fn append_content_parts(content_parts: &mut Vec<(String, Vec<String>)>, total: &mut usize, part: &str, mut ids: Vec<String>, cap: usize) -> bool {
+    let room = cap.saturating_sub(*total);
+    let capped = ids.len() > room;
+    if capped {
+        ids.truncate(room);
+    }
+    *total += ids.len();
+    if !ids.is_empty() {
+        content_parts.push((part.to_string(), ids));
+    }
+    capped
 }
 
 /// `NOTE-PR-LISTING` (ECMA-376 Part 1 §17.11.9) and its reverse,
