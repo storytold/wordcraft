@@ -1282,10 +1282,11 @@ fn anchor_stacking_order_is_read_and_kept() {
         paras(d)[0].objects.iter().filter_map(|o| if let InlineObject::Shape { float, .. } = o { Some(float.z) } else { None }).collect()
     };
     let d = read_body(&body);
-    assert_eq!(zs(&d), [251660288, 251657214, 0]);
+    // Kept one more than the file's (`Float::z`), so a file's 0 isn't "none".
+    assert_eq!(zs(&d), [251660289, 251657215, 0]);
     let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     let z = zs(&again);
-    assert_eq!(&z[..2], &[251660288, 251657214]);
+    assert_eq!(&z[..2], &[251660289, 251657215]);
     assert!(z[2] > 0, "an object without one gets an order on saving: {z:?}");
 }
 
@@ -2531,6 +2532,100 @@ fn anchored_wsp(name: &str, cx: u32, cy: u32, sppr: &str, style: &str, extra: &s
     format!(
         r#"<w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:anchor distT="0" distB="0" distL="114300" distR="114300" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>12700</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>25400</wp:posOffset></wp:positionV><wp:extent cx="{cx}" cy="{cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/><wp:docPr id="1" name="{name}"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp>{extra}<wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>{sppr}</wps:spPr>{style}<wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice><mc:Fallback><w:pict><v:line from="0,0" to="1pt,2pt"/></w:pict></mc:Fallback></mc:AlternateContent></w:r>"#
     )
+}
+
+/// #2638: Word stacks floating objects by `relativeHeight`, not by their order in the text (a
+/// shape sent to back, then copied with the shape over it, comes first in the text but stays
+/// behind). The order is read and kept on save, and an object made here is saved above them.
+#[test]
+fn floating_objects_keep_their_stacking_order() {
+    let shape = |name: &str, z: u32| {
+        anchored_wsp(name, 127000, 127000, r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#, "", "<wps:cNvSpPr/>")
+            .replace(r#"relativeHeight="1""#, &format!(r#"relativeHeight="{z}""#))
+    };
+    let body = format!("<w:p>{}{}</w:p>", shape("Canopy", 251662336), shape("Trunk", 251661312));
+    let mut d = read_body(&body);
+    let stacking = |d: &Document| paras(d)[0].objects.iter().map(|o| o.frame().map(|(_, _, f)| f.z)).collect::<Vec<_>>();
+    assert_eq!(stacking(&d), [Some(251662337), Some(251661313)]);
+    let mut made = paras(&d)[0].objects[0].clone();
+    if let InlineObject::Shape { float, .. } = &mut made {
+        float.z = 0;
+    }
+    let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) else { panic!("a paragraph") };
+    p.insert_object(0, made, &Default::default()).unwrap();
+    let files = unzip(&wordcraft_docx::write(&d).unwrap());
+    let written = attr_values(&text(&files, "word/document.xml"), "wp:anchor", "relativeHeight");
+    assert_eq!(written, ["251662337", "251662336", "251661312"]);
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(stacking(&back), [Some(251662338), Some(251662337), Some(251661313)]);
+}
+
+/// #2638: a file whose stacking orders reach `u32::MAX` leaves no room above them for an object
+/// made here. The stored orders are then numbered again, in their order, so the new object still
+/// goes over all of them and no two objects share an order (it was written as `u32::MAX` too).
+#[test]
+fn stacking_orders_at_the_top_of_the_range_are_numbered_again() {
+    let shape = |name: &str, z: u32| {
+        anchored_wsp(name, 127000, 127000, r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#, "", "<wps:cNvSpPr/>")
+            .replace(r#"relativeHeight="1""#, &format!(r#"relativeHeight="{z}""#))
+    };
+    let body = format!("<w:p>{}{}</w:p>", shape("Top", u32::MAX), shape("Low", 7));
+    let mut d = read_body(&body);
+    let stacking = |d: &Document| paras(d)[0].objects.iter().map(|o| o.frame().map(|(_, _, f)| f.z)).collect::<Vec<_>>();
+    assert_eq!(stacking(&d), [Some(u32::MAX), Some(8)]);
+    let mut made = paras(&d)[0].objects[0].clone();
+    if let InlineObject::Shape { float, .. } = &mut made {
+        float.z = 0;
+    }
+    let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) else { panic!("a paragraph") };
+    p.insert_object(0, made, &Default::default()).unwrap();
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let z: Vec<u32> = stacking(&back).into_iter().map(|z| z.expect("every anchor has an order")).collect();
+    assert!(z[0] > z[1] && z[1] > z[2], "new over Top over Low, all different: {z:?}");
+    // The note separators are saved with the document: an order there counts too.
+    let mut d = read_body(&format!("<w:p>{}</w:p>", shape("Low", 7)));
+    let mut sep = read_body(&format!("<w:p>{}</w:p>", shape("Separator", u32::MAX)));
+    d.footnote_separators.separator = Some(std::mem::take(&mut sep.body));
+    let (orders, unset) = d.stacking_orders();
+    assert_eq!((orders.last().copied(), unset), (Some(u32::MAX), 0), "the separator's order is seen");
+    let mut made = paras(&d)[0].objects[0].clone();
+    if let InlineObject::Shape { float, .. } = &mut made {
+        float.z = 0;
+    }
+    let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) else { panic!("a paragraph") };
+    p.insert_object(0, made, &Default::default()).unwrap();
+    let files = unzip(&wordcraft_docx::write(&d).unwrap());
+    let body: Vec<u64> = attr_values(&text(&files, "word/document.xml"), "wp:anchor", "relativeHeight").iter().map(|v| v.parse().unwrap()).collect();
+    let seps: Vec<u64> = attr_values(&text(&files, "word/footnotes.xml"), "wp:anchor", "relativeHeight").iter().map(|v| v.parse().unwrap()).collect();
+    assert_eq!(seps.len(), 1, "the separator's shape is saved");
+    assert!(body[0] > seps[0] && seps[0] > body[1], "new over the separator's over Low: {body:?} {seps:?}");
+    // So does one in a building block of the glossary, saved with the same numbering (#2638 review).
+    let mut d = read_body(&format!("<w:p>{}</w:p>", shape("Low", 7)));
+    let entry = read_body(&format!("<w:p>{}</w:p>", shape("Entry", u32::MAX)));
+    d.glossary.push(wordcraft_doc::BuildingBlock { name: "Entry".into(), blocks: entry.body, ..Default::default() });
+    assert_eq!(d.stacking_orders().0.last().copied(), Some(u32::MAX), "the glossary's order is seen");
+    // With room above, the stored orders are written as they are.
+    let room = read_body(&format!("<w:p>{}</w:p>", shape("Top", u32::MAX - 5)));
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&room).unwrap()).unwrap();
+    assert_eq!(stacking(&back), [Some(u32::MAX - 4)]);
+}
+
+/// #2638 (review): `relativeHeight="0"`, the lowest a file can give, is a stacking order like
+/// any other: under a shape with 1, not taken for an object without one (made here, which goes
+/// over everything), and saved back as 0.
+#[test]
+fn a_stacking_order_of_zero_stays_the_lowest() {
+    let shape = |name: &str, z: u32| {
+        anchored_wsp(name, 127000, 127000, r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#, "", "<wps:cNvSpPr/>")
+            .replace(r#"relativeHeight="1""#, &format!(r#"relativeHeight="{z}""#))
+    };
+    let d = read_body(&format!("<w:p>{}{}</w:p>", shape("Bottom", 0), shape("Top", 1)));
+    let floats: Vec<_> = paras(&d)[0].objects.iter().filter_map(|o| o.frame().map(|(_, _, f)| f.clone())).collect();
+    assert_eq!(floats.iter().map(|f| f.z).collect::<Vec<_>>(), [1, 2]);
+    assert!(floats[0].stack() < floats[1].stack(), "0 stacks under 1");
+    assert!(floats[1].stack() < wordcraft_doc::para::Float::default().stack(), "an object made here goes over both");
+    let files = unzip(&wordcraft_docx::write(&d).unwrap());
+    assert_eq!(attr_values(&text(&files, "word/document.xml"), "wp:anchor", "relativeHeight"), ["0", "1"]);
 }
 
 /// #611: diagrams drawn with Word's shapes were mostly missing. Connectors and boxes take their
