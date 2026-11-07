@@ -1,8 +1,9 @@
-//! A count of the characters a paragraph's object lookups walk, for the linear-time tests of the
-//! crates that use them: an input 8x the size must cost about 8x the steps, which a busy machine
-//! can't skew the way it skews a timing. Counted only in tests (this crate's, and other crates'
-//! through the `test-support` feature, which they turn on as a dev-dependency); in the app the
-//! count is nothing.
+//! A count of the characters a paragraph's object lookups walk, the blocks
+//! [`crate::Document::para_paths`] visits, and each block lookup by path with the table levels it
+//! descends, for the linear-time tests of the crates that use them: an input 8x the size must cost
+//! about 8x the steps, which a busy machine can't skew the way it skews a timing. Counted only in
+//! tests (this crate's, and other crates' through the `test-support` feature, which they turn on
+//! as a dev-dependency); in the app the count is nothing.
 
 #[cfg(any(test, feature = "test-support"))]
 thread_local! {
