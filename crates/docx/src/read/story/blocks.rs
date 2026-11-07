@@ -367,9 +367,62 @@ impl Reader<'_> {
             return None;
         }
         if table.grid.is_empty() {
-            let cols = table.cols().clamp(1, MAX_COLS);
-            table.grid = vec![72.0; cols];
+            table.grid = grid_from_cells(&table);
         }
         Some(table)
     }
+}
+
+/// The narrowest column Word rebuilds for a table without `w:tblGrid`: 26 twips, for a cell of
+/// 10 twips and for 10 twips left over by a spanning cell alike (measured: Word re-saves both as
+/// `w:gridCol w:w="26"`). Content still widens a column when laid out.
+const MIN_GRID_COL: f32 = 1.3;
+
+/// The column grid of a table without `w:tblGrid` (a file written by a template library), the
+/// way Word rebuilds it on opening: each column as wide as the widest preferred width
+/// (`w:tcW` in twips) among the cells that occupy it alone, a spanning cell's width shared out
+/// among its columns that no cell sets, what it still lacks going to its last column, and an inch
+/// for a column no cell sizes at all; never narrower than [`MIN_GRID_COL`]. Spanning cells are
+/// taken from the left, whatever row they are in (measured: Word gives the same grid in any row
+/// order, and never narrows a column for a spanning cell).
+fn grid_from_cells(table: &Table) -> Vec<f32> {
+    let cols = table.cols().clamp(1, MAX_COLS);
+    let mut grid: Vec<Option<f32>> = vec![None; cols];
+    let mut spanning = Vec::new();
+    for row in &table.rows {
+        // After `w:gridBefore` the row's first cell is not in the first column.
+        let mut g = row.first_grid();
+        for cell in &row.cells {
+            let span = cell.span();
+            if let Some(w) = cell.props.width.filter(|w| w.is_finite() && *w > 0.0) {
+                if span == 1 {
+                    if let Some(slot) = grid.get_mut(g) {
+                        *slot = Some(slot.map_or(w, |cur| cur.max(w)));
+                    }
+                } else {
+                    spanning.push((g, span, w));
+                }
+            }
+            g += span;
+        }
+    }
+    spanning.sort_by(|a: &(usize, usize, f32), b| (a.0 + a.1, a.0).cmp(&(b.0 + b.1, b.0)).then(a.2.total_cmp(&b.2)));
+    for (g, span, w) in spanning {
+        let Some(cs) = grid.get_mut(g..(g + span).min(cols)) else { continue };
+        let known: f32 = cs.iter().flatten().sum();
+        let unknown = cs.iter().filter(|c| c.is_none()).count();
+        if unknown > 0 {
+            let each = ((w - known) / unknown as f32).max(MIN_GRID_COL);
+            for c in cs.iter_mut().filter(|c| c.is_none()) {
+                *c = Some(each);
+            }
+        }
+        let lacking = w - cs.iter().flatten().sum::<f32>();
+        if lacking > 0.0
+            && let Some(Some(last)) = cs.last_mut()
+        {
+            *last += lacking;
+        }
+    }
+    grid.into_iter().map(|w| w.unwrap_or(72.0).clamp(MIN_GRID_COL, crate::units::MAX_LEN_PT)).collect()
 }
