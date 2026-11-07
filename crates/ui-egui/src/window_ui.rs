@@ -253,6 +253,8 @@ impl WordApp {
             file_browser,
             info_editing,
             shown_document,
+            window_controls: _,
+            viewport_commands: _,
         } = self;
         let UiState {
             // App-wide: preferences, recent lists, and the settings the session owns while

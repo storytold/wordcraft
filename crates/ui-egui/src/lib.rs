@@ -65,6 +65,20 @@ pub mod printing;
 pub mod proofing_pane;
 pub mod read_aloud;
 pub mod ribbon;
+
+fn parse_resize_direction(value: &str) -> Option<egui::ResizeDirection> {
+    match value {
+        "north" => Some(egui::ResizeDirection::North),
+        "south" => Some(egui::ResizeDirection::South),
+        "east" => Some(egui::ResizeDirection::East),
+        "west" => Some(egui::ResizeDirection::West),
+        "northeast" => Some(egui::ResizeDirection::NorthEast),
+        "northwest" => Some(egui::ResizeDirection::NorthWest),
+        "southeast" => Some(egui::ResizeDirection::SouthEast),
+        "southwest" => Some(egui::ResizeDirection::SouthWest),
+        _ => None,
+    }
+}
 pub mod ribbon_fit;
 pub mod rtl;
 pub mod ruler_tabs;
@@ -641,6 +655,9 @@ pub struct WordApp {
     pub(crate) dialog_pick: Option<String>,
     /// macOS: the window has no title bar; leave room for the traffic lights.
     pub integrated_titlebar: bool,
+    /// Linux/BSD: frameless window with app-drawn controls and resize edges.
+    pub window_controls: bool,
+    viewport_commands: Vec<egui::ViewportCommand>,
     /// macOS: the title bar's height and where its content starts, around the traffic lights.
     pub mac_titlebar: chrome::MacTitleBar,
     /// Focus (#1678): the ribbon is dropped down from the Focus bar, over the page.

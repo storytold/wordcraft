@@ -505,6 +505,25 @@ impl WordApp {
     pub(crate) fn ui_command(&mut self, id: &str, p: &Value) -> Option<Result<Value, String>> {
         let s = |k: &str| p.get(k).and_then(Value::as_str);
         Some(Ok(match id {
+            "ui.window.minimize" => {
+                self.viewport_commands.push(egui::ViewportCommand::Minimized(true));
+                json!({})
+            }
+            "ui.window.maximize" => {
+                self.viewport_commands.push(egui::ViewportCommand::Maximized(p.get("on").and_then(Value::as_bool).unwrap_or(true)));
+                json!({})
+            }
+            "ui.window.close" => {
+                self.viewport_commands.push(egui::ViewportCommand::Close);
+                json!({})
+            }
+            "ui.window.beginResize" => {
+                let Some(direction) = s("direction").and_then(crate::parse_resize_direction) else {
+                    return Some(Err("direction must be north, south, east, west, northeast, northwest, southeast, or southwest".into()));
+                };
+                self.viewport_commands.push(egui::ViewportCommand::BeginResize(direction));
+                json!({})
+            }
             "ui.checkForUpdates" | "help.checkForUpdates" => {
                 crate::updates_ui::check(self);
                 Value::Null
@@ -1053,6 +1072,10 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.closeDialog"
             | "ui.collapseRibbon"
             | "ui.quickAccessToolbar"
+            | "ui.window.minimize"
+            | "ui.window.maximize"
+            | "ui.window.close"
+            | "ui.window.beginResize"
             | "ui.keytips"
             | "ui.dark"
             | "ui.theme"

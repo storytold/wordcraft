@@ -652,6 +652,38 @@ fn quick_access_toolbar_is_a_ui_command_and_survives_a_restart() {
     assert_eq!(c.run("ui.quickAccessToolbar", json!({"value": false})).unwrap()["quickAccessToolbar"], false, "works without a document");
 }
 
+#[test]
+fn window_caption_commands_dispatch_with_or_without_a_document() {
+    for mut a in [app(), {
+        let mut a = app();
+        a.start_screen();
+        a
+    }] {
+        for (id, params, expected) in [
+            ("ui.window.minimize", json!({}), egui::ViewportCommand::Minimized(true)),
+            ("ui.window.maximize", json!({"on": true}), egui::ViewportCommand::Maximized(true)),
+            ("ui.window.close", json!({}), egui::ViewportCommand::Close),
+            ("ui.window.beginResize", json!({"direction": "east"}), egui::ViewportCommand::BeginResize(egui::ResizeDirection::East)),
+        ] {
+            assert!(a.run(id, params).is_ok(), "{id} should dispatch with or without a document");
+            assert!(a.viewport_commands.contains(&expected), "{id} queues {expected:?}");
+        }
+        assert!(a.run("ui.window.beginResize", json!({"direction": "diagonal"})).is_err());
+    }
+}
+
+#[test]
+fn frameless_caption_close_emits_viewport_close() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.window_controls = true;
+    let mut h = harness(a);
+    h.run_steps(4);
+    h.query_by_label("Close").expect("the frameless close button is exposed").click();
+    h.run_steps(1);
+    assert!(h.output().viewport_output.values().flat_map(|v| v.commands.iter()).any(|c| matches!(c, egui::ViewportCommand::Close)));
+}
+
 fn harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
     egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
