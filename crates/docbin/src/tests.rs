@@ -2976,13 +2976,13 @@ fn table_justification_prefers_logical_and_swaps_physical_in_rtl() {
             Some(Align::Right),
         ),
         (
-            "logical sprmTFBiDi = 0 overrides legacy sprmTFBiDi90 = 1",
-            grpprl(&[(0x5664, &[0x01, 0x00]), (0x560B, &[0x00, 0x00]), (0x5400, &[0x02, 0x00])]),
-            Some(false),
-            Some(Align::Right),
+            "sprmTFBiDi90 = 1 makes the table RTL when sprmTFBiDi = 0",
+            grpprl(&[(0x560B, &[0x00, 0x00]), (0x5664, &[0x01, 0x00]), (0x5400, &[0x02, 0x00])]),
+            Some(true),
+            Some(Align::Left),
         ),
         (
-            "logical sprmTFBiDi = 1 overrides legacy sprmTFBiDi90 = 0",
+            "sprmTFBiDi = 1 makes the table RTL when sprmTFBiDi90 = 0",
             grpprl(&[(0x5664, &[0x00, 0x00]), (0x560B, &[0x01, 0x00]), (0x5400, &[0x02, 0x00])]),
             Some(true),
             Some(Align::Left),
@@ -2994,4 +2994,34 @@ fn table_justification_prefers_logical_and_swaps_physical_in_rtl() {
         assert_eq!(row.bidi(), *expected_bidi, "case '{name}' bidi mismatch");
         assert_eq!(row.align, *expected_align, "case '{name}' align mismatch");
     }
+}
+
+#[test]
+fn adjacent_tables_with_different_directions_split_into_separate_tables() {
+    let def_table = t_def_table(&[0, 2880]);
+    // Row 1: LTR table (sprmTFBiDi = 0)
+    // Row 2: RTL table (sprmTFBiDi = 1)
+    let text = "a\u{7}\rb\u{7}\r";
+    let ccp = text.chars().count() as u32;
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let ttp_ltr = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01]), (0x560B, &[0x00, 0x00])]), def_table.clone()].concat();
+    let ttp_rtl = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01]), (0x560B, &[0x01, 0x00])]), def_table].concat();
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(ccp, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, in_tbl.clone()), (2, 0, ttp_ltr), (3, 0, in_tbl), (5, 0, ttp_rtl)],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tables: Vec<_> = doc.body.iter().filter_map(|b| b.as_table()).collect();
+    assert_eq!(tables.len(), 2, "adjacent rows with opposite directions should split into 2 tables");
+    assert!(!tables[0].props.bidi_visual, "first table is LTR");
+    assert!(tables[1].props.bidi_visual, "second table is RTL");
 }

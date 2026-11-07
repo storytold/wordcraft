@@ -306,7 +306,10 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
             _ => {}
         }
     }
-    r.bidi = bidi_logical.or(bidi_physical);
+    r.bidi = match (bidi_logical, bidi_physical) {
+        (None, None) => None,
+        (logical, physical) => Some(logical.unwrap_or(false) || physical.unwrap_or(false)),
+    };
     let is_rtl = r.bidi.unwrap_or(false);
     r.align = RowInfo::effective_align(align_logical, align_physical, is_rtl);
     // The table indent is the row origin minus half the cell gap.
@@ -328,7 +331,8 @@ pub(crate) struct ParaOut {
 
 /// Group consecutive in-table paragraphs into [`Table`] blocks; the rest pass through.
 /// Rows that never close (or tables nested deeper than we model) degrade to paragraphs so
-/// no text is lost.
+/// no text is lost. Starts a new table when adjacent same-depth rows have different
+/// explicit directions.
 pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
     let mut out: Blocks = Vec::new();
     let mut rows: Vec<Row> = Vec::new();
@@ -339,6 +343,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
     let mut bidi_set = false;
     let mut open = false;
     let mut depth_seen = 0u32;
+    let mut last_depth = 0u32;
 
     /// Flush accumulated paragraph blocks into a table cell.
     fn flush_cell(cells: &mut Vec<Cell>, cell: &mut Blocks) {
@@ -446,6 +451,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
                 bidi_set = false;
                 open = false;
                 depth_seen = 0;
+                last_depth = 0;
             }
             out.push(para_block(p.para));
             continue;
@@ -454,6 +460,34 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             open = true;
         }
         depth_seen = depth_seen.max(info.depth);
+        if !rows.is_empty()
+            && info.depth == last_depth
+            && bidi_set
+            && let Some(bidi) = info.bidi
+            && bidi != props.bidi_visual
+        {
+            // Adjacent same-depth rows have different explicit directions: split into a new table.
+            if depth_seen > 1 {
+                for r in rows.iter() {
+                    for c in &r.cells {
+                        out.extend(c.blocks.iter().cloned());
+                    }
+                }
+            } else {
+                out.push(Arc::new(Block::Table(Table {
+                    props: props.clone(),
+                    grid: grid.clone(),
+                    rows: std::mem::take(&mut rows),
+                    controls: Default::default(),
+                })));
+            }
+            rows.clear();
+            grid.clear();
+            props = TableProps::default();
+            props.bidi_visual = bidi;
+            bidi_set = true;
+            depth_seen = info.depth;
+        }
         if grid.is_empty() {
             // Column widths from the table's first `sprmTDefTable`.
             grid = info.edges.windows(2).take(MAX_COLS).map(|w| (w[1] - w[0]).max(0.0)).collect();
@@ -492,6 +526,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
                 flush_cell(&mut cells, &mut cell);
             }
             if info.ttp {
+                last_depth = info.depth;
                 let row = build_row(std::mem::take(&mut cells), &info);
                 rows.push(row);
             }
