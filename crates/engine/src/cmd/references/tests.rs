@@ -548,6 +548,73 @@ fn caption_for_an_object_in_a_cell_stays_in_the_cell() {
     assert_eq!(texts.get(1).map(String::as_str), Some("Figure 1"), "{texts:?}");
 }
 
+/// A TOC inserted before a heading leaves the caret at the heading's first character, past the
+/// `_Toc` bookmark its entry links to: Delete then deletes that character, and the entry still
+/// finds its heading (Delete at offset zero took the bookmark).
+#[test]
+fn the_caret_after_a_toc_sits_past_the_headings_bookmark() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Kilns\nBody text."));
+    s.run("para.style", &json!({"style": "Heading 1"})).unwrap();
+    s.sel = Selection::caret(Pos { story: StoryRef::Body, path: Path::top(0), off: 0 });
+    s.run("references.toc", &json!({"levels": 2})).unwrap();
+    let heading = s.doc.para_at(&s.sel.focus).cloned().unwrap();
+    assert_eq!(heading.plain_text(), "Kilns");
+    let marks = |p: &Paragraph| p.objects.iter().filter(|o| matches!(o, InlineObject::BookmarkStart { .. })).count();
+    assert_eq!(marks(&heading), 1, "the heading has its bookmark");
+    s.run("text.delete", &json!({})).unwrap();
+    let heading = s.doc.para_at(&s.sel.focus).cloned().unwrap();
+    assert_eq!(heading.plain_text(), "ilns", "Delete took the first character");
+    assert_eq!(marks(&heading), 1, "the bookmark stays");
+}
+
+/// Inserting a table of contents (Word itself warns when there's no heading yet, but still
+/// creates an empty one) must leave the caret in a fresh paragraph just after it, like Word
+/// does — not inside the table's own title, where typing the rest of the document (and later
+/// updating the table) would splice stray text into unrelated paragraphs and blank the title.
+#[test]
+fn a_toc_inserted_before_any_headings_exist_leaves_the_caret_after_it() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("references.toc", &json!({"levels": 2})).unwrap();
+    assert_eq!(s.sel.focus.path, Path::top(1), "the caret must land right after the table, not inside it");
+    s.run("text.insert", &json!({"text": "\r"})).unwrap();
+    s.run("para.style", &json!({"style": "Heading 1"})).unwrap();
+    s.run("text.insert", &json!({"text": "Kilns\r"})).unwrap();
+    s.run("para.style", &json!({"style": "Normal"})).unwrap();
+    s.run("text.insert", &json!({"text": "Body text."})).unwrap();
+    s.run("references.updateToc", &json!({})).unwrap();
+    assert_eq!(
+        s.doc.plain_text(StoryRef::Body).matches("Contents").count(),
+        1,
+        "the title stays where it was, it doesn't vanish and reappear elsewhere"
+    );
+    assert!(s.doc.plain_text(StoryRef::Body).contains("Body text."), "typed body content survives untouched");
+    let heading = s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.props.style.as_deref() == Some("Heading1"));
+    assert_eq!(heading.map(|p| p.plain_text()), Some("Kilns".to_string()));
+}
+
+/// A settings-based replacement of a table whose last entry is directly followed by a table
+/// (nothing paragraph-shaped in between) must still land the caret in a real paragraph: the
+/// block "after" the table isn't always a paragraph just because it exists.
+#[test]
+fn a_toc_replaced_right_before_a_table_still_lands_the_caret_in_a_paragraph() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("references.toc", &json!({"levels": 2})).unwrap();
+    s.run("insert.table", &json!({"rows": 1, "cols": 1})).unwrap();
+    let (_, end) = toc_range(&s).unwrap();
+    while s.doc.body.get(end + 1).is_some_and(|b| b.as_para().is_some_and(|p| p.is_empty())) {
+        s.doc.remove_block(StoryRef::Body, &Path::top(end + 1)).unwrap();
+    }
+    assert!(matches!(&*s.doc.body[end + 1], Block::Table(_)), "test setup: a table must directly follow the table's entries");
+    // Replacing the table's settings must still land the caret in a fresh paragraph right
+    // after the table, not snap back into the table's own entries (a bogus position pointing
+    // at the table gets silently corrected by `clamp_selection` to the nearest *preceding*
+    // paragraph, so a weaker "is this some paragraph" check wouldn't catch the regression).
+    s.run("references.toc", &json!({"levels": 3})).unwrap();
+    let (_, new_end) = toc_range(&s).unwrap();
+    assert_eq!(s.sel.focus.path, Path::top(new_end + 1), "the caret must land right after the table, not snap back into the table");
+    assert!(matches!(&*s.doc.body[new_end + 1], Block::Para(_)));
+}
+
 /// Output (PDF, print, page images) shows the body's unlocked SEQ, STYLEREF and REF fields with
 /// their fresh results, as Word fills them in when it prints or exports even with "Update fields
 /// before printing" off; NUMWORDS and a locked field keep their stored results there, and the
