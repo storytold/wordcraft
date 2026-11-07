@@ -79,6 +79,35 @@ impl Lexer<'_> {
             self.bump();
         }
     }
+    /// After `\url`: if a balanced `{…}` follows, push it as `Open`, one `Text` and `Close`
+    /// with the content read verbatim (a `%` is not a comment there) and return true.
+    fn verbatim_arg(&mut self) -> bool {
+        if self.peek() != Some('{') {
+            return false;
+        }
+        let mut depth = 0usize;
+        let mut end = None;
+        for (at, b) in self.rest().bytes().enumerate() {
+            match b {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(at);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(end) = end else { return false };
+        let inner = self.rest().get(1..end).unwrap_or("").replace("\\%", "%");
+        self.i += end + 1;
+        self.out.push(Tok::Open);
+        self.out.push(Tok::Text(inner));
+        self.out.push(Tok::Close);
+        true
+    }
     /// Read until `end` (not included; consumed) and return what came before.
     fn until(&mut self, end: &str) -> String {
         match self.rest().find(end) {
@@ -174,6 +203,9 @@ impl Lexer<'_> {
                             }
                             _ => {}
                         },
+                        "url" | "nolinkurl" if self.verbatim_arg() => {
+                            self.out.insert(self.out.len() - 3, Tok::Cmd(name));
+                        }
                         _ => {
                             self.out.push(Tok::Cmd(name));
                             // A control word swallows the spaces (and one line end) after it.
