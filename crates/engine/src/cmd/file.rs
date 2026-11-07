@@ -175,7 +175,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("file.privacy", "Privacy Settings", "File › Options › Save", |s, _| Ok(privacy(s)))
             .params(r#"{} → {"removePersonalInfo": bool, "removeDateTime": bool} (file.privacyOptions changes them)"#)
             .pure(),
-        CommandSpec::new("document.inspect", "Inspect Document", "Agents", inspect).params(r#"{"text"?: bool, "raw"?: bool (the stored text, tracked deletions included)} — the text is what the document reads with every change accepted; raw gives the stored text with the deletions back"#).pure(),
+        CommandSpec::new("document.inspect", "Inspect Document", "Agents", inspect).params(r#"{"text"?: bool, "raw"?: bool (the stored text, tracked deletions included)} — text is the final text (deletions dropped); len, runs and deleted are stored-text offsets, what select.range takes; objects are the kept ones unless raw"#).pure(),
         CommandSpec::new("document.text", "Document Text", "Agents", |s, v| {
             let story = super::story_param(s, v);
             Ok(json!({"text": s.doc.final_text(story)}))
@@ -577,8 +577,19 @@ fn inspect(s: &mut Session, v: &Value) -> CmdResult {
                 if !runs.is_empty() {
                     o["runs"] = json!(runs);
                 }
+                // The two coordinate systems, named: text is the final text; len, runs and
+                // deleted are stored-text offsets — what select.range takes. final = stored
+                // minus the deleted ranges.
+                let del = p.deleted_ranges();
+                if !del.is_empty() {
+                    o["deleted"] = json!(del.iter().map(|r| json!({"start": r.start, "end": r.end})).collect::<Vec<_>>());
+                }
                 if !p.objects.is_empty() {
-                    o["objects"] = serde_json::to_value(&p.objects).unwrap_or(Value::Null);
+                    o["objects"] = if raw {
+                        serde_json::to_value(&p.objects).unwrap_or(Value::Null)
+                    } else {
+                        serde_json::to_value(p.final_objects()).unwrap_or(Value::Null)
+                    };
                 }
                 if p.section.is_some() {
                     o["sectionBreak"] = json!(true);
@@ -639,7 +650,7 @@ fn layout_summary(s: &mut Session, _: &Value) -> CmdResult {
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
-    use wordcraft_doc::Document;
+    use wordcraft_doc::{Document, para::OBJ};
 
     use crate::Session;
 
@@ -662,5 +673,35 @@ mod tests {
 
         let raw: Value = s.run("document.inspect", &json!({"raw": true})).unwrap();
         assert!(raw.to_string().contains("DELETED-SECRET-TEXT"), "raw gives the stored text back");
+    }
+
+    /// A field inside a tracked deletion must not reach the default inspection either way:
+    /// neither its result through `text` nor the object through `objects` — the object was
+    /// deleted with its anchor run.
+    #[test]
+    fn a_field_in_a_tracked_deletion_is_not_in_the_inspection_unless_raw() {
+        let mut s = Session::new(Document::new());
+        // A DOCPROPERTY field whose computed result is the secret text (insert.field
+        // evaluates fields on insert; an unresolvable one would give an empty result).
+        s.run("file.properties", &json!({"custom": {"ProjectCode": "SECRET-FIELD-TEXT"}})).unwrap();
+        s.run("text.insert", &json!({"text": "Project: "})).unwrap();
+        s.run("insert.field", &json!({"instr": "DOCPROPERTY \"ProjectCode\"", "result": "SECRET-FIELD-TEXT"})).unwrap();
+        s.run("file.setAuthor", &json!({"name": "Ana"})).unwrap();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        // Delete the field's whole anchor: from the object character to the end.
+        let at = s.doc.body.iter().filter_map(|b| b.as_para()).next().map(|p| p.text.find(OBJ).unwrap_or(p.text.len())).unwrap_or(0);
+        let len = s.doc.body.iter().filter_map(|b| b.as_para()).next().map(|p| p.text.len()).unwrap_or(0);
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": at}, "focus": {"block": 0, "off": len}})).unwrap();
+        s.run("text.delete", &json!({})).unwrap();
+
+        let out = s.run("document.inspect", &json!({})).unwrap();
+        let dumped = out.to_string();
+        assert!(!dumped.contains("SECRET-FIELD-TEXT"), "the inspection leaks a deleted field: {dumped}");
+        // The stored text keeps the deletion (that is what track changes means); raw shows it.
+        let raw: Value = s.run("document.inspect", &json!({"raw": true})).unwrap();
+        assert!(raw.to_string().contains("SECRET-FIELD-TEXT"), "raw gives the stored text back");
+        // The two coordinate systems are named: the deleted ranges are in stored offsets.
+        let del = out["blocks"][0]["deleted"].as_array().expect("deleted ranges are reported");
+        assert!(!del.is_empty(), "the deletion is reported in stored offsets");
     }
 }
