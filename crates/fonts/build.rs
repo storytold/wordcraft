@@ -11,6 +11,9 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
+/// Reads the craft-fonts manifest (if `CRAFT_FONTS_DIR` names a checkout) and writes the
+/// embed list `OUT_DIR/craft_fonts.rs`; the wasm target keeps only the scripts in
+/// [`WASM_SCRIPTS`].
 fn main() {
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_DIR");
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_REQUIRED");

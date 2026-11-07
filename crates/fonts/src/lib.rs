@@ -68,9 +68,11 @@ pub fn chinese_fonts() -> impl Iterator<Item = &'static CraftFont> {
     CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Hans"))
 }
 
-/// The craft-fonts faces for Korean (`"Kore"`), in manifest order. Empty without craft-fonts.
+/// The craft-fonts faces for Korean (`"Kore"`, `"Hang"`), in manifest order — the same script set
+/// the wasm embed filter includes, so every embedded Korean face is also one the database loads
+/// for Hangul fallback. Empty without craft-fonts.
 pub fn korean_fonts() -> impl Iterator<Item = &'static CraftFont> {
-    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Kore"))
+    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Kore") || f.scripts.contains(&"Hang"))
 }
 
 /// The craft-fonts Georgian (`"Geor"`) Regular face for the interface. Empty without craft-fonts.
