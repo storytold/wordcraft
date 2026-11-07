@@ -494,3 +494,21 @@ fn length_units_follow_the_interface_language() {
     h.run_steps(4);
     assert_eq!(length(72.0), "25,4 mm", "English keeps the English names");
 }
+
+/// #5840: File › Options › Proofing shows the Dictionary file setting.
+#[test]
+fn proofing_custom_dictionary_file_setting_is_visible() {
+    let mut a = app();
+    a.run("file.options", json!({"pane": "proofing"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert!(h.query_by_label("Dictionary file:").is_some());
+    assert!(h.query_by_label("Words in dictionary").is_some());
+}

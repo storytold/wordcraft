@@ -1,6 +1,6 @@
 # Installing languages and spelling dictionaries
 
-> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-11-03 · **Change:** trivial (Language packs are installed from Your languages and Add a language…; the Dictionaries folder is in Options › Language); previously trivial (Language packs: the missing-pack bar works on a fresh install and counts the caret's language); previously trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland); Mongolian and Thai aren't packs yet); previously trivial (Language packs: the first set, language-packs-1, is published and pinned: 61 languages, and which aren't packs yet); previously minor (Language packs: install a language's spelling and hyphenation from File › Options › Language, or from the bar a document in that language shows; they are searched after the dictionaries folder and before the system's dictionaries; previously trivial: the Flatpak's own dictionaries folder; previously trivial: WordCraft's own dictionaries folder is searched on macOS and Linux too, as on Windows, so a dictionary dropped there works without a setting; previously minor: ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-11-07 · **Change:** trivial (Freestanding custom dictionary file support in File › Options › Proofing, supporting plain UTF-8 and Word CUSTOM.DIC UTF-16LE with BOM, #5840); previously trivial (Language packs are installed from Your languages and Add a language…; the Dictionaries folder is in Options › Language); previously trivial (Language packs: the missing-pack bar works on a fresh install and counts the caret's language); previously trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland); Mongolian and Thai aren't packs yet); previously trivial (Language packs: the first set, language-packs-1, is published and pinned: 61 languages, and which aren't packs yet); previously minor (Language packs: install a language's spelling and hyphenation from File › Options › Language, or from the bar a document in that language shows; they are searched after the dictionaries folder and before the system's dictionaries; previously trivial: the Flatpak's own dictionaries folder; previously trivial: WordCraft's own dictionaries folder is searched on macOS and Linux too, as on Windows, so a dictionary dropped there works without a setting; previously minor: ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
 
 English spelling works out of the box. Polish, Russian, Portuguese, Czech, Italian, Croatian,
 Turkish, Indonesian and Spanish spelling use a standard **Hunspell** dictionary (an `.aff` and a `.dic` file) that
@@ -172,6 +172,19 @@ Other languages work the same way: replace `pt_BR` with the language's folder an
 from the LibreOffice repository (for example `it_IT/it_IT.aff`; the Spanish ones are all in
 `es/`, for example `es/es_MX.aff`).
 
+## Custom word dictionary (custom.dic)
+
+Words added via **Add to Dictionary** or through `review.addToDictionary` are kept in a custom dictionary.
+By default, WordCraft saves them to `custom-dictionary.txt` in the settings folder.
+
+To use an existing freestanding custom dictionary (such as Microsoft Word's `CUSTOM.DIC`):
+1. Open **File › Options › Proofing**.
+2. Under **Custom dictionary**, set **Dictionary file** to the path of your `.dic` or text file and click **Apply**.
+3. Words in that dictionary are checked in conjunction with the main dictionary, and new additions persist back to the file.
+4. Clicking **Clear** (or setting `"customDictionary": "auto"`) reverts to the default settings folder.
+
+WordCraft supports plain UTF-8 word lists as well as UTF-16LE with BOM (`[0xFF, 0xFE]`) and UTF-8 with BOM, preserving the file's original encoding when saving additions or removals.
+
 ## Checking that it works
 
 - Restart WordCraft. The status bar no longer says **(no dictionary)**, and a misspelled word
@@ -193,6 +206,7 @@ Never commit dictionary files to this repository: they stay on the user's system
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | trivial | Freestanding custom dictionary file support in File › Options › Proofing, supporting plain UTF-8 and Word CUSTOM.DIC UTF-16LE with BOM (#5840) |
 | 2026-11-03 | trivial | Language packs (CP4.3): the missing-pack bar offers a language before the list is fetched and gets the list, then the pack, on Install; a missing or stale list is fetched once while downloading is on; the caret's typing language counts |
 | 2026-11-03 | trivial | Language packs: install from Your languages or Add a language… in Options › Language; the Dictionaries folder is in Options › Language, not Proofing |
 | 2026-11-03 | trivial | Language packs: language-packs-2 is published and pinned (75 languages, adding the compounding languages); Mongolian and Thai aren't packs yet, and why |

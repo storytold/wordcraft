@@ -725,6 +725,18 @@ pub fn read_file_head(path: &str, max: u64) -> Result<Vec<u8>, String> {
     Ok(head)
 }
 
+/// Web fallback for [`read_file_capped`].
+#[cfg(target_arch = "wasm32")]
+pub fn read_file_capped(path: &str, _max: u64, _what: &str) -> Result<Vec<u8>, String> {
+    Err(format!("{path}: files are opened through the browser on the web"))
+}
+
+/// Web fallback for [`read_file_head`].
+#[cfg(target_arch = "wasm32")]
+pub fn read_file_head(path: &str, _max: u64) -> Result<Vec<u8>, String> {
+    Err(format!("{path}: files are opened through the browser on the web"))
+}
+
 /// An entry of [`list_dir`]: a file or folder (links followed).
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Debug)]

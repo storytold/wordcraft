@@ -22,7 +22,7 @@ impl Session {
         let name = path.to_string_lossy();
         if let Err(e) = crate::file_access::check_read(&name)
             .and_then(|()| crate::file_access::check_write(&name))
-            .and_then(|()| wordcraft_proof::save_user_dictionary(path, removed).map_err(|e| e.to_string()))
+            .and_then(|()| crate::custom_dict::save_custom_dictionary(path, removed))
         {
             log::warn!("custom dictionary: save failed: {e}");
         }
@@ -93,6 +93,7 @@ impl Session {
             path,
             file_name,
             user_dict_path: None,
+            default_user_dict_path: None,
             dirty,
             clipboard: None,
             pending_move,

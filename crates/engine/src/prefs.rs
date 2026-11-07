@@ -38,6 +38,9 @@ pub struct Prefs {
     /// Language, #1063): an app started from Finder or the Dock doesn't see
     /// `WORDCRAFT_DICTIONARIES`. `None` searches the system locations only.
     pub dictionaries_folder: Option<String>,
+    /// A custom dictionary file (.dic or plain text) used for custom words (File › Options › Proofing, #5840).
+    /// `None`: the default `custom-dictionary.txt` in the settings folder.
+    pub custom_dictionary: Option<String>,
     /// The user templates folder File › New lists personal templates from and Save as Word
     /// Template starts in (File › Options › Advanced › File locations, #2852). `None`: the app's
     /// own `Templates` folder in its settings folder.
@@ -73,6 +76,7 @@ impl Default for Prefs {
             units: Default::default(),
             region: None,
             dictionaries_folder: None,
+            custom_dictionary: None,
             user_templates_folder: None,
             marks: Default::default(),
             mark_grammar: true,

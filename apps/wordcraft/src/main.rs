@@ -217,8 +217,11 @@ fn load_user_dictionary(app: &mut WordApp) {
     if !prefs_enabled() {
         return;
     }
-    if let Some(p) = user_dict_path() {
-        wordcraft_proof::load_user_dictionary(&p);
+    let default_path = user_dict_path();
+    app.session.default_user_dict_path = default_path.clone();
+    let chosen_path = app.session.prefs.custom_dictionary.as_ref().map(std::path::PathBuf::from).or(default_path);
+    if let Some(p) = chosen_path {
+        wordcraft_engine::custom_dict::load_custom_dictionary(&p);
         app.session.user_dict_path = Some(p);
     }
 }

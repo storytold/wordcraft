@@ -324,6 +324,60 @@ fn add_to_dictionary_takes_only_words_the_file_keeps() {
     assert!(wordcraft_proof::user_dictionary().contains(&"zxqengtrimmed".to_string()));
 }
 
+/// #5840: WordCraft supports choosing a freestanding custom.dic dictionary file (including
+/// UTF-16LE with BOM as written by Microsoft Word), using it in conjunction with the main
+/// dictionary, and persisting additions back to it in the same encoding.
+#[test]
+fn custom_dictionary_freestanding_file_option() {
+    let dir = std::env::temp_dir().join(format!("wc-custom-dic-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let dic_path = dir.join("custom.dic");
+
+    // Write a freestanding UTF-16LE dictionary file with BOM, as Word saves it on Windows.
+    let mut initial_bytes = vec![0xFF, 0xFE];
+    for u in "freestandingword\r\nmameui\r\n".encode_utf16() {
+        initial_bytes.extend_from_slice(&u.to_le_bytes());
+    }
+    std::fs::write(&dic_path, &initial_bytes).unwrap();
+
+    let mut s = s();
+    let default_path = dir.join("default.txt");
+    s.default_user_dict_path = Some(default_path.clone());
+    s.user_dict_path = Some(default_path.clone());
+
+    // Before binding, the word is unknown.
+    assert!(!wordcraft_proof::is_correct("freestandingword"));
+
+    // Set customDictionary in file.options.
+    let res = s.run("file.options", &json!({"customDictionary": dic_path.to_string_lossy()})).unwrap();
+    assert_eq!(res["customDictionary"], json!(dic_path.to_string_lossy()));
+    assert_eq!(s.prefs.custom_dictionary.as_deref(), Some(dic_path.to_string_lossy().as_ref()));
+    assert_eq!(s.user_dict_path.as_ref(), Some(&dic_path));
+
+    // Words from custom.dic are now recognized.
+    assert!(wordcraft_proof::is_correct("freestandingword"));
+    assert!(wordcraft_proof::is_correct("mameui"));
+
+    // Add a new word via review.addToDictionary: it persists back to custom.dic in UTF-16LE.
+    run(&mut s, "review.addToDictionary", json!({"word": "zxqaddedword"}));
+    let saved_raw = std::fs::read(&dic_path).unwrap();
+    assert_eq!(saved_raw[0..2], [0xFF, 0xFE], "persists as UTF-16LE with BOM");
+    let decoded = crate::custom_dict::decode_dictionary_bytes(&saved_raw);
+    assert!(decoded.contains("freestandingword"));
+    assert!(decoded.contains("zxqaddedword"));
+
+    // Revert to "auto": clears custom dictionary and restores default path.
+    s.run("file.options", &json!({"customDictionary": "auto"})).unwrap();
+    assert_eq!(s.prefs.custom_dictionary, None);
+    assert_eq!(s.user_dict_path.as_ref(), Some(&default_path));
+
+    // Reject nonexistent files or folders.
+    assert!(s.run("file.options", &json!({"customDictionary": dir.join("missing.dic").to_string_lossy()})).is_err());
+    assert!(s.run("file.options", &json!({"customDictionary": dir.to_string_lossy()})).is_err());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn non_english_runs_are_not_proofed() {
     // #100: runs tagged with a proofing language that has no dictionary are skipped
