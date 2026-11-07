@@ -375,8 +375,9 @@ fn verify(s: &mut Session, before: &View, idx: usize, want_visible: bool) -> Res
 pub(crate) fn page_footer_visible(s: &mut Session, v: &serde_json::Value) -> CmdResult {
     let layout = s.layout();
     let given = v.get("page").is_some_and(|x| !x.is_null());
+    let whole = v.get("page").is_some_and(|x| x.as_u64().is_some() || x.as_f64().is_some_and(|f| f.is_finite() && f >= 0.0 && f.fract() == 0.0));
     let idx = match p::u64(v, "page") {
-        None if given => return Err(CmdError::Params("page must be a whole number from 1".into())),
+        _ if given && !whole => return Err(CmdError::Params("page must be a whole number from 1".into())),
         Some(n) => {
             let n = usize::try_from(n).unwrap_or(usize::MAX);
             if n == 0 || n > layout.pages.len() {

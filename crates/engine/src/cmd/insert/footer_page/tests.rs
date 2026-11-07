@@ -168,7 +168,7 @@ fn bad_pages_are_params_errors() {
 fn an_unreadable_page_is_an_error_and_a_null_page_means_the_caret_page() {
     let mut s = book(2);
     let before = shown(&mut s);
-    for page in [json!(-1), json!("2"), json!(true)] {
+    for page in [json!(-1), json!("2"), json!(true), json!(1.5), json!(2.8)] {
         let e = s.run("layout.pageFooterVisible", &json!({"page": page.clone(), "visible": false})).unwrap_err();
         assert!(matches!(e, CmdError::Params(_)), "{page}: {e:?}");
     }
