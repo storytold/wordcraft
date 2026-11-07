@@ -150,6 +150,8 @@ impl Session {
         self.column_mode = column_mode;
         // A stale window must not route navigation back into equation editing.
         self.math = if viewing { None } else { math };
+        // A picked Drawing Canvas member (#2637) is not part of a view's saved selection.
+        self.member = None;
         if current {
             self.hf_return = hf_return;
             self.typing_open = typing_open;
