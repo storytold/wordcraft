@@ -14,6 +14,13 @@
 //! provenance it was calibrated against.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+// Step 0 of the grammar work: the tables land before any check reads them. This allow is
+// removed when the first grammar rule uses the module.
+#[allow(dead_code)]
+mod model;
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod model_tests;
 mod package;
 mod scan;
 
