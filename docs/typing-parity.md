@@ -285,6 +285,37 @@ no-break space, a figure space or an ideographic space (`autocorrect_finds_the_w
   still moves to the next cell (`with_tab_indents_on_tab_in_a_table_cell_moves_to_the_next_cell`).
   With the option off, Backspace at the start of a paragraph with its own left indent joins it to
   the paragraph before (`with_tab_indents_off_backspace_before_an_indented_paragraph_joins_it`).
+- Format beginning of list item like the one before it (`tools.autocorrect
+  {"formatListItemStart": true}`, off by default): after Enter at the end of a bulleted or
+  numbered item, the text typed in the new item up to its first punctuation character takes the
+  formatting of the previous item's lead-in, the text before its first punctuation character.
+  Formatting on only part of that lead-in is not repeated ¹
+  (`a_list_item_lead_in_takes_the_previous_items_lead_in_formatting`,
+  `only_formatting_the_whole_lead_in_shares_is_repeated`). The rest is WordCraft's own rule: a
+  character property such as bold, italic, font, size or color is repeated when the whole
+  lead-in shares it, and links, revision marks, language, proofing settings, the symbol font,
+  text direction, and hidden and web-hidden text are not
+  (`links_language_and_revision_marks_of_the_lead_in_are_not_repeated`); the
+  punctuation character takes the lead-in's formatting and the text after it the formatting
+  typing would have had; an item with no punctuation is all lead-in
+  (`an_item_without_punctuation_is_all_lead_in`); the new item must be empty
+  and in the same list and level, also when its style numbers it
+  (`a_list_item_numbered_by_its_style_repeats_the_lead_in`), and nothing is repeated after a
+  paragraph outside a list, the Enter that ends a list or an Enter inside an item
+  (`the_lead_in_is_not_repeated_outside_a_continuing_list_item`); formatting picked in the new
+  item, setting the caret and pasting end it (`formatting_picked_or_a_caret_move_ends_the_lead_in`,
+  `pasted_text_ends_the_lead_in`); text a command types, such as Insert › Date & Time, ends the
+  lead-in at its first punctuation character like typed text
+  (`text_a_command_types_ends_the_lead_in_at_its_punctuation`), and so does punctuation that
+  AutoCorrect or AutoFormat adds, such as "don't" for "dont"
+  (`text_after_punctuation_autoformat_adds_takes_the_formatting_after_the_lead_in`); Backspace and
+  Delete inside the lead-in keep it (`backspace_or_delete_in_a_lead_in_keeps_the_lead_in`); a command that fails leaves it as it was
+  (`a_command_that_fails_puts_the_lead_in_back`); Undo and Redo take it with the typed text, also Undo
+  of a period AutoFormat added after two spaces
+  (`undo_and_redo_take_the_repeated_lead_in_with_the_typing`,
+  `typing_after_undo_or_redo_in_a_lead_in_goes_on_with_the_lead_in`); with Track Changes on the text is a
+  tracked insertion, and while formatting is limited to the document's styles nothing is repeated
+  (`a_tracked_lead_in_is_an_insertion_and_locked_formatting_is_not_repeated`).
 - Smileys `:)` `:-)` `:(` `:-(` `:|` → ☺ ☹ 😐, also straight after a word (`ok:)` → `ok☺`) ¹
   (`smileys_are_replaced_inside_words_too`).
 

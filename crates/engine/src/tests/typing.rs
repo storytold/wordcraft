@@ -1363,6 +1363,456 @@ fn a_locked_heading_style_is_not_applied_as_you_type() {
     assert!(st.contains(&("Open".to_string(), Some("Heading2".to_string()))), "{st:?}");
 }
 
+/// A session with "Format beginning of list item like the one before it" on.
+fn with_list_lead_in() -> Session {
+    let mut s = s();
+    run(&mut s, "tools.autocorrect", json!({"formatListItemStart": true}));
+    s
+}
+
+/// Apply `cmd` to the first `text` in the document, then put the caret at the end of `block`.
+fn format_then_end(s: &mut Session, text: &str, cmd: &str, params: serde_json::Value, block: usize) {
+    run(s, "select.text", json!({"text": text}));
+    run(s, cmd, params);
+    let off = s.doc.para_at(&Pos::body(block, 0)).map(|p| p.len()).unwrap_or(0);
+    run(s, "caret.set", json!({"pos": {"block": block, "off": off}}));
+}
+
+/// The formatting of the character at byte `off` of body paragraph `block`.
+fn char_at(s: &Session, block: usize, off: usize) -> wordcraft_doc::props::CharProps {
+    let p = s.doc.para_at(&Pos::body(block, 0)).unwrap_or_else(|| panic!("no paragraph {block}"));
+    p.props_of_char(off).clone()
+}
+
+#[test]
+fn a_list_item_lead_in_takes_the_previous_items_lead_in_formatting() {
+    for marker in ["* ", "1. "] {
+        let mut s = with_list_lead_in();
+        typ(&mut s, &format!("{marker}Label: explanation"));
+        format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+        typ(&mut s, "\nNext: more");
+        assert_eq!(paras(&s), [para("Label: explanation", Some(0)), para("Next: more", Some(0))], "{marker:?}");
+        // "Next" and the colon that ends it are bold; the text after the colon is not.
+        for off in [0, 3, 4] {
+            assert_eq!(char_at(&s, 1, off).bold, Some(true), "{marker:?} at {off}");
+        }
+        for off in [5, 6, 9] {
+            assert_ne!(char_at(&s, 1, off).bold, Some(true), "{marker:?} at {off}");
+        }
+        // The next item's lead-in follows this one in turn.
+        typ(&mut s, "\nThird. end");
+        assert_eq!((char_at(&s, 2, 0).bold, char_at(&s, 2, 7).bold), (Some(true), None), "{marker:?}");
+    }
+    // Off by default.
+    let mut s = s();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\nNext: more");
+    assert_eq!(char_at(&s, 1, 0).bold, None);
+}
+
+#[test]
+fn only_formatting_the_whole_lead_in_shares_is_repeated() {
+    // Bold on the first word only does not carry over; italic on the whole lead-in does.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* First words: rest");
+    format_then_end(&mut s, "First", "format.bold", json!({}), 0);
+    typ(&mut s, "\nNext: more");
+    assert_eq!(char_at(&s, 1, 0).bold, None);
+    // The lead-in ends at the first punctuation character, here a hyphen.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Whole lead-in: rest");
+    format_then_end(&mut s, "Whole lead", "format.italic", json!({}), 0);
+    format_then_end(&mut s, "Whole", "format.bold", json!({}), 0);
+    typ(&mut s, "\nNext two: more");
+    let first = char_at(&s, 1, 0);
+    assert_eq!((first.italic, first.bold), (Some(true), None));
+    assert_eq!(char_at(&s, 1, 10).italic, None);
+    // A font on the whole lead-in carries over too.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Term\u{2014}meaning");
+    format_then_end(&mut s, "Term", "format.font", json!({"name": "Courier New"}), 0);
+    typ(&mut s, "\nWord\u{2014}gloss");
+    assert_eq!(char_at(&s, 1, 0).font.as_deref(), Some("Courier New"));
+    assert_eq!(char_at(&s, 1, "Word\u{2014}".len()).font, None);
+}
+
+#[test]
+fn a_list_item_numbered_by_its_style_repeats_the_lead_in() {
+    let mut s = with_list_lead_in();
+    let num = s.doc.numbering.try_add_list(wordcraft_doc::ListKind::Bullet).unwrap();
+    if let Some(normal) = s.doc.styles.get_mut("Normal") {
+        normal.para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    }
+    typ(&mut s, "Item: text");
+    format_then_end(&mut s, "Item", "format.bold", json!({}), 0);
+    typ(&mut s, "\nNext: more");
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 6).bold), (Some(true), None));
+}
+
+#[test]
+fn the_lead_in_is_not_repeated_outside_a_continuing_list_item() {
+    // Not after a paragraph outside a list.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\nNext: more");
+    assert_eq!(char_at(&s, 1, 0).bold, None);
+    // Not after the Enter on an empty item that ends the list.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\n\nText: more");
+    assert_eq!(paras(&s).last(), Some(&para("Text: more", None)));
+    assert_eq!(char_at(&s, 1, 0).bold, None);
+    // Not when Enter splits an item before its end.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 7}}));
+    typ(&mut s, "\n");
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    typ(&mut s, "New ");
+    assert_eq!(char_at(&s, 1, 0).bold, None);
+}
+
+#[test]
+fn formatting_picked_or_a_caret_move_ends_the_lead_in() {
+    // Bold picked for the new item wins over the repeated lead-in, and nothing restores it.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\n");
+    run(&mut s, "format.bold", json!({}));
+    typ(&mut s, "Plain: more");
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 7).bold), (Some(false), Some(false)));
+    // Setting the caret ends it: typing goes on in the formatting of the text before the caret.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\nAb");
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 2}}));
+    typ(&mut s, ": c");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).as_deref(), Some("Ab: c"));
+    assert_eq!((char_at(&s, 1, 2).bold, char_at(&s, 1, 4).bold), (Some(true), Some(true)));
+}
+
+#[test]
+fn turning_the_option_off_or_limiting_formatting_ends_the_lead_in() {
+    for (cmd, params) in [
+        ("tools.autocorrect", json!({"formatListItemStart": false})),
+        ("tools.autocorrect", json!({"enabled": false})),
+        ("review.restrict", json!({"mode": "none", "formatting": true})),
+    ] {
+        let mut s = with_list_lead_in();
+        typ(&mut s, "* Label: explanation");
+        format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+        typ(&mut s, "\n");
+        run(&mut s, cmd, params.clone());
+        typ(&mut s, "Term: x");
+        assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 6).bold), (None, None), "{cmd} {params}");
+    }
+}
+
+#[test]
+fn pasted_text_ends_the_lead_in() {
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\n");
+    crate::cmd::paste_text(&mut s, "Pasted words").unwrap();
+    assert_eq!(char_at(&s, 1, 0).bold, None);
+}
+
+#[test]
+fn a_caret_moved_inside_the_new_item_ends_the_lead_in() {
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\nAb");
+    let between = json!({"block": 1, "off": 1});
+    run(&mut s, "select.range", json!({"anchor": between, "focus": between}));
+    typ(&mut s, ": c");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).as_deref(), Some("A: cb"));
+    // Typing at the moved caret takes the formatting of the text before it.
+    assert_eq!((char_at(&s, 1, 1).bold, char_at(&s, 1, 3).bold), (Some(true), Some(true)));
+}
+
+#[test]
+fn taking_the_new_item_out_of_its_list_ends_the_lead_in() {
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\n");
+    run(&mut s, "para.bullets", json!({"off": true}));
+    typ(&mut s, "Next: more");
+    assert_eq!(paras(&s).last(), Some(&para("Next: more", None)));
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 6).bold), (None, None));
+}
+
+#[test]
+fn the_lead_in_stays_with_its_document_and_window() {
+    // Typing in another document leaves the lead-in of this one in effect.
+    let mut s = with_list_lead_in();
+    let a = s.document_id();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\n");
+    s.add_document(wordcraft_doc::Document::new());
+    typ(&mut s, "Other");
+    s.activate(a).unwrap();
+    typ(&mut s, "Next: more");
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 6).bold), (Some(true), None));
+    // Another window on the document types elsewhere: the lead-in ends in this window.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\n");
+    let other = s.copy_view();
+    let this = s.take_view();
+    s.put_view(other);
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    typ(&mut s, "x");
+    s.take_view();
+    s.put_view(this);
+    typ(&mut s, "Next: more");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).as_deref(), Some("Next: more"));
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 6).bold), (None, None));
+    // A window that only looked at the document keeps it.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\n");
+    let other = s.copy_view();
+    let this = s.take_view();
+    s.put_view(other);
+    s.take_view();
+    s.put_view(this);
+    typ(&mut s, "Next: more");
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 6).bold), (Some(true), None));
+}
+
+#[test]
+fn an_autocorrect_rewrite_keeps_the_lead_in_and_a_double_space_period_ends_it() {
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    // "accomodate " becomes "accommodate ": a letter longer, the caret moves with it.
+    typ(&mut s, "\naccomodate word: more");
+    let p = s.doc.para_at(&Pos::body(1, 0)).cloned().unwrap_or_default();
+    let colon = p.text.find(':').unwrap();
+    assert_eq!((char_at(&s, 1, colon - 1).bold, char_at(&s, 1, colon + 2).bold), (Some(true), None), "{:?}", p.text);
+    // A period AutoFormat adds after two spaces ends the lead-in.
+    let mut s = with_list_lead_in();
+    run(&mut s, "tools.autocorrect", json!({"doubleSpacePeriod": true}));
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\nNext  more");
+    let p = s.doc.para_at(&Pos::body(1, 0)).cloned().unwrap_or_default();
+    assert_eq!(p.text, "Next. more");
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 6).bold), (Some(true), None));
+}
+
+#[test]
+fn text_after_punctuation_autoformat_adds_takes_the_formatting_after_the_lead_in() {
+    // "Dont " becomes "Don't ": the apostrophe ends the lead-in, and the "t" and the space after
+    // it take the formatting typing would have had.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\nDont more");
+    let p = s.doc.para_at(&Pos::body(1, 0)).cloned().unwrap_or_default();
+    assert_eq!(p.text, "Don't more");
+    let bold: Vec<_> = (0..p.len()).map(|i| char_at(&s, 1, i).bold).collect();
+    assert_eq!(bold, [Some(true), Some(true), Some(true), Some(true), None, None, None, None, None, None]);
+    // The space typed after a period AutoFormat adds after two spaces.
+    let mut s = with_list_lead_in();
+    run(&mut s, "tools.autocorrect", json!({"doubleSpacePeriod": true}));
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\nNext  more");
+    let p = s.doc.para_at(&Pos::body(1, 0)).cloned().unwrap_or_default();
+    assert_eq!(p.text, "Next. more");
+    assert_eq!((char_at(&s, 1, 4).bold, char_at(&s, 1, 5).bold), (Some(true), None));
+}
+
+#[test]
+fn text_a_command_types_ends_the_lead_in_at_its_punctuation() {
+    // Insert › Date & Time as text: the lead-in ends at the date's first slash.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\n");
+    run(&mut s, "insert.dateTime", json!({"format": "M/d/yyyy"}));
+    let p = s.doc.para_at(&Pos::body(1, 0)).cloned().unwrap_or_default();
+    let slash = p.text.find('/').unwrap();
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, slash).bold), (Some(true), Some(true)), "{:?}", p.text);
+    assert_eq!(char_at(&s, 1, p.len() - 1).bold, None, "{:?}", p.text);
+}
+
+#[test]
+fn undo_and_redo_take_the_repeated_lead_in_with_the_typing() {
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\nNext");
+    let typed = s.doc.para_at(&Pos::body(1, 0)).cloned().unwrap_or_default();
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).as_deref(), Some(""));
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)), Some(&typed));
+    assert_eq!(char_at(&s, 1, 0).bold, Some(true));
+}
+
+#[test]
+fn typing_after_undo_or_redo_in_a_lead_in_goes_on_with_the_lead_in() {
+    // Undo of part of the lead-in, of the whole item, and Redo after Undo: typing then ends the
+    // lead-in at its punctuation as before.
+    for (typed, steps, then) in
+        [("Te", &["edit.undo"][..], "Term: x"), ("Term: x", &["edit.undo"][..], "Term: x"), ("Te", &["edit.undo", "edit.redo"][..], "rm: x")]
+    {
+        let mut s = with_list_lead_in();
+        typ(&mut s, "* Label: explanation");
+        format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+        typ(&mut s, "\n");
+        typ(&mut s, typed);
+        for step in steps {
+            run(&mut s, step, json!({}));
+        }
+        typ(&mut s, then);
+        assert_eq!(s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).as_deref(), Some("Term: x"), "{typed:?} {steps:?}");
+        assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 4).bold, char_at(&s, 1, 6).bold), (Some(true), Some(true), None), "{typed:?} {steps:?}");
+    }
+    // Undo of an AutoCorrect rewrite puts the caret back before the rewrite; the lead-in goes on there.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\naccomodate ");
+    run(&mut s, "edit.undo", json!({}));
+    typ(&mut s, "word: more");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).as_deref(), Some("accomodate word: more"));
+    assert_eq!((char_at(&s, 1, 15).bold, char_at(&s, 1, 17).bold), (Some(true), None));
+    // Undo of the period AutoFormat adds after two spaces: the lead-in goes on after the spaces.
+    let mut s = with_list_lead_in();
+    run(&mut s, "tools.autocorrect", json!({"doubleSpacePeriod": true}));
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\nNext  ");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).as_deref(), Some("Next. "));
+    run(&mut s, "edit.undo", json!({}));
+    typ(&mut s, "x: y");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).as_deref(), Some("Next  x: y"));
+    assert_eq!((char_at(&s, 1, 6).bold, char_at(&s, 1, 7).bold, char_at(&s, 1, 9).bold), (Some(true), Some(true), None));
+}
+
+#[test]
+fn a_command_that_fails_puts_the_lead_in_back() {
+    // A command that types a whole lead-in and then fails: the document, the selection and the
+    // lead-in are all as they were.
+    fn type_then_fail(s: &mut Session, _: &serde_json::Value) -> crate::CmdResult {
+        s.run("text.insert", &json!({"text": "Next: "}))?;
+        Err(crate::CmdError::Failed("refused".into()))
+    }
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\n");
+    let mut spec = s.registry.get("text.insert").cloned().unwrap();
+    spec.id = "test.typeThenFail";
+    spec.run = type_then_fail;
+    let mut specs = s.registry.all().to_vec();
+    specs.push(spec);
+    s.registry = std::sync::Arc::new(crate::Registry::new(specs));
+    assert!(s.run("test.typeThenFail", &json!({})).is_err());
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).as_deref(), Some(""));
+    typ(&mut s, "Next: more");
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 4).bold, char_at(&s, 1, 6).bold), (Some(true), Some(true), None));
+}
+
+#[test]
+fn backspace_or_delete_in_a_lead_in_keeps_the_lead_in() {
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\nNe\u{8}ext: more");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).as_deref(), Some("Next: more"));
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 4).bold, char_at(&s, 1, 6).bold), (Some(true), Some(true), None));
+    // Delete at the end of the item, with nothing after it to delete.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\nNext");
+    run(&mut s, "text.delete", json!({}));
+    typ(&mut s, ": more");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).as_deref(), Some("Next: more"));
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 4).bold, char_at(&s, 1, 6).bold), (Some(true), Some(true), None));
+}
+
+#[test]
+fn a_tracked_lead_in_is_an_insertion_and_locked_formatting_is_not_repeated() {
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "\nNext: more");
+    let c = char_at(&s, 1, 0);
+    assert_eq!((c.bold, c.ins.is_some(), c.fmt_change.is_none()), (Some(true), true, true));
+    // Formatting limited to the document's styles: no direct formatting is added.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    run(&mut s, "review.restrict", json!({"mode": "none", "formatting": true}));
+    typ(&mut s, "\nNext: more");
+    assert_eq!(char_at(&s, 1, 0).bold, None);
+}
+
+#[test]
+fn links_language_and_revision_marks_of_the_lead_in_are_not_repeated() {
+    // A bold lead-in that is also a link, in French with proofing off: only the bold carries over.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    format_then_end(&mut s, "Label", "insert.link", json!({"url": "https://example.org/"}), 0);
+    format_then_end(&mut s, "Label", "review.language", json!({"lang": "fr-FR", "noProof": true}), 0);
+    assert_eq!(char_at(&s, 0, 2).lang.as_deref(), Some("fr-FR"));
+    typ(&mut s, "\nNext: more");
+    let (lead, body) = (char_at(&s, 1, 0), char_at(&s, 1, 6));
+    assert_eq!(lead.bold, Some(true));
+    assert_eq!((&lead.link, &lead.lang, lead.no_proof), (&None, &body.lang, body.no_proof));
+    // A lead-in typed and made bold with Track Changes on: once tracking is off, the new item's
+    // lead-in is bold without the insertion or formatting-change marks.
+    let mut s = with_list_lead_in();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    assert!(char_at(&s, 0, 0).ins.is_some());
+    run(&mut s, "review.trackChanges", json!({"value": false}));
+    typ(&mut s, "\nNext: more");
+    let c = char_at(&s, 1, 0);
+    assert_eq!((c.bold, c.ins, c.fmt_change.is_none()), (Some(true), None, true));
+}
+
+#[test]
+fn an_item_without_punctuation_is_all_lead_in() {
+    // With no punctuation, the whole item is the lead-in: bold on its first word only is not on
+    // the whole lead-in, so it is not repeated.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Bold label");
+    format_then_end(&mut s, "Bold", "format.bold", json!({}), 0);
+    typ(&mut s, "\nNext");
+    assert_eq!(char_at(&s, 1, 0).bold, None);
+}
+
+#[test]
+fn the_list_item_option_is_reported_and_set_through_autocorrect_options() {
+    let mut s = s();
+    let r = s.run("tools.autocorrect", &json!({})).unwrap();
+    assert_eq!(r["formatListItemStart"], json!(false));
+    let r = s.run("tools.autocorrect", &json!({"formatListItemStart": true})).unwrap();
+    assert_eq!(r["formatListItemStart"], json!(true));
+    assert!(s.prefs.autocorrect.format_list_item_start);
+}
+
 #[test]
 fn enter_in_an_editable_region_after_a_protected_short_line_breaks_the_paragraph() {
     // Read only, with an editable region from the end of "Title" to the start of "End.": Enter

@@ -11,12 +11,14 @@ use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 mod autoformat;
 mod delete;
 mod enter_tab;
+mod lead_in;
 mod unicode;
 
 use autoformat::insert;
 use delete::{backspace, delete, delete_word_back, delete_word_fwd};
 pub use enter_tab::MAX_TYPED_PARAGRAPHS;
 use enter_tab::{back_tab, new_paragraph, tab};
+pub(crate) use lead_in::{LeadIn, finish as end_lead_in, put_back as put_back_lead_in, resync as resync_lead_in, type_text_lead};
 pub use unicode::{alt_code_char, oem_code_page, system_code_pages, system_oem_code_page, windows_code_pages};
 use unicode::{ins_char, insert_code, toggle_unicode};
 
