@@ -41,7 +41,7 @@ pub fn start() {
             let message = "This editor must be opened by its host application.";
             log::error!("{message}");
             if let Some(el) = document.get_element_by_id(LOADING_ID) {
-                let _ = el.set_inner_html(&format!("<p>{message}</p>"));
+                el.set_inner_html(&format!("<p>{message}</p>"));
             }
             return;
         }
@@ -91,12 +91,12 @@ pub fn start() {
                         bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
                     }
                     let mut app = WordApp::new(session, services);
-                    // The restricted embedded editor: host-only rules, Track Changes pinned on,
-                    // and no Quick Access Toolbar (its buttons are all document tools).
+                    // The restricted embedded editor: host-only rules, Track Changes pinned
+                    // on. The Quick Access Toolbar stays: its default buttons (Save, Undo,
+                    // Redo) are allowed, and anything denied greys out through the rules.
                     if embed {
                         app.embed = Some(wordcraft_ui_egui::embed::Rules);
                         let _ = app.session.run("review.trackChanges", &serde_json::json!({"value": true}));
-                        app.ui.quick_access_toolbar = false;
                         if let Some(b) = app_bridge.as_ref()
                             && let Err(e) = b.listen_commands(commands.clone(), cc.egui_ctx.clone())
                         {

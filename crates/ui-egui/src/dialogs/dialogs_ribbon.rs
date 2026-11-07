@@ -66,7 +66,7 @@ impl RibbonForm {
 /// Open the dialog on a page. The embedded editor refuses it (its changes are what
 /// `tools.customizeRibbon` denies), wherever a context menu opens it from.
 pub fn open(app: &mut WordApp, page: Page) {
-    if app.embed_refused("tools.customizeRibbon") {
+    if app.embed_refused("tools.customizeRibbon", &serde_json::json!({})) {
         app.status(crate::tl!("This command isn't available in the embedded editor."));
         return;
     }

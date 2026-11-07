@@ -221,7 +221,12 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 );
                             }
                             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, share));
-                            if resp.on_hover_text(tl!("Export a copy to share (PDF, Word document)")).clicked() {
+                            let share_tip = if app.embed.is_some() {
+                                tl!("Export a PDF copy to share")
+                            } else {
+                                tl!("Export a copy to share (PDF, Word document)")
+                            };
+                            if resp.on_hover_text(share_tip).clicked() {
                                 let _ = app.run("ui.backstage", json!({"value": true, "page": "export"}));
                             }
                             ui.add_space(6.0);

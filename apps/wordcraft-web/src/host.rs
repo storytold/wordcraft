@@ -127,6 +127,13 @@ impl Bridge {
 /// the app's memory (the data's own length, not the host's claim). The crate has cleaned the name
 /// (and cut it to 255 characters); a blank one comes as `document` and becomes `Document.docx`.
 fn deliver_open(inbox: &Inbox, ctx: &egui::Context, name: &str, data: &FileData) {
+    // A burst of opens between two frames would queue many large copies at once; the inbox
+    // holds a bounded number of delivered files (it drains every frame).
+    const MAX_PENDING_FILES: usize = 8;
+    if inbox.lock().unwrap_or_else(|e| e.into_inner()).len() >= MAX_PENDING_FILES {
+        log::warn!("host file {name} not taken: {MAX_PENDING_FILES} delivered files are still waiting");
+        return;
+    }
     let name = if name == "document" { DEFAULT_NAME } else { name }.to_string();
     let FileData::Bytes(array) = data else {
         log::warn!("host file {name} came as a File; WordCraft reads bytes only; not opened");
@@ -183,13 +190,14 @@ impl Bridge {
                     }
                 }
             };
-            let Ok(data) = serde_json::from_str::<Value>(&text) else { return };
-            if !crate::command::is_command(&data) {
+            // The size cap runs before any parse: a huge message must not build a JSON tree.
+            // The request id can't be read before the parse, so the refusal carries none.
+            if crate::command::over_cap(&text) {
+                let _ = bridge.post_result("", &Err("command message is over the size cap".to_owned()));
                 return;
             }
-            // A command has a size cap: refused before anything runs, echoing the request id.
-            if crate::command::over_cap(&text) {
-                let _ = bridge.post_result(&crate::command::req_id_of(&data), &Err("command message is over the size cap".to_owned()));
+            let Ok(data) = serde_json::from_str::<Value>(&text) else { return };
+            if !crate::command::is_command(&data) {
                 return;
             }
             match HostCommand::parse(&data) {

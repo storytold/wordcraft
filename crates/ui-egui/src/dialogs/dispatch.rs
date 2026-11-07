@@ -1304,6 +1304,9 @@ fn password_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             Err(e) => *message = e,
         }
     }
+    if cancel && app.embed.is_some() {
+        app.status(crate::i18n::fmt(crate::tl!("{name} wasn't opened: its password wasn't entered."), &[("name", &crate::i18n::isolate_path(name))]));
+    }
     cancel
 }
 

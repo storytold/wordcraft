@@ -13,10 +13,13 @@ impl WordApp {
         r
     }
 
-    /// Whether the embedded editor refuses this command right now: denied, unless it takes
-    /// the host's delivered files in.
-    pub(crate) fn embed_refused(&self, id: &str) -> bool {
-        matches!(&self.embed, Some(rules) if rules.denies(id) && !rules.intake_allows(id))
+    /// Whether the embedded editor refuses this command right now: denied and not a host
+    /// intake id. An intake id (`file.open`, `insert.picture`) only runs with the bytes a
+    /// host delivery carries (`path`/`data` params) — a bare one, like the Mod+O shortcut,
+    /// would push a file-picker request the embed refuses, silently.
+    pub(crate) fn embed_refused(&self, id: &str, params: &Value) -> bool {
+        matches!(&self.embed, Some(rules) if rules.denies(id)
+            && !(rules.intake_allows(id) && (params.get("path").is_some() || params.get("data").is_some())))
     }
 
     /// Run a command as the input method's own transaction while preserving every normal
@@ -38,7 +41,7 @@ impl WordApp {
         // Save As, Print, …) before anything else can route around the refusal. Host intake is
         // the exception: while the host's delivered files drain, the ids that take them in
         // (file.open, insert.picture) run as they would in the normal app.
-        if self.embed_refused(id) {
+        if self.embed_refused(id, &params) {
             let refused: String = crate::tl!("This command isn't available in the embedded editor.").to_owned();
             self.status(refused.clone());
             return Err(refused);
@@ -126,8 +129,14 @@ impl WordApp {
         // The embedded editor's refusal guards the funnel: `run` refuses earlier (status line,
         // before dialogs), but the control channel and a held-back Save Changes answer get here
         // directly. Host intake is exempt, as in `run`.
-        if self.embed_refused(id) {
+        if self.embed_refused(id, &params) {
             return Err(crate::tl!("This command isn't available in the embedded editor.").to_owned());
+        }
+        // The embedded editor saves the host's document; until it has opened (a password may
+        // be pending, or it may have been cancelled) there is nothing to save back, and a save
+        // would deliver a fresh blank document to the host as if it were new.
+        if self.embed.is_some() && id == "file.save" && self.session.path.is_none() {
+            return Err(crate::tl!("The host's document hasn't opened yet.").to_owned());
         }
         self.clear_command_targets(id);
         if let Some(error) = self.document_required_error(id) {
@@ -200,8 +209,12 @@ impl WordApp {
                 (None, None) => Ok(()),
             };
             if let Err(e) = delivered {
-                let msg = i18n::fmt(tl!("Couldn't download {name}: {error}"), &[("name", &name), ("error", &e)]);
-                log::error!("download of {name} failed: {e}");
+                let msg = if self.services.host_save.is_some() {
+                    i18n::fmt(tl!("The host couldn't store {name}: {error}"), &[("name", &name), ("error", &e)])
+                } else {
+                    i18n::fmt(tl!("Couldn't download {name}: {error}"), &[("name", &name), ("error", &e)])
+                };
+                log::error!("delivery of {name} failed: {e}");
                 self.status(msg.clone());
                 return Err(msg);
             }
@@ -443,6 +456,8 @@ impl WordApp {
         if let Some(kind) = req.get("open").and_then(Value::as_str)
             && self.embed.as_ref().is_some_and(|rules| rules.denies_request(kind))
         {
+            let refused: String = crate::tl!("This command isn't available in the embedded editor.").to_owned();
+            self.status(refused);
             return;
         }
         // Made for a document that isn't shown (an agent's command run there): its window handles
@@ -542,6 +557,12 @@ impl WordApp {
             }
             "ui.tab" => {
                 let tab = s("tab").unwrap_or("Home").to_string();
+                // The embedded editor's hidden tab can't be shown, not even by name.
+                if self.embed.as_ref().is_some_and(|rules| rules.hides_tab(&tab)) {
+                    let refused: String = crate::tl!("This command isn't available in the embedded editor.").to_owned();
+                    self.status(refused.clone());
+                    return Some(Err(refused));
+                }
                 if tab == "File" {
                     self.ui.backstage = true;
                 } else {

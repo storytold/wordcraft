@@ -205,6 +205,11 @@ pub fn command_icon(id: &str) -> &str {
 /// Right-click on a command's button: put it on (or take it off) the Quick Access Toolbar, or
 /// open Customize Ribbon (#379).
 pub fn command_menu(resp: &Response, app: &mut WordApp, id: &str) {
+    // The embedded editor hides the Quick Access Toolbar and refuses customization: the
+    // whole menu would be refusals.
+    if app.embed.is_some() {
+        return;
+    }
     crate::rtl::context_menu(resp, |ui| {
         let known = app.session.registry.get(id).is_some();
         let on_qat = app.session.ribbon.qat().contains(&id);
@@ -226,6 +231,9 @@ pub fn command_menu(resp: &Response, app: &mut WordApp, id: &str) {
 /// "Customize the Ribbon…" and "Customize Quick Access Toolbar…" (context menus), and "Show
 /// Quick Access Toolbar" while the toolbar is hidden (#1945).
 pub fn customize_menu_items(ui: &mut Ui, app: &mut WordApp) {
+    if app.embed.is_some() {
+        return;
+    }
     if !app.ui.quick_access_toolbar && ui.button(tl!("Show Quick Access Toolbar")).clicked() {
         let _ = app.run("ui.quickAccessToolbar", serde_json::json!({"value": true}));
         ui.close();

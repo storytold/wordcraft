@@ -65,7 +65,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         app.ui.backstage_page = "home".into();
     }
     // The embedded editor keeps only its own pages: a stale or default Home lands on Info.
-    if app.embed.as_ref().is_some_and(|rules| !rules.keeps_page(&app.ui.backstage_page)) {
+    // "Save" is kept in the menu but routes to a command, never to a page.
+    if app.embed.as_ref().is_some_and(|rules| !rules.keeps_page(&app.ui.backstage_page) || app.ui.backstage_page == "save") {
         app.ui.backstage_page = "info".into();
     }
     let mac = app.integrated_titlebar;
@@ -774,7 +775,11 @@ fn info_properties(app: &mut WordApp, ui: &mut Ui, info: &serde_json::Value) {
     {
         let _ = app.run("ui.dialog", json!({"name": "customProperties"}));
     }
-    // Protect Document › Encrypt with Password (#55).
+    // Protect Document › Encrypt with Password (#55). The embedded editor refuses it: its
+    // host owns protection, so the whole section stays out.
+    if app.embed.is_some() {
+        return;
+    }
     ui.add_space(18.0);
     ui.label(egui::RichText::new(tl!("Protect Document")).font(semibold(15.0)));
     let encrypted = info.get("encrypted").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -842,7 +847,11 @@ fn export_page(app: &mut WordApp, ui: &mut Ui) {
         return;
     }
     heading(ui, "Export");
-    ui.label(tl!("Save a copy in another format. Printing goes through a PDF you can print from any viewer."));
+    if app.embed.is_some() {
+        ui.label(tl!("The host stores a PDF copy under the document's own name."));
+    } else {
+        ui.label(tl!("Save a copy in another format. Printing goes through a PDF you can print from any viewer."));
+    }
     ui.add_space(12.0);
     crate::print_page::export_formats(app, ui);
 }

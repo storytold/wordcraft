@@ -207,3 +207,32 @@ fn track_changes_cannot_be_toggled() {
     assert!(r.denies("review.trackChanges"));
     assert!(super::DENIED.contains(&"review.trackingOptions"), "the author name stays the host's");
 }
+
+/// The intake ids need the bytes they take in: a bare Mod+O is refused with the reason, not
+/// silently turned into a file-picker request the embed would drop.
+#[test]
+fn intake_needs_the_bytes() {
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.embed = Some(Rules);
+    let bare = app.run("file.open", serde_json::json!({}));
+    assert!(bare.as_ref().err().is_some_and(|e| e.contains("embedded")), "bare file.open must be refused: {:?}", bare);
+    let with_data = app.run("file.open", serde_json::json!({"path": "no-such.docx", "data": "abc"}));
+    assert!(with_data.as_ref().err().is_none_or(|e| !e.contains("embedded")), "file.open with bytes must run: {:?}", with_data);
+}
+
+/// A save before the host's document has opened is refused: a fresh blank document must not
+/// reach the host as if it were the file it sent.
+#[test]
+fn save_needs_the_hosts_document() {
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.embed = Some(Rules);
+    let early = app.run("file.save", serde_json::json!({}));
+    assert!(early.as_ref().err().is_some_and(|e| e.contains("hasn't opened")), "early save must be refused: {:?}", early);
+    // Once the host's document is open (it carries a path), saving runs.
+    let dir = std::env::temp_dir().join(format!("wordcraft-embed-save-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    app.session.path = Some(dir.join("Contract.docx"));
+    let saved = app.run("file.save", serde_json::json!({}));
+    assert!(saved.as_ref().err().is_none_or(|e| !e.contains("hasn't opened")), "the open document saves: {:?}", saved);
+    let _ = std::fs::remove_dir_all(&dir);
+}

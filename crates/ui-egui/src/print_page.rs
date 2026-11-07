@@ -462,7 +462,14 @@ pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
     if app.embed.is_some() {
         if ui.add(egui::Button::new(egui::RichText::new(tl!("PDF document (*.pdf)")).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
             let name = format!("{}.pdf", app.title_stem());
-            let _ = app.run("file.exportPdf", json!({"path": name}));
+            match app.run("file.exportPdf", json!({"path": name})) {
+                Ok(_) => {
+                    app.status(crate::i18n::fmt(tl!("Sent {name} to the host."), &[("name", &crate::i18n::isolate_path(&name))]));
+                    app.ui.backstage = false;
+                    app.canvas.want_focus = true;
+                }
+                Err(e) => app.status(e),
+            }
         }
         ui.add_space(4.0);
         return;

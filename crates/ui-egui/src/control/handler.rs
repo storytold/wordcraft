@@ -185,7 +185,7 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
         }
         _ => {
             let Some(id) = p.get("command").or(p.get("id")).and_then(Value::as_str) else { return err("missing `command`") };
-            if app.embed_refused(id) {
+            if app.embed_refused(id, p) {
                 return err("This command isn't available in the embedded editor.");
             }
             let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));

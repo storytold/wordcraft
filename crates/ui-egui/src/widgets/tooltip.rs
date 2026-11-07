@@ -116,6 +116,8 @@ pub(super) fn tooltip(app: &WordApp, resp: Response, label: &str, id: &str) -> R
         None
     } else if !app.has_document() && !crate::works_without_document(id) {
         Some(tl!("Open a document first"))
+    } else if app.embed.as_ref().is_some_and(|rules| rules.denies(id)) {
+        Some(tl!("This command isn't available in the embedded editor."))
     } else {
         Some(app.session.why_disabled(id).unwrap_or(""))
     };
