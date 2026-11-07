@@ -1490,8 +1490,19 @@ fn shape_outline_and_fill_on_text_box() {
     let (w, h) = obj_size(o);
     assert_eq!((w, h), (250.0, 150.0), "width preserved on height edit");
 
-    // 6. When a picture is selected, shape.fill does not target the text box:
+    // 6. shape.effects targets the active text box when typing inside it:
+    s.run("shape.effects", &json!({"shadow": "offsetBottomRight"})).unwrap();
+    let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let InlineObject::Shape { effects, .. } = o else { panic!("{o:?}") };
+    assert!(effects.shadow.is_some(), "shadow applied to text box");
+
+    // 7. When a picture is selected, shape.fill and shape.effects do not target the text box:
     let data = super::super::insert::base64_encode(&png(10, 10));
     s.run("insert.picture", &json!({"data": data})).unwrap();
     assert!(matches!(s.run("shape.fill", &json!({"color": "FF0000"})), Err(CmdError::Disabled(_))));
+    assert!(matches!(s.run("shape.effects", &json!({"shadow": "none"})), Err(CmdError::Disabled(_))));
+
+    // 8. fit_size normalizes NaN and negatives to 1 pt while keeping 0.0:
+    assert_eq!(super::picture::fit_size(f32::NAN, 0.0, false), (1.0, 0.0));
+    assert_eq!(super::picture::fit_size(-50.0, 0.0, false), (1.0, 0.0));
 }
