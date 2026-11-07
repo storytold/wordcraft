@@ -864,6 +864,7 @@ fn is_invisible_format(c: char) -> bool {
     )
 }
 
+/// Map a validation verdict enum to its human-readable uppercase display label.
 fn verdict_label(v: wordcraft_validate::Verdict) -> &'static str {
     match v {
         wordcraft_validate::Verdict::Pass => "PASS",
@@ -872,6 +873,7 @@ fn verdict_label(v: wordcraft_validate::Verdict) -> &'static str {
     }
 }
 
+/// Map a validation severity enum to its human-readable uppercase display label.
 fn severity_label(s: wordcraft_validate::Severity) -> &'static str {
     match s {
         wordcraft_validate::Severity::Corrupt => "CORRUPT",

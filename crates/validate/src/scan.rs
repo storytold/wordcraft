@@ -100,12 +100,15 @@ struct ElemId {
 }
 
 impl ElemId {
+    /// Whether this element belongs to the WordprocessingML main namespace (`w:`).
     fn w(&self) -> bool {
         self.local_w(NS_W)
     }
+    /// Whether this element belongs to the drawing namespace (`wp:`).
     fn wp(&self) -> bool {
         self.local_w(NS_WP)
     }
+    /// Whether this element's namespace URI matches `uri`.
     fn local_w(&self, uri: &str) -> bool {
         self.ns.as_deref() == Some(uri)
     }
@@ -134,6 +137,7 @@ pub(crate) struct ParseGuard {
 }
 
 impl ParseGuard {
+    /// Create a new parse guard with the given event and depth limits.
     pub(crate) fn new(max_events: usize, max_depth: usize) -> ParseGuard {
         ParseGuard { max_events, max_depth, events: 0, depth: 0, exhausted: false, reason: None }
     }
@@ -166,10 +170,12 @@ impl ParseGuard {
         true
     }
 
+    /// Leave an element, decrementing current depth.
     pub(crate) fn leave(&mut self) {
         self.depth = self.depth.saturating_sub(1);
     }
 
+    /// Whether any resource budget (event count or recursion depth) has been exhausted.
     pub(crate) fn exhausted(&self) -> bool {
         self.exhausted
     }
@@ -198,6 +204,7 @@ struct AltSuppress {
 }
 
 impl AltSuppress {
+    /// Create a new alternate content suppression tracker.
     fn new() -> AltSuppress {
         AltSuppress { depth: 0, frames: Vec::new() }
     }
@@ -229,6 +236,7 @@ impl AltSuppress {
     }
 }
 
+/// Check whether an element identifier corresponds to `mc:AlternateContent`.
 fn is_alternate_content(id: &ElemId) -> bool {
     id.ns.as_deref() == Some(NS_MC) && id.local == "AlternateContent"
 }
@@ -349,6 +357,7 @@ enum Declared {
 /// declaration is pathological from being read as UTF-8 by guessing.
 const DECLARATION_SCAN_BOUND: usize = 1 << 20;
 
+/// Locate the byte offset of `needle` within `hay`.
 fn find_bytes(hay: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || hay.len() < needle.len() {
         return None;
@@ -387,6 +396,7 @@ fn declared_encoding(bytes: &[u8]) -> Declared {
     Declared::Encoding(rest[..end].to_string())
 }
 
+/// Decode strict UTF-16 (little-endian or big-endian) into a String, rejecting truncated units or unpaired surrogates.
 fn decode_utf16_strict(bytes: &[u8], little_endian: bool) -> Result<String, DecodeError> {
     if !bytes.len().is_multiple_of(2) {
         return Err(DecodeError::Malformed("a UTF-16 part ends with a truncated unit".to_string()));
@@ -592,6 +602,7 @@ fn enter_alt(state: &mut State, id: &ElemId, part: &str, acc: &mut Acc) -> bool 
     is_alt
 }
 
+/// Construct a stack frame for the element indicating whether it is a table cell, deletion, or revision wrapper.
 fn frame_for(id: &ElemId) -> Frame {
     let w = id.w();
     let local = id.local.as_str();
@@ -619,6 +630,7 @@ fn mark_block_content(state: &mut State, id: &ElemId) {
     }
 }
 
+/// Handle element start tags: update structural flags, deletion depth, IDs, and element structure.
 fn on_open(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole, part: &str, acc: &mut Acc) {
     mark_block_content(state, id);
     if id.w() && id.local == "del" {
@@ -628,6 +640,7 @@ fn on_open(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceR
     record_structure(state, id, attrs, res, part, acc, false);
 }
 
+/// Handle self-closing/empty tags: check structural requirements like non-empty table cells, and record IDs.
 fn on_empty(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole, part: &str, acc: &mut Acc) {
     mark_block_content(state, id);
     if id.w() && id.local == "tc" && role.is_main {
@@ -637,6 +650,7 @@ fn on_empty(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &Namespace
     record_structure(state, id, attrs, res, part, acc, true);
 }
 
+/// Record defined and referenced IDs across story parts (comments, footnotes, endnotes, bookmarks, revisions).
 fn record_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole, part: &str) {
     if !role.is_story {
         return;
@@ -652,6 +666,7 @@ fn record_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &Namespa
     }
 }
 
+/// Record comment definitions, references, and paragraph IDs within comments parts.
 fn record_comment_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole, part: &str) {
     let cap = state.fact_cap;
     match id.local.as_str() {
@@ -668,6 +683,7 @@ fn record_comment_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: 
     }
 }
 
+/// Record footnote and endnote definitions and references.
 fn record_note_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole, part: &str) {
     let cap = state.fact_cap;
     match id.local.as_str() {
@@ -687,6 +703,7 @@ fn record_note_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &Na
     }
 }
 
+/// Record bookmark start and end tags, tracking paired IDs up to the fact budget.
 fn record_bookmark_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, part: &str) {
     match id.local.as_str() {
         "bookmarkStart" if id.w() => {
@@ -712,6 +729,7 @@ fn record_bookmark_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res:
     }
 }
 
+/// Record revision IDs on change-tracking elements (`ins`, `del`, `moveFrom`, `moveTo`, etc.).
 fn record_revision_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, part: &str) {
     let is_revision =
         matches!(id.local.as_str(), "ins" | "del" | "moveFrom" | "moveTo" | "rPrChange" | "pPrChange" | "sectPrChange" | "cellIns" | "cellDel");
@@ -720,6 +738,7 @@ fn record_revision_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res:
     }
 }
 
+/// Record header, footer, style, and numbering references found in elements.
 fn record_reference_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole, part: &str) {
     let cap = state.fact_cap;
     match id.local.as_str() {
@@ -750,6 +769,7 @@ fn insert_name(into: &mut BTreeSet<String>, cap: usize, capped: &mut bool, value
     }
 }
 
+/// Push a `(value, part)` pair into a vector, bounded by the fact capacity limit.
 fn push_capped(into: &mut Vec<(String, String)>, cap: usize, capped: &mut bool, value: Option<String>, part: &str) {
     if into.len() >= cap {
         *capped = true;
@@ -760,6 +780,7 @@ fn push_capped(into: &mut Vec<(String, String)>, cap: usize, capped: &mut bool, 
     }
 }
 
+/// Examine structural constraints such as fields, moves, deleted text, and custom XML elements.
 fn record_structure(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, part: &str, acc: &mut Acc, empty: bool) {
     if !id.w() {
         return;
@@ -837,6 +858,7 @@ const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
 /// The VML namespace (`v:imagedata`).
 const NS_V: &str = "urn:schemas-microsoft-com:vml";
 
+/// Collect relationship references (`r:id`, `r:embed`, `r:link`) from element attributes up to the fact limit.
 fn collect_refs(id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, out: &mut Vec<RefFact>, cap: usize, capped: &mut bool) {
     // headerReference/footerReference are checked by REF-HEADER, not REL-REF-MISSING.
     if id.w() && matches!(id.local.as_str(), "headerReference" | "footerReference") {
@@ -864,18 +886,21 @@ fn collect_refs(id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, out: 
     }
 }
 
+/// Report `STRUCT-MOVE-UNPAIRED` findings for items present in `set` but missing from `counterpart`.
 fn report_unpaired(acc: &mut Acc, part: &str, tag: &str, set: &BTreeSet<String>, counterpart: &BTreeSet<String>, want: &str) {
     for id in set.difference(counterpart) {
         acc.add("STRUCT-MOVE-UNPAIRED", Some(part.to_string()), format!("{tag} with w:id {id} in {part} has no matching {want}"));
     }
 }
 
+/// Report `STRUCT-MOVE-UNPAIRED` findings for move names present in `names` without a counterpart.
 fn report_name_pairs(acc: &mut Acc, part: &str, tag: &str, names: &BTreeSet<String>, want: &str, other: &BTreeSet<String>) {
     for name in names.difference(other) {
         acc.add("STRUCT-MOVE-UNPAIRED", Some(part.to_string()), format!("{tag} name {name} in {part} has no matching {want} name"));
     }
 }
 
+/// Report `STRUCT-MOVE-UNPAIRED` findings when a move start ID is reused within a single part.
 fn report_duplicate_move_ids(acc: &mut Acc, part: &str, ids: &[String]) {
     let mut seen = BTreeSet::new();
     let mut reported = BTreeSet::new();
@@ -886,6 +911,7 @@ fn report_duplicate_move_ids(acc: &mut Acc, part: &str, ids: &[String]) {
     }
 }
 
+/// Report `BOOKMARK-UNPAIRED` findings for bookmarks that have a start tag without an end or vice versa.
 fn report_bookmarks(acc: &mut Acc, part: &str, starts: &BTreeSet<String>, ends: &BTreeSet<String>) {
     for id in starts.difference(ends) {
         acc.add("BOOKMARK-UNPAIRED", Some(part.to_string()), format!("w:bookmarkStart with w:id {id} in {part} has no matching w:bookmarkEnd"));
@@ -937,6 +963,7 @@ fn completion_dependent_pending(state: &State) -> bool {
         || state.bookmark_starts != state.bookmark_ends
 }
 
+/// Detect attribute prefixes that are undeclared or referenced in `mc:Ignorable` without a namespace declaration.
 fn check_prefixes(declared: &[Vec<String>], attrs: &[Attribute], res: &NamespaceResolver, extra: &[String], out: &mut PartScan) {
     for a in attrs {
         match res.resolve_attribute(a.key).0 {
@@ -955,10 +982,12 @@ fn check_prefixes(declared: &[Vec<String>], attrs: &[Attribute], res: &Namespace
     }
 }
 
+/// Check if prefix `pfx` exists among declared prefixes in current element stack or extras.
 fn declared_has(declared: &[Vec<String>], extra: &[String], pfx: &str) -> bool {
     declared.iter().flatten().any(|d| d == pfx) || extra.iter().any(|d| d == pfx)
 }
 
+/// Extract XML namespace prefixes declared with `xmlns:prefix` in the given attributes.
 fn declarations(attrs: &[Attribute]) -> Vec<String> {
     let mut v = Vec::new();
     for a in attrs {
@@ -971,6 +1000,7 @@ fn declarations(attrs: &[Attribute]) -> Vec<String> {
     v
 }
 
+/// Resolve a qualified XML element name against the namespace resolver into an [`ElemId`].
 fn resolve_elem(res: &NamespaceResolver, name: QName) -> ElemId {
     let (r, local) = res.resolve_element(name);
     let local = lossy(local.as_ref());
@@ -981,6 +1011,7 @@ fn resolve_elem(res: &NamespaceResolver, name: QName) -> ElemId {
     }
 }
 
+/// Find an attribute with the given namespace URI and local name, returning its normalized value.
 fn attr_ns(attrs: &[Attribute], res: &NamespaceResolver, uri: &str, name: &[u8]) -> Option<String> {
     attrs
         .iter()
@@ -988,10 +1019,12 @@ fn attr_ns(attrs: &[Attribute], res: &NamespaceResolver, uri: &str, name: &[u8])
         .and_then(|a| a.normalized_value(quick_xml::XmlVersion::Implicit1_0).ok().map(|c| c.into_owned()))
 }
 
+/// Check whether a namespace resolve result matches the expected URI.
 fn ns_matches(r: ResolveResult<'_>, uri: &str) -> bool {
     matches!(r, ResolveResult::Bound(Namespace(ns)) if ns == uri.as_bytes())
 }
 
+/// Find an unprefixed attribute by exact name, returning its normalized value.
 fn attr_plain(attrs: &[Attribute], name: &[u8]) -> Option<String> {
     attrs
         .iter()
@@ -1002,6 +1035,7 @@ fn attr_plain(attrs: &[Attribute], name: &[u8]) -> Option<String> {
         .and_then(|a| a.normalized_value(quick_xml::XmlVersion::Implicit1_0).ok().map(|c| c.into_owned()))
 }
 
+/// Convert a byte slice to a UTF-8 String, replacing invalid sequences lossily.
 fn lossy(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
@@ -1016,6 +1050,7 @@ fn hex_ident(v: String) -> String {
     v.to_ascii_lowercase()
 }
 
+/// Check whether the text event consists entirely of XML whitespace characters.
 fn is_whitespace(e: &quick_xml::events::BytesText) -> bool {
     e.as_ref().iter().all(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
 }
@@ -1060,6 +1095,7 @@ pub(crate) fn invalid_literal_char(text: &str) -> Option<String> {
     None
 }
 
+/// Determine whether a Unicode codepoint is a legal XML 1.0 character.
 fn xml_char_ok(u: u32) -> bool {
     u == 0x9 || u == 0xA || u == 0xD || (0x20..=0xD7FF).contains(&u) || (0xE000..=0xFFFD).contains(&u) || (0x10000..=0x10FFFF).contains(&u)
 }
@@ -1088,6 +1124,7 @@ fn bad_char_ref(s: &str) -> Option<String> {
     if xml_char_ok(value) { None } else { Some(format!("a character reference to U+{value:04X}")) }
 }
 
+/// Parse an ASCII byte as a digit in the given radix (up to 16).
 fn digit(c: u8, radix: u32) -> Option<u32> {
     let v = match c {
         b'0'..=b'9' => u32::from(c - b'0'),
@@ -1286,6 +1323,7 @@ pub(crate) fn parse_style_num_ids(text: &str, cap: usize, guard: &mut ParseGuard
     Some((out, capped))
 }
 
+/// Extract and append a `w:numId/@w:val` reference to the list, respecting the capacity cap.
 fn push_style_num_id(out: &mut Vec<String>, capped: &mut bool, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, cap: usize) {
     if id.w()
         && id.local == "numId"
@@ -1341,6 +1379,7 @@ pub(crate) fn parse_style_ids(text: &str, cap: usize, guard: &mut ParseGuard) ->
     Some((defs, capped))
 }
 
+/// Extract and insert a `w:style/@w:styleId` definition into the set, respecting the capacity cap.
 fn push_style_id(defs: &mut HashSet<String>, capped: &mut bool, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, cap: usize) {
     if id.w()
         && id.local == "style"
@@ -1395,6 +1434,7 @@ pub(crate) fn parse_attached_schemas(text: &str, cap: usize, guard: &mut ParseGu
     Some((out, capped))
 }
 
+/// Extract and append a `w:attachedSchema/@w:val` target to the list, respecting the capacity cap.
 fn push_attached_schema(out: &mut Vec<String>, capped: &mut bool, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, cap: usize) {
     if id.w()
         && id.local == "attachedSchema"
@@ -1448,6 +1488,7 @@ pub(crate) fn parse_custom_xml_schemas(text: &str, cap: usize, guard: &mut Parse
     (out, capped)
 }
 
+/// Extract and append a `ds:schemaRef/@ds:uri` target to the list, respecting the capacity cap.
 fn push_custom_xml_schema(out: &mut Vec<String>, capped: &mut bool, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, cap: usize) {
     if id.local_w(NS_DS)
         && id.local == "schemaRef"
@@ -1509,6 +1550,7 @@ pub(crate) fn parse_comments_extended(text: &str, cap: usize, guard: &mut ParseG
     Some(out)
 }
 
+/// Extract and append a `w15:commentEx` entry with paragraph and parent IDs, respecting capacity.
 fn push_comment_ex(out: &mut CommentEx, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, cap: usize) {
     if id.local_w(NS_W15)
         && id.local == "commentEx"
@@ -1566,6 +1608,7 @@ pub(crate) fn parse_comments_ids(text: &str, cap: usize, guard: &mut ParseGuard)
     Some((out, capped))
 }
 
+/// Extract and append a `w16cid:commentId/@w16cid:paraId` entry to the list, respecting capacity.
 fn push_comment_id(out: &mut Vec<String>, capped: &mut bool, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, cap: usize) {
     if id.local_w(NS_W16CID)
         && id.local == "commentId"

@@ -396,6 +396,7 @@ pub(crate) fn is_xml_part(pkg: &Package, name: &str) -> bool {
     pkg.xml_parts.contains(&name.to_ascii_lowercase())
 }
 
+/// Format an explanatory error message when the package lacks a valid main document part.
 fn no_main_message(package_rels: Option<&RelsPart>) -> String {
     let Some(rp) = package_rels else {
         return "the package has no _rels/.rels part, so it has no main document part".to_string();
@@ -406,6 +407,7 @@ fn no_main_message(package_rels: Option<&RelsPart>) -> String {
     }
 }
 
+/// Inspect the raw zip central directory for duplicate entry names and report `PKG-DUP-ENTRY` findings.
 fn check_duplicate_entries(bytes: &[u8], acc: &mut Acc) {
     acc.ran("PKG-DUP-ENTRY");
     // The zip reader collapses duplicate names into one entry, so the central directory itself is
@@ -443,14 +445,17 @@ fn check_duplicate_entries(bytes: &[u8], acc: &mut Acc) {
     }
 }
 
+/// Read an unsigned 16-bit little-endian integer at byte offset `i`.
 fn u16_at(b: &[u8], i: usize) -> Option<u16> {
     Some(u16::from_le_bytes(b.get(i..i + 2)?.try_into().ok()?))
 }
 
+/// Read an unsigned 32-bit little-endian integer at byte offset `i`.
 fn u32_at(b: &[u8], i: usize) -> Option<u32> {
     Some(u32::from_le_bytes(b.get(i..i + 4)?.try_into().ok()?))
 }
 
+/// Read an unsigned 64-bit little-endian integer at byte offset `i`.
 fn u64_at(b: &[u8], i: usize) -> Option<u64> {
     Some(u64::from_le_bytes(b.get(i..i + 8)?.try_into().ok()?))
 }
@@ -544,6 +549,7 @@ fn find_eocd(bytes: &[u8]) -> Option<usize> {
     }
 }
 
+/// Check for package entries that differ only by ASCII case and report `PKG-CASE-COLLISION` findings.
 fn check_case_collisions(entries: &[Entry], acc: &mut Acc) {
     acc.ran("PKG-CASE-COLLISION");
     let mut groups: HashMap<String, Vec<&str>> = HashMap::new();
@@ -564,6 +570,7 @@ fn check_case_collisions(entries: &[Entry], acc: &mut Acc) {
     }
 }
 
+/// Parse all `.rels` relationship parts within the package entries up to configured resource limits.
 fn load_rels(entries: &[Entry], acc: &mut Acc) -> Vec<RelsPart> {
     let cap = acc.limits.entries;
     let limits = acc.limits;
@@ -610,6 +617,7 @@ pub(crate) fn rels_part_name(part: &str) -> String {
     }
 }
 
+/// Find the stored case-preserving entry name matching `name` (case-insensitive, leading slash stripped).
 fn canonical(entries: &[Entry], name: &str) -> Option<String> {
     let n = name.trim_start_matches('/');
     entries.iter().find(|e| !e.is_dir && e.name.eq_ignore_ascii_case(n)).map(|e| e.name.clone())
@@ -634,6 +642,7 @@ pub(crate) fn content_unavailable(pkg: &Package, name: &str) -> bool {
     entry_by_name(pkg, name).is_some_and(|e| e.content_unavailable)
 }
 
+/// Compute the set of lowercased package part paths reachable from the package relationships root and main document.
 fn reachability(rels: &[RelsPart], main: Option<&str>) -> HashSet<String> {
     let by_name: HashMap<String, usize> = rels.iter().enumerate().map(|(i, r)| (r.name.to_ascii_lowercase(), i)).collect();
     let mut seen = HashSet::new();
@@ -709,6 +718,7 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Convert an ASCII hexadecimal byte to its numeric nibble value (0..=15).
 fn hex(c: u8) -> Option<u8> {
     match c {
         b'0'..=b'9' => Some(c - b'0'),
@@ -763,6 +773,7 @@ fn parse_content_types(text: &str, ct: &mut ContentTypes, cap: usize, guard: &mu
     capped
 }
 
+/// Extract and record an `Override` or `Default` content type declaration from an XML element.
 fn record_content_type(e: &BytesStart, ct: &mut ContentTypes) {
     let local = e.local_name();
     let l = local.as_ref();
@@ -823,6 +834,7 @@ fn push_rel(dir: &str, e: &BytesStart, rels: &mut Vec<Rel>, cap: usize, capped: 
     }
 }
 
+/// Parse attributes of a `<Relationship>` element into a [`Rel`] struct, resolving internal targets.
 fn parse_rel(dir: &str, e: &BytesStart) -> Option<Rel> {
     let id = attr_local(e, b"Id")?;
     let kind = attr_local(e, b"Type").unwrap_or_default();

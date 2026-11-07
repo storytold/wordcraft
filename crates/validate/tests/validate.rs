@@ -61,10 +61,12 @@ const ALL_CHECKS: &[&str] = &[
     "MEDIA-MAGIC",
 ];
 
+/// Build and validate an in-memory document, returning the validation report.
 fn validate(doc: &Doc) -> Report {
     validate_bytes(&doc.build())
 }
 
+/// Check whether the report contains any finding for `rule`.
 fn has(report: &Report, rule: &str) -> bool {
     report.findings.iter().any(|f| f.rule == rule)
 }
@@ -78,6 +80,7 @@ fn assert_finding<'a>(report: &'a Report, rule: &str, part: Option<&str>) -> &'a
         .unwrap_or_else(|| panic!("expected rule {rule} at part {part:?}; findings were {:#?}", report.findings))
 }
 
+/// Assert that the report passed with no findings of Corrupt or Error severity.
 fn assert_clean(report: &Report) {
     let bad: Vec<_> = report.findings.iter().filter(|f| matches!(f.severity, Severity::Corrupt | Severity::Error)).collect();
     assert!(bad.is_empty(), "unexpected Corrupt/Error findings: {bad:?}");
@@ -513,6 +516,7 @@ fn correct_fixed_type_does_not_mismatch() {
     assert!(!has(&report, "CT-MISMATCH"), "{:?}", report.findings);
 }
 
+/// Build a `word/comments.xml` part wrapping the given inner XML.
 fn comments(inner: &str) -> Vec<u8> {
     format!(r#"<?xml version="1.0"?><w:comments xmlns:w="{W_NS}">{inner}</w:comments>"#).into_bytes()
 }
@@ -1739,6 +1743,7 @@ fn validate_path_on_missing_file_is_an_io_error() {
     assert!(validate_path(Path::new("/definitely/not/a/real/file.docx")).is_err());
 }
 
+/// Recursively collect all `.docx` files within a directory in sorted order.
 fn docx_files(dir: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else { return found };
@@ -1915,6 +1920,7 @@ fn blip_from_header_to_image_does_not_fire() {
     assert!(!has(&report, "REL-TYPED"), "an image reference to a proper image rel must not fire: {:?}", report.findings);
 }
 
+/// Construct a test document with main and glossary styles and numbering parts.
 fn glossary_doc(gloss_styles_first: bool) -> Doc {
     let mut d = Doc::minimal();
     d.set(

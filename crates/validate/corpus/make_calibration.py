@@ -76,6 +76,7 @@ STYLES = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 </w:styles>"""
 
 def base_parts():
+    """Build and return the dictionary of base package parts representing a valid document."""
     return {
         "[Content_Types].xml": CT,
         "_rels/.rels": ROOT_RELS,
@@ -95,6 +96,7 @@ def _info(name):
     return zi
 
 def write(name, parts, raw=None):
+    """Write package parts as a ZIP archive or raw bytes to the output calibration directory."""
     path = os.path.join(OUT, name)
     if raw is not None:
         with open(path, "wb") as f:
