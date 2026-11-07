@@ -320,7 +320,7 @@ CSL and library import are separate work.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-05 | trivial | ODT: a size is written for Asian and complex-script text too (`style:font-size-asian`, `style:font-size-complex`), as bold and italic are. Chinese text set to 24 pt stayed at the default size in LibreOffice |
+| 2026-11-05 | trivial | ODT: a size is written for Asian and complex-script text too (`style:font-size-asian`, `style:font-size-complex`), as bold and italic are. Chinese text set to 24 pt stayed at the default size in LibreOffice A complex-script size like the text's stays where a style or default underneath states another. |
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` keeps its default and explicit values in schema-ordered repeated saves |
 | 2026-11-04 | trivial | REF context update: 2026-11-04 · #4609 retains the label and template actually rendered by an ancestor list instance; implicitly counted levels remain distinct from explicitly rendered paragraphs. Synthetic instance-override and field-update regressions; no new native Word qualification or readiness change. |
 | 2026-11-04 | trivial | PR #4609: relative REF keeps context already displayed by the own or a needed ancestor label; six synthetic legal-template cases and separate-list context follow the Word for Windows measurements reported by @pakiat in PR discussion. Existing unknown-switch/cache boundaries and readiness estimates unchanged; no new native Word run. |

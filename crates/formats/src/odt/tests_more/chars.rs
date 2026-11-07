@@ -302,13 +302,46 @@ fn a_size_is_every_scripts_size() {
             || styles.contains("style:font-size-asian"),
         "{styles}"
     );
-    // Read back it is one size: a later change takes the complex-script text along.
+    // Read back every script has it.
     let back = import(&saved).unwrap();
-    assert_eq!(back.body[0].as_para().unwrap().runs[0].props.size_cs, None);
+    let run = &back.body[0].as_para().unwrap().runs[0].props;
+    assert_eq!(back.styles.resolve_char(None, run).size_cs, 24.0);
     // A complex-script size of its own stays its own, written once.
     let mut d = Document::new();
     d.body = vec![para_block(Paragraph::with_text("x", CharProps { size: Some(24.0), size_cs: Some(30.0), ..Default::default() }))];
     let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
     assert_eq!(c.matches("style:font-size-complex").count(), 1, "{c}");
     assert!(c.contains(r#"style:font-size-complex="30pt""#), "{c}");
+}
+
+/// Text and its complex-script size stated alike, over a default style with a smaller one (as
+/// LibreOffice's files have): that size stays, on screen and saved, for a run and for a heading.
+#[test]
+fn a_complex_size_like_the_texts_stays_over_the_default() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="12pt" style:font-size-complex="14pt"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:default-outline-level="1"><style:text-properties fo:font-size="18pt" style:font-size-complex="18pt"/></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties fo:font-size="24pt" style:font-size-complex="24pt"/></style:style></office:automatic-styles><office:body><office:text><text:p>a <text:span text:style-name="T1">big</text:span></text:p><text:h text:style-name="Heading_20_1" text:outline-level="1">h</text:h></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let check = |d: &Document| {
+        let p = d.body[0].as_para().unwrap();
+        let c = d.styles.resolve_char(p.props.style.as_deref(), &p.runs.last().unwrap().props);
+        assert_eq!((c.size, c.size_cs), (24.0, 24.0));
+        let h = d.body[1].as_para().unwrap();
+        let c = d.styles.resolve_char(h.props.style.as_deref(), &h.runs[0].props);
+        assert_eq!((c.size, c.size_cs), (18.0, 18.0));
+    };
+    check(&d);
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let written = crate::odt::tests::entry(&saved, "styles.xml");
+    let heading = written.split(r#"style:name="Heading_20_1""#).nth(1).and_then(|t| t.split("</style:style>").next()).unwrap();
+    assert!(heading.contains(r#"style:font-size-complex="18pt""#) && !heading.contains(r#"style:font-size-complex="14pt""#), "{heading}");
+    check(&import(&saved).unwrap());
+
+    // A default stating one size for all goes with that size: Normal changed takes it along.
+    let same = styles.replace(r#"style:font-size-complex="14pt""#, r#"style:font-size-complex="12pt""#);
+    let d = import(&package(&content, Some(&same))).unwrap();
+    assert_eq!(d.styles.default_chr.size_cs, None);
 }

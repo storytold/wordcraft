@@ -402,6 +402,55 @@ fn number_headings(doc: &mut Document, levels: &[super::styles::ListLevel]) {
     }
 }
 
+/// A complex-script size the same as the text's, where nothing else would give that script another
+/// (what WordCraft writes for every script), is no size of its own: a later change of size takes it
+/// along. Over a style or default with its own, it stays: without it that one would show.
+fn one_size_for_all_scripts(doc: &mut Document) {
+    let plain = wordcraft_doc::props::CharProps::default();
+    let ids: Vec<String> = doc.styles.styles.iter().map(|st| st.id.clone()).collect();
+    let styles = Arc::make_mut(&mut doc.styles);
+    for id in &ids {
+        let Some(said) = styles.get(id).and_then(|st| st.chr.size_cs.filter(|s| Some(*s) == st.chr.size)) else { continue };
+        if let Some(st) = styles.get_mut(id) {
+            st.chr.size_cs = None;
+        }
+        if styles.resolve_char(Some(id), &plain).size_cs != said
+            && let Some(st) = styles.get_mut(id)
+        {
+            st.chr.size_cs = Some(said);
+        }
+    }
+    let styles = Arc::clone(&doc.styles);
+    let stories = std::iter::once(&mut doc.body).chain(doc.parts.values_mut().map(|part| &mut part.blocks));
+    for blocks in stories {
+        runs_one_size(blocks, 0, &styles);
+    }
+}
+
+/// [`one_size_for_all_scripts`] for the runs in `blocks` (and their tables, to 16 levels deep).
+fn runs_one_size(blocks: &mut [Arc<wordcraft_doc::Block>], depth: usize, styles: &wordcraft_doc::styles::StyleSheet) {
+    for b in blocks {
+        match Arc::make_mut(b) {
+            wordcraft_doc::Block::Para(p) => {
+                let style = p.props.style.clone();
+                for r in &mut p.runs {
+                    let Some(said) = r.props.size_cs.filter(|s| Some(*s) == r.props.size) else { continue };
+                    r.props.size_cs = None;
+                    if styles.resolve_char(style.as_deref(), &r.props).size_cs != said {
+                        r.props.size_cs = Some(said);
+                    }
+                }
+            }
+            wordcraft_doc::Block::Table(t) if depth < 16 => {
+                for cell in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                    runs_one_size(&mut cell.blocks, depth + 1, styles);
+                }
+            }
+            wordcraft_doc::Block::Table(_) => {}
+        }
+    }
+}
+
 /// The boolean configuration item `name` of `settings.xml` (ODF 1.3 §3.10), when it has one.
 fn setting(xml: &[u8], name: &str) -> Option<bool> {
     let mut inside = false;
@@ -932,6 +981,11 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
     }
     Arc::make_mut(&mut doc.styles).default_chr.kern = kern.then_some(1.0);
     Arc::make_mut(&mut doc.styles).default_chr.overlay(&scripts);
+    // A default stating one size for every script is one size: a change to Normal takes it along.
+    let defaults = &mut Arc::make_mut(&mut doc.styles).default_chr;
+    if defaults.size.is_some() && defaults.size_cs == defaults.size {
+        defaults.size_cs = None;
+    }
     if let Some(t) = default_tab {
         doc.settings.default_tab = t;
     }
@@ -970,6 +1024,7 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
     }
     doc.last_section = last;
     page_parts::add(&mut doc, parts);
+    one_size_for_all_scripts(&mut doc);
     if let Some(t) = track {
         doc.settings.track_changes = t;
     }
