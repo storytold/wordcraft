@@ -71,6 +71,7 @@ pub(crate) struct Limits {
 }
 
 impl Default for Limits {
+    /// Construct default validation limits.
     fn default() -> Self {
         Limits {
             input_bytes: 512 << 20,
@@ -308,6 +309,7 @@ pub(crate) const RULES: &[RuleSpec] = &[
     MEDIA_MAGIC,
 ];
 
+/// Look up a rule definition by its stable string identifier.
 fn rule_spec(id: &str) -> Option<&'static RuleSpec> {
     RULES.iter().find(|r| r.id == id)
 }
@@ -347,10 +349,12 @@ const ABSENCE_RULES: &[&str] = &[
 ];
 
 impl Acc {
+    /// Create a new accumulator initialized with the specified resource limits.
     pub(crate) fn with_limits(limits: Limits) -> Acc {
         Acc { limits, ..Acc::default() }
     }
 
+    /// Record that a validation rule was executed.
     pub(crate) fn ran(&mut self, rule: &'static str) {
         self.checks.push(rule);
     }
@@ -428,10 +432,12 @@ impl Acc {
         self.coverage.push(message);
     }
 
+    /// Mark the validation outcome as incomplete due to an unreadable part or resource exhaustion.
     pub(crate) fn set_incomplete(&mut self) {
         self.incomplete = true;
     }
 
+    /// Sort findings deterministically and produce the final validation [`Report`].
     fn finish(mut self) -> Report {
         self.findings.sort_by(|a, b| {
             let ka = (a.part.as_deref().unwrap_or(""), a.rule, a.message.as_str());
@@ -500,6 +506,7 @@ pub fn validate_path(path: &Path) -> std::io::Result<Report> {
     Ok(validate_bytes_limited(&bytes, limits))
 }
 
+/// Validate `[Content_Types].xml` integrity: undeclared parts, duplicate main parts, and duplicate overrides/defaults.
 fn check_content_types(pkg: &Package, acc: &mut Acc) {
     if !pkg.content_types_present {
         return;
@@ -581,6 +588,7 @@ struct XmlScan {
     refs: Vec<(String, Vec<RefFact>)>,
 }
 
+/// Scan all XML parts for well-formedness, undeclared prefixes, illegal characters, and extract story facts.
 fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     acc.ran("XML-MALFORMED");
     acc.ran("XML-UNDECLARED-PREFIX");
@@ -657,6 +665,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     XmlScan { facts, refs }
 }
 
+/// Report an `XML-MALFORMED` finding with severity graded by whether the malformed part is main, reachable, or unused.
 fn report_malformed(pkg: &Package, name: &str, err: &str, acc: &mut Acc) {
     let lower = name.to_ascii_lowercase();
     let is_main = pkg.main.as_deref().is_some_and(|m| m.eq_ignore_ascii_case(name));
@@ -695,6 +704,7 @@ fn story_roles(pkg: &Package) -> HashMap<String, scan::PartRole> {
     roles
 }
 
+/// Classify a part role from its declared content type.
 fn content_type_role(ct: Option<&str>) -> Option<scan::PartRole> {
     let role = match ct? {
         package::COMMENTS_CONTENT_TYPE => scan::PartRole { is_story: true, is_comments: true, ..scan::PartRole::default() },
@@ -708,6 +718,7 @@ fn content_type_role(ct: Option<&str>) -> Option<scan::PartRole> {
     Some(role)
 }
 
+/// Classify a part role from the relationship type that targets it.
 fn relationship_role(kind: &str) -> Option<scan::PartRole> {
     Some(match tail(kind) {
         "comments" => scan::PartRole { is_story: true, is_comments: true, ..scan::PartRole::default() },
@@ -718,6 +729,7 @@ fn relationship_role(kind: &str) -> Option<scan::PartRole> {
     })
 }
 
+/// Verify relationships: duplicate IDs, dangling targets, typed targets, and content type matches.
 fn check_rels(pkg: &Package, refs: &[(String, Vec<RefFact>)], acc: &mut Acc) {
     acc.ran("REL-DUP-ID");
     for rp in &pkg.rels {
@@ -746,6 +758,7 @@ fn check_rels(pkg: &Package, refs: &[(String, Vec<RefFact>)], acc: &mut Acc) {
     check_typed_content(pkg, acc);
 }
 
+/// Find duplicate relationship IDs within a single `.rels` part and report `REL-DUP-ID` findings.
 fn report_duplicate_rel_ids(rp: &RelsPart, acc: &mut Acc) {
     let mut counts: HashMap<&str, usize> = HashMap::new();
     for r in &rp.rels {
@@ -841,6 +854,7 @@ fn check_typed_image_refs(pkg: &Package, refs: &[(String, Vec<RefFact>)], acc: &
     }
 }
 
+/// Collect the set of relationship IDs declared in `part`'s `.rels` file.
 fn part_rel_ids(pkg: &Package, part: &str) -> HashSet<String> {
     let want = rels_part_name(part);
     match pkg.rels.iter().find(|r| r.name.eq_ignore_ascii_case(&want)) {
@@ -849,6 +863,7 @@ fn part_rel_ids(pkg: &Package, part: &str) -> HashSet<String> {
     }
 }
 
+/// Verify that typed relationships in the main document part target parts with matching content types.
 fn check_typed_targets(pkg: &Package, acc: &mut Acc) {
     // Every conclusion here compares a target's declared content type; when the manifest's content
     // could not be read, a target's type is UNKNOWN, not absent, so no type conclusion is
@@ -884,6 +899,7 @@ fn check_typed_targets(pkg: &Package, acc: &mut Acc) {
     }
 }
 
+/// Format an error message for mismatched header or footer relationship targets.
 fn header_footer_message(kind: &str, id: &str, target: &str, ct: Option<&str>) -> String {
     format!("{kind} relationship {id} targets {target}, whose content type is {}", ct.unwrap_or("(none)"))
 }
@@ -928,6 +944,7 @@ fn fixed_rel_content_type(kind: &str) -> Option<&'static str> {
     FIXED_REL_CONTENT_TYPES.iter().find(|(k, _)| *k == kind).map(|(_, ct)| *ct)
 }
 
+/// Verify that fixed-type relationships in the package match their prescribed part content types.
 fn check_typed_content(pkg: &Package, acc: &mut Acc) {
     acc.ran("CT-MISMATCH");
     // `header` and `footer` pairings are checked for a non-main owner's relationships part only
@@ -976,6 +993,7 @@ fn check_typed_content(pkg: &Package, acc: &mut Acc) {
     }
 }
 
+/// Check cross-document story identifier families (comments, docPr, bookmarks, revisions, notes, styles, headers).
 fn check_story(pkg: &Package, facts: &scan::StoryFacts, acc: &mut Acc) {
     acc.ran("ID-COMMENT-DUP");
     report_dups(acc, "ID-COMMENT-DUP", &facts.comment_defs, "w:comment id");
@@ -1022,6 +1040,7 @@ fn check_story(pkg: &Package, facts: &scan::StoryFacts, acc: &mut Acc) {
     check_custom_xml(pkg, acc);
 }
 
+/// Collect a set of unique identifier strings from `(id, part)` pairs.
 fn id_set(items: &[(String, String)]) -> HashSet<String> {
     items.iter().map(|(id, _)| id.clone()).collect()
 }
@@ -1037,6 +1056,7 @@ fn kind_source_unavailable(pkg: &Package, kind: &str, ct: &str) -> bool {
     })
 }
 
+/// Record a coverage note for each comment definition that is never referenced in the document.
 fn report_unreferenced_comments(facts: &scan::StoryFacts, acc: &mut Acc) {
     let refs = id_set(&facts.comment_refs);
     let mut seen = HashSet::new();
@@ -1211,10 +1231,12 @@ fn owner_index_map(pkg: &Package) -> HashMap<String, usize> {
 }
 
 /// The owner index a part belongs to, if it is reachable from an owner scope.
+/// Find the owner scope index for `part` from the owner index map.
 fn part_owner(owner_map: &HashMap<String, usize>, part: &str) -> Option<usize> {
     owner_map.get(&part.to_ascii_lowercase()).copied()
 }
 
+/// Verify that style references in story parts resolve to a defined style in their owner scope.
 fn check_style_refs(pkg: &Package, facts: &scan::StoryFacts, acc: &mut Acc) {
     let cap = acc.limits.facts;
     let owners = owner_scopes(pkg);
@@ -1280,6 +1302,7 @@ fn find_by_type<'a>(pkg: &'a Package, ct: &str) -> Option<&'a package::Entry> {
     pkg.entries.iter().find(|e| !e.is_dir && pkg.content_types.of(&e.name) == Some(ct))
 }
 
+/// Verify numbering definitions and references in story and styles parts for each owner scope.
 fn check_numbering(pkg: &Package, facts: &scan::StoryFacts, acc: &mut Acc) {
     acc.ran("NUM-DANGLING");
     let cap = acc.limits.facts;
@@ -1428,6 +1451,7 @@ fn report_num_refs(acc: &mut Acc, facts: &scan::StoryFacts, num_sets: &[Option<H
     }
 }
 
+/// Report duplicate string values within a part for a specified attribute/construct name.
 fn report_dups_values(acc: &mut Acc, values: &[String], part: &str, what: &str) {
     let mut counts: HashMap<&str, usize> = HashMap::new();
     for v in values {
@@ -1440,6 +1464,7 @@ fn report_dups_values(acc: &mut Acc, values: &[String], part: &str, what: &str) 
     }
 }
 
+/// Verify comment-threading relationships between comments, commentsExtended, and commentsIds parts.
 fn check_commentex(pkg: &Package, facts: &scan::StoryFacts, acc: &mut Acc) {
     let cap = acc.limits.facts;
     let owners = owner_scopes(pkg);
@@ -1558,6 +1583,7 @@ fn read_comments_ids(entry: &package::Entry, cap: usize, acc: &mut Acc) -> Optio
     Some((entry.name.clone(), ids))
 }
 
+/// Verify that custom XML itemProperties parts only reference schemas declared in settings.xml.
 fn check_custom_xml(pkg: &Package, acc: &mut Acc) {
     acc.ran("CUSTOMXML-SCHEMA");
     let cap = acc.limits.facts;
@@ -1662,6 +1688,7 @@ fn check_custom_xml(pkg: &Package, acc: &mut Acc) {
     }
 }
 
+/// Report duplicate identifier findings for a given rule across items.
 fn report_dups(acc: &mut Acc, rule: &'static str, items: &[(String, String)], what: &str) {
     let mut first: HashMap<&str, &str> = HashMap::new();
     let mut reported: HashSet<&str> = HashSet::new();
@@ -1679,6 +1706,7 @@ fn report_dups(acc: &mut Acc, rule: &'static str, items: &[(String, String)], wh
     }
 }
 
+/// Report missing definitions for references collected from story elements.
 fn report_missing(acc: &mut Acc, rule: &'static str, refs: &[(String, String)], defs: &HashSet<String>, what: &str) {
     let mut reported: HashSet<&str> = HashSet::new();
     for (id, part) in refs {
@@ -1688,6 +1716,7 @@ fn report_missing(acc: &mut Acc, rule: &'static str, refs: &[(String, String)], 
     }
 }
 
+/// Report missing footnote or endnote definitions.
 fn report_missing_note(acc: &mut Acc, refs: &[(String, String)], defs: &HashSet<String>, kind: &str) {
     let mut reported: HashSet<&str> = HashSet::new();
     for (id, part) in refs {
@@ -1701,6 +1730,7 @@ fn report_missing_note(acc: &mut Acc, refs: &[(String, String)], defs: &HashSet<
     }
 }
 
+/// Verify that media files in `word/media/` or targeted by image relationships match magic byte signatures.
 fn check_media(pkg: &Package, acc: &mut Acc) {
     acc.ran("MEDIA-MAGIC");
     let image_targets = image_rel_targets(pkg);
@@ -1717,6 +1747,7 @@ fn check_media(pkg: &Package, acc: &mut Acc) {
     }
 }
 
+/// Collect lowercased target paths for all image relationships in the package.
 fn image_rel_targets(pkg: &Package) -> HashSet<String> {
     let mut set = HashSet::new();
     for rp in &pkg.rels {
@@ -1731,6 +1762,7 @@ fn image_rel_targets(pkg: &Package) -> HashSet<String> {
     set
 }
 
+/// Determine the expected media format kind from file extension or content type.
 fn media_kind(name: &str, ct: Option<&str>) -> Option<&'static str> {
     let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
     match ext.as_deref() {
@@ -1750,6 +1782,7 @@ fn media_kind(name: &str, ct: Option<&str>) -> Option<&'static str> {
     }
 }
 
+/// Check if the beginning bytes match the expected magic signature for `kind`.
 fn magic_matches(kind: &str, bytes: &[u8]) -> bool {
     match kind {
         "png" => bytes.starts_with(b"\x89PNG"),
@@ -1770,6 +1803,7 @@ mod budget_tests {
     use super::*;
     use crate::{package, scan};
 
+    /// Build an uncompressed in-memory zip archive with the specified entry names and payloads.
     fn tiny_zip(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
         use std::io::{Cursor, Write};
         use zip::write::SimpleFileOptions;
@@ -1782,6 +1816,7 @@ mod budget_tests {
         w.finish().unwrap().into_inner()
     }
 
+    /// Build minimal `[Content_Types].xml` bytes declaring default rels/xml and the main document override.
     fn content_types() -> Vec<u8> {
         format!(
             r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="{}"/></Types>"#,
@@ -1790,23 +1825,28 @@ mod budget_tests {
         .into_bytes()
     }
 
+    /// Build root `_rels/.rels` bytes with an `officeDocument` relationship.
     fn package_rels() -> Vec<u8> {
         br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#.to_vec()
     }
 
+    /// Build an empty `word/_rels/document.xml.rels` relationships part.
     fn doc_rels() -> Vec<u8> {
         br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#.to_vec()
     }
 
+    /// Build a relationships part XML with the given body content.
     fn rels(body: &str) -> Vec<u8> {
         format!(r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{body}</Relationships>"#)
             .into_bytes()
     }
 
+    /// Build a minimal `word/document.xml` part containing an empty paragraph.
     fn document() -> Vec<u8> {
         format!(r#"<?xml version="1.0"?><w:document xmlns:w="{}"><w:body><w:p/></w:body></w:document>"#, NS_W).into_bytes()
     }
 
+    /// Build `[Content_Types].xml` bytes including an override for `part`.
     fn content_types_with_override(part: &str, ct: &str) -> Vec<u8> {
         format!(
             r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="{}"/><Override PartName="/{part}" ContentType="{ct}"/></Types>"#,
@@ -1815,6 +1855,7 @@ mod budget_tests {
         .into_bytes()
     }
 
+    /// Build a minimal valid package zip as raw bytes.
     fn minimal_zip() -> Vec<u8> {
         tiny_zip(&[
             ("[Content_Types].xml", content_types()),

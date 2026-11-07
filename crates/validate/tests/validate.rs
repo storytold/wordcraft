@@ -61,10 +61,12 @@ const ALL_CHECKS: &[&str] = &[
     "MEDIA-MAGIC",
 ];
 
+/// Build and validate an in-memory document, returning the validation report.
 fn validate(doc: &Doc) -> Report {
     validate_bytes(&doc.build())
 }
 
+/// Check whether the report contains any finding for `rule`.
 fn has(report: &Report, rule: &str) -> bool {
     report.findings.iter().any(|f| f.rule == rule)
 }
@@ -78,6 +80,7 @@ fn assert_finding<'a>(report: &'a Report, rule: &str, part: Option<&str>) -> &'a
         .unwrap_or_else(|| panic!("expected rule {rule} at part {part:?}; findings were {:#?}", report.findings))
 }
 
+/// Assert that the report passed with no findings of Corrupt or Error severity.
 fn assert_clean(report: &Report) {
     let bad: Vec<_> = report.findings.iter().filter(|f| matches!(f.severity, Severity::Corrupt | Severity::Error)).collect();
     assert!(bad.is_empty(), "unexpected Corrupt/Error findings: {bad:?}");
@@ -464,6 +467,31 @@ fn percent_encoded_target_resolves() {
     assert!(!has(&report, "REL-DANGLING"), "{:?}", report.findings);
 }
 
+/// An entry stored with percent-encoded path segments matches a decoded internal relationship
+/// target and an encoded Override.
+#[test]
+fn percent_encoded_zip_entry_matches_relationship_and_override() {
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[("png", "image/png")], &[("/word/media/my%20image.png", "image/png")]));
+    d.set("word/media/my%20image.png", b"\x89PNG\r\n\x1a\npng body".to_vec());
+    d.set_doc_rels(
+        r#"<Relationship Id="rIdI" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/my%20image.png"/>"#,
+    );
+    let report = validate(&d);
+    assert!(!has(&report, "REL-DANGLING"), "{:?}", report.findings);
+    assert!(!has(&report, "CT-UNDECLARED"), "{:?}", report.findings);
+}
+
+/// An Override declared with percent-encoded path segments matches a decoded entry name in the ZIP archive.
+#[test]
+fn percent_encoded_override_matches_decoded_zip_entry() {
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/my%20custom.xml", "application/xml")]));
+    d.set("word/my custom.xml", "<root/>".as_bytes().to_vec());
+    let report = validate(&d);
+    assert!(!has(&report, "CT-UNDECLARED"), "{:?}", report.findings);
+}
+
 #[test]
 fn target_with_query_and_fragment_resolves() {
     let mut d = Doc::minimal();
@@ -549,6 +577,7 @@ fn correct_fixed_type_does_not_mismatch() {
     assert!(!has(&report, "CT-MISMATCH"), "{:?}", report.findings);
 }
 
+/// Build a `word/comments.xml` part wrapping the given inner XML.
 fn comments(inner: &str) -> Vec<u8> {
     format!(r#"<?xml version="1.0"?><w:comments xmlns:w="{W_NS}">{inner}</w:comments>"#).into_bytes()
 }
@@ -1775,6 +1804,7 @@ fn validate_path_on_missing_file_is_an_io_error() {
     assert!(validate_path(Path::new("/definitely/not/a/real/file.docx")).is_err());
 }
 
+/// Recursively collect all `.docx` files within a directory in sorted order.
 fn docx_files(dir: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else { return found };
@@ -1951,6 +1981,7 @@ fn blip_from_header_to_image_does_not_fire() {
     assert!(!has(&report, "REL-TYPED"), "an image reference to a proper image rel must not fire: {:?}", report.findings);
 }
 
+/// Construct a test document with main and glossary styles and numbering parts.
 fn glossary_doc(gloss_styles_first: bool) -> Doc {
     let mut d = Doc::minimal();
     d.set(

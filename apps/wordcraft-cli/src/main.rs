@@ -788,11 +788,16 @@ fn run_validate(file: Option<&Path>, rest: &[String]) -> Result<(), Failure> {
             return Err(Failure::Status(3));
         }
     };
-    if rest.iter().any(|a| a == "--json") {
+    let res = if rest.iter().any(|a| a == "--json") {
         let json = serde_json::to_string_pretty(&report).unwrap_or_default();
-        write_stdout(|o| writeln!(o, "{json}"))?;
+        write_stdout(|o| writeln!(o, "{json}"))
     } else {
-        write_stdout(|o| write_validate_report(o, &report))?;
+        write_stdout(|o| write_validate_report(o, &report))
+    };
+    if let Err(e) = res
+        && !matches!(e, Failure::StdoutClosed)
+    {
+        return Err(e);
     }
     match report.verdict {
         wordcraft_validate::Verdict::Pass => Ok(()),
@@ -864,6 +869,7 @@ fn is_invisible_format(c: char) -> bool {
     )
 }
 
+/// Map a validation verdict enum to its human-readable uppercase display label.
 fn verdict_label(v: wordcraft_validate::Verdict) -> &'static str {
     match v {
         wordcraft_validate::Verdict::Pass => "PASS",
@@ -872,6 +878,7 @@ fn verdict_label(v: wordcraft_validate::Verdict) -> &'static str {
     }
 }
 
+/// Map a validation severity enum to its human-readable uppercase display label.
 fn severity_label(s: wordcraft_validate::Severity) -> &'static str {
     match s {
         wordcraft_validate::Severity::Corrupt => "CORRUPT",

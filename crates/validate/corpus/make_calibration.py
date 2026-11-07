@@ -2,7 +2,7 @@
 """Calibration fixtures for the wordcraft-validate PR 1 rules.
 00-control.docx is a rich valid base (proven pattern from the smoke test).
 Every other file mutates exactly one thing; the filename says which rule it exercises.
-Output: ~/workspace/word-web-oracle/calibration/
+Output: calibration/ directory beside this script.
 """
 import zipfile, os, base64, warnings
 warnings.filterwarnings("ignore")
@@ -76,6 +76,7 @@ STYLES = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 </w:styles>"""
 
 def base_parts():
+    """Build and return the dictionary of base package parts representing a valid document."""
     return {
         "[Content_Types].xml": CT,
         "_rels/.rels": ROOT_RELS,
@@ -95,6 +96,7 @@ def _info(name):
     return zi
 
 def write(name, parts, raw=None):
+    """Write package parts as a ZIP archive or raw bytes to the output calibration directory."""
     path = os.path.join(OUT, name)
     if raw is not None:
         with open(path, "wb") as f:
@@ -109,7 +111,6 @@ def write(name, parts, raw=None):
 write("00-control.docx", base_parts())
 # batch 1
 write("01-not-zip.docx", None, raw=b"This is plain text, not a zip archive at all.")
-p = base_parts(); write("02-dup-entry.docx", None, raw=None) if False else None
 with zipfile.ZipFile(os.path.join(OUT, "02-dup-entry.docx"), "w", zipfile.ZIP_DEFLATED) as z:
     for k, v in base_parts().items():
         z.writestr(_info(k), v)

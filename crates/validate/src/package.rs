@@ -89,6 +89,12 @@ impl ContentTypes {
         if let Some(t) = self.overrides.get(&part) {
             return Some(t);
         }
+        let decoded = percent_decode(&part).to_ascii_lowercase();
+        if decoded != part
+            && let Some(t) = self.overrides.get(&decoded)
+        {
+            return Some(t);
+        }
         let ext = part.rsplit_once('.').map(|(_, e)| e)?;
         self.defaults.get(ext).map(String::as_str)
     }
@@ -396,6 +402,7 @@ pub(crate) fn is_xml_part(pkg: &Package, name: &str) -> bool {
     pkg.xml_parts.contains(&name.to_ascii_lowercase())
 }
 
+/// Format an explanatory error message when the package lacks a valid main document part.
 fn no_main_message(package_rels: Option<&RelsPart>) -> String {
     let Some(rp) = package_rels else {
         return "the package has no _rels/.rels part, so it has no main document part".to_string();
@@ -414,6 +421,7 @@ fn trim_leading_slash(mut b: &[u8]) -> &[u8] {
     b
 }
 
+/// Inspect the raw zip central directory for duplicate entry names and report `PKG-DUP-ENTRY` findings.
 fn check_duplicate_entries(bytes: &[u8], acc: &mut Acc) {
     acc.ran("PKG-DUP-ENTRY");
     // The zip reader collapses duplicate names into one entry, so the central directory itself is
@@ -452,14 +460,17 @@ fn check_duplicate_entries(bytes: &[u8], acc: &mut Acc) {
     }
 }
 
+/// Read an unsigned 16-bit little-endian integer at byte offset `i`.
 fn u16_at(b: &[u8], i: usize) -> Option<u16> {
     Some(u16::from_le_bytes(b.get(i..i + 2)?.try_into().ok()?))
 }
 
+/// Read an unsigned 32-bit little-endian integer at byte offset `i`.
 fn u32_at(b: &[u8], i: usize) -> Option<u32> {
     Some(u32::from_le_bytes(b.get(i..i + 4)?.try_into().ok()?))
 }
 
+/// Read an unsigned 64-bit little-endian integer at byte offset `i`.
 fn u64_at(b: &[u8], i: usize) -> Option<u64> {
     Some(u64::from_le_bytes(b.get(i..i + 8)?.try_into().ok()?))
 }
@@ -550,6 +561,7 @@ fn find_eocd(bytes: &[u8]) -> Option<usize> {
     }
 }
 
+/// Check for package entries that differ only by ASCII case and report `PKG-CASE-COLLISION` findings.
 fn check_case_collisions(entries: &[Entry], acc: &mut Acc) {
     acc.ran("PKG-CASE-COLLISION");
     let mut groups: HashMap<String, Vec<&str>> = HashMap::new();
@@ -570,6 +582,7 @@ fn check_case_collisions(entries: &[Entry], acc: &mut Acc) {
     }
 }
 
+/// Parse all `.rels` relationship parts within the package entries up to configured resource limits.
 fn load_rels(entries: &[Entry], acc: &mut Acc) -> Vec<RelsPart> {
     let cap = acc.limits.entries;
     let limits = acc.limits;
@@ -616,9 +629,23 @@ pub(crate) fn rels_part_name(part: &str) -> String {
     }
 }
 
+/// Find the stored case-preserving entry name matching `name` (case-insensitive, leading slash stripped).
 fn canonical(entries: &[Entry], name: &str) -> Option<String> {
     let n = name.trim_start_matches('/');
-    entries.iter().find(|e| !e.is_dir && e.name.eq_ignore_ascii_case(n)).map(|e| e.name.clone())
+    if let Some(e) = entries.iter().find(|e| !e.is_dir && e.name.eq_ignore_ascii_case(n)) {
+        return Some(e.name.clone());
+    }
+    let n_decoded = percent_decode(n);
+    entries
+        .iter()
+        .find(|e| {
+            if e.is_dir {
+                return false;
+            }
+            let e_decoded = percent_decode(&e.name);
+            e_decoded.eq_ignore_ascii_case(n) || e_decoded.eq_ignore_ascii_case(&n_decoded) || e.name.eq_ignore_ascii_case(&n_decoded)
+        })
+        .map(|e| e.name.clone())
 }
 
 /// The stored spelling of the part at `name` (case-insensitive, leading `/` ignored), if present.
@@ -629,7 +656,17 @@ pub(crate) fn canonical_entry(pkg: &Package, name: &str) -> Option<String> {
 /// The entry at `name` (case-insensitive, leading `/` ignored), if present.
 pub(crate) fn entry_by_name<'a>(pkg: &'a Package, name: &str) -> Option<&'a Entry> {
     let n = name.trim_start_matches('/');
-    pkg.entries.iter().find(|e| !e.is_dir && e.name.eq_ignore_ascii_case(n))
+    if let Some(e) = pkg.entries.iter().find(|e| !e.is_dir && e.name.eq_ignore_ascii_case(n)) {
+        return Some(e);
+    }
+    let n_decoded = percent_decode(n);
+    pkg.entries.iter().find(|e| {
+        if e.is_dir {
+            return false;
+        }
+        let e_decoded = percent_decode(&e.name);
+        e_decoded.eq_ignore_ascii_case(n) || e_decoded.eq_ignore_ascii_case(&n_decoded) || e.name.eq_ignore_ascii_case(&n_decoded)
+    })
 }
 
 /// Whether the part at `name` is present in the package but its content could not be read. A
@@ -640,6 +677,7 @@ pub(crate) fn content_unavailable(pkg: &Package, name: &str) -> bool {
     entry_by_name(pkg, name).is_some_and(|e| e.content_unavailable)
 }
 
+/// Compute the set of lowercased package part paths reachable from the package relationships root and main document.
 fn reachability(rels: &[RelsPart], main: Option<&str>) -> HashSet<String> {
     let by_name: HashMap<String, usize> = rels.iter().enumerate().map(|(i, r)| (r.name.to_ascii_lowercase(), i)).collect();
     let mut seen = HashSet::new();
@@ -715,6 +753,7 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Convert an ASCII hexadecimal byte to its numeric nibble value (0..=15).
 fn hex(c: u8) -> Option<u8> {
     match c {
         b'0'..=b'9' => Some(c - b'0'),
@@ -769,6 +808,7 @@ fn parse_content_types(text: &str, ct: &mut ContentTypes, cap: usize, guard: &mu
     capped
 }
 
+/// Extract and record an `Override` or `Default` content type declaration from an XML element.
 fn record_content_type(e: &BytesStart, ct: &mut ContentTypes) {
     let local = e.local_name();
     let l = local.as_ref();
@@ -780,6 +820,12 @@ fn record_content_type(e: &BytesStart, ct: &mut ContentTypes) {
     let Some(value) = attr_local(e, b"ContentType") else { return };
     let key = key.trim_start_matches('/').to_ascii_lowercase();
     let (map, dups) = if l == b"Override" { (&mut ct.overrides, &mut ct.dup_overrides) } else { (&mut ct.defaults, &mut ct.dup_defaults) };
+    if l == b"Override" {
+        let decoded = percent_decode(&key).to_ascii_lowercase();
+        if decoded != key {
+            map.entry(decoded).or_insert_with(|| value.clone());
+        }
+    }
     if map.insert(key.clone(), value).is_some() {
         dups.insert(key);
     }
@@ -829,6 +875,7 @@ fn push_rel(dir: &str, e: &BytesStart, rels: &mut Vec<Rel>, cap: usize, capped: 
     }
 }
 
+/// Parse attributes of a `<Relationship>` element into a [`Rel`] struct, resolving internal targets.
 fn parse_rel(dir: &str, e: &BytesStart) -> Option<Rel> {
     let id = attr_local(e, b"Id")?;
     let kind = attr_local(e, b"Type").unwrap_or_default();

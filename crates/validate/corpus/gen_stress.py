@@ -75,10 +75,12 @@ LATENT_NAMES = [
 
 
 def esc(s):
+    """Escape XML special characters (&, <, >)."""
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def esca(s):
+    """Escape XML attribute special characters (&, <, >, ")."""
     return esc(s).replace('"', "&quot;")
 
 
@@ -89,6 +91,7 @@ def make_png(rng, width, height):
         raw.append(0)  # filter: none
         raw += rng.randbytes(width * 3)
     def chunk(tag, data):
+        """Format a PNG chunk with length, tag, data, and CRC32."""
         return (struct.pack(">I", len(data)) + tag + data
                 + struct.pack(">I", binascii.crc32(tag + data) & 0xFFFFFFFF))
     ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
@@ -138,14 +141,17 @@ def make_xlsx(cats, vals):
 class Rels:
     """Relationship set for one part; ids are rId1.. in insertion order."""
     def __init__(self):
+        """Initialize an empty relationships container."""
         self.items = []  # (id, type, target, external)
 
     def add(self, rtype, target, external=False):
+        """Add a relationship and return its identifier (e.g. 'rId1')."""
         rid = f"rId{len(self.items) + 1}"
         self.items.append((rid, rtype, target, external))
         return rid
 
     def render(self):
+        """Serialize the relationships container to XML string."""
         out = [XML_DECL, f'<Relationships xmlns="{PKG_REL}">']
         for rid, rtype, target, external in self.items:
             mode = ' TargetMode="External"' if external else ""
@@ -163,6 +169,7 @@ class Ctx:
     """All mutable build state: seeded RNG, id spaces, part registry."""
 
     def __init__(self, knobs, seed):
+        """Initialize generator context with configuration knobs and RNG seed."""
         self.k = knobs
         self.rng = random.Random(seed)
         self.parts = {}            # partname -> (content_type_or_None_for_default, bytes)
@@ -192,6 +199,7 @@ class Ctx:
         self.para_ids = {}         # partname -> set of w14:paraId values used
         # bisect3: resolved flavour sub-flags (None sub-knob follows flavour)
         def _sub(name):
+            """Derive a flavour configuration sub-knob value."""
             v = knobs.get(name)
             return knobs["flavour"] if v is None else v
         self.f_proof = _sub("proof_err")
@@ -212,29 +220,36 @@ class Ctx:
 
     # -- tiny helpers ------------------------------------------------------
     def next_docpr(self):
+        """Allocate the next sequential DrawingML docPr identifier."""
         self.docpr += 1
         return self.docpr
 
     def next_bookmark(self):
+        """Allocate the next sequential bookmark identifier."""
         self.bookmark_id += 1
         return self.bookmark_id
 
     def next_rev(self):
+        """Allocate the next sequential revision identifier."""
         self.rev_id += 1
         return self.rev_id
 
     def next_sdt(self):
+        """Allocate the next sequential structured document tag identifier."""
         self.sdt_id += 1
         return self.sdt_id
 
     def date(self):
+        """Generate an ISO-8601 UTC timestamp."""
         self.date_tick += 1
         return (BASE_DATE + timedelta(minutes=self.date_tick)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def author(self):
+        """Select a pseudo-random author name from the test pool."""
         return self.rng.choice(self.authors)
 
     def para_id(self, part):
+        """Generate a unique hex paragraph ID (w14:paraId) within the part."""
         used = self.para_ids.setdefault(part, set())
         while True:
             v = self.rng.randrange(1, 0x7FFFFFFF)
@@ -243,15 +258,18 @@ class Ctx:
                 return "%08X" % v
 
     def sentence(self, n=None):
+        """Generate a pseudo-random sentence of n words."""
         n = n or self.rng.randint(6, 14)
         s = " ".join(self.rng.choice(WORDS) for _ in range(n))
         return s[0].upper() + s[1:] + "."
 
     def text(self, sentences=None):
+        """Generate text composed of multiple sentences."""
         sentences = sentences or self.rng.randint(2, 4)
         return " ".join(self.sentence() for _ in range(sentences))
 
     def add_part(self, name, data, ctype=None, override=False):
+        """Register a package part and its content type declaration."""
         if isinstance(data, str):
             data = data.encode("utf-8")
         self.parts[name] = data
@@ -294,6 +312,7 @@ def rpr(ctx, rich=True):
 
 
 def run(ctx, text=None, rich=True):
+    """Generate an inline text run with optional rich formatting."""
     attrs = ""
     if ctx.k.get("rsid_attrs") and ctx.rsid_pool and ctx.rng.random() < 0.6:
         attrs = (f' w:rsidR="{ctx.rng.choice(ctx.rsid_pool)}"'
@@ -358,6 +377,7 @@ def ppr(ctx, style=None, num=None, sectpr=None, extra_rpr_change=False):
 
 
 def para(ctx, content, style=None, num=None, part="word/document.xml", paraid_p=0.35):
+    """Wrap content into a paragraph with optional properties, numbering, and paraId."""
     attrs = ""
     if ctx.rng.random() < paraid_p:
         attrs = f' w14:paraId="{ctx.para_id(part)}" w14:textId="{ctx.para_id(part)}"'
@@ -379,6 +399,7 @@ def field_complex(ctx, instr, result_text=None):
 
 
 def field_simple(ctx, instr, result_text=None):
+    """Generate a simple field element (<w:fldSimple>)."""
     res = esc(result_text if result_text is not None else ctx.sentence())
     return f'<w:fldSimple w:instr=" {esca(instr)} "><w:r><w:t>{res}</w:t></w:r></w:fldSimple>'
 
@@ -388,6 +409,7 @@ FIELD_INSTRS = ["DATE", "TIME", "NUMPAGES", "AUTHOR", "TITLE", "FILENAME",
 
 
 def field_run(ctx):
+    """Generate complex field runs (PAGE, NUMPAGES, DATE, or TOC)."""
     rng = ctx.rng
     kind = rng.random()
     if kind < 0.12 and ctx.k["form_fields"]:  # legacy form field: ffData rides inside the begin fldChar
@@ -428,10 +450,12 @@ def hyperlink_runs(ctx):
 
 # ---------------------------------------------------------------- math
 def m_run(text):
+    """Generate an Office Math text run."""
     return f"<m:r><m:t>{esc(text)}</m:t></m:r>"
 
 
 def math_expr(ctx):
+    """Generate an Office Math equation structure (<m:oMath>)."""
     rng = ctx.rng
     kind = rng.randrange(8)
     a, b = str(rng.randint(1, 99)), str(rng.randint(2, 40))
@@ -481,6 +505,7 @@ def picture_xml(ctx, rid, name):
 
 
 def anchored_picture_xml(ctx, rid):
+    """Generate DrawingML XML for an anchored floating picture."""
     d = ctx.next_docpr()
     ctx.anchor_height += 8192
     return (f'<w:drawing><wp:anchor simplePos="0" relativeHeight="{ctx.anchor_height}" '
@@ -615,10 +640,12 @@ def table_xml(ctx, rows, cols, depth):
 
 # ---------------------------------------------------------------- planning
 def plan_styles(ctx):
+    """Plan paragraph, character, and table style definitions."""
     k, rng = ctx.k, ctx.rng
     styles = []
 
     def add(sid, name, typ, **kw):
+        """Register a planned style definition."""
         s = {"id": sid, "name": name, "type": typ}
         s.update(kw)
         styles.append(s)
@@ -663,6 +690,7 @@ def plan_styles(ctx):
 
 
 def render_styles(ctx):
+    """Serialize planned styles into word/styles.xml."""
     out = [XML_DECL, f'<w:styles xmlns:w="{NS["w"]}" xmlns:r="{NS["r"]}">']
     out.append('<w:docDefaults><w:rPrDefault><w:rPr>'
                '<w:rFonts w:ascii="Calibri" w:eastAsia="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/>'
@@ -748,6 +776,7 @@ def plan_numbering(ctx):
 
 
 def render_numbering(ctx):
+    """Serialize planned numbering definitions into word/numbering.xml."""
     out = [XML_DECL, f'<w:numbering xmlns:w="{NS["w"]}" xmlns:r="{NS["r"]}" xmlns:v="{NS["v"]}">']
     if ctx.has_pic_bullet:
         out.append('<w:numPicBullet w:numPicBulletId="0"><w:pict>'
@@ -780,6 +809,7 @@ def render_numbering(ctx):
 
 
 def render_settings(ctx):
+    """Serialize document settings into word/settings.xml."""
     k, rng = ctx.k, ctx.rng
     if ctx.rsid_pool is not None:  # settings lists the whole shared pool
         rsids = "".join(f'<w:rsid w:val="{v}"/>' for v in ctx.rsid_pool)
@@ -827,11 +857,13 @@ def render_settings(ctx):
 
 
 def plan_comments(ctx):
+    """Plan threaded comment hierarchies and anchors."""
     k, rng = ctx.k, ctx.rng
     threads = []
     cid = 0
     for _ in range(k["comment_threads"]):
         def mk(is_root):
+            """Create a comment dictionary with unique IDs and text."""
             nonlocal cid
             c = {"cid": cid, "author": ctx.author(), "date": ctx.date(),
                  "paras": [], "durable": rng.randrange(1, 2**31)}
@@ -852,6 +884,7 @@ def plan_comments(ctx):
 
 
 def render_comments(ctx):
+    """Serialize planned comments into word/comments.xml."""
     out = [XML_DECL, f'<w:comments xmlns:w="{NS["w"]}" xmlns:w14="{NS["w14"]}" '
            f'xmlns:mc="{NS["mc"]}" mc:Ignorable="w14">']
     for i, c in enumerate(ctx.all_comments):
@@ -875,6 +908,7 @@ def render_comments(ctx):
 
 
 def render_comments_extended(ctx):
+    """Serialize comment thread links into word/commentsExtended.xml."""
     out = [XML_DECL, f'<w15:commentsEx xmlns:w15="{NS["w15"]}">']
     for t in ctx.comment_plan:
         out.append(f'<w15:commentEx w15:paraId="{t["root"]["paraId"]}" w15:done="0"/>')
@@ -886,6 +920,7 @@ def render_comments_extended(ctx):
 
 
 def render_comments_ids(ctx):
+    """Serialize durable comment IDs into word/commentsIds.xml."""
     out = [XML_DECL, f'<w16cid:commentsIds xmlns:w16cid="{NS["w16cid"]}">']
     for c in ctx.all_comments:
         out.append(f'<w16cid:commentId w16cid:paraId="{c["paraId"]}" '
@@ -895,6 +930,7 @@ def render_comments_ids(ctx):
 
 
 def render_people(ctx):
+    """Serialize comment authors into word/people.xml."""
     out = [XML_DECL, f'<w15:people xmlns:w15="{NS["w15"]}">']
     for i, a in enumerate(ctx.authors):
         out.append(f'<w15:person w15:author="{esca(a)}">'
@@ -905,6 +941,7 @@ def render_people(ctx):
 
 
 def plan_notes(ctx):
+    """Plan footnote and endnote content and separators."""
     for kind in ("footnotes", "endnotes"):
         n = ctx.k[kind]
         notes = [(i + 2, ctx.text()) for i in range(n)]
@@ -913,6 +950,7 @@ def plan_notes(ctx):
 
 
 def render_notes(ctx, kind):
+    """Serialize footnotes or endnotes into XML string."""
     root = "w:footnotes" if kind == "footnotes" else "w:endnotes"
     one = "w:footnote" if kind == "footnotes" else "w:endnote"
     out = [XML_DECL, f'<{root} xmlns:w="{NS["w"]}">']
@@ -931,6 +969,7 @@ def render_notes(ctx, kind):
 
 # ---------------------------------------------------------------- media / sections
 def plan_media(ctx):
+    """Generate synthetic images and chart workbooks for package media."""
     k, rng = ctx.k, ctx.rng
     for i in range(k["media_parts"]):
         w, h = (220, 220) if i else (384, 384)
@@ -982,6 +1021,7 @@ def plan_sections(ctx):
 
 
 def header_footer_content(ctx, part, kind, variant, si, logo_rid=None):
+    """Build header or footer XML content for a section."""
     tag = "w:hdr" if kind == "header" else "w:ftr"
     rng = ctx.rng
     paras = []
@@ -1011,6 +1051,7 @@ def header_footer_content(ctx, part, kind, variant, si, logo_rid=None):
 
 
 def sectpr_xml(ctx, si, last=False):
+    """Build section properties XML (<w:sectPr>) for section index si."""
     entry = ctx.section_rels[si]
     out = ["<w:sectPr>"]
     for (kind, variant), rid in entry.items():
@@ -1029,13 +1070,15 @@ def sectpr_xml(ctx, si, last=False):
     if si % 2 == 0 and ctx.k["revisions"]:  # sectPrChange snapshot of the previous section setup
         out.append(f'<w:sectPrChange w:id="{ctx.next_rev()}" w:author="{esca(ctx.author())}" '
                    f'w:date="{ctx.date()}"><w:sectPr><w:pgSz w:w="12240" w:h="15840"/>'
-                   '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>'
+                   '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" '
+                   'w:header="720" w:footer="720" w:gutter="0"/>'
                    '</w:sectPr></w:sectPrChange>')
     return "".join(out) + "</w:sectPr>"
 
 
 # ---------------------------------------------------------------- chart / misc parts
 def render_chart(ctx):
+    """Serialize an embedded chart part into word/charts/chart1.xml."""
     rng = ctx.rng
     cats = ["Alpha", "Beta", "Gamma", "Delta"]
     vals = [round(rng.uniform(1, 9), 1) for _ in cats]
@@ -1045,10 +1088,10 @@ def render_chart(ctx):
            '<c:chart><c:autoTitleDeleted c:val="1"/><c:plotArea><c:layout/>'
            '<c:barChart><c:barDir c:val="col"/><c:grouping c:val="clustered"/>'
            '<c:varyColors c:val="0"/><c:ser><c:idx c:val="0"/><c:order c:val="0"/>'
-           '<c:tx><c:strRef><c:strCache><c:ptCount c:val="1"/>'
+           '<c:tx><c:strRef><c:f>Sheet1!$B$1</c:f><c:strCache><c:ptCount c:val="1"/>'
            '<c:pt idx="0"><c:v>Series 1</c:v></c:pt></c:strCache></c:strRef></c:tx>'
-           f'<c:cat><c:strRef><c:strCache><c:ptCount c:val="{len(cats)}"/>{pts}</c:strCache></c:strRef></c:cat>'
-           f'<c:val><c:numRef><c:numCache><c:formatCode>General</c:formatCode>'
+           f'<c:cat><c:strRef><c:f>Sheet1!$A$2:$A${1 + len(cats)}</c:f><c:strCache><c:ptCount c:val="{len(cats)}"/>{pts}</c:strCache></c:strRef></c:cat>'
+           f'<c:val><c:numRef><c:f>Sheet1!$B$2:$B${1 + len(vals)}</c:f><c:numCache><c:formatCode>General</c:formatCode>'
            f'<c:ptCount c:val="{len(vals)}"/>{vpts}</c:numCache></c:numRef></c:val></c:ser>'
            '<c:gapWidth c:val="150"/><c:axId c:val="111111111"/><c:axId c:val="222222222"/>'
            '</c:barChart>'
@@ -1066,6 +1109,7 @@ def render_chart(ctx):
 
 
 def chart_drawing(ctx, rid):
+    """Generate DrawingML XML referencing a chart relationship."""
     d = ctx.next_docpr()
     return ('<w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">'
             '<wp:extent cx="5486400" cy="3200400"/><wp:effectExtent l="0" t="0" r="0" b="0"/>'
@@ -1075,6 +1119,7 @@ def chart_drawing(ctx, rid):
 
 
 def render_glossary(ctx):
+    """Generate an auxiliary glossary document part."""
     rng = ctx.rng
     parts = []
     for i in range(3):
@@ -1105,6 +1150,7 @@ FONTS = [("Calibri", "swiss", "020B0504020202020204"), ("Cambria", "roman", "020
 
 
 def render_font_table(ctx):
+    """Serialize font definitions into word/fontTable.xml."""
     out = [XML_DECL, f'<w:fonts xmlns:w="{NS["w"]}" xmlns:r="{NS["r"]}">']
     for name, fam, panose in FONTS:
         out.append(f'<w:font w:name="{name}"><w:altName w:val="{name} Alt"/>'
@@ -1117,6 +1163,7 @@ def render_font_table(ctx):
 
 
 def render_docprops(ctx):
+    """Serialize core and extended document properties."""
     core = (XML_DECL + '<cp:coreProperties '
             'xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
             'xmlns:dc="http://purl.org/dc/elements/1.1/" '
@@ -1135,6 +1182,7 @@ def render_docprops(ctx):
 
 # ---------------------------------------------------------------- body building
 def comment_para(ctx, cid):
+    """Generate paragraph content for a comment body."""
     anchor = (f'<w:commentRangeStart w:id="{cid}"/>'
               f'<w:r><w:t>{esc(ctx.sentence())}</w:t></w:r>'
               f'<w:commentRangeEnd w:id="{cid}"/>'
@@ -1143,6 +1191,7 @@ def comment_para(ctx, cid):
 
 
 def note_para(ctx, kind):
+    """Generate paragraph content for a footnote or endnote body."""
     pend = getattr(ctx, "pending_" + kind)
     nid = pend.pop(0)
     ref = "w:footnoteReference" if kind == "footnotes" else "w:endnoteReference"
@@ -1152,6 +1201,7 @@ def note_para(ctx, kind):
 
 
 def build_blocks(ctx):
+    """Construct document block content (paragraphs, tables, drawings)."""
     k, rng = ctx.k, ctx.rng
     blocks = []
     fields_left = k["fields"]
@@ -1163,6 +1213,7 @@ def build_blocks(ctx):
     links_left = max(4, n // 25)  # cap: hyperlinks are a flavour, not the bulk
 
     def sprinkle_bm(content):
+        """Insert bookmark start and end tags around content spans."""
         nonlocal bm_left
         if bm_left > 0 and rng.random() < 0.3:
             bm_left -= 1
@@ -1276,6 +1327,7 @@ def build_blocks(ctx):
     # paragraphs pre-empt, so without this they can be impossible to emit.
     # Default builds (sub-knobs None) never enter here: output is unchanged.
     def _placed(marker):
+        """Check if marker is already present in generated blocks."""
         return any(marker in b for b in blocks)
     if k.get("proof_err") is True and not _placed("<w:proofErr"):
         for _ in range(3):
@@ -1340,6 +1392,7 @@ DOC_ROOT_ATTRS = " ".join(
 
 
 def render_document(ctx, blocks):
+    """Serialize the main document body and section properties."""
     nsec = ctx.k["sections"]
     chunks = [[] for _ in range(nsec)]
     for i, b in enumerate(blocks):
@@ -1356,6 +1409,7 @@ def render_document(ctx, blocks):
 
 
 def build_document(knobs, seed):
+    """Build a complete valid-by-construction document package as parts dictionary."""
     ctx = Ctx(knobs, seed)
     # plan in dependency order ------------------------------------------------
     plan_styles(ctx)
@@ -1375,7 +1429,7 @@ def build_document(knobs, seed):
     ctx.doc_rels.add(REL + "/comments", "comments.xml")
     ctx.doc_rels.add("http://schemas.microsoft.com/office/2011/relationships/commentsExtended",
                      "commentsExtended.xml")
-    ctx.doc_rels.add("http://schemas.microsoft.com/office/2011/relationships/commentsIds",
+    ctx.doc_rels.add("http://schemas.microsoft.com/office/2016/09/relationships/commentsIds",
                      "commentsIds.xml")
     ctx.doc_rels.add("http://schemas.microsoft.com/office/2011/relationships/people", "people.xml")
     if knobs["glossary"]:
@@ -1480,6 +1534,7 @@ def build_document(knobs, seed):
 
 
 def write_docx(parts, path):
+    """Write package parts to a ZIP archive on disk."""
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         for name in sorted(parts):
             zi = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
@@ -1737,6 +1792,7 @@ KNOB_ARGS = [
 
 
 def main(argv=None):
+    """CLI entry point to generate stress corpus documents."""
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--preset", choices=sorted(PRESETS), help="start from a preset")
@@ -1764,6 +1820,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     def knobs_for(preset):
+        """Return knob configurations for the selected corpus preset."""
         k = dict(PRESETS[preset]) if preset else dict(BASE_KNOBS)
         for name, _ in KNOB_ARGS:
             v = getattr(args, name)
@@ -1805,8 +1862,9 @@ def main(argv=None):
         print(f"{status} {name}: seed={seed} size={size} parts={chk['parts']} "
               f"xml_parsed={chk['xml_parsed']} r:id_refs={chk['refs']} "
               f"unresolved={len(chk['unresolved'])} ct_missing={chk['ct_missing']} "
-              f"ns_violations={len(chk['ns_violations'])}")
-        for u in chk["unresolved"][:10] + chk["ns_violations"][:10]:
+              f"ns_violations={len(chk['ns_violations'])} "
+              f"ct_pairing={len(chk['ct_pairing'])} crc_bad={chk['crc_bad']}")
+        for u in chk["unresolved"][:10] + chk["ns_violations"][:10] + chk["ct_pairing"][:10]:
             print("    ", u)
     return 1 if failures else 0
 
