@@ -939,24 +939,21 @@ fn with_file_faces(xml: &mut String, faces: &[&str]) {
             }
         }
     }
+    // WordCraft's own declarations are empty elements.
+    let (kids, _) = super::kept::children(xml, "office:font-face-decls", "font");
     let mut out = String::with_capacity(xml.len());
-    let mut rest = xml.as_str();
-    while let Some(at) = rest.find("<style:font-face ") {
-        let (before, from) = rest.split_at(at);
+    let mut done = 0;
+    for (_, (from, to)) in kids {
+        let (Some(before), Some(tag)) = (xml.get(done..from), xml.get(from..to)) else { continue };
         out.push_str(before);
-        // WordCraft's own declarations are empty elements.
-        let Some(end) = from.find("/>").map(|e| e + 2) else {
-            rest = from;
-            break;
-        };
-        let (tag, after) = from.split_at(end);
         let name = raw_attr(tag, "style:name").map(attr_text);
         let same = name.as_deref().and_then(|n| named.get(n)).map(|face| face.to_string());
         let family = || name.as_deref().and_then(|n| of_family.get(n).and_then(|face| face_named(face, n)));
-        out.push_str(same.or_else(family).as_deref().unwrap_or(tag));
-        rest = after;
+        let empty = tag.find('>').is_some_and(|end| end + 1 == tag.len());
+        out.push_str(same.or_else(family).filter(|_| empty).as_deref().unwrap_or(tag));
+        done = to;
     }
-    out.push_str(rest);
+    out.push_str(xml.get(done..).unwrap_or(""));
     *xml = out;
 }
 
@@ -964,8 +961,8 @@ fn with_file_faces(xml: &mut String, faces: &[&str]) {
 fn face_named(face: &str, name: &str) -> Option<String> {
     let head = face.split('>').next()?;
     let was = super::kept::raw_attr(head, "style:name")?;
-    let attr = head.find("style:name")?;
-    let at = attr + head.get(attr..)?.find(was)?;
+    // `was` is a piece of `head`, which starts `face`.
+    let at = (was.as_ptr() as usize).checked_sub(head.as_ptr() as usize)?;
     Some(format!("{}{}{}", face.get(..at)?, x(name), face.get(at + was.len()..)?))
 }
 

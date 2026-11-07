@@ -230,7 +230,7 @@ pub(super) fn raw_attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
 /// The children of `container` (a child of the root) in `xml` (a part WordCraft wrote): each
 /// one's key in `group` (as [`defs`] gives it) and its markup's byte range; and the range of
 /// the container's content (`None` when there is no such container).
-fn children(xml: &str, container: &str, group: &str) -> (Vec<(String, (usize, usize))>, Option<(usize, usize)>) {
+pub(super) fn children(xml: &str, container: &str, group: &str) -> (Vec<(String, (usize, usize))>, Option<(usize, usize)>) {
     let mut out = Vec::new();
     let (mut depth, mut inside) = (0usize, false);
     let mut open: Option<(String, usize)> = None;

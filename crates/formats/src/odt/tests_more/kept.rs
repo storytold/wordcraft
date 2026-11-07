@@ -250,6 +250,34 @@ fn a_face_named_other_than_its_family_gives_the_family_the_files_declaration() {
     assert!(mystery.contains(r#"style:font-family-generic="roman""#), "{mystery}");
 }
 
+/// Only declarations are declarations: not a script's text that reads like one. And a face's name
+/// is its own attribute, not another with `style:name` in its name.
+#[test]
+fn a_face_is_found_and_named_by_its_own_markup() {
+    let script =
+        r#"<office:scripts><office:script script:language="x"><![CDATA[<style:font-face style:name="Mystery" />]]></office:script></office:scripts>"#;
+    let face = r#"<style:font-face xstyle:name="F1" style:name="F1" svg:font-family="&apos;Mystery&apos;" style:font-family-generic="roman"/>"#;
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:font-face-decls>{face}</office:font-face-decls><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="12pt"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}>{script}<office:font-face-decls>{face}</office:font-face-decls><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties style:font-name="F1"/></style:style></office:automatic-styles><office:body><office:text><text:p><text:span text:style-name="T1">One</text:span></text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.text.push('!');
+        if let Some(r) = p.runs.last_mut() {
+            r.len += 1;
+        }
+    }
+    let saved = export(&d).unwrap();
+    let part = content_of(&saved);
+    assert!(part.contains(script), "the script as it was: {part}");
+    let decls = part.split("<office:font-face-decls>").last().and_then(|t| t.split("</office:font-face-decls>").next()).unwrap();
+    assert!(decls.contains(r#"xstyle:name="F1" style:name="Mystery""#), "{decls}");
+    assert!(import(&saved).is_ok());
+}
+
 /// A font declaration in single quotes is the file's too: it replaces WordCraft's, and isn't
 /// declared a second time.
 #[test]
