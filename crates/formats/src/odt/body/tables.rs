@@ -75,6 +75,11 @@ pub(in crate::odt) struct TableB {
     pub(in crate::odt) widths: Vec<f32>,
     /// Its alignment and width, and each row's height so far (see [`crate::model::TableExtra`]).
     pub(in crate::odt) extra: crate::model::TableExtra,
+    /// The background of each column's default cell style (`table:default-cell-style-name`).
+    pub(in crate::odt) column_backgrounds: Vec<Option<wordcraft_doc::props::Rgb>>,
+    /// The table's background, and the row's being read.
+    pub(in crate::odt) background: Option<wordcraft_doc::props::Rgb>,
+    pub(in crate::odt) row_background: Option<wordcraft_doc::props::Rgb>,
 }
 
 impl TableB {
