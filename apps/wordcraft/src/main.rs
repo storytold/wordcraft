@@ -27,7 +27,7 @@ mod traffic_lights;
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{
     Services, UiState, WordApp,
-    window_geometry::{RawWindowState, WindowGeometry, take_rescue},
+    window_geometry::{RawWindowState, WindowGeometry, reachable, take_rescue},
 };
 
 /// The app, the restored window geometry (or, with none, the default: no position) until the
@@ -54,7 +54,13 @@ impl eframe::App for App {
         apple_events::poll(&self.5, &mut self.0, ctx);
         self.0.logic(ctx);
         self.3.show(frame);
-        let window = self.4;
+        let mut window = self.4;
+        // Only until the off-screen check below has run: it is the one reader.
+        if self.1.is_some() {
+            let (on_a_monitor, primary_monitor_rect) = monitor_geometry(frame, ctx.pixels_per_point());
+            window.on_a_monitor = on_a_monitor;
+            window.primary_monitor_rect = primary_monitor_rect;
+        }
         // A window that doesn't fit on its screen (the default size on a laptop) shrinks to fit
         // there, so all of the scroll bar can be dragged (#1215). Checked on the frame that first
         // knows the monitor: the off-screen check below takes the pending geometry then.
@@ -124,6 +130,37 @@ impl eframe::App for App {
             key_file.remove();
         }
     }
+}
+
+/// Whether a grippable part of the window is on a monitor, and the primary monitor bounds.
+/// Winit reports physical pixels; egui positions use points. `None` where the platform cannot
+/// report the window or primary monitor (Wayland, headless).
+fn monitor_geometry(frame: &eframe::Frame, pixels_per_point: f32) -> (Option<bool>, Option<egui::Rect>) {
+    let Some(w) = frame.winit_window() else {
+        return (None, None);
+    };
+    if !pixels_per_point.is_finite() || pixels_per_point <= 0.0 {
+        return (None, None);
+    }
+    let Some(pos) = w.outer_position().ok() else {
+        return (None, None);
+    };
+    let size = w.outer_size();
+    let physical_rect = |(x, y): (i32, i32), (width, height): (u32, u32)| {
+        egui::Rect::from_min_size(egui::pos2(x as f32, y as f32), egui::vec2(width as f32, height as f32))
+    };
+    let monitors: Vec<egui::Rect> =
+        w.available_monitors().map(|m| physical_rect((m.position().x, m.position().y), (m.size().width, m.size().height))).collect();
+    let on_a_monitor = (!monitors.is_empty()).then(|| reachable(physical_rect((pos.x, pos.y), (size.width, size.height)), &monitors));
+    let primary_monitor_rect = w.primary_monitor().map(|m| {
+        let pos = m.position();
+        let size = m.size();
+        egui::Rect::from_min_size(
+            egui::pos2(pos.x as f32, pos.y as f32) / pixels_per_point,
+            egui::vec2(size.width as f32, size.height as f32) / pixels_per_point,
+        )
+    });
+    (on_a_monitor, primary_monitor_rect)
 }
 
 /// Quit the way Command-Q does, on the next turn of the main queue.
@@ -216,13 +253,45 @@ fn load_user_fonts() {
     }
 }
 
-/// The saved window geometry, read before the window opens (`load_prefs` runs after).
-fn saved_window() -> Option<WindowGeometry> {
+/// The saved preferences, read before the window opens for its geometry and, on Linux and the
+/// BSDs, the display server (`load_prefs` runs after).
+fn saved_ui() -> Option<UiState> {
     if !prefs_enabled() {
         return None;
     }
     let bytes = std::fs::read(prefs_path()?).ok()?;
-    UiState::from_json(&bytes)?.window?.sanitized()
+    UiState::from_json(&bytes)
+}
+
+/// Whether the window runs through XWayland (X11) rather than native Wayland, and the log line
+/// saying why. `WORDCRAFT_WAYLAND` wins (`0`, `false`, `no` or `off` asks for X11, any other value
+/// for Wayland), then File › Options › Advanced › Linux display server (#2184). Automatic is X11
+/// whenever there's an X server: winit has no file drag-and-drop on Wayland, so dropping files from
+/// the file manager showed a "no" cursor. X11 is only forced with an X server (`DISPLAY`), and
+/// unforced winit picks Wayland when it's there and X11 otherwise, so a choice that isn't
+/// available falls back to the other instead of failing to start.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn uses_x11(setting: wordcraft_ui_egui::DisplayServer, env: impl Fn(&str) -> Option<std::ffi::OsString>) -> (bool, String) {
+    use wordcraft_ui_egui::DisplayServer;
+    let set = |name: &str| env(name).is_some_and(|v| !v.is_empty());
+    let (wanted, by) = match env("WORDCRAFT_WAYLAND") {
+        Some(v) if matches!(v.to_string_lossy().trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off") => {
+            (DisplayServer::X11, "WORDCRAFT_WAYLAND")
+        }
+        Some(_) => (DisplayServer::Wayland, "WORDCRAFT_WAYLAND"),
+        None => (setting, "the setting"),
+    };
+    let x11 = wanted != DisplayServer::Wayland && set("DISPLAY");
+    let runs = if x11 {
+        "X11"
+    } else if set("WAYLAND_DISPLAY") || set("WAYLAND_SOCKET") {
+        "native Wayland"
+    } else if set("DISPLAY") {
+        "X11 (no Wayland)"
+    } else {
+        "neither (no Wayland or X server found)"
+    };
+    (x11, format!("display: {runs}; {} asks for {}", by, wanted.code()))
 }
 
 fn save_prefs(app: &WordApp) {
@@ -268,6 +337,7 @@ fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
         file_dialog: Some(file_dialog),
         printers: Some(print::discover()),
         print_native: Some(print::submit()),
+        cancel_print: Some(print::cancel()),
         clipboard_picture: Some(Box::new(clipboard::picture)),
         make_default_app: default_apps::hook(),
         // Personal templates live in `Templates` in the settings folder (#2852), made on first save.
@@ -275,7 +345,7 @@ fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
         animations_enabled: Some(animations::hook(ctx)),
         clipboard_text: Some(Box::new(clipboard::text)),
         clipboard_html: Some(Box::new(clipboard::html)),
-        set_clipboard_html: Some(Box::new(clipboard::set_html)),
+        set_clipboard_rich: Some(Box::new(clipboard::set_rich)),
         clipboard_rtf: Some(Box::new(clipboard::rtf)),
         clipboard_formats: Some(Box::new(clipboard::formats)),
         ..Default::default()
@@ -370,6 +440,10 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
 /// geometry, opens requested documents or the Start screen, starts the control server when
 /// asked, and runs the eframe event loop.
 fn main() -> eframe::Result {
+    #[cfg(windows)]
+    if let Some(code) = print::isolated::helper_mode() {
+        std::process::exit(code);
+    }
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
     if let Some(result) = craft_update::self_update::finish(&wordcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
@@ -449,25 +523,28 @@ fn main() -> eframe::Result {
     // FXC, which needs no DLL of ours (#603; see graphics.rs).
     #[cfg(target_os = "windows")]
     graphics::configure(&mut options, eframe::wgpu::Backends::from_env());
-    // Intel Macs: Metal's compiler aborts on wgpu's indirect-validation shaders (#2652).
+    // Intel Macs: Metal's compiler aborts on wgpu's indirect-validation shaders (#2652). An x86_64
+    // build under Rosetta on Apple silicon keeps them (#5199).
     #[cfg(target_os = "macos")]
     graphics::configure_indirect_validation(&mut options, graphics::skips_indirect_validation(true, cfg!(target_arch = "x86_64")));
     load_user_fonts();
     // Windows opened for further documents start like the first one, before its saved place.
     let window_builder = options.viewport.clone();
-    let restored = saved_window();
+    let saved = saved_ui();
+    let restored = saved.as_ref().and_then(|ui| ui.window?.sanitized());
     if let Some(window) = restored {
         options.viewport = window.apply(options.viewport);
     }
     #[cfg(all(unix, not(target_os = "macos")))]
-    // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
-    // manager showed a "no" cursor. Run through XWayland when it's there; WORDCRAFT_WAYLAND=1
-    // keeps the native Wayland backend.
-    if std::env::var_os("DISPLAY").is_some() && std::env::var_os("WORDCRAFT_WAYLAND").is_none() {
-        options.event_loop_builder = Some(Box::new(|b| {
-            use winit::platform::x11::EventLoopBuilderExtX11;
-            b.with_x11();
-        }));
+    {
+        let (x11, why) = uses_x11(saved.as_ref().map(|ui| ui.display_server).unwrap_or_default(), |name| std::env::var_os(name));
+        log::info!("{why}");
+        if x11 {
+            options.event_loop_builder = Some(Box::new(|b| {
+                use winit::platform::x11::EventLoopBuilderExtX11;
+                b.with_x11();
+            }));
+        }
     }
     // Registered before the event loop starts, so it catches the Finder event that launched us as
     // well as later ones. Lives until the event loop returns; the app creator only borrows it.
@@ -579,6 +656,32 @@ mod tests {
         open_non_unicode(&mut app, &dir.join(std::ffi::OsString::from_vec(b"gon\xe9.txt".to_vec())));
         assert_eq!(app.session.path.as_deref(), Some(path.as_path()));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// #2184: `WORDCRAFT_WAYLAND` beats the setting, Automatic keeps XWayland where there's an X
+    /// server, and a choice that isn't available falls back to the other.
+    #[test]
+    fn the_display_server_follows_the_variable_then_the_setting() {
+        use wordcraft_ui_egui::DisplayServer::{Auto, Wayland, X11};
+        let x11 = |setting, vars: &[(&str, &str)]| {
+            uses_x11(setting, |name| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| std::ffi::OsString::from(v))).0
+        };
+        let both = [("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0")];
+        assert!(x11(Auto, &both), "Automatic keeps XWayland, for file drag-and-drop");
+        assert!(x11(X11, &both));
+        assert!(!x11(Wayland, &both));
+        for (value, wants_x11) in [("1", false), ("", false), ("yes", false), ("0", true), (" Off ", true), ("FALSE", true), ("no", true)] {
+            let vars = [both[0], both[1], ("WORDCRAFT_WAYLAND", value)];
+            for setting in [Auto, Wayland, X11] {
+                assert_eq!(x11(setting, &vars), wants_x11, "WORDCRAFT_WAYLAND={value:?} beats {setting:?}");
+            }
+        }
+        // Without an X server X11 isn't forced: winit connects to Wayland instead of failing.
+        let wayland_only = [("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", "")];
+        assert!(!x11(X11, &wayland_only) && !x11(Auto, &wayland_only));
+        // Without Wayland, Wayland isn't forced either: unforced winit picks X11.
+        let (forced, why) = uses_x11(Wayland, |name| (name == "DISPLAY").then(|| ":0".into()));
+        assert!(!forced && why.contains("X11 (no Wayland)"), "{why}");
     }
 
     /// A named pipe or a device under such a name is a warning, not a read: the pipe blocked
