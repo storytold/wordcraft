@@ -89,7 +89,8 @@ pub struct Session {
     /// Format painter: copied formatting waiting to be applied (and whether it stays on).
     pub painter: Option<(CharProps, wordcraft_doc::props::ParaProps, bool)>,
     /// Formatting picked up by Copy Formatting (Mod+Shift+C): Paste Formatting applies it as often
-    /// as asked, as in Word, until the next Copy Formatting. The Format Painter brush is separate.
+    /// as asked, as in Word, until the next Copy Formatting. A Format Painter pick is stored here
+    /// as well.
     pub copied_format: Option<(CharProps, wordcraft_doc::props::ParaProps)>,
     /// Last message for the status bar / agents.
     pub status: String,

@@ -192,10 +192,14 @@ fn note_key_state(app: &mut WordApp, e: &egui::Event) {
 
 /// The browser's paste event that follows a Mod+Shift+V that pasted formatting is the same
 /// keystroke: ignored before an equation or a picture-file paste can take it (#5616).
+/// With no text on the clipboard eframe sends no paste event, so the flag waits for the next key,
+/// pointer press or focus change; a menu-bar paste before any of those is dropped.
 fn ignored_paste(app: &mut WordApp, e: &egui::Event) -> bool {
     if matches!(e, egui::Event::Paste(_)) && std::mem::take(&mut app.canvas.ignore_next_paste) {
         // Not a Mod+V with no text either: the release mustn't paste a picture.
         app.canvas.pasted = true;
+        // Its Mod+Shift is used up too, or a later menu-bar paste would read as Keep Text Only.
+        app.canvas.paste_event_mods = None;
         return true;
     }
     false
