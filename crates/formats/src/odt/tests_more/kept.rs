@@ -191,6 +191,38 @@ fn the_files_font_declarations_are_kept() {
     check(&export(&d).unwrap(), "an edit");
 }
 
+/// A font's name spelled another way in XML (`O'Brien`, `O&#39;Brien`) is the same font: its
+/// declaration is the file's, once.
+#[test]
+fn a_fonts_name_spelled_another_way_is_declared_once_as_the_file_has_it() {
+    for spelled in ["O'Brien", "O&#39;Brien"] {
+        let face = format!(r#"<style:font-face style:name="{spelled}" svg:font-family="O&apos;Brien" style:font-family-generic="roman"/>"#);
+        let styles = format!(
+            r#"<office:document-styles {NS_T}><office:font-face-decls>{face}</office:font-face-decls><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="{spelled}" fo:font-size="12pt"/></style:default-style></office:styles></office:document-styles>"#
+        );
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:font-face-decls>{face}</office:font-face-decls><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties style:font-name="{spelled}"/></style:style></office:automatic-styles><office:body><office:text><text:p><text:span text:style-name="T1">One</text:span></text:p></office:text></office:body></office:document-content>"#
+        );
+        let mut d = import(&package(&content, Some(&styles))).unwrap();
+        // Text edited, written from the model.
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+            p.text.push('!');
+            if let Some(r) = p.runs.last_mut() {
+                r.len += 1;
+            }
+        }
+        let saved = export(&d).unwrap();
+        for part in [styles_of(&saved), content_of(&saved)] {
+            assert!(part.contains(&face), "{spelled}: the file's: {part}");
+            let is_it = |t: &&str| {
+                let name = t.split('>').next().and_then(|tag| tag.split("style:name=\"").nth(1)).and_then(|v| v.split('"').next());
+                name.is_some_and(|n| n == "O'Brien" || n == "O&#39;Brien" || n == "O&apos;Brien")
+            };
+            assert_eq!(part.split("<style:font-face ").skip(1).filter(is_it).count(), 1, "{spelled}: declared once: {part}");
+        }
+    }
+}
+
 /// A font declaration in single quotes is the file's too: it replaces WordCraft's, and isn't
 /// declared a second time.
 #[test]

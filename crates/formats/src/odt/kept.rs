@@ -197,7 +197,14 @@ pub(super) fn defined(xml: &str, def: &str) -> bool {
     let name = ["style:name", "draw:name"].into_iter().find_map(|a| Some((a, raw_attr(head, a)?)));
     let (Some((attr, name)), false) = (name, el.is_empty()) else { return false };
     let open = format!("<{el} ");
-    xml.match_indices(&open).any(|(i, _)| xml.get(i..).and_then(|t| t.split('>').next()).is_some_and(|tag| raw_attr(tag, attr) == Some(name)))
+    xml.match_indices(&open).any(|(i, _)| {
+        xml.get(i..).and_then(|t| t.split('>').next()).is_some_and(|tag| raw_attr(tag, attr).is_some_and(|n| attr_text(n) == attr_text(name)))
+    })
+}
+
+/// An attribute's value as it reads, however XML spells it (`O'Brien`, `O&apos;Brien`).
+pub(super) fn attr_text(raw: &str) -> std::borrow::Cow<'_, str> {
+    quick_xml::escape::unescape(raw).unwrap_or(std::borrow::Cow::Borrowed(raw))
 }
 
 /// Attribute `name`'s value as `tag` (a start tag) writes it, spaced and quoted however XML allows.

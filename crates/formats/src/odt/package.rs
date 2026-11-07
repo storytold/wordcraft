@@ -923,8 +923,12 @@ fn with_kept_defs(
 fn with_file_faces(xml: &mut String, faces: &[&str]) {
     for face in faces {
         let Some(name) = face.split('>').next().and_then(|head| super::kept::raw_attr(head, "style:name")) else { continue };
-        let ours = format!("<style:font-face style:name=\"{name}\"");
-        let Some(at) = xml.find(&ours) else { continue };
+        let name = super::kept::attr_text(name);
+        let names_it = |at: &usize| {
+            let tag = xml.get(*at..).and_then(|t| t.split('>').next());
+            tag.and_then(|tag| super::kept::raw_attr(tag, "style:name")).is_some_and(|n| super::kept::attr_text(n) == name)
+        };
+        let Some(at) = xml.match_indices("<style:font-face ").map(|(i, _)| i).find(names_it) else { continue };
         // WordCraft's own declarations are empty elements.
         let Some(end) = xml.get(at..).and_then(|r| r.find("/>")).map(|e| at + e + 2) else { continue };
         xml.replace_range(at..end, face);
