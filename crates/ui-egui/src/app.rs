@@ -264,8 +264,10 @@ impl WordApp {
         self.ensure_recent_fonts();
         self.ensure_find_fonts();
         self.install_ui_fonts(ctx, lang);
-        if let Some(answer) = self.desktop_theme.take_change() {
-            self.desktop_dark = Some(answer);
+        if let Some(answer) = self.desktop_theme.take_change()
+            && (answer.is_some() || self.desktop_dark.is_none())
+        {
+            self.desktop_dark = answer;
         }
         // Both palettes are installed and egui picks one: with `System` it follows an OS appearance
         // change live (winit reports it and repaints, #311). Where winit is silent (Linux) the
@@ -432,8 +434,14 @@ impl WordApp {
             ctx.input_mut(|i| i.smooth_scroll_delta = scroll::unsmoothed_scroll(i, &opts));
         }
         self.handle_ui_input_events(&ctx);
-        // Fonts installed by `logic` take effect on the next frame.
-        if self.fonts_frames < 2 {
+        // Fonts installed by `logic` take effect on the next frame. When the desktop theme is
+        // watched (Linux) and hasn't answered yet, hold the frame briefly so the initial paint
+        // never flashes a stale light theme.
+        let theme_pending = self.ui.theme == theme::Appearance::System
+            && ctx.system_theme().is_none()
+            && self.desktop_theme.watching()
+            && !self.desktop_theme.received();
+        if self.fonts_frames < 2 || (theme_pending && self.fonts_frames < 10) {
             self.fonts_frames += 1;
             ctx.request_repaint();
             return;

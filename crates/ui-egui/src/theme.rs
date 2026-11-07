@@ -21,8 +21,8 @@ pub enum Appearance {
 }
 
 impl Appearance {
-    /// In menu order.
-    pub const ALL: [Appearance; 3] = [Appearance::System, Appearance::Light, Appearance::Dark];
+    /// In menu order: Light, Dark, System.
+    pub const ALL: [Appearance; 3] = [Appearance::Light, Appearance::Dark, Appearance::System];
 
     /// The value used in `ui.json` and by the `ui.theme` command.
     pub fn code(self) -> &'static str {
@@ -34,7 +34,11 @@ impl Appearance {
     }
 
     pub fn from_code(code: &str) -> Option<Appearance> {
-        Appearance::ALL.into_iter().find(|a| a.code().eq_ignore_ascii_case(code.trim()))
+        let c = code.trim();
+        if c.eq_ignore_ascii_case("use system setting") {
+            return Some(Appearance::System);
+        }
+        Appearance::ALL.into_iter().find(|a| a.code().eq_ignore_ascii_case(c))
     }
 
     /// The English label (translated with `tl!` where shown).
@@ -42,7 +46,7 @@ impl Appearance {
         match self {
             Appearance::Light => "Light",
             Appearance::Dark => "Dark",
-            Appearance::System => "Use system setting",
+            Appearance::System => "System",
         }
     }
 
@@ -624,7 +628,7 @@ pub fn font_definitions_language_arabic(
         add_cjk(&mut fonts, format!("system {}", f.family), data);
     }
     #[cfg(target_arch = "wasm32")]
-    let _ = system_cjk;
+    let _ = (system_cjk, system_arabic);
     // Arabic-script faces last: the Arabic interface, its name in the language list, Arabic file
     // names. Without an embedded one (a build without craft-fonts), an installed font, read when
     // `system_arabic` is set: for an Arabic interface.
