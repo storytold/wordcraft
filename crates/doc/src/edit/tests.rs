@@ -988,3 +988,226 @@ fn insert_fragment_remaps_conflicting_media_keys() {
     let remapped = para.objects.iter().find_map(|o| if let InlineObject::Image { media, .. } = o { Some(media.as_str()) } else { None }).unwrap();
     assert_eq!(remapped, other_key);
 }
+
+/// #5906: Copying a range spanning from inside a table to an outside paragraph preserves the table.
+#[test]
+fn copy_range_preserves_table_structure_across_blocks() {
+    let mut d = Document::new();
+    let mut t = Table::new(2, 2, 200.0);
+    t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("A1", CharProps::default()))];
+    t.rows[0].cells[1].blocks = vec![para_block(Paragraph::with_text("B1", CharProps::default()))];
+    t.rows[1].cells[0].blocks = vec![para_block(Paragraph::with_text("A2", CharProps::default()))];
+    t.rows[1].cells[1].blocks = vec![para_block(Paragraph::with_text("B2", CharProps::default()))];
+    d.body = vec![Arc::new(Block::Table(t)), Arc::new(Block::Para(Paragraph::with_text("Trailing", CharProps::default())))];
+    let start = d.start_of(StoryRef::Body);
+    let end = d.end_of(StoryRef::Body);
+    let frag = d.copy_range(&start, &end);
+    assert_eq!(frag.blocks.len(), 2, "expected table and trailing paragraph, got {:?}", frag.blocks);
+    let Block::Table(tbl) = &frag.blocks[0] else { panic!("first block should be Table") };
+    assert_eq!(tbl.rows.len(), 2, "copied table row count");
+    assert_eq!(tbl.cols(), 2, "copied table col count");
+    let c00 = tbl.rows[0].cells[0].blocks.first().and_then(|b| match &**b {
+        Block::Para(p) => Some(p.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(c00, Some("A1"), "cell (0, 0) text");
+    let Block::Para(trail) = &frag.blocks[1] else { panic!("second block should be Para") };
+    assert_eq!(trail.text.as_str(), "Trailing");
+}
+
+/// #5906: Copying a range of cells across a table preserves the table structure as a sliced table.
+#[test]
+fn copy_range_preserves_table_when_selecting_cells() {
+    let mut d = Document::new();
+    let mut t = Table::new(3, 3, 300.0);
+    for r in 0..3 {
+        for c in 0..3 {
+            t.rows[r].cells[c].blocks = vec![para_block(Paragraph::with_text(&format!("R{r}C{c}"), CharProps::default()))];
+        }
+    }
+    d.body = vec![Arc::new(Block::Table(t))];
+    let a = Pos { story: StoryRef::Body, path: Path(vec![0, 0, 0, 0]), off: 0 };
+    let b = Pos { story: StoryRef::Body, path: Path(vec![0, 1, 1, 0]), off: 4 };
+    let frag = d.copy_range(&a, &b);
+    assert_eq!(frag.blocks.len(), 1, "expected 1 block");
+    let Block::Table(sliced) = &frag.blocks[0] else { panic!("should be a Table") };
+    assert_eq!(sliced.rows.len(), 2, "should slice to 2 rows, not full 3 rows");
+    assert_eq!(sliced.cols(), 2, "should slice to 2 cols, not full 3 cols");
+    let c00 = sliced.rows[0].cells[0].blocks.first().and_then(|b| match &**b {
+        Block::Para(p) => Some(p.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(c00, Some("R0C0"), "cell (0,0) text");
+    let c11 = sliced.rows[1].cells[1].blocks.first().and_then(|b| match &**b {
+        Block::Para(p) => Some(p.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(c11, Some("R1C1"), "cell (1,1) text");
+}
+
+/// #5906: Partial range copy trims start and end cell text to offsets.
+#[test]
+fn copy_range_partial_endpoints_trims_text() {
+    let mut d = Document::new();
+    let mut t = Table::new(2, 2, 200.0);
+    t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("Hello", CharProps::default()))];
+    t.rows[0].cells[1].blocks = vec![para_block(Paragraph::with_text("World", CharProps::default()))];
+    t.rows[1].cells[0].blocks = vec![para_block(Paragraph::with_text("Foo", CharProps::default()))];
+    t.rows[1].cells[1].blocks = vec![para_block(Paragraph::with_text("Bar", CharProps::default()))];
+    d.body = vec![Arc::new(Block::Table(t))];
+    let a = Pos { story: StoryRef::Body, path: Path(vec![0, 0, 0, 0]), off: 2 };
+    let b = Pos { story: StoryRef::Body, path: Path(vec![0, 1, 1, 0]), off: 1 };
+    let frag = d.copy_range(&a, &b);
+    let Block::Table(sliced) = &frag.blocks[0] else { panic!("expected Table") };
+    let c00 = sliced.rows[0].cells[0].blocks.first().and_then(|b| match &**b {
+        Block::Para(p) => Some(p.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(c00, Some("llo"));
+    let c11 = sliced.rows[1].cells[1].blocks.first().and_then(|b| match &**b {
+        Block::Para(p) => Some(p.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(c11, Some("B"));
+}
+
+/// #5906: Partial range copy from cell (0,1) to (1,0) trims endpoints without affecting cell (0,0) or (1,1).
+#[test]
+fn copy_range_partial_endpoints_inner_cells() {
+    let mut d = Document::new();
+    let mut t = Table::new(2, 2, 200.0);
+    t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("Hello", CharProps::default()))];
+    t.rows[0].cells[1].blocks = vec![para_block(Paragraph::with_text("World", CharProps::default()))];
+    t.rows[1].cells[0].blocks = vec![para_block(Paragraph::with_text("Foo", CharProps::default()))];
+    t.rows[1].cells[1].blocks = vec![para_block(Paragraph::with_text("Bar", CharProps::default()))];
+    d.body = vec![Arc::new(Block::Table(t))];
+    let a = Pos { story: StoryRef::Body, path: Path(vec![0, 0, 1, 0]), off: 1 };
+    let b = Pos { story: StoryRef::Body, path: Path(vec![0, 1, 0, 0]), off: 2 };
+    let frag = d.copy_range(&a, &b);
+    let Block::Table(sliced) = &frag.blocks[0] else { panic!("expected Table") };
+    assert_eq!(sliced.rows.len(), 2);
+    assert_eq!(sliced.rows[0].cells.len(), 2);
+    let c00 = sliced.rows[0].cells[0].blocks.first().and_then(|b| match &**b {
+        Block::Para(p) => Some(p.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(c00, Some("Hello"), "cell (0,0) retains full text");
+    let c01 = sliced.rows[0].cells[1].blocks.first().and_then(|b| match &**b {
+        Block::Para(p) => Some(p.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(c01, Some("orld"), "cell (0,1) trimmed from offset 1");
+    let c10 = sliced.rows[1].cells[0].blocks.first().and_then(|b| match &**b {
+        Block::Para(p) => Some(p.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(c10, Some("Fo"), "cell (1,0) trimmed to offset 2");
+    let c11 = sliced.rows[1].cells[1].blocks.first().and_then(|b| match &**b {
+        Block::Para(p) => Some(p.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(c11, Some("Bar"), "cell (1,1) retains full text");
+}
+
+/// #5906: Copy range from paragraph before table into cell (1,0) keeps cell (1,1) full text.
+#[test]
+fn copy_range_from_para_before_table_into_cell() {
+    let mut d = Document::new();
+    let mut t = Table::new(2, 2, 200.0);
+    t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("Hello", CharProps::default()))];
+    t.rows[0].cells[1].blocks = vec![para_block(Paragraph::with_text("World", CharProps::default()))];
+    t.rows[1].cells[0].blocks = vec![para_block(Paragraph::with_text("Foo", CharProps::default()))];
+    t.rows[1].cells[1].blocks = vec![para_block(Paragraph::with_text("Bar", CharProps::default()))];
+    d.body = vec![Arc::new(Block::Para(Paragraph::with_text("Leading", CharProps::default()))), Arc::new(Block::Table(t))];
+    let a = Pos { story: StoryRef::Body, path: Path(vec![0]), off: 4 };
+    let b = Pos { story: StoryRef::Body, path: Path(vec![1, 1, 0, 0]), off: 2 };
+    let frag = d.copy_range(&a, &b);
+    assert_eq!(frag.blocks.len(), 2);
+    let Block::Para(p) = &frag.blocks[0] else { panic!("expected Para") };
+    assert_eq!(p.text.as_str(), "ing");
+    let Block::Table(sliced) = &frag.blocks[1] else { panic!("expected Table") };
+    let c10 = sliced.rows[1].cells[0].blocks.first().and_then(|b| match &**b {
+        Block::Para(p) => Some(p.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(c10, Some("Fo"), "cell (1,0) trimmed to offset 2");
+    let c11 = sliced.rows[1].cells[1].blocks.first().and_then(|b| match &**b {
+        Block::Para(p) => Some(p.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(c11, Some("Bar"), "cell (1,1) retains full text");
+}
+
+/// #5906: Copy range from table cell into paragraph after table keeps preceding cells full text.
+#[test]
+fn copy_range_from_cell_into_para_after_table() {
+    let mut d = Document::new();
+    let mut t = Table::new(2, 2, 200.0);
+    t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("Hello", CharProps::default()))];
+    t.rows[0].cells[1].blocks = vec![para_block(Paragraph::with_text("World", CharProps::default()))];
+    t.rows[1].cells[0].blocks = vec![para_block(Paragraph::with_text("Foo", CharProps::default()))];
+    t.rows[1].cells[1].blocks = vec![para_block(Paragraph::with_text("Bar", CharProps::default()))];
+    d.body = vec![Arc::new(Block::Table(t)), Arc::new(Block::Para(Paragraph::with_text("Trailing", CharProps::default())))];
+    let a = Pos { story: StoryRef::Body, path: Path(vec![0, 0, 1, 0]), off: 1 };
+    let b = Pos { story: StoryRef::Body, path: Path(vec![1]), off: 5 };
+    let frag = d.copy_range(&a, &b);
+    assert_eq!(frag.blocks.len(), 2);
+    let Block::Table(sliced) = &frag.blocks[0] else { panic!("expected Table") };
+    let c00 = sliced.rows[0].cells[0].blocks.first().and_then(|b| match &**b {
+        Block::Para(p) => Some(p.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(c00, Some("Hello"), "cell (0,0) retains full text");
+    let c01 = sliced.rows[0].cells[1].blocks.first().and_then(|b| match &**b {
+        Block::Para(p) => Some(p.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(c01, Some("orld"), "cell (0,1) trimmed from offset 1");
+    let Block::Para(p) = &frag.blocks[1] else { panic!("expected Para") };
+    assert_eq!(p.text.as_str(), "Trail");
+}
+
+/// #5906: Copy range in multi-block cell trims sibling blocks before start and after end.
+#[test]
+fn copy_range_multi_block_cell_endpoint_trims_siblings() {
+    let mut d = Document::new();
+    let mut t = Table::new(2, 2, 200.0);
+    t.rows[0].cells[0].blocks = vec![
+        para_block(Paragraph::with_text("P0", CharProps::default())),
+        para_block(Paragraph::with_text("StartP1", CharProps::default())),
+        para_block(Paragraph::with_text("P2", CharProps::default())),
+    ];
+    t.rows[0].cells[1].blocks = vec![para_block(Paragraph::with_text("Other", CharProps::default()))];
+    t.rows[1].cells[0].blocks = vec![para_block(Paragraph::with_text("Mid", CharProps::default()))];
+    t.rows[1].cells[1].blocks =
+        vec![para_block(Paragraph::with_text("EndP0", CharProps::default())), para_block(Paragraph::with_text("TrailingP1", CharProps::default()))];
+    d.body = vec![Arc::new(Block::Table(t))];
+    // Start at (0, 0), block 1 ("StartP1"), offset 5 ("P1")
+    let a = Pos { story: StoryRef::Body, path: Path(vec![0, 0, 0, 1]), off: 5 };
+    // End at (1, 1), block 0 ("EndP0"), offset 3 ("End")
+    let b = Pos { story: StoryRef::Body, path: Path(vec![0, 1, 1, 0]), off: 3 };
+    let frag = d.copy_range(&a, &b);
+    let Block::Table(sliced) = &frag.blocks[0] else { panic!("expected Table") };
+    // Cell (0,0) in sliced table should have P0 removed, keeping trimmed P1 and full P2.
+    let c00_blocks = &sliced.rows[0].cells[0].blocks;
+    assert_eq!(c00_blocks.len(), 2, "expected P0 removed, leaving 2 blocks");
+    let p0 = match &*c00_blocks[0] {
+        Block::Para(p) => p.text.as_str(),
+        _ => "",
+    };
+    assert_eq!(p0, "P1", "start para trimmed");
+    let p1 = match &*c00_blocks[1] {
+        Block::Para(p) => p.text.as_str(),
+        _ => "",
+    };
+    assert_eq!(p1, "P2", "subsequent sibling block kept");
+
+    // Cell (1,1) in sliced table should have TrailingP1 removed, keeping trimmed EndP0.
+    let c11_blocks = &sliced.rows[1].cells[1].blocks;
+    assert_eq!(c11_blocks.len(), 1, "expected TrailingP1 removed, leaving 1 block");
+    let end_p = match &*c11_blocks[0] {
+        Block::Para(p) => p.text.as_str(),
+        _ => "",
+    };
+    assert_eq!(end_p, "End", "end para trimmed");
+}
