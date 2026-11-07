@@ -8,11 +8,14 @@ use wordcraft_doc::{Block, Paragraph, PartKind, Path, Pos, StoryRef, Table, para
 use super::{delete_selection, sel_result, split_para, type_text};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
+mod footer_page;
 mod header_footer;
 mod items;
 mod links;
 mod objects;
 
+pub(crate) use footer_page::page_footer_visible;
+pub use footer_page::{PageFooterInfo, blocks_blank, footer_visible, header_visible, page_footer_info, page_footers};
 pub(crate) use header_footer::saved_copy;
 use header_footer::{create_hf, edit_hf, header_footer, new_empty_headers, strip_headers};
 pub use items::{DropCapState, drop_cap_state, format_date, format_date_at, format_date_parts};
