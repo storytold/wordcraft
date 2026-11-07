@@ -1,6 +1,6 @@
 # How WordCraft interprets OpenDocument files
 
-> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-04 · **Change:** major (no more settings: one choice for each case the standard leaves open); previously trivial (what is written as read: unchanged paragraphs with drawings, comments, changes or marks too); previously minor (the two presets are Microsoft Word style and LibreOffice style; CLI values listed one by one); previously minor (deviations from the standard listed; ODF 1.2 → 1.3 checked); previously major (new: the ODF interpretation profile and the list of every case)
+> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-05 · **Change:** trivial (a page setup change keeps the file's page definitions); previously major (no more settings: one choice for each case the standard leaves open); previously trivial (what is written as read: unchanged paragraphs with drawings, comments, changes or marks too); previously minor (the two presets are Microsoft Word style and LibreOffice style; CLI values listed one by one); previously minor (deviations from the standard listed; ODF 1.2 → 1.3 checked); previously major (new: the ODF interpretation profile and the list of every case)
 
 OpenDocument (ODF 1.3, OASIS) leaves some of a document's look to the application. Part 3 §16.2
 says that when no style sets a property and the standard gives no default, "an
@@ -77,8 +77,11 @@ a save that doesn't touch it:
 - a paragraph or table WordCraft hasn't changed keeps its own markup, with what it names (its
   automatic styles, common styles, font faces, and the package files and folders they refer to);
 - while no style or list definition changed, the file's own style definitions are written;
-- while the page setup didn't change, its page layouts and master pages, and each section starts
-  with the master page it started with;
+- the file's page layouts and master pages, and each section starts with the master page it started
+  with. A change to margins, paper size, columns or page borders changes just those values in the
+  page layout that says them, so the rest stays (a header's background, the footnote line); only
+  a change to what a page is made of (a header added or removed, a new section), to the page
+  colour, the watermark or odd and even pages writes them from the model;
 - named sections around unedited paragraphs, the document properties WordCraft doesn't model,
   the declarations opening the text and the document's scripts.
 
@@ -162,6 +165,7 @@ from public bug reports and ONLYOFFICE's converter test snapshots):
 
 | Date | Change |
 |---|---|
+| 2026-11-05 | How WordCraft writes ODF: a change to margins, paper size, columns or page borders changes those values in the file's page layouts instead of writing every page definition from the model. |
 | 2026-11-04 | The settings removed: File › Options › Advanced › OpenDocument files, `file.options` `odf`, `WORDCRAFT_ODF`, the LibreOffice style and custom values. WordCraft makes one choice for each case the standard leaves open, the one the default made, so nothing changes for a document opened with the default. What a file states is still followed, its `TabsRelativeToIndent` and `AddParaTableSpacing` among it. LibreOffice's choices stay listed beside WordCraft's. |
 | 2026-11-04 | How WordCraft writes ODF: unchanged paragraphs and tables with drawings, comments, tracked changes, notes or marks are written as read too (the text said from the model); what is edited, and the cases left in the element audit, from the model. |
 | 2026-11-04 | The two presets are the two styles a document can be shown in: Microsoft Word style (`word`, the default; `wordcraft`, its earlier id, still taken) and LibreOffice style (`libreoffice`). The CLI's values listed one by one. |

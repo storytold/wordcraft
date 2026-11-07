@@ -290,12 +290,372 @@ pub(super) fn with_common_as_read(styles: &str, defs: &BTreeMap<String, Arc<str>
 }
 
 /// `styles` (a `styles.xml` WordCraft wrote) with its page layouts, master pages and their
-/// automatic styles as read, WordCraft's own added where the file had none by that name. For a
-/// document whose page setup is as read.
-pub(super) fn with_pages_as_read(styles: &str, defs: &BTreeMap<String, Arc<str>>, order: &[String]) -> String {
-    let keep_file = |_: &str, d: &str, _: Option<&str>| Some(d.to_string());
+/// automatic styles as read, but for those in `patches` (by key), WordCraft's own added where
+/// the file had none by that name. For a document whose page setup is as read but for `patches`.
+pub(super) fn with_pages_as_read(styles: &str, defs: &BTreeMap<String, Arc<str>>, order: &[String], patches: &BTreeMap<String, String>) -> String {
+    let keep_file = |k: &str, d: &str, _: Option<&str>| Some(patches.get(k).cloned().unwrap_or_else(|| d.to_string()));
     let s = with_as_read(styles, "office:automatic-styles", "sauto", defs, order, &keep_file);
     with_as_read(&s, "office:master-styles", "master", defs, order, &keep_file)
+}
+
+/// A section starting a page: the file's master page it uses (`None`: the file's first), and what
+/// WordCraft would write for its page layout when the file was read and now.
+pub(super) struct PageChange<'a> {
+    pub(super) master: Option<&'a str>,
+    pub(super) then: &'a str,
+    pub(super) now: &'a str,
+}
+
+/// The file's page layouts as `changes` change them, by key. `None` when one can't be: a section
+/// names a master page the file doesn't have, or sections sharing a page layout would need it
+/// to differ. A section's master page goes on to its next (a first page's to the pages after it),
+/// which WordCraft reads as one section.
+pub(super) fn page_layout_patches(
+    defs: &BTreeMap<String, Arc<str>>,
+    order: &[String],
+    changes: &[PageChange<'_>],
+) -> Option<BTreeMap<String, String>> {
+    let mut wanted: BTreeMap<String, (&str, &str, Place)> = BTreeMap::new();
+    for c in changes {
+        let first = match c.master {
+            Some(m) => m.to_string(),
+            None if defs.contains_key("master:Standard") => "Standard".to_string(),
+            None => match order.iter().find_map(|k| k.strip_prefix("master:")) {
+                Some(m) => m.to_string(),
+                // The file has no page definitions to keep: WordCraft's own say it.
+                None => continue,
+            },
+        };
+        let mut name = first;
+        let mut seen = BTreeSet::new();
+        let mut own = true;
+        while seen.insert(name.clone()) && seen.len() <= 64 {
+            let master = defs.get(&format!("master:{name}"))?;
+            let head = head_attrs(master)?;
+            let key = format!("sauto:{}|page-layout", get(&head, "style:page-layout-name")?);
+            let entry = wanted.entry(key).or_insert((c.then, c.now, Place::default()));
+            if (entry.0, entry.1) != (c.then, c.now) {
+                return None;
+            }
+            entry.2.own |= own;
+            own = false;
+            let (header, footer) = bands_shown(master);
+            entry.2.header |= header;
+            entry.2.footer |= footer;
+            match get(&head, "style:next-style-name").filter(|n| !n.is_empty()) {
+                Some(next) if defs.contains_key(&format!("master:{next}")) => name = next.to_string(),
+                _ => break,
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    for (key, (then, now, place)) in wanted {
+        if then != now {
+            let patched = patch_layout(defs.get(&key)?, then, now, place)?;
+            out.insert(key, patched);
+        }
+    }
+    Some(out)
+}
+
+/// The attributes of the first element of `xml`.
+fn head_attrs(xml: &str) -> Option<super::xml::Attrs> {
+    let mut head = None;
+    super::xml::events(xml.as_bytes(), |ev| {
+        if head.is_none()
+            && let Ev::Start(_, a) = ev
+        {
+            head = Some(a);
+        }
+    });
+    head
+}
+
+/// Whether the master page `xml` shows a header and a footer on any of its pages.
+fn bands_shown(xml: &str) -> (bool, bool) {
+    let (mut header, mut footer) = (false, false);
+    super::xml::events(xml.as_bytes(), |ev| {
+        if let Ev::Start(q, a) = ev
+            && get(&a, "style:display") != Some("false")
+        {
+            let band = q.strip_prefix("style:").or_else(|| q.strip_prefix("loext:")).unwrap_or("");
+            header |= band.starts_with("header");
+            footer |= band.starts_with("footer");
+        }
+    });
+    (header, footer)
+}
+
+/// Each element below the root of `xml` by its path (`a/b`), with its attributes.
+fn element_attrs(xml: &str) -> BTreeMap<String, BTreeMap<String, String>> {
+    let mut out = BTreeMap::new();
+    let mut path: Vec<String> = Vec::new();
+    super::xml::events(xml.as_bytes(), |ev| match ev {
+        Ev::Start(q, a) => {
+            path.push(q);
+            if path.len() > 1 {
+                out.insert(path[1..].join("/"), a.into_iter().collect());
+            }
+        }
+        Ev::End(_) => {
+            path.pop();
+        }
+        Ev::Text(_) => {}
+    });
+    out
+}
+
+/// Where the element at `path` below the root of `xml` is (`""`: the root): its start tag's start
+/// and end, and its end tag's start and end (for an empty element, the start tag's again).
+fn locate(xml: &str, path: &str) -> Option<(usize, usize, usize, usize)> {
+    let mut stack: Vec<String> = Vec::new();
+    let (mut open, mut found) = (None, None);
+    events_at(xml.as_bytes(), |ev, at| match ev {
+        Ev::Start(q, _) => {
+            stack.push(q);
+            if open.is_none() && found.is_none() && stack.get(1..).unwrap_or(&[]).join("/") == path {
+                open = Some((at.0, at.1, stack.len()));
+            }
+        }
+        Ev::End(_) => {
+            if found.is_none()
+                && let Some((s, e, depth)) = open
+                && depth == stack.len()
+            {
+                found = Some((s, e, at.0, at.1));
+            }
+            stack.pop();
+        }
+        Ev::Text(_) => {}
+    });
+    found
+}
+
+/// Where attribute `name` is in `tag` (a start tag): from the space before it to its value's end.
+/// XML allows space around the `=` and either quote, and a value may hold what looks like an
+/// attribute, so this walks the attributes in turn.
+fn attr_span(tag: &str, name: &str) -> Option<(usize, usize)> {
+    let past_space = |at: usize| Some(at + tag.get(at..)?.find(|c: char| !c.is_ascii_whitespace())?);
+    let mut at = tag.find(|c: char| c.is_ascii_whitespace())?;
+    loop {
+        let name_at = past_space(at)?;
+        let eq = name_at + tag.get(name_at..)?.find('=')?;
+        let value_at = past_space(eq + 1)?;
+        let rest = tag.get(value_at..)?;
+        let quote = rest.chars().next().filter(|c| matches!(c, '"' | '\''))?;
+        let end = value_at + 1 + rest.get(1..)?.find(quote)? + 1;
+        if tag.get(name_at..eq)?.trim_end() == name {
+            return Some((at, end));
+        }
+        at = end;
+    }
+}
+
+/// `tag` (a start tag) with its attributes set as `sets` says (`None`: taken out).
+fn tag_with(tag: &str, sets: &[(String, Option<String>)]) -> String {
+    let mut tag = tag.to_string();
+    for (name, value) in sets {
+        let written = value.as_ref().map(|v| format!(" {name}=\"{}\"", super::writer::x(v))).unwrap_or_default();
+        match attr_span(&tag, name) {
+            Some((from, to)) => tag.replace_range(from..to, &written),
+            None => {
+                let at = tag.len() - if tag.ends_with("/>") { 2 } else { usize::from(tag.ends_with('>')) };
+                tag.insert_str(at, &written);
+            }
+        }
+    }
+    tag
+}
+
+/// `xml` with `child` the last child of the element at `parent` (before `before`, when it has one).
+fn with_child(xml: &str, parent: &str, child: &str, before: Option<&str>) -> Option<String> {
+    let (s, e, end, _) = locate(xml, parent)?;
+    let joined = |name: &str| if parent.is_empty() { name.to_string() } else { format!("{parent}/{name}") };
+    if let Some((at, ..)) = before.and_then(|b| locate(xml, &joined(b))) {
+        return Some(format!("{}{child}{}", xml.get(..at)?, xml.get(at..)?));
+    }
+    let tag = xml.get(s..e)?;
+    if let Some(open) = tag.strip_suffix("/>") {
+        let name = open.trim_start_matches('<').split_whitespace().next()?;
+        return Some(format!("{}{open}>{child}</{name}>{}", xml.get(..s)?, xml.get(e..)?));
+    }
+    Some(format!("{}{child}{}", xml.get(..end)?, xml.get(end..)?))
+}
+
+/// `xml` with the attributes of the element at `path` set as `sets` says, the element made if
+/// it has none (a page layout may have a band's style with no properties in it).
+fn with_attrs(xml: &str, path: &str, sets: &[(String, Option<String>)]) -> Option<String> {
+    if let Some((s, e, ..)) = locate(xml, path) {
+        return Some(format!("{}{}{}", xml.get(..s)?, tag_with(xml.get(s..e)?, sets), xml.get(e..)?));
+    }
+    let (parent, name) = path.rsplit_once('/').unwrap_or(("", path));
+    let xml = if locate(xml, parent).is_some() { xml.to_string() } else { with_attrs(xml, parent, &[])? };
+    let child = tag_with(&format!("<{name}/>"), sets);
+    // The elements of a page layout go in this order (§16.5): a header's style before a footer's.
+    with_child(&xml, parent, &child, (name == "style:header-style").then_some("style:footer-style"))
+}
+
+/// The columns of a page layout (`style:columns`, whole), if it has any.
+fn layout_columns(xml: &str) -> Option<&str> {
+    let (s, _, _, e) = locate(xml, COLUMNS)?;
+    xml.get(s..e)
+}
+
+const LAYOUT: &str = "style:page-layout-properties";
+const COLUMNS: &str = "style:page-layout-properties/style:columns";
+
+/// How a page layout stands to the section it changes for.
+#[derive(Clone, Copy, Default)]
+struct Place {
+    /// The section's first pages use it, whose measurements WordCraft read. Otherwise the pages
+    /// after those do, and it takes a change only where it said what the first pages did.
+    own: bool,
+    /// Its pages have a header.
+    header: bool,
+    /// Its pages have a footer.
+    footer: bool,
+}
+
+/// A page's top or bottom in a page layout: the margin, the band's style, the band's spacing from
+/// the text (see [`patch_side`]).
+struct Side {
+    margin: &'static str,
+    band: &'static str,
+    spacing: &'static str,
+}
+
+const SIDES: [Side; 2] = [
+    Side { margin: "fo:margin-top", band: "style:header-style", spacing: "fo:margin-bottom" },
+    Side { margin: "fo:margin-bottom", band: "style:footer-style", spacing: "fo:margin-top" },
+];
+
+/// Whether two values of a page layout's attribute say the same (lengths to half a point, as
+/// LibreOffice's page styles of one size differ by hundredths of a millimetre).
+fn same_value(a: Option<&String>, b: Option<&String>) -> bool {
+    match (a.and_then(|v| super::xml::length(v)), b.and_then(|v| super::xml::length(v))) {
+        (Some(a), Some(b)) => (a - b).abs() < 0.5,
+        _ => a == b,
+    }
+}
+
+/// `file` (a page layout as the file has it, `place`d) with what changed between `then` and `now`
+/// (what WordCraft would have written and would write): only that, so all WordCraft doesn't model
+/// of the page (a header's background, the footnote line) stays, and values that didn't change
+/// stay in the file's own units.
+fn patch_layout(file: &str, then: &str, now: &str, place: Place) -> Option<String> {
+    let (old, new, had) = (element_attrs(then), element_attrs(now), element_attrs(file));
+    let none = BTreeMap::new();
+    let count = |map: &BTreeMap<String, BTreeMap<String, String>>| map.get(COLUMNS).and_then(|m| m.get("fo:column-count")).cloned();
+    let mut out = file.to_string();
+    if layout_columns(then) != layout_columns(now) && (place.own || count(&had) == count(&old)) {
+        if let Some((s, _, _, e)) = locate(&out, COLUMNS) {
+            out.replace_range(s..e, "");
+        }
+        if let Some(columns) = layout_columns(now) {
+            out = with_child(&out, LAYOUT, columns, Some("style:footnote-sep"))?;
+        }
+    }
+    let paths: BTreeSet<&String> = old.keys().chain(new.keys()).filter(|p| !p.starts_with(COLUMNS)).collect();
+    for path in paths {
+        let (was, is) = (old.get(path).unwrap_or(&none), new.get(path).unwrap_or(&none));
+        // A band's measurements stay off a page without that band.
+        if SIDES.iter().zip([place.header, place.footer]).any(|(side, shown)| !shown && path.starts_with(side.band)) {
+            continue;
+        }
+        let of_side = |n: &str| n == "fo:min-height" || (path == LAYOUT && SIDES.iter().any(|side| side.margin == n));
+        let has = had.get(path);
+        // What the file says of `n`: a border's or padding's side may be in what it gave all at once.
+        let stated = |n: &str| {
+            let has = has?;
+            has.get(n).or_else(|| {
+                let (all, side) = n.rsplit_once('-')?;
+                (matches!(all, "fo:border" | "fo:padding") && matches!(side, "top" | "bottom" | "left" | "right")).then(|| has.get(all))?
+            })
+        };
+        let names: BTreeSet<&String> = was.keys().chain(is.keys()).collect();
+        let mut sets: Vec<(String, Option<String>)> = names
+            .into_iter()
+            .filter(|n| was.get(*n) != is.get(*n) && !of_side(n))
+            // (WordCraft leaves out the plain number format, which a file states as `1`.)
+            .filter(|n| {
+                let plain = n.as_str() == "style:num-format" && was.get(*n).is_none() && stated(n).is_some_and(|v| v == "1");
+                place.own || plain || same_value(stated(n), was.get(*n))
+            })
+            .map(|n| (n.clone(), is.get(n).cloned()))
+            .collect();
+        if sets.is_empty() {
+            continue;
+        }
+        // Page borders: each side as they are now, in place of any the file gave all at once. A
+        // later page's sides that didn't follow the change stay as the file says them.
+        if sets.iter().any(|(n, _)| n.starts_with("fo:border-") || n.starts_with("fo:padding-")) {
+            for attr in ["fo:border", "fo:padding"] {
+                sets.push((attr.to_string(), None));
+                for side in ["top", "bottom", "left", "right"] {
+                    let n = format!("{attr}-{side}");
+                    let followed = sets.iter().any(|(k, _)| *k == n);
+                    sets.retain(|(k, _)| *k != n);
+                    let value = if place.own || followed { is.get(&n).cloned() } else { stated(&n).cloned() };
+                    sets.push((n, value));
+                }
+            }
+        }
+        // WordCraft leaves out the plain number format, whose absence means no numbers in ODF.
+        for (n, v) in &mut sets {
+            if n == "style:num-format" && v.is_none() {
+                *v = Some("1".to_string());
+            }
+        }
+        out = with_attrs(&out, path, &sets)?;
+    }
+    for (side, shown) in SIDES.iter().zip([place.header, place.footer]) {
+        out = patch_side(out, (then, now), side, shown, place.own)?;
+    }
+    Some(out)
+}
+
+/// `file` with one side of the page (its band `shown` on its pages or not) as `then` and `now`
+/// change it. They say where the text starts: after the margin and any band's height and spacing.
+/// The file's page may differ in having that band (a first page with no header before pages with
+/// one), so its text goes to the same place by what it has, and its band stays at its own
+/// distance from the page edge unless that's what changed. A page that isn't the section's own
+/// (see [`Place`]) follows only if its text started where the section's did, or if it states the
+/// same margin and differs by a band: its text then moves by as much.
+fn patch_side(file: String, (then, now): (&str, &str), side: &Side, shown: bool, own: bool) -> Option<String> {
+    let band = format!("{}/style:header-footer-properties", side.band);
+    let measure = |xml: &str| {
+        let attrs = element_attrs(xml);
+        let of = |path: &str, names: &[&str]| {
+            names.iter().find_map(|n| attrs.get(path)?.get(*n)).and_then(|v| super::xml::length(v)).filter(|v| v.is_finite()).unwrap_or(0.0)
+        };
+        (of(LAYOUT, &[side.margin]), of(&band, &["fo:min-height", "svg:height"]), of(&band, &[side.spacing]))
+    };
+    let (was, is, has) = (measure(then), measure(now), measure(&file));
+    let reach = |(margin, height, spacing): (f32, f32, f32)| margin + height + spacing;
+    let moved = (reach(was) - reach(is)).abs() >= 0.005;
+    let band_moved = (was.0 - is.0).abs() >= 0.005;
+    let same_reach = (reach(has) - reach(was)).abs() < 0.5;
+    // (Where the section's first page has no band, its margin is where its text starts.)
+    let same_margin = (has.0 - was.0).abs() < 0.5 || (has.0 - reach(was)).abs() < 0.5;
+    if !(moved || band_moved) || (!own && !same_reach && !same_margin) {
+        return Some(file);
+    }
+    // Where its text is to start.
+    let target = if own || same_reach { reach(is) } else { reach(has) + reach(is) - reach(was) };
+    let length = |v: f32| Some(super::writer::pt(v));
+    if !shown {
+        return if moved { with_attrs(&file, LAYOUT, &[(side.margin.to_string(), length(target))]) } else { Some(file) };
+    }
+    let (out, from) = if band_moved { (with_attrs(&file, LAYOUT, &[(side.margin.to_string(), length(is.0))])?, is.0) } else { (file, has.0) };
+    let room = (target - from).max(0.0);
+    let spacing = has.2.min(room);
+    // A band of a fixed height stays one.
+    let fixed = element_attrs(&out).get(&band).is_some_and(|a| a.contains_key("svg:height") && !a.contains_key("fo:min-height"));
+    let mut sets = vec![((if fixed { "svg:height" } else { "fo:min-height" }).to_string(), length(room - spacing))];
+    if spacing < has.2 {
+        sets.push((side.spacing.to_string(), length(spacing)));
+    }
+    with_attrs(&out, &band, &sets)
 }
 
 /// Attribute names whose values name a definition kept markup may refer to.
