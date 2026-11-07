@@ -93,6 +93,12 @@ pub(crate) struct Writer<'d> {
     /// Move ranges open in the output: (revision, range `w:id`, destination?).
     open_moves: Vec<(u32, String, bool)>,
     docpr: u32,
+    /// Drawing ids the document's shapes already carry; fresh ids skip them.
+    doc_ids: std::collections::BTreeSet<u32>,
+    /// Fresh drawing ids handed out so far.
+    issued: std::collections::HashSet<u32>,
+    /// Lowest id the saturated fallback still has to consider.
+    low: u32,
     /// Shapes' own drawing ids written so far (connectors refer to them).
     shape_ids: std::collections::HashSet<u32>,
     z: u32,
@@ -175,8 +181,7 @@ impl Writer<'_> {
     }
 
     fn next_docpr(&mut self) -> String {
-        self.docpr = self.docpr.saturating_add(1);
-        self.docpr.to_string()
+        fresh_docpr(&mut self.docpr, &mut self.low, &self.doc_ids, &mut self.issued).unwrap_or(0).to_string()
     }
 
     /// The drawing id of a shape: its own (once; a copy gets a fresh one), else a fresh one.
@@ -239,5 +244,61 @@ impl Writer<'_> {
         self.blocks(w, blocks, rels, false, 0);
         self.current_note = None;
         self.pending_mark = None;
+    }
+}
+
+/// The next fresh drawing id: counts up from `docpr`; once that saturates, takes the lowest id (from
+/// `low`) that is neither in `doc_ids` nor already in `issued`. `doc_ids` is fixed and `issued` only
+/// grows, so ids below `low` stay taken. `None` when every id is taken; the caller writes 0 then
+/// (shapes never own 0), so the save still succeeds and no occupied id is repeated.
+fn fresh_docpr(
+    docpr: &mut u32,
+    low: &mut u32,
+    doc_ids: &std::collections::BTreeSet<u32>,
+    issued: &mut std::collections::HashSet<u32>,
+) -> Option<u32> {
+    while let Some(next) = docpr.checked_add(1) {
+        *docpr = next;
+        if !doc_ids.contains(&next) && issued.insert(next) {
+            return Some(next);
+        }
+    }
+    let mut id = *low;
+    while doc_ids.contains(&id) || issued.contains(&id) {
+        id = id.checked_add(1)?;
+    }
+    *low = id;
+    issued.insert(id);
+    Some(id)
+}
+
+#[cfg(test)]
+mod docpr_tests {
+    use super::fresh_docpr;
+    use std::collections::{BTreeSet, HashSet};
+
+    #[test]
+    fn saturated_fallback_never_returns_an_occupied_id() {
+        let doc_ids: BTreeSet<u32> = [u32::MAX - 1, u32::MAX].into_iter().collect();
+        let mut issued: HashSet<u32> = (u32::MAX - 3..=u32::MAX - 2).collect();
+        let (mut docpr, mut low) = (u32::MAX - 4, u32::MAX - 4);
+        let mut got = Vec::new();
+        for _ in 0..4 {
+            got.push(fresh_docpr(&mut docpr, &mut low, &doc_ids, &mut issued));
+        }
+        assert_eq!(got, vec![Some(u32::MAX - 4), None, None, None]);
+        for id in got.into_iter().flatten() {
+            assert!(!doc_ids.contains(&id));
+        }
+    }
+
+    #[test]
+    fn saturated_fallback_reuses_low_free_ids_once() {
+        let doc_ids: BTreeSet<u32> = [1, u32::MAX].into_iter().collect();
+        let mut issued = HashSet::new();
+        let (mut docpr, mut low) = (u32::MAX, 1);
+        let a = fresh_docpr(&mut docpr, &mut low, &doc_ids, &mut issued);
+        let b = fresh_docpr(&mut docpr, &mut low, &doc_ids, &mut issued);
+        assert_eq!((a, b), (Some(2), Some(3)));
     }
 }
