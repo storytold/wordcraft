@@ -2533,6 +2533,77 @@ fn anchored_wsp(name: &str, cx: u32, cy: u32, sppr: &str, style: &str, extra: &s
     )
 }
 
+/// #2638: Word stacks floating objects by `relativeHeight`, not by their order in the text (a
+/// shape sent to back, then copied with the shape over it, comes first in the text but stays
+/// behind). The order is read and kept on save, and an object made here is saved above them.
+#[test]
+fn floating_objects_keep_their_stacking_order() {
+    let shape = |name: &str, z: u32| {
+        anchored_wsp(name, 127000, 127000, r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#, "", "<wps:cNvSpPr/>")
+            .replace(r#"relativeHeight="1""#, &format!(r#"relativeHeight="{z}""#))
+    };
+    let body = format!("<w:p>{}{}</w:p>", shape("Canopy", 251662336), shape("Trunk", 251661312));
+    let mut d = read_body(&body);
+    let stacking = |d: &Document| paras(d)[0].objects.iter().map(|o| o.frame().map(|(_, _, f)| f.z)).collect::<Vec<_>>();
+    assert_eq!(stacking(&d), [Some(251662336), Some(251661312)]);
+    let mut made = paras(&d)[0].objects[0].clone();
+    if let InlineObject::Shape { float, .. } = &mut made {
+        float.z = 0;
+    }
+    let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) else { panic!("a paragraph") };
+    p.insert_object(0, made, &Default::default()).unwrap();
+    let files = unzip(&wordcraft_docx::write(&d).unwrap());
+    let written = attr_values(&text(&files, "word/document.xml"), "wp:anchor", "relativeHeight");
+    assert_eq!(written, ["251662337", "251662336", "251661312"]);
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(stacking(&back), [Some(251662337), Some(251662336), Some(251661312)]);
+}
+
+/// #2638: a file whose stacking orders reach `u32::MAX` leaves no room above them for an object
+/// made here. The stored orders are then numbered again, in their order, so the new object still
+/// goes over all of them and no two objects share an order (it was written as `u32::MAX` too).
+#[test]
+fn stacking_orders_at_the_top_of_the_range_are_numbered_again() {
+    let shape = |name: &str, z: u32| {
+        anchored_wsp(name, 127000, 127000, r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#, "", "<wps:cNvSpPr/>")
+            .replace(r#"relativeHeight="1""#, &format!(r#"relativeHeight="{z}""#))
+    };
+    let body = format!("<w:p>{}{}</w:p>", shape("Top", u32::MAX), shape("Low", 7));
+    let mut d = read_body(&body);
+    let stacking = |d: &Document| paras(d)[0].objects.iter().map(|o| o.frame().map(|(_, _, f)| f.z)).collect::<Vec<_>>();
+    assert_eq!(stacking(&d), [Some(u32::MAX), Some(7)]);
+    let mut made = paras(&d)[0].objects[0].clone();
+    if let InlineObject::Shape { float, .. } = &mut made {
+        float.z = 0;
+    }
+    let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) else { panic!("a paragraph") };
+    p.insert_object(0, made, &Default::default()).unwrap();
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let z: Vec<u32> = stacking(&back).into_iter().map(|z| z.expect("every anchor has an order")).collect();
+    assert!(z[0] > z[1] && z[1] > z[2], "new over Top over Low, all different: {z:?}");
+    // The note separators are saved with the document: an order there counts too.
+    let mut d = read_body(&format!("<w:p>{}</w:p>", shape("Low", 7)));
+    let mut sep = read_body(&format!("<w:p>{}</w:p>", shape("Separator", u32::MAX)));
+    d.footnote_separators.separator = Some(std::mem::take(&mut sep.body));
+    let (orders, unset) = d.stacking_orders();
+    assert_eq!((orders.last().copied(), unset), (Some(u32::MAX), 0), "the separator's order is seen");
+    let mut made = paras(&d)[0].objects[0].clone();
+    if let InlineObject::Shape { float, .. } = &mut made {
+        float.z = 0;
+    }
+    let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) else { panic!("a paragraph") };
+    p.insert_object(0, made, &Default::default()).unwrap();
+    let files = unzip(&wordcraft_docx::write(&d).unwrap());
+    let body: Vec<u64> = attr_values(&text(&files, "word/document.xml"), "wp:anchor", "relativeHeight").iter().map(|v| v.parse().unwrap()).collect();
+    let seps: Vec<u64> = attr_values(&text(&files, "word/footnotes.xml"), "wp:anchor", "relativeHeight").iter().map(|v| v.parse().unwrap()).collect();
+    assert_eq!(seps.len(), 1, "the separator's shape is saved");
+    assert!(body[0] > seps[0] && seps[0] > body[1], "new over the separator's over Low: {body:?} {seps:?}");
+    // With room above, the stored orders are written as they are.
+    let room = read_body(&format!("<w:p>{}</w:p>", shape("Top", u32::MAX - 5)));
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&room).unwrap()).unwrap();
+    assert_eq!(stacking(&back), [Some(u32::MAX - 5)]);
+}
+
 /// #611: diagrams drawn with Word's shapes were mostly missing. Connectors and boxes take their
 /// outline and fill from the theme through their style references, or name preset and scheme
 /// colours; all of these are read, with line widths and arrowheads.
@@ -3710,6 +3781,102 @@ fn text_frames_read_and_round_trip() {
     assert!(q.iter().any(|x| x.props.drop_cap == Some(2) && x.props.frame.is_none()));
 }
 
+/// #3000: Word writes the drop cap's letter in its framed paragraph at the enlarged size the
+/// dialog computed for it. The merge gives the letter back the text's size — the layout sizes a
+/// dropped letter from the text around it, so keeping the file's size would render the
+/// enlargement twice, a letter twice as tall as the lines it drops through.
+#[test]
+fn a_word_drop_caps_letter_takes_the_texts_size_back() {
+    let body = r#"<w:p><w:r><w:t>Relationship with Myself</w:t></w:r></w:p>
+        <w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:hSpace="141" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Lucida Calligraphy" w:hAnsi="Lucida Calligraphy"/><w:sz w:val="88"/><w:szCs w:val="88"/></w:rPr><w:t>B</w:t></w:r></w:p>
+        <w:p><w:r><w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr><w:t>efore we start</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let p = paras(&d);
+    assert_eq!(p.len(), 2);
+    assert_eq!(p[1].text, "Before we start");
+    assert_eq!(p[1].props.drop_cap, Some(3));
+    assert_eq!(p[1].props.drop_cap_font.as_deref(), Some("Lucida Calligraphy"));
+    assert_eq!(p[1].runs.len(), 1, "the letter and the text share a run once sized alike");
+    assert_eq!((p[1].runs[0].props.size, p[1].runs[0].props.size_cs), (Some(12.0), Some(12.0)), "the letter keeps the text's size");
+    // Without a size of its own in the text, the letter inherits the paragraph's.
+    let plain = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="2" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="72"/></w:rPr><w:t>D</w:t></w:r></w:p>
+        <w:p><w:r><w:t>rop cap text</w:t></w:r></w:p>"#,
+    );
+    let q = paras(&plain);
+    assert_eq!(q.len(), 1);
+    assert_eq!((q[0].runs[0].props.size, q[0].runs[0].props.size_cs), (None, None));
+    // Saved, the letter carries the size the layout draws it at — Word draws a framed letter at
+    // its run's own `w:sz` — here 3 lines of 12 pt text, (2*14.4 + 8.4)/0.7 = 53.14 pt → 106.
+    // Reading that back gives the document the first read gave: the letter at the text's size.
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = text(&unzip(&bytes), "word/document.xml");
+    assert!(xml.contains(r#"w:sz w:val="106""#), "the drawn size on the letter's run: {xml}");
+    let again = wordcraft_docx::read(&bytes).unwrap();
+    let r = paras(&again);
+    assert_eq!((r.len(), r[1].text.as_str(), r[1].runs.len()), (2, "Before we start", 1));
+    assert_eq!((r[1].props.drop_cap, r[1].props.drop_cap_font.as_deref()), (Some(3), Some("Lucida Calligraphy")));
+    assert_eq!((r[1].runs[0].props.size, r[1].runs[0].props.size_cs), (Some(12.0), Some(12.0)));
+}
+
+/// #3000: a bookmark opening the text after a drop cap is a run of its own with no size; the
+/// letter still takes the size of the text, not the marker's.
+#[test]
+fn a_drop_caps_letter_skips_a_leading_bookmark_for_the_texts_size() {
+    let d = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="88"/></w:rPr><w:t>B</w:t></w:r></w:p>
+        <w:p><w:bookmarkStart w:id="1" w:name="start"/><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>efore we start</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>"#,
+    );
+    let p = paras(&d);
+    assert_eq!(p.len(), 1);
+    assert_eq!(p[0].plain_text(), "Before we start");
+    assert_eq!(p[0].props.drop_cap, Some(3));
+    let letter = p[0].run_ranges().find(|(range, _)| p[0].text.get(range.clone()) == Some("B")).map(|(_, props)| props.size);
+    assert_eq!(letter, Some(Some(12.0)), "the letter keeps the text's size, not the bookmark's: {:?}", p[0].runs);
+}
+
+/// #3000: a run in the drop cap's frame with a size of its own keeps it; only the runs at the
+/// letter's enlarged size take the text's size back.
+#[test]
+fn a_drop_cap_frames_other_sizes_are_kept() {
+    let d = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="88"/></w:rPr><w:t>B</w:t></w:r><w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t>e</w:t></w:r></w:p>
+        <w:p><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>fore we start</w:t></w:r></w:p>"#,
+    );
+    let p = paras(&d);
+    assert_eq!(p.len(), 1);
+    let size = |s: &str| p[0].run_ranges().find(|(range, _)| p[0].text.get(range.clone()) == Some(s)).map(|(_, props)| props.size);
+    assert_eq!(size("B"), Some(Some(12.0)), "{:?}", p[0].runs);
+    assert_eq!(size("e"), Some(Some(10.0)), "{:?}", p[0].runs);
+}
+
+/// #3000: a drop cap's frame followed by an empty paragraph stays as it is: there is no text to
+/// merge the letter into, so it keeps its enlarged size instead of shrinking to an ordinary letter.
+#[test]
+fn a_drop_cap_before_an_empty_paragraph_keeps_its_size() {
+    let d = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="88"/></w:rPr><w:t>B</w:t></w:r></w:p>
+        <w:p/>"#,
+    );
+    let p = paras(&d);
+    assert_eq!(p.len(), 2, "the empty paragraph is not merged: {p:?}");
+    assert_eq!((p[0].text.as_str(), p[0].runs[0].props.size), ("B", Some(44.0)));
+}
+
+/// #3000: a bookmark opening the drop cap's own frame is a sizeless run before the letter; the
+/// letter is still recognised by its enlarged size and takes the text's size back.
+#[test]
+fn a_drop_caps_letter_after_a_bookmark_in_its_frame_takes_the_texts_size() {
+    let d = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:bookmarkStart w:id="2" w:name="cap"/><w:r><w:rPr><w:sz w:val="88"/></w:rPr><w:t>B</w:t></w:r><w:bookmarkEnd w:id="2"/></w:p>
+        <w:p><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>efore we start</w:t></w:r></w:p>"#,
+    );
+    let p = paras(&d);
+    assert_eq!(p.len(), 1);
+    let letter = p[0].run_ranges().find(|(range, _)| p[0].text.get(range.clone()) == Some("B")).map(|(_, props)| props.size);
+    assert_eq!(letter, Some(Some(12.0)), "the letter takes the text's size, not its enlarged one: {:?}", p[0].runs);
+}
+
 /// #2360: a `w:framePr` in the document defaults, the sizeless top-left one Apple Pages writes,
 /// frames no paragraph, as in Word: a header's title and the body's text stay in the text instead
 /// of moving to the page's corner, and the default isn't written back. The defaults' other
@@ -4625,4 +4792,18 @@ fn vml_horizontal_rules_are_read_and_kept() {
     .concat();
     let d = read_body(&body);
     assert_eq!(rules(&d).iter().map(|r| r.0).collect::<Vec<_>>(), [None, None]);
+}
+
+/// A leading bookmark marker has default run properties; the following text keeps its font.
+#[test]
+fn drop_cap_merge_takes_text_font_after_leading_marker() {
+    let body = r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Liberation Mono" w:hAnsi="Liberation Mono"/></w:rPr><w:t>A</w:t></w:r></w:p>
+        <w:p><w:bookmarkStart w:id="0" w:name="before-text"/><w:r><w:rPr><w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/></w:rPr><w:t>c tale</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let p = paras(&d);
+    assert_eq!(p.len(), 1, "the frame merges into its paragraph");
+    assert_eq!(p[0].props.drop_cap_font.as_deref(), Some("Liberation Mono"));
+    let text_at = p[0].text.find("c tale").unwrap();
+    assert_eq!(p[0].props_of_char(0).font.as_deref(), Some("Liberation Serif"), "the cap letter gets the following text's font");
+    assert_eq!(p[0].props_of_char(text_at).font.as_deref(), Some("Liberation Serif"));
 }

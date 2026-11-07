@@ -382,12 +382,19 @@ pub(super) fn apply_border_line(s: &mut Session, at: &Pos, line: Border) -> Resu
     match prev.filter(|q| matches!(s.doc.block(at.story, q), Some(Block::Para(_)))) {
         Some(q) => {
             // The characters' paragraph becomes the one typing continues in.
+            let before = s.doc.para(at.story, &q).map(|p| p.props.clone());
             set_bottom(s.doc.para_mut(at.story, &q)?);
+            if let Some(before) = before {
+                crate::cmd::fmt_revisions::record_para_props(s, at.story, &q, &before)?;
+            }
             s.sel = Selection::caret(end);
         }
         None => {
             let before = s.doc.para(at.story, &at.path).map(|p| p.props.clone());
             set_bottom(s.doc.para_mut(at.story, &at.path)?);
+            if let Some(before) = before.as_ref() {
+                crate::cmd::fmt_revisions::record_para_props(s, at.story, &at.path, before)?;
+            }
             let new = split_para(s, &end)?;
             let p = s.doc.para_mut(new.story, &new.path)?;
             p.props.borders = None;

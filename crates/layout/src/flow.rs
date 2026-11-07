@@ -2,8 +2,8 @@ use super::boxes::{BoxInput, BoxLayout, Edges, joined, layout_box, push_para};
 use super::cache::has_page_number_fields;
 use super::ctx::Ctx;
 use super::floats::{
-    FloatAnchor, LateFloats, ObjFrame, ObjectPlacement, anchor_floats, body_wraps, continued_exclusions, fitting, late_floats, place_late,
-    place_objects,
+    FloatAnchor, LateFloats, ObjFrame, ObjectPlacement, PageStacks, StackSpan, anchor_floats, body_wraps, continued_exclusions, fitting, late_floats,
+    object_groups, place_late, place_objects,
 };
 use super::notes::{DECOR_STORY, NoteBox, para_notes};
 use super::page::{PageBuilder, PageFrame, item_bottom};
@@ -123,11 +123,15 @@ struct Rooms {
 }
 
 impl Rooms {
-    fn of(ctx: &Ctx, block: usize, pl: &ParaLayout) -> Self {
+    fn of(ctx: &Ctx, block: usize, web: bool, p: &Paragraph, pl: &ParaLayout) -> Self {
         let above = joined(ctx.doc, &ctx.doc.body, block, block.checked_sub(1), None);
         let below = joined(ctx.doc, &ctx.doc.body, block, Some(block + 1), None);
         let own = Edges::own(pl, 0, pl.lines.len());
-        Rooms { above, top: if above { 0.0 } else { own.top }, bottom: if below { 0.0 } else { own.bottom } }
+        let break_mark = !web
+            && pl.lines.len() >= 2
+            && pl.lines.get(pl.lines.len() - 2).is_some_and(|line| line.end == LineEnd::PageBreak)
+            && pl.lines.last().is_some_and(|line| only_markers(p, line.start..line.stop));
+        Rooms { above, top: if above { 0.0 } else { own.top }, bottom: if below || break_mark { 0.0 } else { own.bottom } }
     }
 }
 
@@ -192,7 +196,12 @@ impl<'a> Flow<'a> {
         // Floating objects anchored here join the page's wrap areas before the text is laid out; if
         // the paragraph then starts somewhere else (another column or page, or contextual spacing
         // drops its space before), they are placed again there.
-        let space_before = ctx.doc.styles.resolve_para(&p.props).space_before;
+        let mut rp = ctx.doc.styles.resolve_para(&p.props);
+        // Spacing in lines is a line of the section's grid, as the paragraph will be laid out.
+        if rp.space_lines.iter().any(|l| *l != 0.0) {
+            rp.set_line_unit(ctx.grid.line.unwrap_or(wordcraft_doc::resolve::LINE_UNIT));
+        }
+        let space_before = rp.space_before;
         let excl_mark = pb.excl.len();
         let guess = pb.y + space_before;
         let label = ctx.next_label(p);
@@ -544,7 +553,7 @@ impl<'a> Flow<'a> {
             pinned: None,
             late: Some(&self.late),
         };
-        let (behind, front) = place_objects(
+        let groups = object_groups(
             ctx,
             &ObjectPlacement {
                 story: StoryRef::Body,
@@ -558,10 +567,38 @@ impl<'a> Flow<'a> {
                 depth: 0,
             },
         );
+        let (mut behind, mut spans) = (Vec::new(), PageStacks::default());
+        for (key, b, f) in groups {
+            if let Some(key) = key {
+                pb.stack_seq = pb.stack_seq.saturating_add(1);
+                let span = |at, len| StackSpan { key, seq: pb.stack_seq, at, len };
+                if !b.is_empty() {
+                    spans.behind.push(span(0, b.len()));
+                }
+                if !f.is_empty() {
+                    spans.front.push(span(items.len(), f.len()));
+                }
+            }
+            behind.extend(b);
+            items.extend(f);
+        }
         self.late.drew();
-        items.extend(front);
         items.extend(line_numbers(ctx, pb, &self.pl, (l0, l1), y));
-        add_items(pb, behind, items);
+        let n_behind = behind.len();
+        if let Some(pg) = pb.pages.last_mut() {
+            for (i, item) in behind.into_iter().enumerate() {
+                pg.items.insert(i.min(pg.items.len()), item);
+            }
+            let base = pg.items.len().saturating_sub(pb.behind.last().copied().unwrap_or(0).saturating_add(n_behind));
+            if let Some(st) = pb.stacks.last_mut() {
+                st.behind.splice(0..0, spans.behind);
+                st.front.extend(spans.front.into_iter().map(|s| StackSpan { at: s.at.saturating_add(base), ..s }));
+            }
+            pg.items.extend(items);
+        }
+        if let Some(count) = pb.behind.last_mut() {
+            *count += n_behind;
+        }
         if let (Some(f), Some(l)) = (self.pl.lines.get(l0), self.pl.lines.get(l1 - 1)) {
             pb.y = y + (l.top + l.height - f.top);
             pb.content_bottom = pb.content_bottom.max(pb.y);
@@ -798,20 +835,6 @@ fn line_numbers(ctx: &mut Ctx, pb: &mut PageBuilder, pl: &ParaLayout, (l0, l1): 
     items
 }
 
-/// Add a piece's items to the last page: those `behind` the text at the front, the rest at the end.
-fn add_items(pb: &mut PageBuilder, behind: Vec<Placed>, items: Vec<Placed>) {
-    let n_behind = behind.len();
-    if let Some(pg) = pb.pages.last_mut() {
-        for (i, it) in behind.into_iter().enumerate() {
-            pg.items.insert(i.min(pg.items.len()), it);
-        }
-        pg.items.extend(items);
-    }
-    if let Some(b) = pb.behind.last_mut() {
-        *b += n_behind;
-    }
-}
-
 fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) {
     let mut f = Flow::new(ctx, pb, p, (block, body_top));
     let spot = |pb: &PageBuilder| (pb.pages.len(), pb.col);
@@ -822,7 +845,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     }
     let before = f.gap_before(ctx, pb, broke_before);
     pb.y += before;
-    let rooms = Rooms::of(ctx, block, &f.pl);
+    let rooms = Rooms::of(ctx, block, pb.web, p, &f.pl);
     let applied_before = f.keep_together(ctx, pb, rooms, before);
     // A different top only matters when there is something to wrap around.
     if spot(pb) != placed_at || ((pb.y - f.guess).abs() > 0.01 && !pb.excl.is_empty()) {

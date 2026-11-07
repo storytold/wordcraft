@@ -25,9 +25,9 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("text.insert", "Type Text", "Editing", insert).params(r#"{"text": string, "raw"?: bool, "paragraphs"?: bool} (paragraphs: each line a paragraph, one undo step, at most 10000 lines)"#),
         CommandSpec::new("text.newParagraph", "New Paragraph", "Editing", new_paragraph).key("Enter"),
-        CommandSpec::new("text.lineBreak", "Line Break", "Editing", |s, _| ins_char(s, '\n')).key("Shift+Enter"),
-        CommandSpec::new("text.pageBreak", "Page Break", "Insert › Pages", |s, _| ins_char(s, PAGE_BREAK)).key("Mod+Enter"),
-        CommandSpec::new("text.columnBreak", "Column Break", "Layout › Breaks", |s, _| ins_char(s, COLUMN_BREAK)).key("Mod+Shift+Enter"),
+        CommandSpec::new("text.lineBreak", "Line Break", "Editing", |s, _| insert_break(s, '\n')).key("Shift+Enter"),
+        CommandSpec::new("text.pageBreak", "Page Break", "Insert › Pages", |s, _| insert_break(s, PAGE_BREAK)).key("Mod+Enter"),
+        CommandSpec::new("text.columnBreak", "Column Break", "Layout › Breaks", |s, _| insert_break(s, COLUMN_BREAK)).key("Mod+Shift+Enter"),
         CommandSpec::new("text.tab", "Tab", "Editing", tab).key("Tab"),
         CommandSpec::new("text.backTab", "Shift+Tab", "Editing", back_tab).key("Shift+Tab"),
         // A tab character even in a table cell, where Tab moves to the next cell (#3137); ⌥Tab on macOS.
@@ -56,4 +56,17 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("text.trademark", "Trademark Sign", "Insert › Symbols", |s, _| ins_char(s, '™')).key(non_mac("Mod+Alt+T")),
         CommandSpec::new("text.ellipsis", "Ellipsis", "Insert › Symbols", |s, _| ins_char(s, '…')).key(non_mac("Mod+Alt+.")),
     ]
+}
+
+/// A line, page or column break. On a selected picture or shape, Word inserts the break before
+/// it and keeps the object selected (#4126).
+fn insert_break(s: &mut Session, c: char) -> CmdResult {
+    let Some(at) = super::objects::object_selection(s).map(|(p, _)| p) else { return ins_char(s, c) };
+    s.sel = Selection::caret(at.clone());
+    ins_char(s, c)?;
+    let after_break = Pos { off: at.off + c.len_utf8(), ..at };
+    if s.doc.para_at(&after_break).and_then(|para| para.object_at(after_break.off)).is_some_and(|o| o.is_drawing()) {
+        super::objects::select_object(s, &after_break);
+    }
+    sel_result(s)
 }

@@ -2,13 +2,13 @@ use super::bidi::{Dir, bidi_levels, visual_order};
 use super::builder::{Builder, left_out, overstrike};
 use super::chars::caps_char;
 use super::grid::{auto_space, snap_chars};
-use super::justify::hyphenation_points;
+use super::justify::{cluster_gaps, hyphenation_points};
 use super::lines::break_lines;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, ParaEnv, RubyLayout, undrawable_bullet};
 use super::proof::{ProofRun, is_list_item, proof_issues};
 use super::{
-    Arc, COLUMN_BREAK, CharProps, Document, FIELD_SHADING, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, PTabAlign, PTabBase, ParaLayout,
-    Paragraph, ResolvedChar, ResolvedPara, TabLeader, field_code_text, field_text_on, reference_link,
+    Align, Arc, COLUMN_BREAK, CharProps, Document, FIELD_SHADING, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, PTabAlign, PTabBase,
+    ParaLayout, Paragraph, ResolvedChar, ResolvedPara, TabLeader, field_code_text, field_text_on, reference_link,
 };
 
 /// A run's formatting resolved in the paragraph's style and table.
@@ -58,6 +58,7 @@ impl Slot {
             obj_h,
             obj_d,
             dot: false,
+            picture: false,
         }
     }
 }
@@ -99,6 +100,10 @@ fn paragraph_props(p: &Paragraph, env: &ParaEnv) -> ResolvedPara {
     // Indents in characters are measured in the paragraph mark's font size.
     if rp.indent_chars.iter().any(|c| *c != 0.0) {
         rp.set_char_unit(doc.styles.resolve_char_in(p.props.style.as_deref(), env.table.map(|t| &t.chr), &p.mark).size);
+    }
+    // Spacing in lines: a line is the section's line pitch when it has a line grid.
+    if rp.space_lines.iter().any(|l| *l != 0.0) {
+        rp.set_line_unit(env.grid.line.unwrap_or(wordcraft_doc::resolve::LINE_UNIT));
     }
     list_indents(&mut rp, p, env);
     // ODF (XSL's box model): padding takes room whether or not a side has a border.
@@ -260,12 +265,10 @@ impl<'a> Shaped<'a> {
         let rp = cx.rp;
         let Some(c) = cx.drop_first.filter(|_| start == 0) else { return 0 };
         let Some(first) = text.get(..c.len_utf8()) else { return 0 };
-        let line_h = (rc.size * 1.2).max(1.0);
-        let lines = rp.drop_cap as f32;
-        // Capital height is ~0.7 em: the letter's cap spans from line 1's caps to line N's baseline.
         let mut big = (**rc).clone();
-        // `clamp` would panic here when the text itself is larger than 1000 pt.
-        big.size = (((lines - 1.0) * line_h + rc.size * 0.7) / 0.7).min(1000.0).max(rc.size);
+        big.size = wordcraft_doc::resolve::drop_cap_size(rc.size, rp.drop_cap);
+        // An Arabic or other complex-script letter is shaped at `size_cs`.
+        big.size_cs = wordcraft_doc::resolve::drop_cap_size(rc.size_cs, rp.drop_cap);
         if let Some(f) = &rp.drop_cap_font {
             big.font = f.clone();
             big.font_cs = f.clone();
@@ -373,6 +376,13 @@ impl<'a> Shaped<'a> {
             let floor = if tall.is_finite() { -tall.max(0.0) } else { 0.0 };
             let raise = if raise.is_finite() { raise.clamp(floor, 1584.0) } else { 0.0 };
             self.b.clusters.push(slot.cluster(ClKind::Object(k), w * s + el + er + 2.0 * px, (tall + raise, -raise)));
+            if let Some(c) = self.b.clusters.last_mut() {
+                c.picture = match o {
+                    InlineObject::Image { .. } | InlineObject::Graphic { .. } | InlineObject::Group { .. } => true,
+                    InlineObject::Shape { kind, story, .. } => *kind != wordcraft_doc::para::ShapeKind::TextBox && story.is_none(),
+                    _ => false,
+                };
+            }
         } else {
             self.push(slot, ClKind::Object(k), 0.0, 0.0);
         }
@@ -655,7 +665,11 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         left_out: Vec::new(),
         enclosures,
         auto_space,
+        gaps: Vec::new(),
     };
+    if matches!(pl.rp.align, Align::ThaiDistribute | Align::KhmerJustify) {
+        pl.gaps = cluster_gaps(&p.text, &pl.clusters, pl.rp.align == Align::ThaiDistribute);
+    }
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&bt.text, |i| bt.to_para(i), &pl, auto, env.doc.settings.hyphenate_caps, &runs);
     // A paragraph whose text and mark are all a deletion the layout leaves out (a deleted

@@ -11,9 +11,20 @@ pub enum Align {
     Right,
     Justify,
     Distribute,
+    /// Word's "Thai Distributed" (`w:jc="thaiDistribute"`): the extra space of a wrapped line is
+    /// spread evenly between the character clusters of Thai and Khmer text, which has no spaces.
+    ThaiDistribute,
+    /// WordCraft's Khmer Justify: phrase spaces first, then word boundaries, then orthographic
+    /// syllables, never inside one. Saved as `thaiDistribute` plus a `wc:khmer` mark.
+    KhmerJustify,
 }
 
 impl Align {
+    /// Does this alignment stretch the lines of a wrapped paragraph to both margins?
+    pub fn stretches(self) -> bool {
+        matches!(self, Align::Justify | Align::Distribute | Align::ThaiDistribute | Align::KhmerJustify)
+    }
+
     /// Alignment is logical (`Left` is the start edge, ISO 29500 `start`): the alignment as seen
     /// on the page, or the logical one for a visual choice, in a paragraph that reads right to
     /// left when `rtl` (Left and Right swap; the swap is its own inverse).
@@ -346,6 +357,14 @@ pub struct ParaProps {
     pub space_before: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub space_after: Option<f32>,
+    /// Space before in lines (`w:beforeLines`, stored by Word in hundredths). A non-zero value
+    /// wins over `space_before`; one line is 12 pt, or the line pitch of a document grid with
+    /// lines. `Some(0.0)` cancels an inherited value. Written by WPS Office and East Asian Word.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_before_lines: Option<f32>,
+    /// Space after in lines (`w:afterLines`), like `space_before_lines`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_after_lines: Option<f32>,
     /// HTML-style automatic space before (`w:beforeAutospacing`): 14 pt, none at the top of the
     /// document or of a table cell, and collapsing with the space after the paragraph above.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -453,7 +472,8 @@ impl ParaProps {
 
     fn overlay_layout(&mut self, patch: &ParaProps) {
         overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars,
-            space_before, space_after, space_before_auto, space_after_auto, line_spacing, contextual_spacing, mirror_indents, adjust_right_indent, tabs, shading, borders);
+            space_before, space_after, space_before_lines, space_after_lines, space_before_auto, space_after_auto, line_spacing, contextual_spacing, mirror_indents,
+            adjust_right_indent, tabs, shading, borders);
     }
 
     fn overlay_pagination(&mut self, patch: &ParaProps) {

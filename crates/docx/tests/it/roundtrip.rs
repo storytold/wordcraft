@@ -19,23 +19,19 @@ fn rt(doc: &Document) -> Document {
     wordcraft_docx::read(&bytes).expect("read")
 }
 
-fn paras(doc: &Document) -> Vec<&Paragraph> {
-    doc.body.iter().filter_map(|b| b.as_para()).collect()
+/// `doc` without the stacking order a save gives objects made in WordCraft (`relativeHeight`,
+/// read back as `Float::z`), to compare them with the objects as made.
+fn unstacked(mut doc: Document) -> Document {
+    doc.objects_mut(&|_| true, &mut |o| {
+        if let Some(f) = o.float_mut() {
+            f.z = 0;
+        }
+    });
+    doc
 }
 
-/// `doc` with the stacking order of its body's floating objects cleared: saving gives objects
-/// without one an order (`relativeHeight`), so tests about other properties compare without it.
-fn unstacked(mut doc: Document) -> Document {
-    for b in &mut doc.body {
-        if let Block::Para(p) = std::sync::Arc::make_mut(b) {
-            for o in &mut p.objects {
-                if let Some(f) = o.float_mut() {
-                    f.z = 0;
-                }
-            }
-        }
-    }
-    doc
+fn paras(doc: &Document) -> Vec<&Paragraph> {
+    doc.body.iter().filter_map(|b| b.as_para()).collect()
 }
 
 fn part_text(doc: &Document, id: Option<u32>) -> String {
@@ -157,6 +153,7 @@ fn every_char_prop_round_trips() {
     assert_eq!(p.runs[0].props, CharProps::default());
 }
 
+/// Every paragraph property survives a DOCX save and reopen.
 #[test]
 fn every_para_prop_round_trips() {
     let b = Border { style: BorderStyle::Double, width: 0.75, color: Some(Rgb(9, 8, 7)), space: 4.0 };
@@ -171,6 +168,8 @@ fn every_para_prop_round_trips() {
         indent_first_chars: Some(-1.0),
         space_before: Some(6.0),
         space_after: Some(12.0),
+        space_before_lines: Some(0.5),
+        space_after_lines: Some(0.0),
         space_before_auto: Some(true),
         space_after_auto: Some(false),
         line_spacing: Some(LineSpacing::Multiple(1.5)),
@@ -229,6 +228,8 @@ fn every_para_prop_round_trips() {
         ParaProps { line_spacing: Some(LineSpacing::AtLeast(14.0)), indent_first: Some(24.0), align: Some(Align::Center), ..Default::default() },
         ParaProps { line_spacing: Some(LineSpacing::Exactly(20.0)), align: Some(Align::Right), ..Default::default() },
         ParaProps { align: Some(Align::Distribute), ..Default::default() },
+        ParaProps { align: Some(Align::ThaiDistribute), ..Default::default() },
+        ParaProps { align: Some(Align::KhmerJustify), ..Default::default() },
         ParaProps { kinsoku: Some(true), word_wrap: Some(true), auto_space_dn: Some(false), ..Default::default() },
         ParaProps::default(),
     ];
@@ -546,7 +547,16 @@ fn comments_round_trip() {
     p.insert_object(end, InlineObject::CommentEnd { id: 0 }, &CharProps::default()).unwrap();
     d.body = vec![para_block(p.clone())];
     let r = rt(&d);
-    assert_eq!(paras(&r)[0].objects, p.objects);
+    // The reply made here is written with its parent's anchors, as Word saves a reply (Word for
+    // Mac drops a reply without them), and comes back with them; a second save keeps them as they are.
+    let anchored = [
+        InlineObject::CommentStart { id: 0 },
+        InlineObject::CommentStart { id: 1 },
+        InlineObject::CommentEnd { id: 0 },
+        InlineObject::CommentEnd { id: 1 },
+    ];
+    assert_eq!(paras(&r)[0].objects, anchored);
+    assert_eq!(paras(&rt(&r))[0].objects, anchored);
     assert_eq!(r.comments.len(), 2);
     for (id, c) in &d.comments {
         let g = r.comments.get(id).expect("comment");
@@ -554,6 +564,35 @@ fn comments_round_trip() {
         assert_eq!(part_text(&r, Some(g.part)), part_text(&d, Some(c.part)));
         assert_eq!(r.parts.get(&g.part).unwrap().kind, PartKind::Comment);
     }
+}
+
+/// A reply to a reply made here (neither has anchors yet) takes the thread's anchors too, so Word
+/// shows both.
+#[test]
+fn a_reply_to_a_new_reply_is_anchored_too() {
+    let mut d = Document::new();
+    for (id, parent, text) in [(0, None, "Please check this."), (1, Some(0), "Done."), (2, Some(1), "Thanks.")] {
+        let part = d.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text(text, CharProps::default()))]);
+        d.comments.insert(id, Comment { author: "Ann".into(), initials: "A".into(), parent, part, ..Default::default() });
+    }
+    let mut p = Paragraph::with_text("commented text", CharProps::default());
+    p.insert_object(0, InlineObject::CommentStart { id: 0 }, &CharProps::default()).unwrap();
+    let end = p.len();
+    p.insert_object(end, InlineObject::CommentEnd { id: 0 }, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let r = rt(&d);
+    assert_eq!(
+        paras(&r)[0].objects,
+        [
+            InlineObject::CommentStart { id: 0 },
+            InlineObject::CommentStart { id: 1 },
+            InlineObject::CommentStart { id: 2 },
+            InlineObject::CommentEnd { id: 0 },
+            InlineObject::CommentEnd { id: 1 },
+            InlineObject::CommentEnd { id: 2 },
+        ]
+    );
+    assert_eq!(r.comments.get(&2).and_then(|c| c.parent), Some(1));
 }
 
 /// A table style's cell text formatting, whole-table shading, cell margins and its header row and
@@ -2840,5 +2879,60 @@ fn drop_cap_options_round_trip() {
     assert_eq!(
         (b.props.drop_cap, b.props.drop_cap_margin, b.props.drop_cap_distance, b.props.drop_cap_font.as_deref()),
         (Some(4), Some(true), None, None)
+    );
+}
+
+/// Thai Distributed is `w:jc="thaiDistribute"`; Khmer Justify is the same value plus the ignorable
+/// `wc:khmer` mark, so Word shows Thai Distributed and WordCraft shows Khmer Justify.
+#[test]
+fn thai_distributed_and_khmer_justify_stay_apart() {
+    let mut a = Paragraph::with_text("ខ្មែរ", CharProps::default());
+    a.props = ParaProps { align: Some(Align::ThaiDistribute), ..Default::default() };
+    let mut b = Paragraph::with_text("ខ្មែរ", CharProps::default());
+    b.props = ParaProps { align: Some(Align::KhmerJustify), ..Default::default() };
+    let r = rt(&doc_with(vec![a, b]));
+    let got = paras(&r);
+    assert_eq!(got[0].props.align, Some(Align::ThaiDistribute));
+    assert_eq!(got[1].props.align, Some(Align::KhmerJustify));
+}
+
+/// #3000: a drop cap set past Word's 10 lines is saved as 10 lines, and its letter at the size of
+/// 10 lines of 12 pt (197.14 pt → 394), the size the layout draws, not 11 lines' 435.
+#[test]
+fn a_drop_cap_past_ten_lines_is_saved_at_ten_lines_size() {
+    let mut p = Paragraph::with_text("Once upon a time", CharProps::default());
+    p.props.drop_cap = Some(11);
+    let d = doc_with(vec![p]);
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"w:lines="10""#), "{xml}");
+    assert!(xml.contains(r#"w:sz w:val="394""#) && !xml.contains(r#"w:val="435""#), "the letter's size is 10 lines': {xml}");
+}
+
+/// #3000: a drop cap whose text inherits its complex-script size from the document defaults is
+/// saved with that size enlarged too — `w:szCs` beside `w:sz` — or an Arabic letter would stay at
+/// the text's size. Differing Latin and complex-script sizes each grow from their own: 3 lines of
+/// 12 pt → 53.14 pt (106), of 16 pt → 70.86 pt (142).
+#[test]
+fn a_drop_caps_inherited_complex_script_size_is_enlarged() {
+    let mut p = Paragraph::with_text("مرحبا بالعالم", CharProps::default());
+    p.props.drop_cap = Some(3);
+    let mut d = doc_with(vec![p]);
+    std::sync::Arc::make_mut(&mut d.styles).default_chr.size = Some(12.0);
+    std::sync::Arc::make_mut(&mut d.styles).default_chr.size_cs = Some(16.0);
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<w:sz w:val="106"/><w:szCs w:val="142"/>"#), "both scripts' drawn sizes on the letter's run: {xml}");
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = paras(&r);
+    assert_eq!(got.len(), 1, "the letter merges back into its paragraph");
+    assert!(
+        got[0].runs.iter().all(|r| (r.props.size, r.props.size_cs) == (None, None)),
+        "the letter inherits the text's sizes again: {:?}",
+        got[0].runs
     );
 }

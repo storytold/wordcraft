@@ -568,11 +568,52 @@ impl<'e> Breaker<'e> {
         }
         // A line ending in a manual line break is stretched too, unless `doNotExpandShiftReturn` says not to.
         let stretch_end = sc.end == LineEnd::Wrap || (sc.end == LineEnd::LineBreak && self.expand_break);
-        let justify = display.is_none() && ((rp.align == Align::Justify && stretch_end) || rp.align == Align::Distribute);
+        let khmer_mode = matches!(rp.align, Align::ThaiDistribute | Align::KhmerJustify);
+        let justify = display.is_none() && (((rp.align == Align::Justify || khmer_mode) && stretch_end) || rp.align == Align::Distribute);
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
         let shrink = display.is_none() && self.shrink_spaces && slack < 0.0 && last_tab.is_none();
         if shrink {
             shrink_line_spaces(pl, &mut sc.xs, c0, c1, content_end, slack);
+        } else if justify && slack > 0.0 && khmer_mode {
+            // Space goes between the clusters of Thai and Khmer text, which has no spaces to
+            // stretch: all alike (Thai Distributed) or by rank (Khmer Justify). Not after the
+            // line's last cluster, nor after a space that hangs past the edge, nor in the spaces that
+            // start the line.
+            let mode = if rp.align == Align::KhmerJustify { crate::khmer_just::Mode::Tiered } else { crate::khmer_just::Mode::Even };
+            // The spaces before the first character (a Thai letter indents a paragraph with a run
+            // of them) keep their width, as in Word; so do anchors and empty objects around them.
+            let blank = |k: usize| {
+                pl.clusters.get(k).is_some_and(|c| {
+                    matches!(c.kind, ClKind::Space | ClKind::Marker) || (matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0)
+                })
+            };
+            let first = (align_from..c1).find(|k| !blank(*k)).unwrap_or(c1);
+            let last = (align_from..c1).rev().find(|k| !blank(*k));
+            let slots: Vec<usize> = match last {
+                Some(l) if l > first => (first..l).collect(),
+                _ => Vec::new(),
+            };
+            let gaps: Vec<(wordcraft_doc::khmer::Gap, f32)> = slots
+                .iter()
+                .map(|&k| {
+                    let em = pl.clusters.get(k).and_then(|c| pl.styles.get(c.style as usize)).map_or(12.0, |s| s.size);
+                    (pl.gaps.get(k).copied().unwrap_or(wordcraft_doc::khmer::Gap::None), em)
+                })
+                .collect();
+            let adds = crate::khmer_just::distribute(mode, slack, &gaps);
+            let mut add = 0.0;
+            let mut it = slots.iter().zip(adds.iter()).peekable();
+            for k in align_from..c1 {
+                if let Some(v) = sc.xs.get_mut(k - c0) {
+                    *v += add;
+                }
+                if let Some((_, a)) = it.next_if(|(s, _)| **s == k) {
+                    add += *a;
+                }
+            }
+            if let Some(v) = sc.xs.last_mut() {
+                *v += add;
+            }
         } else if justify && slack > 0.0 {
             justify_line(pl, &mut sc.xs, (c0, c1, align_from), (content_end, slack), rp.align == Align::Distribute);
         }
@@ -611,14 +652,14 @@ impl<'e> Breaker<'e> {
             (LineSpacing::Exactly(v), _) => v,
         };
         // The empty line's caret follows the alignment, as an empty paragraph's does.
+        let (width, x0) = (self.width, rp.indent_left);
+        let (x0, left, right) = if self.rtl_para { (width - x0, width - self.base_right, width - x0) } else { (x0, x0, self.base_right) };
         let slack = (self.base_right - rp.indent_left).max(0.0);
         let shift = match rp.align {
             Align::Center => slack / 2.0,
             Align::Right => slack,
             _ => 0.0,
         };
-        let (width, x0) = (self.width, rp.indent_left);
-        let (x0, left, right) = if self.rtl_para { (width - x0, width - self.base_right, width - x0) } else { (x0, x0, self.base_right) };
         self.lines.push(Line {
             top: self.top,
             height: h,
@@ -651,8 +692,8 @@ impl<'e> Breaker<'e> {
         let short = lines.len() < dl as usize;
         let dy = if short { (dl as f32 - 1.0) * l0.height } else { ln.baseline - l0.baseline };
         let lead = self.first_x0.unwrap_or(0.0) - self.first_left.max(rp.indent_left);
-        // In margin, the letter's right edge stays the distance left of the text column (or of a
-        // hanging first line), whatever the alignment or first-line indent: always in the margin.
+        // In margin, hang from the paragraph column edge (or a first line that hangs farther
+        // left), regardless of text alignment or a positive first-line indent.
         let edge = self.first_left.min(rp.indent_left);
         let in_margin = (self.first_x0.unwrap_or(0.0) - edge).max(0.0) + pl.drop_cap_w + rp.drop_cap_distance;
         let dx = if rp.drop_cap_margin { in_margin } else { dw.min(lead) };

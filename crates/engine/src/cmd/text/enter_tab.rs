@@ -58,8 +58,9 @@ fn sample_text(s: &Session) -> Option<String> {
 
 /// `text.newParagraph`: Enter, unless the selection is in a control that takes no paragraph break.
 pub(super) fn new_paragraph(s: &mut Session, _: &Value) -> CmdResult {
-    // Enter in a one-line plain text control (or a check box or list) does nothing, as in Word.
-    if crate::cmd::controls::refuses_paragraph(s) {
+    // Enter in a one-line plain text control (or a check box or list), or on a selected picture or
+    // shape, does nothing, as in Word.
+    if crate::cmd::controls::refuses_paragraph(s) || crate::cmd::objects::object_selection(s).is_some() {
         return sel_result(s);
     }
     enter(s, true)?;

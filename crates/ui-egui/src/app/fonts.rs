@@ -174,15 +174,9 @@ impl WordApp {
                     }
                 }
             }
-            theme::install_fonts_language_arabic(
-                ctx,
-                lang.prefers_hans(),
-                lang.prefers_korean(),
-                lang.prefers_hant(),
-                system_cjk,
-                system_arabic,
-                &faces,
-            );
+            let fonts =
+                theme::font_definitions_language_arabic(lang.prefers_hans(), lang.prefers_korean(), lang.prefers_hant(), system_cjk, system_arabic);
+            theme::install_font_definitions(ctx, fonts, &faces, self.canvas.ime_face);
             self.fonts_hans = lang.prefers_hans();
             self.fonts_korean = lang.prefers_korean();
             self.fonts_hant = lang.prefers_hant();

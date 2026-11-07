@@ -466,17 +466,18 @@ pub fn install_fonts_with(ctx: &egui::Context, prefer_hans: bool, system_cjk: bo
 
 /// [`install_fonts_with`] with the CJK font order selected for the interface language.
 pub fn install_fonts_language_with(ctx: &egui::Context, prefer_hans: bool, prefer_korean: bool, prefer_hant: bool, system_cjk: bool) {
-    install_fonts_language_extra(ctx, prefer_hans, prefer_korean, prefer_hant, system_cjk, &[]);
+    install_fonts_language_extra(ctx, prefer_hans, prefer_korean, prefer_hant, system_cjk, &[], None);
 }
 
 /// [`install_fonts_with`], also adding document-font `faces` as last-resort fallbacks (#565): the
 /// faces that cover text the interface fonts cannot draw (an input method's composition, or a
 /// file name in the window caption).
 pub fn install_fonts_extra(ctx: &egui::Context, prefer_hans: bool, system_cjk: bool, faces: &[Arc<wordcraft_fonts::FontFace>]) {
-    install_fonts_language_extra(ctx, prefer_hans, false, false, system_cjk, faces);
+    install_fonts_language_extra(ctx, prefer_hans, false, false, system_cjk, faces, None);
 }
 
-/// [`install_fonts_extra`] with the CJK font order selected for the interface language.
+/// [`install_fonts_extra`] with the CJK font order selected for the interface language, and the
+/// document face the input method's composition is drawn in ([`composition_family`]).
 pub fn install_fonts_language_extra(
     ctx: &egui::Context,
     prefer_hans: bool,
@@ -484,25 +485,45 @@ pub fn install_fonts_language_extra(
     prefer_hant: bool,
     system_cjk: bool,
     faces: &[Arc<wordcraft_fonts::FontFace>],
+    composition: Option<wordcraft_fonts::FaceRef>,
 ) {
-    install_fonts_language_arabic(ctx, prefer_hans, prefer_korean, prefer_hant, system_cjk, false, faces);
+    install_font_definitions(ctx, font_definitions_language(prefer_hans, prefer_korean, prefer_hant, system_cjk), faces, composition);
 }
 
-/// [`install_fonts_language_extra`], also adding an installed Arabic font when `system_arabic` is
-/// set and no embedded face has Arabic letters. Asked for by an Arabic interface only, apart from
-/// the installed CJK font: reading either is a font file read the other languages never need.
-pub fn install_fonts_language_arabic(
+/// Install the interface `fonts` with document-font `faces` after them ([`add_fallback_faces`])
+/// and the document face the input method's composition is drawn in ([`set_composition_face`]).
+pub fn install_font_definitions(
     ctx: &egui::Context,
-    prefer_hans: bool,
-    prefer_korean: bool,
-    prefer_hant: bool,
-    system_cjk: bool,
-    system_arabic: bool,
+    mut fonts: FontDefinitions,
     faces: &[Arc<wordcraft_fonts::FontFace>],
+    composition: Option<wordcraft_fonts::FaceRef>,
 ) {
-    let mut fonts = font_definitions_language_arabic(prefer_hans, prefer_korean, prefer_hant, system_cjk, system_arabic);
     add_fallback_faces(&mut fonts, faces);
+    set_composition_face(&mut fonts, composition);
     ctx.set_fonts(fonts);
+}
+
+/// The font family an input method's composition is drawn in: the document's face at the caret,
+/// then the interface fonts for what it lacks. Every font set made here binds it (egui panics on
+/// a family it doesn't know).
+pub fn composition_family() -> FontFamily {
+    FontFamily::Name("composition".into())
+}
+
+/// Bind [`composition_family`] to `face` followed by the interface fonts, so a composition looks
+/// like the text around it, as in Word. A face larger than the composition borrows (see
+/// [`faces_for_preedit`]) is left out: the interface fonts draw the composition then.
+pub fn set_composition_face(fonts: &mut FontDefinitions, face: Option<wordcraft_fonts::FaceRef>) {
+    let mut family = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    if let Some(f) = face.filter(|f| f.data().len() <= 16 << 20) {
+        let f = f.get();
+        let name = format!("composition {} {} {}", f.family, f.style, f.id());
+        let mut data = FontData::from_static(f.data());
+        data.index = f.index();
+        fonts.font_data.insert(name.clone(), Arc::new(data));
+        family.insert(0, name);
+    }
+    fonts.families.insert(composition_family(), family);
 }
 
 /// Add `faces` after every other font of the interface families.
@@ -642,6 +663,7 @@ pub fn font_definitions_language_arabic(
         add_cjk(&mut fonts, format!("system {}", f.family), data);
     }
     // Symbols and emoji fall back to egui's defaults (kept in the families).
+    set_composition_face(&mut fonts, None);
     fonts
 }
 

@@ -109,6 +109,7 @@ impl<'a> Builder<'a> {
     /// Style index for a resolved char in `face` (caps-scaled `size` override for small caps).
     pub(super) fn style(&mut self, rc: &Arc<ResolvedChar>, face_override: Option<FaceRef>, small: bool) -> u32 {
         let r = wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &rc.font), rc.bold, rc.italic);
+        let requested_face = r.face;
         let face = face_override.unwrap_or(r.face);
         // The display list reads every run's format (link target, strike kind, underline colour,
         // baseline shift…) from its StyleRun, so runs share one only when their formats are equal.
@@ -149,6 +150,7 @@ impl<'a> Builder<'a> {
         };
         let st = StyleRun {
             face,
+            requested_face,
             size,
             synth_bold,
             synth_italic,
@@ -409,7 +411,10 @@ impl<'a> Builder<'a> {
                 let ch = s.chars().next().unwrap_or(' ');
                 let kind = kind_override.unwrap_or(if ch == ' ' || ch == '\u{3000}' {
                     ClKind::Space
-                } else if ch == SOFT_HYPHEN {
+                } else if ch == SOFT_HYPHEN || matches!(ch, '\u{200B}' | '\u{2060}' | '\u{FEFF}') {
+                    // The zero-width space, word joiner and no-break mark are invisible and take no
+                    // room, whatever the font draws for them (Khmer OS Battambang has no glyph for
+                    // U+200B at all).
                     ClKind::Marker
                 } else {
                     ClKind::Text
@@ -429,6 +434,7 @@ impl<'a> Builder<'a> {
                     obj_h: 0.0,
                     obj_d: 0.0,
                     dot: s == "." || s == ",",
+                    picture: false,
                 });
             }
             if matches!(dir, Dir::Para) {
@@ -501,6 +507,7 @@ impl<'a> Builder<'a> {
                 obj_h: 0.0,
                 obj_d: 0.0,
                 dot: false,
+                picture: false,
             });
             return;
         };
@@ -534,7 +541,20 @@ impl<'a> Builder<'a> {
         let style = first.style;
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
         self.shown.push((self.clusters.len(), text.to_string(), ranges));
-        self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
+        self.clusters.push(Cluster {
+            start,
+            end,
+            adv: x,
+            kind: ClKind::Text,
+            style,
+            g0,
+            g1,
+            break_after: false,
+            obj_h: 0.0,
+            obj_d: 0.0,
+            dot: false,
+            picture: false,
+        });
     }
 
     /// Shape `texts` on top of one another as one cluster for `start..end`: each aligned within
@@ -584,7 +604,20 @@ impl<'a> Builder<'a> {
         if !text.is_empty() {
             self.shown.push((k, text, ranges));
         }
-        self.clusters.push(Cluster { start, end, adv, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
+        self.clusters.push(Cluster {
+            start,
+            end,
+            adv,
+            kind: ClKind::Text,
+            style,
+            g0,
+            g1,
+            break_after: false,
+            obj_h: 0.0,
+            obj_d: 0.0,
+            dot: false,
+            picture: false,
+        });
         Some(k)
     }
 }

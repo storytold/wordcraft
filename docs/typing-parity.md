@@ -125,6 +125,8 @@ Windows/Linux keys are given first, macOS second.
 
 | Keys | Word's result | Test |
 |---|---|---|
+| Enter (Return) on a selected picture or shape, inline or floating | nothing: the object stays, still selected, and no paragraph is added, however many times it is pressed (Word for Mac, observed 2026-10-24; #4126). On a selected text box, Enter puts the caret in its text | `enter_on_a_selected_picture_does_nothing` |
+| Shift+Enter (⇧Return), Insert › Page Break (⌘Return) on a selected picture or shape | the break goes in front of it (in front of a content control around it) and the object stays selected: each Shift+Enter moves an inline picture down a line (with a floating picture, the text after its anchor), and a page break moves it to the next page (Word for Mac, observed 2026-10-24; #4126). A column break does the same (not observed) | `a_break_on_a_selected_picture_goes_in_front_of_it`, `a_break_on_a_picture_in_a_picture_control_keeps_the_picture_selected` |
 | select text right to left (from its end), type | the new text takes the first selected character's formatting (font, size…), as with a selection made left to right; not the text's before it (#2879) | `typing_over_backward_selection_keeps_its_font` |
 | Down / Up (↓ / ↑) from a line beside a table | into the table's nearest row: the cell under the caret, or the nearest one when the caret is left or right of the cells' text (the start of the line above a table is left of the first cell's text); never past the table to the paragraph beyond it | `down_and_up_from_a_line_start_beside_a_table_go_into_it` |
 | Alt+Shift+Up / Down (⌃⇧↑ / ⌃⇧↓) | the paragraphs the selection touches swap with the paragraph above / below, keeping style and list membership; the selection moves with them; one undo step. A selection ending at the start of a paragraph doesn't take it along. Refused at the top or bottom of the story or cell, next to a table and across a section break | `alt_shift_down_then_up_moves_a_paragraph_and_back_and_undoes` |
@@ -581,6 +583,8 @@ this correction; native Windows interaction and Microsoft Word remain untested.
 | 2026-10-28 | trivial | Highlighting at a caret leaves the word alone and sets the colour for what is typed next (#4086). |
 | 2026-10-28 | trivial | Arabic Backspace removes one combining mark and keeps its base letter (#4757); stored mark order, caret/forward-Delete and other-script behavior retained; original synthetic command/history/protection/save-reopen checks, no native Word comparison; readiness estimates unchanged |
 | 2026-10-27 | trivial | Backspace after a floating shape's anchor at a paragraph start joins paragraphs and keeps the shape (#4592) |
+| 2026-10-24 | trivial | Enter on a selected picture or shape does nothing, and Shift+Enter, page and column breaks go in front of it, instead of deleting it (#4126) |
+| 2026-10-24 | trivial | AutoCorrect: a word typed after a no-break space or an ideographic space is corrected as after a plain space |
 | 2026-10-25 | trivial | AutoFormat: a tracked heading, and a tracked border line at the top of a story, replace another author's formatting change on the paragraph instead of keeping it |
 | 2026-10-25 | trivial | Tests and notes: border lines with formatting markup off, after the author's own formatting change and in a locked content control; Reject All keeps a `+---+` table; Tab in a table cell with tab indents on; Backspace before an indented paragraph with them off; narrow no-break and figure spaces before an AutoCorrect word; a no-break space typed after a word listed as a known gap |
 | 2026-10-25 | trivial | Highlight decisions include fully selected paragraph marks in whole cells and ordinary ranges, including empty paragraphs; partial text columns exclude unselected marks (#4085). |
@@ -646,3 +650,5 @@ this correction; native Windows interaction and Microsoft Word remain untested.
 | 2026-10-10 | minor | Track Changes rows: tracked Enter, Backspace and Delete on paragraph marks (#244) |
 | 2026-10-10 | major | First version: lists, AutoCorrect and AutoFormat as you type, observed against Word (#204) |
 | 2026-10-15 | trivial | Text direction: typed and inserted text takes its direction from its own letters, not the caret's run; spaces typed into reopened Hebrew draw in the Latin font until reopened (#1543) |
+
+| 2026-10-27 | trivial | Backspace after a floating shape's anchor at a paragraph start joins paragraphs and keeps the shape (#4592) |
