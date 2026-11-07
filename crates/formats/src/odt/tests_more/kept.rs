@@ -159,3 +159,92 @@ fn a_file_a_kept_definition_names_is_written_with_it() {
     let m = crate::odt::tests::entry(&saved, "META-INF/manifest.xml");
     assert!(m.contains(r#"manifest:full-path="Pictures/paper.png""#), "{m}");
 }
+
+/// A picture as LibreOffice writes one it draws as a shape: a frame with a text style, and in its
+/// `draw:image` an empty paragraph (ODF 1.3 §10.4.4 lets a picture hold text).
+const SHAPE_PICTURE: &str = r#"<draw:frame text:anchor-type="paragraph" draw:z-index="0" draw:name="Banner" draw:style-name="gr1" draw:text-style-name="P1" svg:width="19cm" svg:height="3cm" svg:x="-3cm" svg:y="0cm"><draw:image xlink:href="Pictures/x.png" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad" draw:mime-type="image/png"><text:p/></draw:image></draw:frame>"#;
+const AFTER_PICTURE: &str = r#"<text:p text:style-name="P2">Text after it.</text:p>"#;
+
+/// A package whose text is `body`, with the styles and the picture [`SHAPE_PICTURE`] names.
+fn shape_picture_doc(body: &str) -> (Vec<u8>, Vec<u8>) {
+    let png = [b"\x89PNG\r\n\x1a\n".as_slice(), &[5u8; 64]].concat();
+    let content = format!(
+        r#"<office:document-content {NS_T} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink"><office:automatic-styles><style:style style:name="P1" style:family="paragraph"/><style:style style:name="P2" style:family="paragraph"><style:paragraph-properties fo:margin-top="3.4cm"/></style:style><style:style style:name="gr1" style:family="graphic"><style:graphic-properties style:wrap="none" style:horizontal-pos="from-left" style:horizontal-rel="paragraph" style:vertical-pos="from-top" style:vertical-rel="paragraph"/></style:style></office:automatic-styles><office:body><office:text>{body}</office:text></office:body></office:document-content>"#
+    );
+    (crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("Pictures/x.png", &png)]), png)
+}
+
+#[test]
+fn a_picture_holding_an_empty_paragraph_stays_in_its_own() {
+    let first = format!(r#"<text:p text:style-name="Standard">{SHAPE_PICTURE}</text:p>"#);
+    let (pkg, png) = shape_picture_doc(&format!("{first}{AFTER_PICTURE}"));
+    let d = import(&pkg).unwrap();
+    // Two paragraphs, as written: the picture in the first, the text in the second. The picture's
+    // own paragraph used to end the one around it, and the picture joined the next one.
+    assert_eq!(d.body.len(), 2);
+    let (a, b) = (d.body[0].as_para().unwrap(), d.body[1].as_para().unwrap());
+    assert_eq!(a.objects.len(), 1, "the picture is in the first paragraph");
+    assert!(b.objects.is_empty());
+    assert_eq!(b.text, "Text after it.");
+
+    let saved = export(&d).unwrap();
+    let c = content_of(&saved);
+    assert!(c.contains(&format!("{first}\n{AFTER_PICTURE}")), "as read: {c}");
+    for def in [r#"style:name="P1""#, r#"style:name="P2""#, r#"style:name="gr1""#] {
+        assert!(c.contains(def), "{def}: {c}");
+    }
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(saved.clone())).unwrap();
+    let mut got = Vec::new();
+    std::io::Read::read_to_end(&mut z.by_name("Pictures/x.png").unwrap(), &mut got).unwrap();
+    assert_eq!(got, png);
+    // Saved again, still as read.
+    assert!(content_of(&export(&import(&saved).unwrap()).unwrap()).contains(&format!("{first}\n{AFTER_PICTURE}")));
+}
+
+#[test]
+fn a_grouped_picture_holding_an_empty_paragraph_stays_in_its_own() {
+    // LibreOffice writes every picture in a group this way.
+    let member = SHAPE_PICTURE.replace(r#" text:anchor-type="paragraph" draw:z-index="0""#, "");
+    let first = format!(
+        r#"<text:p text:style-name="Standard"><draw:g text:anchor-type="paragraph" draw:z-index="0" draw:style-name="gr1">{member}<draw:rect draw:style-name="gr1" svg:width="2cm" svg:height="1cm" svg:x="0cm" svg:y="4cm"><text:p/></draw:rect></draw:g></text:p>"#
+    );
+    let (pkg, _) = shape_picture_doc(&format!("{first}{AFTER_PICTURE}"));
+    let d = import(&pkg).unwrap();
+    assert_eq!(d.body.len(), 2);
+    assert_eq!(d.body[0].as_para().unwrap().objects.len(), 1, "the group is in the first paragraph");
+    assert_eq!(d.body[1].as_para().unwrap().text, "Text after it.");
+    let c = content_of(&export(&d).unwrap());
+    assert!(c.contains(&format!("{first}\n{AFTER_PICTURE}")), "{c}");
+}
+
+#[test]
+fn a_picture_holding_a_paragraph_in_a_cell_or_a_text_box_stays_in_its_own() {
+    let inner = format!(r#"<text:p text:style-name="Standard">Before {SHAPE_PICTURE} after.</text:p>"#);
+    let cell =
+        format!(r#"<table:table><table:table-column/><table:table-row><table:table-cell>{inner}</table:table-cell></table:table-row></table:table>"#);
+    let boxed = format!(
+        r#"<text:p><draw:frame text:anchor-type="paragraph" svg:width="5cm" svg:height="5cm"><draw:text-box>{inner}</draw:text-box></draw:frame></text:p>"#
+    );
+    let (pkg, _) = shape_picture_doc(&format!("{cell}{boxed}"));
+    let d = import(&pkg).unwrap();
+    let wordcraft_doc::Block::Table(t) = &*d.body[0] else { panic!("a table: {:?}", d.body[0]) };
+    let in_cell = &t.rows[0].cells[0].blocks;
+    assert_eq!(in_cell.len(), 1);
+    assert_eq!(in_cell[0].as_para().unwrap().text, "Before \u{FFFC} after.");
+    let saved = content_of(&export(&d).unwrap());
+    assert_eq!(saved.matches(inner.as_str()).count(), 2, "as read: {saved}");
+}
+
+#[test]
+fn a_picture_holding_words_is_written_as_read_and_they_stay_out_of_the_text() {
+    // LibreOffice draws them on the picture. WordCraft doesn't show them, but they aren't the
+    // body's: the paragraphs stay as they are and the words stay where they were.
+    let held = SHAPE_PICTURE.replace("<text:p/>", r#"<text:p text:style-name="P1">Words on it</text:p>"#);
+    let first = format!(r#"<text:p text:style-name="Standard">{held}</text:p>"#);
+    let (pkg, _) = shape_picture_doc(&format!("{first}{AFTER_PICTURE}"));
+    let d = import(&pkg).unwrap();
+    assert_eq!(d.body.len(), 2);
+    assert_eq!(d.body[0].as_para().unwrap().text, "\u{FFFC}", "only the picture");
+    assert_eq!(d.body[1].as_para().unwrap().text, "Text after it.");
+    assert!(content_of(&export(&d).unwrap()).contains(&format!("{first}\n{AFTER_PICTURE}")));
+}
