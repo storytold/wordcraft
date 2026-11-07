@@ -113,6 +113,14 @@ pub(crate) struct PartScan {
     pub content_parts: Vec<String>,
     /// This (settings) part carries `w:uiCompat97to2003`.
     pub compat_97_2003: bool,
+    /// Special note definitions in this part: (id, is_endnote, w:type).
+    pub special_notes: Vec<(String, bool, String)>,
+    /// Ids listed by `w:footnotePr` / `w:endnotePr` elements in this part.
+    pub note_listings: (Vec<String>, Vec<String>),
+    /// A note definition or listing was dropped at the fact budget.
+    pub note_capped: bool,
+    /// The generic fact budget dropped at least one fact in this part.
+    pub fact_capped: bool,
 }
 
 struct ElemId {
@@ -280,6 +288,10 @@ struct Frame {
     is_tc: bool,
     /// A `w:p` frame: math placement is judged against paragraph ancestry.
     is_p: bool,
+    /// A `w:footnotePr` frame: its `w:footnote` children are listing entries.
+    is_footnote_pr: bool,
+    /// A `w:endnotePr` frame: its `w:endnote` children are listing entries.
+    is_endnote_pr: bool,
     /// Any Office Math element: an `m:oMathPara` must not descend from one.
     is_math: bool,
     /// An `m:oMath` frame: math content and nested `m:oMath` are judged against it.
@@ -320,6 +332,14 @@ struct State {
     /// This settings part carries `w:uiCompat97to2003` (the Word 97–2003
     /// compatibility flag the count limits key on).
     compat_97: bool,
+    /// Special note definitions in this part: (id, is_endnote, w:type).
+    special_notes: Vec<(String, bool, String)>,
+    /// Ids listed by `w:footnotePr` elements in this part.
+    note_listings_f: Vec<String>,
+    /// Ids listed by `w:endnotePr` elements in this part.
+    note_listings_e: Vec<String>,
+    /// A note definition or listing was dropped at the fact budget.
+    note_capped: bool,
     declared: Vec<Vec<String>>,
     frames: Vec<Frame>,
     del_depth: i64,
@@ -485,6 +505,10 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
         facts: StoryFacts::default(),
         content_parts: Vec::new(),
         compat_97_2003: false,
+        special_notes: Vec::new(),
+        note_listings: (Vec::new(), Vec::new()),
+        note_capped: false,
+        fact_capped: false,
     };
     let mut root_count = 0usize;
     let mut events = 0usize;
@@ -634,6 +658,10 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
     }
     out.facts = state.facts;
     out.compat_97_2003 = state.compat_97;
+    out.special_notes = std::mem::take(&mut state.special_notes);
+    out.note_listings = (std::mem::take(&mut state.note_listings_f), std::mem::take(&mut state.note_listings_e));
+    out.note_capped = state.note_capped;
+    out.fact_capped = state.fact_capped;
     out.unknown_prefixes.sort_unstable();
     out.unknown_prefixes.dedup();
     out
@@ -684,6 +712,8 @@ fn frame_for(id: &ElemId) -> Frame {
     Frame {
         is_tc: w && local == "tc",
         is_p: w && local == "p",
+        is_footnote_pr: w && local == "footnotePr",
+        is_endnote_pr: w && local == "endnotePr",
         is_math: id.m(),
         is_omath: id.m() && local == "oMath",
         is_omath_para: id.m() && local == "oMathPara",
@@ -909,11 +939,50 @@ fn record_compat_flag(state: &mut State, id: &ElemId, attrs: &[Attribute], res: 
     }
 }
 
+/// Collect the two sides of the footnotePr/endnotePr join: special note
+/// definitions (a `w:footnote`/`w:endnote` in a notes part whose `w:type`
+/// is separator, continuationSeparator, or continuationNotice) and listing
+/// entries (a `w:footnote`/`w:endnote` whose parent is `w:footnotePr` /
+/// `w:endnotePr` in a SETTINGS part — the listing child exists only in
+/// the document-wide form, CT_FtnDocProps; the section-wide form,
+/// CT_FtnProps, admits only numbering/positioning children).
+fn record_note_pr(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole) {
+    if !id.w() || (id.local != "footnote" && id.local != "endnote") {
+        return;
+    }
+    let is_end = id.local == "endnote";
+    if ((is_end && role.is_endnotes) || (!is_end && role.is_footnotes))
+        && let Some(t) = attr_ns(attrs, res, NS_W, b"type")
+        && matches!(t.as_str(), "separator" | "continuationSeparator" | "continuationNotice")
+        && let Some(x) = attr_ns(attrs, res, NS_W, b"id")
+    {
+        if state.special_notes.len() >= state.fact_cap {
+            state.note_capped = true;
+        } else {
+            state.special_notes.push((x, is_end, t));
+        }
+    }
+    if role.is_settings
+        && let Some(parent) = state.frames.last()
+    {
+        let listed = if is_end { parent.is_endnote_pr } else { parent.is_footnote_pr };
+        if listed && let Some(x) = attr_ns(attrs, res, NS_W, b"id") {
+            let list = if is_end { &mut state.note_listings_e } else { &mut state.note_listings_f };
+            if list.len() >= state.fact_cap {
+                state.note_capped = true;
+            } else {
+                list.push(x);
+            }
+        }
+    }
+}
+
 fn on_open(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole, part: &str, acc: &mut Acc) {
     mark_block_content(state, id);
     check_math_placement(state, id, role, part, acc);
     check_protection(id, attrs, res, role, part, acc);
     record_compat_flag(state, id, attrs, res, role);
+    record_note_pr(state, id, attrs, res, role);
     if id.w() && id.local == "del" {
         state.del_depth += 1;
     }
@@ -927,6 +996,7 @@ fn on_empty(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &Namespace
     check_math_placement(state, id, role, part, acc);
     check_protection(id, attrs, res, role, part, acc);
     record_compat_flag(state, id, attrs, res, role);
+    record_note_pr(state, id, attrs, res, role);
     if id.w() && id.local == "tc" && role.is_main {
         acc.add("STRUCT-TC-NO-P", Some(part.to_string()), format!("w:tc in {part} has no block-level content"));
     }
@@ -1155,10 +1225,11 @@ const NS_V: &str = "urn:schemas-microsoft-com:vml";
 
 /// Collect the relationship id named by a `w:contentPart` element, if any.
 fn collect_content_part(id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, out: &mut Vec<String>) {
-    if id.w() && id.local == "contentPart" {
-        if let Some(v) = attr_ns(attrs, res, NS_R, b"id") {
-            out.push(v);
-        }
+    if id.w()
+        && id.local == "contentPart"
+        && let Some(v) = attr_ns(attrs, res, NS_R, b"id")
+    {
+        out.push(v);
     }
 }
 

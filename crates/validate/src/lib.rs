@@ -308,6 +308,19 @@ pub(crate) const PERM_COUNT: RuleSpec = RuleSpec { id: "PERM-COUNT", severity: S
 /// settings carries `w:uiCompat97to2003`. MS-OI29500 Part 1 §17.13.5.24
 /// note (a).
 pub(crate) const MOVE_RANGE_COUNT: RuleSpec = RuleSpec { id: "MOVE-RANGE-COUNT", severity: Severity::Error, evidence: Evidence::MsDocumented };
+/// `NOTE-PR-LISTING`: a special footnote/endnote (separator,
+/// continuationSeparator, continuationNotice) whose id no `footnotePr` /
+/// `endnotePr` lists. ECMA-376 Part 1 §17.11.9: it "shall not be loaded";
+/// the document is non-conformant when the note "is required by the
+/// document content" — statically establishable only for a separator
+/// when an ordinary note of the same kind is referenced — so only that
+/// case is an Error; the rest are Warnings.
+pub(crate) const NOTE_PR_LISTING: RuleSpec = RuleSpec { id: "NOTE-PR-LISTING", severity: Severity::Error, evidence: Evidence::ByConstruction };
+/// `NOTE-PR-DANGLING`: a `footnotePr` / `endnotePr` listing names a note
+/// id that no footnote/endnote defines. Nothing documents Word loading or
+/// rejecting such a listing; it is dead configuration, reported at the
+/// lowest grade.
+pub(crate) const NOTE_PR_DANGLING: RuleSpec = RuleSpec { id: "NOTE-PR-DANGLING", severity: Severity::Warning, evidence: Evidence::Inferred };
 /// `STRUCT-DELTEXT`: a `w:t` inside `w:del`, or a `w:delText` outside one. Observed (web): lenient
 /// recovery, the text renders as a tracked deletion anyway, so Warning.
 pub(crate) const STRUCT_DELTEXT: RuleSpec = RuleSpec { id: "STRUCT-DELTEXT", severity: Severity::Warning, evidence: Evidence::Observed };
@@ -342,6 +355,8 @@ pub(crate) const RULES: &[RuleSpec] = &[
     BOOKMARK_COUNT,
     PERM_COUNT,
     MOVE_RANGE_COUNT,
+    NOTE_PR_LISTING,
+    NOTE_PR_DANGLING,
     PROTECTION_PASSWORD,
     CONTENTPART_TYPE,
     REL_DUP_ID,
@@ -537,6 +552,7 @@ pub(crate) fn validate_bytes_limited(bytes: &[u8], limits: Limits) -> Report {
     check_rels(&pkg, &xml.refs, &mut acc);
     check_content_part_types(&pkg, &xml.content_parts, &mut acc);
     check_story(&pkg, &xml.facts, xml.compat, &mut acc);
+    check_note_pr(&xml.facts, &xml, &mut acc);
     check_media(&pkg, &mut acc);
     acc.finish()
 }
@@ -661,6 +677,19 @@ struct XmlScan {
     /// `w:contentPart` relationship ids per owning part (for `CONTENTPART-TYPE`).
     content_parts: Vec<(String, Vec<String>)>,
     compat: Compat,
+    /// Ids listed by `w:footnotePr` / `w:endnotePr` in settings parts.
+    note_listings: (Vec<String>, Vec<String>),
+    /// Special note definitions: (owning part, id, is_endnote, w:type).
+    special_notes: Vec<(String, String, bool, String)>,
+    /// A settings part (a listing source) could not be read.
+    settings_unreadable: bool,
+    /// A note definition or listing collection hit the fact budget.
+    note_capped_any: bool,
+    /// A notes part (a definition source) could not be read.
+    notes_unreadable: bool,
+    /// The definition side of the note join is complete: no notes part
+    /// unreadable or fact-capped, and pooled definitions did not cap.
+    defs_complete: bool,
 }
 
 /// Scan all XML parts for well-formedness, undeclared prefixes, illegal characters, and extract story facts.
@@ -677,6 +706,12 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     let mut content_parts: Vec<(String, Vec<String>)> = Vec::new();
     let mut compat_on = false;
     let mut compat_unknown = false;
+    let mut note_listings: (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    let mut special_notes: Vec<(String, String, bool, String)> = Vec::new();
+    let mut settings_unreadable = false;
+    let mut note_capped_any = false;
+    let mut notes_unreadable = false;
+    let mut defs_ok_parts = true;
     let mut pooled_capped = false;
     let mut facts_pooled_part: Option<String> = None;
     let mut pooled_refs = 0usize;
@@ -690,6 +725,11 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
         let role = roles.get(&l).copied().unwrap_or_default();
         if role.is_settings && e.decode_error.is_some() {
             compat_unknown = true;
+            settings_unreadable = true;
+        }
+        if (role.is_footnotes || role.is_endnotes) && e.decode_error.is_some() {
+            notes_unreadable = true;
+            defs_ok_parts = false;
         }
         if let Some(err) = &e.decode_error {
             match err {
@@ -709,9 +749,24 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
         }
         let Some(text) = &e.decoded else { continue };
         let scanned = scan::scan_part(&e.name, text, role, acc);
+        if scanned.note_capped {
+            note_capped_any = true;
+        }
+        note_listings.0.extend(scanned.note_listings.0);
+        note_listings.1.extend(scanned.note_listings.1);
+        for (id, is_end, t) in scanned.special_notes {
+            special_notes.push((e.name.clone(), id, is_end, t));
+        }
+        if (role.is_footnotes || role.is_endnotes) && (scanned.malformed.is_some() || scanned.fact_capped) {
+            defs_ok_parts = false;
+            if scanned.malformed.is_some() {
+                notes_unreadable = true;
+            }
+        }
         if role.is_settings {
             if scanned.malformed.is_some() {
                 compat_unknown = true;
+                settings_unreadable = true;
             }
             // Only a settings part that scanned clean establishes On: a flag
             // seen before a malformation proves nothing about the document.
@@ -766,7 +821,114 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     } else {
         Compat::Off
     };
-    XmlScan { facts, refs, content_parts, compat }
+    // The note collections are also pooled-budgeted at the package
+    // level: any number of parts can carry the settings or notes roles
+    // in a malformed package, so per-part caps alone do not bound them.
+    let listing_total = note_listings.0.len() + note_listings.1.len();
+    if listing_total > acc.limits.facts {
+        let keep_f = acc.limits.facts.min(note_listings.0.len());
+        note_listings.0.truncate(keep_f);
+        note_listings.1.truncate(acc.limits.facts - keep_f);
+        note_capped_any = true;
+    }
+    if special_notes.len() > acc.limits.facts {
+        special_notes.truncate(acc.limits.facts);
+        note_capped_any = true;
+    }
+    let defs_complete = defs_ok_parts && !pooled_capped;
+    XmlScan {
+        facts,
+        refs,
+        content_parts,
+        compat,
+        note_listings,
+        special_notes,
+        settings_unreadable,
+        note_capped_any,
+        notes_unreadable,
+        defs_complete,
+    }
+}
+
+/// `NOTE-PR-LISTING` (ECMA-376 Part 1 §17.11.9) and its reverse,
+/// `NOTE-PR-DANGLING`: join the special note definitions (separator,
+/// continuationSeparator, continuationNotice) against the
+/// `footnotePr`/`endnotePr` listings in settings parts (the listing
+/// child exists only in the document-wide form of those elements).
+/// Each direction reports only when its own side of the join is
+/// complete: the forward direction needs every listing source read
+/// and uncapped; the reverse additionally needs the definition sets
+/// complete (no notes part unreadable or capped, no pooled cap). An
+/// incomplete join with anything at stake — an unreadable source, a
+/// cap, a definition, or a listing — yields a coverage note and an
+/// INCOMPLETE run instead of a guess.
+///
+/// Severity follows the cited text: the definition "shall not be
+/// loaded" unconditionally, but the document is non-conformant only
+/// when the note "is required by the document content". Necessity is
+/// established per note: a separator is required when an ordinary
+/// note of the same kind is actually referenced (referenced notes
+/// render behind a separator); whether a continuation separator or
+/// notice is required depends on pagination, which a static checker
+/// cannot know — so those stay Warnings, as does a separator nothing
+/// references.
+fn check_note_pr(facts: &scan::StoryFacts, xml: &XmlScan, acc: &mut Acc) {
+    acc.ran("NOTE-PR-LISTING");
+    acc.ran("NOTE-PR-DANGLING");
+    let forward_ok = !xml.settings_unreadable && !xml.note_capped_any;
+    let reverse_ok = forward_ok && xml.defs_complete;
+    if !forward_ok || !reverse_ok {
+        let anything = xml.settings_unreadable
+            || xml.notes_unreadable
+            || xml.note_capped_any
+            || !xml.defs_complete
+            || !xml.special_notes.is_empty()
+            || !xml.note_listings.0.is_empty()
+            || !xml.note_listings.1.is_empty();
+        if anything {
+            acc.note("the footnotePr/endnotePr listings could not be fully joined (a part exceeded the fact budget or a settings or notes part could not be read)".to_string());
+            acc.set_incomplete();
+        }
+    }
+    let defs_f: HashSet<&str> = facts.footnote_defs.iter().map(|(id, _)| id.as_str()).collect();
+    let defs_e: HashSet<&str> = facts.endnote_defs.iter().map(|(id, _)| id.as_str()).collect();
+    if forward_ok {
+        let listed_f: HashSet<&str> = xml.note_listings.0.iter().map(String::as_str).collect();
+        let listed_e: HashSet<&str> = xml.note_listings.1.iter().map(String::as_str).collect();
+        let special_f: HashSet<&str> = xml.special_notes.iter().filter(|(_, _, e, _)| !e).map(|(_, id, _, _)| id.as_str()).collect();
+        let special_e: HashSet<&str> = xml.special_notes.iter().filter(|(_, _, e, _)| *e).map(|(_, id, _, _)| id.as_str()).collect();
+        let refs_f: HashSet<&str> = facts.footnote_refs.iter().map(|(id, _)| id.as_str()).collect();
+        let refs_e: HashSet<&str> = facts.endnote_refs.iter().map(|(id, _)| id.as_str()).collect();
+        let required_f = refs_f.iter().any(|id| defs_f.contains(id) && !special_f.contains(id));
+        let required_e = refs_e.iter().any(|id| defs_e.contains(id) && !special_e.contains(id));
+        for (part, id, is_end, t) in &xml.special_notes {
+            let listed = if *is_end { listed_e.contains(id.as_str()) } else { listed_f.contains(id.as_str()) };
+            if !listed {
+                let (note, pr) = if *is_end { ("endnote", "endnotePr") } else { ("footnote", "footnotePr") };
+                let required = t == "separator" && ((*is_end && required_e) || (!*is_end && required_f));
+                let severity = if required { Severity::Error } else { Severity::Warning };
+                acc.add_graded(
+                    "NOTE-PR-LISTING",
+                    severity,
+                    Evidence::ByConstruction,
+                    Some(part.clone()),
+                    format!("the {note} with id {id} in {part} has type {t} but is not listed in any {pr}, so it will not be loaded"),
+                );
+            }
+        }
+    }
+    if reverse_ok {
+        for id in &xml.note_listings.0 {
+            if !defs_f.contains(id.as_str()) {
+                acc.add("NOTE-PR-DANGLING", None, format!("a footnotePr lists footnote id {id}, but no footnote with that id is defined"));
+            }
+        }
+        for id in &xml.note_listings.1 {
+            if !defs_e.contains(id.as_str()) {
+                acc.add("NOTE-PR-DANGLING", None, format!("an endnotePr lists endnote id {id}, but no endnote with that id is defined"));
+            }
+        }
+    }
 }
 
 /// `CONTENTPART-TYPE` (MS-OI29500 Part 1 §17.3.3.2 note (a)): each
@@ -2138,6 +2300,76 @@ mod budget_tests {
         // Regression control: fully scanned, the unclosed field is reported.
         let full = validate_bytes(&zip);
         assert!(full.findings.iter().any(|f| f.rule == "FLD-UNBALANCED"), "findings: {:?}", full.findings);
+    }
+
+    /// NOTE-PR-DANGLING must not run on a truncated definition set: with
+    /// a fact budget of 1, the footnotes part's first definition (id 2)
+    /// fills the budget and the separator's definition (id 0) is dropped
+    /// from the pooled facts — the settings listing for id 0 is then NOT
+    /// dangling, and the run must not claim it is.
+    #[test]
+    fn note_pr_dangling_suppressed_when_definitions_capped() {
+        let ct = format!(
+            r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="{}"/><Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/></Types>"#,
+            package::MAIN_CONTENT_TYPE
+        );
+        let doc = format!(r#"<?xml version="1.0"?><w:document xmlns:w="{NS_W}"><w:body><w:p/></w:body></w:document>"#).into_bytes();
+        let footnotes = format!(
+            r#"<?xml version="1.0"?><w:footnotes xmlns:w="{NS_W}"><w:footnote w:id="2"><w:p/></w:footnote><w:footnote w:type="separator" w:id="0"><w:p/></w:footnote></w:footnotes>"#
+        )
+        .into_bytes();
+        let settings =
+            format!(r#"<?xml version="1.0"?><w:settings xmlns:w="{NS_W}"><w:footnotePr><w:footnote w:id="0"/></w:footnotePr></w:settings>"#)
+                .into_bytes();
+        let zip = tiny_zip(&[
+            ("[Content_Types].xml", ct.into_bytes()),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", doc),
+            ("word/footnotes.xml", footnotes),
+            ("word/settings.xml", settings),
+        ]);
+        let report = validate_bytes_limited(&zip, Limits { facts: 1, ..Limits::default() });
+        assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+        assert!(
+            !report.findings.iter().any(|f| f.rule == "NOTE-PR-DANGLING"),
+            "a capped definition set must not produce dangling claims: {:?}",
+            report.findings
+        );
+        // Control: at full limits the same package is clean for both rules.
+        let full = validate_bytes(&zip);
+        assert!(!full.findings.iter().any(|f| f.rule == "NOTE-PR-DANGLING" || f.rule == "NOTE-PR-LISTING"), "findings: {:?}", full.findings);
+    }
+
+    /// The note collections are pooled-budgeted across parts: three
+    /// settings parts listing two ids each overflow a fact budget of 3
+    /// in aggregate even though no single part caps — the join must
+    /// report incompleteness and make no dangling claims.
+    #[test]
+    fn note_pr_listings_pooled_cap_suppresses_the_join() {
+        let settings_ct = "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml";
+        let ct = format!(
+            r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="{}"/><Override PartName="/word/settings.xml" ContentType="{settings_ct}"/><Override PartName="/word/settings2.xml" ContentType="{settings_ct}"/><Override PartName="/word/settings3.xml" ContentType="{settings_ct}"/></Types>"#,
+            package::MAIN_CONTENT_TYPE
+        );
+        let doc = format!(r#"<?xml version="1.0"?><w:document xmlns:w="{NS_W}"><w:body><w:p/></w:body></w:document>"#).into_bytes();
+        let listing = |a: u8, b: u8| {
+            format!(r#"<?xml version="1.0"?><w:settings xmlns:w="{NS_W}"><w:footnotePr><w:footnote w:id="{a}"/><w:footnote w:id="{b}"/></w:footnotePr></w:settings>"#).into_bytes()
+        };
+        let zip = tiny_zip(&[
+            ("[Content_Types].xml", ct.into_bytes()),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", doc),
+            ("word/settings.xml", listing(1, 2)),
+            ("word/settings2.xml", listing(3, 4)),
+            ("word/settings3.xml", listing(5, 6)),
+        ]);
+        let report = validate_bytes_limited(&zip, Limits { facts: 3, ..Limits::default() });
+        assert!(
+            !report.findings.iter().any(|f| f.rule == "NOTE-PR-DANGLING" || f.rule == "NOTE-PR-LISTING"),
+            "a pooled-capped join must not judge listings: {:?}",
+            report.findings
+        );
+        assert!(report.coverage_notes.iter().any(|n| n.contains("footnotePr")), "notes: {:?}", report.coverage_notes);
     }
 
     /// §3 canary (a): a budget stop must not hide a defect the scanned prefix already establishes.

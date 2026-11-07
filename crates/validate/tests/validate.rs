@@ -66,6 +66,8 @@ const ALL_CHECKS: &[&str] = &[
     "STRUCT-DELTEXT",
     "STRUCT-MOVE-UNPAIRED",
     "CUSTOMXML-SCHEMA",
+    "NOTE-PR-LISTING",
+    "NOTE-PR-DANGLING",
     "MEDIA-MAGIC",
 ];
 
@@ -1697,6 +1699,174 @@ fn comment_range_count_sums_across_stories() {
     let report = validate(&d);
     assert_finding(&report, "COMMENT-RANGE-COUNT", None);
     assert_eq!(range_count_findings(&report), 1, "{:?}", report.findings);
+}
+
+/// A footnotes part holding a separator (id 0), a continuation separator
+/// (id 1), and one normal note (id 2).
+fn special_footnotes_doc() -> Doc {
+    let mut d = Doc::minimal();
+    d.add_with_override(
+        "word/footnotes.xml",
+        CT_FOOTNOTES,
+        format!(
+            r#"<?xml version="1.0"?><w:footnotes xmlns:w="{W_NS}"><w:footnote w:type="separator" w:id="0"><w:p/></w:footnote><w:footnote w:type="continuationSeparator" w:id="1"><w:p/></w:footnote><w:footnote w:id="2"><w:p/></w:footnote></w:footnotes>"#
+        ),
+    );
+    d
+}
+
+/// Settings whose footnotePr lists the given footnote ids.
+fn settings_with_footnote_pr(ids: &[&str]) -> String {
+    let items: String = ids.iter().map(|i| format!("<w:footnote w:id=\"{i}\"/>")).collect();
+    format!("<w:footnotePr>{items}</w:footnotePr>")
+}
+
+/// Both special footnotes listed in settings: clean. The normal note
+/// needs no listing.
+#[test]
+fn note_pr_listing_satisfied() {
+    let mut d = special_footnotes_doc();
+    let inner = settings_with_footnote_pr(&["0", "1"]);
+    d.add_with_override("word/settings.xml", CT_SETTINGS, format!("<?xml version=\"1.0\"?><w:settings xmlns:w=\"{W_NS}\">{inner}</w:settings>"));
+    let report = validate(&d);
+    assert!(!has(&report, "NOTE-PR-LISTING"), "{:?}", report.findings);
+    assert!(!has(&report, "NOTE-PR-DANGLING"), "{:?}", report.findings);
+}
+
+/// No footnotePr anywhere: both special footnotes are unlisted and will
+/// not be loaded.
+#[test]
+fn note_pr_listing_missing() {
+    let d = special_footnotes_doc();
+    let report = validate(&d);
+    assert_eq!(report.findings.iter().filter(|f| f.rule == "NOTE-PR-LISTING").count(), 2, "{:?}", report.findings);
+    assert_finding(&report, "NOTE-PR-LISTING", Some("word/footnotes.xml"));
+}
+
+/// A listing inside a section's sectPr does NOT count: the listing
+/// child exists only in the document-wide form (CT_FtnDocProps); the
+/// section-wide footnotePr (CT_FtnProps) admits only numbering and
+/// positioning children, so this markup cannot satisfy the join.
+#[test]
+fn note_pr_listing_in_sectpr_does_not_satisfy() {
+    let mut d = special_footnotes_doc();
+    d.set_document(&format!("<w:p><w:r><w:t>x</w:t></w:r></w:p><w:sectPr>{}</w:sectPr>", settings_with_footnote_pr(&["0", "1"])));
+    let report = validate(&d);
+    assert_eq!(report.findings.iter().filter(|f| f.rule == "NOTE-PR-LISTING").count(), 2, "{:?}", report.findings);
+}
+
+/// §17.11.9 grades non-conformance on the note being "required by the
+/// document content": a separator is required when an ordinary footnote
+/// is actually referenced — Error. A continuation separator's necessity
+/// depends on pagination, so the same document leaves it a Warning.
+#[test]
+fn note_pr_listing_error_when_required() {
+    let mut d = special_footnotes_doc();
+    d.set_document(r#"<w:p><w:r><w:footnoteReference w:id="2"/></w:r></w:p>"#);
+    let report = validate(&d);
+    let sep = report.findings.iter().find(|f| f.rule == "NOTE-PR-LISTING" && f.message.contains("type separator")).expect("separator finding");
+    assert_eq!(sep.severity, Severity::Error, "{:?}", report.findings);
+    let cont =
+        report.findings.iter().find(|f| f.rule == "NOTE-PR-LISTING" && f.message.contains("continuationSeparator")).expect("continuation finding");
+    assert_eq!(cont.severity, Severity::Warning, "{:?}", report.findings);
+}
+
+/// An ordinary definition nobody references does not make the
+/// separator required either: unreferenced content renders nothing.
+#[test]
+fn note_pr_listing_warning_when_ordinary_unreferenced() {
+    let d = special_footnotes_doc();
+    let report = validate(&d);
+    let f = assert_finding(&report, "NOTE-PR-LISTING", Some("word/footnotes.xml"));
+    assert_eq!(f.severity, Severity::Warning, "{:?}", report.findings);
+}
+
+/// The same unlisted special note with NO ordinary note of its kind —
+/// nothing requires it — is a Warning.
+#[test]
+fn note_pr_listing_warning_when_unused() {
+    let mut d = Doc::minimal();
+    d.add_with_override(
+        "word/footnotes.xml",
+        CT_FOOTNOTES,
+        format!(
+            r#"<?xml version="1.0"?><w:footnotes xmlns:w="{W_NS}"><w:footnote w:type="continuationNotice" w:id="3"><w:p/></w:footnote></w:footnotes>"#
+        ),
+    );
+    let report = validate(&d);
+    let f = assert_finding(&report, "NOTE-PR-LISTING", Some("word/footnotes.xml"));
+    assert_eq!(f.severity, Severity::Warning);
+}
+
+/// A malformed notes part leaves the definition side unknown: the
+/// listing below names a note whose definition was never observed
+/// (the part truncates mid-tag after one complete definition), so it
+/// must not be reported dangling — and the join says so.
+#[test]
+fn note_pr_dangling_suppressed_when_notes_unreadable() {
+    let mut d = Doc::minimal();
+    d.add_with_override(
+        "word/footnotes.xml",
+        CT_FOOTNOTES,
+        format!("<w:footnotes xmlns:w=\"{W_NS}\"><w:footnote w:id=\"5\"><w:p/></w:footnote><w:footnote w:id="),
+    );
+    let inner = settings_with_footnote_pr(&["0"]);
+    d.add_with_override("word/settings.xml", CT_SETTINGS, format!("<?xml version=\"1.0\"?><w:settings xmlns:w=\"{W_NS}\">{inner}</w:settings>"));
+    let report = validate(&d);
+    assert!(!has(&report, "NOTE-PR-DANGLING"), "{:?}", report.findings);
+    assert!(report.coverage_notes.iter().any(|n| n.contains("footnotePr")), "{:?}", report.coverage_notes);
+}
+
+/// An unreadable settings part is a listing source even when the
+/// package has no notes at all: the join reports its own incompleteness.
+#[test]
+fn note_pr_incomplete_when_settings_unreadable_and_no_notes() {
+    let mut d = Doc::minimal();
+    d.add_with_override("word/settings.xml", CT_SETTINGS, format!("<w:settings xmlns:w=\"{W_NS}\"><w:footnotePr>"));
+    let report = validate(&d);
+    assert!(report.coverage_notes.iter().any(|n| n.contains("footnotePr")), "{:?}", report.coverage_notes);
+    assert!(!has(&report, "NOTE-PR-LISTING"), "{:?}", report.findings);
+    assert!(!has(&report, "NOTE-PR-DANGLING"), "{:?}", report.findings);
+}
+
+/// The endnote mirror: an unlisted continuationNotice endnote fires.
+#[test]
+fn note_pr_listing_endnote() {
+    let mut d = Doc::minimal();
+    d.add_with_override(
+        "word/endnotes.xml",
+        CT_ENDNOTES,
+        format!(
+            r#"<?xml version="1.0"?><w:endnotes xmlns:w="{W_NS}"><w:endnote w:type="continuationNotice" w:id="3"><w:p/></w:endnote></w:endnotes>"#
+        ),
+    );
+    let report = validate(&d);
+    assert_finding(&report, "NOTE-PR-LISTING", Some("word/endnotes.xml"));
+}
+
+/// The reverse direction is a Warning: a listing for a note that does
+/// not exist.
+#[test]
+fn note_pr_dangling_listing() {
+    let mut d = special_footnotes_doc();
+    let inner = settings_with_footnote_pr(&["0", "1", "7"]);
+    d.add_with_override("word/settings.xml", CT_SETTINGS, format!("<?xml version=\"1.0\"?><w:settings xmlns:w=\"{W_NS}\">{inner}</w:settings>"));
+    let report = validate(&d);
+    let f = assert_finding(&report, "NOTE-PR-DANGLING", None);
+    assert_eq!(f.severity, Severity::Warning);
+    assert!(!has(&report, "NOTE-PR-LISTING"), "{:?}", report.findings);
+}
+
+/// An unreadable settings part leaves the join incomplete: no listing
+/// findings, and the run is INCOMPLETE with a coverage note.
+#[test]
+fn note_pr_unknown_when_settings_unreadable() {
+    let mut d = special_footnotes_doc();
+    d.add_with_override("word/settings.xml", CT_SETTINGS, format!("<w:settings xmlns:w=\"{W_NS}\"><w:footnotePr>"));
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    assert!(!has(&report, "NOTE-PR-LISTING"), "{:?}", report.findings);
+    assert!(report.coverage_notes.iter().any(|n| n.contains("footnotePr")), "{:?}", report.coverage_notes);
 }
 
 /// A document with body `body`; with `compat`, its settings carry the

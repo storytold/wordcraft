@@ -1,7 +1,8 @@
 # Corpus manifest — wordcraft-validate
 
 Every entry below was computed from the shipped generator output on
-2026-11-06. Regenerating with the same seeds reproduces these SHA-256
+2026-11-06; regenerated 2026-11-07 after the generator learned to list
+its separator notes in footnotePr/endnotePr (NOTE-PR-LISTING). Regenerating with the same seeds reproduces these SHA-256
 hashes byte-for-byte (verified: two `--all` runs, identical hashes).
 
 ## Stress corpus (generated, binaries not committed)
@@ -13,16 +14,16 @@ construction, so any Corrupt/Error finding on it is a false positive.
 
 | File | Seed | Size (bytes) | Parts | Axis | SHA-256 |
 |---|---|---|---|---|---|
-| `monster.docx` | 7 | 2866534 | 76 | everything high; altChunk + background on | `b09aa063e2d21364a878d13c38899503b1d0e4a06d4c6b9404884f9f40acddf4` |
-| `axis-revisions.docx` | 8 | 912326 | 43 | rev-density 0.95, 10 authors, 900 paragraphs | `b41b9df30bf72b177ba27ee7fc22eb6f2b05b0c48a3fe795cb8b7ad1140c397c` |
-| `axis-comments.docx` | 9 | 1019789 | 43 | 220 threads x depth 8 -> 1,089 comments | `e8e786cc53dd002c6b068df3296f44fc803092bfd3a184fbf90882999def032d` |
-| `axis-numbering.docx` | 10 | 899120 | 43 | 300 abstractNum, 60 orphans, 1,200 paragraphs | `83c570739e128fc076a332ff0d484cdd09c9a9fa773403edb41381d407bd89a7` |
-| `axis-styles.docx` | 11 | 851143 | 43 | 600 styles, basedOn depth 30 | `a7c877125f371e8ef8dcec484e11aa185162e2a8eea45f8929ea875755336ba5` |
-| `axis-tables.docx` | 12 | 1331002 | 43 | 30 tables, 40x8, nesting depth 3 | `352e7b1af7a2f8a78c9a4038b9a0fa23a50d8de8581df395927c0a867f6e4b8b` |
-| `axis-media.docx` | 13 | 6473139 | 89 | 40 media parts, 200 refs, 10 orphans | `aada526b3def436a1ff5dd1334bb526d352eeb703230e4a843468fc32b569caa` |
-| `axis-sections.docx` | 14 | 875964 | 103 | 12 sections (72 header/footer parts) | `ad6303156cf70f8194cb57f0e4658afa05b73508c69b24c299028fc34f502a9d` |
-| `axis-fields-math.docx` | 15 | 862434 | 43 | 150 fields, 120 math expressions, 400 bookmarks | `b8081031ae4e39ed47f944c39c761e62bea56aa2a5119ebcf52919f33657645c` |
-| `small-valid.docx` | 16 | 647682 | 42 | control: everything on, all knobs low | `dc0419a60792981dc0e3c95d388bc484bbedb1a79d06bf7852f288889e7321e3` |
+| `monster.docx` | 7 | 2,866,580 | 76 | everything high; altChunk + background on | `70a87e245c0d1c55917e624c8f8701c07f92cc8e6c92c0ff37b69995785ab70f` |
+| `axis-revisions.docx` | 8 | 912,367 | 43 | rev-density 0.95, 10 authors, 900 paragraphs | `9db82bcb1c0cadf22a5d0e3c3fa0571d004e1826f91988020cdd1c6966ac080b` |
+| `axis-comments.docx` | 9 | 1,019,829 | 43 | 220 threads x depth 8 -> 1,089 comments | `58ddf0130287a168c69620938972497ca470bce9228773b357f2bd6b26bb43c2` |
+| `axis-numbering.docx` | 10 | 899,160 | 43 | 300 abstractNum, 60 orphans, 1,200 paragraphs | `3955ee3a1ff074bc12528b06031bd266e3756565f9fafdf3fcae718ccd1ca89b` |
+| `axis-styles.docx` | 11 | 851,185 | 43 | 600 styles, basedOn depth 30 | `d8afe3f7c0f5c91d542ae7bda39046e939a51255a655dfc12e5aeceea680fae9` |
+| `axis-tables.docx` | 12 | 1,331,043 | 43 | 30 tables, 40x8, nesting depth 3 | `84823e4eab65df85c980108506ed0afc7a38172c9d48a2004f7882b74cddd663` |
+| `axis-media.docx` | 13 | 6,473,181 | 89 | 40 media parts, 200 refs, 10 orphans | `b91255ea8b2b62330cb98c247a6373c7fadc7d681029c8b5530377920fc1aa7c` |
+| `axis-sections.docx` | 14 | 876,005 | 103 | 12 sections (72 header/footer parts) | `ad4abb8f93e4ba363f47607ab4e92978aebbe5a2e3a62522f264054caba75dd9` |
+| `axis-fields-math.docx` | 15 | 862,474 | 43 | 150 fields, 120 math expressions, 400 bookmarks | `a7136d054b8d39f83f7297c3affa7f038998109056945065550bff7d32983364` |
+| `small-valid.docx` | 16 | 647,721 | 42 | control: everything on, all knobs low | `83669349c790d3af7f1bdc3c608f05182d12a9415a30838b74b9971ccbbe0a33` |
 
 **Resolved gap (2026-11-06):** the first build of this corpus declared
 the glossary part with the main document content type in

@@ -828,6 +828,8 @@ def render_settings(ctx):
     out.append('<w:drawingGridHorizontalSpacing w:val="120"/>')
     out.append('<w:drawingGridVerticalSpacing w:val="120"/>')
     out.append('<w:characterSpacingControl w:val="doNotCompress"/>')
+    out.append('<w:footnotePr><w:footnote w:id="0"/><w:footnote w:id="1"/></w:footnotePr>')
+    out.append('<w:endnotePr><w:endnote w:id="0"/><w:endnote w:id="1"/></w:endnotePr>')
     out.append('<w:compat><w:spaceForUL/><w:balanceSingleByteDoubleByteWidth/>'
                '<w:doNotLeaveBackslashAlone/><w:ulTrailSpace/><w:doNotExpandShiftReturn/>'
                '<w:adjustLineHeightInTable/>'
