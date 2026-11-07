@@ -5958,6 +5958,21 @@ fn applying_paragraph_style_to_selection_preserves_unselected_character_formatti
 }
 
 #[test]
+fn applying_paragraph_style_to_selection_ending_at_paragraph_end_preserves_prefix_formatting() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "keep this text"}));
+    run(&mut s, "select.text", json!({"text": "keep"}));
+    run(&mut s, "format.size", json!({"size": 22.0}));
+    run(&mut s, "select.text", json!({"text": "this text"}));
+    run(&mut s, "styles.apply", json!({"style": "Heading 1"}));
+
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.props_of_char(1).size, Some(22.0));
+    assert_eq!(p.props_of_char(6).size, None);
+    assert_eq!(p.props.style.as_deref(), Some("Heading1"));
+}
+
+#[test]
 fn styles_apply_multi_paragraph_selection() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "One"}));

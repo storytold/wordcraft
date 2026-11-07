@@ -40,15 +40,15 @@ pub(super) fn apply_style(s: &mut Session, v: &Value) -> CmdResult {
             p.numbering = None;
         }
     })?;
-    // A paragraph style resets direct character formatting only when it applies at the caret
-    // or reaches the paragraph end. A partial selection must not clear formatting elsewhere
-    // in the paragraph.
+    // Applying a paragraph style to a partial selection must not clear direct character
+    // formatting elsewhere in the paragraph. Clear it only for a caret application or when
+    // the selection covers the whole paragraph.
     if a.path == b.path || a == b {
         let paths = s.doc.paths_between(&a, &b);
         for path in paths {
             let para = s.doc.para_mut(a.story, &path)?;
             let len = para.len();
-            if a == b || b.off >= len {
+            if a == b || (a.off == 0 && b.off >= len) {
                 para.format(0, len, &|c| {
                     c.font = None;
                     c.font_cs = None;
