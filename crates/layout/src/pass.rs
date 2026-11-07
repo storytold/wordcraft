@@ -293,6 +293,17 @@ fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<
 /// Continuous: new column layout below the current text (its tallest column).
 fn continue_page(pb: &mut PageBuilder, sect: &SectionProps, block: usize) {
     pb.close_column_lines();
+    if pb.at_top()
+        && let Some(pg) = pb.pages.last_mut()
+    {
+        pg.section = pb.sect_idx;
+    }
+    if let Some(n) = sect.page_num_start {
+        pb.number = n;
+        if let Some(pg) = pb.pages.last_mut() {
+            pg.number = n;
+        }
+    }
     pb.cols = sect.column_boxes();
     pb.col = 0;
     pb.top = pb.text_bottom();

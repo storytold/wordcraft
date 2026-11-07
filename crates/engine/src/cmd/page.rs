@@ -221,8 +221,37 @@ fn manual_hyphenation(s: &mut Session, v: &Value) -> CmdResult {
     Ok(best.map(|(_, v)| v).unwrap_or_else(|| json!({"done": true})))
 }
 
+/// Resolve the section index associated with a header, footer, or note part `id`.
 fn section_of_part(s: &Session, id: u32) -> usize {
     let sections = s.doc.sections();
+    if s.doc.parts.get(&id).is_some_and(|p| matches!(p.kind, wordcraft_doc::PartKind::Header | wordcraft_doc::PartKind::Footer)) {
+        let uses_hf = |sec: usize| {
+            let slice = sections.get(..=sec).unwrap_or(&sections);
+            [
+                slice.iter().rev().find_map(|(_, sp)| sp.headers.default),
+                slice.iter().rev().find_map(|(_, sp)| sp.headers.first),
+                slice.iter().rev().find_map(|(_, sp)| sp.headers.even),
+                slice.iter().rev().find_map(|(_, sp)| sp.footers.default),
+                slice.iter().rev().find_map(|(_, sp)| sp.footers.first),
+                slice.iter().rev().find_map(|(_, sp)| sp.footers.even),
+            ]
+            .contains(&Some(id))
+        };
+        if let Some(pg) = s.cached_layout().and_then(|l| l.pages.get(s.page_hint)) {
+            let sec = pg.section.min(sections.len().saturating_sub(1));
+            if uses_hf(sec) {
+                return sec;
+            }
+        }
+        if let Some(ret) = &s.hf_return
+            && ret.focus.story == wordcraft_doc::StoryRef::Body
+        {
+            let sec = s.doc.section_index_of(ret.focus.path.0.first().copied().unwrap_or(0) as usize);
+            if uses_hf(sec) {
+                return sec;
+            }
+        }
+    }
     for (i, (_, sp)) in sections.iter().enumerate() {
         if [sp.headers.default, sp.headers.first, sp.headers.even, sp.footers.default, sp.footers.first, sp.footers.even].contains(&Some(id)) {
             return i;

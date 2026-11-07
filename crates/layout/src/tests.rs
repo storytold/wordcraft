@@ -3144,6 +3144,7 @@ fn sections_land_on_the_side_their_break_and_numbering_ask_for() {
     assert_eq!(pages(SectionStart::NextPage, Some(2), true), [(0, 1), (1, 2)]);
     assert_eq!(pages(SectionStart::NextPage, Some(1), false), [(0, 1), (1, 1)]);
     assert_eq!(pages(SectionStart::NextPage, None, true), [(0, 1), (1, 2)]);
+    assert_eq!(pages(SectionStart::Continuous, Some(5), false), [(0, 5)]);
 }
 
 #[test]

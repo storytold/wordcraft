@@ -237,7 +237,7 @@ impl PageNumbersForm {
             section: wordcraft_engine::cmd::page::section_index_of_focus(&app.session),
             format: sp.page_num_format.ooxml().to_string(),
             cont: sp.page_num_start.is_none(),
-            start: sp.page_num_start.unwrap_or(1).clamp(1, 100_000),
+            start: sp.page_num_start.unwrap_or(1).min(100_000),
         }
     }
 
@@ -258,21 +258,106 @@ impl PageNumbersForm {
     }
 }
 
+/// Parse a starting page number typed into `Start at:`: a decimal number, or a Roman numeral or
+/// letter sequence (`i`, `iv`, `a`, `aa`…).
+fn parse_page_start(s: &str, format: &str) -> Option<f64> {
+    let s = s.trim();
+    if let Ok(n) = s.parse::<f64>() {
+        return Some(n);
+    }
+    if matches!(format, "lowerLetter" | "upperLetter") {
+        parse_letters(s).or_else(|| parse_roman(s)).map(f64::from)
+    } else {
+        parse_roman(s).or_else(|| parse_letters(s)).map(f64::from)
+    }
+}
+
+/// Parse a canonical Roman numeral (`i`..`mmmcmxcix`, case-insensitive) into its page number.
+fn parse_roman(s: &str) -> Option<u32> {
+    if s.is_empty() {
+        return None;
+    }
+    let val = |b: u8| match b.to_ascii_lowercase() {
+        b'i' => Some(1u32),
+        b'v' => Some(5),
+        b'x' => Some(10),
+        b'l' => Some(50),
+        b'c' => Some(100),
+        b'd' => Some(500),
+        b'm' => Some(1000),
+        _ => None,
+    };
+    let mut total = 0u32;
+    let mut prev = 0u32;
+    for &b in s.as_bytes().iter().rev() {
+        let v = val(b)?;
+        if v < prev {
+            total = total.checked_sub(v)?;
+        } else {
+            total = total.checked_add(v)?;
+            prev = v;
+        }
+    }
+    (total > 0 && wordcraft_doc::section::roman(total).eq_ignore_ascii_case(s)).then_some(total)
+}
+
+/// Parse a repeated-letter page numeral (`a`..`z`, `aa`..`zz`, case-insensitive) into its page number.
+fn parse_letters(s: &str) -> Option<u32> {
+    let first = s.chars().next()?.to_ascii_lowercase();
+    if !first.is_ascii_lowercase() || !s.chars().all(|c| c.eq_ignore_ascii_case(&first)) {
+        return None;
+    }
+    let count = u32::try_from(s.len()).ok()?;
+    (1..=30).contains(&count).then(|| (count - 1) * 26 + u32::from(first as u8 - b'a') + 1)
+}
+
+/// Render the Page Number Format dialog contents and return true when the dialog should close.
 pub(super) fn page_numbers_ui(app: &mut WordApp, ui: &mut Ui, f: &mut PageNumbersForm) -> bool {
     f.follow(app);
     ui.add_space(4.0);
-    ui.label(tl!("Number format"));
+    let format_label = ui.label(tl!("Number format"));
     let label = crate::dialogs_notes::FORMATS.iter().find(|(v, _)| *v == f.format.as_str()).map(|(_, l)| *l).unwrap_or_default();
-    craft_ui::ComboBox::from_id_salt("pnum_format").selected_text(label).width(150.0).show_ui(ui, |ui| {
-        for (v, l) in crate::dialogs_notes::FORMATS {
-            ui.selectable_value(&mut f.format, v.to_string(), l);
-        }
-    });
+    craft_ui::ComboBox::from_id_salt("pnum_format")
+        .selected_text(label)
+        .width(150.0)
+        .show_ui(ui, |ui| {
+            for (v, l) in crate::dialogs_notes::FORMATS {
+                ui.selectable_value(&mut f.format, v.to_string(), l);
+            }
+        })
+        .response
+        .labelled_by(format_label.id);
     heading(ui, "Page numbering");
     ui.radio_value(&mut f.cont, true, tl!("Continue from previous section"));
     ui.horizontal(|ui| {
-        ui.radio_value(&mut f.cont, false, tl!("Start at:"));
-        ui.add_enabled(!f.cont, egui::DragValue::new(&mut f.start).range(1..=100_000));
+        let was_cont = f.cont;
+        let prev_start = f.start;
+        let radio = ui.radio_value(&mut f.cont, false, tl!("Start at:"));
+        let fmt = f.format.clone();
+        let r = ui
+            .add(
+                egui::DragValue::new(&mut f.start)
+                    .range(0..=100_000)
+                    .clamp_existing_to_range(false)
+                    .custom_parser(move |s| parse_page_start(s, &fmt)),
+            )
+            .labelled_by(radio.id);
+        if radio.clicked() || r.dragged() {
+            if r.dragged() && was_cont {
+                f.start = prev_start;
+            }
+            let text = f.start.to_string();
+            let mut state = egui::TextEdit::load_state(ui.ctx(), r.id).unwrap_or_default();
+            state.cursor.set_char_range(Some(egui::text::CCursorRange::select_all_str(&text)));
+            state.store(ui.ctx(), r.id);
+            r.request_focus();
+        }
+        if r.clicked() || r.changed() || r.gained_focus() || r.has_focus() {
+            f.cont = false;
+        }
+        if radio.clicked() || r.clicked() || r.dragged() || r.gained_focus() {
+            ui.ctx().request_repaint();
+        }
     });
     let (ok, cancel) = buttons(ui, "OK", true);
     if ok {

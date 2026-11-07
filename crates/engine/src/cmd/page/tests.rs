@@ -432,4 +432,19 @@ fn page_number_format_keeps_or_clears_the_start() {
     let back = s.run("layout.pageNumberFormat", &json!({"format": "decimal", "start": 1})).unwrap();
     assert_eq!(back["pageNumFormat"], "decimal");
     assert_eq!(back["pageNumStart"], 1);
+
+    // #5855: from a linked footer on a later section's page, `sect` and `layout.pageNumberFormat`
+    // read and update that page's section, not the earlier section that defined the footer.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("front\nbody"));
+    s.run("select.text", &json!({"text": "front"})).unwrap();
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("insert.editFooter", &json!({"page": 1})).unwrap();
+    s.run("insert.pageNumber", &json!({"position": "bottom"})).unwrap();
+    assert_eq!(section_index_of_focus(&s), 1);
+    s.run("layout.pageNumberFormat", &json!({"format": "lowerRoman", "start": 5})).unwrap();
+    let secs = s.doc.sections();
+    assert_eq!((secs[0].1.page_num_format, secs[0].1.page_num_start), (NumFormat::Decimal, None));
+    assert_eq!((secs[1].1.page_num_format, secs[1].1.page_num_start), (NumFormat::LowerRoman, Some(5)));
+    assert_eq!(s.layout().pages[1].number, 5);
 }
