@@ -51,7 +51,7 @@ pub fn paragraph_issues(
     if !skipped.is_empty() {
         issues.retain(|i| !overlaps(&skipped, i.start, i.end));
     }
-    issues.retain(|i| !is_german_coordinated_compound(&text, i, spelling));
+    filter_german_coordinated_compounds(&text, &mut issues, spelling);
     issues
 }
 
@@ -97,24 +97,32 @@ fn is_german_abbreviation(token: &str) -> bool {
 
 /// Whether `s` starts with a known German abbreviation ending with a period.
 fn starts_with_german_abbreviation(s: &str) -> bool {
-    let s_lower = s.to_lowercase();
-    for abbr in &["bzw.", "z.b.", "u.a.", "d.h.", "usw.", "etc.", "evtl.", "ggf.", "v.a.", "insb.", "ca.", "sog.", "inkl.", "exkl.", "bzgl."] {
-        if s_lower.starts_with(abbr) {
-            return true;
-        }
+    let s_trimmed = s.trim_start();
+    if s_trimmed.is_empty() {
+        return false;
     }
-    false
+    let token_end = s_trimmed.find(|c: char| c.is_whitespace() || c == '/' || c == ',').unwrap_or(s_trimmed.len());
+    let Some(raw_token) = s_trimmed.get(..token_end) else {
+        return false;
+    };
+    is_german_abbreviation(raw_token)
 }
 
 /// Whether `s` ends with a known German abbreviation ending with a period.
 fn ends_with_german_abbreviation(s: &str) -> bool {
-    let s_lower = s.to_lowercase();
-    for abbr in &["bzw.", "z.b.", "u.a.", "d.h.", "usw.", "etc.", "evtl.", "ggf.", "v.a.", "insb.", "ca.", "sog.", "inkl.", "exkl.", "bzgl."] {
-        if s_lower.ends_with(abbr) {
-            return true;
-        }
+    let s_trimmed = s.trim_end();
+    if s_trimmed.is_empty() {
+        return false;
     }
-    false
+    let sep_match = s_trimmed.char_indices().rfind(|(_, c)| c.is_whitespace() || *c == '/' || *c == ',');
+    let token_start = match sep_match {
+        Some((idx, c)) => idx.saturating_add(c.len_utf8()),
+        None => 0,
+    };
+    let Some(raw_token) = s_trimmed.get(token_start..) else {
+        return false;
+    };
+    is_german_abbreviation(raw_token)
 }
 
 /// Whether `token` is a German coordination conjunction, separator, or article that can appear
@@ -153,46 +161,49 @@ fn is_german_connector(token: &str) -> bool {
     )
 }
 
-/// Whether a spelling issue is a valid German coordinated compound with ellipsis (*Ergänzungsstrich*).
+/// Filter out valid German coordinated compounds with ellipsis (*Ergänzungsstrich*).
 ///
 /// In German orthography (§ 98 Amtliche Rechtschreibung), a suspended hyphen marks an omitted
 /// compound constituent in coordinated compounds (e.g. `Handlungs- und Zustandssatz`,
 /// `Schul- und Universitätsbetrieb`, or `Wasserverbrauch und -qualität`).
 ///
-/// If the flagged word has a trailing or leading ellipsis hyphen in a coordination structure,
-/// and combining it with the coordination partner forms a valid compound in German, it is not
-/// an orthographic error.
-fn is_german_coordinated_compound(text: &str, issue: &wordcraft_proof::Issue, opts: &wordcraft_proof::Options) -> bool {
-    if issue.kind != wordcraft_proof::IssueKind::Spelling || issue.lang.code() != "de" {
-        return false;
-    }
-    let Some(word) = text.get(issue.start..issue.end) else {
-        return false;
-    };
-    if word.is_empty() {
-        return false;
-    }
+/// Scans are cached across the paragraph to avoid quadratic rescanning for repeated or long lists.
+fn filter_german_coordinated_compounds(text: &str, issues: &mut Vec<wordcraft_proof::Issue>, opts: &wordcraft_proof::Options) {
+    let mut cached_forward: Option<(std::ops::Range<usize>, Option<String>)> = None;
+    let mut backward_state = BackwardScanState::default();
 
-    if is_forward_coordinated_compound(text, issue.start, issue.end, word, issue.lang, opts) {
-        return true;
-    }
+    issues.retain(|issue| {
+        if issue.kind != wordcraft_proof::IssueKind::Spelling || issue.lang.code() != "de" {
+            return true;
+        }
+        let Some(word) = text.get(issue.start..issue.end) else {
+            return true;
+        };
+        if word.is_empty() {
+            return true;
+        }
 
-    if is_backward_coordinated_compound(text, issue.start, issue.end, word, issue.lang, opts) {
-        return true;
-    }
+        if check_forward_coordinated(text, issue.start, issue.end, word, issue.lang, opts, &mut cached_forward) {
+            return false;
+        }
 
-    false
+        if check_backward_coordinated(text, issue.start, issue.end, word, issue.lang, opts, &mut backward_state) {
+            return false;
+        }
+
+        true
+    });
 }
 
-/// Check if a flagged word is the first element of a German coordinated compound with forward
-/// ellipsis (e.g. `Handlungs- und Zustandssatz`, `Schul- und Universitätsbetrieb`).
-fn is_forward_coordinated_compound(
+/// Check if a flagged word is part of a valid German forward coordinated compound, reusing scan results.
+fn check_forward_coordinated(
     text: &str,
-    _start: usize,
+    start: usize,
     end: usize,
     word: &str,
     lang: wordcraft_proof::ProofLang,
     opts: &wordcraft_proof::Options,
+    cache: &mut Option<(std::ops::Range<usize>, Option<String>)>,
 ) -> bool {
     let Some(after_word) = text.get(end..) else {
         return false;
@@ -203,19 +214,44 @@ fn is_forward_coordinated_compound(
     let Some(after_hyphen) = text.get(end.saturating_add(hyphen_char.len_utf8())..) else {
         return false;
     };
-    // Must be followed by whitespace, comma, or slash.
     let is_boundary = after_hyphen.chars().next().is_some_and(|c| c.is_whitespace() || c == ',' || c == '/');
     if !is_boundary {
         return false;
     }
 
-    // Look ahead for candidate partner words.
+    if let Some((range, partner_opt)) = cache
+        && range.contains(&start)
+    {
+        return partner_opt.as_deref().is_some_and(|partner| test_compound_forward(word, partner, lang, opts));
+    }
+
+    let (scan_end, partner_opt) = scan_forward_partner(text, word, end.saturating_add(hyphen_char.len_utf8()), lang, opts);
+    *cache = Some((start..scan_end, partner_opt.clone()));
+
+    partner_opt.as_deref().is_some_and(|partner| test_compound_forward(word, partner, lang, opts))
+}
+
+/// Scan forward from `after_hyphen_offset` to find the terminal candidate partner word of a coordination chain.
+///
+/// Returns the byte offset up to which the scan reached and the candidate partner word, if found.
+fn scan_forward_partner(
+    text: &str,
+    word: &str,
+    after_hyphen_offset: usize,
+    lang: wordcraft_proof::ProofLang,
+    opts: &wordcraft_proof::Options,
+) -> (usize, Option<String>) {
     let mut saw_connector = false;
     let mut modifier_count: usize = 0;
-    let mut remainder = after_hyphen;
+    let mut remainder = text.get(after_hyphen_offset..).unwrap_or("");
+    let mut current_offset = after_hyphen_offset;
+
     while !remainder.is_empty() {
+        crate::work::steps(1);
         let prev_len = remainder.len();
-        remainder = remainder.trim_start();
+        let trimmed = remainder.trim_start();
+        current_offset = current_offset.saturating_add(remainder.len().saturating_sub(trimmed.len()));
+        remainder = trimmed;
         if remainder.is_empty() {
             break;
         }
@@ -226,6 +262,7 @@ fn is_forward_coordinated_compound(
             saw_connector = true;
             let first_char_len = remainder.chars().next().map_or(1, |c| c.len_utf8());
             remainder = remainder.get(first_char_len..).unwrap_or("");
+            current_offset = current_offset.saturating_add(first_char_len);
             if remainder.len() >= prev_len {
                 break;
             }
@@ -237,6 +274,7 @@ fn is_forward_coordinated_compound(
             break;
         };
         remainder = remainder.get(token_end..).unwrap_or("");
+        current_offset = current_offset.saturating_add(token_end);
         if remainder.len() >= prev_len {
             break;
         }
@@ -253,6 +291,9 @@ fn is_forward_coordinated_compound(
 
         if token.ends_with(is_hyphen) {
             saw_connector = true;
+            if has_sentence_punct {
+                break;
+            }
             continue;
         }
 
@@ -267,14 +308,31 @@ fn is_forward_coordinated_compound(
 
         if saw_connector {
             let partner = token.trim_matches(|c: char| !c.is_alphabetic());
-            if partner.chars().count() >= 2 && test_compound_forward(word, partner, lang, opts) {
-                return true;
-            }
+            if partner.chars().count() >= 2 {
+                let is_noun = word.chars().next().is_some_and(|c| c.is_uppercase());
+                let token_is_noun = token.chars().next().is_some_and(|c| c.is_uppercase());
 
-            let is_lowercase = token.chars().next().is_some_and(|c| c.is_lowercase());
-            if !has_sentence_punct && is_lowercase && modifier_count < 2 {
-                modifier_count = modifier_count.saturating_add(1);
-                continue;
+                if is_noun && !token_is_noun {
+                    if !has_sentence_punct && modifier_count < 2 {
+                        modifier_count = modifier_count.saturating_add(1);
+                        continue;
+                    }
+                    break;
+                }
+
+                if test_compound_forward(word, partner, lang, opts) {
+                    return (current_offset, Some(partner.to_string()));
+                }
+
+                let is_lowercase = token.chars().next().is_some_and(|c| c.is_lowercase());
+                if !has_sentence_punct && is_lowercase && modifier_count < 2 {
+                    modifier_count = modifier_count.saturating_add(1);
+                    continue;
+                }
+
+                if is_noun && token_is_noun {
+                    return (current_offset, Some(partner.to_string()));
+                }
             }
 
             break;
@@ -285,7 +343,7 @@ fn is_forward_coordinated_compound(
         }
     }
 
-    false
+    (current_offset, None)
 }
 
 /// Test whether `word` plus any valid suffix/base of `partner` forms a valid German compound.
@@ -324,15 +382,26 @@ fn test_compound_forward(word: &str, partner: &str, lang: wordcraft_proof::Proof
     false
 }
 
-/// Check if a flagged word is the second element of a German coordinated compound with backward
-/// ellipsis (e.g. `Wasserverbrauch und -qualität`).
-fn is_backward_coordinated_compound(
+/// State for caching backward coordination scans across consecutive issues in a paragraph.
+#[derive(Default)]
+struct BackwardScanState {
+    /// Byte range in `text` covered by a cached coordination chain.
+    cached_range: std::ops::Range<usize>,
+    /// The candidate partner word found for this chain, if any.
+    partner: Option<String>,
+    /// The maximum offset up to which backward scans have searched with no partner found.
+    scanned_up_to: usize,
+}
+
+/// Check if a flagged word is part of a valid German backward coordinated compound, reusing scan results.
+fn check_backward_coordinated(
     text: &str,
     start: usize,
-    _end: usize,
+    end: usize,
     word: &str,
     lang: wordcraft_proof::ProofLang,
     opts: &wordcraft_proof::Options,
+    state: &mut BackwardScanState,
 ) -> bool {
     let Some(before_word) = text.get(..start) else {
         return false;
@@ -340,7 +409,8 @@ fn is_backward_coordinated_compound(
     let Some(hyphen_char) = before_word.chars().next_back().filter(|c| is_hyphen(*c)) else {
         return false;
     };
-    let Some(before_hyphen) = text.get(..start.saturating_sub(hyphen_char.len_utf8())) else {
+    let before_hyphen_offset = start.saturating_sub(hyphen_char.len_utf8());
+    let Some(before_hyphen) = text.get(..before_hyphen_offset) else {
         return false;
     };
     let is_boundary = before_hyphen.chars().next_back().is_some_and(|c| c.is_whitespace() || c == '/');
@@ -348,13 +418,42 @@ fn is_backward_coordinated_compound(
         return false;
     }
 
+    if state.cached_range.contains(&start) {
+        return state.partner.as_deref().is_some_and(|partner| test_compound_backward(partner, word, lang, opts));
+    }
+
+    if before_hyphen_offset <= state.scanned_up_to && state.partner.is_none() && state.scanned_up_to > 0 {
+        return false;
+    }
+
+    let stop_offset = if state.partner.is_none() { state.scanned_up_to } else { 0 };
+    let (scan_start, partner_opt) = scan_backward_partner(text, before_hyphen_offset, stop_offset);
+
+    if let Some(ref partner) = partner_opt {
+        state.cached_range = scan_start..end;
+        state.partner = Some(partner.clone());
+        test_compound_backward(partner, word, lang, opts)
+    } else {
+        state.cached_range = scan_start..end;
+        state.partner = None;
+        state.scanned_up_to = state.scanned_up_to.max(before_hyphen_offset);
+        false
+    }
+}
+
+/// Scan backward from `before_hyphen_offset` down to `stop_offset` to find the candidate partner word.
+///
+/// Returns the byte offset down to which the scan reached and the candidate partner word, if found.
+fn scan_backward_partner(text: &str, before_hyphen_offset: usize, stop_offset: usize) -> (usize, Option<String>) {
     let mut saw_connector = false;
     let mut modifier_count: usize = 0;
-    let mut remainder = before_hyphen;
-    while !remainder.is_empty() {
+    let mut remainder = text.get(..before_hyphen_offset).unwrap_or("");
+
+    while !remainder.is_empty() && remainder.len() > stop_offset {
+        crate::work::steps(1);
         let prev_len = remainder.len();
         remainder = remainder.trim_end();
-        if remainder.is_empty() {
+        if remainder.is_empty() || remainder.len() <= stop_offset {
             break;
         }
         if remainder.ends_with(['.', '!', '?', ';', ':', '\n']) && !ends_with_german_abbreviation(remainder) {
@@ -413,8 +512,8 @@ fn is_backward_coordinated_compound(
 
         if saw_connector {
             let partner = token.trim_matches(|c: char| !c.is_alphabetic());
-            if partner.chars().count() >= 2 && test_compound_backward(partner, word, lang, opts) {
-                return true;
+            if partner.chars().count() >= 2 {
+                return (remainder.len(), Some(partner.to_string()));
             }
 
             let is_lowercase = token.chars().next().is_some_and(|c| c.is_lowercase());
@@ -431,7 +530,7 @@ fn is_backward_coordinated_compound(
         }
     }
 
-    false
+    (remainder.len(), None)
 }
 
 /// Test whether any valid prefix of `partner` plus `word` forms a valid German compound.
@@ -572,8 +671,11 @@ mod tests {
         assert!(skipped_ranges(&[run(0..5, false)]).is_empty());
     }
 
+    static TEST_DICT_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     struct TestDictGuard {
         temp_dir: std::path::PathBuf,
+        _lock: std::sync::MutexGuard<'static, ()>,
     }
 
     impl Drop for TestDictGuard {
@@ -589,7 +691,8 @@ mod tests {
     #[test]
     fn german_coordinated_compounds_with_ellipsis_are_accepted() {
         let temp_dir = std::env::temp_dir().join(format!("wordcraft-test-de-{}", std::process::id()));
-        let _guard = TestDictGuard { temp_dir: temp_dir.clone() };
+        let lock = TEST_DICT_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = TestDictGuard { temp_dir: temp_dir.clone(), _lock: lock };
 
         let system_dir = std::path::PathBuf::from("/usr/share/hunspell");
         if system_dir.join("de_DE.dic").is_file() {
@@ -662,5 +765,56 @@ mod tests {
         let p = d.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
         let issues = paragraph_issues(p, &proof_runs(&d, p, None), &Default::default(), true, false);
         assert!(!issues.is_empty(), "expected invalid compound to be flagged");
+    }
+
+    /// Words ending with abbreviation letters (e.g. `Mallorca.` ending in `ca.`) must not be treated as abbreviations.
+    #[test]
+    fn words_ending_with_abbreviation_letters_are_not_abbreviations() {
+        assert!(!ends_with_german_abbreviation("Wir fliegen nach Mallorca."));
+        assert!(!starts_with_german_abbreviation("Mallorca. Wir fliegen"));
+        assert!(ends_with_german_abbreviation("ca."));
+        assert!(ends_with_german_abbreviation("Test ca."));
+        assert!(starts_with_german_abbreviation("bzw. Test"));
+    }
+
+    /// Repeated rejected hyphenated tokens must take linear work ([`crate::work`]) in [`paragraph_issues`].
+    #[test]
+    fn repeated_rejected_hyphenated_tokens_stay_linear() {
+        let temp_dir = std::env::temp_dir().join(format!("wordcraft-test-linear-{}", std::process::id()));
+        let lock = TEST_DICT_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = TestDictGuard { temp_dir: temp_dir.clone(), _lock: lock };
+
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let aff = "SET UTF-8\n";
+        let dic = "0\n";
+        let _ = std::fs::write(temp_dir.join("de_DE.aff"), aff);
+        let _ = std::fs::write(temp_dir.join("de_DE.dic"), dic);
+        wordcraft_proof::set_dictionaries_folder(Some(temp_dir));
+
+        let make_doc = |n: usize| {
+            let text = "Xyzq- ".repeat(n);
+            let mut d = Document::from_text(&text);
+            d.format_range(&wordcraft_doc::Pos::body(0, 0), &wordcraft_doc::Pos::body(0, text.len()), &|c| c.lang = Some("de-DE".into())).unwrap();
+            d
+        };
+
+        let run_proof = |d: &Document| {
+            let p = d.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+            let runs = proof_runs(d, p, None);
+            paragraph_issues(p, &runs, &Default::default(), false, false)
+        };
+
+        let (small, big) = (make_doc(50), make_doc(400));
+        let (s, b) = (
+            crate::work::count(|| {
+                run_proof(&small);
+            }),
+            crate::work::count(|| {
+                run_proof(&big);
+            }),
+        );
+        let ratio = b as f64 / s.max(1) as f64;
+        assert!(s > 0, "no steps counted, so work is not being measured");
+        assert!(ratio <= 12.0, "repeated rejected hyphenated tokens took {ratio:.1}x steps (8x input: {s} -> {b}), not linear");
     }
 }
