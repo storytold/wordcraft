@@ -554,18 +554,18 @@ fn damaged_docx_cli_saves_refuse_overwrite_and_report_command_refusals() {
     assert_eq!(std::fs::read(&source).unwrap(), original, "saving a recovery copy must preserve the damaged source");
 
     let error = run(&args(&["run", "--file", &source_arg, "--save", &source_arg])).unwrap_err().to_string();
-    assert!(error.contains("refusing to replace damaged source"), "{error}");
+    assert!(error.contains("refusing to replace source"), "{error}");
     assert_eq!(std::fs::read(&source).unwrap(), original);
 
     let error = run(&args(&["run", "--file", &source_arg, "--cmd", "file.save"])).unwrap_err().to_string();
-    assert!(error.contains("refusing to replace damaged source"), "{error}");
+    assert!(error.contains("refusing to replace source"), "{error}");
     assert_eq!(std::fs::read(&source).unwrap(), original);
 
     let command = json!({"command":"file.open","params":{"path":source_arg}});
     let script_text = serde_json::to_string(&json!({"commands":[command,"file.save"]})).unwrap();
     let script = write_script(&dir, &script_text);
     let error = run(&args(&["run", "--script", &script])).unwrap_err().to_string();
-    assert!(error.contains("refusing to replace damaged source"), "{error}");
+    assert!(error.contains("refusing to replace source"), "{error}");
     assert_eq!(std::fs::read(&source).unwrap(), original);
 }
 
