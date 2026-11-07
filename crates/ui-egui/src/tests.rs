@@ -583,6 +583,21 @@ fn reading_page_color_restores_for_new_documents_and_windows() {
     assert_eq!(b.session.view.read_page_color, ReadPageColor::Inverse);
 }
 
+/// View › Window › Synchronous Scrolling: the follower's scroll offset takes the leading window's
+/// fraction of its own extent, applied to the follower's (the two panes' extents differ); the ends
+/// clamp, and a degenerate extent in either window falls back to the leader offset bounded by the
+/// follower's extent.
+#[test]
+fn sync_scroll_maps_the_leading_fraction_onto_the_follower_extent() {
+    use crate::windows::sync_scroll_axis;
+    assert_eq!(sync_scroll_axis(100.0, 200.0, 400.0), 200.0, "half of a twice-taller pane");
+    assert_eq!(sync_scroll_axis(100.0, 200.0, 50.0), 25.0, "a follower of a shorter extent");
+    assert_eq!(sync_scroll_axis(-1.0, 200.0, 400.0), 0.0, "past the top clamps at zero");
+    assert_eq!(sync_scroll_axis(999.0, 200.0, 400.0), 400.0, "past the bottom clamps at the bottom");
+    assert_eq!(sync_scroll_axis(30.0, 0.5, 400.0), 30.0, "no usable leader extent: the raw offset");
+    assert_eq!(sync_scroll_axis(30.0, f32::INFINITY, 10.0), 10.0, "no usable follower extent: its bottom");
+}
+
 /// File › Options › Advanced › Animation: the caret's animation is a UI command, kept between
 /// runs.
 #[test]

@@ -98,7 +98,7 @@ pub struct Windows {
     sync_scroll_from: Option<(u64, egui::Vec2, egui::Vec2)>,
 }
 
-fn sync_scroll_axis(leader_offset: f32, leader_max: f32, my_max: f32) -> f32 {
+pub(crate) fn sync_scroll_axis(leader_offset: f32, leader_max: f32, my_max: f32) -> f32 {
     if leader_max.is_finite() && leader_max > 1.0 && my_max.is_finite() && my_max > 1.0 {
         let ratio = (leader_offset / leader_max).clamp(0.0, 1.0);
         (ratio * my_max).clamp(0.0, my_max)
