@@ -19,6 +19,7 @@
 //!
 //! Tables are indexed by code − 0x20; 0 = no Unicode equivalent.
 
+/// The symbol table for a single family name, by lowercase family name.
 fn single_table(family: &str) -> Option<&'static [u32; 224]> {
     let f = family.trim();
     if f.eq_ignore_ascii_case("symbol") || f.eq_ignore_ascii_case("symbol (pcl6)") {

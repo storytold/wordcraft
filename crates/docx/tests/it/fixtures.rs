@@ -3897,6 +3897,7 @@ fn roman_fonts_are_read_from_the_font_table() {
     assert_eq!(d.settings.roman_fonts, ["Brand Serif"]);
 }
 
+/// Semicolon-separated roman font fallback lists in `fontTable.xml` register each candidate family.
 #[test]
 fn roman_fonts_split_fallback_lists() {
     let fonts = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:font w:name="Liberation Serif;Times New Roman"><w:family w:val="roman"/></w:font></w:fonts>"#;
