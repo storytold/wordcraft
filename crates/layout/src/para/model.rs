@@ -144,6 +144,9 @@ pub struct Cluster {
     pub obj_d: f32,
     /// The cluster is a decimal separator (decimal tabs align on it).
     pub dot: bool,
+    /// Explicit bidi embedding level, if this cluster's level differs from the paragraph's `bidi_levels`
+    /// at `start` (e.g. for words inside an inline field result).
+    pub level: Option<u8>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

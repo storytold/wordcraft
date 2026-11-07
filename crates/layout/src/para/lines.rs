@@ -196,7 +196,7 @@ impl<'e> Breaker<'e> {
             widths: word_widths(&pl.clusters, &pl.hyph_after),
             rtl_para: rp.bidi,
             grid: Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid),
-            bidi: rp.bidi || !pl.bidi_levels.is_empty(),
+            bidi: rp.bidi || !pl.bidi_levels.is_empty() || pl.clusters.iter().any(|c| c.level.is_some_and(|l| l > 0)),
             est_h,
             // Exact spacing fixes the table-contact boundary even when the mark has other metrics.
             // Keep the existing estimate for shapes and for non-exact spacing.

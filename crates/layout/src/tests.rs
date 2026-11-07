@@ -834,7 +834,7 @@ fn a_megabyte_long_word_lays_out_quickly() {
 
 /// A cluster with the given advance and kind, for the tests that measure a word by hand.
 fn word_cluster(kind: para::ClKind, adv: f32, break_after: bool) -> para::Cluster {
-    para::Cluster { start: 0, end: 1, adv, kind, style: 0, g0: 0, g1: 1, break_after, obj_h: 0.0, obj_d: 0.0, dot: false }
+    para::Cluster { start: 0, end: 1, adv, kind, style: 0, g0: 0, g1: 1, break_after, obj_h: 0.0, obj_d: 0.0, dot: false, level: None }
 }
 
 /// A word that a negative advance makes narrower still fits beside a float: the width of a word
@@ -14403,5 +14403,33 @@ fn turned_cell_float_keeps_its_along_text_offset() {
         let confined = place(direction, false);
         let reference = place(direction, true);
         assert!((confined.y - reference.y).abs() < 0.01, "{direction:?}: {confined:?} vs {reference:?}");
+    }
+}
+
+/// Field result longer than one line wraps across lines within margins (Issue #5838).
+#[test]
+fn long_field_result_wraps_across_multiple_lines() {
+    let mut doc = Document::new();
+    doc.last_section.margin_left = 200.0;
+    doc.last_section.margin_right = 200.0;
+    let long_text = "The quick brown fox jumps over the lazy dog and runs across the wide open fields ".repeat(10);
+    let mut p = Paragraph::new();
+    p.insert_object(
+        0,
+        InlineObject::Field { instr: "DOCVARIABLE summary".into(), result: long_text, locked: false, dirty: false, code: false, form: String::new() },
+        &Default::default(),
+    )
+    .unwrap();
+    doc.body = vec![wordcraft_doc::para_block(p)];
+
+    let mut cache = LayoutCache::new();
+    let l = layout(&doc, &mut cache, &LayoutOptions::default());
+    let Placed::Lines { para, .. } = &l.pages[0].items[0] else {
+        panic!("expected laid out paragraph");
+    };
+
+    assert!(para.lines.len() >= 3, "expected at least 3 lines, got {}", para.lines.len());
+    for (i, line) in para.lines.iter().enumerate() {
+        assert!(line.end_x() <= line.right + 0.5, "line {i} exceeds right margin: line.end_x()={} > line.right={}", line.end_x(), line.right);
     }
 }
