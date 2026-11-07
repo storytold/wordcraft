@@ -82,27 +82,32 @@ fn resolve_cell(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, ac
     let Some((tp, r, c)) = path.cell() else { return Ok(false) };
     let has = s.doc.table(story, &tp).is_some_and(|t| {
         let row = t.rows.get(r);
-        t.props.fmt_change.is_some()
-            || row.is_some_and(|x| {
-                x.props.ins.is_some()
-                    || x.props.del.is_some()
-                    || x.props.fmt_change.is_some()
-                    || x.props.exceptions.as_ref().is_some_and(|e| e.fmt_change.is_some())
-            })
+        (r == 0 && c == 0 && t.props.fmt_change.is_some())
+            || (c == 0
+                && row.is_some_and(|x| {
+                    x.props.ins.is_some()
+                        || x.props.del.is_some()
+                        || x.props.fmt_change.is_some()
+                        || x.props.exceptions.as_ref().is_some_and(|e| e.fmt_change.is_some())
+                }))
             || row.and_then(|x| x.cells.get(c)).is_some_and(|x| x.props.ins.is_some() || x.props.del.is_some() || x.props.fmt_change.is_some())
     });
     if !has {
         return Ok(false);
     }
     let t = s.doc.table_mut(story, &tp)?;
-    fmt_revisions::resolve_table(t, accept);
-    let drop_row = t.rows.get(r).is_some_and(|row| (row.props.del.is_some() && accept) || (row.props.ins.is_some() && !accept));
+    if r == 0 && c == 0 {
+        fmt_revisions::resolve_table(t, accept);
+    }
+    let drop_row = c == 0 && t.rows.get(r).is_some_and(|row| (row.props.del.is_some() && accept) || (row.props.ins.is_some() && !accept));
     if drop_row && t.rows.len() > 1 {
         t.rows.remove(r);
     } else if let Some(row) = t.rows.get_mut(r) {
-        row.props.ins = None;
-        row.props.del = None;
-        fmt_revisions::resolve_row(row, accept);
+        if c == 0 {
+            row.props.ins = None;
+            row.props.del = None;
+            fmt_revisions::resolve_row(row, accept);
+        }
         let drop_cell = row.cells.get(c).is_some_and(|cell| (cell.props.del.is_some() && accept) || (cell.props.ins.is_some() && !accept));
         if drop_cell && row.cells.len() > 1 {
             row.cells.remove(c);

@@ -403,5 +403,6 @@ fn table_revisions_round_trip() {
     let d = read(&package(tbl)).unwrap();
     let xml = document_xml(&write(&d).unwrap());
     assert!(xml.contains("<w:tblPrExChange "), "{xml}");
+    assert!(xml.contains("<w:trPr><w:ins "), "{xml}");
     assert!(xml.contains("<w:cellIns "), "{xml}");
 }

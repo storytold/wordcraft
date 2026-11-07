@@ -352,26 +352,32 @@ pub fn resolve_containers(blocks: &mut Blocks, accept: bool, depth: usize) {
             Block::Table(t) => {
                 resolve_table(t, accept);
                 let drop_row = |r: &Row| (r.props.del.is_some() && accept) || (r.props.ins.is_some() && !accept);
-                if t.rows.len() > 1 && t.rows.iter().any(|r| !drop_row(r)) {
-                    t.rows.retain(|r| !drop_row(r));
-                }
-                for r in &mut t.rows {
+                let drop_cell = |c: &Cell| (c.props.del.is_some() && accept) || (c.props.ins.is_some() && !accept);
+                t.rows.retain_mut(|r| {
+                    if drop_row(r) {
+                        return false;
+                    }
                     r.props.ins = None;
                     r.props.del = None;
                     resolve_row(r, accept);
-                    let drop_cell = |c: &Cell| (c.props.del.is_some() && accept) || (c.props.ins.is_some() && !accept);
-                    if r.cells.len() > 1 && r.cells.iter().any(|c| !drop_cell(c)) {
-                        r.cells.retain(|c| !drop_cell(c));
-                    }
-                    for c in &mut r.cells {
+                    r.cells.retain_mut(|c| {
+                        if drop_cell(c) {
+                            return false;
+                        }
                         c.props.ins = None;
                         c.props.del = None;
                         resolve_cell(c, accept);
                         resolve_containers(&mut c.blocks, accept, depth + 1);
-                    }
-                }
+                        true
+                    });
+                    !r.cells.is_empty()
+                });
             }
         }
+    }
+    blocks.retain(|b| !matches!(&**b, Block::Table(t) if t.rows.is_empty()));
+    if blocks.is_empty() {
+        blocks.push(Arc::new(Block::Para(wordcraft_doc::Paragraph::new())));
     }
 }
 
