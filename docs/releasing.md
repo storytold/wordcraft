@@ -26,3 +26,14 @@ Local packaging: `packaging/macos/package.sh --arch universal`, `packaging/windo
 Dry run: `gh workflow run release.yml --ref <branch>` builds the unsigned jobs (version, Linux,
 Linux riscv64, Flatpak, FreeBSD, web) on any branch; the signing jobs are refused there by the `release`
 environment's branch rule, so no draft release is made.
+
+Local macOS packaging prefers `xcrun stapler` (staple and validate). Without it, `rcodesign staple` uses the same bounded retries. If neither tool is available, packaging warns that Gatekeeper will fetch the ticket online and still runs the final Gatekeeper assessments.
+
+On GitHub Actions, notarized artifacts still require the native `stapler` to staple and validate the ticket; absence is fatal even if `rcodesign` is installed. The `rcodesign` fallback and missing-tool warning are for local packaging only. A successful online Gatekeeper assessment is not evidence that a ticket was stapled. These paths are covered with synthetic shell mocks, not a new Apple notarization run.
+
+## Revision history
+
+| Date | Change |
+|---|---|
+
+| 2026-11-05 | trivial | PR #5268: local macOS packaging may use rcodesign or warn when stapling tools are absent; GitHub Actions releases still require native stapling and ticket validation. Synthetic app/DMG and failure controls; no new Apple notarization run. |
