@@ -261,7 +261,8 @@ fn line_section(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], line: &CurrentLin
         ui.horizontal(|ui| {
             ui.label(tl!("Width"));
             let mut w = line.width;
-            let r = ui.add(egui::DragValue::new(&mut w).range(0.25..=72.0).suffix(" pt").speed(0.25).fixed_decimals(2));
+            let r =
+                ui.add(egui::DragValue::new(&mut w).range(0.25..=72.0).clamp_existing_to_range(false).suffix(" pt").speed(0.25).fixed_decimals(2));
             if r.changed() {
                 if r.dragged() && ui.data(|d| d.get_temp::<u64>(line_mark_id())).is_none() {
                     let mark = app.session.undo_mark();
@@ -324,7 +325,7 @@ fn layout_section(app: &mut WordApp, ui: &mut Ui, layout: &CurrentLayout) {
     ui.horizontal(|ui| {
         ui.label(tl!("Width"));
         let mut w = layout.width;
-        let r = ui.add(egui::DragValue::new(&mut w).range(4.0..=2000.0).suffix(" pt").speed(1.0).fixed_decimals(1));
+        let r = ui.add(egui::DragValue::new(&mut w).range(4.0..=2000.0).clamp_existing_to_range(false).suffix(" pt").speed(1.0).fixed_decimals(1));
         if r.changed() {
             if r.dragged() && ui.data(|d| d.get_temp::<u64>(layout_mark_id())).is_none() {
                 let mark = app.session.undo_mark();
@@ -336,7 +337,7 @@ fn layout_section(app: &mut WordApp, ui: &mut Ui, layout: &CurrentLayout) {
     ui.horizontal(|ui| {
         ui.label(tl!("Height"));
         let mut h = layout.height;
-        let r = ui.add(egui::DragValue::new(&mut h).range(1.0..=2000.0).suffix(" pt").speed(1.0).fixed_decimals(1));
+        let r = ui.add(egui::DragValue::new(&mut h).range(1.0..=2000.0).clamp_existing_to_range(false).suffix(" pt").speed(1.0).fixed_decimals(1));
         if r.changed() {
             if r.dragged() && ui.data(|d| d.get_temp::<u64>(layout_mark_id())).is_none() {
                 let mark = app.session.undo_mark();
@@ -348,7 +349,7 @@ fn layout_section(app: &mut WordApp, ui: &mut Ui, layout: &CurrentLayout) {
     ui.horizontal(|ui| {
         ui.label(tl!("Rotation"));
         let mut rot = layout.rotation;
-        let r = ui.add(egui::DragValue::new(&mut rot).range(0.0..=360.0).suffix("°").speed(1.0).fixed_decimals(1));
+        let r = ui.add(egui::DragValue::new(&mut rot).range(0.0..=360.0).clamp_existing_to_range(false).suffix("°").speed(1.0).fixed_decimals(1));
         if r.changed() {
             if r.dragged() && ui.data(|d| d.get_temp::<u64>(layout_mark_id())).is_none() {
                 let mark = app.session.undo_mark();
@@ -896,6 +897,27 @@ mod tests {
         assert!(h.query_by_label("Text Box").is_some());
         assert!(h.query_by_label("Vertical alignment").is_some());
         assert!(h.query_by_label("Text direction").is_some());
+    }
+
+    /// Showing the pane leaves a shape with dimensions outside the DragValue range alone.
+    #[test]
+    fn format_shape_pane_leaves_out_of_range_layout_alone() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
+        a.run("picture.size", json!({"width": 2500.0, "lockAspect": false})).unwrap();
+        let (doc, depth) = (a.session.doc.clone(), a.session.undo_depth());
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        assert_eq!(h.state().session.undo_depth(), depth, "opening pane does not mutate size");
+        assert!(h.state().session.doc == doc);
     }
 }
 
