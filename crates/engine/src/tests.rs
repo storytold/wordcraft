@@ -2844,6 +2844,47 @@ fn table_properties_apply_in_one_step() {
     assert!(s.run("table.properties", &json!({"valign": "middle"})).is_err());
 }
 
+/// #5884: Table Properties supports text wrapping options: "none" (inline) and "around" (floating).
+#[test]
+fn table_properties_text_wrapping() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let query0 = run(&mut s, "table.properties", json!({}));
+    assert_eq!(query0["wrapping"], "none");
+    assert_eq!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap().props.float, None);
+
+    // Set wrapping to around.
+    run(&mut s, "table.properties", json!({"wrapping": "around"}));
+    let query_around = run(&mut s, "table.properties", json!({}));
+    assert_eq!(query_around["wrapping"], "around");
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert!(t.props.float.is_some());
+
+    // Undo restores none.
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(run(&mut s, "table.properties", json!({}))["wrapping"], "none");
+    assert_eq!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap().props.float, None);
+
+    // Redo restores around.
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(run(&mut s, "table.properties", json!({}))["wrapping"], "around");
+    assert!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap().props.float.is_some());
+
+    // Set wrapping back to none.
+    run(&mut s, "table.properties", json!({"wrapping": "none"}));
+    assert_eq!(run(&mut s, "table.properties", json!({}))["wrapping"], "none");
+    assert_eq!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap().props.float, None);
+
+    // "wrap" alias also works.
+    run(&mut s, "table.properties", json!({"wrap": "around"}));
+    assert_eq!(run(&mut s, "table.properties", json!({}))["wrapping"], "around");
+    run(&mut s, "table.properties", json!({"wrap": "none"}));
+    assert_eq!(run(&mut s, "table.properties", json!({}))["wrapping"], "none");
+
+    // Invalid wrapping value returns error.
+    assert!(s.run("table.properties", &json!({"wrapping": "tight"})).is_err());
+}
+
 /// #4857: Table Properties' row settings apply to every selected row (the whole table, say), the
 /// column width to every selected column and the cell settings to every selected cell, as in
 /// Word, in one undo step; with nothing selected, to the caret's alone.

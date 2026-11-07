@@ -92,6 +92,8 @@ pub(super) fn properties(s: &mut Session, v: &Value) -> CmdResult {
         "columnWidth",
         "cellWidth",
         "valign",
+        "wrapping",
+        "wrap",
     ];
     if !keys.iter().any(|k| v.get(*k).is_some()) {
         let t = s.doc.table(s.sel.focus.story, &tp).cloned().unwrap_or_default();
@@ -102,6 +104,7 @@ pub(super) fn properties(s: &mut Session, v: &Value) -> CmdResult {
             o.insert("row".into(), row.map(|x| serde_json::to_value(&x.props).unwrap_or(Value::Null)).unwrap_or(Value::Null));
             o.insert("columnWidth".into(), t.grid.get(t.grid_col(r, c)).map_or(Value::Null, |w| json!(w)));
             o.insert("cell".into(), cl.map(|x| serde_json::to_value(&x.props).unwrap_or(Value::Null)).unwrap_or(Value::Null));
+            o.insert("wrapping".into(), json!(if t.props.float.is_some() { "around" } else { "none" }));
         }
         return Ok(out);
     }
@@ -124,6 +127,16 @@ pub(super) fn properties(s: &mut Session, v: &Value) -> CmdResult {
         Some("center") => Some(VAlign::Center),
         Some("bottom") => Some(VAlign::Bottom),
         Some(x) => return Err(CmdError::Params(format!("unknown vertical alignment `{x}`"))),
+    };
+    let wrapping = match v.get("wrapping").or_else(|| v.get("wrap")) {
+        None => None,
+        Some(Value::Null) => Some("none"),
+        Some(Value::String(s)) => match s.as_str() {
+            "none" => Some("none"),
+            "around" => Some("around"),
+            x => return Err(CmdError::Params(format!("unknown table text wrapping `{x}`"))),
+        },
+        Some(_) => None,
     };
     // `null` clears a preferred size (automatic); a number sets it.
     let size = |k: &str, lo: f32, hi: f32| -> Option<Option<f32>> {
@@ -165,6 +178,19 @@ pub(super) fn properties(s: &mut Session, v: &Value) -> CmdResult {
         }
         if let Some(pct) = width_pct {
             t.props.width_pct = Some(pct);
+        }
+        if let Some(w) = wrapping {
+            if w == "none" {
+                t.props.float = None;
+            } else if w == "around" && t.props.float.is_none() {
+                t.props.float = Some(wordcraft_doc::props::TableFloat {
+                    h_rel: wordcraft_doc::para::Anchor::Column,
+                    v_rel: wordcraft_doc::para::Anchor::Paragraph,
+                    dist: [9.0, 0.0, 9.0, 0.0],
+                    overlap: true,
+                    ..Default::default()
+                });
+            }
         }
         for &r in &rows {
             let Some(row) = t.rows.get_mut(r) else { continue };
