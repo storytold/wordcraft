@@ -225,6 +225,9 @@ pub struct CanvasState {
     /// On the web, Mod+Shift+V pasted formatting from its key press: the browser's paste event
     /// that follows is the same keystroke and pastes nothing (#5616). Any other key press clears it.
     pub(crate) ignore_next_paste: bool,
+    /// The platform sends a paste event after Mod+Shift+V's key (a browser does; a desktop shell
+    /// doesn't). Only then does the key leave a paste event to ignore or to let paste text.
+    pub(crate) paste_event_follows_chord: bool,
     /// Draw Table or Eraser is on (`table_pen`): presses draw instead of moving the caret.
     pub table_tool: Option<crate::table_pen::TableTool>,
     /// The Draw Table stroke (or eraser press) in progress.
@@ -407,6 +410,7 @@ impl Default for CanvasState {
             v_pressed: false,
             paste_mods: None,
             ignore_next_paste: false,
+            paste_event_follows_chord: cfg!(target_arch = "wasm32"),
             swallow_text: false,
             ime_join_text: None,
             ime_reset: false,

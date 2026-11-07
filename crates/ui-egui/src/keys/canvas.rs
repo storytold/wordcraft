@@ -60,7 +60,8 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
             continue;
         }
         note_key_state(app, &e);
-        if drop_refused_replacement(app, &e, &mut batch)
+        if ignored_paste(app, &e)
+            || drop_refused_replacement(app, &e, &mut batch)
             || prefilter(app, ctx, &e, alt_codes)
             || paste_release(app, &e)
             || equation_event(app, ctx, &e, &mut batch)
@@ -173,6 +174,17 @@ fn note_key_state(app: &mut WordApp, e: &egui::Event) {
         }
         _ => {}
     }
+}
+
+/// The browser's paste event that follows a Mod+Shift+V that pasted formatting is the same
+/// keystroke: ignored before an equation or a picture-file paste can take it (#5616).
+fn ignored_paste(app: &mut WordApp, e: &egui::Event) -> bool {
+    if matches!(e, egui::Event::Paste(_)) && std::mem::take(&mut app.canvas.ignore_next_paste) {
+        // Not a Mod+V with no text either: the release mustn't paste a picture.
+        app.canvas.pasted = true;
+        return true;
+    }
+    false
 }
 
 /// The replacement paired with a refused equation deletion is dropped.
@@ -511,12 +523,9 @@ fn handle_event(app: &mut WordApp, ctx: &egui::Context, e: egui::Event) {
         }
         egui::Event::Ime(egui::ImeEvent::Commit(text)) => ime_commit(app, text),
         egui::Event::Paste(t) => {
-            if std::mem::take(&mut app.canvas.ignore_next_paste) {
-                return;
-            }
             // Mod+Alt+V arrives as a paste too (the shell reads the clipboard): Paste Special.
             // The modifiers held with Mod in event order: Shift may be up by the frame's end.
-            let m = app.canvas.paste_mods.unwrap_or_else(|| ctx.input(|i| i.modifiers));
+            let m = app.canvas.paste_mods.take().unwrap_or_else(|| ctx.input(|i| i.modifiers));
             // A browser sends Mod+Shift+V as a paste too: Keep Text Only, as the key does on the
             // desktop (#1537). (egui-winit sends that chord as a key, and Shift+Insert has no Mod.)
             let id = match (m.alt, m.shift) {

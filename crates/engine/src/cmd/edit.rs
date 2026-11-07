@@ -163,6 +163,8 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("edit.formatPainter", "Format Painter", "Home › Clipboard", painter).params(r#"{"sticky"?: bool}"#).pure(),
         CommandSpec::new("edit.copyFormat", "Copy Formatting", "Home › Clipboard", |s, _| {
+            // One format buffer, as in Word: Copy Formatting replaces an armed Format Painter.
+            s.painter = None;
             s.copied_format = Some(picked_format(s));
             sel_result(s)
         })
@@ -823,13 +825,16 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
 fn picked_format(s: &Session) -> (wordcraft_doc::props::CharProps, wordcraft_doc::props::ParaProps) {
     let f = s.sel.ordered().0;
     // A symbol's own font isn't formatting to paint onto text.
-    let chr = s.doc.para_at(&f).map(|p| p.props_of_char(f.off).clone().without_symbol()).unwrap_or_default();
+    // Formatting only: not the source's hyperlink or revision marks (#5616).
+    let chr = s.doc.para_at(&f).map(|p| p.props_of_char(f.off).clone().without_symbol().formatting()).unwrap_or_default();
     let para = s.doc.para_at(&f).map(|p| p.props.clone()).unwrap_or_default();
     (chr, para)
 }
 
 fn painter_pick(s: &mut Session) {
     let (chr, para) = picked_format(s);
+    // One format buffer: the brush replaces what Copy Formatting picked up.
+    s.copied_format = None;
     s.painter = Some((chr, para, false));
 }
 
