@@ -76,6 +76,22 @@ fn unknown_options_are_rejected_before_file_access() {
 }
 
 #[test]
+fn convert_rejects_malformed_format_options_before_file_access() {
+    for (options, error) in [
+        (vec!["--format"], "convert: --format requires a value"),
+        (vec!["--format", "--markup"], "convert: --format requires a value"),
+        (vec!["--format", "flatopc", "--format", "wordml2003"], "convert: duplicate --format option"),
+    ] {
+        let mut argv = args(&["convert", "missing.docx", "out.xml"]);
+        argv.extend(args(&options));
+        assert_eq!(run(&argv), Err(error.into()), "{options:?}");
+    }
+    // A valid single value reaches file access, rather than a format-option error.
+    let error = run(&args(&["convert", "missing.docx", "out.xml", "--format", "flatopc"])).unwrap_err().to_string();
+    assert!(error.starts_with("missing.docx:"), "{error}");
+}
+
+#[test]
 fn help_or_h_after_a_subcommand_asks_for_the_usage() {
     for cmd in SUBCOMMANDS {
         assert!(wants_help(cmd, &args(&["in.docx", "--help"])), "{cmd}");
