@@ -192,7 +192,12 @@ impl<'a> Flow<'a> {
         // Floating objects anchored here join the page's wrap areas before the text is laid out; if
         // the paragraph then starts somewhere else (another column or page, or contextual spacing
         // drops its space before), they are placed again there.
-        let space_before = ctx.doc.styles.resolve_para(&p.props).space_before;
+        let mut rp = ctx.doc.styles.resolve_para(&p.props);
+        // Spacing in lines is a line of the section's grid, as the paragraph will be laid out.
+        if rp.space_lines.iter().any(|l| *l != 0.0) {
+            rp.set_line_unit(ctx.grid.line.unwrap_or(wordcraft_doc::resolve::LINE_UNIT));
+        }
+        let space_before = rp.space_before;
         let excl_mark = pb.excl.len();
         let guess = pb.y + space_before;
         let label = ctx.next_label(p);

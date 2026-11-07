@@ -17,7 +17,7 @@ mod outline;
 mod styles;
 mod tabs_borders;
 
-use format::{align, asian_typography, cur, direction, line_spacing, ls, set_align, set_props, tog};
+use format::{align, asian_typography, cancel_line_spacing, cur, direction, line_spacing, ls, set_align, set_props, tog};
 pub use format::{cur as selection_para, fmt, indent, outdent};
 pub use lists::{ListButtons, list_buttons, manage_list, touch_all};
 use lists::{list, restart_numbering};
@@ -114,7 +114,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 if let Some(on) = a_auto {
                     p.space_after_auto = Some(on);
                 }
-            })
+            })?;
+            cancel_line_spacing(s, b.is_some(), a.is_some())
         })
         .params(r#"{"before"?: pt, "after"?: pt, "beforeAuto"?: bool, "afterAuto"?: bool (automatic, HTML-style spacing: 14 pt)}"#),
         CommandSpec::new("para.addSpaceBefore", "Add Space Before Paragraph", "Home › Paragraph › Line Spacing", |s, _| {
@@ -125,7 +126,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 if rp.before_auto {
                     p.space_before_auto = Some(false);
                 }
-            })
+            })?;
+            cancel_line_spacing(s, true, false)
         })
         .key("Mod+0"),
         CommandSpec::new("para.removeSpaceAfter", "Remove Space After Paragraph", "Home › Paragraph › Line Spacing", |s, _| {
@@ -136,7 +138,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 if rp.after_auto {
                     p.space_after_auto = Some(false);
                 }
-            })
+            })?;
+            cancel_line_spacing(s, false, true)
         }),
         // Back to the paragraph style: direct indents, spacing, alignment… go; the style, list
         // membership and drop cap stay. ⌘Q quits on macOS, so Word for Mac uses ⌃Q.
