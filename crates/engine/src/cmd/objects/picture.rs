@@ -74,7 +74,9 @@ pub fn cropped_original_size(s: &Session, o: &InlineObject) -> Option<(f32, f32)
 /// of the original size (`original` alone gives that back: the Size dialog's Reset); then `width`
 /// and `height`, where one alone keeps the proportions unless `lockAspect` is false.
 pub(super) fn size(s: &mut Session, v: &Value) -> CmdResult {
-    let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no object".into()))?;
+    let (_, o) = selected(s)
+        .or_else(|| super::shape::text_box_target(s).and_then(|(p, _)| s.doc.para_at(&p).and_then(|q| q.object_at(p.off)).map(|o| (p, o.clone()))))
+        .ok_or_else(|| CmdError::Disabled("no object".into()))?;
     let lock = p::bool(v, "lockAspect").unwrap_or(true);
     let (mut w, mut h) = obj_size(&o);
     let scale = p::f32(v, "scale");
