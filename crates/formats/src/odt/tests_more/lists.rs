@@ -252,3 +252,20 @@ fn a_sublist_after_an_unnumbered_paragraph_keeps_its_levels() {
     assert_eq!((level, format, start), (1, NumFormat::LowerRoman, 3));
     assert_eq!(sub(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()), sub(&d), "written from the model");
 }
+
+/// A list item's further paragraph stays in its item in HTML and Markdown: the list goes on after it.
+#[test]
+fn a_list_items_further_paragraph_stays_in_it_in_html_and_markdown() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><text:list-style style:name="L"><text:list-level-style-number text:level="1" style:num-format="1" style:num-suffix="."/></text:list-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:list text:style-name="L"><text:list-item><text:p>One</text:p><text:p>Cont</text:p></text:list-item><text:list-item><text:p>Two</text:p></text:list-item></text:list></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let html = crate::html::export(&d);
+    assert_eq!(html.matches("<ol").count(), 1, "{html}");
+    assert!(html.contains("<p>Cont</p>"), "{html}");
+    let md = crate::markdown::export(&d);
+    assert!(md.contains("1. One\n\n   Cont\n\n2. Two"), "{md}");
+}

@@ -334,6 +334,8 @@ pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
     let mut i = 0;
     let mut counters = [0u32; 9];
     let mut prev_list = false;
+    // How far the last list item's text is indented: where its further paragraphs go.
+    let mut prev_cont = 0usize;
     let mut prev_top_ordered = false;
     while let Some(b) = blocks.get(i) {
         match b {
@@ -386,6 +388,7 @@ pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
                         let marker = if li.ordered { format!("{}.", n.unwrap_or(1)) } else { "-".to_string() };
                         let pad = " ".repeat(4 * lv);
                         let cont = " ".repeat(4 * lv + marker.len() + 1);
+                        prev_cont = cont.len();
                         let body = if p.kind == Kind::Code {
                             code_span(&p.text())
                         } else {
@@ -406,6 +409,13 @@ pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
                         if !next_is_list {
                             out.push(String::new());
                         }
+                    }
+                    // A list item's further paragraph: in its item, and the list goes on after it.
+                    None if prev_list && crate::model::continues_list(blocks, i) => {
+                        let pad = " ".repeat(prev_cont);
+                        let text = escape_lines(body).replace("\\\n", &format!("\\\n{pad}"));
+                        out.push(format!("{pad}{text}").trim_end().to_string());
+                        out.push(String::new());
                     }
                     None => {
                         prev_list = false;

@@ -275,7 +275,15 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
                 // Nested lists from consecutive list paragraphs.
                 let mut stack: Vec<(bool, bool)> = Vec::new(); // (ordered, li open)
                 while let Some(FBlock::Para(q)) = blocks.get(i) {
-                    let Some(li) = q.list else { break };
+                    let Some(li) = q.list else {
+                        // A list item's further paragraph, in its item.
+                        if !stack.is_empty() && crate::model::continues_list(blocks, i) {
+                            out.push_str(&format!("<p>{}</p>", inlines_html(&q.inlines)));
+                            i += 1;
+                            continue;
+                        }
+                        break;
+                    };
                     let lv = li.level.min(8) as usize;
                     while stack.len() > lv + 1 {
                         close_list(&mut stack, out);

@@ -320,7 +320,7 @@ CSL and library import are separate work.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-05 | trivial | ODT: a list item's further paragraphs, and a list header's, are paragraphs of their own with no number, at the item's text indent. A second paragraph was joined to the first by a line break, and a header was numbered A level first used after such a paragraph keeps the file's label. |
+| 2026-11-05 | trivial | ODT: a list item's further paragraphs, and a list header's, are paragraphs of their own with no number, at the item's text indent. A second paragraph was joined to the first by a line break, and a header was numbered A level first used after such a paragraph keeps the file's label. In HTML and Markdown a list item's further paragraph stays in its item, so the list goes on after it. |
 | 2026-11-05 | trivial | ODT: a frame offering one picture in several formats (LibreOffice's `.svm` metafile, then a PNG) shows the first WordCraft can read; it took the first whatever it was, and the picture was missing on screen and gone once the paragraph was rewritten An object's replacement picture coming before it is kept too. A readable picture after an unreadable replacement is shown, wherever the object comes, and a save from the model keeps both. |
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` keeps its default and explicit values in schema-ordered repeated saves |
 | 2026-11-04 | trivial | REF context update: 2026-11-04 · #4609 retains the label and template actually rendered by an ancestor list instance; implicitly counted levels remain distinct from explicitly rendered paragraphs. Synthetic instance-override and field-update regressions; no new native Word qualification or readiness change. |
