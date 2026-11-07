@@ -98,6 +98,16 @@ pub(crate) fn convert(bytes: &[u8]) -> Result<Package, DocxError> {
     c.put("word/styles.xml", &styles);
     c.rels[DOC].add(rt::STYLES, "styles.xml", false);
     overrides.push(("/word/styles.xml".into(), "styles"));
+    // Document settings and the font table, as Word itself carries them over when it saves a Word
+    // 2003 XML Document as .docx (in compatibility mode 11).
+    c.put("word/settings.xml", &settings(root.child("w:docPr")));
+    c.rels[DOC].add(rt::SETTINGS, "settings.xml", false);
+    overrides.push(("/word/settings.xml".into(), "settings"));
+    if let Some(fonts) = root.child("w:fonts").and_then(font_table) {
+        c.put("word/fontTable.xml", &fonts);
+        c.rels[DOC].add(rt::FONT_TABLE, "fontTable.xml", false);
+        overrides.push(("/word/fontTable.xml".into(), "fontTable"));
+    }
     if let Some(n) = root.child("w:lists").map(|l| c.numbering(l)) {
         c.put("word/numbering.xml", &n);
         c.rels[DOC].add(rt::NUMBERING, "numbering.xml", false);
@@ -544,6 +554,74 @@ fn media_type(ext: &str) -> &'static str {
     }
 }
 
+/// Settings and compatibility switches past this many are dropped.
+const MAX_SETTINGS: usize = 256;
+
+/// `w:docPr` → `settings.xml`: the settings `settings.xml` names and means the same way. Word's own
+/// .docx save of a Word 2003 XML Document keeps `w:defaultTabStop` and each `w:compat` switch as
+/// they are, writes `w:characterSpacingControl`'s capitalised values with a lower-case first
+/// letter (`CompressPunctuation` → `compressPunctuation`) and states compatibility mode 11.
+fn settings(doc_pr: Option<&El>) -> El {
+    let el = |name: &str, attrs: Vec<(String, String)>, kids: Vec<Node>| Node::El(El { name: name.into(), attrs, kids });
+    let val = |v: &str| vec![("w:val".to_string(), v.to_string())];
+    let mut kids = Vec::new();
+    if let Some(v) = doc_pr.and_then(|d| d.child("w:defaultTabStop")).and_then(|k| k.attr("w:val")) {
+        kids.push(el("w:defaultTabStop", val(v), Vec::new()));
+    }
+    // `doNotCompress` is the default; its 2003 spelling isn't needed.
+    let spacing = doc_pr.and_then(|d| d.child("w:characterSpacingControl")).and_then(|k| k.attr("w:val"));
+    if let Some(v) = spacing.and_then(|v| match v {
+        "CompressPunctuation" => Some("compressPunctuation"),
+        "CompressPunctuationAndJapaneseKana" => Some("compressPunctuationAndJapaneseKana"),
+        _ => None,
+    }) {
+        kids.push(el("w:characterSpacingControl", val(v), Vec::new()));
+    }
+    let mut compat: Vec<Node> = doc_pr
+        .and_then(|d| d.child("w:compat"))
+        .into_iter()
+        .flat_map(|c| c.els())
+        .filter(|k| k.name.starts_with("w:") && k.name.len() <= 64 && k.name != "w:compatSetting")
+        .take(MAX_SETTINGS)
+        .map(|k| el(&k.name, k.attr("w:val").map(val).unwrap_or_default(), Vec::new()))
+        .collect();
+    let mode = [("w:name", "compatibilityMode"), ("w:uri", "http://schemas.microsoft.com/office/word"), ("w:val", "11")];
+    compat.push(el("w:compatSetting", mode.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), Vec::new()));
+    kids.push(el("w:compat", Vec::new(), compat));
+    El { name: "w:settings".into(), attrs: xml::body_ns(), kids }
+}
+
+/// `w:fonts` → `fontTable.xml`: each `w:font` with the parts ECMA-376 keeps under the same meaning
+/// (§17.8.3), as Word's own .docx save of a Word 2003 XML Document writes them: `w:altName`,
+/// `w:panose-1` as `w:panose1`, `w:charset`, `w:family` in lower case (2003 capitalises it:
+/// `Roman`), `w:notTrueType` and `w:pitch`. The font signature (`w:sig`) is left out. `None`
+/// without fonts.
+fn font_table(fonts: &El) -> Option<El> {
+    let kids: Vec<Node> = fonts
+        .children("w:font")
+        .filter_map(|f| {
+            let name = f.attr("w:name").filter(|n| !n.is_empty())?;
+            let kids = f
+                .els()
+                .filter_map(|k| {
+                    let v = k.attr("w:val");
+                    let (name, v) = match k.name.as_str() {
+                        "w:altName" | "w:charset" | "w:pitch" | "w:notTrueType" => (k.name.as_str(), v.map(str::to_string)),
+                        "w:panose-1" => ("w:panose1", v.map(str::to_string)),
+                        "w:family" => ("w:family", v.map(str::to_ascii_lowercase)),
+                        _ => return None,
+                    };
+                    let attrs = v.map(|v| vec![("w:val".to_string(), v)]).unwrap_or_default();
+                    Some(Node::El(El { name: name.into(), attrs, kids: Vec::new() }))
+                })
+                .collect();
+            Some(Node::El(El { name: "w:font".into(), attrs: vec![("w:name".into(), name.to_string())], kids }))
+        })
+        .take(MAX_SETTINGS * 16)
+        .collect();
+    (!kids.is_empty()).then(|| El { name: "w:fonts".into(), attrs: xml::body_ns(), kids })
+}
+
 /// `o:DocumentProperties` → `docProps/core.xml`.
 fn core_xml(props: &El) -> Vec<u8> {
     let mut w = W::new();
@@ -573,4 +651,24 @@ fn core_xml(props: &El) -> Vec<u8> {
     }
     w.close("cp:coreProperties");
     w.into_bytes()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `w:characterSpacingControl` is carried over with Word's .docx spelling of its value, though
+    /// the reader doesn't use it yet.
+    #[test]
+    fn character_spacing_control_takes_the_docx_spelling() {
+        let doc = |v: &str| {
+            format!(
+                r#"<w:wordDocument xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml"><w:docPr><w:characterSpacingControl w:val="{v}"/></w:docPr><w:body><w:p/></w:body></w:wordDocument>"#
+            )
+        };
+        let settings = |v: &str| String::from_utf8(convert(doc(v).as_bytes()).unwrap().get("word/settings.xml").unwrap().to_vec()).unwrap();
+        assert!(settings("CompressPunctuation").contains(r#"<w:characterSpacingControl w:val="compressPunctuation"/>"#));
+        assert!(settings("CompressPunctuationAndJapaneseKana").contains(r#"w:val="compressPunctuationAndJapaneseKana""#));
+        assert!(!settings("DontCompress").contains("characterSpacingControl"));
+    }
 }
