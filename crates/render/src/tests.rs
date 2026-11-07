@@ -1411,3 +1411,82 @@ fn a_line_runs_from_top_left_to_bottom_right() {
     let p = shape_path(ShapeKind::Line, kurbo::Rect::new(10.0, 20.0, 30.0, 60.0), None);
     assert_eq!(p.elements(), &[kurbo::PathEl::MoveTo((10.0, 20.0).into()), kurbo::PathEl::LineTo((30.0, 60.0).into())]);
 }
+
+/// The placeholder for a picture `bytes` shown 200 × 150 pt, one row per pixel row: `Some(true)`
+/// for dark (text) pixels, `Some(false)` for the grey fill, `None` for anything else.
+fn placeholder_pixels(bytes: Vec<u8>) -> Vec<Vec<Option<bool>>> {
+    let mut d = Document::new();
+    let media = d.add_media(bytes, "png");
+    let mut p = wordcraft_doc::Paragraph::new();
+    let obj = wordcraft_doc::para::InlineObject::Image {
+        media,
+        w: 200.0,
+        h: 150.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
+    p.insert_object(0, obj, &Default::default()).unwrap();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let opts = RenderOptions::default();
+    let rect = page_display(&d, &l.pages[0], &opts.display)
+        .iter()
+        .find_map(|i| match i {
+            Draw::Image { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .expect("a picture on the page");
+    let img = render_page(&d, &l.pages[0], 1.0, &opts);
+    ((rect.y.ceil() as u32)..((rect.y + rect.h).floor() as u32))
+        .map(|y| {
+            ((rect.x.ceil() as u32)..((rect.x + rect.w).floor() as u32))
+                .map(|x| {
+                    let px = img.pixel(x, y);
+                    if px[..3] == [0xD0; 3] {
+                        Some(false)
+                    } else if px[..3].iter().all(|c| *c < 0x90) {
+                        Some(true)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// #5637: a picture too large to decode is not just a grey box: the box says why, in three
+/// upright lines centred in it.
+#[test]
+fn a_picture_too_large_to_decode_says_so_in_its_box() {
+    let huge = ihdr_only_png(8333, 8333);
+    assert!(decode_pixmap(&huge).is_none(), "the decode budget refuses it");
+    let grid = placeholder_pixels(huge);
+    let (h, w) = (grid.len() as f64, grid[0].len() as f64);
+    assert!(grid.iter().flatten().any(|p| *p == Some(false)), "the grey placeholder is drawn");
+    let inked: Vec<bool> = grid.iter().map(|row| row.contains(&Some(true))).collect();
+    let rows: Vec<usize> = (0..inked.len()).filter(|y| inked[*y]).collect();
+    assert!(!rows.is_empty(), "the placeholder carries a message, not a plain grey box");
+    // Three lines of text: three bands of inked rows with blank rows between them.
+    let bands = (0..inked.len()).filter(|y| inked[*y] && (*y == 0 || !inked[*y - 1])).count();
+    assert_eq!(bands, 3, "three lines of text, inked rows {rows:?}");
+    // Centred both ways; glyphs flipped about their baselines would sit several pixels low.
+    let (top, bottom) = (rows[0] as f64, *rows.last().unwrap() as f64);
+    assert!(((top + bottom) / 2.0 - h / 2.0).abs() < 3.0, "centred vertically: rows {top}..{bottom} of {h}");
+    let cols: Vec<usize> = (0..grid[0].len()).filter(|x| grid.iter().any(|row| row[*x] == Some(true))).collect();
+    let (left, right) = (cols[0] as f64, *cols.last().unwrap() as f64);
+    assert!(((left + right) / 2.0 - w / 2.0).abs() < 3.0, "centred horizontally: columns {left}..{right} of {w}");
+    // The first line starts with the stem of an upright "P": its leftmost inked column runs at
+    // least 5 px down from the line's top.
+    let first = rows[0]..rows.iter().zip(&rows[1..]).find(|(a, b)| **b != **a + 1).map_or(rows.len(), |(a, _)| *a + 1);
+    let lead = (0..grid[0].len()).find(|x| grid[first.clone()].iter().any(|row| row[*x] == Some(true))).unwrap();
+    let stem = grid[first.clone()].iter().filter(|row| row[lead] == Some(true) || row.get(lead + 1) == Some(&Some(true))).count();
+    assert!(stem >= 5, "the first line starts with an upright P stem ({stem} px)");
+    // A damaged picture still gets its plain grey placeholder.
+    let grid = placeholder_pixels(b"\x89PNG\r\n\x1a\njunk".to_vec());
+    assert!(grid.iter().flatten().any(|p| *p == Some(false)), "a damaged picture keeps its grey placeholder");
+    assert!(!grid.iter().flatten().any(|p| *p == Some(true)), "with no size message");
+}
