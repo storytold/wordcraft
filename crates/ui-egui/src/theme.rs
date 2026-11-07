@@ -513,7 +513,9 @@ pub fn add_fallback_faces(fonts: &mut FontDefinitions, faces: &[Arc<wordcraft_fo
         data.index = f.index();
         fonts.font_data.insert(name.clone(), Arc::new(data));
         for fam in [FontFamily::Proportional, FontFamily::Name("medium".into()), FontFamily::Name("semibold".into())] {
-            if let Some(v) = fonts.families.get_mut(&fam) {
+            if let Some(v) = fonts.families.get_mut(&fam)
+                && !v.contains(&name)
+            {
                 v.push(name.clone());
             }
         }
@@ -773,26 +775,27 @@ pub fn fit_text(painter: &egui::Painter, text: &str, font: &FontId, tracking: f3
     if text.is_empty() || width <= 0.0 {
         return String::new();
     }
-    let full = text_width(painter, text, font, tracking, color);
-    if full <= width {
+    if text_width(painter, text, font, tracking, color) <= width {
         return text.to_string();
     }
-    let count = text.chars().count();
-    // A rough cut first, so a long text doesn't need a layout for every character.
-    let per_char = (full / count as f32).max(0.5);
-    let mut shown: String = text.chars().take((width / per_char) as usize).collect();
-    while !shown.is_empty() && text_width(painter, &format!("{shown}…"), font, tracking, color) > width {
-        shown.pop();
-    }
-    if shown.is_empty() {
-        // Only the ellipsis is left: it stands for the whole text when it fits.
-        if text_width(painter, "…", font, tracking, color) <= width {
-            return "…".to_string();
+    // The longest beginning that still fits with the ellipsis after it. A longer beginning is never
+    // narrower, so halving finds it in about log2(n) layouts, however uneven the letters are.
+    let chars: Vec<char> = text.chars().collect();
+    let with_ellipsis = |n: usize| format!("{}…", chars[..n].iter().collect::<String>());
+    let (mut fits, mut too_long) = (0, chars.len());
+    while fits < too_long {
+        let mid = (fits + too_long).div_ceil(2);
+        if text_width(painter, &with_ellipsis(mid), font, tracking, color) <= width {
+            fits = mid;
+        } else {
+            too_long = mid - 1;
         }
-        return String::new();
     }
-    shown.push('…');
-    shown
+    if fits == 0 {
+        // Only the ellipsis is left: it stands for the whole text when it fits.
+        return if text_width(painter, "…", font, tracking, color) <= width { "…".to_string() } else { String::new() };
+    }
+    with_ellipsis(fits)
 }
 
 /// Paint one line of tracked text with the given anchor and return its rect.
@@ -892,7 +895,10 @@ pub fn c32(c: wordcraft_doc::Rgb) -> Color32 {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
     use std::collections::BTreeSet;
+
+    use super::{Animations, Appearance, InterfaceSize, legacy_interface_percent, migrate_legacy_interface_size};
 
     /// WCAG contrast ratio between two opaque colours.
     pub(super) fn contrast(a: egui::Color32, b: egui::Color32) -> f32 {
@@ -1144,5 +1150,173 @@ mod tests {
             symbols.iter().filter(|(c, _)| !f.has_glyph(&font, *c)).map(|(c, file)| format!("{c} U+{:04X} in {file}", *c as u32)).collect()
         });
         assert!(missing.is_empty(), "symbols without a glyph: {missing:#?}");
+    }
+    // Paste into `mod tests` in crates/ui-egui/src/theme.rs, after the existing `use std::collections::BTreeSet;`.
+    //
+    //     use super::{Animations, Appearance, InterfaceSize, legacy_interface_percent, migrate_legacy_interface_size};
+    //     use serde_json::json;
+    //
+    // The settings tests were run against copies of the types (serde_json, no egui) and pass. The contrast
+    // numbers come from the token values in theme.rs with the same formula as `contrast` below. The
+    // `fit_text` and `Appearance` tests need egui, so run them in the crate:
+    //     cargo test -p wordcraft-ui-egui theme::
+
+    /// Saved settings read back as written, and junk reads as the default instead of failing the file.
+    #[test]
+    fn saved_settings_round_trip_and_junk_reads_as_default() {
+        for a in Appearance::ALL {
+            assert_eq!(serde_json::from_value::<Appearance>(json!(a.code())).ok(), Some(a));
+            assert_eq!(serde_json::to_value(a).ok(), Some(json!(a.code())));
+            assert_eq!(Appearance::from_code(&a.code().to_uppercase()), Some(a), "case does not matter");
+        }
+        assert_eq!(Appearance::from_code(" dark "), Some(Appearance::Dark), "spaces do not matter");
+        assert_eq!(serde_json::from_value::<Appearance>(json!("sepia")).ok(), Some(Appearance::System));
+        for a in Animations::ALL {
+            assert_eq!(serde_json::from_value::<Animations>(json!(a.code())).ok(), Some(a));
+        }
+        assert_eq!(serde_json::from_value::<Animations>(json!("sometimes")).ok(), Some(Animations::System));
+    }
+
+    /// `System` follows the OS appearance, is light when the OS reports none (like egui's fallback
+    /// theme), and stays automatic towards egui so the native window keeps reporting changes (#311).
+    #[test]
+    fn the_system_appearance_follows_the_os_and_falls_back_to_light() {
+        assert!(Appearance::System.is_dark(Some(egui::Theme::Dark)));
+        assert!(!Appearance::System.is_dark(Some(egui::Theme::Light)));
+        assert!(!Appearance::System.is_dark(None), "light when the OS reports none");
+        assert!(Appearance::Dark.is_dark(Some(egui::Theme::Light)));
+        assert!(!Appearance::Light.is_dark(Some(egui::Theme::Dark)));
+        assert!(matches!(Appearance::System.preference(), egui::ThemePreference::System));
+    }
+
+    /// Animation effects: `System` follows what the host says and is on when it says nothing.
+    #[test]
+    fn animations_follow_the_system_only_when_asked() {
+        assert!(Animations::System.enabled(None));
+        assert!(Animations::System.enabled(Some(true)));
+        assert!(!Animations::System.enabled(Some(false)));
+        assert!(Animations::On.enabled(Some(false)));
+        assert!(!Animations::Off.enabled(Some(true)));
+    }
+
+    /// #822: a chosen size is absolute, so "100%" is one screen pixel per point on any display;
+    /// Auto leaves the display's own scale alone.
+    #[test]
+    fn a_chosen_interface_size_is_absolute() {
+        let size = |p: f64| InterfaceSize::from_percent(p).unwrap();
+        for native in [0.75, 1.0, 1.25, 2.0, 3.0] {
+            for pct in InterfaceSize::PRESETS {
+                let drawn = size(f64::from(pct)).drawn_percent(native);
+                assert_eq!(drawn, pct, "{pct}% on a {native}x display draws at {drawn}%");
+            }
+            assert_eq!(InterfaceSize::AUTO.zoom_factor(native), 1.0);
+        }
+        assert_eq!(InterfaceSize::AUTO.drawn_percent(2.0), 200, "Auto keeps the display's 200%");
+        // A display scale egui doesn't know (or reports as nonsense) counts as 1.
+        for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(size(125.0).drawn_percent(bad), 125, "{bad}");
+        }
+    }
+
+    #[test]
+    fn interface_sizes_are_clamped_and_the_presets_are_in_range() {
+        assert_eq!(InterfaceSize::from_percent(10.0).and_then(InterfaceSize::percent), Some(InterfaceSize::MIN));
+        assert_eq!(InterfaceSize::from_percent(9000.0).and_then(InterfaceSize::percent), Some(InterfaceSize::MAX));
+        assert_eq!(InterfaceSize::from_percent(124.6).and_then(InterfaceSize::percent), Some(125));
+        assert!(InterfaceSize::from_percent(f64::NAN).is_none() && InterfaceSize::from_percent(f64::INFINITY).is_none());
+        assert!(InterfaceSize::PRESETS.windows(2).all(|w| w[0] < w[1]), "the presets ascend");
+        assert!(InterfaceSize::PRESETS.iter().all(|p| (InterfaceSize::MIN..=InterfaceSize::MAX).contains(p)));
+    }
+
+    /// `ui.json` holds "auto" or a percentage; anything else reads as Auto.
+    #[test]
+    fn interface_size_is_saved_as_auto_or_a_percentage() {
+        assert_eq!(serde_json::to_value(InterfaceSize::AUTO).ok(), Some(json!("auto")));
+        assert_eq!(serde_json::to_value(InterfaceSize::from_percent(150.0).unwrap()).ok(), Some(json!(150)));
+        for (saved, want) in [
+            (json!("auto"), None),
+            (json!(150), Some(150)),
+            (json!(150.4), Some(150)),
+            (json!(5), Some(50)),
+            (json!("big"), None),
+            (json!(null), None),
+        ] {
+            let got = serde_json::from_value::<InterfaceSize>(saved.clone()).ok().and_then(InterfaceSize::percent);
+            assert_eq!(got, want, "{saved}");
+        }
+    }
+
+    /// #822: a pre-#822 percentage drew at `old × the display scale`, and keeps doing so; the old
+    /// default (100) meant "the display's scale", which is Auto now.
+    #[test]
+    fn an_old_interface_size_keeps_its_drawn_size() {
+        assert_eq!(legacy_interface_percent(&json!(100)), None, "the old default is Auto now");
+        assert_eq!(legacy_interface_percent(&json!(100.2)), None);
+        assert_eq!(legacy_interface_percent(&json!("auto")), None);
+        assert_eq!(legacy_interface_percent(&json!(125)), Some(125.0));
+        let migrated = migrate_legacy_interface_size(125.0, 2.0);
+        assert_eq!(migrated.percent(), Some(250), "125% on a 2x display drew at 250%");
+        assert_eq!(migrated.drawn_percent(2.0), 250);
+        assert_eq!(migrate_legacy_interface_size(200.0, 3.0).percent(), Some(InterfaceSize::MAX), "clamped");
+        assert_eq!(migrate_legacy_interface_size(125.0, f32::NAN).percent(), Some(125), "an unknown scale counts as 1");
+    }
+
+    /// Text and icons on the surfaces they rest on, in both themes: text, dim text and the accent text
+    /// reach 4.5:1 everywhere (the pressed shade is momentary and left out), group labels on the four
+    /// surfaces a group sits on, and icons 3:1.
+    #[test]
+    fn text_and_icons_read_on_their_surfaces() {
+        for t in [super::Tokens::light(), super::Tokens::dark()] {
+            let all = vec![
+                ("ribbon", t.ribbon),
+                ("panel", t.panel),
+                ("menu", t.menu),
+                ("input", t.input),
+                ("tab strip", t.tab_strip),
+                ("title bar", t.title_bar),
+                ("status bar", t.status_bar),
+                ("canvas", t.canvas),
+                ("balloon", t.balloon),
+                ("markup area", t.markup_area),
+                ("hover", t.hover),
+                ("selected", t.checked),
+            ];
+            let checks: [(&str, egui::Color32, &[(&str, egui::Color32)], f32); 5] = [
+                ("text", t.text, &all, 4.5),
+                ("dim text", t.text_dim, &all, 4.5),
+                ("accent text", t.accent_text, &all, 4.5),
+                ("group label", t.group_label, &all[..4], 4.5),
+                ("icon", t.icon, &all, 3.0),
+            ];
+            for (what, fg, surfaces, need) in checks {
+                for (name, bg) in surfaces {
+                    let r = contrast(fg, *bg);
+                    assert!(r >= need, "dark={}: {what} on the {name} is {r:.2}:1", t.dark);
+                }
+            }
+        }
+    }
+
+    /// The text kept is the longest beginning that fits, also when the letters differ a lot in width
+    /// (narrow ones first, wide ones after): the average width of the whole text misjudges the start.
+    #[test]
+    fn fit_text_keeps_the_longest_beginning_that_fits() {
+        let text = format!("{}{}", "i".repeat(40), "W".repeat(40));
+        let font = super::TypeRung::Control.regular();
+        let ctx = egui::Context::default();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            let black = egui::Color32::BLACK;
+            let width_of = |s: &str| super::text_width(ui.painter(), s, &font, 0.0, black);
+            let whole = width_of(&text);
+            for part in [0.3, 0.5, 0.7] {
+                let room = whole * part;
+                let shown = super::fit_text(ui.painter(), &text, &font, 0.0, black, room);
+                assert!(width_of(&shown) <= room, "{part}: {shown} overflows");
+                let kept = shown.trim_end_matches('…').chars().count();
+                let longer: String = text.chars().take(kept + 1).collect();
+                assert!(width_of(&format!("{longer}…")) > room, "{part}: one more character would fit after {shown}");
+            }
+        })
+        .drop_without_applying_deltas();
     }
 }
