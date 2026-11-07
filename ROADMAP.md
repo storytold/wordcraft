@@ -1,5 +1,7 @@
 # WordCraft roadmap
 
+> **UI update — 2026-11-06:** AppKit menus expose native Mac shortcuts, focused-field editing, Settings, and guarded Quit; see [scope and validation](docs/native-menus-macos.md). Parity estimates below are unchanged.
+
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -795,6 +797,8 @@ Section page-numbering settings preserve `w:chapStyle` values across the full un
 MATH glyphs that reference the same construction now share its immutable variants and assembly data (#3630). Glyph mappings, values and the existing partial-record fallback stay unchanged. Repeated glyph IDs keep their last valid reference without retaining superseded constructions. Distinct overlapping constructions and assembly-only sharing remain separate.
 
 ## Revision history
+
+2026-11-06: native menu bar, focused editing shortcuts, Settings, and guarded Quit; existing parity assessments retained.
 
 > 2026-11-03 · Arabic dialogs read right to left (rtl::Table); recorded in the progress log, readiness unchanged.
 >
