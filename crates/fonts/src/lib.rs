@@ -595,6 +595,31 @@ mod tests {
     }
 
     #[test]
+    fn hangul_falls_back_to_the_craft_fonts_korean_face() {
+        // The web build has no system fonts to fall back to, so without an embedded Korean face
+        // every Hangul character drew as a box. The database must find the craft-fonts face for
+        // each character and for a whole run, the way wasm asks for it: no system fallback.
+        let Some(korean) = CRAFT_FONTS.iter().find(|f| f.scripts.contains(&"Kore") || f.scripts.contains(&"Hang")) else {
+            eprintln!("skipped: no Korean face in the optional craft-fonts input");
+            return;
+        };
+        let db = FontDb::with_font_dirs(Vec::new());
+        db.set_system_fallback(false);
+        let latin = db.face(DEFAULT_FAMILY, "Regular");
+        for c in "한글워드프로세서검은색".chars() {
+            let fb = db.fallback_for(c, latin.id()).unwrap_or_else(|| panic!("no fallback for {c}"));
+            assert_eq!(fb.family, korean.family, "{c}");
+        }
+        // A whole Hangul run draws in one face, not one face per character.
+        let run: Vec<char> = "안녕하세요워드크래프트".chars().collect();
+        let f = db.fallback_for_run(&run, latin.id(), false, false).expect("a Korean face covers the run");
+        assert_eq!(f.family, korean.family);
+        for c in &run {
+            assert!(f.covers(*c), "{f:?} covers {c}");
+        }
+    }
+
+    #[test]
     fn works_without_craft_fonts() {
         // Always true without CRAFT_FONTS_DIR; with it, the bundled fonts must still all load.
         let db = FontDb::with_font_dirs(Vec::new());
