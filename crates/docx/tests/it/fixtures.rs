@@ -3055,7 +3055,10 @@ fn embedded_fonts_survive_a_round_trip() {
     assert_eq!(text(&again, "word/fonts/Roboto-bold.ttf"), "bold font bytes");
 }
 
-// ---- native Word ink: opaque preservation, never re-encoded as WordCraft freeforms ----
+// ---- native Word ink: original parts preserved, never re-encoded as WordCraft freeforms ----
+
+#[path = "native_ink.rs"]
+mod native_ink;
 
 const INK_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordprocessingInk";
 const INK_XML: &str = r##"<ink xmlns="http://www.w3.org/2003/InkML"><definitions><context xml:id="ctx"><inkSource xml:id="src"><traceFormat><channel name="X" type="integer" units="cm"/><channel name="Y" type="integer" units="cm"/></traceFormat></inkSource></context><brush xml:id="blue"><brushProperty name="color" value="#2563EB"/><brushProperty name="width" value="0.08" units="cm"/></brush></definitions><trace contextRef="#ctx" brushRef="#blue">0 0, 1 1, 2 0</trace></ink>"##;
@@ -3148,6 +3151,7 @@ fn direct_native_ink_content_part_survives_unrelated_edit_and_two_saves() {
     }
 }
 
+/// Native ink and its alternate picture survive saving even when the producer renames prefixes.
 #[test]
 fn native_ink_keeps_alternate_content_and_preview_with_renamed_prefixes() {
     for alias in [false, true] {
@@ -3155,9 +3159,8 @@ fn native_ink_keeps_alternate_content_and_preview_with_renamed_prefixes() {
         let g = graphics(&d);
         assert_eq!(g.len(), 1, "fallback must not replace native ink");
         let InlineObject::Graphic { graphic, .. } = &g[0] else { panic!() };
-        assert!(
-            graphic.items.iter().any(|item| matches!(item, wordcraft_doc::graphic::GraphicItem::Image { media, .. } if d.media.contains_key(media)))
-        );
+        assert!(graphic.items.iter().any(|item| matches!(item, wordcraft_doc::graphic::GraphicItem::Path { .. })));
+        assert!(d.media.values().any(|bytes| bytes.as_slice() == b"original preview bytes"));
         for _ in 0..2 {
             let out = wordcraft_docx::write(&d).unwrap();
             let files = unzip(&out);
@@ -3413,16 +3416,14 @@ fn native_ink_in_a_group_or_canvas_survives_unrelated_edit_and_two_saves() {
     }
 }
 
+/// A grouped native-ink member draws its strokes and retains its original picture fallback.
 #[test]
-fn native_ink_in_a_group_shows_its_fallback_picture() {
+fn native_ink_in_a_group_draws_strokes_and_keeps_its_fallback_picture() {
     let d = wordcraft_docx::read(&nested_ink_docx(false, &ink_member(914400, true), true)).unwrap();
     let c = group_children(&d);
     let InlineObject::Graphic { graphic, .. } = &c[1].obj else { panic!() };
-    assert!(
-        graphic.items.iter().any(|item| matches!(item, wordcraft_doc::graphic::GraphicItem::Image { media, .. } if d.media.contains_key(media))),
-        "{:?}",
-        graphic.items
-    );
+    assert!(graphic.items.iter().any(|item| matches!(item, wordcraft_doc::graphic::GraphicItem::Path { .. })), "{:?}", graphic.items);
+    assert!(d.media.values().any(|bytes| bytes.as_slice() == b"original preview bytes"));
 }
 
 #[test]

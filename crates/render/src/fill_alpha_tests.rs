@@ -13,6 +13,98 @@ fn image(item: Draw) -> Rendered {
     render_items(&Document::new(), &items, Rect::new(0.0, 0.0, 40.0, 40.0), 4.0, &RenderOptions::default())
 }
 
+#[test]
+fn ink_extreme_widths_are_not_clamped() {
+    for (width, area, scale, points, column, min_rows, max_rows) in [
+        (0.01, Rect::new(0.0, 0.0, 8.0, 8.0), 40.0, vec![(1.0, 4.0), (7.0, 4.0)], 160, 1, 4),
+        (400.0, Rect::new(0.0, 0.0, 500.0, 500.0), 0.1, vec![(100.0, 250.0), (400.0, 250.0)], 25, 38, 42),
+    ] {
+        let draw = Draw::Ink { pts: points, color: Rgb::BLACK, width, alpha: 1.0 };
+        let rendered = render_items(&Document::new(), &[draw], area, scale, &RenderOptions::default());
+        let rows = (0..rendered.height).filter(|y| rendered.pixel(column, *y)[3] > 0).count();
+        assert!((min_rows..=max_rows).contains(&rows), "width={width}, rows={rows}");
+    }
+}
+
+#[test]
+fn binary_mask_dark_mode_inverts_the_composite_not_just_the_pen() {
+    let bounds = Rect::new(0.0, 0.0, 20.0, 20.0);
+    let segs = vec![PathSeg::Move(2.0, 2.0), PathSeg::Line(18.0, 2.0), PathSeg::Line(18.0, 18.0), PathSeg::Line(2.0, 18.0), PathSeg::Close];
+    for dark in [false, true] {
+        for color in [Rgb(0, 0, 0), Rgb(255, 255, 255), Rgb(255, 255, 0), Rgb(0, 255, 0), Rgb(0, 0, 255)] {
+            for alpha in [0.0, 0.5, 1.0] {
+                let items =
+                    [Draw::Fill { rect: bounds, color: Rgb::WHITE, alpha: 1.0, text_bg: false }, Draw::MaskInk { segs: segs.clone(), color, alpha }];
+                let opts = RenderOptions { dark, ..Default::default() };
+                let pixel = render_items(&Document::new(), &items, bounds, 1.0, &opts).pixel(10, 10);
+                for (actual, component) in pixel.into_iter().take(3).zip([color.0, color.1, color.2]) {
+                    let expected = if dark {
+                        if component == 0 { 51.0 + 204.0 * alpha } else { 51.0 }
+                    } else if component == 0 {
+                        255.0 * (1.0 - alpha)
+                    } else {
+                        255.0
+                    };
+                    assert!((f32::from(actual) - expected).abs() <= 2.0, "dark={dark}, {color:?}, alpha={alpha}, pixel={pixel:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn nested_clips_blend_masks_against_the_actual_backdrop() {
+    let area = Rect::new(0.0, 0.0, 20.0, 20.0);
+    let background = Draw::Fill { rect: area, color: Rgb(50, 100, 150), alpha: 1.0, text_bg: false };
+    let segs = vec![PathSeg::Move(1.0, 1.0), PathSeg::Line(19.0, 1.0), PathSeg::Line(19.0, 19.0), PathSeg::Line(1.0, 19.0), PathSeg::Close];
+    for dark in [false, true] {
+        let opts = RenderOptions { dark, ..Default::default() };
+        let control = render_items(&Document::new(), std::slice::from_ref(&background), area, 1.0, &opts);
+        let baseline = control.pixel(10, 10);
+        for color in [Rgb::BLACK, Rgb::WHITE, Rgb(255, 255, 0)] {
+            for alpha in [0.5, 1.0] {
+                let mask = Draw::MaskInk { segs: segs.clone(), color, alpha };
+                let inner = Draw::Clip { rect: Rect::new(4.0, 4.0, 12.0, 12.0), items: vec![mask] };
+                let outer = Draw::Clip { rect: Rect::new(2.0, 2.0, 16.0, 16.0), items: vec![inner] };
+                let rendered = render_items(&Document::new(), &[background.clone(), outer], area, 1.0, &opts);
+                let pixel = rendered.pixel(10, 10);
+                for ((actual, original), component) in pixel.into_iter().zip(baseline).take(3).zip([color.0, color.1, color.2]) {
+                    let expected = if component == 255 {
+                        f32::from(original)
+                    } else if dark {
+                        f32::from(original) + (255.0 - f32::from(original)) * alpha
+                    } else {
+                        f32::from(original) * (1.0 - alpha)
+                    };
+                    assert!((f32::from(actual) - expected).abs() <= 2.0, "dark={dark}, {color:?}, alpha={alpha}, pixel={pixel:?}");
+                }
+                assert_eq!(rendered.pixel(3, 10), control.pixel(3, 10));
+                assert_eq!(rendered.pixel(18, 10), control.pixel(18, 10));
+            }
+        }
+    }
+}
+
+#[test]
+fn rotated_clips_preserve_backdrop_blending_and_clip_boundaries() {
+    let area = Rect::new(0.0, 0.0, 20.0, 20.0);
+    let background = Draw::Fill { rect: area, color: Rgb::WHITE, alpha: 1.0, text_bg: false };
+    let mask = Draw::MaskInk {
+        segs: vec![PathSeg::Move(1.0, 1.0), PathSeg::Line(19.0, 1.0), PathSeg::Line(19.0, 19.0), PathSeg::Line(1.0, 19.0), PathSeg::Close],
+        color: Rgb::BLACK,
+        alpha: 1.0,
+    };
+    let clip = Draw::Clip { rect: Rect::new(5.0, 7.0, 10.0, 6.0), items: vec![mask] };
+    let rotated = Draw::Rotated { cx: 10.0, cy: 10.0, spin: wordcraft_geom::Spin::new(90.0, false, false), items: vec![clip] };
+    for (dark, baseline, painted) in [(false, 255, 0), (true, 51, 255)] {
+        let opts = RenderOptions { dark, ..Default::default() };
+        let image = render_items(&Document::new(), &[background.clone(), rotated.clone()], area, 1.0, &opts);
+        assert_eq!(image.pixel(10, 6), [painted, painted, painted, 255]);
+        assert_eq!(image.pixel(5, 10), [baseline, baseline, baseline, 255]);
+        assert_eq!(image.pixel(10, 16), [baseline, baseline, baseline, 255]);
+    }
+}
+
 fn close(pixel: [u8; 4], alpha: f32) {
     let red = (255.0 * alpha).round() as u8;
     let blue = (255.0 * (1.0 - alpha)).round() as u8;

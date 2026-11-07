@@ -7,6 +7,7 @@ mod drawing_color;
 mod embed;
 mod freeform;
 mod glossary;
+mod ink;
 pub(crate) mod math;
 mod props;
 mod sdt;

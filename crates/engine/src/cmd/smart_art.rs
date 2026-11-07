@@ -184,7 +184,7 @@ fn has_smart_art(s: &Session) -> Option<&'static str> {
 pub fn smart_art_graphic(spec: SmartArtSpec, theme: &[Rgb], w: f32, h: f32) -> Graphic {
     let spec = spec.sanitized();
     let items = wordcraft_docx::smart_art_items(&spec, theme, w, h);
-    Graphic { kind: GraphicKind::Diagram, items, w, h, source: None, chart: None, smart_art: Some(Arc::new(spec)) }
+    Graphic { kind: GraphicKind::Diagram, items, w, h, source: None, chart: None, smart_art: Some(Arc::new(spec)), ink_frame: None }
 }
 
 /// Lay the SmartArt graphic of `o` out again at its current size (after a resize), if it has a model.
