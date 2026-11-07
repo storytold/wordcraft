@@ -37,6 +37,7 @@ const ALL_CHECKS: &[&str] = &[
     "XML-MALFORMED",
     "XML-UNDECLARED-PREFIX",
     "XML-INVALID-CHAR",
+    "STRUCT-END-P",
     "REL-DUP-ID",
     "REL-DANGLING",
     "REL-TYPED",
@@ -1226,6 +1227,118 @@ fn struct_tc_no_p() {
     let report = validate(&d);
     assert_eq!(report.verdict, Verdict::Fail);
     assert_finding(&report, "STRUCT-TC-NO-P", Some("word/document.xml"));
+}
+
+/// Fixture-32 shape: the outer cell ends in a nested table, not its inner paragraph.
+#[test]
+fn struct_end_p_cell_ending_in_nested_table() {
+    let mut d = Doc::minimal();
+    let defect = "<w:tbl><w:tr><w:tc><w:p/><w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl></w:tc></w:tr></w:tbl>";
+    d.set_document(defect);
+    let report = validate(&d);
+    let finding = assert_finding(&report, "STRUCT-END-P", Some("word/document.xml"));
+    assert_eq!(finding.severity, Severity::Error);
+    assert_eq!(finding.evidence, wordcraft_validate::Evidence::Observed);
+    assert_eq!(report.findings.len(), 1);
+    assert!(!has(&report, "STRUCT-TC-NO-P"));
+
+    // Repair only the terminal-block defect; the nested table remains intact.
+    d.set_document(&defect.replace("</w:tbl></w:tc>", "</w:tbl><w:p/></w:tc>"));
+    let repaired = validate(&d);
+    assert_clean(&repaired);
+    assert!(!has(&repaired, "STRUCT-END-P"));
+}
+
+/// A paragraph-only cell is the clean fixture-33 control shape.
+#[test]
+fn struct_end_p_paragraph_control() {
+    let mut d = Doc::minimal();
+    d.set_document("<w:tbl><w:tr><w:tc><w:p></w:p></w:tc></w:tr></w:tbl>");
+    let report = validate(&d);
+    assert_clean(&report);
+    assert!(!has(&report, "STRUCT-END-P"));
+}
+
+/// Both empty-tag spellings belong exclusively to STRUCT-TC-NO-P.
+#[test]
+fn struct_end_p_empty_cell_is_only_tc_no_p() {
+    for cell in ["<w:tc/>", "<w:tc><w:tcPr/></w:tc>"] {
+        let mut d = Doc::minimal();
+        d.set_document(&format!("<w:tbl><w:tr>{cell}</w:tr></w:tbl>"));
+        let report = validate(&d);
+        assert_finding(&report, "STRUCT-TC-NO-P", Some("word/document.xml"));
+        assert_eq!(report.findings.len(), 1);
+        assert!(!has(&report, "STRUCT-END-P"));
+    }
+}
+
+/// Only closed cells establish the terminal block; later malformed XML cannot undo it.
+#[test]
+fn struct_end_p_finish_split() {
+    for (body, fires) in [("<w:tbl><w:tr><w:tc><w:tbl/></w:tc><", true), ("<w:tbl><w:tr><w:tc><w:tbl/><", false)] {
+        let mut d = Doc::minimal();
+        d.set("word/document.xml", format!("<w:document xmlns:w=\"{W_NS}\"><w:body>{body}").into_bytes());
+        let report = validate(&d);
+        assert_eq!(has(&report, "STRUCT-END-P"), fires, "{:?}", report.findings);
+    }
+}
+
+/// A nested table is the calibrated non-paragraph ending: it requires a terminal paragraph.
+#[test]
+fn struct_end_p_other_block_kinds() {
+    let mut d = Doc::minimal();
+    d.set_document("<w:tbl><w:tr><w:tc><w:tbl/></w:tc></w:tr></w:tbl>");
+    assert_finding(&validate(&d), "STRUCT-END-P", Some("word/document.xml"));
+}
+
+/// Wrapper endings are unknown, not violations: an sdt, customXml or altChunk can hold a
+/// terminal paragraph the scanner does not descend into, so none of them is flagged.
+#[test]
+fn struct_end_p_wrapper_endings_are_unknown() {
+    for block in ["<w:sdt/>", "<w:customXml/>", "<w:altChunk/>"] {
+        let mut d = Doc::minimal();
+        d.set_document(&format!("<w:tbl><w:tr><w:tc>{block}</w:tc></w:tr></w:tbl>"));
+        let report = validate(&d);
+        assert!(!has(&report, "STRUCT-END-P"), "{block}: {:?}", report.findings);
+        assert!(!has(&report, "STRUCT-TC-NO-P"), "{block}: {:?}", report.findings);
+    }
+}
+
+/// A cell ending in a block sdt whose content ends in a paragraph is not flagged: the
+/// wrapper's inner paragraph is a valid terminal block for the cell.
+#[test]
+fn struct_end_p_sdt_wrapping_paragraph() {
+    let mut d = Doc::minimal();
+    d.set_document(r#"<w:tbl><w:tr><w:tc><w:sdt><w:sdtContent><w:p/></w:sdtContent></w:sdt></w:tc></w:tr></w:tbl>"#);
+    let report = validate(&d);
+    assert_clean(&report);
+    assert!(!has(&report, "STRUCT-END-P"));
+}
+
+/// A skipped AlternateContent branch leaves its enclosing cell's terminal block unknown.
+#[test]
+fn struct_end_p_skipped_terminal_block_is_unknown() {
+    let mut d = Doc::minimal();
+    d.set_document(concat!(
+        "<w:tbl><w:tr><w:tc><w:tbl/><mc:AlternateContent>",
+        "<mc:Choice Requires=\"w\"><w:p/></mc:Choice>",
+        "<mc:Fallback><w:p/></mc:Fallback></mc:AlternateContent></w:tc></w:tr></w:tbl>",
+    ));
+    let report = validate(&d);
+    assert_clean(&report);
+    assert!(!has(&report, "STRUCT-END-P"));
+    assert!(report.coverage_notes.iter().any(|note| note.contains("AlternateContent")));
+}
+
+/// Story parts other than the main part retain their PR-1 scope.
+#[test]
+fn struct_end_p_header_out_of_scope() {
+    let mut d = Doc::minimal();
+    add_header(&mut d);
+    d.set("word/header1.xml", format!("<w:hdr xmlns:w=\"{W_NS}\"><w:tbl><w:tr><w:tc><w:tbl/></w:tc></w:tr></w:tbl></w:hdr>").into_bytes());
+    let report = validate(&d);
+    assert_clean(&report);
+    assert!(!has(&report, "STRUCT-END-P"));
 }
 
 #[test]

@@ -241,9 +241,20 @@ fn is_alternate_content(id: &ElemId) -> bool {
     id.ns.as_deref() == Some(NS_MC) && id.local == "AlternateContent"
 }
 
+/// The last observed direct block child of a table cell.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TcEnd {
+    /// A paragraph satisfies the cell's terminal-block requirement.
+    Paragraph,
+    /// A nested table: the one non-paragraph ending calibration shows Word rejecting.
+    Other,
+}
+
 struct Frame {
     is_tc: bool,
     tc_has_block: bool,
+    /// None also represents an unknown last block in skipped AlternateContent.
+    tc_last_block: Option<TcEnd>,
     is_del: bool,
     is_wrapper: bool,
     /// This frame is an `mc:AlternateContent` element.
@@ -502,9 +513,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                         if f.is_wrapper {
                             state.wrapper_depth -= 1;
                         }
-                        if f.is_tc && !f.tc_has_block && role.is_main {
-                            acc.add("STRUCT-TC-NO-P", Some(part.to_string()), format!("w:tc in {part} has no block-level content"));
-                        }
+                        close_cell(&f, part, role, acc);
                     }
                 }
             }
@@ -597,6 +606,8 @@ fn enter_alt(state: &mut State, id: &ElemId, part: &str, acc: &mut Acc) -> bool 
             && f.is_tc
         {
             f.tc_has_block = true;
+            // The skipped branch may end in a paragraph; do not infer its terminal kind.
+            f.tc_last_block = None;
         }
     }
     is_alt
@@ -609,6 +620,7 @@ fn frame_for(id: &ElemId) -> Frame {
     Frame {
         is_tc: w && local == "tc",
         tc_has_block: false,
+        tc_last_block: None,
         is_del: w && local == "del",
         is_wrapper: w && matches!(local, "ins" | "del" | "moveFrom" | "moveTo"),
         alt: false,
@@ -616,9 +628,25 @@ fn frame_for(id: &ElemId) -> Frame {
     }
 }
 
+/// Evaluate a closing table-cell frame in the main part: a cell with no block content is
+/// `STRUCT-TC-NO-P`; one whose last block is not a paragraph is `STRUCT-END-P`. A closed
+/// cell's last block is known even if later XML is malformed or truncated, so it is
+/// evaluated here; an open cell never is, because later content could repair it.
+fn close_cell(f: &Frame, part: &str, role: PartRole, acc: &mut Acc) {
+    if !f.is_tc || !role.is_main {
+        return;
+    }
+    if f.tc_has_block && f.tc_last_block == Some(TcEnd::Other) {
+        acc.add("STRUCT-END-P", Some(part.to_string()), format!("w:tc in {part} does not end with a paragraph"));
+    }
+    if !f.tc_has_block {
+        acc.add("STRUCT-TC-NO-P", Some(part.to_string()), format!("w:tc in {part} has no block-level content"));
+    }
+}
+
 /// A block-level child satisfies its enclosing `w:tc` (ECMA-376 Part 1 §17.4.65: a cell with no
 /// block content is corrupt). Only the immediately enclosing frame is checked, so a run-level
-/// `w:sdt` inside a `w:p` does not satisfy the cell.
+/// `w:sdt` inside a `w:p` does not satisfy the cell. Also record the terminal block kind.
 fn mark_block_content(state: &mut State, id: &ElemId) {
     if !id.w() || !matches!(id.local.as_str(), "p" | "tbl" | "sdt" | "customXml" | "altChunk") {
         return;
@@ -627,6 +655,15 @@ fn mark_block_content(state: &mut State, id: &ElemId) {
         && f.is_tc
     {
         f.tc_has_block = true;
+        // Only a nested table is a *known* non-paragraph ending (calibration fixture 32).
+        // The wrapper kinds (sdt, customXml, altChunk) can hold a terminal paragraph the
+        // scanner does not descend into, so they leave the terminal kind unknown — the
+        // same treatment a skipped AlternateContent branch gets in enter_alt.
+        f.tc_last_block = match id.local.as_str() {
+            "p" => Some(TcEnd::Paragraph),
+            "tbl" => Some(TcEnd::Other),
+            _ => None,
+        };
     }
 }
 

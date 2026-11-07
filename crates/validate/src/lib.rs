@@ -263,6 +263,13 @@ pub(crate) const FLD_UNBALANCED: RuleSpec = RuleSpec { id: "FLD-UNBALANCED", sev
 /// fixture, desktop behaviour is unknown, and neighbouring field reports repair prompts in this
 /// family.
 pub(crate) const STRUCT_TC_NO_P: RuleSpec = RuleSpec { id: "STRUCT-TC-NO-P", severity: Severity::Error, evidence: Evidence::Inferred };
+/// `STRUCT-END-P`: a nonempty main-part cell whose last block is a nested table rather
+/// than a paragraph (ECMA-376 Part 1 §17.4.65). Calibration fixture 32 produced a
+/// corruption banner and view-only Word-web document; paragraph-ending control 33
+/// opened clean. Wrapper endings (sdt, customXml, altChunk) are not flagged: they can
+/// hold a terminal paragraph, so their ending is treated as unknown. Desktop behaviour
+/// unrecorded.
+pub(crate) const STRUCT_END_P: RuleSpec = RuleSpec { id: "STRUCT-END-P", severity: Severity::Error, evidence: Evidence::Observed };
 /// `STRUCT-DELTEXT`: a `w:t` inside `w:del`, or a `w:delText` outside one. Observed (web): lenient
 /// recovery, the text renders as a tracked deletion anyway, so Warning.
 pub(crate) const STRUCT_DELTEXT: RuleSpec = RuleSpec { id: "STRUCT-DELTEXT", severity: Severity::Warning, evidence: Evidence::Observed };
@@ -291,6 +298,7 @@ pub(crate) const RULES: &[RuleSpec] = &[
     XML_MALFORMED,
     XML_UNDECLARED_PREFIX,
     XML_INVALID_CHAR,
+    STRUCT_END_P,
     REL_DUP_ID,
     REL_DANGLING,
     REL_TYPED,
@@ -600,6 +608,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     acc.ran("XML-MALFORMED");
     acc.ran("XML-UNDECLARED-PREFIX");
     acc.ran("XML-INVALID-CHAR");
+    acc.ran("STRUCT-END-P");
     let roles = story_roles(pkg);
     let mut facts = scan::StoryFacts::default();
     let mut refs: Vec<(String, Vec<RefFact>)> = Vec::new();
