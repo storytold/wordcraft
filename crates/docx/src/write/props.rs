@@ -290,6 +290,9 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     if let Some(t) = p.text_alignment {
         w.val("w:textAlignment", t.ooxml());
     }
+    if let Some(mode) = p.textbox_tight_wrap {
+        w.val("w:textboxTightWrap", mode.ooxml());
+    }
     if let Some(l) = p.outline_level {
         w.val("w:outlineLvl", &n(l.min(9) as i64));
     }

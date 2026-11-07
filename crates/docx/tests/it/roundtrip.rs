@@ -7,7 +7,7 @@ use wordcraft_doc::numbering::ListKind;
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign, TabLeader,
-    TabStop, TableLook, TextAlignment, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
+    TabStop, TableLook, TextAlignment, TextColor, TextDirection, TextboxTightWrap, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, NumFormat, PageVAlign, SectionProps, SectionStart};
 use wordcraft_doc::styles::{Style, StyleKind};
@@ -174,6 +174,7 @@ fn every_para_prop_round_trips() {
         space_before_auto: Some(true),
         space_after_auto: Some(false),
         line_spacing: Some(LineSpacing::Multiple(1.5)),
+        textbox_tight_wrap: Some(TextboxTightWrap::AllLines),
         contextual_spacing: Some(true),
         mirror_indents: Some(true),
         adjust_right_indent: Some(false),
@@ -247,6 +248,63 @@ fn every_para_prop_round_trips() {
     for (i, v) in variants.iter().enumerate() {
         assert_eq!(&got[i + 1].props, v, "variant {i}");
     }
+}
+
+/// Preserves each tight-wrap mode through two DOCX save and reopen cycles.
+#[test]
+fn textbox_tight_wrap_survives_two_docx_saves() {
+    let modes = [
+        TextboxTightWrap::None,
+        TextboxTightWrap::AllLines,
+        TextboxTightWrap::FirstAndLastLine,
+        TextboxTightWrap::FirstLineOnly,
+        TextboxTightWrap::LastLineOnly,
+    ];
+    let mut doc = doc_with(
+        modes
+            .iter()
+            .enumerate()
+            .map(|(index, mode)| {
+                let mut p = Paragraph::with_text("text", CharProps::default());
+                p.props.textbox_tight_wrap = Some(*mode);
+                if index == 0 {
+                    p.props.align = Some(Align::Center);
+                    p.props.outline_level = Some(1);
+                }
+                p
+            })
+            .chain([Paragraph::with_text("ordinary", CharProps::default())])
+            .collect(),
+    );
+    Arc::make_mut(&mut doc.styles).upsert(Style {
+        id: "TightWrapStyle".into(),
+        name: "Tight Wrap Style".into(),
+        para: ParaProps { textbox_tight_wrap: Some(TextboxTightWrap::AllLines), ..Default::default() },
+        ..Default::default()
+    });
+    let mut inherited = Paragraph::with_text("inherited", CharProps::default());
+    inherited.props.style = Some("TightWrapStyle".into());
+    doc.body.push(para_block(inherited));
+    let first_bytes = wordcraft_docx::write(&doc).expect("first write");
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&first_bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut archive.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let ppr = xml.split_once("<w:pPr>").unwrap().1.split_once("</w:pPr>").unwrap().0;
+    assert!(ppr.find("w:jc").unwrap() < ppr.find("w:textboxTightWrap").unwrap(), "{ppr}");
+    assert!(ppr.find("w:textboxTightWrap").unwrap() < ppr.find("w:outlineLvl").unwrap(), "{ppr}");
+    let first = wordcraft_docx::read(&first_bytes).expect("first read");
+    let second = wordcraft_docx::read(&wordcraft_docx::write(&first).expect("second write")).expect("second read");
+    assert_eq!(second.styles.get("TightWrapStyle").unwrap().para.textbox_tight_wrap, Some(TextboxTightWrap::AllLines));
+    let got = paras(&second);
+    for (para, mode) in got.iter().zip(modes) {
+        assert_eq!(para.props.textbox_tight_wrap, Some(mode));
+    }
+    assert_eq!(got[5].props.textbox_tight_wrap, None);
+    assert_eq!(
+        got[6].props.clone().overlaid(&second.styles.get("TightWrapStyle").unwrap().para).textbox_tight_wrap,
+        Some(TextboxTightWrap::AllLines)
+    );
+    assert_eq!(TextboxTightWrap::from_ooxml("futureMode"), None);
 }
 
 #[test]
