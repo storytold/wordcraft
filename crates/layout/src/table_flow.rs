@@ -6,7 +6,7 @@ use super::headers::{header_items_cap, header_table_areas, placed_cost};
 use super::notes::table_notes;
 use super::page::{PageBuilder, PageFrame, page_frame};
 use super::placed::Placed;
-use super::{Anchor, Arc, HeightRule, Path, Rect, StoryRef, TableFloat, ViewMode, WrapText, table};
+use super::{Anchor, Arc, HeightRule, Path, Rect, StoryRef, TableFloat, ViewMode, table};
 
 /// Footer page tables wrap only the intersecting body lines, which resume below them.
 pub(crate) fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
@@ -113,19 +113,22 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     // Word does (and as an ODT table starting a page opens). Before the table is laid out, so
     // its cells' fields (PAGE) are those of the page it lands on.
     let first = t.rows.first().and_then(|r| r.cells.first()).and_then(|c| c.blocks.first()).and_then(|b| b.as_para());
-    if t.props.float.is_none() && !pb.at_top() && !pb.web && first.is_some_and(|p| ctx.doc.styles.resolve_para(&p.props).page_break_before) {
+    let float = table::float(ctx, t);
+    if float.is_none() && !pb.at_top() && !pb.web && first.is_some_and(|p| ctx.doc.styles.resolve_para(&p.props).page_break_before) {
         pb.new_page(block, body_top);
         ctx.fields.page = pb.number;
     }
     let width = pb.col_w();
+    // Where numbering stood before the table, for laying a floating one out again on the page
+    // it moves to.
+    let snap = float.is_some().then(|| (ctx.counters.clone(), ctx.eq_count, ctx.boxes.total()));
     let mut tl = table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1);
-    if let Some(f) = t.props.float.filter(|_| !pb.web) {
-        // Before Word 2013 layout (compatibility mode 15) an offset places the first cell's text,
-        // so the edge sits a cell margin further out.
-        let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(ctx, t) } else { 0.0 };
+    if let Some((f, snap)) = float.filter(|_| !pb.web).zip(snap) {
+        let legacy = table::legacy_offset(ctx, t);
         let h: f32 = tl.rows.iter().map(|r| r.height).sum();
-        if h <= pb.uncapped_bottom() - pb.top + 0.01 {
-            place_floating_table(ctx, pb, &tl, &f, legacy, block, body_top);
+        // A frame doesn't break across pages: a table in one stays whole where the frame says.
+        if t.props.float.is_none() || h <= pb.uncapped_bottom() - pb.top + 0.01 {
+            place_floating_table(ctx, pb, FloatingTable { t, tl, snap }, &f, block, body_top);
             return;
         }
         // Too tall for a page: Word lets it run across pages like a table in the text, from its
@@ -278,11 +281,21 @@ const MAX_TABLE_SPACE: f32 = 1584.0;
 
 /// Place floating table `tl` (`w:tblpPr`): at its own position, which takes no room in the text
 /// flow; the text after it wraps around it.
-fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLayout, f: &TableFloat, legacy: f32, block: usize, body_top: f32) {
-    let h: f32 = tl.rows.iter().map(|r| r.height).sum::<f32>().clamp(0.0, 100_000.0);
-    let w = tl.width.clamp(1.0, 100_000.0);
+/// A floating table laid out where its anchor stands, with where numbering (list counters,
+/// equation count) and the count of text boxes laid out stood before it.
+struct FloatingTable<'a> {
+    t: &'a wordcraft_doc::Table,
+    tl: table::TableLayout,
+    snap: (wordcraft_doc::numbering::Counters, u32, usize),
+}
+
+fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, ft: FloatingTable, f: &TableFloat, block: usize, body_top: f32) {
+    let FloatingTable { t, mut tl, snap } = ft;
+    let legacy = table::legacy_offset(ctx, t);
     let [dl, dt, dr, db] = f.dist_from_text();
     for attempt in 0..2 {
+        let h: f32 = tl.rows.iter().map(|r| r.height).sum::<f32>().clamp(0.0, 100_000.0);
+        let w = tl.width.clamp(1.0, 100_000.0);
         let s = pb.sect;
         let h_area = float_table_h_area(pb, f, ctx.mirror);
         // The text a table anchored to it stands in: where the next paragraph starts.
@@ -306,6 +319,12 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
         };
         if attempt == 0 && moves && !pb.at_top() {
             pb.advance(block, body_top);
+            // Laid out again on the page it moves to, so its cells' fields (PAGE) are that page's.
+            ctx.fields.page = pb.number;
+            (ctx.counters, ctx.eq_count) = (snap.0.clone(), snap.1);
+            // The first layout's text boxes are thrown away with it.
+            ctx.boxes.rewind(snap.2);
+            tl = table::layout_table(ctx, StoryRef::Body, t, &[block as u32], pb.col_w(), 1);
             continue;
         }
         if let Some(pg) = pb.page() {
@@ -320,8 +339,12 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
             }
             pg.float_tables.push(Path::top(block));
         }
+        // Footnotes referenced in its cells go to the bottom of the page it lands on.
+        for row in &tl.rows {
+            table_notes(ctx, pb, &row.items);
+        }
         let area = r.inset(-dl, -dt, -dr, -db);
-        pb.excl.push((area, false, None, WrapText::BothSides, true));
+        pb.excl.extend(table::float_wrap(ctx, t, area));
         pb.float_tables.push(area);
         return;
     }

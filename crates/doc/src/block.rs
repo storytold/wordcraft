@@ -77,4 +77,10 @@ impl BoxBudget {
     pub fn total(&self) -> usize {
         self.total
     }
+
+    /// Forget the boxes expanded since the count was `total`: their layout was thrown away and
+    /// done again.
+    pub fn rewind(&mut self, total: usize) {
+        self.total = self.total.min(total);
+    }
 }
