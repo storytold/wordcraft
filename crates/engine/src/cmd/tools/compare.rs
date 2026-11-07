@@ -301,24 +301,36 @@ fn unique_deleted_bookmarks(doc: &mut Document, del: u32) {
     if !deleted || live.is_empty() {
         return;
     }
-    let mut renamed: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    // A fresh name per deleted bookmark, not per name: a document can carry one name
+    // twice (Word's `_GoBack` in a merged file), and two deleted copies renamed to one
+    // fresh name would bookmark that name twice — under one id, too, since the writer
+    // keys bookmark ids by name. A deleted start takes the next fresh name; its end,
+    // paired in document order, takes the same one.
+    let mut open: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
     for story in &stories {
         for path in doc.para_paths(*story) {
             let Ok(p) = doc.para_mut(*story, &path) else { continue };
             let dels: Vec<bool> = p.object_offsets().into_iter().map(|off| p.props_of_char(off).del == Some(del)).collect();
             let mut changed = false;
             for (o, deleted) in p.objects.iter_mut().zip(dels) {
+                let is_start = matches!(o, InlineObject::BookmarkStart { .. });
                 let (InlineObject::BookmarkStart { name } | InlineObject::BookmarkEnd { name }) = o else { continue };
                 if !deleted || !live.contains(name.as_str()) {
                     continue;
                 }
-                let fresh = match renamed.get(name.as_str()) {
-                    Some(f) => f.clone(),
-                    None => {
-                        let Some(f) = fresh_bookmark_name(name, &taken) else { continue };
-                        taken.insert(f.clone());
-                        renamed.insert(name.clone(), f.clone());
-                        f
+                let fresh = if is_start {
+                    let Some(f) = fresh_bookmark_name(name, &taken) else { continue };
+                    taken.insert(f.clone());
+                    open.entry(name.clone()).or_default().push(f.clone());
+                    f
+                } else {
+                    match open.get_mut(name.as_str()).and_then(Vec::pop) {
+                        Some(f) => f,
+                        None => {
+                            let Some(f) = fresh_bookmark_name(name, &taken) else { continue };
+                            taken.insert(f.clone());
+                            f
+                        }
                     }
                 };
                 *name = fresh;

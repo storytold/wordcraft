@@ -569,6 +569,50 @@ fn compare_deleted_bookmark_names_avoid_text_box_bookmarks() {
     assert_eq!(all.iter().collect::<BTreeSet<_>>().len(), all.len(), "no bookmark name is used twice: {all:?}");
 }
 
+#[test]
+fn compare_gives_each_deleted_copy_of_a_name_its_own_name() {
+    // The original carries `_GoBack` twice (Word writes one per document, and merged
+    // files can carry two), both in paragraphs the comparison deletes whole; the revised
+    // document's `_GoBack` stays live. Each deleted copy needs a name of its own: renamed
+    // to one shared fresh name they would bookmark that name twice, and the writer keys
+    // bookmark ids by name, so they would share an id as well.
+    let bookmarked = |text: &str, paras: &[usize]| {
+        let mut s = Session::new(Document::from_text(text));
+        for &para in paras {
+            let p = s.doc.para_mut(StoryRef::Body, &Pos::body(para, 0).path).unwrap();
+            p.insert_object(0, InlineObject::BookmarkStart { name: "_GoBack".into() }, &CharProps::default()).unwrap();
+            let at = p.len();
+            p.insert_object(at, InlineObject::BookmarkEnd { name: "_GoBack".into() }, &CharProps::default()).unwrap();
+        }
+        s.doc
+    };
+    let s = compare_files("bookmarks-twice", &bookmarked("A.\nGone one.\nGone two.\nB.", &[1, 2]), &bookmarked("A.\nB.\nFresh para.", &[2]));
+    let marks: Vec<(String, bool, bool)> = objects_in(&s.doc, StoryRef::Body)
+        .into_iter()
+        .filter_map(|(o, del)| match o {
+            InlineObject::BookmarkStart { name } => Some((name, del, true)),
+            InlineObject::BookmarkEnd { name } => Some((name, del, false)),
+            _ => None,
+        })
+        .collect();
+    let starts: Vec<&(String, bool, bool)> = marks.iter().filter(|m| m.2).collect();
+    assert_eq!(starts.len(), 3, "{marks:?}");
+    assert!(starts.contains(&&("_GoBack".to_string(), false, true)), "the revised bookmark keeps its name: {marks:?}");
+    let names: BTreeSet<&String> = starts.iter().map(|(n, _, _)| n).collect();
+    assert_eq!(names.len(), 3, "each copy has a name of its own: {marks:?}");
+    // Every start's end carries the same name, so the pairs survive as pairs.
+    let ends: BTreeSet<&String> = marks.iter().filter(|m| !m.2).map(|(n, _, _)| n).collect();
+    assert_eq!(ends, names, "{marks:?}");
+    // Saved and read back, the three names are still distinct.
+    let path = std::env::temp_dir().join(format!("wc-5571-bookmarks-twice-out-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &s.doc).unwrap();
+    let back = crate::io::open_path(&path);
+    let _ = std::fs::remove_file(&path);
+    let names: Vec<String> = back.unwrap().bookmarks().into_iter().map(|(n, _)| n).collect();
+    assert_eq!(names.len(), 3, "{names:?}");
+    assert_eq!(names.iter().collect::<BTreeSet<_>>().len(), 3, "{names:?}");
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn compare_relinks_what_text_box_stories_refer_to() {
