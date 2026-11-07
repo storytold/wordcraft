@@ -114,9 +114,11 @@ pub struct FindState {
     pub current: usize,
     /// Reading Highlight: mark every match of `query` in the body.
     pub highlight: bool,
-    /// Highlighted matches, for the document revision they were found in.
+    /// Highlighted matches, for the document revision they were found in and how fields read
+    /// then ([`crate::cmd::fields::FieldShow::key`]: View › Field Codes changes what Find matches
+    /// without changing the document).
     #[serde(skip)]
-    pub highlights: Option<(u64, Vec<(Pos, Pos)>)>,
+    pub highlights: Option<(u64, u64, Vec<(Pos, Pos)>)>,
 }
 
 #[derive(Clone)]

@@ -50,20 +50,20 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
         "results" => {
             let results = app.session.find.results.clone();
             ui.label(egui::RichText::new(format!("{} results", results.len())).small().weak());
+            let story = results.first().map_or(StoryRef::Body, |(a, _)| a.story);
+            let fields = wordcraft_engine::cmd::fields::FieldShow::of(&app.session, story);
             for (a, b) in results.iter().take(500) {
                 let Some(p) = app.session.doc.para_at(a) else { continue };
                 let from = p.clamp(a.off.saturating_sub(30));
                 let to = p.clamp((b.off + 40).min(p.len()));
-                let pre = p.text.get(from..a.off).unwrap_or("");
-                let hit = p.text.get(a.off..b.off).unwrap_or("");
-                let post = p.text.get(b.off..to).unwrap_or("");
+                let (pre, hit, post) = (shown(p, (from, a.off), &fields), shown(p, (a.off, b.off), &fields), shown(p, (b.off, to), &fields));
                 let mut job = egui::text::LayoutJob::default();
                 let fmt = |c| egui::TextFormat { font_id: regular(12.0), color: c, ..Default::default() };
-                job.append(pre, 0.0, fmt(ui.visuals().text_color()));
+                job.append(&pre, 0.0, fmt(ui.visuals().text_color()));
                 // The match is marked the way Find marks it on the page, per theme (#656).
                 let mark = Tokens::get(ui.ctx()).find_highlight;
-                job.append(hit, 0.0, egui::TextFormat { font_id: semibold(12.0), background: mark, color: ui.visuals().text_color(), ..Default::default() });
-                job.append(post, 0.0, fmt(ui.visuals().text_color()));
+                job.append(&hit, 0.0, egui::TextFormat { font_id: semibold(12.0), background: mark, color: ui.visuals().text_color(), ..Default::default() });
+                job.append(&post, 0.0, fmt(ui.visuals().text_color()));
                 job.wrap.max_width = ui.available_width();
                 if ui.add(egui::Button::new(job).frame(false)).clicked() {
                     let _ = app.run("select.range", json!({"anchor": a, "focus": b}));
@@ -104,6 +104,28 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
             }
         }
     });
+}
+
+/// Paragraph `p`'s text from byte `a` to `b` as a search result reads it: a field shows the
+/// text Find matched (#5552), not its object character. The paragraph's objects are walked once.
+fn shown(p: &wordcraft_doc::Paragraph, (a, b): (usize, usize), fields: &wordcraft_engine::cmd::fields::FieldShow) -> String {
+    use wordcraft_doc::para::OBJ;
+    let Some(t) = p.text.get(a..b) else { return String::new() };
+    if !t.contains(OBJ) {
+        return t.to_string();
+    }
+    let mut out = String::with_capacity(t.len());
+    let mut at = a;
+    for (off, o) in p.objects_with_offsets().skip_while(|(off, _)| *off < a).take_while(|(off, _)| *off < b) {
+        out.push_str(p.text.get(at..off).unwrap_or(""));
+        match fields.text(o) {
+            Some(r) => out.push_str(&r),
+            None => out.push(OBJ),
+        }
+        at = off + OBJ.len_utf8();
+    }
+    out.push_str(p.text.get(at..b).unwrap_or(""));
+    out
 }
 
 /// Which headings the pane shows: those under a collapsed heading (every following heading
@@ -187,4 +209,38 @@ pub(super) fn nav_heading(ui: &mut Ui, level: u8, text: &str, selected: bool, co
         (toggled, r)
     })
     .inner
+}
+
+#[cfg(test)]
+mod tests {
+    use wordcraft_doc::{Document, InlineObject, Path, Pos, StoryRef};
+
+    /// A Navigation result shows what Find matched in a field: a legacy drop-down's selected
+    /// entry even when its cached result is empty, its code in braces while codes show, and the
+    /// object character for a field that shows no searchable text (a SET).
+    #[test]
+    fn a_result_shows_the_field_text_find_matched() {
+        let mut d = Document::from_text("from  to");
+        let form = r#"<w:ffData><w:name w:val="City"/><w:ddList><w:result w:val="1"/><w:listEntry w:val="Vienna"/><w:listEntry w:val="Graz"/></w:ddList></w:ffData>"#;
+        let field = |instr: &str, result: &str, form: &str| InlineObject::Field {
+            instr: instr.into(),
+            result: result.into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: form.into(),
+        };
+        d.insert_object(&Pos::body(0, 8), field("SET Code \"COD\"", "COD", ""), &Default::default()).unwrap();
+        d.insert_object(&Pos::body(0, 5), field("FORMDROPDOWN", "", form), &Default::default()).unwrap();
+        let mut s = wordcraft_engine::Session::new(d);
+        let obj = wordcraft_doc::para::OBJ;
+        let read = |s: &wordcraft_engine::Session| {
+            let fields = wordcraft_engine::cmd::fields::FieldShow::of(s, StoryRef::Body);
+            let p = s.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+            super::shown(p, (0, p.text.len()), &fields)
+        };
+        assert_eq!(read(&s), format!("from Graz to{obj}"));
+        s.view.field_codes = true;
+        assert_eq!(read(&s), "from { FORMDROPDOWN } to{ SET Code \"COD\" }");
+    }
 }

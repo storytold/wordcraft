@@ -22,6 +22,13 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("view.fieldCodes", "Field Codes", "View › Show", |s, v| {
             s.view.field_codes = p::bool(v, "value").unwrap_or(!s.view.field_codes);
             s.relayout();
+            // Find matches what fields show, which this changes: the listed results are searched
+            // again (Reading Highlight is keyed on it, see `Session::find_highlights`).
+            if !s.find.query.is_empty() {
+                let story = s.find.results.first().map_or(s.sel.focus.story, |(a, _)| a.story);
+                s.find.results = super::edit::search(s, story).unwrap_or_default();
+                s.find.current = s.find.current.min(s.find.results.len().saturating_sub(1));
+            }
             Ok(json!({"value": s.view.field_codes}))
         })
         .key("Alt+F9")
@@ -207,6 +214,77 @@ fn shown_text(s: &mut Session, f: &FieldAt) -> String {
         ..Default::default()
     };
     wordcraft_layout::fields::field_text(&instr, &result, &ctx).0
+}
+
+/// What simple fields show in one story, read the way layout draws them, for Find, Reading
+/// Highlight and the Navigation pane's results (#5552). Word searches what a field displays, so a
+/// field stands in the searched text for: its code in braces while it shows its code
+/// (View › Field Codes, or Shift+F9 on the field); a legacy drop-down's selected entry; otherwise
+/// the text [`wordcraft_layout::fields::field_text_on`] draws (ASK and SET show nothing, TITLE,
+/// AUTHOR and FILENAME with no result show the document's). A field whose text depends on the page
+/// it lands on (PAGE, NUMPAGES, SECTION, SECTIONPAGES, and PAGEREF and STYLEREF where headers and
+/// footers work them out) is left out rather than matched on a number the page doesn't show, as
+/// are check boxes and EQ overstrikes, which draw no searchable text.
+pub struct FieldShow {
+    codes: bool,
+    /// Whether layout may work out PAGEREF and STYLEREF in this story from the pages: headers,
+    /// footers and text boxes (which can sit in them). The body and notes show the result.
+    paged: bool,
+    ctx: wordcraft_layout::fields::FieldCtx,
+}
+
+impl FieldShow {
+    /// How fields read in `story` of `s`'s document as it is now shown.
+    pub fn of(s: &Session, story: StoryRef) -> FieldShow {
+        use wordcraft_doc::PartKind;
+        let paged = match story {
+            StoryRef::Body => false,
+            StoryRef::Part(id) => !matches!(s.doc.parts.get(&id).map(|p| p.kind), Some(PartKind::Footnote | PartKind::Endnote | PartKind::Comment)),
+        };
+        let (filename, filepath) = s.resolved_filenames();
+        let ctx = wordcraft_layout::fields::FieldCtx {
+            title: s.doc.core.title.as_str().into(),
+            author: s.doc.core.creator.as_str().into(),
+            filename: filename.into(),
+            filepath: filepath.into(),
+            ..Default::default()
+        };
+        FieldShow { codes: s.view.field_codes, paged, ctx }
+    }
+
+    /// Changes whenever something besides the document's content changes what fields show
+    /// (field codes shown, the file's name), for caches of search results.
+    pub fn key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (self.codes, self.paged, &*self.ctx.title, &*self.ctx.author, &*self.ctx.filename, &*self.ctx.filepath).hash(&mut h);
+        h.finish()
+    }
+
+    /// The text object `o` shows, or `None` when it isn't a simple field or shows no text that can
+    /// be searched.
+    pub fn text(&self, o: &InlineObject) -> Option<String> {
+        use wordcraft_doc::legacy_form::LegacyForm;
+        use wordcraft_layout::fields::{field_code_text, field_name, field_text_on};
+        let InlineObject::Field { instr, result, code, .. } = o else { return None };
+        if self.codes != *code {
+            return Some(field_code_text(instr));
+        }
+        match o.legacy_form() {
+            Some(LegacyForm::CheckBox { .. }) => return None,
+            Some(f) => {
+                if let Some(t) = f.shown_text() {
+                    return Some(t.to_string());
+                }
+            }
+            None => {}
+        }
+        if wordcraft_doc::eq::parse_overstrike(instr).is_some() || (self.paged && matches!(field_name(instr).as_str(), "PAGEREF" | "STYLEREF")) {
+            return None;
+        }
+        let (text, on_page) = field_text_on(instr, result, &self.ctx, 1);
+        (!on_page && !text.is_empty()).then_some(text)
+    }
 }
 
 /// Ctrl+Shift+F9: replace the selected fields with what they show (a simple field becomes its

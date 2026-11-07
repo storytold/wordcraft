@@ -267,7 +267,7 @@ impl Session {
                 *slot = None;
             }
         }
-        if self.find.highlights.as_ref().is_some_and(|(r, _)| *r != rev) {
+        if self.find.highlights.as_ref().is_some_and(|(r, ..)| *r != rev) {
             self.find.highlights = None;
         }
         let facts = self.protect_facts.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner);
