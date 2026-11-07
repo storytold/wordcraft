@@ -6394,7 +6394,7 @@ fn a_footnote_pushed_on_by_a_float_coming_back_is_on_its_reference_s_page_only()
         vec![wordcraft_doc::para_block(p)]
     };
     let noteref = |id| InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() };
-    let long = d.add_part(wordcraft_doc::PartKind::Footnote, note(&"The note text runs on for a while. ".repeat(30)));
+    let long = d.add_part(wordcraft_doc::PartKind::Footnote, note(&"The note text runs on for a while. ".repeat(25)));
     d.insert_object(&Pos::body(0, 4), noteref(long), &Default::default()).unwrap();
     let anchor = lines_on(&lay(&d), 1)[0].2;
     let short = d.add_part(wordcraft_doc::PartKind::Footnote, note("A short note."));
@@ -6462,7 +6462,7 @@ fn a_float_anchored_on_a_line_a_footnote_pushes_on_is_drawn_on_the_next_page() {
 #[test]
 fn a_float_anchored_on_a_line_widow_control_takes_on_is_drawn_on_the_next_page() {
     // A paragraph of three pages whose last two lines are on the third only by widow control.
-    let (mut d, l) = (150..300)
+    let (mut d, l) = (100..300)
         .map(|k| Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(k)))
         .map(|d| {
             let l = lay(&d);
