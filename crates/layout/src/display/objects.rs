@@ -10,6 +10,45 @@ pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32)
     let (sx, sy) = (scale_of(rect.w, g.w), scale_of(rect.h, g.h));
     let k = (sx + sy) / 2.0;
     let inside = |r: &[f32; 4]| Rect::new(rect.x + r[0] * sx, rect.y + r[1] * sy, r[2] * sx, r[3] * sy);
+    let joins = |c: char| c.is_whitespace() || wordcraft_doc::math_linear::is_combining(c);
+    let db = wordcraft_fonts::FontDb::global();
+
+    // A diagram (SmartArt or chart) should maintain a consistent fallback font family across
+    // all its text nodes (#5672). Collect all characters across the graphic that each item's
+    // primary font lacks, and find one fallback face that covers them all (or, when unrelated
+    // symbols need another face, one fallback face that covers all missing East Asian characters).
+    let mut diagram_chars: Vec<char> = Vec::new();
+    let mut cjk_chars: Vec<char> = Vec::new();
+    let mut primary_id: Option<u32> = None;
+    let mut cjk_primary_id: Option<u32> = None;
+    for it in &g.items {
+        if let GraphicItem::Text { text, font, bold, .. } = it {
+            let family = font.as_deref().filter(|f| !f.is_empty()).unwrap_or(&doc.settings.minor_font);
+            let resolved = wordcraft_fonts::word::resolve(family, *bold, false);
+            let primary = resolved.face;
+            for c in text.chars() {
+                if !joins(c) && !primary.covers(c) {
+                    if primary_id.is_none() {
+                        primary_id = Some(primary.id());
+                    }
+                    diagram_chars.push(c);
+                    if crate::para::is_east_asian(c) {
+                        if cjk_primary_id.is_none() {
+                            cjk_primary_id = Some(primary.id());
+                        }
+                        cjk_chars.push(c);
+                    }
+                }
+            }
+        }
+    }
+    let diagram_fallback = if !diagram_chars.is_empty() {
+        db.fallback_for_run(&diagram_chars, primary_id.unwrap_or(0), false, false)
+            .or_else(|| if !cjk_chars.is_empty() { db.fallback_for_run(&cjk_chars, cjk_primary_id.unwrap_or(0), false, false) } else { None })
+    } else {
+        None
+    };
+
     let mut out = Vec::with_capacity(g.items.len());
     for it in &g.items {
         match it {
@@ -35,7 +74,7 @@ pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32)
                     cap: Default::default(),
                 })
             }
-            GraphicItem::Text { rect: r, .. } => out.extend(text_glyphs(doc, inside(r), it, alpha, k)),
+            GraphicItem::Text { rect: r, .. } => out.extend(text_glyphs(doc, inside(r), it, alpha, k, diagram_fallback.as_ref())),
             GraphicItem::Image { rect: r, media } => out.push(Draw::Image {
                 rect: inside(r),
                 media: media.clone(),
@@ -279,7 +318,14 @@ pub fn seg_path(segs: &[PathSeg]) -> BezPath {
 /// in body text: one draw per run of a face, in reading order. Empty when there is nothing to draw,
 /// or the item's rectangle or size isn't a finite number (a degenerate scale: `r` itself is always
 /// finite, as [`Rect::new`] makes it).
-fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) -> Vec<Draw> {
+fn text_glyphs(
+    doc: &Document,
+    r: Rect,
+    it: &GraphicItem,
+    alpha: f32,
+    k: f32,
+    diagram_fallback: Option<&std::sync::Arc<wordcraft_fonts::FontFace>>,
+) -> Vec<Draw> {
     let GraphicItem::Text { rect, text, size, color, bold, align, font } = it else { return Vec::new() };
     let size = *size * k;
     if !rect.iter().chain([&size]).all(|v| v.is_finite()) {
@@ -290,7 +336,7 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
     let resolved = wordcraft_fonts::word::resolve(family, *bold, false);
     let primary = resolved.face;
     let scale = |f: FaceRef| size / f.upem.max(1.0) as f32;
-    let runs: Vec<_> = face_runs(text, primary, *bold)
+    let runs: Vec<_> = face_runs(text, primary, *bold, diagram_fallback)
         .into_iter()
         .map(|(face, s)| (face, s, wordcraft_fonts::shape(face.get(), s, &[], |c| c)))
         .filter(|(_, _, shaped)| !shaped.is_empty())
@@ -336,7 +382,12 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
 /// fallback face. A run the primary lacks takes one face covering all of it when one does (so a
 /// Chinese label doesn't mix serif and sans glyphs), else each character its own fallback. Spaces
 /// and combining marks stay in the run before them; a character no face has stays in `primary`.
-fn face_runs(text: &str, primary: FaceRef, bold: bool) -> Vec<(FaceRef, &str)> {
+fn face_runs<'a>(
+    text: &'a str,
+    primary: FaceRef,
+    bold: bool,
+    diagram_fallback: Option<&std::sync::Arc<wordcraft_fonts::FontFace>>,
+) -> Vec<(FaceRef, &'a str)> {
     let joins = |c: char| c.is_whitespace() || wordcraft_doc::math_linear::is_combining(c);
     // (start, end, drawn by `primary`)
     let mut spans: Vec<(usize, usize, bool)> = Vec::new();
@@ -357,7 +408,25 @@ fn face_runs(text: &str, primary: FaceRef, bold: bool) -> Vec<(FaceRef, &str)> {
             continue;
         }
         let chars: Vec<char> = s.chars().filter(|c| !joins(*c)).collect();
-        if let Some(f) = db.fallback_for_run(&chars, primary.id(), bold, false) {
+        let df_face_for = |df: &std::sync::Arc<wordcraft_fonts::FontFace>, covered: &[char]| {
+            if bold {
+                let styled = db.face(&df.family, "Bold");
+                if styled.family.eq_ignore_ascii_case(&df.family) && covered.iter().all(|c| styled.covers(*c)) {
+                    return FaceRef::of(&styled);
+                }
+            }
+            FaceRef::of(df)
+        };
+        // A single SmartArt or chart diagram maintains a consistent fallback face across its labels (#5672).
+        if let Some(df) = diagram_fallback
+            && chars.iter().all(|c| df.covers(*c))
+        {
+            out.push((df_face_for(df, &chars), s));
+            continue;
+        }
+        if diagram_fallback.is_none_or(|df| !chars.iter().any(|c| df.covers(*c)))
+            && let Some(f) = db.fallback_for_run(&chars, primary.id(), bold, false)
+        {
             out.push((FaceRef::of(&f), s));
             continue;
         }
@@ -365,8 +434,13 @@ fn face_runs(text: &str, primary: FaceRef, bold: bool) -> Vec<(FaceRef, &str)> {
         // in one run.
         let mut run: Option<(FaceRef, usize)> = None;
         for (i, c) in s.char_indices() {
-            let face =
-                if joins(c) { None } else { Some(db.fallback_styled(c, primary.id(), bold, false).map(|f| FaceRef::of(&f)).unwrap_or(primary)) };
+            let face = if joins(c) {
+                None
+            } else if let Some(df) = diagram_fallback.filter(|df| df.covers(c)) {
+                Some(df_face_for(df, &[c]))
+            } else {
+                Some(db.fallback_styled(c, primary.id(), bold, false).map(|f| FaceRef::of(&f)).unwrap_or(primary))
+            };
             match (run, face) {
                 (Some((cur, from)), Some(f)) if f.id() != cur.id() => {
                     out.extend(s.get(from..i).map(|t| (cur, t)));

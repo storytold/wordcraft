@@ -23,7 +23,7 @@ mod lookup;
 mod names;
 
 use face::{BUNDLED, FontBytes};
-pub use face::{FALLBACK_FAMILY, FaceRef, FontFace, bundled};
+pub use face::{FALLBACK_FAMILY, FaceRef, FontFace, bundled, is_serif_family};
 #[cfg(not(target_arch = "wasm32"))]
 use fallback_data::{CoverageIndex, SysFallback};
 use fallback_data::{FallbackCache, RunFallbackCache};
@@ -134,6 +134,7 @@ impl FontDb {
             self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).enabled = on;
         }
         // Misses remembered while it was off may be found now.
+        self.generation.fetch_add(1, Ordering::AcqRel);
         self.fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner).map.clear();
         *self.run_fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner) = RunFallbackCache::default();
         #[cfg(target_arch = "wasm32")]

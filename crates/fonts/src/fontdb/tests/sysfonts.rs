@@ -706,3 +706,50 @@ fn catalog_postscript_names() {
     assert!(!has(&db.families(), "SysfontSans-Bold"));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// Sans-serif primary fonts prefer sans-serif fallbacks and serif primaries prefer serif fallbacks,
+/// and changing user fonts invalidates the run-fallback cache even when the face count stays equal.
+#[test]
+fn fallback_order_matches_primary_font_serif_nature() {
+    // #5672: When picking fallback faces, sans-serif primary fonts prefer sans-serif fallback fonts,
+    // and serif primary fonts prefer serif fallback fonts.
+    use crate::fontdb::fallback_data::fallback_order;
+    let dir = font_dir("serif-sans-fallback");
+    std::fs::write(dir.join("TestMincho.ttf"), named_face("SourceSans3-Regular.ttf", "Test Mincho")).unwrap();
+    std::fs::write(dir.join("TestGothic.ttf"), named_face("SourceSans3-Regular.ttf", "Test Gothic")).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    db.set_system_fallback(false);
+    let mincho = db.face("Test Mincho", "Regular");
+    let gothic = db.face("Test Gothic", "Regular");
+    assert!(mincho.is_serif(), "Mincho is serif");
+    assert!(!gothic.is_serif(), "Gothic is sans");
+
+    let sans_primary = db.face("Source Sans 3", "Regular");
+    let serif_primary = db.face("Source Serif 4", "Regular");
+
+    let faces = db.read_faces();
+    let for_sans = fallback_order(&faces, sans_primary.id(), false, None);
+    let pos_mincho_sans = for_sans.iter().position(|f| f.family == "Test Mincho").unwrap();
+    let pos_gothic_sans = for_sans.iter().position(|f| f.family == "Test Gothic").unwrap();
+    assert!(pos_gothic_sans < pos_mincho_sans, "sans-serif primary prefers sans-serif fallback font (Gothic before Mincho)");
+
+    let for_serif = fallback_order(&faces, serif_primary.id(), false, None);
+    let pos_mincho_serif = for_serif.iter().position(|f| f.family == "Test Mincho").unwrap();
+    let pos_gothic_serif = for_serif.iter().position(|f| f.family == "Test Gothic").unwrap();
+    assert!(pos_mincho_serif < pos_gothic_serif, "serif primary prefers serif fallback font (Mincho before Gothic)");
+    drop(faces);
+
+    // Replacing a user font with another of the same face count invalidates run_fallbacks.
+    db.install_font("UserGothic.ttf", &mapping("SourceSans3-Regular.ttf", "User1 Gothic1", 0xF_0001, 0xF_0002)).unwrap();
+    let run = ['\u{F0001}', '\u{F0002}'];
+    let first = db.fallback_for_run(&run, serif_primary.id(), false, false).unwrap();
+    assert_eq!(first.family, "User1 Gothic1");
+    let face_count = db.read_faces().len();
+    db.remove_user_font("User1 Gothic1").unwrap();
+    db.install_font("UserMincho.ttf", &mapping("SourceSans3-Regular.ttf", "User2 Mincho2", 0xF_0001, 0xF_0002)).unwrap();
+    assert_eq!(db.read_faces().len(), face_count);
+    let updated = db.fallback_for_run(&run, serif_primary.id(), false, false).unwrap();
+    assert_eq!(updated.family, "User2 Mincho2");
+
+    let _ = std::fs::remove_dir_all(dir);
+}

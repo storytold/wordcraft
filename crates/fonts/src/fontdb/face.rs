@@ -353,6 +353,90 @@ impl FontFace {
     pub fn is_east_asian(&self) -> bool {
         self.skrifa().is_some_and(|f| east_asian_font(&f))
     }
+    /// Is this a serif face? Checks family name conventions (e.g. Mincho, Song, Times vs Sans, Gothic, Arial),
+    /// falling back to the OS/2 family class and Panose serif style.
+    pub fn is_serif(&self) -> bool {
+        let f = self.family.to_ascii_lowercase();
+        if is_explicit_sans(&f) {
+            return false;
+        }
+        if is_explicit_serif(&f) {
+            return true;
+        }
+        use skrifa::raw::TableProvider;
+        if let Some(sk) = self.skrifa()
+            && let Ok(os2) = sk.os2()
+        {
+            let class_id = (os2.s_family_class() >> 8) as u8;
+            if (1..=5).contains(&class_id) || class_id == 7 {
+                return true;
+            }
+            if class_id == 8 {
+                return false;
+            }
+            let panose = os2.panose_10();
+            let serif_style = panose[1];
+            if (2..=10).contains(&serif_style) {
+                return true;
+            }
+            if (11..=15).contains(&serif_style) {
+                return false;
+            }
+        }
+        false
+    }
+}
+
+/// Does a lowercased family name explicitly identify a sans-serif font?
+fn is_explicit_sans(f: &str) -> bool {
+    f.contains("sans")
+        || f.contains("gothic")
+        || f.contains("hei")
+        || f.contains("yahei")
+        || f.contains("meiryo")
+        || f.contains("pingfang")
+        || f.contains("dotum")
+        || f.contains("gulim")
+        || f.contains("malgun")
+        || f.contains("arial")
+        || f.contains("calibri")
+        || f.contains("aptos")
+        || f.contains("carlito")
+        || f.contains("inter")
+        || f.contains("helvetica")
+        || f.contains("segoe")
+        || f.contains("tahoma")
+        || f.contains("verdana")
+}
+
+/// Does a lowercased family name explicitly identify a serif font?
+fn is_explicit_serif(f: &str) -> bool {
+    f.contains("serif")
+        || f.contains("mincho")
+        || f.contains("song")
+        || f.contains("ming")
+        || f.contains("batang")
+        || f.contains("simsun")
+        || f.contains("sun")
+        || f.contains("times")
+        || f.contains("cambria")
+        || f.contains("georgia")
+        || f.contains("garamond")
+        || f.contains("palatino")
+        || f.contains("century")
+        || f.contains("bookman")
+        || f.contains("baskerville")
+        || f.contains("caladea")
+        || f.contains("tinos")
+}
+
+/// Does `family` denote a serif font by typographic naming conventions?
+pub fn is_serif_family(family: &str) -> bool {
+    let f = family.to_ascii_lowercase();
+    if is_explicit_sans(&f) {
+        return false;
+    }
+    is_explicit_serif(&f)
 }
 
 pub(super) static NEXT_ID: AtomicU32 = AtomicU32::new(1);
