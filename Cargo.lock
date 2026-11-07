@@ -6841,7 +6841,9 @@ dependencies = [
  "wordcraft-engine",
  "wordcraft-mcp",
  "wordcraft-render",
+ "wordcraft-validate",
  "wordcraft-zotero",
+ "zip 3.0.0",
 ]
 
 [[package]]
@@ -7091,6 +7093,16 @@ dependencies = [
  "wordcraft-render",
  "wordcraft-zotero",
  "zbus",
+ "zip 3.0.0",
+]
+
+[[package]]
+name = "wordcraft-validate"
+version = "0.15.1"
+dependencies = [
+ "quick-xml 0.41.0",
+ "serde",
+ "serde_json",
  "zip 3.0.0",
 ]
 

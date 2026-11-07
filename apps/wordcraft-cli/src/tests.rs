@@ -214,10 +214,12 @@ fn only_the_opened_file_may_be_other_than_unicode() {
     assert_eq!(ok(vec!["run".into(), "--print".into(), "--file".into(), latin1()]), Some(PathBuf::from(latin1())));
     assert_eq!(ok(vec!["info".into(), "in.docx".into()]), None);
     // Every command that opens a file reaches the open with it (no such file here), so
-    // `OPENS_FILE` and the commands' own arguments agree.
+    // `OPENS_FILE` and the commands' own arguments agree. `validate` takes exactly one path, so it
+    // is checked separately below, together with its exit-3 usage status.
     let missing = || OsString::from_vec(b"/definitely/not/caf\xe9.docx".to_vec());
     let mut opening: Vec<Vec<OsString>> = OPENS_FILE
         .iter()
+        .filter(|(cmd, _)| *cmd != "validate")
         .map(|(cmd, n)| [vec![(*cmd).into()], vec![OsString::from("refresh"); *n], vec![missing(), "out.png".into()]].concat())
         .collect();
     opening.push(vec!["run".into(), "--file".into(), missing()]);
@@ -225,6 +227,7 @@ fn only_the_opened_file_may_be_other_than_unicode() {
         let e = run(&raw).unwrap_err().to_string();
         assert!(e.contains("No such file"), "{raw:?}: {e}");
     }
+    assert!(matches!(run(&["validate".into(), missing()]), Err(Failure::Status(3))));
     for (raw, n) in [
         (vec!["zotero".into(), latin1(), "in.docx".into()], 2),
         (vec!["render".into(), "in.docx".into(), latin1()], 3),
@@ -558,4 +561,110 @@ fn script_parse_resolves_paths_against_the_base() {
     let s = script::parse(r#"{"commands":["caret.docEnd"],"save":["o.docx"]}"#, None).unwrap();
     assert_eq!(s.save, vec!["o.docx".to_string()]);
     assert_eq!(s.commands.len(), 1);
+}
+
+/// Finding 3: a surplus operand is a usage error (exit 3) rejected in the operand check, before any
+/// file is validated, so a valid first path can no longer make `validate a.docx b.docx` print PASS.
+/// The two paths are DIFFERENT files and validating either one would return `Ok`; the code path
+/// returns `Status(3)` from the `paths.len() != 1` check before `validate_path` runs, so no file was
+/// validated to produce it. (A `Status(3)` on its own does not prove that — `validate` also returns
+/// it for an I/O error after a single valid operand reaches the validator — which is why the
+/// operand check, not the status, is what establishes the rejection happened first.)
+#[test]
+fn validate_rejects_missing_or_surplus_operands_without_validating() {
+    let dir = std::env::temp_dir().join(format!("wc-cli-validate-args-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let first = dir.join("first.docx");
+    let second = dir.join("second.docx");
+    run(&args(&["run", "--template", "sample", "--save", &first.to_string_lossy()])).unwrap();
+    run(&args(&["run", "--template", "sample", "--save", &second.to_string_lossy()])).unwrap();
+    let (first, second) = (first.to_string_lossy().into_owned(), second.to_string_lossy().into_owned());
+    assert_ne!(first, second, "the two operands must be different files");
+    assert_eq!(run(&args(&["validate", &first])), Ok(()), "one valid path reports PASS");
+    assert_eq!(
+        run(&args(&["validate", &first, &second])),
+        Err(Failure::Status(3)),
+        "two different paths are a usage error; validating either would return Ok, so it validated neither"
+    );
+    assert_eq!(run(&args(&["validate"])), Err(Failure::Status(3)), "no path is a usage error");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Finding 4: `validate` is in `OPENS_FILE`, so a file name that is not valid Unicode reaches the
+/// validator by its preserved path rather than being rejected as a bad argument.
+#[cfg(unix)]
+#[test]
+fn validate_accepts_a_file_name_that_is_not_unicode() {
+    use std::os::unix::ffi::OsStringExt;
+    let dir = std::env::temp_dir().join(format!("wc-cli-validate-nonutf8-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let doc = wordcraft_doc::Document::from_text("Bonjour");
+    let bytes = wordcraft_engine::io::save_bytes("x.docx", &doc).unwrap();
+    let mut name = dir.as_os_str().to_os_string().into_vec();
+    name.extend_from_slice(b"/caf\xe9.docx");
+    let path = PathBuf::from(OsString::from_vec(name));
+    std::fs::write(&path, bytes).unwrap();
+    let raw = vec![OsString::from("validate"), path.into_os_string()];
+    assert_eq!(run(&raw), Ok(()), "a non-Unicode path validates and reports PASS");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A real `.docx` archive with `extra` parts added: content types, package relationships, the main
+/// document and an empty main relationships part. Used to drive `validate_bytes` from real bytes so
+/// a document-controlled entry name is shown to reach the report the way production does.
+fn validate_fixture_zip(extra: &[(&str, &[u8])]) -> Vec<u8> {
+    use std::io::{Cursor, Write};
+    use zip::write::SimpleFileOptions;
+    let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    w.start_file("[Content_Types].xml", opts).unwrap();
+    w.write_all(
+        br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#,
+    )
+    .unwrap();
+    w.start_file("_rels/.rels", opts).unwrap();
+    w.write_all(
+        br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#,
+    )
+    .unwrap();
+    w.start_file("word/document.xml", opts).unwrap();
+    w.write_all(br#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>"#)
+        .unwrap();
+    for (name, bytes) in extra {
+        w.start_file(*name, opts).unwrap();
+        w.write_all(bytes).unwrap();
+    }
+    w.finish().unwrap().into_inner()
+}
+
+/// Finding 5: document-controlled text (a ZIP entry name) is escaped in the human report, while the
+/// JSON form keeps serde's escaping. The input is a real archive whose entry name carries a control
+/// character, so the test shows the name actually reaches the escaped fields (part and message).
+#[test]
+fn human_report_escapes_document_controlled_text() {
+    let evil = "word/evil\u{1b}[2J.bin";
+    let printable = "word/café—naïve.bin";
+    let zip = validate_fixture_zip(&[(evil, b"x"), (printable, b"x")]);
+    let report = wordcraft_validate::validate_bytes(&zip);
+    // The undeclared part carries the raw control character in its part field and its message.
+    let finding = report
+        .findings
+        .iter()
+        .find(|f| f.rule == "CT-UNDECLARED" && f.part.as_deref() == Some(evil))
+        .unwrap_or_else(|| panic!("expected CT-UNDECLARED at the control-character name: {:#?}", report.findings));
+    assert!(finding.message.contains(evil), "the name reaches the message too: {:?}", finding.message);
+
+    let human = render_validate_report(&report);
+    assert!(!human.contains('\u{1b}'), "no raw escape survives the human report: {human:?}");
+    assert!(human.contains("\\u{1b}"), "{human:?}");
+    assert!(human.contains("[2J"), "the surrounding name text is kept as written: {human:?}");
+    // Printable Unicode in a name is left as written.
+    assert!(human.contains(printable), "printable Unicode must be untouched: {human:?}");
+
+    // JSON output is unchanged by the human escaping: serde still emits the control character as
+    // its own JSON escape.
+    let json = serde_json::to_string(&report).unwrap();
+    assert!(json.contains("\\u001b"), "{json}");
 }
