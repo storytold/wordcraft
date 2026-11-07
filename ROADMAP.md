@@ -139,7 +139,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 4. Stability sweep of the open crash, hang and write-failure issues; autosave soak test (20–30 h).
 5. Pagination fidelity: column balancing, footnote continuation, compat options, comparison
    harness; an Aptos-metric font decision (30–50 h + owner).
-6. Formatting revisions and content controls (12–18 h); native printing (6–10 h); dialog depth
+6. Formatting revisions and content controls (8–12 h); native printing (6–10 h); dialog depth
    (20–30 h).
 
 ## Progress log
@@ -388,6 +388,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-18 | Clearing a font query with no matches keeps Recently Used Fonts visible at the top of a scrollable list. The initial scroll position no longer skips its heading; measured keyboard scrolling is unchanged (#2068). |
 | 2026-10-19 | Centred numbered headings after a leading page break keep their number before the text (#2964). The label uses the alignment of the line it is drawn on; heading text positions and page count stay the same. |
 | 2026-10-17 | Edit Recipient List finds records (#1576): a Find in list box hides rows with no cell containing the text (any case) and counts the matches, and "Show only records that will be merged" hides the rows the filter leaves out; both only change the view. Rows are striped, and edits and removes go to the right record however the grid is narrowed |
+| 2026-10-17 | Tracked style-property changes (#2697): Modify Style and Update Style to Match Selection record the paragraph/run properties as they were while Track Changes is on (`w:pPrChange` / `w:rPrChange` inside the style), the Reviewing Pane lists them at the start of the document, accepting keeps the new properties and rejecting restores the old ones; the change and revision round-trip through DOCX |
 | 2026-10-17 | AccessKit focus guard (#2726): every tree update egui sends carries its focused node, so a frame that drops it falls back to the root instead of panicking in `accesskit_consumer` and closing the window on Windows |
 | 2026-10-17 | Equation arrays centre a row that has no `&` among rows that do, as Word does, so case equations like Word's "First Property of Radicals" no longer push the aligned row right (#2617). |
 | 2026-10-17 | Formatting revisions: a table, row, cell or section property change made while tracking now records as `w:tblPrChange`/`w:trPrChange`/`w:tcPrChange`/`w:sectPrChange` (structure stays out), so Reject All restores and Accept All keeps it; test tracked_table_changes_are_kept_as_formatting_changes |

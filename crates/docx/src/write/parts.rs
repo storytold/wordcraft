@@ -126,7 +126,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     write_comments(doc, &comment_paras, &ns_refs, &mut wr, &mut entries, &mut overrides, &mut rels);
 
     rels.add(rt::STYLES, "styles.xml", false);
-    push_part(&mut entries, &mut overrides, "word/styles.xml", styles_xml(doc), &format!("{CT_WML}styles+xml"), PartRels::default());
+    push_part(&mut entries, &mut overrides, "word/styles.xml", styles_xml(&mut wr), &format!("{CT_WML}styles+xml"), PartRels::default());
     if !doc.numbering.nums.is_empty() || !doc.numbering.abstracts.is_empty() {
         rels.add(rt::NUMBERING, "numbering.xml", false);
         push_part(&mut entries, &mut overrides, "word/numbering.xml", numbering_xml(doc), &format!("{CT_WML}numbering+xml"), PartRels::default());
