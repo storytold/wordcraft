@@ -284,3 +284,126 @@ fn objects_in_hidden_text_are_kept() {
     assert!(p.text.contains("Hidden"), "{:?}", p.text);
     assert!(p.objects.iter().any(|o| matches!(o, wordcraft_doc::para::InlineObject::BookmarkStart { name } if name == "Secret")), "{:?}", p.objects);
 }
+
+#[test]
+fn a_headings_text_of_another_size_keeps_it() {
+    // Only the size its style gives goes with the style: a smaller word in a heading came back
+    // from a save at the heading's size.
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:default-outline-level="1"><style:text-properties fo:font-size="16pt"/></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties fo:font-size="10pt"/></style:style></office:automatic-styles><office:body><office:text><text:h text:style-name="Heading_20_1" text:outline-level="1">big<text:span text:style-name="T1">small</text:span></text:h></office:text></office:body></office:document-content>"#
+    );
+    let check = |d: &Document, what: &str| {
+        let p = d.body[0].as_para().unwrap();
+        let size = |run: usize| d.styles.resolve_char(p.props.style.as_deref(), &p.runs[run].props).size;
+        assert_eq!((size(0), size(1)), (16.0, 10.0), "{what}");
+    };
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    check(&d, "read");
+    assert_eq!(d.body[0].as_para().unwrap().runs[0].props.size, None, "the style's stays the style's");
+    check(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap(), "written from the model");
+}
+
+/// In a heading style with no parent, where Standard's size and the default's differ, text stating
+/// a size keeps that size.
+#[test]
+fn a_parentless_headings_text_keeps_its_size() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="10pt"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"><style:text-properties fo:font-size="14pt"/></style:style><style:style style:name="H" style:family="paragraph" style:default-outline-level="1"/></office:styles></office:document-styles>"#
+    );
+    for size in ["10pt", "14pt"] {
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties fo:font-size="{size}"/></style:style><style:style style:name="T2" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style></office:automatic-styles><office:body><office:text><text:h text:style-name="H" text:outline-level="1"><text:span text:style-name="T1">One</text:span><text:span text:style-name="T2">Two</text:span></text:h></office:text></office:body></office:document-content>"#
+        );
+        let want: f32 = size.trim_end_matches("pt").parse().unwrap();
+        let check = |d: &Document, what: &str| {
+            let p = d.body[0].as_para().unwrap();
+            assert_eq!(p.runs[1].props.size, None, "{size} {what}: a span stating no size has none");
+            assert_eq!(
+                d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).size,
+                want,
+                "{size} {what}: {:?} {:?}",
+                p.props.style,
+                p.runs[0].props.size
+            );
+        };
+        let d = import(&package(&content, Some(&styles))).unwrap();
+        check(&d, "read");
+        check(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap(), "written from the model");
+    }
+}
+
+/// A percent in a heading style with no parent is of the default style's size, not Standard's.
+#[test]
+fn a_percent_in_a_parentless_heading_is_of_the_default_size() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="10pt"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"><style:text-properties fo:font-size="14pt"/></style:style><style:style style:name="H" style:family="paragraph" style:default-outline-level="1"/></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties fo:font-size="50%"/></style:style></office:automatic-styles><office:body><office:text><text:h text:style-name="H" text:outline-level="1"><text:span text:style-name="T1">One</text:span></text:h></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    assert_eq!(d.body[0].as_para().unwrap().runs[0].props.size, Some(5.0));
+}
+
+/// A heading style with no parent and a percent size is that percent of the default's size, so text
+/// stating that size is at the style's size.
+#[test]
+fn a_parentless_heading_style_in_percent_is_of_the_default_size() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="10pt"/></style:default-style><style:style style:name="H" style:family="paragraph"><style:text-properties fo:font-size="50%"/></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties fo:font-size="5pt"/></style:style></office:automatic-styles><office:body><office:text><text:h text:style-name="H" text:outline-level="1"><text:span text:style-name="T1">One</text:span>Two</text:h></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let p = d.body[0].as_para().unwrap();
+    for r in &p.runs {
+        assert_eq!(d.styles.resolve_char(p.props.style.as_deref(), &r.props).size, 5.0, "{:?} {:?}", p.props.style, r.props.size);
+    }
+}
+
+/// Text at its heading's size goes with the heading style, stated or not, and a size in percent
+/// is of the heading's size; text of another size keeps it, and so does a paragraph's own.
+#[test]
+fn a_headings_text_sizes_are_measured_against_the_heading() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:style style:name="Heading" style:family="paragraph"><style:text-properties fo:font-size="20pt"/></style:style><style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:parent-style-name="Heading" style:default-outline-level="1"><style:text-properties fo:font-size="80%"/></style:style></office:styles></office:document-styles>"#
+    );
+    let span = |name: &str, size: &str| {
+        format!(r#"<style:style style:name="{name}" style:family="text"><style:text-properties fo:font-size="{size}"/></style:style>"#)
+    };
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles>{}{}{}<style:style style:name="P1" style:family="paragraph" style:parent-style-name="Heading_20_1"><style:text-properties fo:font-size="30pt"/></style:style></office:automatic-styles><office:body><office:text><text:h text:style-name="Heading_20_1" text:outline-level="1">plain <text:span text:style-name="Same">same</text:span> <text:span text:style-name="Pct">pct</text:span> <text:span text:style-name="Other">other</text:span></text:h><text:h text:style-name="P1" text:outline-level="1">own</text:h></office:text></office:body></office:document-content>"#,
+        span("Same", "16pt"),
+        span("Pct", "50%"),
+        span("Other", "10pt"),
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    let sizes = |d: &Document| {
+        let p = d.body[0].as_para().unwrap();
+        let of = |word: &str| {
+            let at = p.text.find(word).unwrap();
+            let mut from = 0;
+            let run = p.runs.iter().find(|r| {
+                from += r.len;
+                at < from
+            });
+            d.styles.resolve_char(p.props.style.as_deref(), &run.unwrap().props).size
+        };
+        [of("plain"), of("same"), of("pct"), of("other")]
+    };
+    let want = |t: f32| [t, t, 8.0, 10.0];
+    let plain = |d: &Document| d.body[0].as_para().unwrap().runs.iter().filter(|r| r.props.size.is_some()).count();
+    assert_eq!(sizes(&d), want(16.0));
+    assert_eq!(plain(&d), 2, "only the two of another size state one");
+    // The paragraph's own size stays with its text.
+    let own = d.body[1].as_para().unwrap();
+    assert_eq!(d.styles.resolve_char(own.props.style.as_deref(), &own.runs[0].props).size, 30.0);
+    // A change to the style reaches what goes with it.
+    let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+    std::sync::Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(24.0);
+    assert_eq!(sizes(&d), want(24.0));
+}
