@@ -465,6 +465,9 @@ fn draw_scatter(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut V
 
 /// How far inside the chart's edge Word measures a bubble chart's size from, points.
 const BUBBLE_INSET: f32 = 5.0;
+/// Width of a bubble's outline, points: Word draws it this thin whatever the line's `w` (measured
+/// in its PDF export with 1.5 and 3 pt lines).
+const BUBBLE_OUTLINE: f32 = 0.25;
 
 /// Bubble series: a circle per point at its x and y, sized as Word sizes bubbles (measured in
 /// Word for Microsoft 365). The largest size of the chart gets a diameter of `L * 3s / (3s + 1000)`,
@@ -473,6 +476,10 @@ const BUBBLE_INSET: f32 = 5.0;
 /// area, or by width with `c:sizeRepresents="w"`. A size of 0 isn't drawn, nor a negative one
 /// unless `c:showNegBubbles` is on (then at its magnitude). Points without a size are skipped. A
 /// series with no `c:bubbleSize` at all sizes every point 1 (not checked against Word).
+///
+/// A bubble is outlined when its point or series has a visible line. A negative bubble is drawn
+/// inverted, as Office always does (MS-OI29500 §21.2.2.86, whatever `c:invertIfNegative` says):
+/// white, outlined in its line colour or else black.
 fn draw_bubbles(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, area: Rect, labels: &mut Vec<DataLabel>) {
     let Some(opts) = c.bubble else { return };
     let size = |s: &Series, i: usize| if s.sizes.is_empty() { Some(1.0) } else { s.sizes.get(i).copied().flatten() };
@@ -498,7 +505,10 @@ fn draw_bubbles(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, area: Rect, la
                 continue;
             }
             let rect = [cx - d / 2.0, cy - d / 2.0, d, d];
-            out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(c.point_colour(j, i)), stroke: None, stroke_width: 0.0 });
+            let line = s.outlines.get(i).copied().flatten();
+            let (fill, stroke) = if v < 0.0 { (Rgb::WHITE, Some(line.unwrap_or(Rgb::BLACK))) } else { (c.point_colour(j, i), line) };
+            let stroke_width = if stroke.is_some() { BUBBLE_OUTLINE } else { 0.0 };
+            out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(fill), stroke, stroke_width });
             if let Some(text) = label_of(s, i) {
                 labels.push(DataLabel { x: cx, y: cy - d / 2.0, text, inside: false });
             }

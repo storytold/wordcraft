@@ -692,6 +692,67 @@ fn zero_and_negative_bubbles() {
     }
 }
 
+/// Every bubble in drawing order: (centre x, fill, outline colour, outline width).
+fn bubble_paint(items: &[GraphicItem]) -> Vec<(f32, Option<Rgb>, Option<Rgb>, f32)> {
+    let mut b: Vec<_> = items
+        .iter()
+        .filter_map(|it| match it {
+            GraphicItem::Shape { rect: [x, _, w, _], kind: ShapeKind::Ellipse, fill, stroke, stroke_width } => {
+                Some((x + w / 2.0, *fill, *stroke, *stroke_width))
+            }
+            _ => None,
+        })
+        .collect();
+    b.sort_by(|p, q| p.0.total_cmp(&q.0));
+    b
+}
+
+/// The series' `c:spPr` with a 1.5 pt `a:ln` of `rgb` after its fill.
+fn with_series_line(ser: &str, rgb: &str) -> String {
+    ser.replacen(
+        "</a:solidFill></c:spPr>",
+        &format!(r#"</a:solidFill><a:ln w="19050"><a:solidFill><a:srgbClr val="{rgb}"/></a:solidFill></a:ln></c:spPr>"#),
+        1,
+    )
+}
+
+/// A `c:dPt` for point `idx` with a line: of `rgb`, or `a:noFill` when `None`.
+fn dpt_line(idx: usize, rgb: Option<&str>) -> String {
+    let ln = rgb.map_or("<a:noFill/>".to_string(), |c| format!(r#"<a:solidFill><a:srgbClr val="{c}"/></a:solidFill>"#));
+    format!(r#"<c:dPt><c:idx val="{idx}"/><c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill><a:ln w="38100">{ln}</a:ln></c:spPr></c:dPt>"#)
+}
+
+#[test]
+fn negative_bubbles_are_white_with_an_outline() {
+    // Word (measured): a shown negative bubble is filled white, whatever the series' colour, and
+    // outlined in the point's line colour, else the series', else black. Office always inverts
+    // negative bubbles (MS-OI29500 §21.2.2.86), whatever `c:invertIfNegative` says.
+    let ser = bser(0, "FF0000", &["1", "2", "3"], &["2", "2", "2"], Some(&["4", "-4", "16"]));
+    let shown = r#"<c:showNegBubbles val="1"/>"#;
+    let plain = bubble_paint(&bubble_chart(std::slice::from_ref(&ser), shown, 432.0, 252.0));
+    assert_eq!(plain.len(), 3, "{plain:?}");
+    assert_eq!((plain[1].1, plain[1].2), (Some(Rgb::WHITE), Some(Rgb::BLACK)), "the negative bubble: {plain:?}");
+    assert!((plain[1].3 - 0.25).abs() < 1e-3, "{plain:?}");
+    assert!(plain[0].2.is_none() && plain[2].2.is_none(), "positive bubbles with no line have no outline: {plain:?}");
+    assert_eq!((plain[0].1, plain[2].1), (Some(RED), Some(RED)));
+
+    // A series line outlines every bubble, the negative one included.
+    let red_line = bubble_paint(&bubble_chart(&[with_series_line(&ser, "CC2222")], shown, 432.0, 252.0));
+    let line = Some(Rgb(0xCC, 0x22, 0x22));
+    assert!(red_line.iter().all(|b| b.2 == line && (b.3 - 0.25).abs() < 1e-3), "{red_line:?}");
+    assert_eq!(red_line[1].1, Some(Rgb::WHITE));
+
+    // A point's own line wins, drawn 0.25 pt whatever its width (3 pt here); its `a:noFill`
+    // turns the series line off for that point.
+    let points = format!("{}{}<c:xVal>", dpt_line(0, None), dpt_line(1, Some("202060")));
+    let own = with_series_line(&ser, "CC2222").replacen("<c:xVal>", &points, 1);
+    let own = bubble_paint(&bubble_chart(&[own], shown, 432.0, 252.0));
+    assert_eq!(own[0].2, None, "point 0 turns its line off: {own:?}");
+    assert_eq!((own[1].1, own[1].2), (Some(Rgb::WHITE), Some(Rgb(0x20, 0x20, 0x60))), "{own:?}");
+    assert!((own[1].3 - 0.25).abs() < 1e-3, "{own:?}");
+    assert_eq!(own[2].2, line, "point 2 keeps the series line: {own:?}");
+}
+
 #[test]
 fn bubble_points_take_their_own_colour() {
     let dpt = r#"<c:dPt><c:idx val="1"/><c:spPr><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></c:spPr></c:dPt><c:xVal>"#;

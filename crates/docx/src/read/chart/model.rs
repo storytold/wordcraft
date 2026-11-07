@@ -96,6 +96,9 @@ pub(super) struct Series {
     pub(super) sizes: Vec<Option<f64>>,
     /// Per-point colours from `c:dPt`.
     pub(super) points: Vec<Option<Rgb>>,
+    /// Outline colour of each point (bubbles): its `c:dPt`'s `a:ln` when it has one, else the
+    /// series'; `None` for no line (`a:noFill`, or no colour).
+    pub(super) outlines: Vec<Option<Rgb>>,
     pub(super) fmt: Option<String>,
     /// Format code of the scatter x values' cache.
     pub(super) x_fmt: Option<String>,

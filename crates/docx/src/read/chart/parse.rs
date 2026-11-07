@@ -230,15 +230,23 @@ impl Series {
         // Only bubble series have `c:bubbleSize`.
         let (sizes, _) = if scatter { numbers(ser.child("c:bubbleSize"), cap) } else { (Vec::new(), None) };
         let mut points = vec![None; values.len()];
+        // A visible line's colour (`fill_colour` is `None` for `a:noFill`).
+        let outline = ln.and_then(|l| fill_colour(l, theme));
+        let mut outlines = vec![outline; values.len()];
         for dpt in ser.children("c:dPt") {
             let i = dpt.child("c:idx").and_then(|e| e.attr("val")).and_then(int).and_then(|i| usize::try_from(i).ok());
-            let c = dpt.child("c:spPr").and_then(|p| fill_colour(p, theme));
+            let sp = dpt.child("c:spPr");
+            let c = sp.and_then(|p| fill_colour(p, theme));
             if let Some(slot) = i.and_then(|i| points.get_mut(i)) {
                 *slot = c;
             }
+            // The point's own `a:ln`, even `a:noFill`, replaces the series line.
+            if let (Some(l), Some(slot)) = (sp.and_then(|p| p.child("a:ln")), i.and_then(|i| outlines.get_mut(i))) {
+                *slot = fill_colour(l, theme);
+            }
         }
         let labels = show_values(ser.child("c:dLbls"));
-        Series { name, color, line_w, line, values, xs, sizes, points, fmt, x_fmt, labels, raw: Vec::new() }
+        Series { name, color, line_w, line, values, xs, sizes, points, outlines, fmt, x_fmt, labels, raw: Vec::new() }
     }
 }
 
