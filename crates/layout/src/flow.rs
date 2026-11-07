@@ -14,6 +14,7 @@ use super::{
 };
 #[cfg(test)]
 use crate::WRAP_RELAYS;
+use wordcraft_doc::props::Align;
 
 /// A closing mark before a continuous section takes no room after content. An otherwise empty
 /// section starting a new page retains its paragraph line.
@@ -104,6 +105,93 @@ pub(crate) fn again<T>(ctx: &mut Ctx, eq_start: u32, f: impl FnOnce(&mut Ctx) ->
 /// columns and pages it runs onto (#1374).
 const MAX_WRAP_RELAYS: usize = 64;
 
+/// Bound repeated layouts when a paragraph crosses unequal columns (#2382).
+const MAX_WIDTH_RELAYS: usize = 64;
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static WIDTH_RELAYS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The line a paragraph laid out again for another column width continues the text from `resume`
+/// on at, and the layout to place it from: the line starting exactly there, or, when the new
+/// width cuts that text mid-line, the line holding it as its tail (a natural column overflow cuts
+/// a line at the new width's break, unlike a column break, which is a break of its own). The tail
+/// is placed per the paragraph's alignment. `None` when the tail cut is not supported (a
+/// bidirectional line), leaving the lines as they are.
+fn resume_relaid(relaid: &Arc<ParaLayout>, resume: usize) -> Option<(usize, Arc<ParaLayout>)> {
+    if let Some(k) = relaid.lines.iter().position(|l| l.start == resume) {
+        return Some((k, relaid.clone()));
+    }
+    let k = relaid.lines.iter().position(|l| l.start < resume && resume < l.stop)?;
+    let line = relaid.lines.get(k)?;
+    // Right-to-left lines carry per-cluster visual boxes this tail cut does not reorder.
+    if !line.vis.is_empty() {
+        return None;
+    }
+    let jc = (line.c0..line.c1).find(|&k| relaid.clusters.get(k).is_some_and(|c| c.start == resume))?;
+    let base = *line.xs.get(jc - line.c0)?;
+    // The tail continues on a fresh line of its own, at the paragraph's continuation indent, and
+    // keeps the paragraph's alignment: an end-aligned tail sits at the line's right edge and a
+    // centred one is centred by its own width, as Word lays the rest out in the new column.
+    let indent = relaid.rp.indent_left;
+    let mut content_end = line.xs.last().copied().unwrap_or(base);
+    for k in (jc..line.c1).rev() {
+        match relaid.clusters.get(k).map(|c| c.kind) {
+            Some(para::ClKind::Space)
+            | Some(para::ClKind::Marker)
+            | Some(para::ClKind::LineBreak)
+            | Some(para::ClKind::PageBreak)
+            | Some(para::ClKind::ColumnBreak) => {
+                content_end = line.xs.get(k - line.c0).copied().unwrap_or(content_end);
+            }
+            _ => {
+                content_end -= relaid.auto_space_after(k);
+                break;
+            }
+        }
+    }
+    let start = match relaid.rp.align {
+        Align::Right => base + (line.right - content_end),
+        Align::Center => indent + ((line.right - indent) - (content_end - base)) / 2.0,
+        _ => indent,
+    };
+    let shift = start - base;
+    let mut pl = (**relaid).clone();
+    // A justified line was stretched to the width of the column it was broken for; its tail is
+    // only the text from `resume` on, so it keeps natural word spacing, like a last line, rather
+    // than the stretched gaps of a line that then stops short of the right edge (#2382).
+    let xs: Vec<f32> = match relaid.rp.align {
+        Align::Justify | Align::Distribute => {
+            let mut out = Vec::with_capacity(line.c1 - jc + 1);
+            let mut x = indent;
+            for k in jc..line.c1 {
+                out.push(x);
+                x += relaid.clusters.get(k).map(|c| c.adv).unwrap_or(0.0);
+            }
+            out.push(x);
+            out
+        }
+        _ => line.xs.get(jc - line.c0..)?.iter().map(|x| x + shift).collect(),
+    };
+    let leaders = line.leaders.iter().filter(|(k, _)| *k >= jc).cloned().collect();
+    let tail = para::Line { start: resume, c0: jc, xs, leaders, left: indent, right: line.right, ..line.clone() };
+    // Keep the head (the text before `resume`) as line `k` and put the tail after it: the piece
+    // placed from the tail then starts at a later line, as a continuation of the paragraph, so
+    // `push_para` no longer draws the paragraph's top border on it and display no longer draws
+    // its list label (both belong to the paragraph's first piece).
+    if let Some(head) = pl.lines.get_mut(k) {
+        head.stop = resume;
+        head.c1 = jc;
+        head.xs.truncate(jc - line.c0 + 1);
+        head.leaders.retain(|(i, _)| *i < jc);
+        head.hyphen = None;
+        head.end = para::LineEnd::Wrap;
+    }
+    pl.lines.insert(k + 1, tail);
+    Some((k + 1, Arc::new(pl)))
+}
+
 /// Run `f` with `map` as the field context's page map (`FieldCtx::page_from`), then take it back.
 fn with_page_map<T>(ctx: &mut Ctx, map: &mut Vec<(usize, u32)>, f: impl FnOnce(&mut Ctx) -> T) -> T {
     ctx.fields.page_from = std::mem::take(map);
@@ -173,6 +261,7 @@ struct Flow<'a> {
     /// of pages keeps the last number it got), and for the wrap areas of a later column (#1374).
     page_relays: usize,
     wrap_relays: usize,
+    width_relays: usize,
     /// The first line not placed yet.
     l0: usize,
     /// Its floats anchored on a later page or column than its first piece (#4250).
@@ -217,6 +306,7 @@ impl<'a> Flow<'a> {
             page_map: Vec::new(),
             page_relays: 0,
             wrap_relays: 0,
+            width_relays: 0,
             l0: 0,
             late: LateFloats::new(&late),
             rechecked: false,
@@ -343,6 +433,47 @@ impl<'a> Flow<'a> {
             return rp.space_before.min(0.0);
         }
         before
+    }
+
+    /// Break a natural overflow for the destination column's width (#2382), retaining the
+    /// already placed text and floats. Equal-width columns need no additional layout.
+    fn relay_width(&mut self, ctx: &mut Ctx, pb: &PageBuilder) {
+        if self.l0 == 0 || pb.web || self.width_relays >= MAX_WIDTH_RELAYS || (pb.col_w() - self.laid_width).abs() <= 0.5 {
+            return;
+        }
+        let Some((resume, t)) = self.pl.lines.get(self.l0).map(|l| (l.start, l.top)) else { return };
+        self.width_relays += 1;
+        ctx.fields.page = self.laid_page;
+        #[cfg(test)]
+        WIDTH_RELAYS.with(|c| c.set(c.get() + 1));
+        let width_now = pb.col_w();
+        // The old column's exclusions must not follow the text into another column. A new
+        // width can move the resume's top, so resolve the destination's areas from that top
+        // once more; a top that still moves leaves the previous layout in place.
+        let mut offset = t;
+        let mut here = continued_exclusions(&[], &body_wraps(ctx, pb), pb.col_x(), pb.y, offset, width_now);
+        let (p, eq_start, label) = (self.p, self.eq_start, &self.label);
+        let mut relaid =
+            with_page_map(ctx, &mut self.page_map, |ctx| again(ctx, eq_start, |ctx| ctx.para_labelled(p, width_now, None, &here, label.clone())));
+        let mut relayed = resume_relaid(&relaid, resume);
+        let moved = relayed.as_ref().and_then(|(k, r)| r.lines.get(*k)).map(|l| l.top);
+        if let Some(t1) = moved
+            && (t1 - offset).abs() > 0.01
+            && !here.is_empty()
+        {
+            offset = t1;
+            here = continued_exclusions(&[], &body_wraps(ctx, pb), pb.col_x(), pb.y, offset, width_now);
+            relaid =
+                with_page_map(ctx, &mut self.page_map, |ctx| again(ctx, eq_start, |ctx| ctx.para_labelled(p, width_now, None, &here, label.clone())));
+            relayed = match resume_relaid(&relaid, resume) {
+                Some((k, r)) if r.lines.get(k).is_some_and(|l| (l.top - offset).abs() < 0.01) => Some((k, r)),
+                _ => None,
+            };
+        }
+        if let Some((k, relaid)) = relayed {
+            (self.pl, self.rel, self.l0) = (relaid, here, k);
+            self.laid_width = width_now;
+        }
     }
 
     /// The lines going into a new column (or page) were broken around the wrap areas where the
@@ -526,7 +657,9 @@ impl<'a> Flow<'a> {
         {
             edges.up = (y - end).max(0.0);
         }
-        let end = push_para(&mut items, (StoryRef::Body, &[self.block as u32]), &self.pl, (l0, l1), (x, y), self.width, edges);
+        // Decoration follows the column this piece occupies, including after a width relay.
+        let col_w = pb.col_w();
+        let end = push_para(&mut items, (StoryRef::Body, &[self.block as u32]), &self.pl, (l0, l1), (x, y), col_w, edges);
         pb.para_end = Some((pb.pages.len(), pb.col, end));
         // Late floats whose anchor line came here after all are placed with these lines.
         self.late.piece = (pb.pages.len(), pb.col);
@@ -538,7 +671,7 @@ impl<'a> Flow<'a> {
         // Pictures, shapes and text boxes in these lines (web view: floats placed by this piece).
         let at = ObjFrame {
             page: Some(PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror }),
-            col: (x, self.width),
+            col: (x, col_w),
             para_y: if pb.web { y } else { self.anchor_y },
             table_chr: None,
             pinned: None,
@@ -832,6 +965,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     }
     while f.l0 < f.n() {
         f.place_due_late(ctx, pb);
+        f.relay_width(ctx, pb);
         f.relay_wrap(ctx, pb);
         f.relay_pages(ctx, pb);
         // What is laid out for these lines from here (their footnotes) is on this page.
