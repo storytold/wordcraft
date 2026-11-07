@@ -6,6 +6,7 @@ use crate::{Document, LayoutCache, LayoutOptions, Placed, layout};
 /// Inter with its U+00A0 glyph twice as wide as its space, under the family name "Wnbsp".
 /// Built from the bundled font so the test needs no installed font.
 fn wide_nbsp_family() -> &'static str {
+    crate::test_fonts();
     const FAMILY: &str = "Wnbsp";
     let inter = wordcraft_fonts::word::resolve("Inter", false, false).face;
     let mut data = inter.data().to_vec();
