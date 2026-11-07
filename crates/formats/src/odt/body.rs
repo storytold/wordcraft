@@ -1282,12 +1282,12 @@ impl Body<'_> {
             }
             "table-column" => {
                 let w = get(a, "table:style-name").and_then(|n| self.styles.column_width(n)).unwrap_or(0.0);
-                let cells = get(a, "table:default-cell-style-name").map(String::from);
+                let cells = get(a, "table:default-cell-style-name").and_then(|s| self.styles.cell_background(s));
                 let n = get(a, "table:number-columns-repeated").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).max(1);
                 if let Some(t) = self.tables.last_mut() {
                     let room = wordcraft_doc::table::MAX_COLS.saturating_sub(t.widths.len());
                     t.widths.extend(std::iter::repeat_n(w, n.min(room)));
-                    t.column_cells.extend(std::iter::repeat_n(cells, n.min(room)));
+                    t.column_backgrounds.extend(std::iter::repeat_n(cells, n.min(room)));
                 }
             }
             "table-row" => self.start_row(a),
@@ -1301,9 +1301,10 @@ impl Body<'_> {
                 let behind = self.tables.last().and_then(|t| t.row_background.or(t.background));
                 let in_column = self.tables.last().and_then(|t| {
                     let at: usize = t.row.iter().map(|c| c.colspan.max(1) as usize).sum();
-                    t.column_cells.get(at)?.as_deref()
+                    t.column_backgrounds.get(at).copied().flatten()
                 });
-                let shading = get(a, "table:style-name").or(in_column).and_then(|s| self.styles.cell_background(s)).or(behind);
+                let own = get(a, "table:style-name").map_or(in_column, |s| self.styles.cell_background(s));
+                let shading = own.or(behind);
                 let valign = get(a, "table:style-name").and_then(|s| self.styles.cell_valign(s));
                 let borders = get(a, "table:style-name").and_then(|s| self.styles.cell_borders(s));
                 let margins = get(a, "table:style-name").and_then(|s| self.styles.cell_padding(s));
@@ -1389,7 +1390,7 @@ impl Body<'_> {
             row: Vec::new(),
             hcover: 0,
             widths: Vec::new(),
-            column_cells: Vec::new(),
+            column_backgrounds: Vec::new(),
             extra,
             background,
             row_background: None,

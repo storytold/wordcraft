@@ -222,3 +222,15 @@ fn a_column_default_counts_spanned_columns() {
     let last = t.rows[0].cells.iter().rev().find(|c| !c.blocks.is_empty()).unwrap();
     assert_eq!(last.props.shading.map(|s| s.hex().to_ascii_lowercase()).as_deref(), Some("00ff00"));
 }
+
+/// A column's default cell style that names nothing there is no background, however long its name.
+#[test]
+fn a_column_default_naming_no_style_is_no_background() {
+    let long = "x".repeat(100_000);
+    let table = format!(
+        r#"<table:table><table:table-column table:number-columns-repeated="63" table:default-cell-style-name="{long}"/><table:table-row><table:table-cell><text:p>a</text:p></table:table-cell></table:table-row></table:table>"#
+    );
+    let d = doc("", &table);
+    let t = d.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.rows[0].cells[0].props.shading, None);
+}
