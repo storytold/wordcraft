@@ -428,6 +428,64 @@ fn clearing_a_font_query_keeps_the_recent_heading_visible() {
     }
 }
 
+/// #5914: clicking on the font name or anywhere in the font combo opens the dropdown list with
+/// the other fonts (Recently Used Fonts and All Fonts), focuses the field, and selects all text
+/// so typing immediately replaces the font name to search for a font, like in Microsoft Word.
+#[test]
+fn clicking_the_font_name_or_box_shows_other_fonts_and_selects_all_to_type() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, Queryable};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let fonts: Vec<String> = ["Arial", "Courier New", "Georgia", "Times New Roman"].map(String::from).to_vec();
+    let recent: Vec<String> = ["Courier New"].map(String::from).to_vec();
+    let picked = Rc::new(RefCell::new(None));
+    let current = Rc::new(RefCell::new("Arial".to_string()));
+
+    let picked_c = picked.clone();
+    let current_c = current.clone();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 600.0)).build_ui(move |ui| {
+        let cur = current_c.borrow().clone();
+        let v = font_combo_with_recent(ui, "font_test", 150.0, &cur, &fonts, &recent, None);
+        if let Some(f) = v {
+            *current_c.borrow_mut() = f.clone();
+            *picked_c.borrow_mut() = Some(f);
+        }
+    });
+
+    h.run_steps(2);
+    // Before click: dropdown is closed, font name "Arial" is displayed
+    assert_eq!(h.get(By::new().role(Role::TextInput)).value().as_deref(), Some("Arial"));
+    assert!(h.query_by_label("All Fonts").is_none());
+
+    // Click on the font name field
+    h.get(By::new().role(Role::TextInput)).click();
+    h.run_steps(2);
+
+    // After click: other fonts show up (Recently Used Fonts and All Fonts)
+    assert!(h.query_by_label("Recently Used Fonts").is_some(), "recently used fonts should show up on click");
+    assert!(h.query_by_label("All Fonts").is_some(), "all fonts should show up on click");
+    // "Courier New" is present in both Recently Used and All Fonts sections
+    assert_eq!(h.query_all_by_label("Courier New").count(), 2, "the other fonts should show up on click");
+    assert!(h.query_by_label("Times New Roman").is_some(), "the other fonts should show up on click");
+
+    // Typing a letter replaces the selected text and filters the list
+    h.event(egui::Event::Text("t".into()));
+    h.run_steps(2);
+
+    assert_eq!(h.get(By::new().role(Role::TextInput)).value().as_deref(), Some("t"));
+    assert!(h.query_by_label("Times New Roman").is_some(), "matching font shows up");
+    assert_eq!(h.query_all_by_label("Courier New").count(), 0, "non-matching font is filtered out");
+
+    // Press Enter to apply the matching font
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+
+    assert_eq!(picked.borrow().as_deref(), Some("Times New Roman"));
+    assert!(h.query_by_label("All Fonts").is_none(), "dropdown closes after applying");
+}
+
 /// The rows of a sectioned font list, and where the keyboard highlight lands among them.
 #[test]
 fn font_list_sections_skip_their_headings() {
