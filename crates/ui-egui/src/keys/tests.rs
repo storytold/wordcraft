@@ -218,6 +218,19 @@ fn a_desktop_paste_after_mod_shift_v_is_not_swallowed() {
     assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "source later");
 }
 
+/// #5616: a pointer press ends the wait for the browser's paste event, so a later keyless paste
+/// (context menu, touch) isn't swallowed.
+#[test]
+fn a_pointer_press_ends_the_wait_for_the_ignored_paste() {
+    let mut a = copied_bold_app();
+    a.canvas.ignore_next_paste = true;
+    let ctx = egui::Context::default();
+    let press =
+        egui::Event::PointerButton { pos: egui::pos2(5.0, 5.0), button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE };
+    mods_frame(&ctx, &mut a, Modifiers::NONE, vec![press]);
+    assert!(!a.canvas.ignore_next_paste);
+}
+
 /// #5616: the modifiers noted for a paste are used up by it: a later paste with no Mod held
 /// keeps the HTML's formatting instead of reading the stale Mod+Shift.
 #[test]

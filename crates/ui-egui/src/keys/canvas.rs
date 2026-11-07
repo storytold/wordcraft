@@ -159,7 +159,9 @@ fn stale_composition(app: &mut WordApp, e: &egui::Event, b: &mut Batch) -> bool 
 fn note_key_state(app: &mut WordApp, e: &egui::Event) {
     // Which presses reached the canvas, and the modifiers held with Mod, in event order: Mod
     // can go down and up within one frame, leaving the frame's modifiers without it.
-    if matches!(e, egui::Event::Key { pressed: true, key, .. } if !is_modifier_key(*key)) || matches!(e, egui::Event::WindowFocused(_)) {
+    if matches!(e, egui::Event::Key { pressed: true, key, .. } if !is_modifier_key(*key))
+        || matches!(e, egui::Event::WindowFocused(_) | egui::Event::PointerButton { pressed: true, .. })
+    {
         app.canvas.ignore_next_paste = false;
     }
     match &e {

@@ -827,14 +827,15 @@ fn picked_format(s: &Session) -> (wordcraft_doc::props::CharProps, wordcraft_doc
     // A symbol's own font isn't formatting to paint onto text.
     // Formatting only: not the source's hyperlink or revision marks (#5616).
     let chr = s.doc.para_at(&f).map(|p| p.props_of_char(f.off).clone().without_symbol().formatting()).unwrap_or_default();
-    let para = s.doc.para_at(&f).map(|p| p.props.clone()).unwrap_or_default();
+    let para = s.doc.para_at(&f).map(|p| p.props.clone().formatting()).unwrap_or_default();
     (chr, para)
 }
 
 fn painter_pick(s: &mut Session) {
     let (chr, para) = picked_format(s);
-    // One format buffer: the brush replaces what Copy Formatting picked up.
-    s.copied_format = None;
+    // One format buffer, as in Word: the pick is also what the next Paste Formatting applies,
+    // and stays after the brush is used up or cancelled.
+    s.copied_format = Some((chr.clone(), para.clone()));
     s.painter = Some((chr, para, false));
 }
 
