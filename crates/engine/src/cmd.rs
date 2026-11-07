@@ -467,6 +467,12 @@ pub fn split_para(s: &mut Session, at: &Pos) -> Result<Pos, CmdError> {
     split_para_as(s, at, true)
 }
 
+/// Split like Enter, but always insert a paragraph: an empty list item is split too, rather than
+/// leaving the list. Click and Type appends every paragraph it asks for this way.
+pub(crate) fn split_para_plain(s: &mut Session, at: &Pos) -> Result<Pos, CmdError> {
+    split_para_as(s, at, false)
+}
+
 /// [`split_para`]; without `enter` an empty list item is split like any other paragraph.
 fn split_para_as(s: &mut Session, at: &Pos, enter: bool) -> Result<Pos, CmdError> {
     // `num: 0` means "explicitly not in a list", so it isn't a list item. The list may come from

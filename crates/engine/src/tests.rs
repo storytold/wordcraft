@@ -12562,6 +12562,22 @@ fn click_and_type_below_a_word_does_not_autocorrect_it() {
     assert_eq!(s.doc.body[0].as_para().map(|p| p.text.as_str()), Some("teh"));
 }
 
+/// Click and Type after an empty list item still inserts the paragraph it was asked for.
+#[test]
+fn click_and_type_after_an_empty_list_item_adds_a_paragraph() {
+    let mut s = s();
+    run(&mut s, "para.bullets", json!({}));
+    assert!(s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props.numbering).is_some(), "setup: an empty list item");
+    let l = s.layout();
+    let page = l.pages.len() - 1;
+    let body = l.pages[page].body;
+    let line = page_lines(&l.pages[page], StoryRef::Body).into_iter().last().expect("a line");
+    let y = line.bottom + (line.bottom - line.top).max(1.0) * 0.4;
+    let before = s.doc.body.len();
+    run(&mut s, "caret.clickAndType", json!({"page": page, "x": body.x + 10.0, "y": y}));
+    assert!(s.doc.body.len() > before, "one paragraph is added below the empty list item");
+}
+
 /// #4246: empty space inside a table cell is still cell space, not the page below the table.
 #[test]
 fn click_and_type_inside_a_table_cell_adds_nothing() {

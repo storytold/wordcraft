@@ -2,7 +2,7 @@ use super::autoformat::{
     EnterAutoFormat, apply_border_line, apply_heading_line, apply_table_line, border_line, heading_line, table_line, typing_options,
 };
 use super::unicode::ins_char;
-use super::{CmdError, CmdResult, NumRef, Pos, Selection, Session, Value, delete_selection, sel_result, split_para, type_text};
+use super::{CmdError, CmdResult, NumRef, Pos, Selection, Session, Value, delete_selection, sel_result, split_para, split_para_plain, type_text};
 use wordcraft_doc::{Block, Paragraph, Path, StoryRef};
 
 /// Exact sample-text formulas; bounded counts keep typed input from allocating without limit.
@@ -83,7 +83,7 @@ pub(super) fn append_paragraphs(s: &mut Session, n: usize) -> Result<(), CmdErro
     crate::cmd::controls::prepare_edit(s)?;
     for _ in 0..n {
         let at = s.sel.focus.clone();
-        let new = split_para(s, &at)?;
+        let new = split_para_plain(s, &at)?;
         s.sel = Selection::caret(new);
     }
     s.goal_x = None;
