@@ -21,15 +21,24 @@ fn para0(d: &mut Document) -> &mut Paragraph {
 }
 
 /// The room each cluster gains with the flags as `d` sets them, against both flags off, in points
-/// rounded to a hundredth.
+/// rounded to a hundredth. The tests running alongside share the font database: one loading a
+/// font between the two layouts can change the face a character falls back to (Hangul's, on
+/// Windows), so the pair is laid out again until both draw with the same faces.
 fn gaps(d: &Document) -> Vec<f32> {
     let mut off = d.clone();
     let p = para0(&mut off);
     p.props.auto_space_de = Some(false);
     p.props.auto_space_dn = Some(false);
-    let (on, off) = (first_para(&lay(d)), first_para(&lay(&off)));
-    assert_eq!(on.clusters.len(), off.clusters.len());
-    on.clusters.iter().zip(&off.clusters).map(|(a, b)| ((a.adv - b.adv) * 100.0).round() / 100.0).collect()
+    let faces = |l: &ParaLayout| l.clusters.iter().map(|c| l.styles[c.style as usize].face.id()).collect::<Vec<u32>>();
+    for _ in 0..5 {
+        let (on, off) = (first_para(&lay(d)), first_para(&lay(&off)));
+        if faces(&on) != faces(&off) {
+            continue;
+        }
+        assert_eq!(on.clusters.len(), off.clusters.len());
+        return on.clusters.iter().zip(&off.clusters).map(|(a, b)| ((a.adv - b.adv) * 100.0).round() / 100.0).collect();
+    }
+    panic!("the layouts with and without the automatic space draw with other faces");
 }
 
 /// The default font size of `d`'s first paragraph, a quarter of it.

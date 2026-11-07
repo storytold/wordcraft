@@ -21,7 +21,7 @@ use wordcraft_doc::{Document, Paragraph, Pos, StoryRef};
 use wordcraft_geom::Rect;
 
 use crate::display::{author_order, revision_color};
-use crate::{BoxContext, BoxLayout, Ctx, DocLayout, Edges, Placed, fit_box, layout_box, push_para};
+use crate::{BoxInput, BoxLayout, Ctx, DocLayout, Edges, Placed, fit_box, layout_box, push_para};
 
 /// Width of the markup area beside each page (points): the editor's.
 pub const MARKUP_AREA: f32 = 216.0;
@@ -44,6 +44,9 @@ const MAX_PARENT_CHAIN: usize = 64;
 /// Path given to the synthetic author-name paragraphs: no paragraph of the comment's story has it.
 const HEADER_PATH: u32 = u32::MAX;
 
+#[cfg(test)]
+mod anchor_tests;
+
 /// One comment's balloon before it is positioned: items relative to the card's top-left.
 struct Card {
     page: usize,
@@ -59,6 +62,7 @@ struct Card {
 fn root(doc: &Document, id: u32) -> u32 {
     let mut cur = id;
     for _ in 0..MAX_PARENT_CHAIN {
+        crate::work::steps(1);
         match doc.comments.get(&cur).and_then(|c| c.parent) {
             Some(p) if p != cur && doc.comments.contains_key(&p) => cur = p,
             _ => break,
@@ -74,8 +78,9 @@ pub fn anchors(doc: &Document) -> Vec<(u32, Pos)> {
     let mut out = Vec::new();
     for path in doc.para_paths(StoryRef::Body) {
         let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
-        for off in p.object_offsets() {
-            let Some(InlineObject::CommentStart { id }) = p.object_at(off) else { continue };
+        for (off, object) in p.objects_with_offsets() {
+            let InlineObject::CommentStart { id } = object else { continue };
+            crate::work::steps(1);
             if !doc.comments.contains_key(id) || root(doc, *id) != *id || !seen.insert(*id) {
                 continue;
             }
@@ -149,11 +154,11 @@ pub(crate) fn add(ctx: &mut Ctx, lay: &mut DocLayout) {
             );
             let pl = ctx.para_labelled(&head, inner, None, &[], None);
             let lead = pl.lines.first().map_or(0.0, |l| l.top.max(0.0));
-            push_para(&mut items, story, &[HEADER_PATH], &pl, 0, pl.lines.len(), x, y + lead, inner, Edges::own(&pl, 0, pl.lines.len()));
+            push_para(&mut items, (story, &[HEADER_PATH]), &pl, (0, pl.lines.len()), (x, y + lead), inner, Edges::own(&pl, 0, pl.lines.len()));
             y += pl.height + 2.0;
             // The comment itself, as written (its own formatting).
             if let Some(part) = doc.parts.get(&cm.part) {
-                let BoxLayout { items: body, height, .. } = layout_box(ctx, story, &part.blocks, &[], inner, BoxContext::Other, 1, None);
+                let BoxLayout { items: body, height, .. } = layout_box(ctx, BoxInput::other(story, &part.blocks, inner, 1, None));
                 for mut it in body {
                     it.translate(x, y);
                     items.push(it);

@@ -32,11 +32,13 @@ pub(crate) use builder::left_out;
 #[cfg(test)]
 use chars::{MISSING_ROMAN_FONT, lookup_family};
 pub(crate) use chars::{caps_char, push_caps};
+pub use chars::{draws_something, east_asian_substitute_face, reported_font_name, substitute_face};
 #[cfg(test)]
 pub(crate) use chars::{ligature_features, remap_range, thai_run_face};
 pub use grid::{Exclusion, Grid, is_east_asian};
 #[cfg(test)]
 use lines::break_lines;
+pub(crate) use lines::takes_room;
 pub use model::{CellText, ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, Line, LineEnd, PARA_MARK_WIDTH, ParaEnv, RubyLayout, StyleRun, VisCl};
 pub use paragraph::layout_para;
 #[cfg(test)]
@@ -47,6 +49,9 @@ pub use proof::{ProofRun, is_list_item, paragraph_issues, proof_runs, proof_text
 #[derive(Clone, Debug)]
 pub struct ParaLayout {
     pub rp: ResolvedPara,
+    /// Fonts the shown text (and list label) asks for that aren't installed, each with a face
+    /// it was drawn in instead: a substitute or a fallback face covering its characters.
+    pub substituted: Vec<(String, FaceRef)>,
     pub styles: Vec<StyleRun>,
     pub glyphs: Vec<Glyph>,
     pub clusters: Vec<Cluster>,
@@ -76,6 +81,8 @@ pub struct ParaLayout {
     pub drop_cap_w: f32,
     /// Laid-out equations by object index.
     pub maths: Vec<(usize, Arc<crate::math::MathLayout>)>,
+    /// The legacy check boxes among its objects (inline objects' indexes).
+    pub check_boxes: Vec<usize>,
     /// Ruby (Phonetic Guide) text over base-text clusters, in cluster order.
     pub rubies: Vec<RubyLayout>,
     /// Display equations (on lines of their own): cluster index and justification.
@@ -97,6 +104,19 @@ pub struct ParaLayout {
 }
 
 impl ParaLayout {
+    /// The room a horizontal rule at cluster `k` is placed in, from its left edge to the end of
+    /// what the line has left. A first-line indent moves that end along (Word, measured with
+    /// 50 % and fixed-width rules beside floats on either side and with first-line and hanging
+    /// indents: 36 pt of first-line indent ends the room 36 pt past the right margin).
+    pub(crate) fn rule_room(&self, line: &Line, k: usize) -> f32 {
+        let adv = self.clusters.get(k).map_or(0.0, |c| c.adv);
+        if line.rtl {
+            return adv;
+        }
+        let first = if line.c0 == 0 { self.rp.indent_first } else { 0.0 };
+        (line.right + first - line.cl_left(k).unwrap_or(0.0)).max(0.0)
+    }
+
     /// Returns whether `off` is a legal caret and edit boundary, that is, not the interior start of a
     /// joined grapheme cluster.
     fn is_edit_boundary(&self, off: usize) -> bool {

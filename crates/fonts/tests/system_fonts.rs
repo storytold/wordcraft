@@ -1,7 +1,5 @@
 //! A new session finds the installed system fonts by family name (#22). One test in its own
 //! process, so the process-wide database starts fresh, as it does when the app starts.
-// Integration tests: unwrapping and panicking on failure is fine here, unlike in shipped code.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use wordcraft_fonts::{FontDb, system_font_dirs};
 

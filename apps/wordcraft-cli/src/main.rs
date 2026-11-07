@@ -391,6 +391,27 @@ fn valid_connect_addr(addr: &str) -> bool {
     !host.is_empty() && port.parse::<u16>().is_ok()
 }
 
+fn load_run_script(rest: &[String], script_path: Option<&Path>) -> Result<Option<script::Script>, Failure> {
+    match arg_value(rest, "--script") {
+        Some(path) if !path.starts_with("--") => {
+            let source = script_path.unwrap_or(Path::new(&path));
+            Ok(Some(script::load(source)?))
+        }
+        _ if rest.iter().any(|arg| arg == "--script") => Err("run: --script requires a value".into()),
+        _ => Ok(None),
+    }
+}
+
+fn run_source_paths(rest: &[String], script: Option<&script::Script>) -> (Option<String>, Option<String>) {
+    // A source named on the command line wins over both of the script's.
+    let (mut from_file, mut from_template) = (arg_value(rest, "--file"), arg_value(rest, "--template"));
+    if from_file.is_none() && from_template.is_none() {
+        from_file = script.and_then(|loaded| loaded.file.clone());
+        from_template = script.and_then(|loaded| loaded.template.clone());
+    }
+    (from_file, from_template)
+}
+
 /// Run the subcommand named by `args` (the command line after the program name). Files named
 /// there are opened by their real names, which may not be valid Unicode.
 fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
@@ -409,7 +430,12 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
         "convert" => {
             validate_options("convert", &rest, CONVERT_OPTIONS)?;
             // `--format wordml2003` (or `flatopc`) picks the kind of `.xml` file; its value isn't a path.
-            let format = arg_value(&rest, "--format");
+            let format = match find_option_arg(&rest, "--format") {
+                OptionArg::Absent => None,
+                OptionArg::Duplicate => return Err("convert: duplicate --format option".into()),
+                OptionArg::MissingValue => return Err("convert: --format requires a value".into()),
+                OptionArg::Value(value) => Some(value),
+            };
             let paths = positionals(&rest, CONVERT_OPTIONS);
             let (i, o) = (paths.first().ok_or_else(missing_argument)?.to_string(), paths.get(1).ok_or_else(missing_argument)?.to_string());
             let markup = rest.iter().any(|a| a == "--markup");
@@ -474,17 +500,8 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let page = parse_page_arg("run", &rest)?;
             let scale = parse_scale_arg("run", &rest)?;
             let password = password_from(&rest)?;
-            let script = match arg_value(&rest, "--script") {
-                Some(path) if !path.starts_with("--") => Some(script::load(script_path.as_deref().unwrap_or(Path::new(&path)))?),
-                _ if rest.iter().any(|a| a == "--script") => return Err("run: --script requires a value".into()),
-                _ => None,
-            };
-            // A source named on the command line wins over both of the script's.
-            let (mut from_file, mut from_template) = (arg_value(&rest, "--file"), arg_value(&rest, "--template"));
-            if from_file.is_none() && from_template.is_none() {
-                from_file = script.as_ref().and_then(|c| c.file.clone());
-                from_template = script.as_ref().and_then(|c| c.template.clone());
-            }
+            let script = load_run_script(&rest, script_path.as_deref())?;
+            let (from_file, from_template) = run_source_paths(&rest, script.as_ref());
             let mut s = match (from_file, from_template) {
                 (Some(f), _) => open(&f, password.as_deref())?,
                 // Both go through `file.new`, which puts a blank document on the region's paper (#3152).
@@ -746,6 +763,12 @@ fn parity_markdown(p: &Value) -> String {
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    // Language packs installed in the suite's font store are used; `proof.installPack` installs
+    // only while the person has turned downloading on in the app.
+    wordcraft_engine::packs::use_font_store(false);
+    if let Some(source) = wordcraft_engine::packs::index_override() {
+        eprintln!("wordcraft-cli: Language packs come from a test source: {source}");
+    }
     match run(&args) {
         Ok(()) | Err(Failure::StdoutClosed) => ExitCode::SUCCESS,
         Err(Failure::Error(e)) => {

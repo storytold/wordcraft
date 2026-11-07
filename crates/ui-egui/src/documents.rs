@@ -22,6 +22,17 @@ pub(crate) struct Parked {
 }
 
 impl WordApp {
+    /// Replace the document the window opened with before anything else happens (the first blank
+    /// document, made again on the region File › Options chose): the session's document is
+    /// swapped and the window follows it at once. Replacing it with `session.set_document`
+    /// alone leaves the window showing the old document, so the first frame took the change for
+    /// a switch and dropped the dialog a command line file had just asked for, a password box
+    /// among them (#5299).
+    pub fn replace_startup_document(&mut self, doc: wordcraft_doc::Document) {
+        self.session.set_document(doc);
+        self.sync_document();
+    }
+
     /// Follow the session's active document. When it isn't the one the window last showed, the
     /// shown document's own state is put aside (or dropped, if it was closed or replaced), the
     /// new one's comes back, and the window's state about the page that was shown starts afresh
@@ -49,6 +60,7 @@ impl WordApp {
         self.canvas.show_other_document(seen);
         self.controls = Default::default();
         self.dialog = None;
+        self.spelling_review = None;
         self.colors = None;
         self.restrict = crate::dialogs_review::RestrictPane { open: self.restrict.open, ..Default::default() };
         self.status_msg = None;
@@ -63,7 +75,7 @@ impl WordApp {
         self.read_aloud_at = None;
         self.info_editing = None;
         // Caches keyed by the revision alone: another document's revision can be the same number.
-        self.word_count = crate::window_ui::NOT_COUNTED;
+        self.status_counts = crate::window_ui::NOT_COUNTED;
         self.find_fonts_for = None;
         self.previews.document_changed();
         // The Start screen's placeholder (#1129) goes once a document is open beside it.
@@ -125,6 +137,24 @@ impl WordApp {
         Ok(())
     }
 
+    /// Whether the open document `id` has changes that aren't written to a file yet, or a save
+    /// the browser hasn't confirmed. The Save Changes prompt asks about the same work, so the
+    /// prompt and a programmatic refusal cannot drift apart (#1268, #3274).
+    pub(crate) fn document_unsaved_by_id(&self, id: u64) -> bool {
+        let dirty = self.session.document_dirty(id);
+        let unconfirmed = self.saves_in_flight.iter().any(|s| s.marked_saved && s.document == id);
+        dirty || unconfirmed
+    }
+
+    /// Whether the open document `id` has comment or reply text typed but not yet written to
+    /// it (#1348): closing the document would drop that text.
+    pub(crate) fn document_has_comment_drafts(&self, id: u64) -> bool {
+        if id == self.session.document_id() {
+            return panes::has_comment_drafts(self);
+        }
+        self.parked.get(&id).is_some_and(|p| !p.comment_drafts.is_empty())
+    }
+
     /// The open documents with work that would be lost on quitting: the shown one first, then
     /// the others in the order they were opened. Unsaved changes, a save the browser hasn't
     /// confirmed, or comment text not yet written to the document. The Start screen's
@@ -132,13 +162,11 @@ impl WordApp {
     fn unsaved_documents(&self) -> Vec<u64> {
         let active = self.session.document_id();
         let mut out = Vec::new();
-        if self.has_document() && (self.session.dirty || self.save_unconfirmed() || panes::has_comment_drafts(self)) {
+        if self.has_document() && (self.document_unsaved_by_id(active) || self.document_has_comment_drafts(active)) {
             out.push(active);
         }
         for d in self.session.documents() {
-            let unconfirmed = || self.saves_in_flight.iter().any(|s| s.marked_saved && s.document == d.id);
-            let drafts = || self.parked.get(&d.id).is_some_and(|p| !p.comment_drafts.is_empty());
-            if d.id != active && Some(d.id) != self.no_document && (d.dirty || unconfirmed() || drafts()) {
+            if d.id != active && Some(d.id) != self.no_document && (self.document_unsaved_by_id(d.id) || self.document_has_comment_drafts(d.id)) {
                 out.push(d.id);
             }
         }

@@ -78,14 +78,13 @@ fn axis(len: f32, lo: f32, hi: f32, grab: i8, d: f32) -> (f32, f32, f32, f32) {
 /// Hostile numbers (non-finite, non-positive sizes) leave it as it was; sizes are taken within
 /// 1–4000 pt, as `picture.crop` takes them.
 pub fn cropped(w: f32, h: f32, crop: [f32; 4], handle: Handle, dx: f32, dy: f32) -> Cropped {
-    cropped_on_screen(w, h, crop, false, false, handle, dx, dy)
+    cropped_on_screen((w, h), crop, (false, false), handle, (dx, dy))
 }
 
 /// [`cropped`] for a picture flipped left to right (`flip_h`) and/or top to bottom (`flip_v`):
 /// `handle` and the drag are on screen, the crop is the source's. Flipped, the side under a
 /// handle is the source's opposite side, so that's the one that moves.
-#[allow(clippy::too_many_arguments)]
-pub fn cropped_on_screen(w: f32, h: f32, crop: [f32; 4], flip_h: bool, flip_v: bool, handle: Handle, dx: f32, dy: f32) -> Cropped {
+pub fn cropped_on_screen((w, h): (f32, f32), crop: [f32; 4], (flip_h, flip_v): (bool, bool), handle: Handle, (dx, dy): (f32, f32)) -> Cropped {
     let fin = |x: f32| if x.is_finite() { x } else { 0.0 };
     let crop = crop.map(|c| fin(c).clamp(0.0, MAX_SIDE));
     let (w, h) = (fin(w), fin(h));
@@ -139,7 +138,7 @@ impl CropDrag {
         }
         self.moved = true;
         let d = (at - self.press) / scale.max(0.01);
-        self.now = cropped_on_screen(self.w, self.h, self.crop, self.flip_h, self.flip_v, self.handle, d.x, d.y);
+        self.now = cropped_on_screen((self.w, self.h), self.crop, (self.flip_h, self.flip_v), self.handle, (d.x, d.y));
     }
 }
 
@@ -270,12 +269,12 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
 /// The cursor over a crop handle (or while dragging one).
 pub fn cursor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<egui::CursorIcon> {
     if let Some(d) = &app.canvas.crop_drag {
-        return Some(d.handle.cursor());
+        return Some(d.handle.cursor(0.0));
     }
     let (page, rect) = laid_out(app, layout)?;
     let f = screen(pages, scale, page, rect)?;
     match frame::handle_at(f, 0.0, at) {
-        Some(h) => Some(h.cursor()),
+        Some(h) => Some(h.cursor(0.0)),
         None if f.contains(at) => Some(egui::CursorIcon::Default),
         None => None,
     }
@@ -476,15 +475,15 @@ mod tests {
     #[test]
     fn flipped_pictures_trim_the_side_under_the_handle() {
         let c = |crop, w, h, dx, dy| Cropped { crop, w, h, dx, dy };
-        let r = cropped_on_screen(200.0, 100.0, [0.0; 4], true, false, H(-1, 0), 50.0, 0.0);
+        let r = cropped_on_screen((200.0, 100.0), [0.0; 4], (true, false), H(-1, 0), (50.0, 0.0));
         assert!(close(r, c([0.0, 0.0, 0.25, 0.0], 150.0, 100.0, 50.0, 0.0)), "flip H, left handle: {r:?}");
-        let r = cropped_on_screen(200.0, 100.0, [0.0; 4], true, false, H(1, 0), -40.0, 0.0);
+        let r = cropped_on_screen((200.0, 100.0), [0.0; 4], (true, false), H(1, 0), (-40.0, 0.0));
         assert!(close(r, c([0.2, 0.0, 0.0, 0.0], 160.0, 100.0, 0.0, 0.0)), "flip H, right handle: {r:?}");
-        let r = cropped_on_screen(200.0, 100.0, [0.0; 4], false, true, H(0, -1), 0.0, 10.0);
+        let r = cropped_on_screen((200.0, 100.0), [0.0; 4], (false, true), H(0, -1), (0.0, 10.0));
         assert!(close(r, c([0.0, 0.0, 0.0, 0.1], 200.0, 90.0, 0.0, 10.0)), "flip V, top handle: {r:?}");
         // Already cropped on the source's left (the screen's right), flipped: the left handle
         // restores nothing there and trims the right of the source.
-        let r = cropped_on_screen(160.0, 100.0, [0.2, 0.0, 0.0, 0.0], true, true, H(-1, -1), 20.0, 10.0);
+        let r = cropped_on_screen((160.0, 100.0), [0.2, 0.0, 0.0, 0.0], (true, true), H(-1, -1), (20.0, 10.0));
         assert!(close(r, c([0.2, 0.0, 0.1, 0.1], 140.0, 90.0, 20.0, 10.0)), "flip both, corner: {r:?}");
     }
 
@@ -492,7 +491,16 @@ mod tests {
     fn app_with_picture(rot: f32) -> WordApp {
         let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
         let float = wordcraft_doc::para::Float { rot, ..Default::default() };
-        let pic = InlineObject::Image { media: "m".into(), w: 200.0, h: 100.0, alt: String::new(), float, crop: [0.0; 4], ole: None };
+        let pic = InlineObject::Image {
+            media: "m".into(),
+            w: 200.0,
+            h: 100.0,
+            alt: String::new(),
+            float,
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        };
         app.session.doc.insert_object(&Pos::body(0, 0), pic, &Default::default()).unwrap();
         let end = Pos::body(0, OBJ.len_utf8());
         app.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": end})).unwrap();
@@ -545,7 +553,16 @@ mod tests {
     }
 
     fn test_picture() -> InlineObject {
-        InlineObject::Image { media: "m".into(), w: 200.0, h: 100.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None }
+        InlineObject::Image {
+            media: "m".into(),
+            w: 200.0,
+            h: 100.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        }
     }
 
     /// The whole window with `n` 200×100 pt pictures in the first paragraph, the first one
