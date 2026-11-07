@@ -226,3 +226,115 @@ fn cyclic_text_box_references_do_not_block_numbering() {
     s.run("insert.pageNumber", &json!({"position": "bottom"})).unwrap();
     assert_eq!(fields(&s.doc, StoryRef::Part(footer), "PAGE"), 1);
 }
+
+#[test]
+fn generated_numbers_switch_format_without_losing_neighboring_content() {
+    for (command, position) in [("insert.header", "top"), ("insert.footer", "bottom")] {
+        let mut s = Session::new(Document::from_text("Body"));
+        let id = s.run(command, &json!({"text": "Keep this"})).unwrap()["story"].as_u64().unwrap() as u32;
+        let story = StoryRef::Part(id);
+        let mut table = Table::new(1, 1, 300.0);
+        table.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("Keep table", CharProps::default()))];
+        s.doc.story_mut(story).unwrap().push(Arc::new(Block::Table(table)));
+        let blocks = s.doc.story(story).unwrap().clone();
+        let selection = s.sel.clone();
+        for (format, align) in [("plain", "left"), ("x of y", "right"), ("plain", "center")] {
+            let before = s.doc.clone();
+            s.run("insert.pageNumber", &json!({"position": position, "format": format, "align": align})).unwrap();
+            assert_eq!(&s.doc.story(story).unwrap()[..blocks.len()], blocks.as_slice());
+            assert_eq!(s.sel, selection);
+            assert_eq!(fields(&s.doc, story, "PAGE"), 1);
+            assert_eq!(fields(&s.doc, story, "NUMPAGES"), usize::from(format == "x of y"));
+            let expected = match align {
+                "left" => Align::Left,
+                "right" => Align::Right,
+                _ => Align::Center,
+            };
+            assert_eq!(s.doc.para(story, &Path::top(blocks.len())).unwrap().props.align, Some(expected));
+            let after = s.doc.clone();
+            s.run("edit.undo", &json!({})).unwrap();
+            assert_eq!(s.doc, before);
+            s.run("edit.redo", &json!({})).unwrap();
+            assert_eq!(s.doc, after);
+        }
+        let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+        let id = if position == "top" { back.last_section.headers.default } else { back.last_section.footers.default }.unwrap();
+        assert!(back.plain_text(StoryRef::Part(id)).starts_with("Keep this\nKeep table"));
+        assert_eq!(fields(&back, StoryRef::Part(id), "PAGE"), 1);
+        assert_eq!(fields(&back, StoryRef::Part(id), "NUMPAGES"), 0);
+    }
+}
+
+#[test]
+fn repeated_numbering_keeps_clean_state_and_undo_depth() {
+    for position in ["top", "bottom"] {
+        for format in ["plain", "x of y"] {
+            let mut s = Session::new(Document::new());
+            s.run("insert.pageNumber", &json!({"position": position, "format": format})).unwrap();
+            s.dirty = false;
+            let doc = s.doc.clone();
+            let depth = s.undo_depth();
+            s.run("insert.pageNumber", &json!({"position": position, "format": format})).unwrap();
+            assert_eq!(s.doc, doc);
+            assert_eq!(s.undo_depth(), depth, "an identical request must not add an undo step");
+            assert!(!s.dirty, "an identical request must not dirty the document");
+        }
+    }
+}
+
+#[test]
+fn reopened_empty_header_footer_mark_is_reused_without_a_blank_line() {
+    for (command, position) in [("insert.header", "top"), ("insert.footer", "bottom")] {
+        let mut s = Session::new(Document::from_text("Body"));
+        let id = s.run(command, &json!({"text": ""})).unwrap()["story"].as_u64().unwrap() as u32;
+        s.doc.para_mut(StoryRef::Part(id), &Path::top(0)).unwrap().mark = CharProps { bold: Some(true), italic: Some(true), ..Default::default() };
+        let doc = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+        let id = if position == "top" { doc.last_section.headers.default } else { doc.last_section.footers.default }.unwrap();
+        let story = StoryRef::Part(id);
+        let mark = doc.para(story, &Path::top(0)).unwrap().mark.clone();
+        assert_eq!(mark.bold, Some(true));
+        let mut s = Session::new(doc);
+        let before = s.doc.clone();
+        s.run("insert.pageNumber", &json!({"position": position})).unwrap();
+        assert_eq!(s.doc.story(story).unwrap().len(), 1, "reuse the imported empty paragraph rather than add a blank line");
+        assert_eq!(s.doc.para(story, &Path::top(0)).unwrap().mark, mark);
+        assert_eq!(fields(&s.doc, story, "PAGE"), 1);
+        let inserted = s.doc.clone();
+        s.run("insert.pageNumber", &json!({"position": position, "format": "x of y", "align": "right"})).unwrap();
+        assert_eq!(s.doc.story(story).unwrap().len(), 1);
+        assert_eq!(s.doc.para(story, &Path::top(0)).unwrap().mark, mark);
+        assert_eq!(s.doc.para(story, &Path::top(0)).unwrap().props.align, Some(Align::Right));
+        assert_eq!(fields(&s.doc, story, "PAGE"), 1);
+        assert_eq!(fields(&s.doc, story, "NUMPAGES"), 1);
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc, inserted);
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc, before);
+    }
+}
+
+#[test]
+fn user_owned_page_number_lookalikes_are_preserved() {
+    for kind in ["formatting", "metadata", "another field"] {
+        let mut s = Session::new(Document::from_text("Body"));
+        let id = s.run("insert.pageNumber", &json!({"position": "bottom"})).unwrap()["story"].as_u64().unwrap() as u32;
+        let story = StoryRef::Part(id);
+        match kind {
+            "formatting" => s.doc.para_mut(story, &Path::top(0)).unwrap().props.indent_left = Some(12.0),
+            "metadata" => {
+                let InlineObject::Field { locked, .. } = &mut s.doc.para_mut(story, &Path::top(0)).unwrap().objects[0] else {
+                    panic!("no page field")
+                };
+                *locked = true;
+            }
+            _ => {
+                let mut para = Paragraph::with_text("User page: ", CharProps::default());
+                para.insert_object(para.len(), field("PAGE"), &CharProps::default()).unwrap();
+                s.doc.story_mut(story).unwrap().push(para_block(para));
+            }
+        }
+        let before = s.doc.clone();
+        s.run("insert.pageNumber", &json!({"position": "bottom", "format": "x of y"})).unwrap();
+        assert_eq!(s.doc, before, "preserve {kind} rather than claim the PAGE as generated");
+    }
+}
