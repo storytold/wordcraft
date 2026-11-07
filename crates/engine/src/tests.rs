@@ -12634,3 +12634,21 @@ fn a_caret_paste_formatting_keeps_the_targets_link_and_tracked_marks() {
     run(&mut s, "edit.pasteFormat", json!({}));
     assert!(at_caret(&s).ins.is_some(), "Paste Formatting kept the insertion mark");
 }
+
+/// #5616: Paste Formatting over a selection keeps the target's hyperlink too.
+#[test]
+fn a_range_paste_formatting_keeps_the_targets_link() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "source target"}));
+    run(&mut s, "select.text", json!({"text": "source"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "edit.copyFormat", json!({}));
+    run(&mut s, "select.text", json!({"text": "target"}));
+    run(&mut s, "insert.link", json!({"url": "https://example.com/"}));
+    run(&mut s, "select.text", json!({"text": "target"}));
+    run(&mut s, "edit.pasteFormat", json!({}));
+    let (a, _) = s.sel.ordered();
+    let c = s.doc.para_at(&a).map(|p| p.props_of_char(a.off).clone()).unwrap_or_default();
+    assert!(c.link.is_some(), "the target kept its hyperlink");
+    assert_eq!(c.bold, Some(true));
+}

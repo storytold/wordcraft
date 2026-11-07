@@ -246,6 +246,19 @@ fn a_paste_event_uses_up_the_noted_paste_modifiers() {
     assert_eq!(bold, Some(true), "the later paste was a plain paste");
 }
 
+/// #5616: the dropped browser paste uses up its Mod+Shift, so a later menu-bar paste with no key
+/// or pointer press in between isn't read as Keep Text Only.
+#[test]
+fn the_ignored_paste_uses_up_its_paste_modifiers() {
+    let mut a = copied_bold_app();
+    a.canvas.paste_event_follows_chord = true;
+    let ctx = egui::Context::default();
+    let chord = Modifiers::COMMAND | Modifiers::SHIFT;
+    mods_frame(&ctx, &mut a, chord, vec![key_event(Key::V, true, chord), egui::Event::Paste("x".into())]);
+    assert!(!a.canvas.ignore_next_paste);
+    assert!(a.canvas.paste_event_mods.is_none());
+}
+
 /// #5616: the browser paste event after a formatting paste is dropped before an open equation
 /// can type it.
 #[test]
