@@ -5522,6 +5522,33 @@ fn check_spelling_off_survives_a_switch_and_a_restart() {
     assert!(!second.session.view.proofing && !second.session.prefs.check_spelling);
 }
 
+/// The same across windows: Check spelling as you type turned off in a second window on a document
+/// stays off when the first window's own view of it comes back, in a window on another document,
+/// back in the second window, and in the saved settings (#5740).
+#[test]
+fn check_spelling_off_in_a_second_window_stays_off_in_every_window() {
+    let mut a = app();
+    let first = a.windows.shown();
+    a.new_window();
+    let second = a.windows.shown();
+    assert_ne!(first, second, "View › New Window opened a window with its own view");
+    a.run("file.options", json!({"checkSpelling": false})).unwrap();
+
+    assert!(a.enter_window(first));
+    assert!(!a.session.view.proofing, "the first window's own view, put back, follows the setting");
+    a.run("file.new", json!({})).unwrap();
+    assert!(!a.session.view.proofing, "a new document's window");
+    assert!(a.enter_window(second));
+    assert!(!a.session.view.proofing, "back in the second window");
+    assert!(a.enter_window(first));
+    assert!(!a.session.view.proofing);
+
+    let saved = serde_json::to_vec(&a.prefs()).unwrap();
+    let mut b = app();
+    b.apply_prefs(serde_json::from_slice(&saved).unwrap());
+    assert!(!b.session.view.proofing && !b.session.prefs.check_spelling, "saved off, whichever window was drawn");
+}
+
 #[test]
 fn prefs_without_user_name_keep_default() {
     let mut a = app();
