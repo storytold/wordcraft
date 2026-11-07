@@ -15,6 +15,7 @@ mod documents;
 mod font_sizes;
 mod fonts;
 mod ime_noop;
+mod numeric_field_limits;
 mod revision_checks;
 mod typing;
 mod wordart;
@@ -10106,7 +10107,7 @@ fn update_fields_recalculates_a_table_formula() {
 fn table_formula_results_take_the_format_switches() {
     for (formula, inserted, updated) in [
         (r"=SUM(ABOVE) \* CardText", "twelve", "twenty-one"),
-        (r"=SUM(ABOVE) \* CardText \* Caps", "Twelve", "Twenty-one"),
+        (r"=SUM(ABOVE) \* CardText \* Caps", "Twelve", "Twenty-One"),
         (r"=SUM(ABOVE) \* OrdText \* Upper", "TWELFTH", "TWENTY-FIRST"),
         (r"=SUM(ABOVE) \* MERGEFORMAT", "12", "21"),
     ] {
