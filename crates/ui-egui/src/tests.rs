@@ -4166,6 +4166,8 @@ fn ctrl_shift_v_without_copied_formatting_pastes_text_only() {
     a.run("format.bold", json!({})).unwrap();
     a.run("edit.copy", json!({})).unwrap();
     a.run("select.text", json!({"text": "plain"})).unwrap();
+    // The destination has formatting of its own, so a paste that dropped it would show.
+    a.run("format.italic", json!({})).unwrap();
     assert!(a.session.painter.is_none());
     let mut h = harness(a);
     h.run_steps(6);
@@ -4175,6 +4177,8 @@ fn ctrl_shift_v_without_copied_formatting_pastes_text_only() {
     assert_eq!(body_text(h.state()), "Bold Bold", "the clipboard text replaced the selection");
     let bold = h.state_mut().run("format.state", json!({})).unwrap().get("bold").and_then(Value::as_bool);
     assert_ne!(bold, Some(true), "the pasted text took the destination's formatting, not the copied bold");
+    let italic = h.state_mut().run("format.state", json!({})).unwrap().get("italic").and_then(Value::as_bool);
+    assert_eq!(italic, Some(true), "the pasted text kept the destination's italic");
 }
 
 /// #1669: with Shift held, Backspace still erases (#707) and Delete cuts the selection, doing
