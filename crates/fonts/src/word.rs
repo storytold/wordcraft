@@ -32,12 +32,24 @@ fn substitutes(family: &str) -> &'static [&'static str] {
 /// as Liberation Serif for Times New Roman, or the same design under another name), rather than
 /// the generic lists any unknown font gets?
 pub fn has_named_substitutes(family: &str) -> bool {
-    substitutes_by_name(charset_base_family(family)).1
+    family.split(';').map(str::trim).filter(|f| !f.is_empty()).any(|f| substitutes_by_name(charset_base_family(f)).1)
 }
+
+const SANS: &[&str] = &["Carlito", "Helvetica Neue", "Arial", "Liberation Sans", "Noto Sans", "DejaVu Sans", "Source Sans 3"];
 
 /// [`substitutes`], and whether they were chosen for this family by name.
 fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
-    const SANS: &[&str] = &["Carlito", "Helvetica Neue", "Arial", "Liberation Sans", "Noto Sans", "DejaVu Sans", "Source Sans 3"];
+    if family.contains(';') {
+        for cand in family.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+            let (subs, named) = substitutes_by_name(cand);
+            if named || is_thai_family(cand) || subs != SANS {
+                return (subs, named);
+            }
+        }
+        if let Some(first) = family.split(';').map(str::trim).find(|s| !s.is_empty()) {
+            return substitutes_by_name(first);
+        }
+    }
     const SERIF: &[&str] = &["Caladea", "Times New Roman", "Liberation Serif", "Georgia", "Noto Serif", "DejaVu Serif", "Source Serif 4"];
     const MONO: &[&str] = &["Courier New", "Liberation Mono", "Menlo", "Consolas", "DejaVu Sans Mono", "JetBrains Mono"];
     const ARIAL: &[&str] = &["Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
@@ -157,11 +169,11 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
 /// itself: a Symbol bullet makes its line taller than the text alone. The values are those Word's
 /// PDFs give the fonts (`/Ascent`, `/Descent`).
 pub fn symbol_font_metrics(family: &str) -> Option<(f64, f64)> {
-    match family.trim().to_ascii_lowercase().as_str() {
+    family.split(';').map(str::trim).filter(|f| !f.is_empty()).find_map(|f| match f.to_ascii_lowercase().as_str() {
         "symbol" | "symbol (pcl6)" => Some((1.005, 0.216)),
         "wingdings" => Some((0.899, 0.205)),
         _ => None,
-    }
+    })
 }
 
 /// The (ascent, descent) in em Word gives a line with a run in a symbol font, when that isn't the
@@ -224,7 +236,10 @@ fn metric_twins(family: &str) -> impl Iterator<Item = &'static str> + '_ {
 /// wraps and paginates as in `family`.
 pub fn metric_compatible(family: &str, substitute: &str) -> bool {
     let s = substitute.trim();
-    metric_twins(charset_base_family(family.trim())).any(|t| t.eq_ignore_ascii_case(s))
+    family.split(';').map(str::trim).filter(|f| !f.is_empty()).any(|f| {
+        let base = charset_base_family(f);
+        base.eq_ignore_ascii_case(s) || metric_twins(base).any(|t| t.eq_ignore_ascii_case(s))
+    })
 }
 
 /// Naskh-style Persian/Arabic document fonts (the "B …" family names come from the common
@@ -356,8 +371,10 @@ fn is_thai_serif(f: &str) -> bool {
 /// Is `family` a Thai document font ([`is_thai`])? A missing one is drawn in a Thai face for the
 /// whole run, never in a Latin substitute (#1549).
 pub fn is_thai_family(family: &str) -> bool {
-    let f = family.to_ascii_lowercase();
-    is_thai(&f) || is_thai_serif(&f)
+    family.split(';').map(str::trim).filter(|f| !f.is_empty()).any(|f| {
+        let f = f.to_ascii_lowercase();
+        is_thai(&f) || is_thai_serif(&f)
+    })
 }
 
 /// Khmer document fonts: the Khmer OS family, Khmer Mool1 and the like, Windows' and the Mac's
@@ -419,6 +436,65 @@ const FAMILY_CACHE_MAX: usize = 4096;
 /// Family names longer than this (bytes) are resolved but never remembered.
 const FAMILY_KEY_MAX: usize = 256;
 
+fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
+    if !family.contains(';') {
+        let base = if family.trim().eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(family) };
+        return if db.has_family(family) {
+            (family.to_string(), false)
+        } else if base != family && db.has_family(base) {
+            (base.to_string(), false)
+        } else {
+            (substitute(db, base).unwrap_or(crate::FALLBACK_FAMILY).to_string(), true)
+        };
+    }
+
+    let candidates: Vec<&str> = family.split(';').map(str::trim).filter(|s| !s.is_empty()).collect();
+    if candidates.is_empty() {
+        return (crate::FALLBACK_FAMILY.to_string(), true);
+    }
+
+    // 1. First installed family in the list:
+    for &cand in &candidates {
+        let base = if cand.eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(cand) };
+        if db.has_family(cand) {
+            return (cand.to_string(), false);
+        }
+        if base != cand && db.has_family(base) {
+            return (base.to_string(), false);
+        }
+    }
+
+    // 2. None installed: fall back to an installed substitute for an entry in the list rather than generic Carlito.
+    // Try metric twins first across the candidates:
+    for &cand in &candidates {
+        let base = if cand.eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(cand) };
+        if let Some(twin) = metric_twins(base).find(|t| db.has_family(t)) {
+            return (twin.to_string(), true);
+        }
+    }
+
+    // Try candidates with named or category substitutes (Thai, Hebrew, Khmer, Persian, serif, mono):
+    for &cand in &candidates {
+        let base = if cand.eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(cand) };
+        let (subs, named) = substitutes_by_name(base);
+        if (named || is_thai_family(base) || subs != SANS)
+            && let Some(sub) = substitute(db, base)
+        {
+            return (sub.to_string(), true);
+        }
+    }
+
+    // Fall back to the first candidate's substitute:
+    if let Some(&first) = candidates.first() {
+        let base = if first.eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(first) };
+        if let Some(sub) = substitute(db, base) {
+            return (sub.to_string(), true);
+        }
+    }
+
+    (crate::FALLBACK_FAMILY.to_string(), true)
+}
+
 /// Resolve `family` with bold/italic to a face (memoised until user fonts are added or removed,
 /// [`FontDb::generation`]).
 pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
@@ -436,16 +512,7 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
             return *r;
         }
     }
-    // Printer-driver Symbol aliases use the same encoding as Symbol.
-    let base = if family.trim().eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(family) };
-    let (fam, substituted) = if db.has_family(family) {
-        (family.to_string(), false)
-    } else if base != family && db.has_family(base) {
-        // Windows maps the charset names to the font itself: not a substitution.
-        (base.to_string(), false)
-    } else {
-        (substitute(db, base).unwrap_or(crate::FALLBACK_FAMILY).to_string(), true)
-    };
+    let (fam, substituted) = resolve_family(db, family);
     let face = db.face(&fam, style_name(bold, italic));
     let r = Resolved { synth_bold: bold && face.weight < 600.0, synth_italic: italic && !face.italic, substituted, face: FaceRef::of(&face) };
     let mut c = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -786,5 +853,30 @@ mod tests {
         for f in ["No Such Brand Font", "Cambria", "Georgia", "Brand Serif"] {
             assert!(!has_named_substitutes(f), "{f}");
         }
+    }
+
+    #[test]
+    fn libreoffice_fallback_list_resolves_first_installed_family() {
+        let db = FontDb::global();
+        if db.has_family("Liberation Sans") || db.has_family("Arial") {
+            let r = resolve("Liberation Sans;Arial", false, false);
+            assert!(!r.substituted, "should not be substituted when a candidate is installed: got {:?}", r.face.family);
+            if db.has_family("Liberation Sans") {
+                assert_eq!(r.face.family, "Liberation Sans");
+            } else {
+                assert_eq!(r.face.family, "Arial");
+            }
+        }
+
+        // When none of the families is installed, fall back to a substitute for an entry in the list rather than generic Carlito:
+        let r = resolve("NonExistentSansFace123;Times New Roman", false, false);
+        assert!(r.substituted);
+        assert_ne!(r.face.family, "Carlito", "should not fall back to generic Carlito when an entry is Times New Roman");
+        assert!(r.face.family.contains("Serif") || r.face.family == "Times" || r.face.family == "Tinos", "got {:?}", r.face.family);
+
+        // Metric compatibility of fallback list:
+        assert!(metric_compatible("Open Sans;Arial", "Liberation Sans"));
+        assert!(metric_compatible("Liberation Sans;Arial", "Helvetica"));
+        assert!(!metric_compatible("Open Sans;Arial", "Carlito"));
     }
 }

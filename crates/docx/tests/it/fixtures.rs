@@ -3897,6 +3897,14 @@ fn roman_fonts_are_read_from_the_font_table() {
     assert_eq!(d.settings.roman_fonts, ["Brand Serif"]);
 }
 
+#[test]
+fn roman_fonts_split_fallback_lists() {
+    let fonts = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:font w:name="Liberation Serif;Times New Roman"><w:family w:val="roman"/></w:font></w:fonts>"#;
+    let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable", "fontTable.xml")];
+    let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/fontTable.xml", fonts)])).unwrap();
+    assert_eq!(d.settings.roman_fonts, ["Liberation Serif", "Times New Roman"]);
+}
+
 /// `w:doNotUseHTMLParagraphAutoSpacing` in the settings' `w:compat`: paragraph spacing adds up.
 #[test]
 fn html_auto_spacing_off_is_read_and_kept() {

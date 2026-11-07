@@ -130,13 +130,17 @@ pub(super) const MISSING_ROMAN_FONT: &str = "Cambria";
 /// and where it isn't installed Liberation Serif has its metrics; Word never meets it missing.
 pub(super) fn lookup_family<'f>(doc: &Document, font: &'f str) -> &'f str {
     let db = wordcraft_fonts::FontDb::global();
-    let roman = doc.settings.roman_fonts.iter().any(|f| f.eq_ignore_ascii_case(font));
+    let roman = font.split(';').map(str::trim).filter(|f| !f.is_empty()).any(|f| doc.settings.roman_fonts.iter().any(|r| r.eq_ignore_ascii_case(f)));
+    let installed = font
+        .split(';')
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .any(|f| db.has_family(f) || db.has_family(wordcraft_fonts::word::charset_base_family(f)));
     if roman
         && !wordcraft_fonts::word::is_thai_family(font)
         && !wordcraft_doc::symbol_fonts::is_symbol_font(font)
         && !wordcraft_fonts::word::has_named_substitutes(font)
-        && !db.has_family(font)
-        && !db.has_family(wordcraft_fonts::word::charset_base_family(font))
+        && !installed
     {
         MISSING_ROMAN_FONT
     } else {
