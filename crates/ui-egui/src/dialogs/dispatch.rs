@@ -971,58 +971,118 @@ fn new_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
 }
 
 fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
-    let Dialog::ModifyStyle { back, resume, id, name, font, size, bold, italic, color, before, after } = d else {
+    let Dialog::ModifyStyle { back, resume, id, name, font, size, bold, italic, color, before, after, align, left, right, first, line, is_char, tab } =
+        d
+    else {
         return false;
     };
-    crate::rtl::Table::new("ms").columns(2).show(ui, |t| {
+    crate::rtl::Table::new("ms_name").columns(2).show(ui, |t| {
         t.row(|r| {
             let name_label = r.cell(|ui| ui.label(tl!("Name:")));
             r.cell(|ui| ui.text_edit_singleline(name).labelled_by(name_label.id));
         });
-        t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Font:")));
-            r.cell(|ui| {
-                let shown = app.previews.font_shown(font);
-                let fams = app.previews.families();
-                let prev = app.previews.font_preview_fn();
-                if let Some(f) = crate::widgets::font_combo(ui, "ms_font", 220.0, &shown, &fams, Some(&*prev)) {
-                    if f == crate::widgets::ADD_FONT {
-                        let _ = app.run("font.add", json!({}));
-                    } else {
-                        *font = app.previews.font_stored(&f);
-                    }
-                }
-            });
-        });
-        t.row(|r| {
-            let size_label = r.cell(|ui| ui.label(tl!("Size:")));
-            r.cell(|ui| ui.add(egui::DragValue::new(size).range(1.0..=1638.0).speed(0.5)).labelled_by(size_label.id));
-        });
-        t.row(|r| {
-            let color_label = r.cell(|ui| ui.label(tl!("Color:")));
-            r.cell(|ui| ui.text_edit_singleline(color).labelled_by(color_label.id));
-        });
-        t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Space before/after:")));
-            r.cell(|ui| {
-                ui.horizontal(|ui| {
-                    ui.add(egui::DragValue::new(before).range(0.0..=1584.0)).accessible_name(tl!("Space before"));
-                    ui.add(egui::DragValue::new(after).range(0.0..=1584.0)).accessible_name(tl!("Space after"));
+    });
+    if !*is_char {
+        let names = ["Font", "Paragraph"].map(|n| tl!(n).to_string());
+        if let Some(k) = crate::widgets::dialog_tabs(ui, &names, *tab as usize) {
+            *tab = k as u8;
+        }
+        ui.add_space(6.0);
+    }
+    match if *is_char { 0 } else { *tab } {
+        0 => {
+            crate::rtl::Table::new("ms_font").columns(2).show(ui, |t| {
+                t.row(|r| {
+                    r.cell(|ui| ui.label(tl!("Font:")));
+                    r.cell(|ui| {
+                        let shown = app.previews.font_shown(font);
+                        let fams = app.previews.families();
+                        let prev = app.previews.font_preview_fn();
+                        if let Some(f) = crate::widgets::font_combo(ui, "ms_font", 220.0, &shown, &fams, Some(&*prev)) {
+                            if f == crate::widgets::ADD_FONT {
+                                let _ = app.run("font.add", json!({}));
+                            } else {
+                                *font = app.previews.font_stored(&f);
+                            }
+                        }
+                    });
+                });
+                t.row(|r| {
+                    let size_label = r.cell(|ui| ui.label(tl!("Size:")));
+                    r.cell(|ui| ui.add(egui::DragValue::new(size).range(1.0..=1638.0).speed(0.5)).labelled_by(size_label.id));
+                });
+                t.row(|r| {
+                    let color_label = r.cell(|ui| ui.label(tl!("Color:")));
+                    r.cell(|ui| ui.text_edit_singleline(color).labelled_by(color_label.id));
                 });
             });
-        });
-    });
-    ui.horizontal(|ui| {
-        ui.checkbox(bold, tl!("Bold"));
-        ui.checkbox(italic, tl!("Italic"));
-    });
+            ui.horizontal(|ui| {
+                ui.checkbox(bold, tl!("Bold"));
+                ui.checkbox(italic, tl!("Italic"));
+            });
+        }
+        1 => {
+            const ALIGNS: [(&str, &str); 4] = [("left", "Left"), ("center", "Center"), ("right", "Right"), ("justify", "Justify")];
+            ui.horizontal(|ui| {
+                let align_label = ui.label(tl!("Alignment:"));
+                let shown = ALIGNS.iter().find(|(v, _)| v == align).map_or(align.as_str(), |(_, l)| tl!(l));
+                let combo = craft_ui::ComboBox::from_id_salt("ms_para_align").selected_text(shown).show_ui(ui, |ui| {
+                    for (v, l) in ALIGNS {
+                        ui.selectable_value(align, v.to_string(), tl!(l));
+                    }
+                });
+                combo.response.labelled_by(align_label.id);
+            });
+            ui.label(egui::RichText::new(tl!("Indentation")).font(semibold(12.5)));
+            let mut m = std::collections::BTreeSet::new();
+            crate::rtl::Table::new("ms_ind").columns(4).show(ui, |t| {
+                t.row(|r| {
+                    let left_label = r.cell(|ui| ui.label(tl!("Left:")));
+                    r.cell(|ui| para_number(ui, left, ParaNumber::Length, "left", &mut m, &left_label));
+                    let right_label = r.cell(|ui| ui.label(tl!("Right:")));
+                    r.cell(|ui| para_number(ui, right, ParaNumber::Length, "right", &mut m, &right_label));
+                });
+                t.row(|r| {
+                    let first_label = r.cell(|ui| ui.label(tl!("First line:")));
+                    r.cell(|ui| para_number(ui, first, ParaNumber::Length, "indentFirst", &mut m, &first_label));
+                });
+            });
+            ui.label(egui::RichText::new(tl!("Spacing")).font(semibold(12.5)));
+            crate::rtl::Table::new("ms_sp").columns(4).show(ui, |t| {
+                t.row(|r| {
+                    let before_label = r.cell(|ui| ui.label(tl!("Before:")));
+                    r.cell(|ui| para_number(ui, before, ParaNumber::Points, "spaceBefore", &mut m, &before_label));
+                    let line_label = r.cell(|ui| ui.label(tl!("Line spacing:")));
+                    r.cell(|ui| para_number(ui, line, ParaNumber::Lines, "lineSpacing", &mut m, &line_label));
+                });
+                t.row(|r| {
+                    let after_label = r.cell(|ui| ui.label(tl!("After:")));
+                    r.cell(|ui| para_number(ui, after, ParaNumber::Points, "spaceAfter", &mut m, &after_label));
+                });
+            });
+        }
+        _ => {}
+    }
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
         let mut chr = json!({"font": font, "size": *size, "bold": *bold, "italic": *italic});
         if let Some(c) = wordcraft_doc::Rgb::parse(color) {
             chr["color"] = json!({"Rgb": [c.0, c.1, c.2]});
         }
-        let _ = app.run("styles.modify", json!({"style": id, "name": name, "chr": chr, "para": {"spaceBefore": *before, "spaceAfter": *after}}));
+        let mut params = json!({"style": id, "name": name, "chr": chr});
+        if !*is_char {
+            let unit = crate::options::unit().pt_per_unit();
+            params["para"] = json!({
+                "align": align,
+                "indentLeft": *left * unit,
+                "indentRight": *right * unit,
+                "indentFirst": *first * unit,
+                "spaceBefore": *before,
+                "spaceAfter": *after,
+                "lineSpacing": {"rule": "multiple", "value": *line},
+            });
+        }
+        let _ = app.run("styles.modify", params);
     }
     if (ok || cancel) && *back {
         app.dialog = Some(Dialog::ManageStyles { alphabetical: false, selected: id.clone() });

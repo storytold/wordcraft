@@ -239,21 +239,54 @@ pub enum Dialog {
         #[serde(skip)]
         back: bool,
     },
+    /// Modify Style dialog: change name, character properties (Font tab), and for paragraph
+    /// styles, alignment, indents, and spacing (Paragraph tab).
     ModifyStyle {
+        /// Return to Manage Styles on close.
         #[serde(skip)]
         back: bool,
         /// The dialog that comes back when this closes (Table of Contents › Modify…).
         #[serde(skip)]
         resume: Option<Box<Dialog>>,
+        /// Style id.
         id: String,
+        /// User-visible style name.
         name: String,
+        /// Font family name.
         font: String,
+        /// Font size in points.
         size: f32,
+        /// Bold flag.
         bold: bool,
+        /// Italic flag.
         italic: bool,
+        /// Font color (hex or "auto").
         color: String,
+        /// Space before in points.
         before: f32,
+        /// Space after in points.
         after: f32,
+        /// Visual alignment: left, center, right, justify.
+        #[serde(default)]
+        align: String,
+        /// Left indent in current measurement unit.
+        #[serde(default)]
+        left: f32,
+        /// Right indent in current measurement unit.
+        #[serde(default)]
+        right: f32,
+        /// First-line indent in current measurement unit (negative = hanging).
+        #[serde(default)]
+        first: f32,
+        /// Line spacing as multiple.
+        #[serde(default)]
+        line: f32,
+        /// True if this is a character style (paragraph formatting disabled).
+        #[serde(default)]
+        is_char: bool,
+        /// Current tab index: 0 Font, 1 Paragraph.
+        #[serde(default)]
+        tab: u8,
     },
     /// Manage Styles: every style with its preview and description; modify, create, delete and
     /// show or hide them.
@@ -873,6 +906,13 @@ impl Dialog {
             },
         );
         let rp = app.session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some(id.into()), ..Default::default() });
+        let is_char = st.kind == wordcraft_doc::StyleKind::Character;
+        let line = match rp.line_spacing {
+            wordcraft_doc::props::LineSpacing::Multiple(m) => m,
+            _ => 1.0,
+        };
+        let (vl, vr) = rp.visual_indents();
+        let unit = crate::options::unit().pt_per_unit();
         Some(Dialog::ModifyStyle {
             back: false,
             resume: None,
@@ -888,6 +928,13 @@ impl Dialog {
             },
             before: rp.space_before,
             after: rp.space_after,
+            align: format!("{:?}", rp.align.visual(rp.bidi)).to_lowercase(),
+            left: vl / unit,
+            right: vr / unit,
+            first: rp.indent_first / unit,
+            line,
+            is_char,
+            tab: 0,
         })
     }
 }
