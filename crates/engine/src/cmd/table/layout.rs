@@ -92,6 +92,8 @@ pub(super) fn properties(s: &mut Session, v: &Value) -> CmdResult {
         "columnWidth",
         "cellWidth",
         "valign",
+        "wrapping",
+        "wrap",
     ];
     if !keys.iter().any(|k| v.get(*k).is_some()) {
         let t = s.doc.table(s.sel.focus.story, &tp).cloned().unwrap_or_default();
@@ -102,6 +104,7 @@ pub(super) fn properties(s: &mut Session, v: &Value) -> CmdResult {
             o.insert("row".into(), row.map(|x| serde_json::to_value(&x.props).unwrap_or(Value::Null)).unwrap_or(Value::Null));
             o.insert("columnWidth".into(), t.grid.get(t.grid_col(r, c)).map_or(Value::Null, |w| json!(w)));
             o.insert("cell".into(), cl.map(|x| serde_json::to_value(&x.props).unwrap_or(Value::Null)).unwrap_or(Value::Null));
+            o.insert("wrapping".into(), json!(if t.props.float.is_some() { "around" } else { "none" }));
         }
         return Ok(out);
     }
@@ -125,6 +128,29 @@ pub(super) fn properties(s: &mut Session, v: &Value) -> CmdResult {
         Some("bottom") => Some(VAlign::Bottom),
         Some(x) => return Err(CmdError::Params(format!("unknown vertical alignment `{x}`"))),
     };
+    let parse_wrap = |val: &Value| -> Result<Option<&'static str>, CmdError> {
+        match val {
+            Value::Null => Ok(Some("none")),
+            Value::String(s) => match s.as_str() {
+                "none" => Ok(Some("none")),
+                "around" => Ok(Some("around")),
+                x => Err(CmdError::Params(format!("unknown table text wrapping `{x}`"))),
+            },
+            _ => Err(CmdError::Params("expected a string for table text wrapping (`none` or `around`)".into())),
+        }
+    };
+    let wrapping = match (v.get("wrapping"), v.get("wrap")) {
+        (None, None) => None,
+        (Some(w1), Some(w2)) => {
+            let p1 = parse_wrap(w1)?;
+            let p2 = parse_wrap(w2)?;
+            if p1 != p2 {
+                return Err(CmdError::Params("conflicting `wrapping` and `wrap` parameters".into()));
+            }
+            p1
+        }
+        (Some(w), None) | (None, Some(w)) => parse_wrap(w)?,
+    };
     // `null` clears a preferred size (automatic); a number sets it.
     let size = |k: &str, lo: f32, hi: f32| -> Option<Option<f32>> {
         match v.get(k)? {
@@ -146,15 +172,65 @@ pub(super) fn properties(s: &mut Session, v: &Value) -> CmdResult {
     let mut rows: Vec<usize> = cells.iter().map(|&(r, _)| r).collect();
     rows.sort_unstable();
     rows.dedup();
+    if wrapping == Some("around") && !(s.sel.focus.story == wordcraft_doc::StoryRef::Body && tp.0.len() == 1) {
+        return Err(CmdError::Disabled("only top-level tables in the body text can wrap text".into()));
+    }
     with_table(s, |t| {
+        if let Some(w) = wrapping {
+            if w == "none" {
+                t.props.float = None;
+            } else if w == "around" {
+                // Reuse existing float settings when present; only initialize a default when float is None.
+                if t.props.float.is_none() {
+                    let h_align = if !t.props.bidi_visual {
+                        match t.props.align {
+                            Some(Align::Center) => Some(wordcraft_doc::para::FloatAlign::Center),
+                            Some(Align::Right) => Some(wordcraft_doc::para::FloatAlign::End),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+                    t.props.float = Some(wordcraft_doc::props::TableFloat {
+                        h_rel: wordcraft_doc::para::Anchor::Column,
+                        v_rel: wordcraft_doc::para::Anchor::Paragraph,
+                        h_align,
+                        x: if h_align.is_none() { t.props.indent.unwrap_or(0.0) } else { 0.0 },
+                        dist: [9.0, 0.0, 9.0, 0.0],
+                        overlap: true,
+                        ..Default::default()
+                    });
+                }
+            }
+        }
         if let Some(a) = align {
             t.props.align = Some(a);
+            if let Some(f) = &mut t.props.float
+                && !t.props.bidi_visual
+            {
+                f.h_align = match a {
+                    Align::Center => Some(wordcraft_doc::para::FloatAlign::Center),
+                    Align::Right => Some(wordcraft_doc::para::FloatAlign::End),
+                    _ => None,
+                };
+                if a == Align::Left {
+                    f.x = t.props.indent.unwrap_or(0.0);
+                }
+            }
         }
         if let Some(on) = rtl {
             t.props.bidi_visual = on;
+            if on && let Some(f) = &mut t.props.float {
+                f.h_align = None;
+            }
         }
         if let Some(i) = indent {
             t.props.indent = Some(i);
+            if let Some(f) = &mut t.props.float
+                && f.h_align.is_none()
+            {
+                f.x = i;
+            }
         }
         if let Some(cw) = column_width {
             set_column_widths(t, &cells, cw);
