@@ -7,7 +7,17 @@ use super::{
 /// even page or the default), made when there is none: with Different First Page on, a header
 /// inserted on page 1 is the one page 1 shows (#2826).
 pub(super) fn hf_part(s: &mut Session, header: bool) -> u32 {
-    let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
+    if let StoryRef::Part(id) = s.sel.focus.story
+        && s.doc.parts.get(&id).is_some_and(|p| p.kind == if header { PartKind::Header } else { PartKind::Footer })
+    {
+        return id;
+    }
+    let block = if s.sel.focus.story == StoryRef::Body {
+        s.sel.focus.path.0.first().copied().unwrap_or(0) as usize
+    } else {
+        let i = crate::cmd::page::section_index_of_focus(s);
+        s.doc.sections().get(i).map(|(end, _)| *end).unwrap_or(0)
+    };
     let layout = s.layout();
     let page = if s.sel.focus.story == StoryRef::Body { layout.page_of(&s.sel.focus) } else { Some(s.page_hint) };
     let slot = page.and_then(|pg| layout.pages.get(pg)).map(|pg| pg.hf_slot).unwrap_or_default();
