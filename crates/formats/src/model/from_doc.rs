@@ -722,7 +722,7 @@ fn graphic_group(
                 let inline = Inline::Shape { kind: *kind, w: rect[2] * sx, h: rect[3] * sy, float: None, blocks: Vec::new(), look, path: None };
                 Some(Member { x: rect[0] * sx, y: rect[1] * sy, inline })
             }
-            GraphicItem::Text { rect, text, size, color, bold, align, font } if finite(rect) && !text.trim().is_empty() => {
+            GraphicItem::Text { rect, text, size, color, bold, align, font, .. } if finite(rect) && !text.trim().is_empty() => {
                 let size = if size.is_finite() { size.clamp(1.0, 400.0) } else { 11.0 };
                 // One line, centred vertically in its place as the graphic draws it.
                 let line = size * 1.2;
