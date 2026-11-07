@@ -378,7 +378,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     let mut marks = notes::parse_bookmarks(&table, &fib);
     // Comment stories: each text range becomes a comment's part, and the comment's range is
     // marked in the main document like a bookmark's. A comment on an empty range, or whose range
-    // is missing or not in the main document, is marked at its reference (0x05, which the walk
+    // is missing, empty or not in the main document, is marked at its reference (0x05, which the walk
     // drops, as it does the reference mark that starts each comment's own text). A range must end
     // before the text does: the walk stops there, and the comment would be left without its end.
     let atn_base = hdd_base.saturating_add(fib.ccp.hdd);
@@ -391,7 +391,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
         let part = doc.add_part(PartKind::Comment, blocks);
         let id = doc.comments.len() as u32;
         doc.comments.insert(id, Comment { author: a.author, initials: a.initials, part, ..Default::default() });
-        let (start, end) = a.range.filter(|(s, e)| s <= e && *e < fib.ccp.text).unwrap_or((a.ref_cp, a.ref_cp));
+        let (start, end) = a.range.filter(|(s, e)| s < e && *e < fib.ccp.text).unwrap_or((a.ref_cp, a.ref_cp));
         marks.push((start, notes::Mark::CommentStart(id)));
         marks.push((end, notes::Mark::CommentEnd(id)));
     }

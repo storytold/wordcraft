@@ -11,7 +11,8 @@ use crate::fib::{Fib, pair};
 const MAX: usize = 10_000;
 /// Most author names ([MS-DOC] caps `GrpXstAtnOwners` at 0x7FFF entries).
 const MAX_AUTHORS: usize = 0x7FFF;
-/// Characters kept of an author name (the specification's limit is 55).
+/// Characters kept of an author name: more than the specification's 55 (`cch` < 56), so a
+/// slightly non-conforming name is kept whole, while a hostile one is still bounded.
 const MAX_NAME: usize = 255;
 /// Size of an `ATRDPre10` (§2.9.7).
 const ATRD: usize = 30;
@@ -46,7 +47,7 @@ pub(crate) fn parse(table: &[u8], fib: &Fib) -> Vec<Annotation> {
     let mut out = Vec::new();
     let mut kept_to = 0u32;
     // The last CP of the reference PLC is a limit, not a reference.
-    for (i, &ref_cp) in refs.iter().take(refs.len().saturating_sub(1)).enumerate() {
+    for (i, &ref_cp) in refs.iter().take(refs.len().saturating_sub(1)).take(MAX).enumerate() {
         let (Some(&a), Some(&b)) = (txts.get(i), txts.get(i + 1)) else { break };
         if b <= a || a < kept_to {
             continue;
@@ -60,7 +61,8 @@ pub(crate) fn parse(table: &[u8], fib: &Fib) -> Vec<Annotation> {
             .map(utf16)
             .unwrap_or_default();
         let author = atrd.get(20..22).and_then(|b| authors.get(u16::from_le_bytes([b[0], b[1]]) as usize)).cloned().unwrap_or_default();
-        // lTagBkmk is -1 exactly when the comment is on an empty range.
+        // lTagBkmk is -1 exactly when the comment is on an empty range. Any other value is a tag:
+        // `ATNBE.lTag` is unsigned, so one past i32::MAX reads as negative here and is still matched.
         let tag = atrd.get(26..30).map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]])).filter(|t| *t != -1);
         let range = tag.and_then(|t| ranges.get(&(t as u32)).copied());
         out.push(Annotation { ref_cp, story: (a, b), author, initials, range });
@@ -74,9 +76,10 @@ fn plc(table: &[u8], (fc, lcb): (u32, u32), size: usize) -> Option<(Vec<u32>, &[
         return None;
     }
     let b = table.get(fc as usize..(fc as usize).checked_add(lcb as usize)?)?;
-    // 4·(n + 1) bytes of CPs, then n data elements.
+    // 4·(n + 1) bytes of CPs, then n data elements. A `PlcfandTxt` has one CP more than there
+    // are comments (the guard's), so it may hold one element more than `MAX`.
     let n = b.len().checked_sub(4)? / (4 + size);
-    if n == 0 || n > MAX {
+    if n == 0 || n > MAX + 1 {
         return None;
     }
     let (cps, data) = b.split_at_checked((n + 1) * 4)?;
@@ -106,9 +109,9 @@ fn authors(table: &[u8], at: Option<(u32, u32)>) -> Vec<String> {
 
 /// The commented ranges by bookmark tag. `SttbfAtnBkmk` and `PlcfAtnBkf` are parallel: the
 /// i-th bookmark's tag is in the i-th `ATNBE`, its start is the i-th CP of the `Plcfbkf`, and its
-/// end is the CP of the `Plcfbkl` (CPs only) that its `FBKF.ibkl` indexes. A range ending
-/// before it starts, or an index or tag that isn't there, is left out; the first range of a
-/// repeated tag is kept.
+/// end is the CP of the `Plcfbkl` (CPs only) that its `FBKF.ibkl` indexes. An empty range (a
+/// comment on one has no tag, `lTagBkmk` -1) or one ending before it starts, or an index or tag
+/// that isn't there, is left out; the first range of a repeated tag is kept.
 fn ranges(table: &[u8], fib: &Fib) -> HashMap<u32, (u32, u32)> {
     let mut out = HashMap::new();
     let tags = tags(table, fib.pair(pair::STTBF_ATN_BKMK));
@@ -119,7 +122,7 @@ fn ranges(table: &[u8], fib: &Fib) -> HashMap<u32, (u32, u32)> {
     for (i, (&tag, &start)) in tags.iter().zip(starts).enumerate() {
         let Some(f) = fbkfs.get(i * FBKF..i * FBKF + 2) else { break };
         let Some(&end) = ends.get(u16::from_le_bytes([f[0], f[1]]) as usize) else { continue };
-        if end >= start {
+        if end > start {
             out.entry(tag).or_insert((start, end));
         }
     }

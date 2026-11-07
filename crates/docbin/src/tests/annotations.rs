@@ -143,6 +143,36 @@ fn a_comment_whose_range_reaches_past_the_text_falls_back_to_its_reference() {
 }
 
 #[test]
+fn a_comment_whose_bookmark_is_empty_falls_back_to_its_reference() {
+    // A tag on an empty range breaks the specification (that is lTagBkmk -1's meaning): the
+    // comment is anchored at its reference, not at the bookmark.
+    let ccp = TEXT.chars().count() as u32;
+    let mut pairs = ranged_pairs(7, 7);
+    if let Some((_, bkl)) = pairs.iter_mut().find(|(i, _)| *i == ATN_BKL) {
+        *bkl = plc(&[4, ccp], &[]);
+    }
+    let doc = open(TEXT, &STORIES, pairs);
+    let (&id, _) = doc.comments.iter().next().expect("one comment");
+    let p = body_para(&doc);
+    assert_eq!(p.text, "See this\u{FFFC}\u{FFFC} word");
+    assert_eq!(p.objects, vec![InlineObject::CommentStart { id }, InlineObject::CommentEnd { id }]);
+}
+
+#[test]
+fn ten_thousand_comments_are_all_read() {
+    // At the cap, the PlcfandTxt holds one CP more than there are comments (the guard's).
+    const N: u32 = 10_000;
+    let text: &'static str = Box::leak((0..N).map(|_| '\u{5}').chain(['\r']).collect::<String>().into_boxed_str());
+    let ccp = N + 1;
+    let story: String = (0..N).map(|_| "\u{5}c\r").chain(["\r"]).collect();
+    let refs: Vec<u32> = (0..N).chain([ccp]).collect();
+    let txts: Vec<u32> = (0..=N).map(|i| i * 3).chain([N * 3 + 1]).collect();
+    let pairs = vec![(AND_REF, plc(&refs, &atrd("A", 0, -1).repeat(N as usize))), (AND_TXT, plc(&txts, &[]))];
+    let doc = open(text, &[&story], pairs);
+    assert_eq!(doc.comments.len(), N as usize);
+}
+
+#[test]
 fn two_comments_each_get_their_author_and_text() {
     let text = "One\u{5} two\u{5}\r";
     let ccp = text.chars().count() as u32;
