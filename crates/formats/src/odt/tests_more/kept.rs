@@ -304,5 +304,7 @@ fn two_names_for_one_style_both_stay_when_it_is_edited() {
     let saved = styles_of(&export(&d).unwrap());
     for name in ["My_20_Custom", "My_Custom"] {
         assert_eq!(saved.matches(&format!(r#"style:name="{name}""#)).count(), 1, "{name}: {saved}");
+        let def = saved.split(&format!(r#"style:name="{name}""#)).nth(1).and_then(|d| d.split("</style:style>").next()).unwrap();
+        assert!(def.contains(r#"fo:font-size="21pt""#), "{name}: {def}");
     }
 }
