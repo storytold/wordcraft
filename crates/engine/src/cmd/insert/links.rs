@@ -1,4 +1,4 @@
-use super::{CharProps, CmdError, CmdResult, InlineObject, Pos, Selection, Session, StoryRef, Value, json, p, sel_result};
+use super::{CharProps, CmdError, CmdResult, InlineObject, Pos, Selection, Session, StoryRef, Value, delete_selection, json, p, sel_result};
 
 /// What a link can point to inside the document (Insert › Link › Place in This Document): the top
 /// of the document, its headings (body block, level, text) and its bookmarks, without the hidden
@@ -39,6 +39,13 @@ fn place_target(s: &mut Session, v: &Value) -> Result<Option<(String, String)>, 
     Ok(None)
 }
 
+/// Inserts or updates a hyperlink pointing to an external URL or an internal document target.
+///
+/// When the selection is collapsed, the link is inserted at the caret with the specified
+/// display text (falling back to the target URL/label). When text is selected, if a custom
+/// display text is provided that differs from the existing selection, the selected text is
+/// replaced with the new display text and formatted as a link (#5915); otherwise, the existing
+/// selected range is formatted in place with the link target.
 pub(super) fn link(s: &mut Session, v: &Value) -> CmdResult {
     let (url, label) = match p::str(v, "url") {
         Some(url) => (url.to_string(), url.to_string()),
@@ -54,13 +61,24 @@ pub(super) fn link(s: &mut Session, v: &Value) -> CmdResult {
         return Err(CmdError::Params("bad url".into()));
     }
     let style = Some("Hyperlink".to_string());
+    let custom_text = p::str(v, "text").filter(|t| !t.is_empty());
     if s.sel.is_collapsed() {
-        let text = p::str(v, "text").unwrap_or(&label).to_string();
+        let text = custom_text.unwrap_or(&label).to_string();
         let mut props = s.typing_props();
         props.link = Some(url.clone());
         props.style = style;
         let at = s.sel.focus.clone();
         let end = s.doc.insert_text(&at, &text, &props)?;
+        s.sel = Selection::caret(end);
+        s.pending = Some(CharProps::default());
+    } else if let Some(text) = custom_text
+        && text != s.selected_text()
+    {
+        let mut props = s.typing_props();
+        props.link = Some(url.clone());
+        props.style = style;
+        let at = delete_selection(s)?;
+        let end = s.doc.insert_text(&at, text, &props)?;
         s.sel = Selection::caret(end);
         s.pending = Some(CharProps::default());
     } else {

@@ -10567,6 +10567,10 @@ fn links_to_places_in_this_document() {
     run(&mut s, "select.text", json!({"text": "here"}));
     run(&mut s, "insert.link", json!({"bookmark": "Mark1"}));
     assert_eq!(links(&s), vec![("#Mark1".to_string(), "here".to_string())]);
+    // #5915: Replacing the selection with custom display text.
+    run(&mut s, "select.text", json!({"text": "here"}));
+    run(&mut s, "insert.link", json!({"bookmark": "Mark1", "text": "mark target"}));
+    assert_eq!(links(&s), vec![("#Mark1".to_string(), "mark target".to_string())]);
     // A heading link at a caret inserts the heading's text; it reuses the heading's hidden bookmark.
     run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
     run(&mut s, "insert.link", json!({"heading": t["headings"][1]["block"]}));

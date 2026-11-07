@@ -1502,6 +1502,27 @@ fn links(s: &Session) -> Vec<(String, bool)> {
         .collect()
 }
 
+/// #5915: Modifying the "Text to display" field when inserting a hyperlink on a selected
+/// word or phrase must replace the selected text with the custom display text.
+#[test]
+fn inserting_link_over_selection_with_custom_display_text_replaces_text() {
+    let mut s = typed("Select a phrase here for testing.");
+    run(&mut s, "select.text", json!({"text": "phrase"}));
+    run(&mut s, "insert.link", json!({"url": "https://example.com/target", "text": "cas pratique"}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Select a cas pratique here for testing.");
+    assert_eq!(links(&s), [("cas pratique".into(), false)]);
+
+    // Undo restores original text and selection
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Select a phrase here for testing.");
+    assert_eq!(links(&s), [(String::new(), false)]);
+
+    // Redo reapplies the replacement
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Select a cas pratique here for testing.");
+    assert_eq!(links(&s), [("cas pratique".into(), false)]);
+}
+
 #[test]
 fn a_link_covers_only_its_own_text() {
     // Issue #413: linking a whole paragraph also linked its mark, so Enter carried the link into
