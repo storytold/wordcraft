@@ -241,6 +241,8 @@ pub struct Session {
     order: Vec<u64>,
     /// Untitled documents made so far, for the next one's name (`Document3`).
     untitled_count: u32,
+    /// The open documents whose embedded fonts this session claims (a preview copy claims none).
+    font_claims: documents::FontClaims,
 }
 
 impl Session {
