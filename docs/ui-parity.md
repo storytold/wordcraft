@@ -101,6 +101,7 @@ Right-click and Shift+F10 keep the compact suggestions menu. The pane is shared 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | trivial | Dialog sections: 13 dialogs group related controls in theme-aware panels with indented settings; tall dialogs scroll only when needed (#4035, #4038) |
 | 2026-10-17 | trivial | Drawing Canvas members are selected with a click and dragged, resized, turned, nudged, formatted, deleted and copied on their own inside the canvas; a click in a text box member's text puts the caret there (#2637) |
 | 2026-11-05 | trivial | On-canvas objects: dragging an In Line with Text picture, shape or text box shows a bold, solid insertion cursor, twice the caret's width, as in Word; the dashed one was hard to see (#4195) |
 | 2026-10-28 | trivial | Protected typing boundary lookup counts preceding objects once and indexes editable permission IDs (#3614); caret movement and enforcement policy are unchanged. |

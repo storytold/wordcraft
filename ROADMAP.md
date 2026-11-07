@@ -242,6 +242,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-10-29: Saving a DOCX with many comments no longer searches all comment paragraph IDs and all reserved durable IDs for each comment. Paragraph IDs use their existing sorted order; durable-ID reservations are indexed once. Parent links, resolved flags, authored text and existing ID rules are unchanged.
 
 - 2026-10-28: RTF import keeps pictures stored as Windows Metafiles (`\wmetafile8`, as Word writes a pasted or floating picture) and Enhanced Metafiles (`\emfblip`); they were dropped, so such a document opened without its pictures. They are drawn by the metafile renderer, saved to .docx as `.wmf`/`.emf` media, and saved to .rtf as metafiles again (RTF export dropped them too). (#4259)
+- 2026-10-26: Thirteen dialogs group related settings in theme-aware panels with indented contents; tall dialogs scroll only when needed (#4035, #4038).
 - 2026-10-27: File › Options › Proofing › AutoCorrect Options opens with no document open (#4585). On the Start screen, or after closing the last document, the button did nothing: AutoCorrect wasn't among the commands allowed without a document. Its options are user preferences, so changes made there are kept for the next document.
 - 2026-10-29: Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880). Labels → New Document with one label per recipient includes every selected address, with unused labels blank on the final sheet. Fixed-text and single-label output remain one sheet. Finish & Merge template expansion is separate.
 - 2026-10-29: HTML import keeps preformatted lines with CR, CRLF or LF input newlines (#4810); numeric character references retain their separate meaning; readiness estimates unchanged.
@@ -808,6 +809,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | trivial | Progress log: dialog sections across 13 dialogs; conditional scrolling for tall dialogs (#4035, #4038) |
 | 2026-11-06 | trivial | Print helpers remove loaded PDF/settings files before driver work, tolerate prior removal and report cleanup errors; a held-driver regression checks the files are already absent (#5710) |
 | 2026-11-06 | trivial | Windows print submissions isolated per helper process; cancelled driver work cannot block a retry (#5710) |
 | 2026-11-06 | trivial | Progress log: print cancellation before sending, including without a document, and the Windows repeated-conversion limitation (#5710) |

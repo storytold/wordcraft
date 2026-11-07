@@ -1694,6 +1694,27 @@ fn the_custom_properties_dialog_leaves_imported_non_text_properties_alone() {
     assert_eq!(kinds, [("Status", "lpwstr"), ("Count", "i4")], "Cancel leaves the imported property as it was");
 }
 
+/// A tall dialog on a short screen stays inside it and scrolls.
+#[test]
+fn a_tall_dialog_fits_a_short_screen() {
+    let mut app = app_with("Some text");
+    app.dialog = Dialog::open("pageSetup", &mut app);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 360.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..4 {
+        h.step();
+    }
+    let id = egui::Id::unique(("dialog", "Page Setup"));
+    let rect = h.ctx.memory(|m| m.area_rect(id)).expect("the dialog is open");
+    assert!(rect.height() <= 360.5, "the dialog is {}pt tall on a 360pt screen", rect.height());
+}
+
 /// #3859: a dialog is modal, as in Word. While Font is open, typing (from the frame it opens),
 /// Mod+O and a click on File reach nothing behind it, and the dialog itself still works. Find
 /// and Replace is modeless: with it open, File still opens.

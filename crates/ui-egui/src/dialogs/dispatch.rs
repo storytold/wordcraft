@@ -122,128 +122,130 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     };
     let sample_props =
         font_sample_props(app, sample_paper(app), font, size, color, (*bold, *italic, *underline, *strike), (*small_caps, *caps, *hidden), *spacing);
-    crate::rtl::Table::new("fontdlg").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
-        // Word's two font boxes when East Asian text is in use: the Latin text font and
-        // the Asian text font, each with its own list (type to find a font).
-        let prev = app.previews.font_preview_fn();
-        if *asian {
+    crate::widgets::section(ui, "", |ui| {
+        crate::rtl::Table::new("fontdlg").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
+            // Word's two font boxes when East Asian text is in use: the Latin text font and
+            // the Asian text font, each with its own list (type to find a font).
+            let prev = app.previews.font_preview_fn();
+            if *asian {
+                t.row(|r| {
+                    r.cell(|ui| ui.label(tl!("Asian text font:")));
+                    r.cell(|ui| {
+                        let fams = app.previews.east_asian_families();
+                        let stored = app.previews.font_stored(font_ea);
+                        let latin = app.previews.font_stored(font);
+                        let warning = app.east_asian_font_box_warning(&stored, &latin);
+                        if let Some(f) = font_box(ui, ("fontdlg_asian", font_ea.as_str()), &fams, &*prev, warning.as_deref()) {
+                            if f == crate::widgets::ADD_FONT {
+                                let _ = app.run("font.add", json!({}));
+                            } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
+                                let _ = app.run("font.loadSystem", json!({}));
+                            } else {
+                                *font_ea = f;
+                            }
+                        }
+                    });
+                });
+            }
             t.row(|r| {
-                r.cell(|ui| ui.label(tl!("Asian text font:")));
+                r.cell(|ui| ui.label(if *asian { tl!("Latin text font:") } else { tl!("Font:") }));
                 r.cell(|ui| {
-                    let fams = app.previews.east_asian_families();
-                    let stored = app.previews.font_stored(font_ea);
-                    let latin = app.previews.font_stored(font);
-                    let warning = app.east_asian_font_box_warning(&stored, &latin);
-                    if let Some(f) = font_box(ui, ("fontdlg_asian", font_ea.as_str()), &fams, &*prev, warning.as_deref()) {
+                    let fams = app.previews.families();
+                    let stored = app.previews.font_stored(font);
+                    let warning = app.font_dialog_warning(&stored);
+                    if let Some(f) = font_box(ui, ("fontdlg_font", font.as_str()), &fams, &*prev, warning.as_deref()) {
                         if f == crate::widgets::ADD_FONT {
                             let _ = app.run("font.add", json!({}));
                         } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
                             let _ = app.run("font.loadSystem", json!({}));
                         } else {
-                            *font_ea = f;
+                            *font = f;
                         }
                     }
                 });
             });
-        }
-        t.row(|r| {
-            r.cell(|ui| ui.label(if *asian { tl!("Latin text font:") } else { tl!("Font:") }));
-            r.cell(|ui| {
-                let fams = app.previews.families();
-                let stored = app.previews.font_stored(font);
-                let warning = app.font_dialog_warning(&stored);
-                if let Some(f) = font_box(ui, ("fontdlg_font", font.as_str()), &fams, &*prev, warning.as_deref()) {
-                    if f == crate::widgets::ADD_FONT {
-                        let _ = app.run("font.add", json!({}));
-                    } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
-                        let _ = app.run("font.loadSystem", json!({}));
-                    } else {
-                        *font = f;
-                    }
-                }
+            t.row(|r| {
+                let size_label = r.cell(|ui| ui.label(tl!("Size:")));
+                r.cell(|ui| ui.text_edit_singleline(size).labelled_by(size_label.id));
             });
-        });
-        t.row(|r| {
-            let size_label = r.cell(|ui| ui.label(tl!("Size:")));
-            r.cell(|ui| ui.text_edit_singleline(size).labelled_by(size_label.id));
-        });
-        t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Font color:")));
-            r.cell(|ui| {
-                let theme = app.session.doc.settings.theme_colors.clone();
-                color_field(ui, &theme, color, "Automatic", "auto");
+            t.row(|r| {
+                r.cell(|ui| ui.label(tl!("Font color:")));
+                r.cell(|ui| {
+                    let theme = app.session.doc.settings.theme_colors.clone();
+                    color_field(ui, &theme, color, "Automatic", "auto");
+                });
             });
-        });
-        t.row(|r| {
-            let spacing_label = r.cell(|ui| ui.label(tl!("Spacing (pt):")));
-            r.cell(|ui| ui.add(egui::DragValue::new(spacing).speed(0.1).range(-20.0..=20.0)).labelled_by(spacing_label.id));
-        });
-        t.row(|r| {
-            let label = tl!("Kerning for fonts:");
-            r.cell(|ui| match kern {
-                Some(on) => {
-                    ui.checkbox(on, label);
-                }
-                None => {
-                    if ui.add(egui::Checkbox::new(&mut false, label).indeterminate(true)).clicked() {
-                        *kern = Some(true);
-                    }
-                }
+            t.row(|r| {
+                let spacing_label = r.cell(|ui| ui.label(tl!("Spacing (pt):")));
+                r.cell(|ui| ui.add(egui::DragValue::new(spacing).speed(0.1).range(-20.0..=20.0)).labelled_by(spacing_label.id));
             });
-            r.cell(|ui| {
-                ui.horizontal(|ui| {
-                    let enabled = *kern == Some(true);
-                    let field = egui::DragValue::new(kern_at).speed(0.5).range(1.0..=1638.0).max_decimals(1);
-                    // The number comes first in the reading order, then "points and above"; a left-to-right
-                    // row in a right-to-left interface runs the other way, so there the label is first.
-                    if crate::rtl::on() && !crate::rtl::flows(ui) {
-                        let points_label = ui.label(tl!("Points and above"));
-                        ui.add_enabled(enabled, field).labelled_by(points_label.id);
-                    } else {
-                        let points = ui.add_enabled(enabled, field);
-                        let points_label = ui.label(tl!("Points and above"));
-                        points.labelled_by(points_label.id);
+            t.row(|r| {
+                let label = tl!("Kerning for fonts:");
+                r.cell(|ui| match kern {
+                    Some(on) => {
+                        ui.checkbox(on, label);
                     }
+                    None => {
+                        if ui.add(egui::Checkbox::new(&mut false, label).indeterminate(true)).clicked() {
+                            *kern = Some(true);
+                        }
+                    }
+                });
+                r.cell(|ui| {
+                    ui.horizontal(|ui| {
+                        let enabled = *kern == Some(true);
+                        let field = egui::DragValue::new(kern_at).speed(0.5).range(1.0..=1638.0).max_decimals(1);
+                        // The number comes first in the reading order, then "points and above"; a left-to-right
+                        // row in a right-to-left interface runs the other way, so there the label is first.
+                        if crate::rtl::on() && !crate::rtl::flows(ui) {
+                            let points_label = ui.label(tl!("Points and above"));
+                            ui.add_enabled(enabled, field).labelled_by(points_label.id);
+                        } else {
+                            let points = ui.add_enabled(enabled, field);
+                            let points_label = ui.label(tl!("Points and above"));
+                            points.labelled_by(points_label.id);
+                        }
+                    });
                 });
             });
         });
     });
-    ui.separator();
-    ui.label(egui::RichText::new(tl!("Effects")).font(semibold(12.5)));
-    crate::rtl::Table::new("fx").columns(2).show(ui, |t| {
-        t.row(|r| {
-            r.cell(|ui| ui.checkbox(bold, tl!("Bold")));
-            r.cell(|ui| ui.checkbox(italic, tl!("Italic")));
-        });
-        t.row(|r| {
-            r.cell(|ui| ui.checkbox(underline, tl!("Underline")));
-            r.cell(|ui| ui.checkbox(strike, tl!("Strikethrough")));
-        });
-        t.row(|r| {
-            // Superscript and Subscript exclude each other: the one just ticked wins.
-            let was_sup = *sup;
-            r.cell(|ui| ui.checkbox(sup, tl!("Superscript")));
-            r.cell(|ui| ui.checkbox(sub, tl!("Subscript")));
-            if *sup && *sub {
-                if was_sup {
-                    *sup = false;
-                } else {
-                    *sub = false;
+    crate::widgets::section(ui, tl!("Effects"), |ui| {
+        crate::rtl::Table::new("fx").columns(2).show(ui, |t| {
+            t.row(|r| {
+                r.cell(|ui| ui.checkbox(bold, tl!("Bold")));
+                r.cell(|ui| ui.checkbox(italic, tl!("Italic")));
+            });
+            t.row(|r| {
+                r.cell(|ui| ui.checkbox(underline, tl!("Underline")));
+                r.cell(|ui| ui.checkbox(strike, tl!("Strikethrough")));
+            });
+            t.row(|r| {
+                // Superscript and Subscript exclude each other: the one just ticked wins.
+                let was_sup = *sup;
+                r.cell(|ui| ui.checkbox(sup, tl!("Superscript")));
+                r.cell(|ui| ui.checkbox(sub, tl!("Subscript")));
+                if *sup && *sub {
+                    if was_sup {
+                        *sup = false;
+                    } else {
+                        *sub = false;
+                    }
                 }
-            }
-        });
-        t.row(|r| {
-            r.cell(|ui| ui.checkbox(small_caps, tl!("Small caps")));
-            r.cell(|ui| ui.checkbox(caps, tl!("All caps")));
-        });
-        t.row(|r| {
-            r.cell(|ui| ui.checkbox(hidden, tl!("Hidden")));
+            });
+            t.row(|r| {
+                r.cell(|ui| ui.checkbox(small_caps, tl!("Small caps")));
+                r.cell(|ui| ui.checkbox(caps, tl!("All caps")));
+            });
+            t.row(|r| {
+                r.cell(|ui| ui.checkbox(hidden, tl!("Hidden")));
+            });
         });
     });
     // Live preview of the chosen font/size/colour/effects.
-    ui.separator();
-    ui.label(egui::RichText::new(tl!("Preview")).small().weak());
-    font_sample_box(app, ui, sample_paper(app), &sample_props, (*sup, *sub), *hidden);
+    crate::widgets::section(ui, tl!("Preview"), |ui| {
+        font_sample_box(app, ui, sample_paper(app), &sample_props, (*sup, *sub), *hidden);
+    });
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
         apply_font(app, d);
@@ -281,86 +283,92 @@ fn paragraph_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ui.add_space(6.0);
     match *tab {
         0 => {
-            ui.label(egui::RichText::new(tl!("General")).font(semibold(12.5)));
-            ui.horizontal(|ui| {
-                ui.label(tl!("Direction:"));
-                // Neither while the selected paragraphs differ.
-                let blank = mixed.contains("bidi");
-                for (value, text) in [(true, tl!("Right-to-left")), (false, tl!("Left-to-right"))] {
-                    if ui.radio(!blank && *rtl == value, text).clicked() {
-                        *rtl = value;
-                        mixed.remove("bidi");
-                    }
-                }
-            });
-            const ALIGNS: [(&str, &str); 4] = [("left", "Left"), ("center", "Center"), ("right", "Right"), ("justify", "Justify")];
-            ui.horizontal(|ui| {
-                let align_label = ui.label(tl!("Alignment:"));
-                let shown =
-                    if mixed.contains("align") { "" } else { ALIGNS.iter().find(|(v, _)| v == align).map_or(align.as_str(), |(_, l)| tl!(l)) };
-                let combo = craft_ui::ComboBox::from_id_salt("para_align").selected_text(shown).show_ui(ui, |ui| {
-                    for (v, l) in ALIGNS {
-                        if ui.selectable_value(align, v.to_string(), tl!(l)).clicked() {
-                            mixed.remove("align");
+            crate::widgets::section(ui, tl!("General"), |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(tl!("Direction:"));
+                    // Neither while the selected paragraphs differ.
+                    let blank = mixed.contains("bidi");
+                    for (value, text) in [(true, tl!("Right-to-left")), (false, tl!("Left-to-right"))] {
+                        if ui.radio(!blank && *rtl == value, text).clicked() {
+                            *rtl = value;
+                            mixed.remove("bidi");
                         }
                     }
                 });
-                combo.response.labelled_by(align_label.id);
-            });
-            ui.label(egui::RichText::new(tl!("Indentation")).font(semibold(12.5)));
-            // Mirrored indents are the inside and outside ones (they swap on even pages).
-            let (l_label, r_label) = if opts[0] { ("Inside:", "Outside:") } else { ("Left:", "Right:") };
-            crate::rtl::Table::new("ind").columns(4).show(ui, |t| {
-                t.row(|r| {
-                    let left_label = r.cell(|ui| ui.label(tl!(l_label)));
-                    r.cell(|ui| para_number(ui, left, ParaNumber::Length, "left", mixed, &left_label));
-                    let right_label = r.cell(|ui| ui.label(tl!(r_label)));
-                    r.cell(|ui| para_number(ui, right, ParaNumber::Length, "right", mixed, &right_label));
-                });
-                t.row(|r| {
-                    let first_label = r.cell(|ui| ui.label(tl!("First line:")));
-                    r.cell(|ui| para_number(ui, first, ParaNumber::Length, "indentFirst", mixed, &first_label));
+                const ALIGNS: [(&str, &str); 4] = [("left", "Left"), ("center", "Center"), ("right", "Right"), ("justify", "Justify")];
+                ui.horizontal(|ui| {
+                    let align_label = ui.label(tl!("Alignment:"));
+                    let shown =
+                        if mixed.contains("align") { "" } else { ALIGNS.iter().find(|(v, _)| v == align).map_or(align.as_str(), |(_, l)| tl!(l)) };
+                    let combo = craft_ui::ComboBox::from_id_salt("para_align").selected_text(shown).show_ui(ui, |ui| {
+                        for (v, l) in ALIGNS {
+                            if ui.selectable_value(align, v.to_string(), tl!(l)).clicked() {
+                                mixed.remove("align");
+                            }
+                        }
+                    });
+                    combo.response.labelled_by(align_label.id);
                 });
             });
-            para_check(ui, &mut opts[0], tl!("Mirror indents"), "mirrorIndents", mixed);
-            ui.label(egui::RichText::new(tl!("Spacing")).font(semibold(12.5)));
-            crate::rtl::Table::new("sp").columns(4).show(ui, |t| {
-                t.row(|r| {
-                    let before_label = r.cell(|ui| ui.label(tl!("Before:")));
-                    r.cell(|ui| para_number(ui, before, ParaNumber::Points, "spaceBefore", mixed, &before_label));
-                    let line_label = r.cell(|ui| ui.label(tl!("Line spacing:")));
-                    r.cell(|ui| para_number(ui, line, ParaNumber::Lines, "lineSpacing", mixed, &line_label));
+            crate::widgets::section(ui, tl!("Indentation"), |ui| {
+                // Mirrored indents are the inside and outside ones (they swap on even pages).
+                let (l_label, r_label) = if opts[0] { ("Inside:", "Outside:") } else { ("Left:", "Right:") };
+                crate::rtl::Table::new("ind").columns(4).show(ui, |t| {
+                    t.row(|r| {
+                        let left_label = r.cell(|ui| ui.label(tl!(l_label)));
+                        r.cell(|ui| para_number(ui, left, ParaNumber::Length, "left", mixed, &left_label));
+                        let right_label = r.cell(|ui| ui.label(tl!(r_label)));
+                        r.cell(|ui| para_number(ui, right, ParaNumber::Length, "right", mixed, &right_label));
+                    });
+                    t.row(|r| {
+                        let first_label = r.cell(|ui| ui.label(tl!("First line:")));
+                        r.cell(|ui| para_number(ui, first, ParaNumber::Length, "indentFirst", mixed, &first_label));
+                    });
                 });
-                t.row(|r| {
-                    let after_label = r.cell(|ui| ui.label(tl!("After:")));
-                    r.cell(|ui| para_number(ui, after, ParaNumber::Points, "spaceAfter", mixed, &after_label));
+                para_check(ui, &mut opts[0], tl!("Mirror indents"), "mirrorIndents", mixed);
+            });
+            crate::widgets::section(ui, tl!("Spacing"), |ui| {
+                crate::rtl::Table::new("sp").columns(4).show(ui, |t| {
+                    t.row(|r| {
+                        let before_label = r.cell(|ui| ui.label(tl!("Before:")));
+                        r.cell(|ui| para_number(ui, before, ParaNumber::Points, "spaceBefore", mixed, &before_label));
+                        let line_label = r.cell(|ui| ui.label(tl!("Line spacing:")));
+                        r.cell(|ui| para_number(ui, line, ParaNumber::Lines, "lineSpacing", mixed, &line_label));
+                    });
+                    t.row(|r| {
+                        let after_label = r.cell(|ui| ui.label(tl!("After:")));
+                        r.cell(|ui| para_number(ui, after, ParaNumber::Points, "spaceAfter", mixed, &after_label));
+                    });
                 });
             });
-            para_check(ui, &mut opts[1], tl!("Don't add space between paragraphs of the same style"), "contextualSpacing", mixed);
         }
         1 => {
-            ui.label(egui::RichText::new(tl!("Line and Page Breaks")).font(semibold(12.5)));
-            para_check(ui, widow, tl!("Widow/Orphan control"), "widowControl", mixed);
-            para_check(ui, keep_next, tl!("Keep with next"), "keepNext", mixed);
-            para_check(ui, keep_lines, tl!("Keep lines together"), "keepLines", mixed);
-            para_check(ui, page_break, tl!("Page break before"), "pageBreakBefore", mixed);
-            ui.label(egui::RichText::new(tl!("Formatting exceptions")).font(semibold(12.5)));
-            para_check(ui, &mut opts[2], tl!("Suppress line numbers"), "suppressLineNumbers", mixed);
-            para_check(ui, &mut opts[3], tl!("Don't hyphenate"), "suppressHyphens", mixed);
+            crate::widgets::section(ui, tl!("Line and Page Breaks"), |ui| {
+                para_check(ui, widow, tl!("Widow/Orphan control"), "widowControl", mixed);
+                para_check(ui, keep_next, tl!("Keep with next"), "keepNext", mixed);
+                para_check(ui, keep_lines, tl!("Keep lines together"), "keepLines", mixed);
+                para_check(ui, page_break, tl!("Page break before"), "pageBreakBefore", mixed);
+            });
+            crate::widgets::section(ui, tl!("Formatting exceptions"), |ui| {
+                para_check(ui, &mut opts[2], tl!("Suppress line numbers"), "suppressLineNumbers", mixed);
+                para_check(ui, &mut opts[3], tl!("Don't hyphenate"), "suppressHyphens", mixed);
+            });
         }
         _ => {
             let [kinsoku, word_wrap, overflow, top_line, de, dn] = asian;
-            ui.label(egui::RichText::new(tl!("Line breaking")).font(semibold(12.5)));
-            para_check(ui, kinsoku, tl!("Apply Asian line-breaking rules (kinsoku)"), "kinsoku", mixed);
-            // The model's flag is "wrap whole words"; the box offers the opposite.
-            let mut mid_word = !*word_wrap;
-            para_check(ui, &mut mid_word, tl!("Allow Latin text to wrap in the middle of a word"), "wordWrap", mixed);
-            *word_wrap = !mid_word;
-            para_check(ui, overflow, tl!("Allow hanging punctuation"), "overflowPunct", mixed);
-            ui.label(egui::RichText::new(tl!("Character Spacing")).font(semibold(12.5)));
-            para_check(ui, top_line, tl!("Compress punctuation at the start of a line"), "topLinePunct", mixed);
-            para_check(ui, de, tl!("Add space between Asian and Latin text"), "autoSpaceDE", mixed);
-            para_check(ui, dn, tl!("Add space between Asian text and numbers"), "autoSpaceDN", mixed);
+            crate::widgets::section(ui, tl!("Line breaking"), |ui| {
+                para_check(ui, kinsoku, tl!("Apply Asian line-breaking rules (kinsoku)"), "kinsoku", mixed);
+                // The model's flag is "wrap whole words"; the box offers the opposite.
+                let mut mid_word = !*word_wrap;
+                para_check(ui, &mut mid_word, tl!("Allow Latin text to wrap in the middle of a word"), "wordWrap", mixed);
+                *word_wrap = !mid_word;
+                para_check(ui, overflow, tl!("Allow hanging punctuation"), "overflowPunct", mixed);
+            });
+            crate::widgets::section(ui, tl!("Character Spacing"), |ui| {
+                para_check(ui, top_line, tl!("Compress punctuation at the start of a line"), "topLinePunct", mixed);
+                para_check(ui, de, tl!("Add space between Asian and Latin text"), "autoSpaceDE", mixed);
+                para_check(ui, dn, tl!("Add space between Asian text and numbers"), "autoSpaceDN", mixed);
+            });
         }
     }
     ui.add_space(6.0);
@@ -607,57 +615,62 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     else {
         return false;
     };
-    ui.label(egui::RichText::new(tl!("Margins")).font(semibold(12.5)));
-    crate::rtl::Table::new("ps").columns(4).show(ui, |t| {
-        t.row(|r| {
-            let top_label = r.cell(|ui| ui.label(tl!("Top:")));
-            r.cell(|ui| ui.add(margin(top)).labelled_by(top_label.id));
-            let bottom_label = r.cell(|ui| ui.label(tl!("Bottom:")));
-            r.cell(|ui| ui.add(margin(bottom)).labelled_by(bottom_label.id));
-        });
-        t.row(|r| {
-            let left_label = r.cell(|ui| ui.label(if *mirror { tl!("Inside:") } else { tl!("Left:") }));
-            r.cell(|ui| ui.add(margin(left)).labelled_by(left_label.id));
-            let right_label = r.cell(|ui| ui.label(if *mirror { tl!("Outside:") } else { tl!("Right:") }));
-            r.cell(|ui| ui.add(margin(right)).labelled_by(right_label.id));
-        });
-    });
-    ui.label(egui::RichText::new(tl!("Orientation")).font(semibold(12.5)));
-    ui.horizontal(|ui| {
-        ui.radio_value(landscape, false, tl!("Portrait"));
-        ui.radio_value(landscape, true, tl!("Landscape"));
-    });
-    ui.label(egui::RichText::new(tl!("Pages")).font(semibold(12.5)));
-    ui.checkbox(mirror, tl!("Mirror margins"));
-    page_paper_group(ui, paper, landscape, paper_custom);
-    ui.label(egui::RichText::new(tl!("Document Grid")).font(semibold(12.5)));
-    ui.horizontal_wrapped(|ui| {
-        ui.radio_value(&mut grid.0, 0, tl!("No grid"));
-        ui.radio_value(&mut grid.0, 1, tl!("Lines only"));
-        ui.radio_value(&mut grid.0, 2, tl!("Lines and characters"));
-        ui.radio_value(&mut grid.0, 3, tl!("Text snaps to characters"));
-    });
-    crate::rtl::Table::new("ps_grid").columns(4).show(ui, |t| {
-        t.row(|r| {
-            let chars_label = r.cell(|ui| ui.add_enabled(grid.0 >= 2, egui::Label::new(tl!("Characters per line:"))));
-            r.cell(|ui| ui.add_enabled(grid.0 >= 2, egui::DragValue::new(&mut grid.2).range(1..=1000)).labelled_by(chars_label.id));
-            let lines_label = r.cell(|ui| ui.add_enabled(grid.0 >= 1, egui::Label::new(tl!("Lines per page:"))));
-            r.cell(|ui| ui.add_enabled(grid.0 >= 1, egui::DragValue::new(&mut grid.1).range(1..=1000)).labelled_by(lines_label.id));
+    crate::widgets::section(ui, tl!("Margins"), |ui| {
+        crate::rtl::Table::new("ps").columns(4).show(ui, |t| {
+            t.row(|r| {
+                let top_label = r.cell(|ui| ui.label(tl!("Top:")));
+                r.cell(|ui| ui.add(margin(top)).labelled_by(top_label.id));
+                let bottom_label = r.cell(|ui| ui.label(tl!("Bottom:")));
+                r.cell(|ui| ui.add(margin(bottom)).labelled_by(bottom_label.id));
+            });
+            t.row(|r| {
+                let left_label = r.cell(|ui| ui.label(if *mirror { tl!("Inside:") } else { tl!("Left:") }));
+                r.cell(|ui| ui.add(margin(left)).labelled_by(left_label.id));
+                let right_label = r.cell(|ui| ui.label(if *mirror { tl!("Outside:") } else { tl!("Right:") }));
+                r.cell(|ui| ui.add(margin(right)).labelled_by(right_label.id));
+            });
         });
     });
-    ui.horizontal(|ui| {
-        ui.label(tl!("Section direction:"));
-        ui.radio_value(rtl, false, tl!("Left-to-right"));
-        ui.radio_value(rtl, true, tl!("Right-to-left"));
+    crate::widgets::section(ui, tl!("Orientation"), |ui| {
+        ui.horizontal(|ui| {
+            ui.radio_value(landscape, false, tl!("Portrait"));
+            ui.radio_value(landscape, true, tl!("Landscape"));
+        });
     });
-    if !message.is_empty() {
-        ui.label(egui::RichText::new(message.as_str()).small().color(ui.visuals().error_fg_color));
-    }
-    page_valign_combo(ui, valign);
-    // Word's Page Setup › Layout: a title page without the page number (#1230).
-    ui.label(egui::RichText::new(tl!("Headers and footers")).font(semibold(12.5)));
-    ui.checkbox(odd_even, tl!("Different Odd & Even Pages"));
-    ui.checkbox(first_page, tl!("Different First Page"));
+    crate::widgets::section(ui, tl!("Pages"), |ui| {
+        ui.checkbox(mirror, tl!("Mirror margins"));
+        page_paper_group(ui, paper, landscape, paper_custom);
+    });
+    crate::widgets::section(ui, tl!("Document Grid"), |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.radio_value(&mut grid.0, 0, tl!("No grid"));
+            ui.radio_value(&mut grid.0, 1, tl!("Lines only"));
+            ui.radio_value(&mut grid.0, 2, tl!("Lines and characters"));
+            ui.radio_value(&mut grid.0, 3, tl!("Text snaps to characters"));
+        });
+        crate::rtl::Table::new("ps_grid").columns(4).show(ui, |t| {
+            t.row(|r| {
+                let chars_label = r.cell(|ui| ui.add_enabled(grid.0 >= 2, egui::Label::new(tl!("Characters per line:"))));
+                r.cell(|ui| ui.add_enabled(grid.0 >= 2, egui::DragValue::new(&mut grid.2).range(1..=1000)).labelled_by(chars_label.id));
+                let lines_label = r.cell(|ui| ui.add_enabled(grid.0 >= 1, egui::Label::new(tl!("Lines per page:"))));
+                r.cell(|ui| ui.add_enabled(grid.0 >= 1, egui::DragValue::new(&mut grid.1).range(1..=1000)).labelled_by(lines_label.id));
+            });
+        });
+        ui.horizontal(|ui| {
+            ui.label(tl!("Section direction:"));
+            ui.radio_value(rtl, false, tl!("Left-to-right"));
+            ui.radio_value(rtl, true, tl!("Right-to-left"));
+        });
+        if !message.is_empty() {
+            ui.label(egui::RichText::new(message.as_str()).small().color(ui.visuals().error_fg_color));
+        }
+        page_valign_combo(ui, valign);
+    });
+    crate::widgets::section(ui, tl!("Headers and footers"), |ui| {
+        // Word's Page Setup › Layout: a title page without the page number (#1230).
+        ui.checkbox(odd_even, tl!("Different Odd & Even Pages"));
+        ui.checkbox(first_page, tl!("Different First Page"));
+    });
     let (mut ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
         // Everything OK changes is one undo step; a refused command applies nothing.

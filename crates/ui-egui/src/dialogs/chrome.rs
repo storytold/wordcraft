@@ -214,7 +214,21 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     let held = (app.file_browser_open() || app.colors.is_some()).then(|| ctx.input_mut(|i| std::mem::take(&mut i.events)));
     let shown = place_dialog(ctx, id, window).show(ctx, |ui| {
         ui.set_min_width(340.0);
-        close = crate::rtl::root(ui, |ui| body(app, ui, &mut d));
+        // Scrolls only when the last frame's body was taller than the screen.
+        let room = (ui.ctx().content_rect().height() - 110.0).max(160.0);
+        let key = id.with("body_height");
+        let tall = ui.ctx().data(|data| data.get_temp::<f32>(key)).is_some_and(|h| h > room);
+        let mut content = |ui: &mut egui::Ui| {
+            let top = ui.cursor().min.y;
+            close = crate::rtl::root(ui, |ui| body(app, ui, &mut d));
+            let height = ui.min_rect().max.y - top;
+            ui.ctx().data_mut(|data| data.insert_temp(key, height));
+        };
+        if tall {
+            egui::ScrollArea::vertical().max_height(room).auto_shrink([true, true]).show(ui, content);
+        } else {
+            content(ui);
+        }
     });
     if let Some(events) = held {
         ctx.input_mut(|i| i.events = events);
