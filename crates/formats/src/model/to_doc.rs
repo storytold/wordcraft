@@ -822,8 +822,14 @@ impl<'a> Builder<'a> {
         if t.borderless || t.extra.is_some() {
             tb.props.style = None;
         }
-        if t.widths.len() == cols && t.widths.iter().all(|w| w.is_finite() && *w > 1.0) {
+        let sized = t.widths.len() == cols && t.widths.iter().all(|w| w.is_finite() && *w > 1.0);
+        if sized {
             tb.grid = t.widths.iter().map(|w| w.clamp(6.0, 1584.0)).collect();
+        } else {
+            // No widths in the source: the columns follow their content (AutoFit), like a table
+            // with no `width` in a browser or Word, not the whole line split in equal parts.
+            tb.props.width = None;
+            tb.props.width_pct = None;
         }
         tb.rows.clear();
         if let Some(x) = &t.extra {
@@ -867,7 +873,7 @@ impl<'a> Builder<'a> {
                 });
                 row.cells.push(wordcraft_doc::Cell {
                     props: CellProps {
-                        width: Some(w),
+                        width: sized.then_some(w),
                         span: span as u32,
                         vmerge,
                         shading: c.shading,
