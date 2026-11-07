@@ -970,9 +970,31 @@ fn new_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ok || cancel
 }
 
+/// Body of the Modify Style dialog. Edits style properties (name, Font tab, and for paragraph
+/// styles, Paragraph tab with alignment, indents, and line spacing), dispatching updates via `styles.modify`.
 fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
-    let Dialog::ModifyStyle { back, resume, id, name, font, size, bold, italic, color, before, after, align, left, right, first, line, is_char, tab } =
-        d
+    let Dialog::ModifyStyle {
+        back,
+        resume,
+        id,
+        name,
+        font,
+        size,
+        bold,
+        italic,
+        color,
+        before,
+        after,
+        align,
+        left,
+        right,
+        first,
+        line,
+        initial_line,
+        non_multiple_line,
+        is_char,
+        tab,
+    } = d
     else {
         return false;
     };
@@ -1072,15 +1094,19 @@ fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         let mut params = json!({"style": id, "name": name, "chr": chr});
         if !*is_char {
             let unit = crate::options::unit().pt_per_unit();
-            params["para"] = json!({
+            let mut para = json!({
                 "align": align,
                 "indentLeft": *left * unit,
                 "indentRight": *right * unit,
                 "indentFirst": *first * unit,
                 "spaceBefore": *before,
                 "spaceAfter": *after,
-                "lineSpacing": {"rule": "multiple", "value": *line},
             });
+            let line_changed = (*line - *initial_line).abs() > 0.001;
+            if line_changed || non_multiple_line.is_none() {
+                para["lineSpacing"] = json!({"rule": "multiple", "value": *line});
+            }
+            params["para"] = para;
         }
         let _ = app.run("styles.modify", params);
     }

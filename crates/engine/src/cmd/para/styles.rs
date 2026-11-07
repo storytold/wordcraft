@@ -107,6 +107,8 @@ pub(super) fn create_style(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"id": id}))
 }
 
+/// Modifies an existing style's character, paragraph, or name/next properties, updating
+/// all affected paragraphs across the document.
 pub(super) fn modify_style(s: &mut Session, v: &Value) -> CmdResult {
     let id = style_id(s, p::req_str(v, "style")?)?;
     let chr: Option<CharProps> = v.get("chr").map(|c| serde_json::from_value(c.clone())).transpose().map_err(|e| CmdError::Params(e.to_string()))?;

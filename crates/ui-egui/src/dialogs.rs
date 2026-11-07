@@ -281,6 +281,12 @@ pub enum Dialog {
         /// Line spacing as multiple.
         #[serde(default)]
         line: f32,
+        /// Initial line spacing as multiple when opened, to detect edits (#5833).
+        #[serde(default)]
+        initial_line: f32,
+        /// Non-multiple line spacing (Exactly or At Least) if the style had one when opened (#5833).
+        #[serde(default)]
+        non_multiple_line: Option<wordcraft_doc::props::LineSpacing>,
         /// True if this is a character style (paragraph formatting disabled).
         #[serde(default)]
         is_char: bool,
@@ -896,6 +902,8 @@ impl Dialog {
         Dialog::PasteSpecial { formats, choice: 0, payload: kept, note }
     }
 
+    /// Opens the Modify Style dialog for style `id`, prefilling its character properties and,
+    /// for paragraph styles, its paragraph alignment, indentation, spacing, and line spacing.
     pub fn modify_style(app: &WordApp, id: &str) -> Option<Dialog> {
         let st = app.session.doc.styles.get(id)?;
         let rc = app.session.doc.styles.resolve_char(
@@ -907,9 +915,9 @@ impl Dialog {
         );
         let rp = app.session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some(id.into()), ..Default::default() });
         let is_char = st.kind == wordcraft_doc::StyleKind::Character;
-        let line = match rp.line_spacing {
-            wordcraft_doc::props::LineSpacing::Multiple(m) => m,
-            _ => 1.0,
+        let (line, non_multiple_line) = match rp.line_spacing {
+            wordcraft_doc::props::LineSpacing::Multiple(m) => (m, None),
+            other => (1.0, Some(other)),
         };
         let (vl, vr) = rp.visual_indents();
         let unit = crate::options::unit().pt_per_unit();
@@ -933,6 +941,8 @@ impl Dialog {
             right: vr / unit,
             first: rp.indent_first / unit,
             line,
+            initial_line: line,
+            non_multiple_line,
             is_char,
             tab: 0,
         })
