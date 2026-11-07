@@ -55,7 +55,7 @@ pub(crate) fn bg(ui: &Ui, r: Rect, resp: &Response, checked: bool, t: &Tokens) {
 /// panes and tabs that take focus themselves, so they keep it.
 pub(crate) fn run_from_ribbon(app: &mut WordApp, id: &str, params: Value) {
     let _ = app.run(id, params);
-    if !id.starts_with("ui.") {
+    if !id.starts_with("ui.") && app.dialog.is_none() && !app.file_dialog_open() && !app.nav_search_focus {
         app.canvas.want_focus = true;
     }
 }
