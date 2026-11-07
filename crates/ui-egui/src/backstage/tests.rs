@@ -4,6 +4,47 @@ use serde_json::json;
 use super::{HOME_TEMPLATES, TEMPLATES, matching_templates};
 use crate::{Services, WordApp};
 
+#[test]
+fn exiting_backstage_blocks_navigation_and_page_actions() {
+    for active in [false, true] {
+        for label in ["Save As", "Blank document"] {
+            let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+            a.run("text.insert", json!({"text": "Keep this draft"})).unwrap();
+            let original_document = a.session.document_id();
+            a.ui.backstage = true;
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    app.logic(&ui.ctx().clone());
+                    if app.fonts_frames < 2 {
+                        app.ui(ui);
+                        return;
+                    }
+                    super::show(app, ui, 0.75);
+                },
+                a,
+            );
+            h.run_steps(4);
+            let pos = h.get_by_label(label).rect().center();
+            h.state_mut().ui.backstage = active;
+            h.run_steps(2);
+            h.event(egui::Event::PointerMoved(pos));
+            h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+            h.step();
+            h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+            h.run_steps(2);
+            if label == "Save As" {
+                assert_eq!(h.state().ui.backstage_page, if active { "saveAs" } else { "home" });
+            } else {
+                assert_eq!(h.state().session.document_id() != original_document, active, "only an active template opens a document");
+                assert!(
+                    h.state().session.documents().iter().any(|doc| doc.id == original_document && doc.dirty),
+                    "the existing draft stays open and unsaved"
+                );
+            }
+        }
+    }
+}
+
 /// #1714: every side-menu item has its own icon, a drawn one (an unknown name would fall back
 /// to a tile with its first letter, the only icon here that draws text).
 #[test]

@@ -92,6 +92,8 @@ const TEXTURE_KEEP_SCREENS: f32 = 3.0;
 
 pub struct CanvasState {
     textures: HashMap<usize, (u64, TextureHandle)>,
+    /// Page thumbnails (or current tiled-page slices) for the blurred ribbon, keyed by render state.
+    pub(crate) thumbs: HashMap<usize, (u64, crate::ribbon_blur::Thumb)>,
     /// Visible full-resolution tiles of pages too tall for one GPU texture.
     tiles: HashMap<(usize, usize), (u64, TextureHandle)>,
     /// Page content fingerprints of the current layout, for the texture cache (#811).
@@ -139,6 +141,9 @@ pub struct CanvasState {
     pub open_url: Option<String>,
     /// Screen rects of pages last frame (for the control channel: page ↔ screen coordinates).
     pub page_rects: Vec<Rect>,
+    /// Where the page viewport starts on screen, below the ruler. The blurred ribbon continues
+    /// the pages upward from here.
+    pub view_top: f32,
     /// While the vertical scrollbar is dragged: the page at the top of the window (0-based),
     /// which a tip beside the pointer names (#2551).
     pub scrollbar_page: Option<usize>,
@@ -351,6 +356,7 @@ impl Default for CanvasState {
     fn default() -> Self {
         CanvasState {
             textures: HashMap::new(),
+            thumbs: HashMap::new(),
             tiles: HashMap::new(),
             page_keys: PageKeys::default(),
             markup_facts: std::cell::Cell::new(None),
@@ -375,6 +381,7 @@ impl Default for CanvasState {
             last_shading: "FFF2CC".into(),
             open_url: None,
             page_rects: Vec::new(),
+            view_top: 0.0,
             scrollbar_page: None,
             viewed_page: None,
             scale: PX_PER_PT,
@@ -731,7 +738,7 @@ fn prepare_layout(app: &mut WordApp, ui: &Ui, full: Rect) -> std::sync::Arc<DocL
     let reflow_anchor = update_viewport(app, ui, full, now);
     // While a modal dialog ("Save changes?" too) is up, keys answer it rather than edit the
     // document behind it, also in the frame it opens, before the canvas has given up focus.
-    if app.canvas.focused && !app.modal_open() {
+    if app.canvas.focused && !app.ui.backstage && !app.modal_open() {
         crate::keys::canvas_events(app, ui.ctx());
     } else {
         app.canvas.alt_code.clear();
@@ -898,6 +905,7 @@ fn draw_page_gridlines(app: &WordApp, painter: &egui::Painter, t: &Tokens, page:
 
 fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
     let PagePaint { app, ui, layout, geo, t, painter, dim_body, paper, hidden, view, content_origin, ppp, max_tex, grid_story } = pass;
+    app.canvas.view_top = ui.clip_rect().min.y;
     let mut visible_tile_keys = HashSet::new();
     let mut rendered = 0;
     let mut rects = Vec::with_capacity(geo.rects.len());
@@ -918,10 +926,18 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
         let cached = !tiled && app.canvas.textures.contains_key(&i);
         let key =
             if visible || cached { page_key(app, layout, i, view, scale_px) ^ if tiled { (tile_height_px as u64) << 32 } else { 0 } } else { 0 };
+        clear_stale_page_thumb(app, i, key);
         let mut fresh = cached && app.canvas.textures.get(&i).is_some_and(|(k, _)| *k == key);
         // The page a drag took an object off: render it this frame whatever the budget, or the
         // raster with the object still on it shows for a frame.
         let forced = hidden.as_ref().is_some_and(|(page, _)| *page == i);
+        // A page the blurred ribbon would show draws at once, whatever the budget.
+        let blur_needs =
+            app.ribbon_glass() && !app.canvas.thumbs.contains_key(&i) && sr.max.y > ui.clip_rect().min.y - 200.0 && sr.min.y < ui.clip_rect().min.y;
+        // A cached page has no thumbnail from before the blur was on: render it again.
+        if blur_needs {
+            fresh = false;
+        }
         // Render before placing the page: a page re-rendered in this frame (a zoom step, an
         // edit) then sits on the pixel grid in this frame too, rather than a frame later.
         if visible && !tiled && !fresh && (forced || rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
@@ -930,6 +946,9 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
             opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
             let img = wordcraft_render::render_page(page_doc(app), page, scale_px, &opts);
             let ci = page_image(&img);
+            if app.ribbon_glass() {
+                app.canvas.thumbs.insert(i, (key, crate::ribbon_blur::Thumb::of(&ci, crate::ribbon_blur::block_for(ppp), paper)));
+            }
             match app.canvas.textures.get_mut(&i) {
                 Some((k, tex)) => {
                     tex.set(ci, egui::TextureOptions::LINEAR);
@@ -968,6 +987,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
             let total_px = (page.h.clamp(1.0, 1e6) * scale_px).ceil() as usize;
             let screen_per_raster_px = geo.scale / scale_px;
             let base = pos2((sr.min.x * ppp).round() / ppp, (sr.min.y * ppp).round() / ppp);
+            retain_tiled_page_thumb(app, i, key, sr, base, ui.clip_rect().min.y);
             for tile in visible_tiles(sr, ui.clip_rect().expand(200.0).intersect(band), geo.scale, scale_px, tile_height_px) {
                 let start_px = tile.saturating_mul(tile_height_px);
                 let height_px = total_px.saturating_sub(start_px).min(tile_height_px);
@@ -977,7 +997,13 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
                 let id = (i, tile);
                 visible_tile_keys.insert(id);
                 let fresh = app.canvas.tiles.get(&id).is_some_and(|(k, _)| *k == key);
-                if !fresh && rendered < 4 {
+                let slice_top = (start_px as f32 / scale_px / page.h).clamp(0.0, 1.0);
+                let slice_bottom = ((start_px + height_px) as f32 / scale_px / page.h).clamp(slice_top, 1.0);
+                let tile_top = base.y + start_px as f32 * screen_per_raster_px;
+                let tile_bottom = tile_top + height_px as f32 * screen_per_raster_px;
+                let blur_tile_needs = tiled_page_thumb_needed(app, i, key, slice_top..slice_bottom, tile_top..tile_bottom, ui.clip_rect().min.y);
+                let needs_render = !fresh || blur_tile_needs;
+                if needs_render && rendered < 4 {
                     let mut opts = page_render_options(app, dim_body);
                     // Only on the page it is on: the `Pos` can't match an object of another page.
                     opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
@@ -991,6 +1017,10 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
                         &opts,
                     );
                     let ci = page_image(&img);
+                    if blur_tile_needs {
+                        let thumb = app.canvas.thumbs.entry(i).or_insert_with(|| (key, crate::ribbon_blur::Thumb::empty()));
+                        thumb.1.set_slice(&ci, crate::ribbon_blur::block_for(ppp), paper, slice_top, slice_bottom);
+                    }
                     match app.canvas.tiles.get_mut(&id) {
                         Some((k, tex)) => {
                             tex.set(ci, egui::TextureOptions::LINEAR);
@@ -1002,7 +1032,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
                         }
                     }
                     rendered += 1;
-                } else if !fresh {
+                } else if needs_render {
                     ui.ctx().request_repaint();
                 }
                 if let Some((_, tex)) = app.canvas.tiles.get(&id) {
@@ -1045,6 +1075,42 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
         }
     }
     PagePaintOutput { rects, visible_tile_keys, rendered }
+}
+
+fn clear_stale_page_thumb(app: &mut WordApp, page: usize, key: u64) {
+    if app.canvas.thumbs.get(&page).is_some_and(|(thumb_key, _)| *thumb_key != key) {
+        app.canvas.thumbs.remove(&page);
+    }
+}
+
+fn retain_tiled_page_thumb(app: &mut WordApp, page: usize, key: u64, rect: Rect, base: Pos2, view_top: f32) {
+    if !app.ribbon_glass() || rect.max.y <= view_top - 200.0 || rect.min.y >= view_top {
+        app.canvas.thumbs.remove(&page);
+        return;
+    }
+    if app.canvas.thumbs.get(&page).is_some_and(|(thumb_key, _)| *thumb_key != key) {
+        app.canvas.thumbs.remove(&page);
+        return;
+    }
+    if let Some((_, thumb)) = app.canvas.thumbs.get_mut(&page) {
+        let top = ((view_top - 200.0 - base.y) / rect.height()).clamp(0.0, 1.0);
+        let bottom = ((view_top - base.y) / rect.height()).clamp(0.0, 1.0);
+        thumb.retain_intersecting(top, bottom);
+    }
+}
+
+fn tiled_page_thumb_needed(
+    app: &WordApp,
+    page: usize,
+    key: u64,
+    page_slice: std::ops::Range<f32>,
+    screen_range: std::ops::Range<f32>,
+    view_top: f32,
+) -> bool {
+    if !app.ribbon_glass() || screen_range.end <= view_top - 200.0 || screen_range.start >= view_top {
+        return false;
+    }
+    !app.canvas.thumbs.get(&page).is_some_and(|(thumb_key, thumb)| *thumb_key == key && thumb.covers(page_slice.start, page_slice.end))
 }
 
 fn paint_read_aloud_highlight(
@@ -1432,6 +1498,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let clip = ui.clip_rect();
         let near = clip.expand2(vec2(clip.width(), clip.height() * TEXTURE_KEEP_SCREENS));
         app.canvas.textures.retain(|k, _| *k < n && geo.rects.get(*k).is_some_and(|r| r.translate(content_origin.to_vec2()).intersects(near)));
+        let glass = app.ribbon_glass();
+        app.canvas.thumbs.retain(|k, _| glass && (app.canvas.textures.contains_key(k) || visible_tile_keys.iter().any(|(page, _)| page == k)));
         app.canvas.tiles.retain(|id, _| visible_tile_keys.contains(id));
         app.canvas.page_rects = rects.clone();
         let view_rect = ui.clip_rect();
