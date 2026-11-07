@@ -203,14 +203,8 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
                     _ => Some(Align::Left),
                 };
             }
-            T_BIDI => {
-                let on = u16_of(&prl).is_some_and(|v| v != 0) || prl.operand.first().copied().unwrap_or(0) != 0;
-                bidi_logical = Some(on);
-            }
-            T_BIDI_90 => {
-                let on = u16_of(&prl).is_some_and(|v| v != 0) || prl.operand.first().copied().unwrap_or(0) != 0;
-                bidi_physical = Some(on);
-            }
+            T_BIDI => bidi_logical = Some(bool_of(&prl)),
+            T_BIDI_90 => bidi_physical = Some(bool_of(&prl)),
             T_DXA_LEFT => dxa_left = s16(&prl),
             T_DXA_GAP_HALF => gap_half = s16(&prl),
             T_TABLE_BORDERS_80 => r.borders = table_borders(prl.operand),
@@ -403,19 +397,8 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             controls: Default::default(),
         }
     }
-    /// Flush accumulated rows into a [`Table`] block.
-    fn flush_table(out: &mut Blocks, rows: &mut Vec<Row>, cells: &mut Vec<Cell>, cell: &mut Blocks, grid: &[f32], props: &TableProps, nested: bool) {
-        if !cells.is_empty() || !cell.is_empty() {
-            flush_cell(cells, cell);
-            // A stray trailing row (no TTP of its own): size its cells from the grid.
-            let mut stray = build_row(std::mem::take(cells), &RowInfo::default());
-            for (i, c) in stray.cells.iter_mut().enumerate() {
-                if c.props.width.is_none() && c.props.span == 1 {
-                    c.props.width = grid.get(i).copied();
-                }
-            }
-            rows.push(stray);
-        }
+    /// Emit accumulated rows as a [`Table`] block, or flatten cells if nested.
+    fn emit_table(out: &mut Blocks, rows: &mut Vec<Row>, grid: &[f32], props: &TableProps, nested: bool) {
         if rows.is_empty() {
             return;
         }
@@ -435,6 +418,22 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             })));
         }
         rows.clear();
+    }
+
+    /// Flush accumulated rows into a [`Table`] block.
+    fn flush_table(out: &mut Blocks, rows: &mut Vec<Row>, cells: &mut Vec<Cell>, cell: &mut Blocks, grid: &[f32], props: &TableProps, nested: bool) {
+        if !cells.is_empty() || !cell.is_empty() {
+            flush_cell(cells, cell);
+            // A stray trailing row (no TTP of its own): size its cells from the grid.
+            let mut stray = build_row(std::mem::take(cells), &RowInfo::default());
+            for (i, c) in stray.cells.iter_mut().enumerate() {
+                if c.props.width.is_none() && c.props.span == 1 {
+                    c.props.width = grid.get(i).copied();
+                }
+            }
+            rows.push(stray);
+        }
+        emit_table(out, rows, grid, props, nested);
     }
 
     for p in paras {
@@ -467,21 +466,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             && bidi != props.bidi_visual
         {
             // Adjacent same-depth rows have different explicit directions: split into a new table.
-            if depth_seen > 1 {
-                for r in rows.iter() {
-                    for c in &r.cells {
-                        out.extend(c.blocks.iter().cloned());
-                    }
-                }
-            } else {
-                out.push(Arc::new(Block::Table(Table {
-                    props: props.clone(),
-                    grid: grid.clone(),
-                    rows: std::mem::take(&mut rows),
-                    controls: Default::default(),
-                })));
-            }
-            rows.clear();
+            emit_table(&mut out, &mut rows, &grid, &props, depth_seen > 1);
             grid.clear();
             props = TableProps::default();
             props.bidi_visual = bidi;
@@ -505,7 +490,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
         if props.indent.is_none() {
             props.indent = info.indent;
         }
-        if info.cell_mark {
+        if info.cell_mark || info.ttp {
             // A row-end (TTP) mark terminates the row. Word writes rows as N content
             // cells each ended by their own cell mark, followed by an empty row-end mark
             // that carries the row's TDefTable (the 3GPP change history: 8 content marks
@@ -599,6 +584,12 @@ fn shd80_rgb(b: &[u8]) -> Option<Rgb> {
     fmt::ico(if ipat == 1 { fore as u8 } else { back as u8 })
 }
 
+/// Interpret a 2-byte (or fallback 1-byte) boolean sprm operand.
+fn bool_of(p: &Prl) -> bool {
+    u16_of(p).map_or_else(|| p.operand.first().is_some_and(|&b| b != 0), |v| v != 0)
+}
+
+/// Read a 16-bit little-endian integer from a Prl's operand.
 fn u16_of(p: &Prl) -> Option<u16> {
     match p.operand {
         [b0, b1, ..] => Some(u16::from_le_bytes([*b0, *b1])),
@@ -606,10 +597,12 @@ fn u16_of(p: &Prl) -> Option<u16> {
     }
 }
 
+/// Read a signed 16-bit integer from a Prl's operand.
 fn s16(p: &Prl) -> Option<i16> {
     u16_of(p).map(|v| v as i16)
 }
 
+/// Read a signed 32-bit integer from a Prl's operand.
 fn i32_of(p: &Prl) -> Option<i32> {
     match p.operand {
         [b0, b1, b2, b3, ..] => Some(i32::from_le_bytes([*b0, *b1, *b2, *b3])),

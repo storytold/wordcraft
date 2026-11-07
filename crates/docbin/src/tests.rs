@@ -3024,4 +3024,7 @@ fn adjacent_tables_with_different_directions_split_into_separate_tables() {
     assert_eq!(tables.len(), 2, "adjacent rows with opposite directions should split into 2 tables");
     assert!(!tables[0].props.bidi_visual, "first table is LTR");
     assert!(tables[1].props.bidi_visual, "second table is RTL");
+    let cell_text = |t: &wordcraft_doc::Table| -> Option<String> { t.rows.first()?.cells.first()?.blocks.first()?.as_para().map(|p| p.text.clone()) };
+    assert_eq!(cell_text(tables[0]).as_deref(), Some("a"), "first table content preserved");
+    assert_eq!(cell_text(tables[1]).as_deref(), Some("b"), "second table content preserved");
 }
