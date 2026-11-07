@@ -74,7 +74,10 @@ pub(crate) fn poll(app: &mut WordApp, _ctx: &egui::Context) {
     w.others = others;
     w.side_by_side = partner;
     w.sync_scroll = sync;
-    if sync && waiting.is_finite() {
+    if !sync {
+        // Scrolling still queued for a partner that is gone, replaced or no longer synced.
+        app.canvas.sync_in = 0.0;
+    } else if waiting.is_finite() {
         app.canvas.sync_in += waiting.clamp(-MAX_SCROLL, MAX_SCROLL);
     }
 }
@@ -97,6 +100,7 @@ pub(crate) fn request(app: &mut WordApp, req: &Value) {
     let id = |k: &str| req.get(k).and_then(Value::as_u64);
     match what {
         "sideBySide" => {
+            app.canvas.sync_in = 0.0;
             if id("off").is_some() {
                 app.windows.arranged.clear();
             }
@@ -113,6 +117,7 @@ pub(crate) fn request(app: &mut WordApp, req: &Value) {
             }
         }
         "syncScroll" => {
+            app.canvas.sync_in = 0.0;
             if let Some(on) = req.get("value").and_then(Value::as_bool) {
                 app.windows.arranged.sync = on;
             }
@@ -275,7 +280,15 @@ mod tests {
         assert_eq!(app.canvas.sync_out, 0.0);
         assert_eq!(app.windows.arranged.waiting.get(&other), Some(&40.0));
         assert!(!app.windows.arranged.waiting.contains_key(&shown));
-        // Nothing is passed on once Synchronous Scrolling is off.
+        // Nothing is passed on once Synchronous Scrolling is off, and scrolling still queued for
+        // this window is dropped.
+        app.canvas.sync_in = 9.0;
+        app.windows.arranged.sync = false;
+        poll(&mut app, &ctx);
+        assert_eq!(app.canvas.sync_in, 0.0);
+        app.canvas.sync_in = 9.0;
+        request(&mut app, &json!({"windows": "syncScroll", "value": true}));
+        assert_eq!(app.canvas.sync_in, 0.0);
         app.windows.arranged.sync = false;
         app.canvas.sync_out = 5.0;
         forward_scroll(&mut app, &ctx);
@@ -287,7 +300,9 @@ mod tests {
         assert_eq!(app.windows.arranged.waiting.get(&other), Some(&MAX_SCROLL));
         // The partner closing ends the pairing.
         app.windows.open.retain(|w| w.key == shown);
+        app.canvas.sync_in = 3.0;
         poll(&mut app, &ctx);
+        assert_eq!(app.canvas.sync_in, 0.0);
         assert_eq!((app.session.windows.side_by_side, app.session.windows.sync_scroll), (None, false));
     }
 }

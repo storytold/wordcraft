@@ -10490,6 +10490,10 @@ fn window_commands_need_the_desktop_and_name_a_window() {
     run(&mut s, "view.syncScroll", json!({}));
     assert!(!s.windows.sync_scroll);
     assert_eq!(s.ui_requests.pop(), Some(json!({"windows": "syncScroll", "with": 7, "value": false})));
+    // Asking again for the partner it already has keeps scrolling off and pairs nothing anew.
+    let r = run(&mut s, "view.sideBySide", json!({"window": 7, "value": true}));
+    assert_eq!((r["syncScroll"].as_bool(), s.windows.sync_scroll), (Some(false), false));
+    assert!(s.ui_requests.is_empty());
     // Another partner replaces the first; the bare button turns it off.
     run(&mut s, "view.sideBySide", json!({"window": 9}));
     assert_eq!(std::mem::take(&mut s.ui_requests), [json!({"windows": "sideBySide", "off": 7}), json!({"windows": "sideBySide", "with": 9})]);

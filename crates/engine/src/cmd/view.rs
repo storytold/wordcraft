@@ -262,10 +262,14 @@ fn side_by_side(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(old) = s.windows.side_by_side.filter(|old| *old != id) {
         s.ui_requests.push(json!({"windows": "sideBySide", "off": old}));
     }
-    s.windows.side_by_side = Some(id);
-    s.windows.sync_scroll = true;
-    s.ui_requests.push(json!({"windows": "sideBySide", "with": id}));
-    Ok(json!({"value": true, "window": id, "syncScroll": true}))
+    // The partner it already has keeps the user's Synchronous Scrolling choice and is not asked
+    // again; a new pairing starts with scrolling on.
+    if s.windows.side_by_side != Some(id) {
+        s.windows.side_by_side = Some(id);
+        s.windows.sync_scroll = true;
+        s.ui_requests.push(json!({"windows": "sideBySide", "with": id}));
+    }
+    Ok(json!({"value": true, "window": id, "syncScroll": s.windows.sync_scroll}))
 }
 
 /// The browser keeps full screen to itself (its own F11); the web app can't ask for it.
