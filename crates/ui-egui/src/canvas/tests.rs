@@ -699,6 +699,7 @@ fn dragging_the_scrollbar_names_the_page_at_the_top() {
         }
         a.run("view.commentsPane", json!({"value": false})).unwrap();
         a.run("view.hideWhiteSpace", json!({"value": hide_white_space})).unwrap();
+        a.run("caret.docStart", json!({})).unwrap();
         let (rev, sel) = (a.session.rev(), a.session.sel.clone());
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
             |ui, app: &mut WordApp| {
@@ -753,6 +754,71 @@ fn dragging_the_scrollbar_names_the_page_at_the_top() {
         assert!(h.query_all_by_label(&label).all(|n| n.rect().center().x < 700.0), "and its text (the status bar still names the page)");
         assert_eq!((h.state().session.rev(), &h.state().session.sel), (rev, &sel), "scrolling changes neither the document nor the selection");
     }
+}
+
+/// #5853: clicking in the vertical scrollbar track below the elevator moves one screen down,
+/// and clicking above the elevator moves one screen up, rather than jumping to that position in the document.
+#[test]
+fn clicking_vertical_scrollbar_track_advances_one_screen() {
+    use egui::accesskit::Role;
+    use egui::{Event, PointerButton};
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    for _ in 0..11 {
+        a.run("text.insert", json!({"text": "Page text"})).unwrap();
+        a.run("layout.break", json!({"kind": "page"})).unwrap();
+    }
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    a.run("caret.docStart", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    assert_eq!(h.state_mut().session.layout().pages.len(), 12);
+    let bar = h
+        .query_all_by_role(Role::ScrollBar)
+        .map(|n| n.rect())
+        .filter(|r| r.height() > r.width())
+        .max_by(|a, b| a.height().total_cmp(&b.height()))
+        .expect("the canvas's vertical scrollbar");
+
+    let button = |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+
+    let click = |h: &mut egui_kittest::Harness<'_, WordApp>, at: Pos2| {
+        h.event(Event::PointerMoved(at));
+        h.step();
+        h.event(button(at, true));
+        h.step();
+        h.event(button(at, false));
+        for _ in 0..3 {
+            h.step();
+        }
+    };
+
+    let start_offset = h.state().canvas.scroll_offset.y;
+    assert_eq!(start_offset, 0.0, "starts at the top");
+    let viewport_height = h.state().canvas.viewport.expect("viewport").height();
+
+    // Click near the bottom of the scrollbar (well below the elevator).
+    let near_bottom = pos2(bar.center().x, bar.bottom() - 20.0);
+    click(&mut h, near_bottom);
+
+    let after_click_down = h.state().canvas.scroll_offset.y;
+    assert!((after_click_down - viewport_height).abs() < 2.0, "advances one screen down: expected ~{viewport_height}, got {after_click_down}");
+
+    // Now click near the top of the scrollbar (above the elevator).
+    let near_top = pos2(bar.center().x, bar.top() + 10.0);
+    click(&mut h, near_top);
+
+    let after_click_up = h.state().canvas.scroll_offset.y;
+    assert!(after_click_up.abs() < 2.0, "advances one screen up back to top: expected ~0.0, got {after_click_up}");
 }
 
 /// #3880: the status bar names the page being looked at. With the caret scrolled out of view, that
