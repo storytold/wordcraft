@@ -270,10 +270,12 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 let ghost = ghosts.iter().find(|(n, ..)| n == tab);
                                 let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), if ghost.is_some() { Sense::hover() } else { Sense::click() });
                                 if app.ui.keytips == crate::keytips::Phase::Tabs && ghost.is_none() {
-                                    crate::keytips::record_tab(r, tab, &app.ui.keytip_prefix, &mut app.keytip_rects);
+                                    let letter = crate::keytips::tab_letter_for(app, tab);
+                                    crate::keytips::record_tab(r, letter, &app.ui.keytip_prefix, &mut app.keytip_rects);
                                 } else if app.ui.keytips == crate::keytips::Phase::Legacy && ghost.is_none() {
                                     // Every tab: they only place the legacy keys' hint (#1697).
-                                    crate::keytips::record_tab(r, tab, "", &mut app.keytip_rects);
+                                    let letter = crate::keytips::tab_letter_for(app, tab);
+                                    crate::keytips::record_tab(r, letter, "", &mut app.keytip_rects);
                                 }
                                 let active = app.ui.tab == tab && !app.ui.backstage;
                                 resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, shown));

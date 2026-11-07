@@ -143,6 +143,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
    (20–30 h).
 
 ## Progress log
+- 2026-10-26: Contextual ribbon tabs receive stable WordCraft-assigned single-letter KeyTips; the four object-design tabs also expose control badges, while Equation and Outlining do not yet have control badges (#3854).
 
 - 2026-11-06: Windows print submissions run in separate helper processes (#5710). A helper acknowledges cancellation before it stops, so a driver stalled in a cancelled job cannot hold another job’s provider lock. A private temporary PDF and bounded settings messages cross the process boundary; normal shutdown reaps helpers and removes their inputs. The helper erases its plaintext inputs before driver work; a hard app crash during startup can still leave private temporary files. Jobs already sending still complete. Readiness estimates unchanged.
 - 2026-11-06: File › Print: before sending starts, Cancel printing stops a waiting job, frees the Print page and keeps the settings; a successfully cancelled job is never sent. Cancellation remains available after the last document closes. Quitting cancels waiting jobs and joins jobs already sending (#5710). On Windows, winprint repeats the DEVMODE conversion after sending starts. A stall during that repeat prevents cancellation and can keep shutdown waiting, even before a native job exists. Readiness estimates unchanged.
@@ -889,6 +890,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-27 | trivial | Progress log: Return on File › Print prints, as Word's default Print button does |
 | 2026-10-27 | trivial | PR #4609: Numeric cross-references (#4533): preserve the numbered clause through field updates; adapted from @Alyosha-dot-shop's issue patch, with extra relative-context and cache guards. Synthetic checks only; readiness estimates unchanged. |
 | 2026-10-26 | minor | Word-observed Proofing task pane uses shared review commands; clicking a suggestion corrects and advances; context, suggestion cards and ignore/dictionary links follow the Windows reference; inspected previews prompted a full-width context and scrollable three-card list; exact selected spelling takes priority over overlapping grammar, with command/pane regressions and integration workflow paths; readiness estimates unchanged |
+| 2026-10-26 | trivial | Contextual KeyTips (#3854): WordCraft-assigned letters for six contextual tabs; four tabs have control badges, Equation and Outlining do not |
 | 2026-10-14 | trivial | Progress log: Insert Date and Time and DATE/TIME fields use local time (#1707) |
 | 2026-10-27 | trivial | Preserve #4249 complete-record CSV delimiter detection and its regressions in the mailings modules; recipient commands, limits and refusal behavior unchanged. |
 | 2026-10-26 | trivial | Integrate #4249 with current-main CSV helpers, preserving logical-record detection, existing recipient limits and refusal behavior. |
