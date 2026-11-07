@@ -36,10 +36,12 @@ const MAX_CHAR_DIFF: usize = 2000;
 /// with `author`. Options Word offers that the comparison can't honour yet (moves, comments,
 /// headers and footers, footnotes, text boxes, fields) are accepted and listed in the result.
 pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
-    let revised = if let Some(t) = p::str(v, "text") {
-        Document::from_text(t)
+    // A revised side given as plain text carries no real runs or properties; one opened from a
+    // path does. The diff takes the revised formatting only in the latter case.
+    let (revised, plain_revised) = if let Some(t) = p::str(v, "text") {
+        (Document::from_text(t), true)
     } else if let Some(path) = p::str(v, "path") {
-        crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?
+        (crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?, false)
     } else {
         return Err(CmdError::Params("`path` or `text` of the revised document is required".into()));
     };
@@ -77,6 +79,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let ins = (s.doc.revisions.len() - 1) as u32;
     s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Delete, author: author.clone(), date: date.clone(), move_name: None });
     let del = (s.doc.revisions.len() - 1) as u32;
+    let marks = Marks { ins, del };
     let key = |b: &Arc<Block>| match &**b {
         Block::Para(p) => opts.key(&p.plain_text()),
         // Tables match as a whole, by their text.
@@ -97,7 +100,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                     if !same_objects(&s.doc, pa, pb) {
                         // Same text, but objects (text boxes, pictures…) differ: diffed, so the
                         // original's objects aren't lost.
-                        out.push(para_block(word_diff(&s.doc, pa, pb, ins, del, &opts, &mut budget)));
+                        out.push(para_block(word_diff(&s.doc, pa, pb, marks, &opts, &mut budget, plain_revised)));
                         changes += 1;
                         i += 1;
                         j += 1;
@@ -130,7 +133,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                     let (a, b) = (if x < dels { old.get(i + x) } else { None }, if x < inss { new.get(j + x) } else { None });
                     match (a.map(|x| &**x), b.map(|x| &**x)) {
                         (Some(Block::Para(pa)), Some(Block::Para(pb))) => {
-                            out.push(para_block(word_diff(&s.doc, pa, pb, ins, del, &opts, &mut budget)))
+                            out.push(para_block(word_diff(&s.doc, pa, pb, marks, &opts, &mut budget, plain_revised)))
                         }
                         _ => {
                             if let Some(x) = a {
@@ -330,9 +333,11 @@ fn flatten_region(out: &mut Vec<Op>, region: &[(Op, usize, Kind)]) {
 
 /// A token of a changed paragraph: a word (or character), or an inline object without text
 /// of its own (a text box anchor, a picture, a bookmark…), which is compared and kept whole.
+/// Each token also carries the byte range it came from in its source paragraph, so the output
+/// segment can take the formatting of the run it came from instead of the paragraph's first run.
 enum Tok<'a> {
-    Text(String),
-    Obj(&'a InlineObject),
+    Text(String, std::ops::Range<usize>),
+    Obj(&'a InlineObject, std::ops::Range<usize>),
 }
 
 /// What a comparison sees of a token: the text as the options say, an object with the text of
@@ -358,65 +363,117 @@ fn same_objects(doc: &Document, a: &Paragraph, b: &Paragraph) -> bool {
 }
 
 /// Words with the spaces after them ("The ", "cat "), or single characters, and the objects
-/// between them. Objects with text (fields, equations…) count as their text.
+/// between them. Objects with text (fields, equations…) count as their text. Each token records
+/// the byte range it came from in `p`, so its output segment can take that source run's
+/// formatting. An object's flattened text (or a broken marker's placeholder) maps to the marker's
+/// own range, which is the nearest formatting the object has.
 fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
-    fn push(v: &mut Vec<Tok<'_>>, cur: &mut String, c: char, characters: bool) {
+    fn push(v: &mut Vec<Tok<'_>>, cur: &mut String, start: usize, end: usize, c: char, characters: bool) {
         cur.push(c);
         if characters || c == ' ' {
-            v.push(Tok::Text(std::mem::take(cur)));
+            v.push(Tok::Text(std::mem::take(cur), start..end));
         }
     }
     let mut v = Vec::new();
     let mut cur = String::new();
+    let mut cur_start = 0usize;
     let mut objects = p.objects.iter();
-    for c in p.text.chars() {
+    for (i, c) in p.text.char_indices() {
+        let marker = i..i + OBJ.len_utf8();
         if c != OBJ {
-            push(&mut v, &mut cur, c, characters);
+            if cur.is_empty() {
+                cur_start = i;
+            }
+            push(&mut v, &mut cur, cur_start, i + c.len_utf8(), c, characters);
             continue;
         }
         match objects.next() {
             Some(o) if o.plain_text().is_empty() => {
                 if !cur.is_empty() {
-                    v.push(Tok::Text(std::mem::take(&mut cur)));
+                    v.push(Tok::Text(std::mem::take(&mut cur), cur_start..i));
                 }
-                v.push(Tok::Obj(o));
+                v.push(Tok::Obj(o, marker));
             }
-            Some(o) => o.plain_text().chars().for_each(|c| push(&mut v, &mut cur, c, characters)),
+            Some(o) => {
+                for c in o.plain_text().chars() {
+                    if cur.is_empty() {
+                        cur_start = i;
+                    }
+                    push(&mut v, &mut cur, cur_start, marker.end, c, characters);
+                }
+            }
             None => {
                 // A marker without its object (a broken paragraph): kept as a visible
                 // placeholder, so the loss shows in the result instead of vanishing.
                 log::warn!("compare: an object marker without its object");
-                push(&mut v, &mut cur, char::REPLACEMENT_CHARACTER, characters);
+                if cur.is_empty() {
+                    cur_start = i;
+                }
+                push(&mut v, &mut cur, cur_start, marker.end, char::REPLACEMENT_CHARACTER, characters);
             }
         }
     }
     if !cur.is_empty() {
-        v.push(Tok::Text(cur));
+        v.push(Tok::Text(cur, cur_start..p.text.len()));
     }
     v
+}
+
+/// The formatting of the source run a token came from: the run holding the token's first byte,
+/// with the revision metadata stripped. `ins`, `del` and `fmt_change` are indices into the
+/// *source* document's own revision table, and the rebuilt paragraph lives in the result document,
+/// whose table is a different one, so a source mark can never be carried across; `word_diff`
+/// stamps the compare's own `ins`/`del` on the segments it marks. The consequence is plain: a
+/// pre-existing pending revision inside a changed paragraph (say another author's deletion) is
+/// superseded by the compare result rather than preserved. The hyperlink is kept, because Reject
+/// restores it on a deleted run (at token granularity: the link is taken from the token's first
+/// byte, so a token that starts unlinked can lose a mid-token link).
+fn source_props(p: &Paragraph, t: &Tok<'_>) -> CharProps {
+    let off = match t {
+        Tok::Text(_, range) | Tok::Obj(_, range) => range.start,
+    };
+    let c = p.props_of_char(off);
+    CharProps { ins: None, del: None, fmt_change: None, ..c.clone() }
+}
+
+/// The props of an output token: those of the source run it came from, or — never expected, since
+/// [`tokens`] and [`lcs_ops`] consume both sides in step — the given fallback. A miss is loud.
+fn output_props(p: &Paragraph, t: Option<&Tok<'_>>, fallback: &CharProps) -> CharProps {
+    if t.is_none() {
+        log::warn!("compare: a token range lookup missed; `tokens` and `lcs_ops` are out of step");
+    }
+    t.map(|t| source_props(p, t)).unwrap_or_else(|| fallback.clone())
 }
 
 /// Add a token at the end of `p` with `props`.
 fn put(p: &mut Paragraph, t: Option<&Tok<'_>>, props: &CharProps) {
     let at = p.len();
     match t {
-        Some(Tok::Text(t)) => {
+        Some(Tok::Text(t, _)) => {
             let _ = p.insert_text(at, t, props);
         }
-        Some(Tok::Obj(o)) => {
+        Some(Tok::Obj(o, _)) => {
             let _ = p.insert_object(at, (*o).clone(), props);
         }
         None => {}
     }
 }
 
-fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ins: u32, del: u32, opts: &CompareOptions, budget: &mut u64) -> Paragraph {
+/// The compare's own insertion and deletion revision ids; they travel together to every changed
+/// paragraph pair's [`word_diff`].
+#[derive(Clone, Copy)]
+struct Marks {
+    ins: u32,
+    del: u32,
+}
+
+fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, marks: Marks, opts: &CompareOptions, budget: &mut u64, plain_revised: bool) -> Paragraph {
     let (at, bt) = (a.plain_text(), b.plain_text());
     let chars = opts.characters && at.chars().count().max(bt.chars().count()) <= MAX_CHAR_DIFF;
     let (ta, tb) = (tokens(a, chars), tokens(b, chars));
     let key = |t: &Tok<'_>| match t {
-        Tok::Text(t) => Key::Text(opts.key(t)),
-        Tok::Obj(o) => obj_key(doc, o),
+        Tok::Text(t, _) => Key::Text(opts.key(t)),
+        Tok::Obj(o, _) => obj_key(doc, o),
     };
     let ops = lcs_ops(&ta.iter().map(key).collect::<Vec<_>>(), &tb.iter().map(key).collect::<Vec<_>>(), budget);
     // Only at character granularity: a matched whole word almost never happens by coincidence,
@@ -424,23 +481,45 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ins: u32, del: u32, o
     // a short interior match need folding back into its surrounding edit.
     let ops = if chars { collapse_noise_matches(&ops) } else { ops };
     let mut p = Paragraph::new();
-    p.props = b.props.clone();
-    let base = a.runs.first().map(|r| r.props.clone()).unwrap_or_default();
+    // The revised paragraph's properties are used with its revision bookkeeping stripped, like runs
+    // (`source_props`) and the mark, because `fmt_change`/`num_change` are indices into the revised
+    // document's own revision table and are meaningless in the result document. A plain-text
+    // revised side, which carries no paragraph properties of its own, falls back to the original's,
+    // stripped the same way, so pre-existing revision state never leaks into the rebuilt paragraph.
+    p.props = if plain_revised && b.props.is_empty() { a.props.formatting() } else { b.props.formatting() };
+    // The paragraph mark (the formatting typing into the paragraph's end would get) is the revised
+    // paragraph's when it comes from a document, and the original's when the revised side is plain
+    // text and has no mark of its own. Its own revision bookkeeping (`ins`, `del`, `fmt_change`)
+    // is cleared because those indices belong to another document's revision table.
+    p.mark = if plain_revised {
+        CharProps { ins: None, del: None, fmt_change: None, ..a.mark.clone() }
+    } else {
+        CharProps { ins: None, del: None, fmt_change: None, ..b.mark.clone() }
+    };
+    let fallback = a.runs.first().map(|r| CharProps { ins: None, del: None, fmt_change: None, ..r.props.clone() }).unwrap_or_default();
+    let fallback_b = b.runs.first().map(|r| CharProps { ins: None, del: None, fmt_change: None, ..r.props.clone() }).unwrap_or_default();
     let (mut i, mut j) = (0, 0);
     for op in ops {
         match op {
             Op::Same => {
-                // Equal as compared (perhaps up to case or spacing): the revised text.
-                put(&mut p, tb.get(j), &base);
+                // Equal as compared (perhaps up to case or spacing): the revised text, but the
+                // formatting of the run it stands for. For a document revised side that is the
+                // revised run, as issue #3749 prescribes ("Copy unchanged tokens from the revised
+                // paragraph with their own properties"); a plain-text revised side has no runs to
+                // speak of, so the original run's formatting is kept instead.
+                let props = if plain_revised { output_props(a, ta.get(i), &fallback) } else { output_props(b, tb.get(j), &fallback_b) };
+                put(&mut p, tb.get(j), &props);
                 i += 1;
                 j += 1;
             }
             Op::Del => {
-                put(&mut p, ta.get(i), &CharProps { del: Some(del), ..base.clone() });
+                let props = output_props(a, ta.get(i), &fallback);
+                put(&mut p, ta.get(i), &CharProps { del: Some(marks.del), ..props });
                 i += 1;
             }
             Op::Ins => {
-                put(&mut p, tb.get(j), &CharProps { ins: Some(ins), ..base.clone() });
+                let props = tb.get(j).map(|t| source_props(b, t)).unwrap_or_else(|| fallback.clone());
+                put(&mut p, tb.get(j), &CharProps { ins: Some(marks.ins), ..props });
                 j += 1;
             }
         }

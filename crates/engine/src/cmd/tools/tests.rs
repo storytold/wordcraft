@@ -1,5 +1,7 @@
 use super::*;
 
+mod compare_stage0;
+
 #[test]
 fn compare_marks_changes() {
     let mut s = Session::new(Document::from_text("The cat sat.\nKeep this.\nOld line."));
