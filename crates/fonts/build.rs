@@ -1,14 +1,19 @@
 //! Optional craft-fonts build input (https://github.com/storytold/craft-fonts, recipe from its
 //! `docs/integration.md`). With `CRAFT_FONTS_DIR=<checkout>` the fonts in its
 //! `fonts/manifest.txt` are embedded as `CRAFT_FONTS`; unset, `CRAFT_FONTS` is empty. Web
-//! (wasm32) builds embed only the Georgian interface face (about 230 KB), to stay within the web
-//! size budget; the Japanese one is 4.7 MB. With `CRAFT_FONTS_REQUIRED` (releases), a native
-//! build also fails when the checkout has no font for a CJK interface language (Japanese,
-//! Simplified Chinese), as an outdated pin once did (#241). It only reads the local checkout: no
-//! network.
+//! (wasm32) builds embed only the faces whose scripts no system font can supply there (the
+//! browser has none): the small Arabic and Georgian interface faces, and the Korean document
+//! face (about 2 MB — without it Hangul draws as boxes on the web, which has no fallback
+//! fonts); the Japanese (4.7 MB) and Chinese (16 MB) faces stay native-only. With
+//! `CRAFT_FONTS_REQUIRED` (releases), a native build also fails when the checkout has no font
+//! for a CJK interface language (Japanese, Simplified Chinese), as an outdated pin once did
+//! (#241). It only reads the local checkout: no network.
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
+/// Reads the craft-fonts manifest (if `CRAFT_FONTS_DIR` names a checkout) and writes the
+/// embed list `OUT_DIR/craft_fonts.rs`; the wasm target keeps only the scripts in
+/// [`WASM_SCRIPTS`].
 fn main() {
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_DIR");
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_REQUIRED");
@@ -43,6 +48,11 @@ fn main() {
 /// interface languages' (Japanese, Simplified Chinese).
 const REQUIRED_SCRIPTS: &[&str] = &["Jpan", "Hans"];
 
+/// Scripts a web (wasm32) build embeds despite the size budget: Arabic and Georgian are
+/// interface languages' only faces and stay small, and Korean (Hangul) has no bundled
+/// substitute — on the web no system font can back them up.
+const WASM_SCRIPTS: &[&str] = &["Arab", "Geor", "Hang", "Kore"];
+
 /// One `CraftFont { .. }` initialiser per manifest line, and the scripts the embedded fonts cover.
 fn craft_fonts(dir: &std::path::Path) -> Result<(String, Vec<String>), String> {
     let manifest = dir.join("fonts/manifest.txt");
@@ -56,9 +66,7 @@ fn craft_fonts(dir: &std::path::Path) -> Result<(String, Vec<String>), String> {
         let [family, style, file, scripts, ..] = f.as_slice() else {
             return Err(format!("malformed manifest line: {line}"));
         };
-        // Arabic interface faces are small, so the web build keeps them too.
-        let small_ui_face = scripts.split(',').any(|s| matches!(s.trim(), "Arab" | "Geor"));
-        if wasm && !small_ui_face {
+        if wasm && !scripts.split(',').any(|s| WASM_SCRIPTS.contains(&s.trim())) {
             continue;
         }
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
