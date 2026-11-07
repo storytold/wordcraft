@@ -18,6 +18,7 @@ pub(super) enum Kind {
     Doughnut,
     Scatter,
     Radar,
+    Bubble,
 }
 
 impl Kind {
@@ -30,9 +31,27 @@ impl Kind {
             "c:doughnutChart" => Kind::Doughnut,
             "c:scatterChart" => Kind::Scatter,
             "c:radarChart" => Kind::Radar,
+            "c:bubbleChart" => Kind::Bubble,
             _ => return None,
         })
     }
+
+    /// Whether points sit at their own x values (`c:xVal`) on a horizontal value axis, not in
+    /// categories: scatter and bubble charts.
+    pub(super) fn xy(self) -> bool {
+        matches!(self, Kind::Scatter | Kind::Bubble)
+    }
+}
+
+/// A bubble chart's sizing (`c:bubbleChart`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct BubbleOpts {
+    /// `c:bubbleScale`, percent of the default size, 0..=300.
+    pub(super) scale: f64,
+    /// `c:sizeRepresents val="w"`: sizes set the bubbles' widths, not their areas.
+    pub(super) by_width: bool,
+    /// `c:showNegBubbles`: negative sizes are drawn, at their magnitude.
+    pub(super) negative: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +92,8 @@ pub(super) struct Series {
     pub(super) values: Vec<Option<f64>>,
     /// Scatter x values (index + 1 when the file has none).
     pub(super) xs: Vec<Option<f64>>,
+    /// Bubble sizes (`c:bubbleSize`); empty for other chart types, or when the file has none.
+    pub(super) sizes: Vec<Option<f64>>,
     /// Per-point colours from `c:dPt`.
     pub(super) points: Vec<Option<Rgb>>,
     pub(super) fmt: Option<String>,

@@ -150,11 +150,11 @@ fn texts(items: &[GraphicItem]) -> Vec<&str> {
 fn unsupported_chart_types_draw_a_placeholder() {
     let ser = r#"<c:ser><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser>"#;
     let title = r#"<c:title><c:tx><c:rich><a:p><a:r><a:t>Skills</a:t></a:r></a:p></c:rich></c:tx></c:title>"#;
-    let x = format!(r#"<c:chartSpace {NS}><c:chart>{title}<c:plotArea><c:bubbleChart>{ser}</c:bubbleChart></c:plotArea></c:chart></c:chartSpace>"#);
-    let bubble = chart_items(&crate::xml::parse(x.as_bytes()).unwrap(), &theme(), 300.0, 200.0);
-    assert_eq!(texts(&bubble), ["Skills", "Bubble chart (not supported yet)"]);
-    let framed = bubble.iter().any(|it| matches!(it, GraphicItem::Shape { rect, stroke: Some(_), .. } if *rect == [0.0, 0.0, 300.0, 200.0]));
-    assert!(framed, "a light border marks the chart's frame: {bubble:?}");
+    let x = format!(r#"<c:chartSpace {NS}><c:chart>{title}<c:plotArea><c:surfaceChart>{ser}</c:surfaceChart></c:plotArea></c:chart></c:chartSpace>"#);
+    let surface = chart_items(&crate::xml::parse(x.as_bytes()).unwrap(), &theme(), 300.0, 200.0);
+    assert_eq!(texts(&surface), ["Skills", "Surface chart (not supported yet)"]);
+    let framed = surface.iter().any(|it| matches!(it, GraphicItem::Shape { rect, stroke: Some(_), .. } if *rect == [0.0, 0.0, 300.0, 200.0]));
+    assert!(framed, "a light border marks the chart's frame: {surface:?}");
 
     let stock = chart_items(&space(&format!("<c:stockChart>{ser}{ser}{ser}</c:stockChart>")), &theme(), 300.0, 200.0);
     assert_eq!(texts(&stock), ["Stock chart (not supported yet)"]);
@@ -527,4 +527,206 @@ fn negative_sections_and_scientific_numbers() {
     assert_eq!(format_value(0.00012, "0.0E+0", 0.0001), "1.2E-4");
     assert_eq!(format_value(0.0, "0.00E+00", 1.0), "0.00E+00");
     assert_eq!(format_value(-12345.0, "0.0E-00", 1.0), "-1.2E04");
+}
+
+// Bubble charts (#5941). The sizes are Word's, measured in Word for Microsoft 365 from charts of
+// known data: the largest bubble's diameter is `L * 3s / (3s + 1000)`, with `s` the
+// `c:bubbleScale` and `L` the short side of the chart less 10 pt (no title or legend). Other
+// bubbles scale from the largest size of the chart: by area (`sqrt`) or, with
+// `c:sizeRepresents="w"`, by width.
+
+/// A bubble series: `c:xVal`, `c:yVal` and, when given, `c:bubbleSize`, as literals.
+fn bser(i: usize, color: &str, xs: &[&str], ys: &[&str], sizes: Option<&[&str]>) -> String {
+    let lit = |tag: &str, vals: &[&str]| {
+        let pts: String = vals.iter().enumerate().map(|(k, v)| format!(r#"<c:pt idx="{k}"><c:v>{v}</c:v></c:pt>"#)).collect();
+        format!(r#"<c:{tag}><c:numLit><c:ptCount val="{}"/>{pts}</c:numLit></c:{tag}>"#, vals.len())
+    };
+    let sizes = sizes.map_or(String::new(), |s| lit("bubbleSize", s));
+    format!(
+        r#"<c:ser><c:idx val="{i}"/><c:order val="{i}"/><c:spPr><a:solidFill><a:srgbClr val="{color}"/></a:solidFill></c:spPr>{}{}{sizes}</c:ser>"#,
+        lit("xVal", xs),
+        lit("yVal", ys)
+    )
+}
+
+/// A bubble chart of `w` x `h` points, both axes fixed at 0..4, with `extra` after the series.
+fn bubble_chart(sers: &[String], extra: &str, w: f32, h: f32) -> Vec<GraphicItem> {
+    let ax = |id: u32, pos: &str| {
+        format!(
+            r#"<c:valAx><c:axId val="{id}"/><c:scaling><c:orientation val="minMax"/><c:max val="4"/><c:min val="0"/></c:scaling><c:delete val="0"/><c:axPos val="{pos}"/></c:valAx>"#
+        )
+    };
+    let plot = format!(
+        r#"<c:bubbleChart><c:varyColors val="0"/>{}{extra}<c:axId val="1"/><c:axId val="2"/></c:bubbleChart>{}{}"#,
+        sers.concat(),
+        ax(1, "b"),
+        ax(2, "l")
+    );
+    chart_items(&space(&plot), &theme(), w, h)
+}
+
+/// Circles filled with `col`: (centre x, centre y, diameter), in drawing order.
+fn bubbles(items: &[GraphicItem], col: Rgb) -> Vec<(f32, f32, f32)> {
+    items
+        .iter()
+        .filter_map(|it| match it {
+            GraphicItem::Shape { rect: [x, y, w, h], kind: ShapeKind::Ellipse, fill: Some(c), .. } if *c == col => {
+                assert!((w - h).abs() < 1e-3, "a bubble is round: {w} x {h}");
+                Some((x + w / 2.0, y + h / 2.0, *w))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Word's largest bubble diameter for a chart of `w` x `h` with no title or legend.
+fn word_d_max(w: f32, h: f32, scale: f32) -> f32 {
+    (w.min(h) - 10.0) * 3.0 * scale / (3.0 * scale + 1000.0)
+}
+
+/// Bubbles in order of their centre's x.
+fn by_x(mut b: Vec<(f32, f32, f32)>) -> Vec<(f32, f32, f32)> {
+    b.sort_by(|p, q| p.0.total_cmp(&q.0));
+    b
+}
+
+const RED: Rgb = Rgb(0xFF, 0, 0);
+const BLUE: Rgb = Rgb(0, 0, 0xFF);
+
+/// Three red bubbles at x = 1, 2, 3 (y = 2) with sizes 1, 4 and 16.
+fn three() -> Vec<String> {
+    vec![bser(0, "FF0000", &["1", "2", "3"], &["2", "2", "2"], Some(&["1", "4", "16"]))]
+}
+
+fn largest(items: &[GraphicItem]) -> Option<f32> {
+    bubbles(items, RED).iter().map(|b| b.2).reduce(f32::max)
+}
+
+#[test]
+fn bubble_charts_draw_a_circle_per_point_sized_by_area() {
+    let items = bubble_chart(&three(), "", 432.0, 252.0);
+    assert!(!texts(&items).iter().any(|t| t.contains("not supported")), "{:?}", texts(&items));
+    let b = by_x(bubbles(&items, RED));
+    assert_eq!(b.len(), 3, "a bubble per point: {items:?}");
+    // Word, 432 x 252, scale 100: 13.96, 27.92 and 55.84 pt across.
+    let d_max = word_d_max(432.0, 252.0, 100.0);
+    assert!((b[2].2 - d_max).abs() < 0.1, "largest bubble {} vs Word's {d_max}", b[2].2);
+    assert!((b[1].2 - d_max / 2.0).abs() < 0.1 && (b[0].2 - d_max / 4.0).abs() < 0.1, "area grows with size: {b:?}");
+    // Centres on the scatter positions: one height, evenly spaced along x.
+    assert!(b.iter().all(|p| (p.1 - b[0].1).abs() < 1e-3), "{b:?}");
+    assert!(((b[1].0 - b[0].0) - (b[2].0 - b[1].0)).abs() < 1e-3 && b[1].0 > b[0].0, "{b:?}");
+}
+
+#[test]
+fn bubble_size_is_relative_to_the_largest_of_the_chart() {
+    let small = bser(0, "FF0000", &["1", "2"], &["1", "1"], Some(&["1", "4"]));
+    let big = bser(1, "0000FF", &["1", "2"], &["3", "3"], Some(&["16", "64"]));
+    let items = bubble_chart(&[small, big], "", 432.0, 252.0);
+    let d_max = word_d_max(432.0, 252.0, 100.0);
+    let r = by_x(bubbles(&items, RED));
+    let b = by_x(bubbles(&items, BLUE));
+    assert_eq!((r.len(), b.len()), (2, 2), "{items:?}");
+    assert!((b[1].2 - d_max).abs() < 0.1, "{b:?}");
+    assert!((r[0].2 - d_max / 8.0).abs() < 0.1, "size 1 of 64 across both series: {r:?}");
+    // The same bubbles at ten times the sizes.
+    let tens = bser(0, "FF0000", &["1", "2", "3"], &["2", "2", "2"], Some(&["10", "40", "160"]));
+    let t = by_x(bubbles(&bubble_chart(&[tens], "", 432.0, 252.0), RED));
+    assert!((t[0].2 - d_max / 4.0).abs() < 0.1 && (t[2].2 - d_max).abs() < 0.1, "{t:?}");
+}
+
+#[test]
+fn bubble_scale_and_size_represents_follow_word() {
+    let at = |extra: &str| largest(&bubble_chart(&three(), extra, 432.0, 252.0));
+    // Word: 31.56, 90.75 and 114.63 pt. The scale isn't linear.
+    for scale in [50.0, 200.0, 300.0] {
+        let d = at(&format!(r#"<c:bubbleScale val="{scale}"/>"#)).unwrap_or_default();
+        assert!((d - word_d_max(432.0, 252.0, scale)).abs() < 0.1, "scale {scale}: {d}");
+    }
+    // ISO/IEC 29500-4:2016 also allows a percent.
+    let pct = at(r#"<c:bubbleScale val="150%"/>"#).unwrap_or_default();
+    assert!((pct - word_d_max(432.0, 252.0, 150.0)).abs() < 0.1, "150%: {pct}");
+    // Out of range clamps to 0..300, and 0 draws no bubbles.
+    let huge = at(r#"<c:bubbleScale val="99999"/>"#).unwrap_or_default();
+    assert!((huge - word_d_max(432.0, 252.0, 300.0)).abs() < 0.1, "{huge}");
+    assert_eq!(at(r#"<c:bubbleScale val="0"/>"#), None);
+
+    let w = by_x(bubbles(&bubble_chart(&three(), r#"<c:sizeRepresents val="w"/>"#, 432.0, 252.0), RED));
+    let d_max = word_d_max(432.0, 252.0, 100.0);
+    assert_eq!(w.len(), 3, "{w:?}");
+    assert!(
+        (w[2].2 - d_max).abs() < 0.1 && (w[1].2 - d_max / 4.0).abs() < 0.1 && (w[0].2 - d_max / 16.0).abs() < 0.1,
+        "width grows with size: {w:?}"
+    );
+}
+
+#[test]
+fn bubble_size_follows_the_charts_short_side() {
+    // Word: 43.84 pt (600 x 200), 55.38 (250 x 450), 66.92 (300 x 300), 113.08 (700 x 500).
+    for (w, h) in [(600.0, 200.0), (250.0, 450.0), (300.0, 300.0), (700.0, 500.0)] {
+        let d = largest(&bubble_chart(&three(), "", w, h)).unwrap_or_default();
+        assert!((d - word_d_max(w, h, 100.0)).abs() < 0.1, "{w} x {h}: {d}");
+    }
+}
+
+#[test]
+fn zero_and_negative_bubbles() {
+    let s = || vec![bser(0, "FF0000", &["1", "2", "3"], &["2", "2", "2"], Some(&["0", "-4", "16"]))];
+    let ellipses = |items: &[GraphicItem]| -> Vec<f32> {
+        items
+            .iter()
+            .filter_map(|it| match it {
+                GraphicItem::Shape { rect: [_, _, w, _], kind: ShapeKind::Ellipse, .. } => Some(*w),
+                _ => None,
+            })
+            .collect()
+    };
+    let off = ellipses(&bubble_chart(&s(), r#"<c:showNegBubbles val="0"/>"#, 432.0, 252.0));
+    assert_eq!(off.len(), 1, "size 0 and negative sizes aren't drawn: {off:?}");
+    // When shown, a negative bubble is drawn at its size's magnitude. An empty
+    // `c:showNegBubbles` means true (CT_Boolean's default).
+    let d_max = word_d_max(432.0, 252.0, 100.0);
+    for extra in [r#"<c:showNegBubbles val="1"/>"#, "<c:showNegBubbles/>"] {
+        let all = ellipses(&bubble_chart(&s(), extra, 432.0, 252.0));
+        assert_eq!(all.len(), 2, "{extra}: {all:?}");
+        assert!(all.iter().any(|d| (d - d_max / 2.0).abs() < 0.1), "{extra}: {all:?}");
+    }
+}
+
+#[test]
+fn bubble_points_take_their_own_colour() {
+    let dpt = r#"<c:dPt><c:idx val="1"/><c:spPr><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></c:spPr></c:dPt><c:xVal>"#;
+    let s = three().concat().replacen("<c:xVal>", dpt, 1);
+    let items = bubble_chart(&[s], "", 432.0, 252.0);
+    assert_eq!((bubbles(&items, RED).len(), bubbles(&items, BLUE).len()), (2, 1), "{items:?}");
+}
+
+#[test]
+fn bubble_data_labels_show_the_values() {
+    let s = bser(0, "FF0000", &["1", "2", "3"], &["1.5", "2.5", "3.5"], Some(&["1", "4", "16"]));
+    let items = bubble_chart(&[s], r#"<c:dLbls><c:showVal val="1"/></c:dLbls>"#, 432.0, 252.0);
+    for v in ["1.5", "2.5", "3.5"] {
+        assert!(texts(&items).contains(&v), "label {v}: {:?}", texts(&items));
+    }
+}
+
+#[test]
+fn hostile_bubble_sizes_never_panic() {
+    let cases: [&[&str]; 4] =
+        [&["NaN", "inf", "-inf", "1"], &["1e308", "1e308", "1", "0"], &["-1e308", "x", "", "5"], &["1e-308", "4.9e-324", "0", "-0"]];
+    let extras = ["", r#"<c:bubbleScale val="300"/><c:showNegBubbles val="1"/>"#, r#"<c:bubbleScale val="-5"/><c:sizeRepresents val="w"/>"#];
+    for sizes in cases {
+        let s = bser(0, "FF0000", &["1", "2", "3", "1e308"], &["2", "2", "NaN", "2"], Some(sizes));
+        for extra in extras {
+            for (w, h) in [(432.0, 252.0), (5.0, 5.0), (1e6, 1e6)] {
+                for it in bubble_chart(std::slice::from_ref(&s), extra, w, h) {
+                    if let GraphicItem::Shape { rect, .. } = it {
+                        assert!(rect.iter().all(|v| v.is_finite()), "{sizes:?} {extra}: {rect:?}");
+                    }
+                }
+            }
+        }
+    }
+    // No `c:bubbleSize` at all, and a series with no points.
+    let bare = bser(0, "FF0000", &["1", "2"], &["2", "3"], None);
+    let _ = bubble_chart(&[bare, bser(1, "0000FF", &[], &[], Some(&[]))], "", 432.0, 252.0);
 }

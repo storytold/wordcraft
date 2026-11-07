@@ -1,9 +1,9 @@
 //! Charts (ECMA-376 Part 1 §21.2): the cached data of a `c:chartSpace` drawn as items in points.
 //!
-//! Bar and column (clustered, stacked or 100% stacked), line, area, pie, doughnut and scatter
-//! charts are drawn from the first supported chart type of the plot area, with their values as
+//! Bar and column (clustered, stacked or 100% stacked), line, area, pie, doughnut, scatter and
+//! bubble charts are drawn from the first supported chart type of the plot area, with their values as
 //! data labels where `c:dLbls` shows them (`c:showVal`). Radar charts (standard, with markers or
-//! filled) draw as spokes, concentric grid polygons and one polygon per series. A chart of only other types (stock, bubble…)
+//! filled) draw as spokes, concentric grid polygons and one polygon per series. A chart of only other types (stock, surface…)
 //! draws a placeholder: its frame, its title and the type it is. Text widths are estimated ([`CHAR_W`] em a character), so label places are approximate.
 
 use std::f64::consts::{FRAC_PI_2, TAU};
@@ -29,7 +29,7 @@ pub(super) use canvas::text_w;
 use canvas::{Rect, clip_text, legend, text};
 #[cfg(test)]
 use format::{civil, excel_stamp, format_value};
-use model::{Axis, Grouping, Kind, Pos, Series};
+use model::{Axis, BubbleOpts, Grouping, Kind, Pos, Series};
 #[cfg(test)]
 use parse::{axis, category_text, labels, numbers};
 use parse::{read_series, text_size, title_of};
@@ -115,7 +115,7 @@ fn title_block(out: &mut Vec<GraphicItem>, t: &str, area: Rect) -> Rect {
     Rect { y: area.y + lh + PAD, h: (area.h - lh - PAD).max(1.0), ..area }
 }
 
-/// A chart whose plot area holds only chart types WordCraft doesn't draw (stock, bubble…): its
+/// A chart whose plot area holds only chart types WordCraft doesn't draw (stock, surface…): its
 /// frame with a light border, its title and a line saying which type it is, so it isn't blank
 /// space. Nothing when the plot area has no chart type at all, or a supported one with nothing
 /// to draw.
@@ -143,7 +143,6 @@ fn placeholder(out: &mut Vec<GraphicItem>, space: &El, theme: &[Rgb], w: f32, h:
 fn unsupported_name(name: &str) -> &'static str {
     match name {
         "c:stockChart" => "Stock chart",
-        "c:bubbleChart" => "Bubble chart",
         "c:surfaceChart" | "c:surface3DChart" => "Surface chart",
         "c:ofPieChart" => "Pie of pie chart",
         "c:bar3DChart" => "3-D bar chart",
@@ -186,6 +185,8 @@ struct Chart {
     date1904: bool,
     /// Outline of the plot area, when the file draws one.
     plot_border: Option<Rgb>,
+    /// Bubble sizing; `None` for other chart types.
+    bubble: Option<BubbleOpts>,
 }
 
 #[cfg(test)]

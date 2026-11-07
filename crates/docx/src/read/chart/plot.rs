@@ -3,7 +3,7 @@ use super::format::format_value;
 use super::model::{DataLabel, Grouping, Kind, Series};
 use super::parse::category_text;
 use super::polar::{draw_data_labels, label_of};
-use super::{AXIS, Chart, El, GAP, GRID, GraphicItem, LINE, MAX_LABEL, MAX_TICKS, PathSeg, Rgb, ShapeKind, TextAlign, fill_colour, measure};
+use super::{AXIS, Chart, El, GAP, GRID, GraphicItem, LINE, MAX_LABEL, MAX_TICKS, PAD, PathSeg, Rgb, ShapeKind, TextAlign, fill_colour, measure};
 
 pub(super) fn label(s: &str) -> String {
     s.chars().take(MAX_LABEL).collect()
@@ -124,11 +124,11 @@ impl Axes {
     pub(super) fn of(c: &Chart) -> Axes {
         let (dlo, dhi) = extent(c);
         let (vmin, vmax) = if c.grouping == Grouping::Percent { (Some(0.0), Some(1.0)) } else { (c.val.min, c.val.max) };
-        // Lines and scatters don't need zero for a narrow range (1000..1050 stays on its own scale).
-        let zero = !matches!(c.kind, Kind::Line | Kind::Scatter) || !narrow(dlo, dhi);
+        // Lines, scatters and bubbles don't need zero for a narrow range (1000..1050 stays on its own scale).
+        let zero = !(c.kind == Kind::Line || c.kind.xy()) || !narrow(dlo, dhi);
         let vs = nice_scale(dlo, dhi, zero, vmin, vmax);
         let vticks = vs.ticks().into_iter().map(|t| (t, format_value(t, &c.val_fmt, vs.step))).collect();
-        let xs = (c.kind == Kind::Scatter).then(|| {
+        let xs = c.kind.xy().then(|| {
             let (xl, xh) = x_extent(c);
             nice_scale(xl, xh, false, c.cat.min, c.cat.max)
         });
@@ -155,7 +155,7 @@ struct Margins {
 fn axis_margins(c: &Chart, ax: &Axes, area: Rect) -> Margins {
     let fs = c.text_size;
     let lh = fs * LINE;
-    let scatter = c.kind == Kind::Scatter;
+    let scatter = c.kind.xy();
     let (cat_on, val_on) = (!c.cat.deleted, !c.val.deleted);
     let left = if c.horizontal {
         if cat_on { widest(&c.cats, fs).min(area.w * 0.4) + GAP } else { 0.0 }
@@ -185,7 +185,7 @@ fn axis_margins(c: &Chart, ax: &Axes, area: Rect) -> Margins {
     Margins { left, top, bottom, wrapped, skip }
 }
 
-/// A bar, column, line, area or scatter chart in `area`: gridlines, series, axes, then labels.
+/// A bar, column, line, area, scatter or bubble chart in `area`: gridlines, series, axes, then labels.
 pub(super) fn cartesian(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
     if c.n == 0 {
         return;
@@ -206,6 +206,7 @@ pub(super) fn cartesian(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
         Kind::Line => lines(out, c, &g, &mut labels),
         Kind::Area => areas(out, c, &g, &mut labels),
         Kind::Scatter => draw_scatter(out, c, &g, &mut labels),
+        Kind::Bubble => draw_bubbles(out, c, &g, area, &mut labels),
         Kind::Pie | Kind::Doughnut | Kind::Radar => {}
     }
     draw_axes(out, c, &g);
@@ -263,7 +264,7 @@ fn draw_value_labels(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, ticks: &[
 fn draw_category_labels(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, xticks: &[(f64, String)], m: &Margins, area: Rect) {
     let (fs, lh) = (c.text_size, c.text_size * LINE);
     let plot = g.plot;
-    if c.kind == Kind::Scatter {
+    if c.kind.xy() {
         for (t, s) in xticks {
             text_at(out, g.scat_x(*t), plot.bottom() + GAP / 2.0, s, fs);
         }
@@ -458,6 +459,49 @@ fn draw_scatter(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut V
         for (x, y) in pts.iter().flatten() {
             let rect = [x - MARKER / 2.0, y - MARKER / 2.0, MARKER, MARKER];
             out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(c.series_colour(j)), stroke: None, stroke_width: 0.0 });
+        }
+    }
+}
+
+/// How far inside the chart's edge Word measures a bubble chart's size from, points.
+const BUBBLE_INSET: f32 = 5.0;
+
+/// Bubble series: a circle per point at its x and y, sized as Word sizes bubbles (measured in
+/// Word for Microsoft 365). The largest size of the chart gets a diameter of `L * 3s / (3s + 1000)`,
+/// where `L` is the short side of the room the title and legend leave (the chart less 5 pt a side
+/// when it has neither) and `s` is the `c:bubbleScale`. Other bubbles scale from the largest by
+/// area, or by width with `c:sizeRepresents="w"`. A size of 0 isn't drawn, nor a negative one
+/// unless `c:showNegBubbles` is on (then at its magnitude). Points without a size are skipped. A
+/// series with no `c:bubbleSize` at all sizes every point 1 (not checked against Word).
+fn draw_bubbles(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, area: Rect, labels: &mut Vec<DataLabel>) {
+    let Some(opts) = c.bubble else { return };
+    let size = |s: &Series, i: usize| if s.sizes.is_empty() { Some(1.0) } else { s.sizes.get(i).copied().flatten() };
+    let shown = |v: f64| v > 0.0 || (opts.negative && v < 0.0);
+    let largest =
+        c.series.iter().flat_map(|s| (0..s.values.len()).filter_map(move |i| size(s, i))).filter(|v| shown(*v)).map(f64::abs).fold(0.0, f64::max);
+    // `area` is PAD inside the chart's edge (and below a title, beside a legend).
+    let side = f64::from((area.w.min(area.h) + 2.0 * (PAD - BUBBLE_INSET)).max(0.0));
+    let d_max = side * 3.0 * opts.scale / (3.0 * opts.scale + 1000.0);
+    if !(largest > 0.0 && largest.is_finite() && d_max > 0.0 && d_max.is_finite()) {
+        return;
+    }
+    for (j, s) in c.series.iter().enumerate() {
+        for (i, (x, y)) in s.xs.iter().zip(&s.values).enumerate() {
+            let (Some(x), Some(y), Some(v)) = (x, y, size(s, i)) else { continue };
+            if !shown(v) {
+                continue;
+            }
+            let share = v.abs() / largest;
+            let d = (d_max * if opts.by_width { share } else { share.sqrt() }) as f32;
+            let (cx, cy) = (g.scat_x(*x), g.val(*y));
+            if !(d.is_finite() && d > 0.0) {
+                continue;
+            }
+            let rect = [cx - d / 2.0, cy - d / 2.0, d, d];
+            out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(c.point_colour(j, i)), stroke: None, stroke_width: 0.0 });
+            if let Some(text) = label_of(s, i) {
+                labels.push(DataLabel { x: cx, y: cy - d / 2.0, text, inside: false });
+            }
         }
     }
 }
