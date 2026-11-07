@@ -2,8 +2,8 @@ use super::boxes::{BoxInput, BoxLayout, Edges, frame_float, frame_stack, joined,
 use super::cache::has_page_number_fields;
 use super::ctx::Ctx;
 use super::floats::{
-    FloatAnchor, LateFloats, ObjFrame, ObjectPlacement, anchor_floats, body_wraps, continued_exclusions, fitting, float_rect, late_floats,
-    place_late, place_objects, wrap_area,
+    FloatAnchor, LateFloats, ObjFrame, ObjectPlacement, anchor_floats, body_wraps, continued_exclusions, fitting, float_rect, frame_wrap_area,
+    late_floats, place_late, place_objects,
 };
 use super::notes::{DECOR_STORY, NoteBox, para_notes, table_notes};
 use super::page::{PageBuilder, PageFrame, item_bottom};
@@ -183,7 +183,7 @@ fn place_framed_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: 
     }
     // The frame's first paragraph makes the text around keep clear of the whole frame.
     if block == first
-        && let Some(area) = wrap_area(r, &float, None)
+        && let Some(area) = frame_wrap_area(r, &float)
     {
         pb.excl.push(area);
     }

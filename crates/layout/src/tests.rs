@@ -10200,6 +10200,49 @@ fn a_long_run_of_framed_paragraphs_is_cut_into_whole_frames() {
     }
 }
 
+/// Word for Windows leaves the gap between a body text frame and the margin empty when it is
+/// 72pt or less, and puts text in it from 90pt (a 75pt frame 9pt from the text, on either side;
+/// reported on #2523). WordCraft filled any gap of 20pt, as it does beside a floating object.
+#[test]
+fn text_stays_out_of_a_narrow_gap_beside_a_body_text_frame() {
+    use wordcraft_doc::props::TextFrame;
+    // Whether the text beside a frame `gap` points from the right (or left) margin uses the
+    // room between them. The page is Letter with 1-inch margins: the text runs from 72 to 540.
+    let beside = |gap: f32, right: bool| {
+        let x = if right { 540.0 - gap - 75.0 } else { 72.0 + gap };
+        let frame = TextFrame {
+            w: Some(75.0),
+            h: Some(100.0),
+            h_exact: true,
+            x,
+            h_anchor: "page".into(),
+            v_anchor: "text".into(),
+            wrap: "around".into(),
+            h_space: 9.0,
+            ..Default::default()
+        };
+        let mut framed = wordcraft_doc::Paragraph::with_text("Frame", Default::default());
+        framed.props.frame = Some(frame);
+        let text = "aa ".repeat(400);
+        let mut d = Document::new();
+        d.body = vec![wordcraft_doc::para_block(framed), wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&text, Default::default()))];
+        let l = lay(&d);
+        let frame_top = l.caret(&Pos::body(0, 0)).unwrap().top;
+        (0..text.len())
+            .filter_map(|off| l.caret(&Pos::body(1, off)))
+            .filter(|c| c.top < frame_top + 90.0)
+            .any(|c| if right { c.x > x + 75.0 + 1.0 } else { c.x < x - 1.0 })
+    };
+    for right in [true, false] {
+        for gap in [54.0, 72.0] {
+            assert!(!beside(gap, right), "a {gap}pt gap ({}) stays empty", if right { "right" } else { "left" });
+        }
+        for gap in [90.0, 144.0] {
+            assert!(beside(gap, right), "a {gap}pt gap ({}) takes text", if right { "right" } else { "left" });
+        }
+    }
+}
+
 /// Word has no frames inside a text box: a paragraph there whose style carries a frame (a
 /// letterhead's "Weld" and "Governor" styles, framed at the page's left) runs in the box's text
 /// like any other. WordCraft placed each one apart at the frame's offset, so two of them in a row

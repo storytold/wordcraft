@@ -137,6 +137,9 @@ pub struct Exclusion {
     pub side: WrapText,
     /// A floating table counts a line touching its top as overlapping; shapes do not (#3977).
     pub table: bool,
+    /// The narrowest gap beside this area text goes into, points: a narrower one between it and
+    /// the margin or another area is left empty.
+    pub min_span: f32,
 }
 
 impl Exclusion {

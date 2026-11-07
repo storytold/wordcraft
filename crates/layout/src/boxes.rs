@@ -1,6 +1,7 @@
 use super::ctx::{Ctx, page_anchored};
 use super::floats::{
-    ObjFrame, ObjectPlacement, WrapArea, align_in, float_rect, floating, left_out_objects, place_objects, rel_exclusions, wrap_area,
+    AreaKind, ObjFrame, ObjectPlacement, WrapArea, align_in, float_rect, floating, frame_wrap_area, left_out_objects, place_objects, rel_exclusions,
+    wrap_area,
 };
 use super::page::PageFrame;
 use super::placed::Placed;
@@ -161,11 +162,11 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
         Some(float) => {
             let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(ctx, t) } else { 0.0 };
             let (rect, area) = box_float_table_rect(frame, width, *y, &layout, &float, legacy, float_tables);
-            exclusions.push((area, false, None, WrapText::BothSides, true));
+            exclusions.push((area, false, None, WrapText::BothSides, AreaKind::Table));
             float_tables.push(area);
             table_areas.push(area);
             if float.v_rel == Anchor::Page {
-                page_table_wraps.push((area, false, None, WrapText::BothSides, true));
+                page_table_wraps.push((area, false, None, WrapText::BothSides, AreaKind::Table));
             }
             (rect.x, rect.y)
         }
@@ -277,7 +278,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                         path.push((i + k) as u32);
                         push_para(&mut items, (story, &path), pf, (0, pf.lines.len()), (r.x, r.y + top), fw, Edges::own(pf, 0, pf.lines.len()));
                     }
-                    excl.extend(wrap_area(r, &float, None));
+                    excl.extend(frame_wrap_area(r, &float));
                     float_tables.push(r);
                     continue;
                 }
