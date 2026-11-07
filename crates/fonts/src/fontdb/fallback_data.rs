@@ -211,10 +211,12 @@ pub(super) struct FallbackCache {
 pub(super) type RunFallbackKey = (Vec<char>, u32, bool, bool);
 
 /// [`FontDb::fallback_for_run`] results: (sorted, deduplicated chars, excluded face, bold,
-/// italic) → face, valid while the loaded face count is `faces`.
+/// italic) → face, valid while the loaded face count is `faces` and [`FontDb::generation`] is
+/// `generation`.
 #[derive(Default)]
 pub(super) struct RunFallbackCache {
     pub(super) faces: usize,
+    pub(super) generation: u64,
     /// Chars held in the keys (bounds memory: hostile runs can be long).
     pub(super) chars: usize,
     pub(super) map: HashMap<RunFallbackKey, Option<Arc<FontFace>>>,
@@ -229,7 +231,7 @@ pub(super) const RUN_FALLBACK_CACHE_CHARS: usize = 1 << 20;
 /// for the script first (so a word isn't split across fonts, which breaks Arabic joining); for a
 /// complex-script character `complex` (Thai, Myanmar…) faces with OpenType layout tables, the
 /// script's own families first, as the per-character fallback ranks them; then the fallback
-/// family, upright, nearest to regular weight.
+/// family, matching serif/sans classification, upright, nearest to regular weight.
 pub(super) fn fallback_order(faces: &[Arc<FontFace>], exclude: u32, rtl: bool, complex: Option<char>) -> Vec<&Arc<FontFace>> {
     let mut order: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.id != exclude).collect();
     let primary = faces.iter().find(|f| f.id == exclude);
@@ -241,7 +243,7 @@ pub(super) fn fallback_order(faces: &[Arc<FontFace>], exclude: u32, rtl: bool, c
         Some(c) => (!f.has_layout_tables(), crate::fallback_rank(c, &f.family)),
         None => (false, 0),
     };
-    order.sort_by_key(|f| {
+    order.sort_by_cached_key(|f| {
         (rank(f), shaping(f), !f.family.eq_ignore_ascii_case(FALLBACK_FAMILY), serif_mismatch(f), f.italic, (f.weight - 400.0).abs() as i32)
     });
     order

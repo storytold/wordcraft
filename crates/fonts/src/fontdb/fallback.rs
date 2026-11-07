@@ -129,7 +129,7 @@ impl FontDb {
         // the script's own families, so syllables reorder and stack (#604).
         let complex = crate::needs_layout_tables(c);
         let shaping = |f: &FontFace| if complex { (!f.has_layout_tables(), crate::fallback_rank(c, &f.family)) } else { (false, 0) };
-        order.sort_by_key(|f| {
+        order.sort_by_cached_key(|f| {
             (rank(f), shaping(f), !f.family.eq_ignore_ascii_case(FALLBACK_FAMILY), serif_mismatch(f), f.italic, (f.weight - 400.0).abs() as i32)
         });
         (order.into_iter().find(|f| f.covers(c)).cloned(), faces.len())
@@ -156,23 +156,36 @@ impl FontDb {
         set.sort_unstable();
         set.dedup();
         let key = (set, exclude, bold, italic);
+        let generation = self.generation();
         let n = self.read_faces().len();
         {
             let cache = self.run_fallbacks.read().unwrap_or_else(std::sync::PoisonError::into_inner);
             if cache.faces == n
+                && cache.generation == generation
                 && let Some(hit) = cache.map.get(&key)
             {
                 return hit.clone();
             }
         }
-        // Keyed by the face count the search last looked at, not the count after it: a face loaded
-        // meanwhile by another thread (one its search, or a family named by a document) must make
-        // a miss count as stale, not as the answer for the new count.
+        // Keyed by the face count and generation the search last looked at, not the state after it:
+        // a face loaded or changed meanwhile by another thread (one its search, a family named by a
+        // document, or a user font change) must not be overwritten with a stale answer.
         let (found, n) = self.search_run(&key.0, exclude, bold, italic);
+        if n != self.read_faces().len() || generation != self.generation() {
+            return found;
+        }
         let mut cache = self.run_fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if cache.faces != n || cache.map.len() >= RUN_FALLBACK_CACHE_MAX || cache.chars.saturating_add(key.0.len()) > RUN_FALLBACK_CACHE_CHARS {
+        if n != self.read_faces().len() || generation != self.generation() {
+            return found;
+        }
+        if cache.faces != n
+            || cache.generation != generation
+            || cache.map.len() >= RUN_FALLBACK_CACHE_MAX
+            || cache.chars.saturating_add(key.0.len()) > RUN_FALLBACK_CACHE_CHARS
+        {
             cache.map.clear();
             cache.faces = n;
+            cache.generation = generation;
             cache.chars = 0;
         }
         cache.chars = cache.chars.saturating_add(key.0.len());
@@ -218,7 +231,11 @@ impl FontDb {
             (true, false) => "Bold",
             _ => "Italic",
         };
+        let before_style = self.read_faces().len();
         let styled = self.face(&base.family, style);
+        if before_style == checked {
+            checked = self.read_faces().len();
+        }
         let face = if styled.family.eq_ignore_ascii_case(&base.family) && chars.iter().all(|c| styled.covers(*c)) && styled.id != exclude {
             styled
         } else {
