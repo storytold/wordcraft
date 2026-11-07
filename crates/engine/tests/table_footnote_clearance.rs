@@ -175,3 +175,31 @@ fn measuring_table_notes_does_not_advance_list_counters() {
     assert_eq!(labels(StoryRef::Body, &Path::top(1)), ["2."]);
     assert_clear(&mut s);
 }
+
+/// A cut through one cell's first line must not hide a smaller fitting cut in another cell.
+#[test]
+fn notes_in_different_cells_keep_a_fitting_prefix_on_the_page() {
+    use wordcraft_doc::{CharProps, props::LineSpacing};
+    let mut d = Document::new();
+    (d.last_section.page_w, d.last_section.page_h) = (595.3, 841.9);
+    (d.last_section.margin_top, d.last_section.margin_bottom) = (28.35, 28.35);
+    let mut before = Paragraph::with_text("Before the table.", Default::default());
+    before.props.space_after = Some(550.0);
+    let mut t = Table::new(1, 2, d.last_section.text_width());
+    let mut left = Paragraph::with_text(&"Ordinary cell content. ".repeat(100), Default::default());
+    left.props.widow_control = Some(false);
+    t.rows[0].cells[0].blocks = vec![para_block(left)];
+    let mut right = Paragraph::with_text("Tall", CharProps { size: Some(60.0), ..Default::default() });
+    right.props.space_before = Some(60.0);
+    right.props.line_spacing = Some(LineSpacing::Exactly(100.0));
+    t.rows[0].cells[1].blocks = vec![para_block(right)];
+    d.body = vec![para_block(before), Arc::new(Block::Table(t)), para_block(Paragraph::new())];
+    let mut s = Session::new(d);
+    let left_reference = Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 5 };
+    s.run("caret.set", &json!({"pos": left_reference})).unwrap();
+    s.run("references.footnote", &json!({"text": "The early cell note."})).unwrap();
+    s.run("caret.set", &json!({"pos": Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off: 1 }})).unwrap();
+    s.run("references.footnote", &json!({"text": "The later cell note. ".repeat(30)})).unwrap();
+    assert_eq!(s.layout().caret(&left_reference).unwrap().page, 0, "a smaller prefix fits before the tall cell starts");
+    assert_clear(&mut s);
+}
