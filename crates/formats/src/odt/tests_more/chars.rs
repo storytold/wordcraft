@@ -315,11 +315,12 @@ fn a_parentless_headings_text_keeps_its_size() {
     );
     for size in ["10pt", "14pt"] {
         let content = format!(
-            r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties fo:font-size="{size}"/></style:style></office:automatic-styles><office:body><office:text><text:h text:style-name="H" text:outline-level="1"><text:span text:style-name="T1">One</text:span></text:h></office:text></office:body></office:document-content>"#
+            r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties fo:font-size="{size}"/></style:style><style:style style:name="T2" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style></office:automatic-styles><office:body><office:text><text:h text:style-name="H" text:outline-level="1"><text:span text:style-name="T1">One</text:span><text:span text:style-name="T2">Two</text:span></text:h></office:text></office:body></office:document-content>"#
         );
         let want: f32 = size.trim_end_matches("pt").parse().unwrap();
         let check = |d: &Document, what: &str| {
             let p = d.body[0].as_para().unwrap();
+            assert_eq!(p.runs[1].props.size, None, "{size} {what}: a span stating no size has none");
             assert_eq!(
                 d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).size,
                 want,

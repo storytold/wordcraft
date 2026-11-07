@@ -1543,7 +1543,17 @@ impl Body<'_> {
                 // A size in percent is of the size it is in: its heading's, where nothing nearer
                 // states one.
                 let sized = Fmt { size: base.size.or(self.para_sizes.last().and_then(|(size, _)| *size)), ..base.clone() };
-                let fmt = get(a, "text:style-name").map_or_else(|| base.clone(), |s| self.styles.span_fmt(s, &sized));
+                let fmt = get(a, "text:style-name").map_or_else(
+                    || base.clone(),
+                    |s| {
+                        let mut fmt = self.styles.span_fmt(s, &sized);
+                        // That size is only for working out a percent: saying nothing of size, it has none.
+                        if base.size.is_none() && self.styles.span_fmt(s, &base).size.is_none() {
+                            fmt.size = None;
+                        }
+                        fmt
+                    },
+                );
                 self.fmt.push(fmt);
             }
             "a" => {
