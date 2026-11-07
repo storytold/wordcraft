@@ -527,6 +527,21 @@ pub fn controls_public(tab: &str) -> Vec<ControlInfo> {
         .collect()
 }
 
+/// Compact ribbon buttons (the 24×22 icon buttons) are at most this tall.
+const COMPACT_H: f32 = 26.0;
+
+/// Where a badge `width` wide goes for a control at `rect`. A big control has room for the badge
+/// in its top-left corner. A compact button is nearly all icon (17×17 in 24×22), so there the
+/// badge is smaller and hangs out over the button's corner, in the padding and the gap to the
+/// neighbours, instead of sitting on the glyph (#4497).
+pub fn badge_rect(rect: Rect, width: f32) -> Rect {
+    if rect.height() <= COMPACT_H {
+        Rect::from_min_size(rect.min + Vec2::new(-4.0, -4.0), Vec2::new((width + 3.0).max(12.0), 12.0))
+    } else {
+        Rect::from_min_size(rect.min + Vec2::new(2.0, 1.0), Vec2::new((width + 4.0).max(15.0), 15.0))
+    }
+}
+
 /// A keytip badge: letters or toolbar numbers, high contrast in both themes.
 pub fn badge(ui: &Ui, rect: Rect, letter: &str) {
     let count = letter.chars().count();
@@ -534,9 +549,16 @@ pub fn badge(ui: &Ui, rect: Rect, letter: &str) {
         return;
     }
     let t = Tokens::get(ui.ctx());
-    let font = semibold(if count > 3 { 8.5 } else { 10.0 });
+    let compact = rect.height() <= COMPACT_H;
+    let font = semibold(if count > 3 || (compact && count > 1) {
+        8.5
+    } else if compact {
+        9.0
+    } else {
+        10.0
+    });
     let width = ui.ctx().fonts_mut(|f| f.layout_no_wrap(letter.to_string(), font.clone(), t.on_accent).size().x);
-    let r = Rect::from_min_size(rect.min + Vec2::new(2.0, 1.0), Vec2::new((width + 4.0).max(15.0), 15.0));
+    let r = badge_rect(rect, width);
     let p = ui.painter();
     p.rect_filled(r, CornerRadius::same(3), t.accent);
     p.rect_stroke(r, CornerRadius::same(3), Stroke::new(1.0, t.menu), egui::StrokeKind::Inside);

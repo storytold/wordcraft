@@ -12,6 +12,25 @@ fn input_frame(ctx: &egui::Context, app: &mut WordApp, events: Vec<egui::Event>)
     ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| logic(app, ui.ctx())).drop_without_applying_deltas();
 }
 
+/// #4497: a compact button is nearly all icon (`widgets::small`: 17×17 in 24×22), and its
+/// badge sat on 63% of the glyph. It now hangs out over the corner and covers a sliver, for a
+/// one-letter and a two-letter badge alike; a big control keeps its corner badge.
+#[test]
+fn a_compact_buttons_badge_leaves_its_icon_visible() {
+    let button = Rect::from_min_size(egui::pos2(100.0, 60.0), Vec2::new(24.0, 22.0));
+    let icon = Rect::from_center_size(egui::pos2(button.min.x + 12.0, button.center().y), Vec2::splat(17.0));
+    for (width, most) in [(7.0, 0.10), (14.0, 0.20)] {
+        let r = badge_rect(button, width);
+        let covered = r.intersect(icon);
+        let share = covered.width().max(0.0) * covered.height().max(0.0) / (icon.width() * icon.height());
+        assert!(share <= most, "a badge {width} wide covers {share:.2} of the icon (at most {most})");
+        assert!(r.min.x >= button.min.x - 4.0 && r.min.y >= button.min.y - 4.0, "it hangs out of the corner by no more than 4 px");
+        assert!(r.width() >= 12.0 && r.height() >= 12.0, "and stays big enough to read");
+    }
+    let big = Rect::from_min_size(egui::pos2(100.0, 60.0), Vec2::new(44.0, 66.0));
+    assert_eq!(badge_rect(big, 7.0), Rect::from_min_size(egui::pos2(102.0, 61.0), Vec2::new(15.0, 15.0)));
+}
+
 #[test]
 fn native_alt_taps_toggle_once_in_either_event_order() {
     let alt = egui::Modifiers { alt: true, ..Default::default() };
