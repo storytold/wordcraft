@@ -152,6 +152,13 @@ impl Body<'_> {
                     })
                 }
                 (None, None) => img.and_then(|data| picture(data, w, h, alt.trim())).map(|mut img| {
+                    // In line with no stated size, it comes at its own: fitted to the text, as
+                    // other formats' pictures are. A stated size is the file's.
+                    let room = self.sec.text_width();
+                    if w.is_none() && h.is_none() && float.is_none() && room.is_finite() && room > 0.0 && img.w > room {
+                        img.h = (img.h * room / img.w).max(1.0);
+                        img.w = room.max(1.0);
+                    }
                     img.float = float.map(Box::new);
                     if let Some(clip) = self.frame_clip.take() {
                         img.crop = crop_fractions(clip, &img.data);
