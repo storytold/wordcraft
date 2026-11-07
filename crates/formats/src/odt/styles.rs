@@ -1480,6 +1480,10 @@ impl Styles {
         };
         let mut fmt = Fmt::default();
         s.fmt.apply(&mut fmt);
+        // A percent is of what's under it: the parent's size, or with none the default style's.
+        if s.fmt.size_pct.is_some() {
+            fmt.size = self.named_size(odt);
+        }
         // A style with no parent inherits the default style, not Standard (the document's
         // defaults here): its size, when Standard's differs.
         if s.parent.is_none() && fmt.size.is_none() && self.doc_size() != self.default_size {

@@ -348,6 +348,23 @@ fn a_percent_in_a_parentless_heading_is_of_the_default_size() {
     assert_eq!(d.body[0].as_para().unwrap().runs[0].props.size, Some(5.0));
 }
 
+/// A heading style with no parent and a percent size is that percent of the default's size, so text
+/// stating that size is at the style's size.
+#[test]
+fn a_parentless_heading_style_in_percent_is_of_the_default_size() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="10pt"/></style:default-style><style:style style:name="H" style:family="paragraph"><style:text-properties fo:font-size="50%"/></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties fo:font-size="5pt"/></style:style></office:automatic-styles><office:body><office:text><text:h text:style-name="H" text:outline-level="1"><text:span text:style-name="T1">One</text:span>Two</text:h></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let p = d.body[0].as_para().unwrap();
+    for r in &p.runs {
+        assert_eq!(d.styles.resolve_char(p.props.style.as_deref(), &r.props).size, 5.0, "{:?} {:?}", p.props.style, r.props.size);
+    }
+}
+
 /// Text at its heading's size goes with the heading style, stated or not, and a size in percent
 /// is of the heading's size; text of another size keeps it, and so does a paragraph's own.
 #[test]
