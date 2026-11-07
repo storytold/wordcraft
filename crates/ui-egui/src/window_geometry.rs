@@ -62,8 +62,11 @@ impl RawWindowState {
     }
 }
 
-/// The smallest window restored: the desktop app's minimum inner size.
-pub const MIN_SIZE: egui::Vec2 = egui::vec2(760.0, 480.0);
+/// The desktop app's minimum inner size, and the smallest window restored. 600 pt wide (#4850, #5886):
+/// allows half-screen split window tiling on standard displays (e.g. 1280 pt or 1366 pt, such as
+/// under GNOME Wayland), and the widest dialogs that fitted 760 pt (Organizer, Define New
+/// Multilevel List) still fit.
+pub const MIN_SIZE: egui::Vec2 = egui::vec2(600.0, 480.0);
 /// Larger saved sizes are corrupt. eframe also shrinks the start size to the largest monitor.
 const MAX_SIZE: egui::Vec2 = egui::vec2(16384.0, 16384.0);
 /// Saved positions farther from the origin than this are corrupt.
@@ -520,6 +523,15 @@ mod tests {
         assert_eq!(requested_size(egui::vec2(1200.0, 800.0), 0.0), None);
     }
 
+    /// #5886: window can be resized to half-screen split widths on standard screens (1280 pt, 1366 pt, etc.).
+    /// Clamping at 760 prevented Wayland and GNOME window managers from tiling the window side-by-side.
+    #[test]
+    fn requested_size_allows_split_window_narrow_widths() {
+        assert_eq!(requested_size(egui::vec2(600.0, 480.0), 8192.0), Some(egui::vec2(600.0, 480.0)));
+        assert_eq!(requested_size(egui::vec2(640.0, 480.0), 8192.0), Some(egui::vec2(640.0, 480.0)));
+        assert_eq!(requested_size(egui::vec2(683.0, 480.0), 8192.0), Some(egui::vec2(683.0, 480.0)));
+    }
+
     /// An oversized default window shrinks and is centred to fit, while a restored window keeps its
     /// place; maximized, full-screen, minimized and unknown-monitor frames, and frames without
     /// rectangles, are left alone.
@@ -548,7 +560,7 @@ mod tests {
         let again = WindowGeometry { position: Some([48.0, 48.0]), width: 1424.0, height: 729.0, ..saved() };
         assert_eq!(again.fit_on_monitor(&opened(egui::pos2(48.0, 48.0), egui::vec2(1424.0, 729.0), laptop)), None);
         // Never smaller than the minimum size, and never off the top-left corner.
-        let tiny = egui::vec2(800.0, 600.0);
+        let tiny = egui::vec2(MIN_SIZE.x + 40.0, 600.0);
         assert_eq!(system.fit_on_monitor(&opened(at, start, tiny)), Some((egui::pos2(12.0, 40.5), MIN_SIZE)));
         // Maximized, full screen or minimized, or the monitor not known yet: nothing to do.
         let mut i = opened(at, egui::vec2(1440.0, 864.0), laptop);
