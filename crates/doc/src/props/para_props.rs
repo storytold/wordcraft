@@ -178,9 +178,11 @@ impl BorderStyle {
             BorderStyle::ThinThickThinLargeGap => "thinThickThinLargeGap",
         }
     }
-    pub fn from_ooxml(s: &str) -> BorderStyle {
-        match s {
+    /// The style an OOXML `w:val` (or `none`) names; `None` for a name it doesn't know.
+    pub fn parse(s: &str) -> Option<BorderStyle> {
+        Some(match s {
             "nil" | "none" => BorderStyle::None,
+            "single" => BorderStyle::Single,
             "double" => BorderStyle::Double,
             "dotted" => BorderStyle::Dotted,
             "dashed" | "dashSmallGap" => BorderStyle::Dashed,
@@ -197,8 +199,16 @@ impl BorderStyle {
             "thinThickLargeGap" => BorderStyle::ThinThickLargeGap,
             "thickThinLargeGap" => BorderStyle::ThickThinLargeGap,
             "thinThickThinLargeGap" => BorderStyle::ThinThickThinLargeGap,
-            _ => BorderStyle::Single,
-        }
+            _ => return None,
+        })
+    }
+    /// Like [`BorderStyle::parse`], with an unknown name read as a single line.
+    pub fn from_ooxml(s: &str) -> BorderStyle {
+        BorderStyle::parse(s).unwrap_or(BorderStyle::Single)
+    }
+    /// The name commands use: the OOXML one, with `none` for no line.
+    pub fn name(self) -> &'static str {
+        if self == BorderStyle::None { "none" } else { self.ooxml() }
     }
 }
 

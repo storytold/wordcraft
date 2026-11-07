@@ -7,7 +7,7 @@
 //!   mapping taken from the paragraph text, so text is selectable, searchable and extractable.
 //!   Synthetic bold (fill + stroke) and italic (skew) follow the renderer.
 //! - **Graphics:** fills (highlight, shading, cell fills), rules and underlines (solid, dotted,
-//!   dashed, double, wave), shapes, pictures (decoded with `image`; JPEG passed through, the rest
+//!   dashed, dot-dash, double, triple, wave), shapes, pictures (decoded with `image`; JPEG passed through, the rest
 //!   embedded losslessly; WMF and EMF drawn as vector paths and embedded bitmaps) with cropping and
 //!   opacity, the page colour and the watermark.
 //! - **Interactive:** link annotations for hyperlinked runs (URLs and internal `#bookmark`
