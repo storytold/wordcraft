@@ -65,6 +65,11 @@ pub(crate) struct Ctx<'a> {
     /// Each body float's latest placement: on which page and with what wrap area, when it is
     /// above its anchor paragraph with text before it ([`EarlyFloats`]).
     pub(crate) floats_above: HashMap<(usize, usize), Option<(usize, WrapArea)>>,
+    /// Which of a paragraph's inline objects the layout leaves out (hidden, or deleted in the
+    /// final text), by paragraph and the table text it is laid out with, worked out once per
+    /// layout ([`floats::left_out_cached`]): a long word's paragraphs have their floats placed
+    /// again on every page they reach, and identically flag fetching is not a per-page walk.
+    pub(crate) left_out: HashMap<(usize, usize, HideDeleted), Arc<Vec<bool>>>,
     /// The document's sections with their headers and footers linked ([`HfLinks`]).
     pub(crate) hf: Arc<HfLinks<'a>>,
     /// Pictures' transparency, decoded for Tight and Through wrapping ([`Ctx::wrap_outline`]).

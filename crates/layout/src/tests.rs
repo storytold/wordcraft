@@ -803,6 +803,20 @@ pub(crate) fn layout_time_ratio(doc: impl Fn(usize) -> Document, n: usize, opts:
     )
 }
 
+/// The characters the document's object lookups walk ([`wordcraft_doc::work`]) laying out
+/// `doc(SCALE * n)` against `doc(n)`, and their ratio: about [`SCALE`] when every walk runs once
+/// per layout, `SCALE`² when one runs again for every page a paragraph spans. Steps hold on a
+/// busy machine, where a timing doesn't.
+pub(crate) fn layout_doc_steps(doc: impl Fn(usize) -> Document, n: usize, opts: &LayoutOptions) -> (u64, u64, f64) {
+    let (small, big) = (doc(n), doc(SCALE * n));
+    let lay = |d: &Document| {
+        let l = layout(d, &mut LayoutCache::new(), opts);
+        std::hint::black_box(&l);
+    };
+    let (s, b) = (wordcraft_doc::work::count(|| lay(&small)), wordcraft_doc::work::count(|| lay(&big)));
+    (s, b, b as f64 / s.max(1) as f64)
+}
+
 /// A document that is one word with no break opportunity in it, laid out beside a floating
 /// object: the word is wider than the span the object leaves, so the measurement that asks
 /// whether it would fit the full line runs for every line the word takes.
@@ -815,21 +829,23 @@ fn long_word_beside_a_float(n: usize) -> Document {
 }
 
 /// A word with no break opportunity in it: measuring the word for every line it takes scanned
-/// the whole paragraph each time, so the layout was quadratic in the word's length.
+/// the whole paragraph each time (#3808), and its float was looked up again for every page the
+/// word spans. Both walks now run once, so the document's object lookups stay linear in it.
 #[test]
 fn a_long_unbreakable_word_lays_out_in_linear_time() {
-    let (t1, tk, ratio) = layout_time_ratio(long_word_beside_a_float, 50_000, &LayoutOptions::default());
-    eprintln!("t(n) {t1:.4} s, t(8n) {tk:.4} s, ratio {ratio:.1}");
-    assert!(ratio < 24.0, "8x the word took {ratio:.1}x the time ({t1:.4} s → {tk:.4} s): not linear");
+    let (s, b, ratio) = layout_doc_steps(long_word_beside_a_float, 50_000, &LayoutOptions::default());
+    eprintln!("steps(n) {s}, steps(8n) {b}, ratio {ratio:.1}");
+    assert!(ratio < 1.5 * SCALE as f64, "8x the word took {ratio:.1}x the document's object steps ({s} → {b}): not linear");
 }
 
-/// A word a megabyte long lays out in a fraction of a second: it used to take half a minute.
+/// A word a megabyte long lays out in a fraction of a second: it used to take half a minute. The
+/// cost is the document's object lookups, counted once per layout, so it holds while the machine
+/// is busy too.
 #[test]
 fn a_megabyte_long_word_lays_out_quickly() {
-    let d = long_word_beside_a_float(1_000_000);
-    let t = std::time::Instant::now();
-    lay(&d);
-    assert!(t.elapsed().as_secs() < 15, "a megabyte-long word took {:?}", t.elapsed());
+    let (s, b, ratio) = layout_doc_steps(long_word_beside_a_float, 125_000, &LayoutOptions::default());
+    eprintln!("steps(n) {s}, steps(8n) {b}, ratio {ratio:.1}");
+    assert!(ratio < 1.5 * SCALE as f64, "8x the word took {ratio:.1}x the document's object steps ({s} → {b}): not linear");
 }
 
 /// A cluster with the given advance and kind, for the tests that measure a word by hand.
@@ -1036,11 +1052,12 @@ fn long_word_with_alternating_advances_beside_a_float(n: usize) -> Document {
 
 /// A word whose advances alternate in sign lays out in linear time: the measurement that asks
 /// whether it would fit the full line must not walk the word again for every line it takes.
+/// The count is the document's object lookups, so it holds on a busy machine too.
 #[test]
 fn a_word_with_alternating_advances_lays_out_in_linear_time() {
-    let (t1, tk, ratio) = layout_time_ratio(long_word_with_alternating_advances_beside_a_float, 50_000, &LayoutOptions::default());
-    eprintln!("t(n) {t1:.4} s, t(8n) {tk:.4} s, ratio {ratio:.1}");
-    assert!(ratio < 24.0, "8x the word took {ratio:.1}x the time ({t1:.4} s → {tk:.4} s): not linear");
+    let (s, b, ratio) = layout_doc_steps(long_word_with_alternating_advances_beside_a_float, 50_000, &LayoutOptions::default());
+    eprintln!("steps(n) {s}, steps(8n) {b}, ratio {ratio:.1}");
+    assert!(ratio < 1.5 * SCALE as f64, "8x the word took {ratio:.1}x the document's object steps ({s} → {b}): not linear");
 }
 
 #[test]

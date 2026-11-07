@@ -277,6 +277,80 @@ fn inspect_removals_are_refused_while_the_document_tracks_changes() {
     assert_eq!(found["found"]["hiddenText"], true, "{found}");
 }
 
+#[test]
+fn combine_reports_mode_and_marks_changes() {
+    let mut s = Session::new(Document::from_text("The cat sat.\nKeep this."));
+    let r = s.run("review.combine", &json!({"text": "The dog sat.\nKeep this.\nAdded."})).unwrap();
+    assert_eq!(r["mode"], "combine");
+    assert!(r["changes"].as_u64().unwrap() >= 1);
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "The dog sat.\nKeep this.\nAdded.");
+}
+
+#[test]
+fn merge3_applies_non_conflicting_changes() {
+    let mut s = Session::new(Document::from_text("base\nours changed\nshared"));
+    let r = s.run("review.merge", &json!({"base": {"text": "base\nmiddle\nshared"}, "theirs": {"text": "base\nmiddle\nshared theirs"}})).unwrap();
+    assert_eq!(r["mode"], "merge3");
+    assert_eq!(r["conflicts"], 0);
+    let text = s.doc.plain_text(StoryRef::Body);
+    assert!(text.contains("ours changed"), "{text}");
+    assert!(text.contains("shared theirs"), "{text}");
+}
+
+#[test]
+fn merge3_marks_conflicts_and_supports_resolution_modes() {
+    let mut s = Session::new(Document::from_text("base\nours"));
+    let r = s.run("review.merge", &json!({"base": {"text": "base\nold"}, "theirs": {"text": "base\ntheirs"}, "conflicts": "markers"})).unwrap();
+    assert!(r["conflicts"].as_u64().unwrap() >= 1, "{r}");
+    assert_eq!(r["scope"], "body", "{r}");
+    assert_eq!(r["nonBodyStoriesMerged"], false, "{r}");
+    assert_eq!(r["tables"]["mergedAs"], "whole-block", "{r}");
+    assert!(r["notes"].as_array().is_some_and(|a| !a.is_empty()), "{r}");
+    let text = s.doc.plain_text(StoryRef::Body);
+    assert!(text.contains("<<<<<<< ours"), "{text}");
+    assert!(text.contains(">>>>>>> theirs"), "{text}");
+
+    let mut s = Session::new(Document::from_text("base\nours"));
+    let r = s.run("review.merge", &json!({"base": {"text": "base\nold"}, "theirs": {"text": "base\ntheirs"}, "conflicts": "theirs"})).unwrap();
+    assert!(r["conflicts"].as_u64().unwrap() >= 1);
+    assert!(s.doc.plain_text(StoryRef::Body).contains("theirs"));
+    assert!(!s.doc.plain_text(StoryRef::Body).contains("ours\n"));
+}
+
+#[test]
+fn compare_reports_not_honoured_options_when_requested() {
+    let mut s = Session::new(Document::from_text("Original"));
+    let r = s.run("review.compare", &json!({"text": "Revised", "moves": true, "comments": true, "tables": false})).unwrap();
+    assert_eq!(r["mode"], "compare");
+    let nh = r["notHonoured"].as_array().cloned().unwrap_or_default();
+    assert!(nh.iter().any(|v| v == "moves"), "{nh:?}");
+    assert!(nh.iter().any(|v| v == "comments"), "{nh:?}");
+    assert!(nh.iter().any(|v| v == "tables"), "{nh:?}");
+}
+
+#[test]
+fn combine_preserves_adopted_revisions_in_unchanged_regions() {
+    let mut revised = Document::from_text("Same\nChanged");
+    revised.revisions.push(wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Insert, "Mira", "2026-01-01T00:00:00Z"));
+    let rev = (revised.revisions.len() - 1) as u32;
+    if let Some(Block::Para(p)) = revised.body.first_mut().map(Arc::make_mut) {
+        let len = p.len();
+        let _ = p.format(0, len, &|c| c.ins = Some(rev));
+    }
+    let mut s = Session::new(Document::from_text("Same\nOriginal"));
+    let dir = std::env::temp_dir().join(format!("wordcraft-combine-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("revised.json");
+    crate::io::save_path(&path, &revised).unwrap();
+    let r = s.run("review.combine", &json!({"path": path.to_string_lossy()})).unwrap();
+    assert_eq!(r["mode"], "combine");
+    let has_mira = s.doc.revisions.iter().any(|rev| rev.author == "Mira");
+    assert!(has_mira, "adopted revision metadata should be preserved: {:?}", s.doc.revisions.iter().map(|r| &r.author).collect::<Vec<_>>());
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir(&dir);
+}
+
 /// A document that doesn't track changes is inspected as before: the hidden text goes.
 #[test]
 fn inspect_removals_work_when_the_document_does_not_track_changes() {

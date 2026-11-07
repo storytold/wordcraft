@@ -9,9 +9,9 @@ use super::{
 
 /// Which of `p`'s objects (by index) the layout leaves out ([`para::left_out`]): anchored in hidden
 /// text unless `show_hidden`, in a tracked deletion with `hide_deleted`, or a hidden drawing
-/// (`Float::hidden`, whatever is shown). `table_chr` is the
-/// cell's table-style character formatting ([`para::CellText::chr`]), resolved as the paragraph is
-/// laid out with (`StyleSheet::resolve_char_in`).
+/// (`Float::hidden`, whatever is shown). `table_chr` is
+/// the cell's table-style character formatting ([`para::CellText::chr`]), resolved as the paragraph
+/// is laid out with (`StyleSheet::resolve_char_in`).
 pub(crate) fn left_out_objects(
     doc: &Document,
     p: &Paragraph,
@@ -19,6 +19,31 @@ pub(crate) fn left_out_objects(
     show_hidden: bool,
     hide_deleted: HideDeleted,
 ) -> impl Fn(usize) -> bool {
+    let left = left_out_walk(doc, p, table_chr, show_hidden, hide_deleted);
+    // A hidden drawing is left out whatever is shown (Word shows it in no view).
+    move |k| left.get(k).copied().unwrap_or(false) || p.objects.get(k).and_then(InlineObject::frame).is_some_and(|(_, _, f)| f.hidden)
+}
+
+/// [`left_out_objects`] with the layout's [`Ctx`]: the walk runs once per paragraph and state and
+/// is shared by the whole layout. A paragraph a long word spans has its floats placed again on
+/// every page it reaches (`anchor_floats`), and walking the paragraph's whole text again per page
+/// would be quadratic in it, which the long-word layout tests count.
+pub(crate) fn left_out_cached<'a>(ctx: &mut Ctx, p: &'a Paragraph, table_chr: Option<&CharProps>) -> impl Fn(usize) -> bool + 'a {
+    let key = (p as *const Paragraph as usize, table_chr.map_or(0, |c| c as *const CharProps as usize), ctx.hide_deleted);
+    let left = if let Some(a) = ctx.left_out.get(&key) {
+        a.clone()
+    } else {
+        let a = Arc::new(left_out_walk(ctx.doc, p, table_chr, ctx.opts.show_hidden, ctx.hide_deleted));
+        ctx.left_out.insert(key, a.clone());
+        a
+    };
+    // A hidden drawing is left out whatever is shown (Word shows it in no view).
+    move |k| left.get(k).copied().unwrap_or(false) || p.objects.get(k).and_then(InlineObject::frame).is_some_and(|(_, _, f)| f.hidden)
+}
+
+/// Which objects (by index) the walk of the object anchors and their runs finds left out. Empty
+/// when nothing is left out with hidden text shown (a hidden drawing is still, see `left_out`).
+fn left_out_walk(doc: &Document, p: &Paragraph, table_chr: Option<&CharProps>, show_hidden: bool, hide_deleted: HideDeleted) -> Vec<bool> {
     let mut left = Vec::new();
     // No text left out with hidden text shown and markup on (hidden drawings still are, below).
     if (hide_deleted.any() || !show_hidden) && !p.objects.is_empty() {
@@ -47,8 +72,7 @@ pub(crate) fn left_out_objects(
             left.push(l);
         }
     }
-    // A hidden drawing is left out whatever is shown (Word shows it in no view).
-    move |k| left.get(k).copied().unwrap_or(false) || p.objects.get(k).and_then(InlineObject::frame).is_some_and(|(_, _, f)| f.hidden)
+    left
 }
 
 /// A floating (not inline) picture, chart or shape: its size and placement.
@@ -476,7 +500,7 @@ fn anchor_floats_but(
         let frame = PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
         // An object left out of the layout (hidden, or deleted in the final text) is not placed, so
         // it takes no room either.
-        let left_out = left_out_objects(ctx.doc, p, None, ctx.opts.show_hidden, ctx.hide_deleted);
+        let left_out = left_out_cached(ctx, p, None);
         for (oi, o) in p.objects.iter().enumerate() {
             let Some((w, h, float)) = floating(o) else { continue };
             if left_out(oi) {
@@ -700,7 +724,7 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
     let mut z_top = 0u32;
     let Some(fl) = pl.lines.get(l0) else { return (Vec::new(), Vec::new()) };
     // Objects left out of the layout (hidden, or deleted in the final text) aren't placed.
-    let left_out = left_out_objects(ctx.doc, p, at.table_chr, ctx.opts.show_hidden, ctx.hide_deleted);
+    let left_out = left_out_cached(ctx, p, at.table_chr);
     // The paragraph's first piece draws its floating objects, whichever of its lines holds the
     // anchor, except those anchored on a later page (`at.late`): the piece there draws them
     // (#4250). Inline objects go with their own line.

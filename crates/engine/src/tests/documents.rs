@@ -346,3 +346,29 @@ fn input_method_joins_stay_with_their_window() {
     assert_eq!(text(&s).trim(), "Hello", "B's typing is its own undo step");
     drop(a);
 }
+
+#[test]
+fn sync_scroll_toggles_view_state_and_requests_window() {
+    let mut s = s();
+    assert!(!s.view.sync_scroll);
+    let r = run(&mut s, "view.syncScroll", json!({}));
+    assert_eq!(r["value"], true);
+    assert!(s.view.sync_scroll);
+    assert!(s.ui_requests.iter().any(|q| q["window"] == "syncScroll" && q["value"] == true), "{:?}", s.ui_requests);
+    let r = run(&mut s, "view.syncScroll", json!({"value": false}));
+    assert_eq!(r["value"], false);
+    assert!(!s.view.sync_scroll);
+}
+
+#[test]
+fn arrange_and_side_by_side_require_multiple_documents_and_request_window() {
+    let mut s = s();
+    assert!(s.run("view.arrangeAll", &json!({})).is_err());
+    assert!(s.run("view.sideBySide", &json!({})).is_err());
+    let b = s.add_document(wordcraft_doc::Document::new());
+    let r = run(&mut s, "view.arrangeAll", json!({}));
+    assert!(r.get("anchor").is_some(), "{r}");
+    assert!(s.ui_requests.iter().any(|q| q["window"] == "arrangeAll"), "{:?}", s.ui_requests);
+    let _ = run(&mut s, "view.sideBySide", json!({"id": b}));
+    assert!(s.ui_requests.iter().any(|q| q["window"] == "sideBySide" && q["id"] == b), "{:?}", s.ui_requests);
+}

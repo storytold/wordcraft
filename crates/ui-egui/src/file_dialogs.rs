@@ -80,6 +80,8 @@ pub(crate) enum AfterPick {
     ForDialog,
     /// Put the picked document into the Compare dialog (original or revised, #412).
     ComparePath { revised: bool },
+    /// Put the picked document into the Merge dialog (0=base, 1=ours, 2=theirs).
+    MergePath { which: u8 },
 }
 
 /// What to do once Save As has written the document.
@@ -289,6 +291,11 @@ impl WordApp {
             AfterPick::ComparePath { revised } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 crate::dialogs_review::set_compare_path(self, revised, path);
+                Ok(json!({"picked": true}))
+            }
+            AfterPick::MergePath { which } => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                crate::dialogs_review::set_merge_path(self, which, path);
                 Ok(json!({"picked": true}))
             }
             AfterPick::Export { ext } => {

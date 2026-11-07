@@ -92,6 +92,8 @@ pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Window", None, app, |ui, app| {
         big(ui, app, "newWindow", "New\nWindow", "view.newWindow", json!({}), false);
         big(ui, app, "arrangeAll", "Arrange\nAll", "view.arrangeAll", json!({}), false);
+        big(ui, app, "sideBySide", "View Side\nby Side", "view.sideBySide", json!({}), false);
+        big_toggle(ui, app, "syncScroll", "Synchronous\nScrolling", "view.syncScroll", v.sync_scroll);
         big(ui, app, "split", "Split", "view.split", json!({}), false);
         menu_button(
             ui,

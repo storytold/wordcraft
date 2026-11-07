@@ -289,6 +289,9 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     if encrypted {
         s.password = password.map(crate::io::Password::new);
     }
+    if !encrypted {
+        crate::versions::load_for_path(s, std::path::Path::new(path));
+    }
     Ok(
         json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()}),
     )
@@ -326,6 +329,9 @@ fn encrypt(s: &mut Session, v: &Value) -> CmdResult {
     if password != s.password {
         if password.is_some() {
             s.clear_recovery_before_password()?;
+            if let Err(e) = crate::versions::clear_persisted(s) {
+                log::warn!("version history sidecar removal failed: {e}");
+            }
         }
         s.password = password;
         s.dirty = true;
@@ -352,6 +358,9 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         }
         wordcraft_docx::check_password(pw).map_err(|e| CmdError::Params(e.to_string()))?;
         s.clear_recovery_before_password()?;
+        if let Err(e) = crate::versions::clear_persisted(s) {
+            log::warn!("version history sidecar removal failed: {e}");
+        }
         s.password = Some(crate::io::Password::new(pw));
     }
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
@@ -387,6 +396,9 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         s.path = Some(path.clone());
         s.dirty = false;
         s.relayout();
+        if let Err(e) = crate::versions::persist(s) {
+            log::warn!("version history persistence failed ({}): {e}", path.display());
+        }
     }
     Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted}))
 }

@@ -2353,6 +2353,21 @@ fn cell_widths_follow_the_grid_after_skipped_columns() {
 }
 
 #[test]
+fn file_versions_delete_and_clear_work() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Versioned."));
+    run(&mut s, "file.versions", json!({"save": "one"}));
+    run(&mut s, "file.versions", json!({"save": "two"}));
+    let list = run(&mut s, "file.versions", json!({}));
+    assert_eq!(list.as_array().map(|a| a.len()), Some(2));
+    let list = run(&mut s, "file.versions", json!({"delete": 0}));
+    assert_eq!(list.as_array().map(|a| a.len()), Some(1));
+    assert_eq!(list[0]["label"], "two");
+    let list = run(&mut s, "file.versions", json!({"clear": true}));
+    assert_eq!(list.as_array().map(|a| a.len()), Some(0));
+    assert!(s.run("file.versions", &json!({"delete": 0})).is_err());
+}
+
+#[test]
 fn a_rejected_version_restore_saves_nothing() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Original text."));
     s.run("review.restrict", &json!({"mode": "readOnly", "password": "pw"})).unwrap();
@@ -10853,6 +10868,79 @@ fn a_rejected_comparison_keeps_the_current_versions() {
     assert_eq!(s.versions.len(), 1, "a rejected comparison discarded the current document's snapshot");
     assert_eq!(s.path.as_deref(), Some(std::path::Path::new("original.docx")));
     assert_eq!(s.file_name.as_deref(), Some("original.docx"));
+}
+
+#[test]
+fn compare_versions_compares_snapshot_to_current_and_preserves_snapshots() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Original text."));
+    s.path = Some(std::path::PathBuf::from("doc.docx"));
+    s.file_name = Some("doc.docx".into());
+    s.run("file.versions", &json!({"save": "v1"})).unwrap();
+    s.doc = wordcraft_doc::Document::from_text("Changed text.");
+    let r = s.run("file.versions.compare", &json!({"version": 0, "showIn": "new"})).unwrap();
+    assert!(r["changes"].as_u64().unwrap_or(0) >= 1, "{r}");
+    assert_eq!(r["version"], json!(0));
+    assert_eq!(r["other"], json!("current"));
+    assert_eq!(r["preserveVersions"], json!(true));
+    assert_eq!(s.versions.len(), 1, "version compare should preserve snapshots by default");
+    assert!(s.path.is_none() && s.file_name.is_none(), "new compare result is untitled");
+}
+
+#[test]
+fn compare_versions_compares_two_snapshots() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Alpha."));
+    s.run("file.versions", &json!({"save": "v1"})).unwrap();
+    s.doc = wordcraft_doc::Document::from_text("Beta.");
+    s.run("file.versions", &json!({"save": "v2"})).unwrap();
+    s.doc = wordcraft_doc::Document::from_text("Gamma.");
+    let r = s.run("file.versions.compare", &json!({"version": 0, "other": 1, "showIn": "new"})).unwrap();
+    assert!(r["changes"].as_u64().unwrap_or(0) >= 1, "{r}");
+    assert_eq!(r["other"], json!(1));
+    assert_eq!(s.versions.len(), 2, "comparing snapshots must not drop history");
+}
+
+#[test]
+fn compare_versions_validates_inputs() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Text."));
+    s.run("file.versions", &json!({"save": "v1"})).unwrap();
+    for bad in [
+        json!({"other": "current"}),
+        json!({"version": 9}),
+        json!({"version": -1}),
+        json!({"version": 0, "other": 9}),
+        json!({"version": 0, "other": "bogus"}),
+    ] {
+        let e = s.run("file.versions.compare", &bad).unwrap_err().to_string();
+        assert!(e.contains("no such version") || e.contains("version") || e.contains("other"), "{bad} => {e}");
+    }
+    assert_eq!(s.versions.len(), 1);
+}
+
+#[test]
+fn compare_versions_respects_protection_for_in_place_result() {
+    use wordcraft_doc::{CharProps, InlineObject};
+
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Editable. Locked."));
+    s.run("file.versions", &json!({"save": "v1"})).unwrap();
+    let end = s.doc.end_of(StoryRef::Body);
+    s.doc.insert_object(&end, InlineObject::PermEnd { id: 1 }, &CharProps::default()).unwrap();
+    let start = s.doc.start_of(StoryRef::Body);
+    s.doc.insert_object(&start, InlineObject::PermStart { id: 1, group: String::new(), editor: s.author.clone() }, &CharProps::default()).unwrap();
+    s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
+    let before = s.doc.clone();
+    let e = s.run("file.versions.compare", &json!({"version": 0, "showIn": "original"})).unwrap_err().to_string();
+    assert!(e.contains("protection"), "{e}");
+    assert_eq!(s.doc, before);
+    assert_eq!(s.versions.len(), 1);
+}
+
+#[test]
+fn compare_versions_can_clear_versions_when_requested() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Original."));
+    s.run("file.versions", &json!({"save": "v1"})).unwrap();
+    s.doc = wordcraft_doc::Document::from_text("Changed.");
+    s.run("file.versions.compare", &json!({"version": 0, "showIn": "new", "preserveVersions": false})).unwrap();
+    assert!(s.versions.is_empty(), "preserveVersions=false should clear snapshots on an untitled result");
 }
 
 /// A mailing result opens beside a protected source document, which keeps its save target,

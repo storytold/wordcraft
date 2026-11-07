@@ -132,6 +132,35 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         })
         .pure(),
+        CommandSpec::new("view.arrangeAll", "Arrange All", "View › Window", |s, _| {
+            s.push_ui_request(json!({"window": "arrangeAll"}));
+            sel_result(s)
+        })
+        .when(|s| if s.documents().len() > 1 { None } else { Some("more than one document must be open") })
+        .pure(),
+        CommandSpec::new("view.sideBySide", "View Side by Side", "View › Window", |s, v| {
+            let mut req = json!({"window": "sideBySide"});
+            if let Some(id) = v.get("id").and_then(serde_json::Value::as_u64) {
+                req["id"] = json!(id);
+            }
+            s.push_ui_request(req);
+            sel_result(s)
+        })
+        .params(r#"{"id"?: n (open document to compare with the active one)}"#)
+        .when(|s| if s.documents().len() > 1 { None } else { Some("more than one document must be open") })
+        .pure(),
+        CommandSpec::new("view.syncScroll", "Synchronous Scrolling", "View › Window", |s, v| {
+            let value = match v.get("value").and_then(serde_json::Value::as_bool) {
+                Some(v) => v,
+                None => !s.view.sync_scroll,
+            };
+            s.view.sync_scroll = value;
+            let req = json!({"window": "syncScroll", "value": value});
+            s.push_ui_request(req);
+            Ok(json!({"value": value}))
+        })
+        .params(r#"{"value"?: bool}"#)
+        .pure(),
         CommandSpec::new("view.switchWindows", "Switch Windows", "View › Window", switch_windows)
             .params(r#"{"id"?: n (make this open document the active one)} → {"documents": [{"id", "title", "path", "dirty", "active"}]} in the order they were opened"#)
             .pure(),

@@ -1,7 +1,5 @@
 use super::ctx::{Ctx, page_anchored};
-use super::floats::{
-    ObjFrame, ObjectPlacement, WrapArea, align_in, float_rect, floating, left_out_objects, place_objects, rel_exclusions, wrap_area,
-};
+use super::floats::{ObjFrame, ObjectPlacement, WrapArea, align_in, float_rect, floating, left_out_cached, place_objects, rel_exclusions, wrap_area};
 use super::page::PageFrame;
 use super::placed::Placed;
 use super::table_flow::below;
@@ -281,7 +279,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 let mut floats = HashMap::new();
                 // A header or footer cell's floats placed on the page: no room taken in the cell.
                 let mut pinned = HashMap::new();
-                let left_out = left_out_objects(ctx.doc, p, table.map(|t| &t.chr), ctx.opts.show_hidden, ctx.hide_deleted);
+                let left_out = left_out_cached(ctx, p, table.map(|t| &t.chr));
                 for (oi, o) in p.objects.iter().enumerate() {
                     let Some((w, h, float)) = floating(o) else { continue };
                     if left_out(oi) {

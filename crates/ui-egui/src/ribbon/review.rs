@@ -107,7 +107,17 @@ pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Compare", None, app, |ui, app| {
-        big(ui, app, "compare", "Compare", "review.compare", json!({}), false);
+        menu_button(
+            ui,
+            app,
+            crate::widgets::MenuButtonOptions::new("compare", Some("Compare"), "Compare documents or versions", true, "review.compare"),
+            |ui, app| {
+                mi(ui, app, "Compare…", "review.compare", json!({}));
+                mi(ui, app, "Combine…", "review.combine", json!({}));
+                mi(ui, app, "Merge Documents…", "ui.dialog", json!({"name": "merge"}));
+                mi(ui, app, "Compare to Version…", "ui.dialog", json!({"name": "compareVersions"}));
+            },
+        );
     });
     group(ui, "Protect", None, app, |ui, app| {
         big(ui, app, "blockAuthors", "Block\nAuthors", "review.blockAuthors", json!({}), false);

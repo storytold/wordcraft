@@ -90,6 +90,21 @@ pub struct Windows {
     input_plugin: bool,
     /// The viewport driver draws the windows this frame, and titles them.
     driven: bool,
+    /// View Side by Side: the two window keys being compared (left, right).
+    pub(crate) side_by_side: Option<(u64, u64)>,
+    /// Synchronous Scrolling: last observed scroll offset per paired window key.
+    sync_scroll_seen: std::collections::HashMap<u64, egui::Vec2>,
+    /// Synchronous Scrolling: the window that last changed scroll, offset, and scrollable size.
+    sync_scroll_from: Option<(u64, egui::Vec2, egui::Vec2)>,
+}
+
+pub(crate) fn sync_scroll_axis(leader_offset: f32, leader_max: f32, my_max: f32) -> f32 {
+    if leader_max.is_finite() && leader_max > 1.0 && my_max.is_finite() && my_max > 1.0 {
+        let ratio = (leader_offset / leader_max).clamp(0.0, 1.0);
+        (ratio * my_max).clamp(0.0, my_max)
+    } else {
+        leader_offset.clamp(0.0, my_max.max(0.0))
+    }
 }
 
 impl Windows {
@@ -113,12 +128,19 @@ impl Windows {
             builder: egui::ViewportBuilder::default().with_inner_size([1440.0, 920.0]).with_min_inner_size([760.0, 480.0]),
             input_plugin: false,
             driven: false,
+            side_by_side: None,
+            sync_scroll_seen: std::collections::HashMap::new(),
+            sync_scroll_from: None,
         }
     }
 
     /// Whether documents get native windows of their own.
     pub(crate) fn native(&self) -> bool {
         self.native
+    }
+
+    fn viewport_id(&self, id: WindowId) -> ViewportId {
+        self.viewports.as_ref().map(|v| v.viewport_id(id)).unwrap_or(ViewportId::ROOT)
     }
 
     /// One window for every document, as in the web app.
@@ -395,6 +417,136 @@ impl WordApp {
     /// The window that comes forward when the drawn window closes and other windows show its
     /// document, which then stays open: the one of all the others focused last. `None` when the
     /// drawn window is its document's only one.
+    pub(crate) fn handle_window_request(&mut self, what: &str, req: &Value) {
+        if !self.windows.native {
+            if what == "syncScroll"
+                && let Some(v) = req.get("value").and_then(Value::as_bool)
+            {
+                self.session.view.sync_scroll = v;
+            }
+            return;
+        }
+        match what {
+            "arrangeAll" => self.arrange_all_windows(),
+            "sideBySide" => self.view_side_by_side(req.get("id").and_then(Value::as_u64)),
+            "syncScroll" => {
+                let value = req.get("value").and_then(Value::as_bool).unwrap_or(!self.session.view.sync_scroll);
+                self.session.view.sync_scroll = value;
+                if !value {
+                    self.windows.side_by_side = None;
+                    self.windows.sync_scroll_seen.clear();
+                    self.windows.sync_scroll_from = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn paired_sync_window(&self, key: u64) -> Option<u64> {
+        if !self.session.view.sync_scroll {
+            return None;
+        }
+        let (a, b) = self.windows.side_by_side?;
+        if key == a {
+            Some(b)
+        } else if key == b {
+            Some(a)
+        } else {
+            None
+        }
+    }
+
+    fn apply_sync_scroll_before_draw(&mut self, key: u64) {
+        let Some(_other) = self.paired_sync_window(key) else { return };
+        let Some((from, leader_offset, leader_max)) = self.windows.sync_scroll_from else { return };
+        if from == key {
+            return;
+        }
+        let my_max = self.canvas.scroll_max;
+        let target = egui::vec2(sync_scroll_axis(leader_offset.x, leader_max.x, my_max.x), sync_scroll_axis(leader_offset.y, leader_max.y, my_max.y));
+        let cur = self.canvas.scroll_offset;
+        if (cur.y - target.y).abs() > 0.5 || (cur.x - target.x).abs() > 0.5 {
+            self.canvas.scroll_request = Some(target);
+            self.windows.sync_scroll_seen.insert(key, target);
+        }
+    }
+
+    fn capture_sync_scroll_after_draw(&mut self, key: u64) {
+        if self.paired_sync_window(key).is_none() {
+            return;
+        }
+        let offset = self.canvas.scroll_offset;
+        let max = self.canvas.scroll_max;
+        let prev = self.windows.sync_scroll_seen.get(&key).copied().unwrap_or(egui::Vec2::ZERO);
+        if (offset.x - prev.x).abs() > 0.5 || (offset.y - prev.y).abs() > 0.5 {
+            self.windows.sync_scroll_from = Some((key, offset, max));
+        }
+        self.windows.sync_scroll_seen.insert(key, offset);
+    }
+
+    fn arrange_all_windows(&mut self) {
+        let Some(ctx) = self.ctx.clone() else { return };
+        let ids: Vec<WindowId> = self.windows.open.iter().filter_map(|w| w.id).collect();
+        if ids.len() < 2 {
+            return;
+        }
+        let monitor = ctx.input(|i| i.viewport().monitor_size).unwrap_or(egui::vec2(1440.0, 900.0));
+        let cols = ((ids.len() as f32).sqrt().ceil() as usize).max(1);
+        let rows = ids.len().div_ceil(cols);
+        let gap = 8.0f32;
+        let w = ((monitor.x - gap * (cols.saturating_sub(1) as f32 + 2.0)) / cols as f32).max(400.0);
+        let h = ((monitor.y - gap * (rows.saturating_sub(1) as f32 + 2.0) - 48.0) / rows as f32).max(300.0);
+        for (i, id) in ids.iter().copied().enumerate() {
+            let col = i % cols;
+            let row = i / cols;
+            let x = gap + col as f32 * (w + gap);
+            let y = gap + 40.0 + row as f32 * (h + gap);
+            ctx.send_viewport_cmd_to(self.windows.viewport_id(id), ViewportCommand::OuterPosition(egui::pos2(x, y)));
+            ctx.send_viewport_cmd_to(self.windows.viewport_id(id), ViewportCommand::InnerSize(egui::vec2(w, h)));
+        }
+        self.status(format!("Arranged {} windows", ids.len()));
+    }
+
+    fn view_side_by_side(&mut self, target_doc: Option<u64>) {
+        if self.windows.side_by_side.is_some() {
+            self.windows.side_by_side = None;
+            self.session.view.sync_scroll = false;
+            self.windows.sync_scroll_seen.clear();
+            self.windows.sync_scroll_from = None;
+            self.status("Side by side: off".to_string());
+            return;
+        }
+        let Some(ctx) = self.ctx.clone() else { return };
+        let shown = self.windows.shown;
+        let target_key = target_doc
+            .and_then(|doc| self.windows.open.iter().find(|w| w.doc == doc && w.key != shown).map(|w| w.key))
+            .or_else(|| self.windows.recent_keys().into_iter().find(|&k| k != shown && self.windows.open.iter().any(|w| w.key == k)));
+        let Some(other_key) = target_key else {
+            self.status("Open another document in a window to view side by side".to_string());
+            return;
+        };
+        let Some(a) = self.windows.open.iter().find(|w| w.key == shown).and_then(|w| w.id) else { return };
+        let Some(b) = self.windows.open.iter().find(|w| w.key == other_key).and_then(|w| w.id) else { return };
+        let monitor = ctx.input(|i| i.viewport().monitor_size).unwrap_or(egui::vec2(1440.0, 900.0));
+        let gap = 8.0f32;
+        let w = ((monitor.x - gap * 3.0) / 2.0).max(420.0);
+        let h = (monitor.y - gap * 2.0 - 48.0).max(320.0);
+        for (i, id) in [a, b].into_iter().enumerate() {
+            let x = gap + i as f32 * (w + gap);
+            let y = gap + 40.0;
+            ctx.send_viewport_cmd_to(self.windows.viewport_id(id), ViewportCommand::OuterPosition(egui::pos2(x, y)));
+            ctx.send_viewport_cmd_to(self.windows.viewport_id(id), ViewportCommand::InnerSize(egui::vec2(w, h)));
+        }
+        self.windows.side_by_side = Some((shown, other_key));
+        self.session.view.sync_scroll = true;
+        self.windows.sync_scroll_seen.clear();
+        self.windows.sync_scroll_from = None;
+        self.status("Side by side".to_string());
+    }
+
+    /// The window that comes forward when the drawn window closes and other windows show its
+    /// document, which then stays open: the one of all the others focused last. `None` when the
+    /// drawn window is its document's only one.
     pub(crate) fn other_window_on_document(&self) -> Option<u64> {
         let shown = self.windows.shown;
         let doc = self.windows.get(shown)?.doc;
@@ -654,7 +806,9 @@ impl WordApp {
         if self.windows.shown != key {
             return;
         }
+        self.apply_sync_scroll_before_draw(key);
         self.window_ui(ui);
+        self.capture_sync_scroll_after_draw(key);
         // Drawing can close the window or bring another forward: the fields then hold another
         // window's state.
         if self.windows.shown != key {
