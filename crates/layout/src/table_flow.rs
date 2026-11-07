@@ -1,6 +1,6 @@
 use super::boxes::{BoxInput, clear_of_float_tables, layout_box};
 use super::ctx::{Ctx, with_pct_base};
-use super::floats::{WrapArea, align_in, body_wraps};
+use super::floats::{AreaKind, WrapArea, align_in, body_wraps};
 use super::flow::again;
 use super::headers::{header_items_cap, header_table_areas, placed_cost};
 use super::notes::table_notes;
@@ -321,13 +321,13 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
             pg.float_tables.push(Path::top(block));
         }
         let area = r.inset(-dl, -dt, -dr, -db);
-        pb.excl.push((area, false, None, WrapText::BothSides, true));
+        pb.excl.push((area, false, None, WrapText::BothSides, AreaKind::Table));
         pb.float_tables.push(area);
         return;
     }
 }
 
-fn placed_intersects(item: &Placed, rect: &Rect) -> bool {
+pub(crate) fn placed_intersects(item: &Placed, rect: &Rect) -> bool {
     match item {
         Placed::Lines { para, l0, l1, x, y, .. } => para.lines.get(*l0..*l1).is_some_and(|lines| {
             lines.iter().enumerate().any(|(offset, line)| {

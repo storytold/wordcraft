@@ -1033,7 +1033,11 @@ impl Scan {
 
 /// Narrowest span text flows into beside a floating object, points. Word puts an empty
 /// paragraph beside a floating table in a 21.3pt gap but not in an 18.6pt one.
-const MIN_SPAN: f32 = 20.0;
+pub(crate) const MIN_SPAN: f32 = 20.0;
+/// Narrowest span text flows into beside a text frame, points. Word for Windows leaves a gap of
+/// 63pt beside a frame (its distance from text taken off) empty and fills one of 81pt, on either
+/// side and for a framed paragraph or table alike (#2523); an inch is between.
+pub(crate) const FRAME_MIN_SPAN: f32 = 72.0;
 
 /// How far below a line's top its baseline sits. Multiple spacing at or above single keeps the
 /// text at the top of the line and puts the extra leading below the baseline; below single it
@@ -1056,13 +1060,14 @@ fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, table_h: f32, lo: f32, 
         return Err(below);
     }
     // What each object takes of the row: its whole area, or (Tight, Through) the stretches its
-    // outline takes, as (left, right, bottom of the object's area).
-    let mut taken: Vec<(f32, f32, f32)> = Vec::new();
+    // outline takes, as (left, right, bottom of the object's area, narrowest gap beside it).
+    let mut taken: Vec<(f32, f32, f32, f32)> = Vec::new();
     for e in &here {
         let first = taken.len();
+        let min = if e.min_span.is_finite() { e.min_span.clamp(MIN_SPAN, 1584.0) } else { MIN_SPAN };
         match &e.contour {
-            None => taken.push((e.left, e.right, e.bottom)),
-            Some(c) => taken.extend(c.occupied(top - e.top, top + h - e.top).into_iter().map(|(a, b)| (a + e.left, b + e.left, e.bottom))),
+            None => taken.push((e.left, e.right, e.bottom, min)),
+            Some(c) => taken.extend(c.occupied(top - e.top, top + h - e.top).into_iter().map(|(a, b)| (a + e.left, b + e.left, e.bottom, min))),
         }
         // Text on one side only: the object's other side of the row is taken too.
         let Some(mine) = taken.get(first..).filter(|t| !t.is_empty() && !e.side.is_both()) else { continue };
@@ -1075,23 +1080,26 @@ fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, table_h: f32, lo: f32, 
             _ => left - lo >= hi - right,
         };
         taken.truncate(first);
-        taken.push(if text_left { (left, hi.max(right), e.bottom) } else { (lo.min(left), right, e.bottom) });
+        taken.push(if text_left { (left, hi.max(right), e.bottom, min) } else { (lo.min(left), right, e.bottom, min) });
     }
-    taken.retain(|(l, r, _)| *r > lo && *l < hi);
+    taken.retain(|(l, r, ..)| *r > lo && *l < hi);
     if taken.is_empty() {
         return Ok(VecDeque::from([(lo, hi)]));
     }
-    let mut spans = vec![(lo, hi)];
-    for &(left, right, _) in &taken {
+    // Each span with the narrowest it may be: the larger of the objects' beside it.
+    let mut spans = vec![(lo, hi, MIN_SPAN)];
+    for &(left, right, _, min) in &taken {
         spans = spans
             .into_iter()
-            .flat_map(|(a, b)| if right <= a || left >= b { vec![(a, b)] } else { vec![(a, left.min(b)), (right.max(a), b)] })
+            .flat_map(
+                |(a, b, m)| if right <= a || left >= b { vec![(a, b, m)] } else { vec![(a, left.min(b), m.max(min)), (right.max(a), b, m.max(min))] },
+            )
             .collect();
     }
-    spans.retain(|(a, b)| b - a >= MIN_SPAN);
+    let spans: VecDeque<(f32, f32)> = spans.into_iter().filter(|(a, b, m)| b - a >= *m).map(|(a, b, _)| (a, b)).collect();
     if spans.is_empty() {
         // Nothing wide enough: the line goes below the first object that ends.
         return Err(taken.iter().map(|t| t.2).reduce(f32::min).unwrap_or(top));
     }
-    Ok(spans.into())
+    Ok(spans)
 }
