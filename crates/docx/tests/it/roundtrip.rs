@@ -6,8 +6,8 @@ use wordcraft_doc::fill::Fill;
 use wordcraft_doc::numbering::ListKind;
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{
-    Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign, TabLeader,
-    TabStop, TableLook, TextAlignment, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
+    Align, Border, BorderStyle, Borders, BreakClear, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign,
+    TabLeader, TabStop, TableLook, TextAlignment, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, NumFormat, PageVAlign, SectionProps, SectionStart};
 use wordcraft_doc::styles::{Style, StyleKind};
@@ -144,6 +144,7 @@ fn every_char_prop_round_trips() {
         ins: None,
         del: None,
         fmt_change: None,
+        break_clear: None,
     };
     let auto =
         CharProps { color: Some(TextColor::Auto), highlight: Some(Highlight::None), vert_align: Some(VertAlign::Subscript), ..Default::default() };
@@ -351,6 +352,41 @@ fn tables_with_merges_round_trip() {
     }
     assert_eq!(got.rows[0].cells[0].span(), 2);
     assert_eq!(got.rows[2].cells[2].props.vmerge, VMerge::Continue);
+}
+
+#[test]
+fn wrapping_break_clear_survives_json_and_two_docx_saves() {
+    let values = [BreakClear::None, BreakClear::Left, BreakClear::Right, BreakClear::All];
+    let mut p = Paragraph::new();
+    for (i, clear) in values.into_iter().enumerate() {
+        p.insert_text(p.len(), &format!("T{i}"), &CharProps::default()).expect("insert text");
+        p.insert_text(p.len(), "\n", &CharProps { break_clear: Some(clear), ..Default::default() }).expect("insert break");
+    }
+    p.insert_text(p.len(), "Absent\n", &CharProps::default()).expect("insert absent break");
+    let hostile_page_props = CharProps { break_clear: Some(BreakClear::All), ..Default::default() };
+    p.insert_text(p.len(), "Page", &CharProps::default()).expect("insert page label");
+    p.insert_text(p.len(), &wordcraft_doc::para::PAGE_BREAK.to_string(), &hostile_page_props).expect("insert page break");
+    p.insert_text(p.len(), "Column", &CharProps::default()).expect("insert column label");
+    p.insert_text(p.len(), &wordcraft_doc::para::COLUMN_BREAK.to_string(), &hostile_page_props).expect("insert column break");
+    let mut d = doc_with(vec![p]);
+    let json = serde_json::to_vec(&d).expect("serialize document");
+    d = serde_json::from_slice(&json).expect("deserialize document");
+
+    for _ in 0..2 {
+        d = rt(&d);
+        let paragraph = paras(&d).first().copied().expect("paragraph");
+        let breaks: Vec<_> = paragraph.text.char_indices().filter(|(_, c)| *c == '\n').map(|(off, _)| off).collect();
+        assert_eq!(breaks.len(), 5);
+        for (off, clear) in breaks.iter().zip([Some(BreakClear::None), Some(BreakClear::Left), Some(BreakClear::Right), Some(BreakClear::All), None])
+        {
+            assert_eq!(paragraph.props_of_char(*off).break_clear, clear);
+        }
+        let page = paragraph.text.find(wordcraft_doc::para::PAGE_BREAK).expect("page break");
+        let column = paragraph.text.find(wordcraft_doc::para::COLUMN_BREAK).expect("column break");
+        assert_eq!(paragraph.props_of_char(page).break_clear, None);
+        assert_eq!(paragraph.props_of_char(column).break_clear, None);
+        assert!(paragraph.plain_text().contains("T0\nT1\nT2\nT3\nAbsent\nPage"));
+    }
 }
 
 #[test]

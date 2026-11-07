@@ -3,7 +3,7 @@
 use wordcraft_doc::effects::ShapeEffects;
 use wordcraft_doc::fill::{Fill, GradientFlip, GradientKind, PathShape};
 use wordcraft_doc::para::{AltText, Anchor, Float, NoteKind, ShapeKind, Wrap};
-use wordcraft_doc::props::{CharProps, PropChange, Rgb, TextColor};
+use wordcraft_doc::props::{BreakClear, CharProps, PropChange, Rgb, TextColor};
 use wordcraft_doc::section::{LineNumberRestart, NoteProps, SectionProps, SectionStart};
 use wordcraft_doc::table::Table;
 use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, RevisionKind};
@@ -31,7 +31,7 @@ const MAX_DEPTH: usize = 24;
 enum Piece<'a> {
     Text(String),
     Tab,
-    Br(Option<&'static str>),
+    Br(Option<&'static str>, Option<BreakClear>),
     NbHyphen,
     SoftHyphen,
     /// A symbol character in its own font (`w:sym`, ECMA-376 §17.3.3.30).

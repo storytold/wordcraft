@@ -4,7 +4,7 @@
 
 use serde_json::json;
 use std::sync::Arc;
-use wordcraft_doc::props::{BorderStyle, VertAlign};
+use wordcraft_doc::props::{BorderStyle, BreakClear, CharProps, VertAlign};
 use wordcraft_doc::{Pos, StoryRef};
 
 use crate::Session;
@@ -1458,6 +1458,21 @@ fn shift_enter_stays_inside_the_list_item() {
     run(&mut s, "text.lineBreak", json!({}));
     typ(&mut s, "cont\ntwo");
     assert_eq!(paras(&s), vec![para("Line one\ncont", Some(0)), para("two", Some(0))]);
+}
+
+#[test]
+fn shift_enter_does_not_copy_clear_from_the_previous_break() {
+    let mut s = typed("One");
+    let path = Pos::body(0, 0).path;
+    let p = s.doc.para_mut(StoryRef::Body, &path).unwrap();
+    p.insert_text(p.len(), "\n", &CharProps { break_clear: Some(BreakClear::Left), ..Default::default() }).unwrap();
+    s.sel = crate::Selection::caret(Pos::body(0, 4));
+
+    run(&mut s, "text.lineBreak", json!({}));
+
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.props_of_char(3).break_clear, Some(BreakClear::Left));
+    assert_eq!(p.props_of_char(4).break_clear, None);
 }
 
 /// Body paragraph texts, lower-cased (AutoCorrect may capitalise a sentence start).

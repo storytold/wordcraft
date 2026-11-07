@@ -1,6 +1,6 @@
 use super::{
-    CharProps, El, InlineObject, Item, MAX_FORM, MAX_INSTR, NoteKind, PB, PTabAlign, PTabBase, Phase, Reader, Rels, RevisionKind, RunCtx, StoryCtx,
-    TextColor, children_of_choice, clean_text, int, measure, on_off_attr, placeholder_of, sink,
+    BreakClear, CharProps, El, InlineObject, Item, MAX_FORM, MAX_INSTR, NoteKind, PB, PTabAlign, PTabBase, Phase, Reader, Rels, RevisionKind, RunCtx,
+    StoryCtx, TextColor, children_of_choice, clean_text, int, measure, on_off_attr, placeholder_of, sink,
 };
 
 impl Reader<'_> {
@@ -201,7 +201,13 @@ impl Reader<'_> {
                     Some("column") => "\u{000E}",
                     _ => "\n",
                 };
-                self.emit_text(sc, pb, c, props);
+                if c == "\n" {
+                    let mut break_props = props.clone();
+                    break_props.break_clear = k.attr("w:clear").and_then(BreakClear::from_ooxml);
+                    self.emit_text(sc, pb, c, &break_props);
+                } else {
+                    self.emit_text(sc, pb, c, props);
+                }
             }
             "w:cr" if !sc.fields.iter().any(|f| f.phase == Phase::Instr) => {
                 self.emit_text(sc, pb, "\n", props);

@@ -1,5 +1,6 @@
 use super::{
-    ChangeAttrs, CharProps, InlineObject, Paragraph, PartRels, Piece, PropChange, RevisionKind, W, Writer, open_change, ppr_inner, rpr, rpr_inner, rt,
+    BreakClear, ChangeAttrs, CharProps, InlineObject, Paragraph, PartRels, Piece, PropChange, RevisionKind, W, Writer, open_change, ppr_inner, rpr,
+    rpr_inner, rt,
 };
 
 impl Writer<'_> {
@@ -153,9 +154,9 @@ impl Writer<'_> {
             for (ci, c) in text.char_indices() {
                 let special = match c {
                     '\t' => Some(Piece::Tab),
-                    '\n' => Some(Piece::Br(None)),
-                    '\u{000C}' => Some(Piece::Br(Some("page"))),
-                    '\u{000E}' => Some(Piece::Br(Some("column"))),
+                    '\n' => Some(Piece::Br(None, props.break_clear)),
+                    '\u{000C}' => Some(Piece::Br(Some("page"), None)),
+                    '\u{000E}' => Some(Piece::Br(Some("column"), None)),
                     '\u{2011}' => Some(Piece::NbHyphen),
                     '\u{00AD}' => Some(Piece::SoftHyphen),
                     wordcraft_doc::para::OBJ => {
@@ -247,8 +248,16 @@ impl Writer<'_> {
                         match pc {
                             Piece::Text(t) if !t.is_empty() => w.leaf(if del { "w:delText" } else { "w:t" }, &[("xml:space", "preserve")], t),
                             Piece::Tab => w.empty("w:tab", &[]),
-                            Piece::Br(None) => w.empty("w:br", &[]),
-                            Piece::Br(Some(t)) => w.empty("w:br", &[("w:type", t)]),
+                            Piece::Br(kind, clear) => {
+                                let kind = kind.map(|v| ("w:type", v));
+                                let clear = clear.map(BreakClear::ooxml).map(|v| ("w:clear", v));
+                                match (kind, clear) {
+                                    (None, None) => w.empty("w:br", &[]),
+                                    (Some(k), None) => w.empty("w:br", &[k]),
+                                    (None, Some(c)) => w.empty("w:br", &[c]),
+                                    (Some(k), Some(c)) => w.empty("w:br", &[k, c]),
+                                }
+                            }
                             Piece::NbHyphen => w.empty("w:noBreakHyphen", &[]),
                             Piece::SoftHyphen => w.empty("w:softHyphen", &[]),
                             Piece::Sym(font, c) => w.empty("w:sym", &[("w:font", font), ("w:char", &format!("{:04X}", u32::from(*c)))]),
