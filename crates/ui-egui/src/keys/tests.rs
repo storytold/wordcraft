@@ -1460,3 +1460,21 @@ fn typing_with_smart_art_selected_types_into_an_item() {
     let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).expect("still there");
     assert_eq!(g.items[0].text, "Ada", "one undo step for the typing");
 }
+
+/// #5616: modifiers recorded for an unrelated key (Mod+Shift+C) don't steer a later keyless paste,
+/// whether Mod was released or is still held with no change event.
+#[test]
+fn an_unrelated_keys_modifiers_do_not_steer_a_later_paste() {
+    for mod_still_held in [false, true] {
+        let services = crate::Services { clipboard_html: Some(Box::new(|| Some("<p><b>external</b></p>".into()))), ..Default::default() };
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+        let ctx = egui::Context::default();
+        let chord = Modifiers::COMMAND | Modifiers::SHIFT;
+        mods_frame(&ctx, &mut a, chord, vec![key_event(Key::C, true, chord)]);
+        // Shift released, Mod still held: Mod+C's chord isn't the paste's modifiers.
+        let after = if mod_still_held { Modifiers::COMMAND } else { Modifiers::NONE };
+        mods_frame(&ctx, &mut a, after, vec![egui::Event::Paste("external".into())]);
+        let bold = a.session.run("format.state", &json!({})).unwrap().get("bold").and_then(serde_json::Value::as_bool);
+        assert_eq!(bold, Some(true), "held={mod_still_held}: a plain paste keeps the HTML's bold");
+    }
+}

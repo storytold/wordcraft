@@ -222,6 +222,9 @@ pub struct CanvasState {
     pub(crate) v_pressed: bool,
     /// The modifiers last held with Mod, for a Mod+V whose Mod is released before V.
     pub(crate) paste_mods: Option<egui::Modifiers>,
+    /// The modifiers a paste event is read with: those of Mod+V's press or a Mod change, until an
+    /// unrelated key, a pointer press or a focus change. (`paste_mods` also serves the release path.)
+    pub(crate) paste_event_mods: Option<egui::Modifiers>,
     /// On the web, Mod+Shift+V pasted formatting from its key press: the browser's paste event
     /// that follows is the same keystroke and pastes nothing (#5616). Any other key press clears it.
     pub(crate) ignore_next_paste: bool,
@@ -409,6 +412,7 @@ impl Default for CanvasState {
             pasted: false,
             v_pressed: false,
             paste_mods: None,
+            paste_event_mods: None,
             ignore_next_paste: false,
             paste_event_follows_chord: cfg!(target_arch = "wasm32"),
             swallow_text: false,
