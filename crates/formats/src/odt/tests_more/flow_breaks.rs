@@ -204,3 +204,30 @@ fn a_rows_keep_together_defaults_to_the_default_style() {
     assert_eq!(keeps(&d), [true, true, false]);
     assert_eq!(keeps(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()), [true, true, false]);
 }
+
+/// A row free to break under a default row style that keeps rows together says so when written from
+/// the model, or a save takes that away: the file's default style stays.
+#[test]
+fn a_row_free_to_break_stays_so_over_the_default_style() {
+    let styles = r#"<office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"><office:styles><style:default-style style:family="table-row"><style:table-row-properties fo:keep-together="always"/></style:default-style></office:styles></office:document-styles>"#;
+    let row = |s: &str| format!(r#"<table:table-row{s}><table:table-cell><text:p>x</text:p></table:table-cell></table:table-row>"#);
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="F" style:family="table-row"><style:table-row-properties fo:keep-together="auto"/></style:style></office:automatic-styles><office:body><office:text><table:table><table:table-column/>{}{}</table:table></office:text></office:body></office:document-content>"#,
+        row(r#" table:style-name="F""#),
+        row("")
+    );
+    let mut d = import(&package(&content, Some(styles))).unwrap();
+    let keeps = |d: &wordcraft_doc::Document| {
+        d.body.iter().find_map(|b| b.as_table()).map(|t| t.rows.iter().map(|r| r.props.cant_split).collect::<Vec<_>>()).unwrap_or_default()
+    };
+    assert_eq!(keeps(&d), [false, true]);
+    if let Some(wordcraft_doc::Block::Table(t)) = d.body.get_mut(0).map(std::sync::Arc::make_mut)
+        && let Some(wordcraft_doc::Block::Para(p)) = t.rows[0].cells[0].blocks.get_mut(0).map(std::sync::Arc::make_mut)
+    {
+        p.text.push('!');
+        if let Some(r) = p.runs.last_mut() {
+            r.len += 1;
+        }
+    }
+    assert_eq!(keeps(&import(&export(&d).unwrap()).unwrap()), [false, true], "after an edit and a save");
+}

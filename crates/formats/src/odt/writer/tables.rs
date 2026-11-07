@@ -166,8 +166,16 @@ impl Writer {
                 Some((h, false)) => format!(" style:min-row-height=\"{}\"", pt(h)),
                 None => String::new(),
             };
-            // A row that doesn't break across pages (§20.247 on a row).
-            let keep = if t.extra.as_ref().is_some_and(|x| x.keep_rows.get(ri) == Some(&true)) { " fo:keep-together=\"always\"" } else { "" };
+            // A row that doesn't break across pages (§20.247 on a row). One that may says so where
+            // the file's default row style, which stays, would keep it together.
+            let keep = if t.extra.as_ref().is_some_and(|x| x.keep_rows.get(ri) == Some(&true)) {
+                " fo:keep-together=\"always\""
+            } else if self.kept_defs.get("common~style:default-style~table-row").is_some_and(|d| d.contains("keep-together") && d.contains("always"))
+            {
+                " fo:keep-together=\"auto\""
+            } else {
+                ""
+            };
             let props = format!("{height}{keep}");
             if props.is_empty() {
                 out.push_str("<table:table-row>");
