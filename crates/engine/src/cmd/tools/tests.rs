@@ -290,3 +290,63 @@ fn inspect_removals_work_when_the_document_does_not_track_changes() {
     assert!(!text.contains("Hidden"), "the hidden text is still there: {text}");
     assert!(text.contains("Visible text."), "{text}");
 }
+
+/// #5861: When an edit run contains inserted or deleted paragraphs, blocks are aligned by
+/// text similarity rather than naive positional zipping, so edited paragraphs retain their
+/// partner and are diffed within rather than restructured wholesale.
+#[test]
+fn compare_pairs_paragraphs_across_insertions_and_deletions_retaining_within_diff() {
+    // 1. Insertion before a modified paragraph:
+    let original = "The supplier agrees to deliver the items on time every week.\nKeep this anchor.";
+    let revised = "A brand new preamble paragraph.\nThe vendor agrees to deliver the items on time every week.\nKeep this anchor.";
+    let mut s = Session::new(Document::from_text(original));
+    s.run("review.compare", &json!({"text": revised})).unwrap();
+    // The revised paragraph must be diffed within rather than replaced wholesale:
+    // "agrees to deliver the items on time every week." must survive as unmarked unchanged text.
+    let para = s.doc.body[1].as_para().unwrap();
+    let unmarked: String = para.run_ranges().filter(|(_, c)| c.del.is_none() && c.ins.is_none()).map(|(r, _)| para.text[r].to_string()).collect();
+    assert!(unmarked.contains("agrees to deliver the items on time every week."), "unchanged text must survive as unmarked text; got: {unmarked}");
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), revised);
+
+    // 2. Deletion before a modified paragraph:
+    let original = "Obsolete preamble paragraph to be deleted.\nThe supplier agrees to deliver the items on time every week.\nKeep this anchor.";
+    let revised = "The contractor agrees to deliver the items on time every week.\nKeep this anchor.";
+    let mut s = Session::new(Document::from_text(original));
+    s.run("review.compare", &json!({"text": revised})).unwrap();
+    let para = s.doc.body[1].as_para().unwrap();
+    let unmarked: String = para.run_ranges().filter(|(_, c)| c.del.is_none() && c.ins.is_none()).map(|(r, _)| para.text[r].to_string()).collect();
+    assert!(
+        unmarked.contains("agrees to deliver the items on time every week."),
+        "unchanged text must survive as unmarked text after deletion; got: {unmarked}"
+    );
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), original);
+
+    // 3. Insertion between two modified paragraphs:
+    let original = "Clause 1. Definitions of the agreement terms.\nClause 2. Obligations of the supplier.\nKeep anchor.";
+    let revised = "Clause 1. Definitions of the contract terms.\nClause 1.5. Special rules.\nClause 2. Obligations of the vendor.\nKeep anchor.";
+    let mut s = Session::new(Document::from_text(original));
+    s.run("review.compare", &json!({"text": revised})).unwrap();
+    // Both Clause 1 and Clause 2 must be diffed within and retain their unmarked text:
+    let p_c1 = s.doc.body[0].as_para().unwrap();
+    let p_c2 = s.doc.body[2].as_para().unwrap();
+    let unmarked_c1: String = p_c1.run_ranges().filter(|(_, c)| c.del.is_none() && c.ins.is_none()).map(|(r, _)| p_c1.text[r].to_string()).collect();
+    let unmarked_c2: String = p_c2.run_ranges().filter(|(_, c)| c.del.is_none() && c.ins.is_none()).map(|(r, _)| p_c2.text[r].to_string()).collect();
+    assert!(unmarked_c1.contains("Definitions of the"), "Clause 1 within-paragraph diff: {unmarked_c1}");
+    assert!(unmarked_c2.contains("Obligations of the"), "Clause 2 within-paragraph diff: {unmarked_c2}");
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), revised);
+
+    // 4. Chinese text across an insertion:
+    let original = "会议改到周三下午。\n保持此段。";
+    let revised = "新插入的段落。\n会议改到周四下午。\n保持此段。";
+    let mut s = Session::new(Document::from_text(original));
+    s.run("review.compare", &json!({"text": revised, "level": "character"})).unwrap();
+    let p_cjk = s.doc.body[1].as_para().unwrap();
+    let unmarked_cjk: String =
+        p_cjk.run_ranges().filter(|(_, c)| c.del.is_none() && c.ins.is_none()).map(|(r, _)| p_cjk.text[r].to_string()).collect();
+    assert!(unmarked_cjk.contains("会议改到周"), "Chinese within-paragraph diff: {unmarked_cjk}");
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), revised);
+}
