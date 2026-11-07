@@ -333,7 +333,7 @@ fn click_and_type(s: &mut Session, v: &Value) -> CmdResult {
     let last_bottom = lines.iter().map(|ln| ln.bottom).fold(body.y, f32::max);
     let below = y - last_bottom;
     let original_body = s.doc.body.len();
-    if in_body && !on_line && page == l.pages.len().saturating_sub(1) && below > 0.0 {
+    if in_body && !on_line && l.cell_at(page, x, y).is_none() && page == l.pages.len().saturating_sub(1) && below > 0.0 {
         let line_h = lines.last().map(|ln| (ln.bottom - ln.top).max(1.0)).unwrap_or(12.0);
         let n = ((below / line_h).ceil() as usize).clamp(1, MAX_CLICK_AND_TYPE_PARAGRAPHS);
         super::text::append_paragraphs(s, n)?;

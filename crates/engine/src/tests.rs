@@ -12533,3 +12533,54 @@ fn click_and_type_on_a_line_adds_nothing() {
     assert_eq!(s.sel.focus.path.0, [0]);
     assert_eq!(s.sel.focus.story, StoryRef::Body);
 }
+
+/// #4246: Click and Type appends plain paragraphs, not the AutoFormat/AutoCorrect that Enter
+/// would apply to the last paragraph.
+#[test]
+fn click_and_type_below_a_sample_formula_does_not_generate_text() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "=lorem(1)"}));
+    let l = s.layout();
+    let page = l.pages.len() - 1;
+    let body = l.pages[page].body;
+    let before = s.doc.body.len();
+    run(&mut s, "caret.clickAndType", json!({"page": page, "x": body.x + 10.0, "y": body.bottom() - 10.0}));
+    assert!(s.doc.body.len() > before, "added paragraphs");
+    assert_eq!(s.doc.body[0].as_para().map(|p| p.text.as_str()), Some("=lorem(1)"));
+}
+
+#[test]
+fn click_and_type_below_a_word_does_not_autocorrect_it() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "teh"}));
+    let l = s.layout();
+    let page = l.pages.len() - 1;
+    let body = l.pages[page].body;
+    let before = s.doc.body.len();
+    run(&mut s, "caret.clickAndType", json!({"page": page, "x": body.x + 10.0, "y": body.bottom() - 10.0}));
+    assert!(s.doc.body.len() > before, "added paragraphs");
+    assert_eq!(s.doc.body[0].as_para().map(|p| p.text.as_str()), Some("teh"));
+}
+
+/// #4246: empty space inside a table cell is still cell space, not the page below the table.
+#[test]
+fn click_and_type_inside_a_table_cell_adds_nothing() {
+    let mut s = table_from("A\tB");
+    let l = s.layout();
+    let page = 0;
+    let cell = l.pages[page]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, .. } => Some(*rect),
+            _ => None,
+        })
+        .expect("a cell");
+    let line = page_lines(&l.pages[page], StoryRef::Body).into_iter().find(|line| line.path.cell().is_some()).expect("a cell line");
+    let y = (line.bottom + cell.y + cell.h) / 2.0;
+    assert!(y > line.bottom && y < cell.y + cell.h, "test needs empty cell space");
+    let before = s.doc.body.len();
+    run(&mut s, "caret.clickAndType", json!({"page": page, "x": line.left + 1.0, "y": y}));
+    assert_eq!(s.doc.body.len(), before, "the cell click must not append paragraphs");
+    assert!(s.sel.focus.path.cell().is_some(), "the caret stays in the cell: {:?}", s.sel.focus);
+}
