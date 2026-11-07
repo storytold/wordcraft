@@ -386,7 +386,7 @@ impl Reader<'_> {
             let x = group_xfrm(sppr);
             let ((ox, oy), (ew, eh)) = (x.off, x.ext);
             if e.name == "wpg:grpSp" || e.name == "wpg:wgp" {
-                if depth >= 8 {
+                if depth >= 64 {
                     continue;
                 }
                 // Its members' space maps onto its own box.
