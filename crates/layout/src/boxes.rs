@@ -7,7 +7,7 @@ use super::placed::Placed;
 use super::table_flow::below;
 use super::{
     Anchor, Arc, Block, Blocks, Border, Document, Float, FloatAlign, HashMap, ParaLayout, Paragraph, Path, Rect, StoryRef, TableFloat, TextDirection,
-    Wrap, WrapText, para, table,
+    Wrap, para, table,
 };
 
 /// Cell identity is independent of optional table-style formatting.
@@ -152,20 +152,22 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
     if frame.is_none()
         && !in_cell
         && matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Footer))
-        && t.props.float.is_some_and(|f| f.v_rel == Anchor::Page)
+        && table::float(ctx, t).is_some_and(|f| f.v_rel == Anchor::Page)
     {
         return false;
     }
     let layout = table::layout_table(ctx, story, t, path, width, depth + 1);
-    let (tx, ty) = match t.props.float {
+    let table_float = table::float(ctx, t);
+    let (tx, ty) = match table_float {
         Some(float) => {
-            let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(ctx, t) } else { 0.0 };
+            let legacy = table::legacy_offset(ctx, t);
             let (rect, area) = box_float_table_rect(frame, width, *y, &layout, &float, legacy, float_tables);
-            exclusions.push((area, false, None, WrapText::BothSides, true));
+            let wrap = table::float_wrap(ctx, t, area);
+            exclusions.extend(wrap.clone());
             float_tables.push(area);
             table_areas.push(area);
             if float.v_rel == Anchor::Page {
-                page_table_wraps.push((area, false, None, WrapText::BothSides, true));
+                page_table_wraps.extend(wrap);
             }
             (rect.x, rect.y)
         }
@@ -180,7 +182,7 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
         }
         row_y += row.height;
     }
-    if t.props.float.is_none() {
+    if table_float.is_none() {
         *y = row_y;
         *previous_after = 0.0;
         *previous_style = None;
@@ -226,8 +228,10 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     let mut prev_style: Option<(String, bool)> = None;
     let mut last_top = 0.0f32;
     // Word has no frames in a text box: a framed paragraph there (its style's frame, usually)
-    // runs with the box's text (#2357).
-    let frames = !matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox));
+    // runs with the box's text (#2357). In a table standing in a frame, the frame places the
+    // table and its cells' paragraphs run with their text.
+    let frames = !ctx.in_framed_table
+        && !matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox));
     // The bottom of the last paragraph's lines.
     let mut prev_end = 0.0f32;
     for (i, b) in blocks.iter().enumerate() {
@@ -415,6 +419,13 @@ fn natural_width(pl: &ParaLayout) -> f32 {
 }
 
 /// A text frame's placement as a floating object's (`w:framePr` → anchors, alignment, wrap).
+/// A table in a text frame floats where the frame says ([`table::text_frame`]).
+pub(crate) fn frame_table_float(fr: &wordcraft_doc::props::TextFrame) -> TableFloat {
+    let f = frame_float(fr);
+    let (h, v) = (fr.h_space, fr.v_space);
+    TableFloat { h_rel: f.h_rel, v_rel: f.v_rel, x: f.x, y: f.y, h_align: f.h_align, v_align: f.v_align, dist: [h, v, h, v], overlap: true }
+}
+
 fn frame_float(fr: &wordcraft_doc::props::TextFrame) -> Float {
     let anchor = |a: &str, text: Anchor| match a {
         "page" => Anchor::Page,

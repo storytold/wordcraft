@@ -72,6 +72,9 @@ pub(crate) struct Ctx<'a> {
     /// Items re-placed as repeated table header rows so far, in the whole layout (see
     /// [`MAX_HEADER_ITEMS`]).
     pub(crate) header_repeats: usize,
+    /// While a table standing in a text frame is laid out ([`crate::table::text_frame`]): its cells'
+    /// paragraphs carry the frame, which places the table, not each paragraph.
+    pub(crate) in_framed_table: bool,
 }
 
 struct ParaEnvInput<'a> {
