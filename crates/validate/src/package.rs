@@ -89,12 +89,6 @@ impl ContentTypes {
         if let Some(t) = self.overrides.get(&part) {
             return Some(t);
         }
-        let decoded = percent_decode(&part).to_ascii_lowercase();
-        if decoded != part
-            && let Some(t) = self.overrides.get(&decoded)
-        {
-            return Some(t);
-        }
         let ext = part.rsplit_once('.').map(|(_, e)| e)?;
         self.defaults.get(ext).map(String::as_str)
     }
@@ -224,18 +218,8 @@ pub(crate) fn load(bytes: &[u8], acc: &mut Acc) -> Option<Package> {
         acc.set_unknown_unreadable();
     }
     let cd = central_directory(bytes, acc.limits.entries);
-    if let Some(cd) = &cd
-        && cd.total > zip.len() as u64
-    {
-        acc.note(format!(
-            "the zip central directory declares {} records but the index has {}; unindexed entries were not checked",
-            cd.total,
-            zip.len()
-        ));
-        acc.set_incomplete();
-    }
     check_duplicate_entries(cd.as_ref(), acc);
-    check_case_collisions(cd.as_ref(), acc);
+    check_case_collisions(cd.as_ref(), &entries, acc);
 
     let ct_at = entries.iter().position(|e| !e.is_dir && e.name.eq_ignore_ascii_case("[Content_Types].xml"));
     acc.ran("PKG-NO-CONTENT-TYPES");
@@ -290,7 +274,7 @@ pub(crate) fn load(bytes: &[u8], acc: &mut Acc) -> Option<Package> {
 
     let glossary = glossary_part(&entries, &content_types, &rels, main.as_deref());
 
-    let reachable = reachability(&entries, &rels, main.as_deref());
+    let reachable = reachability(&rels, main.as_deref());
     Some(Package { entries, content_types, content_types_present, rels, main, glossary, reachable, xml_parts })
 }
 
@@ -573,25 +557,48 @@ fn find_eocd(bytes: &[u8]) -> Option<usize> {
 }
 
 /// Check for package entries that differ only by ASCII case and report `PKG-CASE-COLLISION` findings.
-fn check_case_collisions(dir: Option<&CentralDirectory>, acc: &mut Acc) {
+///
+/// Groups the raw central-directory names, folding ASCII case on the bytes,
+/// so legacy-encoded names are compared as stored. When the central
+/// directory cannot be parsed, falls back to the zip reader's entry list
+/// (whose names the reader decoded) rather than not checking at all; the
+/// run is already INCOMPLETE in that case via the duplicate check.
+fn check_case_collisions(dir: Option<&CentralDirectory>, entries: &[Entry], acc: &mut Acc) {
     acc.ran("PKG-CASE-COLLISION");
-    let Some(dir) = dir else { return };
-    let mut groups: HashMap<Vec<u8>, Vec<&[u8]>> = HashMap::new();
-    for &raw in &dir.names {
-        let trimmed = trim_leading_slash(raw);
-        if trimmed.ends_with(b"/") {
-            continue;
+    let mut collisions: Vec<Vec<String>> = match dir {
+        Some(dir) => {
+            let mut groups: HashMap<Vec<u8>, Vec<&[u8]>> = HashMap::new();
+            for &raw in &dir.names {
+                let trimmed = trim_leading_slash(raw);
+                if trimmed.ends_with(b"/") {
+                    continue;
+                }
+                groups.entry(trimmed.to_ascii_lowercase()).or_default().push(trimmed);
+            }
+            groups
+                .into_values()
+                .filter_map(|mut v| {
+                    v.sort_unstable();
+                    v.dedup();
+                    (v.len() > 1).then(|| v.into_iter().map(|raw| String::from_utf8_lossy(raw).into_owned()).collect())
+                })
+                .collect()
         }
-        groups.entry(trimmed.to_ascii_lowercase()).or_default().push(trimmed);
-    }
-    let mut collisions: Vec<Vec<String>> = groups
-        .into_values()
-        .filter_map(|mut v| {
-            v.sort_unstable();
-            v.dedup();
-            (v.len() > 1).then(|| v.into_iter().map(|raw| String::from_utf8_lossy(raw).into_owned()).collect())
-        })
-        .collect();
+        None => {
+            let mut groups: HashMap<String, Vec<&str>> = HashMap::new();
+            for e in entries.iter().filter(|e| !e.is_dir) {
+                groups.entry(e.name.to_ascii_lowercase()).or_default().push(e.name.as_str());
+            }
+            groups
+                .into_values()
+                .filter_map(|mut v| {
+                    v.sort_unstable();
+                    v.dedup();
+                    (v.len() > 1).then(|| v.into_iter().map(str::to_string).collect())
+                })
+                .collect()
+        }
+    };
     collisions.sort();
     for v in collisions {
         acc.add("PKG-CASE-COLLISION", None, format!("part names differ only by ASCII case: {}", v.join(", ")));
@@ -645,46 +652,21 @@ pub(crate) fn rels_part_name(part: &str) -> String {
     }
 }
 
-/// Match an entry by name, trying exact case-insensitive match first, then unambiguous percent-decoded equivalence.
-fn find_entry<'a>(entries: &'a [Entry], name: &str) -> Option<&'a Entry> {
-    let n = name.trim_start_matches('/');
-    if let Some(e) = entries.iter().find(|e| !e.is_dir && e.name.eq_ignore_ascii_case(n)) {
-        return Some(e);
-    }
-    let n_has_pct = n.contains('%');
-    let n_decoded = if n_has_pct { percent_decode(n) } else { String::new() };
-    let mut matches = entries.iter().filter(|e| {
-        if e.is_dir {
-            return false;
-        }
-        if n_has_pct && e.name.eq_ignore_ascii_case(&n_decoded) {
-            return true;
-        }
-        if e.name.contains('%') {
-            let e_decoded = percent_decode(&e.name);
-            if e_decoded.eq_ignore_ascii_case(n) || (n_has_pct && e_decoded.eq_ignore_ascii_case(&n_decoded)) {
-                return true;
-            }
-        }
-        false
-    });
-    let first = matches.next()?;
-    if matches.next().is_none() { Some(first) } else { None }
-}
-
 /// Find the stored case-preserving entry name matching `name` (case-insensitive, leading slash stripped).
 fn canonical(entries: &[Entry], name: &str) -> Option<String> {
-    find_entry(entries, name).map(|e| e.name.clone())
+    let n = name.trim_start_matches('/');
+    entries.iter().find(|e| !e.is_dir && e.name.eq_ignore_ascii_case(n)).map(|e| e.name.clone())
 }
 
 /// The stored spelling of the part at `name` (case-insensitive, leading `/` ignored), if present.
 pub(crate) fn canonical_entry(pkg: &Package, name: &str) -> Option<String> {
-    find_entry(&pkg.entries, name).map(|e| e.name.clone())
+    canonical(&pkg.entries, name)
 }
 
 /// The entry at `name` (case-insensitive, leading `/` ignored), if present.
 pub(crate) fn entry_by_name<'a>(pkg: &'a Package, name: &str) -> Option<&'a Entry> {
-    find_entry(&pkg.entries, name)
+    let n = name.trim_start_matches('/');
+    pkg.entries.iter().find(|e| !e.is_dir && e.name.eq_ignore_ascii_case(n))
 }
 
 /// Whether the part at `name` is present in the package but its content could not be read. A
@@ -696,25 +678,23 @@ pub(crate) fn content_unavailable(pkg: &Package, name: &str) -> bool {
 }
 
 /// Compute the set of lowercased package part paths reachable from the package relationships root and main document.
-fn reachability(entries: &[Entry], rels: &[RelsPart], main: Option<&str>) -> HashSet<String> {
+fn reachability(rels: &[RelsPart], main: Option<&str>) -> HashSet<String> {
     let by_name: HashMap<String, usize> = rels.iter().enumerate().map(|(i, r)| (r.name.to_ascii_lowercase(), i)).collect();
     let mut seen = HashSet::new();
     seen.insert("[content_types].xml".to_string());
     seen.insert("_rels/.rels".to_string());
     let mut queue: Vec<String> = Vec::new();
     let mut visited: HashSet<String> = HashSet::new();
-    let resolve_entry = |t: &str| -> String { canonical(entries, t).unwrap_or_else(|| t.to_string()) };
     for rp in rels.iter().filter(|r| r.name.eq_ignore_ascii_case("_rels/.rels")) {
         for r in &rp.rels {
             if let Some(t) = &r.target_abs {
-                let resolved = resolve_entry(t);
-                seen.insert(resolved.to_ascii_lowercase());
-                queue.push(resolved);
+                seen.insert(t.to_ascii_lowercase());
+                queue.push(t.clone());
             }
         }
     }
     if let Some(m) = main {
-        queue.push(resolve_entry(m));
+        queue.push(m.to_string());
     }
     while let Some(part) = queue.pop() {
         if !visited.insert(part.to_ascii_lowercase()) {
@@ -723,9 +703,8 @@ fn reachability(entries: &[Entry], rels: &[RelsPart], main: Option<&str>) -> Has
         if let Some(i) = by_name.get(&rels_part_name(&part).to_ascii_lowercase()) {
             for r in &rels[*i].rels {
                 if let Some(t) = &r.target_abs {
-                    let resolved = resolve_entry(t);
-                    seen.insert(resolved.to_ascii_lowercase());
-                    queue.push(resolved);
+                    seen.insert(t.to_ascii_lowercase());
+                    queue.push(t.clone());
                 }
             }
         }
@@ -841,12 +820,6 @@ fn record_content_type(e: &BytesStart, ct: &mut ContentTypes) {
     let Some(value) = attr_local(e, b"ContentType") else { return };
     let key = key.trim_start_matches('/').to_ascii_lowercase();
     let (map, dups) = if l == b"Override" { (&mut ct.overrides, &mut ct.dup_overrides) } else { (&mut ct.defaults, &mut ct.dup_defaults) };
-    if l == b"Override" {
-        let decoded = percent_decode(&key).to_ascii_lowercase();
-        if decoded != key {
-            map.entry(decoded).or_insert_with(|| value.clone());
-        }
-    }
     if map.insert(key.clone(), value).is_some() {
         dups.insert(key);
     }

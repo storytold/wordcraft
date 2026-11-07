@@ -478,30 +478,6 @@ fn percent_encoded_target_resolves() {
     assert!(!has(&report, "REL-DANGLING"), "{:?}", report.findings);
 }
 
-/// An entry stored with percent-encoded path segments matches a decoded internal relationship target and an encoded Override.
-#[test]
-fn percent_encoded_zip_entry_matches_relationship_and_override() {
-    let mut d = Doc::minimal();
-    d.set("[Content_Types].xml", content_types_xml(&[("png", "image/png")], &[("/word/media/my%20image.png", "image/png")]));
-    d.set("word/media/my%20image.png", b"\x89PNG\r\n\x1a\npng body".to_vec());
-    d.set_doc_rels(
-        r#"<Relationship Id="rIdI" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/my%20image.png"/>"#,
-    );
-    let report = validate(&d);
-    assert!(!has(&report, "REL-DANGLING"), "{:?}", report.findings);
-    assert!(!has(&report, "CT-UNDECLARED"), "{:?}", report.findings);
-}
-
-/// An Override declared with percent-encoded path segments matches a decoded entry name in the ZIP archive.
-#[test]
-fn percent_encoded_override_matches_decoded_zip_entry() {
-    let mut d = Doc::minimal();
-    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/my%20custom.xml", "application/xml")]));
-    d.set("word/my custom.xml", "<root/>".as_bytes().to_vec());
-    let report = validate(&d);
-    assert!(!has(&report, "CT-UNDECLARED"), "{:?}", report.findings);
-}
-
 #[test]
 fn target_with_query_and_fragment_resolves() {
     let mut d = Doc::minimal();
