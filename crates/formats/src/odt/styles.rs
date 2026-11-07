@@ -1266,7 +1266,9 @@ impl Styles {
     /// The size of text in paragraph style `name` by its named styles, not its automatic ones,
     /// which are the paragraph's own: what they say on what the document says.
     pub(super) fn named_size(&self, name: &str) -> Option<f32> {
-        let mut f = Fmt { size: self.doc_size(), ..Fmt::default() };
+        // The default style's: Standard's counts only for a style based on it, in the chain.
+        let size = self.default_size.filter(|v| v.is_finite() && *v >= 1.0).map(|v| v.min(1638.0));
+        let mut f = Fmt { size, ..Fmt::default() };
         for (_, s) in self.chain(name).iter().rev().filter(|(_, s)| !s.auto) {
             s.fmt.apply(&mut f);
         }

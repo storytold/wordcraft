@@ -335,6 +335,19 @@ fn a_parentless_headings_text_keeps_its_size() {
     }
 }
 
+/// A percent in a heading style with no parent is of the default style's size, not Standard's.
+#[test]
+fn a_percent_in_a_parentless_heading_is_of_the_default_size() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="10pt"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"><style:text-properties fo:font-size="14pt"/></style:style><style:style style:name="H" style:family="paragraph" style:default-outline-level="1"/></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties fo:font-size="50%"/></style:style></office:automatic-styles><office:body><office:text><text:h text:style-name="H" text:outline-level="1"><text:span text:style-name="T1">One</text:span></text:h></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    assert_eq!(d.body[0].as_para().unwrap().runs[0].props.size, Some(5.0));
+}
+
 /// Text at its heading's size goes with the heading style, stated or not, and a size in percent
 /// is of the heading's size; text of another size keeps it, and so does a paragraph's own.
 #[test]
