@@ -307,6 +307,14 @@ impl WordApp {
         }
     }
 
+    /// The file name for what was typed in Save As › File name (#5800), or `None` when nothing
+    /// usable was typed (Save As then suggests [`Self::default_save_name`]). The extension Save
+    /// would use is added unless the name already ends in a format WordCraft saves.
+    pub(crate) fn typed_save_name(&self, typed: &str) -> Option<String> {
+        let default = self.default_save_name();
+        clean_save_name(typed, default.rsplit_once('.').map_or("docx", |(_, e)| e))
+    }
+
     /// Say how the print job went, once, in the window showing the printed document.
     pub(super) fn print_feedback(&mut self) {
         if self.printing.message == self.print_feedback_seen {
@@ -461,5 +469,24 @@ impl WordApp {
                 self.ui.backstage = false;
             }
         }
+    }
+}
+
+/// A name typed in Save As › File name, ready to save under (#5800): control characters are
+/// dropped, a folder separator (a name can't hold one) becomes a space, spaces and trailing dots
+/// are trimmed (Windows refuses both), and `default_ext` is added unless the name already ends in
+/// one of [`wordcraft_engine::io::SAVE_EXTS`], so "Letter.docx" isn't saved as "Letter.docx.docx"
+/// and "Notes.pdf" is a PDF. `None` when nothing is left, so the default name is used.
+pub(crate) fn clean_save_name(typed: &str, default_ext: &str) -> Option<String> {
+    let cleaned: String = typed.chars().filter(|c| !c.is_control()).map(|c| if matches!(c, '/' | '\\') { ' ' } else { c }).collect();
+    let name = cleaned.trim().trim_end_matches('.').trim_end();
+    let lower = name.to_ascii_lowercase();
+    let own = wordcraft_engine::io::SAVE_EXTS.iter().find(|e| lower.ends_with(&format!(".{e}")));
+    match own {
+        // Only an extension: there is no name before it.
+        Some(e) if name.len() <= e.len() + 1 || name[..name.len() - e.len() - 1].trim().is_empty() => None,
+        Some(_) => Some(name.to_string()),
+        None if name.is_empty() => None,
+        None => Some(format!("{name}.{default_ext}")),
     }
 }
