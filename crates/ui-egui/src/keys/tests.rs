@@ -198,6 +198,25 @@ fn mod_v_released_mod_first_pastes_the_clipboard_picture() {
     assert_eq!(pictures(&mut a), 1);
 }
 
+/// Mod+V key release pastes WordCraft's internal clipboard copy when system clipboard text and
+/// picture are absent.
+#[test]
+fn mod_v_release_pastes_clipboard_copy_when_no_clipboard_text_or_picture() {
+    let ctx = egui::Context::default();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.session.run("insert.textBox", &json!({"text": "Hello"})).unwrap();
+    a.session.run("select.range", &json!({"anchor": wordcraft_doc::Pos::body(0, 0), "focus": wordcraft_doc::Pos::body(0, 3)})).unwrap();
+    a.session.run("edit.copy", &json!({})).unwrap();
+    assert!(a.session.clipboard.is_some());
+    a.session.run("caret.set", &json!({"pos": wordcraft_doc::Pos::body(0, 3)})).unwrap();
+
+    let cmd = Modifiers { command: true, ..Default::default() };
+    mods_frame(&ctx, &mut a, cmd, vec![]);
+    mods_frame(&ctx, &mut a, cmd, vec![key_event(Key::V, false, cmd)]);
+    let count = a.session.doc.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().objects.len();
+    assert_eq!(count, 2, "Mod+V release pasted the copied text box");
+}
+
 /// Ctrl down, the kept Mod+V press, Ctrl up and V up can all arrive in one frame: the frame's
 /// modifiers no longer have Mod, but the ModifiersChanged events in between did.
 #[test]

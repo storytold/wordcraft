@@ -258,7 +258,7 @@ fn prefilter(app: &mut WordApp, ctx: &egui::Context, e: &egui::Event, alt_codes:
     false
 }
 
-/// Mod+V with no clipboard text sends only the key's release: paste the picture then.
+/// Mod+V with no clipboard text sends only the key's release: paste the picture or session copy then.
 fn paste_release(app: &mut WordApp, e: &egui::Event) -> bool {
     // Desktop: Mod+V with no text on the clipboard sends no paste event, only the key's
     // release; paste the clipboard's picture then (#45). A paste event before the release
@@ -269,12 +269,16 @@ fn paste_release(app: &mut WordApp, e: &egui::Event) -> bool {
         let modifiers = &paste_release_modifiers(*modifiers, press_seen, app.canvas.paste_mods.take());
         let paste_keys = is_paste_release(*key, *modifiers);
         let pasted = std::mem::take(&mut app.canvas.pasted);
-        if !pasted && paste_keys && app.session.math.is_none() && app.services.clipboard_picture.is_some() {
+        if !pasted && paste_keys && app.session.math.is_none() && (app.services.clipboard_picture.is_some() || app.session.clipboard.is_some()) {
             let _ = app.run("edit.paste", json!({}));
         }
         // Mod+Alt+V with no text on the clipboard: Paste Special still opens, listing what
         // is there (a picture) or saying what it holds (#687, #833).
-        if !pasted && is_paste_special_release(*key, *modifiers) && app.session.math.is_none() && app.services.clipboard_picture.is_some() {
+        if !pasted
+            && is_paste_special_release(*key, *modifiers)
+            && app.session.math.is_none()
+            && (app.services.clipboard_picture.is_some() || app.session.clipboard.is_some())
+        {
             let _ = app.run("edit.pasteSpecial", json!({}));
         }
         return true;
