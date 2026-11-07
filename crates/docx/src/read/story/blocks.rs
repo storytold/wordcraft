@@ -282,7 +282,7 @@ impl Reader<'_> {
 
     /// A tracked run formatting change in `rpr` (`w:rPrChange`, §17.13.5.31): the formatting
     /// before it. A change nested inside it is ignored.
-    pub(super) fn rpr_change(&mut self, rpr: &El) -> Option<Box<PropChange<CharProps>>> {
+    pub(crate) fn rpr_change(&mut self, rpr: &El) -> Option<Box<PropChange<CharProps>>> {
         let ch = rpr.child("w:rPrChange")?;
         let old = ch.child("w:rPr").map(|o| self.pc.rpr(o).formatting()).unwrap_or_default();
         PropChange::boxed(self.revision(RevisionKind::Format, ch), old)

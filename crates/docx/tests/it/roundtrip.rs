@@ -2842,3 +2842,53 @@ fn drop_cap_options_round_trip() {
         (Some(4), Some(true), None, None)
     );
 }
+
+/// #5841: a style definition holding tracked property changes writes `w:pPrChange` and
+/// `w:rPrChange` to `styles.xml` and reads them back.
+#[test]
+fn style_definition_property_changes_roundtrip() {
+    let mut doc = Document::new();
+    doc.revisions.push(Revision { kind: RevisionKind::Format, author: "Editor".into(), date: "2026-11-07T00:00:00Z".into(), move_name: None });
+    let old_para = ParaProps { space_after: Some(6.0), align: Some(Align::Left), ..ParaProps::default() };
+    let old_chr = CharProps { size: Some(14.0), bold: Some(false), ..CharProps::default() };
+    let st = Style {
+        id: "CustomCallout".into(),
+        name: "Custom Callout".into(),
+        kind: StyleKind::Paragraph,
+        para: ParaProps {
+            space_after: Some(18.0),
+            align: Some(Align::Center),
+            fmt_change: wordcraft_doc::props::PropChange::boxed(0, old_para),
+            ..ParaProps::default()
+        },
+        chr: CharProps {
+            size: Some(18.0),
+            bold: Some(true),
+            fmt_change: wordcraft_doc::props::PropChange::boxed(0, old_chr),
+            ..CharProps::default()
+        },
+        ..Default::default()
+    };
+    Arc::make_mut(&mut doc.styles).styles.push(st);
+
+    let bytes = wordcraft_docx::write(&doc).expect("write");
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("word/styles.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains("<w:pPrChange"), "styles.xml contains pPrChange: {xml}");
+    assert!(xml.contains("<w:rPrChange"), "styles.xml contains rPrChange: {xml}");
+
+    let read_back = wordcraft_docx::read(&bytes).expect("read");
+    let back_st = read_back.styles.get("CustomCallout").expect("CustomCallout style kept");
+    assert_eq!(back_st.para.space_after, Some(18.0));
+    assert_eq!(back_st.para.align, Some(Align::Center));
+    let pch = back_st.para.fmt_change.as_deref().expect("pPrChange preserved");
+    assert_eq!(pch.old.space_after, Some(6.0));
+    assert_eq!(pch.old.align, Some(Align::Left));
+
+    assert_eq!(back_st.chr.size, Some(18.0));
+    assert_eq!(back_st.chr.bold, Some(true));
+    let rch = back_st.chr.fmt_change.as_deref().expect("rPrChange preserved");
+    assert_eq!(rch.old.size, Some(14.0));
+    assert_eq!(rch.old.bold, Some(false));
+}

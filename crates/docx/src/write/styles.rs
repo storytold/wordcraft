@@ -16,6 +16,7 @@ fn file_style_name(name: &str) -> String {
     name.to_string()
 }
 
+/// Serialize a document's style sheet and document defaults to `word/styles.xml`.
 pub(super) fn styles_xml(doc: &Document) -> Vec<u8> {
     let s = &doc.styles;
     let mut w = W::new();
@@ -49,14 +50,65 @@ pub(super) fn styles_xml(doc: &Document) -> Vec<u8> {
     }
     // Kinds whose default style the file named (`w:default`); the English ids stand in otherwise.
     let flagged: Vec<StyleKind> = s.styles.iter().filter(|st| st.default).map(|st| st.kind).collect();
+    let mut rev_id = 0u32;
     for st in &s.styles {
-        style_xml(&mut w, st, &flagged);
+        style_xml(&mut w, doc, &mut rev_id, st, &flagged);
     }
     w.close("w:styles");
     w.into_bytes()
 }
 
-fn style_xml(w: &mut W, st: &Style, flagged: &[StyleKind]) {
+/// Format tracked change attributes `w:id`, `w:author`, and optionally `w:date` for revision `idx`.
+fn change_attrs(doc: &Document, rev_id: &mut u32, idx: u32) -> props::ChangeAttrs {
+    *rev_id += 1;
+    let r = doc.revisions.get(idx as usize);
+    let author = crate::write::annotation_author(doc, r.map_or("", |r| r.author.as_str())).to_string();
+    let date = if doc.settings.remove_date_time { String::new() } else { r.map(|r| r.date.clone()).unwrap_or_default() };
+    let mut a = vec![("w:id", rev_id.to_string()), ("w:author", author)];
+    if !date.is_empty() {
+        a.push(("w:date", date));
+    }
+    a
+}
+
+/// Write a style's paragraph properties `w:pPr`, including tracked formatting changes `w:pPrChange`.
+fn write_style_ppr(w: &mut W, doc: &Document, rev_id: &mut u32, st: &Style) {
+    let has_ppr_change = st.para.fmt_change.is_some();
+    if (!st.para.is_empty() || has_ppr_change) && st.kind != StyleKind::Character {
+        w.open("w:pPr", &[]);
+        props::ppr_inner(w, &st.para, false, None);
+        if let Some(ch) = &st.para.fmt_change {
+            let a = change_attrs(doc, rev_id, ch.rev);
+            props::open_change(w, "w:pPrChange", &a);
+            w.open("w:pPr", &[]);
+            props::ppr_inner(w, &ch.old, false, None);
+            w.close("w:pPr");
+            w.close("w:pPrChange");
+        }
+        w.close("w:pPr");
+    }
+}
+
+/// Write a style's run properties `w:rPr`, including tracked formatting changes `w:rPrChange`.
+fn write_style_rpr(w: &mut W, doc: &Document, rev_id: &mut u32, st: &Style) {
+    let has_rpr_change = st.chr.fmt_change.is_some();
+    if (props::has_rpr(&st.chr) || has_rpr_change) && st.kind != StyleKind::Numbering {
+        w.open("w:rPr", &[]);
+        props::rpr_inner(w, &st.chr);
+        if let Some(ch) = &st.chr.fmt_change {
+            let a = change_attrs(doc, rev_id, ch.rev);
+            props::open_change(w, "w:rPrChange", &a);
+            w.open("w:rPr", &[]);
+            props::rpr_inner(w, &ch.old);
+            w.close("w:rPr");
+            w.close("w:rPrChange");
+        }
+        w.close("w:rPr");
+    }
+}
+
+/// Write a style definition `<w:style>`, including its paragraph and run properties and tracked changes.
+fn style_xml(w: &mut W, doc: &Document, rev_id: &mut u32, st: &Style, flagged: &[StyleKind]) {
     let ty = match st.kind {
         StyleKind::Paragraph => "paragraph",
         StyleKind::Character => "character",
@@ -102,16 +154,8 @@ fn style_xml(w: &mut W, st: &Style, flagged: &[StyleKind]) {
     if st.locked {
         w.empty("w:locked", &[]);
     }
-    if !st.para.is_empty() && st.kind != StyleKind::Character {
-        w.open("w:pPr", &[]);
-        props::ppr_inner(w, &st.para, false, None);
-        w.close("w:pPr");
-    }
-    if props::has_rpr(&st.chr) && st.kind != StyleKind::Numbering {
-        w.open("w:rPr", &[]);
-        props::rpr_inner(w, &st.chr);
-        w.close("w:rPr");
-    }
+    write_style_ppr(w, doc, rev_id, st);
+    write_style_rpr(w, doc, rev_id, st);
     if let Some(t) = &st.table {
         if t.borders.is_some() || t.cell_margins.is_some() || t.band_size.is_some() || t.col_band_size.is_some() {
             w.open("w:tblPr", &[]);
