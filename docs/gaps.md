@@ -163,7 +163,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 
 ## Revision history
 
-> 2026-11-05 · DOCX cell diagonals round-trip in valid cell-border markup and render across vertically merged cells. Whole-table style diagonals are dropped pending Word schema observation; other format exports and real-world corpus qualification remain open.
+> 2026-11-05 · DOCX cell diagonals round-trip in valid cell-border markup and render across vertically merged cells. Whole-table style diagonals are dropped pending Word schema observation; RTF, ODT and HTML exports still omit cell diagonals, and real-world corpus qualification remains open.
 > 2026-11-03 · Section `w:chapStyle` values now preserve the complete unsigned-byte range, including 10; values above 255 are rejected.
 
 > 2026-11-03 · Gap 11: the Arabic dialogs, tables and galleries read right to left (rtl::Table); readiness unchanged.

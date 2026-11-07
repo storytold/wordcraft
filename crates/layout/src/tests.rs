@@ -2564,6 +2564,24 @@ fn vertically_merged_cell_diagonal_is_drawn_once_across_the_span() {
     assert!(((rules[0].1 - rules[0].0).abs() - merged.h).abs() < 0.01, "{rules:?}, {merged:?}");
 }
 
+#[test]
+fn table_level_diagonal_borders_fill_cells_without_an_override() {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    let mut d = Document::from_text("");
+    let mut t = Table::new(1, 1, 200.0);
+    let border = Border { style: BorderStyle::Single, width: 1.0, ..Default::default() };
+    t.props.borders = Some(Borders { tl2br: Some(border), tr2bl: Some(border), ..Default::default() });
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+
+    let diagonals = lay(&d)
+        .pages
+        .iter()
+        .flat_map(|page| &page.items)
+        .filter(|item| matches!(item, Placed::Rule { x0, y0, x1, y1, .. } if (x0 - x1).abs() > 0.01 && (y0 - y1).abs() > 0.01))
+        .count();
+    assert_eq!(diagonals, 2);
+}
+
 /// Rows that skip grid columns at the start and at the end (`w:gridBefore`, `w:gridAfter`, as in
 /// #1174): the cells sit on their own grid columns, the middle one keeps its width, and a merge
 /// down the last column matches by the shifted column.
