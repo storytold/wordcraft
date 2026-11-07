@@ -19,7 +19,7 @@ mod input;
 mod pictures;
 mod prefs;
 
-pub(crate) use commands::{discards_document, works_without_document};
+pub(crate) use commands::works_without_document;
 pub(crate) use input::control_click_as_secondary;
 
 impl WordApp {
@@ -54,7 +54,7 @@ impl WordApp {
             sent_full_screen,
             seen_full_screen,
             escape_free,
-            word_count,
+            status_counts,
             missing_fonts,
             last_autosave,
             equation_prev_tab,
@@ -169,7 +169,7 @@ impl WordApp {
             sent_full_screen,
             seen_full_screen,
             escape_free,
-            word_count,
+            status_counts,
             missing_fonts,
             last_autosave,
             equation_prev_tab,
@@ -443,6 +443,8 @@ impl WordApp {
         // Keytips are read before layout so the frame paints the new state; badges paint after
         // the ribbon so they sit on top of it.
         crate::keytips::logic(self, &ctx);
+        // Alt codes in a text box are read before the box is drawn, so it types the character.
+        crate::keys::field_alt_codes(self, &ctx);
         // A failed Recent open, or a failed Save As, is news only until File closes (#2938).
         if !self.ui.backstage {
             backstage::forget_open_error(&ctx);

@@ -1346,6 +1346,74 @@ fn copying_bold_text_puts_html_on_the_clipboard() {
     assert_eq!(s.clipboard_html, html);
 }
 
+/// Bold and italic of a paragraph's character, in a document.
+fn emphasis_at(d: &wordcraft_doc::Document, block: usize, off: usize) -> (bool, bool) {
+    match d.body.get(block).map(|b| &**b) {
+        Some(wordcraft_doc::Block::Para(p)) => {
+            let c = p.props_of_char(off);
+            (c.bold.unwrap_or(false), c.italic.unwrap_or(false))
+        }
+        _ => (false, false),
+    }
+}
+
+#[test]
+fn copying_puts_rtf_on_the_clipboard() {
+    // gap-clipboard-rtf: a copy carries RTF beside its text and HTML, for programs that read RTF.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "plain bold\nsome italic"}));
+    s.doc.format_range(&Pos::body(0, 6), &Pos::body(0, 10), &|c| c.bold = Some(true)).unwrap();
+    s.doc.format_range(&Pos::body(1, 5), &Pos::body(1, 11), &|c| c.italic = Some(true)).unwrap();
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let rtf = r["rtf"].as_str().unwrap_or_default().to_string();
+    assert!(rtf.starts_with("{\\rtf1"), "{r}");
+    assert_eq!(s.clipboard_rtf, rtf);
+    let d = wordcraft_formats::rtf::import(rtf.as_bytes()).unwrap();
+    let paras: Vec<String> =
+        d.body.iter().filter_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { Some(p.text.clone()) } else { None }).collect();
+    assert_eq!(paras.get(..2), Some(&["plain bold".to_string(), "some italic".to_string()][..]), "{paras:?}");
+    assert_eq!(emphasis_at(&d, 0, 0), (false, false));
+    assert_eq!(emphasis_at(&d, 0, 7), (true, false));
+    assert_eq!(emphasis_at(&d, 1, 7), (false, true));
+
+    // Pasting it elsewhere keeps the formatting.
+    let mut t = Session::new(wordcraft_doc::Document::new());
+    run(&mut t, "edit.paste", json!({"rtf": rtf}));
+    assert!(text(&t).starts_with("plain bold\nsome italic"), "{}", text(&t));
+    assert_eq!(emphasis_at(&t.doc, 0, 7), (true, false));
+    assert_eq!(emphasis_at(&t.doc, 1, 7), (false, true));
+
+    // Cut carries it too.
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 6}, "focus": {"block": 0, "off": 10}}));
+    let r = run(&mut s, "edit.cut", json!({}));
+    assert!(r["rtf"].as_str().is_some_and(|t| t.starts_with("{\\rtf1") && t.contains("bold")), "{r}");
+    assert_eq!(text(&s).lines().next(), Some("plain "));
+
+    // Nothing selected: nothing copied, no RTF.
+    run(&mut s, "caret.docEnd", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    assert!(r.get("rtf").is_none(), "{r}");
+}
+
+#[test]
+fn pasting_hostile_rtf_never_panics() {
+    let deep = format!("{{\\rtf1 {}x{}", "{\\b ".repeat(5000), "}".repeat(5000));
+    let junk = ["{\\rtf1", "{\\rtf1 {\\b bo", "{\\rtf1\\ansi\\u-99999999999? \\bin999999999 x}", "{\\rtf1 \\'zz\\fonttbl{", "{\\rtf\u{0}\u{FFFF}}"];
+    for rtf in junk.iter().map(|j| j.to_string()).chain([deep]) {
+        for id in ["edit.paste", "edit.pasteMerge", "edit.pasteSpecial"] {
+            let mut t = Session::new(wordcraft_doc::Document::new());
+            // `Session::run` turns a panic into an error: look for it.
+            for v in [json!({"rtf": rtf, "as": "rtf"}), json!({"rtf": rtf, "text": "fallback"})] {
+                if let Err(e) = t.run(id, &v) {
+                    assert!(!e.to_string().contains("panicked"), "{id}: {e}");
+                }
+                let _ = t.layout();
+            }
+        }
+    }
+}
+
 #[test]
 fn copying_symbol_font_text_puts_the_unicode_symbols_on_the_clipboard() {
     let mut s = s();
@@ -6045,6 +6113,22 @@ fn props_colours_take_hex_strings() {
     }
 }
 
+#[test]
+fn para_set_frame_geometry_keeps_anchor_lock_unless_replaced() {
+    use wordcraft_doc::props::TextFrame;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Framed text"}));
+    let paragraph = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    paragraph.props.frame = Some(TextFrame { anchor_lock: Some(true), ..TextFrame::default() });
+
+    run(&mut s, "para.set", json!({"props": {"frame": {"x": 36.0, "y": 72.0, "w": 108.0}}}));
+    let frame = s.doc.para_at(&Pos::body(0, 0)).unwrap().props.frame.as_ref().unwrap();
+    assert_eq!((frame.x, frame.y, frame.w, frame.anchor_lock), (36.0, 72.0, Some(108.0), Some(true)));
+
+    run(&mut s, "para.set", json!({"props": {"frame": {"x": 54.0, "anchorLock": false}}}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props.frame.as_ref().unwrap().anchor_lock, Some(false));
+}
+
 /// #555: Update Heading 2 to Match Selection (the styles pane's context menu) makes Heading 2
 /// look like the selected text — its paragraph style and direct formatting — so every Heading 2
 /// paragraph changes; the selected paragraph takes Heading 2, and it is one undo step.
@@ -9659,6 +9743,47 @@ fn smart_art_edits_undo_one_step_each() {
     run(&mut s, "picture.size", json!({"width": 200, "height": 120, "lockAspect": false}));
 }
 
+/// An item's own colour survives item edits and layout changes, and a style colour drops it.
+#[test]
+fn smart_art_item_colors_stay_until_a_style_is_picked() {
+    let mut s = s();
+    run(&mut s, "insert.smartArt", json!({"layout": "process"}));
+    let colors = |s: &Session| cmd::smart_art::selected_smart_art(s).unwrap().items.iter().map(|i| i.color.map(|c| c.hex())).collect::<Vec<_>>();
+    assert!(!cmd::smart_art::selected_smart_art(&s).unwrap().has_custom_colors());
+    run(&mut s, "smartArt.itemColor", json!({"index": 1, "color": "FF8800"}));
+    assert_eq!(colors(&s), [None, Some("FF8800".to_string()), None, None]);
+    run(&mut s, "smartArt.items", json!({"items": [{"text": "A"}, {"text": "B", "color": "#ff8800"}]}));
+    run(&mut s, "smartArt.layout", json!({"layout": "cycle"}));
+    run(&mut s, "smartArt.addShape", json!({"after": 0}));
+    assert_eq!(colors(&s), [None, None, Some("FF8800".to_string())]);
+    assert!(s.run("smartArt.itemColor", &json!({"index": 0, "color": "nope"})).is_err());
+    run(&mut s, "smartArt.itemColor", json!({"index": 2}));
+    assert!(!cmd::smart_art::selected_smart_art(&s).unwrap().has_custom_colors());
+    run(&mut s, "smartArt.itemColor", json!({"index": 0, "color": "00FF00"}));
+    run(&mut s, "smartArt.colors", json!({"variant": "accent2"}));
+    assert!(!cmd::smart_art::selected_smart_art(&s).unwrap().has_custom_colors());
+    run(&mut s, "edit.undo", json!({}));
+    assert!(cmd::smart_art::selected_smart_art(&s).unwrap().has_custom_colors(), "undo brings the colours back");
+}
+
+/// A malformed colour must not silently replace a coloured item with its style colour.
+#[test]
+fn smart_art_item_colors_reject_invalid_values_without_changing_the_graphic() {
+    let mut s = s();
+    run(&mut s, "insert.smartArt", json!({"items": [{"text": "Keep", "color": "123456"}]}));
+    let before = cmd::smart_art::selected_smart_art(&s).unwrap();
+    for command in ["insert.smartArt", "smartArt.items"] {
+        for color in [json!("nope"), json!(42), json!(true), json!([]), json!({})] {
+            assert!(s.run(command, &json!({"items": [{"text": "Replace", "color": color}]})).is_err(), "{command}: {color}");
+            assert_eq!(cmd::smart_art::selected_smart_art(&s).unwrap(), before);
+        }
+        run(&mut s, command, json!({"items": [{"text": "Default", "color": null}, {"text": "Omitted"}]}));
+        assert!(!cmd::smart_art::selected_smart_art(&s).unwrap().has_custom_colors());
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(cmd::smart_art::selected_smart_art(&s).unwrap(), before);
+    }
+}
+
 /// #497: hostile SmartArt params are capped or refused, never a panic.
 #[test]
 fn smart_art_hostile_params_are_capped() {
@@ -9680,6 +9805,7 @@ fn smart_art_hostile_params_are_capped() {
         "smartArt.demote",
         "smartArt.layout",
         "smartArt.colors",
+        "smartArt.itemColor",
         "smartArt.reset",
         "smartArt.textPane",
     ] {
