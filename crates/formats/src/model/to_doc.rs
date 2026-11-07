@@ -742,6 +742,12 @@ impl<'a> Builder<'a> {
 
     fn blocks(&mut self, blocks: &[FBlock], depth: usize) -> Blocks {
         let mut out = Blocks::new();
+        // Each list the source numbers, all of it in these blocks: a run of it after a paragraph
+        // it doesn't number may be the first to use a level.
+        let mut of_list: std::collections::HashMap<u32, Vec<ListInfo>> = std::collections::HashMap::new();
+        for li in blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { p.list } else { None }).filter(|li| li.list != 0) {
+            of_list.entry(li.list).or_default().push(li);
+        }
         let mut i = 0;
         while let Some(b) = blocks.get(i) {
             match b {
@@ -771,10 +777,8 @@ impl<'a> Builder<'a> {
                     let num = match self.lists.get(&id) {
                         Some(num) if id != 0 => *num,
                         _ => {
-                            // All of it in these blocks: a run of it after a paragraph it doesn't
-                            // number may be the first to use a level.
-                            let same = |b: &FBlock| if let FBlock::Para(q) = b { q.list.filter(|l| l.list == id) } else { None };
-                            let all: Vec<ListInfo> = if id == 0 { group } else { blocks.get(i..).unwrap_or(&[]).iter().filter_map(same).collect() };
+                            // First met here, so this is the only time it's asked for.
+                            let all = if id == 0 { group } else { of_list.remove(&id).unwrap_or(group) };
                             let num = self.new_list(&all);
                             if id != 0 {
                                 self.lists.insert(id, num);

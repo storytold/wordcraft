@@ -246,9 +246,9 @@ fn a_sublist_after_an_unnumbered_paragraph_keeps_its_levels() {
     let bullet = |level: u8| format!(r#"<text:list-level-style-bullet text:level="{level}" text:bullet-char="–"/>"#);
     let d = open(&number(1, "1", 1), &bullet(2));
     assert_eq!(sub(&d), (1, NumFormat::Bullet, "–".to_string(), 1));
-    assert_eq!(sub(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()).1, NumFormat::Bullet, "written from the model");
+    assert_eq!(sub(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()), sub(&d), "written from the model");
     let d = open(&bullet(1), &number(2, "i", 3));
     let (level, format, _, start) = sub(&d);
     assert_eq!((level, format, start), (1, NumFormat::LowerRoman, 3));
-    assert_eq!(sub(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()).1, NumFormat::LowerRoman, "written from the model");
+    assert_eq!(sub(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()), sub(&d), "written from the model");
 }
