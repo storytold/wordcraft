@@ -215,6 +215,8 @@ impl Previews {
     pub fn fonts_changed(&mut self, ctx: &egui::Context, families: impl Iterator<Item = String>) {
         self.families = None;
         self.east_asian = None;
+        // Style snippets may have been rasterised with a fallback for a newly installed face.
+        self.tex.clear();
         ctx.data_mut(|d| {
             for f in families {
                 d.remove::<TextureHandle>(egui::Id::unique(format!("font:{f}")));
@@ -483,6 +485,15 @@ pub fn preview_tint(t: &Tokens, dark_page: bool) -> egui::Color32 {
     if t.dark && !dark_page { egui::Color32::from_gray(0xC8) } else { egui::Color32::WHITE }
 }
 
+/// Character styles belong on the sample run; paragraph styles belong on the sample paragraph.
+fn style_gallery_sample(base: &Document, id: &str, text: &str) -> Paragraph {
+    if base.styles.get(id).is_some_and(|style| style.kind == wordcraft_doc::styles::StyleKind::Character) {
+        Paragraph::with_text(text, CharProps { style: Some(id.to_string()), ..CharProps::default() })
+    } else {
+        Paragraph::with_text(text, CharProps::default()).styled(id)
+    }
+}
+
 struct SnippetOptions {
     width: f32,
     height: f32,
@@ -600,7 +611,7 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
         let doc = &app.session.doc;
         let tex = app.previews.get_or(ui.ctx(), &key, || {
             // Sample letters in the interface's script (`АаБбВвГг` in Russian).
-            let mut p = Paragraph::with_text(tl!("AaBbCcDd"), CharProps::default()).styled(id);
+            let mut p = style_gallery_sample(doc, id, tl!("AaBbCcDd"));
             p.props.space_before = Some(0.0);
             p.props.align = Some(wordcraft_doc::Align::Left);
             // Keep hanging indents (bullets) but start the first line at the tile's left edge.

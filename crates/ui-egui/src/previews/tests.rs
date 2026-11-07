@@ -64,6 +64,33 @@ fn gallery_style(name: &str) -> wordcraft_doc::styles::Style {
     wordcraft_doc::styles::Style { id: "Backfill".into(), name: name.into(), quick: true, priority: Some(0), ..Default::default() }
 }
 
+#[test]
+fn style_gallery_sample_applies_character_styles_to_the_run() {
+    let doc = Document::new();
+    for id in ["Emphasis", "Strong"] {
+        let p = style_gallery_sample(&doc, id, "AaBbCc");
+        let run = &p.runs[0].props;
+        assert_eq!(p.props.style, None, "{id} is not a paragraph style");
+        assert_eq!(run.style.as_deref(), Some(id));
+        let resolved = doc.styles.resolve_char(p.props.style.as_deref(), run);
+        if id == "Emphasis" {
+            assert!(resolved.italic);
+        } else {
+            assert!(resolved.bold);
+        }
+    }
+}
+
+#[test]
+fn font_changes_invalidate_cached_style_preview_textures() {
+    let ctx = egui::Context::default();
+    let mut previews = Previews::default();
+    let texture = ctx.load_texture("test-style-preview", egui::ColorImage::new([1, 1], vec![egui::Color32::BLACK]), egui::TextureOptions::LINEAR);
+    previews.tex.insert("style:Normal:cached".into(), texture);
+    previews.fonts_changed(&ctx, std::iter::empty());
+    assert!(previews.tex.is_empty(), "a new font can replace the fallback used by cached style previews");
+}
+
 /// Regression test for #2: a style gallery label longer than its tile was painted at full width
 /// and ran into the neighbouring tiles; it is now cut with an ellipsis to fit the tile.
 #[test]
