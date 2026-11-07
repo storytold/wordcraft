@@ -223,8 +223,19 @@ pub(crate) fn load(bytes: &[u8], acc: &mut Acc) -> Option<Package> {
     if unknown_unreadable {
         acc.set_unknown_unreadable();
     }
-    check_duplicate_entries(bytes, acc);
-    check_case_collisions(&entries, acc);
+    let cd = central_directory(bytes, acc.limits.entries);
+    if let Some(cd) = &cd
+        && cd.total > zip.len() as u64
+    {
+        acc.note(format!(
+            "the zip central directory declares {} records but the index has {}; unindexed entries were not checked",
+            cd.total,
+            zip.len()
+        ));
+        acc.set_incomplete();
+    }
+    check_duplicate_entries(cd.as_ref(), acc);
+    check_case_collisions(cd.as_ref(), acc);
 
     let ct_at = entries.iter().position(|e| !e.is_dir && e.name.eq_ignore_ascii_case("[Content_Types].xml"));
     acc.ran("PKG-NO-CONTENT-TYPES");
@@ -279,7 +290,7 @@ pub(crate) fn load(bytes: &[u8], acc: &mut Acc) -> Option<Package> {
 
     let glossary = glossary_part(&entries, &content_types, &rels, main.as_deref());
 
-    let reachable = reachability(&rels, main.as_deref());
+    let reachable = reachability(&entries, &rels, main.as_deref());
     Some(Package { entries, content_types, content_types_present, rels, main, glossary, reachable, xml_parts })
 }
 
@@ -422,12 +433,12 @@ fn trim_leading_slash(mut b: &[u8]) -> &[u8] {
 }
 
 /// Inspect the raw zip central directory for duplicate entry names and report `PKG-DUP-ENTRY` findings.
-fn check_duplicate_entries(bytes: &[u8], acc: &mut Acc) {
+fn check_duplicate_entries(dir: Option<&CentralDirectory>, acc: &mut Acc) {
     acc.ran("PKG-DUP-ENTRY");
     // The zip reader collapses duplicate names into one entry, so the central directory itself is
     // read to see every stored name (a package may legally list the same name twice). The parse is
     // bounded by the entry budget, exactly as the entry loop is.
-    let Some(dir) = central_directory(bytes, acc.limits.entries) else {
+    let Some(dir) = dir else {
         acc.note("the zip central directory could not be parsed; duplicate entry names were not checked".to_string());
         // The parse did not run at all, so duplicate checking covered none of the directory. This is
         // the all-or-nothing counterpart of the truncated parse below: a partial check is reported
@@ -562,18 +573,23 @@ fn find_eocd(bytes: &[u8]) -> Option<usize> {
 }
 
 /// Check for package entries that differ only by ASCII case and report `PKG-CASE-COLLISION` findings.
-fn check_case_collisions(entries: &[Entry], acc: &mut Acc) {
+fn check_case_collisions(dir: Option<&CentralDirectory>, acc: &mut Acc) {
     acc.ran("PKG-CASE-COLLISION");
-    let mut groups: HashMap<String, Vec<&str>> = HashMap::new();
-    for e in entries.iter().filter(|e| !e.is_dir) {
-        groups.entry(e.name.to_ascii_lowercase()).or_default().push(e.name.as_str());
+    let Some(dir) = dir else { return };
+    let mut groups: HashMap<Vec<u8>, Vec<&[u8]>> = HashMap::new();
+    for &raw in &dir.names {
+        let trimmed = trim_leading_slash(raw);
+        if trimmed.ends_with(b"/") {
+            continue;
+        }
+        groups.entry(trimmed.to_ascii_lowercase()).or_default().push(trimmed);
     }
-    let mut collisions: Vec<Vec<&str>> = groups
+    let mut collisions: Vec<Vec<String>> = groups
         .into_values()
         .filter_map(|mut v| {
             v.sort_unstable();
             v.dedup();
-            (v.len() > 1).then_some(v)
+            (v.len() > 1).then(|| v.into_iter().map(|raw| String::from_utf8_lossy(raw).into_owned()).collect())
         })
         .collect();
     collisions.sort();
@@ -680,23 +696,25 @@ pub(crate) fn content_unavailable(pkg: &Package, name: &str) -> bool {
 }
 
 /// Compute the set of lowercased package part paths reachable from the package relationships root and main document.
-fn reachability(rels: &[RelsPart], main: Option<&str>) -> HashSet<String> {
+fn reachability(entries: &[Entry], rels: &[RelsPart], main: Option<&str>) -> HashSet<String> {
     let by_name: HashMap<String, usize> = rels.iter().enumerate().map(|(i, r)| (r.name.to_ascii_lowercase(), i)).collect();
     let mut seen = HashSet::new();
     seen.insert("[content_types].xml".to_string());
     seen.insert("_rels/.rels".to_string());
     let mut queue: Vec<String> = Vec::new();
     let mut visited: HashSet<String> = HashSet::new();
+    let resolve_entry = |t: &str| -> String { canonical(entries, t).unwrap_or_else(|| t.to_string()) };
     for rp in rels.iter().filter(|r| r.name.eq_ignore_ascii_case("_rels/.rels")) {
         for r in &rp.rels {
             if let Some(t) = &r.target_abs {
-                seen.insert(t.to_ascii_lowercase());
-                queue.push(t.clone());
+                let resolved = resolve_entry(t);
+                seen.insert(resolved.to_ascii_lowercase());
+                queue.push(resolved);
             }
         }
     }
     if let Some(m) = main {
-        queue.push(m.to_string());
+        queue.push(resolve_entry(m));
     }
     while let Some(part) = queue.pop() {
         if !visited.insert(part.to_ascii_lowercase()) {
@@ -705,8 +723,9 @@ fn reachability(rels: &[RelsPart], main: Option<&str>) -> HashSet<String> {
         if let Some(i) = by_name.get(&rels_part_name(&part).to_ascii_lowercase()) {
             for r in &rels[*i].rels {
                 if let Some(t) = &r.target_abs {
-                    seen.insert(t.to_ascii_lowercase());
-                    queue.push(t.clone());
+                    let resolved = resolve_entry(t);
+                    seen.insert(resolved.to_ascii_lowercase());
+                    queue.push(resolved);
                 }
             }
         }
