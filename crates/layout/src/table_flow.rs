@@ -3,7 +3,7 @@ use super::ctx::{Ctx, with_pct_base};
 use super::floats::{WrapArea, align_in, body_wraps};
 use super::flow::again;
 use super::headers::{header_items_cap, header_table_areas, placed_cost};
-use super::notes::{NoteBox, keep_table_notes, measure_table_notes, table_note_ids, table_notes};
+use super::notes::{NoteBox, keep_table_notes, measure_table_notes, table_notes};
 use super::page::{PageBuilder, PageFrame, page_frame};
 use super::placed::Placed;
 use super::{Anchor, Arc, HeightRule, Path, Rect, StoryRef, TableFloat, ViewMode, WrapText, table};
@@ -123,15 +123,17 @@ fn row_fits_notes(pb: &PageBuilder, row: &table::RowLayout, notes: &[NoteBox], c
 }
 
 /// Split against the notes of the retained lines, not notes whose references move on.
-fn split_noted_row(pb: &PageBuilder, row: &table::RowLayout, notes: &[NoteBox], whole_cells: bool) -> Option<(table::RowLayout, table::RowLayout)> {
+fn split_noted_row(
+    ctx: &mut Ctx,
+    pb: &PageBuilder,
+    row: &table::RowLayout,
+    notes: &[NoteBox],
+    whole_cells: bool,
+) -> Option<(table::RowLayout, table::RowLayout)> {
     let split = |cut| if whole_cells { table::split_row_keeping_cells(row, cut) } else { table::split_row(row, cut) };
-    let subset = |part: &table::RowLayout| {
-        let ids = table_note_ids(&part.items);
-        notes.iter().filter(|n| ids.contains(&n.id)).cloned().collect::<Vec<_>>()
-    };
     let room = pb.bottom - pb.y;
     if let Some((a, b)) = split(room)
-        && row_fits_notes(pb, &a, &subset(&a), false)
+        && row_fits_notes(pb, &a, &measure_table_notes(ctx, pb, &a.items), false)
     {
         return Some((a, b));
     }
@@ -149,7 +151,7 @@ fn split_noted_row(pb: &PageBuilder, row: &table::RowLayout, notes: &[NoteBox], 
         let cut = (lo + hi) * 0.5;
         match split(cut) {
             None => lo = cut,
-            Some((a, b)) if row_fits_notes(pb, &a, &subset(&a), false) => {
+            Some((a, b)) if row_fits_notes(pb, &a, &measure_table_notes(ctx, pb, &a.items), false) => {
                 lo = cut;
                 best = Some((a, b));
             }
@@ -291,7 +293,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
             let moves_on = first_part && short_of_min(ri, room);
             let split = match (splittable && !moves_on && !defer_kept, first_part) {
                 (false, _) => None,
-                (true, first) => split_noted_row(pb, cur, &notes, first),
+                (true, first) => split_noted_row(ctx, pb, cur, &notes, first),
             };
             match split {
                 Some((a, b)) => {
