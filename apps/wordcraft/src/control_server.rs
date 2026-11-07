@@ -21,6 +21,10 @@ const MAX_LINE: usize = 1 << 20;
 /// A connection that sends no authorised request in this time is closed.
 const FIRST_REQUEST: Duration = Duration::from_secs(30);
 
+/// The longest one reply line may take to write, however the client drains it; then the
+/// connection is closed. Short in tests.
+const REPLY_WRITE: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(30) };
+
 /// The key file of a running control server; [`KeyFile::remove`] it when the window closes.
 pub struct KeyFile(PathBuf);
 
@@ -141,6 +145,28 @@ impl Timed {
     }
 }
 
+/// Write `v` and a newline within [`REPLY_WRITE`], in chunks that each wait only for the time
+/// left, so a client that stops reading or drains a few bytes at a time cannot hold the
+/// connection's thread. `false` when the line was not written in time (close the connection).
+fn write_reply(out: &mut TcpStream, v: &Value) -> bool {
+    let line = format!("{v}\n");
+    let deadline = Instant::now() + REPLY_WRITE;
+    let mut buf = line.as_bytes();
+    while !buf.is_empty() {
+        let Some(left) = deadline.checked_duration_since(Instant::now()).filter(|l| !l.is_zero()) else { return false };
+        if out.set_write_timeout(Some(left)).is_err() {
+            return false;
+        }
+        match out.write(buf.get(..buf.len().min(1 << 16)).unwrap_or(buf)) {
+            Ok(0) => return false,
+            Ok(n) => buf = buf.get(n..).unwrap_or_default(),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return false,
+        }
+    }
+    true
+}
+
 /// The next line (trimmed), `None` at the end of the stream or after a read error.
 fn read_line(r: &mut BufReader<Timed>) -> Option<Result<String, &'static str>> {
     let mut buf = Vec::new();
@@ -187,8 +213,10 @@ fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context, key:
         let line = match line {
             Ok(l) => l,
             Err(e) => {
-                let _ = writeln!(out, "{}", json!({"ok": false, "error": e}));
-                if e == "line too long" {
+                // Always closes. The drain (itself bounded at 2 s) only helps a client that reads
+                // its error, so it is skipped when the reply missed its deadline.
+                let sent = write_reply(&mut out, &json!({"ok": false, "error": e}));
+                if sent && e == "line too long" {
                     discard_rest_of_line(&mut reader);
                 }
                 break;
@@ -203,7 +231,8 @@ fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context, key:
             // port) starts with a request line that never parses, so it can't carry a command in
             // its body, even before the key is checked.
             Err(e) => {
-                let _ = writeln!(out, "{}", json!({"ok": false, "error": format!("bad JSON: {e}; closing the connection")}));
+                // Closes whether or not the reply was written in time.
+                let _ = write_reply(&mut out, &json!({"ok": false, "error": format!("bad JSON: {e}; closing the connection")}));
                 break;
             }
         };
@@ -218,7 +247,7 @@ fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context, key:
             if let Some(o) = v.as_object_mut() {
                 o.insert("id".into(), id.clone());
             }
-            writeln!(out, "{v}").is_ok()
+            write_reply(&mut out, &v)
         };
         // Checked on every request.
         let k = given.or(conn_key.as_deref()).unwrap_or("");
@@ -426,6 +455,43 @@ mod tests {
         }
         let _ = feeder.join();
         assert!(t0.elapsed() < Duration::from_millis(1500), "{:?}", t0.elapsed());
+    }
+
+    #[test]
+    fn a_client_that_does_not_read_its_reply_is_dropped() {
+        let (port, rx) = boot();
+        let mut slow = Conn::open(port);
+        slow.send(&format!(r#"{{"id":1,"key":"{KEY}","method":"document.inspect"}}"#));
+        // A reply far larger than the socket buffers.
+        let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let _ = req.reply.send(json!({"ok": true, "result": {"text": "x".repeat(32 << 20)}}));
+        let t0 = Instant::now();
+        let mut buf = vec![0u8; 1 << 16];
+        // Read a few bytes at a time for a while: progress on each write must not keep the reply
+        // (and the connection's thread) alive past the server's limit.
+        while t0.elapsed() < Duration::from_secs(3) {
+            match slow.0.get_mut().read(&mut buf[..256]) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => std::thread::sleep(Duration::from_millis(20)),
+            }
+        }
+        // Then drain what was sent: the connection ends before the whole reply line arrived.
+        let mut got = 0usize;
+        let end = loop {
+            match slow.0.get_mut().read(&mut buf) {
+                Ok(0) => break "closed",
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => break "stalled",
+                Err(_) => break "closed",
+                Ok(n) if buf[..n].contains(&b'\n') => break "whole reply",
+                Ok(n) => got += n,
+            }
+        };
+        assert_eq!(end, "closed", "after {got} bytes");
+        // Another client is still served.
+        let mut c = Conn::open(port);
+        c.send(&format!(r#"{{"id":2,"key":"{KEY}","method":"document.inspect"}}"#));
+        answer(&rx);
+        assert_eq!(c.recv()["ok"], true);
     }
 
     #[test]
