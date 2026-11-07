@@ -174,6 +174,11 @@ pub fn open_change(w: &mut W, tag: &str, a: &ChangeAttrs) {
     w.open(tag, &refs);
 }
 
+fn empty_change(w: &mut W, tag: &str, a: &ChangeAttrs) {
+    let refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    w.empty(tag, &refs);
+}
+
 /// A tracked change element holding the properties before the change: `<tag attrs><inner>…</inner></tag>`.
 fn change_el(w: &mut W, tag: &str, inner: &str, a: &ChangeAttrs, body: impl FnOnce(&mut W)) {
     open_change(w, tag, a);
@@ -550,17 +555,30 @@ fn tblpr_inner(w: &mut W, t: &TableProps) {
 }
 
 /// `w:trPr` (when the row has any), with a tracked change last as for [`tblpr`].
-pub fn trpr(w: &mut W, r: &RowProps, change: Option<&ChangeAttrs>) {
+pub fn trpr(
+    w: &mut W,
+    r: &RowProps,
+    change: Option<&ChangeAttrs>,
+    ex_change: Option<&ChangeAttrs>,
+    ins_del: (Option<&ChangeAttrs>, Option<&ChangeAttrs>),
+) {
     if let Some(x) = &r.exceptions {
-        tblprex(w, x);
+        tblprex(w, x, ex_change);
     }
     let change = change.zip(r.fmt_change.as_ref());
     let gaps = r.grid_before > 0 || r.grid_after > 0 || r.w_before.is_some() || r.w_after.is_some();
-    if r.height.is_none() && !r.header && !r.cant_split && !gaps && change.is_none() {
+    let has_rev = ins_del.0.is_some() || ins_del.1.is_some();
+    if r.height.is_none() && !r.header && !r.cant_split && !gaps && change.is_none() && !has_rev {
         return;
     }
     w.open("w:trPr", &[]);
     trpr_inner(w, r);
+    if let Some(a) = ins_del.0 {
+        empty_change(w, "w:ins", a);
+    }
+    if let Some(a) = ins_del.1 {
+        empty_change(w, "w:del", a);
+    }
     if let Some((a, ch)) = change {
         change_el(w, "w:trPrChange", "w:trPr", a, |w| trpr_inner(w, &ch.old));
     }
@@ -568,8 +586,16 @@ pub fn trpr(w: &mut W, r: &RowProps, change: Option<&ChangeAttrs>) {
 }
 
 /// `w:tblPrEx`: only the properties the row overrides (it takes no style, float or look).
-fn tblprex(w: &mut W, t: &TableProps) {
+fn tblprex(w: &mut W, t: &TableProps, change: Option<&ChangeAttrs>) {
     w.open("w:tblPrEx", &[]);
+    tblprex_inner(w, t);
+    if let (Some(a), Some(ch)) = (change, &t.fmt_change) {
+        change_el(w, "w:tblPrExChange", "w:tblPrEx", a, |w| tblprex_inner(w, &ch.old));
+    }
+    w.close("w:tblPrEx");
+}
+
+fn tblprex_inner(w: &mut W, t: &TableProps) {
     if let Some(p) = t.width_pct {
         w.empty("w:tblW", &[("w:w", &n(round(p.clamp(0.0, 1000.0) * 50.0))), ("w:type", "pct")]);
     } else if let Some(v) = t.width {
@@ -593,7 +619,6 @@ fn tblprex(w: &mut W, t: &TableProps) {
     if let Some(m) = &t.cell_margins {
         margins(w, "w:tblCellMar", m);
     }
-    w.close("w:tblPrEx");
 }
 
 fn trpr_inner(w: &mut W, r: &RowProps) {
@@ -626,9 +651,15 @@ fn trpr_inner(w: &mut W, r: &RowProps) {
 }
 
 /// `w:tcPr`, with a tracked change last as for [`tblpr`].
-pub fn tcpr(w: &mut W, c: &CellProps, change: Option<&ChangeAttrs>) {
+pub fn tcpr(w: &mut W, c: &CellProps, change: Option<&ChangeAttrs>, ins_del: (Option<&ChangeAttrs>, Option<&ChangeAttrs>)) {
     w.open("w:tcPr", &[]);
     tcpr_inner(w, c);
+    if let Some(a) = ins_del.0 {
+        empty_change(w, "w:cellIns", a);
+    }
+    if let Some(a) = ins_del.1 {
+        empty_change(w, "w:cellDel", a);
+    }
     if let (Some(a), Some(ch)) = (change, &c.fmt_change) {
         change_el(w, "w:tcPrChange", "w:tcPr", a, |w| tcpr_inner(w, &ch.old));
     }

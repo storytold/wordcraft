@@ -74,20 +74,36 @@ fn resolve_cell(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, ac
     let has = s.doc.table(story, &tp).is_some_and(|t| {
         let row = t.rows.get(r);
         t.props.fmt_change.is_some()
-            || row.is_some_and(|x| x.props.fmt_change.is_some())
-            || row.and_then(|x| x.cells.get(c)).is_some_and(|x| x.props.fmt_change.is_some())
+            || row.is_some_and(|x| {
+                x.props.ins.is_some()
+                    || x.props.del.is_some()
+                    || x.props.fmt_change.is_some()
+                    || x.props.exceptions.as_ref().is_some_and(|e| e.fmt_change.is_some())
+            })
+            || row.and_then(|x| x.cells.get(c)).is_some_and(|x| x.props.ins.is_some() || x.props.del.is_some() || x.props.fmt_change.is_some())
     });
     if !has {
         return Ok(false);
     }
     let t = s.doc.table_mut(story, &tp)?;
     fmt_revisions::resolve_table(t, accept);
-    if let Some(row) = t.rows.get_mut(r) {
+    let drop_row = t.rows.get(r).is_some_and(|row| (row.props.del.is_some() && accept) || (row.props.ins.is_some() && !accept));
+    if drop_row && t.rows.len() > 1 {
+        t.rows.remove(r);
+    } else if let Some(row) = t.rows.get_mut(r) {
+        row.props.ins = None;
+        row.props.del = None;
         fmt_revisions::resolve_row(row, accept);
-        if let Some(cell) = row.cells.get_mut(c) {
+        let drop_cell = row.cells.get(c).is_some_and(|cell| (cell.props.del.is_some() && accept) || (cell.props.ins.is_some() && !accept));
+        if drop_cell && row.cells.len() > 1 {
+            row.cells.remove(c);
+        } else if let Some(cell) = row.cells.get_mut(c) {
+            cell.props.ins = None;
+            cell.props.del = None;
             fmt_revisions::resolve_cell(cell, accept);
         }
     }
+    s.clamp_selection();
     Ok(true)
 }
 
@@ -322,8 +338,29 @@ fn changes(s: &Session) -> Vec<Change> {
         {
             let row = t.rows.get(r);
             let cell = row.and_then(|x| x.cells.get(c));
+            if c == 0
+                && let Some(row) = row
+            {
+                let kind = run_kind(&s.doc, row.props.ins, row.props.del);
+                if !kind.is_empty() {
+                    out.push(Change { a: mk(&path, 0), b: mk(&path, 0), kind, rev: row.props.ins.or(row.props.del), props: Vec::new() });
+                }
+            }
+            if let Some(cell) = cell {
+                let kind = run_kind(&s.doc, cell.props.ins, cell.props.del);
+                if !kind.is_empty() {
+                    out.push(Change { a: mk(&path, 0), b: mk(&path, 0), kind, rev: cell.props.ins.or(cell.props.del), props: Vec::new() });
+                }
+            }
             let found = [
                 (r == 0 && c == 0).then(|| t.props.fmt_change.as_ref().map(|ch| (ch.rev, fmt_revisions::table_diff(&t.props)))).flatten(),
+                (c == 0)
+                    .then(|| {
+                        row.and_then(|x| {
+                            x.props.exceptions.as_deref().and_then(|ex| ex.fmt_change.as_ref().map(|ch| (ch.rev, fmt_revisions::table_diff(ex))))
+                        })
+                    })
+                    .flatten(),
                 (c == 0).then(|| row.and_then(|x| x.props.fmt_change.as_ref().map(|ch| (ch.rev, fmt_revisions::row_diff(&x.props))))).flatten(),
                 cell.and_then(|x| x.props.fmt_change.as_ref().map(|ch| (ch.rev, fmt_revisions::cell_diff(&x.props)))),
             ];
@@ -392,7 +429,11 @@ pub fn has_format_changes(doc: &wordcraft_doc::Document) -> bool {
                 || p.section.as_ref().is_some_and(|x| x.fmt_change.is_some())
                 || path.cell().and_then(|(tp, r, c)| doc.table(StoryRef::Body, &tp).map(|t| (t, r, c))).is_some_and(|(t, r, c)| {
                     t.props.fmt_change.is_some()
-                        || t.rows.get(r).is_some_and(|x| x.props.fmt_change.is_some() || x.cells.get(c).is_some_and(|x| x.props.fmt_change.is_some()))
+                        || t.rows.get(r).is_some_and(|x| {
+                            x.props.fmt_change.is_some()
+                                || x.props.exceptions.as_ref().is_some_and(|e| e.fmt_change.is_some())
+                                || x.cells.get(c).is_some_and(|x| x.props.fmt_change.is_some())
+                        })
                 })
         })
     })
@@ -480,6 +521,11 @@ pub fn has_deletions(doc: &wordcraft_doc::Document) -> bool {
     doc.para_paths(StoryRef::Body).iter().any(|path| {
         doc.para(StoryRef::Body, path)
             .is_some_and(|p| plain_deletion(doc, p.mark.del).is_some() || p.runs.iter().any(|r| plain_deletion(doc, r.props.del).is_some()))
+            || path.cell().and_then(|(tp, r, c)| doc.table(StoryRef::Body, &tp).map(|t| (t, r, c))).is_some_and(|(t, r, c)| {
+                t.rows.get(r).is_some_and(|x| {
+                    plain_deletion(doc, x.props.del).is_some() || x.cells.get(c).is_some_and(|x| plain_deletion(doc, x.props.del).is_some())
+                })
+            })
     })
 }
 

@@ -59,9 +59,9 @@ impl Writer<'_> {
             InlineObject::Field { instr, result, locked, dirty, form, .. } => {
                 self.field(w, FieldData { instr, result, locked: *locked, dirty: *dirty, form }, props)
             }
-            InlineObject::FieldStart { instr, locked, dirty } => {
+            InlineObject::FieldStart { instr, locked, dirty, form } => {
                 self.rev_open(w, props);
-                self.field_start(w, instr, *locked, *dirty, "", props);
+                self.field_start(w, instr, *locked, *dirty, form, props);
                 self.rev_close(w, props);
             }
             InlineObject::FieldEnd => {
@@ -260,13 +260,18 @@ impl Writer<'_> {
             self.rev_close(w, props);
             return;
         }
-        let Some(file) = self.media_files.get(media).cloned() else { return };
+        let Some(file) = self.media_files.get(media).cloned().or_else(|| media.strip_prefix("link:").map(str::to_string)) else { return };
         self.rev_open(w, props);
         w.open("w:r", &[]);
         self.rpr(w, props);
         w.open("w:drawing", &[]);
         let docpr = self.next_docpr();
         let name = format!("Picture {docpr}");
+        let mut float = float.clone();
+        for (e, fx) in float.effect.iter_mut().zip(float.pic_effects.extent()) {
+            *e = wordcraft_geom::finite(*e).max(fx);
+        }
+        let float = &float;
         self.drawing_open(w, DrawingInfo { float, size: (*iw, *ih), docpr: &docpr, name: &name, alt });
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.open("a:graphic", &[]);
@@ -433,7 +438,7 @@ impl Writer<'_> {
             let at = (c.x, c.y);
             match &c.obj {
                 InlineObject::Image { media, .. } => {
-                    if let Some(file) = self.media_files.get(media).cloned() {
+                    if let Some(file) = self.media_files.get(media).cloned().or_else(|| media.strip_prefix("link:").map(str::to_string)) {
                         self.pic(w, &c.obj, &file, at, rels);
                     }
                 }

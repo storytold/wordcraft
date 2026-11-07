@@ -261,7 +261,7 @@ fn object_cost(o: &InlineObject) -> usize {
                 children.len().saturating_mul(std::mem::size_of::<crate::para::GroupChild>()).saturating_add(float(f))
             }
             InlineObject::Field { instr, result, form, .. } => instr.len().saturating_add(result.len()).saturating_add(form.len()),
-            InlineObject::FieldStart { instr, .. } => instr.len(),
+            InlineObject::FieldStart { instr, form, .. } => instr.len().saturating_add(form.len()),
             InlineObject::ControlStart { control } => std::mem::size_of::<crate::control::ContentControl>().saturating_add(serialized_len(control)),
             InlineObject::NoteRef { custom, .. } => custom.len(),
             InlineObject::BookmarkStart { name } | InlineObject::BookmarkEnd { name } => name.len(),
@@ -426,8 +426,19 @@ impl Relink<'_> {
                         self.style(&mut c.old.style);
                     }
                     for row in t.rows.iter_mut() {
+                        row.props.ins = row.props.ins.and_then(|r| self.rev_id(r));
+                        row.props.del = row.props.del.and_then(|r| self.rev_id(r));
                         self.shift_change(&mut row.props.fmt_change);
+                        if let Some(ex) = row.props.exceptions.as_deref_mut() {
+                            self.style(&mut ex.style);
+                            self.shift_change(&mut ex.fmt_change);
+                            if let Some(c) = ex.fmt_change.as_mut() {
+                                self.style(&mut c.old.style);
+                            }
+                        }
                         for cell in row.cells.iter_mut() {
+                            cell.props.ins = cell.props.ins.and_then(|r| self.rev_id(r));
+                            cell.props.del = cell.props.del.and_then(|r| self.rev_id(r));
                             self.shift_change(&mut cell.props.fmt_change);
                             todo.extend(cell.blocks.iter_mut().map(Arc::make_mut));
                         }

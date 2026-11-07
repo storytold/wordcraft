@@ -46,7 +46,10 @@ pub fn measure(s: &str, per_pt: f32) -> Option<f32> {
     }
     let unit_lower = unit.trim().to_ascii_lowercase();
     let pt = match unit_lower.as_str() {
-        "" => v / per_pt as f64,
+        "" => {
+            let file_units = if per_pt > 1.0 { v.round() } else { v };
+            file_units / per_pt as f64
+        }
         "pt" => v,
         "in" => v * 72.0,
         "cm" => v * 72.0 / 2.54,
@@ -68,7 +71,7 @@ pub fn measure(s: &str, per_pt: f32) -> Option<f32> {
 pub fn line_multiple(s: &str) -> Option<f32> {
     let t = s.trim();
     let measured = t.ends_with(|c: char| c.is_ascii_alphabetic());
-    measure(t, 240.0).map(|v| if measured { v * 20.0 / 240.0 } else { v })
+    measure(t, 240.0).map(|v| if measured { (v * 20.0).round() / 240.0 } else { v })
 }
 
 /// Plain integer (accepts decimals, rounds; clamps into i64 range).
@@ -166,6 +169,9 @@ mod tests {
         assert!((strict - 278.0 / 240.0).abs() < 1e-5, "{strict}");
         let inches = line_multiple("1.2in").expect("inches");
         assert!((inches - 7.2).abs() < 1e-5, "{inches}");
+        assert_eq!(measure("398.4", 240.0), measure("398", 240.0));
+        assert_eq!(measure("398.4", 20.0), measure("398", 20.0));
+        assert_eq!(measure("17.9955", 2.0), measure("18", 2.0));
         assert_eq!(line_multiple("junk"), None);
         assert_eq!(line_multiple(""), None);
         assert_eq!(measure("12700emu", 20.0), Some(1.0));

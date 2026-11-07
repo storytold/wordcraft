@@ -34,30 +34,31 @@ impl Writer<'_> {
         self.rev_open(w, props);
         self.field_start(w, instr, locked, dirty, form, props);
         if !result.is_empty() {
-            run(w, &|w| {
-                let mut buf = String::new();
-                let flush = |w: &mut W, buf: &mut String| {
-                    if !buf.is_empty() {
-                        w.leaf(if del { "w:delText" } else { "w:t" }, &[("xml:space", "preserve")], buf);
-                        buf.clear();
-                    }
-                };
-                for c in result.chars() {
-                    match c {
-                        '\t' => {
-                            flush(w, &mut buf);
-                            w.empty("w:tab", &[]);
-                        }
-                        '\n' | '\r' => {
-                            flush(w, &mut buf);
-                            w.empty("w:br", &[]);
-                        }
-                        c if (c as u32) < 0x20 || c == wordcraft_doc::para::OBJ => {}
-                        c => buf.push(c),
-                    }
+            w.open("w:r", &[]);
+            self.rpr(w, props);
+            let mut buf = String::new();
+            let flush = |w: &mut W, buf: &mut String| {
+                if !buf.is_empty() {
+                    w.leaf(if del { "w:delText" } else { "w:t" }, &[("xml:space", "preserve")], buf);
+                    buf.clear();
                 }
-                flush(w, &mut buf);
-            });
+            };
+            for c in result.chars() {
+                match c {
+                    '\t' => {
+                        flush(w, &mut buf);
+                        w.empty("w:tab", &[]);
+                    }
+                    '\n' | '\r' => {
+                        flush(w, &mut buf);
+                        w.empty("w:br", &[]);
+                    }
+                    c if (c as u32) < 0x20 || c == wordcraft_doc::para::OBJ => {}
+                    c => buf.push(c),
+                }
+            }
+            flush(w, &mut buf);
+            w.close("w:r");
         }
         run(w, &|w| w.empty("w:fldChar", &[("w:fldCharType", "end")]));
         self.rev_close(w, props);

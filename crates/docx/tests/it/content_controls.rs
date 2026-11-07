@@ -342,3 +342,69 @@ fn toc_gallery_around_a_toc_whose_heading_is_in_a_block_control_round_trips() {
         assert!(xml.rfind("</w:sdt>").unwrap() < xml.rfind(">Chapter One<").unwrap(), "pass {pass}: {xml}");
     }
 }
+
+#[test]
+fn word_toc_gallery_with_field_end_after_entries_round_trips_without_update() {
+    let style = |s: &str, inner: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="{s}"/></w:pPr>{inner}</w:p>"#);
+    let begin = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#;
+    let content = format!(
+        "{}{}{}<w:p><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>",
+        style("TOCHeading", &t("Contents")),
+        style("TOC1", &format!("{begin}{}", t("Chapter One\t1"))),
+        style("TOC2", &t("Section\t2"))
+    );
+    let pr = r#"<w:id w:val="-1234567"/><w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj>"#;
+    let mut bytes = package(&format!("{}{}", sdt(pr, &content), p(&t("Chapter One"))));
+    for pass in 0..2 {
+        let d = read(&bytes).unwrap();
+        bytes = write(&d).unwrap();
+        let xml = document_xml(&bytes);
+        assert_eq!(xml.matches("<w:sdt>").count(), 1, "pass {pass}: {xml}");
+        assert!(xml.contains(r#"<w:docPartGallery w:val="Table of Contents"/>"#), "pass {pass}: {xml}");
+        assert!(xml.find("</w:sdt>").unwrap() < xml.rfind(">Chapter One<").unwrap(), "pass {pass}: {xml}");
+    }
+}
+
+#[test]
+fn field_result_rpr_change_and_table_revisions_round_trip() {
+    let fld = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> REF _Ref1 \h </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:color w:val="auto"/><w:rPrChange w:id="582" w:author="Author"><w:rPr><w:b/></w:rPr></w:rPrChange></w:rPr><w:t>Section 3.1(s)</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+    let form_fld = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="Field1"/><w:enabled/><w:textInput/></w:ffData></w:fldChar></w:r><w:r><w:instrText xml:space="preserve"> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:ins w:id="10" w:author="Alice"><w:r><w:t>Added </w:t></w:r></w:ins><w:r><w:rPr><w:b/><w:rPrChange w:id="11" w:author="Bob"><w:rPr/></w:rPrChange></w:rPr><w:t>Tail</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+    let tbl = r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2880"/></w:tblGrid><w:tr><w:tblPrEx><w:tblW w:w="2880" w:type="dxa"/><w:tblPrExChange w:id="1" w:author="Alice"><w:tblPrEx><w:tblW w:w="1440" w:type="dxa"/></w:tblPrEx></w:tblPrExChange></w:tblPrEx><w:trPr><w:ins w:id="2" w:author="Bob"/></w:trPr><w:tc><w:tcPr><w:tcW w:w="2880" w:type="dxa"/><w:cellIns w:id="3" w:author="Carol"/></w:tcPr><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+    let d = read(&package(&format!("{fld}{form_fld}{tbl}"))).unwrap();
+    let xml = document_xml(&write(&d).unwrap());
+    assert!(xml.contains(r#"<w:name w:val="Field1"/>"#), "{xml}");
+    assert!(xml.contains("Added ") && xml.contains("<w:ins "), "{xml}");
+    assert_eq!(xml.matches("<w:rPrChange ").count(), 2, "{xml}");
+    assert!(xml.contains("<w:tblPrExChange "), "{xml}");
+    assert!(xml.contains("<w:cellIns "), "{xml}");
+}
+
+#[test]
+fn range_toc_without_control_stays_unwrapped_and_section_break_toc_control_hands_over() {
+    let style = |s: &str, inner: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="{s}"/></w:pPr>{inner}</w:p>"#);
+    let begin = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#;
+    // A range TOC that was never in a content control (with FieldEnd in its own paragraph) must
+    // not gain a Table of Contents w:sdt on save.
+    let bare = format!(
+        "{}{}{}<w:p><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>{}",
+        style("TOCHeading", &t("Contents")),
+        style("TOC1", &format!("{begin}{}", t("Chapter One\t1"))),
+        style("TOC2", &t("Section\t2")),
+        p(&t("Chapter One")),
+    );
+    let d_bare = read(&package(&bare)).unwrap();
+    let xml_bare = document_xml(&write(&d_bare).unwrap());
+    assert_eq!(xml_bare.matches("<w:sdt>").count(), 0, "{xml_bare}");
+
+    // #3889: a Table of Contents control opening on an empty paragraph that ends a section above
+    // the entries hands its control over on read so Update Table reuses the section-break paragraph.
+    let sect_toc = format!(
+        r#"<w:p><w:pPr><w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:pPr></w:p>{}{}<w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#,
+        style("TOC1", &format!("{begin}{}", t("Chapter One\t1"))),
+        style("TOC2", &t("Section\t2")),
+    );
+    let pr = r#"<w:id w:val="-1234567"/><w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj>"#;
+    let d_sect = read(&package(&format!("{}{}", sdt(pr, &sect_toc), p(&t("Chapter One"))))).unwrap();
+    assert!(controls(&d_sect).is_empty());
+    assert!(d_sect.body[0].as_para().unwrap().section.is_some());
+}

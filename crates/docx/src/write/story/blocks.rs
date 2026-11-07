@@ -113,7 +113,10 @@ impl Writer<'_> {
             }
             w.open("w:tr", &[]);
             let chg = r.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
-            trpr(w, &r.props, chg.as_ref());
+            let ex_chg = r.props.exceptions.as_ref().and_then(|x| x.fmt_change.as_ref()).map(|c| self.change_attrs(c.rev));
+            let r_ins = r.props.ins.map(|i| self.change_attrs(i));
+            let r_del = r.props.del.map(|i| self.change_attrs(i));
+            trpr(w, &r.props, chg.as_ref(), ex_chg.as_ref(), (r_ins.as_ref(), r_del.as_ref()));
             let mut open_cells = 0u32;
             for c in &r.cells {
                 for ctl in &c.controls.open {
@@ -122,7 +125,9 @@ impl Writer<'_> {
                 }
                 w.open("w:tc", &[]);
                 let chg = c.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
-                tcpr(w, &c.props, chg.as_ref());
+                let c_ins = c.props.ins.map(|i| self.change_attrs(i));
+                let c_del = c.props.del.map(|i| self.change_attrs(i));
+                tcpr(w, &c.props, chg.as_ref(), (c_ins.as_ref(), c_del.as_ref()));
                 self.blocks(w, &c.blocks, rels, false, depth + 1);
                 w.close("w:tc");
                 let n = c.controls.close.min(open_cells);

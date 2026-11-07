@@ -83,13 +83,14 @@ pub(super) fn toc_control_to_toc(body: &mut Blocks) {
     }
     // An empty paragraph opening the control takes the field. It may end a section, as above
     // entries in columns (#3889).
-    if engine.get(s).and_then(|b| b.as_para()).is_some_and(|p| p.is_empty()) {
+    let empty_heading = engine.get(s).and_then(|b| b.as_para()).is_some_and(|p| p.is_empty());
+    if empty_heading {
         field_to_heading(&mut engine, s + 1);
     } else {
         toc_field_to_heading(&mut engine);
     }
     if crate::write::written_toc_span(&engine) == Some((s, last)) {
-        *body = toc;
+        *body = if empty_heading { toc } else { engine };
     }
 }
 
@@ -97,7 +98,7 @@ pub(super) fn toc_control_to_toc(body: &mut Blocks) {
 /// reproduce exactly. Other imported TOCs keep their explicit boundaries, independent of styles.
 pub(super) fn toc_field_to_heading(body: &mut Blocks) {
     for i in 1..body.len() {
-        if body[i - 1].as_para().is_some_and(|p| p.props.style.as_deref() == Some("TOCHeading")) {
+        if body.get(i - 1).and_then(|b| b.as_para()).is_some_and(|p| p.props.style.as_deref() == Some("TOCHeading")) {
             field_to_heading(body, i);
         }
     }
@@ -113,8 +114,8 @@ fn field_to_heading(body: &mut Blocks, i: usize) {
     }
     let Some((field, props, end)) = body.get(i).and_then(|b| b.as_para()).and_then(|p| {
         let (field, end) = match p.object_at(0) {
-            Some(InlineObject::FieldStart { instr, locked, dirty }) if is_toc(instr) => (
-                InlineObject::Field { instr: instr.clone(), result: String::new(), locked: *locked, dirty: *dirty, code: false, form: String::new() },
+            Some(InlineObject::FieldStart { instr, locked, dirty, form }) if is_toc(instr) => (
+                InlineObject::Field { instr: instr.clone(), result: String::new(), locked: *locked, dirty: *dirty, code: false, form: form.clone() },
                 Some(toc_range_end(body, i)?),
             ),
             Some(f @ InlineObject::Field { result, .. }) if result.is_empty() && has_toc(f) => (f.clone(), None),
