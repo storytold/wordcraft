@@ -39,6 +39,7 @@ pub const FIELDS: &[(&str, &str, &str)] = &[
     ("SECTION", "Numbering", "Number of the section the field sits in"),
     ("SECTIONPAGES", "Numbering", "How many pages this section has"),
     ("SEQ", "Numbering", "A numbered sequence (figures, tables…)"),
+    ("LISTNUM", "Numbering", "An inline multilevel list number"),
     ("PAGEREF", "Links and References", "Page on which a bookmarked passage falls"),
     ("REF", "Links and References", "Copy of the text a bookmark marks"),
     ("STYLEREF", "Links and References", "Text of the nearest paragraph with a given style (running headers)"),

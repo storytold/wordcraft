@@ -121,7 +121,7 @@ pub fn specs() -> Vec<CommandSpec> {
             read_opts(s, v);
             step(s, 1)
         })
-        .key("Mod+G / F3 / Shift+F4 / Mod+PageDown")
+        .key(super::mac_or("Mod+G / F3 / Shift+F4 / Mod+PageDown", "Mod+G / F3 / Shift+F4 / Mod+PageDown / Mod+Alt+Y"))
         .params(r#"{"text"?: string, "matchCase"?: bool, "wholeWord"?: bool, "regex"?: bool}"#)
         .pure(),
         CommandSpec::new("edit.findPrevious", "Find Previous", "Home › Editing › Find", |s, v| {

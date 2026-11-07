@@ -1370,7 +1370,7 @@ fn field_code_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     if !r.has_focus() && code.is_empty() {
         r.request_focus();
     }
-    ui.label(egui::RichText::new("PAGE · NUMPAGES · DATE \\@ \"MMMM d, yyyy\" · AUTHOR · TITLE · SEQ Figure").small().weak());
+    ui.label(egui::RichText::new("PAGE · NUMPAGES · DATE \\@ \"MMMM d, yyyy\" · AUTHOR · TITLE · SEQ Figure · LISTNUM").small().weak());
     if !message.is_empty() {
         ui.label(egui::RichText::new(message.as_str()).small().weak());
     }
