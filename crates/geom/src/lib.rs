@@ -48,6 +48,14 @@ pub fn half_points(v: i64) -> f32 {
 pub fn to_half_points(pt: f32) -> i64 {
     (finite(pt) * 2.0).round() as i64
 }
+/// Eighths of a point (OOXML border widths) → points.
+pub fn eighth_points(v: i64) -> f32 {
+    v as f32 / 8.0
+}
+/// Points → eighths of a point (rounded).
+pub fn to_eighth_points(pt: f32) -> i64 {
+    (finite(pt) as f64 * 8.0).round() as i64
+}
 
 /// Replace NaN/inf with 0 so casts and arithmetic stay defined.
 pub fn finite(v: f32) -> f32 {
@@ -58,15 +66,21 @@ pub fn finite(v: f32) -> f32 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Unit {
+    /// Inches (the default).
     #[default]
     Inches,
+    /// Centimetres.
     Centimeters,
+    /// Millimetres.
     Millimeters,
+    /// Points (1/72 inch).
     Points,
+    /// Picas (12 points).
     Picas,
 }
 
 impl Unit {
+    /// The suffix shown after a number in this unit (`"` for inches, ` cm`, ` pt`, …).
     pub fn suffix(self) -> &'static str {
         match self {
             Unit::Inches => "\"",
@@ -76,6 +90,7 @@ impl Unit {
             Unit::Picas => " pi",
         }
     }
+    /// How many points one of this unit is.
     pub fn pt_per_unit(self) -> f32 {
         match self {
             Unit::Inches => PT_PER_IN,
@@ -99,15 +114,34 @@ impl Unit {
         let s = format!("{v:.2}");
         let s = if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.') } else { &s };
         let s = if s == "-0" { "0" } else { s };
-        s.replace('.', &decimal.to_string())
+        let mut buf = [0u8; 4];
+        let sep: &str = decimal.encode_utf8(&mut buf);
+        s.replace('.', sep)
+    }
+}
+
+/// Maps the digits and decimal separators of other scripts to their ASCII forms: Arabic-Indic
+/// (`٠`–`٩`, `٫`), Extended Arabic-Indic (`۰`–`۹`) and full-width (`０`–`９`, `．`, `，`).
+fn fold_digit(c: char) -> char {
+    match c {
+        '\u{0660}'..='\u{0669}' => char::from(b'0' + (c as u32 - 0x0660) as u8),
+        '\u{06F0}'..='\u{06F9}' => char::from(b'0' + (c as u32 - 0x06F0) as u8),
+        '\u{FF10}'..='\u{FF19}' => char::from(b'0' + (c as u32 - 0xFF10) as u8),
+        '\u{066B}' | '\u{FF0E}' => '.',
+        '\u{FF0C}' => ',',
+        other => other,
     }
 }
 
 /// Parse a measurement typed by a user: `1"`, `1 in`, `2.5cm`, `12pt`, `3 pi`, `10 mm`, `1.5 li`
-/// (lines are 12 pt). A bare number is in `default`. Returns points. Either decimal separator
-/// works (`2,5 cm` and `2.5 cm`), whatever the region.
+/// (lines are 12 pt), `8 px` (pixels are 0.75 pt). A bare number is in `default`. Returns points,
+/// or `None` for anything unreadable or whose result does not fit in an `f32`.
+///
+/// Either decimal separator works (`2,5 cm` and `2.5 cm`), whatever the region, so a thousands
+/// separator is *not* understood: `1,000 pt` is 1 pt, not 1000. Arabic-Indic and full-width digits
+/// are accepted like ASCII ones. Scientific notation is not: the number ends at the `e`.
 pub fn parse_measure(s: &str, default: Unit) -> Option<f32> {
-    let t = s.trim().to_ascii_lowercase().replace('\u{2212}', "-");
+    let t = s.trim().chars().map(fold_digit).collect::<String>().to_ascii_lowercase().replace('\u{2212}', "-");
     if t.is_empty() {
         return None;
     }
@@ -138,50 +172,98 @@ pub fn parse_measure(s: &str, default: Unit) -> Option<f32> {
 /// A point in page space (points, y down).
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct Point {
+    /// Distance from the left edge.
     pub x: f32,
+    /// Distance from the top edge.
     pub y: f32,
 }
 
 impl Point {
+    /// A point at (`x`, `y`).
     pub const fn new(x: f32, y: f32) -> Self {
         Point { x, y }
     }
 }
 
-/// An axis-aligned rectangle (points, y down). `w`/`h` are never negative when built with [`Rect::new`].
+/// An axis-aligned rectangle (points, y down). `w`/`h` are finite and never negative, whether the
+/// rectangle was built with [`Rect::new`] or deserialized (both go through the same checks).
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(from = "RectRaw")]
 pub struct Rect {
+    /// Left edge.
     pub x: f32,
+    /// Top edge.
     pub y: f32,
+    /// Width.
     pub w: f32,
+    /// Height.
     pub h: f32,
 }
 
+/// The unchecked shape of a [`Rect`] on the wire; converting it applies [`Rect::new`]'s rules.
+#[derive(Deserialize)]
+struct RectRaw {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+impl From<RectRaw> for Rect {
+    fn from(r: RectRaw) -> Self {
+        Rect::new(r.x, r.y, r.w, r.h)
+    }
+}
+
+/// Where two crossed edges meet: both land on their midpoint.
+fn collapse(lo: f32, hi: f32) -> (f32, f32) {
+    if hi < lo {
+        let m = lo * 0.5 + hi * 0.5;
+        (m, m)
+    } else {
+        (lo, hi)
+    }
+}
+
 impl Rect {
+    /// A rectangle with NaN and infinities replaced by 0 and a negative size clamped to 0.
     pub fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
         Rect { x: finite(x), y: finite(y), w: finite(w).max(0.0), h: finite(h).max(0.0) }
     }
+    /// The right edge.
     pub fn right(&self) -> f32 {
         self.x + self.w
     }
+    /// The bottom edge.
     pub fn bottom(&self) -> f32 {
         self.y + self.h
     }
+    /// Whether `p` is inside or on the edge. Edges are *included*, unlike [`Rect::intersects`],
+    /// so a point on an edge shared by two rectangles is in both.
     pub fn contains(&self, p: Point) -> bool {
         p.x >= self.x && p.x <= self.right() && p.y >= self.y && p.y <= self.bottom()
     }
+    /// Whether the interiors overlap. Rectangles that only touch along an edge do *not* intersect.
     pub fn intersects(&self, o: &Rect) -> bool {
         self.x < o.right() && o.x < self.right() && self.y < o.bottom() && o.y < self.bottom()
     }
+    /// The smallest rectangle covering both. An empty rectangle still counts: `Rect::default()`
+    /// sits at the origin, so accumulating bounds from it always stretches to (0, 0). Start from
+    /// the first real rectangle instead.
     pub fn union(&self, o: &Rect) -> Rect {
         let x = self.x.min(o.x);
         let y = self.y.min(o.y);
         Rect::new(x, y, self.right().max(o.right()) - x, self.bottom().max(o.bottom()) - y)
     }
+    /// Shrunk by `l`, `t`, `r`, `b` on the left, top, right and bottom (grown for negative values).
+    /// If the edges cross, the result has zero size at the middle of where they crossed.
     pub fn inset(&self, l: f32, t: f32, r: f32, b: f32) -> Rect {
-        Rect::new(self.x + l, self.y + t, self.w - l - r, self.h - t - b)
+        let (l, t, r, b) = (finite(l), finite(t), finite(r), finite(b));
+        let (x0, x1) = collapse(self.x + l, self.right() - r);
+        let (y0, y1) = collapse(self.y + t, self.bottom() - b);
+        Rect::new(x0, y0, x1 - x0, y1 - y0)
     }
-    /// Grown by `d` on every side (shrunk for negative `d`, down to zero size).
+    /// Grown by `d` on every side (shrunk for negative `d`, down to zero size at the centre).
     pub fn expand(&self, d: f32) -> Rect {
         self.inset(-d, -d, -d, -d)
     }
@@ -202,8 +284,11 @@ pub fn normalize_degrees(deg: f32) -> f32 {
 /// `flipH`, `flipV` and `rot` say (ECMA-376 §20.1.7.6).
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Spin {
+    /// Clockwise rotation in degrees.
     pub deg: f32,
+    /// Mirrored left to right.
     pub flip_h: bool,
+    /// Mirrored top to bottom.
     pub flip_v: bool,
 }
 
@@ -307,13 +392,15 @@ pub fn paper_by_name(name: &str) -> Option<(&'static str, f32, f32)> {
 /// How a page is placed on other paper when printing with "Scale to paper size" (#2108).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PaperFit {
-    /// The sheet, turned to the page's orientation (points).
+    /// The sheet's width, turned to the page's orientation (points).
     pub paper_w: f32,
+    /// The sheet's height, turned to the page's orientation (points).
     pub paper_h: f32,
     /// Page points to sheet points.
     pub k: f32,
-    /// Where the page's top-left corner lands on the sheet (the page is centred).
+    /// Where the page's left edge lands on the sheet (the page is centred).
     pub dx: f32,
+    /// Where the page's top edge lands on the sheet (the page is centred).
     pub dy: f32,
 }
 
@@ -323,7 +410,7 @@ pub struct PaperFit {
 /// page as it is (scale 1 on paper of its own size).
 pub fn fit_to_paper(page_w: f32, page_h: f32, paper_w: f32, paper_h: f32) -> PaperFit {
     let ok = |v: f32| v.is_finite() && v >= 1.0;
-    let as_is = PaperFit { paper_w: page_w, paper_h: page_h, k: 1.0, dx: 0.0, dy: 0.0 };
+    let as_is = PaperFit { paper_w: finite(page_w), paper_h: finite(page_h), k: 1.0, dx: 0.0, dy: 0.0 };
     if !(ok(page_w) && ok(page_h) && ok(paper_w) && ok(paper_h)) {
         return as_is;
     }
@@ -341,6 +428,10 @@ pub fn fit_to_paper(page_w: f32, page_h: f32, paper_w: f32, paper_h: f32) -> Pap
 mod tests {
     use super::*;
 
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-3
+    }
+
     #[test]
     fn unit_round_trips() {
         assert_eq!(twips(1440), 72.0);
@@ -349,6 +440,10 @@ mod tests {
         assert_eq!(to_emu(72.0), 914_400);
         assert_eq!(half_points(24), 12.0);
         assert_eq!(to_half_points(10.5), 21);
+        assert_eq!(eighth_points(8), 1.0);
+        assert_eq!(eighth_points(12), 1.5);
+        assert_eq!(to_eighth_points(0.5), 4);
+        assert_eq!(to_eighth_points(f32::NAN), 0);
         assert_eq!(to_twips(f32::NAN), 0);
     }
 
@@ -359,6 +454,7 @@ mod tests {
         assert_eq!(parse_measure("12pt", Unit::Inches), Some(12.0));
         assert_eq!(parse_measure("2", Unit::Inches), Some(144.0));
         assert_eq!(parse_measure("1,5 li", Unit::Inches), Some(18.0));
+        assert_eq!(parse_measure("8 px", Unit::Inches), Some(6.0));
         let cm = parse_measure("2.54 cm", Unit::Inches).unwrap();
         assert!((cm - 72.0).abs() < 0.01);
         assert_eq!(parse_measure("abc", Unit::Inches), None);
@@ -371,17 +467,27 @@ mod tests {
         assert_eq!(parse_measure("1.5\"", Unit::Centimeters), Some(108.0));
         assert_eq!(parse_measure("\u{2212}1 in", Unit::Points), Some(-72.0));
         assert_eq!(parse_measure("1,2,3", Unit::Inches), None);
-        // Overflowing values during unit conversion return None (#1359).
+        // A comma is a decimal separator, never a thousands separator.
+        assert_eq!(parse_measure("1,000 pt", Unit::Inches), Some(1.0));
+        // Scientific notation is not accepted: the number stops at the `e`, leaving an unknown
+        // unit. (Overflow itself is covered by `parse_measure_rejects_overflow_to_infinity`.)
+        assert_eq!(parse_measure("1e3 pt", Unit::Points), None);
         assert_eq!(parse_measure("3.4e38 in", Unit::Points), None);
-        assert_eq!(parse_measure("-3.4e38 in", Unit::Points), None);
-        assert_eq!(parse_measure("3.4e38 cm", Unit::Points), None);
-        assert_eq!(parse_measure("3.4e38 mm", Unit::Points), None);
-        assert_eq!(parse_measure("3.4e38 pi", Unit::Points), None);
-        assert_eq!(parse_measure("3.4e38 li", Unit::Points), None);
         assert_eq!(parse_measure("3.4e38", Unit::Inches), None);
-        assert_eq!(parse_measure("1e39 pt", Unit::Points), None);
         assert_eq!(parse_measure("inf", Unit::Points), None);
         assert_eq!(parse_measure("nan", Unit::Points), None);
+    }
+
+    #[test]
+    fn parses_digits_of_other_scripts() {
+        let two_cm = parse_measure("2 cm", Unit::Inches).unwrap();
+        assert_eq!(parse_measure("\u{0662} cm", Unit::Inches), Some(two_cm)); // Arabic-Indic ٢
+        assert_eq!(parse_measure("\u{06F2} cm", Unit::Inches), Some(two_cm)); // Extended ۲
+        assert_eq!(parse_measure("\u{FF12} cm", Unit::Inches), Some(two_cm)); // Full-width ２
+        let two_and_half = parse_measure("2.5 cm", Unit::Inches).unwrap();
+        assert_eq!(parse_measure("\u{0662}\u{066B}\u{0665} cm", Unit::Inches), Some(two_and_half)); // ٢٫٥
+        assert_eq!(parse_measure("\u{FF12}\u{FF0E}\u{FF15}cm", Unit::Inches), Some(two_and_half)); // ２．５
+        assert_eq!(parse_measure("\u{0663}", Unit::Points), Some(3.0));
     }
 
     #[test]
@@ -420,6 +526,10 @@ mod tests {
         assert_eq!(Unit::Inches.format_with(108.0, ','), "1,5\"");
         assert_eq!(Unit::Points.format_with(720.0, ','), "720 pt");
         assert_eq!(Unit::Inches.format_with(f32::NAN, ','), "0\"");
+        // A tiny negative value must not print as "-0".
+        assert_eq!(Unit::Points.format(-0.001), "0 pt");
+        // Any character can be the separator.
+        assert_eq!(Unit::Inches.number(108.0, '\u{066B}'), "1\u{066B}5");
     }
 
     #[test]
@@ -431,6 +541,95 @@ mod tests {
         assert!(a.contains(Point::new(5.0, 5.0)));
         assert_eq!(Rect::new(0.0, 0.0, -5.0, f32::NAN).w, 0.0);
         assert_eq!(a.inset(1.0, 2.0, 3.0, 4.0), Rect::new(1.0, 2.0, 6.0, 4.0));
+    }
+
+    #[test]
+    fn rect_edges_are_in_contains_but_not_intersects() {
+        let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let b = Rect::new(10.0, 0.0, 10.0, 10.0); // shares the edge x = 10
+        assert!(!a.intersects(&b));
+        assert!(a.contains(Point::new(10.0, 5.0)) && b.contains(Point::new(10.0, 5.0)));
+    }
+
+    #[test]
+    fn inset_past_zero_collapses_to_center() {
+        let r = Rect::new(0.0, 0.0, 10.0, 10.0);
+        assert_eq!(r.inset(8.0, 8.0, 8.0, 8.0), Rect::new(5.0, 5.0, 0.0, 0.0));
+        assert_eq!(r.expand(-8.0), Rect::new(5.0, 5.0, 0.0, 0.0));
+        assert_eq!(r.expand(-20.0), Rect::new(5.0, 5.0, 0.0, 0.0));
+        // Only one axis crosses: the other keeps its size.
+        assert_eq!(r.inset(0.0, 8.0, 0.0, 8.0), Rect::new(0.0, 5.0, 10.0, 0.0));
+        // Growing still works, and hostile insets are ignored rather than poisoning the result.
+        assert_eq!(r.expand(1.0), Rect::new(-1.0, -1.0, 12.0, 12.0));
+        assert_eq!(r.inset(f32::NAN, 0.0, 0.0, 0.0), r);
+    }
+
+    #[test]
+    fn rect_from_raw_is_sanitised() {
+        // Deserialization goes through this conversion (`#[serde(from = "RectRaw")]`).
+        let r = Rect::from(RectRaw { x: f32::NAN, y: 1.0, w: -4.0, h: f32::INFINITY });
+        assert_eq!(r, Rect::new(0.0, 1.0, 0.0, 0.0));
+        let ok = Rect::from(RectRaw { x: 1.0, y: 2.0, w: 3.0, h: 4.0 });
+        assert_eq!(ok, Rect::new(1.0, 2.0, 3.0, 4.0));
+    }
+
+    #[test]
+    fn spin_apply_and_unapply_are_inverse() {
+        for spin in [
+            Spin::new(0.0, false, false),
+            Spin::new(37.0, false, false),
+            Spin::new(90.0, true, false),
+            Spin::new(215.0, false, true),
+            Spin::new(300.0, true, true),
+        ] {
+            let (x, y) = spin.apply(50.0, 40.0, 70.0, 10.0);
+            let (bx, by) = spin.unapply(50.0, 40.0, x, y);
+            assert!(close(bx, 70.0) && close(by, 10.0), "{spin:?}");
+        }
+    }
+
+    #[test]
+    fn a_quarter_turn_is_clockwise_in_page_space() {
+        // y points down, so the point to the right of the centre goes below it.
+        let (x, y) = Spin::new(90.0, false, false).apply(0.0, 0.0, 10.0, 0.0);
+        assert!(x.abs() < 1e-4 && (y - 10.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn within_equals_applying_both_spins() {
+        let (outer, inner) = (Spin::new(30.0, true, false), Spin::new(75.0, false, true));
+        let (ix, iy) = inner.apply(0.0, 0.0, 12.0, -7.0);
+        let (ex, ey) = outer.apply(0.0, 0.0, ix, iy);
+        let (bx, by) = inner.within(outer).apply(0.0, 0.0, 12.0, -7.0);
+        assert!(close(ex, bx) && close(ey, by));
+    }
+
+    #[test]
+    fn spin_matrix_agrees_with_apply() {
+        let spin = Spin::new(37.0, true, false);
+        let [a, b, c, d, e, f] = spin.matrix(50.0, 40.0);
+        let (x, y) = spin.apply(50.0, 40.0, 70.0, 10.0);
+        assert!(close(a * 70.0 + c * 10.0 + e, x) && close(b * 70.0 + d * 10.0 + f, y));
+        // The centre stays where it is.
+        let (cx, cy) = spin.apply(50.0, 40.0, 50.0, 40.0);
+        assert!(close(cx, 50.0) && close(cy, 40.0));
+    }
+
+    #[test]
+    fn spin_bounds_and_identity() {
+        assert!(Spin::default().is_identity());
+        assert!(Spin::new(360.0, false, false).is_identity());
+        assert!(!Spin::new(0.0, true, false).is_identity());
+        let b = Spin::new(90.0, false, false).bounds(Rect::new(0.0, 0.0, 10.0, 20.0));
+        assert!(close(b.x, -5.0) && close(b.y, 5.0) && close(b.w, 20.0) && close(b.h, 10.0));
+    }
+
+    #[test]
+    fn normalises_degrees() {
+        assert_eq!(normalize_degrees(370.0), 10.0);
+        assert_eq!(normalize_degrees(-90.0), 270.0);
+        assert_eq!(normalize_degrees(f32::NAN), 0.0);
+        assert!((0.0..360.0).contains(&normalize_degrees(-1e-9)));
     }
 
     #[test]
@@ -468,6 +667,7 @@ mod tests {
         {
             let f = fit_to_paper(a, b, c, d);
             assert_eq!((f.k, f.dx, f.dy), (1.0, 0.0, 0.0));
+            assert!(f.paper_w.is_finite() && f.paper_h.is_finite());
         }
         assert!(fit_to_paper(1.0, 1.0, f32::MAX, f32::MAX).k.is_finite());
     }
