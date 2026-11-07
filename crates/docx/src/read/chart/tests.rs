@@ -550,8 +550,8 @@ fn column_colours(sers: &[String]) -> (Vec<Rgb>, Vec<Rgb>) {
 
 /// `ser` with its `c:idx` / `c:order` replaced by `idx_order` (an empty string drops them).
 fn renumbered(ser: &str, idx_order: &str) -> String {
-    let start = ser.find("<c:idx").unwrap_or(0);
-    let end = ser.find("<c:tx>").unwrap_or(start);
+    let start = ser.find("<c:idx").expect("ser writes c:idx");
+    let end = ser.find("<c:tx>").expect("ser writes c:tx");
     format!("{}{idx_order}{}", &ser[..start], &ser[end..])
 }
 
