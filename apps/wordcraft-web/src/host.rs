@@ -26,6 +26,9 @@
 //! - `wordcraft:dirty` whenever unsaved changes appear or go away, `wordcraft:failed` when the
 //!   app couldn't start.
 //!
+//! The embedded editor (`?embed=1`) also hears `wordcraft:command` from an iframe host and
+//! answers `wordcraft:result` — see [`crate::command`].
+//!
 //! In both host modes the host sends the document to edit, so no sample opens, saves are handed
 //! to the host rather than downloaded, the host guards leaving the page, and `?author=` names the
 //! user for comments and tracked changes.
@@ -33,7 +36,18 @@
 use std::rc::Rc;
 
 use craft_web_host::web::{FileData, Host, Message};
+use serde_json::Value;
+use wasm_bindgen::{JsCast as _, closure::Closure};
 use wordcraft_ui_egui::{Inbox, Services, WordApp};
+
+use crate::command::HostCommand;
+
+/// The host's queued commands ([`Bridge::listen_commands`]), drained by the app each frame.
+pub(crate) type CommandQueue = Rc<std::cell::RefCell<Vec<HostCommand>>>;
+
+/// The largest queued commands: a hostile host cannot grow the queue past this. The app
+/// drains it every frame.
+const MAX_PENDING: usize = 32;
 
 /// The app id in the host messages (`wordcraft:ready`).
 const APP: &str = "wordcraft";
@@ -124,4 +138,98 @@ fn deliver_open(inbox: &Inbox, ctx: &egui::Context, name: &str, data: &FileData)
     }
     inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, array.to_vec()));
     ctx.request_repaint();
+}
+
+impl Bridge {
+    /// Hear `wordcraft:command` from the host page and queue the commands for the next frame
+    /// ([`CommandQueue`]). Same-origin iframe hosts only, with the same checks as the file
+    /// messages; a page hosting WordCraft in its own document keeps to files and this returns
+    /// quietly. A command over the cap is refused, not queued, so a hostile host cannot grow
+    /// the queue. Messages that are not well-formed JSON or carry another `type` are ignored,
+    /// as craft-web-host ignores its unknown messages; a command with bad fields is refused
+    /// with a reply echoing whatever request id it carried.
+    pub fn listen_commands(&self, queue: CommandQueue, ctx: egui::Context) -> Result<(), String> {
+        if self.host.mode() != craft_web_host::Mode::Parent {
+            return Ok(());
+        }
+        let window = web_sys::window().ok_or("no window")?;
+        let parent = window.parent().ok().flatten().ok_or("no parent window")?;
+        if js_sys::Object::is(&parent, &window) {
+            return Err("no parent window".to_owned());
+        }
+        let origin = window.location().origin().map_err(|e| format!("{e:?}"))?;
+        if parent.location().origin().map_err(|e| format!("{e:?}"))? != origin {
+            return Err("the parent is on another origin".to_owned());
+        }
+        let bridge = self.clone();
+        let on_message = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
+            if event.origin() != origin || !event.source().is_some_and(|s| js_sys::Object::is(&s, &parent)) {
+                return;
+            }
+            // A plain object (like every craft-web-host message) or its JSON encoding. For
+            // objects, only a command is serialized here — file messages carry payloads the
+            // size cap would explode into a giant string, and they are not for this listener.
+            // Text messages that parse to another type are ignored the same way.
+            let text = match event.data().as_string() {
+                Some(text) => text,
+                None => {
+                    let kind = js_sys::Reflect::get(&event.data(), &"type".into()).ok().and_then(|v| v.as_string());
+                    if kind.as_deref() != Some("wordcraft:command") {
+                        return;
+                    }
+                    match js_sys::JSON::stringify(&event.data()) {
+                        Ok(json) => json.into(),
+                        Err(_) => return,
+                    }
+                }
+            };
+            let Ok(data) = serde_json::from_str::<Value>(&text) else { return };
+            if !crate::command::is_command(&data) {
+                return;
+            }
+            // A command has a size cap: refused before anything runs, echoing the request id.
+            if crate::command::over_cap(&text) {
+                let _ = bridge.post_result(&crate::command::req_id_of(&data), &Err("command message is over the size cap".to_owned()));
+                return;
+            }
+            match HostCommand::parse(&data) {
+                Ok(cmd) => {
+                    let mut pending = queue.borrow_mut();
+                    if pending.len() >= MAX_PENDING {
+                        drop(pending);
+                        log::warn!("host command queue is full; refusing {id}", id = cmd.id);
+                        let _ = bridge.post_result(&cmd.req_id, &Err("too many queued commands".to_owned()));
+                        return;
+                    }
+                    pending.push(cmd);
+                    drop(pending);
+                    ctx.request_repaint();
+                }
+                Err(e) => {
+                    log::warn!("{e}");
+                    let _ = bridge.post_result(&crate::command::req_id_of(&data), &Err(e));
+                }
+            }
+        });
+        window.add_event_listener_with_callback("message", on_message.as_ref().unchecked_ref()).map_err(|e| format!("{e:?}"))?;
+        // The listener lives as long as the page.
+        on_message.forget();
+        Ok(())
+    }
+
+    /// Answer a host command: the request id echoed with the run's outcome. Same-origin only.
+    pub fn post_result(&self, req_id: &str, outcome: &Result<Value, String>) -> Result<(), String> {
+        let window = web_sys::window().ok_or("no window")?;
+        let parent = window.parent().ok().flatten().ok_or("no parent window")?;
+        if js_sys::Object::is(&parent, &window) {
+            return Err("no parent window".to_owned());
+        }
+        let origin = window.location().origin().map_err(|e| format!("{e:?}"))?;
+        if parent.location().origin().map_err(|e| format!("{e:?}"))? != origin {
+            return Err("the parent is on another origin".to_owned());
+        }
+        let reply = serde_json::to_string(&crate::command::reply_message(req_id, outcome)).map_err(|e| format!("{e:?}"))?;
+        let parsed = js_sys::JSON::parse(&reply).map_err(|e| format!("{e:?}"))?;
+        parent.post_message(&parsed, &origin).map_err(|e| format!("{e:?}"))
+    }
 }

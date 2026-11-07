@@ -48,6 +48,9 @@ pub fn start() {
         let app_bridge = bridge.clone();
         let dirty = Rc::new(Cell::new(false));
         let saves = AsyncSaves::default();
+        // The embedded editor's host may run commands (`wordcraft:command`): queued here,
+        // run with the next frame, answered on the same origin.
+        let commands: crate::host::CommandQueue = Default::default();
         if bridge.is_none()
             && let Err(e) = guard_unload(dirty.clone(), saves.clone())
         {
@@ -94,6 +97,11 @@ pub fn start() {
                         app.embed = Some(wordcraft_ui_egui::embed::Rules);
                         let _ = app.session.run("review.trackChanges", &serde_json::json!({"value": true}));
                         app.ui.quick_access_toolbar = false;
+                        if let Some(b) = app_bridge.as_ref()
+                            && let Err(e) = b.listen_commands(commands.clone(), cc.egui_ctx.clone())
+                        {
+                            log::error!("host commands unavailable: {e}");
+                        }
                     }
                     // Pasted pictures wait apart from dropped files: the app inserts one only when the page is the edit target (#1349).
                     app.services.pasted = Some(pasted);
@@ -123,7 +131,7 @@ pub fn start() {
                         crate::host::Bridge::set_author(&mut app, &author);
                         prefs.keep_own_author(&app.session.author, &own);
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages, prefs, embed }))
+                    Ok(Box::new(WebShell { app, inbox, messages, prefs, embed, commands, bridge: app_bridge }))
                 }),
             )
             .await;
@@ -160,6 +168,10 @@ struct WebShell {
     prefs: crate::prefs::PrefsSync,
     /// The restricted embedded editor: no dropped files, no stored preferences.
     embed: bool,
+    /// The host's queued commands, run with each frame and answered on the same origin.
+    commands: crate::host::CommandQueue,
+    /// The host bridge, present in host modes; replies to commands go through it.
+    bridge: Option<crate::host::Bridge>,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -181,6 +193,19 @@ impl eframe::App for WebShell {
             self.app.status(msg);
         }
         self.app.logic(ctx);
+        // The host's commands run after the frame's logic, so a document the host opened this
+        // frame (its bytes open inside `logic`) is what they see and answer about. They go
+        // through `execute` — the programmatic path, no dialogs — with the embedded refusals;
+        // each gets a `wordcraft:result` reply on the same origin.
+        let commands = std::mem::take(&mut *self.commands.borrow_mut());
+        for cmd in commands {
+            let outcome = self.app.execute(&cmd.id, cmd.params_value());
+            if let Some(bridge) = &self.bridge
+                && let Err(e) = bridge.post_result(&cmd.req_id, &outcome)
+            {
+                log::warn!("couldn't answer host command {}: {e}", cmd.id);
+            }
+        }
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#2132).
         // The embedded editor keeps none.
         if !self.embed
