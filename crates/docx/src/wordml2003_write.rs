@@ -267,6 +267,22 @@ impl<'a> Conv<'a> {
             "w:numFmt" if parent == "w:lvl" => return vec![Node::El(nfc(e))],
             "w:sectPr" => return vec![Node::El(self.section(e, rels, depth))],
             "w:pict" => return vec![Node::El(self.vml_pict(e, rels, depth))],
+            // A cell's or section's text direction is 2003's `w:textFlow`, its value hyphenated:
+            // `tbRlV` → `tb-rl-v`.
+            "w:textDirection" if matches!(parent, "w:tcPr" | "w:sectPr") => {
+                return match e.attr("w:val") {
+                    Some(v) => vec![Node::El(attr_el("w:textFlow", &[("w:val", &hyphenated(v))]))],
+                    None => Vec::new(),
+                };
+            }
+            // 2003 capitalises a table's layout: `Fixed`, `AutoFit`.
+            "w:tblLayout" => {
+                return match e.attr("w:type") {
+                    Some(t) if t.eq_ignore_ascii_case("fixed") => vec![Node::El(attr_el("w:tblLayout", &[("w:type", "Fixed")]))],
+                    Some(_) => vec![Node::El(attr_el("w:tblLayout", &[("w:type", "AutoFit")]))],
+                    None => Vec::new(),
+                };
+            }
             "w:tblLook" => {
                 return match e.attr("w:val") {
                     Some(v) => vec![Node::El(attr_el("w:tblLook", &[("w:val", v)]))],
@@ -857,6 +873,26 @@ fn allowed_w(local: &str) -> bool {
     )
 }
 
+/// An ECMA-376 camel-case value in 2003's hyphenated spelling: `tbRlV` → `tb-rl-v`, `pct5` → `pct-5`,
+/// `decimalFullWidth2` → `decimal-full-width2`.
+fn hyphenated(v: &str) -> String {
+    let mut out = String::with_capacity(v.len() + 4);
+    let mut prev: Option<char> = None;
+    for c in v.chars() {
+        // Only a pattern's percentage (`pct-5`) and the Hebrew number formats (`hebrew-1`) take a
+        // hyphen before their digits; other number formats keep theirs (`decimal-full-width2`,
+        // `korean-digital2`), as the 2003 schema spells them.
+        let digit_after_letter =
+            c.is_ascii_digit() && prev.is_some_and(|p| p.is_ascii_alphabetic()) && (v.starts_with("pct") || v.starts_with("hebrew"));
+        if (c.is_ascii_uppercase() && prev.is_some()) || digit_after_letter {
+            out.push('-');
+        }
+        out.push(c.to_ascii_lowercase());
+        prev = Some(c);
+    }
+    out
+}
+
 /// The 2003 spelling of an ECMA-376 name: `w:szCs` → `w:sz-cs`, `w:eastAsia` → `w:fareast`,
 /// `w:vMerge` → `w:vmerge`. Names outside `w:` are kept.
 fn rename(name: &str) -> String {
@@ -865,6 +901,10 @@ fn rename(name: &str) -> String {
         "eastAsia" => "fareast",
         "vMerge" => "vmerge",
         "hMerge" => "hmerge",
+        "hAnchor" => "hanchor",
+        "vAnchor" => "vanchor",
+        "hSpace" => "hspace",
+        "vSpace" => "vspace",
         "bCs" => "b-cs",
         "iCs" => "i-cs",
         "szCs" => "sz-cs",
@@ -956,6 +996,9 @@ fn attrs(e: &El) -> Vec<(String, String)> {
         let mut val = v.clone();
         if (key == "w:val" && is_toggle(local_el)) || ((key == "w:default" || key == "w:customStyle") && e.name == "w:style") {
             val = switch(&val);
+        } else if crate::wordml2003::hyphenated_enum(&e.name, k) && val.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            // Enumerated values in 2003's hyphenated spelling: `atLeast` → `at-least`.
+            val = hyphenated(&val);
         }
         out.push((key, val));
     }

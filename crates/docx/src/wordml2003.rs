@@ -238,6 +238,31 @@ impl Conv {
             return Vec::new();
         }
         let mut el = El { name: rename(&e.name), attrs: attrs(e), kids: self.kids(e, part, depth) };
+        // 2003's `w:textFlow` (sections and cells) is ECMA-376's `w:textDirection`, its values
+        // hyphenated: `tb-rl-v` → `tbRlV`, `bt-lr` → `btLr`.
+        // 2003 hyphenates enumerated values ECMA-376 camel-cases: `at-least` → `atLeast`,
+        // `pct-5` → `pct5`, `thin-thick-small-gap` → `thinThickSmallGap`, `dot-dash` → `dotDash`.
+        for (k, v) in &mut el.attrs {
+            if hyphenated_enum(&el.name, k) && v.contains('-') && v.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
+                *v = rename(&format!("w:{v}")).trim_start_matches("w:").to_string();
+            }
+        }
+        // 2003 capitalises a table's layout: `Fixed`, `AutoFit`.
+        if el.name == "w:tblLayout" {
+            for (k, v) in &mut el.attrs {
+                if k == "w:type" {
+                    *v = v.to_ascii_lowercase();
+                }
+            }
+        }
+        if el.name == "w:textFlow" {
+            el.name = "w:textDirection".into();
+            for (k, v) in &mut el.attrs {
+                if k == "w:val" {
+                    *v = rename(&format!("w:{v}")).trim_start_matches("w:").to_string();
+                }
+            }
+        }
         if el.name == "v:imagedata"
             && let Some(target) = e.attr("src").and_then(|s| self.media.get(s)).cloned()
             && let Some(r) = self.rels.get_mut(part)
@@ -475,13 +500,18 @@ fn keep(name: &str) -> bool {
 }
 
 /// A WordprocessingML 2003 name in its ECMA-376 spelling: `w:sz-cs` → `w:szCs`, `w:first-line`
-/// → `w:firstLine`, `w:fareast` → `w:eastAsia`, `w:vmerge` → `w:vMerge`.
+/// → `w:firstLine`, `w:fareast` → `w:eastAsia`, `w:vmerge` → `w:vMerge`, `w:hanchor` → `w:hAnchor`.
 fn rename(name: &str) -> String {
     let Some(local) = name.strip_prefix("w:") else { return name.to_string() };
     match local {
         "fareast" => return "w:eastAsia".into(),
         "vmerge" => return "w:vMerge".into(),
         "hmerge" => return "w:hMerge".into(),
+        // A frame's anchors and distances from text (`w:framePr`).
+        "hanchor" => return "w:hAnchor".into(),
+        "vanchor" => return "w:vAnchor".into(),
+        "hspace" => return "w:hSpace".into(),
+        "vspace" => return "w:vSpace".into(),
         _ => {}
     }
     let mut out = String::from("w:");
@@ -497,6 +527,44 @@ fn rename(name: &str) -> String {
         }
     }
     out
+}
+
+/// Whether attribute `attr` (renamed) of element `el` (renamed) holds an enumerated value 2003
+/// spells hyphenated: line and height rules, a frame's wrapping, number formats, tab leaders,
+/// and the `w:val` of underlines, highlights, shading, borders, emphasis marks, alignments,
+/// section types and text effects. Never names, ids, languages or fonts.
+pub(crate) fn hyphenated_enum(el: &str, attr: &str) -> bool {
+    match attr {
+        "w:lineRule" | "w:hRule" | "w:wrap" | "w:fmt" | "w:leader" | "w:restart" | "w:dropCap" => true,
+        "w:val" => matches!(
+            el,
+            "w:u"
+                | "w:bdr"
+                | "w:highlight"
+                | "w:shd"
+                | "w:top"
+                | "w:left"
+                | "w:bottom"
+                | "w:right"
+                | "w:between"
+                | "w:bar"
+                | "w:insideH"
+                | "w:insideV"
+                | "w:tl2br"
+                | "w:tr2bl"
+                | "w:em"
+                | "w:jc"
+                | "w:tab"
+                | "w:vAlign"
+                | "w:textAlignment"
+                | "w:effect"
+                | "w:type"
+                | "w:vertAlign"
+                | "w:numFmt"
+                | "w:numRestart"
+        ),
+        _ => false,
+    }
 }
 
 /// The attributes of `e` that the package keeps, renamed.

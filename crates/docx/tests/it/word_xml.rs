@@ -127,6 +127,74 @@ fn word_2003_xml_picture_keeps_washout() {
     assert!(matches!(pic, Some(InlineObject::Image { fx, .. }) if (fx.bright - 70_000).abs() <= 2 && (fx.contrast + 70_000).abs() <= 2), "{pic:?}");
 }
 
+/// Word 2003's `w:textFlow` (cells and sections) is ECMA-376's `w:textDirection`, its values
+/// hyphenated: East Asian text written top to bottom (`tb-rl-v`) in a cell, a section turned
+/// bottom to top (`bt-lr`).
+#[test]
+fn word_2003_xml_text_flow_turns_cells_and_sections() {
+    use wordcraft_doc::props::TextDirection;
+    let xml = r#"<w:wordDocument xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml"><w:body><w:tbl><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:textFlow w:val="tb-rl-v"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:textFlow w:val="lr-tb"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl><w:p/><w:sectPr><w:textFlow w:val="bt-lr"/></w:sectPr></w:body></w:wordDocument>"#;
+    let doc = read_xml(xml.as_bytes()).unwrap();
+    let Some(Block::Table(t)) = doc.body.iter().map(|b| &**b).find(|b| matches!(b, Block::Table(_))) else { panic!("no table") };
+    let dirs: Vec<TextDirection> = t.rows[0].cells.iter().map(|c| c.props.text_direction).collect();
+    assert_eq!(dirs, [TextDirection::Down, TextDirection::Horizontal]);
+    assert_eq!(doc.sections().last().map(|(_, s)| s.text_direction), Some(TextDirection::Up));
+}
+
+/// Word 2003 XML writes a frame's anchors and distances from text in lower case (`w:hanchor`,
+/// `w:vanchor`, `w:hspace`, `w:vspace`): a frame anchored to the text keeps that anchor rather
+/// than the page.
+#[test]
+fn word_2003_xml_frame_anchors() {
+    let xml = r#"<w:wordDocument xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml"><w:body><w:p><w:pPr><w:framePr w:w="2000" w:hspace="180" w:vspace="40" w:wrap="around" w:vanchor="text" w:hanchor="margin" w:x="100" w:y="-354"/></w:pPr></w:p></w:body></w:wordDocument>"#;
+    let doc = read_xml(xml.as_bytes()).unwrap();
+    let f = paras(&doc)[0].props.frame.clone().expect("a frame");
+    assert_eq!((f.h_anchor.as_str(), f.v_anchor.as_str()), ("margin", "text"));
+    assert!((f.h_space - 9.0).abs() < 0.01 && (f.v_space - 2.0).abs() < 0.01, "{f:?}");
+    assert!((f.y + 17.7).abs() < 0.01, "{f:?}");
+}
+
+/// Word 2003 XML hyphenates enumerated values ECMA-376 camel-cases: line spacing at least some
+/// height (`at-least`), a thin-thick-thin border, a dot-dash underline. A language (`EN-US`) and a
+/// hyphenated style id are left as they are.
+#[test]
+fn word_2003_xml_hyphenated_values() {
+    use wordcraft_doc::props::{BorderStyle, LineSpacing, Underline};
+    let xml = r#"<w:wordDocument xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml"><w:styles><w:style w:type="paragraph" w:styleId="my-style"><w:name w:val="My style"/><w:pPr><w:jc w:val="center"/></w:pPr></w:style></w:styles><w:body><w:p><w:pPr><w:pStyle w:val="my-style"/><w:spacing w:line="360" w:line-rule="at-least"/><w:pBdr><w:bottom w:val="thin-thick-thin-small-gap" w:sz="24" w:space="1" w:color="auto"/></w:pBdr></w:pPr><w:r><w:rPr><w:u w:val="dot-dash"/><w:bdr w:val="dot-dash" w:sz="4" w:space="0" w:color="auto"/><w:lang w:val="EN-US"/></w:rPr><w:t>Text</w:t></w:r></w:p></w:body></w:wordDocument>"#;
+    let doc = read_xml(xml.as_bytes()).unwrap();
+    let p = paras(&doc)[0];
+    assert_eq!(p.props.line_spacing, Some(LineSpacing::AtLeast(18.0)), "at least 18pt, not 1.5 lines");
+    assert_eq!(p.props.borders.as_ref().and_then(|b| b.bottom.as_ref()).map(|b| b.style), Some(BorderStyle::ThinThickThinSmallGap));
+    assert_eq!(p.props.style.as_deref(), Some("my-style"), "a style id keeps its hyphen");
+    let run = p.runs.first().expect("a run");
+    assert_eq!(run.props.underline, Some(Underline::DotDash), "{:?}", run.props);
+    assert_eq!(run.props.border.as_ref().map(|b| b.style), Some(BorderStyle::DotDash), "a run border's style too");
+
+    // A section's footnote number format and restart.
+    use wordcraft_doc::section::{NoteRestart, NumFormat};
+    let xml = r#"<w:wordDocument xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml"><w:body><w:p/><w:sectPr><w:footnotePr><w:numFmt w:val="lower-roman"/><w:numRestart w:val="each-page"/></w:footnotePr></w:sectPr></w:body></w:wordDocument>"#;
+    let doc = read_xml(xml.as_bytes()).unwrap();
+    assert_eq!(doc.last_section.footnote_pr.num_fmt, Some(NumFormat::LowerRoman));
+    assert_eq!(doc.last_section.footnote_pr.num_restart, Some(NoteRestart::EachPage));
+}
+
+/// Word 2003 XML capitalises a table's layout (`w:tblLayout w:type="Fixed"`): the table keeps its
+/// fixed column widths.
+#[test]
+fn word_2003_xml_fixed_table_layout() {
+    let table = |ty: &str| {
+        format!(
+            r#"<w:wordDocument xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml"><w:body><w:tbl><w:tblPr><w:tblLayout w:type="{ty}"/></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p/></w:body></w:wordDocument>"#
+        )
+    };
+    let fixed = |xml: String| {
+        let doc = read_xml(xml.as_bytes()).unwrap();
+        doc.body.iter().find_map(|b| if let Block::Table(t) = &**b { Some(t.props.fixed) } else { None })
+    };
+    assert_eq!(fixed(table("Fixed")), Some(true));
+    assert_eq!(fixed(table("AutoFit")), Some(false));
+}
+
 #[test]
 fn imports_word_2003_xml() {
     let xml = wordml_2003_sample();
