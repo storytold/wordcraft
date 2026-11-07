@@ -77,12 +77,15 @@ fn extend(v: &Value) -> bool {
 }
 
 fn apply(s: &mut Session, to: Pos, ext: bool) {
+    let moved = ext || s.sel.anchor != to || s.sel.focus != to;
     if ext {
         s.sel.focus = to;
     } else {
         s.sel = Selection::caret(to);
     }
-    s.pending = None;
+    if moved {
+        s.pending = None;
+    }
 }
 
 fn mv(s: &mut Session, v: &Value, f: fn(&mut Session, &Pos) -> Pos) -> CmdResult {

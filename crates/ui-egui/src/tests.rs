@@ -8173,3 +8173,35 @@ fn recent_list_edits_work_without_a_document() {
     assert_eq!(a.run("ui.recentRemove", json!({"path": "/tmp/alpha.docx"})).unwrap()["removed"], 1);
     assert_eq!(a.run("ui.recentClear", json!({})).unwrap()["removed"], 0);
 }
+
+/// #5580: selecting font or font size from the ribbon returns keyboard focus to the document
+/// and preserves pending formatting for immediate typing.
+#[test]
+fn ribbon_font_and_size_return_focus_and_preserve_typing_font() {
+    let mut a = app();
+    a.run("text.insert", json!({"text": "Hello "})).unwrap();
+    a.canvas.want_focus = false;
+
+    // Font selection via ribbon hands focus back to canvas.
+    crate::widgets::run_from_ribbon(&mut a, "format.font", json!({"name": "JetBrains Mono"}));
+    assert!(a.canvas.want_focus, "ribbon font selection hands focus back to canvas");
+    assert_eq!(a.session.pending.as_ref().and_then(|p| p.font.as_deref()), Some("JetBrains Mono"));
+
+    // Size selection via ribbon hands focus back to canvas.
+    a.canvas.want_focus = false;
+    crate::widgets::run_from_ribbon(&mut a, "format.size", json!({"size": 18.0}));
+    assert!(a.canvas.want_focus, "ribbon font size selection hands focus back to canvas");
+    assert_eq!(a.session.pending.as_ref().and_then(|p| p.size), Some(18.0));
+
+    // Refocusing or clicking where the caret already was keeps pending font & size.
+    let pos = a.session.sel.focus.clone();
+    a.run("caret.set", json!({"pos": pos})).unwrap();
+    assert_eq!(a.session.pending.as_ref().and_then(|p| p.font.as_deref()), Some("JetBrains Mono"));
+    assert_eq!(a.session.pending.as_ref().and_then(|p| p.size), Some(18.0));
+
+    // Typing immediately inherits both font and size.
+    a.run("text.insert", json!({"text": "world"})).unwrap();
+    let p = a.session.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).unwrap();
+    assert_eq!(p.props_of_char(6).font.as_deref(), Some("JetBrains Mono"));
+    assert_eq!(p.props_of_char(6).size, Some(18.0));
+}

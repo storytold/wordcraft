@@ -4036,3 +4036,27 @@ fn issues_1281_1045_english_dialects_proof_typed_text() {
     let words: Vec<&str> = issues.as_array().unwrap().iter().filter(|i| i["kind"] == "spelling").filter_map(|i| i["text"].as_str()).collect();
     assert_eq!(words, ["21th"]);
 }
+
+#[test]
+fn setting_caret_to_same_position_preserves_pending_formatting() {
+    let mut s = typed("Hello ");
+    run(&mut s, "format.font", json!({"name": "JetBrains Mono"}));
+    assert_eq!(s.pending.as_ref().and_then(|p| p.font.as_deref()), Some("JetBrains Mono"));
+
+    // Setting the caret to the exact same position (e.g. clicking the sheet at the caret)
+    // must not drop pending formatting (#5580).
+    let pos = s.sel.focus.clone();
+    run(&mut s, "caret.set", json!({"pos": pos}));
+    assert_eq!(s.pending.as_ref().and_then(|p| p.font.as_deref()), Some("JetBrains Mono"));
+
+    // Subsequent typing takes the pending font.
+    typ(&mut s, "world");
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.props_of_char(6).font.as_deref(), Some("JetBrains Mono"));
+
+    // Moving the caret away drops pending formatting.
+    run(&mut s, "format.font", json!({"name": "Georgia"}));
+    assert_eq!(s.pending.as_ref().and_then(|p| p.font.as_deref()), Some("Georgia"));
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    assert!(s.pending.is_none());
+}

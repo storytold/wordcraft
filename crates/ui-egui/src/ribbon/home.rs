@@ -64,14 +64,14 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                         shown_as: warning.as_deref(),
                     },
                 ) {
-                    let _ = if f == crate::widgets::ADD_FONT {
-                        app.run("font.add", json!({}))
+                    if f == crate::widgets::ADD_FONT {
+                        crate::widgets::run_from_ribbon(app, "font.add", json!({}));
                     } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
-                        app.run("font.loadSystem", json!({}))
+                        crate::widgets::run_from_ribbon(app, "font.loadSystem", json!({}));
                     } else {
                         let f = app.previews.font_stored(&f);
-                        app.run("format.font", json!({"name": f}))
-                    };
+                        crate::widgets::run_from_ribbon(app, "format.font", json!({"name": f}));
+                    }
                 }
                 let size = st
                     .get("size")
@@ -83,7 +83,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                 if let Some(v) = crate::widgets::combo_hint(ui, "size", 52.0, &size, &sizes, None, tl!("Font Size"))
                     && let Ok(x) = v.trim().parse::<f64>()
                 {
-                    let _ = app.run("format.size", json!({"size": x}));
+                    crate::widgets::run_from_ribbon(app, "format.size", json!({"size": x}));
                 }
                 ui.add_space(3.0);
                 small(ui, app, "grow", None, "Increase Font Size", crate::widgets::ButtonAction::new("format.growFont", json!({}), false));
