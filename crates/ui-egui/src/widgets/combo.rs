@@ -356,12 +356,12 @@ fn update_search_matches(s: &mut ComboSearch, text: &str, items: &[String], rece
             s.matches = std::sync::Arc::new((0..items.len()).collect());
             s.query.clear();
             s.items_len = items.len();
-            if !s.moved {
-                if let Some(pos) = recent_shown.iter().position(|r| r == current) {
-                    s.highlight = pos;
-                } else if let Some(pos) = items.iter().position(|it| it == current) {
-                    s.highlight = recent_shown.len().saturating_add(pos);
-                }
+        }
+        if !s.moved {
+            if let Some(pos) = recent_shown.iter().position(|r| r == current) {
+                s.highlight = pos;
+            } else if let Some(pos) = items.iter().position(|it| it == current) {
+                s.highlight = recent_shown.len().saturating_add(pos);
             }
         }
     } else if s.query != text || s.items_len != items.len() {
