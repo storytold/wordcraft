@@ -185,6 +185,10 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
         if f.wrap == Wrap::Inline {
             f.wrap = Wrap::Square;
         }
+        // A drawing anchored to a page is on this one now.
+        if f.page > 0 {
+            f.page = u32::try_from(page).map_or(f.page, |p| p.saturating_add(1));
+        }
         f.h_rel = Anchor::Page;
         f.v_rel = Anchor::Page;
         f.h_align = None;
