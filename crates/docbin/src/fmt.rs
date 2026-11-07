@@ -25,6 +25,7 @@ const C_FTC1: u16 = 0x4A50; // East Asian font index (sprmCRgFtc1)
 const C_FTC_BI: u16 = 0x4A5E; // complex-script font index (sprmCFtcBi)
 const C_HIGHLIGHT: u16 = 0x2A0C;
 const C_ISTD: u16 = 0x4A30; // character style
+const C_BIDI: u16 = 0x085A; // sprmCFBiDi: the run reads right to left
 
 // Paragraph sprms ([MS-DOC] §2.6.2).
 const P_JC: u16 = 0x2461;
@@ -46,6 +47,7 @@ const P_KEEP: u16 = 0x2405; // keep lines together
 const P_KEEP_FOLLOW: u16 = 0x2406; // keep with next
 const P_PAGE_BREAK_BEFORE: u16 = 0x2407;
 const P_OUTLVL: u16 = 0x2640;
+const P_BIDI: u16 = 0x2441; // sprmPFBiDi: right-to-left paragraph
 // Paragraph borders ([MS-DOC] §2.6.2). The 80 forms carry a Brc80 (palette colour), the
 // newer ones a BrcOperand: cb(1) + Brc(8, with a full COLORREF).
 const P_BRC_TOP80: u16 = 0x6424;
@@ -204,6 +206,7 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
         C_SMALL_CAPS => set(&mut p.small_caps, sprm::toggle(prl), base.small_caps.unwrap_or(false)),
         C_CAPS => set(&mut p.caps, sprm::toggle(prl), base.caps.unwrap_or(false)),
         C_HIDDEN => set(&mut p.hidden, sprm::toggle(prl), base.hidden.unwrap_or(false)),
+        C_BIDI => set(&mut p.rtl, sprm::toggle(prl), base.rtl.unwrap_or(false)),
         C_KUL => {
             p.underline = match prl.operand.first().copied().unwrap_or(0) {
                 0x00 => Some(Underline::None),
@@ -412,6 +415,13 @@ pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
         P_OUTLVL => {
             if let Some(&l) = prl.operand.first() {
                 p.outline_level = Some(l.min(8));
+            }
+        }
+        // A Bool8: the paragraph reads right to left. Its alignment is the logical sprmPJc, which
+        // Word writes after the physical sprmPJc80.
+        P_BIDI => {
+            if let Some(&v) = prl.operand.first() {
+                p.bidi = Some(v != 0);
             }
         }
         P_BRC_TOP80 | P_BRC_LEFT80 | P_BRC_BOTTOM80 | P_BRC_RIGHT80 | P_BRC_BETWEEN80 => {

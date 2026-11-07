@@ -18,9 +18,13 @@ const P_TTP: u16 = 0x2417;
 /// `sprmPItap`: table depth (we only model depth 1; deeper rows fall back to paragraphs).
 const P_ITAP: u16 = 0x6649;
 
-// Table sprms ([MS-DOC] §2.6.3).
-const T_JC: u16 = 0x5400;
-const T_JC_90: u16 = 0x548A;
+// Table sprms ([MS-DOC] §2.6.3). Justification: sprmTJc90 is physical (left or right on
+// the page), sprmTJc logical (start or end).
+const T_JC_90: u16 = 0x5400;
+const T_JC: u16 = 0x548A;
+// Right-to-left table: either sprm set to true ([MS-DOC] sprmTFBiDi, sprmTFBiDi90).
+const T_BIDI: u16 = 0x560B;
+const T_BIDI_90: u16 = 0x5664;
 const T_DXA_LEFT: u16 = 0x9601;
 const T_DXA_GAP_HALF: u16 = 0x9602;
 const T_TABLE_HEADER: u16 = 0x3404;
@@ -66,7 +70,10 @@ pub(crate) struct RowInfo {
     height_rule: HeightRule,
     header: bool,
     cant_split: bool,
+    /// Logical alignment (start = `Left`), as the model keeps it.
     align: Option<Align>,
+    /// The table reads right to left (`w:bidiVisual`).
+    pub(crate) bidi: bool,
     indent: Option<f32>,
     borders: Option<Borders>,
     /// Horizontal merges: (itcFirst, itcLim) cell-index ranges.
@@ -98,6 +105,12 @@ impl RowInfo {
     #[cfg(test)]
     pub(crate) fn shading_of(&self, i: u8) -> Option<Rgb> {
         self.shading.iter().rfind(|(k, _)| *k == i).and_then(|(_, s)| *s)
+    }
+
+    /// The table's logical alignment, for tests.
+    #[cfg(test)]
+    pub(crate) fn align(&self) -> Option<Align> {
+        self.align
     }
 
     /// The width cell `i` ends up with, for tests.
@@ -132,6 +145,7 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
     let mut r = RowInfo::default();
     let mut gap_half: Option<i16> = None;
     let mut dxa_left: Option<i16> = None;
+    let (mut jc, mut jc90) = (None, None);
     for prl in sprm::iter(papx) {
         // The membership sprms are paragraph sprms (sgc 1); the rest here are table sprms
         // (sgc 5), so match opcodes directly.
@@ -153,13 +167,9 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
                     }
                 }
             }
-            T_JC | T_JC_90 => {
-                r.align = match u16_of(&prl).unwrap_or(0) {
-                    1 => Some(Align::Center),
-                    2 => Some(Align::Right),
-                    _ => Some(Align::Left),
-                };
-            }
+            T_JC => jc = Some(jc_align(&prl)),
+            T_JC_90 => jc90 = Some(jc_align(&prl)),
+            T_BIDI | T_BIDI_90 => r.bidi |= u16_of(&prl).is_some_and(|v| v != 0),
             T_DXA_LEFT => dxa_left = s16(&prl),
             T_DXA_GAP_HALF => gap_half = s16(&prl),
             T_TABLE_BORDERS_80 => r.borders = table_borders(prl.operand),
@@ -255,12 +265,24 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
             _ => {}
         }
     }
+    // The logical sprmTJc wins; the physical sprmTJc90 swaps left and right in a right-to-left
+    // table (a physically right table starts at the right margin).
+    r.align = jc.or_else(|| jc90.map(|a: Align| a.visual(r.bidi)));
     // The table indent is the row origin minus half the cell gap.
     if let Some(l) = dxa_left {
         let gap = gap_half.unwrap_or(0) as f32 / 20.0;
         r.indent = Some(((l as f32 / 20.0) - gap).clamp(-1584.0, 1584.0));
     }
     r
+}
+
+/// The alignment a table justification operand names: 0 left, 1 centre, 2 right.
+fn jc_align(prl: &Prl) -> Align {
+    match u16_of(prl).unwrap_or(0) {
+        1 => Align::Center,
+        2 => Align::Right,
+        _ => Align::Left,
+    }
 }
 
 /// A finished paragraph plus the bookkeeping the block assembly needs.
@@ -404,6 +426,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
         if props.align.is_none() {
             props.align = info.align;
         }
+        props.bidi_visual |= info.bidi;
         if props.indent.is_none() {
             props.indent = info.indent;
         }

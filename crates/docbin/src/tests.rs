@@ -2542,6 +2542,58 @@ fn second_table_gets_its_own_grid() {
 }
 
 #[test]
+fn right_to_left_paragraphs_runs_tables_and_sections_imported() {
+    // An Arabic document from Word: sprmPFBiDi on its paragraphs, sprmCFBiDi on its runs,
+    // sprmTFBiDi on its tables and sprmSFBiDi on its section. The table carries only the
+    // physical sprmTJc90 = right, which in a right-to-left table is its start (logical left).
+    use wordcraft_doc::props::Align;
+    let text = "a\u{7}\u{7}text\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01]), (0x6649, &[1, 0, 0, 0])]);
+    let ttp = [
+        grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01]), (0x6649, &[1, 0, 0, 0]), (0x560B, &1u16.to_le_bytes()), (0x5400, &2u16.to_le_bytes())]),
+        t_def_edges(&[0, 1440]),
+    ]
+    .concat();
+    // Word writes the physical sprmPJc80 and then the logical sprmPJc: physically right is the
+    // start of a right-to-left paragraph.
+    let rtl_para = grpprl(&[(0x2403, &[0x02]), (0x2461, &[0x00]), (0x2441, &[0x01])]);
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, grpprl(&[(0x3228, &[0x01])]))],
+        chpx_runs: vec![(0, Vec::new()), (3, grpprl(&[(0x085A, &[0x01])]))],
+        papx_entries: vec![(0, 0, in_tbl), (2, 0, ttp), (3, 0, rtl_para)],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let table = doc.body.iter().find_map(|b| b.as_table()).expect("a table");
+    assert!(table.props.bidi_visual, "sprmTFBiDi");
+    assert_eq!(table.props.align, Some(Align::Left), "physically right in a right-to-left table is its start");
+    let p = doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == "text").expect("the paragraph");
+    assert_eq!(p.props.bidi, Some(true), "sprmPFBiDi");
+    assert_eq!(p.props.align, Some(Align::Left), "the logical sprmPJc wins over the physical sprmPJc80");
+    assert!(p.runs.iter().all(|r| r.props.rtl == Some(true)), "sprmCFBiDi: {:?}", p.runs);
+    assert!(doc.last_section.rtl, "sprmSFBiDi");
+}
+
+#[test]
+fn a_logical_table_justification_wins_over_the_physical_one() {
+    // sprmTJc (logical) names the start or end whatever the direction; sprmTJc90 is physical.
+    use wordcraft_doc::props::Align;
+    let row = |prls: &[(u16, &[u8])]| crate::table::decode(&grpprl(prls));
+    let (bidi, right, left) = (1u16.to_le_bytes(), 2u16.to_le_bytes(), 0u16.to_le_bytes());
+    assert_eq!(row(&[(0x5400, &right), (0x548A, &left)]).align(), Some(Align::Left));
+    assert_eq!(row(&[(0x548A, &right), (0x560B, &bidi), (0x5400, &right)]).align(), Some(Align::Right));
+    assert_eq!(row(&[(0x5664, &bidi), (0x5400, &left)]).align(), Some(Align::Right), "sprmTFBiDi90, physically left");
+    assert_eq!(row(&[(0x5400, &right)]).align(), Some(Align::Right), "left to right: physical is logical");
+}
+
+#[test]
 fn repeated_cell_sprms_keep_one_override_per_cell() {
     // A PAPX repeating cell-range sprms (shared by every paragraph mark that names it) keeps one
     // slot per cell, the last value winning, instead of a copy per repetition.
