@@ -359,8 +359,9 @@ fn styles_xml(
             _ => String::new(),
         },
         tab = pt(tab),
-        // The document's language, without which each reader uses its own default.
-        lang = doc.styles.default_chr.lang.as_deref().map(|l| super::writer::lang_attrs(l, "")).unwrap_or_default(),
+        // The document's language, without which each reader uses its own default: Normal's, as
+        // WordCraft has it (a Word file's Normal may state another than its defaults).
+        lang = doc.styles.resolve_char(None, &Default::default()).lang.as_deref().map(|l| super::writer::lang_attrs(l, "")).unwrap_or_default(),
         scripts = super::writer::script_attrs(&doc.styles.default_chr)
     ));
     s.push_str("<style:style style:name=\"Standard\" style:family=\"paragraph\" style:class=\"text\"/>");

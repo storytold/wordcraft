@@ -321,6 +321,22 @@ fn the_default_language_is_the_files_and_written_back_from_the_model() {
     assert!(!styles.contains(r#"fo:language="en""#), "{styles}");
 }
 
+/// The document's language as WordCraft has it is Normal's (a Word file's Normal may state
+/// another than its defaults): that is what the default style says when written from the model.
+#[test]
+fn the_documents_language_written_is_normals() {
+    use std::sync::Arc;
+    let mut d = Document::new();
+    Arc::make_mut(&mut d.styles).default_chr.lang = Some("en-US".into());
+    Arc::make_mut(&mut d.styles).get_mut("Normal").unwrap().chr.lang = Some("fr-FR".into());
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let s = crate::odt::tests::styles_of(&saved);
+    let def = s.split(r#"<style:default-style style:family="paragraph""#).nth(1).and_then(|t| t.split("</style:default-style>").next()).unwrap();
+    assert!(def.contains(r#"fo:language="fr""#) && def.contains(r#"fo:country="FR""#), "{def}");
+    let back = import(&saved).unwrap();
+    assert_eq!(back.styles.resolve_char(None, &Default::default()).lang.as_deref(), Some("fr-FR"));
+}
+
 /// A file stating no language, or `none` or `zxx`, has none: not the English of new documents.
 #[test]
 fn a_file_stating_no_language_has_none_and_writes_none() {
