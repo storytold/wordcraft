@@ -338,7 +338,9 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     // Moves with an end in the range: their other ends go with them.
     let moves = crate::cmd::moves::names_in(s, &a, &b, caret_mark.as_ref());
     let paths = s.doc.paths_between(&a, &b);
-    for path in paths.iter().rev() {
+    let cell_prefixes: std::collections::HashSet<Vec<u32>> =
+        if ranged { paths.iter().filter(|p| p.cell().is_some()).map(|p| p.parent().to_vec()).collect() } else { std::collections::HashSet::new() };
+    for (idx, path) in paths.iter().enumerate().rev() {
         let len = s.doc.para(a.story, path).map(|p| p.len()).unwrap_or(0);
         let from = if *path == a.path { a.off } else { 0 };
         let to = if *path == b.path { b.off } else { len };
@@ -346,14 +348,18 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
         let mark = *path != b.path || caret_mark.as_ref() == Some(path);
         let props = (ranged && (*path != b.path || to > from)) || caret_props.as_ref() == Some(path);
         resolve_para(s, a.story, path, (from, to), (mark, props), accept)?;
-    }
-    if ranged {
-        let mut seen_cells = std::collections::HashSet::new();
-        for path in paths.iter().rev() {
-            if let Some(cell_id) = path.cell()
-                && seen_cells.insert(cell_id)
-            {
-                resolve_cell(s, a.story, path, accept)?;
+        if ranged {
+            let prev = idx.checked_sub(1).and_then(|i| paths.get(i));
+            let slice = path.0.as_slice();
+            let mut depth = slice.len().saturating_sub(1);
+            while depth >= 3 {
+                let prefix = &slice[..depth];
+                if cell_prefixes.contains(prefix) && !prev.is_some_and(|p| p.0.starts_with(prefix)) {
+                    let mut cell_para = prefix.to_vec();
+                    cell_para.push(0);
+                    resolve_cell(s, a.story, &wordcraft_doc::Path(cell_para), accept)?;
+                }
+                depth -= 3;
             }
         }
     }

@@ -12953,3 +12953,49 @@ fn review_changes_and_accept_reject_cover_row_cell_ins_del_and_tbl_pr_ex_change(
     run(&mut s, "review.reject", json!({}));
     assert_eq!(s.doc.body[0].as_table().unwrap().rows.len(), 1);
 }
+
+#[test]
+fn ranged_reject_resolves_table_cells_before_earlier_paragraph_removal_shifts_blocks() {
+    use std::sync::Arc;
+    use wordcraft_doc::{Block, CharProps, Paragraph, Revision, RevisionKind, Table};
+
+    let mut d = wordcraft_doc::Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Carol".into(), date: String::new(), move_name: None });
+
+    let p0 = Paragraph::with_text("Inserted para", CharProps { ins: Some(0), ..Default::default() });
+    let p1 = Paragraph::with_text("Kept para", CharProps::default());
+
+    let mut t = Table::new(1, 1, 200.0);
+    t.rows[0].props.ins = Some(0);
+    d.body = vec![Arc::new(Block::Para(p0)), Arc::new(Block::Para(p1)), Arc::new(Block::Table(t))];
+
+    let mut s = Session::new(d);
+    s.sel = crate::Selection {
+        anchor: Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0]), off: 0 },
+        focus: Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![2, 0, 0, 0]), off: 0 },
+    };
+    run(&mut s, "review.reject", json!({}));
+    assert_eq!(s.doc.body.len(), 1);
+    assert_eq!(s.doc.body[0].as_para().unwrap().text, "Kept para");
+
+    // Partial selection starting inside a nested table cell and ending in a trailing paragraph of the outer cell.
+    let mut inner = Table::new(1, 2, 100.0);
+    inner.rows[0].cells[0].props.ins = Some(0);
+    let mut outer = Table::new(1, 2, 200.0);
+    outer.rows[0].cells[0].blocks = vec![
+        Arc::new(Block::Para(Paragraph::with_text("Outer lead", CharProps::default()))),
+        Arc::new(Block::Table(inner)),
+        Arc::new(Block::Para(Paragraph::with_text("Outer tail", CharProps::default()))),
+    ];
+    outer.rows[0].cells[0].props.ins = Some(0);
+    outer.rows[0].cells[1].blocks = vec![Arc::new(Block::Para(Paragraph::with_text("Outer sibling", CharProps::default())))];
+    s.doc.body = vec![Arc::new(Block::Table(outer))];
+    s.sel = crate::Selection {
+        anchor: Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 0, 1, 0, 0, 0]), off: 0 },
+        focus: Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 0, 2]), off: 5 },
+    };
+    run(&mut s, "review.reject", json!({}));
+    let tbl = s.doc.body[0].as_table().unwrap();
+    assert_eq!(tbl.rows[0].cells.len(), 1);
+    assert_eq!(tbl.rows[0].cells[0].blocks[0].as_para().unwrap().text, "Outer sibling");
+}
