@@ -148,7 +148,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"tab"?: "find|replace|goto" (default replace)}"#)
         .pure(),
         CommandSpec::new("edit.replaceAll", "Replace All", "Home › Editing › Replace", replace_all)
-            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards; with regex also $1 ${n} ${name} $0 $$ \\1 \\n (paragraph mark) \\t), …options of edit.find}"#),
+            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards; with regex also $1 ${n} ${name} $0 $$ \\1 \\n (paragraph mark) \\t), …options of edit.find}; replaces in the main text, headers, footers, footnotes, endnotes and text boxes, wherever the caret is"#),
         CommandSpec::new("edit.goto", "Go To", "Home › Editing › Find", goto)
             .key("Mod+Alt+G / F5")
             .params(r#"{"page"?: n, "pageBy"?: int (pages forward, negative back, from the caret's page), "bookmark"?: string (selects its text), "paragraph"?: n}; none opens Find and Replace on its Go To tab"#)
@@ -739,15 +739,40 @@ fn replace(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"remaining": search(s, story)?.len()}))
 }
 
-/// Every match replaced, last first so earlier positions stay valid (one undo step). A `\r` in
-/// the replacement (`^p`) splits the paragraph.
+/// The stories Replace All covers, as in Word: the main text, then headers, footers, footnotes,
+/// endnotes and text boxes. Comments keep their words.
+fn replace_stories(s: &Session) -> Vec<StoryRef> {
+    use wordcraft_doc::PartKind;
+    let parts = s.doc.parts.iter().filter(|(_, p)| !matches!(p.kind, PartKind::Comment)).map(|(id, _)| StoryRef::Part(*id));
+    std::iter::once(StoryRef::Body).chain(parts).collect()
+}
+
+/// Every match in every story replaced (wherever the caret is), last first so earlier positions
+/// stay valid (one undo step). A `\r` in the replacement (`^p`) splits the paragraph. Locked
+/// content in any story stops it before anything changes.
 fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
     need_query(s, v)?;
     read_opts(s, v);
-    let story = s.sel.focus.story;
-    let results = search_full(s, story, true)?;
-    let n = results.len();
-    super::controls::check_deletions(s, story, results.iter().map(|f| (&f.a, &f.b)))?;
+    let mut found = Vec::new();
+    for story in replace_stories(s) {
+        let results = search_full(s, story, true)?;
+        if results.is_empty() {
+            continue;
+        }
+        super::controls::check_deletions(s, story, results.iter().map(|f| (&f.a, &f.b)))?;
+        found.push(results);
+    }
+    let n: usize = found.iter().map(Vec::len).sum();
+    // The main text comes last, so under Track Changes the caret ends where it did before.
+    for results in found.into_iter().rev() {
+        replace_found(s, results)?;
+    }
+    s.status = format!("All done. We made {n} replacements.");
+    Ok(json!({"replaced": n}))
+}
+
+/// Replace the matches of one story, last first.
+fn replace_found(s: &mut Session, results: Vec<Found>) -> Result<(), CmdError> {
     for Found { a, b, rep } in results.into_iter().rev() {
         let with = rep.unwrap_or_default();
         if s.doc.settings.track_changes {
@@ -768,8 +793,7 @@ fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
             }
         }
     }
-    s.status = format!("All done. We made {n} replacements.");
-    Ok(json!({"replaced": n}))
+    Ok(())
 }
 
 fn goto(s: &mut Session, v: &Value) -> CmdResult {
