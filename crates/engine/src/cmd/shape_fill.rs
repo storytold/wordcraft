@@ -78,6 +78,7 @@ fn targets(s: &Session) -> Vec<Pos> {
         }
     }
     if out.is_empty()
+        && super::objects::selected(s).is_none()
         && let Some((pos, _)) = super::objects::text_box_target(s)
     {
         out.push(pos);

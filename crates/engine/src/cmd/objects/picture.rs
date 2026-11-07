@@ -115,7 +115,11 @@ pub(super) fn size(s: &mut Session, v: &Value) -> CmdResult {
         (None, None) => true,
         _ => lock,
     };
-    let (w, h) = fit_size(w, h, keep);
+    let (w, h) = match (nw, nh) {
+        (Some(_), None) if !lock => (fit_size(w, 1.0, false).0, h),
+        (None, Some(_)) if !lock => (w, fit_size(1.0, h, false).1),
+        _ => fit_size(w, h, keep),
+    };
     // Any drawing: a group's members scale with its frame (its child space is kept); a chart or
     // SmartArt graphic lays itself out again at the new size.
     let theme = s.doc.settings.theme_colors.clone();
@@ -126,11 +130,11 @@ pub(super) fn size(s: &mut Session, v: &Value) -> CmdResult {
     })
 }
 
-/// An object size within 1–4000 pt. With `keep`, both sides scale by one factor, the one nearest
-/// 1 that brings them within the limits, so the proportions hold; a shape too long and thin for any
-/// such factor is clamped side by side.
+/// An object size within 1–4000 pt (or 0 pt on an axis for a flat line or connector). With `keep`,
+/// both sides scale by one factor, the one nearest 1 that brings them within the limits, so the
+/// proportions hold; a shape too long and thin for any such factor is clamped side by side.
 pub fn fit_size(w: f32, h: f32, keep: bool) -> (f32, f32) {
-    let side = |x: f32| if x.is_nan() { 1.0 } else { x.clamp(1.0, 4000.0) };
+    let side = |x: f32| if x.is_nan() || x <= 0.0 { 0.0 } else { x.clamp(1.0, 4000.0) };
     if keep && w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 {
         let (lo, hi) = ((1.0 / w).max(1.0 / h), (4000.0 / w).min(4000.0 / h));
         if lo <= hi {

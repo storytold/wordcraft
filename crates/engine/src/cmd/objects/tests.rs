@@ -1477,4 +1477,21 @@ fn shape_outline_and_fill_on_text_box() {
     let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
     let InlineObject::Shape { stroke, .. } = o else { panic!("{o:?}") };
     assert_eq!(*stroke, Some(Rgb(0x15, 0x60, 0x82)), "color preserved on error");
+
+    // 5. Unlocked size edits preserve the other dimension, including zero:
+    s.run("picture.size", &json!({"width": 100.0, "height": 0.0, "lockAspect": false})).unwrap();
+    s.run("picture.size", &json!({"width": 250.0, "lockAspect": false})).unwrap();
+    let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let (w, h) = obj_size(o);
+    assert_eq!((w, h), (250.0, 0.0), "height preserved at 0.0 on width edit");
+
+    s.run("picture.size", &json!({"height": 150.0, "lockAspect": false})).unwrap();
+    let o = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let (w, h) = obj_size(o);
+    assert_eq!((w, h), (250.0, 150.0), "width preserved on height edit");
+
+    // 6. When a picture is selected, shape.fill does not target the text box:
+    let data = super::super::insert::base64_encode(&png(10, 10));
+    s.run("insert.picture", &json!({"data": data})).unwrap();
+    assert!(matches!(s.run("shape.fill", &json!({"color": "FF0000"})), Err(CmdError::Disabled(_))));
 }

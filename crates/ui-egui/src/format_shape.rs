@@ -325,7 +325,7 @@ fn layout_section(app: &mut WordApp, ui: &mut Ui, layout: &CurrentLayout) {
     ui.horizontal(|ui| {
         ui.label(tl!("Width"));
         let mut w = layout.width;
-        let r = ui.add(egui::DragValue::new(&mut w).range(4.0..=2000.0).clamp_existing_to_range(false).suffix(" pt").speed(1.0).fixed_decimals(1));
+        let r = ui.add(egui::DragValue::new(&mut w).range(0.0..=4000.0).clamp_existing_to_range(false).suffix(" pt").speed(1.0).fixed_decimals(1));
         if r.changed() {
             if r.dragged() && ui.data(|d| d.get_temp::<u64>(layout_mark_id())).is_none() {
                 let mark = app.session.undo_mark();
@@ -337,7 +337,7 @@ fn layout_section(app: &mut WordApp, ui: &mut Ui, layout: &CurrentLayout) {
     ui.horizontal(|ui| {
         ui.label(tl!("Height"));
         let mut h = layout.height;
-        let r = ui.add(egui::DragValue::new(&mut h).range(1.0..=2000.0).clamp_existing_to_range(false).suffix(" pt").speed(1.0).fixed_decimals(1));
+        let r = ui.add(egui::DragValue::new(&mut h).range(0.0..=4000.0).clamp_existing_to_range(false).suffix(" pt").speed(1.0).fixed_decimals(1));
         if r.changed() {
             if r.dragged() && ui.data(|d| d.get_temp::<u64>(layout_mark_id())).is_none() {
                 let mark = app.session.undo_mark();

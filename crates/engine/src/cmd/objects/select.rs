@@ -99,7 +99,8 @@ pub(super) fn can_group(s: &Session) -> Option<&'static str> {
 pub(super) fn has_shape(s: &Session) -> Option<&'static str> {
     match selected(s) {
         Some((_, InlineObject::Shape { .. })) => None,
-        _ => match super::shape::text_box_target(s) {
+        Some(_) => Some("select a shape first"),
+        None => match super::shape::text_box_target(s) {
             Some(_) => None,
             None => Some("select a shape first"),
         },
