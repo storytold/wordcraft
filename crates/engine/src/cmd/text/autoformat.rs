@@ -366,6 +366,185 @@ pub(super) fn apply_heading_line(s: &mut Session, at: &Pos, level: u8) -> Result
     Ok(())
 }
 
+/// The heading levels Define styles based on your formatting compares a paragraph with.
+const DEFINED_HEADINGS: std::ops::RangeInclusive<u8> = 1..=3;
+
+/// How a paragraph is laid out: its resolved formatting without the style name, the outline
+/// level, the list number, the keep-with-next and keep-lines-together settings a heading style
+/// gives, and the tab stops (the text holds no tab).
+fn para_look(r: &wordcraft_doc::resolve::ResolvedPara) -> wordcraft_doc::resolve::ResolvedPara {
+    let mut r = r.clone();
+    (r.style, r.outline_level, r.numbering, r.keep_next, r.keep_lines, r.tabs) = (String::new(), None, None, false, false, Vec::new());
+    r
+}
+
+/// How text in a paragraph of style `style` with the run properties `c` looks: its resolved
+/// formatting without revision marks, links and proofing language.
+fn char_look(s: &Session, style: Option<&str>, c: &wordcraft_doc::props::CharProps) -> wordcraft_doc::resolve::ResolvedChar {
+    let mut r = s.doc.styles.resolve_char(style, c);
+    (r.ins, r.del, r.fmt, r.link, r.lang, r.no_proof) = (None, None, None, None, None, false);
+    r
+}
+
+/// Remove the direct character formatting that a heading style gives instead.
+fn consume_char_formatting(c: &mut wordcraft_doc::props::CharProps) {
+    (c.font, c.font_cs, c.font_ea, c.size, c.size_cs, c.kern, c.spacing, c.color) = (None, None, None, None, None, None, None, None);
+    (c.bold, c.bold_cs, c.italic, c.italic_cs, c.caps, c.small_caps, c.strike, c.double_strike) = (None, None, None, None, None, None, None, None);
+    (c.underline, c.underline_color, c.highlight, c.shading, c.border, c.vert_align) = (None, None, None, None, None, None);
+    (c.hidden, c.scale, c.position, c.emphasis, c.ligatures, c.text_effects) = (None, None, None, None, None, None);
+    (c.outline, c.shadow, c.emboss, c.engrave) = (None, None, None, None);
+}
+
+/// Remove the direct paragraph formatting that a heading style gives instead.
+fn consume_para_formatting(p: &mut wordcraft_doc::props::ParaProps) {
+    (p.align, p.indent_left, p.indent_right, p.indent_first) = (None, None, None, None);
+    (p.indent_left_chars, p.indent_right_chars, p.indent_first_chars) = (None, None, None);
+    (p.space_before, p.space_after, p.space_before_auto, p.space_after_auto) = (None, None, None, None);
+    (p.line_spacing, p.contextual_spacing, p.shading, p.borders, p.bidi) = (None, None, None, None, None);
+}
+
+/// AutoFormat Define styles based on your formatting: Enter at the end of a Normal paragraph of
+/// the main text whose text, all formatted alike, looks exactly like Heading 1, 2 or 3 (font,
+/// size, color and the other character formatting, alignment, indents and spacing). Returns the
+/// paragraph with that style and without the direct formatting the style now gives, so it looks
+/// the same. A heading style that numbers its paragraphs does not match. A paragraph in a list, with a link, a character style, a tab, an object or a tracked
+/// deletion, one that looks like no heading or like more than one, and any paragraph while the
+/// document limits formatting to its styles stay as typed.
+pub(super) fn defined_style(s: &Session, at: &Pos) -> Option<wordcraft_doc::Paragraph> {
+    let ac = &s.prefs.autocorrect;
+    let para = s.doc.para_at(at)?;
+    if !ac.enabled
+        || !ac.define_styles
+        || at.story != StoryRef::Body
+        || at.path.0.len() != 1
+        || at.off != para.len()
+        || para.text.trim().is_empty()
+        || para.text.contains(|c: char| c.is_control() || c == OBJ)
+        || !para.objects.is_empty()
+        || para.section.is_some()
+        || para.props.style.as_deref().is_some_and(|st| st != "Normal")
+        || para.props.drop_cap.is_some_and(|d| d != 0)
+        || para.props.frame.is_some()
+        || (crate::cmd::protect::enforced(&s.doc) && s.doc.settings.protect_formatting)
+    {
+        return None;
+    }
+    let styles = &s.doc.styles;
+    let resolved = styles.resolve_para(&para.props);
+    if resolved.numbering.is_some_and(|n| n.num != 0) || resolved.outline_level.is_some_and(|l| l < 9) {
+        return None;
+    }
+    if para.run_ranges().any(|(_, c)| c.del.is_some() || c.link.is_some() || c.style.is_some()) {
+        return None;
+    }
+    // Only manually formatted text is given a style.
+    let consumed = |c: &wordcraft_doc::props::CharProps| {
+        let mut x = c.clone();
+        consume_char_formatting(&mut x);
+        x != *c
+    };
+    let mut plain = para.props.clone();
+    consume_para_formatting(&mut plain);
+    if plain == para.props && !para.run_ranges().any(|(_, c)| consumed(c)) {
+        return None;
+    }
+    let (_, first) = para.run_ranges().next()?;
+    let look = char_look(s, None, first);
+    if para.run_ranges().any(|(_, c)| char_look(s, None, c) != look) {
+        return None;
+    }
+    let mut found = None;
+    for level in DEFINED_HEADINGS {
+        let id = format!("Heading{level}");
+        if styles.get(&id).is_none_or(|st| st.kind != wordcraft_doc::styles::StyleKind::Paragraph) {
+            continue;
+        }
+        let props = wordcraft_doc::props::ParaProps { style: Some(id.clone()), ..Default::default() };
+        if char_look(s, Some(&id), &Default::default()) == look && para_look(&styles.resolve_para(&props)) == para_look(&resolved) {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(id);
+        }
+    }
+    let id = found?;
+    let mut styled = para.clone();
+    styled.props.style = Some(id.clone());
+    consume_para_formatting(&mut styled.props);
+    styled.format(0, styled.len(), &consume_char_formatting).ok()?;
+    // The paragraph mark loses only the formatting the style gives it in the same way.
+    let mut mark = styled.mark.clone();
+    consume_char_formatting(&mut mark);
+    if char_look(s, Some(&id), &mark) == char_look(s, None, &para.mark) {
+        styled.mark = mark;
+    }
+    styled.normalize();
+    // The paragraph must look as it did before, without a number from the style's list.
+    let after = styles.resolve_para(&styled.props);
+    let same = para_look(&after) == para_look(&resolved)
+        && after.numbering.is_none_or(|n| n.num == 0)
+        && styled.text == para.text
+        && styled.run_ranges().all(|(_, c)| char_look(s, Some(&id), c) == look);
+    same.then_some(styled)
+}
+
+/// Replace the paragraph at `at` with `styled`, the same text with a heading style
+/// ([`defined_style`]). With Track Changes on, the style and formatting changes are formatting
+/// revisions, so Reject brings back the Normal style and the direct formatting.
+pub(super) fn apply_defined_style(s: &mut Session, at: &Pos, styled: wordcraft_doc::Paragraph) -> Result<(), CmdError> {
+    let before = s.doc.para(at.story, &at.path).cloned();
+    let p = s.doc.para_mut(at.story, &at.path)?;
+    *p = styled;
+    p.touch();
+    // Enter adds a paragraph, and the formatting comparison after the command skips a container
+    // whose block count changed, so the change is recorded here.
+    if s.doc.settings.track_changes
+        && s.prefs.markup.track_formatting
+        && let Some(before) = before
+    {
+        crate::cmd::fmt_revisions::record_para(s, &before, at)?;
+        track_own_inserted_runs(s, &before, at)?;
+    }
+    Ok(())
+}
+
+/// After [`apply_defined_style`] with Track Changes on: the recorder leaves text the author is
+/// inserting without a formatting change, so the direct formatting the style replaced on that
+/// text becomes part of the style change's revision. Reject then brings it back, and Accept
+/// leaves the text with the style's formatting only.
+fn track_own_inserted_runs(s: &mut Session, before: &wordcraft_doc::Paragraph, at: &Pos) -> Result<(), CmdError> {
+    let (revisions, author) = (&s.doc.revisions, &s.author);
+    let own = |rev: u32| revisions.get(rev as usize).is_some_and(|r| &r.author == author);
+    let Some(after) = s.doc.para(at.story, &at.path) else { return Ok(()) };
+    let Some(rev) = after.props.fmt_change.as_ref().map(|c| c.rev) else { return Ok(()) };
+    let (rb, ra): (Vec<_>, Vec<_>) = (before.run_ranges().collect(), after.run_ranges().collect());
+    let (mut runs, mut changed, mut i, mut j) = (Vec::new(), false, 0, 0);
+    while let (Some((x, pb)), Some((y, pa))) = (rb.get(i), ra.get(j)) {
+        let (from, to) = (x.start.max(y.start), x.end.min(y.end));
+        if from < to {
+            let mut props = (*pa).clone();
+            if pb.ins.is_some_and(own) && pa.fmt_change.is_none() && pb.formatting() != pa.formatting() {
+                props.fmt_change = wordcraft_doc::props::PropChange::boxed(rev, pb.formatting());
+                changed = true;
+            }
+            runs.push(wordcraft_doc::Run { len: to - from, props });
+        }
+        if x.end <= y.end {
+            i += 1;
+        }
+        if y.end <= x.end {
+            j += 1;
+        }
+    }
+    if changed {
+        let p = s.doc.para_mut(at.story, &at.path)?;
+        p.runs = runs;
+        p.normalize();
+        p.touch();
+    }
+    Ok(())
+}
+
 /// Turn the border-line characters into a bottom border on the paragraph above (or this one
 /// at the top of a story). With Track Changes on, the characters are marked deleted (or
 /// removed, when this author typed them) and the border is a formatting revision.

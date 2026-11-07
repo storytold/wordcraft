@@ -212,6 +212,21 @@ pub(crate) fn record(s: &mut Session, id: &str, before: &Document) {
     }
 }
 
+/// Record how the command formatted the paragraph at `at` (its text unchanged) differently from
+/// `before` as tracked formatting changes, for a command that also adds or removes paragraphs in
+/// the same story, which [`record`] does not compare.
+pub(crate) fn record_para(s: &mut Session, before: &Paragraph, at: &wordcraft_doc::Pos) -> Result<(), crate::CmdError> {
+    let Some(mut p) = s.doc.para(at.story, &at.path).cloned() else { return Ok(()) };
+    if p.text != before.text {
+        return Ok(());
+    }
+    let old = s.doc.revisions.clone();
+    let mut r = Recorder { author: s.author.clone(), date: super::now_iso(), before: &old, revisions: &mut s.doc.revisions, rid: None };
+    r.para(before, &mut p);
+    *s.doc.para_mut(at.story, &at.path)? = p;
+    Ok(())
+}
+
 /// Record the paragraph formatting a command changed on the paragraph at `path` whose text it also
 /// changed, which [`record`] doesn't compare: `before` is the paragraph's properties before the
 /// command. As in [`record`], the author's own earlier change keeps the formatting before it and

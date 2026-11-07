@@ -1247,6 +1247,270 @@ fn undo_right_after_a_heading_autoformat_keeps_the_enter() {
     assert_eq!(s.sel.focus, Pos::body(2, 0));
 }
 
+/// Format body paragraph `block` directly the way the built-in Heading `level` formats text: its
+/// font, size, color and italic on every character, its space before and after on the paragraph.
+fn format_like_heading(s: &mut Session, block: usize, level: u8) {
+    let st = s.doc.styles.get(&format!("Heading{level}")).cloned().unwrap_or_default();
+    let p = s.doc.para_mut(StoryRef::Body, &Pos::body(block, 0).path).unwrap();
+    let len = p.len();
+    p.format(0, len, &|c| {
+        c.font = st.chr.font.clone();
+        c.size = st.chr.size;
+        c.color = st.chr.color;
+        c.italic = st.chr.italic;
+    })
+    .unwrap();
+    p.props.space_before = st.para.space_before;
+    p.props.space_after = st.para.space_after;
+    p.touch();
+}
+
+/// A session with Define styles based on your formatting on and `text` typed, formatted like
+/// Heading `level`; the caret is at its end.
+fn typed_like_heading(text: &str, level: u8) -> Session {
+    let mut s = s();
+    run(&mut s, "tools.autocorrect", json!({"defineStyles": true}));
+    typ(&mut s, text);
+    format_like_heading(&mut s, 0, level);
+    s
+}
+
+/// Body paragraph `block`'s first character as it looks.
+fn looks(s: &Session, block: usize) -> wordcraft_doc::resolve::ResolvedChar {
+    let p = s.doc.para_at(&Pos::body(block, 0)).cloned().unwrap_or_default();
+    let c = p.run_ranges().next().map(|(_, c)| c.clone()).unwrap_or_default();
+    s.doc.styles.resolve_char(p.props.style.as_deref(), &c)
+}
+
+#[test]
+fn enter_after_text_formatted_like_a_heading_gives_it_the_heading_style() {
+    let h = |t: &str, st: Option<&str>| (t.to_string(), st.map(str::to_string));
+    for level in 1..=3 {
+        let mut s = typed_like_heading("Results", level);
+        let before = (looks(&s, 0), s.doc.styles.resolve_para(&s.doc.para_at(&Pos::body(0, 0)).unwrap().props).space_before);
+        typ(&mut s, "\nNext");
+        let style = format!("Heading{level}");
+        assert_eq!(styled(&s), [h("Results", Some(&style)), h("Next", Some("Normal"))], "level {level}");
+        // The paragraph looks the same, and the direct formatting the style gives is removed.
+        let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+        assert_eq!((looks(&s, 0), s.doc.styles.resolve_para(&p.props).space_before), before, "level {level}");
+        assert!(p.run_ranges().all(|(_, c)| c.font.is_none() && c.size.is_none() && c.color.is_none()), "{:?}", p.runs);
+        assert_eq!((p.props.space_before, p.props.space_after), (None, None));
+        // The next paragraph is Normal text.
+        assert_eq!(looks(&s, 1).size, 12.0, "level {level}");
+    }
+}
+
+#[test]
+fn text_that_does_not_look_exactly_like_a_heading_stays_as_typed() {
+    let normal = |s: &Session| styled(s).iter().all(|(_, st)| st.as_deref().is_none_or(|st| st == "Normal"));
+    // Off by default.
+    let mut s = typed_like_heading("Results", 1);
+    run(&mut s, "tools.autocorrect", json!({"defineStyles": false}));
+    typ(&mut s, "\n");
+    assert!(normal(&s), "{:?}", styled(&s));
+    let mut s = self::s();
+    run(&mut s, "tools.autocorrect", json!({}));
+    assert!(!s.prefs.autocorrect.define_styles);
+    // Text without direct formatting, and text that is only larger.
+    let mut s = self::s();
+    run(&mut s, "tools.autocorrect", json!({"defineStyles": true}));
+    typ(&mut s, "Results\n");
+    assert!(normal(&s), "no direct formatting: {:?}", styled(&s));
+    let mut s = self::s();
+    run(&mut s, "tools.autocorrect", json!({"defineStyles": true}));
+    typ(&mut s, "Results");
+    s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap().format(0, 7, &|c| c.size = Some(20.0)).unwrap();
+    typ(&mut s, "\n");
+    assert!(normal(&s), "only the size: {:?}", styled(&s));
+    // Mixed formatting, other spacing, a link, Enter inside the text.
+    let mut s = typed_like_heading("Results", 1);
+    s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap().format(0, 1, &|c| c.size = Some(11.0)).unwrap();
+    typ(&mut s, "\n");
+    assert!(normal(&s), "mixed: {:?}", styled(&s));
+    let mut s = typed_like_heading("Results", 1);
+    s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap().props.space_before = None;
+    typ(&mut s, "\n");
+    assert!(normal(&s), "other spacing: {:?}", styled(&s));
+    let mut s = typed_like_heading("Results", 1);
+    s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap().format(0, 7, &|c| c.link = Some("https://example.com".into())).unwrap();
+    typ(&mut s, "\n");
+    assert!(normal(&s), "a link: {:?}", styled(&s));
+    let mut s = typed_like_heading("Results", 1);
+    s.sel = crate::Selection::caret(Pos::body(0, 3));
+    typ(&mut s, "\n");
+    assert!(normal(&s), "Enter inside the text: {:?}", styled(&s));
+    // A list item, and a paragraph of another style.
+    let mut s = typed_like_heading("Results", 1);
+    run(&mut s, "para.bullets", json!({}));
+    typ(&mut s, "\n");
+    assert!(styled(&s).iter().all(|(_, st)| st.as_deref().is_none_or(|st| !st.starts_with("Heading"))), "a list item: {:?}", styled(&s));
+    let mut s = typed_like_heading("Results", 1);
+    s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap().props.style = Some("Quote".into());
+    typ(&mut s, "\n");
+    assert!(styled(&s).iter().all(|(_, st)| st.as_deref().is_none_or(|st| !st.starts_with("Heading"))), "a Quote: {:?}", styled(&s));
+    // Two headings that look the same: neither is applied.
+    let mut s = typed_like_heading("Results", 2);
+    let two = s.doc.styles.get("Heading2").cloned().unwrap_or_default();
+    if let Some(three) = std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Heading3") {
+        (three.chr, three.para.space_before, three.para.space_after) = (two.chr, two.para.space_before, two.para.space_after);
+    }
+    typ(&mut s, "\n");
+    assert!(normal(&s), "two headings match: {:?}", styled(&s));
+    // Formatting limited to the document's styles.
+    let mut s = typed_like_heading("Results", 1);
+    run(&mut s, "review.restrict", json!({"mode": "none", "formatting": true}));
+    typ(&mut s, "\n");
+    assert!(normal(&s), "formatting restricted: {:?}", styled(&s));
+}
+
+#[test]
+fn built_in_heading_styles_work_with_define_styles_on() {
+    let mut s = s();
+    run(&mut s, "tools.autocorrect", json!({"headingStyles": true, "defineStyles": true}));
+    typ(&mut s, "Introduction\n\nText");
+    assert_eq!(styled(&s), [("Introduction".to_string(), Some("Heading1".to_string())), ("Text".to_string(), None)]);
+}
+
+#[test]
+fn undo_right_after_define_styles_keeps_the_enter() {
+    let mut s = typed_like_heading("Results", 1);
+    let runs = |s: &Session| -> Vec<wordcraft_doc::props::CharProps> {
+        s.doc.para_at(&Pos::body(0, 0)).map(|p| p.run_ranges().map(|(_, c)| c.clone()).collect()).unwrap_or_default()
+    };
+    let (props, before) = (s.doc.para_at(&Pos::body(0, 0)).map(|p| p.props.clone()), runs(&s));
+    typ(&mut s, "\n");
+    assert_eq!(styled(&s).first().and_then(|(_, st)| st.as_deref()), Some("Heading1"));
+    // Undo takes back the style and brings the direct formatting back; the Enter stays.
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Results\n");
+    assert_eq!((s.doc.para_at(&Pos::body(0, 0)).map(|p| p.props.clone()), runs(&s)), (props, before));
+    assert_eq!(s.sel.focus, Pos::body(1, 0));
+    // A second Undo takes back the Enter; Redo twice brings the style back.
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Results");
+    run(&mut s, "edit.redo", json!({}));
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(styled(&s).first().and_then(|(_, st)| st.as_deref()), Some("Heading1"));
+}
+
+#[test]
+fn a_tracked_define_styles_change_can_be_rejected() {
+    let mut s = typed_like_heading("Results", 1);
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!(p.props.style.as_deref(), Some("Heading1"));
+    assert!(p.props.fmt_change.is_some(), "the style change is tracked");
+    // The new paragraph does not take the heading's formatting change.
+    let next = s.doc.para_at(&Pos::body(1, 0)).cloned().unwrap_or_default();
+    assert!(next.props.fmt_change.is_none() && next.mark.fmt_change.is_none(), "{:?}", next.props.fmt_change);
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!(p.props.style, None);
+    assert_eq!((p.props.space_before, p.run_ranges().next().and_then(|(_, c)| c.size)), (Some(18.0), Some(20.0)), "the direct formatting is back");
+
+    // Text the author typed with Track Changes on: the direct formatting the style replaces is part
+    // of the tracked change. Accepting it leaves only the style's formatting; accepting the
+    // insertion and then rejecting the style change brings back how the text looked.
+    let typed = || {
+        let mut s = self::s();
+        run(&mut s, "tools.autocorrect", json!({"defineStyles": true}));
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        typ(&mut s, "Results");
+        format_like_heading(&mut s, 0, 1);
+        let before = looks(&s, 0);
+        typ(&mut s, "\n");
+        assert_eq!(s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props.style.clone()).as_deref(), Some("Heading1"));
+        assert_eq!(wordcraft_doc::resolve::ResolvedChar { fmt: None, ..looks(&s, 0) }, before);
+        (s, before)
+    };
+    let (mut s, _) = typed();
+    run(&mut s, "review.acceptAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!(p.props.style.as_deref(), Some("Heading1"));
+    assert!(p.run_ranges().all(|(_, c)| c.font.is_none() && c.size.is_none() && c.color.is_none() && c.fmt_change.is_none()), "{:?}", p.runs);
+    let (mut s, before) = typed();
+    // Accept the insertions: the text and both paragraph marks are no longer inserted.
+    for block in 0..2 {
+        let p = s.doc.para_mut(StoryRef::Body, &Pos::body(block, 0).path).unwrap();
+        let len = p.len();
+        p.format(0, len, &|c| c.ins = None).unwrap();
+        p.mark.ins = None;
+        p.touch();
+    }
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    let before = wordcraft_doc::resolve::ResolvedChar { ins: None, ..before };
+    assert_eq!((p.props.style.as_deref(), looks(&s, 0)), (None, before), "the look is back");
+}
+
+#[test]
+fn text_without_direct_formatting_stays_normal_when_a_heading_looks_like_normal() {
+    let mut s = s();
+    run(&mut s, "tools.autocorrect", json!({"defineStyles": true}));
+    let normal = s.doc.styles.get("Normal").cloned().unwrap_or_default();
+    if let Some(one) = std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Heading1") {
+        one.chr = normal.chr.clone();
+        let keep = (one.para.outline_level, one.para.keep_next, one.para.keep_lines);
+        one.para = normal.para.clone();
+        (one.para.outline_level, one.para.keep_next, one.para.keep_lines) = keep;
+    }
+    typ(&mut s, "Results\nNext");
+    assert!(styled(&s).iter().all(|(_, st)| st.as_deref().is_none_or(|st| st == "Normal")), "{:?}", styled(&s));
+}
+
+#[test]
+fn shading_the_heading_gives_is_removed() {
+    use wordcraft_doc::props::Rgb;
+    let mut s = typed_like_heading("Results", 1);
+    let teal = Some(Rgb(0, 128, 128));
+    if let Some(one) = std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Heading1") {
+        one.para.shading = teal;
+        one.chr.highlight = None;
+        one.chr.shading = teal;
+    }
+    let p = s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap();
+    p.props.shading = teal;
+    p.format(0, 7, &|c| c.shading = teal).unwrap();
+    // The paragraph mark's own shading differs from the heading's and stays.
+    p.mark.shading = Some(Rgb(255, 0, 0));
+    p.touch();
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!(p.props.style.as_deref(), Some("Heading1"));
+    assert_eq!(p.props.shading, None);
+    assert!(p.run_ranges().all(|(_, c)| c.shading.is_none()), "{:?}", p.runs);
+    assert_eq!(p.mark.shading, Some(Rgb(255, 0, 0)));
+}
+
+#[test]
+fn text_formatted_like_a_heading_that_wraps_or_indents_otherwise_stays_as_typed() {
+    // A heading that breaks Latin words at any character, or mirrors its indents, lays the text
+    // out differently.
+    let customized: [(&str, fn(&mut wordcraft_doc::props::ParaProps)); 2] =
+        [("word wrap", |p| p.word_wrap = Some(false)), ("mirror indents", |p| p.mirror_indents = Some(true))];
+    for (what, change) in customized {
+        let mut s = typed_like_heading("Results", 1);
+        if let Some(one) = std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Heading1") {
+            change(&mut one.para);
+        }
+        typ(&mut s, "\n");
+        assert!(styled(&s).iter().all(|(_, st)| st.as_deref().is_none_or(|st| !st.starts_with("Heading"))), "{what}: {:?}", styled(&s));
+    }
+}
+
+#[test]
+fn text_formatted_like_a_numbered_heading_stays_as_typed() {
+    // Heading 1 numbers its paragraphs, so giving the text that style would add a number.
+    let mut s = typed_like_heading("Results", 1);
+    if let Some(one) = std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Heading1") {
+        one.para.numbering = Some(wordcraft_doc::props::NumRef { num: 1, level: 0 });
+    }
+    typ(&mut s, "\n");
+    assert!(styled(&s).iter().all(|(_, st)| st.as_deref().is_none_or(|st| !st.starts_with("Heading"))), "{:?}", styled(&s));
+}
+
 #[test]
 fn a_tracked_heading_autoformat_can_be_rejected() {
     // Enter in the empty paragraph turns a zero-tab line into Heading 1.
