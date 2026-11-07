@@ -403,6 +403,16 @@ fn band_dist(v: f32, top: f32, h: f32) -> f32 {
 }
 
 impl DocLayout {
+    /// The upright line of `story` on `page` whose band and text extent contain (x, y), if the
+    /// point is on text. Empty page space (below the last line, say) is `None`.
+    pub fn line_at_point(&self, page: usize, x: f32, y: f32, story: StoryRef) -> Option<LineHit<'_>> {
+        let p = self.pages.get(page)?;
+        if !(x.is_finite() && y.is_finite()) || x < p.body.x || x > p.body.right() || y < p.body.y || y > p.body.bottom() {
+            return None;
+        }
+        page_lines(p, story).into_iter().find(|l| y >= l.top && y <= l.bottom && x >= l.left && x <= l.right)
+    }
+
     /// The position nearest to (x, y) on `page`, in `story`.
     pub fn hit(&self, page: usize, x: f32, y: f32, story: StoryRef) -> Option<Pos> {
         let p = self.pages.get(page)?;
