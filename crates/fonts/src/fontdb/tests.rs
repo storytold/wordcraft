@@ -408,3 +408,17 @@ fn named_instances_and_collection_members_are_capped() {
     // (under 0.1 s on a loaded machine) only backs up "read once", with room for a busy CI.
     assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
 }
+
+#[test]
+fn read_family_coverage_reads_cmap_from_large_ttc_collection() {
+    let path = std::env::temp_dir().join(format!("wc-large-ttc-{}.ttc", std::process::id()));
+    let ttc = collection_of(BUNDLED[0], 1);
+    std::fs::write(&path, &ttc).unwrap();
+    let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    file.set_len((40 << 20) + 1024).unwrap();
+    drop(file);
+    assert!(super::fallback_data::read_fallback_file(&path).is_none());
+    let got = super::fallback_data::read_family_coverage(&path);
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(got, super::fallback_data::coverage_ranges(BUNDLED[0]));
+}

@@ -236,23 +236,18 @@ impl FontDb {
         (found, faces.len())
     }
 
-    /// Whether any cataloged file belonging to `family` maps `c`, indexing each file once.
-    /// The file bytes are scoped to coverage extraction, so a large collection that misses does
-    /// not keep its temporary buffer alive while the fallback search continues.
     #[cfg(not(target_arch = "wasm32"))]
-    fn family_covers(&self, family: &str, c: char) -> bool {
-        let paths = self.family_paths(family);
-        let cp = u32::from(c);
-        let mut index = self.coverage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    fn sync_coverage_index(&self, index: &mut CoverageIndex) {
         let generation = self.catalog_gen.load(Ordering::Acquire);
         if index.generation != Some(generation) {
+            // A new scan (or the first search): keep what is known of files still installed.
             let mut known: HashMap<std::path::PathBuf, IndexedFile> =
                 std::mem::take(&mut index.files).into_iter().map(|f| (f.path.clone(), f)).collect();
-            let mut catalog_paths: Vec<std::path::PathBuf> =
+            let mut paths: Vec<std::path::PathBuf> =
                 self.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner).iter().map(|e| e.path.clone()).collect();
-            catalog_paths.sort();
-            catalog_paths.dedup();
-            index.files = catalog_paths
+            paths.sort();
+            paths.dedup();
+            index.files = paths
                 .into_iter()
                 .map(|path| {
                     known.remove(&path).unwrap_or_else(|| IndexedFile {
@@ -265,6 +260,17 @@ impl FontDb {
                 .collect();
             index.generation = Some(generation);
         }
+    }
+
+    /// Whether any cataloged file belonging to `family` maps `c`, indexing each file once.
+    /// The file bytes are scoped to coverage extraction, so a large collection that misses does
+    /// not keep its temporary buffer alive while the fallback search continues.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn family_covers(&self, family: &str, c: char) -> bool {
+        let paths = self.family_paths(family);
+        let cp = u32::from(c);
+        let mut index = self.coverage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.sync_coverage_index(&mut index);
         let CoverageIndex { files, reads, .. } = &mut *index;
         for file in files.iter_mut().filter(|f| paths.contains(&f.path)) {
             if file.ranges.as_ref().is_none_or(|r| r.is_empty() && !file.family_checked) {
@@ -353,21 +359,7 @@ impl FontDb {
         let cps: Vec<u32> = chars.iter().map(|c| u32::from(*c)).collect();
         let maps_all = |ranges: &[(u32, u32)]| cps.iter().all(|cp| ranges_hold(ranges, *cp));
         let mut index = self.coverage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let generation = self.catalog_gen.load(Ordering::Acquire);
-        if index.generation != Some(generation) {
-            // A new scan (or the first search): keep what is known of files still installed.
-            let mut known: HashMap<std::path::PathBuf, IndexedFile> =
-                std::mem::take(&mut index.files).into_iter().map(|f| (f.path.clone(), f)).collect();
-            let mut paths: Vec<std::path::PathBuf> =
-                self.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner).iter().map(|e| e.path.clone()).collect();
-            paths.sort();
-            paths.dedup();
-            let files = paths.into_iter().map(|path| {
-                known.remove(&path).unwrap_or_else(|| IndexedFile { used: index.loaded.contains(&path), path, ranges: None, family_checked: false })
-            });
-            index.files = files.collect();
-            index.generation = Some(generation);
-        }
+        self.sync_coverage_index(&mut index);
         let CoverageIndex { files, reads, .. } = &mut *index;
         for i in 0..files.len() {
             let Some(file) = files.get_mut(i).filter(|f| !f.used) else { continue };
