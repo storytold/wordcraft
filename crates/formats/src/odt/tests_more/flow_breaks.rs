@@ -234,3 +234,18 @@ fn a_column_default_naming_no_style_is_no_background() {
     let t = d.body.iter().find_map(|b| b.as_table()).unwrap();
     assert_eq!(t.rows[0].cells[0].props.shading, None);
 }
+
+/// A cell style saying `transparent` over a coloured parent has no background of its own: what's
+/// behind it shows, in LibreOffice too, from a column's default cell style or the cell's own.
+#[test]
+fn a_transparent_cell_style_stops_its_parents_colour() {
+    let styles = r##"<style:style style:name="PC" style:family="table-cell"><style:table-cell-properties fo:background-color="#ff0000"/></style:style><style:style style:name="KC" style:family="table-cell" style:parent-style-name="PC"><style:table-cell-properties fo:background-color="transparent"/></style:style><style:style style:name="R" style:family="table-row"><style:table-row-properties fo:background-color="#0000ff"/></style:style>"##;
+    for (column, cell) in [(r#" table:default-cell-style-name="KC""#, ""), ("", r#" table:style-name="KC""#)] {
+        let table = format!(
+            r#"<table:table><table:table-column{column}/><table:table-row table:style-name="R"><table:table-cell{cell}><text:p>a</text:p></table:table-cell></table:table-row></table:table>"#
+        );
+        let d = doc(styles, &table);
+        let t = d.body.iter().find_map(|b| b.as_table()).unwrap();
+        assert_eq!(t.rows[0].cells[0].props.shading, crate::model::parse_color("#0000ff"), "{column}{cell}");
+    }
+}

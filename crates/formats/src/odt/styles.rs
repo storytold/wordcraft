@@ -229,7 +229,7 @@ struct StyleInfo {
     outline: Option<u8>,
     border_bottom: bool,
     /// `fo:background-color` of a table-cell style's `style:table-cell-properties`.
-    cell_background: Option<Rgb>,
+    cell_background: Option<Option<Rgb>>,
     /// A table-cell style's background picture (§17.3 `style:background-image`): its package
     /// path, `style:repeat` and `style:position`.
     cell_picture: Option<(String, String, String)>,
@@ -683,7 +683,7 @@ pub(super) fn writing_direction(m: &str) -> wordcraft_doc::props::TextDirection 
 /// A table-cell style's `style:table-cell-properties` (ODF 1.3 §17.18): background, borders,
 /// padding and vertical alignment.
 fn table_cell_properties(a: &Attrs, s: &mut StyleInfo) {
-    if let Some(c) = get(a, "fo:background-color").and_then(model::parse_color) {
+    if let Some(c) = table_background_of(a) {
         s.cell_background = Some(c);
     }
     cell_borders_and_padding(a, s);
@@ -1360,7 +1360,7 @@ impl Styles {
 
     /// Background of a table-cell style (whole chain).
     pub(super) fn cell_background(&self, name: &str) -> Option<Rgb> {
-        self.chain(name).iter().find_map(|(_, s)| s.cell_background)
+        self.chain(name).iter().find_map(|(_, s)| s.cell_background).flatten()
     }
 
     /// Borders of a table-cell style (whole chain).
