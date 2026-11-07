@@ -48,6 +48,8 @@ fn convert_refresh_is_opt_in() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Converting a protected document with `--update-fields` skips updating fields with a warning,
+/// retains the cached field result, and preserves the protection mode on output.
 #[test]
 fn convert_protected_document_with_update_fields_skips_with_warning() {
     let dir = std::env::temp_dir().join(format!("wc-convert-fields-prot-{}", std::process::id()));
@@ -102,6 +104,7 @@ fn convert_protected_document_with_update_fields_skips_with_warning() {
             .collect();
         // Result should remain "104" (cached) because the field could not be updated under protection
         assert_eq!(results, vec!["104"], "field result was unexpectedly modified for mode {mode}");
+        assert_eq!(out.settings.protection.as_deref(), Some(mode), "protection mode was not preserved for mode {mode}");
     }
 
     std::fs::remove_dir_all(dir).unwrap();
