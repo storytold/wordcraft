@@ -67,7 +67,7 @@ impl Chart {
             first_angle: num("c:firstSliceAng").unwrap_or(0).clamp(0, 360) as f64,
             radar_fill: radar_style == Some("filled"),
             radar_marks: radar_style == Some("marker"),
-            vary: matches!(kind, Kind::Pie | Kind::Doughnut) && ty.child("c:varyColors").and_then(|v| v.attr("val")).is_none_or(truthy),
+            vary: varies(kind, radar_style, series.len()) && ty.child("c:varyColors").and_then(|v| v.attr("val")).is_none_or(truthy),
             n,
             cats,
             title: title_of(chart, &series),
@@ -95,22 +95,29 @@ impl Chart {
         self.series.get(j).and_then(|s| s.color).unwrap_or_else(|| self.accent(j))
     }
 
-    /// Colour of point `i` of series `j`: its `c:dPt` override, else the varied accent (pie) or
-    /// the series colour.
+    /// Colour of point `i` of series `j`: its `c:dPt` override, else the varied accent when the
+    /// chart varies and the series has no colour of its own (Word lets a series' `c:spPr` colour
+    /// win over `c:varyColors`), else the series colour.
     pub(super) fn point_colour(&self, j: usize, i: usize) -> Rgb {
-        if let Some(Some(c)) = self.series.get(j).and_then(|s| s.points.get(i)) {
+        let s = self.series.get(j);
+        if let Some(Some(c)) = s.and_then(|s| s.points.get(i)) {
             return *c;
         }
-        if self.vary { self.accent(i) } else { self.series_colour(j) }
+        if self.vary && s.is_some_and(|s| s.color.is_none()) { self.accent(i) } else { self.series_colour(j) }
     }
 
+    /// The legend: one entry per category, in its point's colour, for pie and doughnut charts
+    /// and for any chart that varies colours by point (even when a series colour keeps the
+    /// points one colour, as Word does); else one entry per series. Points without a category
+    /// name (scatter) are numbered.
     pub(super) fn legend_entries(&self) -> Vec<(String, Rgb)> {
-        if matches!(self.kind, Kind::Pie | Kind::Doughnut) {
-            return self
-                .cats
-                .iter()
-                .enumerate()
-                .map(|(i, c)| (if c.is_empty() { (i + 1).to_string() } else { c.clone() }, self.point_colour(0, i)))
+        if matches!(self.kind, Kind::Pie | Kind::Doughnut) || self.vary {
+            let n = if self.cats.is_empty() { self.n } else { self.cats.len() };
+            return (0..n)
+                .map(|i| {
+                    let name = self.cats.get(i).filter(|c| !c.is_empty()).cloned().unwrap_or_else(|| (i + 1).to_string());
+                    (name, self.point_colour(0, i))
+                })
                 .collect();
         }
         self.series
@@ -328,6 +335,18 @@ fn rich_into(e: &El, s: &mut String) {
         } else {
             rich_into(c, s);
         }
+    }
+}
+
+/// Whether a chart of this kind and series count can vary colours by point (`c:varyColors`), as
+/// Word draws it ([MS-OI29500] §21.2.2.227, and measured): area and filled radar charts never do;
+/// pie and doughnut always can; the others only with a single series.
+fn varies(kind: Kind, radar_style: Option<&str>, series: usize) -> bool {
+    match kind {
+        Kind::Pie | Kind::Doughnut => true,
+        Kind::Area => false,
+        Kind::Radar if radar_style == Some("filled") => false,
+        Kind::Bar | Kind::Line | Kind::Scatter | Kind::Radar => series == 1,
     }
 }
 

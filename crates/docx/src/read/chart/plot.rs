@@ -1,4 +1,4 @@
-use super::canvas::{Rect, fill, rect_segs, runs, seg, stroke, text, text_at, text_w, widest, wrap};
+use super::canvas::{Rect, fill, point_segments, rect_segs, runs, seg, stroke, text, text_at, text_w, widest, wrap};
 use super::format::format_value;
 use super::model::{DataLabel, Grouping, Kind, Series};
 use super::parse::category_text;
@@ -404,7 +404,11 @@ fn lines(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<Data
                 labels.push(DataLabel { x: *x, y: *y, text, inside: false });
             }
         }
-        stroke(out, runs(pts.into_iter()), c.series_colour(j), s.line_w);
+        if c.vary {
+            point_segments(out, &pts, false, |i| c.point_colour(j, i), s.line_w);
+        } else {
+            stroke(out, runs(pts.into_iter()), c.series_colour(j), s.line_w);
+        }
     }
 }
 
@@ -452,12 +456,16 @@ fn draw_scatter(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut V
             }
         }
         if s.line {
-            stroke(out, runs(pts.iter().copied()), c.series_colour(j), s.line_w);
+            if c.vary {
+                point_segments(out, &pts, false, |i| c.point_colour(j, i), s.line_w);
+            } else {
+                stroke(out, runs(pts.iter().copied()), c.series_colour(j), s.line_w);
+            }
             continue;
         }
-        for (x, y) in pts.iter().flatten() {
+        for (i, (x, y)) in pts.iter().enumerate().filter_map(|(i, p)| p.map(|p| (i, p))) {
             let rect = [x - MARKER / 2.0, y - MARKER / 2.0, MARKER, MARKER];
-            out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(c.series_colour(j)), stroke: None, stroke_width: 0.0 });
+            out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(c.point_colour(j, i)), stroke: None, stroke_width: 0.0 });
         }
     }
 }

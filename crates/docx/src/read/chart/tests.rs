@@ -204,7 +204,9 @@ fn radar_charts_draw_spokes_grid_and_series_polygons() {
 #[test]
 fn radar_charts_show_a_legend() {
     let cats = ["a", "b", "c"];
-    let plot = format!("<c:radarChart>{}</c:radarChart>", ser(0, "Team", None, &cats, &["1", "2", "3"]));
+    // `val="0"`, as Word writes it: with no `c:varyColors`, one series varies by point and the
+    // legend lists the categories instead.
+    let plot = format!(r#"<c:radarChart><c:varyColors val="0"/>{}</c:radarChart>"#, ser(0, "Team", None, &cats, &["1", "2", "3"]));
     let items = with_legend(&plot, "r", 300.0, 200.0);
     assert!(texts(&items).contains(&"Team"), "{:?}", texts(&items));
 }
@@ -527,4 +529,147 @@ fn negative_sections_and_scientific_numbers() {
     assert_eq!(format_value(0.00012, "0.0E+0", 0.0001), "1.2E-4");
     assert_eq!(format_value(0.0, "0.00E+00", 1.0), "0.00E+00");
     assert_eq!(format_value(-12345.0, "0.0E-00", 1.0), "-1.2E04");
+}
+
+// `c:varyColors` (#5955), as measured in Word: a one-series chart gives each point its own accent
+// unless the series has its own colour; area and filled radar charts never vary; with several
+// series only pie does. An absent element counts as true.
+
+/// Accent `k` (0-based) of the test theme.
+fn accent(k: usize) -> Rgb {
+    theme()[4 + k]
+}
+
+/// The legend swatches' colours, in order.
+fn swatch_colours(items: &[GraphicItem]) -> Vec<Rgb> {
+    items
+        .iter()
+        .filter_map(|it| if let GraphicItem::Shape { rect, fill, .. } = it { (rect[2] == SWATCH).then_some(*fill).flatten() } else { None })
+        .collect()
+}
+
+/// The fill colours of the round markers, in order.
+fn marker_colours(items: &[GraphicItem]) -> Vec<Rgb> {
+    items.iter().filter_map(|it| if let GraphicItem::Shape { kind: ShapeKind::Ellipse, fill, .. } = it { *fill } else { None }).collect()
+}
+
+/// The colours of the stroked paths drawn in a theme accent (the series' lines), in order.
+fn line_colours(items: &[GraphicItem]) -> Vec<Rgb> {
+    let ours = |c: &Rgb| (0..6).any(|k| accent(k) == *c);
+    items.iter().filter_map(|it| if let GraphicItem::Path { stroke: Some(c), .. } = it { ours(c).then_some(*c) } else { None }).collect()
+}
+
+const CATS: [&str; 3] = ["Q1", "Q2", "Q3"];
+
+fn column_chart(vary: &str, sers: &[String]) -> String {
+    format!(
+        r#"<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{vary}{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#,
+        sers.concat()
+    )
+}
+
+#[test]
+fn one_series_varies_by_point_when_vary_colors_is_on_or_absent() {
+    let one = [ser(0, "S", None, &CATS, &["1", "2", "3"])];
+    let varied = vec![accent(0), accent(1), accent(2)];
+    for vary in [r#"<c:varyColors val="1"/>"#, r#"<c:varyColors val="true"/>"#, "<c:varyColors/>", ""] {
+        let bars: Vec<Rgb> = filled(&chart_items(&space(&column_chart(vary, &one)), &theme(), 300.0, 200.0)).iter().map(|b| b.0).collect();
+        assert_eq!(bars, varied, "{vary:?}");
+    }
+    let off = filled(&chart_items(&space(&column_chart(r#"<c:varyColors val="0"/>"#, &one)), &theme(), 300.0, 200.0));
+    assert!(off.iter().all(|b| b.0 == accent(0)), "{off:?}");
+}
+
+#[test]
+fn an_explicit_series_colour_wins_over_vary_colors() {
+    let red = Rgb(0xFF, 0, 0);
+    let plot = column_chart(r#"<c:varyColors val="1"/>"#, &[ser(0, "S", Some("FF0000"), &CATS, &["1", "2", "3"])]);
+    let items = with_legend(&plot, "r", 300.0, 200.0);
+    assert!(filled(&items).iter().all(|b| b.0 == red), "{:?}", filled(&items));
+    // The legend still lists the categories, each in the series colour.
+    assert_eq!(swatch_colours(&items), vec![red; 3]);
+    // Pie too.
+    let pie = format!(r#"<c:pieChart><c:varyColors val="1"/>{}</c:pieChart>"#, ser(0, "S", Some("FF0000"), &CATS, &["1", "2", "3"]));
+    let slices = filled(&chart_items(&space(&pie), &theme(), 200.0, 150.0));
+    assert!(slices.len() == 3 && slices.iter().all(|s| s.0 == red), "{slices:?}");
+}
+
+#[test]
+fn several_series_area_and_filled_radar_do_not_vary() {
+    let vary = r#"<c:varyColors val="1"/>"#;
+    let two = [ser(0, "A", None, &CATS, &["1", "2", "3"]), ser(1, "B", None, &CATS, &["3", "2", "1"])];
+    let items = with_legend(&column_chart(vary, &two), "r", 300.0, 200.0);
+    let bars: Vec<Rgb> = filled(&items).iter().map(|b| b.0).collect();
+    assert_eq!(bars, [accent(0), accent(0), accent(0), accent(1), accent(1), accent(1)]);
+    assert_eq!(swatch_colours(&items), [accent(0), accent(1)], "the legend lists the series");
+
+    let one = ser(0, "S", None, &CATS, &["1", "2", "3"]);
+    let area = format!(
+        r#"<c:areaChart><c:grouping val="standard"/>{vary}{one}<c:axId val="1"/><c:axId val="2"/></c:areaChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#
+    );
+    let items = with_legend(&area, "r", 300.0, 200.0);
+    assert_eq!(filled(&items).iter().map(|b| b.0).collect::<Vec<_>>(), [accent(0)]);
+    assert_eq!(swatch_colours(&items), [accent(0)]);
+
+    let radar = format!(r#"<c:radarChart><c:radarStyle val="filled"/>{vary}{one}</c:radarChart><c:valAx/>"#);
+    let items = with_legend(&radar, "r", 300.0, 220.0);
+    assert_eq!(filled(&items).iter().map(|b| b.0).collect::<Vec<_>>(), [accent(0)]);
+    assert!(line_colours(&items).iter().all(|c| *c == accent(0)), "{:?}", line_colours(&items));
+    assert_eq!(swatch_colours(&items), [accent(0)]);
+
+    // A pie draws only its first series, and still varies with two.
+    let pie = format!(r#"<c:pieChart>{vary}{}</c:pieChart>"#, two.concat());
+    let slices: Vec<Rgb> = filled(&chart_items(&space(&pie), &theme(), 200.0, 150.0)).iter().map(|s| s.0).collect();
+    assert_eq!(slices, [accent(0), accent(1), accent(2)]);
+}
+
+#[test]
+fn varied_lines_colour_each_segment_by_the_point_it_ends_at() {
+    let plot = format!(
+        r#"<c:lineChart><c:grouping val="standard"/><c:varyColors val="1"/>{}<c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#,
+        ser(0, "S", None, &["a", "b", "c", "d"], &["1", "3", "2", "4"])
+    );
+    let items = chart_items(&space(&plot), &theme(), 300.0, 200.0);
+    assert_eq!(line_colours(&items), [accent(1), accent(2), accent(3)]);
+    // Not varied: one line in the series colour.
+    let plain = plot.replace(r#"<c:varyColors val="1"/>"#, r#"<c:varyColors val="0"/>"#);
+    assert_eq!(line_colours(&chart_items(&space(&plain), &theme(), 300.0, 200.0)), [accent(0)]);
+}
+
+/// A one-series scatter chart; `no_line` hides the line so markers are drawn.
+fn scatter(vary: &str, no_line: bool) -> String {
+    let ln = if no_line { "<c:spPr><a:ln><a:noFill/></a:ln></c:spPr>" } else { "" };
+    let s = ser(0, "S", None, &["1", "2", "3"], &["1", "3", "2"]).replace("c:cat>", "c:xVal>").replace("c:val>", "c:yVal>");
+    let s = s.replace("</c:tx>", &format!("</c:tx>{ln}"));
+    format!(
+        r#"<c:scatterChart><c:scatterStyle val="lineMarker"/>{vary}{s}<c:axId val="1"/><c:axId val="2"/></c:scatterChart><c:valAx><c:axId val="1"/></c:valAx><c:valAx><c:axId val="2"/></c:valAx>"#
+    )
+}
+
+#[test]
+fn varied_scatter_charts_colour_markers_and_segments_by_point() {
+    let vary = r#"<c:varyColors val="1"/>"#;
+    let marks = chart_items(&space(&scatter(vary, true)), &theme(), 300.0, 200.0);
+    assert_eq!(marker_colours(&marks), [accent(0), accent(1), accent(2)]);
+    let lined = chart_items(&space(&scatter(vary, false)), &theme(), 300.0, 200.0);
+    assert_eq!(line_colours(&lined), [accent(1), accent(2)]);
+    let plain = chart_items(&space(&scatter(r#"<c:varyColors val="0"/>"#, true)), &theme(), 300.0, 200.0);
+    assert_eq!(marker_colours(&plain), [accent(0); 3]);
+}
+
+#[test]
+fn varied_radar_charts_colour_markers_and_segments_by_point() {
+    let one = ser(0, "S", None, &CATS, &["1", "2", "3"]);
+    let plot = format!(r#"<c:radarChart><c:radarStyle val="marker"/><c:varyColors val="1"/>{one}</c:radarChart><c:valAx/>"#);
+    let items = chart_items(&space(&plot), &theme(), 300.0, 220.0);
+    assert_eq!(marker_colours(&items), [accent(0), accent(1), accent(2)]);
+    // Segments a→b, b→c, then the closing c→a, each in the colour of the point it ends at.
+    assert_eq!(line_colours(&items), [accent(1), accent(2), accent(0)]);
+}
+
+#[test]
+fn the_legend_of_a_varied_chart_lists_the_categories() {
+    let items = with_legend(&column_chart("", &[ser(0, "Sales", None, &CATS, &["1", "2", "3"])]), "r", 300.0, 200.0);
+    assert_eq!(swatch_colours(&items), [accent(0), accent(1), accent(2)]);
+    assert!(!texts(&items).contains(&"Sales"), "{:?}", texts(&items));
 }
