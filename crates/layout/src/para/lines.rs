@@ -4,7 +4,7 @@ use super::justify::{HYPHENATION_ZONE, hyphen_glyph, shrink_line_spaces, space_r
 use super::model::{ClKind, Cluster, Line, LineEnd, ParaEnv};
 use super::paragraph::word_widths;
 use super::tabs::{next_tab, pl_text_at, ptab_stop, resolve_tab};
-use super::{Align, Arc, Level, LevelSuffix, LineSpacing, MathJc, ParaLayout, TabAlign, TabLeader, TabStop, VecDeque, WrapText};
+use super::{Align, Arc, Level, LevelSuffix, LineSpacing, MathJc, ParaLayout, TabAlign, TabLeader, TabStop, TextAlignment, VecDeque, WrapText};
 
 /// Narrow cells and float spans must retain their usable width.
 const MIN_LINE_WIDTH: f32 = 1.0;
@@ -156,7 +156,7 @@ pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, l
         let mut sc = bk.begin_line(pl);
         sc.scan(&mut bk, pl);
         if sc.skip {
-            bk.skip_row(&sc);
+            bk.skip_row(pl, &sc);
             continue;
         }
         let end = bk.close_line(pl, sc);
@@ -312,13 +312,17 @@ impl<'e> Breaker<'e> {
 
     /// The first word doesn't fit the span beside a floating object: try the row's next span,
     /// or the next row.
-    fn skip_row(&mut self, sc: &Scan) {
+    fn skip_row(&mut self, pl: &ParaLayout, sc: &Scan) {
         self.skipped += 1;
         if !self.row_rest.is_empty() {
             return;
         }
         self.top = if self.lines.len() > self.row_first {
-            self.top + even_row(self.lines.get_mut(self.row_first..).unwrap_or_default())
+            self.top + even_row(
+                self.lines.get_mut(self.row_first..).unwrap_or_default(),
+                self.rp.text_alignment,
+                pl.drop_cap.map_or(0, |d| d.0),
+            )
         } else {
             // Nothing on this row: go below the first object that ends, as when no span is wide enough.
             self.exclusions
@@ -342,6 +346,7 @@ impl<'e> Breaker<'e> {
         }
         let (c1, j, hyphen) = self.settle_clusters(pl, &mut sc);
         let v = self.measure(pl, (sc.c0, c1));
+        let shifts = self.text_shifts(pl, (sc.c0, c1), &v);
         self.align(pl, &mut sc, c1);
         let start = pl.clusters.get(sc.c0).map(|c| c.start).unwrap_or(pl.text_len);
         let stop = if c1 > sc.c0 { pl.clusters.get(c1 - 1).map(|c| c.end).unwrap_or(pl.text_len) } else { start };
@@ -368,6 +373,7 @@ impl<'e> Breaker<'e> {
             beside: sc.beside,
             vis: Vec::new(),
             rtl: self.rtl_para,
+            shifts,
         };
         if self.bidi {
             reorder_line(pl, &mut line, self.width);
@@ -535,6 +541,45 @@ impl<'e> Breaker<'e> {
         Measure { height, baseline, text_asc, text_desc }
     }
 
+    /// Each cluster's baseline shift under the paragraph's `w:textAlignment` (ECMA-376 §17.3.1.39),
+    /// for the clusters `c0..c1` of a line measured as `v`. A character's box runs from its ascent
+    /// above its baseline to its descent below it (a picture's rises its height from the baseline).
+    /// `Top` puts each box's top on the line's top, `Bottom` its bottom on the line's bottom, and
+    /// `Center` its middle on the line's middle. Empty when the characters stay on the baseline.
+    fn text_shifts(&self, pl: &ParaLayout, (c0, c1): (usize, usize), v: &Measure) -> Vec<f32> {
+        let align = self.rp.text_alignment;
+        if matches!(align, TextAlignment::Auto | TextAlignment::Baseline) {
+            return Vec::new();
+        }
+        let base = v.baseline - self.top;
+        let dropped = pl.drop_cap.map_or(0, |d| d.0);
+        let clusters = pl.clusters.get(c0..c1).unwrap_or_default();
+        clusters
+            .iter()
+            .enumerate()
+            .map(|(k, c)| {
+                // A drop cap is placed by its own rules; a cluster without a style has no box.
+                let Some(st) = pl.styles.get(c.style as usize) else { return 0.0 };
+                if c0 + k < dropped {
+                    return 0.0;
+                }
+                let (a, d) = if matches!(c.kind, ClKind::Object(_)) && (c.obj_h > 0.0 || c.obj_d > 0.0) {
+                    (c.obj_h, c.obj_d)
+                } else {
+                    let (a, d) = st.line_extent();
+                    (a.max(c.obj_h + st.shift), d)
+                };
+                let at = match align {
+                    TextAlignment::Top => a,
+                    TextAlignment::Bottom => v.height - d,
+                    TextAlignment::Center => (v.height - a - d) / 2.0 + a,
+                    TextAlignment::Auto | TextAlignment::Baseline => base,
+                };
+                at - base
+            })
+            .collect()
+    }
+
     /// Alignment / justification of the line (trailing spaces hang).
     fn align(&mut self, pl: &mut ParaLayout, sc: &mut Scan, c1: usize) {
         let rp = &self.rp;
@@ -586,7 +631,11 @@ impl<'e> Breaker<'e> {
             self.row_rest.clear();
         }
         if self.row_rest.is_empty() {
-            self.top += even_row(self.lines.get_mut(self.row_first..).unwrap_or_default());
+            self.top += even_row(
+                self.lines.get_mut(self.row_first..).unwrap_or_default(),
+                self.rp.text_alignment,
+                pl.drop_cap.map_or(0, |d| d.0),
+            );
         }
         if self.i >= self.n {
             // A paragraph ending with a line break gets an empty last line.
@@ -638,6 +687,7 @@ impl<'e> Breaker<'e> {
             beside: false,
             vis: Vec::new(),
             rtl: self.rtl_para,
+            shifts: Vec::new(),
         });
         self.top += h;
     }

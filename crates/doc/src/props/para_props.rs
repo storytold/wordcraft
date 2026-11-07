@@ -28,9 +28,10 @@ impl Align {
 
 /// Vertical alignment of characters of different sizes on a line (`w:textAlignment`,
 /// ECMA-376 §17.3.1.39).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum TextAlignment {
+    #[default]
     Auto,
     Top,
     Center,
