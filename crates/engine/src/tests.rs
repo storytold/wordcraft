@@ -7250,6 +7250,21 @@ fn border_side_updates_preserve_flags_per_target() {
 }
 
 #[test]
+fn border_side_updates_preserve_flags_inherited_from_a_style() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("styled"));
+    let inherited = wordcraft_doc::props::Border { shadow: Some(true), frame: Some(false), ..wordcraft_doc::props::Border::single(0.5) };
+    let mut para = wordcraft_doc::props::ParaProps::default();
+    para.borders = Some(wordcraft_doc::props::Borders { top: Some(inherited), ..Default::default() });
+    Arc::make_mut(&mut s.doc.styles).upsert(wordcraft_doc::Style { id: "Bordered".into(), name: "Bordered".into(), para, ..Default::default() });
+    s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.style = Some("Bordered".into());
+
+    run(&mut s, "para.borders", json!({"sides": {"top": {"style": "double", "width": 2.0}}}));
+    let top = s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props.borders).and_then(|b| b.top).unwrap();
+    assert_eq!((top.style, top.width), (BorderStyle::Double, 2.0));
+    assert_eq!((top.shadow, top.frame), (Some(true), Some(false)));
+}
+
+#[test]
 fn border_kind_updates_preserve_existing_side_flags() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("one"));
     let top = wordcraft_doc::props::Border { shadow: Some(false), frame: Some(true), ..wordcraft_doc::props::Border::single(0.5) };
