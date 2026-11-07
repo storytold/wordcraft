@@ -38,7 +38,7 @@ pub(crate) struct WindowUi {
     pub(crate) sent_full_screen: bool,
     pub(crate) seen_full_screen: Option<bool>,
     pub(crate) escape_free: bool,
-    pub(crate) word_count: (u64, usize),
+    pub(crate) status_counts: (u64, crate::StatusCounts),
     /// Per window, as each window shows its own layout: one shared list would be read again
     /// on every frame of every window.
     pub(crate) missing_fonts: crate::chrome::MissingFontsMemo,
@@ -69,8 +69,8 @@ pub(crate) struct WindowUi {
     pub(crate) alt_modifier_seen: bool,
 }
 
-/// A word count that matches no document revision, so the next frame counts.
-pub(crate) const NOT_COUNTED: (u64, usize) = (u64::MAX, 0);
+/// Status-bar counts that match no document revision, so the next frame counts.
+pub(crate) const NOT_COUNTED: (u64, crate::StatusCounts) = (u64::MAX, crate::StatusCounts { words: 0, chars: 0, chars_no_spaces: 0 });
 
 impl WindowUi {
     /// A new window showing open document `document`: nothing open over the page, Home tab.
@@ -111,7 +111,7 @@ impl WindowUi {
             sent_full_screen: false,
             seen_full_screen: None,
             escape_free: false,
-            word_count: NOT_COUNTED,
+            status_counts: NOT_COUNTED,
             missing_fonts: Default::default(),
             last_autosave: 0.0,
             equation_prev_tab: None,
@@ -238,7 +238,7 @@ impl WordApp {
             sent_full_screen,
             seen_full_screen,
             escape_free,
-            word_count,
+            status_counts,
             missing_fonts,
             last_autosave,
             equation_prev_tab,
@@ -269,6 +269,8 @@ impl WordApp {
             animations: _,
             legacy_dark: _,
             nav_tab: _,
+            display_server: _,
+            status_count: _,
             nav_pane: _,
             show_discord: _,
             author: _,
@@ -336,7 +338,7 @@ impl WordApp {
             sent_full_screen,
             seen_full_screen,
             escape_free,
-            word_count,
+            status_counts,
             missing_fonts,
             last_autosave,
             equation_prev_tab,
