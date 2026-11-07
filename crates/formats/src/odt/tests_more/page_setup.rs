@@ -455,3 +455,53 @@ fn continuous_section_header_picture_does_not_suppress_page_background() {
     );
     assert!(s.contains("Pictures/page-background.png"));
 }
+
+/// A non-continuous `last_section` without any body blocks following the section break
+/// does not produce an exported page and does not suppress the page background (#5803).
+#[test]
+fn trailing_empty_last_section_header_picture_does_not_suppress_page_background() {
+    let png = {
+        let img = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let mut d = Document::new();
+    let bg_media = d.add_media(png.clone(), "png");
+    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: bg_media, fill_type: "frame".into(), title: String::new() });
+
+    // Body with a single paragraph ending section 1 (nothing follows it)
+    let mut p1 = wordcraft_doc::Paragraph::new();
+    p1.text = "Sole paragraph ending section 1".into();
+    p1.runs = vec![wordcraft_doc::para::Run { len: p1.text.len(), props: Default::default() }];
+    p1.section = Some(Box::new(wordcraft_doc::SectionProps::default()));
+    d.body.push(wordcraft_doc::para_block(p1));
+
+    // last_section is NextPage and has a header with a picture, but has no blocks following
+    let header_media = d.add_media(png, "png");
+    let mut hp = wordcraft_doc::Paragraph::new();
+    hp.text = format!("{}", wordcraft_doc::para::OBJ);
+    hp.objects.push(wordcraft_doc::para::InlineObject::Image {
+        media: header_media,
+        w: 100.0,
+        h: 100.0,
+        alt: "Unused trailing section header picture".into(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    });
+    hp.runs = vec![wordcraft_doc::para::Run { len: hp.text.len(), props: Default::default() }];
+    d.parts.insert(
+        300,
+        wordcraft_doc::Part { kind: wordcraft_doc::PartKind::Header, blocks: vec![wordcraft_doc::para_block(hp)], body: Default::default() },
+    );
+
+    d.last_section.start = wordcraft_doc::section::SectionStart::NextPage;
+    d.last_section.headers.default = Some(300);
+
+    let saved = export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(s.contains("style:background-image"), "page background must not be suppressed by an unexported trailing last_section header: {s}");
+    assert!(s.contains("Pictures/page-background.png"));
+}

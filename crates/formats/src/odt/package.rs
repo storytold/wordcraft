@@ -1093,7 +1093,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     if w.indexes + hw.indexes > 0 {
         draw_xml.push_str("<style:style style:name=\"Index_20_Link\" style:display-name=\"Index Link\" style:family=\"text\"/>");
     }
-    let styles = page_background(doc, &mut w, styles_xml(doc, &pages, &parts, &hw.style_defs(), &named));
+    let styles = page_background(doc, &mut w, &pages, styles_xml(doc, &pages, &parts, &hw.style_defs(), &named));
     let styles = styles.replacen(
         "</office:styles>",
         // The Frame style text boxes derive from (it states nothing: their own styles do).
@@ -1155,7 +1155,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     // Style definitions as read while nobody changed them: the file's own `office:styles`.
     let styles = styles_as_read(doc, kept, styles, &mut w.kept_used);
     // Page setup as read while nobody changed it: the file's own page layouts and master pages.
-    let styles = kept_pages_styles(doc, kept, styles);
+    let styles = kept_pages_styles(doc, kept, &pages, styles);
     let (content, styles) = with_kept_defs(content, styles, &w.kept_used, &w.kept_defs);
     for (name, data) in [
         ("META-INF/manifest.xml", manifest.as_bytes()),
@@ -1298,8 +1298,8 @@ fn variables(doc: &Document) -> std::collections::BTreeSet<String> {
 ///
 /// When a header contains a picture, a pre-existing legacy background image is suppressed
 /// so it doesn't survive as an orphan or overlap with the header's graphic (#5803).
-fn page_background(doc: &Document, w: &mut Writer, styles: String) -> String {
-    if has_header_picture(doc) {
+fn page_background(doc: &Document, w: &mut Writer, pages: &[(String, SectionProps)], styles: String) -> String {
+    if has_header_picture(doc, pages) {
         return styles;
     }
     let Some(pic) = doc.settings.page_picture.as_ref() else { return styles };
@@ -1341,11 +1341,11 @@ fn page_background(doc: &Document, w: &mut Writer, styles: String) -> String {
 
 /// Page setup definitions from retained markup while nobody changed them, with background
 /// images stripped if active headers have pictures (#5803).
-fn kept_pages_styles(doc: &Document, kept: Option<&wordcraft_doc::kept::KeptXml>, styles: String) -> String {
+fn kept_pages_styles(doc: &Document, kept: Option<&wordcraft_doc::kept::KeptXml>, pages: &[(String, SectionProps)], styles: String) -> String {
     match kept.filter(|k| k.pages_as_read(doc)) {
         Some(k) => {
             let s = super::kept::with_pages_as_read(&styles, &k.defs, &k.order);
-            if has_header_picture(doc) { remove_background_images(&s) } else { s }
+            if has_header_picture(doc, pages) { remove_background_images(&s) } else { s }
         }
         None => styles,
     }
@@ -1405,19 +1405,15 @@ fn remove_background_images(xml: &str) -> String {
 
 /// Whether any active header emitted for `doc` contains a picture.
 ///
-/// Checks only the header parts for sections that produce a master page and that `page_parts`
-/// actually emits:
+/// Checks only the header parts for sections represented in `pages` (those that produce a master
+/// page) and that `page_parts` actually emits:
 /// - `sec.headers.default` (always active if present)
 /// - `sec.headers.even` (active only when `doc.settings.even_odd_headers` is true)
 /// - `sec.headers.first` (active only when `sec.title_page` is true)
-fn has_header_picture(doc: &Document) -> bool {
+fn has_header_picture(doc: &Document, pages: &[(String, SectionProps)]) -> bool {
     let even = doc.settings.even_odd_headers;
     let mut active_ids = std::collections::HashSet::new();
-    for (k, (_, sec)) in doc.sections().iter().enumerate() {
-        // Sections that produce a master page: the first section or any non-continuous section.
-        if k > 0 && sec.start == SectionStart::Continuous {
-            continue;
-        }
+    for (_, sec) in pages {
         if let Some(id) = sec.headers.default {
             active_ids.insert(id);
         }
