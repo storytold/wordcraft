@@ -232,13 +232,18 @@ pub(super) const RUN_FALLBACK_CACHE_CHARS: usize = 1 << 20;
 /// family, upright, nearest to regular weight.
 pub(super) fn fallback_order(faces: &[Arc<FontFace>], exclude: u32, rtl: bool, complex: Option<char>) -> Vec<&Arc<FontFace>> {
     let mut order: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.id != exclude).collect();
+    let primary = faces.iter().find(|f| f.id == exclude);
+    let prefer_serif = primary.is_some_and(|p| p.is_serif());
+    let serif_mismatch = |f: &FontFace| primary.is_some() && f.is_serif() != prefer_serif;
     let rank =
         |f: &FontFace| if rtl { RTL_FALLBACKS.iter().position(|n| f.family.eq_ignore_ascii_case(n)).unwrap_or(RTL_FALLBACKS.len()) } else { 0 };
     let shaping = |f: &FontFace| match complex {
         Some(c) => (!f.has_layout_tables(), crate::fallback_rank(c, &f.family)),
         None => (false, 0),
     };
-    order.sort_by_key(|f| (rank(f), shaping(f), !f.family.eq_ignore_ascii_case(FALLBACK_FAMILY), f.italic, (f.weight - 400.0).abs() as i32));
+    order.sort_by_key(|f| {
+        (rank(f), shaping(f), !f.family.eq_ignore_ascii_case(FALLBACK_FAMILY), serif_mismatch(f), f.italic, (f.weight - 400.0).abs() as i32)
+    });
     order
 }
 

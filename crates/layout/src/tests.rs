@@ -7489,6 +7489,51 @@ fn chart_text_the_font_lacks_is_drawn_in_a_fallback_face() {
     assert!(xs.windows(2).all(|w| w[0] <= w[1]), "{xs:?}");
 }
 
+#[test]
+fn smart_art_diagram_cjk_labels_maintain_consistent_fallback_font() {
+    // #5672: CJK labels in a SmartArt diagram rendered in two different fallback fonts
+    // (first node serif Mincho, rest sans). The diagram must maintain a consistent fallback font
+    // matching the sans-serif primary font of the diagram.
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
+    use wordcraft_doc::props::Rgb;
+    if wordcraft_fonts::FontDb::global().fallback_for('新', 0).is_none() || wordcraft_fonts::FontDb::global().fallback_for('样', 0).is_none() {
+        eprintln!("skipped: no CJK font installed");
+        return;
+    }
+    let labels = ["新建文档", "施加样式", "导出验证"];
+    let items = labels
+        .iter()
+        .enumerate()
+        .map(|(i, &label)| GraphicItem::Text {
+            rect: [0.0, (i as f32) * 30.0, 100.0, 20.0],
+            text: label.into(),
+            size: 12.0,
+            color: Rgb::BLACK,
+            bold: false,
+            align: TextAlign::Center,
+            font: None,
+        })
+        .collect();
+    let graphic = Graphic { kind: GraphicKind::Diagram, items, ..Default::default() };
+    let obj = InlineObject::Graphic { w: 300.0, h: 200.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+    let mut d = Document::from_text("Diagram");
+    d.insert_object(&Pos::body(0, 0), obj, &Default::default()).unwrap();
+    let draws = flat(display::page_display(&d, &lay(&d).pages[0], &Default::default()));
+    let text_faces: Vec<_> = draws
+        .iter()
+        .filter_map(|x| if let display::Draw::Glyphs { face, text, .. } = x { Some((text.clone(), *face)) } else { None })
+        .filter(|(text, _)| labels.iter().any(|l| l.contains(text)))
+        .collect();
+
+    assert!(!text_faces.is_empty(), "diagram text was drawn");
+    let first_family = text_faces[0].1.family.clone();
+    assert!(!text_faces[0].1.is_serif(), "diagram fallback font should be sans-serif, was {first_family}");
+    for (text, face) in &text_faces {
+        assert_eq!(face.family, first_family, "label {text:?} used a different font family from first node");
+        assert!(!face.is_serif(), "label {text:?} rendered in serif font {}", face.family);
+    }
+}
+
 /// The draws with figures opened up.
 fn flat(draws: Vec<display::Draw>) -> Vec<display::Draw> {
     draws.into_iter().flat_map(|x| if let display::Draw::Figure { draws, .. } = x { draws } else { vec![x] }).collect()

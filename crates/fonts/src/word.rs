@@ -147,7 +147,7 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
         | "sitka"
         | "aptos serif" => (SERIF, false),
         _ if f.contains("mono") || f.contains("code") => (MONO, false),
-        _ if f.contains("serif") && !f.contains("sans") => (SERIF, false),
+        _ if crate::fontdb::is_serif_family(&f) => (SERIF, false),
         _ => (SANS, false),
     }
 }
