@@ -1,6 +1,7 @@
-//! A VBA project kept with a part WordCraft carries unchanged (an unmodelled part, the glossary, and
-//! the parts they reach) follows the main document's own: kept in a package that can hold macros,
-//! left out of one that can't (#3629). A hand-written synthetic package, no files produced by Word.
+//! A VBA project kept with a part WordCraft carries unchanged (an unmodelled part, the glossary, an
+//! embedded object, and the parts they reach) follows the main document's own: kept in a package
+//! that can hold macros, left out of one that can't (#3629). Hand-written synthetic packages, no
+//! files produced by Word.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -12,6 +13,9 @@ const OFFICE_DOC: &str = "http://schemas.openxmlformats.org/officeDocument/2006/
 const GLOSSARY: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/glossaryDocument";
 const REL_VBA: &str = "http://schemas.microsoft.com/office/2006/relationships/vbaProject";
 const REL_VBA_DATA: &str = "http://schemas.microsoft.com/office/2006/relationships/wordVbaData";
+const REL_IMAGE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
+const REL_OLE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject";
+const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const REL_EXTENSION: &str = "urn:example:extension";
 const REL_NOTE: &str = "urn:example:note";
 const REL_ODD: &str = "urn:example:odd";
@@ -100,8 +104,7 @@ fn package() -> Vec<u8> {
 }
 
 fn save(flavor: Flavor) -> BTreeMap<String, Vec<u8>> {
-    let doc = wordcraft_docx::read(&package()).expect("read");
-    unzip(&wordcraft_docx::write_as(&doc, flavor).expect("write"))
+    save_as(&package(), flavor)
 }
 
 /// The relationship parts of `files`, joined.
@@ -158,5 +161,106 @@ fn a_vba_project_kept_with_a_carried_part_stays_in_a_macro_enabled_save() {
         assert!(text(&files, "word/_rels/document.xml.rels").contains(REL_ODD), "{flavor:?}");
         assert!(text(&files, "word/glossary/_rels/document.xml.rels").contains(&format!(r#"Type="{REL_VBA}""#)), "{flavor:?}");
         assert!(text(&files, "word/glossary/_rels/vbaProject.bin.rels").contains(REL_VBA_DATA), "{flavor:?}");
+    }
+}
+
+/// A stand-in for an OLE object's picture.
+const PICTURE: &[u8] = b"\x89PNG stand-in for an object's picture";
+
+/// A package whose body holds an OLE object: a VML picture (`rId8`) and an `o:OLEObject` that
+/// uses relationship `rId9`, whose `Type`, `Target` and any `TargetMode` attributes are `ole`.
+/// `types` adds content type overrides and `parts` the parts `rId9` reaches.
+fn object_package(ole: &str, types: &str, parts: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    let ct = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="bin" ContentType="application/octet-stream"/><Override PartName="/word/document.xml" ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/>{types}</Types>"#
+    );
+    let body = format!(
+        r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W}" xmlns:r="{R}" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><w:body><w:p><w:r><w:object w:dxaOrig="1440" w:dyaOrig="720"><v:shape id="_x0000_i1025" type="#_x0000_t75" style="width:72pt;height:36pt" o:ole=""><v:imagedata r:id="rId8" o:title=""/></v:shape><o:OLEObject Type="Embed" ProgID="Package" ShapeID="_x0000_i1025" DrawAspect="Content" ObjectID="_1000000001" r:id="rId9"/></w:object></w:r></w:p></w:body></w:document>"##
+    );
+    let doc_rels = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId8" Type="{REL_IMAGE}" Target="media/image1.png"/><Relationship Id="rId9" {ole}/></Relationships>"#
+    );
+    let mut entries = vec![
+        ("[Content_Types].xml", ct.into_bytes()),
+        ("_rels/.rels", rels(&[("rId1", OFFICE_DOC, "word/document.xml")])),
+        ("word/document.xml", body.into_bytes()),
+        ("word/_rels/document.xml.rels", doc_rels.into_bytes()),
+        ("word/media/image1.png", PICTURE.to_vec()),
+    ];
+    entries.extend(parts.iter().map(|(name, bytes)| (*name, bytes.clone())));
+    zip(&entries)
+}
+
+fn save_as(package: &[u8], flavor: Flavor) -> BTreeMap<String, Vec<u8>> {
+    let doc = wordcraft_docx::read(package).expect("read");
+    unzip(&wordcraft_docx::write_as(&doc, flavor).expect("write"))
+}
+
+/// The value of attribute `name` on the first `element` start tag in `xml`.
+fn first_attr(xml: &str, element: &str, name: &str) -> Option<String> {
+    let start = xml.find(&format!("<{element} "))?;
+    let tag = &xml[start..start + xml[start..].find('>')?];
+    let at = tag.find(&format!(" {name}=\""))? + name.len() + 3;
+    Some(tag[at..at + tag[at..].find('"')?].to_string())
+}
+
+/// The `Relationship` element with id `id` in the relationship part `rels`.
+fn relationship<'a>(rels: &'a str, id: &str) -> Option<&'a str> {
+    let id = format!(r#"Id="{id}""#);
+    rels.split("<Relationship ").skip(1).find(|r| r.contains(&id)).map(|r| &r[..r.find("/>").unwrap_or(r.len())])
+}
+
+/// An object whose markup uses a relationship of the VBA project type, to a part with an ordinary
+/// content type or external, is written as its picture when the package can't hold macros, so
+/// the relationship and the project's bytes stay out; a macro-enabled save keeps the object.
+#[test]
+fn an_object_that_uses_a_vba_project_relationship_is_left_out_of_a_macro_free_save() {
+    let internal = object_package(&format!(r#"Type="{REL_VBA}" Target="payload.bin""#), "", &[("word/payload.bin", fake_vba(4))]);
+    let external = object_package(&format!(r#"Type="{REL_VBA}" Target="https://example.com/project.bin" TargetMode="External""#), "", &[]);
+    for (case, package) in [("internal", &internal), ("external", &external)] {
+        for flavor in [Flavor::Document, Flavor::Template] {
+            let files = save_as(package, flavor);
+            let body = text(&files, "word/document.xml");
+            assert!(!body.contains("o:OLEObject") && body.contains("<w:drawing>"), "{case} {flavor:?}: {body}");
+            let rels = all_rels(&files);
+            assert!(!rels.contains(&format!(r#"Type="{REL_VBA}""#)) && !rels.contains("example.com"), "{case} {flavor:?}: {rels}");
+            for (name, bytes) in &files {
+                assert_ne!(bytes, &fake_vba(4), "{case} {flavor:?}: {name} written");
+            }
+        }
+        let files = save_as(package, Flavor::MacroDocument);
+        let body = text(&files, "word/document.xml");
+        let id = first_attr(&body, "o:OLEObject", "r:id").unwrap_or_else(|| panic!("{case}: no object in {body}"));
+        let rels = text(&files, "word/_rels/document.xml.rels");
+        let rel = relationship(&rels, &id).unwrap_or_else(|| panic!("{case}: no {id} in {rels}"));
+        assert!(rel.contains(&format!(r#"Type="{REL_VBA}""#)), "{case}: {rel}");
+        if case == "internal" {
+            assert!(rel.contains(r#"Target="payload.bin""#), "{rel}");
+            assert_eq!(files.get("word/payload.bin"), Some(&fake_vba(4)));
+        } else {
+            assert!(rel.contains(r#"Target="https://example.com/project.bin""#) && rel.contains(r#"TargetMode="External""#), "{rel}");
+        }
+    }
+}
+
+/// An object whose embedding has a VBA project's content type is left out before any of its
+/// parts is written: its picture isn't also carried as a part that nothing uses.
+#[test]
+fn an_object_left_out_for_a_vba_project_leaves_no_part_behind() {
+    let package = object_package(
+        &format!(r#"Type="{REL_OLE}" Target="embeddings/oleObject1.bin""#),
+        r#"<Override PartName="/word/embeddings/oleObject1.bin" ContentType="application/vnd.ms-office.vbaProject"/>"#,
+        &[("word/embeddings/oleObject1.bin", fake_vba(5))],
+    );
+    for flavor in [Flavor::Document, Flavor::Template] {
+        let files = save_as(&package, flavor);
+        let body = text(&files, "word/document.xml");
+        assert!(!body.contains("o:OLEObject") && body.contains("<w:drawing>"), "{flavor:?}: {body}");
+        let rels = text(&files, "word/_rels/document.xml.rels");
+        assert_eq!(rels.matches("/relationships/image\"").count(), 1, "{flavor:?}: {rels}");
+        assert_eq!(files.values().filter(|b| b.as_slice() == PICTURE).count(), 1, "{flavor:?}: {:?}", files.keys());
+        for (name, bytes) in &files {
+            assert_ne!(bytes, &fake_vba(5), "{flavor:?}: {name} written");
+        }
     }
 }
