@@ -248,6 +248,8 @@ pub fn part_borders(parts: &[(TablePart, Borders)], (ri, nrows): (usize, usize),
                 right: if last_g { b.right } else { b.inside_v },
                 between: None,
                 inside_v: None,
+                tl2br: b.tl2br,
+                tr2bl: b.tr2bl,
             }
         } else if part.is_column() {
             Borders {
@@ -257,6 +259,8 @@ pub fn part_borders(parts: &[(TablePart, Borders)], (ri, nrows): (usize, usize),
                 right: b.right,
                 between: None,
                 inside_v: None,
+                tl2br: b.tl2br,
+                tr2bl: b.tr2bl,
             }
         } else {
             Borders { between: None, inside_v: None, ..b }
@@ -990,6 +994,15 @@ mod tests {
         let json = serde_json::to_value(ParaProps { adjust_right_indent: Some(false), ..Default::default() }).unwrap();
         assert_eq!(json["adjustRightIndent"], false);
         assert_eq!(serde_json::from_value::<ParaProps>(json).unwrap().adjust_right_indent, Some(false));
+    }
+
+    #[test]
+    fn table_part_diagonal_borders_reach_the_cells() {
+        let tl2br = Border::single(1.0);
+        let tr2bl = Border::single(2.0);
+        let borders = Borders { tl2br: Some(tl2br), tr2bl: Some(tr2bl), ..Default::default() };
+        let mapped = part_borders(&[(TablePart::FirstRow, borders)], (0, 1), (true, true));
+        assert_eq!((mapped.tl2br, mapped.tr2bl), (Some(tl2br), Some(tr2bl)));
     }
 
     #[test]

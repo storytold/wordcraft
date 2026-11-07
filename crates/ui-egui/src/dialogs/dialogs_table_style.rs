@@ -373,6 +373,8 @@ pub fn table_style_preview(ui: &mut Ui, style: Option<&TableStyleProps>, look: T
                 right: if ci + 1 == COLS { tb.right } else { tb.inside_v },
                 between: None,
                 inside_v: None,
+                tl2br: tb.tl2br,
+                tr2bl: tb.tr2bl,
             };
             // Parts from lowest to highest precedence, as layout applies them.
             for part in PartSet::of_cell(&look, band, (ri, ROWS), (ci, 1, COLS)).iter() {

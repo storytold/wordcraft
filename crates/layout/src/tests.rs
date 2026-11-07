@@ -2532,6 +2532,56 @@ fn cell_rect(l: &DocLayout, page: usize, r: usize, c: usize) -> Option<wordcraft
     })
 }
 
+#[test]
+fn vertically_merged_cell_diagonal_is_drawn_once_across_the_span() {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders, HeightRule, VMerge};
+    let mut d = Document::from_text("");
+    let mut t = Table::new(2, 1, 200.0);
+    t.props.fixed = true;
+    for row in &mut t.rows {
+        row.props.height = Some(40.0);
+        row.props.height_rule = HeightRule::Exact;
+        row.cells[0] = wordcraft_doc::Cell::with_text("merged cell");
+    }
+    let border = Border { style: BorderStyle::Single, width: 1.0, ..Default::default() };
+    t.rows[0].cells[0].props.vmerge = VMerge::Restart;
+    t.rows[0].cells[0].props.borders = Some(Borders { tl2br: Some(border), ..Default::default() });
+    t.rows[1].cells[0].props.vmerge = VMerge::Continue;
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+
+    let l = lay(&d);
+    let rules: Vec<_> = l
+        .pages
+        .iter()
+        .flat_map(|page| &page.items)
+        .filter_map(|item| match item {
+            Placed::Rule { x0, y0, x1, y1, .. } if (x0 - x1).abs() > 0.01 && (y0 - y1).abs() > 0.01 => Some((*y0, *y1)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rules.len(), 1, "{rules:?}");
+    let merged = cell_rect(&l, 0, 0, 0).expect("merged cell");
+    assert!(((rules[0].1 - rules[0].0).abs() - merged.h).abs() < 0.01, "{rules:?}, {merged:?}");
+}
+
+#[test]
+fn table_level_diagonal_borders_fill_cells_without_an_override() {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    let mut d = Document::from_text("");
+    let mut t = Table::new(1, 1, 200.0);
+    let border = Border { style: BorderStyle::Single, width: 1.0, ..Default::default() };
+    t.props.borders = Some(Borders { tl2br: Some(border), tr2bl: Some(border), ..Default::default() });
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+
+    let diagonals = lay(&d)
+        .pages
+        .iter()
+        .flat_map(|page| &page.items)
+        .filter(|item| matches!(item, Placed::Rule { x0, y0, x1, y1, .. } if (x0 - x1).abs() > 0.01 && (y0 - y1).abs() > 0.01))
+        .count();
+    assert_eq!(diagonals, 2);
+}
+
 /// Rows that skip grid columns at the start and at the end (`w:gridBefore`, `w:gridAfter`, as in
 /// #1174): the cells sit on their own grid columns, the middle one keeps its width, and a merge
 /// down the last column matches by the shifted column.
@@ -5618,7 +5668,7 @@ fn at_least_rows_add_cell_margins_and_border_bands() {
     let mut d = Document::from_text("");
     let line = Some(Border { style: BorderStyle::Single, width: 0.5, color: None, space: 0.0 });
     let mut t = Table::new(2, 1, 200.0);
-    t.props.borders = Some(Borders { top: line, left: line, bottom: line, right: line, between: line, inside_v: line });
+    t.props.borders = Some(Borders { top: line, left: line, bottom: line, right: line, between: line, inside_v: line, ..Default::default() });
     t.props.cell_margins = Some([5.0, 5.4, 5.0, 5.4]);
     for (r, text) in t.rows.iter_mut().zip(["one", "two"]) {
         r.props.height = Some(30.0);
@@ -6893,7 +6943,7 @@ fn compatibility_mode_decides_where_a_table_s_edge_sits() {
         d.settings.compat_mode = mode;
         let line = Some(Border { style: BorderStyle::Single, width: 0.5, color: None, space: 0.0 });
         let mut t = Table::new(1, 1, 200.0);
-        t.props.borders = Some(Borders { top: line, left: line, bottom: line, right: line, between: line, inside_v: line });
+        t.props.borders = Some(Borders { top: line, left: line, bottom: line, right: line, between: line, inside_v: line, ..Default::default() });
         t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("cell", Default::default()))];
         d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
         let l = lay(&d);
@@ -8318,6 +8368,46 @@ fn a_split_row_moves_shading_below_the_cut_with_it() {
     assert_eq!(moved.first().map(|f| f.0), Some(0.0), "the row's shading starts the continuation: {moved:?}");
     let nested = moved.get(1).copied().unwrap_or_default();
     assert!(nested.0 > 0.0 && (nested.1 - 50.0).abs() < 0.01, "the nested shading keeps its place and size: {moved:?}");
+}
+
+#[test]
+fn a_split_diagonal_rule_uses_the_intersection_at_the_cut() {
+    use crate::table::{CellPart, RowLayout, split_row};
+    let d = Document::from_text("Line");
+    let l = lay(&d);
+    let Some(Placed::Lines { story, path, para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })).cloned() else {
+        panic!("no line")
+    };
+    let line = |y| Placed::Lines { story, path: path.clone(), para: para.clone(), l0: 0, l1: 1, x: 0.0, y, turn: TextDirection::Horizontal };
+    let border = wordcraft_doc::props::Border { style: wordcraft_doc::props::BorderStyle::Single, width: 1.0, ..Default::default() };
+    let row = RowLayout {
+        edge: 0.0,
+        height: 200.0,
+        items: vec![line(0.0), line(150.0), Placed::Rule { x0: 10.0, y0: 0.0, x1: 110.0, y1: 200.0, border }],
+        bottom: 0.0,
+        cells: vec![CellPart { top: 2.0, items: 0..3, end: Some(180.0), align: None }],
+    };
+    let (first, rest) = split_row(&row, 100.0).expect("row splits");
+    let first_rule = first
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Placed::Rule { x0, y0, x1, y1, .. } if (y0 - y1).abs() > 0.01 => Some((*x0, *y0, *x1, *y1)),
+            _ => None,
+        })
+        .expect("diagonal above cut");
+    let next_rule = rest
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Placed::Rule { x0, y0, x1, y1, .. } if (y0 - y1).abs() > 0.01 => Some((*x0, *y0, *x1, *y1)),
+            _ => None,
+        })
+        .expect("diagonal continues below cut");
+    assert_eq!(first_rule, (10.0, 0.0, 60.0, 100.0));
+    assert_eq!(next_rule.0, 84.0, "the continuation starts where the shifted line reaches y = 0");
+    assert_eq!(next_rule.1, 0.0);
+    assert_eq!(next_rule.2, 110.0);
 }
 
 #[test]
@@ -11697,7 +11787,7 @@ fn split_cell_reuses_top_inset() {
             let mut t = Table::new(1, 1, 300.0);
             t.rows[0].cells[0].props.margins = Some([margin, 5.4, 0.0, 5.4]);
             let edge = Some(Border { width, style: if width > 0.0 { BorderStyle::Single } else { BorderStyle::None }, ..Default::default() });
-            t.props.borders = Some(Borders { top: edge, bottom: edge, left: edge, right: edge, between: edge, inside_v: edge });
+            t.props.borders = Some(Borders { top: edge, bottom: edge, left: edge, right: edge, between: edge, inside_v: edge, ..Default::default() });
             t.rows[0].props.height = Some(100.0);
             t.rows[0].props.height_rule = HeightRule::AtLeast;
             let mut p = Paragraph::with_text(

@@ -112,71 +112,85 @@ fn style_xml(w: &mut W, st: &Style, flagged: &[StyleKind]) {
         props::rpr_inner(w, &st.chr);
         w.close("w:rPr");
     }
-    if let Some(t) = &st.table {
-        if t.borders.is_some() || t.cell_margins.is_some() || t.band_size.is_some() || t.col_band_size.is_some() {
-            w.open("w:tblPr", &[]);
-            if let Some(n) = t.band_size {
-                w.val("w:tblStyleRowBandSize", &n.min(1000).to_string());
-            }
-            if let Some(n) = t.col_band_size {
-                w.val("w:tblStyleColBandSize", &n.min(1000).to_string());
-            }
-            if let Some(b) = &t.borders {
-                props::borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
-            }
-            if let Some(m) = &t.cell_margins {
-                props::margins(w, "w:tblCellMar", m);
-            }
-            w.close("w:tblPr");
-        }
-        // The conditional formatting parts (ECMA-376 §17.7.6): paragraph and run properties,
-        // then cell borders, shading and vertical alignment. The whole table's text formatting
-        // is the style's own (above).
-        for part in TablePart::ALL {
-            let f = t.part(part);
-            let ppr = ParaProps { align: f.align, ..ParaProps::default() };
-            let has_rpr = props::has_rpr(&f.chr);
-            // The whole table's borders are its table borders (`w:tblPr` above).
-            let borders = f.borders.filter(|_| part != TablePart::WholeTable);
-            let has_tc = f.fill.is_some() || borders.is_some() || f.v_align.is_some();
-            if !has_rpr && !has_tc && f.align.is_none() {
-                continue;
-            }
-            w.open("w:tblStylePr", &[("w:type", part.ooxml())]);
-            if f.align.is_some() {
-                w.open("w:pPr", &[]);
-                props::ppr_inner(w, &ppr, false, None);
-                w.close("w:pPr");
-            }
-            if has_rpr {
-                w.open("w:rPr", &[]);
-                props::rpr_inner(w, &f.chr);
-                w.close("w:rPr");
-            }
-            if has_tc {
-                w.open("w:tcPr", &[]);
-                if let Some(bs) = borders {
-                    props::borders(w, "w:tcBorders", &bs, Some("w:insideH"), &[]);
-                }
-                if let Some(c) = f.fill {
-                    w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &c.hex())]);
-                }
-                if let Some(v) = f.v_align {
-                    w.val(
-                        "w:vAlign",
-                        match v {
-                            VAlign::Top => "top",
-                            VAlign::Center => "center",
-                            VAlign::Bottom => "bottom",
-                        },
-                    );
-                }
-                w.close("w:tcPr");
-            }
-            w.close("w:tblStylePr");
-        }
-    }
+    table_style_xml(w, st);
     w.close("w:style");
+}
+
+fn table_style_xml(w: &mut W, st: &Style) {
+    let Some(t) = &st.table else { return };
+    if t.borders.is_some() || t.cell_margins.is_some() || t.band_size.is_some() || t.col_band_size.is_some() {
+        w.open("w:tblPr", &[]);
+        if let Some(n) = t.band_size {
+            w.val("w:tblStyleRowBandSize", &n.min(1000).to_string());
+        }
+        if let Some(n) = t.col_band_size {
+            w.val("w:tblStyleColBandSize", &n.min(1000).to_string());
+        }
+        if let Some(b) = t.borders {
+            let sides = wordcraft_doc::props::Borders {
+                top: b.top,
+                left: b.left,
+                bottom: b.bottom,
+                right: b.right,
+                between: b.between,
+                inside_v: b.inside_v,
+                ..wordcraft_doc::props::Borders::default()
+            };
+            if sides != wordcraft_doc::props::Borders::default() {
+                props::borders(w, "w:tblBorders", &sides, Some("w:insideH"), &[]);
+            }
+        }
+        if let Some(m) = &t.cell_margins {
+            props::margins(w, "w:tblCellMar", m);
+        }
+        w.close("w:tblPr");
+    }
+    // The conditional formatting parts (ECMA-376 §17.7.6): paragraph and run properties,
+    // then cell borders, shading and vertical alignment. The whole table's text formatting
+    // is the style's own (above).
+    for part in TablePart::ALL {
+        let f = t.part(part);
+        let ppr = ParaProps { align: f.align, ..ParaProps::default() };
+        let has_rpr = props::has_rpr(&f.chr);
+        // The whole table's borders are its table borders (`w:tblPr` above).
+        let borders = if part == TablePart::WholeTable { f.borders.and_then(|b| b.diagonals()) } else { f.borders };
+        let has_tc = f.fill.is_some() || borders.is_some() || f.v_align.is_some();
+        if !has_rpr && !has_tc && f.align.is_none() {
+            continue;
+        }
+        w.open("w:tblStylePr", &[("w:type", part.ooxml())]);
+        if f.align.is_some() {
+            w.open("w:pPr", &[]);
+            props::ppr_inner(w, &ppr, false, None);
+            w.close("w:pPr");
+        }
+        if has_rpr {
+            w.open("w:rPr", &[]);
+            props::rpr_inner(w, &f.chr);
+            w.close("w:rPr");
+        }
+        if has_tc {
+            w.open("w:tcPr", &[]);
+            if let Some(bs) = borders {
+                props::borders(w, "w:tcBorders", &bs, Some("w:insideH"), &[]);
+            }
+            if let Some(c) = f.fill {
+                w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &c.hex())]);
+            }
+            if let Some(v) = f.v_align {
+                w.val(
+                    "w:vAlign",
+                    match v {
+                        VAlign::Top => "top",
+                        VAlign::Center => "center",
+                        VAlign::Bottom => "bottom",
+                    },
+                );
+            }
+            w.close("w:tcPr");
+        }
+        w.close("w:tblStylePr");
+    }
 }
 
 pub(super) fn numbering_xml(doc: &Document) -> Vec<u8> {

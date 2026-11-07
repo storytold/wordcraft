@@ -295,10 +295,14 @@ mod tests {
             self.send(line);
             self.recv()
         }
-        /// The server closed the connection.
+        /// The server closed the connection, cleanly or with a TCP reset.
         fn closed(&mut self) -> bool {
             let mut r = String::new();
-            matches!(self.0.read_line(&mut r), Ok(0))
+            match self.0.read_line(&mut r) {
+                Ok(0) => true,
+                Err(e) => matches!(e.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted),
+                _ => false,
+            }
         }
     }
 

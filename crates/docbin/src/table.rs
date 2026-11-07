@@ -464,7 +464,7 @@ fn def_table_edges(operand: &[u8]) -> Vec<f32> {
 /// left, bottom, right, inside-horizontal, inside-vertical, read as paragraph borders are.
 fn table_borders(operand: &[u8]) -> Option<Borders> {
     let b = |i: usize| operand.get(1 + i * 4..1 + i * 4 + 4).and_then(fmt::brc80);
-    Some(Borders { top: b(0), left: b(1), bottom: b(2), right: b(3), between: b(4), inside_v: b(5) })
+    Some(Borders { top: b(0), left: b(1), bottom: b(2), right: b(3), between: b(4), inside_v: b(5), ..Default::default() })
 }
 
 /// Background colour from a 10-byte `Shd`: cvFore, cvBack (COLORREFs), ipat. Solid patterns
