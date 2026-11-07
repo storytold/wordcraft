@@ -632,6 +632,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         rp,
         substituted: b.substituted,
         styles: b.styles,
+        mark_style,
         glyphs: b.glyphs,
         clusters: b.clusters,
         shown: b.shown,
