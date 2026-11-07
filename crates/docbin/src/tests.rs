@@ -2880,3 +2880,92 @@ fn field_results_keep_their_text_and_runs() {
         p.objects
     );
 }
+
+#[test]
+fn bidi_paragraph_and_run_imported() {
+    let text = "العربية\r";
+    let ccp = text.chars().count() as u32;
+    // sprmCFBiDi (0x085A): operand 0x01
+    let chpx = grpprl(&[(0x085A, &[0x01])]);
+    // sprmPFBiDi (0x2441): operand 0x01
+    let papx = grpprl(&[(0x2441, &[0x01])]);
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(ccp, Vec::new())],
+        chpx_runs: vec![(0, chpx)],
+        papx_entries: vec![(0, 0, papx)],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p = doc.body.first().and_then(|b| b.as_para()).expect("paragraph");
+    assert_eq!(p.props.bidi, Some(true), "sprmPFBiDi sets ParaProps::bidi");
+    assert_eq!(p.runs.first().and_then(|r| r.props.rtl), Some(true), "sprmCFBiDi sets CharProps::rtl");
+}
+
+#[test]
+fn bidi_table_and_section_imported() {
+    let def_table = t_def_table(&[0, 2880, 5760]);
+    let text = "a\u{7}b\u{7}\r";
+    let ccp = text.chars().count() as u32;
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    // sprmTFBiDi (0x560B) = 1, sprmTJc90 (0x5400) = 2 (physical right)
+    let ttp = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01]), (0x560B, &[0x01, 0x00]), (0x5400, &[0x02, 0x00])]), def_table].concat();
+    // sprmSFBiDi (0x3228) = 1
+    let sepx = grpprl(&[(0x3228, &[0x01])]);
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(ccp, sepx)],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, in_tbl), (2, 0, ttp), (4, 0, Vec::new())],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    assert!(doc.last_section.rtl, "sprmSFBiDi sets SectionProps::rtl");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    assert!(tbl.props.bidi_visual, "sprmTFBiDi sets TableProps::bidi_visual");
+    assert_eq!(tbl.props.align, Some(wordcraft_doc::props::Align::Left), "physical right justification on RTL table swaps to logical Left");
+}
+
+#[test]
+fn table_justification_prefers_logical_and_swaps_physical_in_rtl() {
+    use wordcraft_doc::props::Align;
+    // 1. sprmTJc90 = 2 (physical right) without bidi -> Align::Right
+    let papx_ltr_right = grpprl(&[(0x5400, &[0x02, 0x00])]);
+    let row_ltr_right = crate::table::decode(&papx_ltr_right);
+    assert_eq!(row_ltr_right.bidi(), None);
+    assert_eq!(row_ltr_right.align, Some(Align::Right));
+
+    // 2. sprmTJc90 = 2 (physical right) with sprmTFBiDi = 1 -> Align::Left (swapped)
+    let papx_rtl_right = grpprl(&[(0x560B, &[0x01, 0x00]), (0x5400, &[0x02, 0x00])]);
+    let row_rtl_right = crate::table::decode(&papx_rtl_right);
+    assert_eq!(row_rtl_right.bidi(), Some(true));
+    assert_eq!(row_rtl_right.align, Some(Align::Left));
+
+    // 3. sprmTJc90 = 0 (physical left) with sprmTFBiDi90 = 1 -> Align::Right (swapped)
+    let papx_rtl_left = grpprl(&[(0x5664, &[0x01, 0x00]), (0x5400, &[0x00, 0x00])]);
+    let row_rtl_left = crate::table::decode(&papx_rtl_left);
+    assert_eq!(row_rtl_left.bidi(), Some(true));
+    assert_eq!(row_rtl_left.align, Some(Align::Right));
+
+    // 4. sprmTJc = 2 (logical right) with sprmTFBiDi = 1 -> stays Align::Right
+    let papx_logical_right = grpprl(&[(0x560B, &[0x01, 0x00]), (0x548A, &[0x02, 0x00])]);
+    let row_logical_right = crate::table::decode(&papx_logical_right);
+    assert_eq!(row_logical_right.align, Some(Align::Right));
+
+    // 5. Both sprmTJc (logical left = 0) and sprmTJc90 (physical right = 2): logical wins
+    let papx_both = grpprl(&[(0x5400, &[0x02, 0x00]), (0x548A, &[0x00, 0x00])]);
+    let row_both = crate::table::decode(&papx_both);
+    assert_eq!(row_both.align, Some(Align::Left));
+}

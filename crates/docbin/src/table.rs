@@ -19,8 +19,10 @@ const P_TTP: u16 = 0x2417;
 const P_ITAP: u16 = 0x6649;
 
 // Table sprms ([MS-DOC] §2.6.3).
-const T_JC: u16 = 0x5400;
-const T_JC_90: u16 = 0x548A;
+const T_JC_90: u16 = 0x5400; // sprmTJc90 (physical table justification)
+const T_JC: u16 = 0x548A; // sprmTJc (logical table justification)
+const T_BIDI: u16 = 0x560B; // sprmTFBiDi (right-to-left table)
+const T_BIDI_90: u16 = 0x5664; // sprmTFBiDi90 (right-to-left table)
 const T_DXA_LEFT: u16 = 0x9601;
 const T_DXA_GAP_HALF: u16 = 0x9602;
 const T_TABLE_HEADER: u16 = 0x3404;
@@ -66,9 +68,10 @@ pub(crate) struct RowInfo {
     height_rule: HeightRule,
     header: bool,
     cant_split: bool,
-    align: Option<Align>,
+    pub(crate) align: Option<Align>,
     indent: Option<f32>,
     borders: Option<Borders>,
+    pub(crate) bidi: Option<bool>,
     /// Horizontal merges: (itcFirst, itcLim) cell-index ranges.
     merges: Vec<(u8, u8)>,
     /// Per-cell overrides keyed by (pre-merge) cell index.
@@ -117,6 +120,30 @@ impl RowInfo {
     pub(crate) fn width_pct_of(&self, i: u8) -> Option<f32> {
         self.width_pcts.iter().rfind(|(k, _)| *k == i).map(|(_, w)| *w)
     }
+
+    /// Calculate the logical alignment, preferring logical `sprmTJc` and swapping physical
+    /// `sprmTJc90` in right-to-left tables.
+    pub(crate) fn effective_align(align_logical: Option<Align>, align_physical: Option<Align>, rtl: bool) -> Option<Align> {
+        align_logical.or_else(|| {
+            align_physical.map(|a| {
+                if rtl {
+                    match a {
+                        Align::Left => Align::Right,
+                        Align::Right => Align::Left,
+                        other => other,
+                    }
+                } else {
+                    a
+                }
+            })
+        })
+    }
+
+    /// Whether the row marks the table as right-to-left (`sprmTFBiDi` / `sprmTFBiDi90`), for tests.
+    #[cfg(test)]
+    pub(crate) fn bidi(&self) -> Option<bool> {
+        self.bidi
+    }
 }
 
 /// Set cell `c`'s override to `v`, replacing an earlier one: one slot per cell, however often
@@ -128,10 +155,17 @@ fn set<T>(slots: &mut Vec<(u8, T)>, c: u8, v: T) {
     }
 }
 
+/// Decode the table context out of a paragraph mark's PAPX grpprl.
+///
+/// Decodes table membership, row-end marks, column edges (`sprmTDefTable`),
+/// row height, headers, cell borders/shading/widths/merges, table alignment,
+/// and right-to-left table direction (`sprmTFBiDi` / `sprmTFBiDi90`).
 pub(crate) fn decode(papx: &[u8]) -> RowInfo {
     let mut r = RowInfo::default();
     let mut gap_half: Option<i16> = None;
     let mut dxa_left: Option<i16> = None;
+    let mut align_logical: Option<Align> = None;
+    let mut align_physical: Option<Align> = None;
     for prl in sprm::iter(papx) {
         // The membership sprms are paragraph sprms (sgc 1); the rest here are table sprms
         // (sgc 5), so match opcodes directly.
@@ -153,12 +187,23 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
                     }
                 }
             }
-            T_JC | T_JC_90 => {
-                r.align = match u16_of(&prl).unwrap_or(0) {
+            T_JC => {
+                align_logical = match u16_of(&prl).unwrap_or(0) {
                     1 => Some(Align::Center),
                     2 => Some(Align::Right),
                     _ => Some(Align::Left),
                 };
+            }
+            T_JC_90 => {
+                align_physical = match u16_of(&prl).unwrap_or(0) {
+                    1 => Some(Align::Center),
+                    2 => Some(Align::Right),
+                    _ => Some(Align::Left),
+                };
+            }
+            T_BIDI | T_BIDI_90 => {
+                let on = u16_of(&prl).is_some_and(|v| v != 0) || prl.operand.first().copied().unwrap_or(0) != 0;
+                r.bidi = Some(r.bidi.unwrap_or(false) || on);
             }
             T_DXA_LEFT => dxa_left = s16(&prl),
             T_DXA_GAP_HALF => gap_half = s16(&prl),
@@ -255,6 +300,8 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
             _ => {}
         }
     }
+    let is_rtl = r.bidi.unwrap_or(false);
+    r.align = RowInfo::effective_align(align_logical, align_physical, is_rtl);
     // The table indent is the row origin minus half the cell gap.
     if let Some(l) = dxa_left {
         let gap = gap_half.unwrap_or(0) as f32 / 20.0;
@@ -282,9 +329,11 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
     let mut cell: Blocks = Vec::new();
     let mut grid: Vec<f32> = Vec::new();
     let mut props = TableProps::default();
+    let mut bidi_set = false;
     let mut open = false;
     let mut depth_seen = 0u32;
 
+    /// Flush accumulated paragraph blocks into a table cell.
     fn flush_cell(cells: &mut Vec<Cell>, cell: &mut Blocks) {
         let mut blocks = std::mem::take(cell);
         if blocks.is_empty() {
@@ -292,6 +341,8 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
         }
         cells.push(Cell { props: CellProps { span: 1, ..Default::default() }, blocks, controls: Default::default() });
     }
+
+    /// Build a [`Row`] applying cell overrides and column merges.
     fn build_row(mut cells: Vec<Cell>, info: &RowInfo) -> Row {
         // Per-cell overrides first (sprm cell indices count pre-merge cells), then merges.
         for (i, c) in cells.iter_mut().enumerate() {
@@ -340,6 +391,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             controls: Default::default(),
         }
     }
+    /// Flush accumulated rows into a [`Table`] block.
     fn flush_table(out: &mut Blocks, rows: &mut Vec<Row>, cells: &mut Vec<Cell>, cell: &mut Blocks, grid: &[f32], props: &TableProps, nested: bool) {
         if !cells.is_empty() || !cell.is_empty() {
             flush_cell(cells, cell);
@@ -384,6 +436,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
                 // Word's default 108-twip gap, and every later table — including the
                 // change history with its own 40-twip gap — inherited 5.4 pt margins).
                 props = TableProps::default();
+                bidi_set = false;
                 open = false;
                 depth_seen = 0;
             }
@@ -397,6 +450,10 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
         if grid.is_empty() {
             // Column widths from the table's first `sprmTDefTable`.
             grid = info.edges.windows(2).take(MAX_COLS).map(|w| (w[1] - w[0]).max(0.0)).collect();
+        }
+        if !bidi_set && let Some(bidi) = info.bidi {
+            props.bidi_visual = bidi;
+            bidi_set = true;
         }
         if info.borders.is_some() && props.borders.is_none() {
             props.borders = info.borders;

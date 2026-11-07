@@ -24,11 +24,13 @@ const C_FTC0: u16 = 0x4A4F; // font index (ASCII)
 const C_FTC1: u16 = 0x4A50; // East Asian font index (sprmCRgFtc1)
 const C_FTC_BI: u16 = 0x4A5E; // complex-script font index (sprmCFtcBi)
 const C_HIGHLIGHT: u16 = 0x2A0C;
+const C_BIDI: u16 = 0x085A; // sprmCFBiDi
 const C_ISTD: u16 = 0x4A30; // character style
 
 // Paragraph sprms ([MS-DOC] §2.6.2).
 const P_JC: u16 = 0x2461;
 const P_JC80: u16 = 0x2403;
+const P_BIDI: u16 = 0x2441; // sprmPFBiDi
 const P_DXA_LEFT: u16 = 0x845E;
 const P_DXA_LEFT80: u16 = 0x840F;
 const P_DXA_RIGHT: u16 = 0x845D;
@@ -193,8 +195,11 @@ fn set(props: &mut Option<bool>, t: Toggle, base: bool) {
     });
 }
 
-/// Apply a character-property sprm. `base` carries the style-inherited values so toggle
-/// operands can invert them; `fonts` maps sprmCRgFtc0 indices to names.
+/// Apply a character-property sprm to the given character properties.
+///
+/// `base` carries the style-inherited values so toggle operands can invert them;
+/// `fonts` maps font indices to names. Handles styling, fonts, colors, and
+/// right-to-left run direction (`sprmCFBiDi`).
 pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: &[String]) {
     let op = prl.op;
     match op {
@@ -204,6 +209,7 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
         C_SMALL_CAPS => set(&mut p.small_caps, sprm::toggle(prl), base.small_caps.unwrap_or(false)),
         C_CAPS => set(&mut p.caps, sprm::toggle(prl), base.caps.unwrap_or(false)),
         C_HIDDEN => set(&mut p.hidden, sprm::toggle(prl), base.hidden.unwrap_or(false)),
+        C_BIDI => set(&mut p.rtl, sprm::toggle(prl), base.rtl.unwrap_or(false)),
         C_KUL => {
             p.underline = match prl.operand.first().copied().unwrap_or(0) {
                 0x00 => Some(Underline::None),
@@ -328,12 +334,23 @@ fn change_tabs(p: &mut ParaProps, prl: &Prl) {
     p.tabs = Some(tabs);
 }
 
-/// Apply a paragraph-property sprm.
+/// Apply a paragraph-property sprm to the given paragraph properties.
+///
+/// Decodes indents, alignments, borders, spacing, tabs, keep-with-next,
+/// outline levels, and right-to-left paragraph direction (`sprmPFBiDi`).
 pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
     let tw = |v: i32| (v as f32 / 20.0).clamp(-1000.0, 1000.0);
     let s16 = |prl: &Prl| -> Option<i16> { u16_of(prl).map(|v| v as i16) };
     match prl.op {
         sprm::P_CHG_TABS | sprm::P_CHG_TABS_PAPX => change_tabs(p, prl),
+        P_BIDI => {
+            p.bidi = match sprm::toggle(prl) {
+                Toggle::On => Some(true),
+                Toggle::Off => Some(false),
+                Toggle::Keep => p.bidi,
+                Toggle::Invert => Some(!p.bidi.unwrap_or(false)),
+            };
+        }
         P_JC | P_JC80 => {
             p.align = match prl.operand.first().copied().unwrap_or(0) {
                 1 => Some(Align::Center),

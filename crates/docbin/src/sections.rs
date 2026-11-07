@@ -16,6 +16,7 @@ const S_TITLE_PAGE: u16 = 0x300A; // sprmSFTitlePage
 const S_CCOLUMNS: u16 = 0x500B;
 const S_PGN_START: u16 = 0x300C; // sprmSPgnStart
 const S_ORIENTATION: u16 = 0x301D; // sprmSBOrientation
+const S_BIDI: u16 = 0x3228; // sprmSFBiDi
 const S_HDR_TOP: u16 = 0xB017;
 const S_HDR_BOTTOM: u16 = 0xB018;
 const S_XA_PAGE: u16 = 0xB01F;
@@ -78,8 +79,11 @@ pub(crate) fn parse(word: &[u8], table: &[u8], fib: &Fib) -> Vec<Section> {
     out
 }
 
-/// Apply a section sprm to the model's section properties. All the measurement sprms here
-/// carry 16-bit twip operands ([MS-DOC] §2.6.4).
+/// Apply a section sprm to the model's section properties.
+///
+/// All the measurement sprms here carry 16-bit twip operands ([MS-DOC] §2.6.4).
+/// Also decodes page setup, headers/footers, column counts, margins,
+/// and right-to-left section direction (`sprmSFBiDi`).
 fn apply_section(s: &mut SectionProps, prl: &Prl) {
     let tw = |v: i32| (v as f32 / 20.0).clamp(0.0, 1584.0);
     let s16 = |prl: &Prl| -> Option<i16> {
@@ -101,6 +105,7 @@ fn apply_section(s: &mut SectionProps, prl: &Prl) {
             };
         }
         S_TITLE_PAGE => s.title_page = prl.operand.first().is_some_and(|&v| v != 0),
+        S_BIDI => s.rtl = prl.operand.first().is_some_and(|&v| v != 0),
         S_CCOLUMNS => {
             if let Some(c) = s16(prl) {
                 s.columns = Columns { count: (c as u32).saturating_add(1).min(44), ..Default::default() };
