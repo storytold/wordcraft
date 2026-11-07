@@ -323,13 +323,11 @@ fn handle_search_interactions(
     reveal: &mut bool,
 ) {
     let was_open = s.open;
-    if resp.clicked() || (!was_open && resp.gained_focus()) {
-        if !was_open {
-            s.open = true;
-            s.typed = false;
-            s.moved = false;
-            *reveal = true;
-        }
+    if !was_open && (resp.clicked() || resp.gained_focus()) {
+        s.open = true;
+        s.typed = false;
+        s.moved = false;
+        *reveal = true;
         select_all_text(ui.ctx(), te_id, text);
     } else if aresp.clicked() {
         if was_open {
@@ -453,8 +451,6 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
         let mut reveal = step != 0;
         if search {
             handle_search_interactions(ui, &mut s, &resp, &aresp, te_id, &text, &mut reveal);
-        } else if resp.clicked() || resp.gained_focus() {
-            select_all_text(ui.ctx(), te_id, &text);
         }
         // The recent section keeps its order while the list stays open: a pick moves the family to
         // the top for the next time the list opens, not under the pointer.
