@@ -90,7 +90,7 @@ pub fn check_dir(dir: &str) -> Result<(), CmdError> {
         return Err(CmdError::Params("`dir` isn't a folder path".into()));
     }
     // A folder on another machine: listing it would make Windows authenticate to that host.
-    if super::templates::is_network_path(d) {
+    if crate::file_access::is_network_path(d) {
         return Err(CmdError::Params("templates aren't listed from a network folder".into()));
     }
     if !std::path::Path::new(d).is_absolute() {

@@ -233,7 +233,7 @@ pub fn local_path(target: &str, base: Option<&Path>) -> Option<PathBuf> {
     };
     // Never follow a template path to another machine: opening `\\host\share\T.dotx` (or `//host/…`) from a
     // hostile document would make Windows authenticate to that host and leak the user's NTLM credentials.
-    if path.is_empty() || is_network_path(&path) {
+    if path.is_empty() || crate::file_access::is_network_path(&path) {
         return None;
     }
     let p = PathBuf::from(&path);
@@ -242,29 +242,7 @@ pub fn local_path(target: &str, base: Option<&Path>) -> Option<PathBuf> {
         _ => p,
     };
     // Checked again once joined: the document's own folder may be on another machine (#3698).
-    (!is_network_path(&p.to_string_lossy())).then_some(p)
-}
-
-/// Does `p` name another machine or a device, whatever separators it mixes: `\\host\share`,
-/// `//host`, `\\?\UNC\…`, `\\.\UNC\…`, other devices, and the NT namespace `\??\…`. The
-/// verbatim, device and NT prefixes are local when a drive letter follows (`\\?\C:\…`,
-/// `\\.\C:\…`, `\??\C:\…`, #3698). Purely lexical, so it is the same on every platform.
-pub(crate) fn is_network_path(p: &str) -> bool {
-    let sep = |c: Option<&u8>| matches!(c, Some(b'\\' | b'/'));
-    let b = p.as_bytes();
-    // `\\?\`, `\\.\` or `\??\`, then `X:` and the end or a separator.
-    let prefix = sep(b.first())
-        && sep(b.get(3))
-        && match (b.get(1), b.get(2)) {
-            (Some(b'?'), Some(b'?')) => true,
-            (c, Some(b'?' | b'.')) => sep(c),
-            _ => false,
-        };
-    let drive = b.get(4).is_some_and(u8::is_ascii_alphabetic) && b.get(5) == Some(&b':') && (b.len() == 6 || sep(b.get(6)));
-    if prefix {
-        return !drive;
-    }
-    sep(b.first()) && sep(b.get(1))
+    (!crate::file_access::is_network_path(&p.to_string_lossy())).then_some(p)
 }
 
 fn is_windows_absolute(p: &str) -> bool {
@@ -399,6 +377,7 @@ fn import_num(doc: &mut Document, src: &Document, num: u32, map: &HashMap<String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::file_access::is_network_path;
     use wordcraft_doc::numbering::ListKind;
     use wordcraft_doc::props::{CharProps, NumRef};
 

@@ -203,11 +203,18 @@ pub fn check_write(path: &str) -> Result<(), String> {
 /// `path` made absolute with its links followed; for a path that doesn't exist (yet), its nearest
 /// existing folder's links followed and the rest appended.
 fn resolve(path: &str) -> Result<PathBuf, String> {
+    resolve_with_platform(path, cfg!(windows))
+}
+
+fn resolve_with_platform(path: &str, windows: bool) -> Result<PathBuf, String> {
     if path.is_empty() {
         return Err("automation path rejected: path is empty".into());
     }
+    // Do not let canonicalize or symlink_metadata contact a remote host before the root check
+    // rejects the path. On Windows those calls can authenticate to an SMB server (#3697).
+    reject_network_path(path, windows)?;
     // Checked as given: making `…\NUL` absolute gives the device path `\\.\NUL` on Windows.
-    if cfg!(windows) && Path::new(path).components().any(|c| matches!(c, Component::Normal(n) if is_device_name(&n.to_string_lossy()))) {
+    if windows && Path::new(path).components().any(|c| matches!(c, Component::Normal(n) if is_device_name(&n.to_string_lossy()))) {
         return Err(format!("automation path rejected: reserved device names are not allowed: {path}"));
     }
     let absolute = std::path::absolute(path).map_err(|e| format!("automation path rejected: cannot resolve {path}: {e}"))?;
@@ -264,6 +271,35 @@ fn resolve_absolute(path: &str, absolute: &Path) -> Result<PathBuf, String> {
     }
 }
 
+/// Reject a Windows network/device namespace path before path resolution touches the file system.
+fn reject_network_path(path: &str, windows: bool) -> Result<(), String> {
+    if windows && is_network_path(path) {
+        return Err(format!("automation path rejected: network and device paths are not allowed: {path}"));
+    }
+    Ok(())
+}
+
+/// Does `path` name another machine or a device, whatever separators it mixes? Verbatim, device
+/// and NT prefixes are local when a drive letter follows (`\\?\C:\…`, `\\.\C:\…`,
+/// `\??\C:\…`). Purely lexical so callers can reject before file-system access.
+pub(crate) fn is_network_path(path: &str) -> bool {
+    let sep = |c: Option<&u8>| matches!(c, Some(b'\\' | b'/'));
+    let b = path.as_bytes();
+    // `\\?\`, `\\.\` or `\??\`, then `X:` and the end or a separator.
+    let prefix = sep(b.first())
+        && sep(b.get(3))
+        && match (b.get(1), b.get(2)) {
+            (Some(b'?'), Some(b'?')) => true,
+            (c, Some(b'?' | b'.')) => sep(c),
+            _ => false,
+        };
+    let drive = b.get(4).is_some_and(u8::is_ascii_alphabetic) && b.get(5) == Some(&b':') && (b.len() == 6 || sep(b.get(6)));
+    if prefix {
+        return !drive;
+    }
+    sep(b.first()) && sep(b.get(1))
+}
+
 /// Is `path` (resolved) `root` or inside it, component by component (without regard to case on
 /// Windows, whose file systems ignore it)?
 fn inside(path: &Path, root: &Path) -> bool {
@@ -294,6 +330,29 @@ fn is_device_name(component: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_paths_are_rejected_before_resolution_on_windows() {
+        for path in [
+            r"\\server\share\file.docx",
+            "//server/share/file.docx",
+            r"\\?\UNC\server\share\file.docx",
+            r"\\.\UNC\server\share\file.docx",
+            r"\??\UNC\server\share\file.docx",
+            r"\??\GLOBALROOT\Device\Mup\server\share\file.docx",
+            r"\\.\PhysicalDrive0",
+        ] {
+            assert!(is_network_path(path), "{path}");
+            let error = resolve_with_platform(path, true).unwrap_err();
+            assert!(error.contains("network and device paths"), "{path}: {error}");
+        }
+        // These are local Windows paths; the guard must preserve their existing support.
+        for path in [r"\\?\C:\work\file.docx", r"\\.\C:\work\file.docx", r"\??\C:\work\file.docx", r"\??\C:"] {
+            assert!(!is_network_path(path), "{path}");
+            assert_eq!(reject_network_path(path, true), Ok(()), "{path}");
+        }
+        assert_eq!(reject_network_path(r"\\server\share\file.docx", false), Ok(()));
+    }
 
     /// A fresh folder holding `in` (read root), `out` (write root) and `outside`.
     fn folders(name: &str) -> (PathBuf, Arc<AutomationRoots>) {

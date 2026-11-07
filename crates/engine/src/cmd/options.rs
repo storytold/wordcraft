@@ -257,7 +257,7 @@ fn folder_setting(key: &str, f: &str, local_only: bool) -> Result<Option<String>
         (Some(rest), Some(h)) => h.join(rest),
         _ => std::path::PathBuf::from(f),
     };
-    if local_only && (super::templates::is_network_path(f) || super::templates::is_network_path(&path.to_string_lossy())) {
+    if local_only && (crate::file_access::is_network_path(f) || crate::file_access::is_network_path(&path.to_string_lossy())) {
         return Err(CmdError::Params(format!("`{key}` can't be a network folder")));
     }
     if !path.is_absolute() {
