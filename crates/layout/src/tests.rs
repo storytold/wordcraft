@@ -9467,8 +9467,8 @@ fn unproofed_languages_and_no_proof_runs_are_not_marked() {
     let text = "Nous écrivons beaucoup aujourd'hui.";
     let mut d = Document::from_text(text);
     assert!(issues(&d) > 0, "French words are English misspellings in an English document");
-    Arc::make_mut(&mut d.styles).default_chr.lang = Some("fr-FR".into());
-    assert_eq!(issues(&d), 0, "no French dictionary: no marks");
+    Arc::make_mut(&mut d.styles).default_chr.lang = Some("zxx".into());
+    assert_eq!(issues(&d), 0, "an explicitly nonlinguistic run has no proofing marks");
     Arc::make_mut(&mut d.styles).default_chr.lang = Some("pl-PL".into());
     let mut pl = Document::from_text("Płynie żeka.");
     Arc::make_mut(&mut pl.styles).default_chr.lang = Some("pl-PL".into());

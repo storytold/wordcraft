@@ -109,7 +109,7 @@ pub static LANGUAGES: [LangInfo; 28] = [
     // Hungarian; `hu`, `hu-HU` and `hu_HU.UTF-8` resolve here.
     LangInfo { code: "hu", prefer_hans: false, editing_lang: None },
     // French; `fr`, `fr-FR`, `fr_CA` and other regions resolve here.
-    LangInfo { code: "fr", prefer_hans: false, editing_lang: None },
+    LangInfo { code: "fr", prefer_hans: false, editing_lang: Some("fr-FR") },
     // Bulgarian; `bg`, `bg-BG` and `bg_BG.UTF-8` resolve here.
     LangInfo { code: "bg", prefer_hans: false, editing_lang: None },
     // Vietnamese; `vi`, `vi-VN` and `vi_VN.UTF-8` resolve here.
@@ -200,6 +200,29 @@ impl Lang {
     /// The language new blank documents are written in with this interface ([`LangInfo::editing_lang`]).
     pub fn editing_lang(self) -> Option<&'static str> {
         self.info().and_then(|l| l.editing_lang)
+    }
+
+    /// The language of new documents, with the first French system locale's actual region.
+    /// Other interfaces keep their existing default; extension keys are never regions.
+    pub fn editing_lang_in(self, locales: &[String]) -> Option<String> {
+        let default = self.editing_lang()?;
+        if self.code() != "fr" {
+            return Some(default.to_string());
+        }
+        let regional = locales.iter().find_map(|tag| {
+            let locale = wordcraft_engine::proof::ProofLang::from_tag(Some(tag)).pack_locale()?;
+            if locale.primary() != "fr" {
+                return None;
+            }
+            let mut parts = locale.as_str().split('-').skip(1);
+            let first = parts.next()?;
+            let region = if first.len() == 4 && first.bytes().all(|b| b.is_ascii_alphabetic()) { parts.next()? } else { first };
+            if region.len() != 2 || !region.bytes().all(|b| b.is_ascii_alphabetic()) {
+                return None;
+            }
+            wordcraft_engine::proof::lang::normalize_tag(&format!("fr-{region}"))
+        });
+        Some(regional.unwrap_or_else(|| default.to_string()))
     }
 
     /// Is the interface written in CJK script (its own name is), so it needs a CJK face?
@@ -310,6 +333,18 @@ pub fn system_lang() -> Lang {
     }
     static SYSTEM: OnceLock<Lang> = OnceLock::new();
     *SYSTEM.get_or_init(detect_system_lang)
+}
+
+/// Preferred system locales for new French documents; tests are independent of the host.
+pub fn system_locales() -> &'static [String] {
+    if cfg!(test) {
+        return &[];
+    }
+    static LOCALES: OnceLock<Vec<String>> = OnceLock::new();
+    LOCALES.get_or_init(|| {
+        let explicit = std::env::var("WORDCRAFT_LANGUAGE").ok().filter(|v| !v.trim().is_empty());
+        explicit.into_iter().chain(sys_locale::get_locales().take(16)).collect()
+    })
 }
 
 fn detect_system_lang() -> Lang {

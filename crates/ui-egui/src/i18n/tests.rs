@@ -809,9 +809,50 @@ fn an_italian_interface_writes_new_documents_in_italian() {
 }
 
 #[test]
+fn french_editing_region_uses_the_locale_not_extension_keys() {
+    needs_catalogs!();
+    let fr = lang("fr");
+    assert_eq!(fr.editing_lang(), Some("fr-FR"));
+    let resolve = |locales: &[&str]| fr.editing_lang_in(&locales.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    for tag in ["fr_CA.UTF-8", "fr-Latn-CA", "FR_ca", "fr_CA@euro", "fr-CA-u-ca-gregory"] {
+        assert_eq!(resolve(&["en-US", tag]).as_deref(), Some("fr-CA"), "{tag}");
+    }
+    assert_eq!(resolve(&["fr_BE.UTF-8@euro"]).as_deref(), Some("fr-BE"));
+    assert_eq!(resolve(&["fr-CA", "fr-FR"]).as_deref(), Some("fr-CA"));
+    for tag in ["fr", "fr-u-ca-gregory", "fr-Latn-u-ca-gregory", "fr-x-ca", "en-CA"] {
+        assert_eq!(resolve(&[tag]).as_deref(), Some("fr-FR"), "{tag}");
+    }
+    assert_eq!(resolve(&[]).as_deref(), Some("fr-FR"));
+    // This French integration does not change another interface's default region.
+    assert_eq!(lang("pt-br").editing_lang_in(&["pt-PT".into()]).as_deref(), Some("pt-BR"));
+}
+
+#[test]
+fn a_french_interface_writes_new_documents_in_french() {
+    needs_catalogs!();
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let ctx = egui::Context::default();
+    let frame = |app: &mut crate::WordApp| ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx())).drop_without_applying_deltas();
+    frame(&mut app);
+    app.run("ui.language", serde_json::json!({"value": "fr"})).unwrap();
+    frame(&mut app);
+    assert_eq!(app.session.editing_lang.as_deref(), Some("fr-FR"));
+    assert_eq!(app.session.doc.styles.default_chr.lang.as_deref(), Some("fr-FR"));
+    app.session.run("text.insert", &serde_json::json!({"text": "Une maison près de la rivière."})).unwrap();
+    let issues = app.session.run("review.issues", &serde_json::json!({})).unwrap();
+    assert!(issues.as_array().unwrap().iter().all(|i| i["lang"] == "fr-fr"), "{issues}");
+    set_current(Lang::EN);
+    assert_eq!(crate::ribbon::caret_language(&app), "French (France)");
+    let before = app.session.doc.clone();
+    app.run("ui.language", serde_json::json!({"value": "en"})).unwrap();
+    frame(&mut app);
+    assert_eq!(app.session.doc, before, "an interface change does not relabel existing text");
+}
+
+#[test]
 fn the_editing_languages_are_the_ones_wordcraft_can_proof() {
     let with: Vec<(&str, &str)> = LANGUAGES.iter().filter_map(|l| l.editing_lang.map(|e| (l.code, e))).collect();
-    assert_eq!(with, [("pt-br", "pt-BR"), ("pl", "pl-PL"), ("cs", "cs-CZ"), ("tr", "tr-TR"), ("it", "it-IT")]);
+    assert_eq!(with, [("pt-br", "pt-BR"), ("pl", "pl-PL"), ("cs", "cs-CZ"), ("tr", "tr-TR"), ("it", "it-IT"), ("fr", "fr-FR")]);
 }
 
 #[test]

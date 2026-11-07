@@ -1,7 +1,7 @@
 use super::{Ui, Value, WordApp, json, vec2};
 
 /// The proofing languages the Language menu offers: tag and English name (translated when drawn).
-pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 16] = [
+pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 18] = [
     ("en-US", "English (United States)"),
     ("en-GB", "English (United Kingdom)"),
     ("en-AU", "English (Australia)"),
@@ -14,6 +14,8 @@ pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 16] = [
     ("ru-RU", "Russian"),
     ("cs-CZ", "Czech"),
     ("id-ID", "Indonesian"),
+    ("fr-FR", "French (France)"),
+    ("fr-CA", "French (Canada)"),
     ("es-ES", "Spanish (Spain)"),
     ("es-MX", "Spanish (Mexico)"),
     ("es-419", "Spanish (Latin America)"),
@@ -217,6 +219,20 @@ fn name_parts(tag: Option<&str>) -> NameParts {
     // Any language the Language dialog offers (French, German…) by its name, not its tag (#860).
     if let Some(name) = named(tag) {
         return NameParts::Whole(name.to_string());
+    }
+    // French is a pack locale. Its actual region follows the language and optional script;
+    // calendar/private-use extension data never selects Canada. Keep other labels unchanged.
+    if let Some(locale) = wordcraft_engine::proof::ProofLang::from_tag(Some(tag)).pack_locale().filter(|l| l.primary() == "fr") {
+        let mut parts = locale.as_str().split('-').skip(1);
+        let first = parts.next().unwrap_or("");
+        let region = if first.len() == 4 && first.bytes().all(|b| b.is_ascii_alphabetic()) { parts.next().unwrap_or("") } else { first };
+        let is_region = (region.len() == 2 && region.bytes().all(|b| b.is_ascii_alphabetic()))
+            || (region.len() == 3 && region.bytes().all(|b| b.is_ascii_digit()));
+        return if is_region {
+            NameParts::Regioned { language: "French".into(), region: region_name(region) }
+        } else {
+            NameParts::Whole("French (France)".into())
+        };
     }
     let mut parts = tag.split(['-', '_']);
     let primary = parts.next().unwrap_or("");
@@ -469,6 +485,24 @@ fn listed_parts(tag: &str) -> TagParts {
 /// it with) and that WordCraft proofs alike ([`same_proofing`]): `nl` is the `nl-NL` row, `pl` the
 /// `pl-PL` one, `ces` the `cs-CZ` one. Tags are compared, never the names the lists show for them.
 pub(crate) fn same_language(a: &str, b: &str) -> bool {
+    // French keeps its accepted locale spellings (fr_CA.UTF-8 and extension tags),
+    // while the shared list matcher compares the canonical region rather than a display name.
+    let french = |tag: &str| {
+        wordcraft_engine::proof::ProofLang::from_tag(Some(tag)).pack_locale().filter(|locale| locale.primary() == "fr").map(|locale| {
+            let mut parts: Vec<_> = locale.as_str().split('-').collect();
+            // French's implicit script is Latin; an explicit other script stays distinct.
+            if parts.get(1) == Some(&"latn") {
+                parts.remove(1);
+            }
+            let region = if parts.get(1).is_some_and(|p| p.len() == 4 && p.bytes().all(|b| b.is_ascii_alphabetic())) { 2 } else { 1 };
+            if !parts.get(region).is_some_and(|p| wordcraft_engine::packs::is_region(p)) {
+                parts.insert(region, "fr");
+            }
+            parts.join("-")
+        })
+    };
+    let (fa, fb) = (french(a), french(b));
+    let (a, b) = (fa.as_deref().unwrap_or(a), fb.as_deref().unwrap_or(b));
     if a.eq_ignore_ascii_case(b) {
         return true;
     }

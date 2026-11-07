@@ -136,6 +136,29 @@ fn language_dialog_marks_the_selection() {
     assert_eq!(language_name("xx-YY"), "xx-YY", "an unknown tag shows as itself");
 }
 
+#[test]
+fn canadian_french_language_selection_undo_and_default() {
+    let mut a = app();
+    a.ui.language = "en".into();
+    a.run("select.all", json!({})).unwrap();
+    let before = a.session.doc.clone();
+    let form = LanguageForm { lang: "fr-CA".into(), no_proof: false, detect: false };
+    assert!(LANGUAGES.contains(&("fr-CA", "French (Canada)")));
+    a.run("review.language", form.params()).unwrap();
+    assert_eq!(LanguageForm::read(&a).lang, "fr-CA");
+    assert!(!LanguageForm::read(&a).no_proof);
+    a.run("edit.undo", json!({})).unwrap();
+    assert_eq!(a.session.doc, before);
+    a.run("review.language", json!({"lang": "fr-CA", "default": true})).unwrap();
+    let saved = serde_json::to_vec(&a.prefs()).unwrap();
+    let mut b = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    b.apply_prefs(serde_json::from_slice(&saved).unwrap());
+    b.logic(&egui::Context::default());
+    assert_eq!(LanguageForm::read(&b).lang, "fr-CA");
+    b.run("file.new", json!({})).unwrap();
+    assert_eq!(LanguageForm::read(&b).lang, "fr-CA");
+}
+
 /// #2717: language and no-proof can come from defaults or either kind of style.
 #[test]
 fn language_dialog_reads_inherited_proofing() {

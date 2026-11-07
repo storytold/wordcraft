@@ -333,11 +333,14 @@ fn a_language_and_region_name_is_translated_in_parts() {
         match s {
             "Swedish" => "X".into(),
             "Finland" => "Y".into(),
+            "French" => "F".into(),
+            "Belgium" => "B".into(),
             "{language} ({region})" => "{language} \u{2013} {region}".into(),
             other => other.to_string(),
         }
     };
     assert_eq!(display_name_with(Some("sv-FI"), &fake), "X \u{2013} Y");
+    assert_eq!(display_name_with(Some("fr-BE"), &fake), "F \u{2013} B");
     // A whole name is looked up as it is; the template isn't used for it.
     assert_eq!(display_name_with(Some("sv-SE"), &fake), "X");
     // Without a catalogue (English) the name is byte-identical to the English name.
@@ -360,7 +363,7 @@ fn other_regions_show_by_name_once() {
     assert_eq!(language_name(Some("sr-Latn-BA")), "Serbian (Bosnia and Herzegovina)");
     assert_eq!(language_name(Some("en-ZZ")), "English (ZZ)");
     assert_eq!(language_name(Some("xx-YY")), "xx-YY");
-    for tag in ["fr-CA", "pt-AO", "en-SG"] {
+    for tag in ["fr-BE", "pt-AO", "en-SG"] {
         let c = language_checks(tag, &short());
         let name = c.extra.expect("shown above the list");
         assert!(!PROOFING_LANGUAGES.iter().any(|(_, n)| *n == name), "{name} is listed once");
@@ -370,6 +373,43 @@ fn other_regions_show_by_name_once() {
     let c = language_checks("PT-br-x-test", &short());
     assert_eq!(c.extra, None);
     assert_eq!(c.listed, listed_only("pt-BR"));
+}
+
+/// French keeps two explicit choices while its shared pack uses the real region only.
+#[test]
+fn french_regions_are_in_both_language_pickers() {
+    let entries = super::language::short_languages();
+    let all = super::language::all_languages();
+    for tag in ["fr-Cyrl", "fr-Cyrl-CA"] {
+        assert!(!super::language::same_language(tag, "fr-FR"));
+        assert!(!super::language::same_language(tag, "fr-CA"));
+    }
+    for (tag, name) in [("fr-FR", "French (France)"), ("fr-CA", "French (Canada)")] {
+        assert!(PROOFING_LANGUAGES.contains(&(tag, name)));
+        assert!(crate::dialogs_layout::LANGUAGES.contains(&(tag, name)));
+        // Both choices are available once, independently of an installed French pack.
+        assert_eq!(entries.iter().filter(|(t, _)| t == tag).count(), 1);
+        assert_eq!(all.iter().filter(|(t, _)| t == tag).count(), 1);
+        let checks = language_checks(tag, &short());
+        assert_eq!((checks.extra, checks.listed), (None, listed_only(tag)));
+    }
+    assert_eq!(language_name(Some("fr-BE")), "French (Belgium)");
+    // The shared dynamic entries keep the two regions separate, including encoded locales.
+    for (current, expected) in [("fr_FR.UTF-8", "fr-FR"), ("fr_CA.UTF-8", "fr-CA")] {
+        let checks = language_checks(current, &entries);
+        assert!(checks.extra.is_none());
+        assert_eq!(checks.listed, entries.iter().map(|(t, _)| t == expected).collect::<Vec<_>>());
+    }
+    for tag in ["fr", "fr-u-ca-gregory", "fr-Latn-u-ca-gregory", "fr-x-ca", "fr_FR.UTF-8", "FR_fr"] {
+        assert_eq!(language_name(Some(tag)), "French (France)", "{tag}");
+        let checks = language_checks(tag, &short());
+        assert_eq!((checks.extra, checks.listed), (None, listed_only("fr-FR")), "{tag}");
+    }
+    for tag in ["fr-CA", "fr-Latn-CA", "fr_CA.UTF-8", "FR_ca", "fr-CA-u-nu-latn"] {
+        assert_eq!(language_name(Some(tag)), "French (Canada)", "{tag}");
+        let checks = language_checks(tag, &short());
+        assert_eq!((checks.extra, checks.listed), (None, listed_only("fr-CA")), "{tag}");
+    }
 }
 
 /// The Englishes WordCraft proofs differently are in the menu, checked by their tags, and
@@ -705,7 +745,7 @@ fn language_menu_reaches_every_language() {
     let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Bonjour")), crate::Services::default());
     let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 600.0)).build_ui_state(|ui, app: &mut WordApp| language_menu(ui, app), app);
     h.run();
-    assert!(h.query(item("French (France)")).is_none(), "the short list only, on an English document");
+    assert!(h.query(item("French (France)")).is_some(), "French is available before selecting it");
     assert!(!h.get(item("Set Proofing Language…")).accesskit_node().is_disabled(), "never greyed out on a fresh document");
     assert!(!h.get(item("English (United States)")).accesskit_node().is_disabled());
     h.get(item("Set Proofing Language…")).click();
@@ -716,7 +756,7 @@ fn language_menu_reaches_every_language() {
     h.state_mut().run("review.language", json!({"lang": "fr-FR", "default": true})).unwrap();
     h.run();
     assert_eq!(caret_language(h.state()), "French (France)");
-    assert!(h.query(item("French (France)")).is_some(), "the current language is listed (only while it is the current one)");
+    assert!(h.query(item("French (France)")).is_some(), "the current language remains listed once");
     h.get(item("Language Preferences…")).click();
     h.run();
     assert!(h.state().ui.backstage, "File › Options opened");
