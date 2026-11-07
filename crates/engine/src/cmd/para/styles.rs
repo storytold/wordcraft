@@ -90,9 +90,8 @@ pub(super) fn create_style(s: &mut Session, v: &Value) -> CmdResult {
         priority: Some(50),
         ..Default::default()
     };
-    if p::bool(v, "fromSelection").unwrap_or(true)
-        && let Some(para) = s.doc.para_at(&s.sel.focus)
-    {
+    let from_selection = p::bool(v, "fromSelection").unwrap_or(true);
+    if from_selection && let Some(para) = s.doc.para_at(&s.sel.focus) {
         st.para = para.props.clone();
         st.para.style = None;
         st.para.numbering = None;
@@ -105,9 +104,51 @@ pub(super) fn create_style(s: &mut Session, v: &Value) -> CmdResult {
         st.chr.fmt_change = None;
         st.para = st.para.formatting();
     }
+    let copied_chr = from_selection.then(|| st.chr.clone());
     Arc::make_mut(&mut s.doc.styles).upsert(st);
     apply_style(s, &json!({"style": id}))?;
+    if let Some(copied_chr) = copied_chr {
+        strip_created_style_overrides(s, &copied_chr)?;
+    }
     Ok(json!({"id": id}))
+}
+
+/// Remove matching copied direct character formatting from the selected text only. A differing
+/// run keeps its formatting, as does every character outside the selection.
+fn strip_created_style_overrides(s: &mut Session, copied: &CharProps) -> Result<(), CmdError> {
+    let (a, b) = s.sel.ordered();
+    if a == b {
+        return Ok(());
+    }
+    for path in s.doc.paths_between(&a, &b) {
+        let para = s.doc.para_mut(a.story, &path)?;
+        let from = if path == a.path { a.off } else { 0 };
+        let to = if path == b.path { b.off } else { para.len() };
+        if to <= from {
+            continue;
+        }
+        para.format(from, to, &|c| {
+            if c.font == copied.font {
+                c.font = None;
+            }
+            if c.font_cs == copied.font_cs {
+                c.font_cs = None;
+            }
+            if c.font_ea == copied.font_ea {
+                c.font_ea = None;
+            }
+            if c.size == copied.size {
+                c.size = None;
+            }
+            if c.size_cs == copied.size_cs {
+                c.size_cs = None;
+            }
+            if c.color == copied.color {
+                c.color = None;
+            }
+        })?;
+    }
+    Ok(())
 }
 
 pub(super) fn modify_style(s: &mut Session, v: &Value) -> CmdResult {
