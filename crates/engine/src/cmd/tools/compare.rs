@@ -1,6 +1,6 @@
 use super::{
-    json, p, para_block, Arc, Block, CharProps, CmdError, CmdResult, Document, InlineObject, Paragraph, RevisionKind, Selection, Session, StoryRef,
-    Value,
+    Arc, Block, CharProps, CmdError, CmdResult, Document, InlineObject, Paragraph, RevisionKind, Selection, Session, StoryRef, Value, json, p,
+    para_block,
 };
 use wordcraft_doc::para::OBJ;
 
@@ -23,11 +23,7 @@ impl CompareOptions {
     /// The text a comparison sees: case folded and white space collapsed as the options say.
     fn key(&self, t: &str) -> String {
         let t = if self.white_space { t.to_string() } else { t.split_whitespace().collect::<Vec<_>>().join(" ") };
-        if self.case {
-            t
-        } else {
-            t.to_lowercase()
-        }
+        if self.case { t } else { t.to_lowercase() }
     }
 }
 
@@ -378,11 +374,7 @@ fn para_similarity(pa: &Paragraph, pb: &Paragraph, opts: &CompareOptions) -> u32
     if words_a.len() > 1 && words_b.len() > 1 {
         let shared = count_shared_tokens(&words_a, &words_b);
         let total = words_a.len().saturating_add(words_b.len());
-        if total == 0 {
-            0
-        } else {
-            ((2000u64 * shared as u64) / total as u64) as u32
-        }
+        if total == 0 { 0 } else { ((2000u64 * shared as u64) / total as u64) as u32 }
     } else {
         let chars_a: Vec<char> = key_a.chars().filter(|c| !c.is_whitespace()).collect();
         let chars_b: Vec<char> = key_b.chars().filter(|c| !c.is_whitespace()).collect();
@@ -394,11 +386,7 @@ fn para_similarity(pa: &Paragraph, pb: &Paragraph, opts: &CompareOptions) -> u32
         }
         let shared = count_shared_chars(&chars_a, &chars_b);
         let total = chars_a.len().saturating_add(chars_b.len());
-        if total == 0 {
-            0
-        } else {
-            ((2000u64 * shared as u64) / total as u64) as u32
-        }
+        if total == 0 { 0 } else { ((2000u64 * shared as u64) / total as u64) as u32 }
     }
 }
 
