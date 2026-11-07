@@ -140,42 +140,77 @@ fn list_autoformat(s: &mut Session) -> Result<bool, CmdError> {
         return Ok(false);
     }
     let Some(prefix) = para.text.get(..f.off) else { return Ok(false) };
-    let kind = match prefix {
-        "* " => ListKind::Bullet,
-        "- " => ListKind::BulletChar('-'),
+    // "1. " / "1) " start numbering at 1; "2. ", "3) " … at the number typed, so counting on by hand
+    // (1. 2. 3.) keeps the numbers typed instead of falling back to 1.
+    let numbered = numbered_trigger(prefix);
+    let kind = match numbered.map(|(k, _)| k).ok_or(prefix) {
+        Ok(kind) => kind,
+        Err("* ") => ListKind::Bullet,
+        Err("- ") => ListKind::BulletChar('-'),
         // Arrow bullets (Word draws these from a symbol font; we use the Unicode arrows).
-        "> " => ListKind::BulletChar('\u{27A2}'),
-        "-> " => ListKind::BulletChar('\u{2794}'),
-        "=> " => ListKind::BulletChar('\u{21E8}'),
-        "1. " => ListKind::Numbered,
-        "1) " => ListKind::NumberedParen,
-        "a. " => ListKind::LowerLetterDot,
-        "a) " => ListKind::LowerLetter,
-        "A. " => ListKind::UpperLetter,
-        "i. " => ListKind::LowerRoman,
-        "I. " => ListKind::Outline,
-        _ => return Ok(false),
+        Err("> ") => ListKind::BulletChar('\u{27A2}'),
+        Err("-> ") => ListKind::BulletChar('\u{2794}'),
+        Err("=> ") => ListKind::BulletChar('\u{21E8}'),
+        Err("a. ") => ListKind::LowerLetterDot,
+        Err("a) ") => ListKind::LowerLetter,
+        Err("A. ") => ListKind::UpperLetter,
+        Err("i. ") => ListKind::LowerRoman,
+        Err("I. ") => ListKind::Outline,
+        Err(_) => return Ok(false),
     };
     let ac = &s.prefs.autocorrect;
     if !(if kind.is_bullet() { ac.bullets } else { ac.numbering }) {
         return Ok(false);
     }
-    // Bullets join an existing bullet list; typing "1. " always starts numbering again at 1,
-    // as in Word.
+    // Bullets join an existing bullet list; a typed number always starts a list of its own, at
+    // that number (so "1. " starts again at 1, as in Word, and "2. " shows 2).
     let found = if kind.is_bullet() { s.doc.numbering.find_kind(kind) } else { None };
     let num = match found {
         Some(n) => n,
         None => Arc::make_mut(&mut s.doc.numbering).try_add_list(kind)?,
     };
+    if let Some((_, start)) = numbered.filter(|(_, n)| *n != 1)
+        && let Some(list) = Arc::make_mut(&mut s.doc.numbering).nums.iter_mut().find(|x| x.id == num)
+    {
+        list.start_overrides = vec![(0, start)];
+    }
+    // The label goes. With Track Changes on, text this author just typed is removed, but text that
+    // was already there is marked deleted instead, so Reject All brings it back; the caret then
+    // sits after what stays.
+    let before = s.doc.para_at(&f).map_or(0, |p| p.len());
+    if s.doc.settings.track_changes {
+        crate::cmd::track_delete(s, &Pos { off: 0, ..f.clone() }, &f)?;
+    } else {
+        s.doc.para_mut(f.story, &f.path)?.delete(0, f.off)?;
+    }
+    let removed = before.saturating_sub(s.doc.para_at(&f).map_or(0, |p| p.len()));
     let para = s.doc.para_mut(f.story, &f.path)?;
-    para.delete(0, f.off)?;
     para.props.numbering = Some(NumRef { num, level: 0 });
     // A heading stays a heading (Word: "1. " in a Heading 1 gives a numbered Heading 1).
     if para.props.style.as_deref().is_none_or(|st| st == "Normal") {
         para.props.style = Some("ListParagraph".into());
     }
-    s.sel = Selection::caret(Pos { off: 0, ..f });
+    s.sel = Selection::caret(Pos { off: f.off.saturating_sub(removed), ..f });
     Ok(true)
+}
+
+/// A typed number label, `"12. "` or `"12) "`: the list kind it starts and the number it starts at.
+/// Zero, numbers with a leading zero and numbers above `MAX_LIST_START` are ordinary text.
+fn numbered_trigger(prefix: &str) -> Option<(ListKind, u32)> {
+    let label = prefix.strip_suffix(' ')?;
+    let sep = label.chars().next_back()?;
+    let digits = &label[..label.len() - sep.len_utf8()];
+    if digits.is_empty() || digits.len() > 5 || digits.starts_with('0') || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let kind = match sep {
+        '.' => ListKind::Numbered,
+        ')' => ListKind::NumberedParen,
+        _ => return None,
+    };
+    // Stops where `list.define` does, so a typed start survives later edits to the list.
+    let start: u32 = digits.parse().ok().filter(|n| *n <= crate::cmd::lists::MAX_LIST_START)?;
+    Some((kind, start))
 }
 
 /// "word" + two spaces → "word. ": the second Space turns the first into a period, after a

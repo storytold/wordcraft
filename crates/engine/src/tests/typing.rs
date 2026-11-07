@@ -382,6 +382,99 @@ fn typing_1_dot_starts_numbering_again() {
     assert_ne!(num(0), num(3), "a new list restarts at 1");
 }
 
+/// Typed one character at a time like the keyboard: "1. " starts a list every time, and "2. ",
+/// "10) " … start one at the number typed instead of going back to 1.
+#[test]
+fn typed_numbers_start_a_list_at_that_number() {
+    let mut s = typed("1. a\n\n1. b\n\n2. c\n\n10) d\n\n7.x\n02. e");
+    let lower: Vec<_> = paras(&s).into_iter().map(|(t, level, _)| (t.to_lowercase(), level)).collect();
+    let want = [("a", Some(0)), ("b", Some(0)), ("c", Some(0)), ("d", Some(0)), ("7.x", None), ("02. e", None)];
+    assert_eq!(lower, want.map(|(t, l)| (t.to_string(), l)));
+    let shown: Vec<Option<String>> = numbers(&mut s).into_iter().map(|n| n.0).collect();
+    let shown: Vec<_> = shown.iter().map(|l| l.as_deref()).collect();
+    assert_eq!(&shown[..4], [Some("1."), Some("1."), Some("2."), Some("10)")], "a typed number is the number shown");
+    // "0" and a leading zero are ordinary text, and so is a number not followed by a space.
+    assert_eq!(&shown[4..], [None, None]);
+    // A list started at 2 keeps counting from there.
+    let mut s = typed("2. a\nb");
+    let shown: Vec<_> = numbers(&mut s).into_iter().map(|n| n.0).collect();
+    assert_eq!(shown, [Some("2.".to_string()), Some("3.".to_string())]);
+    // Undo right after takes only the AutoFormat back.
+    let mut s = typed("3. ");
+    run(&mut s, "edit.undo", json!({}));
+    typ(&mut s, "x");
+    assert_eq!(paras(&s), vec![("3. x".to_string(), None, false)]);
+}
+
+/// The numbering-format panel reads a list through `levels_of`: a typed start shows there too, and
+/// the levels the list has no override for keep their own start.
+#[test]
+fn a_typed_list_start_shows_in_the_list_levels() {
+    let s = typed("5. a");
+    let num = crate::cmd::lists::caret_list(&s).expect("in a list");
+    let levels = crate::cmd::lists::levels_of(&s, num).expect("levels");
+    assert_eq!(levels[0].start, 5);
+    assert!(levels[1..].iter().all(|l| l.start == 1));
+}
+
+/// Redefining a typed list in place edits the shared definition: the list's own typed start is not
+/// copied into it, and the list still starts where it was typed.
+#[test]
+fn redefining_a_typed_list_keeps_its_start_out_of_the_shared_definition() {
+    let mut s = typed("5. a");
+    let num = crate::cmd::lists::caret_list(&s).expect("in a list");
+    run(&mut s, "list.define", json!({"num": num, "levels": [{}]}));
+    assert_eq!(s.doc.numbering.level(num, 0).expect("level").start, 1);
+    assert_eq!(crate::cmd::lists::levels_of(&s, num).expect("levels")[0].start, 5);
+}
+
+/// A start given when a typed list is redefined in place replaces the list's own typed start.
+#[test]
+fn redefining_a_typed_list_with_a_start_replaces_its_typed_start() {
+    let mut s = typed("5. a");
+    let num = crate::cmd::lists::caret_list(&s).expect("in a list");
+    run(&mut s, "list.define", json!({"num": num, "levels": [{"start": 7}]}));
+    assert_eq!(s.doc.numbering.level(num, 0).expect("level").start, 7);
+    assert_eq!(crate::cmd::lists::levels_of(&s, num).expect("levels")[0].start, 7);
+}
+
+/// Sending a typed list's levels back unchanged leaves the shared definition alone, and a typed
+/// number above the largest start stays text.
+#[test]
+fn a_round_trip_of_a_typed_list_keeps_its_start_out_of_the_shared_definition() {
+    let mut s = typed("5. a");
+    let num = crate::cmd::lists::caret_list(&s).expect("in a list");
+    let got = s.run("list.get", &json!({"num": num})).unwrap();
+    run(&mut s, "list.define", json!({"num": num, "levels": got["levels"]}));
+    assert_eq!(s.doc.numbering.level(num, 0).expect("level").start, 1);
+    assert_eq!(crate::cmd::lists::levels_of(&s, num).expect("levels")[0].start, 5);
+    let s = typed("32768. a");
+    assert_eq!(paras(&s), vec![("32768. a".to_string(), None, false)]);
+}
+
+/// The label is removed by the AutoFormat: with Track Changes on, what this author typed goes
+/// outright, but a label that was already in the paragraph is marked deleted, so Reject All
+/// brings it back.
+#[test]
+fn a_tracked_number_label_that_was_already_there_is_marked_deleted() {
+    // "2." was there before Track Changes was turned on; the space after it is typed tracked.
+    let mut s = typed("2.");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, " ");
+    assert!(paras(&s)[0].1.is_some(), "{:?}", paras(&s));
+    assert!(s.doc.para_at(&Pos::body(0, 0)).is_some_and(|p| p.text == "2." && p.run_ranges().all(|(_, c)| c.del.is_some())), "{:?}", paras(&s));
+    assert_eq!(s.sel.focus, Pos::body(0, 2), "the caret is after the label that stays");
+    typ(&mut s, "x");
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "2.");
+    // Typed with Track Changes on, the whole label never existed.
+    let mut s = typed("");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "2. x");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "x");
+    assert_eq!(s.sel.focus, Pos::body(0, 1));
+}
+
 #[test]
 fn undo_right_after_autoformat_undoes_only_the_autoformat() {
     let mut s = typed("* ");
