@@ -6843,6 +6843,7 @@ dependencies = [
  "wordcraft-render",
  "wordcraft-validate",
  "wordcraft-zotero",
+ "zip 3.0.0",
 ]
 
 [[package]]

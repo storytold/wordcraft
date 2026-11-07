@@ -528,7 +528,24 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
             out.malformed = Some("the part has no document element".to_string());
         }
     }
-    finish(&state, part, acc);
+    // Pairing reports split into two classes. PREFIX-ESTABLISHED reports are true of the scanned
+    // prefix alone (monotone), so they are emitted on every scan. COMPLETION-DEPENDENT reports need
+    // the whole part; emitting them from a truncated state would invent findings the rest of the
+    // part might contradict. They are emitted only on a complete scan. A budget/cap stop already
+    // marked INCOMPLETE at its own site; on the malformed path, a discarded completion-dependent set
+    // that would have reported something marks the run INCOMPLETE below (the malformed part itself
+    // is Warning-only by calibration).
+    let scan_complete = out.malformed.is_none() && !budget_stopped && !state.fact_capped && !state.refs_capped;
+    finish_prefix(&state, part, acc);
+    if scan_complete {
+        finish_completion(&state, part, acc);
+    } else if out.malformed.is_some() && completion_dependent_pending(&state) {
+        // No INCOMPLETE is marked by a malformed part itself, but here a completion-dependent
+        // pairing check could not run and would have reported something: the run could not examine
+        // everything a finding depends on. Name the part and the check that could not complete.
+        acc.note(format!("{part} ends before its field/move/bookmark pairing checks could complete; they were not run"));
+        acc.set_incomplete();
+    }
     if state.fact_capped || state.refs_capped {
         acc.note(format!("{part} exceeded the {}-entry fact/reference budget; later facts or references were not recorded", acc.limits.facts));
         acc.set_incomplete();
@@ -645,7 +662,7 @@ fn record_comment_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: 
             push_capped(&mut state.facts.comment_refs, cap, &mut state.fact_capped, attr_ns(attrs, res, NS_W, b"id"), part);
         }
         "p" if id.w() && role.is_comments => {
-            push_capped(&mut state.facts.comment_para_ids, cap, &mut state.fact_capped, attr_ns(attrs, res, NS_W14, b"paraId"), part);
+            push_capped(&mut state.facts.comment_para_ids, cap, &mut state.fact_capped, attr_ns(attrs, res, NS_W14, b"paraId").map(hex_ident), part);
         }
         _ => {}
     }
@@ -878,21 +895,46 @@ fn report_bookmarks(acc: &mut Acc, part: &str, starts: &BTreeSet<String>, ends: 
     }
 }
 
-fn finish(state: &State, part: &str, acc: &mut Acc) {
+/// Prefix-established pairing reports: their truth is decided by the scanned prefix alone, so they
+/// are monotone (a longer scan cannot make them false) and are emitted on every scan, complete or
+/// not. The rules in this class are:
+///
+/// - `FLD-UNBALANCED` for a `w:fldChar` `end` seen at field depth 0 — field nesting is ordered, so
+///   the prefix already proves the end is unbalanced whatever follows.
+/// - `STRUCT-MOVE-UNPAIRED` for a duplicate move range-start id — once an id has appeared twice in
+///   the prefix, the duplicate exists regardless of the rest.
+fn finish_prefix(state: &State, part: &str, acc: &mut Acc) {
+    report_duplicate_move_ids(acc, part, &state.move_start_ids);
+    if state.fld_extra_end > 0 {
+        acc.add("FLD-UNBALANCED", Some(part.to_string()), format!("{part} has {} w:fldChar end(s) with no open begin", state.fld_extra_end));
+    }
+}
+
+/// Completion-dependent pairing reports: their truth needs the whole part, so they run only on a
+/// complete scan. An unclosed `w:fldChar` begin, an unpaired move range start/end, a mismatched move
+/// name or an unpaired bookmark could still be paired by content the scan has not read.
+fn finish_completion(state: &State, part: &str, acc: &mut Acc) {
     report_unpaired(acc, part, "w:moveFromRangeStart", &state.move_from_start, &state.move_from_end, "w:moveFromRangeEnd");
     report_unpaired(acc, part, "w:moveFromRangeEnd", &state.move_from_end, &state.move_from_start, "w:moveFromRangeStart");
     report_unpaired(acc, part, "w:moveToRangeStart", &state.move_to_start, &state.move_to_end, "w:moveToRangeEnd");
     report_unpaired(acc, part, "w:moveToRangeEnd", &state.move_to_end, &state.move_to_start, "w:moveToRangeStart");
     report_name_pairs(acc, part, "w:moveFromRangeStart", &state.move_from_names, "w:moveToRangeStart", &state.move_to_names);
     report_name_pairs(acc, part, "w:moveToRangeStart", &state.move_to_names, "w:moveFromRangeStart", &state.move_from_names);
-    report_duplicate_move_ids(acc, part, &state.move_start_ids);
     report_bookmarks(acc, part, &state.bookmark_starts, &state.bookmark_ends);
     if state.fld_depth > 0 {
         acc.add("FLD-UNBALANCED", Some(part.to_string()), format!("{part} has {} unclosed w:fldChar begin(s)", state.fld_depth));
     }
-    if state.fld_extra_end > 0 {
-        acc.add("FLD-UNBALANCED", Some(part.to_string()), format!("{part} has {} w:fldChar end(s) with no open begin", state.fld_extra_end));
-    }
+}
+
+/// Whether running [`finish_completion`] on the accumulated state would emit at least one report.
+/// A matched pair before the break emits nothing; an unmatched begin or end does. (A duplicate move
+/// id is prefix-established, so it is not part of this test.)
+fn completion_dependent_pending(state: &State) -> bool {
+    state.fld_depth > 0
+        || state.move_from_start != state.move_from_end
+        || state.move_to_start != state.move_to_end
+        || state.move_from_names != state.move_to_names
+        || state.bookmark_starts != state.bookmark_ends
 }
 
 fn check_prefixes(declared: &[Vec<String>], attrs: &[Attribute], res: &NamespaceResolver, extra: &[String], out: &mut PartScan) {
@@ -962,6 +1004,16 @@ fn attr_plain(attrs: &[Attribute], name: &[u8]) -> Option<String> {
 
 fn lossy(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// Canonicalise a hex identifier value (`w14:paraId`, `w15:paraIdParent`, `w16cid:paraId`:
+/// ST_LongHexNumber). The same number may be written in either case, so it is case-folded at
+/// collection. The joins that compare these values are the ones `COMMENTEX-LINK` actually performs:
+/// a commentEx `paraId` against a comments paragraph's `w14:paraId`; a commentEx `paraIdParent`
+/// against another commentEx `paraId`; and a commentsIds `w16cid:paraId` against a commentEx
+/// `paraId`. The `w16cid:durableId` attribute is not read and no durable-id value is compared.
+fn hex_ident(v: String) -> String {
+    v.to_ascii_lowercase()
 }
 
 fn is_whitespace(e: &quick_xml::events::BytesText) -> bool {
@@ -1462,7 +1514,8 @@ fn push_comment_ex(out: &mut CommentEx, id: &ElemId, attrs: &[Attribute], res: &
         && id.local == "commentEx"
         && let Some(para) = attr_ns(attrs, res, NS_W15, b"paraId")
     {
-        let parent = attr_ns(attrs, res, NS_W15, b"paraIdParent");
+        let para = hex_ident(para);
+        let parent = attr_ns(attrs, res, NS_W15, b"paraIdParent").map(hex_ident);
         if out.entries.len() >= cap {
             out.capped = true;
         } else {
@@ -1521,7 +1574,7 @@ fn push_comment_id(out: &mut Vec<String>, capped: &mut bool, id: &ElemId, attrs:
         if out.len() >= cap {
             *capped = true;
         } else {
-            out.push(v);
+            out.push(hex_ident(v));
         }
     }
 }

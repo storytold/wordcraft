@@ -140,6 +140,29 @@ pub fn corrupt_entry_data(zip: &[u8], name: &str) -> Vec<u8> {
     out
 }
 
+/// Claim `method` (a ZIP compression-method id) for `name` in both the local header and the
+/// central directory, so the reader cannot open the entry though the archive itself stays
+/// readable. The stored bytes are untouched.
+pub fn claim_entry_method(zip: &[u8], name: &str, method: u16) -> Vec<u8> {
+    const LOCAL: [u8; 4] = [0x50, 0x4B, 0x03, 0x04];
+    const CENTRAL: [u8; 4] = [0x50, 0x4B, 0x01, 0x02];
+    let mut out = zip.to_vec();
+    // (signature, name-length field, name field, method field). The two headers place these at
+    // different offsets, so all four are given explicitly.
+    for (sig, nlen_at, name_at, method_at) in [(LOCAL, 26usize, 30usize, 8usize), (CENTRAL, 28, 46, 10)] {
+        for i in 0..out.len().saturating_sub(30) {
+            if out.get(i..i + 4) != Some(&sig) {
+                continue;
+            }
+            let nlen = usize::from(u16::from_le_bytes([out[i + nlen_at], out[i + nlen_at + 1]]));
+            if out.get(i + name_at..i + name_at + nlen) == Some(name.as_bytes()) {
+                out[i + method_at..i + method_at + 2].copy_from_slice(&method.to_le_bytes());
+            }
+        }
+    }
+    out
+}
+
 /// A document under construction.
 pub struct Doc {
     pub entries: Vec<(String, Vec<u8>)>,

@@ -88,6 +88,12 @@ def base_parts():
         "word/media/image1.png": PNG,
     }
 
+def _info(name):
+    # A fixed entry timestamp keeps the archive byte-identical between runs.
+    zi = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+    zi.compress_type = zipfile.ZIP_DEFLATED
+    return zi
+
 def write(name, parts, raw=None):
     path = os.path.join(OUT, name)
     if raw is not None:
@@ -96,7 +102,7 @@ def write(name, parts, raw=None):
     else:
         with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
             for k, v in parts.items():
-                z.writestr(k, v)
+                z.writestr(_info(k), v)
     print("wrote", name)
 
 # control
@@ -106,8 +112,8 @@ write("01-not-zip.docx", None, raw=b"This is plain text, not a zip archive at al
 p = base_parts(); write("02-dup-entry.docx", None, raw=None) if False else None
 with zipfile.ZipFile(os.path.join(OUT, "02-dup-entry.docx"), "w", zipfile.ZIP_DEFLATED) as z:
     for k, v in base_parts().items():
-        z.writestr(k, v)
-    z.writestr("word/document.xml", DOC)
+        z.writestr(_info(k), v)
+    z.writestr(_info("word/document.xml"), DOC)
 print("wrote 02-dup-entry.docx")
 p = base_parts(); p["word/Document.xml"] = DOC; write("03-case-collision.docx", p)
 p = base_parts(); del p["[Content_Types].xml"]; write("04-no-content-types.docx", p)
@@ -131,7 +137,7 @@ p = base_parts(); p["word/document.xml"] = DOC.replace('<w:footnoteReference w:i
 p = base_parts(); p["word/document.xml"] = DOC.replace('r:id="rId3"', 'r:id="rId99"'); write("20-header-ref.docx", p)
 p = base_parts(); p["word/document.xml"] = DOC.replace('w:val="MyStyle"', 'w:val="NoSuchStyle"'); write("21-style-ref.docx", p)
 p = base_parts(); p["word/document.xml"] = DOC.replace("<w:sectPr>", '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r></w:p><w:sectPr>'); write("22-fld-unbalanced.docx", p)
-p = base_parts(); p["word/document.xml"] = DOC.replace("<w:sectPr>", '<w:tbl><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/></w:tcPr></w:tc></w:tr></w:tbl><w:sectPr>'); write("23-tc-no-p.docx", p)
+p = base_parts(); p["word/document.xml"] = DOC.replace("<w:sectPr>", '<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/></w:tcPr></w:tc></w:tr></w:tbl><w:sectPr>'); write("23-tc-no-p.docx", p)
 p = base_parts(); p["word/document.xml"] = DOC.replace("<w:sectPr>", '<w:p><w:del w:id="301" w:author="Ember Test" w:date="2026-11-06T12:02:00Z"><w:r><w:t>wrong element</w:t></w:r></w:del></w:p><w:sectPr>'); write("24-deltext.docx", p)
 p = base_parts(); p["word/document.xml"] = DOC.replace("<w:sectPr>", '<w:p><w:moveFromRangeStart w:id="5" w:name="mv1" w:author="Ember Test" w:date="2026-11-06T12:03:00Z"/><w:r><w:t>moved text</w:t></w:r></w:p><w:sectPr>'); write("25-move-unpaired.docx", p)
 p = base_parts(); p["word/media/image1.png"] = JPEG; write("26-media-magic.docx", p)

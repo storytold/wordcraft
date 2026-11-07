@@ -242,8 +242,10 @@ pub(crate) const REF_STYLE: RuleSpec = RuleSpec { id: "REF-STYLE", severity: Sev
 /// `NUM-DANGLING`: a list-numbering reference or abstract-number reference with no definition, or a
 /// duplicate definition. Inferred (the compare/merge residue class).
 pub(crate) const NUM_DANGLING: RuleSpec = RuleSpec { id: "NUM-DANGLING", severity: Severity::Warning, evidence: Evidence::Inferred };
-/// `COMMENTEX-LINK`: a comment-threading link (`commentEx`, `paraIdParent`, durableId) with no
-/// counterpart. Inferred (resolved state / reply threading silently drop).
+/// `COMMENTEX-LINK`: a comment-threading link with no counterpart — a commentEx `paraId` with no
+/// comments paragraph, a `paraIdParent` with no commentEx `paraId`, a commentsIds `paraId` with
+/// no commentEx `paraId`, or a commentEx `paraId` with no commentsIds `paraId`. Inferred (resolved
+/// state / reply threading silently drop).
 pub(crate) const COMMENTEX_LINK: RuleSpec = RuleSpec { id: "COMMENTEX-LINK", severity: Severity::Warning, evidence: Evidence::Inferred };
 /// `FLD-UNBALANCED`: unbalanced field characters within one story part. Observed: Word web refuses
 /// editing. §17.16.18's graceful-degradation text is not what the web consumer does.
@@ -318,7 +320,31 @@ pub(crate) struct Acc {
     incomplete: bool,
     limits: Limits,
     rule_counts: HashMap<&'static str, usize>,
+    /// An entry was found whose identity could not be recovered. It could be any part, so no
+    /// absence conclusion is established while this is set (see [`ABSENCE_RULES`]).
+    unknown_unreadable: bool,
 }
+
+/// Rules whose truth depends on something being *absent* from the package (a relationship target, a
+/// content-type declaration, a cross-part reference's definition, or the main-part resolution). When
+/// the package holds an entry of unknown identity, whatever it might have contained is unknown, so
+/// none of these can be concluded: absence is not established. Presence-based rules are unaffected.
+const ABSENCE_RULES: &[&str] = &[
+    "PKG-NO-CONTENT-TYPES",
+    "PKG-NO-MAIN",
+    "CT-UNDECLARED",
+    "CT-MAIN-TYPE",
+    "REL-DANGLING",
+    "REL-TYPED",
+    "REL-REF-MISSING",
+    "ID-COMMENT-REF",
+    "REF-NOTE",
+    "REF-HEADER",
+    "REF-STYLE",
+    "NUM-DANGLING",
+    "COMMENTEX-LINK",
+    "CUSTOMXML-SCHEMA",
+];
 
 impl Acc {
     pub(crate) fn with_limits(limits: Limits) -> Acc {
@@ -327,6 +353,19 @@ impl Acc {
 
     pub(crate) fn ran(&mut self, rule: &'static str) {
         self.checks.push(rule);
+    }
+
+    /// Record that the archive holds an entry whose identity could not be recovered. Absence
+    /// conclusions are suppressed from here on (see [`ABSENCE_RULES`]).
+    pub(crate) fn set_unknown_unreadable(&mut self) {
+        self.unknown_unreadable = true;
+    }
+
+    /// Whether an absence-class finding must be suppressed because an entry of unknown identity
+    /// exists: absence is not established. Suppression happens at emission, so no count is spent and
+    /// no per-rule budget is touched.
+    fn absence_suppressed(&self, rule: &str, severity: Severity) -> bool {
+        self.unknown_unreadable && matches!(severity, Severity::Corrupt | Severity::Error) && ABSENCE_RULES.contains(&rule)
     }
 
     /// Whether another finding for `rule` may be recorded; once the per-rule budget is spent the
@@ -349,16 +388,22 @@ impl Acc {
 
     /// Record a finding, grading it from [`RULES`].
     pub(crate) fn add(&mut self, rule: &'static str, part: Option<String>, message: String) {
+        let (severity, evidence) = rule_spec(rule).map_or((Severity::Error, Evidence::Inferred), |r| (r.severity, r.evidence));
+        if self.absence_suppressed(rule, severity) {
+            return;
+        }
         if !self.allow(rule) {
             return;
         }
-        let (severity, evidence) = rule_spec(rule).map_or((Severity::Error, Evidence::Inferred), |r| (r.severity, r.evidence));
         self.findings.push(Finding { rule, severity, evidence, part, message });
     }
 
     /// Record a finding with an explicit grade, for the few rules whose grade depends on where the
     /// finding is (`XML-MALFORMED`).
     pub(crate) fn add_graded(&mut self, rule: &'static str, severity: Severity, evidence: Evidence, part: Option<String>, message: String) {
+        if self.absence_suppressed(rule, severity) {
+            return;
+        }
         if !self.allow(rule) {
             return;
         }
@@ -457,6 +502,11 @@ pub fn validate_path(path: &Path) -> std::io::Result<Report> {
 
 fn check_content_types(pkg: &Package, acc: &mut Acc) {
     if !pkg.content_types_present {
+        return;
+    }
+    // The manifest is present but its content could not be read: no declaration is known, so no
+    // part is established as undeclared (or mistyped). Absence is not established.
+    if package::content_unavailable(pkg, "[Content_Types].xml") {
         return;
     }
     acc.ran("CT-UNDECLARED");
@@ -712,6 +762,11 @@ fn report_duplicate_rel_ids(rp: &RelsPart, acc: &mut Acc) {
 fn check_part_refs(pkg: &Package, refs: &[(String, Vec<RefFact>)], acc: &mut Acc) {
     acc.ran("REL-REF-MISSING");
     for (part, values) in refs {
+        // The part's own `.rels` could not be read: which relationships it declares is unknown, so
+        // its `r:id`/`r:embed`/`r:link` values are not established as unresolved.
+        if package::content_unavailable(pkg, &rels_part_name(part)) {
+            continue;
+        }
         let ids = part_rel_ids(pkg, part);
         let mut reported: HashSet<&str> = HashSet::new();
         for r in values {
@@ -751,17 +806,23 @@ fn check_typed_image_refs(pkg: &Package, refs: &[(String, Vec<RefFact>)], acc: &
                     ),
                 );
             } else if let Some(target) = &rel.target_abs {
-                let ct = pkg.content_types.of(target);
-                if !ct.is_some_and(|c| c.starts_with("image/")) {
-                    acc.add(
-                        "REL-TYPED",
-                        Some(part.clone()),
-                        format!(
-                            "an image element in {part} references relationship {}, whose target {target} has content type {}",
-                            r.value,
-                            ct.unwrap_or("(none)")
-                        ),
-                    );
+                // The relationship resolves and targets an internal part. Only the next conclusion
+                // depends on the manifest: when its content could not be read the target's declared
+                // type is unknown, not absent, so it is skipped. (The non-image-relationship and
+                // external-relationship conclusions above and below do not depend on the manifest.)
+                if !package::content_unavailable(pkg, "[Content_Types].xml") {
+                    let ct = pkg.content_types.of(target);
+                    if !ct.is_some_and(|c| c.starts_with("image/")) {
+                        acc.add(
+                            "REL-TYPED",
+                            Some(part.clone()),
+                            format!(
+                                "an image element in {part} references relationship {}, whose target {target} has content type {}",
+                                r.value,
+                                ct.unwrap_or("(none)")
+                            ),
+                        );
+                    }
                 }
             } else if r.attr != "link" {
                 // `r:embed` (and `v:imagedata`'s `r:id`) name an embedded image and must resolve to
@@ -789,6 +850,12 @@ fn part_rel_ids(pkg: &Package, part: &str) -> HashSet<String> {
 }
 
 fn check_typed_targets(pkg: &Package, acc: &mut Acc) {
+    // Every conclusion here compares a target's declared content type; when the manifest's content
+    // could not be read, a target's type is UNKNOWN, not absent, so no type conclusion is
+    // established. (The run is already INCOMPLETE from loading the manifest.)
+    if package::content_unavailable(pkg, "[Content_Types].xml") {
+        return;
+    }
     let Some(main) = &pkg.main else { return };
     let want = rels_part_name(main);
     let Some(rp) = pkg.rels.iter().find(|r| r.name.eq_ignore_ascii_case(&want)) else {
@@ -914,7 +981,11 @@ fn check_story(pkg: &Package, facts: &scan::StoryFacts, acc: &mut Acc) {
     report_dups(acc, "ID-COMMENT-DUP", &facts.comment_defs, "w:comment id");
     acc.ran("ID-COMMENT-REF");
     let comment_defs = id_set(&facts.comment_defs);
-    report_missing(acc, "ID-COMMENT-REF", &facts.comment_refs, &comment_defs, "w:commentReference id");
+    // A comments part that could not be read leaves the pooled definitions incomplete, so a
+    // reference must not be reported as dangling: absence is not established.
+    if !kind_source_unavailable(pkg, "comments", package::COMMENTS_CONTENT_TYPE) {
+        report_missing(acc, "ID-COMMENT-REF", &facts.comment_refs, &comment_defs, "w:commentReference id");
+    }
     report_unreferenced_comments(facts, acc);
     acc.ran("ID-DOCPR-DUP");
     report_dups(acc, "ID-DOCPR-DUP", &facts.docpr, "wp:docPr id");
@@ -930,8 +1001,14 @@ fn check_story(pkg: &Package, facts: &scan::StoryFacts, acc: &mut Acc) {
     acc.ran("REF-NOTE");
     let footnote_defs = id_set(&facts.footnote_defs);
     let endnote_defs = id_set(&facts.endnote_defs);
-    report_missing_note(acc, &facts.footnote_refs, &footnote_defs, "footnote");
-    report_missing_note(acc, &facts.endnote_refs, &endnote_defs, "endnote");
+    // An unreadable footnotes/endnotes part leaves the definitions incomplete, so a reference is
+    // not established as dangling.
+    if !kind_source_unavailable(pkg, "footnotes", package::FOOTNOTES_CONTENT_TYPE) {
+        report_missing_note(acc, &facts.footnote_refs, &footnote_defs, "footnote");
+    }
+    if !kind_source_unavailable(pkg, "endnotes", package::ENDNOTES_CONTENT_TYPE) {
+        report_missing_note(acc, &facts.endnote_refs, &endnote_defs, "endnote");
+    }
     acc.ran("REF-HEADER");
     check_header_footer_refs(pkg, facts, acc);
     acc.ran("REF-STYLE");
@@ -947,6 +1024,17 @@ fn check_story(pkg: &Package, facts: &scan::StoryFacts, acc: &mut Acc) {
 
 fn id_set(items: &[(String, String)]) -> HashSet<String> {
     items.iter().map(|(id, _)| id.clone()).collect()
+}
+
+/// Whether the definitions a story kind would contribute to any owner are unestablished: either the
+/// supporting part resolves to one whose content could not be read, or the discovery source that
+/// would find it (the owner's `.rels`, or the manifest in the no-owner fallback scope) could not be
+/// read. In both cases the part's existence is unestablished, not established-absent, so references
+/// checked against it are not reported as dangling.
+fn kind_source_unavailable(pkg: &Package, kind: &str, ct: &str) -> bool {
+    owner_scopes(pkg).iter().any(|owner| {
+        discovery_unavailable(pkg, owner.as_deref()) || supporting_part(pkg, owner.as_deref(), kind, ct).is_some_and(|e| e.content_unavailable)
+    })
 }
 
 fn report_unreferenced_comments(facts: &scan::StoryFacts, acc: &mut Acc) {
@@ -965,6 +1053,11 @@ fn report_unreferenced_comments(facts: &scan::StoryFacts, acc: &mut Acc) {
 fn check_header_footer_refs(pkg: &Package, facts: &scan::StoryFacts, acc: &mut Acc) {
     let Some(main) = &pkg.main else { return };
     let want = rels_part_name(main);
+    // The main part's relationships could not be read: its header/footer relationships are unknown,
+    // not absent, so a reference must not be reported as having no relationship.
+    if package::content_unavailable(pkg, &want) {
+        return;
+    }
     let Some(rp) = pkg.rels.iter().find(|r| r.name.eq_ignore_ascii_case(&want)) else {
         for (id, part) in facts.header_refs.iter().chain(facts.footer_refs.iter()) {
             acc.add("REF-HEADER", Some(part.clone()), format!("the main part {main} has a header/footer reference {id} but no relationships part"));
@@ -1058,6 +1151,17 @@ fn supporting_part<'a>(pkg: &'a Package, owner: Option<&str>, kind: &str, ct: &s
         return owner_rel_part(pkg, owner, kind);
     }
     find_by_type(pkg, ct)
+}
+
+/// Whether the source that would discover an owner's supporting part could not be read, so the
+/// part's existence is unestablished rather than established-absent. In an established owner scope
+/// that source is the owner's `.rels`; in the no-owner fallback scope it is the content-type
+/// manifest that [`find_by_type`] reads.
+fn discovery_unavailable(pkg: &Package, owner: Option<&str>) -> bool {
+    match owner {
+        Some(owner) => package::content_unavailable(pkg, &rels_part_name(owner)),
+        None => package::content_unavailable(pkg, "[Content_Types].xml"),
+    }
 }
 
 /// Map each part (lowercased) reachable from an owner scope to that owner's index in
@@ -1182,9 +1286,13 @@ fn check_numbering(pkg: &Package, facts: &scan::StoryFacts, acc: &mut Acc) {
     let owners = owner_scopes(pkg);
     let owner_map = owner_index_map(pkg);
     let mut numbering_cache: HashMap<String, Option<HashSet<String>>> = HashMap::new();
-    // Each owner's numbering set, in owner order. `None` = the owner has no numbering part;
-    // `Some(None)` = a part exists but could not be examined, so the owner's dependent checks are
-    // skipped (H8).
+    // Each owner's numbering set, in owner order. `Some(set)` = the owner's numbering part was
+    // examined, so `set` is the definitions it declares (empty when the owner has no numbering part
+    // — established absent, so its references are genuinely dangling). `None` = the owner's
+    // numbering could not be established: the part exists but could not be examined, or the
+    // discovery source (its `.rels`, or the manifest in the no-owner scope) could not be read, so
+    // that owner's references are not established as dangling and its dependent checks are skipped
+    // (H8).
     let mut num_sets: Vec<Option<HashSet<String>>> = Vec::with_capacity(owners.len());
     let mut style_checks: Vec<(String, HashSet<String>)> = Vec::new();
     let mut seen_styles: HashSet<String> = HashSet::new();
@@ -1200,7 +1308,13 @@ fn check_numbering(pkg: &Package, facts: &scan::StoryFacts, acc: &mut Acc) {
                     parsed
                 }
             }
-            None => Some(HashSet::new()),
+            None => {
+                // A readable discovery source that reaches no numbering part establishes that the
+                // owner has none (an empty set, exactly as before). When the discovery source
+                // itself could not be read, the owner's numbering is unknown, not absent: its
+                // references must not be reported against an empty set (H8).
+                if discovery_unavailable(pkg, owner.as_deref()) { None } else { Some(HashSet::new()) }
+            }
         };
         // Each owner's styles are checked against that owner's own numbering set, and only when it
         // could actually be examined.
@@ -1336,8 +1450,19 @@ fn check_commentex(pkg: &Package, facts: &scan::StoryFacts, acc: &mut Acc) {
     }
     acc.ran("COMMENTEX-LINK");
     for (i, owner) in owners.iter().enumerate() {
+        // If the owner's comments part could not be read, its paragraph ids are unknown, so no
+        // commentEx entry is established as unlinked; likewise, if its commentsExtended part could
+        // not be read, its entries and the commentsIds join cannot be checked. Absence is not
+        // established from unavailable content.
+        if supporting_part(pkg, owner.as_deref(), "comments", package::COMMENTS_CONTENT_TYPE).is_some_and(|e| e.content_unavailable) {
+            continue;
+        }
+        if supporting_part(pkg, owner.as_deref(), "commentsExtended", package::COMMENTS_EXTENDED_CONTENT_TYPE).is_some_and(|e| e.content_unavailable)
+        {
+            continue;
+        }
         // Each owner's comment-threading is checked within its own scope: its commentEx entries
-        // against its own comments part, and its commentsIds durableIds against its own commentEx.
+        // against its own comments part, and its commentsIds paraIds against its own commentEx.
         let comment_para: HashSet<&str> =
             facts.comment_para_ids.iter().filter(|(_, p)| part_owner(&owner_map, p) == Some(i)).map(|(p, _)| p.as_str()).collect();
         let ext = supporting_part(pkg, owner.as_deref(), "commentsExtended", package::COMMENTS_EXTENDED_CONTENT_TYPE)
@@ -1374,13 +1499,13 @@ fn check_commentex(pkg: &Package, facts: &scan::StoryFacts, acc: &mut Acc) {
         let cid_set: HashSet<&str> = cid_ids.iter().map(String::as_str).collect();
         for id in cid_ids {
             if !ex_para.contains(id.as_str()) {
-                acc.add("COMMENTEX-LINK", Some(cid_name.clone()), format!("commentsIds durableId on paraId {id} has no commentEx counterpart"));
+                acc.add("COMMENTEX-LINK", Some(cid_name.clone()), format!("commentsIds paraId {id} has no commentEx counterpart"));
             }
         }
         if let Some((name, e)) = &ext {
             for (para, _) in &e.entries {
                 if !cid_set.contains(para.as_str()) {
-                    acc.add("COMMENTEX-LINK", Some(name.clone()), format!("commentEx paraId {para} has no durableId counterpart in commentsIds.xml"));
+                    acc.add("COMMENTEX-LINK", Some(name.clone()), format!("commentEx paraId {para} has no commentsIds paraId counterpart"));
                 }
             }
         }
@@ -1413,7 +1538,7 @@ fn read_comments_ext(entry: &package::Entry, cap: usize, acc: &mut Acc) -> Optio
     Some(ext)
 }
 
-/// Parse a commentsIds part, returning its part name and durableIds. `None` when the part's link
+/// Parse a commentsIds part, returning its part name and `w16cid:paraId` values. `None` when the part's link
 /// checks must be skipped.
 fn read_comments_ids(entry: &package::Entry, cap: usize, acc: &mut Acc) -> Option<(String, Vec<String>)> {
     let name = &entry.name;
@@ -1440,11 +1565,43 @@ fn check_custom_xml(pkg: &Package, acc: &mut Acc) {
     let owner_map = owner_index_map(pkg);
     // Schema availability and definitions are tracked per owner (J3): a glossary-only attached
     // schema cannot satisfy a main-owned reference, and an unreadable settings part disables the
-    // checks for its owner alone. `None` = that owner's settings part could not be examined, so its
+    // checks for its owner alone. `None` = that owner's settings could not be established, so its
     // customXml parts are skipped.
     let mut per_owner: Vec<Option<HashSet<String>>> = Vec::with_capacity(owners.len());
-    for owner in &owners {
+    // The owners whose customXml item-properties parts exist, so whose schema references would have
+    // been checked. A note about a skipped check is only worth recording for such an owner; an owner
+    // with no customXml parts loses nothing when the check is skipped (Opus N5). When the manifest
+    // that types the parts could not be read the attribution itself is unavailable, so the note is
+    // kept.
+    let custom_xml_owners: HashSet<usize> = pkg
+        .entries
+        .iter()
+        .filter(|e| !e.is_dir && pkg.content_types.of(&e.name) == Some(package::CUSTOM_XML_PROPS_CONTENT_TYPE))
+        .filter_map(|e| part_owner(&owner_map, &e.name))
+        .collect();
+    for (i, owner) in owners.iter().enumerate() {
+        // The settings part is discovered through the owner's own `.rels`, or in the no-owner
+        // fallback scope through the manifest (`find_by_type`). When that source could not be read,
+        // which settings part (and so which schemas) the owner reaches is UNKNOWN, not absent: skip
+        // the owner rather than substituting an empty schema set, which would report a valid schema
+        // reference as unattached. Applying the same predicate in both scopes keeps established
+        // absence (a readable source that reaches no settings) a genuine empty set. (The run is
+        // already INCOMPLETE from loading the unreadable source.)
+        if discovery_unavailable(pkg, owner.as_deref()) {
+            if custom_xml_owners.contains(&i) || package::content_unavailable(pkg, "[Content_Types].xml") {
+                let source = match owner.as_deref() {
+                    Some(o) => rels_part_name(o),
+                    None => "[Content_Types].xml".to_string(),
+                };
+                acc.note(format!("{source} could not be read; custom XML schema references were not checked"));
+            }
+            acc.set_incomplete();
+            per_owner.push(None);
+            continue;
+        }
         let Some(entry) = supporting_part(pkg, owner.as_deref(), "settings", package::SETTINGS_CONTENT_TYPE) else {
+            // The owner's `.rels` was readable and holds no settings relationship: there is
+            // genuinely no settings part for this owner, so the attached-schema set is empty.
             per_owner.push(Some(HashSet::new()));
             continue;
         };
@@ -1720,6 +1877,151 @@ mod budget_tests {
         let _ = scan::scan_part("word/document.xml", &xml, role, &mut acc);
         let report = acc.finish();
         assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    }
+
+    /// Finding 2 canary: the pairing reports must not run on a partial scan. A field left open when
+    /// the event budget stops the scan is not an unbalanced field; the same document under normal
+    /// limits still reports `FLD-UNBALANCED`.
+    #[test]
+    fn budget_stopped_scan_does_not_report_a_truncated_field() {
+        let body = format!(r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>{}</w:p>"#, "<w:r><w:t>x</w:t></w:r>".repeat(80));
+        let doc = format!(r#"<?xml version="1.0"?><w:document xmlns:w="{}"><w:body>{body}</w:body></w:document>"#, NS_W).into_bytes();
+        let zip = tiny_zip(&[
+            ("[Content_Types].xml", content_types()),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", doc),
+            ("word/_rels/document.xml.rels", doc_rels()),
+        ]);
+        let stopped = validate_bytes_limited(&zip, Limits { events: 25, ..Limits::default() });
+        assert_eq!(stopped.verdict, Verdict::Incomplete, "findings: {:?}", stopped.findings);
+        assert!(
+            !stopped.findings.iter().any(|f| f.rule == "FLD-UNBALANCED"),
+            "a budget-stopped scan must not report the truncated field: {:?}",
+            stopped.findings
+        );
+        // Regression control: fully scanned, the unclosed field is reported.
+        let full = validate_bytes(&zip);
+        assert!(full.findings.iter().any(|f| f.rule == "FLD-UNBALANCED"), "findings: {:?}", full.findings);
+    }
+
+    /// §3 canary (a): a budget stop must not hide a defect the scanned prefix already establishes.
+    /// An extra `fldChar end` at depth 0 is unbalanced whatever follows, so the run FAILs (not merely
+    /// INCOMPLETE) even though the event budget stopped the scan.
+    #[test]
+    fn budget_stopped_scan_still_reports_a_prefix_established_field_imbalance() {
+        let body = format!(r#"<w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>{}"#, "<w:r><w:t>x</w:t></w:r>".repeat(80));
+        let doc = format!(r#"<?xml version="1.0"?><w:document xmlns:w="{}"><w:body>{body}</w:body></w:document>"#, NS_W).into_bytes();
+        let zip = tiny_zip(&[
+            ("[Content_Types].xml", content_types()),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", doc),
+            ("word/_rels/document.xml.rels", doc_rels()),
+        ]);
+        let stopped = validate_bytes_limited(&zip, Limits { events: 25, ..Limits::default() });
+        // Independently assert the budget really stopped the scan: the part's event-budget note is
+        // emitted only when the scan breaks early on the ceiling, so it cannot be produced by a scan
+        // that read the whole part. Without this the test would not discriminate a real stop from a
+        // complete scan that merely skipped the prefix report.
+        assert!(
+            stopped.coverage_notes.iter().any(|n| n.contains("word/document.xml") && n.contains("XML events")),
+            "the event budget must be shown to have stopped the scan: {:?}",
+            stopped.coverage_notes
+        );
+        assert!(
+            stopped.findings.iter().any(|f| f.rule == "FLD-UNBALANCED" && f.part.as_deref() == Some("word/document.xml")),
+            "a prefix-established imbalance must survive the budget stop: {:?}",
+            stopped.findings
+        );
+        assert_eq!(stopped.verdict, Verdict::Fail, "an established Error outranks the stop's INCOMPLETE: {:?}", stopped.findings);
+    }
+
+    /// §3 canary (b): a malformed part whose scanned prefix leaves a `fldChar begin` unclosed marks
+    /// the run INCOMPLETE with a note naming the part, and reports no FLD-UNBALANCED Error, because
+    /// the completion-dependent check that would decide it could not run.
+    #[test]
+    fn malformed_part_with_unmatched_begin_is_incomplete_without_a_field_error() {
+        // An unreferenced part: malformed is Warning-only by calibration, so INCOMPLETE is decisive.
+        let doc = format!(r#"<?xml version="1.0"?><w:document xmlns:w="{}"><w:body><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r></w:p>"#, NS_W)
+            .into_bytes();
+        let zip = tiny_zip(&[
+            ("[Content_Types].xml", content_types()),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", document()),
+            ("word/_rels/document.xml.rels", doc_rels()),
+            ("word/unused.xml", doc),
+        ]);
+        let report = validate_bytes(&zip);
+        assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+        assert!(
+            !report.findings.iter().any(|f| f.rule == "FLD-UNBALANCED"),
+            "the completion-dependent field check must not run on the malformed prefix: {:?}",
+            report.findings
+        );
+        assert!(
+            report.coverage_notes.iter().any(|n| n.contains("word/unused.xml") && n.contains("pairing")),
+            "the INCOMPLETE must be explained by a note naming the part and the check: {:?}",
+            report.coverage_notes
+        );
+    }
+
+    /// §3 canary (c): a malformed part whose prefix holds a fully matched pair changes nothing — no
+    /// completion-dependent report would have fired, so no INCOMPLETE is added. A matched **bookmark**
+    /// pair is used deliberately: it leaves both sets non-empty but equal, so a trigger written as
+    /// "sets are non-empty" would wrongly fire, while the correct "sets differ" trigger does not.
+    #[test]
+    fn malformed_part_with_a_matched_pair_is_unchanged() {
+        let doc = format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="{}"><w:body><w:p><w:bookmarkStart w:id="1" w:name="a"/><w:bookmarkEnd w:id="1"/></w:p>"#,
+            NS_W
+        )
+        .into_bytes();
+        let zip = tiny_zip(&[
+            ("[Content_Types].xml", content_types_with_override("word/unused.xml", package::COMMENTS_CONTENT_TYPE)),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", document()),
+            ("word/_rels/document.xml.rels", doc_rels()),
+            ("word/unused.xml", doc),
+        ]);
+        let report = validate_bytes(&zip);
+        assert_eq!(report.verdict, Verdict::Pass, "findings: {:?}", report.findings);
+        assert!(
+            report.findings.iter().any(|f| f.rule == "XML-MALFORMED" && f.severity == Severity::Warning),
+            "the malformed unreferenced part is still a Warning: {:?}",
+            report.findings
+        );
+        assert!(!report.coverage_notes.iter().any(|n| n.contains("pairing")), "a matched pair leaves nothing pending: {:?}", report.coverage_notes);
+    }
+
+    /// Finding 2 canary: a bookmark pair split by the fact budget must not be reported as unpaired
+    /// on the partial scan; the same document under normal limits still reports `BOOKMARK-UNPAIRED`.
+    #[test]
+    fn fact_capped_scan_does_not_report_a_split_bookmark() {
+        let body = concat!(
+            r#"<w:p><w:bookmarkEnd w:id="5"/></w:p>"#,
+            r#"<w:p><w:bookmarkStart w:id="1" w:name="a"/></w:p>"#,
+            r#"<w:p><w:bookmarkStart w:id="2" w:name="b"/></w:p>"#,
+            r#"<w:p><w:bookmarkStart w:id="3" w:name="c"/></w:p>"#,
+            r#"<w:p><w:bookmarkStart w:id="4" w:name="d"/></w:p>"#,
+            r#"<w:p><w:bookmarkEnd w:id="1"/></w:p>"#,
+            r#"<w:p><w:bookmarkEnd w:id="2"/></w:p>"#,
+        );
+        let doc = format!(r#"<?xml version="1.0"?><w:document xmlns:w="{}"><w:body>{body}</w:body></w:document>"#, NS_W).into_bytes();
+        let zip = tiny_zip(&[
+            ("[Content_Types].xml", content_types()),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", doc),
+            ("word/_rels/document.xml.rels", doc_rels()),
+        ]);
+        let capped = validate_bytes_limited(&zip, Limits { facts: 3, ..Limits::default() });
+        assert_eq!(capped.verdict, Verdict::Incomplete, "findings: {:?}", capped.findings);
+        assert!(
+            !capped.findings.iter().any(|f| f.rule == "BOOKMARK-UNPAIRED"),
+            "a fact-capped scan must not report a split bookmark: {:?}",
+            capped.findings
+        );
+        // Regression control: fully scanned, the unpaired bookmark is reported.
+        let full = validate_bytes(&zip);
+        assert!(full.findings.iter().any(|f| f.rule == "BOOKMARK-UNPAIRED"), "findings: {:?}", full.findings);
     }
 
     #[test]
@@ -1999,6 +2301,62 @@ mod budget_tests {
             report.coverage_notes.iter().any(|n| n.contains("relationship references") && n.contains("word/header1.xml")),
             "the pooled-reference note must name the mechanism and the first affected part: {:?}",
             report.coverage_notes
+        );
+    }
+
+    /// Replace every occurrence of the same-length `from` with `to` in raw bytes (used to force a
+    /// duplicate entry name the zip writer itself refuses to create).
+    fn replace_same_len(data: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
+        assert_eq!(from.len(), to.len(), "replacement must preserve length");
+        let mut out = Vec::with_capacity(data.len());
+        let mut i = 0;
+        while i < data.len() {
+            if data[i..].starts_with(from) {
+                out.extend_from_slice(to);
+                i += from.len();
+            } else {
+                out.push(data[i]);
+                i += 1;
+            }
+        }
+        out
+    }
+
+    /// §2 canary: four unique parts plus a duplicate of one, with `entries` equal to the
+    /// deduplicated count. The zip reader collapses the duplicate, so the loader's `zip.len()` check
+    /// does not fire; the raw central directory holds five records, and the budgeted parse examines
+    /// only four. The run must not return a clean PASS: duplicate checking learns a raw record went
+    /// unexamined and marks the run INCOMPLETE with a note naming itself. Under a generous budget the
+    /// same package still reports the duplicate exactly as before.
+    #[test]
+    fn duplicate_checking_knows_when_it_was_truncated() {
+        let parts = [
+            ("[Content_Types].xml", content_types()),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", document()),
+            ("word/_rels/document.xml.rels", doc_rels()),
+        ];
+        // A fifth raw record duplicates `_rels/.rels`: its name is the same 11 bytes, so the reader
+        // deduplicates it away while the central directory still lists five records.
+        let mut all: Vec<(&str, Vec<u8>)> = parts.to_vec();
+        all.push(("_rels/.xels", package_rels()));
+        let zip = replace_same_len(&tiny_zip(&all), b"_rels/.xels", b"_rels/.rels");
+
+        let capped = validate_bytes_limited(&zip, Limits { entries: 4, ..Limits::default() });
+        assert_ne!(capped.verdict, Verdict::Pass, "a truncated duplicate scan must not pass silently: {:?}", capped.findings);
+        assert_eq!(capped.verdict, Verdict::Incomplete, "findings: {:?}", capped.findings);
+        assert!(
+            capped.coverage_notes.iter().any(|n| n.contains("duplicate entry checking")),
+            "the coverage note must name duplicate checking as the incomplete check: {:?}",
+            capped.coverage_notes
+        );
+
+        // Regression control: under a generous budget the duplicate is reported exactly as before.
+        let full = validate_bytes_limited(&zip, Limits::default());
+        assert!(
+            full.findings.iter().any(|f| f.rule == "PKG-DUP-ENTRY"),
+            "the duplicate must still be reported under a generous budget: {:?}",
+            full.findings
         );
     }
 }

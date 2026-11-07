@@ -101,7 +101,7 @@ fn open(path: &Path, password: Option<&str>) -> Result<Session, String> {
 
 /// The commands that open a file, and which of their arguments not starting with `--` it is (as
 /// `pos` counts). `run` opens the value of `--file`.
-const OPENS_FILE: &[(&str, usize)] = &[("convert", 0), ("info", 0), ("text", 0), ("inspect", 0), ("render", 0), ("zotero", 1)];
+const OPENS_FILE: &[(&str, usize)] = &[("convert", 0), ("info", 0), ("text", 0), ("inspect", 0), ("render", 0), ("validate", 0), ("zotero", 1)];
 
 /// The arguments as text. Only the file the command opens may have a name that isn't valid Unicode,
 /// such as a Latin-1 one (#1440): it comes back as the path to open, and lossy among the arguments.
@@ -605,35 +605,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 write_stdout(|o| writeln!(o, "{}", serde_json::to_string_pretty(&p).unwrap_or_default()))
             }
         }
-        "validate" => {
-            if let Err(e) = validate_options("validate", &rest, VALIDATE_OPTIONS) {
-                eprintln!("wordcraft-cli: {e}");
-                return Err(Failure::Status(3));
-            }
-            let paths = positionals(&rest, VALIDATE_OPTIONS);
-            let Some(path) = paths.first() else {
-                eprintln!("wordcraft-cli: missing argument\n\n{USAGE}");
-                return Err(Failure::Status(3));
-            };
-            let report = match wordcraft_validate::validate_path(Path::new(path)) {
-                Ok(report) => report,
-                Err(e) => {
-                    eprintln!("wordcraft-cli: {path}: {e}");
-                    return Err(Failure::Status(3));
-                }
-            };
-            if rest.iter().any(|a| a == "--json") {
-                let json = serde_json::to_string_pretty(&report).unwrap_or_default();
-                write_stdout(|o| writeln!(o, "{json}"))?;
-            } else {
-                write_stdout(|o| write_validate_report(o, &report))?;
-            }
-            match report.verdict {
-                wordcraft_validate::Verdict::Pass => Ok(()),
-                wordcraft_validate::Verdict::Fail => Err(Failure::Status(1)),
-                wordcraft_validate::Verdict::Incomplete => Err(Failure::Status(2)),
-            }
-        }
+        "validate" => run_validate(file.as_deref(), &rest),
         "mcp" => {
             let (roots, rest) = automation_roots("mcp", &rest)?;
             validate_options("mcp", &rest, MCP_OPTIONS)?;
@@ -795,21 +767,101 @@ fn parity_markdown(p: &Value) -> String {
     s
 }
 
+/// `validate`: exactly one positional path (batch mode does not exist yet, so a surplus operand is
+/// a usage error rather than a silently ignored second file). `file` is the preserved operand, so a
+/// file name that is not valid Unicode still reaches the validator.
+fn run_validate(file: Option<&Path>, rest: &[String]) -> Result<(), Failure> {
+    if let Err(e) = validate_options("validate", rest, VALIDATE_OPTIONS) {
+        eprintln!("wordcraft-cli: {e}");
+        return Err(Failure::Status(3));
+    }
+    let paths = positionals(rest, VALIDATE_OPTIONS);
+    if paths.len() != 1 {
+        eprintln!("wordcraft-cli: validate takes exactly one file\n\n{USAGE}");
+        return Err(Failure::Status(3));
+    }
+    let path = file.unwrap_or_else(|| Path::new(paths[0]));
+    let report = match wordcraft_validate::validate_path(path) {
+        Ok(report) => report,
+        Err(e) => {
+            eprintln!("wordcraft-cli: {}: {e}", path.display());
+            return Err(Failure::Status(3));
+        }
+    };
+    if rest.iter().any(|a| a == "--json") {
+        let json = serde_json::to_string_pretty(&report).unwrap_or_default();
+        write_stdout(|o| writeln!(o, "{json}"))?;
+    } else {
+        write_stdout(|o| write_validate_report(o, &report))?;
+    }
+    match report.verdict {
+        wordcraft_validate::Verdict::Pass => Ok(()),
+        wordcraft_validate::Verdict::Fail => Err(Failure::Status(1)),
+        wordcraft_validate::Verdict::Incomplete => Err(Failure::Status(2)),
+    }
+}
+
 /// Write a `validate` report for people: the verdict, then one line per finding
 /// (`SEVERITY RULE [part] message`), then the coverage notes.
 fn write_validate_report(o: &mut std::io::StdoutLock<'static>, report: &wordcraft_validate::Report) -> std::io::Result<()> {
-    writeln!(o, "{}", verdict_label(report.verdict))?;
+    o.write_all(render_validate_report(report).as_bytes())
+}
+
+/// Render a `validate` report for people. Document-controlled text — a ZIP entry name flowing into
+/// a finding part or coverage note — is escaped so a name cannot end its line or drive the
+/// terminal; printable text, including Unicode, is left as written.
+///
+/// The `--json` form is not escaped by hand; it is the validator's own `serde_json` serialization.
+/// `serde_json` escapes `U+0000`–`U+001F`, `"` and `\`; C1 controls such as `U+009B` and the bidi
+/// embeddings/overrides (`U+202A`–`U+202E`, `U+2066`–`U+2069`) are emitted raw. So a control or bidi
+/// run carried by a ZIP entry name survives into the JSON text; JSON is only safe because a
+/// *parser* takes the string value as data. If that text is printed directly to a terminal, the raw
+/// C1/bidi run reaches the terminal exactly as it would from any other text, so the JSON form is
+/// not a terminal-safe rendering. Only the human report below escapes those characters, and it does
+/// so to defend the terminal; keeping the JSON byte-for-byte the validator's own serialization is
+/// why its escaping is left to `serde_json`.
+fn render_validate_report(report: &wordcraft_validate::Report) -> String {
+    let mut out = format!("{}\n", verdict_label(report.verdict));
     for f in &report.findings {
         let severity = severity_label(f.severity);
         match &f.part {
-            Some(part) => writeln!(o, "{severity} {} [{part}] {}", f.rule, f.message)?,
-            None => writeln!(o, "{severity} {} {}", f.rule, f.message)?,
+            Some(part) => out.push_str(&format!("{severity} {} [{}] {}\n", f.rule, escape_report_text(part), escape_report_text(&f.message))),
+            None => out.push_str(&format!("{severity} {} {}\n", f.rule, escape_report_text(&f.message))),
         }
     }
     for note in &report.coverage_notes {
-        writeln!(o, "note: {note}")?;
+        out.push_str(&format!("note: {}\n", escape_report_text(note)));
     }
-    Ok(())
+    out
+}
+
+/// Escape the control and invisible-formatting characters that could spoof a report line, in the
+/// same escape *form* `escape_debug` uses (`\u{1b}`, `\n`); printable characters (including Unicode)
+/// are left untouched. The *selection* is a hand-picked set ([`is_invisible_format`] plus
+/// `char::is_control`), not `escape_debug`'s full non-printable set: it omits, for example, the
+/// U+E0000 tag block, U+FFF9–U+FFFB and the Hangul fillers. None of those can end a line or drive a
+/// terminal, which is the threat this guards against. Backslash is not escaped, so a name that
+/// literally contains the text `\u{1b}` prints exactly like an escaped ESC and the output is not
+/// injective.
+fn escape_report_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_control() || is_invisible_format(c) {
+            out.extend(c.escape_debug());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Invisible Unicode formatting characters and line/paragraph separators: no glyph, but they can
+/// alter how a terminal renders the rest of the line (`char::is_control` covers C0/C1 controls).
+fn is_invisible_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00ad}' | '\u{061c}' | '\u{180e}' | '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2060}'..='\u{206f}' | '\u{feff}'
+    )
 }
 
 fn verdict_label(v: wordcraft_validate::Verdict) -> &'static str {

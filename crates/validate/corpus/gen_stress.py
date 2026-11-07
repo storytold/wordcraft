@@ -558,7 +558,14 @@ def table_xml(ctx, rows, cols, depth):
               '</w:tblPrChange>' if ctx.k["revisions"] and rng.random() < 0.2 else "")
            + '</w:tblPr>',
            grid]
-    vmerge_col = rng.randrange(cols) if cols > 1 and rows > 2 else -1
+    if rows > 2 and cols > 2:
+        # Never column 0: the first cell may gridSpan 2 there, which would leave the vertically
+        # merged cells of one run with different widths (and the merge column covered by the span).
+        vmerge_col = rng.randrange(2, cols)
+    elif rows > 2 and cols == 2:
+        vmerge_col = rng.randrange(cols)
+    else:
+        vmerge_col = -1
     for ri in range(rows):
         trpr = ""
         if ri == 0 and rng.random() < 0.5:
@@ -831,7 +838,7 @@ def plan_comments(ctx):
             cid += 1
             for _ in range(rng.randint(1, 2)):
                 c["paras"].append((ctx.para_id("word/comments.xml"), ctx.text()))
-            c["paraId"] = c["paras"][0][0]
+            c["paraId"] = c["paras"][-1][0]
             return c
         root = mk(True)
         replies = [mk(False) for _ in range(rng.randint(0, k["comment_depth"]))]

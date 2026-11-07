@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 
 use common::{
     CT_CHART, CT_COMMENTS, CT_COMMENTS_EXT, CT_COMMENTS_IDS, CT_CUSTOMXML_PROPS, CT_ENDNOTES, CT_FOOTER, CT_FOOTNOTES, CT_GLOSSARY, CT_HEADER,
-    CT_MAIN, CT_NUMBERING, CT_PEOPLE, CT_SETTINGS, CT_STYLES, CT_TEMPLATE_MAIN, CT_WEB_SETTINGS, Doc, add_header, content_types_xml,
-    corrupt_entry_data, ns, rels_xml, replace_all, rich_content_types, utf16_le_with_bom,
+    CT_MAIN, CT_NUMBERING, CT_PEOPLE, CT_SETTINGS, CT_STYLES, CT_TEMPLATE_MAIN, CT_WEB_SETTINGS, Doc, add_header, claim_entry_method,
+    content_types_xml, corrupt_entry_data, ns, rels_xml, replace_all, rich_content_types, utf16_le_with_bom,
 };
 use wordcraft_validate::{Finding, Report, Severity, Verdict, validate_bytes, validate_path};
 
@@ -149,6 +149,23 @@ fn pkg_dup_entry() {
     let report = validate_bytes(&zip);
     assert_eq!(report.verdict, Verdict::Fail);
     assert_finding(&report, "PKG-DUP-ENTRY", None);
+}
+
+/// §2 canary: an archive the zip reader accepts but the raw central-directory parser rejects must be
+/// INCOMPLETE with the coverage note, not a silent PASS. A prepended stub shifts every stored
+/// offset; the zip reader adjusts for it, but the raw EOCD reader reads the central-directory
+/// offset literally and so fails to parse. Removing the incomplete marking restores PASS.
+#[test]
+fn unparseable_central_directory_is_incomplete() {
+    let mut bytes = vec![b'X'; 64];
+    bytes.extend_from_slice(&Doc::minimal().build());
+    let report = validate_bytes(&bytes);
+    assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    assert!(
+        report.coverage_notes.iter().any(|n| n.contains("central directory could not be parsed")),
+        "the coverage note must say duplicate checking did not run: {:?}",
+        report.coverage_notes
+    );
 }
 
 #[test]
@@ -1403,6 +1420,320 @@ fn main_part_that_cannot_be_decompressed_is_incomplete() {
     assert!(report.coverage_notes.iter().any(|n| n.contains("document.xml")), "{:?}", report.coverage_notes);
 }
 
+/// Finding 1 canary (a): a part the archive cannot open (an unsupported compression method) leaves
+/// the run INCOMPLETE with a note naming it, and because it is registered as present-but-unchecked
+/// a relationship to it must not read as dangling.
+#[test]
+fn unreadable_zip_entry_is_incomplete_and_not_dangling() {
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/comments.xml", CT_COMMENTS)]));
+    d.set("word/comments.xml", comments(r#"<w:comment w:id="1"><w:p/></w:comment>"#));
+    d.set_doc_rels(
+        r#"<Relationship Id="rC" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>"#,
+    );
+    let zip = claim_entry_method(&d.build(), "word/comments.xml", 12); // BZIP2: unsupported here
+    let report = validate_bytes(&zip);
+    assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    assert!(report.coverage_notes.iter().any(|n| n.contains("comments.xml")), "{:?}", report.coverage_notes);
+    assert!(!has(&report, "REL-DANGLING"), "an unreadable part must be present-but-unchecked, never dangling: {:?}", report.findings);
+}
+
+/// Finding 1 canary (b): a corrupt-deflate non-main story part is INCOMPLETE with the note, not a
+/// silent pass and not a dangling-reference failure.
+#[test]
+fn corrupt_non_main_story_part_is_incomplete() {
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/comments.xml", CT_COMMENTS)]));
+    d.set("word/comments.xml", comments(r#"<w:comment w:id="1"><w:p/></w:comment>"#));
+    d.set_doc_rels(
+        r#"<Relationship Id="rC" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>"#,
+    );
+    let zip = corrupt_entry_data(&d.build(), "word/comments.xml");
+    let report = validate_bytes(&zip);
+    assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    assert_clean(&report);
+    assert!(report.coverage_notes.iter().any(|n| n.contains("comments.xml")), "{:?}", report.coverage_notes);
+    assert!(!has(&report, "REL-DANGLING"), "a present-but-unreadable part is not dangling: {:?}", report.findings);
+}
+
+/// §1 canary (a): an unreadable entry's identity must come from the zip crate, not a second parse
+/// matched by index. The archive lists a real styles part twice (so a parser that keeps both records
+/// shifts every later index) followed by an unsupported-method `word/comments.xml`. The recovered
+/// name must be the unsupported part's own name, the duplicated part's real content must stay
+/// intact, and the relationship to the unreadable part must not read as dangling.
+#[test]
+fn unreadable_entry_after_a_duplicate_keeps_its_own_identity() {
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/comments.xml", CT_COMMENTS), ("/word/styles.xml", CT_STYLES)]));
+    // The duplicated part is a real styles part whose content produces a finding when it is
+    // retained: its `w:numPr` references a `numId` with no numbering definition (NUM-DANGLING).
+    let styles = format!(
+        r#"<?xml version="1.0"?><w:styles xmlns:w="{W_NS}"><w:style w:type="paragraph" w:styleId="List"><w:pPr><w:numPr><w:numId w:val="99"/></w:numPr></w:pPr></w:style></w:styles>"#
+    );
+    d.set("word/styles.xml", styles.clone());
+    d.set("word/style0.xml", styles); // same 15-byte name length as word/styles.xml
+    d.set("word/comments.xml", comments(r#"<w:comment w:id="1"><w:p/></w:comment>"#));
+    d.set_doc_rels(concat!(
+        r#"<Relationship Id="rC" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>"#,
+        r#"<Relationship Id="rS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#,
+    ));
+    // Rename the second of the pair so it duplicates the first (same byte length), then claim an
+    // unsupported compression method for the comments part so the reader cannot open it.
+    let bytes = replace_all(&d.build(), b"word/style0.xml", b"word/styles.xml");
+    let zip = claim_entry_method(&bytes, "word/comments.xml", 12); // BZIP2: unsupported here
+    let report = validate_bytes(&zip);
+    // The PKG-DUP-ENTRY Error makes this run FAIL, not PASS; the point is where the unreadable
+    // entry's identity lands, not the verdict.
+    assert_eq!(report.verdict, Verdict::Fail, "findings: {:?}", report.findings);
+    assert!(
+        report.coverage_notes.iter().any(|n| n.contains("word/comments.xml")),
+        "the coverage note must name the part that actually failed: {:?}",
+        report.coverage_notes
+    );
+    assert!(
+        !report.coverage_notes.iter().any(|n| n.contains("word/styles.xml")),
+        "no note may blame the duplicated part for the unreadable entry: {:?}",
+        report.coverage_notes
+    );
+    assert!(
+        !report.findings.iter().any(|f| f.rule == "REL-DANGLING" && f.part.as_deref() == Some("word/_rels/document.xml.rels")),
+        "the unreadable part is present-but-unchecked, never dangling: {:?}",
+        report.findings
+    );
+    // The duplicated part's retained CONTENT survived the index hazard: the real styles part's
+    // dangling `numId` still produces its finding. A lost or blanked duplicated entry could not.
+    assert_finding(&report, "NUM-DANGLING", Some("word/styles.xml"));
+}
+
+/// §2 canary: an unreadable part-level `.rels` must not make the part's `r:id` values look
+/// unresolved (REL-REF-MISSING). Absence is not established from unavailable content.
+#[test]
+fn unreadable_part_rels_does_not_fire_ref_missing() {
+    let mut d = Doc::minimal();
+    d.set_document(r#"<w:p><w:hyperlink r:id="rL1"/></w:p>"#);
+    d.set(
+        "word/_rels/document.xml.rels",
+        rels_xml(
+            r#"<Relationship Id="rL1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/" TargetMode="External"/>"#,
+        ),
+    );
+    let zip = claim_entry_method(&d.build(), "word/_rels/document.xml.rels", 12);
+    let report = validate_bytes(&zip);
+    assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    assert!(!has(&report, "REL-REF-MISSING"), "an unreadable .rels must not make r:ids look missing: {:?}", report.findings);
+}
+
+/// §2 canary: an unreadable `[Content_Types].xml` must not make every part look undeclared
+/// (CT-UNDECLARED) or the main part mistyped (CT-MAIN-TYPE).
+#[test]
+fn unreadable_content_types_does_not_fire_undeclared() {
+    let zip = claim_entry_method(&Doc::minimal().build(), "[Content_Types].xml", 12);
+    let report = validate_bytes(&zip);
+    assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    assert!(!has(&report, "CT-UNDECLARED"), "an unreadable manifest must not make every part undeclared: {:?}", report.findings);
+    assert!(!has(&report, "CT-MAIN-TYPE"), "an unreadable manifest must not mistype the main part: {:?}", report.findings);
+}
+
+/// §1 canary (b): an unreadable `[Content_Types].xml` in a package that ALSO carries a valid header
+/// relationship and a valid image relationship (with an image element referencing the latter) must
+/// not make either look mistyped. `check_typed_targets` and `check_typed_image_refs` read the
+/// target's declared type through the manifest; when the manifest's content is unavailable that
+/// type is unknown, not absent, so no REL-TYPED fires and the verdict is INCOMPLETE.
+#[test]
+fn unreadable_content_types_does_not_fire_typed_relationships() {
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[("png", "image/png")], &[("/word/header1.xml", CT_HEADER)]));
+    add_header(&mut d);
+    d.set("word/media/pic.png", b"\x89PNG\r\n\x1a\npng bytes".to_vec());
+    d.set_doc_rels(concat!(
+        r#"<Relationship Id="rIdH" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>"#,
+        r#"<Relationship Id="rIdI" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/pic.png"/>"#,
+    ));
+    // An image element references the image relationship, so both the relationship-side
+    // (`check_typed_targets`) and the element-side (`check_typed_image_refs`) typed checks run.
+    d.set_document(
+        r#"<w:p><w:r><w:drawing><wp:inline><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill><a:blip r:embed="rIdI"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#,
+    );
+    // No w:headerReference element: the header is only a relationship, so this exercises
+    // REL-TYPED's relationship-side check without involving REF-HEADER.
+    let zip = claim_entry_method(&d.build(), "[Content_Types].xml", 12);
+    let report = validate_bytes(&zip);
+    assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    assert!(
+        !has(&report, "REL-TYPED"),
+        "an unreadable manifest must not make a valid header/image relationship look mistyped: {:?}",
+        report.findings
+    );
+}
+
+/// §1 canary (c): an unreadable owner `.rels` (`word/_rels/document.xml.rels`) in a package whose
+/// customXml part carries a schema reference the settings part would satisfy must not report
+/// CUSTOMXML-SCHEMA. The settings part is discovered through that `.rels`; when it cannot be read,
+/// the attached-schema set is unknown, not empty, so the schema conclusion is skipped and the run is
+/// INCOMPLETE.
+#[test]
+fn unreadable_owner_rels_does_not_fire_custom_xml_schema() {
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/settings.xml", CT_SETTINGS), ("/customXml/itemProps1.xml", CT_CUSTOMXML_PROPS)]));
+    d.set(
+        "word/settings.xml",
+        format!(r#"<?xml version="1.0"?><w:settings xmlns:w="{W_NS}"><w:attachedSchema w:val="http://example.com/ns"/></w:settings>"#),
+    );
+    d.set(
+        "customXml/itemProps1.xml",
+        format!(
+            r#"<?xml version="1.0"?><ds:datastoreItem xmlns:ds="{DS_NS}" ds:itemID="{{X}}"><ds:schemaRefs><ds:schemaRef ds:uri="http://example.com/ns"/></ds:schemaRefs></ds:datastoreItem>"#
+        ),
+    );
+    // The settings relationship lives in the owner's `.rels`; when that part is unreadable the
+    // discovery source is gone, so the schema reference must not be reported as unattached.
+    d.set_doc_rels(
+        r#"<Relationship Id="rSet" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>"#,
+    );
+    let zip = claim_entry_method(&d.build(), "word/_rels/document.xml.rels", 12);
+    let report = validate_bytes(&zip);
+    assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    assert!(!has(&report, "CUSTOMXML-SCHEMA"), "an unreadable owner .rels must not make an attached schema look unattached: {:?}", report.findings);
+}
+
+/// §1 by-construction guard: with no owner scope (no main part), the discovery source for settings
+/// is the manifest; when both `_rels/.rels` and `[Content_Types].xml` are unreadable, no main part
+/// exists and the no-owner scope applies, and a customXml part carrying a schema reference must not
+/// fire CUSTOMXML-SCHEMA — the predicate pushes `None` (skip) instead of an empty schema set. Note
+/// this test cannot distinguish the guard by mutation: the second loop enumerates customXml parts by
+/// content type (lib.rs), so an unreadable manifest enumerates none and the false finding cannot
+/// arise either way. It pins the invariant the guard keeps by construction.
+#[test]
+fn no_owner_manifest_unavailable_does_not_fire_custom_xml_schema() {
+    let mut d = Doc::minimal();
+    d.add_with_override(
+        "customXml/itemProps1.xml",
+        CT_CUSTOMXML_PROPS,
+        format!(
+            r#"<?xml version="1.0"?><ds:datastoreItem xmlns:ds="{DS_NS}" ds:itemID="{{X}}"><ds:schemaRefs><ds:schemaRef ds:uri="http://example.com/ns"/></ds:schemaRefs></ds:datastoreItem>"#
+        ),
+    );
+    d.add_with_override(
+        "word/settings.xml",
+        CT_SETTINGS,
+        format!(r#"<?xml version="1.0"?><w:settings xmlns:w="{W_NS}"><w:attachedSchema w:val="http://example.com/ns"/></w:settings>"#),
+    );
+    // `_rels/.rels` unreadable removes the main part, so only the no-owner scope remains; the
+    // manifest unreadable is the discovery source the guard must not treat as "no settings".
+    let zip = claim_entry_method(&d.build(), "_rels/.rels", 12);
+    let zip = claim_entry_method(&zip, "[Content_Types].xml", 12);
+    let report = validate_bytes(&zip);
+    assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    assert!(!has(&report, "CUSTOMXML-SCHEMA"), "an unreadable manifest must not make an attached schema look unattached: {:?}", report.findings);
+}
+
+/// Opus N5: the "custom XML schema references were not checked" note is recorded only for an owner
+/// that actually has customXml parts. With an unreadable owner `.rels` and no customXml part there
+/// is nothing to lose, so no note; with a customXml part the note is kept. No finding changes.
+#[test]
+fn unreadable_owner_rels_note_only_for_owners_with_custom_xml() {
+    const PHRASE: &str = "custom XML schema references were not checked";
+    let without = Doc::minimal();
+    let zip = claim_entry_method(&without.build(), "word/_rels/document.xml.rels", 12);
+    let report = validate_bytes(&zip);
+    assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    assert!(
+        !report.coverage_notes.iter().any(|n| n.contains(PHRASE)),
+        "an owner with no customXml part has nothing to report: {:?}",
+        report.coverage_notes
+    );
+
+    let mut with = Doc::minimal();
+    with.add_with_override(
+        "customXml/itemProps1.xml",
+        CT_CUSTOMXML_PROPS,
+        format!(
+            r#"<?xml version="1.0"?><ds:datastoreItem xmlns:ds="{DS_NS}" ds:itemID="{{X}}"><ds:schemaRefs><ds:schemaRef ds:uri="http://example.com/ns"/></ds:schemaRefs></ds:datastoreItem>"#
+        ),
+    );
+    let zip = claim_entry_method(&with.build(), "word/_rels/document.xml.rels", 12);
+    let report = validate_bytes(&zip);
+    assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    assert!(
+        report.coverage_notes.iter().any(|n| n.contains(PHRASE)),
+        "an owner with a customXml part keeps the explanatory note: {:?}",
+        report.coverage_notes
+    );
+}
+
+/// §2 canary: an unreadable comments part must not make the document's comment references look
+/// dangling (ID-COMMENT-REF), on top of the REL-DANGLING the round-8 canary already checked.
+#[test]
+fn unreadable_comments_part_does_not_fire_comment_ref() {
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/comments.xml", CT_COMMENTS)]));
+    d.set("word/comments.xml", comments(r#"<w:comment w:id="1"><w:p/></w:comment>"#));
+    d.set_doc_rels(
+        r#"<Relationship Id="rC" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>"#,
+    );
+    d.set_document(r#"<w:p><w:r><w:commentReference w:id="1"/></w:r></w:p>"#);
+    let zip = claim_entry_method(&d.build(), "word/comments.xml", 12);
+    let report = validate_bytes(&zip);
+    assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    assert!(!has(&report, "REL-DANGLING"), "{:?}", report.findings);
+    assert!(!has(&report, "ID-COMMENT-REF"), "an unreadable comments part must not make references dangling: {:?}", report.findings);
+}
+
+/// §1 residual canary: an unreadable owner `.rels` (`word/_rels/document.xml.rels`) plus a comments
+/// part that is NOT discoverable by content type (typed only by the `xml` default, `application/xml`
+/// — never the comments content type) must not make the document's comment references look dangling
+/// (`ID-COMMENT-REF`). The supporting part's existence is unestablished, not established-absent, so
+/// no dangling finding fires and the run is INCOMPLETE from the unreadable `.rels`. Removing the
+/// guard restores the false FAIL (`ID-COMMENT-REF`, Error).
+#[test]
+fn unreadable_owner_rels_with_untyped_comments_does_not_fire_comment_ref() {
+    let mut d = Doc::minimal();
+    // The comments part exists and the owner's `.rels` names it, but no Override types it: it falls
+    // back to the `xml` Default (`application/xml`), so it is not discoverable by content type.
+    d.set("word/comments.xml", comments(r#"<w:comment w:id="1"><w:p/></w:comment>"#));
+    d.set_doc_rels(
+        r#"<Relationship Id="rC" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>"#,
+    );
+    d.set_document(r#"<w:p><w:r><w:commentReference w:id="1"/></w:r></w:p>"#);
+    let zip = claim_entry_method(&d.build(), "word/_rels/document.xml.rels", 12);
+    let report = validate_bytes(&zip);
+    assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    assert!(!has(&report, "ID-COMMENT-REF"), "an unreadable owner .rels must not make references dangling: {:?}", report.findings);
+}
+
+/// §2 canary: an unreadable `_rels/.rels` must not make main resolution report PKG-NO-MAIN. The
+/// officeDocument relationship is unknown, not absent.
+#[test]
+fn unreadable_package_rels_does_not_fire_no_main() {
+    let zip = claim_entry_method(&Doc::minimal().build(), "_rels/.rels", 12);
+    let report = validate_bytes(&zip);
+    assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    assert!(!has(&report, "PKG-NO-MAIN"), "an unreadable _rels/.rels must not report no main: {:?}", report.findings);
+}
+
+/// §4 canary: `w14:paraId` / `w15:paraId` are ST_LongHexNumber, so the same number in different
+/// case across comments.xml and commentsExtended.xml must still join (no COMMENTEX-LINK).
+#[test]
+fn commentex_hex_identifiers_join_despite_case() {
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/comments.xml", CT_COMMENTS), ("/word/commentsExtended.xml", CT_COMMENTS_EXT)]));
+    d.set(
+        "word/comments.xml",
+        format!(r#"<?xml version="1.0"?><w:comments xmlns:w="{W_NS}" xmlns:w14="{W14_NS}"><w:comment w:id="1"><w:p w14:paraId="AAAA0001"/></w:comment></w:comments>"#),
+    );
+    d.set(
+        "word/commentsExtended.xml",
+        format!(r#"<?xml version="1.0"?><w15:commentsEx xmlns:w15="{W15_NS}"><w15:commentEx w15:paraId="aaaa0001"/></w15:commentsEx>"#),
+    );
+    d.set_doc_rels(concat!(
+        r#"<Relationship Id="rC" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>"#,
+        r#"<Relationship Id="rCE" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/commentsExtended" Target="commentsExtended.xml"/>"#,
+    ));
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Pass, "findings: {:?}", report.findings);
+    assert!(!has(&report, "COMMENTEX-LINK"), "hex identifiers that differ only in case must join: {:?}", report.findings);
+}
+
 #[test]
 fn validate_path_on_missing_file_is_an_io_error() {
     assert!(validate_path(Path::new("/definitely/not/a/real/file.docx")).is_err());
@@ -2013,6 +2344,21 @@ fn unavailable_numbering_part_does_not_fire_dangling_finding() {
         report.coverage_notes
     );
     assert!(!has(&report, "NUM-DANGLING"), "an unreadable numbering part must not manufacture a dangling finding: {:?}", report.findings);
+}
+
+/// §2 residual canary: an unreadable owner `.rels` (`word/_rels/document.xml.rels`) with a
+/// `w:numId val="99"` in the document must not manufacture a spurious NUM-DANGLING finding. The
+/// owner's numbering is unestablished (its discovery source could not be read), not established
+/// absent, so no dangling finding fires and the run is INCOMPLETE from the unreadable `.rels`.
+/// Removing the `None`/`Some` distinction restores the spurious Warning.
+#[test]
+fn unreadable_owner_rels_does_not_fire_numbering_dangling() {
+    let mut d = Doc::minimal();
+    d.set_document(r#"<w:p><w:pPr><w:numPr><w:numId w:val="99"/></w:numPr></w:pPr><w:r><w:t>x</w:t></w:r></w:p>"#);
+    let zip = claim_entry_method(&d.build(), "word/_rels/document.xml.rels", 12);
+    let report = validate_bytes(&zip);
+    assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    assert!(!has(&report, "NUM-DANGLING"), "an unreadable owner .rels must not manufacture a numbering dangling finding: {:?}", report.findings);
 }
 
 #[test]

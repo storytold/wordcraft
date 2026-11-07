@@ -64,6 +64,10 @@ pub(crate) struct Entry {
     pub decoded: Option<String>,
     /// Why decoding failed, when it did.
     pub decode_error: Option<crate::scan::DecodeError>,
+    /// The part is present in the package but its content could not be read (a blank entry, or one
+    /// that failed strict decoding). Cross-part checks that would conclude *absence* from this
+    /// part's content must skip instead: absence is not established from unavailable content.
+    pub content_unavailable: bool,
 }
 
 /// `[Content_Types].xml`: Override by part name, else Default by extension (both case-insensitive).
@@ -136,10 +140,41 @@ pub(crate) fn load(bytes: &[u8], acc: &mut Acc) -> Option<Package> {
     }
     let limit = zip.len().min(limits.entries);
     let mut entries = Vec::new();
-    let mut failed = HashSet::new();
     let mut total: u64 = 0;
+    // Set when an entry that failed to open could not be named at all. Its identity is unknown, so
+    // nothing can be concluded about what is absent from the package while it is set.
+    let mut unknown_unreadable = false;
     for i in 0..limit {
-        let Ok(mut f) = zip.by_index(i) else { continue };
+        // The identity is read before opening: `by_index` holds a mutable borrow of the archive for
+        // the whole match, so the name must be cloned first. Both come from the same table, keyed by
+        // the same index, so the recovered name can never disagree with the entry that failed.
+        let name = zip.name_for_index(i).map(|n| n.trim_start_matches('/').to_string());
+        let mut f = match zip.by_index(i) {
+            Ok(f) => f,
+            Err(_) => {
+                let described = match &name {
+                    Some(n) => format!("entry {i} ({n})"),
+                    None => format!("entry {i}"),
+                };
+                acc.note(format!("{described} could not be read from the archive and was not checked"));
+                acc.set_incomplete();
+                match name {
+                    // A directory entry: never register it as a part (the readable path skips
+                    // directories too, and the unreadable path must not invent one).
+                    Some(n) if n.ends_with('/') => entries.push(blank_entry(n, true)),
+                    // Register the part as present-but-unchecked. Its content is marked unavailable,
+                    // which is what makes every cross-part check that would conclude absence from it
+                    // skip; the marker, not the mere registration, is the mechanism.
+                    Some(n) => entries.push(blank_entry(n, false)),
+                    // `name_for_index` and `by_index` index the same table and the loop is bounded
+                    // by `zip.len()`, so this should be unreachable. If it happens, an entry of
+                    // unknown identity exists: it could be any part, so no absence conclusion is
+                    // established (see `Acc::set_unknown_unreadable` and `ABSENCE_RULES`).
+                    None => unknown_unreadable = true,
+                }
+                continue;
+            }
+        };
         let name = f.name().trim_start_matches('/').to_string();
         if f.is_dir() {
             entries.push(blank_entry(name, true));
@@ -170,13 +205,18 @@ pub(crate) fn load(bytes: &[u8], acc: &mut Acc) -> Option<Package> {
                 entries.push(text_entry(name, buf));
             }
             Err(_) => {
+                // Any part whose content could not be read leaves the run INCOMPLETE: a check that
+                // depended on it could not run. (This subsumes the old main-part special case.)
                 acc.note(format!("part {name} could not be decompressed and was not checked"));
-                failed.insert(name.to_ascii_lowercase());
+                acc.set_incomplete();
                 entries.push(blank_entry(name, false));
             }
         }
     }
 
+    if unknown_unreadable {
+        acc.set_unknown_unreadable();
+    }
     check_duplicate_entries(bytes, acc);
     check_case_collisions(&entries, acc);
 
@@ -223,13 +263,12 @@ pub(crate) fn load(bytes: &[u8], acc: &mut Acc) -> Option<Package> {
         .and_then(|r| r.target_abs.as_deref())
         .and_then(|t| canonical(&entries, t));
     if main.is_none() {
-        acc.add("PKG-NO-MAIN", None, no_main_message(package_rels));
-    }
-
-    if let Some(m) = &main
-        && failed.contains(&m.to_ascii_lowercase())
-    {
-        acc.set_incomplete();
+        // If `_rels/.rels` is present but its content could not be read, its officeDocument
+        // relationship is unknown, not absent: no absence conclusion is established.
+        let package_rels_unavailable = entries.iter().any(|e| !e.is_dir && e.name.eq_ignore_ascii_case("_rels/.rels") && e.content_unavailable);
+        if !package_rels_unavailable {
+            acc.add("PKG-NO-MAIN", None, no_main_message(package_rels));
+        }
     }
 
     let glossary = glossary_part(&entries, &content_types, &rels, main.as_deref());
@@ -254,12 +293,14 @@ fn glossary_part(entries: &[Entry], ct: &ContentTypes, rels: &[RelsPart], main: 
     entries.iter().find(|e| !e.is_dir && ct.of(&e.name) == Some(GLOSSARY_CONTENT_TYPE)).map(|e| e.name.clone())
 }
 
-/// A directory entry, or one whose bytes were skipped.
+/// A directory entry, or one whose bytes were skipped. A skipped file entry's content is
+/// unavailable (a directory has no content to be unavailable).
 fn blank_entry(name: String, is_dir: bool) -> Entry {
-    Entry { name, bytes: None, is_dir, decoded: None, decode_error: None }
+    Entry { name, bytes: None, is_dir, decoded: None, decode_error: None, content_unavailable: !is_dir }
 }
 
-/// A file entry whose bytes are held: text parts are decoded once, strictly.
+/// A file entry whose bytes are held: text parts are decoded once, strictly. A decode failure means
+/// the content is present but unreadable, so its text is unavailable to any consumer.
 fn text_entry(name: String, bytes: Vec<u8>) -> Entry {
     let (decoded, decode_error) = if is_text_part(&name) {
         match crate::scan::decode_strict(&bytes) {
@@ -269,7 +310,8 @@ fn text_entry(name: String, bytes: Vec<u8>) -> Entry {
     } else {
         (None, None)
     };
-    Entry { name, bytes: Some(bytes), is_dir: false, decoded, decode_error }
+    let content_unavailable = decode_error.is_some();
+    Entry { name, bytes: Some(bytes), is_dir: false, decoded, decode_error, content_unavailable }
 }
 
 /// Decode a part identified as XML by its effective content type, whichever its file name (H5).
@@ -279,6 +321,7 @@ fn decode_entry(e: &mut Entry) {
         Ok(t) => (Some(t), None),
         Err(err) => (None, Some(err)),
     };
+    e.content_unavailable = decode_error.is_some();
     e.decoded = decoded;
     e.decode_error = decode_error;
 }
@@ -366,19 +409,37 @@ fn no_main_message(package_rels: Option<&RelsPart>) -> String {
 fn check_duplicate_entries(bytes: &[u8], acc: &mut Acc) {
     acc.ran("PKG-DUP-ENTRY");
     // The zip reader collapses duplicate names into one entry, so the central directory itself is
-    // read to see every stored name (a package may legally list the same name twice).
-    let Some(names) = central_directory_names(bytes) else {
+    // read to see every stored name (a package may legally list the same name twice). The parse is
+    // bounded by the entry budget, exactly as the entry loop is.
+    let Some(dir) = central_directory(bytes, acc.limits.entries) else {
         acc.note("the zip central directory could not be parsed; duplicate entry names were not checked".to_string());
+        // The parse did not run at all, so duplicate checking covered none of the directory. This is
+        // the all-or-nothing counterpart of the truncated parse below: a partial check is reported
+        // INCOMPLETE, so a completely unrun one must be too, rather than leaving a silent PASS.
+        acc.set_incomplete();
         return;
     };
     let mut counts: HashMap<&str, usize> = HashMap::new();
-    for n in &names {
+    for n in &dir.names {
         *counts.entry(n.trim_start_matches('/')).or_default() += 1;
     }
     let mut dups: Vec<&str> = counts.into_iter().filter(|(_, c)| *c > 1).map(|(n, _)| n).collect();
     dups.sort_unstable();
     for n in dups {
         acc.add("PKG-DUP-ENTRY", None, format!("the entry {n} appears more than once in the archive"));
+    }
+    // The raw directory holds more records than the budget allowed the parse to examine. The
+    // unexamined records' names (and so any duplicate among them) are unknown, so duplicate
+    // checking did not cover the whole directory: mark it incomplete rather than let a truncated
+    // scan return a clean PASS. This is where the loader's deduplicated `zip.len()` check cannot
+    // see the truncation: a directory whose duplicates deduplicate to the entry budget passes that
+    // check while raw records remain.
+    if dir.truncated {
+        acc.note(format!(
+            "the zip central directory holds {} records, more than the {} examined; duplicate entry checking stopped early and later names were not checked",
+            dir.total, acc.limits.entries
+        ));
+        acc.set_incomplete();
     }
 }
 
@@ -394,10 +455,32 @@ fn u64_at(b: &[u8], i: usize) -> Option<u64> {
     Some(u64::from_le_bytes(b.get(i..i + 8)?.try_into().ok()?))
 }
 
-/// The names in the zip central directory, in stored order, including duplicates. `None` when the
-/// directory cannot be parsed (not a zip, or a layout this reader does not understand), in which
-/// case duplicate names are simply not checked.
-fn central_directory_names(bytes: &[u8]) -> Option<Vec<String>> {
+/// The parsed zip central directory: the raw records examined within the entry budget, and
+/// whether the budget stopped the parse before the last raw record.
+struct CentralDirectory {
+    /// The entry names examined, in stored order, including duplicate names.
+    names: Vec<String>,
+    /// The total raw record count the directory declares.
+    total: u64,
+    /// True when fewer than `total` records were examined because the entry budget stopped the
+    /// parse; duplicates among the unexamined records are then unknown.
+    truncated: bool,
+}
+
+/// The names in the zip central directory, in stored order, including duplicates, stopping after
+/// `limit` names (the entry budget), together with whether any raw record remained unexamined.
+/// `None` when the directory cannot be parsed (not a zip, or a layout this reader does not
+/// understand), in which case duplicate names are simply not checked.
+///
+/// Names are decoded with `String::from_utf8_lossy`, not by the zip reader's legacy-name decoding.
+/// What duplicate detection therefore guarantees: among examined records, an exact byte-for-byte
+/// duplicate entry name is always seen (lossy decoding maps identical bytes to the identical
+/// string), and every ASCII or valid-UTF-8 name is compared exactly. Records past the entry budget
+/// are unexamined by design, and the run reports INCOMPLETE instead of claiming coverage. What it
+/// does not guarantee: two *distinct* legacy-encoded (non-UTF-8) byte sequences can both decode to
+/// the same replacement-character string, so two different stored names are reported as a duplicate
+/// — a PKG-DUP-ENTRY Error — even though their bytes differ.
+fn central_directory(bytes: &[u8], limit: usize) -> Option<CentralDirectory> {
     let eocd = find_eocd(bytes)?;
     let mut count = u64::from(u16_at(bytes, eocd + 10)?);
     let mut cd_off = u64::from(u32_at(bytes, eocd + 16)?);
@@ -410,9 +493,12 @@ fn central_directory_names(bytes: &[u8]) -> Option<Vec<String>> {
     if count > 1_000_000 {
         return None;
     }
-    let mut names = Vec::with_capacity(count.min(1 << 16) as usize);
+    let limit = u64::try_from(limit).unwrap_or(u64::MAX);
+    let truncated = count > limit;
+    let examined = count.min(limit);
+    let mut names = Vec::with_capacity(examined.min(1 << 16) as usize);
     let mut i = usize::try_from(cd_off).ok()?;
-    for _ in 0..count {
+    for _ in 0..examined {
         if u32_at(bytes, i)? != 0x0201_4B50 {
             return None;
         }
@@ -423,7 +509,7 @@ fn central_directory_names(bytes: &[u8]) -> Option<Vec<String>> {
         names.push(String::from_utf8_lossy(name).into_owned());
         i = i.checked_add(46 + name_len + extra_len + comment_len)?;
     }
-    Some(names)
+    Some(CentralDirectory { names, total: count, truncated })
 }
 
 /// The zip64 end-of-central-directory `(entry count, central directory offset)`.
@@ -538,6 +624,14 @@ pub(crate) fn canonical_entry(pkg: &Package, name: &str) -> Option<String> {
 pub(crate) fn entry_by_name<'a>(pkg: &'a Package, name: &str) -> Option<&'a Entry> {
     let n = name.trim_start_matches('/');
     pkg.entries.iter().find(|e| !e.is_dir && e.name.eq_ignore_ascii_case(n))
+}
+
+/// Whether the part at `name` is present in the package but its content could not be read. A
+/// cross-part check that would conclude *absence* from this part's content must skip instead:
+/// absence is not established from unavailable content. Part identity is matched exactly as part
+/// lookup does (OPC names are case-insensitive), so `_RELS/.RELS` is recognised the same way.
+pub(crate) fn content_unavailable(pkg: &Package, name: &str) -> bool {
+    entry_by_name(pkg, name).is_some_and(|e| e.content_unavailable)
 }
 
 fn reachability(rels: &[RelsPart], main: Option<&str>) -> HashSet<String> {
