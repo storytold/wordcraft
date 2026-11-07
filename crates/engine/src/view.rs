@@ -8,6 +8,9 @@ pub struct ViewState {
     pub zoom: f32,
     pub mode: ViewMode,
     pub read_mode: bool,
+    /// Manual edit lock for this open document; never persisted or changed by window views.
+    #[serde(skip)]
+    pub viewing: bool,
     /// View › Focus (#1678): the document alone on screen, with a slim bar to drop the ribbon down.
     pub focus_mode: bool,
     /// Full Screen View (#1678): the pages alone on screen. Never on together with `focus_mode`.
@@ -167,6 +170,7 @@ impl Default for ViewState {
             zoom: 1.0,
             mode: ViewMode::Print,
             read_mode: false,
+            viewing: false,
             focus_mode: false,
             full_screen_view: false,
             marks: false,

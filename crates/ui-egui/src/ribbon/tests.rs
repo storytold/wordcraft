@@ -1005,3 +1005,239 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+/// Viewing is a manual interaction choice, with an orange active indicator and a reversible edit lock.
+#[test]
+fn viewing_menu_is_manual_and_only_viewing_is_orange() {
+    use egui_kittest::kittest::Queryable;
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Original")), crate::Services::default());
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(6);
+    h.get_by_label("Editing").click();
+    h.run_steps(2);
+    h.get_by_label("Viewing — view the file but make no changes").click();
+    h.run_steps(3);
+    assert!(h.state_mut().run("text.insert", json!({"text":"Blocked"})).is_err());
+    let mode = h.get_by_label("Viewing").rect();
+    let orange = Tokens::get(&h.ctx).orange;
+    assert!(
+        h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == orange && r.rect.intersects(mode))),
+        "the active mode has an orange fill"
+    );
+    h.get_by_label("Viewing").click();
+    h.run_steps(2);
+    h.get_by_label("Editing — edit the document directly").click();
+    h.run_steps(3);
+    assert!(h.state_mut().run("text.insert", json!({"text":"Allowed"})).is_ok());
+    h.get_by_label("Editing");
+}
+
+/// Viewing keeps keyboard selection and copy without accepting text or requesting an IME context.
+#[test]
+fn viewing_canvas_keeps_copy_and_releases_ime_ownership() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Original")), crate::Services::default());
+    app.run("view.viewing", json!({"value":true})).unwrap();
+    let before = app.session.doc.clone();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(6);
+    let (id, _) = h.state().canvas.widget_id.expect("visible canvas");
+    h.ctx.memory_mut(|m| m.request_focus(id));
+    h.run_steps(1);
+    assert!(h.state().canvas.focused, "keyboard selection keeps its focus");
+    h.input_mut().events.push(egui::Event::Text("Blocked".into()));
+    h.input_mut().events.push(egui::Event::Paste("Blocked paste".into()));
+    h.run_steps(3);
+    assert!(h.state().session.doc.same_content(&before));
+    assert!(h.output().platform_output.ime.is_none(), "Viewing must not request a text input context");
+    h.state_mut().run("select.all", json!({})).unwrap();
+    h.state_mut().run("edit.copy", json!({})).unwrap();
+    assert_eq!(h.state().session.selected_text(), "Original");
+}
+
+/// Refusal must precede input dialogs and integration launches, not merely the eventual edit.
+#[test]
+fn viewing_refuses_ui_edits_before_dialogs_or_external_connections() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Original")), crate::Services::default());
+    app.execute("view.viewing", json!({"value":true})).unwrap();
+    assert!(app.run("insert.picture", json!({})).is_err());
+    assert!(app.dialog.is_none(), "a refused edit must not open its input dialog");
+    let error = app.execute("ui.zotero.addEditCitation", json!({})).unwrap_err();
+    assert!(error.contains("Viewing"), "must refuse before contacting Zotero: {error}");
+    assert!(app.zotero.busy.is_none());
+}
+
+/// A selected picture must not open a replacement picker until Viewing is switched off.
+#[test]
+fn viewing_blocks_change_picture_before_opening_picker() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("insert.picture", json!({"data": png_data()})).unwrap();
+    assert!(app.selected_picture_media().is_some(), "exercise Change Picture with a real selected picture");
+    let picked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = picked.clone();
+    app.services.open_async = Some(Box::new(move |purpose| seen.borrow_mut().push(purpose.to_string())));
+    app.run("view.viewing", json!({"value": true})).unwrap();
+    let before = app.session.doc.clone();
+    let undo_depth = app.session.undo_depth();
+    assert!(!crate::widgets::enabled(&app, "ui.changePicture"));
+    for execute_directly in [false, true] {
+        let result = if execute_directly { app.execute("ui.changePicture", json!({})) } else { app.run("ui.changePicture", json!({})) };
+        assert!(result.unwrap_err().contains("Viewing"));
+        assert!(picked.borrow().is_empty(), "neither command entrypoint may launch a picker");
+        assert!(app.change_picture_target.is_none(), "a refused command must not leave a pending replacement");
+        assert!(app.session.doc.same_content(&before));
+        assert_eq!(app.session.undo_depth(), undo_depth);
+    }
+    app.run("view.viewing", json!({"value": false})).unwrap();
+    assert!(crate::widgets::enabled(&app, "ui.changePicture"));
+    assert_eq!(app.run("ui.changePicture", json!({})).unwrap(), json!({"pending": true}));
+    assert_eq!(*picked.borrow(), vec!["picture"]);
+    assert!(app.change_picture_target.is_some());
+}
+
+/// A failed ribbon mode switch must keep Viewing and protection, in either tracking direction.
+#[test]
+fn failed_ribbon_tracking_switch_restores_viewing() {
+    use egui_kittest::kittest::Queryable;
+    for tracking in [false, true] {
+        let mut app =
+            WordApp::new(Session::new(wordcraft_doc::Document::from_text("Locked intro.\nEditable text.\nLocked end.")), crate::Services::default());
+        app.run("review.trackChanges", json!({"value": tracking})).unwrap();
+        app.run("select.text", json!({"text": "Editable text."})).unwrap();
+        app.run("review.restrict", json!({"exception": "add"})).unwrap();
+        app.run("review.restrict", json!({"mode": "readOnly"})).unwrap();
+        app.run("view.viewing", json!({"value": true})).unwrap();
+        let before = app.session.doc.clone();
+        let depth = app.session.undo_depth();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(6);
+        h.get_by_label("Viewing").click();
+        h.run_steps(2);
+        let target = if tracking { "Editing — edit the document directly" } else { "Reviewing — edits become suggestions" };
+        h.get_by_label(target).click();
+        h.run_steps(3);
+        assert!(h.state().session.view.viewing, "the failed tracking change must not unlock the editable exception");
+        assert_eq!(h.state().session.doc.settings.track_changes, tracking);
+        assert!(h.state().session.doc.same_content(&before));
+        assert_eq!(h.state().session.undo_depth(), depth);
+        assert!(h.state_mut().run("text.insert", json!({"text": "Blocked"})).is_err());
+        h.get_by_label("Viewing");
+    }
+}
+
+/// Failed tracking from ordinary Editing keeps that mode instead of introducing a Viewing lock.
+#[test]
+fn failed_tracking_switch_preserves_an_existing_editing_mode() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Editable text.")), crate::Services::default());
+    app.run("select.all", json!({})).unwrap();
+    app.run("review.restrict", json!({"exception": "add"})).unwrap();
+    app.run("review.restrict", json!({"mode": "readOnly"})).unwrap();
+    let before = app.session.doc.clone();
+    assert!(set_tracking_mode(&mut app, true).is_err());
+    assert!(!app.session.view.viewing);
+    assert!(!app.session.doc.settings.track_changes);
+    assert!(app.session.doc.same_content(&before));
+    app.run("text.insert", json!({"text": "Allowed inside the exception"})).unwrap();
+}
+
+/// Successful mode changes leave Viewing, with tracking set as requested or already configured.
+#[test]
+fn tracking_mode_switch_keeps_successful_and_no_change_paths() {
+    for initially_tracking in [false, true] {
+        for requested in [false, true] {
+            let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Original")), crate::Services::default());
+            app.run("review.trackChanges", json!({"value": initially_tracking})).unwrap();
+            app.run("view.viewing", json!({"value": true})).unwrap();
+            set_tracking_mode(&mut app, requested).unwrap();
+            assert!(!app.session.view.viewing);
+            assert_eq!(app.session.doc.settings.track_changes, requested);
+            app.run("text.insert", json!({"text": "Allowed"})).unwrap();
+        }
+    }
+}
+
+/// Editing dialogs, including Templates, Macros, Compare and Combine, are refused without replacing an open query dialog.
+/// Leaving Viewing restores these dialogs through both command paths.
+#[test]
+fn viewing_refuses_editing_dialogs_before_opening_or_replacing_one() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Original")), crate::Services::default());
+    app.run("view.viewing", json!({"value": true})).unwrap();
+    app.run("ui.dialog", json!({"name": "wordCount"})).unwrap();
+    let before = app.session.doc.clone();
+    let depth = app.session.undo_depth();
+    for name in [
+        "insertTable",
+        "link",
+        "bookmark",
+        "toc",
+        "createSource",
+        "font",
+        "replace",
+        "colors",
+        "controlProperties",
+        "recipientList",
+        "templates",
+        "macros",
+        "compare",
+        "combine",
+        "mergeRecords",
+        "printRecords",
+    ] {
+        for execute_directly in [false, true] {
+            let params = json!({"name": name});
+            let result = if execute_directly { app.execute("ui.dialog", params) } else { app.run("ui.dialog", params) };
+            assert!(result.unwrap_err().contains("Viewing"), "editing dialog {name}");
+            assert_eq!(app.dialog.as_ref().map(|d| d.name()), Some("wordCount"));
+            assert!(app.colors.is_none(), "the color picker has a separate dispatch branch");
+            assert!(app.session.doc.same_content(&before));
+            assert_eq!(app.session.undo_depth(), depth);
+        }
+    }
+    app.run("view.viewing", json!({"value": false})).unwrap();
+    for name in ["insertTable", "templates", "macros", "compare", "combine", "mergeRecords", "printRecords"] {
+        for execute_directly in [false, true] {
+            let params = json!({"name": name});
+            if execute_directly { app.execute("ui.dialog", params) } else { app.run("ui.dialog", params) }.unwrap();
+            assert_eq!(app.dialog.as_ref().map(|d| d.name()), Some(name));
+            app.run("ui.closeDialog", json!({})).unwrap();
+        }
+    }
+}
+
+/// Viewing keeps reading, navigation and informational dialogs accessible through either command path.
+#[test]
+fn viewing_keeps_query_and_navigation_dialogs_available() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Original")), crate::Services::default());
+    app.run("view.viewing", json!({"value": true})).unwrap();
+    let before = app.session.doc.clone();
+    for name in ["wordCount", "find", "goto", "zoom", "commands", "about"] {
+        for execute_directly in [false, true] {
+            let params = json!({"name": name});
+            if execute_directly { app.execute("ui.dialog", params) } else { app.run("ui.dialog", params) }.unwrap();
+            assert!(app.dialog.is_some(), "query dialog {name} should open");
+            assert!(app.session.view.viewing);
+            assert!(app.session.doc.same_content(&before));
+            app.run("ui.closeDialog", json!({})).unwrap();
+        }
+    }
+}

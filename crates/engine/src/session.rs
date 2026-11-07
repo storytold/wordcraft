@@ -11,6 +11,7 @@ use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, ViewMode};
 use crate::{CmdError, ImeEditOutcome, Registry};
 
 mod documents;
+mod viewing;
 mod views;
 pub use documents::{DocInfo, DocState};
 use documents::{document_id_mark, next_document_id, untitled_name};

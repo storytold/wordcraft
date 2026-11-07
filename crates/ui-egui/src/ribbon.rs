@@ -160,7 +160,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     // Share, Editing mode and Comments keep their room; the tabs get what is left of it
                     // (#897, #2026), and the buttons give up their labels before a tab is drawn over them.
                     let share = tl!("Share");
-                    let editing_label = if app.session.doc.settings.track_changes { tl!("Reviewing") } else { tl!("Editing") };
+                    let viewing = app.session.view.viewing;
+                    let editing_label = if viewing {
+                        tl!("Viewing")
+                    } else if app.session.doc.settings.track_changes {
+                        tl!("Reviewing")
+                    } else {
+                        tl!("Editing")
+                    };
                     let comments = tl!("Comments");
                     let share_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(share.to_string(), medium(12.0), t.text).size().x);
                     let spaced = |w: f32| w + 2.0;
@@ -220,18 +227,18 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             }
                             ui.add_space(6.0);
                             let track = app.session.doc.settings.track_changes;
-                            let mode = if plan.buttons == 0 {
-                                crate::widgets::icon_text_menu_button(ui, "pencil", editing_label, regular(12.0))
-                            } else {
-                                crate::widgets::icon_only_button(ui, "pencil", editing_label, regular(12.0), true)
-                            };
+                            let mode = crate::widgets::interaction_mode_button(ui, editing_label, viewing, plan.buttons == 0);
                             crate::rtl::menu(&mode).show(|ui| {
-                                if ui.selectable_label(!track, tl!(tl!("Editing — edit the document directly"))).clicked() {
-                                    let _ = app.run("review.trackChanges", json!({"value": false}));
+                                if ui.selectable_label(!viewing && !track, tl!("Editing — edit the document directly")).clicked() {
+                                    let _ = set_tracking_mode(app, false);
                                     ui.close();
                                 }
-                                if ui.selectable_label(track, tl!(tl!("Reviewing — edits become suggestions"))).clicked() {
-                                    let _ = app.run("review.trackChanges", json!({"value": true}));
+                                if ui.selectable_label(!viewing && track, tl!("Reviewing — edits become suggestions")).clicked() {
+                                    let _ = set_tracking_mode(app, true);
+                                    ui.close();
+                                }
+                                if ui.selectable_label(viewing, tl!("Viewing — view the file but make no changes")).clicked() {
+                                    let _ = app.run("view.viewing", json!({"value": true}));
                                     ui.close();
                                 }
                             });
@@ -492,6 +499,25 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 ui.ctx().request_repaint();
             }
         });
+}
+
+/// Leave Viewing for Editing or Reviewing only if the requested tracking setting succeeds.
+/// Protection may refuse a document-wide tracking change even inside an editable exception.
+/// On failure, restore the previous Viewing choice and keep the original error visible;
+/// a failed switch from ordinary Editing must not unexpectedly enter Viewing.
+fn set_tracking_mode(app: &mut WordApp, tracking: bool) -> Result<(), String> {
+    let was_viewing = app.session.view.viewing;
+    app.run("view.viewing", json!({"value": false}))?;
+    if app.session.doc.settings.track_changes != tracking
+        && let Err(error) = app.run("review.trackChanges", json!({"value": tracking}))
+    {
+        if was_viewing {
+            app.run("view.viewing", json!({"value": true}))?;
+        }
+        app.status(error.clone());
+        return Err(error);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

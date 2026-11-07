@@ -47,6 +47,14 @@ pub struct ZoteroLink {
 }
 
 impl ZoteroLink {
+    /// Viewing must wait until this document's asynchronous Zotero command has finished.
+    /// Calls may pause between inserting a placeholder and supplying its citation text.
+    pub(crate) fn viewing_entry_error(&self, document: u64) -> Option<String> {
+        self.busy
+            .filter(|_| self.document == document)
+            .map(|cmd| format!("Zotero is still working on {}; finish in Zotero's window first", cmd.wire_name()))
+    }
+
     /// Whether an alert from Zotero is waiting for an answer.
     pub(crate) fn alert_open(&self) -> bool {
         self.alert.is_some()
@@ -308,6 +316,7 @@ mod tests {
         panic!("timed out");
     }
 
+    /// Viewing entry waits across Zotero's asynchronous placeholder/text gap through both UI command routes.
     #[test]
     fn a_zotero_session_runs_through_the_app_with_a_question() {
         let (addr, server) = fake_zotero(vec![
@@ -328,6 +337,18 @@ mod tests {
         pump(&mut app, &ctx, |a| a.zotero.alert.is_some());
         let st = app.run("ui.zotero.status", json!({})).unwrap();
         assert_eq!(st["waitingForAnswer"], "Keep going?");
+        let partial = app.session.doc.clone();
+        let depth = app.session.undo_depth();
+        for direct in [false, true] {
+            for params in [json!({}), json!({"value": true})] {
+                let result = if direct { app.execute("view.viewing", params) } else { app.run("view.viewing", params) };
+                assert!(result.unwrap_err().contains("Zotero is still working"));
+                assert!(!app.session.view.viewing);
+                assert!(app.session.doc.same_content(&partial));
+                assert_eq!(app.session.undo_depth(), depth);
+            }
+        }
+        app.run("view.viewing", json!({"value": false})).unwrap();
         assert!(app.run("ui.zotero.answer", json!({"button": 7})).is_err());
         assert_eq!(app.run("ui.zotero.answer", json!({"button": 1})).unwrap(), json!({"answered": 1}));
         pump(&mut app, &ctx, |a| a.zotero.busy.is_none());
@@ -337,6 +358,10 @@ mod tests {
         assert_eq!(app.run("ui.zotero.status", json!({})).unwrap()["last"]["completed"], true);
         assert!(app.run("ui.zotero.answer", json!({"button": 1})).is_err());
         assert!(app.run("ui.zotero.nope", json!({})).is_err());
+        // Completing Zotero releases the entry guard; leaving Viewing keeps undo available.
+        app.run("view.viewing", json!({"value": true})).unwrap();
+        assert!(app.session.view.viewing);
+        app.run("view.viewing", json!({"value": false})).unwrap();
         // One undo step.
         app.run("edit.undo", json!({})).unwrap();
         assert_eq!(app.session.doc.plain_text(StoryRef::Body), "Cite: ");
@@ -366,6 +391,18 @@ mod tests {
         assert!(!app.session.can_undo(), "the old command left no undo step in the new document");
     }
 
+    /// The temporary entry guard belongs only to the document whose Zotero command is active.
+    #[test]
+    fn zotero_does_not_block_viewing_in_another_document() {
+        let mut app = WordApp::new(Session::new(Document::from_text("First")), Services::default());
+        app.zotero.busy = Some(Command::Refresh);
+        app.zotero.document = app.session.document_id();
+        let other = app.session.add_document(Document::from_text("Second"));
+        app.session.switch_document(other).unwrap();
+        app.run("view.viewing", json!({"value": true})).unwrap();
+        assert!(app.session.view.viewing);
+    }
+
     #[test]
     fn no_zotero_is_a_clear_error() {
         let free = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
@@ -376,5 +413,7 @@ mod tests {
         pump(&mut app, &ctx, |a| a.zotero.busy.is_none());
         let last = app.run("ui.zotero.status", json!({})).unwrap()["last"].clone();
         assert!(last["error"].as_str().unwrap().contains("Zotero isn't running"), "{last}");
+        app.run("view.viewing", json!({"value": true})).unwrap();
+        assert!(app.session.view.viewing, "a failed Zotero command must not leave an entry lock");
     }
 }

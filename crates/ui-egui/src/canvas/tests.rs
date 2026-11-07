@@ -4993,3 +4993,35 @@ fn a_pictures_corrections_and_crop_change_its_page_key() {
     assert_ne!(plain, pages::page_content_key(&at([0.1, 0.0, 0.0, 0.0], PicFx::default())), "crop");
     assert_ne!(plain, pages::page_content_key(&at([0.0; 4], PicFx::new(10_000, 0, 0))), "brightness");
 }
+
+/// Viewing draws the navigation caret while keeping IME geometry and document editing disabled.
+#[test]
+fn viewing_keeps_a_visible_navigation_caret_without_requesting_ime() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), Default::default());
+    app.run("view.viewing", json!({"value": true})).unwrap();
+    app.canvas.want_focus = true;
+    let before = app.session.doc.clone();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.canvas.caret_visible_since = crate::now_ms();
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(8);
+    assert!(h.state().canvas.focused);
+    assert!(h.state().canvas.caret_bg.is_some(), "the caret is painted using its contrast color");
+    assert!(h.output().platform_output.ime.is_none());
+    h.state_mut().run("caret.docEnd", json!({})).unwrap();
+    h.state_mut().canvas.caret_bg = None;
+    h.run_steps(3);
+    assert!(h.state().canvas.caret_bg.is_some(), "navigation still paints the caret");
+    assert!(h.output().platform_output.ime.is_none());
+    assert!(h.state_mut().run("text.insert", json!({"text": "Blocked"})).is_err());
+    assert!(h.state().session.doc.same_content(&before));
+    h.state_mut().run("view.viewing", json!({"value": false})).unwrap();
+    h.run_steps(3);
+    assert!(h.output().platform_output.ime.is_some(), "Editing restores the input method geometry");
+}

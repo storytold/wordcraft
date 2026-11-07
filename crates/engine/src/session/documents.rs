@@ -89,7 +89,9 @@ pub struct DocState {
 
 impl DocState {
     /// A fresh document state: caret at the start, no history, not dirty, a new id.
-    pub(super) fn new(doc: Document, untitled: u32, view: ViewState) -> Self {
+    /// Viewing starts off even when the supplied display settings came from a viewed document.
+    pub(super) fn new(doc: Document, untitled: u32, mut view: ViewState) -> Self {
+        view.viewing = false;
         let start = doc.start_of(StoryRef::Body);
         let bib_style = doc_bib_style(&doc);
         DocState {

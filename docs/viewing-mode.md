@@ -1,0 +1,46 @@
+# Viewing mode
+
+Choose **Viewing — view the file but make no changes** from the interaction-mode
+menu beside Editing and Reviewing. Its button turns orange while Viewing is on.
+Choose Editing or Reviewing from the same menu to resume the corresponding mode.
+If document protection refuses the requested tracking change, Viewing stays on.
+A failed switch between Editing and Reviewing also keeps the previous mode.
+
+Viewing keeps the current page layout. Navigation, zoom, selection, copying,
+search, printing and exporting copies remain available. Document edits, comments,
+formatting, history changes, encryption changes, macros that write and Zotero
+writes are refused by the session, including commands sent through automation.
+The navigation caret remains visible, but the canvas does not request IME text input
+while Viewing is active. Returning to another window does not restore equation editing.
+If Zotero is working in this document, wait for it to finish before entering Viewing;
+this prevents an incomplete citation when its insertion spans several calls.
+
+Editing dialogs, including Insert Table, Link, Bookmark, custom Table of Contents,
+Create Source, Templates, Macros, Compare and Combine, are refused before they open through
+`ui.dialog`. Word Count, Find, Go To, Zoom and informational dialogs remain available. The same early
+check applies to user actions and direct UI commands, and leaves an existing
+dialog in place when the requested editing dialog is refused.
+The mail-merge record dialogs are also refused before opening. The Styles gallery
+and Styles pane disable Modify while Viewing is active; an already-open Manage Styles
+dialog also disables Modify, style double-click, and New Style. Leaving Viewing restores
+these actions. Closing a dialog restores keyboard focus for navigation in Viewing,
+without enabling IME input.
+
+Change Picture is disabled even when a picture remains selected. Both user-facing
+and direct UI command entrypoints refuse it before opening a file picker or
+recording a pending replacement; leaving Viewing restores the normal picker.
+
+This is a manual, temporary choice for the open document. Newly opened or created
+documents keep the usual editable default; switching back to an existing document
+keeps its choice. It is not stored in the document or application preferences.
+It does not change Track Changes or remove existing document protection. It is an
+interaction aid, not an access-control or document-protection mechanism.
+
+The Romanian label is **Vizualizare**, with the hint **Vizualizare — vezi
+documentul cu editarea blocată**. Catalogs live separately in
+[craft-i18n](https://github.com/storytold/craft-i18n). The three Romanian rows were
+merged in [craft-i18n#102](https://github.com/storytold/craft-i18n/pull/102), and
+WordCraft's catalog revision includes that upstream merge.
+
+Read Mode remains a separate layout designed for reading columns. Viewing does
+not switch to it, rearrange the pages or hide the normal ribbon.

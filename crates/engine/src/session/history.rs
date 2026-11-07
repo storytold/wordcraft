@@ -113,12 +113,14 @@ impl Session {
         self.typing_open = false;
     }
 
+    /// Whether undo is available now; Viewing retains the history but prevents replaying it.
     pub fn can_undo(&self) -> bool {
-        !self.history.is_empty()
+        !self.view.viewing && !self.history.is_empty()
     }
 
+    /// Whether redo is available now; leaving Viewing makes retained redo steps available again.
     pub fn can_redo(&self) -> bool {
-        !self.redo.is_empty()
+        !self.view.viewing && !self.redo.is_empty()
     }
 
     pub fn undo_label(&self) -> Option<&str> {
@@ -176,6 +178,9 @@ impl Session {
     /// was its automatic capital, swaps the document, selection, pending formatting and column with
     /// the redo snapshot, replaces the body identity, refreshes equation editing and touches layout.
     pub fn undo(&mut self) -> bool {
+        if self.view.viewing {
+            return false;
+        }
         self.typing_open = false;
         // Undoing the automatic capitalisation's own step makes its word an exception; any
         // other Undo forgets the capital.
@@ -208,6 +213,9 @@ impl Session {
     /// Redoes the newest undone step by swapping the snapshots back, replacing the body identity,
     /// refreshing equation editing and touching layout.
     pub fn redo(&mut self) -> bool {
+        if self.view.viewing {
+            return false;
+        }
         self.typing_open = false;
         let Some(u) = self.redo.pop().map(Arc::unwrap_or_clone) else { return false };
         let cur = Undo {

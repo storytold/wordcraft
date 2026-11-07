@@ -59,6 +59,9 @@ impl Session {
         // Every dispatch starts from an unclassified outcome. Early returns (unknown, disabled,
         // protected) leave it at the default.
         self.ime_edit_outcome = ImeEditOutcome::default();
+        if self.viewing_blocks_command(id, params) {
+            return Err(CmdError::Disabled(format!("{id}: {}", super::viewing::REASON)));
+        }
         // A rolled-back transaction must not leave a successful application-change signal from a
         // nested command that ran before the failure.
         let pending_application_change_before = self.pending_ime_application_change;

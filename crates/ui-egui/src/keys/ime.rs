@@ -31,6 +31,7 @@ fn ime_window(app: &mut WordApp) -> Option<wordcraft_doc::ime_text::ImeWindow> {
 /// The tracker is scoped by native viewport. A closed viewport releases its state; a pass without
 /// a visible focused editor reports an unfocused observation so a later focus starts afresh.
 pub(crate) fn observe_ime(app: &mut WordApp, ctx: &egui::Context, geometry: Option<(egui::Rect, egui::Rect)>, interrupt: bool) {
+    let geometry = geometry.filter(|_| !app.session.view.viewing);
     let viewport = ctx.viewport_id();
     // Drain an application-origin change before the final observation. The signal survives later
     // commands until here (or until a receipt publishes), so an edit after the receipt still
