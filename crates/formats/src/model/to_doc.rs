@@ -771,7 +771,11 @@ impl<'a> Builder<'a> {
                     let num = match self.lists.get(&id) {
                         Some(num) if id != 0 => *num,
                         _ => {
-                            let num = self.new_list(&group);
+                            // All of it in these blocks: a run of it after a paragraph it doesn't
+                            // number may be the first to use a level.
+                            let same = |b: &FBlock| if let FBlock::Para(q) = b { q.list.filter(|l| l.list == id) } else { None };
+                            let all: Vec<ListInfo> = if id == 0 { group } else { blocks.get(i..).unwrap_or(&[]).iter().filter_map(same).collect() };
+                            let num = self.new_list(&all);
                             if id != 0 {
                                 self.lists.insert(id, num);
                             }

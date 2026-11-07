@@ -221,3 +221,34 @@ fn a_list_items_further_paragraphs_are_paragraphs_with_no_number() {
         assert_eq!(nums[0], nums[1], "{nums:?}");
     }
 }
+
+/// A level first used after an unnumbered paragraph is still the file's: a bulleted sublist stays
+/// bulleted, a numbered one under bullets stays numbered, read and written from the model.
+#[test]
+fn a_sublist_after_an_unnumbered_paragraph_keeps_its_levels() {
+    let open = |first: &str, second: &str| {
+        let styles = format!(
+            r#"<office:document-styles {NS_T}><office:styles><text:list-style style:name="L">{first}{second}</text:list-style></office:styles></office:document-styles>"#
+        );
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:body><office:text><text:list text:style-name="L"><text:list-item><text:p>One</text:p><text:p>More</text:p><text:list><text:list-item><text:p>Sub</text:p></text:list-item></text:list></text:list-item></text:list></office:text></office:body></office:document-content>"#
+        );
+        import(&package(&content, Some(&styles))).unwrap()
+    };
+    let sub = |d: &Document| {
+        let p = d.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == "Sub").unwrap();
+        let n = p.props.numbering.unwrap();
+        d.numbering.level(n.num, n.level).map(|l| (n.level, l.format, l.text.clone(), l.start)).unwrap()
+    };
+    let number = |level: u8, format: &str, start: u8| {
+        format!(r#"<text:list-level-style-number text:level="{level}" style:num-format="{format}" style:num-suffix="." text:start-value="{start}"/>"#)
+    };
+    let bullet = |level: u8| format!(r#"<text:list-level-style-bullet text:level="{level}" text:bullet-char="–"/>"#);
+    let d = open(&number(1, "1", 1), &bullet(2));
+    assert_eq!(sub(&d), (1, NumFormat::Bullet, "–".to_string(), 1));
+    assert_eq!(sub(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()).1, NumFormat::Bullet, "written from the model");
+    let d = open(&bullet(1), &number(2, "i", 3));
+    let (level, format, _, start) = sub(&d);
+    assert_eq!((level, format, start), (1, NumFormat::LowerRoman, 3));
+    assert_eq!(sub(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()).1, NumFormat::LowerRoman, "written from the model");
+}
