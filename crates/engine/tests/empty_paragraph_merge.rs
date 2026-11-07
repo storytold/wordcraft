@@ -4,10 +4,12 @@ use wordcraft_doc::{Document, Path, Pos, StoryRef};
 use wordcraft_engine::{Selection, Session};
 use wordcraft_layout::outline;
 
+/// Dispatch an engine command and report its ID if it fails.
 fn run(s: &mut Session, id: &str, params: Value) {
     s.run(id, &params).unwrap_or_else(|e| panic!("{id}: {e}"));
 }
 
+/// Create an empty heading, mixed-run body text and a genuine TOC heading.
 fn fixture() -> Session {
     let mut s = Session::new(Document::from_text("\nBody paragraph.\nReal heading\n"));
     run(&mut s, "para.style", json!({"style": "Heading1"}));
@@ -20,6 +22,7 @@ fn fixture() -> Session {
     s
 }
 
+/// Keyboard and selection deletes preserve body formatting through Undo and Redo.
 #[test]
 fn empty_heading_delete_backspace_and_selection_preserve_body_format_and_history() {
     for mode in ["delete", "backspace", "selection", "reverse selection"] {
@@ -56,6 +59,7 @@ fn empty_heading_delete_backspace_and_selection_preserve_body_format_and_history
     }
 }
 
+/// Saving to DOCX and generating a TOC must keep the surviving body text out of the outline.
 #[test]
 fn deleted_empty_heading_does_not_promote_body_text_into_toc_or_docx() {
     let mut s = fixture();
