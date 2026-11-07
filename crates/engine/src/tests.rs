@@ -7253,8 +7253,10 @@ fn border_side_updates_preserve_flags_per_target() {
 fn border_side_updates_preserve_flags_inherited_from_a_style() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("styled"));
     let inherited = wordcraft_doc::props::Border { shadow: Some(true), frame: Some(false), ..wordcraft_doc::props::Border::single(0.5) };
-    let mut para = wordcraft_doc::props::ParaProps::default();
-    para.borders = Some(wordcraft_doc::props::Borders { top: Some(inherited), ..Default::default() });
+    let para = wordcraft_doc::props::ParaProps {
+        borders: Some(wordcraft_doc::props::Borders { top: Some(inherited), ..Default::default() }),
+        ..Default::default()
+    };
     Arc::make_mut(&mut s.doc.styles).upsert(wordcraft_doc::Style { id: "Bordered".into(), name: "Bordered".into(), para, ..Default::default() });
     s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.style = Some("Bordered".into());
 

@@ -12880,7 +12880,7 @@ fn bottom_border_reserves_gap() {
         for style in [BorderStyle::None, BorderStyle::Single] {
             let mut d = Document::from_text("First\nNext");
             d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.borders =
-                Some(Borders { bottom: Some(Border { style, width: 0.5, space: 2.0, color: None }), ..Default::default() });
+                Some(Borders { bottom: Some(Border { style, width: 0.5, space: 2.0, color: None, ..Default::default() }), ..Default::default() });
             if let Some(kind) = part {
                 let id = d.add_part(kind, d.body.clone());
                 d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Body", Default::default()))];
@@ -12926,7 +12926,10 @@ fn bottom_border_keeps_chain() {
                 p.props.line_spacing = Some(LineSpacing::Exactly(LINE_HEIGHT));
                 p.props.keep_next = Some(block == 1 || block == 2);
                 if block == bordered {
-                    p.props.borders = Some(Borders { bottom: Some(Border { style, width: 0.5, space: 2.0, color: None }), ..Default::default() });
+                    p.props.borders = Some(Borders {
+                        bottom: Some(Border { style, width: 0.5, space: 2.0, color: None, ..Default::default() }),
+                        ..Default::default()
+                    });
                 }
             }
             let laid = lay(&d);
@@ -12957,8 +12960,10 @@ fn border_break_keeps_preflight() {
         p.props.line_spacing = Some(LineSpacing::Exactly(LINE_HEIGHT));
         p.props.keep_lines = Some(true);
         p.props.keep_next = Some(false);
-        p.props.borders =
-            Some(Borders { bottom: Some(Border { style: BorderStyle::Single, width: 1.0, space: BORDER_GAP, color: None }), ..Default::default() });
+        p.props.borders = Some(Borders {
+            bottom: Some(Border { style: BorderStyle::Single, width: 1.0, space: BORDER_GAP, color: None, ..Default::default() }),
+            ..Default::default()
+        });
         p
     };
     let fitting = format!("One{PAGE_BREAK}");
