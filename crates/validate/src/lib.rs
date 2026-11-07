@@ -1576,7 +1576,7 @@ fn read_comments_ids(entry: &package::Entry, cap: usize, acc: &mut Acc) -> Optio
     }
     let (ids, capped) = parsed?;
     if capped {
-        acc.note(format!("{name} exceeded the {cap}-entry budget; later durableIds were not recorded"));
+        acc.note(format!("{name} exceeded the {cap}-entry budget; later paraIds were not recorded"));
         acc.set_incomplete();
     }
     Some((entry.name.clone(), ids))
@@ -1865,6 +1865,7 @@ mod budget_tests {
     }
 
     #[test]
+    /// A main part over the per-part byte budget is unreadable content: the verdict is INCOMPLETE, never a manufactured verdict on a part that was not read.
     fn oversized_main_part_is_incomplete() {
         let zip = tiny_zip(&[
             ("[Content_Types].xml", content_types()),
@@ -1880,6 +1881,7 @@ mod budget_tests {
     }
 
     #[test]
+    /// A central directory longer than the entry cap truncates the raw duplicate scan, so the run is INCOMPLETE rather than a duplicate-clean PASS.
     fn entry_cap_truncation_is_incomplete() {
         let zip = minimal_zip();
         let mut acc = Acc::with_limits(Limits { entries: 3, ..Limits::default() });
@@ -1889,6 +1891,7 @@ mod budget_tests {
     }
 
     #[test]
+    /// Input over the total byte budget is INCOMPLETE.
     fn input_over_the_byte_budget_is_incomplete() {
         let report = validate_bytes_limited(b"definitely not a zip", Limits { input_bytes: 4, ..Limits::default() });
         assert_eq!(report.verdict, Verdict::Incomplete);
@@ -1896,6 +1899,7 @@ mod budget_tests {
     }
 
     #[test]
+    /// A part nested past the depth limit stops the scan and marks the run INCOMPLETE instead of recursing without bound.
     fn deeply_nested_part_is_incomplete_without_hanging() {
         let mut xml = format!(r#"<w:document xmlns:w="{}">"#, NS_W);
         xml.push_str(&"<w:p>".repeat(2000));
@@ -1910,6 +1914,7 @@ mod budget_tests {
     }
 
     #[test]
+    /// A part with more elements than the event budget stops the scan and marks the run INCOMPLETE.
     fn extreme_element_count_stops_within_budget() {
         let xml = format!(r#"<w:document xmlns:w="{}">{}</w:document>"#, NS_W, "<w:p/>".repeat(10_000));
         let mut acc = Acc::with_limits(Limits { events: 1000, ..Limits::default() });
@@ -2065,6 +2070,7 @@ mod budget_tests {
     }
 
     #[test]
+    /// Mutation: cutting the pooled fact cap so a dangling comment reference is dropped flips the clean verdict to INCOMPLETE (undropped, the same package FAILs).
     fn dropped_dangling_comment_reference_is_incomplete() {
         let mut refs = String::new();
         for _ in 0..3 {
@@ -2092,6 +2098,7 @@ mod budget_tests {
     }
 
     #[test]
+    /// Mutation: the same dropped-fact flip for a dangling style reference.
     fn dropped_dangling_style_reference_is_incomplete() {
         let mut body = String::new();
         for _ in 0..3 {
@@ -2121,6 +2128,7 @@ mod budget_tests {
     }
 
     #[test]
+    /// A supporting part whose own parser exhausts the event budget marks the run INCOMPLETE.
     fn auxiliary_parser_event_budget_exhaustion_is_incomplete() {
         // A numbering part named without the `.xml` suffix is not read by the main scan, so only
         // the auxiliary numbering parser can hit the event budget (H1).
@@ -2151,6 +2159,7 @@ mod budget_tests {
     }
 
     #[test]
+    /// Move range-start ids past the fact budget exhaust the pool and mark the run INCOMPLETE.
     fn repeated_move_start_ids_exhaust_the_move_budget() {
         let mut body = String::new();
         for _ in 0..8 {
@@ -2173,6 +2182,7 @@ mod budget_tests {
     }
 
     #[test]
+    /// A supporting part nested past the depth limit fails its parse outright, so dependent absence-judging checks skip rather than report.
     fn auxiliary_parser_depth_exhaustion_is_terminal() {
         // J1: a low-depth auxiliary parser must stop at the crossing. A duplicate Override placed
         // AFTER the crossing would fire CT-DUP-OVERRIDE if the content-type parser kept reading;
@@ -2206,6 +2216,7 @@ mod budget_tests {
     }
 
     #[test]
+    /// A .rels part nested past the depth limit fails its parse outright, so reference checks against it skip.
     fn deep_rels_depth_exhaustion_is_terminal() {
         // J1: a deeply nested .rels part must stop at the depth crossing, so a dangling
         // relationship placed AFTER it is never recorded — INCOMPLETE, a depth-budget note naming
@@ -2237,6 +2248,7 @@ mod budget_tests {
     }
 
     #[test]
+    /// When the footnote fact budget cuts off collection, a coverage note records that later notes went unrecorded.
     fn note_budget_exhaustion_leaves_a_marker() {
         let comments = format!(
             r#"<?xml version="1.0"?><w:comments xmlns:w="{}"><w:comment w:id="1"><w:p/></w:comment><w:comment w:id="2"><w:p/></w:comment><w:comment w:id="3"><w:p/></w:comment></w:comments>"#,
@@ -2260,6 +2272,7 @@ mod budget_tests {
     }
 
     #[test]
+    /// Pooled story-fact exhaustion produces one coverage note naming the first part whose facts were cut.
     fn pooled_story_fact_exhaustion_names_the_first_affected_part() {
         // K2: the pooled story-fact budget is aggregate across parts. Two comments parts each hold
         // fewer than the cap, so neither hits its own per-part budget; only the pooled budget is
@@ -2301,6 +2314,7 @@ mod budget_tests {
     }
 
     #[test]
+    /// Pooled relationship-reference exhaustion produces one coverage note naming the first part whose references were cut.
     fn pooled_relationship_reference_exhaustion_names_the_first_affected_part() {
         // K2: the pooled relationship-reference budget is aggregate across parts. The main part's
         // two refs resolve; adding the header's two takes the pool past the cap, so the note must
