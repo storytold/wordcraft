@@ -3,7 +3,7 @@ use super::ctx::{Ctx, with_pct_base};
 use super::floats::{WrapArea, align_in, body_wraps};
 use super::flow::again;
 use super::headers::{header_items_cap, header_table_areas, placed_cost};
-use super::notes::table_notes;
+use super::notes::{NoteBox, keep_table_notes, table_note_ids, table_notes};
 use super::page::{PageBuilder, PageFrame, page_frame};
 use super::placed::Placed;
 use super::{Anchor, Arc, HeightRule, Path, Rect, StoryRef, TableFloat, ViewMode, WrapText, table};
@@ -105,6 +105,63 @@ fn row_can_start(row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, p
         return false;
     }
     table::split_row_keeping_cells(laid, room).is_some()
+}
+
+/// The row and all earlier columns must leave the new notes above the actual page footer.
+fn row_fits_notes(pb: &PageBuilder, row: &table::RowLayout, notes: &[NoteBox], continuation: bool) -> bool {
+    let sep = if pb.notes.is_empty() && !notes.is_empty() { pb.seps.sep_h(false) } else { 0.0 };
+    let height: f32 = notes.iter().map(|n| n.h).sum();
+    let extra = if continuation {
+        let Some(last) = notes.last() else { return false };
+        height - last.h + last.first_piece() + pb.seps.notice_h()
+    } else {
+        height
+    };
+    let limit = pb.bottom - sep - extra;
+    let bottom = pb.y + row.height + row.edge;
+    bottom <= limit + 0.01 && (notes.is_empty() || pb.body_floor().max(bottom) <= limit + 0.01)
+}
+
+/// Split against the notes of the retained lines, not notes whose references move on.
+fn split_noted_row(
+    pb: &PageBuilder,
+    row: &table::RowLayout,
+    notes: &[NoteBox],
+    whole_cells: bool,
+) -> Option<(table::RowLayout, table::RowLayout)> {
+    let split = |cut| if whole_cells { table::split_row_keeping_cells(row, cut) } else { table::split_row(row, cut) };
+    let subset = |part: &table::RowLayout| {
+        let ids = table_note_ids(&part.items);
+        notes.iter().filter(|n| ids.contains(&n.id)).cloned().collect::<Vec<_>>()
+    };
+    let room = pb.bottom - pb.y;
+    if let Some((a, b)) = split(room)
+        && row_fits_notes(pb, &a, &subset(&a), false)
+    {
+        return Some((a, b));
+    }
+    if notes.is_empty() {
+        return None;
+    }
+    // Fitting prefixes only gain reference lines as they grow. A bounded search avoids
+    // repeatedly moving a note-bearing row or scanning every possible cut of a tall cell.
+    let (mut lo, mut hi) = (0.0, room.min(row.height - 0.02));
+    let mut best = None;
+    for _ in 0..24 {
+        if hi - lo <= 0.02 {
+            break;
+        }
+        let cut = (lo + hi) * 0.5;
+        match split(cut) {
+            None => lo = cut,
+            Some((a, b)) if row_fits_notes(pb, &a, &subset(&a), false) => {
+                lo = cut;
+                best = Some((a, b));
+            }
+            Some(_) => hi = cut,
+        }
+    }
+    best
 }
 
 pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, block: usize, body_top: f32) {
@@ -209,6 +266,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         // Each pass places the part of the row that fits, then breaks the page.
         for _ in 0..1000 {
             let cur = rest.as_ref().unwrap_or(row);
+            let notes = table_notes(ctx, pb, &cur.items);
             // A fitting kept row follows the next row when that row cannot start below it.
             // Move only the prefix's start; an oversized follower cannot separate its kept rows.
             let defer_kept = pb.y + cur.height <= pb.bottom + 0.01
@@ -226,7 +284,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                     height <= page_height + 0.01 && !row_can_start(next, laid, pb.bottom - pb.y - height, page_height)
                 });
             // A row another row follows needs room for the border below it too (measured in Word).
-            if pb.y + cur.height + cur.edge <= pb.bottom + 0.01 && !defer_kept {
+            if row_fits_notes(pb, cur, &notes, false) && !defer_kept {
                 break;
             }
             // An at-least row with less room than its minimum moves on whole, unless nothing
@@ -238,15 +296,18 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
             let moves_on = first_part && short_of_min(ri, room);
             let split = match (splittable && !moves_on && !defer_kept, first_part) {
                 (false, _) => None,
-                (true, true) => table::split_row_keeping_cells(cur, room),
-                (true, false) => table::split_row(cur, room),
+                (true, first) => split_noted_row(pb, cur, &notes, first),
             };
             match split {
                 Some((a, b)) => {
+                    let notes = table_notes(ctx, pb, &a.items);
                     place(pb, &a);
-                    table_notes(ctx, pb, &a.items);
+                    keep_table_notes(pb, notes);
                     rest = Some(b);
                 }
+                // An indivisible reference line may keep the first piece of a long note;
+                // flush_notes carries the remainder, just as it does for body paragraphs.
+                None if !defer_kept && row_fits_notes(pb, cur, &notes, true) => break,
                 // Like Word, a row that does not fit on an empty page, or under the header rows
                 // repeated there, is placed anyway and runs into the bottom margin.
                 None if pb.at_top() || fresh => break,
@@ -263,8 +324,9 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
             fresh = true;
         }
         let last = rest.as_ref().unwrap_or(row);
+        let notes = table_notes(ctx, pb, &last.items);
         place(pb, last);
-        table_notes(ctx, pb, &last.items);
+        keep_table_notes(pb, notes);
     }
     // Its own space below (ODT).
     if let Some(s) = t.props.space_after.filter(|s| s.is_finite() && *s > 0.0) {

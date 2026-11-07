@@ -382,29 +382,43 @@ pub(crate) fn para_notes(doc: &Document, p: &Paragraph, pl: &ParaLayout) -> Vec<
     notes
 }
 
-/// Footnotes referenced in the cell lines of a placed table row (or part of one) go to the
-/// bottom of the page, like those of body paragraphs; notes that don't fit there continue on
-/// the next page (see [`PageBuilder::flush_notes`]).
-pub(crate) fn table_notes(ctx: &mut Ctx, pb: &mut PageBuilder, items: &[Placed]) {
-    if pb.web {
-        return;
-    }
+/// Note IDs actually referenced in these cell lines, in table reading order.
+pub(crate) fn table_note_ids(items: &[Placed]) -> Vec<u32> {
     let mut ids: Vec<u32> = Vec::new();
     for it in items {
         let Placed::Lines { story: StoryRef::Body, para, l0, l1, .. } = it else { continue };
         let (Some(a), Some(b)) = (para.lines.get(*l0), para.lines.get(l1.saturating_sub(1))) else { continue };
         for (ci, id) in &para.notes {
-            if *ci >= a.c0 && *ci < b.c1 && !ids.contains(id) && !pb.notes.iter().any(|n| n.id == *id) {
+            if *ci >= a.c0 && *ci < b.c1 && !ids.contains(id) {
                 ids.push(*id);
             }
         }
     }
-    let before = pb.notes_h();
-    for id in ids {
+    ids
+}
+
+/// Measure new table notes before fitting the row; a rejected trial must not reserve them.
+pub(crate) fn table_notes(ctx: &mut Ctx, pb: &PageBuilder, items: &[Placed]) -> Vec<NoteBox> {
+    if pb.web {
+        return Vec::new();
+    }
+    let mut notes = Vec::new();
+    for id in table_note_ids(items).into_iter().filter(|id| !pb.notes.iter().any(|n| n.id == *id)) {
         let Some(part) = ctx.doc.parts.get(&id).filter(|p| p.kind == wordcraft_doc::PartKind::Footnote) else { continue };
         let blocks = part.blocks.clone();
         let BoxLayout { items, height: h, .. } = layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, pb.sect.text_width(), 0, None));
-        pb.notes.push(NoteBox { id, items, h, cont: false });
+        notes.push(NoteBox { id, items, h, cont: false });
     }
+    notes
+}
+
+/// Commit only the notes whose reference lines were placed, leaving room for continuation.
+pub(crate) fn keep_table_notes(pb: &mut PageBuilder, notes: Vec<NoteBox>) {
+    let before = pb.notes_h();
+    pb.notes.extend(notes);
     pb.bottom -= pb.notes_h() - before;
+    if !pb.notes.is_empty() && pb.y > pb.bottom + 0.01 {
+        // As for body paragraphs, an overlong note takes the remaining space, then continues.
+        pb.bottom = pb.body_floor().max(pb.y).min(pb.orig_bottom);
+    }
 }
