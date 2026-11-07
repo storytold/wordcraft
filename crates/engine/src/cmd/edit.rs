@@ -276,7 +276,8 @@ fn spike(s: &mut Session, _: &Value) -> CmdResult {
 /// Ctrl+Shift+F3: insert everything the Spike collected, in order, and empty it.
 fn insert_spike(s: &mut Session, _: &Value) -> CmdResult {
     let frag = s.building_blocks.get(SPIKE).cloned().ok_or_else(|| CmdError::Disabled("edit.insertSpike: the Spike is empty".into()))?;
-    super::paste::insert(s, frag)?;
+    // Inserting the Spike is not a paste: no Paste Options are offered for it.
+    super::paste::insert_plain(s, frag)?;
     s.building_blocks.remove(SPIKE);
     sel_result(s)
 }

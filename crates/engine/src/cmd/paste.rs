@@ -171,6 +171,9 @@ fn import_html(html: &str) -> Document {
             }
         });
     }
+    // A browser's computed left alignment is not a choice, for Paste Special › HTML as for a plain
+    // paste: both read the HTML here.
+    drop_computed_left(&mut doc);
     doc
 }
 
@@ -250,10 +253,7 @@ pub fn rich_fragment(s: &mut Session, v: &Value) -> Option<Fragment> {
     let fits = |k: &str| p::str(v, k).filter(|t| !t.trim().is_empty() && t.len() <= MAX_PASTE_BYTES);
     let doc = fits("html").map(import_html);
     let doc = match doc.filter(has_content) {
-        Some(mut d) => {
-            drop_computed_left(&mut d);
-            d
-        }
+        Some(d) => d,
         None => {
             let rtf = fits("rtf").filter(|t| looks_like_rtf(t))?;
             wordcraft_formats::rtf::import(rtf.as_bytes()).ok().filter(has_content)?
@@ -879,6 +879,27 @@ mod tests {
         s.run("edit.paste", &json!({"text": "First\nSecond", "html": html})).unwrap();
         let aligns: Vec<_> = s.doc.body.iter().filter_map(|b| if let Block::Para(p) = &**b { Some(p.props.align) } else { None }).collect();
         assert!(aligns.iter().all(|a| *a == Some(wordcraft_doc::Align::Center)), "{aligns:?}");
+    }
+
+    /// Paste Special › HTML drops a browser's computed left alignment as a plain paste does, and
+    /// inserting the Spike is not a paste, so it offers no Paste Options.
+    #[test]
+    fn paste_special_html_drops_computed_left_and_the_spike_is_no_paste() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("para.alignCenter", &json!({})).unwrap();
+        let html = "<p style=\"text-align:left\">First</p><p style=\"text-align:left\">Second</p>";
+        s.run("edit.pasteSpecial", &json!({"as": "html", "html": html})).unwrap();
+        let aligns: Vec<_> = s.doc.body.iter().filter_map(|b| if let Block::Para(p) = &**b { Some(p.props.align) } else { None }).collect();
+        assert!(aligns.iter().all(|a| *a == Some(wordcraft_doc::Align::Center)), "{aligns:?}");
+
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("text.insert", &json!({"text": "Spiked"})).unwrap();
+        s.run("select.all", &json!({})).unwrap();
+        // Formatted, so that as a paste it would have a choice to offer.
+        s.run("format.bold", &json!({"value": true})).unwrap();
+        s.run("edit.spike", &json!({})).unwrap();
+        s.run("edit.insertSpike", &json!({})).unwrap();
+        assert!(s.last_paste.is_none() && paste_options(&s).is_empty(), "the Spike is not a paste");
     }
 
     /// The copy of the pasted content that Paste Options keeps is freed when the offer ends: the
