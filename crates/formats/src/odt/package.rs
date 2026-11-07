@@ -1297,7 +1297,13 @@ fn variables(doc: &Document) -> std::collections::BTreeSet<String> {
 /// each page layout (§17.3 `style:background-image`, first in `style:page-layout-properties`),
 /// the picture written into the package by `w`: tiled, stretched, or centred at its own size
 /// (§20.249 `style:repeat`).
+///
+/// When a header contains a picture, a pre-existing legacy background image is suppressed
+/// so it doesn't survive as an orphan or overlap with the header's graphic (#5803).
 fn page_background(doc: &Document, w: &mut Writer, styles: String) -> String {
+    if has_header_picture(doc) {
+        return styles;
+    }
     let Some(pic) = doc.settings.page_picture.as_ref() else { return styles };
     let Some(data) = doc.media.get(&pic.media) else { return styles };
     let Some(ext) = model::sniff_image(data) else { return styles };
@@ -1333,6 +1339,43 @@ fn page_background(doc: &Document, w: &mut Writer, styles: String) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// Whether any header in `doc` contains a picture.
+fn has_header_picture(doc: &Document) -> bool {
+    let header_ids: std::collections::HashSet<u32> =
+        doc.sections().iter().flat_map(|(_, sec)| [sec.headers.default, sec.headers.first, sec.headers.even].into_iter().flatten()).collect();
+    for (id, part) in &doc.parts {
+        if (matches!(part.kind, wordcraft_doc::PartKind::Header) || header_ids.contains(id)) && blocks_have_picture(&part.blocks, 0) {
+            return true;
+        }
+    }
+    false
+}
+
+fn blocks_have_picture(blocks: &[std::sync::Arc<wordcraft_doc::Block>], depth: usize) -> bool {
+    if depth > 16 {
+        return false;
+    }
+    blocks.iter().any(|b| match &**b {
+        wordcraft_doc::Block::Para(p) => para_has_picture(p, depth),
+        wordcraft_doc::Block::Table(t) => t.rows.iter().any(|r| r.cells.iter().any(|c| blocks_have_picture(&c.blocks, depth + 1))),
+    })
+}
+
+fn para_has_picture(p: &wordcraft_doc::Paragraph, depth: usize) -> bool {
+    p.objects.iter().any(|o| object_has_picture(o, depth))
+}
+
+fn object_has_picture(o: &wordcraft_doc::InlineObject, depth: usize) -> bool {
+    if depth > 16 {
+        return false;
+    }
+    match o {
+        wordcraft_doc::InlineObject::Image { .. } => true,
+        wordcraft_doc::InlineObject::Group { children, .. } => children.iter().any(|c| object_has_picture(&c.obj, depth + 1)),
+        _ => false,
+    }
 }
 
 /// `xml` (content.xml or styles.xml) with each font family it uses declared once (§16.21

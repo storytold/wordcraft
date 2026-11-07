@@ -233,3 +233,78 @@ fn a_page_borders_padding_keeps_the_text_where_it_was() {
     }
     assert_eq!(s.page_borders.and_then(|b| b.left).map(|b| (b.width, b.space)), Some((3.0, 24.0)));
 }
+
+#[test]
+fn header_picture_removes_orphaned_legacy_background_image_on_odt_export() {
+    // #5803: an ODT document with a pre-existing page background picture (legacy
+    // <style:background-image>) shouldn't retain that background picture as an orphan
+    // when a header picture is inserted/present.
+    let png = {
+        let img = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let mut d = Document::new();
+    let bg_media = d.add_media(png.clone(), "png");
+    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: bg_media, fill_type: "frame".into(), title: String::new() });
+    let header_media = d.add_media(png.clone(), "png");
+    let mut hp = wordcraft_doc::Paragraph::new();
+    hp.text = format!("{}", wordcraft_doc::para::OBJ);
+    hp.objects.push(wordcraft_doc::para::InlineObject::Image {
+        media: header_media,
+        w: 595.0,
+        h: 842.0,
+        alt: "Header picture".into(),
+        float: wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::BehindText, ..Default::default() },
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    });
+    hp.runs = vec![wordcraft_doc::para::Run { len: hp.text.len(), props: Default::default() }];
+    d.parts.insert(
+        1,
+        wordcraft_doc::Part { kind: wordcraft_doc::PartKind::Header, blocks: vec![wordcraft_doc::para_block(hp)], body: Default::default() },
+    );
+    d.last_section.headers.default = Some(1);
+
+    let saved = export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(!s.contains("style:background-image"), "legacy background-image must not be written when header picture is present: {s}");
+    assert!(!s.contains("Pictures/page-background.png"), "orphan page-background image must not be referenced: {s}");
+
+    // Also verify that the package does not contain Pictures/page-background.png
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
+    let names: Vec<String> = (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().to_string()).collect();
+    assert!(!names.iter().any(|n| n.contains("page-background")), "page-background file must not exist in package: {names:?}");
+
+    // Reading the saved ODT back has no page_picture
+    let back = import(&saved).unwrap();
+    assert!(back.settings.page_picture.is_none(), "saved ODT must not import an orphaned page picture");
+}
+
+#[test]
+fn text_header_keeps_page_background_picture() {
+    let png = {
+        let img = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let mut d = Document::new();
+    let bg_media = d.add_media(png, "png");
+    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: bg_media, fill_type: "frame".into(), title: String::new() });
+    let mut hp = wordcraft_doc::Paragraph::new();
+    hp.text = "Header text".into();
+    hp.runs = vec![wordcraft_doc::para::Run { len: hp.text.len(), props: Default::default() }];
+    d.parts.insert(
+        1,
+        wordcraft_doc::Part { kind: wordcraft_doc::PartKind::Header, blocks: vec![wordcraft_doc::para_block(hp)], body: Default::default() },
+    );
+    d.last_section.headers.default = Some(1);
+
+    let saved = export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(s.contains("style:background-image"), "page background must be written when header has no picture: {s}");
+    assert!(s.contains("Pictures/page-background.png"));
+}
