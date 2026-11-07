@@ -111,7 +111,8 @@ impl Body<'_> {
             // In line with no stated size, a picture comes at its own: fitted to the text, as
             // other formats' pictures are. A stated size is the file's.
             let room = self.sec.text_width();
-            let fit = (w.is_none() && h.is_none() && float.is_none() && room.is_finite() && room > 0.0).then_some(room);
+            let says = |v: Option<f32>| v.is_some_and(|v| v.is_finite() && v > 0.0);
+            let fit = (!says(w) && !says(h) && float.is_none() && room.is_finite() && room > 0.0).then_some(room);
             let inline = match (boxed, eq) {
                 (Some(blocks), _) => {
                     let mut look = std::mem::take(&mut self.frame_look);
