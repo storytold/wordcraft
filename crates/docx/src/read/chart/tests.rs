@@ -598,6 +598,7 @@ fn three() -> Vec<String> {
     vec![bser(0, "FF0000", &["1", "2", "3"], &["2", "2", "2"], Some(&["1", "4", "16"]))]
 }
 
+/// The diameter of the largest red bubble, if any.
 fn largest(items: &[GraphicItem]) -> Option<f32> {
     bubbles(items, RED).iter().map(|b| b.2).reduce(f32::max)
 }

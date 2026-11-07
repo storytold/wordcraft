@@ -121,6 +121,8 @@ pub(super) struct Axes {
 }
 
 impl Axes {
+    /// The value scale of `c` and, for scatter and bubble charts, its x scale, with their ticks and
+    /// tick texts.
     pub(super) fn of(c: &Chart) -> Axes {
         let (dlo, dhi) = extent(c);
         let (vmin, vmax) = if c.grouping == Grouping::Percent { (Some(0.0), Some(1.0)) } else { (c.val.min, c.val.max) };

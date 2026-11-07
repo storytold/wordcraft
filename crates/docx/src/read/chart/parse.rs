@@ -4,6 +4,9 @@ use super::plot::label;
 use super::{Chart, El, FONT, LINE_W, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, fill_colour, int, measure, slot};
 
 impl Chart {
+    /// The chart of a `c:chartSpace`, read from the cached data of the plot area's first
+    /// supported chart type. `None` when there's no such type or it has no series (the caller then
+    /// draws a placeholder, or nothing).
     pub(super) fn parse(space: &El, theme: &[Rgb]) -> Option<Chart> {
         let chart = space.child("c:chart")?;
         let plot = chart.child("c:plotArea")?;
@@ -214,6 +217,9 @@ pub(super) fn text_size(space: &El) -> f32 {
 }
 
 impl Series {
+    /// One `c:ser`: its name, colours, line, values (`c:val`; for scatter and bubble charts
+    /// `c:yVal`, `c:xVal` and `c:bubbleSize`), point colours and outlines from `c:dPt`, and whether
+    /// it shows data labels. At most `cap` points.
     fn parse(ser: &El, scatter: bool, theme: &[Rgb], cap: usize) -> Series {
         let name = ser.child("c:tx").and_then(|t| t.find("c:v")).map(|v| label(v.text().trim())).unwrap_or_default();
         let sp = ser.child("c:spPr");

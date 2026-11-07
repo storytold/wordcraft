@@ -22,6 +22,8 @@ pub(super) enum Kind {
 }
 
 impl Kind {
+    /// The kind of a plot-area chart type element (`c:barChart`, `c:bubbleChart`…); `None` for
+    /// types WordCraft doesn't draw.
     pub(super) fn of(name: &str) -> Option<Kind> {
         Some(match name {
             "c:barChart" => Kind::Bar,
