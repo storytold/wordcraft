@@ -7,7 +7,8 @@ use wordcraft_layout::Placed;
 /// A synthetic two-column table with a note in its thirteenth row and a real footer.
 fn fixture(columns: u32, distance: f32, footer_lines: usize, note: &str) -> Session {
     let mut d = Document::new();
-    let footer = d.add_part(PartKind::Footer, (0..footer_lines).map(|_| para_block(Paragraph::with_text("An ordinary footer.", Default::default()))).collect());
+    let footer = d
+        .add_part(PartKind::Footer, (0..footer_lines).map(|_| para_block(Paragraph::with_text("An ordinary footer.", Default::default()))).collect());
     let s = &mut d.last_section;
     (s.page_w, s.page_h) = (595.3, 841.9);
     (s.margin_top, s.margin_bottom, s.margin_left, s.margin_right) = (28.35, 28.35, 28.35, 28.35);
@@ -34,17 +35,25 @@ fn assert_clear(s: &mut Session) {
     let l = s.layout();
     let mut pieces = 0;
     for (pi, p) in l.pages.iter().enumerate() {
-        let footer = p.footer.iter().filter_map(|it| match it {
-            Placed::Lines { y, l0, l1, .. } if l1 > l0 => Some(*y),
-            _ => None,
-        }).fold(p.h, f32::min);
-        let body = p.items.iter().filter_map(|it| match it {
-            Placed::Lines { story: StoryRef::Body, y, para, l0, l1, .. } if l1 > l0 => {
-                let last = &para.lines[l1 - 1];
-                Some(y + last.top - para.lines[*l0].top + last.height)
-            }
-            _ => None,
-        }).fold(0.0, f32::max);
+        let footer = p
+            .footer
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Lines { y, l0, l1, .. } if l1 > l0 => Some(*y),
+                _ => None,
+            })
+            .fold(p.h, f32::min);
+        let body = p
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Lines { story: StoryRef::Body, y, para, l0, l1, .. } if l1 > l0 => {
+                    let last = &para.lines[l1 - 1];
+                    Some(y + last.top - para.lines[*l0].top + last.height)
+                }
+                _ => None,
+            })
+            .fold(0.0, f32::max);
         for it in &p.items {
             if let Placed::Lines { story: StoryRef::Part(id), y, para, l0, l1, .. } = it
                 && doc.parts.get(id).is_some_and(|part| part.kind == PartKind::Footnote)
@@ -69,9 +78,17 @@ fn long_table_notes_continue_above_multiline_footers() {
         assert_clear(&mut s);
         let doc = s.doc.clone();
         let l = s.layout();
-        let pages = l.pages.iter().filter(|p| p.items.iter().any(|it| matches!(it,
-            Placed::Lines { story: StoryRef::Part(id), .. } if doc.parts.get(id).is_some_and(|p| p.kind == PartKind::Footnote)
-        ))).count();
+        let pages = l
+            .pages
+            .iter()
+            .filter(|p| {
+                p.items.iter().any(|it| {
+                    matches!(it,
+                        Placed::Lines { story: StoryRef::Part(id), .. } if doc.parts.get(id).is_some_and(|p| p.kind == PartKind::Footnote)
+                    )
+                })
+            })
+            .count();
         assert!(pages > 1, "the overlong note must continue");
     }
 }
@@ -102,4 +119,30 @@ fn table_footnotes_stay_above_the_footer() {
         let mut s = fixture(2, distance, 1, "A short footnote.");
         assert_clear(&mut s);
     }
+}
+
+/// A note near the end of a split cell starts on its reference page, not on an earlier fragment.
+#[test]
+fn split_rows_reserve_only_the_notes_of_retained_lines() {
+    let mut s = fixture(2, 35.45, 1, "The later table note.");
+    s.run("caret.set", &json!({"pos": Pos { story: StoryRef::Body, path: Path(vec![0, 0, 0, 0]), off: 0 }})).unwrap();
+    s.run("text.insert", &json!({"text": "An ordinary long cell paragraph. ".repeat(180)})).unwrap();
+    let reference = s.sel.focus.clone();
+    let id = s.run("references.footnote", &json!({"text": "The split cell's note."})).unwrap()["id"].as_u64().unwrap() as u32;
+    assert_clear(&mut s);
+    let l = s.layout();
+    let reference_page = l.caret(&reference).unwrap().page;
+    let first_note_page = l
+        .pages
+        .iter()
+        .position(|p| {
+            p.items.iter().any(|it| {
+                matches!(it,
+                    Placed::Lines { story: StoryRef::Part(own), .. } if *own == id
+                )
+            })
+        })
+        .unwrap();
+    assert!(reference_page > 0, "the large cell must split before its reference");
+    assert_eq!(first_note_page, reference_page, "no note on a fragment without its reference");
 }
