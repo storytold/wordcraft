@@ -762,6 +762,7 @@ struct CanvasFinish<'a> {
     vruler: Option<Rect>,
 }
 
+/// Update scroll offset, scrollbar tip, and current viewed page state for the canvas frame.
 fn update_canvas_scroll_state(
     app: &mut WordApp,
     ui: &mut Ui,
@@ -785,6 +786,7 @@ fn update_canvas_scroll_state(
     });
     crate::ink::replay_bar(app, ui, out.inner_rect);
     app.canvas.scroll_max = (out.content_size - out.inner_rect.size()).max(egui::Vec2::ZERO);
+    scrollbar_track_paging(app, ui, out);
     if app.session.view.read_mode {
         let step = app.session.view.read_width * geo.scale + GAP;
         if step.is_finite() && step > 0.0 {
@@ -795,6 +797,69 @@ fn update_canvas_scroll_state(
     // The viewport barely moves between frames; the auto-scroll decides this frame's scroll before
     // the scroll area is built, so it reads last frame's viewport.
     app.canvas.viewport = Some(out.inner_rect);
+}
+
+/// Advance the vertical scroll by one screen when clicking in the track above or below the elevator (#5853).
+///
+/// In Word, clicking in the vertical scrollbar track above the elevator moves one screen up,
+/// and clicking below it moves one screen down. Sensed here over the track regions outside the
+/// elevator so egui does not jump the scroll offset to the clicked position.
+fn scrollbar_track_paging(app: &mut WordApp, ui: &mut Ui, out: &egui::scroll_area::ScrollAreaOutput<(egui::Response, Vec<Rect>)>) {
+    let scroll_id = out.id.with(1usize);
+    let dragging_bar = ui.ctx().is_being_dragged(scroll_id);
+    if app.session.view.read_mode || !out.inner_rect.is_finite() || !out.content_size.is_finite() || app.canvas.scroll_max.y <= 0.0 || dragging_bar {
+        return;
+    }
+    let step = out.inner_rect.height();
+    if !step.is_finite() || step <= 0.0 {
+        return;
+    }
+    let inner_rect = out.inner_rect;
+    let scroll_style = ui.spacing().scroll;
+    let full_width = scroll_style.bar_width;
+    let outer_margin = scroll_style.bar_outer_margin;
+    let outer_edge =
+        (inner_rect.max.x + if scroll_style.floating { 0.0 } else { scroll_style.allocated_width() }).min(ui.clip_rect().max.x) - outer_margin;
+    let bar_left = outer_edge - full_width;
+    let bar_right = outer_edge;
+    if !bar_left.is_finite() || !bar_right.is_finite() || bar_right <= bar_left {
+        return;
+    }
+    let handle_min_length = ui.spacing().scroll.handle_min_length;
+    let content_h = out.content_size.y;
+    let offset_y = app.canvas.scroll_offset.y;
+    let max_offset_y = app.canvas.scroll_max.y;
+
+    let from_content = |content: f32| egui::remap_clamp(content, 0.0..=content_h, inner_rect.min.y..=inner_rect.max.y);
+    let handle_size = (from_content(offset_y + step) - from_content(offset_y)).max(handle_min_length);
+    let handle_start = if max_offset_y > 0.0 {
+        egui::remap_clamp(offset_y, 0.0..=max_offset_y, inner_rect.min.y..=(inner_rect.max.y - handle_size))
+    } else {
+        inner_rect.min.y
+    };
+    let handle_end = handle_start + handle_size;
+
+    let track_above = Rect::from_min_max(pos2(bar_left, inner_rect.min.y), pos2(bar_right, handle_start));
+    if track_above.height() > 0.0 {
+        let resp = ui.interact(track_above, out.id.with("track_above"), Sense::click_and_drag());
+        if resp.clicked() && resp.interact_pointer_pos().is_some_and(|p| track_above.contains(p)) {
+            let target_y = (offset_y - step).max(0.0);
+            app.canvas.scroll_request = Some(vec2(app.canvas.scroll_offset.x, target_y));
+            app.canvas.scroll_offset.y = target_y;
+            ui.ctx().request_repaint();
+        }
+    }
+
+    let track_below = Rect::from_min_max(pos2(bar_left, handle_end), pos2(bar_right, inner_rect.max.y));
+    if track_below.height() > 0.0 {
+        let resp = ui.interact(track_below, out.id.with("track_below"), Sense::click_and_drag());
+        if resp.clicked() && resp.interact_pointer_pos().is_some_and(|p| track_below.contains(p)) {
+            let target_y = (offset_y + step).min(max_offset_y);
+            app.canvas.scroll_request = Some(vec2(app.canvas.scroll_offset.x, target_y));
+            app.canvas.scroll_offset.y = target_y;
+            ui.ctx().request_repaint();
+        }
+    }
 }
 
 fn update_canvas_focus(app: &mut WordApp, ui: &mut Ui, resp: &egui::Response, ime_geometry: Option<(Rect, Rect)>, ime_interrupt: bool) {
