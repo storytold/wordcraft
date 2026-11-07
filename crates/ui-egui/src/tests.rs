@@ -5719,6 +5719,23 @@ fn auto_interface_size_is_capped_to_what_fits_the_screen() {
     assert_eq!(InterfaceSize::from_percent(300.0).unwrap().drawn_percent_within(3.0, limit), 300);
 }
 
+/// #4030: the zoom is shared, so the smallest screen of all the open windows caps Auto, and a
+/// monitor size made with the zoom before a change still gives the same physical screen.
+#[test]
+fn auto_cap_follows_the_smallest_window_screen_and_the_zoom_of_its_points() {
+    use theme::auto_scale_limit_over;
+    let small = auto_scale_limit_over([((1366.0, 768.0), 1.0)], 1.0);
+    let large = auto_scale_limit_over([((3840.0, 2160.0), 1.0)], 1.0);
+    assert!(small < large);
+    assert_eq!(auto_scale_limit_over([((3840.0, 2160.0), 1.0), ((1366.0, 768.0), 1.0)], 1.0), small);
+    // A 1366x768 panel at native scale 3: the points are 455x256 at zoom 1, 683x384 at zoom 1.5.
+    // The pixels, and so the cap, don't depend on which zoom made the points.
+    let a = auto_scale_limit_over([((1366.0 / 3.0, 768.0 / 3.0), 3.0)], 1.0);
+    let b = auto_scale_limit_over([((1366.0 / 4.5, 768.0 / 4.5), 3.0)], 1.5);
+    assert!((a - b).abs() < 1e-4 && (a - small).abs() < 1e-4, "{a} {b} {small}");
+    assert_eq!(auto_scale_limit_over([], 1.0), f32::INFINITY);
+}
+
 /// #4030: the cap shows in `ui.interfaceSize` and is never saved; Ctrl+Shift+0 returns to Auto
 /// while Ctrl+Alt+0 (AltGr+0, which types `}` on a German layout) neither resets nor swallows it.
 #[cfg(not(target_os = "macos"))]
@@ -5754,6 +5771,17 @@ fn reset_interface_size_shortcut_and_capped_report() {
     h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: None, pressed: true, repeat: false, modifiers: chord });
     h.step();
     assert!(h.state().ui.interface_size.is_auto(), "Ctrl+Shift+0 returns to Auto");
+    // Where Shift changes the zero key's character (`=` on a German layout) egui-winit reports
+    // that character as the key and the zero only as the physical key.
+    h.state_mut().run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    h.event(egui::Event::Key { key: egui::Key::Equals, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert!(h.state().ui.interface_size.is_auto(), "Ctrl+Shift+0 returns to Auto where Shift types =");
+    h.state_mut().run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    let altgr_shift = egui::Modifiers { alt: true, ctrl: true, shift: true, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Equals, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: altgr_shift });
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "AltGr+Shift+0 doesn't reset");
 }
 
 /// #115: System follows the OS appearance (light when unknown); the manual choices ignore it.

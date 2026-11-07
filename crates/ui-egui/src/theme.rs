@@ -156,6 +156,13 @@ pub fn auto_scale_limit(screen_px: Option<(f32, f32)>) -> f32 {
         .map_or(f32::INFINITY, |(w, h)| (w / AUTO_MIN_POINTS.0).min(h / AUTO_MIN_POINTS.1).max(1.0))
 }
 
+/// [`auto_scale_limit`] for the smallest of several windows' screens. Each is a monitor size in
+/// points and the window's native scale; `zoom` is the zoom factor those points were made with, so
+/// the size in pixels is the three multiplied. Unlimited when none is known.
+pub fn auto_scale_limit_over(monitors: impl IntoIterator<Item = ((f32, f32), f32)>, zoom: f32) -> f32 {
+    monitors.into_iter().map(|((w, h), native)| auto_scale_limit(Some((w * zoom * native, h * zoom * native)))).fold(f32::INFINITY, f32::min)
+}
+
 /// The display's scale, or 1.0 when egui doesn't know it (or reports nonsense).
 pub fn usable_scale(native: f32) -> f32 {
     if native.is_finite() && native > 0.0 { native } else { 1.0 }

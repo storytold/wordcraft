@@ -439,6 +439,23 @@ const QUIT: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers
 /// Ctrl+Alt+0, which is AltGr+0 on some layouts and types a character there (#3424).
 const RESET_INTERFACE_SIZE: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT), egui::Key::Num0);
+
+/// Consume Ctrl+Shift+0 (⌘⇧0), also where Shift changes the zero key's logical character: on a
+/// German layout Shift+0 types `=`, which egui-winit reports as `Key::Equals` with `Num0` only as
+/// the physical key. The physical match is exact in Alt, so AltGr+0 still passes through.
+fn consume_reset_interface_size(input: &mut egui::InputState) -> bool {
+    let mut physical = false;
+    input.events.retain(|e| match e {
+        egui::Event::Key { physical_key: Some(egui::Key::Num0), pressed: true, modifiers, .. }
+            if modifiers.matches_exact(RESET_INTERFACE_SIZE.modifiers) =>
+        {
+            physical = true;
+            false
+        }
+        _ => true,
+    });
+    input.consume_shortcut(&RESET_INTERFACE_SIZE) || physical
+}
 /// Most recent documents kept (File › Options › Advanced offers 0–50, as Word does).
 pub const MAX_RECENT: usize = 50;
 /// Most custom dictionary words read back from `ui.json`.
@@ -709,6 +726,10 @@ pub struct WordApp {
     native_scale: f32,
     /// The most pixels per point Auto may draw at on this screen ([`theme::auto_scale_limit`], #4030).
     auto_scale_limit: f32,
+    /// The zoom factor in force during the previous frame's `logic`: egui-winit turns each
+    /// window's monitor size into points with the zoom of the frame before a pending change is
+    /// applied, so the physical size is that size times this zoom ([`theme::auto_scale_limit_over`]).
+    monitor_zoom: f32,
     /// A pre-#822 interface size (percent on top of the display scale) waiting for the first frame
     /// that knows the display's scale, to become the absolute size it drew at
     /// ([`theme::migrate_legacy_interface_size`]).
