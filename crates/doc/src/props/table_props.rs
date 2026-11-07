@@ -46,6 +46,7 @@ pub enum CellSpacingKind {
 }
 
 impl CellSpacingKind {
+    /// Parse the OOXML spelling of a supported cell-spacing measurement.
     pub fn from_ooxml(value: &str) -> Option<Self> {
         match value {
             "dxa" => Some(Self::Dxa),
@@ -56,6 +57,7 @@ impl CellSpacingKind {
         }
     }
 
+    /// Return the OOXML spelling used when writing this measurement.
     pub fn ooxml(self) -> &'static str {
         match self {
             Self::Dxa => "dxa",
