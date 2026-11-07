@@ -1434,22 +1434,25 @@ impl Body<'_> {
                     && fr.2.is_none()
                     && fr.4.is_none()
                     && fr.5.is_none()
-                    && fr.6.as_ref().is_none_or(|o| o.replacement.is_none())
                 {
                     let path = href.trim_start_matches("./");
                     // A frame may offer one picture in several formats, in order of preference
                     // (LibreOffice writes its own `.svm` metafile before a PNG): the first
-                    // WordCraft can read. An object's replacement is kept whatever it is, also when
-                    // the object is still to come.
-                    match (self.zip)(path) {
-                        Some(d) if fr.6.is_some() || drawing::readable_picture(&d) => fr.2 = Some(d),
-                        Some(d) => {
-                            self.frame_unread.get_or_insert(d);
+                    // WordCraft can read. An object's replacement is the first, kept whatever it
+                    // is, also when the object is still to come.
+                    if let Some(d) = (self.zip)(path) {
+                        let readable = drawing::readable_picture(&d);
+                        match &mut fr.6 {
+                            Some(o) if o.replacement.is_none() => o.replacement = Some(std::sync::Arc::new(d.clone())),
+                            Some(_) => {}
+                            None if !readable => {
+                                self.frame_unread.get_or_insert_with(|| d.clone());
+                            }
+                            None => {}
                         }
-                        None => {}
-                    }
-                    if let Some(o) = &mut fr.6 {
-                        o.replacement = fr.2.clone().map(std::sync::Arc::new);
+                        if readable {
+                            fr.2 = Some(d);
+                        }
                     }
                 }
             }
