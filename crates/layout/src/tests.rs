@@ -7510,8 +7510,9 @@ fn diagram_test_font(family: &str, first: u32, last: u32) -> (Vec<u8>, String) {
 fn smart_art_diagram_cjk_labels_maintain_consistent_fallback_font() {
     // #5672: CJK labels in a SmartArt diagram rendered in two different fallback fonts
     // (first node serif Mincho, rest sans). The diagram must maintain a consistent fallback font
-    // matching the sans-serif primary font of the diagram, even when another character needs a
-    // separate symbol fallback face.
+    // matching the diagram's fallback font, even when another character needs a separate symbol
+    // fallback face. The synthetic check below uses a serif primary and checks the shared CJK face
+    // only. The sans-serif check runs in the real-CJK part when a CJK font is installed.
     use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
     use wordcraft_doc::props::Rgb;
     let db = wordcraft_fonts::FontDb::global();
@@ -7560,8 +7561,11 @@ fn smart_art_diagram_cjk_labels_maintain_consistent_fallback_font() {
         assert_eq!(face.family, "DiagOnlySymbol");
     }
 
-    if db.fallback_for('新', 0).is_none() || db.fallback_for('样', 0).is_none() {
-        eprintln!("skipped real CJK check: no CJK font installed");
+    let minor = wordcraft_fonts::word::resolve(&Document::default().settings.minor_font, false, false);
+    if !db.fallback_for('新', minor.face.id()).is_some_and(|f| !f.is_serif())
+        || !db.fallback_for('样', minor.face.id()).is_some_and(|f| !f.is_serif())
+    {
+        eprintln!("skipped real CJK check: no sans-serif CJK font available");
         return;
     }
     let labels = ["新建文档", "施加样式", "导出验证"];
@@ -7598,10 +7602,10 @@ fn smart_art_diagram_cjk_labels_maintain_consistent_fallback_font() {
     }
 }
 
-/// In a mixed-font diagram where the first label's primary font covers its own text as well as
-/// characters missing from later labels, later labels can reuse that first primary face.
+/// In a mixed-font diagram where the first label's primary font covers characters missing from
+/// later labels, later labels use the diagram fallback face, which here is that same font.
 #[test]
-fn mixed_font_diagram_reuses_first_primary_face_for_later_missing_characters() {
+fn mixed_font_diagram_uses_covering_fallback_for_later_missing_characters() {
     use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
     use wordcraft_doc::props::Rgb;
     let db = wordcraft_fonts::FontDb::global();
@@ -7639,7 +7643,7 @@ fn mixed_font_diagram_reuses_first_primary_face_for_later_missing_characters() {
         .collect();
     assert_eq!(cjk_faces.len(), 3, "all three labels drawn");
     for (text, face) in &cjk_faces {
-        assert_eq!(face.family, "DiagWholeGothic", "label {text:?} should reuse the first item's covering primary face");
+        assert_eq!(face.family, "DiagWholeGothic", "label {text:?} should use the shared diagram fallback face");
     }
 }
 
