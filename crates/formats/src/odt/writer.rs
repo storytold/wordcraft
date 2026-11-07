@@ -20,6 +20,8 @@ pub(super) use props::{
 };
 use props::{parent_style, text_props};
 use tracked::{Item, join_deleted_marks};
+// EPUB export dates its metadata with the ODT writer's `dc:date` writer (`crate::odt::now_iso`).
+pub(crate) use tracked::now_iso;
 
 // ---------------------------------------------------------------------------------------------
 // Export
