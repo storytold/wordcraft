@@ -88,7 +88,7 @@ pub struct Construction {
     pub parts: Vec<GlyphPart>,
 }
 
-/// A parsed `MATH` table. Values are font units.
+/// A parsed `MATH` table. Values are font units; glyphs can share immutable constructions.
 #[derive(Clone, Debug, Default)]
 pub struct MathTable {
     pub script_percent: f32,
@@ -100,8 +100,8 @@ pub struct MathTable {
     pub italics: HashMap<u32, f32>,
     pub top_accent: HashMap<u32, f32>,
     pub min_connector_overlap: f32,
-    pub vert: HashMap<u32, Construction>,
-    pub horiz: HashMap<u32, Construction>,
+    pub vert: HashMap<u32, Arc<Construction>>,
+    pub horiz: HashMap<u32, Arc<Construction>>,
 }
 
 impl MathTable {
@@ -185,40 +185,58 @@ fn value_map(b: &[u8], at: usize) -> HashMap<u32, f32> {
     m
 }
 
-fn constructions(b: &[u8], variants: usize, cov_at: usize, count: usize, offsets_at: usize) -> HashMap<u32, Construction> {
+fn construction(b: &[u8], c: usize) -> Construction {
+    let mut con = Construction::default();
+    let nv = u16_at(b, c + 2).unwrap_or(0) as usize;
+    for k in 0..nv.min(256) {
+        let r = c + 4 + k * 4;
+        let (Some(vg), Some(adv)) = (u16_at(b, r), u16_at(b, r + 2)) else { break };
+        con.variants.push((vg as u32, adv as f32));
+    }
+    if let Some(a) = sub(b, c, c) {
+        let np = u16_at(b, a + 4).unwrap_or(0) as usize;
+        for k in 0..np.min(64) {
+            let r = a + 6 + k * 10;
+            let (Some(pg), Some(s), Some(e), Some(full), Some(fl)) =
+                (u16_at(b, r), u16_at(b, r + 2), u16_at(b, r + 4), u16_at(b, r + 6), u16_at(b, r + 8))
+            else {
+                break;
+            };
+            con.parts.push(GlyphPart {
+                gid: pg as u32,
+                start_connector: s as f32,
+                end_connector: e as f32,
+                full_advance: full as f32,
+                extender: fl & 1 != 0,
+            });
+        }
+    }
+    con
+}
+
+fn constructions(
+    b: &[u8],
+    variants: usize,
+    cov_at: usize,
+    count: usize,
+    offsets_at: usize,
+    cache: &mut HashMap<usize, Arc<Construction>>,
+) -> HashMap<u32, Arc<Construction>> {
     let mut m = HashMap::new();
     let Some(cov) = sub(b, variants, cov_at) else { return m };
     let glyphs = coverage(b, cov);
+    let mut offsets = HashMap::new();
     for (i, g) in glyphs.iter().enumerate().take(count) {
         let Some(c) = sub(b, variants, offsets_at + i * 2) else { continue };
-        let mut con = Construction::default();
-        let nv = u16_at(b, c + 2).unwrap_or(0) as usize;
-        for k in 0..nv.min(256) {
-            let r = c + 4 + k * 4;
-            let (Some(vg), Some(adv)) = (u16_at(b, r), u16_at(b, r + 2)) else { break };
-            con.variants.push((vg as u32, adv as f32));
-        }
-        if let Some(a) = sub(b, c, c) {
-            let np = u16_at(b, a + 4).unwrap_or(0) as usize;
-            for k in 0..np.min(64) {
-                let r = a + 6 + k * 10;
-                let (Some(pg), Some(s), Some(e), Some(full), Some(fl)) =
-                    (u16_at(b, r), u16_at(b, r + 2), u16_at(b, r + 4), u16_at(b, r + 6), u16_at(b, r + 8))
-                else {
-                    break;
-                };
-                con.parts.push(GlyphPart {
-                    gid: pg as u32,
-                    start_connector: s as f32,
-                    end_connector: e as f32,
-                    full_advance: full as f32,
-                    extender: fl & 1 != 0,
-                });
-            }
-        }
         if *g != u32::MAX {
-            m.insert(*g, con);
+            offsets.insert(*g, c);
         }
+    }
+    // Malformed coverage may repeat a glyph. Decode only its last valid reference so
+    // superseded records cannot accumulate in the shared cache.
+    for (g, c) in offsets {
+        let con = cache.entry(c).or_insert_with(|| Arc::new(construction(b, c)));
+        m.insert(g, Arc::clone(con));
     }
     m
 }
@@ -250,8 +268,9 @@ pub fn parse(b: &[u8]) -> Option<MathTable> {
         t.min_connector_overlap = u16_at(b, v).unwrap_or(0) as f32;
         let nv = u16_at(b, v + 6).unwrap_or(0) as usize;
         let nh = u16_at(b, v + 8).unwrap_or(0) as usize;
-        t.vert = constructions(b, v, v + 2, nv, v + 10);
-        t.horiz = constructions(b, v, v + 4, nh, v + 10 + nv * 2);
+        let mut cache = HashMap::new();
+        t.vert = constructions(b, v, v + 2, nv, v + 10, &mut cache);
+        t.horiz = constructions(b, v, v + 4, nh, v + 10 + nv * 2, &mut cache);
     }
     Some(t)
 }
@@ -423,6 +442,126 @@ mod tests {
         let long = "L".repeat(10_000);
         let _ = resolve_math(&long);
         assert!(!cached(&long), "absurdly long names must not be cached");
+    }
+
+    /// A small MathVariants table with two directions and shared or distinct records.
+    fn construction_bytes(count: u16, distinct: bool) -> Vec<u8> {
+        let cov = 10 + 4 * usize::from(count);
+        let con = cov + 10;
+        let mut b = vec![0; con];
+        let put = |b: &mut Vec<u8>, at: usize, value: u16| b[at..at + 2].copy_from_slice(&value.to_be_bytes());
+        put(&mut b, 0, 50);
+        put(&mut b, 2, cov as u16);
+        put(&mut b, 4, cov as u16);
+        put(&mut b, 6, count);
+        put(&mut b, 8, count);
+        for i in 0..2 * usize::from(count) {
+            put(&mut b, 10 + 2 * i, (con + if distinct && i % 2 == 1 { 1674 } else { 0 }) as u16);
+        }
+        for (i, v) in [2, 1, 0, count - 1, 0].into_iter().enumerate() {
+            put(&mut b, cov + 2 * i, v);
+        }
+        for shift in 0..if distinct { 2 } else { 1 } {
+            b.extend_from_slice(&1028u16.to_be_bytes());
+            b.extend_from_slice(&256u16.to_be_bytes());
+            for k in 0..256 {
+                b.extend_from_slice(&7u16.to_be_bytes());
+                b.extend_from_slice(&(500u16 + k + shift).to_be_bytes());
+            }
+            for v in [0u16, 0, 64] {
+                b.extend_from_slice(&v.to_be_bytes());
+            }
+            for _ in 0..64 {
+                for v in [8u16, 10, 20, 600 + shift, 1] {
+                    b.extend_from_slice(&v.to_be_bytes());
+                }
+            }
+        }
+        b
+    }
+
+    fn construction_math(variants: &[u8]) -> Vec<u8> {
+        let v = 10 + 8 + VALUE_COUNT * 4 + 2;
+        let mut b = vec![0; v];
+        b[1] = 1;
+        b[5] = 10;
+        b[8..10].copy_from_slice(&(v as u16).to_be_bytes());
+        b.extend_from_slice(variants);
+        b
+    }
+
+    #[test]
+    fn shared_constructions_reuse_variant_and_assembly_storage() {
+        // 16,000 references per direction fit in the table's 16-bit offset domain.
+        let table = parse(&construction_math(&construction_bytes(16_000, false))).unwrap();
+        assert_eq!(table.vert.len(), 16_000);
+        assert_eq!(table.horiz.len(), 16_000);
+        let first = table.vert.get(&0).unwrap();
+        assert_eq!(first.variants.len(), 256);
+        assert_eq!(first.variants[255], (7, 755.0));
+        assert_eq!(first.parts.len(), 64);
+        assert_eq!(first.parts[0], GlyphPart { gid: 8, start_connector: 10.0, end_connector: 20.0, full_advance: 600.0, extender: true });
+        for con in table.vert.values().chain(table.horiz.values()) {
+            assert_eq!(con.variants.as_ptr(), first.variants.as_ptr(), "one source record must have one variant allocation");
+            assert_eq!(con.parts.as_ptr(), first.parts.as_ptr(), "one source record must have one assembly allocation");
+        }
+    }
+
+    #[test]
+    fn distinct_constructions_keep_values_and_direction_mappings() {
+        let table = parse(&construction_math(&construction_bytes(4, true))).unwrap();
+        for glyph in 0..4 {
+            let con = table.vert.get(&glyph).unwrap();
+            let other = table.horiz.get(&glyph).unwrap();
+            assert_eq!(con.variants[0], (7, 500.0 + (glyph % 2) as f32));
+            assert_eq!(con.parts[0].full_advance, 600.0 + (glyph % 2) as f32);
+            assert_eq!(con.variants.as_ptr(), other.variants.as_ptr());
+        }
+        assert_ne!(table.vert[&0].variants.as_ptr(), table.vert[&1].variants.as_ptr());
+    }
+
+    #[test]
+    fn shared_constructions_keep_truncated_records_and_absent_offsets() {
+        let mut variants = construction_bytes(4, false);
+        let con = u16_at(&variants, 10).unwrap() as usize;
+        variants.truncate(con + 4 + 10);
+        // An absent source reference remains absent, rather than aliasing record zero.
+        variants[10..12].copy_from_slice(&0u16.to_be_bytes());
+        let table = parse(&construction_math(&variants)).unwrap();
+        assert!(!table.vert.contains_key(&0));
+        let first = table.vert.get(&1).unwrap();
+        assert_eq!(first.variants, [(7, 500.0), (7, 501.0)]);
+        assert!(first.parts.is_empty());
+        for con in table.vert.values().chain(table.horiz.values()) {
+            assert_eq!(con.variants.as_ptr(), first.variants.as_ptr());
+        }
+    }
+
+    #[test]
+    fn duplicate_coverage_retains_only_surviving_constructions() {
+        let mut variants = construction_bytes(3, true);
+        let cov = u16_at(&variants, 2).unwrap() as usize;
+        // Format 1 accepts repeated glyph IDs. Each direction keeps its last valid offset.
+        for (i, value) in [1u16, 3, 7, 7, 7].into_iter().enumerate() {
+            variants[cov + i * 2..cov + i * 2 + 2].copy_from_slice(&value.to_be_bytes());
+        }
+        let mut cache = HashMap::new();
+        let vert = constructions(&variants, 0, 2, 3, 10, &mut cache);
+        assert_eq!(vert.len(), 1);
+        assert_eq!(vert[&7].variants[0], (7, 500.0));
+        assert_eq!(cache.len(), 1, "superseded records must not stay alive in the cache");
+        let horiz = constructions(&variants, 0, 4, 3, 16, &mut cache);
+        assert_eq!(horiz.len(), 1);
+        assert_eq!(horiz[&7].variants[0], (7, 501.0));
+        assert_eq!(cache.len(), 2, "each surviving direction can retain its own record");
+
+        // A later absent offset must not remove the preceding valid mapping.
+        variants[14..16].copy_from_slice(&0u16.to_be_bytes());
+        let table = parse(&construction_math(&variants)).unwrap();
+        assert_eq!(table.vert.len(), 1);
+        assert_eq!(table.vert[&7].variants[0], (7, 501.0));
+        assert_eq!(table.horiz[&7].variants[0], (7, 501.0));
+        assert!(Arc::ptr_eq(&table.vert[&7], &table.horiz[&7]));
     }
 
     #[test]
