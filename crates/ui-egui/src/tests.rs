@@ -7537,3 +7537,40 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
     h.step();
     assert!(h.state().session.view.read_mode && shown(&h, "Focus"), "Immersive Reader keeps the status bar");
 }
+
+/// A file moved outside WordCraft and opened from its new place is the same file: Recent
+/// replaces its old, now missing, path instead of keeping both (#5434).
+#[test]
+fn opening_a_moved_file_by_browse_replaces_its_recent_entry() {
+    let dir = scratch("moved-recent");
+    let (old_dir, new_dir, other_dir) = (dir.join("A"), dir.join("B"), dir.join("C"));
+    for d in [&old_dir, &new_dir, &other_dir] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let (old, moved, other) = (old_dir.join("notes.docx"), new_dir.join("notes.docx"), other_dir.join("notes.docx"));
+    let s = |p: &std::path::Path| p.to_string_lossy().to_string();
+    let mut a = typed();
+    a.run("file.save", json!({"path": s(&other)})).unwrap();
+    a.run("file.save", json!({"path": s(&old)})).unwrap();
+    let recent = a.ui.recent.clone();
+    assert_eq!(recent.first(), Some(&s(&old)));
+    std::fs::rename(&old, &moved).unwrap();
+
+    // Open › Browse.
+    let mut b = app();
+    b.ui.recent = recent.clone();
+    let document = b.session.document_id();
+    b.finish_pick(crate::file_dialogs::AfterPick::OpenDocument { document }, Some(s(&moved))).unwrap();
+    assert_eq!(b.ui.recent.first(), Some(&s(&moved)));
+    assert!(!b.ui.recent.contains(&s(&old)), "stale entry kept: {:?}", b.ui.recent);
+    assert!(b.ui.recent.contains(&s(&other)), "a different file with the same name stays: {:?}", b.ui.recent);
+
+    // Open with (the OS hands the path over).
+    let mut c = app();
+    c.ui.recent = recent;
+    c.open_file(&s(&moved), None).unwrap();
+    assert_eq!(c.ui.recent.first(), Some(&s(&moved)));
+    assert!(!c.ui.recent.contains(&s(&old)), "stale entry kept: {:?}", c.ui.recent);
+    assert!(c.ui.recent.contains(&s(&other)), "{:?}", c.ui.recent);
+    let _ = std::fs::remove_dir_all(&dir);
+}
