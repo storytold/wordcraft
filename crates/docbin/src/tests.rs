@@ -2941,31 +2941,57 @@ fn bidi_table_and_section_imported() {
 #[test]
 fn table_justification_prefers_logical_and_swaps_physical_in_rtl() {
     use wordcraft_doc::props::Align;
-    // 1. sprmTJc90 = 2 (physical right) without bidi -> Align::Right
-    let papx_ltr_right = grpprl(&[(0x5400, &[0x02, 0x00])]);
-    let row_ltr_right = crate::table::decode(&papx_ltr_right);
-    assert_eq!(row_ltr_right.bidi(), None);
-    assert_eq!(row_ltr_right.align, Some(Align::Right));
 
-    // 2. sprmTJc90 = 2 (physical right) with sprmTFBiDi = 1 -> Align::Left (swapped)
-    let papx_rtl_right = grpprl(&[(0x560B, &[0x01, 0x00]), (0x5400, &[0x02, 0x00])]);
-    let row_rtl_right = crate::table::decode(&papx_rtl_right);
-    assert_eq!(row_rtl_right.bidi(), Some(true));
-    assert_eq!(row_rtl_right.align, Some(Align::Left));
+    let cases: &[(&str, Vec<u8>, Option<bool>, Option<Align>)] = &[
+        ("physical right without bidi", grpprl(&[(0x5400, &[0x02, 0x00])]), None, Some(Align::Right)),
+        (
+            "physical right with sprmTFBiDi = 1 swaps to left",
+            grpprl(&[(0x560B, &[0x01, 0x00]), (0x5400, &[0x02, 0x00])]),
+            Some(true),
+            Some(Align::Left),
+        ),
+        (
+            "physical left with sprmTFBiDi90 = 1 swaps to right",
+            grpprl(&[(0x5664, &[0x01, 0x00]), (0x5400, &[0x00, 0x00])]),
+            Some(true),
+            Some(Align::Right),
+        ),
+        (
+            "logical right with sprmTFBiDi = 1 stays right",
+            grpprl(&[(0x560B, &[0x01, 0x00]), (0x548A, &[0x02, 0x00])]),
+            Some(true),
+            Some(Align::Right),
+        ),
+        ("logical left wins over physical right", grpprl(&[(0x5400, &[0x02, 0x00]), (0x548A, &[0x00, 0x00])]), None, Some(Align::Left)),
+        (
+            "later sprmTFBiDi = 0 clears earlier sprmTFBiDi = 1",
+            grpprl(&[(0x560B, &[0x01, 0x00]), (0x560B, &[0x00, 0x00]), (0x5400, &[0x02, 0x00])]),
+            Some(false),
+            Some(Align::Right),
+        ),
+        (
+            "later sprmTFBiDi90 = 0 clears earlier sprmTFBiDi90 = 1",
+            grpprl(&[(0x5664, &[0x01, 0x00]), (0x5664, &[0x00, 0x00]), (0x5400, &[0x02, 0x00])]),
+            Some(false),
+            Some(Align::Right),
+        ),
+        (
+            "logical sprmTFBiDi = 0 overrides legacy sprmTFBiDi90 = 1",
+            grpprl(&[(0x5664, &[0x01, 0x00]), (0x560B, &[0x00, 0x00]), (0x5400, &[0x02, 0x00])]),
+            Some(false),
+            Some(Align::Right),
+        ),
+        (
+            "logical sprmTFBiDi = 1 overrides legacy sprmTFBiDi90 = 0",
+            grpprl(&[(0x5664, &[0x00, 0x00]), (0x560B, &[0x01, 0x00]), (0x5400, &[0x02, 0x00])]),
+            Some(true),
+            Some(Align::Left),
+        ),
+    ];
 
-    // 3. sprmTJc90 = 0 (physical left) with sprmTFBiDi90 = 1 -> Align::Right (swapped)
-    let papx_rtl_left = grpprl(&[(0x5664, &[0x01, 0x00]), (0x5400, &[0x00, 0x00])]);
-    let row_rtl_left = crate::table::decode(&papx_rtl_left);
-    assert_eq!(row_rtl_left.bidi(), Some(true));
-    assert_eq!(row_rtl_left.align, Some(Align::Right));
-
-    // 4. sprmTJc = 2 (logical right) with sprmTFBiDi = 1 -> stays Align::Right
-    let papx_logical_right = grpprl(&[(0x560B, &[0x01, 0x00]), (0x548A, &[0x02, 0x00])]);
-    let row_logical_right = crate::table::decode(&papx_logical_right);
-    assert_eq!(row_logical_right.align, Some(Align::Right));
-
-    // 5. Both sprmTJc (logical left = 0) and sprmTJc90 (physical right = 2): logical wins
-    let papx_both = grpprl(&[(0x5400, &[0x02, 0x00]), (0x548A, &[0x00, 0x00])]);
-    let row_both = crate::table::decode(&papx_both);
-    assert_eq!(row_both.align, Some(Align::Left));
+    for (name, papx, expected_bidi, expected_align) in cases {
+        let row = crate::table::decode(papx);
+        assert_eq!(row.bidi(), *expected_bidi, "case '{name}' bidi mismatch");
+        assert_eq!(row.align, *expected_align, "case '{name}' align mismatch");
+    }
 }

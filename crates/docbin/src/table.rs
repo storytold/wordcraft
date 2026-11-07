@@ -166,6 +166,8 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
     let mut dxa_left: Option<i16> = None;
     let mut align_logical: Option<Align> = None;
     let mut align_physical: Option<Align> = None;
+    let mut bidi_logical: Option<bool> = None;
+    let mut bidi_physical: Option<bool> = None;
     for prl in sprm::iter(papx) {
         // The membership sprms are paragraph sprms (sgc 1); the rest here are table sprms
         // (sgc 5), so match opcodes directly.
@@ -201,9 +203,13 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
                     _ => Some(Align::Left),
                 };
             }
-            T_BIDI | T_BIDI_90 => {
+            T_BIDI => {
                 let on = u16_of(&prl).is_some_and(|v| v != 0) || prl.operand.first().copied().unwrap_or(0) != 0;
-                r.bidi = Some(r.bidi.unwrap_or(false) || on);
+                bidi_logical = Some(on);
+            }
+            T_BIDI_90 => {
+                let on = u16_of(&prl).is_some_and(|v| v != 0) || prl.operand.first().copied().unwrap_or(0) != 0;
+                bidi_physical = Some(on);
             }
             T_DXA_LEFT => dxa_left = s16(&prl),
             T_DXA_GAP_HALF => gap_half = s16(&prl),
@@ -300,6 +306,7 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
             _ => {}
         }
     }
+    r.bidi = bidi_logical.or(bidi_physical);
     let is_rtl = r.bidi.unwrap_or(false);
     r.align = RowInfo::effective_align(align_logical, align_physical, is_rtl);
     // The table indent is the row origin minus half the cell gap.
