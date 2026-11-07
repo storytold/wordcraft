@@ -64,20 +64,34 @@ pub(super) fn link(s: &mut Session, v: &Value) -> CmdResult {
     let custom_text = p::str(v, "text").filter(|t| !t.is_empty());
     if s.sel.is_collapsed() {
         let text = custom_text.unwrap_or(&label).to_string();
-        let mut props = s.typing_props();
+        let prepared = crate::cmd::controls::prepare_edit(s)?;
+        let mut props = prepared.unwrap_or_else(|| s.typing_props());
         props.link = Some(url.clone());
         props.style = style;
-        let at = s.sel.focus.clone();
+        let at = delete_selection(s)?;
+        props.fmt_change = None;
+        props.rtl = None;
+        if s.doc.settings.track_changes && !text.is_empty() {
+            props.ins = Some(crate::cmd::new_revision(s, wordcraft_doc::RevisionKind::Insert));
+            props.del = None;
+        }
         let end = s.doc.insert_text(&at, &text, &props)?;
         s.sel = Selection::caret(end);
         s.pending = Some(CharProps::default());
     } else if let Some(text) = custom_text
         && text != s.selected_text()
     {
-        let mut props = s.typing_props();
+        let prepared = crate::cmd::controls::prepare_edit(s)?;
+        let mut props = prepared.unwrap_or_else(|| s.typing_props());
         props.link = Some(url.clone());
         props.style = style;
         let at = delete_selection(s)?;
+        props.fmt_change = None;
+        props.rtl = None;
+        if s.doc.settings.track_changes && !text.is_empty() {
+            props.ins = Some(crate::cmd::new_revision(s, wordcraft_doc::RevisionKind::Insert));
+            props.del = None;
+        }
         let end = s.doc.insert_text(&at, text, &props)?;
         s.sel = Selection::caret(end);
         s.pending = Some(CharProps::default());
