@@ -2475,10 +2475,50 @@ mod budget_tests {
         let fired = report.findings.iter().filter(|f| f.rule == "CONTENTPART-TYPE").count();
         assert_eq!(fired, 4, "findings: {:?}", report.findings);
         assert!(report.coverage_notes.iter().any(|n| n.contains("contentPart")), "notes: {:?}", report.coverage_notes);
+        // Established errors keep FAIL precedence over the incomplete
+        // marking (the note-join rules differ: there an omission can
+        // invalidate a "missing" claim; a collected contentPart
+        // resolving to a wrong type is a defect on its own).
+        assert_eq!(report.verdict, Verdict::Fail, "findings: {:?}", report.findings);
         // Control: at full limits all six are judged, with no note.
         let full = validate_bytes(&content_part_zip(6));
         assert_eq!(full.findings.iter().filter(|f| f.rule == "CONTENTPART-TYPE").count(), 6);
         assert!(!full.coverage_notes.iter().any(|n| n.contains("contentPart")));
+    }
+
+    /// The mirror image of the budget test above: when every collected
+    /// reference is valid (a text/xml target) and the budget still
+    /// truncates collection, the verdict is INCOMPLETE — not PASS,
+    /// since not every reference was checked, and not FAIL, since no
+    /// defect was established.
+    #[test]
+    fn content_part_capped_with_valid_references_is_incomplete() {
+        let ct = format!(
+            r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="{}"/><Override PartName="/word/data.xml" ContentType="text/xml"/></Types>"#,
+            package::MAIN_CONTENT_TYPE
+        );
+        let elems: String = (0..6).map(|i| format!(r#"<w:p><w:r><w:contentPart r:id="cp{i}"/></w:r></w:p>"#)).collect();
+        let doc = format!(r#"<?xml version="1.0"?><w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}"><w:body>{elems}</w:body></w:document>"#).into_bytes();
+        // A non-catalogue relationship type keeps CT-MISMATCH out of
+        // the scenario (it prescribes application/xml for customXml
+        // relationships); CONTENTPART-TYPE resolves by id regardless.
+        let rels: String =
+            (0..6).map(|i| format!(r#"<Relationship Id="cp{i}" Type="https://example.com/relationships/contentPart" Target="data.xml"/>"#)).collect();
+        let doc_rels = format!(
+            r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{rels}</Relationships>"#
+        )
+        .into_bytes();
+        let zip = tiny_zip(&[
+            ("[Content_Types].xml", ct.into_bytes()),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", doc),
+            ("word/_rels/document.xml.rels", doc_rels),
+            ("word/data.xml", b"<root/>".to_vec()),
+        ]);
+        let report = validate_bytes_limited(&zip, Limits { facts: 4, ..Limits::default() });
+        assert_eq!(report.findings.iter().filter(|f| f.rule == "CONTENTPART-TYPE").count(), 0, "findings: {:?}", report.findings);
+        assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+        assert!(report.coverage_notes.iter().any(|n| n.contains("contentPart")), "notes: {:?}", report.coverage_notes);
     }
 
     /// The pooled budget binds across owners: two parts with three
