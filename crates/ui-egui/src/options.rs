@@ -443,8 +443,35 @@ fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
 }
 
 /// The custom dictionary: the words Add to Dictionary kept, each with a Remove button, and a
-/// field to add one.
+/// field to add one, plus a setting to bind an external dictionary file (#5840).
 fn custom_dictionary(app: &mut WordApp, ui: &mut Ui) {
+    let saved = app.session.prefs.custom_dictionary.clone().unwrap_or_default();
+    let id_file = egui::Id::unique("options_custom_dictionary_file");
+    let mut file_path = ui.data(|d| d.get_temp::<String>(id_file)).unwrap_or_else(|| saved.clone());
+    let file_label = ui.label(tl!("Dictionary file:")).id;
+    ui.horizontal(|ui| {
+        let r = ui
+            .add(egui::TextEdit::singleline(&mut file_path).desired_width(320.0).hint_text(tl!("Default (custom-dictionary.txt)")))
+            .labelled_by(file_label);
+        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let changed = file_path.trim() != saved;
+        if ui.add_enabled(changed, egui::Button::new(tl!("Apply"))).clicked() || (enter && changed) {
+            let value = if file_path.trim().is_empty() { "auto" } else { file_path.trim() };
+            match app.run("file.options", json!({"customDictionary": value})) {
+                Ok(_) => file_path = app.session.prefs.custom_dictionary.clone().unwrap_or_default(),
+                Err(e) => app.status(e),
+            }
+        }
+        if ui.add_enabled(!saved.is_empty(), egui::Button::new(tl!("Clear"))).clicked()
+            && app.run("file.options", json!({"customDictionary": "auto"})).is_ok()
+        {
+            file_path.clear();
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(id_file, file_path));
+    note(ui, "A custom-word dictionary file (.dic or plain text) used in conjunction with the main dictionary.");
+    ui.add_space(6.0);
+    ui.label(RichText::new(tl!("Words in dictionary")).strong());
     let words = wordcraft_engine::proof::user_dictionary();
     if words.is_empty() {
         note(ui, "No words yet. Add to Dictionary on a misspelled word puts it here.");
