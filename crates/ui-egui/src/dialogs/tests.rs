@@ -860,6 +860,124 @@ fn modify_style_font_box_finds_the_family() {
     assert_eq!(rc.font, wordcraft_doc::styles::HEADING_FONT);
 }
 
+/// #5833: Modify Style offers paragraph formatting (alignment, indents, first line, line spacing)
+/// on its Paragraph tab, allowing footnotes and styles to have indents without manually formatting
+/// each footnote paragraph.
+#[test]
+fn modify_style_configures_paragraph_options_and_indents() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = app_with("Body text.");
+    let fn_res = app.run("references.footnote", json!({"text": "Footnote body."})).unwrap();
+    let fn_story = wordcraft_doc::StoryRef::Part(fn_res["id"].as_u64().unwrap() as u32);
+
+    // Initially, FootnoteText has no first-line or left indent.
+    let rp0 = app.session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("FootnoteText".into()), ..Default::default() });
+    assert_eq!(rp0.indent_first, 0.0);
+    assert_eq!(rp0.indent_left, 0.0);
+
+    // Open Modify Style for FootnoteText.
+    let Some(mut d) = Dialog::modify_style(&app, "FootnoteText") else { panic!("no modify style dialog") };
+    let Dialog::ModifyStyle { is_char, tab, first, left, align, .. } = &mut d else { panic!("expected ModifyStyle") };
+    assert!(!*is_char, "FootnoteText is a paragraph style");
+    assert_eq!(*tab, 0);
+
+    // Switch to paragraph tab and set first-line indent, left indent, and alignment.
+    *tab = 1;
+    let unit = crate::options::unit().pt_per_unit();
+    *first = 36.0 / unit; // 36 pt first line indent
+    *left = 18.0 / unit; // 18 pt left indent
+    *align = "center".into();
+
+    // Opening Modify Style for a character style has is_char true.
+    let char_d = Dialog::modify_style(&app, "FootnoteReference").unwrap();
+    let Dialog::ModifyStyle { is_char: char_is_char, .. } = char_d else { panic!() };
+    assert!(char_is_char, "FootnoteReference is a character style");
+
+    // Press OK in the harness to apply the style modifications.
+    let mut h = app_harness(app);
+    h.state_mut().dialog = Some(d);
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+
+    // Style itself now resolves with updated first-line indent, left indent, and center alignment.
+    let rp1 = h.state().session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("FootnoteText".into()), ..Default::default() });
+    assert_eq!(rp1.indent_first, 36.0);
+    assert_eq!(rp1.indent_left, 18.0);
+    assert_eq!(rp1.align, wordcraft_doc::Align::Center);
+
+    // Footnote paragraph in footnote story automatically inherits these style properties.
+    let foot_para = h.state().session.doc.para(fn_story, &wordcraft_doc::Path::top(0)).unwrap();
+    let foot_rp = h.state().session.doc.styles.resolve_para(&foot_para.props);
+    assert_eq!(foot_rp.indent_first, 36.0);
+    assert_eq!(foot_rp.indent_left, 18.0);
+    assert_eq!(foot_rp.align, wordcraft_doc::Align::Center);
+}
+
+/// #5833: editing a style with non-multiple line spacing (e.g., Exactly or At Least) preserves
+/// that non-multiple line spacing when the user does not change the line spacing box in Modify Style.
+#[test]
+fn modify_style_preserves_non_multiple_line_spacing_when_unchanged() {
+    use egui_kittest::kittest::Queryable;
+    use wordcraft_doc::props::LineSpacing;
+
+    let mut app = app_with("Sample text.");
+
+    // Configure FootnoteText with fixed/exact line spacing (24 pt).
+    let _ = app
+        .run(
+            "styles.modify",
+            json!({
+                "style": "FootnoteText",
+                "para": {
+                    "lineSpacing": {"rule": "exactly", "value": 24.0}
+                }
+            }),
+        )
+        .unwrap();
+
+    let rp0 = app.session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("FootnoteText".into()), ..Default::default() });
+    assert_eq!(rp0.line_spacing, LineSpacing::Exactly(24.0));
+
+    // Open Modify Style for FootnoteText.
+    let Some(mut d) = Dialog::modify_style(&app, "FootnoteText") else { panic!("no modify style dialog") };
+    let Dialog::ModifyStyle { non_multiple_line, line, initial_line, align, .. } = &mut d else {
+        panic!("expected ModifyStyle");
+    };
+
+    assert_eq!(*non_multiple_line, Some(LineSpacing::Exactly(24.0)));
+    assert_eq!(*line, 1.0);
+    assert_eq!(*initial_line, 1.0);
+
+    // Modify only alignment without touching line spacing.
+    *align = "center".into();
+
+    let mut h = app_harness(app);
+    h.state_mut().dialog = Some(d);
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+
+    // Verify alignment updated but Exactly(24.0) line spacing was preserved.
+    let rp1 = h.state().session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("FootnoteText".into()), ..Default::default() });
+    assert_eq!(rp1.align, wordcraft_doc::Align::Center);
+    assert_eq!(rp1.line_spacing, LineSpacing::Exactly(24.0));
+
+    // When line spacing IS explicitly edited, multiple line spacing replaces the fixed spacing.
+    let Some(mut d2) = Dialog::modify_style(h.state(), "FootnoteText") else { panic!() };
+    if let Dialog::ModifyStyle { line, .. } = &mut d2 {
+        *line = 1.5;
+    }
+    h.state_mut().dialog = Some(d2);
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+
+    let rp2 = h.state().session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("FootnoteText".into()), ..Default::default() });
+    assert_eq!(rp2.line_spacing, LineSpacing::Multiple(1.5));
+}
+
 /// A dialog was pinned by its anchor, so dragging its title bar did nothing (#732).
 #[test]
 fn dragging_a_dialog_title_bar_moves_it() {
