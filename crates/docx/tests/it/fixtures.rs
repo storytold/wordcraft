@@ -3710,6 +3710,184 @@ fn text_frames_read_and_round_trip() {
     assert!(q.iter().any(|x| x.props.drop_cap == Some(2) && x.props.frame.is_none()));
 }
 
+/// #3000: Word writes the drop cap's letter in its framed paragraph at the enlarged size the
+/// dialog computed for it. The merge gives the letter back the text's size — the layout sizes a
+/// dropped letter from the text around it, so keeping the file's size would render the
+/// enlargement twice, a letter twice as tall as the lines it drops through.
+#[test]
+fn a_word_drop_caps_letter_takes_the_texts_size_back() {
+    let body = r#"<w:p><w:r><w:t>Relationship with Myself</w:t></w:r></w:p>
+        <w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:hSpace="141" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Lucida Calligraphy" w:hAnsi="Lucida Calligraphy"/><w:sz w:val="88"/><w:szCs w:val="88"/></w:rPr><w:t>B</w:t></w:r></w:p>
+        <w:p><w:r><w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr><w:t>efore we start</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let p = paras(&d);
+    assert_eq!(p.len(), 2);
+    assert_eq!(p[1].text, "Before we start");
+    assert_eq!(p[1].props.drop_cap, Some(3));
+    assert_eq!(p[1].props.drop_cap_font.as_deref(), Some("Lucida Calligraphy"));
+    assert_eq!(p[1].runs.len(), 1, "the letter and the text share a run once sized alike");
+    assert_eq!((p[1].runs[0].props.size, p[1].runs[0].props.size_cs), (Some(12.0), Some(12.0)), "the letter keeps the text's size");
+    // Without a size of its own in the text, the letter inherits the paragraph's.
+    let plain = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="2" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="72"/></w:rPr><w:t>D</w:t></w:r></w:p>
+        <w:p><w:r><w:t>rop cap text</w:t></w:r></w:p>"#,
+    );
+    let q = paras(&plain);
+    assert_eq!(q.len(), 1);
+    assert_eq!((q[0].runs[0].props.size, q[0].runs[0].props.size_cs), (None, None));
+    // Saved, the letter carries the size the layout draws it at — Word draws a framed letter at
+    // its run's own `w:sz` — here 3 lines of 12 pt text, (2*14.4 + 8.4)/0.7 = 53.14 pt → 106.
+    // Reading that back gives the document the first read gave: the letter at the text's size.
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = text(&unzip(&bytes), "word/document.xml");
+    assert!(xml.contains(r#"w:sz w:val="106""#), "the drawn size on the letter's run: {xml}");
+    let again = wordcraft_docx::read(&bytes).unwrap();
+    let r = paras(&again);
+    assert_eq!((r.len(), r[1].text.as_str(), r[1].runs.len()), (2, "Before we start", 1));
+    assert_eq!((r[1].props.drop_cap, r[1].props.drop_cap_font.as_deref()), (Some(3), Some("Lucida Calligraphy")));
+    assert_eq!((r[1].runs[0].props.size, r[1].runs[0].props.size_cs), (Some(12.0), Some(12.0)));
+}
+
+/// #3000: a frame at the size the text draws a letter takes the text's size, and so does one at
+/// the text's own size, as older saves wrote a dialog-made drop cap.
+#[test]
+fn a_drop_cap_frame_at_the_texts_sizes_takes_the_texts_size() {
+    for frame in [106, 24] {
+        let d = read_body(&format!(
+            r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="{frame}"/><w:szCs w:val="{frame}"/></w:rPr><w:t>B</w:t></w:r></w:p>
+            <w:p><w:r><w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr><w:t>efore we start</w:t></w:r></w:p>"#
+        ));
+        let p = paras(&d);
+        assert_eq!((p.len(), p[0].runs.len()), (1, 1), "the letter and the text share a run once sized alike");
+        assert_eq!((p[0].runs[0].props.size, p[0].runs[0].props.size_cs), (Some(12.0), Some(12.0)));
+    }
+}
+
+/// #3000: a paragraph holding only a field shows something, whichever way the field is written and
+/// even with no cached result (PAGE fills its in when drawn), so the letter's frame merges into it. A
+/// paragraph holding only a bookmark shows nothing.
+#[test]
+fn a_drop_cap_merges_into_a_paragraph_holding_only_a_field() {
+    let frame = r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="88"/></w:rPr><w:t>B</w:t></w:r></w:p>"#;
+    let simple = r#"<w:p><w:fldSimple w:instr=" MERGEFIELD Name "><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>Name</w:t></w:r></w:fldSimple></w:p>"#;
+    let complex = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> MERGEFIELD Name </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>Name</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+    for field in [simple, complex] {
+        let d = read_body(&format!("{frame}{field}"));
+        let p = paras(&d);
+        assert_eq!(p.len(), 1, "{field}: {p:?}");
+        assert_eq!(p[0].props.drop_cap, Some(3));
+        assert_eq!(p[0].plain_text(), "BName");
+        assert_eq!(p[0].runs[0].props.size, Some(12.0), "the letter takes the field's size: {:?}", p[0].runs);
+    }
+    let empty_simple = r#"<w:p><w:fldSimple w:instr=" PAGE "/></w:p>"#;
+    let empty_complex = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+    for field in [empty_simple, empty_complex] {
+        let d = read_body(&format!("{frame}{field}"));
+        assert_eq!(paras(&d).len(), 1, "{field}: an empty result is filled in when drawn");
+    }
+    let marker = r#"<w:p><w:bookmarkStart w:id="1" w:name="m"/><w:bookmarkEnd w:id="1"/></w:p>"#;
+    let d = read_body(&format!("{frame}{marker}"));
+    assert_eq!(paras(&d).len(), 2, "a bookmark shows nothing to drop into");
+}
+
+/// #3000: a frame's size far below the text's maps back to no less than the 1 pt a size can read as.
+#[test]
+fn a_drop_caps_tiny_frame_reads_as_at_least_one_point() {
+    let d = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="10" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="2"/></w:rPr><w:t>B</w:t></w:r></w:p>
+        <w:p><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>efore we start</w:t></w:r></w:p>"#,
+    );
+    assert_eq!(paras(&d)[0].runs[0].props.size, Some(1.0));
+}
+
+/// #3000: a bookmark opening the text after a drop cap is a run of its own with no size; the
+/// letter still takes the size of the text, not the marker's.
+#[test]
+fn a_drop_caps_letter_skips_a_leading_bookmark_for_the_texts_size() {
+    let d = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="88"/></w:rPr><w:t>B</w:t></w:r></w:p>
+        <w:p><w:bookmarkStart w:id="1" w:name="start"/><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>efore we start</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>"#,
+    );
+    let p = paras(&d);
+    assert_eq!(p.len(), 1);
+    assert_eq!(p[0].plain_text(), "Before we start");
+    assert_eq!(p[0].props.drop_cap, Some(3));
+    let letter = p[0].run_ranges().find(|(range, _)| p[0].text.get(range.clone()) == Some("B")).map(|(_, props)| props.size);
+    assert_eq!(letter, Some(Some(12.0)), "the letter keeps the text's size, not the bookmark's: {:?}", p[0].runs);
+}
+
+/// #3000: a run in the drop cap's frame with a size of its own keeps it; only the runs at the
+/// letter's enlarged size take the text's size back.
+#[test]
+fn a_drop_cap_frames_other_sizes_are_kept() {
+    let d = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="88"/></w:rPr><w:t>B</w:t></w:r><w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t>e</w:t></w:r></w:p>
+        <w:p><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>fore we start</w:t></w:r></w:p>"#,
+    );
+    let p = paras(&d);
+    assert_eq!(p.len(), 1);
+    let size = |s: &str| p[0].run_ranges().find(|(range, _)| p[0].text.get(range.clone()) == Some(s)).map(|(_, props)| props.size);
+    assert_eq!(size("B"), Some(Some(12.0)), "{:?}", p[0].runs);
+    assert_eq!(size("e"), Some(Some(10.0)), "{:?}", p[0].runs);
+}
+
+/// #3000: a drop cap's frame followed by an empty paragraph stays as it is: there is no text to
+/// merge the letter into, so it keeps its enlarged size instead of shrinking to an ordinary letter.
+#[test]
+fn a_drop_cap_before_an_empty_paragraph_keeps_its_size() {
+    let d = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="88"/></w:rPr><w:t>B</w:t></w:r></w:p>
+        <w:p/>"#,
+    );
+    let p = paras(&d);
+    assert_eq!(p.len(), 2, "the empty paragraph is not merged: {p:?}");
+    assert_eq!((p[0].text.as_str(), p[0].runs[0].props.size), ("B", Some(44.0)));
+}
+
+/// #3000: a bookmark opening the drop cap's own frame is a sizeless run before the letter; the
+/// letter is still recognised by its enlarged size and takes the text's size back.
+#[test]
+fn a_drop_caps_letter_after_a_bookmark_in_its_frame_takes_the_texts_size() {
+    let d = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:bookmarkStart w:id="2" w:name="cap"/><w:r><w:rPr><w:sz w:val="88"/></w:rPr><w:t>B</w:t></w:r><w:bookmarkEnd w:id="2"/></w:p>
+        <w:p><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>efore we start</w:t></w:r></w:p>"#,
+    );
+    let p = paras(&d);
+    assert_eq!(p.len(), 1);
+    let letter = p[0].run_ranges().find(|(range, _)| p[0].text.get(range.clone()) == Some("B")).map(|(_, props)| props.size);
+    assert_eq!(letter, Some(Some(12.0)), "the letter takes the text's size, not its enlarged one: {:?}", p[0].runs);
+    // The letter comes first, where the layout and the writer look for it, and the bookmark is kept.
+    assert!(p[0].text.starts_with('B'), "{:?}", p[0].text);
+    assert_eq!(p[0].plain_text(), "Before we start");
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = text(&unzip(&bytes), "word/document.xml");
+    assert!(xml.contains(r#"w:dropCap="drop""#), "saved as a framed drop cap: {xml}");
+    assert!(xml.contains(r#"w:name="cap""#), "the bookmark survives: {xml}");
+    let again = wordcraft_docx::read(&bytes).unwrap();
+    let r = paras(&again);
+    assert_eq!((r.len(), r[0].props.drop_cap, r[0].plain_text().as_str()), (1, Some(3), "Before we start"));
+    assert_eq!(r[0].run_ranges().next().map(|(_, props)| props.size), Some(Some(12.0)), "and keeps its size: {:?}", r[0].runs);
+}
+
+/// #3000: only a bookmark or comment anchor moves behind the letter. A content control around the
+/// frame's letter keeps it, so the control's content survives a save, and the letter keeps its size.
+#[test]
+fn a_drop_caps_letter_in_a_content_control_stays_in_it() {
+    let d = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:sdt><w:sdtPr><w:alias w:val="Cap"/></w:sdtPr><w:sdtContent><w:r><w:rPr><w:sz w:val="88"/></w:rPr><w:t>B</w:t></w:r></w:sdtContent></w:sdt></w:p>
+        <w:p><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>efore we start</w:t></w:r></w:p>"#,
+    );
+    let p = paras(&d);
+    assert_eq!(p.len(), 1);
+    let at = p[0].text.find('B').unwrap();
+    let letter = p[0].run_ranges().find(|(range, _)| range.contains(&at)).map(|(_, props)| props.size);
+    assert_eq!(letter, Some(Some(44.0)), "{:?}", p[0].runs);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = text(&unzip(&bytes), "word/document.xml");
+    let content = xml.split("<w:sdtContent>").nth(1).and_then(|c| c.split("</w:sdtContent>").next()).unwrap_or_default();
+    assert!(content.contains(">B<"), "the control keeps its letter: {xml}");
+}
+
 /// #2360: a `w:framePr` in the document defaults, the sizeless top-left one Apple Pages writes,
 /// frames no paragraph, as in Word: a header's title and the body's text stay in the text instead
 /// of moving to the page's corner, and the default isn't written back. The defaults' other
