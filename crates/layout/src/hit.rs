@@ -235,18 +235,21 @@ impl<'a> PartPages<'a> {
 /// The items of `page` that `story`'s pieces are among (each one looked at counted as a step of
 /// [`crate::work`]).
 fn items_of(page: &Page, story: StoryRef) -> Box<dyn Iterator<Item = &Placed> + '_> {
-    let items = story_items(page, story);
+    let items = page.story_items(story);
     #[cfg(test)]
     let items: Box<dyn Iterator<Item = &Placed> + '_> = Box::new(items.inspect(|_| crate::work::steps(1)));
     items
 }
 
-fn story_items(page: &Page, story: StoryRef) -> Box<dyn Iterator<Item = &Placed> + '_> {
-    match story {
-        StoryRef::Body => Box::new(page.items.iter()),
-        // Headers and footers, and the text boxes in them, are drawn with the page's header and
-        // footer; everything else is in its items.
-        StoryRef::Part(_) => Box::new(page.header.iter().chain(page.footer.iter()).chain(page.items.iter())),
+impl Page {
+    /// The items `story`'s pieces are among: the page's items for the body; for a header,
+    /// footer or text box, its header and footer too (they hold the header's and footer's
+    /// pieces, and the text boxes in them).
+    pub fn story_items(&self, story: StoryRef) -> Box<dyn Iterator<Item = &Placed> + '_> {
+        match story {
+            StoryRef::Body => Box::new(self.items.iter()),
+            StoryRef::Part(_) => Box::new(self.header.iter().chain(self.footer.iter()).chain(self.items.iter())),
+        }
     }
 }
 
