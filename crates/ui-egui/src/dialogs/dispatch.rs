@@ -1082,7 +1082,14 @@ fn commands_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         find = ui.add(egui::Button::new(label).min_size(vec2(380.0, 0.0))).clicked() || (enter && hits.is_empty());
     }
     if let Some(id) = run {
-        let _ = app.run(id, json!({}));
+        if id == "view.paperColor" {
+            // Command Search is an interactive UI entry point: open the selector instead of
+            // sending the engine command an empty value. Programmatic callers still get the
+            // command's normal parameter validation.
+            let _ = app.run("file.options", json!({"pane": "general"}));
+        } else {
+            let _ = app.run(id, json!({}));
+        }
     } else if find {
         find_in_navigation_pane(app, ui.ctx(), &text);
     }

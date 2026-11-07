@@ -40,6 +40,15 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("view.readPageColor", "Reading Page Color", "Reading › Layout", read_page_color)
             .params(r#"{"value": "none" | "sepia" | "inverse"}"#)
             .pure(),
+        CommandSpec::new("view.paperColor", "Screen Paper Color", "View › Display", |s, v| {
+            let color: PaperColor = serde_json::from_value(v.get("value").cloned().unwrap_or(Value::Null))
+                .map_err(|_| CmdError::Params("screen paper color must be document, green, cream, or gray".into()))?;
+            s.prefs.paper_color = color;
+            if color != PaperColor::Document {
+                s.view.dark_mode = false;
+            }
+            Ok(json!({"paperColor": color}))
+        }).params(r#"{"value": "document" | "green" | "cream" | "gray"}"#).pure(),
         // Print Layout: hide the white space (margins, headers, footers) between pages. Screen only.
         CommandSpec::new("view.hideWhiteSpace", "Hide White Space", "View › Show", |s, v| toggle(s, v, |x| &mut x.hide_white_space))
             .params(r#"{"value"?: bool}"#)
@@ -232,6 +241,40 @@ fn read_line_spacing(s: &mut Session, v: &Value) -> CmdResult {
     };
     s.view.read_line_spacing = spacing;
     Ok(json!({"spacing": spacing}))
+}
+
+/// Screen-only paper presets, saved with user preferences, never in the document.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PaperColor {
+    #[default]
+    Document,
+    Green,
+    Cream,
+    Gray,
+}
+
+impl PaperColor {
+    pub const ALL: [Self; 4] = [Self::Document, Self::Green, Self::Cream, Self::Gray];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Document => "Document background",
+            Self::Green => "Soft green",
+            Self::Cream => "Warm cream",
+            Self::Gray => "Soft gray",
+        }
+    }
+
+    pub fn color(self) -> wordcraft_doc::props::Rgb {
+        use wordcraft_doc::props::Rgb;
+        match self {
+            Self::Document => Rgb::WHITE,
+            Self::Green => Rgb(0xCC, 0xE8, 0xCF),
+            Self::Cream => Rgb(0xFA, 0xF0, 0xDC),
+            Self::Gray => Rgb(0xE8, 0xEA, 0xED),
+        }
+    }
 }
 
 /// Read Mode › View › Page Color, as in Word. Screen only: the document and its own page color

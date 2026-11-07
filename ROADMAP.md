@@ -1,5 +1,6 @@
 # WordCraft roadmap
 
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (#3398: persistent screen paper colors; parity estimates unchanged)
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -226,6 +227,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-10-31: Table of contents: with Word's table over entries in columns, where the title sits in a one-column section above a continuous break, Insert Table of Contents with new settings keeps the title above the break and the entries in their columns (the new title went under the break, into the columns), and Remove Table of Contents takes the title, the blank paragraph and its break with the entries, as Word does (observed in Word for Mac); a paragraph of another style above the break stays (#4041).
 - 2026-10-31: A table of contents writes its page numbers as `PAGEREF` fields to the headings' bookmarks, as Word does, so updating the fields in Word moves the numbers with the headings; they were plain text (#5097).
 - 2026-10-31: Keytips reach the Backstage: Alt, F badges its pages with Word's letters, and Alt, F, P (or V) opens Print (#4960).
+- **2026-10-31 (#3398):** General Options offers persistent Document background / Soft green / Warm cream / Soft gray screen paper. The view.paperColor command reaches the same setting headlessly. Document page colors and pictures, saves, printing and exports retain their own styling; the screen raster/tile cache and page backing share the selected color. Read Mode None uses the preset; explicit Sepia/Inverse keep priority. Parity counts and readiness estimates unchanged.
+
 - 2026-10-29: Documents with hyperlinks or a table of contents print again on the desktop (#4734). The print job scales each page to the paper, and the spooler refused a page with link annotations ("flatten page annotations before using shrink-to-fit"); the PDF sent to the printer now omits link annotations, which print nothing; the link and table-of-contents text stays on the page. Exported PDFs and Save these pages as PDF (`file.printPdf`) keep the annotations.
 - 2026-10-28: Word count counts each Chinese and Japanese character as a word, as Word does, in the status bar, the Word Count dialog and NUMWORDS fields. Unspaced Chinese text used to count as one word per run of text; Korean, which is written with spaces, still counts by words. (#4547)
 - 2026-10-28: Aligned-copy review fixes keep the document axis locked through middle-button scrolling and let Ctrl/Command+Shift start on a secondary selected object. Plain Ctrl and Shift clicks keep their existing behavior (#4764).
@@ -862,6 +865,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-01 | trivial | #3915: preserve guarded whole-line ordinary-tab alignment with current main. Existing controls retained; source checks only, primary qualification pending. |
 | 2026-11-01 | trivial | #2437: Preserve finite paragraph-border flow extents and terminal-break keep preflight with current-main changes. Recursive terminal-successor lookahead remains outside scope. Source checks only; primary qualification pending. |
 | 2026-10-31 | trivial | Progress log: a paragraph naming an undefined DOCX style is formatted as Normal (#5077) |
+| 2026-10-31 | minor | #3398: persistent screen-only green, cream and gray paper presets, with document backgrounds and export colors retained. Read Mode None follows the screen preset; Sepia/Inverse retain priority. |
 | 2026-10-31 | trivial | Progress log: TOC page numbers are PAGEREF fields (#5097) |
 | 2026-10-31 | trivial | Progress log: Backstage keytips, Alt, F, P prints (#4960) |
 | 2026-10-30 | trivial | Progress log: only the PDF sent to the printer leaves out link annotations; Save these pages as PDF keeps them (#4734) |
