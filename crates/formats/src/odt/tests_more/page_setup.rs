@@ -379,6 +379,22 @@ fn a_bands_spacing_counts_once_when_the_page_setup_changes() {
     assert!((again.last_section.margin_top - was).abs() < 0.02, "{} after {was}", again.last_section.margin_top);
 }
 
+/// A header's spacing changed where its text starts doesn't move: the band's height gives way.
+#[test]
+fn a_change_of_only_a_bands_spacing_leaves_the_text_where_it_was() {
+    let ns = crate::odt::tests::NS_T;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="500pt" fo:page-height="700pt" fo:margin-top="20pt" fo:margin-bottom="20pt" fo:margin-left="20pt" fo:margin-right="20pt"/><style:header-style><style:header-footer-properties fo:min-height="40pt" fo:margin-bottom="10pt"/></style:header-style></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>h</text:p></style:header></style:master-page></office:master-styles></office:document-styles>"#
+    );
+    let content =
+        format!("<office:document-content {ns}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>");
+    let mut d = crate::odt::import(&crate::odt::tests::package(&content, Some(&styles))).unwrap();
+    let was = d.last_section.margin_top;
+    d.last_section.header_gap = 20.0;
+    let back = crate::odt::import(&crate::odt::export(&d).unwrap()).unwrap();
+    assert!((back.last_section.margin_top - was).abs() < 0.02, "{} after {was}", back.last_section.margin_top);
+}
+
 #[test]
 fn a_fixed_height_band_stays_one() {
     let ns = crate::odt::tests::NS_T;

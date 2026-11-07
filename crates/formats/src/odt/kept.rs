@@ -545,9 +545,8 @@ fn same_value(a: Option<&String>, b: Option<&String>) -> bool {
 fn patch_layout(file: &str, then: &str, now: &str, place: Place) -> Option<String> {
     let (old, new, had) = (element_attrs(then), element_attrs(now), element_attrs(file));
     let none = BTreeMap::new();
-    let count = |map: &BTreeMap<String, BTreeMap<String, String>>| map.get(COLUMNS).and_then(|m| m.get("fo:column-count")).cloned();
     let mut out = file.to_string();
-    if layout_columns(then) != layout_columns(now) && (place.own || count(&had) == count(&old)) {
+    if layout_columns(then) != layout_columns(now) && (place.own || same_columns(file, then)) {
         if let Some((s, _, _, e)) = locate(&out, COLUMNS) {
             out.replace_range(s..e, "");
         }
@@ -609,19 +608,48 @@ fn patch_layout(file: &str, then: &str, now: &str, place: Place) -> Option<Strin
         out = with_attrs(&out, path, &sets)?;
     }
     for (side, shown) in SIDES.iter().zip([place.header, place.footer]) {
-        out = patch_side(out, (then, now), side, shown, place.own)?;
+        out = patch_side(out, file, (then, now), side, shown, place.own)?;
     }
     Some(out)
 }
 
+/// Whether two page layouts' columns say the same, read as the file's are: how many, the gap, the
+/// line between and each one's width, whatever units or form they're written in.
+fn same_columns(a: &str, b: &str) -> bool {
+    use super::styles::{MAX_COLUMN_SPECS, column_sep, column_spec, columns_of, with_widths};
+    let said = |xml: &str| {
+        let (mut columns, mut specs) = (wordcraft_doc::section::Columns::default(), Vec::new());
+        super::xml::events(layout_columns(xml).unwrap_or("").as_bytes(), |ev| {
+            if let Ev::Start(q, attrs) = ev {
+                match q.as_str() {
+                    "style:columns" => columns = columns_of(&attrs),
+                    "style:column-sep" => columns.separator = column_sep(&attrs),
+                    "style:column" if specs.len() < MAX_COLUMN_SPECS => specs.extend(column_spec(&attrs)),
+                    _ => {}
+                }
+            }
+        });
+        // (On any width, for comparing.)
+        with_widths(columns, &specs, 1000.0)
+    };
+    let (a, b) = (said(a), said(b));
+    let close = |x: f32, y: f32| (x - y).abs() < 2.0;
+    a.count == b.count
+        && (a.count < 2
+            || (a.separator == b.separator
+                && close(a.space, b.space)
+                && a.widths.len() == b.widths.len()
+                && a.widths.iter().zip(&b.widths).all(|(x, y)| close(x.0, y.0) && close(x.1, y.1))))
+}
+
 /// `file` with one side of the page (its band `shown` on its pages or not) as `then` and `now`
-/// change it. They say where the text starts: after the margin and any band's height and spacing.
+/// change it, `original` being the file's layout before any of this change. They say where the text starts: after the margin and any band's height and spacing.
 /// The file's page may differ in having that band (a first page with no header before pages with
 /// one), so its text goes to the same place by what it has, and its band stays at its own
 /// distance from the page edge unless that's what changed. A page that isn't the section's own
 /// (see [`Place`]) follows only if its text started where the section's did, or if it states the
 /// same margin and differs by a band: its text then moves by as much.
-fn patch_side(file: String, (then, now): (&str, &str), side: &Side, shown: bool, own: bool) -> Option<String> {
+fn patch_side(file: String, original: &str, (then, now): (&str, &str), side: &Side, shown: bool, own: bool) -> Option<String> {
     let band = format!("{}/style:header-footer-properties", side.band);
     let measure = |xml: &str| {
         let attrs = element_attrs(xml);
@@ -630,18 +658,20 @@ fn patch_side(file: String, (then, now): (&str, &str), side: &Side, shown: bool,
         };
         (of(LAYOUT, &[side.margin]), of(&band, &["fo:min-height", "svg:height"]), of(&band, &[side.spacing]))
     };
-    let (was, is, has) = (measure(then), measure(now), measure(&file));
+    let (was, is, has, before) = (measure(then), measure(now), measure(&file), measure(original));
     let reach = |(margin, height, spacing): (f32, f32, f32)| margin + height + spacing;
     let moved = (reach(was) - reach(is)).abs() >= 0.005;
     let band_moved = (was.0 - is.0).abs() >= 0.005;
-    let same_reach = (reach(has) - reach(was)).abs() < 0.5;
+    // Its spacing may have changed already, without its height (see `patch_layout`).
+    let spaced = (was.2 - is.2).abs() >= 0.005;
+    let same_reach = (reach(before) - reach(was)).abs() < 0.5;
     // (Where the section's first page has no band, its margin is where its text starts.)
-    let same_margin = (has.0 - was.0).abs() < 0.5 || (has.0 - reach(was)).abs() < 0.5;
-    if !(moved || band_moved) || (!own && !same_reach && !same_margin) {
+    let same_margin = (before.0 - was.0).abs() < 0.5 || (before.0 - reach(was)).abs() < 0.5;
+    if !(moved || band_moved || spaced) || (!own && !same_reach && !same_margin) {
         return Some(file);
     }
     // Where its text is to start.
-    let target = if own || same_reach { reach(is) } else { reach(has) + reach(is) - reach(was) };
+    let target = if own || same_reach { reach(is) } else { reach(before) + reach(is) - reach(was) };
     let length = |v: f32| Some(super::writer::pt(v));
     if !shown {
         return if moved { with_attrs(&file, LAYOUT, &[(side.margin.to_string(), length(target))]) } else { Some(file) };
@@ -1103,6 +1133,48 @@ pub(super) fn needed(defs: &BTreeMap<String, Arc<str>>, start: BTreeSet<String>,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn page(columns: &str, band: &str) -> String {
+        format!(
+            r#"<style:page-layout style:name="p"><style:page-layout-properties fo:margin-top="20pt">{columns}</style:page-layout-properties><style:header-style>{band}</style:header-style></style:page-layout>"#
+        )
+    }
+
+    /// A later page takes a change of columns only where it said what the first pages did, more
+    /// than how many there are.
+    #[test]
+    fn a_later_pages_own_columns_stay() {
+        let at = |gap: &str| format!(r#"<style:columns fo:column-count="2" fo:column-gap="{gap}"/>"#);
+        let (then, now) = (page(&at("10pt"), ""), page(&at("20pt"), ""));
+        let own = r#"<style:columns fo:column-count="2" fo:column-gap="30pt"><style:column-sep style:style="solid"/><style:column style:rel-width="1*" fo:start-indent="0pt" fo:end-indent="15pt"/><style:column style:rel-width="3*" fo:start-indent="15pt" fo:end-indent="0pt"/></style:columns>"#;
+        let later = patch_layout(&page(own, ""), &then, &now, Place::default()).unwrap();
+        assert!(later.contains(own), "{later}");
+        let same = patch_layout(&page(&at("10pt"), ""), &then, &now, Place::default()).unwrap();
+        assert!(same.contains(&at("20pt")), "follows: {same}");
+        let first = patch_layout(&page(own, ""), &then, &now, Place { own: true, ..Place::default() }).unwrap();
+        assert!(first.contains(&at("20pt")), "the section's own: {first}");
+    }
+
+    /// Spacing changed, the text not moved: the band's height gives way, as it is stated.
+    #[test]
+    fn a_change_of_only_a_bands_spacing_rebalances_its_height() {
+        let side = |height: &str, gap: &str| {
+            format!(r#"<style:header-footer-properties {height}="{gap}" fo:margin-bottom="{}"/>"#, if gap == "40pt" { "10pt" } else { "20pt" })
+        };
+        let on = Place { own: true, header: true, footer: false };
+        for attr in ["fo:min-height", "svg:height"] {
+            let (then, now) = (page("", &side(attr, "40pt")), page("", &side(attr, "30pt")));
+            for place in [on, Place { own: false, ..on }] {
+                let out = patch_layout(&then, &then, &now, place).unwrap();
+                assert!(out.contains(&format!(r#"{attr}="30pt""#)) && out.contains(r#"fo:margin-bottom="20pt""#), "{attr}: {out}");
+            }
+        }
+        // A later page that said another spacing keeps it and its height.
+        let (then, now) = (page("", &side("fo:min-height", "40pt")), page("", &side("fo:min-height", "30pt")));
+        let other = page("", r#"<style:header-footer-properties fo:min-height="40pt" fo:margin-bottom="5pt"/>"#);
+        let out = patch_layout(&other, &then, &now, Place { own: false, ..on }).unwrap();
+        assert!(out.contains(r#"fo:min-height="40pt""#) && out.contains(r#"fo:margin-bottom="5pt""#), "{out}");
+    }
 
     const CONTENT: &str = r#"<office:document-content><office:font-face-decls><style:font-face style:name="Liberation Serif" svg:font-family="'Liberation Serif'"/></office:font-face-decls><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:parent-style-name="Body" style:list-style-name="L1"><style:text-properties style:font-name="Liberation Serif"/></style:style><text:list-style style:name="L1"><text:list-level-style-bullet text:level="1" text:style-name="Bullets"/></text:list-style><style:style style:name="P2" style:family="paragraph" style:master-page-name="First"/></office:automatic-styles><office:body/></office:document-content>"#;
 
