@@ -30,8 +30,18 @@ fn doc(paras: &[(&str, &str, bool)], codes: &[&str]) -> Document {
     d
 }
 
+/// Collect the concatenated shown strings of each laid-out paragraph.
 fn shown(items: &[Placed]) -> Vec<String> {
-    items.iter().flat_map(|it| if let Placed::Lines { para, .. } = it { para.shown.iter().map(|s| s.1.clone()).collect() } else { vec![] }).collect()
+    items
+        .iter()
+        .flat_map(|it| {
+            if let Placed::Lines { para, .. } = it {
+                if para.shown.is_empty() { vec![] } else { vec![para.shown.iter().map(|s| s.1.clone()).collect::<String>()] }
+            } else {
+                vec![]
+            }
+        })
+        .collect()
 }
 
 fn headers(d: &Document) -> Vec<Vec<String>> {
@@ -183,14 +193,21 @@ fn field_char_xs(d: &Document) -> Vec<(String, Vec<f32>)> {
     let mut out = Vec::new();
     for it in &l.pages[0].header {
         let Placed::Lines { para, .. } = it else { continue };
-        for (k, text, ranges) in &para.shown {
-            let cl = &para.clusters[*k];
-            let glyphs = &para.glyphs[cl.g0 as usize..cl.g1 as usize];
-            let xs = text
-                .char_indices()
-                .map(|(i, _)| glyphs.iter().zip(ranges).find(|(_, r)| r.start == i).map(|(g, _)| g.dx).unwrap_or(f32::NAN))
-                .collect();
-            out.push((text.clone(), xs));
+        let text: String = para.shown.iter().map(|s| s.1.as_str()).collect();
+        let xs: Vec<f32> = para
+            .shown
+            .iter()
+            .flat_map(|(k, s, ranges)| {
+                let cl = &para.clusters[*k];
+                let glyphs = &para.glyphs[cl.g0 as usize..cl.g1 as usize];
+                let line = para.lines.first().unwrap();
+                let cl_x = line.cl_left(*k).unwrap_or(0.0);
+                s.char_indices()
+                    .map(move |(i, _)| glyphs.iter().zip(ranges).find(|(_, r)| r.start == i).map(|(g, _)| cl_x + g.dx).unwrap_or(f32::NAN))
+            })
+            .collect();
+        if !text.is_empty() {
+            out.push((text, xs));
         }
     }
     out
@@ -234,25 +251,25 @@ fn field_drawn(d: &Document, opts: &LayoutOptions) -> Vec<String> {
     let mut out = Vec::new();
     for it in &l.pages[0].header {
         let Placed::Lines { para, .. } = it else { continue };
+        let gids = |ch: char| -> Vec<Option<u32>> {
+            para.styles.iter().map(|st| wordcraft_fonts::shape_run(&st.face, &ch.to_string(), &[], |c| c, false).first().map(|g| g.gid)).collect()
+        };
+        let line = para.lines.first().unwrap();
+        let mut drawn: Vec<(f32, char)> = Vec::new();
         for (k, text, ranges) in &para.shown {
             let cl = &para.clusters[*k];
-            // A fallback face's glyphs share the cluster, so a glyph is matched in every face.
-            let gids = |ch: char| -> Vec<Option<u32>> {
-                para.styles.iter().map(|st| wordcraft_fonts::shape_run(&st.face, &ch.to_string(), &[], |c| c, false).first().map(|g| g.gid)).collect()
-            };
             let glyphs = &para.glyphs[cl.g0 as usize..cl.g1 as usize];
-            let mut drawn: Vec<(f32, char)> = glyphs
-                .iter()
-                .zip(ranges)
-                .map(|(g, r)| {
-                    let ch = text[r.start..].chars().next().unwrap();
-                    let m = mirror(ch);
-                    let is = |ch: char| gids(ch).contains(&Some(g.gid));
-                    let shown = if m != ch && is(m) && !is(ch) { m } else { ch };
-                    (g.dx, shown)
-                })
-                .collect();
-            drawn.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let cl_x = line.cl_left(*k).unwrap_or(0.0);
+            for (g, r) in glyphs.iter().zip(ranges) {
+                let ch = text[r.start..].chars().next().unwrap();
+                let m = mirror(ch);
+                let is = |ch: char| gids(ch).contains(&Some(g.gid));
+                let shown = if m != ch && is(m) && !is(ch) { m } else { ch };
+                drawn.push((cl_x + g.dx, shown));
+            }
+        }
+        drawn.sort_by(|a, b| a.0.total_cmp(&b.0));
+        if !drawn.is_empty() {
             out.push(drawn.into_iter().map(|d| d.1).collect());
         }
     }

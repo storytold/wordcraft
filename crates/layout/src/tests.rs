@@ -834,7 +834,7 @@ fn a_megabyte_long_word_lays_out_quickly() {
 
 /// A cluster with the given advance and kind, for the tests that measure a word by hand.
 fn word_cluster(kind: para::ClKind, adv: f32, break_after: bool) -> para::Cluster {
-    para::Cluster { start: 0, end: 1, adv, kind, style: 0, g0: 0, g1: 1, break_after, obj_h: 0.0, obj_d: 0.0, dot: false }
+    para::Cluster { start: 0, end: 1, adv, kind, style: 0, g0: 0, g1: 1, break_after, obj_h: 0.0, obj_d: 0.0, dot: false, level: None }
 }
 
 /// A word that a negative advance makes narrower still fits beside a float: the width of a word
@@ -14404,4 +14404,218 @@ fn turned_cell_float_keeps_its_along_text_offset() {
         let reference = place(direction, true);
         assert!((confined.y - reference.y).abs() < 0.01, "{direction:?}: {confined:?} vs {reference:?}");
     }
+}
+
+/// Field result longer than one line wraps across lines within margins (Issue #5838).
+#[test]
+fn long_field_result_wraps_across_multiple_lines() {
+    let mut doc = Document::new();
+    doc.last_section.margin_left = 200.0;
+    doc.last_section.margin_right = 200.0;
+    let long_text = "The quick brown fox jumps over the lazy dog and runs across the wide open fields ".repeat(10);
+    let mut p = Paragraph::new();
+    p.insert_object(
+        0,
+        InlineObject::Field {
+            instr: "DOCVARIABLE summary".into(),
+            result: long_text.clone(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        },
+        &Default::default(),
+    )
+    .unwrap();
+    doc.body = vec![wordcraft_doc::para_block(p)];
+
+    let mut cache = LayoutCache::new();
+    let l = layout(&doc, &mut cache, &LayoutOptions::default());
+    let Placed::Lines { para, .. } = &l.pages[0].items[0] else {
+        panic!("expected laid out paragraph");
+    };
+
+    assert!(para.lines.len() >= 3, "expected at least 3 lines, got {}", para.lines.len());
+    for (i, line) in para.lines.iter().enumerate() {
+        // Trailing spaces at line wraps hang past the right margin.
+        let ink = if line.c1 > line.c0 && para.clusters.get(line.c1 - 1).is_some_and(|c| c.kind == para::ClKind::Space) {
+            line.cl_left(line.c1 - 1).unwrap_or(line.end_x())
+        } else {
+            line.end_x()
+        };
+        assert!(ink <= line.right + 0.5, "line {i} text exceeds right margin: ink={ink} > line.right={}", line.right);
+    }
+    let placed_text: String = para.shown.iter().map(|s| s.1.as_str()).collect();
+    assert_eq!(placed_text, long_text);
+}
+
+#[test]
+fn field_result_mixed_bidi_levels_in_rtl_and_ltr_para() {
+    let mut doc = Document::default();
+    let mut p_rtl = Paragraph::new();
+    p_rtl.props.bidi = Some(true);
+    // In an RTL paragraph, insert an LTR field containing mixed Latin and Hebrew text: "abc שלום"
+    p_rtl
+        .insert_object(
+            0,
+            InlineObject::Field {
+                instr: "MERGEFIELD test".into(),
+                result: "abc שלום".into(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+            },
+            &Default::default(),
+        )
+        .unwrap();
+
+    let mut p_ltr = Paragraph::new();
+    // In an LTR paragraph, insert an LTR field containing mixed Latin and Hebrew text: "abc שלום"
+    p_ltr
+        .insert_object(
+            0,
+            InlineObject::Field {
+                instr: "MERGEFIELD test".into(),
+                result: "abc שלום".into(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+            },
+            &Default::default(),
+        )
+        .unwrap();
+
+    let mut p_rtl_latin = Paragraph::new();
+    p_rtl_latin.props.bidi = Some(true);
+    p_rtl_latin.insert_text(0, "foo ", &Default::default()).unwrap();
+    let obj_off = p_rtl_latin.text.len();
+    p_rtl_latin
+        .insert_object(
+            obj_off,
+            InlineObject::Field {
+                instr: "MERGEFIELD test".into(),
+                result: "bar".into(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+            },
+            &Default::default(),
+        )
+        .unwrap();
+    let after_obj = p_rtl_latin.text.len();
+    p_rtl_latin.insert_text(after_obj, " baz", &Default::default()).unwrap();
+
+    doc.body = vec![wordcraft_doc::para_block(p_rtl), wordcraft_doc::para_block(p_ltr), wordcraft_doc::para_block(p_rtl_latin)];
+
+    let mut cache = LayoutCache::new();
+    let l = layout(&doc, &mut cache, &LayoutOptions::default());
+
+    let Placed::Lines { para: para_rtl, .. } = &l.pages[0].items[0] else {
+        panic!("expected laid out rtl paragraph");
+    };
+    let Placed::Lines { para: para_ltr, .. } = &l.pages[0].items[1] else {
+        panic!("expected laid out ltr paragraph");
+    };
+    let Placed::Lines { para: para_rtl_latin, .. } = &l.pages[0].items[2] else {
+        panic!("expected laid out rtl latin paragraph");
+    };
+
+    // In RTL paragraph (base level 1):
+    // LTR field "abc שלום": "abc" chunk gets level 2, " " gets level 2, "שלום" chunk gets level 3.
+    let rtl_levels: Vec<Option<u8>> = para_rtl.clusters.iter().map(|c| c.level).collect();
+    assert_eq!(rtl_levels, vec![Some(2), Some(2), Some(3)]);
+
+    // In LTR paragraph (base level 0):
+    // LTR field "abc שלום": "abc" chunk gets level 0, " " gets level 0, "שלום" chunk gets level 1.
+    let ltr_levels: Vec<Option<u8>> = para_ltr.clusters.iter().map(|c| c.level).collect();
+    assert_eq!(ltr_levels, vec![Some(0), Some(0), Some(1)]);
+
+    // In RTL paragraph, field between Latin text inherits level 2 without splitting the run.
+    let field_cl = para_rtl_latin.clusters.iter().find(|c| c.start == 4).unwrap();
+    assert_eq!(field_cl.level, Some(2));
+}
+
+/// Field result spaces are distinguishable from word text clusters as `ClKind::Space`.
+#[test]
+fn field_result_spaces_are_distinguishable_from_word_text() {
+    let mut doc = Document::new();
+    let mut p = Paragraph::new();
+    p.insert_object(
+        0,
+        InlineObject::Field {
+            instr: "MERGEFIELD test".into(),
+            result: "hello world".into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        },
+        &Default::default(),
+    )
+    .unwrap();
+    doc.body = vec![wordcraft_doc::para_block(p)];
+
+    let mut cache = LayoutCache::new();
+    let l = layout(&doc, &mut cache, &LayoutOptions::default());
+    let Placed::Lines { para, .. } = &l.pages[0].items[0] else { panic!("expected lines") };
+
+    // "hello" (Text), " " (Space), "world" (Text)
+    assert_eq!(para.clusters.len(), 3);
+    assert_eq!(para.clusters[0].kind, para::ClKind::Text);
+    assert!(!para.clusters[0].break_after);
+    assert_eq!(para.clusters[1].kind, para::ClKind::Space);
+    assert!(para.clusters[1].break_after);
+    assert_eq!(para.clusters[2].kind, para::ClKind::Text);
+    assert!(!para.clusters[2].break_after);
+}
+
+/// Field result with no interior break opportunities emergency-breaks across lines like ordinary text.
+#[test]
+fn field_result_unbroken_long_word_emergency_breaks_like_plain_text() {
+    let unbroken = "x".repeat(120);
+    let mut doc_field = Document::new();
+    doc_field.last_section.margin_left = 200.0;
+    doc_field.last_section.margin_right = 200.0;
+    let mut p_field = Paragraph::new();
+    p_field
+        .insert_object(
+            0,
+            InlineObject::Field {
+                instr: "MERGEFIELD unbroken".into(),
+                result: unbroken.clone(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+            },
+            &Default::default(),
+        )
+        .unwrap();
+    doc_field.body = vec![wordcraft_doc::para_block(p_field)];
+
+    let mut doc_text = Document::new();
+    doc_text.last_section.margin_left = 200.0;
+    doc_text.last_section.margin_right = 200.0;
+    let mut p_text = Paragraph::new();
+    p_text.insert_text(0, &unbroken, &Default::default()).unwrap();
+    doc_text.body = vec![wordcraft_doc::para_block(p_text)];
+
+    let mut cache = LayoutCache::new();
+    let l_field = layout(&doc_field, &mut cache, &LayoutOptions::default());
+    let l_text = layout(&doc_text, &mut cache, &LayoutOptions::default());
+
+    let Placed::Lines { para: para_field, .. } = &l_field.pages[0].items[0] else { panic!("expected field lines") };
+    let Placed::Lines { para: para_text, .. } = &l_text.pages[0].items[0] else { panic!("expected text lines") };
+
+    assert!(para_field.lines.len() >= 2, "expected at least 2 lines, got {}", para_field.lines.len());
+    assert_eq!(para_field.lines.len(), para_text.lines.len(), "field lines count matches plain text");
+    for (i, (lf, lt)) in para_field.lines.iter().zip(&para_text.lines).enumerate() {
+        assert!(lf.end_x() <= lf.right + 0.5, "field line {i} exceeds right margin");
+        assert!((lf.end_x() - lt.end_x()).abs() < 1.0, "line {i} end_x matches plain text: {} vs {}", lf.end_x(), lt.end_x());
+    }
+    let placed_field: String = para_field.shown.iter().map(|s| s.1.as_str()).collect();
+    assert_eq!(placed_field, unbroken);
 }
