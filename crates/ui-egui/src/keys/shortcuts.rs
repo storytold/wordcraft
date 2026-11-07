@@ -137,13 +137,16 @@ pub(super) fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
         // #4943). Another key bound to Paste Formatting only pastes formatting.
         let id = if spec.id == "edit.pasteFormat" {
             let formatting = app.session.painter.is_some() || app.session.copied_format.is_some();
-            // A browser sends a paste event after the key (the desktop doesn't): after pasting
-            // formatting it's ignored; with none, it pastes the text there, once.
-            app.canvas.ignore_next_paste = formatting;
-            if !formatting && cfg!(target_arch = "wasm32") {
+            let chord = key == Key::V && m.command && m.shift && !m.alt;
+            // A browser sends a paste event after that chord (the desktop doesn't): after
+            // pasting formatting it's ignored; with none, it pastes the text there, once. A
+            // rebinding to another key makes no paste event.
+            let paste_follows = chord && app.canvas.paste_event_follows_chord;
+            app.canvas.ignore_next_paste = formatting && paste_follows;
+            if !formatting && paste_follows {
                 return true;
             }
-            if !formatting && key == Key::V && m.command && m.shift && !m.alt { "edit.pasteText" } else { spec.id }
+            if !formatting && chord { "edit.pasteText" } else { spec.id }
         } else {
             spec.id
         };

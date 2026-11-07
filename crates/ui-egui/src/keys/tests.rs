@@ -154,6 +154,7 @@ fn a_mod_shift_paste_event_keeps_text_only() {
 #[test]
 fn a_paste_event_after_mod_shift_v_pasted_formatting_is_ignored() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.canvas.paste_event_follows_chord = true;
     a.run("text.insert", json!({"text": "source target"})).unwrap();
     a.run("select.text", json!({"text": "source"})).unwrap();
     a.run("format.bold", json!({})).unwrap();
@@ -189,6 +190,80 @@ fn pictures(a: &mut WordApp) -> usize {
 fn mods_frame(ctx: &egui::Context, a: &mut WordApp, modifiers: Modifiers, events: Vec<egui::Event>) {
     let events = std::iter::once(egui::Event::ModifiersChanged(modifiers)).chain(events).collect();
     ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| canvas_events(a, ui.ctx())).drop_without_applying_deltas();
+}
+
+/// A source word in bold with Copy Formatting picked up, and "target" selected.
+fn copied_bold_app() -> WordApp {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "source target"})).unwrap();
+    a.run("select.text", json!({"text": "source"})).unwrap();
+    a.run("format.bold", json!({})).unwrap();
+    a.run("edit.copyFormat", json!({})).unwrap();
+    a.run("select.text", json!({"text": "target"})).unwrap();
+    a
+}
+
+/// #5616: on a desktop no paste event follows Mod+Shift+V's key, so none is swallowed: a later
+/// paste (from a menu, say) pastes.
+#[test]
+fn a_desktop_paste_after_mod_shift_v_is_not_swallowed() {
+    let mut a = copied_bold_app();
+    assert!(!a.canvas.paste_event_follows_chord || cfg!(target_arch = "wasm32"));
+    a.canvas.paste_event_follows_chord = false;
+    let ctx = egui::Context::default();
+    let chord = Modifiers::COMMAND | Modifiers::SHIFT;
+    mods_frame(&ctx, &mut a, chord, vec![key_event(Key::V, true, chord)]);
+    assert!(!a.canvas.ignore_next_paste);
+    mods_frame(&ctx, &mut a, Modifiers::NONE, vec![egui::Event::Paste("later".into())]);
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "source later");
+}
+
+/// #5616: the modifiers noted for a paste are used up by it: a later paste with no Mod held
+/// keeps the HTML's formatting instead of reading the stale Mod+Shift.
+#[test]
+fn a_paste_event_uses_up_the_noted_paste_modifiers() {
+    let services = crate::Services { clipboard_html: Some(Box::new(|| Some("<p><b>external</b></p>".into()))), ..Default::default() };
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+    let ctx = egui::Context::default();
+    mods_frame(&ctx, &mut a, Modifiers::COMMAND | Modifiers::SHIFT, vec![egui::Event::Paste("external".into())]);
+    assert!(a.canvas.paste_mods.is_none());
+    a.run("select.all", json!({})).unwrap();
+    mods_frame(&ctx, &mut a, Modifiers::NONE, vec![egui::Event::Paste("external".into())]);
+    let bold = a.session.run("format.state", &json!({})).unwrap().get("bold").and_then(serde_json::Value::as_bool);
+    assert_eq!(bold, Some(true), "the later paste was a plain paste");
+}
+
+/// #5616: the browser paste event after a formatting paste is dropped before an open equation
+/// can type it.
+#[test]
+fn the_ignored_paste_event_never_reaches_an_open_equation() {
+    let mut a = copied_bold_app();
+    a.canvas.paste_event_follows_chord = true;
+    a.run("insert.equation", json!({"linear": "abc"})).unwrap();
+    a.canvas.ignore_next_paste = true;
+    let ctx = egui::Context::default();
+    let before = a.session.math.clone();
+    mods_frame(&ctx, &mut a, Modifiers::COMMAND, vec![egui::Event::Paste("zzz".into())]);
+    assert_eq!(a.session.math, before, "the ignored paste typed nothing into the equation");
+    assert!(!a.canvas.ignore_next_paste);
+}
+
+/// #5616: only Mod+Shift+V leaves a browser paste event; Paste Formatting on another key neither
+/// arms the ignore flag nor waits for a paste.
+#[test]
+fn paste_formatting_on_another_key_leaves_no_paste_to_ignore() {
+    for formatting in [true, false] {
+        let mut a = if formatting {
+            copied_bold_app()
+        } else {
+            WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default())
+        };
+        a.canvas.paste_event_follows_chord = true;
+        a.session.keymap = wordcraft_engine::keymap::KeyMap::from_value(&json!({"assigned": {"Mod+Alt+P": "edit.pasteFormat"}}));
+        let m = Modifiers::COMMAND | Modifiers::ALT;
+        super::shortcuts::dispatch(&mut a, Key::P, m);
+        assert!(!a.canvas.ignore_next_paste, "formatting={formatting}");
+    }
 }
 
 /// A press or release of `key` with `modifiers`.
