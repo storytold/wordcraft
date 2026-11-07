@@ -93,6 +93,7 @@ pub(super) fn apply_style(
     css: &str,
     f: &mut Fmt,
     align: &mut Option<Align>,
+    rtl: &mut bool,
     preserve: &mut bool,
     page_break: &mut bool,
     page_break_after: &mut bool,
@@ -148,6 +149,13 @@ pub(super) fn apply_style(
             "vertical-align" => {
                 f.sup = lv == "super";
                 f.sub = lv == "sub";
+            }
+            "direction" => {
+                if lv.starts_with("rtl") {
+                    *rtl = true;
+                } else if lv.starts_with("ltr") {
+                    *rtl = false;
+                }
             }
             "text-align" => {
                 *align = match lv.as_str() {

@@ -87,6 +87,7 @@ impl Reader {
     pub(super) fn para_props(&self, st: &St) -> Para {
         let mut p = Para::new(self.para_kind(st));
         p.align = st.align;
+        p.rtl = st.rtldir;
         p.page_break = st.pagebb;
         p.spacing = spacing(st);
         p.borders = st.borders.any_visible().then_some(st.borders);

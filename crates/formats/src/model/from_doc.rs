@@ -465,6 +465,8 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
         kind,
         list,
         align: p.props.align,
+        // Direction can come from the paragraph's style (`w:bidi` in the style's pPr).
+        rtl: doc.styles.resolve_para(&p.props).bidi,
         page_break: p.props.page_break_before.unwrap_or(false),
         keep_next: p.props.keep_next.unwrap_or(false),
         inlines: Vec::new(),
@@ -508,6 +510,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                         kind,
                         list: None,
                         align: p.props.align,
+                        rtl: out.rtl,
                         page_break: true,
                         keep_next: p.props.keep_next.unwrap_or(false),
                         inlines: Vec::new(),
