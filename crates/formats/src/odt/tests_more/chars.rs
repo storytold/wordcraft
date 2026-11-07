@@ -391,3 +391,18 @@ fn strike_turned_off_over_a_double_strike_stays_off() {
     check(&d, "a span, read");
     check(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap(), "a span, written from the model");
 }
+
+/// A span's character style is its own: a paragraph turning bold or italic off doesn't reach past it.
+#[test]
+fn a_spans_character_style_wins_over_its_paragraph_turning_off() {
+    let styles = r#"<style:style style:name="Standard" style:family="paragraph"/><style:style style:name="Strong_20_Emphasis" style:display-name="Strong Emphasis" style:family="text"><style:text-properties fo:font-weight="bold" fo:font-style="italic"/></style:style>"#;
+    let auto = r#"<style:style style:name="P1" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-weight="normal" fo:font-style="normal"/></style:style>"#;
+    let d = off_doc(styles, "P1", auto, r#"<text:span text:style-name="Strong_20_Emphasis">One</text:span>"#);
+    let check = |d: &Document, what: &str| {
+        let p = d.body[0].as_para().unwrap();
+        let c = d.styles.resolve_char(p.props.style.as_deref(), &p.runs.last().unwrap().props);
+        assert_eq!((c.bold, c.italic), (true, true), "{what}: {:?}", p.runs.last().unwrap().props);
+    };
+    check(&d, "read");
+    check(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap(), "written from the model");
+}

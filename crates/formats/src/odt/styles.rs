@@ -1294,6 +1294,32 @@ impl Styles {
         let chain = self.chain(name);
         let Some(at) = chain.iter().position(|(n, _)| self.is_named_text(n)) else { return self.text_fmt(name, base) };
         let mut f = base.clone();
+        // What the span's character style says is its own: its paragraph turning that off doesn't
+        // reach past it (ODF: the span's style wins).
+        if let Some(x) = f.extra.as_deref_mut() {
+            use wordcraft_doc::props::Underline;
+            for (_, s) in chain.iter().skip(at) {
+                let (d, e) = (&s.fmt, &s.fmt.extra);
+                if d.bold.is_some() && x.bold == Some(false) {
+                    x.bold = None;
+                }
+                if d.italic.is_some() && x.italic == Some(false) {
+                    x.italic = None;
+                }
+                if d.underline.is_some() && x.underline == Some(Underline::None) {
+                    x.underline = None;
+                }
+                if (d.strike.is_some() || e.double_strike.is_some()) && x.strike == Some(false) {
+                    (x.strike, x.double_strike) = (None, None);
+                }
+                if e.caps.is_some() && x.caps == Some(false) {
+                    x.caps = None;
+                }
+                if e.small_caps.is_some() && x.small_caps == Some(false) {
+                    x.small_caps = None;
+                }
+            }
+        }
         for (_, s) in chain.iter().take(at).rev() {
             s.fmt.apply(&mut f);
         }
