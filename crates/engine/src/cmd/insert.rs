@@ -15,7 +15,7 @@ mod objects;
 
 pub(crate) use header_footer::saved_copy;
 use header_footer::{create_hf, edit_hf, header_footer, new_empty_headers, strip_headers};
-pub use items::{DropCapState, drop_cap_state, format_date, format_date_parts};
+pub use items::{DropCapState, drop_cap_state, format_date, format_date_at, format_date_parts};
 use items::{cover_page, date_time, drop_cap, drop_cap_off, field, page_number, symbol};
 use links::{bookmark, delete_bookmark, link, link_targets};
 pub use links::{bookmark_name_ok, bookmark_range, bookmark_span};
@@ -124,7 +124,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("insert.pageField", "Insert Page Field", "Insert › Text › Quick Parts", |s, _| field(s, &json!({"instr": "PAGE"})))
             .key(super::mac_or("Ctrl+Shift+P", "Alt+Shift+P")),
         CommandSpec::new("insert.dropCap", "Drop Cap", "Insert › Text", drop_cap)
-            .params(r#"{"position"?: "none"|"dropped"|"margin" (default dropped), "lines"?: 1..10 (default 3; 0 = none), "distance"?: pt from the text (0..1584, default 0), "font"?: family (omit for the text's font)}"#)
+            .params(r#"{"position"?: "none"|"dropped"|"margin" (default dropped), "lines"?: 1..10 (default 3; 0 = none), "distance"?: pt from the text (0..1584, default 0), "font"?: family (omit for the text's font), "keep"?: bool (true: each selected paragraph that has a drop cap keeps its own lines, distance and font unless given here)}"#)
             .when(drop_cap_off),
         CommandSpec::new("insert.horizontalLine", "Horizontal Line", "Home › Paragraph › Borders", |s, _| {
             super::para::fmt(s, &|p| {
@@ -134,7 +134,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("insert.textFromFile", "Text from File", "Insert › Text › Object", |s, v| {
             let path = p::req_str(v, "path")?;
             let doc = crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?;
-            let mut frag = doc.body_fragment();
+            // The file's pictures, lists and styles come along (its own keys and ids mean nothing here).
+            let mut frag = s.doc.adopt(doc);
             super::paste::unlink_sections(&mut frag.blocks);
             let at = delete_selection(s)?;
             let end = s.doc.insert_fragment(&at, &frag)?;

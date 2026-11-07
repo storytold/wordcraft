@@ -44,10 +44,9 @@ impl WordApp {
             self.dialog = dialogs::Dialog::open(name, self);
             return Ok(json!({"pending": name}));
         }
-        if (self.session.dirty || self.save_unconfirmed() || refused.is_some())
-            && discards_document(id, &params)
-            && !self.closes_only_its_window(id, &params)
-        {
+        // The same unsaved work the control channel's refusal covers, so the prompt and the
+        // refusal can't drift apart (#3274).
+        if (self.document_unsaved() || refused.is_some()) && discards_document(id, &params) && !self.closes_only_its_window(id, &params) {
             let name = self.prompt_name();
             self.dialog = Some(dialogs::Dialog::SaveChanges {
                 name,
@@ -85,15 +84,12 @@ impl WordApp {
         if matches!(id, "insert.picture" | "insert.icon") {
             self.select_inserted_picture(&r);
         }
-        // review.spelling only moves the selection to the next issue; without this, the ribbon's
-        // Spelling & Grammar and Editor buttons looked broken — just a selection with no way to
-        // see or apply a suggestion (#3340). Reuse the context menu's suggestions, as Shift+F10
-        // already does for the word at the caret.
-        if id == "review.spelling"
+        // User proofing opens the persistent task pane; scripts keep structured results.
+        // Right-click and Shift+F10 retain their compact suggestions menu.
+        if matches!(id, "review.spelling" | "review.editor")
             && let Ok(v) = &r
-            && v.get("done").and_then(serde_json::Value::as_bool) != Some(true)
         {
-            self.canvas.context_menu_from_keys = true;
+            self.spelling_review = Some(crate::proofing_pane::SpellingForm::new(self, v.clone()));
         }
         let r = system_clipboard::explain(self, id, r);
         // Check Accessibility shows its findings in the Accessibility pane, kept up to date there.
@@ -122,6 +118,13 @@ impl WordApp {
         if id == "file.close" {
             return self.close_document(&params);
         }
+        // `file.closeDocument` closes the document its `id` names (the active one by default):
+        // the same unsaved work would go with it, so it needs the same explicit `force` (#3274).
+        if id == "file.closeDocument"
+            && let Some(e) = crate::control::close_refused(self, id, &params)
+        {
+            return Err(e.into());
+        }
         if id == "file.autosave" {
             return self.set_autosave(&params);
         }
@@ -144,7 +147,7 @@ impl WordApp {
                 && let Some(pw) = params.get("password").filter(|v| !v.is_null())
             {
                 if !wordcraft_engine::io::can_encrypt(&name) || pw.as_str().is_none_or(str::is_empty) {
-                    return Err("only Word documents (.docx, .docm, .dotx, .dotm) can be saved with a password, and it can't be empty".into());
+                    return Err("only Word documents (.docx, .docm, .dotx, .dotm) and OpenDocument text files (.odt, .ott) can be saved with a password, and it can't be empty".into());
                 }
                 self.session.run("file.encrypt", &json!({"password": pw})).map_err(|e| e.to_string())?;
             }
@@ -661,6 +664,17 @@ impl WordApp {
                 self.read_system_animations();
                 json!({"animations": self.ui.animations.code(), "enabled": self.animations_on(), "system": self.system_animations})
             }
+            "ui.statusCount" => {
+                // `words` (the default), `characters` or `charactersNoSpaces`: what the status
+                // bar's live count shows; no value reads it (#2797).
+                if let Some(v) = s("value") {
+                    match crate::StatusCount::from_code(v) {
+                        Some(c) => self.ui.status_count = c,
+                        None => return Some(Err(format!("unknown status count {v:?}; use words, characters or charactersNoSpaces"))),
+                    }
+                }
+                json!({"statusCount": self.ui.status_count.code()})
+            }
             "ui.language" => {
                 // `auto` (follow the system) or a language code; anything else is an error.
                 if let Some(v) = s("value") {
@@ -738,6 +752,7 @@ impl WordApp {
             // Native printing submits the selected queue on a worker; the browser owns its dialog.
             "ui.printSettings" => return Some(printing::settings(&mut self.printing, p, self.services.printers.as_ref())),
             "ui.print" | "ui.printSubmit" => return Some(self.print_to_system(p)),
+            "ui.printCancel" => return Some(printing::cancel(self)),
             // File › Options › General › Make WordCraft the default… changes the user's system
             // default apps (Linux) or opens system settings (Windows), so only a click on that
             // button does it ([`WordApp::make_default_app`]); scripts, the control channel and
@@ -781,6 +796,18 @@ impl WordApp {
                     Some(_) => return Some(Err("`value` must be true or false".into())),
                 }
                 json!({"startScreen": self.ui.start_screen})
+            }
+            "ui.displayServer" => {
+                // File › Options › Advanced › Linux display server (#2184): `value` `auto`,
+                // `wayland` or `x11`; no value reads it. The desktop app reads it at the next launch.
+                match p.get("value") {
+                    None => {}
+                    Some(v) => match v.as_str().and_then(crate::DisplayServer::from_code) {
+                        Some(d) => self.ui.display_server = d,
+                        None => return Some(Err(format!("unknown display server {v}; use auto, wayland or x11"))),
+                    },
+                }
+                json!({"displayServer": self.ui.display_server.code()})
             }
             // Shape Format › Text › Create Link: the next click on an empty text box links the
             // selected box to it (`shape.link` with that box as the target); Esc cancels.
@@ -984,6 +1011,8 @@ fn input_dialog_other(id: &str, params: &Value) -> Option<&'static str> {
         "review.language" if no_settings(params) => Some("language"),
         "tools.autocorrect" if no_settings(params) => Some("autoCorrect"),
         "tools.templates" => Some("templates"),
+        // Macros without a name to run, define or delete shows its dialog (#4327); scripts get the list.
+        "tools.macros" if !["run", "define", "delete"].into_iter().any(|key| has_value(params, key)) => Some("macros"),
         "styles.organizer" if !has_value(params, "path") => Some("organizer"),
         "developer.properties" if no_settings(params) => Some("controlProperties"),
         _ => None,
@@ -1032,11 +1061,14 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.language"
             | "ui.saveChanges"
             | "ui.openFileDialog"
+            | "ui.printCancel"
             | "ui.fileBrowser"
             | "ui.makeDefaultApp"
             | "ui.discord"
             | "ui.caretAnimation"
             | "ui.startScreen"
+            | "ui.displayServer"
+            | "ui.statusCount"
             | "ui.checkForUpdates"
     ) || id.starts_with("help.")
 }
