@@ -132,6 +132,17 @@ impl eframe::App for App {
     }
 }
 
+/// The monitors' rectangles on the desktop, in physical pixels.
+fn available_monitors(window: &winit::window::Window) -> Vec<egui::Rect> {
+    window
+        .available_monitors()
+        .map(|m| {
+            let (pos, size) = (m.position(), m.size());
+            egui::Rect::from_min_size(egui::pos2(pos.x as f32, pos.y as f32), egui::vec2(size.width as f32, size.height as f32))
+        })
+        .collect()
+}
+
 /// Whether a grippable part of the window is on a monitor, and the primary monitor bounds.
 /// Winit reports physical pixels; egui positions use points. `None` where the platform cannot
 /// report the window or primary monitor (Wayland, headless).
@@ -149,8 +160,7 @@ fn monitor_geometry(frame: &eframe::Frame, pixels_per_point: f32) -> (Option<boo
     let physical_rect = |(x, y): (i32, i32), (width, height): (u32, u32)| {
         egui::Rect::from_min_size(egui::pos2(x as f32, y as f32), egui::vec2(width as f32, height as f32))
     };
-    let monitors: Vec<egui::Rect> =
-        w.available_monitors().map(|m| physical_rect((m.position().x, m.position().y), (m.size().width, m.size().height))).collect();
+    let monitors = available_monitors(w);
     let on_a_monitor = (!monitors.is_empty()).then(|| reachable(physical_rect((pos.x, pos.y), (size.width, size.height)), &monitors));
     let primary_monitor_rect = w.primary_monitor().map(|m| {
         let pos = m.position();
@@ -331,9 +341,16 @@ fn write_prefs(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 /// Native file dialogs, shown without blocking the window (`file_dialogs`, #94), File › Print
 /// through the system spooler (`print`), the system clipboard's text, formatted copies,
 /// pictures and format names (`clipboard`, #45, #584, #687, #833), the system's animation setting
-/// (`animations`), and making WordCraft the default app for Word documents (`default_apps`, #295).
-fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
+/// (`animations`), making WordCraft the default app for Word documents (`default_apps`, #295) and
+/// the desktop's monitors, which the window's handle can list.
+fn services(file_dialog: file_dialogs::Hook, cc: &eframe::CreationContext<'_>) -> Services {
+    let ctx = &cc.egui_ctx;
+    let window = cc.winit_window().map(std::sync::Arc::downgrade);
     Services {
+        monitors: Some(Box::new(move || {
+            let Some(window) = window.as_ref().and_then(std::sync::Weak::upgrade) else { return Vec::new() };
+            available_monitors(&window)
+        })),
         file_dialog: Some(file_dialog),
         printers: Some(print::discover()),
         print_native: Some(print::submit()),
@@ -563,7 +580,7 @@ fn main() -> eframe::Result {
             let (file_dialog, dialogs) = file_dialogs::hook(&cc.egui_ctx);
             let mut session = Session::new(doc);
             session.system_region = region;
-            let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
+            let mut app = WordApp::new(session, services(file_dialog, cc));
             app.set_startup_update_check(true);
             load_prefs(&mut app);
             load_user_dictionary(&mut app);
