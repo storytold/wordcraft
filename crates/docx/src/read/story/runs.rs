@@ -132,6 +132,10 @@ impl Reader<'_> {
             Some(p) => self.run_props(p, ctx),
             None => self.run_props_none(ctx),
         };
+        let previous_source_run = pb.source_run;
+        let source_run = pb.next_source_run;
+        pb.next_source_run = pb.next_source_run.saturating_add(1);
+        pb.source_run = Some(source_run);
         let mut note: Option<(NoteKind, u32, Option<String>)> = None;
         for k in r.els() {
             self.read_run_child(sc, pb, k, (&props, rels), &mut note, depth + 1);
@@ -139,6 +143,7 @@ impl Reader<'_> {
         if let Some((kind, id, custom)) = note.take() {
             self.emit_obj(sc, pb, InlineObject::NoteRef { kind, id, custom: custom.unwrap_or_default() }, &props);
         }
+        pb.source_run = previous_source_run;
     }
 
     fn read_run_child(
@@ -369,7 +374,7 @@ impl Reader<'_> {
         match sink(sc) {
             Some(f) => {
                 if f.phase == Phase::Result && f.buf.len() < 100_000 {
-                    f.buf.push((Item::Text(s.to_string()), props.clone()));
+                    f.buf.push((Item::Text(s.to_string()), props.clone(), pb.source_run));
                 }
             }
             _ => pb.push_text(s, props),
@@ -380,7 +385,7 @@ impl Reader<'_> {
         match sink(sc) {
             Some(f) => {
                 if f.phase == Phase::Result && f.buf.len() < 100_000 {
-                    f.buf.push((Item::Obj(Box::new(o)), props.clone()));
+                    f.buf.push((Item::Obj(Box::new(o)), props.clone(), pb.source_run));
                 }
             }
             _ => pb.push_obj(o, props),

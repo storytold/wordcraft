@@ -26,6 +26,16 @@ fn is_range_instr(instr: &str) -> bool {
 }
 
 impl Reader<'_> {
+    fn emit_buffered_item(&mut self, sc: &mut StoryCtx, pb: &mut PB, item: Item, props: &CharProps, source_run: Option<usize>) {
+        let previous_source_run = pb.source_run;
+        pb.source_run = source_run;
+        match item {
+            Item::Text(t) => self.emit_text(sc, pb, &t, props),
+            Item::Obj(o) => self.emit_obj(sc, pb, *o, props),
+        }
+        pb.source_run = previous_source_run;
+    }
+
     // ---- fields ----
 
     pub(super) fn begin_field(&mut self, sc: &mut StoryCtx, props: CharProps, instr: String, locked: bool, dirty: bool, form: String) {
@@ -97,12 +107,9 @@ impl Reader<'_> {
         // carrying the link, so a tab in it reaches its tab stop and the `PAGEREF` in a table of
         // contents entry (Word for the web writes them this way) stays a field of its own (#2174).
         if !nested_in_instr && let Some(target) = hyperlink_target(&f.instr) {
-            for (it, mut p) in f.buf {
+            for (it, mut p, source_run) in f.buf {
                 p.link.get_or_insert_with(|| target.clone());
-                match it {
-                    Item::Text(t) => self.emit_text(sc, pb, &t, &p),
-                    Item::Obj(o) => self.emit_obj(sc, pb, *o, &p),
-                }
+                self.emit_buffered_item(sc, pb, it, &p, source_run);
             }
             return;
         }
@@ -112,20 +119,17 @@ impl Reader<'_> {
         // A tracked insertion or deletion inside the result (one the field itself isn't wrapped
         // in) keeps the field a range too: a cached text result has one revision at most, so
         // each piece stays an ordinary run with its own `w:ins` / `w:del` (#1037).
-        let tracked_inside = f.buf.iter().any(|(_, p)| (p.ins, p.del) != (f.props.ins, f.props.del));
-        if !nested_in_instr && (tracked_inside || f.buf.iter().any(|(it, _)| matches!(it, Item::Obj(o) if o.frame().is_some()))) {
+        let tracked_inside = f.buf.iter().any(|(_, p, _)| (p.ins, p.del) != (f.props.ins, f.props.del));
+        if !nested_in_instr && (tracked_inside || f.buf.iter().any(|(it, _, _)| matches!(it, Item::Obj(o) if o.frame().is_some()))) {
             self.emit_obj(sc, pb, InlineObject::FieldStart { instr: f.instr.trim().to_string(), locked: f.locked, dirty: f.dirty }, &f.props);
-            for (it, p) in f.buf {
-                match it {
-                    Item::Text(t) => self.emit_text(sc, pb, &t, &p),
-                    Item::Obj(o) => self.emit_obj(sc, pb, *o, &p),
-                }
+            for (it, p, source_run) in f.buf {
+                self.emit_buffered_item(sc, pb, it, &p, source_run);
             }
             self.emit_obj(sc, pb, InlineObject::FieldEnd, &f.props);
             return;
         }
         let mut result = String::new();
-        for (it, _) in &f.buf {
+        for (it, _, _) in &f.buf {
             match it {
                 Item::Text(t) => result.push_str(t),
                 Item::Obj(o) => result.push_str(o.plain_text()),
@@ -140,7 +144,7 @@ impl Reader<'_> {
         let props = f
             .buf
             .iter()
-            .find_map(|(it, p)| match it {
+            .find_map(|(it, p, _)| match it {
                 Item::Text(t) if !t.is_empty() => Some(p),
                 Item::Obj(o) if !o.plain_text().is_empty() => Some(p),
                 _ => None,
@@ -171,11 +175,14 @@ impl Reader<'_> {
                 InlineObject::Field { instr: f.instr.trim().to_string(), result: String::new(), locked: f.locked, dirty: f.dirty, code: false, form },
                 &f.props,
             );
-            for (it, p) in f.buf.drain(..) {
+            for (it, p, source_run) in f.buf.drain(..) {
+                let previous_source_run = pb.source_run;
+                pb.source_run = source_run;
                 match it {
                     Item::Text(t) => pb.push_text(&t, &p),
                     Item::Obj(o) => pb.push_obj(*o, &p),
                 }
+                pb.source_run = previous_source_run;
             }
         }
     }

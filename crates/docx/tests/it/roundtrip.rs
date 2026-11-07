@@ -140,6 +140,7 @@ fn every_char_prop_round_trips() {
             vert: Some(false),
             vert_compress: Some(true),
         }),
+        fit_text: Some(wordcraft_doc::props::FitText { width: Some(720), id: Some(1) }),
         link: None,
         ins: None,
         del: None,
@@ -155,6 +156,25 @@ fn every_char_prop_round_trips() {
     assert_eq!(p.runs[1].props, all);
     assert_eq!(p.runs[2].props, auto);
     assert_eq!(p.runs[0].props, CharProps::default());
+}
+
+#[test]
+fn adjacent_ungrouped_fit_text_runs_remain_separate_after_round_trips() {
+    let props = CharProps { fit_text: Some(wordcraft_doc::props::FitText { width: Some(720), id: None }), ..Default::default() };
+    let doc = doc_with(vec![para_runs(&[("first", props.clone()), ("second", props)])]);
+    assert_eq!(paras(&doc)[0].text, "firstsecond");
+    let bytes = wordcraft_docx::write(&doc).unwrap();
+    let xml = part_xml(&bytes, "word/document.xml");
+    let first = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(paras(&first)[0].text, "firstsecond", "{xml}");
+    let second = rt(&first);
+    let p = paras(&second)[0];
+    let xml = part_xml(&wordcraft_docx::write(&second).unwrap(), "word/document.xml");
+    assert_eq!(p.text, "firstsecond", "{xml}");
+    assert_eq!(p.runs.len(), 2);
+    assert!(p.runs.iter().all(|run| run.props.fit_text.as_ref().is_some_and(|fit| fit.id.is_none())));
+    assert_eq!(xml.matches("<w:fitText").count(), 2);
+    assert!(!xml.contains("w:id="));
 }
 
 #[test]

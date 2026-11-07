@@ -23,6 +23,12 @@ pub use inline_kinds::{NoteKind, PTabAlign, PTabBase, RubyAlign, ShapeKind, ruby
 pub use inline_object::{CanvasStyle, GroupChild, InlineObject, MAX_GROUP_CHILDREN};
 pub use run::{COLUMN_BREAK, LINE_BREAK, NB_HYPHEN, NBSP, OBJ, PAGE_BREAK, Run, SOFT_HYPHEN, next_rev};
 
+/// Whether adjacent runs with these properties retain a meaningful DOCX boundary.
+/// Fit-text runs without a group id are independent regions and must remain separate.
+pub fn runs_can_merge(left: &CharProps, right: &CharProps) -> bool {
+    left == right && !left.fit_text.as_ref().is_some_and(|fit| fit.id.is_none())
+}
+
 /// A paragraph.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Paragraph {
@@ -284,6 +290,19 @@ impl Paragraph {
     }
 
     fn insert_run(&mut self, off: usize, len: usize, props: CharProps) {
+        // Inserting text with the same properties inside a run should extend that source run.
+        // In particular, splitting an ungrouped `w:fitText` run would make the writer assign its
+        // width to three XML runs instead of keeping the original region intact.
+        let mut run_start = 0usize;
+        for run in &mut self.runs {
+            let run_end = run_start.saturating_add(run.len);
+            if off > run_start && off < run_end && run.props == props {
+                run.len = run.len.saturating_add(len);
+                return;
+            }
+            run_start = run_end;
+        }
+
         // Split the run at `off`, insert, merge neighbours.
         let mut start = 0;
         let mut idx = self.runs.len();
@@ -326,7 +345,7 @@ impl Paragraph {
                 continue;
             }
             match out.last_mut() {
-                Some(l) if l.props == r.props => l.len += e - end,
+                Some(l) if runs_can_merge(&l.props, &r.props) => l.len += e - end,
                 _ => out.push(Run { len: e - end, props: r.props }),
             }
             end = e;
@@ -620,6 +639,33 @@ impl Paragraph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_merge_keeps_ungrouped_fit_text_regions_separate() {
+        let ungrouped = CharProps { fit_text: Some(crate::props::FitText { width: Some(720), id: None }), ..Default::default() };
+        assert!(!runs_can_merge(&ungrouped, &ungrouped));
+        let grouped = CharProps { fit_text: Some(crate::props::FitText { width: Some(720), id: Some(1) }), ..Default::default() };
+        assert!(runs_can_merge(&grouped, &grouped));
+        assert!(runs_can_merge(&CharProps::default(), &CharProps::default()));
+    }
+
+    #[test]
+    fn insert_with_matching_fit_text_properties_keeps_the_source_region() {
+        let fit_text = CharProps { fit_text: Some(crate::props::FitText { width: Some(720), id: None }), ..Default::default() };
+        let mut same = Paragraph::with_text("abcd", fit_text.clone());
+        same.insert_text(2, "X", &fit_text).unwrap();
+        assert_eq!(same.text, "abXcd");
+        assert_eq!(same.runs.len(), 1);
+        assert_eq!(same.runs[0].len, same.text.len());
+
+        let mut different = Paragraph::with_text("abcd", fit_text.clone());
+        different.insert_text(2, "X", &bold()).unwrap();
+        assert_eq!(different.text, "abXcd");
+        assert_eq!(different.runs.len(), 3);
+        assert_eq!(different.runs[0].props, fit_text);
+        assert_eq!(different.runs[1].props, bold());
+        assert_eq!(different.runs[2].props, different.runs[0].props);
+    }
 
     #[test]
     fn sentence_at_sentence_start() {

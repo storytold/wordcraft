@@ -68,7 +68,7 @@ struct FieldState {
     instr: String,
     phase: Phase,
     spilled: bool,
-    buf: Vec<(Item, CharProps)>,
+    buf: Vec<(Item, CharProps, Option<usize>)>,
     props: CharProps,
     locked: bool,
     /// `w:dirty` from the begin marker: the result is stale, Word refreshes it on open.
@@ -121,6 +121,9 @@ struct PB {
     text: String,
     runs: Vec<Run>,
     objects: Vec<InlineObject>,
+    source_run: Option<usize>,
+    last_run_source: Option<usize>,
+    next_source_run: usize,
 }
 
 impl PB {
@@ -137,10 +140,13 @@ impl PB {
         self.push_run(wordcraft_doc::para::OBJ.len_utf8(), props);
     }
     fn push_run(&mut self, len: usize, props: &CharProps) {
+        let same_source_run =
+            self.source_run.is_some_and(|source| self.last_run_source == Some(source)) && self.runs.last().is_some_and(|run| run.props == *props);
         match self.runs.last_mut() {
-            Some(r) if r.props == *props => r.len += len,
+            Some(r) if same_source_run || wordcraft_doc::para::runs_can_merge(&r.props, props) => r.len += len,
             _ => self.runs.push(Run { len, props: props.clone() }),
         }
+        self.last_run_source = self.source_run;
     }
 }
 
