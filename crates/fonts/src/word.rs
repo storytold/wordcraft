@@ -32,12 +32,24 @@ fn substitutes(family: &str) -> &'static [&'static str] {
 /// as Liberation Serif for Times New Roman, or the same design under another name), rather than
 /// the generic lists any unknown font gets?
 pub fn has_named_substitutes(family: &str) -> bool {
-    substitutes_by_name(charset_base_family(family)).1
+    family.split(';').map(str::trim).filter(|f| !f.is_empty()).any(|f| substitutes_by_name(charset_base_family(f)).1)
 }
+
+const SANS: &[&str] = &["Carlito", "Helvetica Neue", "Arial", "Liberation Sans", "Noto Sans", "DejaVu Sans", "Source Sans 3"];
 
 /// [`substitutes`], and whether they were chosen for this family by name.
 fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
-    const SANS: &[&str] = &["Carlito", "Helvetica Neue", "Arial", "Liberation Sans", "Noto Sans", "DejaVu Sans", "Source Sans 3"];
+    if family.contains(';') {
+        for cand in family.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+            let (subs, named) = substitutes_by_name(cand);
+            if named || is_thai_family(cand) || subs != SANS {
+                return (subs, named);
+            }
+        }
+        if let Some(first) = family.split(';').map(str::trim).find(|s| !s.is_empty()) {
+            return substitutes_by_name(first);
+        }
+    }
     const SERIF: &[&str] = &["Caladea", "Times New Roman", "Liberation Serif", "Georgia", "Noto Serif", "DejaVu Serif", "Source Serif 4"];
     const MONO: &[&str] = &["Courier New", "Liberation Mono", "Menlo", "Consolas", "DejaVu Sans Mono", "JetBrains Mono"];
     const ARIAL: &[&str] = &["Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
@@ -157,11 +169,11 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
 /// itself: a Symbol bullet makes its line taller than the text alone. The values are those Word's
 /// PDFs give the fonts (`/Ascent`, `/Descent`).
 pub fn symbol_font_metrics(family: &str) -> Option<(f64, f64)> {
-    match family.trim().to_ascii_lowercase().as_str() {
+    family.split(';').map(str::trim).filter(|f| !f.is_empty()).find_map(|f| match f.to_ascii_lowercase().as_str() {
         "symbol" | "symbol (pcl6)" => Some((1.005, 0.216)),
         "wingdings" => Some((0.899, 0.205)),
         _ => None,
-    }
+    })
 }
 
 /// The (ascent, descent) in em Word gives a line with a run in a symbol font, when that isn't the
@@ -224,7 +236,10 @@ fn metric_twins(family: &str) -> impl Iterator<Item = &'static str> + '_ {
 /// wraps and paginates as in `family`.
 pub fn metric_compatible(family: &str, substitute: &str) -> bool {
     let s = substitute.trim();
-    metric_twins(charset_base_family(family.trim())).any(|t| t.eq_ignore_ascii_case(s))
+    family.split(';').map(str::trim).filter(|f| !f.is_empty()).any(|f| {
+        let base = charset_base_family(f);
+        base.eq_ignore_ascii_case(s) || metric_twins(base).any(|t| t.eq_ignore_ascii_case(s))
+    })
 }
 
 /// Naskh-style Persian/Arabic document fonts (the "B …" family names come from the common
@@ -356,8 +371,10 @@ fn is_thai_serif(f: &str) -> bool {
 /// Is `family` a Thai document font ([`is_thai`])? A missing one is drawn in a Thai face for the
 /// whole run, never in a Latin substitute (#1549).
 pub fn is_thai_family(family: &str) -> bool {
-    let f = family.to_ascii_lowercase();
-    is_thai(&f) || is_thai_serif(&f)
+    family.split(';').map(str::trim).filter(|f| !f.is_empty()).any(|f| {
+        let f = f.to_ascii_lowercase();
+        is_thai(&f) || is_thai_serif(&f)
+    })
 }
 
 /// Khmer document fonts: the Khmer OS family, Khmer Mool1 and the like, Windows' and the Mac's
@@ -416,8 +433,165 @@ fn resolve_cache() -> &'static Mutex<Memo> {
 }
 
 const FAMILY_CACHE_MAX: usize = 4096;
-/// Family names longer than this (bytes) are resolved but never remembered.
+/// Family names longer than this (bytes) are resolved but never remembered as string keys.
 const FAMILY_KEY_MAX: usize = 256;
+/// Maximum number of direct `FontDb::has_family` catalog scans per uncached fallback list
+/// for candidate names not present in [`FontDb::families`].
+const MAX_DIRECT_CANDIDATE_PROBES: usize = 32;
+
+/// Memoised fallback-list resolutions and installed-family lookups for the current [`FontDb::generation`].
+#[derive(Default)]
+struct FallbackListMemo {
+    generation: u64,
+    families: std::collections::HashSet<String>,
+    probed: HashMap<String, bool>,
+    lists: HashMap<(u64, usize), (String, bool)>,
+    long_resolved: HashMap<(u64, usize, bool, bool), Resolved>,
+}
+
+/// Shared cache for fallback-list resolutions and candidate availability checks.
+fn fallback_list_cache() -> &'static Mutex<FallbackListMemo> {
+    static CACHE: OnceLock<Mutex<FallbackListMemo>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(FallbackListMemo::default()))
+}
+
+/// Hash and byte length of `family`, used as a compact cache key for fallback lists.
+fn family_list_key(family: &str) -> (u64, usize) {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    family.hash(&mut h);
+    (h.finish(), family.len())
+}
+
+/// Whether `cand` is an installed family in `db`, using the memoised family set and bounded
+/// direct catalog probes so long fallback lists do not rescan the font catalog for every candidate.
+fn candidate_has_family(db: &FontDb, cand: &str, direct_probes: &mut usize) -> bool {
+    let cand = cand.trim();
+    if cand.is_empty() || cand.len() > FAMILY_KEY_MAX {
+        return false;
+    }
+    let generation = db.generation();
+    let lower = cand.to_ascii_lowercase();
+    {
+        let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if c.generation != generation {
+            *c = FallbackListMemo { generation, ..Default::default() };
+        }
+        if c.families.is_empty() {
+            c.families = db.families().into_iter().map(|f| f.to_ascii_lowercase()).collect();
+        }
+        if c.families.contains(&lower) {
+            return true;
+        }
+        if let Some(&hit) = c.probed.get(&lower) {
+            return hit;
+        }
+    }
+    if *direct_probes == 0 {
+        return false;
+    }
+    *direct_probes -= 1;
+    let hit = db.has_family(cand);
+    let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if c.generation == generation {
+        if c.probed.len() >= FAMILY_CACHE_MAX {
+            c.probed.clear();
+        }
+        c.probed.insert(lower, hit);
+    }
+    hit
+}
+
+/// Record a resolved `(family, substituted)` pair for a semicolon-separated fallback list.
+fn remember_list_resolution(generation: u64, key: (u64, usize), result: (String, bool)) -> (String, bool) {
+    let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if c.generation == generation {
+        if c.lists.len() >= FAMILY_CACHE_MAX {
+            c.lists.clear();
+        }
+        c.lists.insert(key, result.clone());
+    }
+    result
+}
+
+/// Resolve a single family or semicolon-separated fallback list to `(family_name, substituted)`.
+fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
+    if !family.contains(';') {
+        let base = if family.trim().eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(family) };
+        return if db.has_family(family) {
+            (family.to_string(), false)
+        } else if base != family && db.has_family(base) {
+            (base.to_string(), false)
+        } else {
+            (substitute(db, base).unwrap_or(crate::FALLBACK_FAMILY).to_string(), true)
+        };
+    }
+
+    let generation = db.generation();
+    let list_key = family_list_key(family);
+    {
+        let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if c.generation != generation {
+            *c = FallbackListMemo { generation, ..Default::default() };
+        } else if let Some(r) = c.lists.get(&list_key) {
+            return r.clone();
+        }
+    }
+
+    let candidates: Vec<&str> = family.split(';').map(str::trim).filter(|s| !s.is_empty() && s.len() <= FAMILY_KEY_MAX).collect();
+    if candidates.is_empty() {
+        return remember_list_resolution(generation, list_key, (crate::FALLBACK_FAMILY.to_string(), true));
+    }
+
+    let mut direct_probes = MAX_DIRECT_CANDIDATE_PROBES;
+
+    // 1. First installed family in the list:
+    for &cand in &candidates {
+        let base = if cand.eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(cand) };
+        if candidate_has_family(db, cand, &mut direct_probes) {
+            return remember_list_resolution(generation, list_key, (cand.to_string(), false));
+        }
+        if base != cand && candidate_has_family(db, base, &mut direct_probes) {
+            return remember_list_resolution(generation, list_key, (base.to_string(), false));
+        }
+    }
+
+    // 2. None installed: fall back to an installed substitute for an entry in the list rather than generic Carlito.
+    // Try Thai substitutes before metric twins of later candidates:
+    for &cand in &candidates {
+        let base = if cand.eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(cand) };
+        if is_thai_family(base)
+            && let Some(sub) = substitute(db, base)
+        {
+            return remember_list_resolution(generation, list_key, (sub.to_string(), true));
+        }
+        let mut twin_probes = MAX_DIRECT_CANDIDATE_PROBES;
+        if let Some(twin) = metric_twins(base).find(|t| candidate_has_family(db, t, &mut twin_probes)) {
+            return remember_list_resolution(generation, list_key, (twin.to_string(), true));
+        }
+    }
+
+    // Try candidates with named or category substitutes (Thai, Hebrew, Khmer, Persian, serif, mono):
+    for &cand in &candidates {
+        let base = if cand.eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(cand) };
+        let (subs, named) = substitutes_by_name(base);
+        if (named || is_thai_family(base) || subs != SANS)
+            && let Some(sub) = substitute(db, base)
+        {
+            return remember_list_resolution(generation, list_key, (sub.to_string(), true));
+        }
+    }
+
+    // Fall back to the first candidate's substitute:
+    if let Some(&first) = candidates.first() {
+        let base = if first.eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(first) };
+        if let Some(sub) = substitute(db, base) {
+            return remember_list_resolution(generation, list_key, (sub.to_string(), true));
+        }
+    }
+
+    remember_list_resolution(generation, list_key, (crate::FALLBACK_FAMILY.to_string(), true))
+}
 
 /// Resolve `family` with bold/italic to a face (memoised until user fonts are added or removed,
 /// [`FontDb::generation`]).
@@ -427,6 +601,10 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
     let generation = db.generation();
     let cacheable = family.len() <= FAMILY_KEY_MAX;
     let key = (if cacheable { family.to_string() } else { String::new() }, bold, italic);
+    let long_key = (!cacheable && family.contains(';')).then(|| {
+        let (h, len) = family_list_key(family);
+        (h, len, bold, italic)
+    });
     {
         let mut c = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if c.0 != generation {
@@ -436,24 +614,33 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
             return *r;
         }
     }
-    // Printer-driver Symbol aliases use the same encoding as Symbol.
-    let base = if family.trim().eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(family) };
-    let (fam, substituted) = if db.has_family(family) {
-        (family.to_string(), false)
-    } else if base != family && db.has_family(base) {
-        // Windows maps the charset names to the font itself: not a substitution.
-        (base.to_string(), false)
-    } else {
-        (substitute(db, base).unwrap_or(crate::FALLBACK_FAMILY).to_string(), true)
-    };
+    if let Some(lk) = long_key {
+        let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if c.generation != generation {
+            *c = FallbackListMemo { generation, ..Default::default() };
+        } else if let Some(r) = c.long_resolved.get(&lk) {
+            return *r;
+        }
+    }
+    let (fam, substituted) = resolve_family(db, family);
     let face = db.face(&fam, style_name(bold, italic));
     let r = Resolved { synth_bold: bold && face.weight < 600.0, synth_italic: italic && !face.italic, substituted, face: FaceRef::of(&face) };
-    let mut c = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if cacheable && c.0 == generation {
-        if c.1.len() >= FAMILY_CACHE_MAX {
-            c.1.clear();
+    if cacheable {
+        let mut c = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if c.0 == generation {
+            if c.1.len() >= FAMILY_CACHE_MAX {
+                c.1.clear();
+            }
+            c.1.insert(key, r);
         }
-        c.1.insert(key, r);
+    } else if let Some(lk) = long_key {
+        let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if c.generation == generation {
+            if c.long_resolved.len() >= FAMILY_CACHE_MAX {
+                c.long_resolved.clear();
+            }
+            c.long_resolved.insert(lk, r);
+        }
     }
     r
 }
@@ -786,5 +973,90 @@ mod tests {
         for f in ["No Such Brand Font", "Cambria", "Georgia", "Brand Serif"] {
             assert!(!has_named_substitutes(f), "{f}");
         }
+    }
+
+    /// Semicolon-separated fallback lists resolve to the first installed family, or to a
+    /// candidate's substitute when no listed family is installed.
+    #[test]
+    fn libreoffice_fallback_list_resolves_first_installed_family() {
+        let db = FontDb::global();
+        if db.has_family("Liberation Sans") || db.has_family("Arial") {
+            let r = resolve("Liberation Sans;Arial", false, false);
+            assert!(!r.substituted, "should not be substituted when a candidate is installed: got {:?}", r.face.family);
+            if db.has_family("Liberation Sans") {
+                assert_eq!(r.face.family, "Liberation Sans");
+            } else {
+                assert_eq!(r.face.family, "Arial");
+            }
+        }
+        let bundled = resolve("NonExistentSansFace123;Source Serif 4", false, false);
+        assert!(!bundled.substituted);
+        assert_eq!(bundled.face.family, "Source Serif 4");
+
+        // When none of the families is installed, fall back to a substitute for an entry in the list rather than generic Carlito:
+        if !db.has_family("NonExistentSansFace123") && !db.has_family("Times New Roman") {
+            let r = resolve("NonExistentSansFace123;Times New Roman", false, false);
+            assert!(r.substituted);
+            assert_ne!(r.face.family, "Carlito", "should not fall back to generic Carlito when an entry is Times New Roman");
+            assert!(r.face.family.contains("Serif") || r.face.family == "Times" || r.face.family == "Tinos", "got {:?}", r.face.family);
+        }
+        let r = resolve("NonExistentSansFace123;NonExistentSerifFace123", false, false);
+        assert!(r.substituted);
+        assert_ne!(r.face.family, "Carlito", "should not fall back to generic Carlito when an entry is a serif family");
+        assert!(
+            r.face.family.contains("Serif")
+                || r.face.family == "Times"
+                || r.face.family == "Tinos"
+                || r.face.family == "Caladea"
+                || r.face.family == "Georgia",
+            "got {:?}",
+            r.face.family
+        );
+
+        // Metric compatibility of fallback list:
+        assert!(metric_compatible("Open Sans;Arial", "Liberation Sans"));
+        assert!(metric_compatible("Liberation Sans;Arial", "Helvetica"));
+        assert!(!metric_compatible("Open Sans;Arial", "Carlito"));
+    }
+
+    /// In a mixed Thai-and-Latin fallback list where neither listed family is installed, an
+    /// earlier Thai substitute takes precedence over a later candidate's metric twin.
+    #[test]
+    fn thai_fallback_list_prefers_thai_substitute_before_later_metric_twin() {
+        let db = FontDb::global();
+        let Some(thai_sub) = substitute(db, "NonExistentThaiUPC") else {
+            eprintln!("skipped: no Thai substitute installed");
+            return;
+        };
+        if !db.has_family("Cordia New") && !db.has_family("Arial") && metric_twins("Arial").any(|t| db.has_family(t)) {
+            let r = resolve("Cordia New;Arial", false, false);
+            assert!(r.substituted);
+            assert!(substitutes("Cordia New").contains(&r.face.family.as_str()), "got {:?}", r.face.family);
+        }
+        if let Some(latin) =
+            METRIC_TWINS.iter().flat_map(|g| g.iter().copied()).find(|&f| !db.has_family(f) && metric_twins(f).any(|t| db.has_family(t)))
+        {
+            let list = format!("NonExistentThaiUPC;{latin}");
+            let r = resolve(&list, false, false);
+            assert!(r.substituted);
+            assert_eq!(r.face.family, thai_sub);
+        }
+    }
+
+    /// Fallback lists longer than `FAMILY_KEY_MAX` still select a later installed family and
+    /// cache their resolution without growing `resolve_cache` string keys.
+    #[test]
+    fn long_fallback_list_selects_later_installed_family_and_caches() {
+        let mut candidates: Vec<String> = (0..120).map(|i| format!("MissingCandidateFont{i}")).collect();
+        candidates.push("Source Serif 4".to_string());
+        let list = candidates.join(";");
+        assert!(list.len() > FAMILY_KEY_MAX);
+
+        let r1 = resolve(&list, false, false);
+        let r2 = resolve(&list, false, false);
+        assert!(!r1.substituted);
+        assert_eq!(r1.face.family, "Source Serif 4");
+        assert_eq!(r1.face.id(), r2.face.id());
+        assert!(!resolve_cache().lock().unwrap_or_else(|e| e.into_inner()).1.keys().any(|k| k.0.len() > FAMILY_KEY_MAX));
     }
 }
