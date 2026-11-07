@@ -10,6 +10,8 @@ use super::*;
 
 /// Lay out one paragraph.
 pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
+    #[cfg(test)]
+    crate::test_fonts();
     let doc = env.doc;
     let mut rp = doc.styles.resolve_para_in(&p.props, env.table.map(|t| &t.para));
     if let Some(spacing) = env.read_line_spacing.filter(|s| s.is_finite() && (1.0..=2.0).contains(s)) {
