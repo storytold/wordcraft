@@ -197,6 +197,8 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     // Deletions in balloons leave the body's text only: a header, note or text box keeps its own
     // inline (restored for the story around this box when it's done).
     let outer_hide = std::mem::replace(&mut ctx.hide_deleted, ctx.opts.hides_deleted(story));
+    // A turned cell's text (boxes and cells inside it lay out their own text upright).
+    let turned = ctx.turned_cell.take();
     let empty_cell = para::CellText::default();
     let (in_cell, table, cell_edges) = match context {
         BoxContext::Other => (false, None, None),
@@ -307,8 +309,20 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     {
                         r.x = keep_in_cell(r.x, r.w, left, right);
                     }
-                    let outline = ctx.wrap_outline(o);
-                    excl.extend(wrap_area(r, float, outline.as_deref().map(Vec::as_slice)));
+                    // In a turned cell the object stands upright while the text turns: text keeps
+                    // clear of where it stands, in the text's own frame (its outline left aside).
+                    match turned {
+                        // Its distances from text are on the object's own sides, so they're added
+                        // before the area turns into the text's frame.
+                        Some(tc) => excl.extend(wrap_area(r, float, None).map(|mut a| {
+                            a.0 = tc.frame_rect(a.0);
+                            a
+                        })),
+                        None => {
+                            let outline = ctx.wrap_outline(o);
+                            excl.extend(wrap_area(r, float, outline.as_deref().map(Vec::as_slice)));
+                        }
+                    }
                     floats.insert(oi, r);
                 }
                 let rel = rel_exclusions(&excl, 0.0, y);
@@ -400,6 +414,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     }
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(float_objects_bottom, f32::max);
     ctx.hide_deleted = outer_hide;
+    ctx.turned_cell = turned;
     BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
 }
 

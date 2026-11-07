@@ -2208,16 +2208,27 @@ fn turned_table(dir: TextDirection, text: &str, row: Option<f32>) -> Document {
     d
 }
 
+/// [`turned_table`] with its row at least `h` tall.
+fn turned_table_at_least(dir: TextDirection, text: &str, h: f32) -> Document {
+    let mut d = turned_table(dir, text, None);
+    if let Some(wordcraft_doc::Block::Table(t)) = d.body.get_mut(1).map(std::sync::Arc::make_mut) {
+        t.rows[0].props.height = Some(h);
+        t.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::AtLeast;
+    }
+    d
+}
+
 fn turned_lines(l: &DocLayout) -> &Placed {
     l.pages[0].items.iter().find(|it| matches!(it, Placed::Lines { path, .. } if path.0 == [1, 0, 1, 0])).unwrap()
 }
 
-/// Table Layout › Text Direction (#226): turned cell text runs along the cell's height, the row
-/// grows to fit it, and caret, clicks and drawing follow the turn.
+/// Table Layout › Text Direction (#226): turned cell text runs along the cell's height, and
+/// caret, clicks and drawing follow the turn. The row is at least 150pt, so the text fits in one
+/// line.
 #[test]
 fn turned_cell_text_runs_down_the_cell() {
     let text = "Turned cell text";
-    let d = turned_table(TextDirection::Down, text, None);
+    let d = turned_table_at_least(TextDirection::Down, text, 150.0);
     let l = lay(&d);
     let it = turned_lines(&l);
     assert!(matches!(it, Placed::Lines { turn: TextDirection::Down, l0: 0, l1: 1, .. }), "one unwrapped line: {it:?}");
@@ -2225,7 +2236,7 @@ fn turned_cell_text_runs_down_the_cell() {
     // Tall and narrow, against the cell's right edge (cell 2 spans x 228..384, 5.4pt margins).
     assert!(b.h > 60.0 && b.w < 20.0, "{b:?}");
     assert!((b.right() - (72.0 + 312.0 - 5.4)).abs() < 1.0 && b.x > 72.0 + 156.0, "{b:?}");
-    // The row grew to hold the text: the next paragraph starts below it.
+    // The row holds the text: the next paragraph starts below it.
     let after = l.caret(&Pos::body(2, 0)).unwrap();
     assert!(after.top > b.bottom(), "{after:?} vs {b:?}");
     let cell = l.pages[0].items.iter().find_map(|i| if let Placed::Cell { rect, cell: 1, .. } = i { Some(*rect) } else { None }).unwrap();
@@ -2238,16 +2249,18 @@ fn turned_cell_text_runs_down_the_cell() {
     assert!((c0.top - b.y).abs() < 1.0 && c1.top > c0.top + 50.0, "{c0:?} {c1:?}");
     assert!(c0.x >= b.x - 0.5 && c0.x + c0.width <= b.right() + 0.5, "{c0:?} {b:?}");
     // A click on the turned text lands in it, by how far down the click is.
-    let hit = l.hit(0, b.x + b.w / 2.0, b.y + b.h * 0.6, StoryRef::Body).unwrap();
+    // (40pt in: the text is about 95pt long, its line as long as the row.)
+    let hit = l.hit(0, b.x + b.w / 2.0, b.y + 40.0, StoryRef::Body).unwrap();
     assert_eq!(hit.path, Path(vec![1, 0, 1, 0]));
     assert!(hit.off > 3 && hit.off < text.len(), "{hit:?}");
     // Selection highlights are turned too: tall, inside the text's area.
     let sel = l.selection_rects(&d, &pos(0), &pos(text.len()), 0);
     assert!(sel.iter().all(|(_, r)| r.h > r.w && r.x >= b.x - 1.0 && r.right() <= b.right() + 1.0), "{sel:?}");
-    // Drawn in a turned frame.
+    // Drawn in a turned frame, in the cell's clip (turned text is cut off at the cell's edges).
     let draws = display::page_display(&d, &l.pages[0], &Default::default());
-    let turned = draws.iter().find_map(|x| if let display::Draw::Turned { turn, items, .. } = x { Some((*turn, items)) } else { None });
-    let (turn, items) = turned.expect("turned draw");
+    let clipped = draws.iter().filter_map(|x| if let display::Draw::Clip { items, .. } = x { Some(items) } else { None }).flatten();
+    let turned = clipped.filter_map(|x| if let display::Draw::Turned { turn, items, .. } = x { Some((*turn, items)) } else { None }).next();
+    let (turn, items) = turned.expect("turned draw in a clip");
     assert_eq!(turn, TextDirection::Down);
     assert!(items.iter().any(|x| matches!(x, display::Draw::Glyphs { text, .. } if text.contains("Turned"))), "{items:?}");
 }
@@ -2255,7 +2268,7 @@ fn turned_cell_text_runs_down_the_cell() {
 #[test]
 fn turned_up_cell_text_reads_bottom_to_top() {
     let text = "Bottom to top";
-    let d = turned_table(TextDirection::Up, text, None);
+    let d = turned_table_at_least(TextDirection::Up, text, 150.0);
     let l = lay(&d);
     let b = turned_lines(&l).turned_bounds().unwrap();
     // Against the cell's left edge; the text starts at the bottom and climbs.
@@ -2434,6 +2447,237 @@ fn turned_text_wraps_in_an_exact_row() {
     assert!(b.h <= 72.0 && b.w > 30.0, "{b:?}");
     let after = l.caret(&Pos::body(2, 0)).unwrap();
     assert!(after.top < b.y + 72.0 + 30.0, "the row keeps its exact height: {after:?}");
+}
+
+/// Turned text never makes a row taller: its lines wrap at the row's height, which the row's own
+/// height and its upright cells set, and what doesn't fit across the cell is cut off at its
+/// edges. Word for Windows: rows at least 50pt holding 5 to 80 turned words (and nothing upright
+/// but a short label) stay 50pt, and rows with no height are as tall as the label, their turned
+/// text cut off at the cell's sides. WordCraft laid the text out unwrapped, up to 648pt, and grew
+/// the row to that.
+#[test]
+fn turned_text_never_makes_a_row_taller() {
+    let cell = |l: &DocLayout| {
+        l.pages[0].items.iter().find_map(|i| if let Placed::Cell { rect, cell: 1, clip, .. } = i { Some((rect.h, *clip)) } else { None }).unwrap()
+    };
+    let lines = |l: &DocLayout| if let Placed::Lines { l0, l1, .. } = turned_lines(l) { l1 - l0 } else { 0 };
+    // A row at least 72pt: the text wraps there and the row keeps its height, however much text.
+    for words in [15, 100] {
+        let l = lay(&turned_table_at_least(TextDirection::Down, &"word ".repeat(words), 72.0));
+        let (h, clip) = cell(&l);
+        assert!(lines(&l) > 2, "{words} words wrap at the row's height");
+        assert!(h < 72.0 + 2.0, "{words} words: the row keeps its height: {h}");
+        assert!(clip, "cut off at the cell's edges");
+        let b = turned_lines(&l).turned_bounds().unwrap();
+        assert!(b.h <= 72.0 + 0.5, "lines no longer than the row: {b:?}");
+    }
+    // No height: the row is as tall as its upright cell ("plain", one line), and the turned
+    // text wraps at that.
+    let l = lay(&turned_table(TextDirection::Up, &"word ".repeat(15), None));
+    let (h, _) = cell(&l);
+    assert!(h < 30.0, "as tall as the upright cell: {h}");
+    assert!(lines(&l) > 5, "wraps at the row's height");
+    // Many paragraphs: the row keeps its height too.
+    let mut d = turned_table_at_least(TextDirection::Down, "", 72.0);
+    if let Some(wordcraft_doc::Block::Table(t)) = d.body.get_mut(1).map(std::sync::Arc::make_mut) {
+        t.rows[0].cells[1].blocks =
+            (0..20).map(|_| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("word", Default::default()))).collect();
+    }
+    assert!(cell(&lay(&d)).0 < 72.0 + 2.0);
+}
+
+/// Turned cells in at-least rows nested in one another are laid out a bounded number of times
+/// (an earlier search for each one's line length multiplied the layouts per level, so a few
+/// nested levels took millions of layouts and opening the file hung).
+#[test]
+fn nested_turned_cells_in_at_least_rows_are_laid_out_a_bounded_number_of_times() {
+    let levels = 4;
+    let mut inner: Option<Table> = None;
+    for _ in 0..levels {
+        let mut t = Table::new(1, 2, 300.0);
+        let mut blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&"word ".repeat(60), Default::default()))];
+        if let Some(i) = inner.take() {
+            blocks.insert(0, wordcraft_doc::Block::Table(i).into());
+        }
+        t.rows[0].cells[1].blocks = blocks;
+        t.rows[0].cells[1].props.text_direction = TextDirection::Down;
+        t.rows[0].props.height = Some(36.0);
+        t.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::AtLeast;
+        inner = Some(t);
+    }
+    let mut d = Document::from_text("before\nafter");
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(inner.unwrap())).unwrap();
+    crate::table::TURNED_LAYOUTS.with(|n| n.set(0));
+    let l = lay(&d);
+    let n = crate::table::TURNED_LAYOUTS.with(std::cell::Cell::get);
+    assert!(!l.pages.is_empty());
+    assert!(n < 2_000, "turned cells laid out {n} times");
+}
+
+/// A floating text box anchored in a turned cell doesn't turn with the cell's text: it stands
+/// upright at its offsets from the cell (upright in Word for Windows too, though placed differently). WordCraft turned it with the text, so a
+/// tall box lay on its side and its text ran in one line across the page.
+#[test]
+fn a_floating_text_box_in_a_turned_cell_stays_upright() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = turned_table(TextDirection::Down, "Turned cell text", None);
+    let float = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: -150.0, y: 10.0, ..Default::default() };
+    let pos = Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off: 0 };
+    let id = text_box_at(&mut d, &pos, "Box text", 100.0, 40.0, float);
+    let l = lay(&d);
+    let cell = l.pages[0].items.iter().find_map(|i| if let Placed::Cell { rect, cell: 1, .. } = i { Some(*rect) } else { None }).unwrap();
+    let rect = l.pages[0]
+        .items
+        .iter()
+        .find_map(|i| if let Placed::Object { rect, text_box: Some(b), .. } = i { (*b == id).then_some(*rect) } else { None })
+        .unwrap();
+    assert!((rect.w - 100.0).abs() < 0.5 && (rect.h - 40.0).abs() < 0.5, "upright, not on its side: {rect:?}");
+    assert!((rect.x - (cell.x + 5.4 - 150.0)).abs() < 2.0, "at its offset from the cell's left: {rect:?} vs {cell:?}");
+    assert!(rect.y > cell.y && rect.y < cell.y + 20.0, "at its offset from the cell's top: {rect:?} vs {cell:?}");
+    let box_lines = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Part(b), .. } if *b == id));
+    assert!(matches!(box_lines, Some(Placed::Lines { turn: TextDirection::Horizontal, .. })), "its text runs across: {box_lines:?}");
+}
+
+/// A floating group's text boxes stand upright with it in a turned cell, like a lone text box.
+#[test]
+fn a_floating_group_in_a_turned_cell_keeps_its_text_upright() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = turned_table(TextDirection::Down, "Turned cell text", None);
+    let id = d.add_part(
+        wordcraft_doc::PartKind::TextBox,
+        vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Box text", Default::default()))],
+    );
+    let member = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w: 100.0,
+        h: 40.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.75,
+        float: Float::default(),
+        story: Some(id),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let float = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: -150.0, y: 10.0, ..Default::default() };
+    let group = InlineObject::Group {
+        w: 100.0,
+        h: 40.0,
+        float,
+        ch_w: 100.0,
+        ch_h: 40.0,
+        children: vec![wordcraft_doc::para::GroupChild { x: 0.0, y: 0.0, obj: member }],
+        canvas: None,
+    };
+    d.insert_object(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off: 0 }, group, &Default::default()).unwrap();
+    let l = lay(&d);
+    let box_lines = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Part(b), .. } if *b == id));
+    assert!(matches!(box_lines, Some(Placed::Lines { turn: TextDirection::Horizontal, .. })), "its text runs across: {box_lines:?}");
+}
+
+/// The turned cell's lines on page 0 that come within `pad` (left, right) of the floating
+/// picture in a turned cell, laid out with `text`, the picture `x` in from the cell's left and
+/// wrapped with `float`, and the cell aligned `valign`; and how many lines there are.
+fn turned_lines_over_picture(
+    dir: TextDirection,
+    text: &str,
+    x: f32,
+    float: wordcraft_doc::para::Float,
+    valign: wordcraft_doc::props::VAlign,
+    pad: f32,
+) -> (Vec<Rect>, usize) {
+    use wordcraft_doc::para::Anchor;
+    let mut d = turned_table(dir, text, Some(200.0));
+    if let Some(Block::Table(t)) = d.body.get_mut(1).map(Arc::make_mut) {
+        t.rows[0].cells[1].props.valign = Some(valign);
+    }
+    let float = wordcraft_doc::para::Float { h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x, y: 0.0, ..float };
+    d.insert_object(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off: 0 }, picture(30.0, 60.0, float), &Default::default()).unwrap();
+    let l = lay(&d);
+    let obj = l.pages[0]
+        .items
+        .iter()
+        .find_map(|i| if let Placed::Object { rect, path, .. } = i { (path.0 == [1, 0, 1, 0]).then_some(*rect) } else { None })
+        .expect("the picture's area");
+    assert!((obj.w - 30.0).abs() < 0.5 && (obj.h - 60.0).abs() < 0.5, "{dir:?}: upright: {obj:?}");
+    let keep = obj.inset(1.0 - pad, 1.0, 1.0 - pad, 1.0);
+    let (mut over, mut lines) = (Vec::new(), 0);
+    for it in &l.pages[0].items {
+        let Placed::Lines { x, y, para, l0, l1, turn, path, .. } = it else { continue };
+        if path.0 != [1, 0, 1, 0] {
+            continue;
+        }
+        for line in para.lines.get(*l0..*l1).unwrap_or_default() {
+            let r = crate::placed::turn_rect(*turn, *x, *y, Rect::new(line.left, line.top, line.right - line.left, line.height));
+            if r.intersects(&keep) {
+                over.push(r);
+            }
+            lines += 1;
+        }
+    }
+    (over, lines)
+}
+
+/// Turned text keeps clear of a square-wrapped object standing upright in its cell: where the
+/// object stands, in the turned text's own frame. Its wrap area was taken unturned, so text
+/// ran over the object and left a gap elsewhere.
+#[test]
+fn turned_cell_text_wraps_around_an_upright_object() {
+    use wordcraft_doc::para::{Float, Wrap};
+    let square = Float { wrap: Wrap::Square, ..Default::default() };
+    for dir in [TextDirection::Down, TextDirection::Up] {
+        let (over, lines) = turned_lines_over_picture(dir, &"word ".repeat(60), 0.0, square.clone(), wordcraft_doc::props::VAlign::Top, 0.0);
+        assert!(over.is_empty() && lines > 5, "{dir:?}: no line over the picture, of {lines}: {over:?}");
+        // Its distance from text on its left and right is kept on its left and right.
+        let apart = Float { dist: 20.0, dist_top: 0.0, dist_bottom: 0.0, ..square.clone() };
+        let (over, _) = turned_lines_over_picture(dir, &"word ".repeat(60), 0.0, apart, wordcraft_doc::props::VAlign::Top, 19.0);
+        assert!(over.is_empty(), "{dir:?}: lines 20pt clear of its sides: {over:?}");
+        // Centred lines keep clear of it where they end up.
+        let (over, lines) = turned_lines_over_picture(dir, &"word ".repeat(20), 60.0, square.clone(), wordcraft_doc::props::VAlign::Center, 0.0);
+        assert!(over.is_empty() && lines > 1, "{dir:?}: centred lines clear of the picture, of {lines}: {over:?}");
+    }
+}
+
+/// A grouped text box linked from another shows that chain's text; it stands upright too.
+#[test]
+fn a_grouped_linked_text_box_in_a_turned_cell_stays_upright() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = turned_table(TextDirection::Down, "Turned cell text", None);
+    let first = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, ..Default::default() };
+    let a = text_box_at(&mut d, &Pos::body(0, 0), &"Linked box text ".repeat(20), 60.0, 20.0, first);
+    let b = d.add_part(wordcraft_doc::PartKind::TextBox, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::new())]);
+    if let Some(part) = d.parts.get_mut(&a) {
+        part.body.next = Some(b);
+    }
+    let member = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w: 100.0,
+        h: 60.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.75,
+        float: Float::default(),
+        story: Some(b),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let float = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: -150.0, y: 10.0, ..Default::default() };
+    let group = InlineObject::Group {
+        w: 100.0,
+        h: 60.0,
+        float,
+        ch_w: 100.0,
+        ch_h: 60.0,
+        children: vec![wordcraft_doc::para::GroupChild { x: 0.0, y: 0.0, obj: member }],
+        canvas: None,
+    };
+    d.insert_object(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off: 0 }, group, &Default::default()).unwrap();
+    let l = lay(&d);
+    let chain: Vec<&Placed> = l.pages[0].items.iter().filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if *s == a)).collect();
+    assert!(chain.len() >= 2, "the chain's text in both boxes: {}", chain.len());
+    assert!(chain.iter().all(|i| matches!(i, Placed::Lines { turn: TextDirection::Horizontal, .. })), "all of it runs across");
 }
 
 #[test]
