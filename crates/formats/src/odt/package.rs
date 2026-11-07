@@ -1353,6 +1353,7 @@ fn has_header_picture(doc: &Document) -> bool {
     false
 }
 
+/// Whether any block in `blocks` contains an image, recursing into table cells up to `depth`.
 fn blocks_have_picture(blocks: &[std::sync::Arc<wordcraft_doc::Block>], depth: usize) -> bool {
     if depth > 16 {
         return false;
@@ -1363,10 +1364,12 @@ fn blocks_have_picture(blocks: &[std::sync::Arc<wordcraft_doc::Block>], depth: u
     })
 }
 
+/// Whether paragraph `p` contains an inline or grouped image object up to `depth`.
 fn para_has_picture(p: &wordcraft_doc::Paragraph, depth: usize) -> bool {
     p.objects.iter().any(|o| object_has_picture(o, depth))
 }
 
+/// Whether inline object `o` is an image or a group containing an image, up to `depth`.
 fn object_has_picture(o: &wordcraft_doc::InlineObject, depth: usize) -> bool {
     if depth > 16 {
         return false;

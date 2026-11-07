@@ -234,6 +234,9 @@ fn a_page_borders_padding_keeps_the_text_where_it_was() {
     assert_eq!(s.page_borders.and_then(|b| b.left).map(|b| (b.width, b.space)), Some((3.0, 24.0)));
 }
 
+/// An ODT document with a pre-existing page background picture (legacy
+/// `<style:background-image>`) suppresses that background and its package image
+/// when a header contains a picture (#5803).
 #[test]
 fn header_picture_removes_orphaned_legacy_background_image_on_odt_export() {
     // #5803: an ODT document with a pre-existing page background picture (legacy
@@ -283,6 +286,8 @@ fn header_picture_removes_orphaned_legacy_background_image_on_odt_export() {
     assert!(back.settings.page_picture.is_none(), "saved ODT must not import an orphaned page picture");
 }
 
+/// An ODT document with a text-only header retains its legacy page background image
+/// and writes the image into the package archive.
 #[test]
 fn text_header_keeps_page_background_picture() {
     let png = {
