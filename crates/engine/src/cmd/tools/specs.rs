@@ -248,6 +248,17 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .key(crate::cmd::non_mac("Alt+Shift+R"))
         .params(r#"{"footer"?: bool}"#),
+        CommandSpec::new("layout.pageFooterVisible", "Page Number on This Page", "Header & Footer › Options", crate::cmd::insert::page_footer_visible)
+            .params(r#"{"page"?: number (1-based page of the current layout; default: the caret's page), "visible"?: bool (default: toggle)} — hides or shows the footer (the page number) on that one page only, with Different First Page on the first page of a section and otherwise a section of its own around the page (next-page breaks on the paragraphs before and on the page, an own empty footer, the section after it keeping the footer it had); refused when the page starts or ends inside a paragraph or next to a table. Page numbers go on counting. Returns {page, visible, changed}"#),
+        CommandSpec::new("layout.pageFooters", "Footers by Page", "Header & Footer › Options", |s, _| {
+            let pages: Vec<_> = crate::cmd::insert::page_footers(s)
+                .into_iter()
+                .map(|i| json!({"page": i.page, "number": i.number, "footer": i.footer, "header": i.header, "blocked": i.blocked}))
+                .collect();
+            Ok(json!({"pages": pages}))
+        })
+        .params(r#"{} — every page of the layout with whether it shows a footer and a header, and why its footer can't be changed alone (blocked) if so"#)
+        .pure(),
         CommandSpec::new("hf.next", "Next Section", "Header & Footer › Navigation", |s, _| hf_nav(s, 1)).pure(),
         CommandSpec::new("hf.previous", "Previous Section", "Header & Footer › Navigation", |s, _| hf_nav(s, -1)).pure(),
         CommandSpec::new("hf.position", "Header/Footer Position", "Header & Footer › Position", |s, v| {
