@@ -78,6 +78,11 @@ impl Exporter<'_> {
         (text.to_string(), ranges)
     }
 
+    /// Draws a positioned run of glyphs to the PDF surface.
+    ///
+    /// Resolves character ranges across multi-glyph clusters so that ToUnicode mappings
+    /// and cluster-level `/ActualText` spans preserve original text for extractors, orders RTL
+    /// glyphs visually when needed, and renders either font glyphs or vector outlines.
     pub(super) fn glyphs(
         &mut self,
         s: &mut Surface,
@@ -106,15 +111,12 @@ impl Exporter<'_> {
         // ligatures can't be guessed back from the font's cmap), else a guess.
         let valid = known.len() == glyphs.len() && known.iter().all(|r| r.start < r.end && text.get(r.clone()).is_some());
         let (txt, ranges) = if valid { (text.to_string(), known.to_vec()) } else { self.map_text(face, glyphs, text) };
+        let (txt, ranges) = decompose_clusters(&txt, &ranges);
         let upem = face.upem.max(1.0) as f32;
-        // Right-to-left text is written left to right as it appears (see `left_to_right`); glyphs
-        // already in that order are written as they are.
-        let (order, ranges) = if left_to_right(glyphs) {
-            ((0..glyphs.len()).collect(), ranges)
-        } else {
-            let parts = split_clusters(&txt, glyphs, &ranges, &self.cmap(face));
-            (visual_order(&txt, glyphs, &ranges, &parts), parts)
-        };
+        let parts = split_clusters(&txt, glyphs, &ranges, &self.cmap(face));
+        let is_rtl = txt.chars().any(wordcraft_fonts::is_rtl);
+        let order = if !is_rtl || left_to_right(glyphs) { (0..glyphs.len()).collect() } else { visual_order(&txt, glyphs, &ranges, &parts) };
+        let ranges = parts;
         let placed: Vec<(u32, f32, f32, std::ops::Range<usize>)> =
             order.iter().filter_map(|&i| Some((glyphs.get(i).copied()?, ranges.get(i).cloned()?))).map(|((g, x, y), r)| (g, x, y, r)).collect();
         let Some(&(_, x0, y0, _)) = placed.first() else { return };
@@ -232,4 +234,43 @@ impl Exporter<'_> {
         s.set_fill(None);
         s.pop();
     }
+}
+
+/// Decomposes composite Thai and Lao vowels (such as SARA AM `\u{0E33}` into NIKHAHIT
+/// `\u{0E4D}` and SARA AA `\u{0E32}`) in the run's text and updates glyph character ranges
+/// accordingly, giving each shaped glyph a 1:1 character correspondence.
+fn decompose_clusters(text: &str, ranges: &[std::ops::Range<usize>]) -> (String, Vec<std::ops::Range<usize>>) {
+    if !text.contains(['\u{0E33}', '\u{0EB3}']) {
+        return (text.to_string(), ranges.to_vec());
+    }
+    let mut out_text = String::with_capacity(text.len() + 16);
+    let mut map = Vec::with_capacity(text.len() + 1);
+    for (i, c) in text.char_indices() {
+        while map.len() <= i {
+            map.push(out_text.len());
+        }
+        match c {
+            '\u{0E33}' => {
+                out_text.push('\u{0E4D}');
+                out_text.push('\u{0E32}');
+            }
+            '\u{0EB3}' => {
+                out_text.push('\u{0ECD}');
+                out_text.push('\u{0EB2}');
+            }
+            _ => out_text.push(c),
+        }
+    }
+    while map.len() <= text.len() {
+        map.push(out_text.len());
+    }
+    let out_ranges = ranges
+        .iter()
+        .map(|r| {
+            let start = map.get(r.start).copied().unwrap_or(0);
+            let end = map.get(r.end).copied().unwrap_or(out_text.len());
+            start..end
+        })
+        .collect();
+    (out_text, out_ranges)
 }
