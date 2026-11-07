@@ -140,6 +140,25 @@ impl Paragraph {
     pub fn final_text(&self) -> String {
         self.text_without(&self.deleted_ranges())
     }
+    /// The objects whose anchor character is not inside a tracked deletion, in order: the `k`-th
+    /// entry answers the `k`-th object character of [`Self::final_text`].
+    pub fn final_objects(&self) -> Vec<&InlineObject> {
+        let dropped = self.deleted_ranges();
+        let mut out = Vec::new();
+        let mut k = 0;
+        for (i, c) in self.text.char_indices() {
+            if c != OBJ {
+                continue;
+            }
+            if let Some(o) = self.objects.get(k)
+                && !dropped.iter().any(|r| r.contains(&i))
+            {
+                out.push(o);
+            }
+            k += 1;
+        }
+        out
+    }
     /// The byte ranges of the tracked deletions.
     pub fn deleted_ranges(&self) -> Vec<std::ops::Range<usize>> {
         self.run_ranges().filter(|(_, c)| c.del.is_some()).map(|(r, _)| r).collect()
