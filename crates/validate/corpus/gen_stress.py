@@ -866,7 +866,7 @@ def plan_comments(ctx):
             """Create a comment dictionary with unique IDs and text."""
             nonlocal cid
             c = {"cid": cid, "author": ctx.author(), "date": ctx.date(),
-                 "paras": [], "durable": rng.randrange(1, 2**31)}
+                 "paras": [], "durable": "%08X" % rng.randrange(1, 0x7FFFFFFF)}
             cid += 1
             for _ in range(rng.randint(1, 2)):
                 c["paras"].append((ctx.para_id("word/comments.xml"), ctx.text()))
