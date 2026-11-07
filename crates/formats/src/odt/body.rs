@@ -128,6 +128,9 @@ pub(super) struct Body<'a> {
     paras_done: usize,
     /// `(width, height, picture bytes, alt text, equation read from an embedded `draw:object`)`.
     frame: Option<Frame>,
+    /// The first picture the open frame offers that WordCraft can't show: an object coming after it
+    /// keeps it as its replacement.
+    frame_unread: Option<Vec<u8>>,
     in_desc: bool,
     /// The master pages' page setups.
     pages: &'a Pages,
@@ -259,6 +262,7 @@ impl<'a> Body<'a> {
             pending_master: None,
             paras_done: 0,
             frame: None,
+            frame_unread: None,
             in_desc: false,
             pages,
             sec: page.clone(),
@@ -1323,6 +1327,7 @@ impl Body<'_> {
                 let w = get(a, "svg:width").and_then(length);
                 let h = get(a, "svg:height").and_then(length);
                 self.frame = Some((w, h, None, String::new(), None, None, None));
+                self.frame_unread = None;
                 let g = get(a, "draw:style-name").map(|s| self.styles.graphic(s)).unwrap_or_default();
                 self.frame_float = Some(super::frames::place(a, w.unwrap_or(0.0), h.unwrap_or(0.0), &g, self.text_size()));
                 self.member_start(a, w.unwrap_or(0.0), h.unwrap_or(0.0), None);
@@ -1429,12 +1434,25 @@ impl Body<'_> {
                     && fr.2.is_none()
                     && fr.4.is_none()
                     && fr.5.is_none()
-                    && fr.6.as_ref().is_none_or(|o| o.replacement.is_none())
                 {
                     let path = href.trim_start_matches("./");
-                    fr.2 = (self.zip)(path);
-                    if let Some(o) = &mut fr.6 {
-                        o.replacement = fr.2.clone().map(std::sync::Arc::new);
+                    // A frame may offer one picture in several formats, in order of preference
+                    // (LibreOffice writes its own `.svm` metafile before a PNG): the first
+                    // WordCraft can read. An object's replacement is the first, kept whatever it
+                    // is, also when the object is still to come.
+                    if let Some(d) = (self.zip)(path) {
+                        let readable = drawing::readable_picture(&d);
+                        match &mut fr.6 {
+                            Some(o) if o.replacement.is_none() => o.replacement = Some(std::sync::Arc::new(d.clone())),
+                            Some(_) => {}
+                            None if !readable => {
+                                self.frame_unread.get_or_insert_with(|| d.clone());
+                            }
+                            None => {}
+                        }
+                        if readable {
+                            fr.2 = Some(d);
+                        }
                     }
                 }
             }
@@ -1478,9 +1496,9 @@ impl Body<'_> {
             // A chart is kept whole too, to be written back as it was while it is unchanged.
             if fr.4.is_none() {
                 fr.6 = super::objects::gather(href, ole, self.entries, self.manifest, &mut *self.zip);
-                // A replacement picture read before the object.
+                // A replacement picture read before the object: the first the frame offered.
                 if let Some(o) = &mut fr.6 {
-                    o.replacement = fr.2.clone().map(std::sync::Arc::new);
+                    o.replacement = self.frame_unread.take().or_else(|| fr.2.clone()).map(std::sync::Arc::new);
                 }
             }
         }
