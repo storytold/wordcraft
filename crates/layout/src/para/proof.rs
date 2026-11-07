@@ -180,21 +180,17 @@ fn is_forward_coordinated_compound(
 
     // Look ahead for candidate partner words.
     let mut saw_connector = false;
+    let mut modifier_count: usize = 0;
     let mut remainder = after_hyphen;
-    for _ in 0..12 {
+    for _ in 0..64 {
         remainder = remainder.trim_start();
         if remainder.is_empty() {
             break;
         }
-        if remainder.starts_with(['.', '!', '?', ';', '\n']) && !remainder.starts_with("bzw.") {
+        if remainder.starts_with(['.', '!', '?', ';', ':', '\n']) && !remainder.starts_with("bzw.") {
             break;
         }
-        if remainder.starts_with('/') {
-            saw_connector = true;
-            remainder = remainder.get(1..).unwrap_or("");
-            continue;
-        }
-        if remainder.starts_with(',') {
+        if remainder.starts_with('/') || remainder.starts_with(',') {
             saw_connector = true;
             remainder = remainder.get(1..).unwrap_or("");
             continue;
@@ -227,6 +223,14 @@ fn is_forward_coordinated_compound(
             if partner.chars().count() >= 2 && test_compound_forward(word, partner, lang, opts) {
                 return true;
             }
+
+            let is_lowercase = token.chars().next().is_some_and(|c| c.is_lowercase());
+            if is_lowercase && modifier_count < 2 {
+                modifier_count = modifier_count.saturating_add(1);
+                continue;
+            }
+
+            break;
         }
     }
 
@@ -242,7 +246,7 @@ fn test_compound_forward(word: &str, partner: &str, lang: wordcraft_proof::Proof
         let Some(suffix) = partner.get(k..) else {
             continue;
         };
-        if suffix.chars().count() < 2 || suffix.len() > 40 {
+        if suffix.len() > 40 || suffix.chars().count() < 2 {
             continue;
         }
 
@@ -294,28 +298,31 @@ fn is_backward_coordinated_compound(
     }
 
     let mut saw_connector = false;
+    let mut modifier_count: usize = 0;
     let mut remainder = before_hyphen;
-    for _ in 0..12 {
+    for _ in 0..64 {
         remainder = remainder.trim_end();
         if remainder.is_empty() {
             break;
         }
-        if remainder.ends_with('/') {
-            saw_connector = true;
-            remainder = remainder.get(..remainder.len().saturating_sub(1)).unwrap_or("");
-            continue;
+        if remainder.ends_with(['.', '!', '?', ';', ':', '\n']) && !remainder.ends_with("bzw.") {
+            break;
         }
-        if remainder.ends_with(',') {
+        if remainder.ends_with('/') || remainder.ends_with(',') {
             saw_connector = true;
             remainder = remainder.get(..remainder.len().saturating_sub(1)).unwrap_or("");
             continue;
         }
 
-        let token_start = remainder.rfind(|c: char| c.is_whitespace() || c == '/' || c == ',').map_or(0, |i| i + 1);
+        let sep_match = remainder.char_indices().rfind(|(_, c)| c.is_whitespace() || *c == '/' || *c == ',');
+        let (token_start, prev_end) = match sep_match {
+            Some((idx, c)) => (idx.saturating_add(c.len_utf8()), idx),
+            None => (0, 0),
+        };
         let Some(raw_token) = remainder.get(token_start..) else {
             break;
         };
-        remainder = remainder.get(..token_start.saturating_sub(1)).unwrap_or("");
+        remainder = remainder.get(..prev_end).unwrap_or("");
 
         let token = raw_token.trim_start_matches(|c: char| !c.is_alphabetic() && !is_hyphen(c));
         if token.is_empty() {
@@ -338,6 +345,14 @@ fn is_backward_coordinated_compound(
             if partner.chars().count() >= 2 && test_compound_backward(partner, word, lang, opts) {
                 return true;
             }
+
+            let is_lowercase = token.chars().next().is_some_and(|c| c.is_lowercase());
+            if is_lowercase && modifier_count < 2 {
+                modifier_count = modifier_count.saturating_add(1);
+                continue;
+            }
+
+            break;
         }
     }
 
@@ -482,25 +497,35 @@ mod tests {
         assert!(skipped_ranges(&[run(0..5, false)]).is_empty());
     }
 
+    struct TestDictGuard {
+        temp_dir: std::path::PathBuf,
+    }
+
+    impl Drop for TestDictGuard {
+        fn drop(&mut self) {
+            wordcraft_proof::set_dictionaries_folder(None);
+            let _ = std::fs::remove_dir_all(&self.temp_dir);
+        }
+    }
+
     /// German coordinated compounds with ellipsis (e.g. `Handlungs- und Zustandssatz`,
     /// `Schul- und Universitätsbetrieb`, or `Wasserverbrauch und -qualität`) are valid
     /// compound forms (§ 98) and must not be flagged as spelling errors (#5903).
     #[test]
     fn german_coordinated_compounds_with_ellipsis_are_accepted() {
-        let snap_dir = std::path::PathBuf::from("/snap/kf6-core24/69/usr/share/hunspell");
-        let system_dir = std::path::PathBuf::from("/usr/share/hunspell");
         let temp_dir = std::env::temp_dir().join(format!("wordcraft-test-de-{}", std::process::id()));
-        if snap_dir.join("de_DE.dic").is_file() {
-            wordcraft_proof::set_dictionaries_folder(Some(snap_dir));
-        } else if system_dir.join("de_DE.dic").is_file() {
+        let _guard = TestDictGuard { temp_dir: temp_dir.clone() };
+
+        let system_dir = std::path::PathBuf::from("/usr/share/hunspell");
+        if system_dir.join("de_DE.dic").is_file() {
             wordcraft_proof::set_dictionaries_folder(Some(system_dir));
         } else {
             let _ = std::fs::create_dir_all(&temp_dir);
             let aff = "SET UTF-8\nCOMPOUNDFLAG X\n";
-            let dic = "22\nHandlung/X\nHandlungssatz/X\nZustandssatz/X\nSchulbetrieb/X\nUniversitätsbetrieb/X\nArbeitsrecht/X\nSozialrecht/X\nForschungsabteilung/X\nEntwicklungsabteilung/X\nWirtschaftspolitik/X\nFinanzpolitik/X\nVersicherungsrecht/X\nVertragsrecht/X\nBildungsauftrag/X\nErziehungsauftrag/X\nBewegungsverb/X\nWahrnehmungsverb/X\nOrdnungsdienst/X\nSicherheitsdienst/X\nGestaltungssatz/X\nWasserverbrauch/X\nWasserqualität/X\n";
+            let dic = "36\nHandlung/X\nHandlungssatz/X\nZustandssatz/X\nSchulbetrieb/X\nUniversitätsbetrieb/X\nArbeitsrecht/X\nSozialrecht/X\nFamilienrecht/X\nSteuerrecht/X\nVertragsrecht/X\nVersicherungsrecht/X\nVerkehrsrecht/X\nMietrecht/X\nForschungsabteilung/X\nEntwicklungsabteilung/X\nWirtschaftspolitik/X\nFinanzpolitik/X\nBildungsauftrag/X\nErziehungsauftrag/X\nBewegungsverb/X\nWahrnehmungsverb/X\nOrdnungsdienst/X\nSicherheitsdienst/X\nGestaltungssatz/X\nWasserverbrauch/X\nWasserqualität/X\nFriedensforschung/X\nKonfliktforschung/X\nLiebesbeziehung/X\nEhebeziehung/X\nLebensbedingungen/X\nArbeitsbedingungen/X\nund/X\noder/X\nder/X\nneue/X\n";
             let _ = std::fs::write(temp_dir.join("de_DE.aff"), aff);
             let _ = std::fs::write(temp_dir.join("de_DE.dic"), dic);
-            wordcraft_proof::set_dictionaries_folder(Some(temp_dir.clone()));
+            wordcraft_proof::set_dictionaries_folder(Some(temp_dir));
         }
 
         assert!(wordcraft_proof::has_dictionary(Some("de-DE")), "German dictionary should be available");
@@ -521,6 +546,8 @@ mod tests {
             "Handlungs-, Gestaltungs- und Zustandssatz",
             "Schul-/Universitätsbetrieb",
             "Wasserverbrauch und -qualität",
+            "Arbeits-, Sozial-, Familien-, Steuer-, Vertrags-, Versicherungs-, Verkehrs- und Mietrecht",
+            "der Schul- und der neue Universitätsbetrieb",
         ];
 
         for text in cases {
@@ -539,7 +566,5 @@ mod tests {
         let p = d.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
         let issues = paragraph_issues(p, &proof_runs(&d, p, None), &Default::default(), true, false);
         assert!(!issues.is_empty(), "expected invalid compound to be flagged");
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
