@@ -80,9 +80,13 @@ pub(super) fn append_paragraphs(s: &mut Session, n: usize) -> Result<(), CmdErro
         Pos { story: StoryRef::Body, path, off: 0 }
     };
     s.sel = Selection::caret(at);
+    crate::cmd::controls::prepare_edit(s)?;
     for _ in 0..n {
-        enter(s, false)?;
+        let at = s.sel.focus.clone();
+        let new = split_para(s, &at)?;
+        s.sel = Selection::caret(new);
     }
+    s.goal_x = None;
     Ok(())
 }
 
