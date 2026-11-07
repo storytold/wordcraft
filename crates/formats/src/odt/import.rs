@@ -402,28 +402,72 @@ fn number_headings(doc: &mut Document, levels: &[super::styles::ListLevel]) {
     }
 }
 
-/// A complex-script size the same as the text's, where nothing else would give that script another
-/// (what WordCraft writes for every script), is no size of its own: a later change of size takes it
-/// along. Over a style or default with its own, it stays: without it that one would show.
+/// What a run's complex size comes from: its paragraph's style, its character style, and the size
+/// and complex size it states (as bits).
+type SizeSource<'a> = (Option<&'a str>, Option<&'a str>, Option<u32>, Option<u32>);
+
+/// A complex-script size the same as the text's (what WordCraft writes for every script) is no size
+/// of its own: a later change of size takes it along. The default's and the styles' go together,
+/// unless a run's complex size would change: a size stated alone, or another complex size between
+/// them, shows what's above it, so they stay as the file says. A run's goes where its stays the same.
 fn one_size_for_all_scripts(doc: &mut Document) {
-    let plain = wordcraft_doc::props::CharProps::default();
-    let ids: Vec<String> = doc.styles.styles.iter().map(|st| st.id.clone()).collect();
+    let mut sources = std::collections::BTreeSet::new();
+    for blocks in std::iter::once(&doc.body).chain(doc.parts.values().map(|part| &part.blocks)) {
+        size_sources(blocks, 0, &mut sources);
+    }
+    let sizes = |styles: &wordcraft_doc::styles::StyleSheet| -> Vec<f32> {
+        let of = |(para, chr, size, size_cs): &SizeSource| {
+            let run = wordcraft_doc::props::CharProps {
+                style: chr.map(str::to_string),
+                size: size.map(f32::from_bits),
+                size_cs: size_cs.map(f32::from_bits),
+                ..Default::default()
+            };
+            styles.resolve_char(*para, &run).size_cs
+        };
+        sources.iter().map(of).collect()
+    };
+    let as_read = Arc::clone(&doc.styles);
+    let was = sizes(&as_read);
     let styles = Arc::make_mut(&mut doc.styles);
-    for id in &ids {
-        let Some(said) = styles.get(id).and_then(|st| st.chr.size_cs.filter(|s| Some(*s) == st.chr.size)) else { continue };
-        if let Some(st) = styles.get_mut(id) {
-            st.chr.size_cs = None;
+    let one_size = |c: &mut wordcraft_doc::props::CharProps| {
+        if c.size.is_some() && c.size_cs == c.size {
+            c.size_cs = None;
         }
-        if styles.resolve_char(Some(id), &plain).size_cs != said
-            && let Some(st) = styles.get_mut(id)
-        {
-            st.chr.size_cs = Some(said);
-        }
+    };
+    one_size(&mut styles.default_chr);
+    styles.styles.iter_mut().for_each(|st| one_size(&mut st.chr));
+    if sizes(&doc.styles) != was {
+        doc.styles = as_read;
     }
     let styles = Arc::clone(&doc.styles);
     let stories = std::iter::once(&mut doc.body).chain(doc.parts.values_mut().map(|part| &mut part.blocks));
     for blocks in stories {
         runs_one_size(blocks, 0, &styles);
+    }
+}
+
+/// What the runs in `blocks` (and their tables, to 16 levels deep) take their complex sizes from.
+fn size_sources<'a>(blocks: &'a [Arc<wordcraft_doc::Block>], depth: usize, out: &mut std::collections::BTreeSet<SizeSource<'a>>) {
+    for b in blocks {
+        match &**b {
+            wordcraft_doc::Block::Para(p) => {
+                for r in &p.runs {
+                    out.insert((
+                        p.props.style.as_deref(),
+                        r.props.style.as_deref(),
+                        r.props.size.map(f32::to_bits),
+                        r.props.size_cs.map(f32::to_bits),
+                    ));
+                }
+            }
+            wordcraft_doc::Block::Table(t) if depth < 16 => {
+                for cell in t.rows.iter().flat_map(|r| r.cells.iter()) {
+                    size_sources(&cell.blocks, depth + 1, out);
+                }
+            }
+            wordcraft_doc::Block::Table(_) => {}
+        }
     }
 }
 
@@ -981,11 +1025,6 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
     }
     Arc::make_mut(&mut doc.styles).default_chr.kern = kern.then_some(1.0);
     Arc::make_mut(&mut doc.styles).default_chr.overlay(&scripts);
-    // A default stating one size for every script is one size: a change to Normal takes it along.
-    let defaults = &mut Arc::make_mut(&mut doc.styles).default_chr;
-    if defaults.size.is_some() && defaults.size_cs == defaults.size {
-        defaults.size_cs = None;
-    }
     if let Some(t) = default_tab {
         doc.settings.default_tab = t;
     }

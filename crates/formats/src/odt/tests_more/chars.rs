@@ -345,3 +345,47 @@ fn a_complex_size_like_the_texts_stays_over_the_default() {
     let d = import(&package(&content, Some(&same))).unwrap();
     assert_eq!(d.styles.default_chr.size_cs, None);
 }
+
+/// A complex size equal to the text's goes only where no run's complex size changes without it:
+/// not under a character style over another size, nor under a size stated alone.
+#[test]
+fn a_complex_size_something_shows_stays() {
+    let open = |s: &str, auto: &str, body: &str| {
+        let styles = format!(
+            r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="12pt" style:font-size-complex="12pt"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"/>{s}</office:styles></office:document-styles>"#
+        );
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:automatic-styles>{auto}</office:automatic-styles><office:body><office:text>{body}</office:text></office:body></office:document-content>"#
+        );
+        import(&package(&content, Some(&styles))).unwrap()
+    };
+    let sizes = |d: &Document| {
+        let p = d.body[0].as_para().unwrap();
+        let c = d.styles.resolve_char(p.props.style.as_deref(), &p.runs.last().unwrap().props);
+        (c.size, c.size_cs)
+    };
+    // A character style's, over a paragraph style with another complex size.
+    let d = open(
+        r#"<style:style style:name="P" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="12pt" style:font-size-complex="18pt"/></style:style><style:style style:name="C" style:family="text"><style:text-properties fo:font-size="24pt" style:font-size-complex="24pt"/></style:style>"#,
+        "",
+        r#"<text:p text:style-name="P"><text:span text:style-name="C">One</text:span></text:p>"#,
+    );
+    assert_eq!(sizes(&d), (24.0, 24.0));
+    let parent = r#"<style:style style:name="Parent" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="16pt" style:font-size-complex="16pt"/></style:style>"#;
+    // A parent's, under a child stating only a size.
+    let kid = format!(
+        r#"{parent}<style:style style:name="Kid" style:family="paragraph" style:parent-style-name="Parent"><style:text-properties fo:font-size="20pt"/></style:style>"#
+    );
+    assert_eq!(sizes(&open(&kid, "", r#"<text:p text:style-name="Kid">One</text:p>"#)), (20.0, 16.0));
+    // A style's, under a run stating only a size.
+    let d = open(
+        parent,
+        r#"<style:style style:name="T1" style:family="text"><style:text-properties fo:font-size="30pt"/></style:style>"#,
+        r#"<text:p text:style-name="Parent"><text:span text:style-name="T1">One</text:span></text:p>"#,
+    );
+    assert_eq!(sizes(&d), (30.0, 16.0));
+    // Nothing shows it: one size for all, so a change of size takes it along.
+    let d = open(parent, "", r#"<text:p text:style-name="Parent">One</text:p>"#);
+    assert_eq!(sizes(&d), (16.0, 16.0));
+    assert_eq!(d.styles.get("Parent").unwrap().chr.size_cs, None);
+}
