@@ -12,11 +12,14 @@ use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 mod fields;
 mod notes;
+mod numbers;
 mod properties;
 mod toc;
 
 use fields::caption;
-pub use fields::{CHAPTER_SEPARATORS, refresh_date_fields, seq_format, update_fields, update_fields_in, update_seq};
+pub use fields::{
+    CHAPTER_SEPARATORS, REFERENCE_NOT_FOUND, output_fields, refresh_date_fields, seq_format, update_fields, update_fields_in, update_seq,
+};
 pub(super) use notes::note_options;
 use notes::{note, note_refs};
 pub use properties::{bookmark_text, date_picture};

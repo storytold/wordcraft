@@ -609,8 +609,10 @@ impl Document {
             let mut at = at.into_iter().peekable();
             let mut start = 0usize;
             for r in &mut p.runs {
+                crate::work::steps(1);
                 let end = start.saturating_add(r.len);
                 while at.peek().is_some_and(|&o| o < start) {
+                    crate::work::steps(1);
                     at.next();
                 }
                 if at.peek().is_some_and(|&o| o < end) {
