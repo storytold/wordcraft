@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use wordcraft_doc::para::cap_alt;
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, HeightRule, Highlight, LineSpacing, NumRef,
-    ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign, VMerge,
-    VertAlign,
+    ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextAlignment, TextColor, TextDirection, Underline,
+    VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{
     Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, NotePos, NoteProps, NoteRestart, NumFormat,
@@ -33,6 +33,7 @@ fn text_frame(k: &El) -> wordcraft_doc::props::TextFrame {
         h_anchor: word("w:hAnchor", &["text", "margin", "page"], "page"),
         v_anchor: word("w:vAnchor", &["text", "margin", "page"], "page"),
         wrap: word("w:wrap", &["around", "auto", "notBeside", "none", "tight", "through"], "auto"),
+        anchor_lock: k.attr("w:anchorLock").map(|v| !matches!(v.trim(), "0" | "false" | "off" | "False" | "FALSE")),
         h_space: len("w:hSpace").unwrap_or(0.0).max(0.0),
         v_space: len("w:vSpace").unwrap_or(0.0).max(0.0),
     }
@@ -254,6 +255,7 @@ impl PropCtx {
                 "w:cs" => c.cs = Some(on_off(k)),
                 "w:caps" => c.caps = Some(on_off(k)),
                 "w:smallCaps" => c.small_caps = Some(on_off(k)),
+                "w:em" => c.emphasis = Some(k.attr("w:val").map(wordcraft_doc::props::EmphasisMark::from_ooxml).unwrap_or_default()),
                 "w:strike" => c.strike = Some(on_off(k)),
                 "w:dstrike" => c.double_strike = Some(on_off(k)),
                 "w:outline" => c.outline = Some(on_off(k)),
@@ -332,6 +334,7 @@ impl PropCtx {
                 "w:widowControl" => p.widow_control = Some(on_off(k)),
                 "w:contextualSpacing" => p.contextual_spacing = Some(on_off(k)),
                 "w:mirrorIndents" => p.mirror_indents = Some(on_off(k)),
+                "w:adjustRightInd" => p.adjust_right_indent = Some(on_off(k)),
                 "w:suppressAutoHyphens" => p.suppress_hyphens = Some(on_off(k)),
                 "w:suppressLineNumbers" => p.suppress_line_numbers = Some(on_off(k)),
                 "w:bidi" => p.bidi = Some(on_off(k)),
@@ -342,6 +345,7 @@ impl PropCtx {
                 "w:autoSpaceDE" => p.auto_space_de = Some(on_off(k)),
                 "w:autoSpaceDN" => p.auto_space_dn = Some(on_off(k)),
                 "w:snapToGrid" => p.snap_to_grid = Some(on_off(k)),
+                "w:textAlignment" => p.text_alignment = k.attr("w:val").and_then(TextAlignment::from_ooxml),
                 "w:framePr" => {
                     if let Some(kind @ ("drop" | "margin")) = k.attr("w:dropCap") {
                         p.drop_cap = Some(k.attr("w:lines").and_then(u32_of).unwrap_or(3).clamp(1, 10) as u8);
@@ -761,7 +765,25 @@ pub fn sectpr(pc: &PropCtx, e: &El) -> (SectionProps, Vec<HfRef>) {
                 if let Some(f) = k.attr("w:fmt") {
                     s.page_num_format = NumFormat::from_ooxml(f);
                 }
+                s.chapter_style = k.attr("w:chapStyle").and_then(u32_of).filter(|v| *v <= u8::MAX as u32).map(|v| v as u8);
+                s.chapter_sep = k.attr("w:chapSep").and_then(wordcraft_doc::section::ChapterSep::from_ooxml);
                 s.page_num_set = s.page_num_start.is_none() && s.page_num_format == NumFormat::Decimal;
+            }
+            "w:paperSrc" => {
+                let tray = |name| {
+                    let value = k.attr(name)?.trim();
+                    let digits = value.strip_prefix('+').unwrap_or(value);
+                    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+                        return None;
+                    }
+                    u32_of(digits).filter(|v| *v <= u16::MAX as u32).map(|v| v as u16)
+                };
+                s.paper_src_first = tray("w:first");
+                s.paper_src_other = tray("w:other");
+            }
+            "w:noEndnote" => s.no_endnote = Some(on_off(k)),
+            "w15:footnoteColumns" => {
+                s.footnote_columns = k.attr("w:val").and_then(u32_of).filter(|v| (1..=45).contains(v));
             }
             "w:lnNumType" => {
                 let mut l = LineNumbering::default();
