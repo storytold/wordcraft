@@ -6460,7 +6460,7 @@ fn a_float_anchored_on_a_line_a_footnote_pushes_on_is_drawn_on_the_next_page() {
 #[test]
 fn a_float_anchored_on_a_line_widow_control_takes_on_is_drawn_on_the_next_page() {
     // A paragraph of three pages whose last two lines are on the third only by widow control.
-    let (mut d, l) = (150..300)
+    let (mut d, l) = (100..300)
         .map(|k| Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(k)))
         .map(|d| {
             let l = lay(&d);
