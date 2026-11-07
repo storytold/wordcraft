@@ -53,6 +53,7 @@ fn builtin_heading_level(name: &str) -> Option<u8> {
 }
 
 impl Reader<'_> {
+    /// Read style definitions and document defaults from `styles.xml` at `path`.
     pub(super) fn read_styles(&mut self, path: &str) -> Result<(), DocxError> {
         /// Largest `w:latentStyles` kept (Word's has ~380 exceptions, ~40 KB).
         const MAX_LATENT_STYLES_XML: usize = 1 << 20;

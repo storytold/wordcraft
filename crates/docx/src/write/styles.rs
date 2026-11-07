@@ -16,6 +16,7 @@ fn file_style_name(name: &str) -> String {
     name.to_string()
 }
 
+/// Serialize a document's style sheet and document defaults to `word/styles.xml`.
 pub(super) fn styles_xml(doc: &Document) -> Vec<u8> {
     let s = &doc.styles;
     let mut w = W::new();

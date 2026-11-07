@@ -155,17 +155,22 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     s.note_body_replaced();
     s.math = None;
     if opts.formatting {
-        let mut result_styles = (*revised.styles).clone();
-        for new_st in &mut result_styles.styles {
-            if let Some(old_st) = s.doc.styles.styles.iter().find(|st| st.id == new_st.id)
-                && crate::cmd::fmt_revisions::compare_style(old_st, new_st, &mut s.doc.revisions, &author, &date)
-            {
-                changes += 1;
-            }
-        }
-        for old_st in &s.doc.styles.styles {
-            if !result_styles.styles.iter().any(|st| st.id == old_st.id) {
-                result_styles.styles.push(old_st.clone());
+        let mut result_styles = (*s.doc.styles).clone();
+        for new_st in &revised.styles.styles {
+            if let Some(target) = result_styles.styles.iter_mut().find(|st| st.id == new_st.id) {
+                let old_st = target.clone();
+                let mut updated = new_st.clone();
+                updated.para.fmt_change = None;
+                updated.chr.fmt_change = None;
+                if crate::cmd::fmt_revisions::compare_style(&old_st, &mut updated, &mut s.doc.revisions, &author, &date) {
+                    changes += 1;
+                }
+                *target = updated;
+            } else {
+                let mut added = new_st.clone();
+                added.para.fmt_change = None;
+                added.chr.fmt_change = None;
+                result_styles.styles.push(added);
             }
         }
         s.doc.styles = Arc::new(result_styles);
@@ -173,7 +178,10 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         let mut result_styles = (*s.doc.styles).clone();
         for new_st in &revised.styles.styles {
             if !result_styles.styles.iter().any(|st| st.id == new_st.id) {
-                result_styles.styles.push(new_st.clone());
+                let mut added = new_st.clone();
+                added.para.fmt_change = None;
+                added.chr.fmt_change = None;
+                result_styles.styles.push(added);
             }
         }
         s.doc.styles = Arc::new(result_styles);
