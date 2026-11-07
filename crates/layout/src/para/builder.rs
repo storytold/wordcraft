@@ -616,12 +616,17 @@ impl<'a> Builder<'a> {
 
         let opps: std::collections::HashSet<usize> = break_positions(text, rp).into_iter().collect();
 
-        // Group `added` clusters into word chunks based on `break_positions`.
+        // Group `added` clusters into word and space chunks based on `break_positions` and whitespace kind.
         let mut group_start = 0;
         let n_added = added.len();
+        let max_line_w = self.env.width.max(1.0);
         while group_start < n_added {
+            let is_space = added[group_start].kind == ClKind::Space;
             let mut group_end = group_start + 1;
             while group_end < n_added {
+                if (added[group_end].kind == ClKind::Space) != is_space {
+                    break;
+                }
                 let t_end = added[group_end - 1].end.saturating_sub(start);
                 if opps.contains(&t_end) {
                     break;
@@ -646,54 +651,85 @@ impl<'a> Builder<'a> {
             let base_cl_lv = word_cl_lv.first().copied().unwrap_or(base_internal);
             let cluster_level = iso_base + base_cl_lv.saturating_sub(base_internal);
 
-            // Visual order of graphemes inside this word.
-            let word_order = visual_order(&word_cl_lv);
-            let mut adv = 0.0f32;
-            for &i in &word_order {
-                if let Some(c) = group.get(i) {
-                    for g in self.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
-                        g.dx += adv;
-                    }
-                    adv += c.adv;
+            let group_adv: f32 = group.iter().map(|c| c.adv).sum();
+            // If an unbroken text word exceeds available line width, emit grapheme clusters
+            // individually so `Scan::break_long_word` can emergency-split across lines.
+            if !is_space && group.len() > 1 && group_adv > max_line_w {
+                for (gi, c) in group.iter().enumerate() {
+                    let is_last = gi + 1 == group.len();
+                    let cl_end = if group_end == n_added && is_last { end } else { start };
+                    let cs = c.start.saturating_sub(start);
+                    let ce = c.end.saturating_sub(start);
+                    let ct = text.get(cs..ce).unwrap_or("");
+                    let cl_byte = c.start.saturating_sub(start);
+                    let cl_base = lv.get(cl_byte).copied().unwrap_or(base_internal);
+                    let cl_lvl = iso_base + cl_base.saturating_sub(base_internal);
+                    let ranges = vec![0..ct.len(); (c.g1 - c.g0) as usize];
+                    self.shown.push((self.clusters.len(), ct.to_string(), ranges));
+                    self.clusters.push(Cluster {
+                        start,
+                        end: cl_end,
+                        adv: c.adv,
+                        kind: c.kind,
+                        style: c.style,
+                        g0: c.g0,
+                        g1: c.g1,
+                        break_after: is_last && opps.contains(&w_end),
+                        obj_h: 0.0,
+                        obj_d: 0.0,
+                        dot: ct == "." || ct == ",",
+                        level: Some(cl_lvl),
+                    });
                 }
-            }
-
-            let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
-            for c in group {
-                let a = c.start.saturating_sub(start).saturating_sub(w_start);
-                let b = c.end.saturating_sub(start).saturating_sub(w_start);
-                if c.g1 <= c.g0 {
-                    let from = ranges.last().map(|r| r.start);
-                    for r in ranges.iter_mut().rev().take_while(|r| Some(r.start) == from) {
-                        r.end = b;
+            } else {
+                // Visual order of graphemes inside this word.
+                let word_order = visual_order(&word_cl_lv);
+                let mut adv = 0.0f32;
+                for &i in &word_order {
+                    if let Some(c) = group.get(i) {
+                        for g in self.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
+                            g.dx += adv;
+                        }
+                        adv += c.adv;
                     }
                 }
-                ranges.extend((c.g0..c.g1).map(|_| a..b));
+
+                let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+                for c in group {
+                    let a = c.start.saturating_sub(start).saturating_sub(w_start);
+                    let b = c.end.saturating_sub(start).saturating_sub(w_start);
+                    if c.g1 <= c.g0 {
+                        let from = ranges.last().map(|r| r.start);
+                        for r in ranges.iter_mut().rev().take_while(|r| Some(r.start) == from) {
+                            r.end = b;
+                        }
+                    }
+                    ranges.extend((c.g0..c.g1).map(|_| a..b));
+                }
+
+                let break_after = opps.contains(&w_end);
+                let kind = if is_space { ClKind::Space } else { ClKind::Text };
+                let style = first.style;
+                let g0 = first.g0;
+                let g1 = last.g1;
+                let cl_end = if group_end == n_added { end } else { start };
+
+                self.shown.push((self.clusters.len(), word_text.to_string(), ranges));
+                self.clusters.push(Cluster {
+                    start,
+                    end: cl_end,
+                    adv,
+                    kind,
+                    style,
+                    g0,
+                    g1,
+                    break_after,
+                    obj_h: 0.0,
+                    obj_d: 0.0,
+                    dot: word_text == "." || word_text == ",",
+                    level: Some(cluster_level),
+                });
             }
-
-            let break_after = opps.contains(&w_end);
-            let is_space = group.iter().all(|c| c.kind == ClKind::Space);
-            let kind = if is_space { ClKind::Space } else { ClKind::Text };
-            let style = first.style;
-            let g0 = first.g0;
-            let g1 = last.g1;
-            let cl_end = if group_end == n_added { end } else { start };
-
-            self.shown.push((self.clusters.len(), word_text.to_string(), ranges));
-            self.clusters.push(Cluster {
-                start,
-                end: cl_end,
-                adv,
-                kind,
-                style,
-                g0,
-                g1,
-                break_after,
-                obj_h: 0.0,
-                obj_d: 0.0,
-                dot: word_text == "." || word_text == ",",
-                level: Some(cluster_level),
-            });
 
             group_start = group_end;
         }
