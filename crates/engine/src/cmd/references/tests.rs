@@ -897,3 +897,48 @@ fn output_gives_every_reference_its_bookmarks_text() {
     assert_eq!(results, expected);
     assert_eq!(results, ["First target", "Second target", "First target", REFERENCE_NOT_FOUND, "First target"]);
 }
+
+/// A second Word probe of LISTNUM: every field after one Heading 2 (so the default level is 3), with
+/// start-at (`\s`), two fields in one paragraph, and the Legal and Outline formats sharing the counters.
+#[test]
+fn listnum_start_at_legal_and_outline_share_the_counters() {
+    let probe: [(&str, &[&str], &[&str]); 19] = [
+        ("L01", &["LISTNUM"], &["i)"]),
+        ("L02", &["LISTNUM"], &["ii)"]),
+        ("L03", &[r"LISTNUM \l 2"], &["b)"]),
+        ("L04", &[r"LISTNUM \l 3"], &["i)"]),
+        ("L05", &[r"LISTNUM \l 1"], &["2)"]),
+        ("L06", &[r"LISTNUM \s 10"], &["x)"]),
+        ("L07", &["LISTNUM"], &["xi)"]),
+        ("L08", &["LISTNUM", "LISTNUM"], &["xii)", "xiii)"]),
+        ("L09", &["LISTNUM LegalDefault"], &["2.1.14."]),
+        ("L10", &[r"LISTNUM LegalDefault \l 2"], &["2.2."]),
+        ("L11", &[r"LISTNUM LegalDefault \l 2"], &["2.3."]),
+        ("L12", &["LISTNUM LegalDefault"], &["2.3.1."]),
+        ("L13", &["LISTNUM OutlineDefault"], &["2."]),
+        ("L14", &[r"LISTNUM OutlineDefault \l 2"], &["D."]),
+        ("L15", &[r"LISTNUM OutlineDefault \l 3"], &["1."]),
+        ("L16", &["LISTNUM NumberDefault"], &["ii)"]),
+        ("L17", &[r"LISTNUM \l 2 \s 5"], &["e)"]),
+        ("L18", &[r"LISTNUM \l 2"], &["f)"]),
+        ("L19", &["LISTNUM"], &["i)"]),
+    ];
+    let mut text = vec!["Cases"];
+    text.extend(probe.iter().map(|r| r.0));
+    let mut s = Session::new(wordcraft_doc::Document::from_text(&text.join("\n")));
+    s.run("select.text", &json!({"text": "Cases"})).unwrap();
+    s.run("styles.apply", &json!({"style": "Heading 2"})).unwrap();
+    for (t, codes, _) in probe {
+        s.run("select.text", &json!({"text": t})).unwrap();
+        s.run("caret.end", &json!({})).unwrap();
+        for c in codes {
+            s.run("insert.field", &json!({"instr": c})).unwrap();
+            s.run("text.insert", &json!({"text": " "})).unwrap();
+        }
+    }
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("references.updateFields", &json!({"all": true})).unwrap();
+    let got: Vec<(String, String)> = fields(&s).into_iter().map(|(c, r)| (c.trim().to_string(), r)).collect();
+    let want: Vec<(String, String)> = probe.iter().flat_map(|r| r.1.iter().zip(r.2.iter()).map(|(c, w)| (c.to_string(), w.to_string()))).collect();
+    assert_eq!(got, want);
+}

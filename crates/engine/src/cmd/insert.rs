@@ -116,6 +116,10 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("insert.dateTime", "Date & Time", "Insert › Text", date_time).params(r#"{"format"?: "M/d/yyyy", "update"?: bool}"#),
         CommandSpec::new("insert.symbol", "Symbol", "Insert › Symbols", symbol).params(r#"{"char": string, "font"?: family (the symbol's own font)}"#),
         CommandSpec::new("insert.field", "Field", "Insert › Text › Quick Parts", field).key("Mod+F9").params(r#"{"instr": string, "result"?: string}"#),
+        CommandSpec::new("insert.listNum", "Insert LISTNUM Field", "Insert › Text › Quick Parts", |s, _| {
+            field(s, &json!({"instr": "LISTNUM"}))
+        })
+        .key(super::mac_or("", "Mod+Alt+L")),
         // Word's Alt+Shift+D / T / P (Control+Shift+… in Word for Mac): DATE, TIME and PAGE fields.
         CommandSpec::new("insert.dateField", "Insert Date Field", "Insert › Text › Quick Parts", |s, _| field(s, &json!({"instr": "DATE"})))
             .key(super::mac_or("Ctrl+Shift+D", "Alt+Shift+D")),

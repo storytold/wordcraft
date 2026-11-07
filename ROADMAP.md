@@ -1,5 +1,6 @@
 # WordCraft roadmap
 
+> **Last updated:** 2026-11-06 · **Change:** trivial (P0077: body LISTNUM fields share nine level counters on F9 and output, with heading-derived levels, start-at and NumberDefault/LegalDefault/OutlineDefault formats; locked fields do not count. Insert LISTNUM and Repeat Find use Ctrl+Alt+L/Y on Windows/Linux. Readiness estimates unchanged.)
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
