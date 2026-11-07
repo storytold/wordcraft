@@ -7,7 +7,7 @@ use wordcraft_doc::numbering::ListKind;
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign, TabLeader,
-    TabStop, TableLook, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
+    TabStop, TableLook, TextAlignment, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, NumFormat, PageVAlign, SectionProps, SectionStart};
 use wordcraft_doc::styles::{Style, StyleKind};
@@ -95,6 +95,7 @@ fn every_char_prop_round_trips() {
         scale: Some(150.0),
         position: Some(3.0),
         kern: Some(8.0),
+        emphasis: Some(wordcraft_doc::props::EmphasisMark::Comma),
         ligatures: Some(wordcraft_doc::props::Ligatures { standard: true, historical: true, ..Default::default() }),
         outline: Some(true),
         shadow: Some(true),
@@ -175,6 +176,7 @@ fn every_para_prop_round_trips() {
         line_spacing: Some(LineSpacing::Multiple(1.5)),
         contextual_spacing: Some(true),
         mirror_indents: Some(true),
+        adjust_right_indent: Some(false),
         keep_next: Some(true),
         keep_lines: Some(false),
         page_break_before: Some(true),
@@ -208,6 +210,7 @@ fn every_para_prop_round_trips() {
             h_anchor: "margin".into(),
             v_anchor: "text".into(),
             wrap: "around".into(),
+            anchor_lock: Some(true),
             h_space: 9.0,
             v_space: 0.0,
         }),
@@ -220,6 +223,7 @@ fn every_para_prop_round_trips() {
         num_change: None,
         fmt_change: None,
         snap_to_grid: Some(false),
+        text_alignment: Some(TextAlignment::Top),
     };
     let variants = [
         ParaProps { line_spacing: Some(LineSpacing::AtLeast(14.0)), indent_first: Some(24.0), align: Some(Align::Center), ..Default::default() },
@@ -427,6 +431,7 @@ fn images_round_trip() {
         // Room for a shadow: kept through save and load.
         float: Float { effect: [12.0, 12.0, 27.0, 27.0], ..Default::default() },
         crop: [0.1, 0.0, 0.25, 0.05],
+        fx: Default::default(),
         ole: None,
     };
     let floating = InlineObject::Image {
@@ -436,6 +441,7 @@ fn images_round_trip() {
         alt: String::new(),
         float: Float { wrap: Wrap::Square, h_rel: Anchor::Page, v_rel: Anchor::Margin, x: 36.0, y: 12.5, dist: 9.0, ..Default::default() },
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     let aligned = InlineObject::Image {
@@ -455,6 +461,7 @@ fn images_round_trip() {
             ..Default::default()
         },
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     let mut floats = vec![floating.clone(), aligned];
@@ -466,6 +473,7 @@ fn images_round_trip() {
             alt: String::new(),
             float: Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, dist: 0.0, ..Default::default() },
             crop: [0.0; 4],
+            fx: Default::default(),
             ole: None,
         });
     }
@@ -1188,7 +1196,16 @@ fn groups_round_trip() {
     let mut d = Document::new();
     let key = d.add_media(tiny_png(), "png");
     let story = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("In the group", CharProps::default()))]);
-    let pic = InlineObject::Image { media: key, w: 60.0, h: 40.0, alt: "A picture".into(), float: Float::default(), crop: [0.0; 4], ole: None };
+    let pic = InlineObject::Image {
+        media: key,
+        w: 60.0,
+        h: 40.0,
+        alt: "A picture".into(),
+        float: Float::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
     let oval = InlineObject::Shape {
         kind: ShapeKind::Ellipse,
         w: 50.0,
@@ -1275,7 +1292,16 @@ fn drawing_canvas_round_trips() {
     use wordcraft_doc::para::{CanvasStyle, GroupChild};
     let mut d = Document::new();
     let key = d.add_media(tiny_png(), "png");
-    let pic = InlineObject::Image { media: key, w: 60.0, h: 40.0, alt: "In the canvas".into(), float: Float::default(), crop: [0.0; 4], ole: None };
+    let pic = InlineObject::Image {
+        media: key,
+        w: 60.0,
+        h: 40.0,
+        alt: "In the canvas".into(),
+        float: Float::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
     let star = InlineObject::Shape {
         kind: ShapeKind::Star,
         w: 72.0,
@@ -1733,7 +1759,16 @@ fn kitchen_sink() -> Document {
     let mut img = Paragraph::new();
     img.insert_object(
         0,
-        InlineObject::Image { media: key, w: 30.0, h: 20.0, alt: "pic".into(), float: Float::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media: key,
+            w: 30.0,
+            h: 20.0,
+            alt: "pic".into(),
+            float: Float::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -1828,6 +1863,7 @@ fn hostile_model_values_still_write() {
             alt: String::new(),
             float: Float::default(),
             crop: [f32::NAN; 4],
+            fx: Default::default(),
             ole: None,
         },
         &CharProps::default(),
@@ -2098,6 +2134,7 @@ fn rotation_and_flips_round_trip() {
         alt: String::new(),
         float: Float { rot: 30.0, effect: [6.0; 4], ..Default::default() },
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     let shape = |kind, float| InlineObject::Shape {
@@ -2598,6 +2635,7 @@ fn alt_text_title_and_decorative_round_trip_for_every_object() {
         alt: "A kiln at dusk".into(),
         float: Float { alt: AltText { title: "Kiln".into(), ..Default::default() }, ..Default::default() },
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     let shape = |alt: AltText| InlineObject::Shape {
