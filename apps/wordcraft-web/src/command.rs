@@ -35,6 +35,16 @@ pub(crate) fn over_cap(text: &str) -> bool {
     text.len() > MAX_COMMAND_BYTES
 }
 
+/// The largest number of host-delivered files waiting to open, and the largest total bytes
+/// they may hold: a burst of opens between two frames cannot grow wasm memory without bound.
+pub(crate) const MAX_PENDING_FILES: usize = 8;
+pub(crate) const MAX_PENDING_FILE_BYTES: u64 = 512 << 20;
+
+/// Whether a delivered file may join the open queue (`queued` files totalling `queued_bytes`).
+pub(crate) fn file_queue_full(queued: usize, queued_bytes: u64) -> bool {
+    queued >= MAX_PENDING_FILES || queued_bytes >= MAX_PENDING_FILE_BYTES
+}
+
 /// A command the host asked to run.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct HostCommand {
@@ -158,6 +168,14 @@ mod tests {
         }
         let data: Value = serde_json::from_str(r#"{"type":"wordcraft:command","reqId":"kept","id":42}"#).unwrap();
         assert_eq!(req_id_of(&data), "kept", "a readable request id is echoed on errors");
+    }
+
+    /// The delivered-file queue refuses past either bound.
+    #[test]
+    fn caps_the_file_queue() {
+        assert!(!super::file_queue_full(0, 0));
+        assert!(super::file_queue_full(super::MAX_PENDING_FILES, 0));
+        assert!(super::file_queue_full(1, super::MAX_PENDING_FILE_BYTES));
     }
 
     /// A message over the size cap is refused before any parse.

@@ -128,12 +128,16 @@ impl Bridge {
 /// (and cut it to 255 characters); a blank one comes as `document` and becomes `Document.docx`.
 fn deliver_open(inbox: &Inbox, ctx: &egui::Context, name: &str, data: &FileData) {
     // A burst of opens between two frames would queue many large copies at once; the inbox
-    // holds a bounded number of delivered files (it drains every frame).
-    const MAX_PENDING_FILES: usize = 8;
-    if inbox.lock().unwrap_or_else(|e| e.into_inner()).len() >= MAX_PENDING_FILES {
-        log::warn!("host file {name} not taken: {MAX_PENDING_FILES} delivered files are still waiting");
+    // holds a bounded number of delivered files, of bounded total bytes (it drains every
+    // frame).
+    let pending = inbox.lock().unwrap_or_else(|e| e.into_inner());
+    let queued_bytes: u64 = pending.iter().map(|(_, bytes)| bytes.len() as u64).sum();
+    if crate::command::file_queue_full(pending.len(), queued_bytes) {
+        drop(pending);
+        log::warn!("host file {name} not taken: the delivered-file queue is full");
         return;
     }
+    drop(pending);
     let name = if name == "document" { DEFAULT_NAME } else { name }.to_string();
     let FileData::Bytes(array) = data else {
         log::warn!("host file {name} came as a File; WordCraft reads bytes only; not opened");

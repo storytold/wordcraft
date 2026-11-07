@@ -205,8 +205,8 @@ pub fn command_icon(id: &str) -> &str {
 /// Right-click on a command's button: put it on (or take it off) the Quick Access Toolbar, or
 /// open Customize Ribbon (#379).
 pub fn command_menu(resp: &Response, app: &mut WordApp, id: &str) {
-    // The embedded editor hides the Quick Access Toolbar and refuses customization: the
-    // whole menu would be refusals.
+    // The embedded editor refuses the toolbar's customization: the whole menu would be
+    // refusals.
     if app.embed.is_some() {
         return;
     }

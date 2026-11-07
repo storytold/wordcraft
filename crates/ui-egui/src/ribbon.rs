@@ -236,16 +236,20 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             } else {
                                 crate::widgets::icon_only_button(ui, "pencil", editing_label, regular(12.0), true)
                             };
-                            crate::rtl::menu(&mode).show(|ui| {
-                                if ui.selectable_label(!track, tl!(tl!("Editing — edit the document directly"))).clicked() {
-                                    let _ = app.run("review.trackChanges", json!({"value": false}));
-                                    ui.close();
-                                }
-                                if ui.selectable_label(track, tl!(tl!("Reviewing — edits become suggestions"))).clicked() {
-                                    let _ = app.run("review.trackChanges", json!({"value": true}));
-                                    ui.close();
-                                }
-                            });
+                            // The embedded editor pins Track Changes on: the button shows the
+                            // state, and the menu (whose choices are the refused command) stays shut.
+                            if !app.embed_refused("review.trackChanges", &json!({})) {
+                                crate::rtl::menu(&mode).show(|ui| {
+                                    if ui.selectable_label(!track, tl!(tl!("Editing — edit the document directly"))).clicked() {
+                                        let _ = app.run("review.trackChanges", json!({"value": false}));
+                                        ui.close();
+                                    }
+                                    if ui.selectable_label(track, tl!(tl!("Reviewing — edits become suggestions"))).clicked() {
+                                        let _ = app.run("review.trackChanges", json!({"value": true}));
+                                        ui.close();
+                                    }
+                                });
+                            }
                             ui.add_space(4.0);
                             let comments_button = if plan.buttons == 0 {
                                 crate::widgets::icon_text_button(ui, "comment", comments, regular(12.0))
@@ -335,7 +339,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 if resp.double_clicked() && tab != "File" {
                                     let _ = app.run("ui.collapseRibbon", json!({}));
                                 }
-                                if ghost.is_none() {
+                                if ghost.is_none() && app.embed.is_none() {
                                     resp.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
                                 }
                             }
@@ -394,7 +398,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 ui.disable();
             }
             let bg = ui.interact(ui.max_rect(), ui.scope_id().with("ribbon_background"), Sense::click());
-            crate::rtl::context_menu(&bg, |ui| crate::rtl::root(ui, |ui| crate::widgets::customize_menu_items(ui, app)));
+            if app.embed.is_none() {
+                crate::rtl::context_menu(&bg, |ui| crate::rtl::root(ui, |ui| crate::widgets::customize_menu_items(ui, app)));
+            }
             let entry = user_tabs.iter().find(|e| e.name == app.ui.tab);
             crate::ribbon_fit::begin(ui.ctx(), &app.ui.tab, ui.available_width() - 4.0);
             // 0.37 keeps the scroll offset private: an edge-chevron click leaves a one-frame

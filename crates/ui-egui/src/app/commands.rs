@@ -132,11 +132,13 @@ impl WordApp {
         if self.embed_refused(id, &params) {
             return Err(crate::tl!("This command isn't available in the embedded editor.").to_owned());
         }
-        // The embedded editor saves the host's document; until it has opened (a password may
-        // be pending, or it may have been cancelled) there is nothing to save back, and a save
-        // would deliver a fresh blank document to the host as if it were new.
-        if self.embed.is_some() && id == "file.save" && self.session.path.is_none() {
-            return Err(crate::tl!("The host's document hasn't opened yet.").to_owned());
+        // The embedded editor saves and exports the host's document; until it has opened (a
+        // password may be pending, or it may have been cancelled) there is nothing to deliver,
+        // and a save or export would hand the host a fresh blank document as if it were new.
+        if self.embed.is_some() && matches!(id, "file.save" | "file.exportPdf") && self.session.path.is_none() {
+            let refused: String = crate::tl!("The host's document hasn't opened yet.").to_owned();
+            self.status(refused.clone());
+            return Err(refused);
         }
         self.clear_command_targets(id);
         if let Some(error) = self.document_required_error(id) {

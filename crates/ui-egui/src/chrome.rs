@@ -86,6 +86,11 @@ fn quick_access(ui: &mut Ui, app: &mut WordApp) {
         }
     }
     let t = Tokens::get(ui.ctx());
+    // The embedded editor keeps the working buttons (Save, Undo, Redo) and refuses the
+    // customization menu, so the "…" button stays out.
+    if app.embed.is_some() {
+        return;
+    }
     let (r, _) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::hover());
     let resp = ui.interact(r, qat_menu_button_id(), Sense::click());
     if resp.hovered() {

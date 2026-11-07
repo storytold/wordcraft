@@ -97,6 +97,14 @@ fn export_pdf_runs() {
     app.embed = Some(Rules);
     let dir = std::env::temp_dir().join(format!("wordcraft-embed-export-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
+    // The host's document is open (it carries a path); until then the export is refused.
+    let early = app.run("file.exportPdf", serde_json::json!({"path": dir.join("Document1.pdf").to_string_lossy()}));
+    assert!(
+        early.as_ref().err().is_some_and(|e| e.contains("hasn't opened")),
+        "an export before the host document opened must be refused: {:?}",
+        early
+    );
+    app.session.path = Some(dir.join("Contract.docx"));
     let path = dir.join("Contract.pdf");
     let r = app.run("file.exportPdf", serde_json::json!({"path": path.to_string_lossy()}));
     assert!(r.as_ref().err().is_none_or(|e| !e.contains("embedded")), "export must get past the refusal: {:?}", r);
