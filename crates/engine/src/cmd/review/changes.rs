@@ -95,26 +95,41 @@ fn resolve_cell(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, ac
     if !has {
         return Ok(false);
     }
-    let t = s.doc.table_mut(story, &tp)?;
-    if r == 0 && c == 0 {
-        fmt_revisions::resolve_table(t, accept);
-    }
-    let drop_row = c == 0 && t.rows.get(r).is_some_and(|row| (row.props.del.is_some() && accept) || (row.props.ins.is_some() && !accept));
-    if drop_row && t.rows.len() > 1 {
-        t.rows.remove(r);
-    } else if let Some(row) = t.rows.get_mut(r) {
-        if c == 0 {
-            row.props.ins = None;
-            row.props.del = None;
-            fmt_revisions::resolve_row(row, accept);
+    let remove_table = {
+        let t = s.doc.table_mut(story, &tp)?;
+        if r == 0 && c == 0 {
+            fmt_revisions::resolve_table(t, accept);
         }
-        let drop_cell = row.cells.get(c).is_some_and(|cell| (cell.props.del.is_some() && accept) || (cell.props.ins.is_some() && !accept));
-        if drop_cell && row.cells.len() > 1 {
-            row.cells.remove(c);
-        } else if let Some(cell) = row.cells.get_mut(c) {
-            cell.props.ins = None;
-            cell.props.del = None;
-            fmt_revisions::resolve_cell(cell, accept);
+        let drop_row = c == 0 && t.rows.get(r).is_some_and(|row| (row.props.del.is_some() && accept) || (row.props.ins.is_some() && !accept));
+        if drop_row {
+            t.rows.remove(r);
+        } else if let Some(row) = t.rows.get_mut(r) {
+            if c == 0 {
+                row.props.ins = None;
+                row.props.del = None;
+                fmt_revisions::resolve_row(row, accept);
+            }
+            let drop_cell = row.cells.get(c).is_some_and(|cell| (cell.props.del.is_some() && accept) || (cell.props.ins.is_some() && !accept));
+            if drop_cell {
+                row.cells.remove(c);
+            } else if let Some(cell) = row.cells.get_mut(c) {
+                cell.props.ins = None;
+                cell.props.del = None;
+                fmt_revisions::resolve_cell(cell, accept);
+            }
+            if row.cells.is_empty() {
+                t.rows.remove(r);
+            }
+        }
+        t.rows.is_empty()
+    };
+    if remove_table {
+        let bl = s.doc.container_mut(story, &tp)?;
+        if tp.last() < bl.len() {
+            bl.remove(tp.last());
+        }
+        if bl.is_empty() {
+            bl.push(std::sync::Arc::new(wordcraft_doc::Block::Para(Paragraph::new())));
         }
     }
     s.clamp_selection();
@@ -322,16 +337,24 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     };
     // Moves with an end in the range: their other ends go with them.
     let moves = crate::cmd::moves::names_in(s, &a, &b, caret_mark.as_ref());
-    for path in s.doc.paths_between(&a, &b).into_iter().rev() {
-        let len = s.doc.para(a.story, &path).map(|p| p.len()).unwrap_or(0);
-        let from = if path == a.path { a.off } else { 0 };
-        let to = if path == b.path { b.off } else { len };
+    let paths = s.doc.paths_between(&a, &b);
+    for path in paths.iter().rev() {
+        let len = s.doc.para(a.story, path).map(|p| p.len()).unwrap_or(0);
+        let from = if *path == a.path { a.off } else { 0 };
+        let to = if *path == b.path { b.off } else { len };
         // A paragraph's mark is in the selection when the selection goes on past it.
-        let mark = path != b.path || caret_mark.as_ref() == Some(&path);
-        let props = (ranged && (path != b.path || to > from)) || caret_props.as_ref() == Some(&path);
-        resolve_para(s, a.story, &path, (from, to), (mark, props), accept)?;
-        if ranged {
-            resolve_cell(s, a.story, &path, accept)?;
+        let mark = *path != b.path || caret_mark.as_ref() == Some(path);
+        let props = (ranged && (*path != b.path || to > from)) || caret_props.as_ref() == Some(path);
+        resolve_para(s, a.story, path, (from, to), (mark, props), accept)?;
+    }
+    if ranged {
+        let mut seen_cells = std::collections::HashSet::new();
+        for path in paths.iter().rev() {
+            if let Some(cell_id) = path.cell()
+                && seen_cells.insert(cell_id)
+            {
+                resolve_cell(s, a.story, path, accept)?;
+            }
         }
     }
     crate::cmd::moves::resolve(s, &moves, accept)?;
