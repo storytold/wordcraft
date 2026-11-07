@@ -15,9 +15,17 @@ pub const TINT_ALPHA: u8 = 214;
 /// The same in a light theme, where the page and the ribbon are both pale and little shows.
 pub const LIGHT_TINT_ALPHA: u8 = 125;
 
-/// A page averaged down to cells of about [`CELL`] points, over its paper colour.
+/// A page averaged down to cells of about [`CELL`] points, over its paper colour. Very tall
+/// pages keep only the rendered tile slices that can contribute to the ribbon.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Thumb {
+    slices: Vec<ThumbSlice>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ThumbSlice {
+    top: f32,
+    bottom: f32,
     w: usize,
     h: usize,
     px: Vec<[f32; 3]>,
@@ -27,6 +35,47 @@ impl Thumb {
     /// Average `img` in blocks of `block` pixels. Pixels are premultiplied, so they go over
     /// `paper` by adding the paper scaled by the missing alpha.
     pub fn of(img: &ColorImage, block: usize, paper: Color32) -> Thumb {
+        Thumb { slices: vec![ThumbSlice::of(img, block, paper, 0.0, 1.0)] }
+    }
+
+    /// A page can be too tall for one texture. Keep thumbnails only for tiles that cover the
+    /// ribbon's current sample band, rather than allocating a thumbnail for the whole page.
+    pub fn empty() -> Thumb {
+        Thumb { slices: Vec::new() }
+    }
+
+    /// Whether a thumbnail slice already covers this page-height interval.
+    pub fn covers(&self, top: f32, bottom: f32) -> bool {
+        self.slices.iter().any(|slice| slice.top <= top + f32::EPSILON && slice.bottom >= bottom - f32::EPSILON)
+    }
+
+    /// Keep only portions still needed by the current ribbon strip. This bounds memory while
+    /// scrolling through very tall pages.
+    pub fn retain_intersecting(&mut self, top: f32, bottom: f32) {
+        self.slices.retain(|slice| slice.bottom > top && slice.top < bottom);
+    }
+
+    /// Replace or add a downsampled slice from a tiled page.
+    pub fn set_slice(&mut self, img: &ColorImage, block: usize, paper: Color32, top: f32, bottom: f32) {
+        let slice = ThumbSlice::of(img, block, paper, top, bottom);
+        if let Some(existing) = self.slices.iter_mut().find(|s| (s.top - top).abs() < 0.00001 && (s.bottom - bottom).abs() < 0.00001) {
+            *existing = slice;
+        } else {
+            self.slices.push(slice);
+        }
+    }
+
+    /// The colour at (`u`, `v`) in 0..1 of the page, bilinear between cell centres.
+    fn sample(&self, u: f32, v: f32) -> Option<[f32; 3]> {
+        self.slices.iter().find(|s| v >= s.top && (v < s.bottom || (s.bottom >= 1.0 && v <= s.bottom))).map(|s| {
+            let local_v = ((v - s.top) / (s.bottom - s.top)).clamp(0.0, 1.0);
+            s.sample(u, local_v)
+        })
+    }
+}
+
+impl ThumbSlice {
+    fn of(img: &ColorImage, block: usize, paper: Color32, top: f32, bottom: f32) -> ThumbSlice {
         let block = block.max(1);
         let [iw, ih] = img.size;
         let (w, h) = (iw.div_ceil(block).max(1), ih.div_ceil(block).max(1));
@@ -49,7 +98,7 @@ impl Thumb {
                 px.push([sum[0] / n, sum[1] / n, sum[2] / n]);
             }
         }
-        Thumb { w, h, px }
+        ThumbSlice { top: top.clamp(0.0, 1.0), bottom: bottom.clamp(top, 1.0), w, h, px }
     }
 
     /// The colour at (`u`, `v`) in 0..1 of the page, bilinear between cell centres.
@@ -94,7 +143,7 @@ pub fn compose(area: Rect, pages: &[PageView], background: Color32) -> ColorImag
                 }
                 let (u, v) = ((at.x - page.rect.min.x) / page.rect.width(), (at.y - page.rect.min.y) / page.rect.height());
                 if let Some(slot) = raw.get_mut(y * w + x) {
-                    *slot = page.thumb.map_or(paper, |t| t.sample(u, v));
+                    *slot = page.thumb.and_then(|t| t.sample(u, v)).unwrap_or(paper);
                 }
             }
         }
@@ -172,7 +221,7 @@ pub fn paint(app: &crate::WordApp, ui: &egui::Ui, slot: egui::layers::ShapeIdx, 
         .page_rects
         .iter()
         .enumerate()
-        .map(|(i, r)| PageView { rect: r.translate(shift), thumb: app.canvas.thumbs.get(&i), paper })
+        .map(|(i, r)| PageView { rect: r.translate(shift), thumb: app.canvas.thumbs.get(&i).map(|(_, thumb)| thumb), paper })
         .collect();
     let id = upload(ui.ctx(), "ribbon", compose(ribbon, &pages, t.canvas));
     let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
@@ -183,8 +232,13 @@ pub fn paint(app: &crate::WordApp, ui: &egui::Ui, slot: egui::layers::ShapeIdx, 
 pub fn paint_band(app: &crate::WordApp, ui: &egui::Ui, area: Rect) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let paper = if app.session.view.dark_mode { Color32::from_gray(wordcraft_render::DARK_PAPER) } else { Color32::WHITE };
-    let pages: Vec<PageView> =
-        app.canvas.page_rects.iter().enumerate().map(|(i, r)| PageView { rect: *r, thumb: app.canvas.thumbs.get(&i), paper }).collect();
+    let pages: Vec<PageView> = app
+        .canvas
+        .page_rects
+        .iter()
+        .enumerate()
+        .map(|(i, r)| PageView { rect: *r, thumb: app.canvas.thumbs.get(&i).map(|(_, thumb)| thumb), paper })
+        .collect();
     let id = upload(ui.ctx(), "ruler", compose(area, &pages, t.canvas));
     let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
     ui.painter().image(id, area, full, Color32::WHITE);
@@ -251,7 +305,7 @@ mod tests {
     #[test]
     fn a_transparent_page_thumbnail_is_the_paper() {
         let t = Thumb::of(&flat(40, 40, Color32::TRANSPARENT), 8, Color32::WHITE);
-        assert_eq!(t.sample(0.5, 0.5), [255.0; 3]);
+        assert_eq!(t.sample(0.5, 0.5), Some([255.0; 3]));
     }
 
     #[test]
@@ -263,8 +317,21 @@ mod tests {
             }
         }
         let t = Thumb::of(&img, 8, Color32::WHITE);
-        assert!(t.sample(0.25, 0.25)[0] < 1.0);
-        assert!(t.sample(0.75, 0.75)[0] > 254.0);
+        assert!(t.sample(0.25, 0.25).unwrap()[0] < 1.0);
+        assert!(t.sample(0.75, 0.75).unwrap()[0] > 254.0);
+    }
+
+    #[test]
+    fn a_tiled_page_thumbnail_only_replaces_its_covered_band() {
+        let tile = flat(16, 16, Color32::BLACK);
+        let mut thumb = Thumb::empty();
+        thumb.set_slice(&tile, 8, Color32::WHITE, 0.25, 0.75);
+        assert_eq!(thumb.sample(0.5, 0.1), None, "unrendered page area falls back to paper");
+        assert_eq!(thumb.sample(0.5, 0.5), Some([0.0; 3]), "rendered tile contributes its ink");
+        assert_eq!(thumb.sample(0.5, 0.9), None, "unrendered page area falls back to paper");
+        thumb.retain_intersecting(0.8, 0.9);
+        assert_eq!(thumb.sample(0.5, 0.5), None, "old tile slices are released after scrolling");
+        assert_eq!(thumb.sample(0.5, 0.7), None);
     }
 
     #[test]
