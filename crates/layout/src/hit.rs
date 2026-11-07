@@ -72,6 +72,9 @@ pub struct ObjectHit {
     pub wrap: Wrap,
     /// Where column- and paragraph-relative offsets start (see [`Placed::Object`]).
     pub origin: Point,
+    /// A member of a Drawing Canvas, by its index in the canvas, when the hit is that member
+    /// (its frame inside the canvas at `pos`) rather than the canvas. Layout gives `None`.
+    pub member: Option<usize>,
 }
 
 /// Object positions in one layout, retaining each page occurrence for page-hinted lookups.
@@ -149,6 +152,7 @@ fn objects_in(items: &[Placed], index: usize) -> impl Iterator<Item = ObjectHit>
             text_box: *text_box,
             wrap: *wrap,
             origin: *origin,
+            member: None,
         }),
         _ => None,
     })
@@ -285,6 +289,13 @@ pub fn page_lines(page: &Page, story: StoryRef) -> Vec<LineHit<'_>> {
     v
 }
 
+/// Whether line `l` is above (`dir < 0`) or below the caret `c`: past the caret's middle, and
+/// not the caret's own line.
+fn beyond(l: &LineHit, c: &Caret, dir: i32) -> bool {
+    let (mid, cur_mid) = ((l.top + l.bottom) / 2.0, c.top + c.height / 2.0);
+    if dir < 0 { mid < cur_mid - 1.0 && l.bottom <= cur_mid } else { mid > cur_mid + 1.0 && l.top >= cur_mid }
+}
+
 /// Of `lines`, the one nearest the caret moving up (`dir < 0`) or down: the lowest above it or
 /// the highest below it.
 fn nearest<'a, 'b>(lines: &[&'b LineHit<'a>], dir: i32) -> Option<&'b LineHit<'a>> {
@@ -317,11 +328,11 @@ fn between(a: &Path, b: &Path, l: &Path) -> bool {
 }
 
 /// The position in turned text (a table cell's text direction) of `story` under page point
-/// (x, y), if there is turned text there.
-fn turned_hit(page: &Page, story: StoryRef, x: f32, y: f32) -> Option<Pos> {
+/// (x, y), if there is turned text there in a paragraph `skip` doesn't leave out.
+fn turned_hit(page: &Page, story: StoryRef, x: f32, y: f32, skip: &dyn Fn(&Path) -> bool) -> Option<Pos> {
     items_of(page, story).find_map(|it| {
         let Placed::Lines { story: s, path, para, l0, l1, x: ox, y: oy, turn } = it else { return None };
-        if *s != story || !it.turned_bounds()?.expand(2.0).contains(Point::new(x, y)) {
+        if *s != story || skip(path) || !it.turned_bounds()?.expand(2.0).contains(Point::new(x, y)) {
             return None;
         }
         let (u, v) = crate::unturn_point(*turn, *ox, *oy, x, y);
@@ -395,38 +406,46 @@ impl DocLayout {
     /// The position nearest to (x, y) on `page`, in `story`.
     pub fn hit(&self, page: usize, x: f32, y: f32, story: StoryRef) -> Option<Pos> {
         let p = self.pages.get(page)?;
-        if let Some(pos) = turned_hit(p, story, x, y) {
-            return Some(pos);
-        }
         // Like Word, a click outside a floating table doesn't land in its cells while there's
         // other text on the page: below one, it goes to the text beside or after it (#2038).
         let floats = if story == StoryRef::Body { float_table_areas(p) } else { Vec::new() };
         let away = |path: &Path| floats.iter().any(|(t, r)| path.0.len() > t.0.len() && path.0.starts_with(&t.0) && !r.contains(Point::new(x, y)));
+        // Turned cell text takes a click up to 2pt outside it, so outside a floating table too.
+        if let Some(pos) = turned_hit(p, story, x, y, &away) {
+            return Some(pos);
+        }
         let lines = page_lines(p, story);
         if lines.is_empty() {
             // A page of turned text (a vertical section): the nearest turned line.
             return nearest_turned(p, story, x, y, &away).or_else(|| nearest_turned(p, story, x, y, &|_: &Path| false));
         }
         let nearest = |a: &&LineHit, b: &&LineHit| score(a, x, y).total_cmp(&score(b, x, y));
-        let best = lines.iter().filter(|l| !away(l.path)).min_by(nearest).or_else(|| lines.iter().min_by(nearest))?;
-        let off = best.para.off_at_x(best.li, x - best.x);
-        Some(Pos { story: best.story, path: best.path.clone(), off })
+        let at = |l: &LineHit| Pos { story: l.story, path: l.path.clone(), off: l.para.off_at_x(l.li, x - l.x) };
+        if let Some(best) = lines.iter().filter(|l| !away(l.path)).min_by(nearest) {
+            return Some(at(best));
+        }
+        // Only a floating table's upright cells are left: other turned text first, then turned
+        // text under the point (the table's too), then the nearest of those cells.
+        nearest_turned(p, story, x, y, &away)
+            .or_else(|| turned_hit(p, story, x, y, &|_: &Path| false))
+            .or_else(|| lines.iter().min_by(nearest).map(at))
     }
 
     /// The story whose text is under a point (body, footnotes, endnotes, text boxes; not
-    /// headers/footers). A text box wins inside its area, except one behind the text, which only
-    /// wins where no body text is.
+    /// headers/footers). A text box wins inside its area (its rotated area when it is turned, as
+    /// [`DocLayout::object_at`] takes it), except one behind the text, which only wins where no
+    /// body text is.
     pub fn story_at(&self, page: usize, x: f32, y: f32) -> Option<StoryRef> {
         let p = self.pages.get(page)?;
         let text_box = |behind: bool| {
-            objects(p, page).find(|o| o.behind() == behind && o.text_box.is_some() && o.rect.contains(Point::new(x, y))).and_then(|o| o.text_box)
+            objects(p, page).find(|o| o.behind() == behind && o.text_box.is_some() && o.rect.contains(o.unspin(x, y))).and_then(|o| o.text_box)
         };
         text_box(false).map(StoryRef::Part).or_else(|| text_at(p, page, x, y)).or_else(|| text_box(true).map(StoryRef::Part))
     }
 
     /// The object a press at (x, y) grabs: a picture or shape anywhere on it, a text box on its
-    /// border (within `edge` points either side; inside is its text). Topmost first; objects
-    /// behind the text only where there's no text.
+    /// border (within `edge` points either side; inside is its text, whatever lies under the
+    /// box). Topmost first; objects behind the text only where there's no text.
     pub fn object_at(&self, page: usize, x: f32, y: f32, edge: f32) -> Option<ObjectHit> {
         self.object_at_in(page, x, y, edge, StoryRef::Body)
     }
@@ -449,11 +468,17 @@ impl DocLayout {
             StoryRef::Body => text_at(p, page, x, y).is_some(),
             StoryRef::Part(id) => hf_text_at(p, id, x, y),
         };
-        cands
-            .iter()
-            .find(|o| !o.behind() && grabs(o))
-            .or_else(|| if text_here { None } else { cands.iter().find(|o| o.behind() && grabs(o)) })
-            .cloned()
+        // Inside a text box is its text: a press there grabs nothing, not an object under the box
+        // (a form scanned as a picture, with text boxes laid over it to fill in). The same holds
+        // among the objects behind the text.
+        let inside_text_box = |o: &ObjectHit| o.text_box.is_some() && !grabs(o) && o.rect.contains(o.unspin(x, y));
+        let topmost = |behind: bool| cands.iter().find(|o| o.behind() == behind && (grabs(o) || inside_text_box(o)));
+        match topmost(false) {
+            Some(o) if inside_text_box(o) => None,
+            Some(o) => Some(o.clone()),
+            None if text_here => None,
+            None => topmost(true).filter(|o| !inside_text_box(o)).cloned(),
+        }
     }
 
     /// The text box in the header or footer at (x, y) on `page`.
@@ -635,18 +660,7 @@ impl DocLayout {
         let gx = goal_x.unwrap_or(c.x);
         let page = self.pages.get(c.page)?;
         let lines = page_lines(page, pos.story);
-        let cur_mid = c.top + c.height / 2.0;
-        let cands: Vec<&LineHit> = lines
-            .iter()
-            .filter(|l| {
-                let mid = (l.top + l.bottom) / 2.0;
-                if dir < 0 {
-                    mid < cur_mid - 1.0 && l.bottom <= c.top + c.height * 0.5
-                } else {
-                    mid > cur_mid + 1.0 && l.top >= c.top + c.height * 0.5
-                }
-            })
-            .collect();
+        let cands: Vec<&LineHit> = lines.iter().filter(|l| beyond(l, &c, dir)).collect();
         let across: Vec<&LineHit> = cands.iter().copied().filter(|l| gx >= l.left - 2.0 && gx <= l.right + 2.0).collect();
         let target = match nearest(&across, dir) {
             // The nearest line across `gx`, unless lines between the caret's paragraph and that
@@ -674,6 +688,21 @@ impl DocLayout {
         let l = if dir < 0 { lines.iter().max_by(|a, b| a.top.total_cmp(&b.top))? } else { lines.iter().min_by(|a, b| a.top.total_cmp(&b.top))? };
         let off = l.para.off_at_x(l.li, gx - l.x);
         Some((Pos { story: l.story, path: l.path.clone(), off }, gx))
+    }
+
+    /// Page Up (`dir < 0`) or Page Down within the caret's page: of the lines above (or below)
+    /// the caret at `pos`, the one nearest page height `y`, on a tie the one horizontally nearest
+    /// page x `x`; the position at `x` on it. Unlike [`DocLayout::hit`], how far the lines are
+    /// sideways never keeps the caret on its own line. `None` when no line is that way.
+    pub fn line_toward(&self, pos: &Pos, page_hint: usize, x: f32, y: f32, dir: i32) -> Option<Pos> {
+        let c = self.caret_on(pos, page_hint)?;
+        let page = self.pages.get(c.page)?;
+        let lines = page_lines(page, pos.story);
+        let dy = |l: &LineHit| band_dist(y, l.top, l.bottom - l.top);
+        let dx = |l: &LineHit| (l.left - x).max(x - l.right).max(0.0);
+        let l = lines.iter().filter(|l| beyond(l, &c, dir)).min_by(|a, b| dy(a).total_cmp(&dy(b)).then(dx(a).total_cmp(&dx(b))))?;
+        let off = l.para.off_at_x(l.li, x - l.x);
+        Some(Pos { story: l.story, path: l.path.clone(), off })
     }
 
     /// Start and end of the visual line holding `pos` (Home / End).

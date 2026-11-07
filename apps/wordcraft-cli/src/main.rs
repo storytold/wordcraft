@@ -430,7 +430,12 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
         "convert" => {
             validate_options("convert", &rest, CONVERT_OPTIONS)?;
             // `--format wordml2003` (or `flatopc`) picks the kind of `.xml` file; its value isn't a path.
-            let format = arg_value(&rest, "--format");
+            let format = match find_option_arg(&rest, "--format") {
+                OptionArg::Absent => None,
+                OptionArg::Duplicate => return Err("convert: duplicate --format option".into()),
+                OptionArg::MissingValue => return Err("convert: --format requires a value".into()),
+                OptionArg::Value(value) => Some(value),
+            };
             let paths = positionals(&rest, CONVERT_OPTIONS);
             let (i, o) = (paths.first().ok_or_else(missing_argument)?.to_string(), paths.get(1).ok_or_else(missing_argument)?.to_string());
             let markup = rest.iter().any(|a| a == "--markup");
@@ -758,6 +763,12 @@ fn parity_markdown(p: &Value) -> String {
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    // Language packs installed in the suite's font store are used; `proof.installPack` installs
+    // only while the person has turned downloading on in the app.
+    wordcraft_engine::packs::use_font_store(false);
+    if let Some(source) = wordcraft_engine::packs::index_override() {
+        eprintln!("wordcraft-cli: Language packs come from a test source: {source}");
+    }
     match run(&args) {
         Ok(()) | Err(Failure::StdoutClosed) => ExitCode::SUCCESS,
         Err(Failure::Error(e)) => {
