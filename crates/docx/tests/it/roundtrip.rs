@@ -2723,7 +2723,7 @@ fn warps_and_glued_connectors_round_trip() {
     let target = shape(ShapeKind::Ellipse, None, ShapeExtra { id: 7, ..Default::default() });
     let lonely = shape(ShapeKind::Rectangle, None, ShapeExtra { id: 9, ..Default::default() });
     let link = ShapeExtra { start: Some(ConnEnd { id: 5, site: 3 }), end: Some(ConnEnd { id: 7, site: 2 }), arrow_end: true, ..Default::default() };
-    let mut conn = shape(ShapeKind::ElbowConnector, None, link);
+    let mut conn = shape(ShapeKind::ElbowArrow, None, link);
     if let InlineObject::Shape { float: f, .. } = &mut conn {
         *f = Float { flip_v: true, ..float(80.0) };
     }
@@ -2742,7 +2742,7 @@ fn warps_and_glued_connectors_round_trip() {
     };
     assert_eq!(extra(&got[0]), extra(&art));
     assert_eq!(extra(&got[1]), extra(&conn));
-    assert!(matches!(&got[1], InlineObject::Shape { kind: ShapeKind::ElbowConnector, float, .. } if float.flip_v));
+    assert!(matches!(&got[1], InlineObject::Shape { kind: ShapeKind::ElbowArrow, float, .. } if float.flip_v));
     assert_eq!(extra(&got[2]), extra(&target));
     assert_eq!(extra(&got[3]).id, 0, "nothing is glued to it");
 

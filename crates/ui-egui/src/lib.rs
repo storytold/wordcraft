@@ -66,6 +66,7 @@ pub mod ribbon;
 pub mod ribbon_fit;
 pub mod ruler_tabs;
 pub mod scroll;
+pub mod shape_tool;
 pub mod system_clipboard;
 pub mod table_mouse;
 pub mod table_pen;

@@ -1,7 +1,7 @@
 use super::text::GlyphPaint;
 use super::{
-    Draw, Exporter, Fill, FillRule, LineCap, LineJoin, LineStyle, PathBuilder, Rect, Rgb, ShapeKind, Size, Stroke, StrokeDash, Surface, Transform,
-    append_path, fill, grown, krilla, norm, ok, paint_fill, pdf_line_cap, rect_path, rgb, shape_effects, shape_path, vector_picture,
+    Draw, Exporter, Fill, FillRule, LineCap, LineJoin, LineStyle, PathBuilder, Rect, Rgb, Size, Stroke, StrokeDash, Surface, Transform, append_path,
+    fill, grown, krilla, norm, ok, paint_fill, pdf_line_cap, rect_path, rgb, shape_effects, shape_path, vector_picture,
 };
 
 impl Exporter<'_> {
@@ -95,7 +95,7 @@ impl Exporter<'_> {
             }
             Draw::Shape { rect, kind, fill: f, stroke, stroke_width, effects, corner, dash, cap } => {
                 let Some(p) = shape_path(*kind, rect, *corner) else { return };
-                let can_fill = *kind != ShapeKind::Line;
+                let can_fill = !kind.is_line_like();
                 let fx = effects.sanitized();
                 if !fx.is_empty() && (f.is_some() && can_fill || stroke.is_some()) {
                     shape_effects(s, (*kind, *corner), rect, &fx, (f.is_some() && can_fill, stroke.is_some(), *stroke_width));

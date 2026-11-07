@@ -125,11 +125,20 @@ pub const MAX_SITE: u32 = 64;
 impl ShapeKind {
     /// A connector (straight, elbow or curved): a line that can be glued to shapes.
     pub fn is_connector(self) -> bool {
-        matches!(self, ShapeKind::StraightConnector | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector)
+        matches!(
+            self,
+            ShapeKind::StraightConnector
+                | ShapeKind::ElbowConnector
+                | ShapeKind::ElbowArrow
+                | ShapeKind::ElbowDoubleArrow
+                | ShapeKind::CurvedConnector
+                | ShapeKind::CurvedArrow
+                | ShapeKind::CurvedDoubleArrow
+        )
     }
     /// A line or connector: drawn as an open path, never filled.
     pub fn is_open(self) -> bool {
-        self == ShapeKind::Line || self.is_connector()
+        self == ShapeKind::Line || self == ShapeKind::DoubleArrow || self.is_connector()
     }
 }
 
@@ -147,7 +156,15 @@ pub fn sites(kind: ShapeKind, w: f32, h: f32) -> Vec<(f32, f32)> {
         ShapeKind::Triangle => vec![(cx, 0.0), (cx / 2.0, cy), (0.0, h), (cx, h), (w, h), (cx + cx / 2.0, cy)],
         // The corners, the legs' midpoints and the hypotenuse's.
         ShapeKind::RightTriangle => vec![(0.0, 0.0), (0.0, cy), (0.0, h), (cx, h), (w, h), (cx, cy)],
-        ShapeKind::Line | ShapeKind::StraightConnector | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector => vec![(0.0, 0.0), (w, h)],
+        ShapeKind::Line
+        | ShapeKind::DoubleArrow
+        | ShapeKind::StraightConnector
+        | ShapeKind::ElbowConnector
+        | ShapeKind::ElbowArrow
+        | ShapeKind::ElbowDoubleArrow
+        | ShapeKind::CurvedConnector
+        | ShapeKind::CurvedArrow
+        | ShapeKind::CurvedDoubleArrow => vec![(0.0, 0.0), (w, h)],
         _ => vec![(cx, 0.0), (0.0, cy), (cx, h), (w, cy)],
     }
 }
@@ -204,8 +221,12 @@ pub fn connector_segs(kind: ShapeKind, w: f32, h: f32) -> Option<Vec<PathSeg>> {
     let mx = w / 2.0;
     Some(match kind {
         ShapeKind::StraightConnector => vec![PathSeg::Move(0.0, 0.0), PathSeg::Line(w, h)],
-        ShapeKind::ElbowConnector => vec![PathSeg::Move(0.0, 0.0), PathSeg::Line(mx, 0.0), PathSeg::Line(mx, h), PathSeg::Line(w, h)],
-        ShapeKind::CurvedConnector => vec![PathSeg::Move(0.0, 0.0), PathSeg::Cubic(mx, 0.0, mx, h, w, h)],
+        ShapeKind::ElbowConnector | ShapeKind::ElbowArrow | ShapeKind::ElbowDoubleArrow => {
+            vec![PathSeg::Move(0.0, 0.0), PathSeg::Line(mx, 0.0), PathSeg::Line(mx, h), PathSeg::Line(w, h)]
+        }
+        ShapeKind::CurvedConnector | ShapeKind::CurvedArrow | ShapeKind::CurvedDoubleArrow => {
+            vec![PathSeg::Move(0.0, 0.0), PathSeg::Cubic(mx, 0.0, mx, h, w, h)]
+        }
         _ => return None,
     })
 }
@@ -214,14 +235,19 @@ pub fn connector_segs(kind: ShapeKind, w: f32, h: f32) -> Option<Vec<PathSeg>> {
 /// leaves its start, in its unflipped `w` × `h` frame: where an arrowhead points.
 pub fn end_direction(kind: ShapeKind, w: f32, h: f32, at_end: bool) -> (f32, f32) {
     let (dx, dy) = match kind {
-        ShapeKind::ElbowConnector | ShapeKind::CurvedConnector => {
+        ShapeKind::ElbowConnector
+        | ShapeKind::ElbowArrow
+        | ShapeKind::ElbowDoubleArrow
+        | ShapeKind::CurvedConnector
+        | ShapeKind::CurvedArrow
+        | ShapeKind::CurvedDoubleArrow => {
             if w.abs() > 0.01 || h.abs() < 0.01 {
                 (1.0, 0.0)
             } else {
                 (0.0, 1.0)
             }
         }
-        ShapeKind::Line => (w, -h),
+        ShapeKind::Line | ShapeKind::DoubleArrow => (w, -h),
         _ => (w, h),
     };
     let len = (dx * dx + dy * dy).sqrt();

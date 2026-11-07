@@ -462,6 +462,7 @@ fn report_catalog_gaps(mut keys: std::collections::BTreeSet<String>) {
         matches!(
             s,
             "Recently Used Shapes"
+                | "Lines"
                 | "Rectangles"
                 | "Basic Shapes"
                 | "Block Arrows"

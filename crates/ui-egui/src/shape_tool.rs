@@ -272,11 +272,11 @@ mod tests {
         let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
         let st = ShapeDrawing { page: 0, from: (20.0, 20.0), to: (120.0, 80.0) };
         finish_drag(&mut app, ShapeKind::TextBox, st);
-        let (_, obj) = wordcraft_engine::cmd::objects::selected(&app.session).unwrap();
+        let obj = app.session.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.objects).next().expect("text box in body");
         match obj {
             wordcraft_doc::para::InlineObject::Shape { kind, w, h, .. } => {
-                assert_eq!(kind, ShapeKind::TextBox);
-                assert_eq!((w, h), (100.0, 60.0));
+                assert_eq!(*kind, ShapeKind::TextBox);
+                assert_eq!((*w, *h), (100.0, 60.0));
             }
             _ => panic!("expected text box"),
         }
