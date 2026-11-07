@@ -570,3 +570,36 @@ fn a_border_change_keeps_what_later_pages_say_of_the_rest() {
     has(&later, "fo:border-left", black);
     has(&later, "fo:padding-left", "20pt");
 }
+
+/// A first page with no header before later pages with one, both stating one margin: a change to
+/// the top margin moves the later pages' text by as much, and a page number format both state goes
+/// on to the later pages.
+#[test]
+fn later_pages_with_a_header_follow_a_first_page_without_one() {
+    let page = r#"fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm" fo:margin-bottom="2cm" fo:margin-left="2cm" fo:margin-right="2cm" style:num-format="1""#;
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pmfirst"><style:page-layout-properties {page}/></style:page-layout><style:page-layout style:name="pmnext"><style:page-layout-properties {page}/><style:header-style><style:header-footer-properties fo:min-height="0.5cm" fo:margin-bottom="0.2cm"/></style:header-style></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pmnext"><style:header><text:p>H</text:p></style:header></style:master-page><style:master-page style:name="First_20_Page" style:page-layout-name="pmfirst" style:next-style-name="Standard"/></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:master-page-name="First_20_Page"/></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">x</text:p></office:text></office:body></office:document-content>"#
+    );
+    let open = || import(&package(&content, Some(&styles))).unwrap();
+    let layout = |s: &str, name: &str| {
+        s.split(&format!(r#"style:name="{name}""#)).nth(1).and_then(|r| r.split("</style:page-layout>").next()).unwrap().to_string()
+    };
+
+    let mut d = open();
+    d.last_section.margin_top += 57.0;
+    let s = crate::odt::tests::entry(&export(&d).unwrap(), "styles.xml");
+    let (first, later) = (layout(&s, "pmfirst"), layout(&s, "pmnext"));
+    assert!(first.contains(r#"fo:margin-top="113.69pt""#), "{first}");
+    // Its header stays where it is and takes the room, as any page with a header's does.
+    assert!(later.contains(r#"fo:margin-top="2cm""#) && later.contains(r#"fo:margin-bottom="0.2cm""#), "{later}");
+    assert!(later.contains(r#"fo:min-height="71.17pt""#), "the text 57 pt lower: {later}");
+
+    let mut d = open();
+    d.last_section.page_num_format = NumFormat::UpperRoman;
+    let s = crate::odt::tests::entry(&export(&d).unwrap(), "styles.xml");
+    assert!(layout(&s, "pmfirst").contains(r#"style:num-format="I""#), "{s}");
+    assert!(layout(&s, "pmnext").contains(r#"style:num-format="I""#), "{s}");
+}

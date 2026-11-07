@@ -576,7 +576,11 @@ fn patch_layout(file: &str, then: &str, now: &str, place: Place) -> Option<Strin
         let mut sets: Vec<(String, Option<String>)> = names
             .into_iter()
             .filter(|n| was.get(*n) != is.get(*n) && !of_side(n))
-            .filter(|n| place.own || same_value(stated(n), was.get(*n)))
+            // (WordCraft leaves out the plain number format, which a file states as `1`.)
+            .filter(|n| {
+                let plain = n.as_str() == "style:num-format" && was.get(*n).is_none() && stated(n).is_some_and(|v| v == "1");
+                place.own || plain || same_value(stated(n), was.get(*n))
+            })
             .map(|n| (n.clone(), is.get(n).cloned()))
             .collect();
         if sets.is_empty() {
@@ -615,7 +619,8 @@ fn patch_layout(file: &str, then: &str, now: &str, place: Place) -> Option<Strin
 /// The file's page may differ in having that band (a first page with no header before pages with
 /// one), so its text goes to the same place by what it has, and its band stays at its own
 /// distance from the page edge unless that's what changed. A page that isn't the section's own
-/// (see [`Place`]) follows only if its text started where the section's did.
+/// (see [`Place`]) follows only if its text started where the section's did, or if it states the
+/// same margin and differs by a band: its text then moves by as much.
 fn patch_side(file: String, (then, now): (&str, &str), side: &Side, shown: bool, own: bool) -> Option<String> {
     let band = format!("{}/style:header-footer-properties", side.band);
     let measure = |xml: &str| {
@@ -629,15 +634,20 @@ fn patch_side(file: String, (then, now): (&str, &str), side: &Side, shown: bool,
     let reach = |(margin, height, spacing): (f32, f32, f32)| margin + height + spacing;
     let moved = (reach(was) - reach(is)).abs() >= 0.005;
     let band_moved = (was.0 - is.0).abs() >= 0.005;
-    if !(moved || band_moved) || (!own && (reach(has) - reach(was)).abs() >= 0.5) {
+    let same_reach = (reach(has) - reach(was)).abs() < 0.5;
+    // (Where the section's first page has no band, its margin is where its text starts.)
+    let same_margin = (has.0 - was.0).abs() < 0.5 || (has.0 - reach(was)).abs() < 0.5;
+    if !(moved || band_moved) || (!own && !same_reach && !same_margin) {
         return Some(file);
     }
+    // Where its text is to start.
+    let target = if own || same_reach { reach(is) } else { reach(has) + reach(is) - reach(was) };
     let length = |v: f32| Some(super::writer::pt(v));
     if !shown {
-        return if moved { with_attrs(&file, LAYOUT, &[(side.margin.to_string(), length(reach(is)))]) } else { Some(file) };
+        return if moved { with_attrs(&file, LAYOUT, &[(side.margin.to_string(), length(target))]) } else { Some(file) };
     }
     let (out, from) = if band_moved { (with_attrs(&file, LAYOUT, &[(side.margin.to_string(), length(is.0))])?, is.0) } else { (file, has.0) };
-    let room = (reach(is) - from).max(0.0);
+    let room = (target - from).max(0.0);
     let spacing = has.2.min(room);
     // A band of a fixed height stays one.
     let fixed = element_attrs(&out).get(&band).is_some_and(|a| a.contains_key("svg:height") && !a.contains_key("fo:min-height"));
