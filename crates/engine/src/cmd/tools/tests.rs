@@ -290,3 +290,94 @@ fn inspect_removals_work_when_the_document_does_not_track_changes() {
     assert!(!text.contains("Hidden"), "the hidden text is still there: {text}");
     assert!(text.contains("Visible text."), "{text}");
 }
+
+/// #5841: style definition changes are diffed and tracked as property-change revisions.
+#[test]
+fn compare_style_definition_changes() {
+    let mut original = Document::from_text("Title text\nBody text");
+    if let Some(h) = Arc::make_mut(&mut original.styles).get_mut("Heading1") {
+        h.chr.size = Some(16.0);
+        h.para.space_after = Some(6.0);
+    }
+    let orig_path = std::env::temp_dir().join(format!("wc-compare-style-orig-{}.docx", std::process::id()));
+    std::fs::write(&orig_path, wordcraft_docx::write(&original).unwrap()).unwrap();
+
+    let mut revised = Document::from_text("Title text\nBody text");
+    if let Some(h) = Arc::make_mut(&mut revised.styles).get_mut("Heading1") {
+        h.chr.size = Some(24.0);
+        h.para.space_after = Some(18.0);
+    }
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-style-rev-{}.docx", std::process::id()));
+    std::fs::write(&rev_path, wordcraft_docx::write(&revised).unwrap()).unwrap();
+
+    let mut s = Session::new(Document::new());
+    let r = s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "author": "Reviewer"
+            }),
+        )
+        .unwrap();
+
+    // The text didn't change, but Heading1 style definition changed.
+    assert_eq!(r["changes"], 1);
+    let h1 = s.doc.styles.get("Heading1").expect("Heading1 style exists");
+    assert_eq!(h1.chr.size, Some(24.0));
+    let chr_change = h1.chr.fmt_change.as_deref().expect("Heading1 has character format revision");
+    assert_eq!(chr_change.old.size, Some(16.0));
+    assert_eq!(h1.para.space_after, Some(18.0));
+    let para_change = h1.para.fmt_change.as_deref().expect("Heading1 has paragraph format revision");
+    assert_eq!(para_change.old.space_after, Some(6.0));
+
+    // Saving to docx preserves the revisions in styles.xml.
+    let saved_docx = wordcraft_docx::write(&s.doc).unwrap();
+    let read_back = wordcraft_docx::read(&saved_docx).unwrap();
+    let rb_h1 = read_back.styles.get("Heading1").expect("Heading1 in saved docx");
+    assert_eq!(rb_h1.chr.size, Some(24.0));
+    assert_eq!(rb_h1.chr.fmt_change.as_deref().map(|c| c.old.size), Some(Some(16.0)));
+    assert_eq!(rb_h1.para.space_after, Some(18.0));
+    assert_eq!(rb_h1.para.fmt_change.as_deref().map(|c| c.old.space_after), Some(Some(6.0)));
+
+    // Rejecting all changes reverts the style definition to the original properties.
+    let mut rejected_s = Session::new(s.doc.clone());
+    rejected_s.run("review.rejectAll", &json!({})).unwrap();
+    let rej_h1 = rejected_s.doc.styles.get("Heading1").expect("Heading1 after reject");
+    assert_eq!(rej_h1.chr.size, Some(16.0));
+    assert!(rej_h1.chr.fmt_change.is_none());
+    assert_eq!(rej_h1.para.space_after, Some(6.0));
+    assert!(rej_h1.para.fmt_change.is_none());
+
+    // Accepting all changes keeps the revised properties and drops the revision.
+    let mut accepted_s = Session::new(s.doc.clone());
+    accepted_s.run("review.acceptAll", &json!({})).unwrap();
+    let acc_h1 = accepted_s.doc.styles.get("Heading1").expect("Heading1 after accept");
+    assert_eq!(acc_h1.chr.size, Some(24.0));
+    assert!(acc_h1.chr.fmt_change.is_none());
+    assert_eq!(acc_h1.para.space_after, Some(18.0));
+    assert!(acc_h1.para.fmt_change.is_none());
+
+    // With formatting: false, style differences are ignored.
+    let mut no_fmt_s = Session::new(Document::new());
+    let r_no_fmt = no_fmt_s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "formatting": false,
+            }),
+        )
+        .unwrap();
+    assert_eq!(r_no_fmt["changes"], 0);
+    let no_fmt_h1 = no_fmt_s.doc.styles.get("Heading1").expect("Heading1 exists");
+    assert_eq!(no_fmt_h1.chr.size, Some(16.0));
+    assert!(no_fmt_h1.chr.fmt_change.is_none());
+    assert_eq!(no_fmt_h1.para.space_after, Some(6.0));
+    assert!(no_fmt_h1.para.fmt_change.is_none());
+
+    let _ = std::fs::remove_file(orig_path);
+    let _ = std::fs::remove_file(rev_path);
+}

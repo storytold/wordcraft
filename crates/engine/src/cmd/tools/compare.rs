@@ -154,6 +154,30 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     s.doc.ensure_nonempty();
     s.note_body_replaced();
     s.math = None;
+    if opts.formatting {
+        let mut result_styles = (*revised.styles).clone();
+        for new_st in &mut result_styles.styles {
+            if let Some(old_st) = s.doc.styles.styles.iter().find(|st| st.id == new_st.id)
+                && crate::cmd::fmt_revisions::compare_style(old_st, new_st, &mut s.doc.revisions, &author, &date)
+            {
+                changes += 1;
+            }
+        }
+        for old_st in &s.doc.styles.styles {
+            if !result_styles.styles.iter().any(|st| st.id == old_st.id) {
+                result_styles.styles.push(old_st.clone());
+            }
+        }
+        s.doc.styles = Arc::new(result_styles);
+    } else {
+        let mut result_styles = (*s.doc.styles).clone();
+        for new_st in &revised.styles.styles {
+            if !result_styles.styles.iter().any(|st| st.id == new_st.id) {
+                result_styles.styles.push(new_st.clone());
+            }
+        }
+        s.doc.styles = Arc::new(result_styles);
+    }
     if show_in != "original" || p::str(v, "original").is_some() {
         // The result is a new, untitled document: saving it never overwrites either file.
         s.path = None;

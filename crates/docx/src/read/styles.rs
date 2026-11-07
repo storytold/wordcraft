@@ -3,6 +3,8 @@ use super::{
     VAlign, flag, int, props, tw, u32_of,
 };
 use std::sync::Arc;
+use wordcraft_doc::RevisionKind;
+use wordcraft_doc::props::PropChange;
 
 /// Built-in style names Word stores in lower case, and how the UI shows them.
 pub(crate) const LOWER_NAMES: &[(&str, &str)] = &[
@@ -138,6 +140,17 @@ impl Reader<'_> {
             };
             if let Some(p) = s.child("w:pPr") {
                 st.para = self.pc.ppr(p).0;
+                if let Some(ch) = p.child("w:pPrChange") {
+                    let old = ch
+                        .child("w:pPr")
+                        .map(|o| {
+                            let mut old = self.pc.ppr(o).0;
+                            crate::read::props::resolve_level_only(&self.doc.styles, &mut old, &id);
+                            old.formatting()
+                        })
+                        .unwrap_or_default();
+                    st.para.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
+                }
             }
             // Word gives its built-in heading styles their outline level whether or not the file
             // writes `w:outlineLvl` (some producers leave it out): "heading 2" is level 2 in the
@@ -151,6 +164,7 @@ impl Reader<'_> {
             }
             if let Some(rp) = s.child("w:rPr") {
                 st.chr = self.pc.rpr(rp);
+                st.chr.fmt_change = self.rpr_change(rp);
             }
             if kind == StyleKind::Table {
                 let parts = self.table_style_parts(s, &mut st);

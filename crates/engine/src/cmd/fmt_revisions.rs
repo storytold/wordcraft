@@ -238,6 +238,28 @@ pub(crate) fn compare_formatting(old: &Paragraph, new: &mut Paragraph, revisions
     r.para(old, new);
 }
 
+/// Compare Documents: record how style `new` is formatted differently from `old` as
+/// tracked formatting changes by `author`. Returns whether any formatting changes were recorded.
+pub(crate) fn compare_style(
+    old: &wordcraft_doc::Style,
+    new: &mut wordcraft_doc::Style,
+    revisions: &mut Vec<Revision>,
+    author: &str,
+    date: &str,
+) -> bool {
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None };
+    let mut changed = false;
+    if let Some(Replacement(want)) = r.change(&old.para, &new.para, ParaProps::formatting, |p| &p.fmt_change) {
+        new.para.fmt_change = want;
+        changed = true;
+    }
+    if let Some(Replacement(want)) = r.change(&old.chr, &new.chr, CharProps::formatting, |c| &c.fmt_change) {
+        new.chr.fmt_change = want;
+        changed = true;
+    }
+    changed
+}
+
 /// The properties a change sets, as the Style Inspector lists them: `[{"prop", "value"}]` in
 /// field order; a switch turned off is `false`, a value removed is `null`.
 pub fn diff<T: Serialize>(old: &T, new: &T) -> Vec<Value> {
@@ -325,6 +347,14 @@ pub fn resolve_para(p: &mut ParaProps, accept: bool) {
     let Some(ch) = p.fmt_change.take() else { return };
     if !accept {
         *p = ch.old.formatting();
+    }
+}
+
+/// Accept or reject tracked formatting changes on every style in `sheet`.
+pub fn resolve_styles(sheet: &mut wordcraft_doc::styles::StyleSheet, accept: bool) {
+    for s in &mut sheet.styles {
+        resolve_para(&mut s.para, accept);
+        resolve_char(&mut s.chr, accept);
     }
 }
 
