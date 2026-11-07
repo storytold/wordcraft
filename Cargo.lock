@@ -6827,7 +6827,9 @@ dependencies = [
  "wordcraft-engine",
  "wordcraft-fonts",
  "wordcraft-ui-egui",
+ "x11-dl",
  "x11rb",
+ "xkbcommon-dl",
  "zbus",
 ]
 
