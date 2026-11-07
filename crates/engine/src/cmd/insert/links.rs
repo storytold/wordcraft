@@ -74,6 +74,9 @@ pub(super) fn link(s: &mut Session, v: &Value) -> CmdResult {
         if s.doc.settings.track_changes && !text.is_empty() {
             props.ins = Some(crate::cmd::new_revision(s, wordcraft_doc::RevisionKind::Insert));
             props.del = None;
+        } else {
+            props.ins = None;
+            props.del = None;
         }
         let end = s.doc.insert_text(&at, &text, &props)?;
         s.sel = Selection::caret(end);
@@ -90,6 +93,9 @@ pub(super) fn link(s: &mut Session, v: &Value) -> CmdResult {
         props.rtl = None;
         if s.doc.settings.track_changes && !text.is_empty() {
             props.ins = Some(crate::cmd::new_revision(s, wordcraft_doc::RevisionKind::Insert));
+            props.del = None;
+        } else {
+            props.ins = None;
             props.del = None;
         }
         let end = s.doc.insert_text(&at, text, &props)?;
