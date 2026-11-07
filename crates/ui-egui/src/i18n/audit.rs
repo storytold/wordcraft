@@ -326,6 +326,14 @@ fn untranslated_interface_text() {
         record(&app, &format!("dialog {name}"), drawn);
         app.dialog = None;
     }
+    // Set Numbering Value opens only on a numbered item.
+    let _ = app.run("para.numbering", json!({"kind": "numbered"}));
+    let _ = app.run("ui.dialog", json!({"name": "numberingValue"}));
+    assert!(app.dialog.is_some(), "Set Numbering Value opens on a numbered item");
+    let drawn = frame(&ctx, &mut app);
+    record(&app, "dialog numberingValue", drawn);
+    app.dialog = None;
+    let _ = app.run("edit.undo", json!({}));
     let panes: Vec<String> =
         app.session.registry.all().iter().map(|c| c.id.to_string()).filter(|id| id.starts_with("view.") && id.ends_with("Pane")).collect();
     for pane in &panes {
@@ -794,6 +802,12 @@ fn the_arabic_interface_is_mirrored_and_never_panics() {
         frame(&ctx, &mut app);
         app.dialog = None;
     }
+    let _ = app.run("para.numbering", json!({"kind": "numbered"}));
+    let _ = app.run("ui.dialog", json!({"name": "numberingValue"}));
+    assert!(app.dialog.is_some(), "Set Numbering Value opens on a numbered item");
+    frame(&ctx, &mut app);
+    app.dialog = None;
+    let _ = app.run("edit.undo", json!({}));
     let panes: Vec<String> =
         app.session.registry.all().iter().map(|c| c.id.to_string()).filter(|id| id.starts_with("view.") && id.ends_with("Pane")).collect();
     for pane in &panes {

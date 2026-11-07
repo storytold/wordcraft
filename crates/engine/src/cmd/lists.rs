@@ -24,6 +24,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("list.get", "List Definition", "Home › Paragraph › Multilevel List", get)
             .params(r#"{"num"?: list id (default: the caret's list)} → {"num", "levels": [as list.define]}"#)
             .pure(),
+        CommandSpec::new("para.getNumberingValue", "Numbering Value", "Home › Paragraph › Numbering", |s, _| {
+            Ok(json!({"value": caret_number(s)}))
+        })
+        .params(r#"{} → {"value": the number the caret's list item shows, null outside a numbered list}"#)
+        .pure(),
         CommandSpec::new("list.multilevelPreset", "Multilevel List Library", "Home › Paragraph › Multilevel List", preset).params(
             r#"{"preset": "headings" (1 / 1.1 / 1.1.1) | "article" (Article I. / Section 1.01 / (a)) | "outlineHeadings" (I. / A. / 1.) | "chapter" (Chapter 1, lower levels unnumbered)} — a new list whose nine levels are linked to Heading 1–9: every paragraph in those styles is numbered, selected paragraphs already in a Heading style keep it, and any other selected paragraph becomes Heading 1 (the first level)"#,
         ),
@@ -144,6 +149,28 @@ pub fn level_from(mut l: Level, i: usize, v: &Value) -> Level {
 pub fn caret_list(s: &Session) -> Option<u32> {
     let para = s.doc.para_at(&s.sel.focus)?;
     para.props.numbering.or_else(|| s.doc.styles.resolve_para(&para.props).numbering).filter(|n| n.num != 0).map(|n| n.num)
+}
+
+/// The number the caret's paragraph shows (3 for `3.`), counting the story's lists up to it:
+/// what Set Numbering Value starts from. `None` outside a numbered list, on a bullet, and on a
+/// paragraph numbered only by its style (Set Numbering Value changes the paragraph's own list).
+pub fn caret_number(s: &Session) -> Option<u32> {
+    let f = &s.sel.focus;
+    let own = s.doc.para_at(f)?.props.numbering.filter(|n| n.num != 0)?;
+    if s.doc.numbering.level(own.num, own.level).is_none_or(|l| matches!(l.format, NumFormat::Bullet | NumFormat::None)) {
+        return None;
+    }
+    let mut counters = wordcraft_doc::numbering::Counters::default();
+    let mut last = None;
+    for path in s.doc.para_paths(f.story).into_iter().filter(|q| *q <= f.path) {
+        let para = s.doc.para(f.story, &path)?;
+        let n = para.props.numbering.or_else(|| s.doc.styles.resolve_para(&para.props).numbering).filter(|n| n.num != 0);
+        last = n.and_then(|n| {
+            counters.next_label(&s.doc.numbering, n.num, n.level)?;
+            counters.values(&s.doc.numbering, n.num)?.get(usize::from(n.level)).copied()
+        });
+    }
+    last
 }
 
 /// The nine levels list `num` shows (its own level definitions over its abstract list's).
@@ -536,5 +563,125 @@ mod tests {
         for n in 1..=9 {
             assert_eq!(s.doc.styles.get(&format!("Heading{n}")).and_then(|st| st.para.numbering), None, "Heading{n}");
         }
+    }
+
+    /// Paragraphs `texts`, with `kind` numbering turned on one paragraph at a time for each
+    /// index in `numbered`, as a user clicks the Numbering button on each.
+    fn numbered_at(texts: &[&str], numbered: &[(usize, &str)]) -> Session {
+        let mut s = Session::new(Document::new());
+        for (i, t) in texts.iter().enumerate() {
+            if i > 0 {
+                s.run("text.newParagraph", &json!({})).unwrap();
+            }
+            s.run("text.insert", &json!({"text": t})).unwrap();
+        }
+        for (i, kind) in numbered {
+            s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(*i, 0));
+            s.run("para.numbering", &json!({"kind": kind})).unwrap();
+        }
+        s
+    }
+
+    fn shown(s: &mut Session) -> Vec<Option<String>> {
+        numbered(s).into_iter().map(|x| x.0).collect()
+    }
+
+    fn want(labels: &[Option<&str>]) -> Vec<Option<String>> {
+        labels.iter().map(|l| l.map(str::to_string)).collect()
+    }
+
+    /// Set Numbering Value numbers the caret's item at any value, and the rest of the list,
+    /// past paragraphs in between, counts on from it; it survives a save to .docx and back.
+    #[test]
+    fn set_numbering_value_numbers_from_any_value_and_the_list_counts_on() {
+        let mut s = numbered_at(&["One", "Between", "Two", "Also", "Three"], &[(0, "numbered"), (2, "numbered"), (4, "numbered")]);
+        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(2, 0));
+        assert_eq!(super::caret_number(&s), Some(2), "the dialog starts from the shown number");
+        s.run("para.setNumberingValue", &json!({"value": 7})).unwrap();
+        let after = want(&[Some("1."), None, Some("7."), None, Some("8.")]);
+        assert_eq!(shown(&mut s), after);
+        assert_eq!(super::caret_number(&s), Some(7));
+        let mut b = Session::new(wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap());
+        assert_eq!(shown(&mut b), after);
+        // Restart at 1 also carries the rest of the list with it.
+        s.run("para.restartNumbering", &json!({})).unwrap();
+        assert_eq!(shown(&mut s), want(&[Some("1."), None, Some("1."), None, Some("2.")]));
+        // Outside a list there is no number to set.
+        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(1, 0));
+        assert_eq!(super::caret_number(&s), None);
+        assert!(s.run("para.setNumberingValue", &json!({"value": 3})).is_err());
+    }
+
+    /// Review of #5245: a heading numbered by its style has no value of its own to set.
+    #[test]
+    fn a_heading_numbered_by_its_style_has_no_value_to_set() {
+        let mut s = numbered_at(&["Heading"], &[]);
+        s.run("list.multilevelPreset", &json!({"preset": "headings"})).unwrap();
+        assert_eq!(shown(&mut s), want(&[Some("1")]));
+        assert_eq!(super::caret_number(&s), None);
+    }
+
+    /// Review of #5245: a bullet has no number to set; `para.getNumberingValue` reads the
+    /// caret's number for agents and the dialog.
+    #[test]
+    fn the_numbering_value_is_read_by_command_and_absent_on_bullets() {
+        let mut s = numbered_at(&["One", "Two"], &[(0, "numbered"), (1, "numbered")]);
+        assert_eq!(s.run("para.getNumberingValue", &json!({})).unwrap(), json!({"value": 2}));
+        let mut s = numbered_at(&["Dot"], &[]);
+        s.run("para.bullets", &json!({})).unwrap();
+        assert_eq!(s.run("para.getNumberingValue", &json!({})).unwrap(), json!({"value": null}));
+    }
+
+    /// Review of #5245: restarting or setting the value of a nested item leaves the levels
+    /// above it counting on, so the next top-level item after it is still 3.
+    #[test]
+    fn restarting_a_nested_item_keeps_the_levels_above_counting() {
+        for (cmd, args) in [("para.restartNumbering", json!({})), ("para.setNumberingValue", json!({"value": 5}))] {
+            let mut s = numbered_at(&["One", "Two", "Sub", "Three"], &[(0, "numbered"), (1, "numbered"), (2, "numbered"), (3, "numbered")]);
+            s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(2, 0));
+            s.run("para.listLevel", &json!({"level": 1})).unwrap();
+            s.run(cmd, &args).unwrap();
+            let got = shown(&mut s);
+            assert_eq!((got[0].as_deref(), got[1].as_deref(), got[3].as_deref()), (Some("1."), Some("2."), Some("3.")), "{cmd}: {got:?}");
+        }
+    }
+
+    /// The list of body paragraph `i`, given a start override at `level`.
+    fn override_start(s: &mut Session, i: usize, level: u8, start: u32) -> wordcraft_doc::props::NumRef {
+        let n = s.doc.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(i)).and_then(|p| p.props.numbering).unwrap();
+        if let Some(num) = std::sync::Arc::make_mut(&mut s.doc.numbering).nums.iter_mut().find(|x| x.id == n.num) {
+            num.start_overrides = vec![(level, start)];
+        }
+        n
+    }
+
+    /// Review of #5245: a later item numbered by its style moves to the restarted list too, so
+    /// it counts on from the value set rather than its old list's start (7., 8., not 7., 5.).
+    #[test]
+    fn set_numbering_value_carries_items_numbered_by_their_style() {
+        let mut s = numbered_at(&["One", "Two"], &[(0, "numbered")]);
+        let n = override_start(&mut s, 0, 0, 5);
+        std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Heading1").unwrap().para.numbering = Some(n);
+        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(1, 0));
+        s.run("para.style", &json!({"style": "Heading1"})).unwrap();
+        assert_eq!(shown(&mut s), want(&[Some("5."), Some("6.")]));
+        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+        s.run("para.setNumberingValue", &json!({"value": 7})).unwrap();
+        assert_eq!(shown(&mut s), want(&[Some("7."), Some("8.")]));
+    }
+
+    /// Review of #5245: when a nested item is the list's first, its level above hasn't started,
+    /// so a restart there keeps that level's start (4) and the next top item is still 5.
+    #[test]
+    fn restarting_a_first_nested_item_keeps_the_start_of_the_level_above() {
+        let mut s = numbered_at(&["Sub", "Top"], &[(0, "numbered"), (1, "numbered")]);
+        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+        s.run("para.listLevel", &json!({"level": 1})).unwrap();
+        override_start(&mut s, 0, 0, 4);
+        s.relayout();
+        let before = shown(&mut s);
+        assert_eq!(before[1].as_deref(), Some("5."), "{before:?}");
+        s.run("para.restartNumbering", &json!({})).unwrap();
+        assert_eq!(shown(&mut s), before);
     }
 }

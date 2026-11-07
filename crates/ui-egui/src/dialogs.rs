@@ -159,6 +159,14 @@ pub enum Dialog {
         rows: u32,
         cols: u32,
     },
+    /// Home › Paragraph › Numbering › Set Numbering Value: the number the caret's list item
+    /// shows, the rest of the list counting on from it.
+    NumberingValue {
+        value: u32,
+        /// The number as opened: OK on an unchanged box changes nothing (a list numbered past
+        /// the box's 100000 keeps its numbers).
+        was: u32,
+    },
     PageSetup {
         top: f32,
         bottom: f32,
@@ -506,6 +514,7 @@ impl Dialog {
             Dialog::Find { tab: FindTab::Replace, .. } => "replace",
             Dialog::Find { tab: FindTab::GoTo, .. } => "goto",
             Dialog::InsertTable { .. } => "insertTable",
+            Dialog::NumberingValue { .. } => "numberingValue",
             Dialog::PageSetup { .. } => "pageSetup",
             Dialog::Link { .. } => "link",
             Dialog::Bookmark { .. } => "bookmark",
@@ -694,6 +703,11 @@ impl Dialog {
                 focus: true,
             },
             "insertTable" => Dialog::InsertTable { rows: 2, cols: 5 },
+            "numberingValue" => {
+                let v = app.session.run("para.getNumberingValue", &json!({})).ok()?;
+                let value = v.get("value").and_then(Value::as_u64)?.min(100_000) as u32;
+                Dialog::NumberingValue { value, was: value }
+            }
             "pageSetup" => {
                 let sp = wordcraft_engine::cmd::page::sect(&app.session);
                 use wordcraft_doc::section::DocGridType;
