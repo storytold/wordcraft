@@ -67,12 +67,12 @@ pub struct FontFace {
     /// values).
     pub cap_height: f64,
     pub x_height: f64,
-    pub shaper: harfrust::ShaperData,
-    /// Variable fonts: the named instance's axis settings (user units; empty = default instance),
-    /// the normalised location and the shaper's view of it.
+    /// The shaper's view of the face, at the named instance's location for variable fonts.
+    pub hb: harfrust::Font,
+    /// Variable fonts: the named instance's axis settings (user units; empty = default instance)
+    /// and the normalised location.
     pub coords: Vec<([u8; 4], f32)>,
     pub(super) location: Location,
-    pub instance: Option<harfrust::ShaperInstance>,
     /// Basic Multilingual Plane coverage bitset, built on first use.
     pub(super) bmp: std::sync::OnceLock<Box<[u64]>>,
     // Some legacy CJK fonts assemble their contours with TrueType instructions.
@@ -187,9 +187,6 @@ impl FontFace {
     }
     pub fn skrifa(&self) -> Option<skrifa::FontRef<'_>> {
         skrifa::FontRef::from_index(self.data(), self.index).ok()
-    }
-    pub fn hb(&self) -> Option<harfrust::FontRef<'_>> {
-        harfrust::FontRef::from_index(self.data(), self.index).ok()
     }
     /// Where in the design space glyphs, metrics and outlines come from.
     pub fn location(&self) -> LocationRef<'_> {
