@@ -5927,6 +5927,37 @@ fn styles_apply_character_style() {
 }
 
 #[test]
+fn applying_paragraph_style_to_selection_preserves_unselected_character_formatting() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "keep this text"}));
+    run(&mut s, "select.text", json!({"text": "keep"}));
+    run(&mut s, "format.size", json!({"size": 22.0}));
+    run(&mut s, "format.color", json!({"color": "156082"}));
+    run(&mut s, "select.text", json!({"text": "this"}));
+    run(&mut s, "styles.apply", json!({"style": "Heading 1"}));
+
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    let untouched = p.props_of_char(1);
+    assert_eq!(untouched.size, Some(22.0));
+    assert_eq!(untouched.color, Some(wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(0x15, 0x60, 0x82))));
+    assert_eq!(untouched.style, None);
+    assert_eq!(p.props.style.as_deref(), Some("Heading1"));
+
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(para_style(&s, 0), None);
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(1).size, Some(22.0));
+    run(&mut s, "edit.redo", json!({}));
+
+    let saved = wordcraft_docx::write(&s.doc).unwrap();
+    let reopened = wordcraft_docx::read(&saved).unwrap();
+    let p = reopened.para_at(&Pos::body(0, 0)).unwrap();
+    let reopened_unselected = p.props_of_char(1);
+    assert_eq!(reopened_unselected.size, Some(22.0));
+    assert_eq!(reopened_unselected.color, Some(wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(0x15, 0x60, 0x82))));
+    assert_eq!(p.props.style.as_deref(), Some("Heading1"));
+}
+
+#[test]
 fn styles_apply_multi_paragraph_selection() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "One"}));

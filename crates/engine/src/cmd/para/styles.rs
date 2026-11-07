@@ -40,27 +40,30 @@ pub(super) fn apply_style(s: &mut Session, v: &Value) -> CmdResult {
             p.numbering = None;
         }
     })?;
-    // A paragraph style resets direct character formatting that matches nothing (Word keeps
-    // direct formatting unless it covers most of the paragraph; we clear font/size/colour).
+    // A paragraph style resets direct character formatting only when it applies at the caret
+    // or reaches the paragraph end. A partial selection must not clear formatting elsewhere
+    // in the paragraph.
     if a.path == b.path || a == b {
         let paths = s.doc.paths_between(&a, &b);
         for path in paths {
             let para = s.doc.para_mut(a.story, &path)?;
             let len = para.len();
-            para.format(0, len, &|c| {
-                c.font = None;
-                c.font_cs = None;
-                c.font_ea = None;
-                c.size = None;
-                c.size_cs = None;
-                c.color = None;
-            })?;
-            para.mark.font = None;
-            para.mark.font_cs = None;
-            para.mark.font_ea = None;
-            para.mark.size = None;
-            para.mark.size_cs = None;
-            para.mark.color = None;
+            if a == b || b.off >= len {
+                para.format(0, len, &|c| {
+                    c.font = None;
+                    c.font_cs = None;
+                    c.font_ea = None;
+                    c.size = None;
+                    c.size_cs = None;
+                    c.color = None;
+                })?;
+                para.mark.font = None;
+                para.mark.font_cs = None;
+                para.mark.font_ea = None;
+                para.mark.size = None;
+                para.mark.size_cs = None;
+                para.mark.color = None;
+            }
         }
     }
     s.pending = None;
