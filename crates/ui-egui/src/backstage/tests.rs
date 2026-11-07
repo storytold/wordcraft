@@ -517,6 +517,56 @@ fn an_unusable_saved_folder_falls_back_to_the_apps_own() {
     let _ = std::fs::remove_dir_all(&own);
 }
 
+/// #2716: the × of a recent row is a cue, not a secret: dimmed when only the row is hovered,
+/// stronger on the × itself, absent when neither is.
+#[test]
+fn recent_remove_cross_shows_when_the_row_is_hovered() {
+    use super::{RemoveCue, remove_cue};
+    assert_eq!(remove_cue(false, false), RemoveCue::Hidden);
+    assert_eq!(remove_cue(true, false), RemoveCue::Dim, "row hovered shows the glyph");
+    assert_eq!(remove_cue(false, true), RemoveCue::Strong);
+    assert_eq!(remove_cue(true, true), RemoveCue::Strong);
+}
+
+/// #2716: each recent row has its own Remove (× at the right end, so it opens nothing), and
+/// Clear all takes the whole list away; the list is empty afterwards.
+#[test]
+fn recent_rows_can_be_removed_one_by_one_or_all_at_once() {
+    use egui::accesskit::Role;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let row = |h: &egui_kittest::Harness<WordApp>, name: &str| h.query_all_by_role_and_label(Role::Button, name).next().map(|n| n.rect());
+    assert!(row(&h, "alpha.docx").is_some() && row(&h, "beta.docx").is_some(), "both rows show");
+    // The × inside alpha's row, not beta's: click it and only alpha goes.
+    let remove_in = |h: &mut egui_kittest::Harness<WordApp>, name: &str| {
+        let r = row(h, name).expect(name);
+        h.query_all_by_role_and_label(Role::Button, "Remove from list")
+            .find(|n| n.rect().min.y >= r.min.y && n.rect().min.y < r.max.y)
+            .expect("row has its Remove")
+            .click();
+    };
+    remove_in(&mut h, "alpha.docx");
+    h.run_steps(4);
+    assert_eq!(h.state().ui.recent, ["/tmp/beta.docx".to_string()], "the row's own Remove takes its row");
+    assert!(h.state().ui.backstage, "the × does not open the Backstage away");
+    assert!(row(&h, "alpha.docx").is_none() && row(&h, "beta.docx").is_some());
+    h.get_by_label("Clear all").click();
+    h.run_steps(4);
+    assert!(h.state().ui.recent.is_empty(), "Clear all empties the list");
+    assert!(h.query_by_label("Documents you open will show up here.").is_some());
+    assert!(row(&h, "beta.docx").is_none(), "and Clear all goes with it");
+}
+
 /// Home and New are different pages (#141): Home has the short template row, the link to New
 /// and Recent; New has every template and no Recent list.
 #[test]
