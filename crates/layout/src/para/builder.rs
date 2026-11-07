@@ -52,6 +52,17 @@ struct SegmentInput<'a> {
     context: &'a [bool],
 }
 
+/// Resolve the base embedding level for an isolate embedded at `surrounding`.
+fn isolate_base_level(surrounding: u8, rtl_base: bool) -> u8 {
+    if rtl_base {
+        if surrounding % 2 == 1 { surrounding } else { surrounding + 1 }
+    } else if surrounding.is_multiple_of(2) {
+        surrounding
+    } else {
+        surrounding + 1
+    }
+}
+
 impl<'a> Builder<'a> {
     /// Displayed form of `c` at run-relative byte `at` (Word › Numeral): one char in, one
     /// char out. `rtl` is the shaping direction; in Context mode `context` (from
@@ -482,8 +493,8 @@ impl<'a> Builder<'a> {
         // Right-to-left text in the result reads like ordinary text (UAX #9, #1670): the result is
         // an isolate whose direction is its first strong letter's (else the text's around the
         // field), and each level run is shaped (mirrored, joined) and placed in that direction.
-        let around = self.levels.get(start).is_some_and(|l| l % 2 == 1);
-        let rtl_base = text.chars().find_map(strong_rtl).unwrap_or(around);
+        let surrounding = self.levels.get(start).copied().unwrap_or(0);
+        let rtl_base = text.chars().find_map(strong_rtl).unwrap_or(surrounding % 2 == 1);
         let lv = bidi_levels(text, rtl_base);
         let before = self.clusters.len();
         self.shape_with(text, start, rc, None, if lv.is_empty() { Dir::Guess } else { Dir::Own(&lv) });
@@ -536,7 +547,7 @@ impl<'a> Builder<'a> {
         let g0 = first.g0;
         let style = first.style;
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
-        let cl_level = if around && !rtl_base { 2 } else { u8::from(rtl_base) };
+        let cl_level = isolate_base_level(surrounding, rtl_base);
         self.shown.push((self.clusters.len(), text.to_string(), ranges));
         self.clusters.push(Cluster {
             start,
@@ -575,9 +586,11 @@ impl<'a> Builder<'a> {
             });
             return;
         }
-        let around = self.levels.get(start).is_some_and(|l| l % 2 == 1);
-        let rtl_base = text.chars().find_map(strong_rtl).unwrap_or(around);
+        let surrounding = self.levels.get(start).copied().unwrap_or(0);
+        let rtl_base = text.chars().find_map(strong_rtl).unwrap_or(surrounding % 2 == 1);
         let lv = bidi_levels(text, rtl_base);
+        let iso_base = isolate_base_level(surrounding, rtl_base);
+        let base_internal = if rtl_base { 1 } else { 0 };
         let before = self.clusters.len();
         self.shape_with(text, start, rc, None, if lv.is_empty() { Dir::Guess } else { Dir::Own(&lv) });
         let added: Vec<Cluster> = self.clusters.drain(before..).collect();
@@ -627,11 +640,11 @@ impl<'a> Builder<'a> {
                 .iter()
                 .map(|c| {
                     let byte_idx = c.start.saturating_sub(start);
-                    lv.get(byte_idx).copied().unwrap_or(u8::from(rtl_base))
+                    lv.get(byte_idx).copied().unwrap_or(base_internal)
                 })
                 .collect();
-            let base_cl_lv = word_cl_lv.first().copied().unwrap_or(u8::from(rtl_base));
-            let cluster_level = if around && base_cl_lv % 2 == 0 { 2 } else { base_cl_lv };
+            let base_cl_lv = word_cl_lv.first().copied().unwrap_or(base_internal);
+            let cluster_level = iso_base + base_cl_lv.saturating_sub(base_internal);
 
             // Visual order of graphemes inside this word.
             let word_order = visual_order(&word_cl_lv);
