@@ -1351,38 +1351,73 @@ fn kept_pages_styles(doc: &Document, kept: Option<&wordcraft_doc::kept::KeptXml>
     }
 }
 
-/// Strips `<style:background-image ...>` elements from page layout XML markup.
+/// Strips `<style:background-image>` elements (empty `<.../>` or start-tag through
+/// `</style:background-image>`) from page layout XML markup using XML event boundaries.
 ///
 /// When an imported document whose page settings were retained is exported, any
 /// pre-existing background images in the page layout definitions must be removed
 /// when active headers contain pictures (#5803).
 fn remove_background_images(xml: &str) -> String {
+    let mut remove_ranges: Vec<(usize, usize)> = Vec::new();
+    let mut depth: usize = 0;
+    let mut open_from: Option<usize> = None;
+    super::xml::events_at(xml.as_bytes(), |ev, at| match ev {
+        super::xml::Ev::Start(q, _) => {
+            if q == "style:background-image" {
+                if depth == 0 {
+                    open_from = Some(at.0);
+                }
+                depth += 1;
+            } else if depth > 0 {
+                depth += 1;
+            }
+        }
+        super::xml::Ev::End(q) => {
+            if depth > 0 {
+                depth = depth.saturating_sub(1);
+                if depth == 0
+                    && let Some(from) = open_from.take()
+                {
+                    remove_ranges.push((from, at.1));
+                }
+            } else if q == "style:background-image" {
+                remove_ranges.push(at);
+            }
+        }
+        super::xml::Ev::Text(_) => {}
+    });
+
+    if remove_ranges.is_empty() {
+        return xml.to_string();
+    }
+
     let mut out = String::with_capacity(xml.len());
-    let mut rest = xml;
-    while let Some(at) = rest.find("<style:background-image") {
-        out.push_str(rest.get(..at).unwrap_or_default());
-        let after = rest.get(at..).unwrap_or_default();
-        if let Some(end) = after.find('>') {
-            rest = after.get(end + 1..).unwrap_or_default();
-        } else {
-            rest = "";
-            break;
+    let mut last = 0;
+    for (start, end) in remove_ranges {
+        if start >= last {
+            out.push_str(xml.get(last..start).unwrap_or_default());
+            last = end;
         }
     }
-    out.push_str(rest);
+    out.push_str(xml.get(last..).unwrap_or_default());
     out
 }
 
 /// Whether any active header emitted for `doc` contains a picture.
 ///
-/// Checks only the header parts that `page_parts` actually emits:
+/// Checks only the header parts for sections that produce a master page and that `page_parts`
+/// actually emits:
 /// - `sec.headers.default` (always active if present)
 /// - `sec.headers.even` (active only when `doc.settings.even_odd_headers` is true)
 /// - `sec.headers.first` (active only when `sec.title_page` is true)
 fn has_header_picture(doc: &Document) -> bool {
     let even = doc.settings.even_odd_headers;
     let mut active_ids = std::collections::HashSet::new();
-    for (_, sec) in doc.sections() {
+    for (k, (_, sec)) in doc.sections().iter().enumerate() {
+        // Sections that produce a master page: the first section or any non-continuous section.
+        if k > 0 && sec.start == SectionStart::Continuous {
+            continue;
+        }
         if let Some(id) = sec.headers.default {
             active_ids.insert(id);
         }
