@@ -49,10 +49,12 @@ fn clip_text(s: &Session, v: &Value) -> Option<String> {
     }
 }
 
+/// Whether the string starts with an RTF file header.
 fn looks_like_rtf(t: &str) -> bool {
     t.trim_start().starts_with("{\\rtf")
 }
 
+/// Whether the string looks like an HTML fragment.
 fn looks_like_html(t: &str) -> bool {
     let t = t.trim_start();
     t.starts_with('<') && (t.contains("</") || t.contains("/>"))
@@ -268,9 +270,13 @@ pub enum Pasted {
 /// another program's formatted copy (HTML, RTF), else the system clipboard's text.
 pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
     let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
+    let (has_html, has_rtf) = (p::str(v, "html").is_some(), p::str(v, "rtf").is_some());
+    let html_matches = p::str(v, "html").is_none_or(|h| h == s.clipboard_html);
+    let rtf_matches = p::str(v, "rtf").is_none_or(|r| r == s.clipboard_rtf);
+
     if let Some(f) = &s.clipboard
         && text.as_ref().is_none_or(|t| f.clipboard_text() == *t)
-        && (text.is_some() || (p::str(v, "html").is_none() && p::str(v, "rtf").is_none()))
+        && (text.is_some() || (!has_html && !has_rtf) || (has_html && html_matches && rtf_matches) || (has_rtf && !has_html && rtf_matches))
     {
         return Ok(Pasted::Fragment(f.clone()));
     }
