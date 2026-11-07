@@ -13,6 +13,7 @@ mod drawing;
 mod fib;
 mod fkp;
 mod fmt;
+mod frame;
 mod list;
 mod media;
 mod metadata;
@@ -320,7 +321,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
             if doc.parts.len() >= MAX_PARTS || tb_stories.contains_key(&spid) {
                 continue;
             }
-            let blocks = story_blocks(&ctx, a, b, &mut pics, max_paragraphs)?;
+            let blocks = story_blocks(&ctx, a, b, &mut pics, max_paragraphs, None, &mut doc)?;
             tb_stories.insert(spid, doc.add_part(PartKind::TextBox, blocks));
         }
     }
@@ -345,7 +346,10 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
                 0 | 1 | 4 => PartKind::Header,
                 _ => PartKind::Footer,
             };
-            let blocks = story_blocks(&ctx, a, b, &mut pics, max_paragraphs)?;
+            // A header/footer story's framed paragraphs float within it like the body's (the repro's
+            // one-line header is three left/centre/right framed paragraphs).
+            let sect_slice = sects.get(si..si + 1).unwrap_or(&[]);
+            let blocks = story_blocks(&ctx, a, b, &mut pics, max_paragraphs, Some((sect_slice, &sheet)), &mut doc)?;
             if !blocks.is_empty() {
                 let id = doc.add_part(kind, blocks);
                 hf_ids.push((si, k, id));
@@ -358,7 +362,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     let mut note_links: Vec<(u32, NoteKind, u32)> = Vec::new();
     for (cp, ab) in notes::parse_notes(&table, &fib, fib::pair::PLCF_FND_REF, fib::pair::PLCF_FND_TXT) {
         let Some((a, b)) = story(ftn_base, fib.ccp.ftn, ab) else { continue };
-        let blocks = story_blocks(&ctx, a, b, &mut pics, max_paragraphs)?;
+        let blocks = story_blocks(&ctx, a, b, &mut pics, max_paragraphs, None, &mut doc)?;
         if !blocks.is_empty() && doc.parts.len() < MAX_PARTS {
             let id = doc.add_part(PartKind::Footnote, blocks);
             note_links.push((cp, NoteKind::Footnote, id));
@@ -366,7 +370,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     }
     for (cp, ab) in notes::parse_notes(&table, &fib, fib::pair::PLCF_END_REF, fib::pair::PLCF_END_TXT) {
         let Some((a, b)) = story(edn_base, fib.ccp.edn, ab) else { continue };
-        let blocks = story_blocks(&ctx, a, b, &mut pics, max_paragraphs)?;
+        let blocks = story_blocks(&ctx, a, b, &mut pics, max_paragraphs, None, &mut doc)?;
         if !blocks.is_empty() && doc.parts.len() < MAX_PARTS {
             let id = doc.add_part(PartKind::Endnote, blocks);
             note_links.push((cp, NoteKind::Endnote, id));
@@ -413,6 +417,9 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
         return Err(paragraph_limit(max_paragraphs));
     }
     doc.media.extend(pics.media);
+    // Paragraph text frames: framed groups leave the body flow for floating parts, each
+    // anchored at its first paragraph, laid out by the section it sits in (#880).
+    let paras = frame::extract(paras, &sects, &sheet, &mut doc);
     doc.body = table::assemble(paras);
     doc.ensure_nonempty();
     work.log();
@@ -425,11 +432,24 @@ fn paragraph_limit(max_paragraphs: usize) -> DocbinError {
 
 /// Walks one story into blocks. A walk that spent the shared paragraph budget is refused before
 /// its partial list is assembled, so a flood does not build blocks it will throw away.
-fn story_blocks(ctx: &WalkCtx<'_>, a: u32, b: u32, pics: &mut media::Pictures, max_paragraphs: usize) -> Result<wordcraft_doc::Blocks, DocbinError> {
+fn story_blocks(
+    ctx: &WalkCtx<'_>,
+    a: u32,
+    b: u32,
+    pics: &mut media::Pictures,
+    max_paragraphs: usize,
+    framed: Option<(&[sections::Section], &StyleSheet)>,
+    doc: &mut Document,
+) -> Result<wordcraft_doc::Blocks, DocbinError> {
     let paras = walk(ctx, a, b, pics);
     if ctx.paragraphs.exceeded.get() {
         return Err(paragraph_limit(max_paragraphs));
     }
+    // A story's framed paragraphs float within it when the caller says which section owns them.
+    let paras = match framed {
+        Some((sects, sheet)) => frame::extract(paras, sects, sheet, doc),
+        None => paras,
+    };
     Ok(table::assemble(paras))
 }
 
@@ -597,6 +617,9 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 }
                 let mut row = table::decode(papx);
                 row.cell_mark = c == '\u{7}';
+                // Frame sprms resolve through the style chain too: covers built from frame styles
+                // carry their geometry on the styles, not on the paragraphs (the 3GPP repro).
+                let frame = frame::decode(ctx.raw_styles, istd, papx);
                 // Only table marks keep their table context; a plain paragraph would carry
                 // a `RowInfo` (about 300 bytes) it never uses.
                 let row = row.is_table().then(|| Box::new(row));
@@ -635,6 +658,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                     },
                     end_cp: cp.saturating_add(1),
                     row,
+                    frame,
                 });
             }
             // Field begin/separator/end ([MS-DOC] §2.9.84 Plcfld).
@@ -734,6 +758,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
             para: Paragraph { text: done.text, runs: done.runs, props: done.props, mark: done.mark, objects: done.objects, ..Default::default() },
             end_cp: cp_end,
             row: None,
+            frame: None,
         });
     }
     out

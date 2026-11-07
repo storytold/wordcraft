@@ -122,6 +122,7 @@ mod tests {
 
     #[test]
     fn lists_installs_and_removes_without_opening_anything() {
+        let _turn = crate::tests::dictionaries_turn();
         with_backend(FixedBackend::sample(), |s, b| {
             let r = s.run("proof.packs", &json!({})).unwrap();
             assert_eq!(r["packs"].as_array().unwrap().len(), 6);
@@ -415,10 +416,25 @@ mod tests {
     /// their layouts are keyed on the dictionaries' generation, not only their own revision.
     #[test]
     fn installing_proofs_parked_documents_again() {
+        let _turn = crate::tests::dictionaries_turn();
         with_backend(FixedBackend::sample(), |s, b| {
             let mut parked = Session::new(crate::sample::sample_document());
-            let before = parked.layout();
-            assert!(std::sync::Arc::ptr_eq(&before, &parked.layout()), "unchanged: the same layout");
+            // The cache key carries the global dictionary generation, so another test's
+            // user-word edit anywhere invalidates this layout between two calls. The
+            // dictionaries turn covers installs; user-word edits are shorter than a retry
+            // window, so a bounded retry keeps the assertion's meaning (a cached layout is
+            // the same object) without depending on other tests' timing.
+            let mut before = parked.layout();
+            let stable = 'stable: {
+                for _ in 0..200 {
+                    if std::sync::Arc::ptr_eq(&before, &parked.layout()) {
+                        break 'stable true;
+                    }
+                    before = parked.layout();
+                }
+                false
+            };
+            assert!(stable, "unchanged: the same layout");
             b.network.store(true, Ordering::Relaxed);
             s.run("proof.installPack", &json!({"locale": "pl"})).unwrap();
             assert!(!std::sync::Arc::ptr_eq(&before, &parked.layout()), "the parked document is laid out (and proofed) again");
@@ -468,6 +484,7 @@ mod tests {
     /// refused.
     #[test]
     fn in_the_app_installs_run_in_the_background() {
+        let _turn = crate::tests::dictionaries_turn();
         let _g = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _reset = Reset;
         let (tx, rx) = std::sync::mpsc::channel();
@@ -527,6 +544,7 @@ mod tests {
     /// while the cancelled download is still stopping says so.
     #[test]
     fn a_cancelled_install_ends_without_an_error() {
+        let _turn = crate::tests::dictionaries_turn();
         let _g = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _reset = Reset;
         let go = slow_in_background();
@@ -550,6 +568,7 @@ mod tests {
     /// run ends (never two downloads of a pack at once).
     #[test]
     fn install_right_after_cancel_starts_again() {
+        let _turn = crate::tests::dictionaries_turn();
         let _g = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _reset = Reset;
         let go = slow_in_background();
@@ -573,6 +592,7 @@ mod tests {
     /// English runs to English: a tiny Lithuanian pack (`ProofLang::Pack`, no rules of its own).
     #[test]
     fn an_installed_pack_proofs_and_hyphenates_its_runs() {
+        let _turn = crate::tests::dictionaries_turn();
         let _g = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _reset = Reset;
         let dir = std::env::temp_dir().join(format!("wordcraft-pack-fixture-{}", std::process::id()));
@@ -639,6 +659,7 @@ mod tests {
     /// their spelling is their own) but hyphenate and check grammar as German and Portuguese.
     #[test]
     fn swiss_german_and_portugal_portuguese_keep_their_languages_rules() {
+        let _turn = crate::tests::dictionaries_turn();
         use wordcraft_proof::ProofLang;
         let de_ch = ProofLang::from_tag(Some("de-CH"));
         let pt_pt = ProofLang::from_tag(Some("pt-PT"));
