@@ -164,6 +164,8 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
         Some(path) => (Pos { story, path, off: 0 }, false),
         None => (nearest_line(&layout, page, y, story).ok_or_else(|| CmdError::Params("no text on that page to anchor to".into()))?, true),
     };
+    let was_with_text =
+        s.doc.para_at(pos).and_then(|p| p.object_at(pos.off)).and_then(|o| o.frame()).map_or(story == StoryRef::Body, |(_, _, f)| moves_with_text(f));
     // Move its character to the anchor, unless it's already in that paragraph and drawn on this
     // page (one anchored on a later page of it is drawn there, #4250).
     let at = if anchor.story == pos.story && anchor.path == pos.path && !on_page && layout.object(pos, page).is_some_and(|o| o.page == page) {
@@ -192,7 +194,7 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
         f.x = x.clamp(-MAX_OFFSET, MAX_OFFSET);
         f.y = y.clamp(-MAX_OFFSET, MAX_OFFSET);
     })?;
-    if on_page {
+    if on_page || story != StoryRef::Body || !was_with_text {
         return Ok(at);
     }
     // Then offsets from its paragraph, as laid out with the object there.
@@ -217,16 +219,23 @@ pub(super) fn unalign(s: &mut Session) -> Result<(), CmdError> {
         return Ok(());
     }
     let hit = s.layout().object(&pos, s.page_hint).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?;
-    let (ox, oy) = (hit.rect.x - hit.origin.x, hit.rect.y - hit.origin.y);
+    let (ox, oy) = (
+        if float.h_rel == Anchor::Page { hit.rect.x } else { hit.rect.x - hit.origin.x },
+        if float.v_rel == Anchor::Page { hit.rect.y } else { hit.rect.y - hit.origin.y },
+    );
     edit_float(s, &pos, |f| {
         if f.h_align.is_some() {
             f.h_align = None;
-            f.h_rel = Anchor::Column;
+            if f.h_rel != Anchor::Page {
+                f.h_rel = Anchor::Column;
+            }
             f.x = ox.clamp(-MAX_OFFSET, MAX_OFFSET);
         }
         if f.v_align.is_some() {
             f.v_align = None;
-            f.v_rel = Anchor::Paragraph;
+            if f.v_rel != Anchor::Page {
+                f.v_rel = Anchor::Paragraph;
+            }
             f.y = oy.clamp(-MAX_OFFSET, MAX_OFFSET);
         }
     })?;
@@ -252,8 +261,13 @@ pub(super) fn move_with_text(s: &mut Session, with_text: bool) -> CmdResult {
     }
     let hit = s.layout().object(&pos, s.page_hint).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?;
     // Paragraph offsets start at the paragraph's top (the hit's origin), page offsets at the page's.
+    let x = if with_text { hit.rect.x - hit.origin.x } else { hit.rect.x };
     let y = if with_text { hit.rect.y - hit.origin.y } else { hit.rect.y };
     let o = edit_float(s, &pos, |f| {
+        f.h_rel = if with_text { Anchor::Column } else { Anchor::Page };
+        if f.h_align.is_none() {
+            f.x = x.clamp(-MAX_OFFSET, MAX_OFFSET);
+        }
         f.v_rel = if with_text { Anchor::Paragraph } else { Anchor::Page };
         f.v_align = None;
         f.y = y.clamp(-MAX_OFFSET, MAX_OFFSET);
