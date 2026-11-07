@@ -6839,6 +6839,7 @@ dependencies = [
  "sys-locale",
  "wordcraft-doc",
  "wordcraft-engine",
+ "wordcraft-fonts",
  "wordcraft-mcp",
  "wordcraft-render",
  "wordcraft-zotero",

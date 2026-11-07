@@ -39,10 +39,10 @@ pub fn has_named_substitutes(family: &str) -> bool {
 fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
     const SANS: &[&str] = &["Carlito", "Helvetica Neue", "Arial", "Liberation Sans", "Noto Sans", "DejaVu Sans", "Source Sans 3"];
     const SERIF: &[&str] = &["Caladea", "Times New Roman", "Liberation Serif", "Georgia", "Noto Serif", "DejaVu Serif", "Source Serif 4"];
-    const MONO: &[&str] = &["Courier New", "Liberation Mono", "Menlo", "Consolas", "DejaVu Sans Mono", "JetBrains Mono"];
-    const ARIAL: &[&str] = &["Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
-    const ARIAL_UNICODE: &[&str] = &["Arial", "Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
-    const TIMES: &[&str] = &["Liberation Serif", "Times", "Tinos", "Source Serif 4"];
+    const MONO: &[&str] = &["Courier New", "Liberation Mono", "Cousine", "Menlo", "Consolas", "DejaVu Sans Mono", "JetBrains Mono"];
+    const ARIAL: &[&str] = &["Liberation Sans", "Arimo", "Helvetica", "Helvetica Neue", "Source Sans 3"];
+    const ARIAL_UNICODE: &[&str] = &["Arial", "Liberation Sans", "Arimo", "Helvetica", "Helvetica Neue", "Source Sans 3"];
+    const TIMES: &[&str] = &["Liberation Serif", "Tinos", "Times", "Source Serif 4"];
     // Word's symbol fonts (Symbol, Wingdings…) are proprietary: their characters are drawn as their
     // Unicode equivalents (`wordcraft_doc::symbol_fonts`) from these faces or any face that has them.
     const SYMBOL: &[&str] = &["Apple Symbols", "Segoe UI Symbol", "DejaVu Sans", "Noto Sans Symbols", "Noto Sans Symbols 2", "Source Sans 3"];
@@ -399,6 +399,37 @@ fn substitute(db: &FontDb, family: &str) -> Option<&'static str> {
         .or_else(|| installed.first().copied())
 }
 
+/// Word's core families, each with the open fonts that share its metrics. Without the family or
+/// a twin, text set in it wraps and paginates differently from Word (Times New Roman drawn in a
+/// wider serif fits fewer lines to a page).
+const CORE_METRIC_FONTS: &[(&str, &[&str])] = &[
+    ("Times New Roman", &["Liberation Serif", "Tinos"]),
+    ("Arial", &["Liberation Sans", "Arimo"]),
+    ("Courier New", &["Liberation Mono", "Cousine"]),
+    ("Calibri", &["Carlito"]),
+    ("Cambria", &["Caladea"]),
+];
+
+/// Word's core families not drawn with themselves or a metric twin, paired with the primary
+/// resolved family. Glyphs the primary family cannot draw may still use glyph fallback.
+pub fn missing_metric_fonts() -> Vec<(&'static str, String)> {
+    missing_metric_fonts_in(FontDb::global())
+}
+
+pub(crate) fn missing_metric_fonts_in(db: &FontDb) -> Vec<(&'static str, String)> {
+    CORE_METRIC_FONTS
+        .iter()
+        .filter_map(|(word, twins)| {
+            let resolved = resolve_with_db(db, word, false, false);
+            if has_metric_resolution(db.has_family(word), twins, &resolved.face.family) { None } else { Some((*word, resolved.face.family.clone())) }
+        })
+        .collect()
+}
+
+fn has_metric_resolution(installed_word_font: bool, twins: &[&str], resolved_family: &str) -> bool {
+    installed_word_font || twins.iter().any(|twin| resolved_family.eq_ignore_ascii_case(twin))
+}
+
 fn style_name(bold: bool, italic: bool) -> &'static str {
     match (bold, italic) {
         (false, false) => "Regular",
@@ -436,6 +467,18 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
             return *r;
         }
     }
+    let r = resolve_with_db(db, family, bold, italic);
+    let mut c = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if cacheable && c.0 == generation {
+        if c.1.len() >= FAMILY_CACHE_MAX {
+            c.1.clear();
+        }
+        c.1.insert(key, r);
+    }
+    r
+}
+
+fn resolve_with_db(db: &FontDb, family: &str, bold: bool, italic: bool) -> Resolved {
     // Printer-driver Symbol aliases use the same encoding as Symbol.
     let base = if family.trim().eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(family) };
     let (fam, substituted) = if db.has_family(family) {
@@ -447,15 +490,7 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
         (substitute(db, base).unwrap_or(crate::FALLBACK_FAMILY).to_string(), true)
     };
     let face = db.face(&fam, style_name(bold, italic));
-    let r = Resolved { synth_bold: bold && face.weight < 600.0, synth_italic: italic && !face.italic, substituted, face: FaceRef::of(&face) };
-    let mut c = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if cacheable && c.0 == generation {
-        if c.1.len() >= FAMILY_CACHE_MAX {
-            c.1.clear();
-        }
-        c.1.insert(key, r);
-    }
-    r
+    Resolved { synth_bold: bold && face.weight < 600.0, synth_italic: italic && !face.italic, substituted, face: FaceRef::of(&face) }
 }
 
 /// A line's (ascent, descent) from hhea values, both positive: the line gap goes above the ascent.
@@ -786,5 +821,47 @@ mod tests {
         for f in ["No Such Brand Font", "Cambria", "Georgia", "Brand Serif"] {
             assert!(!has_named_substitutes(f), "{f}");
         }
+    }
+
+    #[test]
+    fn core_font_notice_uses_the_actual_installed_face() {
+        const SERIF: &[u8] = include_bytes!("../../../assets/fonts/SourceSerif4-Regular.ttf");
+        let database = |name: Option<&str>| {
+            let db = FontDb::with_font_dirs(Vec::new());
+            db.set_system_fallback(false);
+            if let Some(name) = name {
+                assert_eq!(db.add_document_fonts(vec![(SERIF.to_vec(), name.to_owned())]), 1);
+            }
+            db
+        };
+
+        let original = database(Some("Times New Roman"));
+        assert!(missing_metric_fonts_in(&original).iter().all(|(family, _)| *family != "Times New Roman"));
+        assert_eq!(resolve_with_db(&original, "Times New Roman", false, false).face.family, "Times New Roman");
+
+        let twin = database(Some("Liberation Serif"));
+        assert!(missing_metric_fonts_in(&twin).iter().all(|(family, _)| *family != "Times New Roman"));
+        assert_eq!(resolve_with_db(&twin, "Times New Roman", false, false).face.family, "Liberation Serif");
+
+        let fallback = database(None);
+        assert_eq!(
+            missing_metric_fonts_in(&fallback).iter().find(|(family, _)| *family == "Times New Roman"),
+            Some(&("Times New Roman", "Source Serif 4".to_owned()))
+        );
+        assert_eq!(resolve_with_db(&fallback, "Times New Roman", false, false).face.family, "Source Serif 4");
+
+        let no_carlito = database(Some("DejaVu Sans"));
+        assert!(!no_carlito.has_family("Carlito"));
+        assert_eq!(resolve_with_db(&no_carlito, "Calibri", false, false).face.family, "DejaVu Sans");
+        assert_eq!(
+            missing_metric_fonts_in(&no_carlito).iter().find(|(family, _)| *family == "Calibri"),
+            Some(&("Calibri", "DejaVu Sans".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_listed_but_uninstalled_carlito_does_not_hide_the_chosen_fallback() {
+        assert!(!has_metric_resolution(false, &["Carlito"], "DejaVu Sans"));
+        assert!(has_metric_resolution(false, &["Carlito"], "Carlito"));
     }
 }
