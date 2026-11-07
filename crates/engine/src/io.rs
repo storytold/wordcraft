@@ -24,6 +24,7 @@ pub const OPEN_EXTS: &[&str] = &[
     "odt",
     "ott",
     "fodt",
+    "epub",
     "tex",
     "latex",
     "ltx",

@@ -11,6 +11,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod comments;
+pub mod epub;
 pub mod html;
 pub mod latex;
 pub mod markdown;
@@ -30,7 +31,7 @@ pub const MAX_ZIP_ENTRIES: u64 = 20_000;
 
 /// Extensions this crate handles.
 pub const EXTENSIONS: &[&str] =
-    &["txt", "text", "md", "markdown", "html", "htm", "xhtml", "mht", "mhtml", "rtf", "odt", "ott", "fodt", "tex", "latex", "ltx"];
+    &["txt", "text", "md", "markdown", "html", "htm", "xhtml", "mht", "mhtml", "rtf", "odt", "ott", "fodt", "tex", "latex", "ltx", "epub"];
 
 /// Import `bytes` in the format named by `ext` (no dot, any case). `None` = not our format.
 pub fn import(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
@@ -44,6 +45,7 @@ pub fn import(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
         "odt" | "ott" => odt::import(bytes),
         "fodt" => odt::import_flat(bytes),
         "tex" | "latex" | "ltx" => Ok(latex::import(bytes)),
+        "epub" => epub::import(bytes),
         _ => return None,
     };
     Some(r.map(|mut d| {
