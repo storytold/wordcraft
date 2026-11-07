@@ -578,7 +578,10 @@ pub(super) fn turned(f: &Float) -> bool {
 /// `style:graphic-properties` attributes, and the frame's `svg:x`/`svg:y` attributes, or its
 /// `draw:transform` when it is turned (`w` × `h` its size).
 pub(super) fn frame_of(f: &Float, w: f32, h: f32) -> (&'static str, String, String) {
-    let anchor = if f.page > 0 || (f.h_rel == Anchor::Page && f.v_rel == Anchor::Page) {
+    // A page number holds until it is placed by its paragraph: moved in WordCraft.
+    let by_paragraph =
+        matches!(f.h_rel, Anchor::Column | Anchor::Character) || matches!(f.v_rel, Anchor::Paragraph | Anchor::Line | Anchor::Character);
+    let anchor = if (f.page > 0 && !by_paragraph) || (f.h_rel == Anchor::Page && f.v_rel == Anchor::Page) {
         "page"
     } else if f.v_rel == Anchor::Line {
         "char"
