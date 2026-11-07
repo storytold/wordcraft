@@ -865,15 +865,11 @@ fn paste_format(s: &mut Session, _: &Value) -> CmdResult {
         let f = s.sel.focus.clone();
         if let Some(pp) = s.doc.para_at(&f) {
             let (x, y) = pp.word_at(f.off);
-            s.doc.format_range(&Pos { off: x, ..f.clone() }, &Pos { off: y, ..f.clone() }, &|c| *c = chr.cleared().overlaid(&chr))?;
+            s.doc.format_range(&Pos { off: x, ..f.clone() }, &Pos { off: y, ..f.clone() }, &|c| *c = c.cleared().overlaid(&chr))?;
         }
         s.doc.format_paragraphs(&a, &b, &|p| *p = para.clone())?;
     } else {
-        s.doc.format_range(&a, &b, &|c| {
-            let link = c.link.clone();
-            *c = c.cleared().overlaid(&chr);
-            c.link = link;
-        })?;
+        s.doc.format_range(&a, &b, &|c| *c = c.cleared().overlaid(&chr))?;
         if a.path != b.path || a.off == 0 {
             s.doc.format_paragraphs(&a, &b, &|p| *p = para.clone())?;
         }
