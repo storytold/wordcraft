@@ -701,6 +701,7 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ok || cancel
 }
 
+/// The Insert Hyperlink dialog body and actions.
 fn link_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     let Dialog::Link { url, text, place, targets, pick, focus } = d else {
         return false;
@@ -790,7 +791,11 @@ fn link_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             let _ = app.run("insert.link", params);
         } else {
-            let _ = app.run("insert.link", json!({"url": url, "text": text}));
+            let mut params = json!({"url": url});
+            if !text.is_empty() {
+                params["text"] = json!(text);
+            }
+            let _ = app.run("insert.link", params);
         }
     }
     ok || cancel
