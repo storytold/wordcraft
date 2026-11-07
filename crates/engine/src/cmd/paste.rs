@@ -49,10 +49,12 @@ fn clip_text(s: &Session, v: &Value) -> Option<String> {
     }
 }
 
+/// Whether the string starts with an RTF file header.
 fn looks_like_rtf(t: &str) -> bool {
     t.trim_start().starts_with("{\\rtf")
 }
 
+/// Whether the string looks like an HTML fragment.
 fn looks_like_html(t: &str) -> bool {
     let t = t.trim_start();
     t.starts_with('<') && (t.contains("</") || t.contains("/>"))
@@ -293,7 +295,6 @@ fn clipboard_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
     if owns_clipboard(v)
         && let Some(f) = &s.clipboard
         && text.as_ref().is_none_or(|t| f.clipboard_text() == *t)
-        && (text.is_some() || (p::str(v, "html").is_none() && p::str(v, "rtf").is_none()))
     {
         return Ok(Pasted::Fragment(f.clone()));
     }
