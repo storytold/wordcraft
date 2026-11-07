@@ -138,6 +138,13 @@ struct AwaitingSave {
     rev: u64,
 }
 
+/// A Save Changes command held until the user confirms a damaged-source overwrite.
+pub(crate) struct DamagedSaveContinuation {
+    pub(crate) then: String,
+    pub(crate) params: Value,
+    pub(crate) document: u64,
+}
+
 /// File › Options › Advanced › Linux display server (#2184, `ui.displayServer`): how the desktop
 /// app connects on Linux and the BSDs. It's read before the window opens, so a change applies at
 /// the next launch; `WORDCRAFT_WAYLAND` overrides it. An unknown saved value reads as Automatic.
@@ -764,6 +771,7 @@ pub struct WordApp {
     saves_in_flight: Vec<SaveInFlight>,
     /// Web: the command a Save Changes prompt held back until its picker save ends (#1315).
     awaiting_save: Option<AwaitingSave>,
+    pub(crate) damaged_save_continuation: Option<DamagedSaveContinuation>,
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
     file_dialog: Option<file_dialogs::PendingDialog>,
     /// The built-in file browser, when it is open, and the folder it showed last (#576).

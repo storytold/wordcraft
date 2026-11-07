@@ -337,6 +337,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     }
     let (left, bytes, graphic) = (r.chunks.left, r.chunks.bytes, r.chunks.graphic);
     let mut doc = r.doc;
+    doc.skipped_parts = pkg.skipped().to_vec();
     doc.ensure_nonempty();
     Ok((doc, left, bytes, graphic))
 }
