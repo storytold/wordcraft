@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use common::{
     CT_CHART, CT_COMMENTS, CT_COMMENTS_EXT, CT_COMMENTS_IDS, CT_CUSTOMXML_PROPS, CT_ENDNOTES, CT_FOOTER, CT_FOOTNOTES, CT_GLOSSARY, CT_HEADER,
     CT_MAIN, CT_NUMBERING, CT_PEOPLE, CT_SETTINGS, CT_STYLES, CT_TEMPLATE_MAIN, CT_WEB_SETTINGS, Doc, add_header, claim_entry_method,
-    content_types_xml, corrupt_entry_data, ns, rels_xml, replace_all, rich_content_types, utf16_le_with_bom,
+    content_types_xml, corrupt_entry_data, document_xml, ns, rels_xml, replace_all, rich_content_types, utf16_le_with_bom,
 };
 use wordcraft_validate::{Finding, Report, Severity, Verdict, validate_bytes, validate_path};
 
@@ -149,6 +149,42 @@ fn pkg_dup_entry() {
     let report = validate_bytes(&zip);
     assert_eq!(report.verdict, Verdict::Fail);
     assert_finding(&report, "PKG-DUP-ENTRY", None);
+}
+
+#[test]
+fn legacy_encoded_distinct_names_do_not_fire_pkg_dup_entry() {
+    let mut d = Doc::minimal();
+    d.set("word/dA.xml", b"<a/>".to_vec());
+    d.set("word/dB.xml", b"<b/>".to_vec());
+    let zip = replace_all(&d.build(), b"word/dA.xml", b"word/d\x80.xml");
+    let zip = replace_all(&zip, b"word/dB.xml", b"word/d\x81.xml");
+    let report = validate_bytes(&zip);
+    assert!(
+        !report.findings.iter().any(|f| f.rule == "PKG-DUP-ENTRY"),
+        "distinct byte sequences must not be reported as duplicates: {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn legacy_encoded_duplicate_names_fire_pkg_dup_entry() {
+    let mut d = Doc::minimal();
+    d.set("word/dA.xml", b"<a/>".to_vec());
+    d.set("word/dB.xml", b"<b/>".to_vec());
+    let zip = replace_all(&d.build(), b"word/dA.xml", b"word/d\x80.xml");
+    let zip = replace_all(&zip, b"word/dB.xml", b"word/d\x80.xml");
+    let report = validate_bytes(&zip);
+    assert_eq!(report.verdict, Verdict::Fail);
+    assert_finding(&report, "PKG-DUP-ENTRY", None);
+}
+
+#[test]
+fn case_variant_duplicate_document_part() {
+    let mut d = Doc::minimal();
+    d.set("Word/document.xml", document_xml(r#"<w:p><w:r><w:t>Hello</w:t></w:r></w:p>"#));
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Fail);
+    assert_finding(&report, "PKG-CASE-COLLISION", None);
 }
 
 /// §2 canary: an archive the zip reader accepts but the raw central-directory parser rejects must be

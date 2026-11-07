@@ -406,6 +406,14 @@ fn no_main_message(package_rels: Option<&RelsPart>) -> String {
     }
 }
 
+/// Strip leading ASCII slash bytes (`/`) from a raw entry name.
+fn trim_leading_slash(mut b: &[u8]) -> &[u8] {
+    while let Some(rest) = b.strip_prefix(b"/") {
+        b = rest;
+    }
+    b
+}
+
 fn check_duplicate_entries(bytes: &[u8], acc: &mut Acc) {
     acc.ran("PKG-DUP-ENTRY");
     // The zip reader collapses duplicate names into one entry, so the central directory itself is
@@ -419,14 +427,15 @@ fn check_duplicate_entries(bytes: &[u8], acc: &mut Acc) {
         acc.set_incomplete();
         return;
     };
-    let mut counts: HashMap<&str, usize> = HashMap::new();
+    let mut counts: HashMap<&[u8], usize> = HashMap::new();
     for n in &dir.names {
-        *counts.entry(n.trim_start_matches('/')).or_default() += 1;
+        *counts.entry(trim_leading_slash(n)).or_default() += 1;
     }
-    let mut dups: Vec<&str> = counts.into_iter().filter(|(_, c)| *c > 1).map(|(n, _)| n).collect();
+    let mut dups: Vec<&[u8]> = counts.into_iter().filter(|(_, c)| *c > 1).map(|(n, _)| n).collect();
     dups.sort_unstable();
     for n in dups {
-        acc.add("PKG-DUP-ENTRY", None, format!("the entry {n} appears more than once in the archive"));
+        let name_str = String::from_utf8_lossy(n);
+        acc.add("PKG-DUP-ENTRY", None, format!("the entry {name_str} appears more than once in the archive"));
     }
     // The raw directory holds more records than the budget allowed the parse to examine. The
     // unexamined records' names (and so any duplicate among them) are unknown, so duplicate
@@ -457,9 +466,9 @@ fn u64_at(b: &[u8], i: usize) -> Option<u64> {
 
 /// The parsed zip central directory: the raw records examined within the entry budget, and
 /// whether the budget stopped the parse before the last raw record.
-struct CentralDirectory {
-    /// The entry names examined, in stored order, including duplicate names.
-    names: Vec<String>,
+struct CentralDirectory<'a> {
+    /// The raw entry names examined, in stored order, including duplicate names.
+    names: Vec<&'a [u8]>,
     /// The total raw record count the directory declares.
     total: u64,
     /// True when fewer than `total` records were examined because the entry budget stopped the
@@ -467,20 +476,17 @@ struct CentralDirectory {
     truncated: bool,
 }
 
-/// The names in the zip central directory, in stored order, including duplicates, stopping after
-/// `limit` names (the entry budget), together with whether any raw record remained unexamined.
-/// `None` when the directory cannot be parsed (not a zip, or a layout this reader does not
-/// understand), in which case duplicate names are simply not checked.
+/// The raw entry name bytes in the zip central directory, in stored order, including duplicates,
+/// stopping after `limit` names (the entry budget), together with whether any raw record remained
+/// unexamined. `None` when the directory cannot be parsed (not a zip, or a layout this reader does
+/// not understand), in which case duplicate names are simply not checked.
 ///
-/// Names are decoded with `String::from_utf8_lossy`, not by the zip reader's legacy-name decoding.
-/// What duplicate detection therefore guarantees: among examined records, an exact byte-for-byte
-/// duplicate entry name is always seen (lossy decoding maps identical bytes to the identical
-/// string), and every ASCII or valid-UTF-8 name is compared exactly. Records past the entry budget
-/// are unexamined by design, and the run reports INCOMPLETE instead of claiming coverage. What it
-/// does not guarantee: two *distinct* legacy-encoded (non-UTF-8) byte sequences can both decode to
-/// the same replacement-character string, so two different stored names are reported as a duplicate
-/// — a PKG-DUP-ENTRY Error — even though their bytes differ.
-fn central_directory(bytes: &[u8], limit: usize) -> Option<CentralDirectory> {
+/// Entry names are returned as raw byte slices rather than decoded strings, allowing duplicate-entry
+/// detection to compare byte-exact names. This guarantees that distinct legacy-encoded (non-UTF-8)
+/// byte sequences are never falsely reported as duplicates if they share lossy replacement characters;
+/// decoding occurs only when formatting finding messages. Records past the entry budget are
+/// unexamined by design, and the run reports INCOMPLETE instead of claiming coverage.
+fn central_directory<'a>(bytes: &'a [u8], limit: usize) -> Option<CentralDirectory<'a>> {
     let eocd = find_eocd(bytes)?;
     let mut count = u64::from(u16_at(bytes, eocd + 10)?);
     let mut cd_off = u64::from(u32_at(bytes, eocd + 16)?);
@@ -506,7 +512,7 @@ fn central_directory(bytes: &[u8], limit: usize) -> Option<CentralDirectory> {
         let extra_len = usize::from(u16_at(bytes, i + 30)?);
         let comment_len = usize::from(u16_at(bytes, i + 32)?);
         let name = bytes.get(i + 46..i + 46 + name_len)?;
-        names.push(String::from_utf8_lossy(name).into_owned());
+        names.push(name);
         i = i.checked_add(46 + name_len + extra_len + comment_len)?;
     }
     Some(CentralDirectory { names, total: count, truncated })
