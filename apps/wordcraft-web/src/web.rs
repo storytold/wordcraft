@@ -34,6 +34,17 @@ pub fn start() {
         // in instead: it runs WordCraft in its own document and talks over DOM `CustomEvent`s
         // on the canvas (`host`). The host guards leaving the page, so this one doesn't.
         let bridge = crate::host::Bridge::detect(&canvas);
+        // The embedded editor (`?embed=1`) is a host-only restricted app: without a host there is
+        // nothing to open a document or store a save, so it refuses to start standalone.
+        let embed = query_param("embed").as_deref() == Some("1");
+        if embed && bridge.is_none() {
+            let message = "This editor must be opened by its host application.";
+            log::error!("{message}");
+            if let Some(el) = document.get_element_by_id(LOADING_ID) {
+                let _ = el.set_inner_html(&format!("<p>{message}</p>"));
+            }
+            return;
+        }
         let app_bridge = bridge.clone();
         let dirty = Rc::new(Cell::new(false));
         let saves = AsyncSaves::default();
@@ -77,11 +88,19 @@ pub fn start() {
                         bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
                     }
                     let mut app = WordApp::new(session, services);
+                    // The restricted embedded editor: host-only rules, Track Changes pinned on,
+                    // and no Quick Access Toolbar (its buttons are all document tools).
+                    if embed {
+                        app.embed = Some(wordcraft_ui_egui::embed::Rules);
+                        let _ = app.session.run("review.trackChanges", &serde_json::json!({"value": true}));
+                        app.ui.quick_access_toolbar = false;
+                    }
                     // Pasted pictures wait apart from dropped files: the app inserts one only when the page is the edit target (#1349).
                     app.services.pasted = Some(pasted);
                     app.autosave = false;
                     // Preferences from an earlier visit (#2132), as the desktop app reads `ui.json`.
-                    let stored = stored_prefs();
+                    // The embedded editor keeps no preferences: one host page is one document.
+                    let stored = if embed { None } else { stored_prefs() };
                     crate::prefs::restore(&mut app, stored.as_deref());
                     // A region chosen in File › Options replaces the browser's for the first blank
                     // document too (#838).
@@ -91,7 +110,8 @@ pub fn start() {
                     }
                     let mut prefs = crate::prefs::PrefsSync::new(stored);
                     // No document to show: start on File › Home, as the desktop app does (#766).
-                    if !sample {
+                    // The embedded editor's host sends the document, so it never starts there.
+                    if !sample && !embed {
                         app.start_screen();
                     }
                     // The host's name for the user signs this visit's work, but isn't stored as the
@@ -103,7 +123,7 @@ pub fn start() {
                         crate::host::Bridge::set_author(&mut app, &author);
                         prefs.keep_own_author(&app.session.author, &own);
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages, prefs }))
+                    Ok(Box::new(WebShell { app, inbox, messages, prefs, embed }))
                 }),
             )
             .await;
@@ -138,6 +158,8 @@ struct WebShell {
     inbox: Inbox,
     messages: Rc<RefCell<Vec<String>>>,
     prefs: crate::prefs::PrefsSync,
+    /// The restricted embedded editor: no dropped files, no stored preferences.
+    embed: bool,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -160,7 +182,10 @@ impl eframe::App for WebShell {
         }
         self.app.logic(ctx);
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#2132).
-        if let Some(json) = self.prefs.changed(&self.app) {
+        // The embedded editor keeps none.
+        if !self.embed
+            && let Some(json) = self.prefs.changed(&self.app)
+        {
             match local_storage() {
                 Some(store) => {
                     if let Err(e) = store.set_item(crate::prefs::KEY, &json) {
@@ -181,8 +206,9 @@ impl eframe::App for WebShell {
     /// spawns asynchronous byte reads into the inbox; later passes only draw.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // Browser drops are input: take them only in the first real UI pass, never in a hidden
-        // `run_logic` tick that still sees the previous shown frame's RawInput.
-        if ui.ctx().current_pass_index() == 0 {
+        // `run_logic` tick that still sees the previous shown frame's RawInput. The embedded
+        // editor opens only what its host sends, so it doesn't take dropped files.
+        if !self.embed && ui.ctx().current_pass_index() == 0 {
             let ctx = ui.ctx().clone();
             let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
             for f in dropped {

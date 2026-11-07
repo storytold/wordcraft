@@ -38,6 +38,7 @@ pub mod crop;
 pub mod desktop_theme;
 pub mod dialogs;
 pub mod documents;
+pub mod embed;
 pub mod equation_tab;
 /// The built-in file browser, for desktops without a system file dialog (#576).
 #[cfg(not(target_arch = "wasm32"))]
@@ -614,6 +615,8 @@ pub struct WordApp {
     pub session: Session,
     pub ui: UiState,
     pub services: Services,
+    /// The restricted embedded editor's rules ([`embed`]); `None` for the normal app.
+    pub embed: Option<embed::Rules>,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
     pub canvas: canvas::CanvasState,

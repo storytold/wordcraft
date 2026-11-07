@@ -13,6 +13,12 @@ impl WordApp {
         r
     }
 
+    /// Whether the embedded editor refuses this command right now: denied, unless it takes
+    /// the host's delivered files in.
+    pub(crate) fn embed_refused(&self, id: &str) -> bool {
+        matches!(&self.embed, Some(rules) if rules.denies(id) && !rules.intake_allows(id))
+    }
+
     /// Run a command as the input method's own transaction while preserving every normal
     /// [`Self::run`] side effect (save prompts, clipboard, body-epoch tracking, status, …).
     ///
@@ -28,6 +34,15 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // The embedded editor refuses what would leave its host's document behind (New, Open,
+        // Save As, Print, …) before anything else can route around the refusal. Host intake is
+        // the exception: while the host's delivered files drain, the ids that take them in
+        // (file.open, insert.picture) run as they would in the normal app.
+        if self.embed_refused(id) {
+            let refused: String = crate::tl!("This command isn't available in the embedded editor.").to_owned();
+            self.status(refused.clone());
+            return Err(refused);
+        }
         // Comment text still being typed is written first, so a save or export has it and a
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
@@ -108,6 +123,12 @@ impl WordApp {
     /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
     /// UI-level commands (`ui.*`) are handled here, the rest by the engine.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // The embedded editor's refusal guards the funnel: `run` refuses earlier (status line,
+        // before dialogs), but the control channel and a held-back Save Changes answer get here
+        // directly. Host intake is exempt, as in `run`.
+        if self.embed_refused(id) {
+            return Err(crate::tl!("This command isn't available in the embedded editor.").to_owned());
+        }
         self.clear_command_targets(id);
         if let Some(error) = self.document_required_error(id) {
             return Err(error);
@@ -417,6 +438,13 @@ impl WordApp {
 
     /// Requests commands make of the UI (open a dialog…).
     pub(crate) fn handle_request(&mut self, req: &Value) {
+        // The embedded editor refuses the requests that route files or windows (Open, Save As,
+        // Print, Options, a picture picked from the file system, …); its host owns those.
+        if let Some(kind) = req.get("open").and_then(Value::as_str)
+            && self.embed.as_ref().is_some_and(|rules| rules.denies_request(kind))
+        {
+            return;
+        }
         // Made for a document that isn't shown (an agent's command run there): its window handles
         // it when it draws.
         if let Some(document) = req.get("document").and_then(Value::as_u64)
@@ -466,6 +494,9 @@ impl WordApp {
                 }
                 "pasteSpecial" => self.dialog = Some(dialogs::Dialog::paste_special(self, req)),
                 "newWindow" => self.new_window(),
+                // A dialog name: the embedded editor refuses its denied dialogs here too, so
+                // both request and command paths answer to the same list.
+                other if self.embed.as_ref().is_some_and(|rules| rules.denies_dialog(other)) => {}
                 other => self.dialog = dialogs::Dialog::open(other, self),
             }
         }
@@ -521,7 +552,7 @@ impl WordApp {
             }
             "ui.backstage" => {
                 self.ui.backstage = p.get("value").and_then(Value::as_bool).unwrap_or(!self.ui.backstage);
-                if let Some(pg) = s("page") {
+                if let Some(pg) = s("page").filter(|pg| self.embed.as_ref().is_none_or(|rules| !rules.hidden_page(pg))) {
                     self.ui.backstage_page = pg.into();
                 }
                 if let Some(pane) = s("pane") {
@@ -542,7 +573,13 @@ impl WordApp {
                 json!({"dialog": "colors"})
             }
             "ui.dialog" => {
-                self.dialog = dialogs::Dialog::open(s("name").unwrap_or(""), self);
+                let name = s("name").unwrap_or("");
+                if self.embed.as_ref().is_some_and(|rules| rules.denies_dialog(name)) {
+                    let refused: String = crate::tl!("This command isn't available in the embedded editor.").to_owned();
+                    self.status(refused.clone());
+                    return Some(Err(refused));
+                }
+                self.dialog = dialogs::Dialog::open(name, self);
                 // New / Modify Table Style can open on a part (`"part": "firstRow"`…).
                 if let Some(dialogs::Dialog::TableStyle { region, .. }) = &mut self.dialog
                     && let Some(part) = s("part").and_then(wordcraft_engine::cmd::table_style::part_named)

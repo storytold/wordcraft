@@ -253,6 +253,8 @@ impl WordApp {
             file_browser,
             info_editing,
             shown_document,
+            // The embedded editor's rules are read straight off the app elsewhere.
+            embed: _,
         } = self;
         let UiState {
             // App-wide: preferences, recent lists, and the settings the session owns while

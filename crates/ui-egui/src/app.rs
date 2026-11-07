@@ -98,6 +98,7 @@ impl WordApp {
                 ..UiState::default()
             },
             services,
+            embed: None,
             printing: Default::default(),
             print_feedback_seen: None,
             integrated_titlebar: false,
@@ -334,7 +335,7 @@ impl WordApp {
             self.ui.backstage = false;
             self.sync_document();
         }
-        if !self.recovery_seen && self.session.recovery_ready() {
+        if !self.recovery_seen && self.session.recovery_ready() && self.embed.is_none() {
             self.recovery_seen = true;
             if !self.session.recovery_documents().is_empty() && !self.session.dirty {
                 self.ui.backstage = true;

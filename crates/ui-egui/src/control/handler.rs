@@ -174,6 +174,9 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
             let page = p.get("page").and_then(Value::as_u64).unwrap_or(1);
             let scale = p.get("scale").and_then(Value::as_f64).map_or(2.0, |v| v as f32);
             let path = p.get("path").and_then(Value::as_str);
+            if path.is_some() && app.embed.is_some() {
+                return err("This command isn't available in the embedded editor.");
+            }
             let r = app.session.with_document(doc, |s| match path {
                 Some(path) => s.run("file.exportPng", &json!({"path": path, "page": page, "scale": scale})).map_err(|e| e.to_string()),
                 None => render_png(s, page, scale),
@@ -182,6 +185,9 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
         }
         _ => {
             let Some(id) = p.get("command").or(p.get("id")).and_then(Value::as_str) else { return err("missing `command`") };
+            if app.embed_refused(id) {
+                return err("This command isn't available in the embedded editor.");
+            }
             let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
             if id.starts_with("ui.") {
                 return err(format!("`{id}` works on the window: make the document active first (view.switchWindows {{\"id\": {doc}}})"));
@@ -365,6 +371,8 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
             let page = p.get("page").and_then(Value::as_u64).unwrap_or(1);
             let scale = f("scale").unwrap_or(2.0);
             match s("path") {
+                // The embedded editor writes nothing to the file system: no PNG export path.
+                Some(_) if app.embed.is_some() => err("This command isn't available in the embedded editor."),
                 Some(path) => match app.session.run("file.exportPng", &json!({"path": path, "page": page, "scale": scale})) {
                     Ok(v) => ok(v),
                     Err(e) => err(e),

@@ -456,6 +456,17 @@ pub(crate) const EXPORT_WORD_2003: &str = "wordml2003";
 
 /// The "save a copy" formats (File › Export, and below the settings on the Print page).
 pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
+    // The embedded editor keeps one export: the PDF the host stores as a copy, under the
+    // document's own name — no save dialog (the host names the file). The format list's
+    // other routes would run refusals after asking where to save.
+    if app.embed.is_some() {
+        if ui.add(egui::Button::new(egui::RichText::new(tl!("PDF document (*.pdf)")).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
+            let name = format!("{}.pdf", app.title_stem());
+            let _ = app.run("file.exportPdf", json!({"path": name}));
+        }
+        ui.add_space(4.0);
+        return;
+    }
     for (label, ext) in [
         ("PDF document (*.pdf)", "pdf"),
         ("Word document (*.docx)", "docx"),

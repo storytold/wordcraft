@@ -64,6 +64,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     if !has_document && !works_without_document(&app.ui.backstage_page) {
         app.ui.backstage_page = "home".into();
     }
+    // The embedded editor keeps only its own pages: a stale or default Home lands on Info.
+    if app.embed.as_ref().is_some_and(|rules| !rules.keeps_page(&app.ui.backstage_page)) {
+        app.ui.backstage_page = "info".into();
+    }
     let mac = app.integrated_titlebar;
     crate::rtl::start_panel("backstage_nav")
         .exact_size(200.0)
@@ -119,6 +123,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
             ui.add_space(if mac { 12.0 } else { 6.0 });
             for (id, label, icon) in PAGES {
+                // The embedded editor's side menu keeps only its own pages.
+                if app.embed.as_ref().is_some_and(|rules| !rules.keeps_page(id)) {
+                    continue;
+                }
                 // No document open (#1129): Info, Save, Save As, Print and Export are greyed out.
                 let on = has_document || works_without_document(id);
                 let (r, resp) = ui.add_enabled_ui(on, |ui| ui.allocate_exact_size(vec2(200.0, 38.0), Sense::click())).inner;
@@ -249,8 +257,14 @@ fn recovery_page(app: &mut WordApp, ui: &mut Ui) {
 }
 
 /// Opens a side-menu page, as a click on it (or its keytip) does. Without a document only the
-/// pages that work without one open.
+/// pages that work without one open. The embedded editor refuses its hidden pages.
 pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
+    if let Some(rules) = &app.embed
+        && rules.hidden_page(id)
+    {
+        app.status(crate::tl!("This command isn't available in the embedded editor."));
+        return;
+    }
     if !app.has_document() && !works_without_document(id) {
         return;
     }
@@ -258,7 +272,7 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
         // A document without a file goes to the Save As page (as in Word) instead
         // of `file.save`, which would also open the native Save As dialog.
         // In the browser a save is a download, so it saves right away.
-        "save" if app.session.path.is_none() && app.services.download.is_none() => {
+        "save" if app.session.path.is_none() && app.services.download.is_none() && app.embed.is_none() => {
             app.ui.backstage_page = "saveAs".into();
         }
         "save" => {
@@ -266,9 +280,10 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
             if r.is_ok_and(|v| v.get("saved").and_then(serde_json::Value::as_bool) == Some(true) || v.get("downloaded").is_some()) {
                 app.ui.backstage = false;
                 app.canvas.want_focus = true;
-            } else {
+            } else if app.embed.is_none() {
                 app.ui.backstage_page = "saveAs".into();
             }
+            // Embedded: a failed save leaves its error on the status line and the Save page up.
         }
         "saveAs" => {
             app.ui.backstage_page = "saveAs".into();

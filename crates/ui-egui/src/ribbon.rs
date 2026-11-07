@@ -114,7 +114,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     // Format) may be stored while the selection moved away, and a tab may have been hidden.
     let user_tabs = app.session.ribbon.tabs().into_owned();
     let mut tabs: Vec<(String, bool)> = vec![("File".to_string(), false)];
-    tabs.extend(user_tabs.iter().filter(|e| !e.hidden).map(|e| (e.name.clone(), e.custom)));
+    // The embedded editor takes the Mailings tab out: its merge tools have no host document.
+    tabs.extend(
+        user_tabs
+            .iter()
+            .filter(|e| !e.hidden && !app.embed.as_ref().is_some_and(|rules| rules.hides_tab(&e.name)))
+            .map(|e| (e.name.clone(), e.custom)),
+    );
     for ct in contextual_tabs(&app.session) {
         if ct == "Outlining" {
             tabs.insert(1.min(tabs.len()), (ct.to_string(), false));

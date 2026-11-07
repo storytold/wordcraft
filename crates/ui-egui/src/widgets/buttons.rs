@@ -20,6 +20,10 @@ pub const LABEL_LINE_H: f32 = 14.0;
 
 /// Whether a command exists and is enabled.
 pub fn enabled(app: &WordApp, id: &str) -> bool {
+    // The embedded editor's refused commands are always off, so their buttons grey out.
+    if app.embed.as_ref().is_some_and(|rules| rules.denies(id)) {
+        return false;
+    }
     // No document open (#1129): only what opens one, Help and the settings.
     if !app.has_document() && !crate::works_without_document(id) {
         return false;
