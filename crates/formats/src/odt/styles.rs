@@ -571,13 +571,13 @@ pub(super) fn parse_border(v: &str) -> Option<Border> {
     any.then_some(b)
 }
 
-/// A property element `name` (`q` in full) of the style being read, into `s`: true when it is
-/// one (paragraph, table, column, cell, section and graphic properties, tab stops).
 /// A table column's share of its table (`style:rel-column-width`, `1*`).
 fn column_share_of(a: &Attrs) -> Option<f32> {
     get(a, "style:rel-column-width").and_then(|v| v.trim().strip_suffix('*')?.trim().parse::<f32>().ok()).filter(|r| r.is_finite() && *r > 0.0)
 }
 
+/// A property element `name` (`q` in full) of the style being read, into `s`: true when it is
+/// one (paragraph, table, column, cell, section and graphic properties, tab stops).
 fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
     match name {
         "paragraph-properties" => paragraph_properties(a, s),

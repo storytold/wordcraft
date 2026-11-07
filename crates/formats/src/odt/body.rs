@@ -1381,9 +1381,10 @@ impl Body<'_> {
         let space = get(a, "table:style-name").map(|s| self.styles.table_space(s)).unwrap_or_default();
         // What the shares divide: an aligned table's stated width, however wide, as LibreOffice
         // keeps it; else its part of the text width.
-        let room = width.filter(|_| align.is_some() && rel.is_none()).unwrap_or_else(|| self.sec.text_width() * width_pct.unwrap_or(100.0) / 100.0);
+        let room = width.filter(|_| align.is_some() && rel.is_none()).or_else(|| width_pct.map(|p| self.sec.text_width() * p / 100.0));
+        let contained = !self.tables.is_empty() || self.containers.len() > 1 || self.sec.columns.count > 1;
         let extra = model::TableExtra { align, width: None, width_pct, heights: Vec::new(), fixed: true, space, header_rows: 0 };
-        self.tables.push(TableB { rows: Vec::new(), row: Vec::new(), hcover: 0, widths: Vec::new(), shares: Vec::new(), room, extra });
+        self.tables.push(TableB { rows: Vec::new(), row: Vec::new(), hcover: 0, widths: Vec::new(), shares: Vec::new(), room, contained, extra });
     }
 
     /// A table row (`table:table-row`) begins: its height, kept as rows are (see the row's end).

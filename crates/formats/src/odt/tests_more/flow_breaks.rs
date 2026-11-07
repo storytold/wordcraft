@@ -259,3 +259,27 @@ fn columns_by_shares_divide_the_right_width() {
     );
     near(&grid(&import(&package(&content, Some(styles))).unwrap()), &[100.0, 300.0]);
 }
+
+/// A table inside a cell doesn't know its width from the page: with only shares and no width of
+/// its own to divide, or with some columns stating widths, its columns split it equally, as before.
+#[test]
+fn a_table_in_a_cell_shares_out_no_page_width() {
+    let styles = r#"<style:style style:name="W" style:family="table-column"><style:table-column-properties style:column-width="100pt"/></style:style><style:style style:name="S" style:family="table-column"><style:table-column-properties style:rel-column-width="1*"/></style:style><style:style style:name="L" style:family="table"><style:table-properties table:align="left"/></style:style>"#;
+    for (style, columns) in [
+        (r#" table:style-name="L""#, r#"<table:table-column table:style-name="S"/><table:table-column table:style-name="S"/>"#),
+        ("", r#"<table:table-column table:style-name="W"/><table:table-column table:style-name="S"/>"#),
+    ] {
+        let inner = format!(
+            r#"<table:table{style}>{columns}<table:table-row><table:table-cell><text:p>a</text:p></table:table-cell><table:table-cell><text:p>b</text:p></table:table-cell></table:table-row></table:table>"#
+        );
+        let body = format!(
+            r#"<table:table><table:table-column table:style-name="W"/><table:table-column table:style-name="W"/><table:table-row><table:table-cell>{inner}</table:table-cell><table:table-cell><text:p>c</text:p></table:table-cell></table:table-row></table:table>"#
+        );
+        let d = doc(styles, &body);
+        let outer = d.body.iter().find_map(|b| b.as_table()).unwrap();
+        let inner = outer.rows[0].cells[0].blocks.iter().find_map(|b| b.as_table()).unwrap();
+        // The equal split main gives, which layout fits to the cell (not two page-wide columns).
+        let equal = inner.grid.windows(2).all(|w| (w[0] - w[1]).abs() < 0.01);
+        assert!(equal && inner.grid.first().is_some_and(|w| *w < 300.0), "{style}: {:?}", inner.grid);
+    }
+}

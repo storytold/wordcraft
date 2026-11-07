@@ -76,7 +76,9 @@ pub(in crate::odt) struct TableB {
     /// Each column's share of the table (`style:rel-column-width`), 0 where the style gives none.
     pub(in crate::odt) shares: Vec<f32>,
     /// The table's width, points: what the shares divide.
-    pub(in crate::odt) room: f32,
+    pub(in crate::odt) room: Option<f32>,
+    /// It is in a cell, a frame or a column narrower than the page, whose width isn't known here.
+    pub(in crate::odt) contained: bool,
     /// Its alignment and width, and each row's height so far (see [`crate::model::TableExtra`]).
     pub(in crate::odt) extra: crate::model::TableExtra,
 }
@@ -99,7 +101,17 @@ impl TableB {
     pub(in crate::odt) fn finish(self) -> FTable {
         // Columns stating their shares (LibreOffice's tables filling the margins, §20.334) divide
         // the table's width by them; a column with neither leaves the whole grid to the equal split.
-        let widths = if self.widths.iter().all(|w| *w > 0.0) { self.widths } else { widths_of_shares(&self.widths, &self.shares, self.room) };
+        let widths = if self.widths.iter().all(|w| *w > 0.0) {
+            self.widths
+        } else {
+            // With nothing to divide, or in something narrower than the page with widths stated
+            // too, the shares can't be worked out here: the equal split, as before.
+            let mixed = self.shares.iter().any(|s| *s <= 0.0);
+            match self.room.filter(|_| !(self.contained && mixed)) {
+                Some(room) => widths_of_shares(&self.widths, &self.shares, room),
+                None => Vec::new(),
+            }
+        };
         let mut rows = self.rows;
         share_edges(&mut rows);
         // A table whose cells all say "no line" draws none.
