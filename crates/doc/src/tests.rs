@@ -786,3 +786,123 @@ fn lone_table_open_markers_mixed_tables_and_paired() {
     assert!(res1.controls.open.is_empty());
     assert_eq!(res1.controls.close, 0);
 }
+
+#[test]
+fn normalize_runs_reconciles_objects_with_markers() {
+    let c = CharProps::default();
+    let markers = |p: &Paragraph| p.text.chars().filter(|ch| *ch == '\u{FFFC}').count();
+    let build = || {
+        let mut d = Document::from_text("abc");
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.insert_object(1, fs("A"), &c).unwrap();
+        p.insert_object(5, fs("B"), &c).unwrap();
+        d
+    };
+    // More objects than markers (as a hand-edited .json can say): the surplus goes.
+    let mut d = build();
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().objects.push(fs("C"));
+    d.normalize_runs();
+    let p = d.para(StoryRef::Body, &Path::top(0)).unwrap();
+    assert_eq!((markers(p), p.objects.len()), (2, 2));
+    assert_eq!(p.objects, vec![fs("A"), fs("B")]);
+    // More markers than objects: the unmatched marker goes, runs still cover the text.
+    let mut d = build();
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.text.push('\u{FFFC}');
+    p.runs[0].len += 3;
+    d.normalize_runs();
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    assert_eq!((markers(p), p.objects.len()), (2, 2));
+    assert_eq!(p.runs.iter().map(|r| r.len).sum::<usize>(), p.text.len());
+    // Deleting the first marker keeps B on the second.
+    p.delete(1, 4).unwrap();
+    assert_eq!(p.objects, vec![fs("B")]);
+}
+
+#[test]
+fn reconcile_objects_drops_many_unmatched_markers_in_one_pass() {
+    let c = CharProps::default();
+    let mut d = Document::from_text("");
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.insert_object(0, fs("A"), &c).unwrap();
+    p.insert_object(p.text.len(), fs("B"), &c).unwrap();
+    let extra = 50_000;
+    // "<A>x<B>" followed by many unmatched markers around more text, in one run.
+    p.text = format!("\u{FFFC}x\u{FFFC}{}y{}z", "\u{FFFC}".repeat(extra), "\u{FFFC}".repeat(extra));
+    p.runs = vec![Run { len: p.text.len(), props: c.clone() }];
+    p.reconcile_objects();
+    assert_eq!(p.text, "\u{FFFC}x\u{FFFC}yz");
+    assert_eq!(p.objects, vec![fs("A"), fs("B")]);
+    assert_eq!(p.runs.iter().map(|r| r.len).sum::<usize>(), p.text.len());
+}
+
+#[test]
+fn reconcile_objects_keeps_every_matched_object() {
+    let c = CharProps::default();
+    let n = 100_050;
+    let mut d = Document::from_text("");
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.text = "\u{FFFC}".repeat(n);
+    p.objects = (0..n).map(|_| fs("A")).collect();
+    p.runs = vec![Run { len: p.text.len(), props: c }];
+    p.reconcile_objects();
+    assert_eq!(p.objects.len(), n);
+    assert_eq!(p.text.matches('\u{FFFC}').count(), n);
+    assert_eq!(p.runs.iter().map(|r| r.len).sum::<usize>(), p.text.len());
+}
+
+#[test]
+fn reconcile_objects_keeps_run_props_across_several_runs() {
+    let (plain, bold) = (CharProps::default(), CharProps { bold: Some(true), ..CharProps::default() });
+    let italic = CharProps { italic: Some(true), ..CharProps::default() };
+    let mut d = Document::from_text("");
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.objects = vec![fs("A")];
+    // Runs: plain "a<A>b<X>" | bold "<X><X>" (only unmatched, becomes empty) | italic "<X>c<X>" | plain "d".
+    let x = "\u{FFFC}";
+    let parts = [
+        (format!("a\u{FFFC}b{x}"), plain.clone()),
+        (format!("{x}{x}"), bold),
+        (format!("{x}c{x}"), italic.clone()),
+        ("d".to_string(), plain.clone()),
+    ];
+    p.text = parts.iter().map(|(t, _)| t.as_str()).collect();
+    p.runs = parts.iter().map(|(t, c)| Run { len: t.len(), props: c.clone() }).collect();
+    p.reconcile_objects();
+    assert_eq!(p.text, "a\u{FFFC}bcd");
+    assert_eq!(p.objects, vec![fs("A")]);
+    let got: Vec<(usize, CharProps)> = p.runs.iter().map(|r| (r.len, r.props.clone())).collect();
+    // "a<A>b" plain (5 bytes: 1 + 3 + 1), "c" italic, "d" plain.
+    assert_eq!(got, vec![(5, plain.clone()), (1, italic), (1, plain)]);
+}
+
+#[test]
+fn reconcile_objects_marker_on_run_boundary_shrinks_the_right_run() {
+    let (plain, bold) = (CharProps::default(), CharProps { bold: Some(true), ..CharProps::default() });
+    let mut d = Document::from_text("");
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    let x = "\u{FFFC}";
+    // plain "ab" | bold "<X>cd" : the marker is the first byte of the second run.
+    p.text = format!("ab{x}cd");
+    p.runs = vec![Run { len: 2, props: plain.clone() }, Run { len: 2 + x.len(), props: bold.clone() }];
+    p.reconcile_objects();
+    assert_eq!(p.text, "abcd");
+    let got: Vec<(usize, CharProps)> = p.runs.iter().map(|r| (r.len, r.props.clone())).collect();
+    assert_eq!(got, vec![(2, plain), (2, bold)]);
+}
+
+#[test]
+fn reconcile_objects_all_unmatched_markers_empties_the_paragraph() {
+    let bold = CharProps { bold: Some(true), ..CharProps::default() };
+    let mut d = Document::from_text("");
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.text = "\u{FFFC}".repeat(3);
+    p.runs = vec![Run { len: p.text.len(), props: bold.clone() }];
+    p.mark = CharProps { ins: Some(7), ..CharProps::default() };
+    p.reconcile_objects();
+    assert_eq!(p.text, "");
+    assert!(p.objects.is_empty());
+    assert!(p.runs.is_empty());
+    // The mark takes the deleted formatting but keeps its own revision.
+    assert_eq!(p.mark, CharProps { bold: Some(true), ins: Some(7), ..CharProps::default() });
+}
