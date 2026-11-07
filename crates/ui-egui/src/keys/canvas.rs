@@ -165,14 +165,26 @@ fn note_key_state(app: &mut WordApp, e: &egui::Event) {
         app.canvas.ignore_next_paste = false;
     }
     match &e {
-        egui::Event::ModifiersChanged(m) if m.command => app.canvas.paste_mods = Some(*m),
-        egui::Event::Key { key: Key::V | Key::Paste, pressed: true, .. } => app.canvas.v_pressed = true,
+        egui::Event::ModifiersChanged(m) => {
+            app.canvas.paste_event_mods = m.command.then_some(*m);
+            if m.command {
+                app.canvas.paste_mods = Some(*m);
+            }
+        }
+        egui::Event::Key { key: Key::V | Key::Paste, pressed: true, modifiers, .. } => {
+            app.canvas.v_pressed = true;
+            app.canvas.paste_event_mods = modifiers.command.then_some(*modifiers);
+        }
         egui::Event::Key { key, pressed: true, modifiers, .. } if !is_modifier_key(*key) => {
             app.canvas.paste_mods = modifiers.command.then_some(*modifiers);
+            // An unrelated key's modifiers mustn't steer a later keyless paste.
+            app.canvas.paste_event_mods = None;
         }
+        egui::Event::PointerButton { pressed: true, .. } => app.canvas.paste_event_mods = None,
         egui::Event::WindowFocused(_) => {
             app.canvas.v_pressed = false;
             app.canvas.paste_mods = None;
+            app.canvas.paste_event_mods = None;
         }
         _ => {}
     }
@@ -527,7 +539,8 @@ fn handle_event(app: &mut WordApp, ctx: &egui::Context, e: egui::Event) {
         egui::Event::Paste(t) => {
             // Mod+Alt+V arrives as a paste too (the shell reads the clipboard): Paste Special.
             // The modifiers held with Mod in event order: Shift may be up by the frame's end.
-            let m = app.canvas.paste_mods.take().unwrap_or_else(|| ctx.input(|i| i.modifiers));
+            app.canvas.paste_mods = None;
+            let m = app.canvas.paste_event_mods.take().unwrap_or_else(|| ctx.input(|i| i.modifiers));
             // A browser sends Mod+Shift+V as a paste too: Keep Text Only, as the key does on the
             // desktop (#1537). (egui-winit sends that chord as a key, and Shift+Insert has no Mod.)
             let id = match (m.alt, m.shift) {
