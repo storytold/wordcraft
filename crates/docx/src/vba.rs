@@ -151,8 +151,11 @@ fn walk_dir(dir: &[u8]) -> Result<Project, DocxError> {
         let size = size as usize;
         // PROJECTVERSION: id, reserved size (4), then 4 + 2 bytes of version; not a sized
         // payload ([MS-OVBA] §2.3.4.2.1.11), so the generic walk would stop on real projects.
+        // All 12 bytes must remain before advancing: a cut record ends the walk, like any
+        // other, instead of stepping past the stream.
         if id == REC_PROJECT_VERSION {
-            at = at.checked_add(12).ok_or_else(|| bad("the dir stream is too large"))?;
+            let Some(next) = at.checked_add(12).filter(|&next| next <= dir.len()) else { break };
+            at = next;
             continue;
         }
         let Some(end) = at.checked_add(6).and_then(|a| a.checked_add(size)) else { break };

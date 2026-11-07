@@ -276,6 +276,22 @@ fn a_dir_stream_cut_at_every_record_still_walks() {
 }
 
 #[test]
+fn a_project_version_record_cut_inside_its_twelve_bytes_ends_the_walk() {
+    // The record is 12 bytes (id, reserved 4, version 4 + 2). Cut inside them, the walker
+    // stops at the cut instead of stepping past the stream; the module named after it is
+    // never reached.
+    let mut record_bytes = Vec::new();
+    project_version(&mut record_bytes);
+    let mut dir = Vec::new();
+    record(&mut dir, 0x0001, &0x00000001u32.to_le_bytes()); // SysKind
+    record(&mut dir, 0x0003, &CODE_PAGE_1252.to_le_bytes()); // CodePage
+    dir.extend_from_slice(&record_bytes[..7]); // past the 6-byte header, inside the version
+    record(&mut dir, 0x0019, b"Module1"); // MODULENAME, after the cut
+    let project = wordcraft_docx::vba::project(&cfb_project(&compress(&dir), &module_stream(b""))).unwrap();
+    assert!(project.modules.is_empty());
+}
+
+#[test]
 fn more_than_the_module_cap_is_truncated() {
     let mut dir = Vec::new();
     record(&mut dir, 0x0003, &CODE_PAGE_1252.to_le_bytes());
