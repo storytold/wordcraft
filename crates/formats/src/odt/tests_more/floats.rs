@@ -426,3 +426,32 @@ fn a_page_number_on_another_anchor_is_no_page_anchor() {
     let c = saved(by_style, &frame(r#"draw:style-name="fr" text:anchor-page-number="3""#));
     assert!(!c.contains("anchor-page-number"), "{c}");
 }
+
+fn a_frame_offering_several_formats_shows_the_first_it_can_read() {
+    // LibreOffice's letter templates: its own metafile, then a PNG. Taking the first left nothing
+    // to show, and the picture was gone once the paragraph was written from the model.
+    let png = [b"\x89PNG\r\n\x1a\n".as_slice(), &[7u8; 64]].concat();
+    let other = [b"\x89PNG\r\n\x1a\n".as_slice(), &[9u8; 64]].concat();
+    let svm = b"VCLMTF a metafile WordCraft can't draw".to_vec();
+    let frame = |images: &[&str]| {
+        let images: String = images.iter().map(|h| format!(r#"<draw:image xlink:href="{h}"/>"#)).collect();
+        format!(
+            r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><text:p><draw:frame svg:width="2in" svg:height="1in" text:anchor-type="as-char">{images}</draw:frame></text:p></office:text></office:body></office:document-content>"#
+        )
+    };
+    let pictures = |d: &Document| d.body[0].as_para().unwrap().objects.iter().filter(|o| matches!(o, InlineObject::Image { .. })).count();
+    let both = frame(&["Pictures/a.svm", "Pictures/a.png"]);
+    let d = import(&zip_of(&[("content.xml", both.as_bytes()), ("Pictures/a.svm", &svm), ("Pictures/a.png", &png)])).unwrap();
+    assert_eq!(pictures(&d), 1, "the PNG");
+    let back = import(&crate::odt::tests::export_model(&d).unwrap()).unwrap();
+    assert_eq!(pictures(&back), 1, "written from the model");
+    // The first it can read, not the last.
+    let order = frame(&["Pictures/a.png", "Pictures/b.png"]);
+    let d = import(&zip_of(&[("content.xml", order.as_bytes()), ("Pictures/a.png", &png), ("Pictures/b.png", &other)])).unwrap();
+    assert_eq!(pictures(&d), 1);
+    assert_eq!(d.media.values().next().and_then(|m| m.get(8).copied()), Some(7), "the first");
+    // Nothing it can read: no picture, and no failure.
+    let only = frame(&["Pictures/a.svm"]);
+    let d = import(&zip_of(&[("content.xml", only.as_bytes()), ("Pictures/a.svm", &svm)])).unwrap();
+    assert_eq!(pictures(&d), 0);
+}
