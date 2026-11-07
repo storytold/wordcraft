@@ -928,6 +928,7 @@ pub fn export_template(doc: &Document) -> Result<Vec<u8>, String> {
     export_as(doc, TEMPLATE_MIME)
 }
 
+/// Exports `doc` as a zipped ODF package with the specified `mime` type.
 fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     let flow = model::from_doc_with(
         doc,
@@ -1154,10 +1155,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     // Style definitions as read while nobody changed them: the file's own `office:styles`.
     let styles = styles_as_read(doc, kept, styles, &mut w.kept_used);
     // Page setup as read while nobody changed it: the file's own page layouts and master pages.
-    let styles = match kept.filter(|k| k.pages_as_read(doc)) {
-        Some(k) => super::kept::with_pages_as_read(&styles, &k.defs, &k.order),
-        None => styles,
-    };
+    let styles = kept_pages_styles(doc, kept, styles);
     let (content, styles) = with_kept_defs(content, styles, &w.kept_used, &w.kept_defs);
     for (name, data) in [
         ("META-INF/manifest.xml", manifest.as_bytes()),
@@ -1341,12 +1339,66 @@ fn page_background(doc: &Document, w: &mut Writer, styles: String) -> String {
     out
 }
 
-/// Whether any header in `doc` contains a picture.
+/// Page setup definitions from retained markup while nobody changed them, with background
+/// images stripped if active headers have pictures (#5803).
+fn kept_pages_styles(doc: &Document, kept: Option<&wordcraft_doc::kept::KeptXml>, styles: String) -> String {
+    match kept.filter(|k| k.pages_as_read(doc)) {
+        Some(k) => {
+            let s = super::kept::with_pages_as_read(&styles, &k.defs, &k.order);
+            if has_header_picture(doc) { remove_background_images(&s) } else { s }
+        }
+        None => styles,
+    }
+}
+
+/// Strips `<style:background-image ...>` elements from page layout XML markup.
+///
+/// When an imported document whose page settings were retained is exported, any
+/// pre-existing background images in the page layout definitions must be removed
+/// when active headers contain pictures (#5803).
+fn remove_background_images(xml: &str) -> String {
+    let mut out = String::with_capacity(xml.len());
+    let mut rest = xml;
+    while let Some(at) = rest.find("<style:background-image") {
+        out.push_str(rest.get(..at).unwrap_or_default());
+        let after = rest.get(at..).unwrap_or_default();
+        if let Some(end) = after.find('>') {
+            rest = after.get(end + 1..).unwrap_or_default();
+        } else {
+            rest = "";
+            break;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Whether any active header emitted for `doc` contains a picture.
+///
+/// Checks only the header parts that `page_parts` actually emits:
+/// - `sec.headers.default` (always active if present)
+/// - `sec.headers.even` (active only when `doc.settings.even_odd_headers` is true)
+/// - `sec.headers.first` (active only when `sec.title_page` is true)
 fn has_header_picture(doc: &Document) -> bool {
-    let header_ids: std::collections::HashSet<u32> =
-        doc.sections().iter().flat_map(|(_, sec)| [sec.headers.default, sec.headers.first, sec.headers.even].into_iter().flatten()).collect();
-    for (id, part) in &doc.parts {
-        if (matches!(part.kind, wordcraft_doc::PartKind::Header) || header_ids.contains(id)) && blocks_have_picture(&part.blocks, 0) {
+    let even = doc.settings.even_odd_headers;
+    let mut active_ids = std::collections::HashSet::new();
+    for (_, sec) in doc.sections() {
+        if let Some(id) = sec.headers.default {
+            active_ids.insert(id);
+        }
+        if even && let Some(id) = sec.headers.even {
+            active_ids.insert(id);
+        }
+        if sec.title_page
+            && let Some(id) = sec.headers.first
+        {
+            active_ids.insert(id);
+        }
+    }
+    for id in active_ids {
+        if let Some(part) = doc.parts.get(&id)
+            && blocks_have_picture(&part.blocks, 0)
+        {
             return true;
         }
     }

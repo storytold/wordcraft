@@ -313,3 +313,92 @@ fn text_header_keeps_page_background_picture() {
     assert!(s.contains("style:background-image"), "page background must be written when header has no picture: {s}");
     assert!(s.contains("Pictures/page-background.png"));
 }
+
+/// An imported ODT document with a retained page layout containing `<style:background-image>`
+/// suppresses that background image when an active header contains a picture (#5803).
+#[test]
+fn retained_page_layout_suppresses_background_image_when_header_has_picture() {
+    let png = {
+        let img = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    // Create an initial ODT document with a page background image.
+    let mut d = Document::new();
+    let bg_media = d.add_media(png.clone(), "png");
+    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: bg_media, fill_type: "frame".into(), title: String::new() });
+    let initial_odt = export(&d).unwrap();
+
+    // Import it: this populates doc.kept and keeps page definitions as read.
+    let mut imported = import(&initial_odt).unwrap();
+
+    // Now insert an active header containing a picture.
+    let header_media = imported.add_media(png, "png");
+    let mut hp = wordcraft_doc::Paragraph::new();
+    hp.text = format!("{}", wordcraft_doc::para::OBJ);
+    hp.objects.push(wordcraft_doc::para::InlineObject::Image {
+        media: header_media,
+        w: 595.0,
+        h: 842.0,
+        alt: "Header picture".into(),
+        float: wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::BehindText, ..Default::default() },
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    });
+    hp.runs = vec![wordcraft_doc::para::Run { len: hp.text.len(), props: Default::default() }];
+    imported.parts.insert(
+        999,
+        wordcraft_doc::Part { kind: wordcraft_doc::PartKind::Header, blocks: vec![wordcraft_doc::para_block(hp)], body: Default::default() },
+    );
+    imported.last_section.headers.default = Some(999);
+
+    // Re-export: retained page layout definitions must have their background-image removed.
+    let reexported = export(&imported).unwrap();
+    let s = crate::odt::tests::entry(&reexported, "styles.xml");
+    assert!(!s.contains("style:background-image"), "retained page layout must not retain background-image when header has picture: {s}");
+}
+
+/// An inactive header (e.g. `first` when `title_page` is false, or `even` when `even_odd_headers`
+/// is false) containing an image does NOT suppress the page background picture (#5803).
+#[test]
+fn inactive_header_picture_does_not_suppress_page_background() {
+    let png = {
+        let img = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let mut d = Document::new();
+    let bg_media = d.add_media(png.clone(), "png");
+    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: bg_media, fill_type: "frame".into(), title: String::new() });
+
+    let header_media = d.add_media(png, "png");
+    let mut hp = wordcraft_doc::Paragraph::new();
+    hp.text = format!("{}", wordcraft_doc::para::OBJ);
+    hp.objects.push(wordcraft_doc::para::InlineObject::Image {
+        media: header_media,
+        w: 100.0,
+        h: 100.0,
+        alt: "Inactive header picture".into(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    });
+    hp.runs = vec![wordcraft_doc::para::Run { len: hp.text.len(), props: Default::default() }];
+    d.parts.insert(
+        100,
+        wordcraft_doc::Part { kind: wordcraft_doc::PartKind::Header, blocks: vec![wordcraft_doc::para_block(hp)], body: Default::default() },
+    );
+
+    // Point headers.first to the header with picture, but title_page is FALSE.
+    d.last_section.headers.first = Some(100);
+    d.last_section.title_page = false;
+
+    let saved = export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(s.contains("style:background-image"), "background-image must be preserved when header picture is in an inactive header: {s}");
+    assert!(s.contains("Pictures/page-background.png"));
+}
