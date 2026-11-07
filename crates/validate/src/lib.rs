@@ -556,7 +556,7 @@ pub(crate) fn validate_bytes_limited(bytes: &[u8], limits: Limits) -> Report {
     check_content_types(&pkg, &mut acc);
     let xml = check_xml(&pkg, &mut acc);
     check_rels(&pkg, &xml.refs, &mut acc);
-    check_content_part_types(&pkg, &xml.content_parts, &mut acc);
+    check_content_part_types(&pkg, &xml.content_parts, xml.content_part_capped_any, &mut acc);
     check_story(&pkg, &xml.facts, xml.compat, &mut acc);
     check_note_pr(&xml.facts, &xml, &mut acc);
     check_media(&pkg, &mut acc);
@@ -682,6 +682,8 @@ struct XmlScan {
     refs: Vec<(String, Vec<RefFact>)>,
     /// `w:contentPart` relationship ids per owning part (for `CONTENTPART-TYPE`).
     content_parts: Vec<(String, Vec<String>)>,
+    /// A contentPart collection (per part or pooled) hit the fact budget.
+    content_part_capped_any: bool,
     compat: Compat,
     /// Ids listed by `w:footnotePr` / `w:endnotePr` in settings parts.
     note_listings: (Vec<String>, Vec<String>),
@@ -711,6 +713,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     let mut facts = scan::StoryFacts::default();
     let mut refs: Vec<(String, Vec<RefFact>)> = Vec::new();
     let mut content_parts: Vec<(String, Vec<String>)> = Vec::new();
+    let mut content_part_capped_any = false;
     let mut compat_on = false;
     let mut compat_unknown = false;
     let mut note_listings: (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
@@ -793,6 +796,9 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
                 facts_pooled_part = Some(e.name.clone());
             }
         }
+        if scanned.content_part_capped {
+            content_part_capped_any = true;
+        }
         if !scanned.content_parts.is_empty() {
             content_parts.push((e.name.clone(), scanned.content_parts));
         }
@@ -842,11 +848,23 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
         special_notes.truncate(acc.limits.facts);
         note_capped_any = true;
     }
+    // The contentPart ids are pooled-budgeted across owners too.
+    let cp_total: usize = content_parts.iter().map(|(_, ids)| ids.len()).sum();
+    if cp_total > acc.limits.facts {
+        let mut budget = acc.limits.facts;
+        for (_, ids) in &mut content_parts {
+            let keep = budget.min(ids.len());
+            ids.truncate(keep);
+            budget -= keep;
+        }
+        content_part_capped_any = true;
+    }
     let defs_complete = defs_ok_parts && !pooled_capped;
     XmlScan {
         facts,
         refs,
         content_parts,
+        content_part_capped_any,
         compat,
         note_listings,
         special_notes,
@@ -945,18 +963,33 @@ fn check_note_pr(facts: &scan::StoryFacts, xml: &XmlScan, acc: &mut Acc) {
 /// beats the extension Default (OPC §9.1.2). A relationship id the owner
 /// does not define is REL-REF-MISSING's finding, and an undeclared target
 /// is CT-UNDECLARED's; this check judges only a resolved, declared type.
-fn check_content_part_types(pkg: &Package, content_parts: &[(String, Vec<String>)], acc: &mut Acc) {
+fn check_content_part_types(pkg: &Package, content_parts: &[(String, Vec<String>)], capped: bool, acc: &mut Acc) {
     acc.ran("CONTENTPART-TYPE");
+    if capped {
+        acc.note(
+            "the fact budget stopped collection of some w:contentPart references, so CONTENTPART-TYPE did not check every reference".to_string(),
+        );
+        acc.set_incomplete();
+    }
     for (owner, ids) in content_parts {
         let rels_name = package::rels_part_name(owner);
         let Some(rp) = pkg.rels.iter().find(|rp| rp.name.eq_ignore_ascii_case(&rels_name)) else { continue };
-        let mut seen: Vec<&String> = Vec::new();
+        // Index the owner's relationships by id once (first wins, as a
+        // linear find would return), and dedupe ids in a set: with a
+        // Vec both were quadratic in the number of references.
+        let by_id: std::collections::HashMap<&str, &package::Rel> = {
+            let mut map = std::collections::HashMap::new();
+            for r in &rp.rels {
+                map.entry(r.id.as_str()).or_insert(r);
+            }
+            map
+        };
+        let mut seen: std::collections::HashSet<&String> = std::collections::HashSet::new();
         for id in ids {
-            if seen.contains(&id) {
+            if !seen.insert(id) {
                 continue;
             }
-            seen.push(id);
-            let Some(rel) = rp.rels.iter().find(|r| &r.id == id) else { continue };
+            let Some(rel) = by_id.get(id.as_str()) else { continue };
             let Some(target) = &rel.target_abs else { continue };
             let Some(ct) = pkg.content_types.of(target) else { continue };
             if !ct.eq_ignore_ascii_case("text/xml") {
@@ -2377,6 +2410,95 @@ mod budget_tests {
             report.findings
         );
         assert!(report.coverage_notes.iter().any(|n| n.contains("footnotePr")), "notes: {:?}", report.coverage_notes);
+    }
+
+    /// Build a package whose main part carries `n` contentPart
+    /// references, all resolving to an application/xml target (so each
+    /// collected id is a CONTENTPART-TYPE finding).
+    fn content_part_zip(n: usize) -> Vec<u8> {
+        let ct = format!(
+            r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="{}"/><Override PartName="/word/data.xml" ContentType="application/xml"/></Types>"#,
+            package::MAIN_CONTENT_TYPE
+        );
+        let elems: String = (0..n).map(|i| format!(r#"<w:p><w:r><w:contentPart r:id="cp{i}"/></w:r></w:p>"#)).collect();
+        let doc = format!(r#"<?xml version="1.0"?><w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}"><w:body>{elems}</w:body></w:document>"#).into_bytes();
+        let rels: String = (0..n)
+            .map(|i| format!(r#"<Relationship Id="cp{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="data.xml"/>"#))
+            .collect();
+        let doc_rels = format!(
+            r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{rels}</Relationships>"#
+        )
+        .into_bytes();
+        tiny_zip(&[
+            ("[Content_Types].xml", ct.into_bytes()),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", doc),
+            ("word/_rels/document.xml.rels", doc_rels),
+            ("word/data.xml", b"<root/>".to_vec()),
+        ])
+    }
+
+    /// The contentPart collection honours the fact budget (C3 review):
+    /// at a budget of 4 with 6 references, exactly the 4 collected ids
+    /// are judged, the run is marked incomplete, and the shortfall is
+    /// disclosed — collection does not run past the budget.
+    #[test]
+    fn content_part_collection_honours_the_fact_budget() {
+        let report = validate_bytes_limited(&content_part_zip(6), Limits { facts: 4, ..Limits::default() });
+        let fired = report.findings.iter().filter(|f| f.rule == "CONTENTPART-TYPE").count();
+        assert_eq!(fired, 4, "findings: {:?}", report.findings);
+        assert!(report.coverage_notes.iter().any(|n| n.contains("contentPart")), "notes: {:?}", report.coverage_notes);
+        // Control: at full limits all six are judged, with no note.
+        let full = validate_bytes(&content_part_zip(6));
+        assert_eq!(full.findings.iter().filter(|f| f.rule == "CONTENTPART-TYPE").count(), 6);
+        assert!(!full.coverage_notes.iter().any(|n| n.contains("contentPart")));
+    }
+
+    /// The pooled budget binds across owners: two parts with three
+    /// references each stay under a per-part budget of 4 individually
+    /// but overflow it pooled, so the pooled collection truncates and
+    /// the shortfall is disclosed the same way.
+    #[test]
+    fn content_part_pooled_budget_binds_across_owners() {
+        let ct = format!(
+            r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="{}"/><Override PartName="/word/data.xml" ContentType="application/xml"/></Types>"#,
+            package::MAIN_CONTENT_TYPE
+        );
+        let elems = |prefix: &str| -> String { (0..3).map(|i| format!(r#"<w:p><w:r><w:contentPart r:id="{prefix}{i}"/></w:r></w:p>"#)).collect() };
+        let rels = |prefix: &str| -> Vec<u8> {
+            let rs: String = (0..3)
+                .map(|i| format!(r#"<Relationship Id="{prefix}{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="data.xml"/>"#))
+                .collect();
+            format!(
+                r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{rs}</Relationships>"#
+            )
+            .into_bytes()
+        };
+        let doc = format!(r#"<?xml version="1.0"?><w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}"><w:body>{}</w:body></w:document>"#, elems("a"))
+            .into_bytes();
+        let other = format!(r#"<?xml version="1.0"?><w:other xmlns:w="{NS_W}" xmlns:r="{NS_R}">{}</w:other>"#, elems("b")).into_bytes();
+        let zip = tiny_zip(&[
+            ("[Content_Types].xml", ct.into_bytes()),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", doc),
+            ("word/_rels/document.xml.rels", rels("a")),
+            ("word/other.xml", other),
+            ("word/_rels/other.xml.rels", rels("b")),
+            ("word/data.xml", b"<root/>".to_vec()),
+        ]);
+        let report = validate_bytes_limited(&zip, Limits { facts: 4, ..Limits::default() });
+        let fired = report.findings.iter().filter(|f| f.rule == "CONTENTPART-TYPE").count();
+        assert_eq!(fired, 4, "findings: {:?}", report.findings);
+        assert!(report.coverage_notes.iter().any(|n| n.contains("contentPart")), "notes: {:?}", report.coverage_notes);
+    }
+
+    /// Many distinct ids are all judged (the dedupe/index path is not
+    /// quadratic-gated by a finding cap) — 2,000 references resolve and
+    /// report individually.
+    #[test]
+    fn content_part_many_distinct_ids_all_judged() {
+        let report = validate_bytes(&content_part_zip(2_000));
+        assert_eq!(report.findings.iter().filter(|f| f.rule == "CONTENTPART-TYPE").count(), 2_000);
     }
 
     /// §3 canary (a): a budget stop must not hide a defect the scanned prefix already establishes.

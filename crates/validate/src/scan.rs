@@ -111,6 +111,8 @@ pub(crate) struct PartScan {
     pub facts: StoryFacts,
     /// Relationship ids named by `w:contentPart` elements in this part.
     pub content_parts: Vec<String>,
+    /// The fact budget dropped at least one contentPart id in this part.
+    pub content_part_capped: bool,
     /// This (settings) part carries `w:uiCompat97to2003`.
     pub compat_97_2003: bool,
     /// Special note definitions in this part: (id, is_endnote, w:type).
@@ -506,6 +508,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
         refs: Vec::new(),
         facts: StoryFacts::default(),
         content_parts: Vec::new(),
+        content_part_capped: false,
         compat_97_2003: false,
         special_notes: Vec::new(),
         note_listings: (Vec::new(), Vec::new()),
@@ -556,7 +559,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 check_prefixes(&state.declared, &attrs, reader.resolver(), &[], &mut out);
                 if !was_suppressed {
                     collect_refs(&id, &attrs, reader.resolver(), &mut out.refs, acc.limits.facts, &mut state.refs_capped);
-                    collect_content_part(&id, &attrs, reader.resolver(), &mut out.content_parts);
+                    collect_content_part(&id, &attrs, reader.resolver(), &mut out.content_parts, acc.limits.facts, &mut out.content_part_capped);
                     on_open(&mut state, &id, &attrs, reader.resolver(), role, part, acc);
                 }
                 let frame = Frame { alt: is_alt, suppressed: was_suppressed, ..frame_for(&id) };
@@ -582,7 +585,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 check_prefixes(&state.declared, &attrs, reader.resolver(), &decls, &mut out);
                 if !was_suppressed {
                     collect_refs(&id, &attrs, reader.resolver(), &mut out.refs, acc.limits.facts, &mut state.refs_capped);
-                    collect_content_part(&id, &attrs, reader.resolver(), &mut out.content_parts);
+                    collect_content_part(&id, &attrs, reader.resolver(), &mut out.content_parts, acc.limits.facts, &mut out.content_part_capped);
                     on_empty(&mut state, &id, &attrs, reader.resolver(), role, part, acc);
                 }
                 if is_alt {
@@ -1244,11 +1247,15 @@ const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const NS_V: &str = "urn:schemas-microsoft-com:vml";
 
 /// Collect the relationship id named by a `w:contentPart` element, if any.
-fn collect_content_part(id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, out: &mut Vec<String>) {
+fn collect_content_part(id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, out: &mut Vec<String>, cap: usize, capped: &mut bool) {
     if id.w()
         && id.local == "contentPart"
         && let Some(v) = attr_ns(attrs, res, NS_R, b"id")
     {
+        if out.len() >= cap {
+            *capped = true;
+            return;
+        }
         out.push(v);
     }
 }
