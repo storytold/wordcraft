@@ -208,7 +208,13 @@ fn language_dialog_default_survives_a_restart() {
     use egui_kittest::kittest::Queryable;
     let mut a = app();
     a.ui.language = "en".into();
-    a.dialog = Some(Dialog::Layout(Box::new(LayoutDialog::Language(LanguageForm { lang: "fr-FR".into(), no_proof: false, detect: false }))));
+    a.dialog = Some(Dialog::Layout(Box::new(LayoutDialog::Language(LanguageForm {
+        lang: "fr-FR".into(),
+        no_proof: false,
+        detect: false,
+        whole_document: false,
+        initial: ("fr-FR".into(), false),
+    }))));
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             app.logic(&ui.ctx().clone());
@@ -230,6 +236,96 @@ fn language_dialog_default_survives_a_restart() {
     assert!(!b.session.dirty && !b.session.can_undo());
     b.run("file.new", json!({})).unwrap();
     assert_eq!(LanguageForm::read(&b).lang, "fr-FR");
+}
+
+/// #3518: ticking "Apply to the whole document" makes OK send `scope: "document"`; unticked sends none.
+#[test]
+fn language_dialog_whole_document_checkbox_sends_scope() {
+    use egui_kittest::kittest::Queryable;
+    let f = LanguageForm { lang: "fr-FR".into(), no_proof: false, detect: false, whole_document: false, initial: ("fr-FR".into(), false) };
+    assert!(f.params().get("scope").is_none());
+    assert_eq!(LanguageForm { whole_document: true, ..f.clone() }.params()["scope"], "document");
+    let mut a = app();
+    a.ui.language = "en".into();
+    let para = wordcraft_doc::Paragraph::with_text("Header", Default::default());
+    let header = a.session.doc.add_part(wordcraft_doc::PartKind::Header, vec![Arc::new(wordcraft_doc::Block::Para(para))]);
+    a.dialog = Some(Dialog::Layout(Box::new(LayoutDialog::Language(f))));
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(3);
+    h.get_by_label("Apply to the whole document").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    // The header, which the caret isn't in, took the language.
+    let doc = &h.state().session.doc;
+    let hp = doc.para(wordcraft_doc::StoryRef::Part(header), &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(hp.runs.first().and_then(|r| r.props.lang.as_deref()), Some("fr-FR"));
+}
+
+/// "Plain text, then a Do-not-check run", the caret in the plain text.
+fn proofing_mix_app() -> WordApp {
+    let mut a = app();
+    a.run("text.insert", json!({"text": "Plain code"})).unwrap();
+    a.run("select.text", json!({"text": "code"})).unwrap();
+    a.run("review.language", json!({"lang": "de-DE", "noProof": true})).unwrap();
+    a.run("select.text", json!({"text": "Plain"})).unwrap();
+    a.run("review.language", json!({"lang": "en-US", "noProof": false})).unwrap();
+    a.run("select.text", json!({"text": "Plain"})).unwrap();
+    a
+}
+
+fn run_proofing(a: &mut WordApp, text: &str) -> (Option<String>, Option<bool>) {
+    a.run("select.text", json!({"text": text})).unwrap();
+    let st = a.run("format.state", json!({})).unwrap();
+    (st["lang"].as_str().map(String::from), st["noProof"].as_bool())
+}
+
+/// #3518: whole-document OK sends only what the user changed.
+#[test]
+fn language_dialog_whole_document_sends_only_changes() {
+    // Changing only the language leaves the Do-not-check run alone.
+    let mut a = proofing_mix_app();
+    let mut f = LanguageForm::read(&a);
+    f.whole_document = true;
+    f.lang = "en-GB".into();
+    let p = f.params();
+    assert!(p.get("noProof").is_none());
+    a.run("review.language", p).unwrap();
+    assert_eq!(run_proofing(&mut a, "code"), (Some("en-GB".into()), Some(true)));
+    assert_eq!(run_proofing(&mut a, "Plain"), (Some("en-GB".into()), Some(false)));
+
+    // Changing only Do-not-check leaves each run's language alone.
+    let mut a = proofing_mix_app();
+    let mut f = LanguageForm::read(&a);
+    f.whole_document = true;
+    f.no_proof = true;
+    let p = f.params();
+    assert!(p.get("lang").is_none());
+    a.run("review.language", p).unwrap();
+    assert_eq!(run_proofing(&mut a, "code"), (Some("de-DE".into()), Some(true)));
+    assert_eq!(run_proofing(&mut a, "Plain"), (Some("en-US".into()), Some(true)));
+
+    // No edits: the caret's language, no noProof (never the engine's en-US default).
+    let mut a = proofing_mix_app();
+    let mut f = LanguageForm::read(&a);
+    f.lang = "fr-FR".into();
+    f.initial.0 = "fr-FR".into();
+    f.whole_document = true;
+    let p = f.params();
+    assert_eq!(p["lang"], "fr-FR");
+    assert!(p.get("noProof").is_none());
+    a.run("review.language", p).unwrap();
+    assert_eq!(run_proofing(&mut a, "code"), (Some("fr-FR".into()), Some(true)));
+
+    // Selection mode is unchanged: both are sent.
+    f.whole_document = false;
+    assert_eq!(f.params()["noProof"], false);
 }
 
 /// #407: Envelopes starts from the selected address; Add to Document puts an envelope

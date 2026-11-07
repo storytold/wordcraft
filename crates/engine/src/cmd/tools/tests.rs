@@ -290,3 +290,104 @@ fn inspect_removals_work_when_the_document_does_not_track_changes() {
     assert!(!text.contains("Hidden"), "the hidden text is still there: {text}");
     assert!(text.contains("Visible text."), "{text}");
 }
+
+/// #3518: every run and paragraph mark of a story, as (story, path, lang, noProof) rows.
+fn proofing_rows(s: &Session) -> Vec<(StoryRef, Option<String>, Option<bool>)> {
+    let stories = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k)));
+    let mut out = Vec::new();
+    for st in stories {
+        for path in s.doc.para_paths(st) {
+            let Some(p) = s.doc.para(st, &path) else { continue };
+            out.push((st, p.mark.lang.clone(), p.mark.no_proof));
+            out.extend(p.runs.iter().map(|r| (st, r.props.lang.clone(), r.props.no_proof)));
+        }
+    }
+    out
+}
+
+/// A document with its text in German in the body, a table cell, a header, a footnote, a comment
+/// and a text box, as a Word DOCX keeps a `w:lang` on each run, plus a glossary entry.
+fn multi_story_doc() -> Session {
+    use wordcraft_doc::{Block, BuildingBlock, CharProps, Paragraph, PartKind, Table};
+    let de = || CharProps { lang: Some("de-DE".into()), ..Default::default() };
+    let blk = |t: &str| Arc::new(Block::Para(Paragraph::with_text(t, de())));
+    let mut d = Document::from_text("Guten Tag");
+    d.body = vec![blk("Guten Tag")];
+    let mut t = Table::new(1, 2, 200.0);
+    if let Some(c) = t.rows.first_mut().and_then(|r| r.cells.first_mut()) {
+        c.blocks = vec![blk("Zelle")];
+    }
+    d.body.push(Arc::new(Block::Table(t)));
+    d.body.push(blk("Ende"));
+    for kind in [PartKind::Header, PartKind::Footnote, PartKind::Comment, PartKind::TextBox] {
+        d.add_part(kind, vec![blk("Teil")]);
+    }
+    d.glossary.push(BuildingBlock { name: "g".into(), blocks: vec![blk("Baustein")], ..Default::default() });
+    Session::new(d)
+}
+
+#[test]
+fn language_scope_document_sets_every_story() {
+    let mut s = multi_story_doc();
+    s.run("select.text", &json!({"text": "Guten"})).unwrap();
+    let (sel, before) = (s.sel.clone(), s.doc.clone());
+    let rows = proofing_rows(&s);
+    assert!(rows.len() >= 10 && rows.iter().any(|r| r.1.as_deref() == Some("de-DE")));
+    s.run("review.language", &json!({"lang": "fr-FR", "scope": "document"})).unwrap();
+    // Runs that had their own language, the paragraph marks and the empty cell: all French.
+    let rows = proofing_rows(&s);
+    assert!(rows.iter().all(|r| r.1.as_deref() == Some("fr-FR")), "{rows:?}");
+    for kind_story in s.doc.parts.keys() {
+        assert!(rows.iter().any(|r| r.0 == StoryRef::Part(*kind_story)));
+    }
+    assert!(s.doc.plain_text(StoryRef::Body).contains("Zelle"));
+    let g = &s.doc.glossary[0].blocks;
+    assert_eq!(g[0].as_para().map(|p| p.runs[0].props.lang.clone()), Some(Some("fr-FR".into())));
+    assert_eq!(g[0].as_para().map(|p| p.mark.lang.clone()), Some(Some("fr-FR".into())));
+    // The selection stays; the document is modified.
+    assert_eq!(s.sel, sel);
+    assert!(s.doc != before);
+    // One undo restores everything.
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(s.doc == before);
+    assert_eq!(s.sel, sel);
+}
+
+#[test]
+fn language_scope_document_no_proof_and_pending() {
+    let mut s = multi_story_doc();
+    s.run("review.language", &json!({"noProof": true, "scope": "document"})).unwrap();
+    assert!(proofing_rows(&s).iter().all(|r| r.2 == Some(true)));
+    // The language itself wasn't asked for and stays.
+    assert!(proofing_rows(&s).iter().any(|r| r.1.as_deref() == Some("de-DE")));
+    // Formatting waiting for typing follows.
+    s.run("format.bold", &json!({})).unwrap();
+    s.run("review.language", &json!({"lang": "pl-PL", "scope": "document"})).unwrap();
+    assert_eq!(s.pending.as_ref().and_then(|p| p.lang.as_deref()), Some("pl-PL"));
+}
+
+#[test]
+fn language_default_scope_is_selection_only() {
+    let mut s = multi_story_doc();
+    s.run("select.text", &json!({"text": "Guten"})).unwrap();
+    s.run("review.language", &json!({"lang": "fr-FR"})).unwrap();
+    let rows = proofing_rows(&s);
+    assert!(rows.iter().any(|r| r.1.as_deref() == Some("fr-FR")));
+    assert!(rows.iter().filter(|r| r.1.as_deref() == Some("fr-FR")).count() < rows.len() / 2);
+    let mut s = multi_story_doc();
+    s.run("select.text", &json!({"text": "Guten"})).unwrap();
+    s.run("review.language", &json!({"lang": "fr-FR", "scope": "selection"})).unwrap();
+    assert_eq!(proofing_rows(&s), rows);
+}
+
+#[test]
+fn language_bad_scope_is_a_params_error() {
+    let mut s = multi_story_doc();
+    let before = s.doc.clone();
+    for bad in [json!("everything"), json!(1), json!(true), json!(["document"])] {
+        let e = s.run("review.language", &json!({"lang": "fr-FR", "detect": false, "scope": bad})).unwrap_err();
+        assert!(matches!(e, CmdError::Params(_)), "{e:?}");
+    }
+    assert!(s.doc == before);
+    assert!(s.prefs.detect_language);
+}
