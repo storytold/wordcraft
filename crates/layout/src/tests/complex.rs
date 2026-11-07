@@ -68,6 +68,7 @@ fn myanmar_without_spaces_wraps_between_syllables() {
 
 /// A face with Myanmar letters (an installed system font), or `None` to skip.
 fn myanmar_face() -> Option<wordcraft_fonts::FaceRef> {
+    crate::test_fonts();
     wordcraft_fonts::FontDb::global().fallback_for('\u{1000}', 0).map(|f| wordcraft_fonts::FaceRef::of(&f)).filter(|f| f.has_layout_tables())
 }
 
@@ -119,12 +120,14 @@ const THAI_RUN: &str = "[D] น้ำ ค่ำ ปั้น ฝั่ง ปู
 
 /// Is a font with Thai letters installed? `false` skips the test.
 fn thai_font_installed() -> bool {
+    crate::test_fonts();
     wordcraft_fonts::FontDb::global().fallback_for('\u{0E19}', 0).is_some()
 }
 
 /// Is a Thai font with Latin letters and digits installed (Tahoma, Leelawadee UI, Thonburi, the
 /// TLWG fonts…)? Noto Sans Thai alone has none, so no face covers [`THAI_RUN`]: `false` skips.
 fn thai_latin_font_installed() -> bool {
+    crate::test_fonts();
     let face = wordcraft_fonts::word::resolve("TH Sarabun New", false, false).face;
     THAI_RUN.chars().filter(|c| !c.is_whitespace()).all(|c| face.covers(c))
 }

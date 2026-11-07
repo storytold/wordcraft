@@ -314,6 +314,7 @@ fn hostile_bidi_text_never_panics() {
 
 /// A face that has Arabic letters (installed system fonts), or `None` to skip.
 fn arabic_face() -> Option<wordcraft_fonts::FaceRef> {
+    crate::test_fonts();
     wordcraft_fonts::FontDb::global().fallback_for('ب', 0).map(|f| wordcraft_fonts::FaceRef::of(&f)).filter(|f| f.covers('پ'))
 }
 
