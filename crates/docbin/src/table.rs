@@ -305,7 +305,11 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
     let mut grid: Vec<f32> = Vec::new();
     let mut props = TableProps::default();
     let mut open = false;
+    // Deepest nesting among the table's completed rows, and among the paragraphs of the row
+    // still being gathered. They are kept apart so a direction split closes the earlier rows
+    // at their own depth, not at the depth of a nested table inside the incoming row.
     let mut depth_seen = 0u32;
+    let mut row_depth = 0u32;
 
     fn flush_cell(cells: &mut Vec<Cell>, cell: &mut Blocks) {
         let mut blocks = std::mem::take(cell);
@@ -398,7 +402,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
     for p in paras {
         let Some(info) = p.row else {
             if open {
-                flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
+                flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen.max(row_depth) > 1);
                 grid.clear();
                 // Table props are per-table (first row carrying the sprm wins within the
                 // table): reset the accumulator so one table's borders, align, indent and
@@ -408,6 +412,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
                 props = TableProps::default();
                 open = false;
                 depth_seen = 0;
+                row_depth = 0;
             }
             out.push(para_block(p.para));
             continue;
@@ -425,7 +430,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             props = TableProps::default();
             depth_seen = 0;
         }
-        depth_seen = depth_seen.max(info.depth);
+        row_depth = row_depth.max(info.depth);
         if grid.is_empty() {
             // Column widths from the table's first `sprmTDefTable`.
             grid = info.edges.windows(2).take(MAX_COLS).map(|w| (w[1] - w[0]).max(0.0)).collect();
@@ -463,13 +468,15 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             if info.ttp {
                 let row = build_row(std::mem::take(&mut cells), &info);
                 rows.push(row);
+                depth_seen = depth_seen.max(row_depth);
+                row_depth = 0;
             }
         } else {
             cell.push(para_block(p.para));
         }
     }
     if open {
-        flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
+        flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen.max(row_depth) > 1);
     }
     out
 }

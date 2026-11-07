@@ -2634,6 +2634,113 @@ fn rows_of_different_directions_are_different_tables() {
     assert_eq!(tables[1].grid, vec![72.0], "the second table has its own grid");
 }
 
+/// A body of `.doc` table paragraphs for the direction-split tests: `text` and the PAPX runs
+/// (start CP, PAPX) that mark it up.
+fn direction_split_doc(text: &'static str, papx_entries: Vec<(u32, u16, Vec<u8>)>) -> Vec<u8> {
+    struct_doc(&StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries,
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    })
+}
+
+/// Each table's rows as cell texts.
+fn table_cell_texts(doc: &wordcraft_doc::Document) -> Vec<Vec<Vec<String>>> {
+    let cell_text = |c: &wordcraft_doc::Cell| c.blocks.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect::<String>();
+    let row_texts = |r: &wordcraft_doc::Row| r.cells.iter().map(cell_text).collect::<Vec<_>>();
+    doc.body.iter().filter_map(|b| b.as_table()).map(|t| t.rows.iter().map(row_texts).collect()).collect()
+}
+
+/// sprmPFInTable + sprmPItap at `depth`.
+fn in_table_at(depth: u8) -> Vec<u8> {
+    grpprl(&[(0x2416, &[0x01]), (0x6649, &[depth, 0, 0, 0])])
+}
+
+/// A row-end mark (sprmPFTtp), right to left when `bidi`, with a one-column `sprmTDefTable`
+/// when `def_table`.
+fn row_end_mark(bidi: bool, def_table: bool) -> Vec<u8> {
+    let mut prls = grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01]), (0x6649, &[1, 0, 0, 0])]);
+    if bidi {
+        prls.extend(grpprl(&[(0x560B, &1u16.to_le_bytes())]));
+    }
+    if def_table {
+        prls.extend(t_def_edges(&[0, 1440]));
+    }
+    prls
+}
+
+#[test]
+fn direction_split_keeps_the_earlier_table_when_the_new_row_nests_a_table() {
+    // The right-to-left row holds a nested (depth 2) paragraph before its row-end mark. The
+    // split closes the left-to-right row above at its own depth, so it stays a table instead
+    // of degrading to paragraphs because of the nesting in the row that follows it.
+    let text = "a\u{7}\u{7}n\rb\u{7}\u{7}tail\r";
+    let doc = read(&direction_split_doc(
+        text,
+        vec![
+            (0, 0, in_table_at(1)),
+            (2, 0, row_end_mark(false, true)),
+            (3, 0, in_table_at(2)),
+            (5, 0, in_table_at(1)),
+            (7, 0, row_end_mark(true, true)),
+            (8, 0, Vec::new()),
+        ],
+    ))
+    .expect("opens");
+    let first = doc.body.first().and_then(|b| b.as_table()).expect("the left-to-right row is still a table");
+    assert!(!first.props.bidi_visual);
+    assert_eq!(table_cell_texts(&doc).first(), Some(&vec![vec!["a".to_string()]]));
+    // The nested row is deeper than the reader models: its text survives as paragraphs.
+    let paras: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect();
+    assert_eq!(paras, ["n", "b", "tail"]);
+}
+
+#[test]
+fn direction_split_with_content_on_the_row_end_mark() {
+    // The right-to-left row's row-end mark carries text of its own: that text is a cell of the
+    // new table, and the left-to-right table above keeps only its own cell.
+    let text = "a\u{7}\u{7}b\u{7}c\u{7}tail\r";
+    let doc = read(&direction_split_doc(
+        text,
+        vec![(0, 0, in_table_at(1)), (2, 0, row_end_mark(false, true)), (3, 0, in_table_at(1)), (5, 0, row_end_mark(true, true)), (7, 0, Vec::new())],
+    ))
+    .expect("opens");
+    let bidi: Vec<_> = doc.body.iter().filter_map(|b| b.as_table()).map(|t| t.props.bidi_visual).collect();
+    assert_eq!(bidi, [false, true]);
+    assert_eq!(table_cell_texts(&doc), vec![vec![vec!["a".to_string()]], vec![vec!["b".to_string(), "c".to_string()]]]);
+}
+
+#[test]
+fn direction_split_on_a_row_without_a_def_table() {
+    // The right-to-left row has no sprmTDefTable: the split still gives it its own table (with
+    // no grid inherited from the table above), and each cell stays with its row.
+    let text = "a\u{7}\u{7}b\u{7}\u{7}tail\r";
+    let doc = read(&direction_split_doc(
+        text,
+        vec![
+            (0, 0, in_table_at(1)),
+            (2, 0, row_end_mark(false, true)),
+            (3, 0, in_table_at(1)),
+            (5, 0, row_end_mark(true, false)),
+            (6, 0, Vec::new()),
+        ],
+    ))
+    .expect("opens");
+    let tables: Vec<_> = doc.body.iter().filter_map(|b| b.as_table()).collect();
+    let shape: Vec<_> = tables.iter().map(|t| (t.props.bidi_visual, t.grid.clone())).collect();
+    assert_eq!(shape, [(false, vec![72.0]), (true, vec![])]);
+    // Without a sprmTDefTable the row-end mark always ends a cell (the column count is unknown).
+    assert_eq!(table_cell_texts(&doc), vec![vec![vec!["a".to_string()]], vec![vec!["b".to_string(), String::new()]]]);
+}
+
 #[test]
 fn repeated_cell_sprms_keep_one_override_per_cell() {
     // A PAPX repeating cell-range sprms (shared by every paragraph mark that names it) keeps one
