@@ -1263,6 +1263,24 @@ impl Styles {
     /// The formatting of a span in text style `name` over `base`: the automatic styles' over the
     /// nearest custom character style, which the span then names ([`Fmt::extra`]'s style, by ODF
     /// name until import makes it a document style id); without one, the whole chain's.
+    /// The size of text in paragraph style `name` by its named styles, not its automatic ones,
+    /// which are the paragraph's own: what they say on what the document says.
+    pub(super) fn named_size(&self, name: &str) -> Option<f32> {
+        // The default style's: Standard's counts only for a style based on it, in the chain.
+        let size = self.default_size.filter(|v| v.is_finite() && *v >= 1.0).map(|v| v.min(1638.0));
+        let mut f = Fmt { size, ..Fmt::default() };
+        for (_, s) in self.chain(name).iter().rev().filter(|(_, s)| !s.auto) {
+            s.fmt.apply(&mut f);
+        }
+        f.size
+    }
+
+    /// Whether paragraph style `name`'s named styles state a size. Those that don't leave the size
+    /// to WordCraft's style for its kind, so text of any size isn't known to be the style's.
+    pub(super) fn states_size(&self, name: &str) -> bool {
+        self.chain(name).iter().any(|(_, s)| !s.auto && (s.fmt.size.is_some() || s.fmt.size_pct.is_some()))
+    }
+
     pub(super) fn span_fmt(&self, name: &str, base: &Fmt) -> Fmt {
         let chain = self.chain(name);
         let Some(at) = chain.iter().position(|(n, _)| self.is_named_text(n)) else { return self.text_fmt(name, base) };
@@ -1462,6 +1480,10 @@ impl Styles {
         };
         let mut fmt = Fmt::default();
         s.fmt.apply(&mut fmt);
+        // A percent is of what's under it: the parent's size, or with none the default style's.
+        if s.fmt.size_pct.is_some() {
+            fmt.size = self.named_size(odt);
+        }
         // A style with no parent inherits the default style, not Standard (the document's
         // defaults here): its size, when Standard's differs.
         if s.parent.is_none() && fmt.size.is_none() && self.doc_size() != self.default_size {
