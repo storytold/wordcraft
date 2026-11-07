@@ -881,15 +881,11 @@ fn paste_format(s: &mut Session, _: &Value) -> CmdResult {
             // Word selection includes trailing spaces; a painter click formats just the word,
             // matching the ordinary collapsed-caret formatting target.
             let word_end = pp.text.get(x..y).map(|word| x + word.trim_end().len()).unwrap_or(y);
-            s.doc.format_range(&Pos { off: x, ..f.clone() }, &Pos { off: word_end, ..f.clone() }, &|c| *c = chr.cleared().overlaid(&chr))?;
+            s.doc.format_range(&Pos { off: x, ..f.clone() }, &Pos { off: word_end, ..f.clone() }, &|c| *c = c.cleared().overlaid(&chr))?;
         }
         s.doc.format_paragraphs(&a, &b, &|p| *p = para.clone())?;
     } else {
-        s.doc.format_range(&a, &b, &|c| {
-            let link = c.link.clone();
-            *c = c.cleared().overlaid(&chr);
-            c.link = link;
-        })?;
+        s.doc.format_range(&a, &b, &|c| *c = c.cleared().overlaid(&chr))?;
         if a.path != b.path || a.off == 0 {
             s.doc.format_paragraphs(&a, &b, &|p| *p = para.clone())?;
         }
