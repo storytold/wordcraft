@@ -1,5 +1,7 @@
+use super::numbers::{body_bookmark_paths, para_numbers, ref_number};
 use super::properties::{
-    bookmark_text, count_text, date_picture, doc_property, doc_property_arg, new_property_value, set_summary_property, summary_property, text_result,
+    bookmark_ends_in_its_paragraph, bookmark_text, bookmark_text_at, count_text, date_picture, doc_property, doc_property_arg, new_property_value,
+    set_summary_property, summary_property, text_result,
 };
 use super::toc::{heading_style_level, update_toc};
 use super::{
@@ -76,64 +78,217 @@ pub(super) fn caption(s: &mut Session, v: &Value) -> CmdResult {
 /// the last level-n heading's number, or its count when the heading isn't numbered) and the
 /// text or number of the nearest paragraph of a style.
 pub fn update_seq(s: &mut Session) -> Result<(), CmdError> {
-    let mut headings = [0u32; 9];
-    let mut seq: std::collections::HashMap<String, (u32, u32)> = Default::default();
-    // Built on the first STYLEREF (field results don't change what it finds).
-    let mut styles: Option<wordcraft_layout::styleref::StyleIndex> = None;
-    for path in s.doc.para_paths(StoryRef::Body) {
-        let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
+    // Numbers first: a STYLEREF to a heading that holds a SEQ field shows its new number.
+    let numbers = seq_results(&s.doc);
+    apply_results(&mut s.doc, numbers)?;
+    let refs = styleref_results(&s.doc);
+    apply_results(&mut s.doc, refs)
+}
+
+/// A field's fresh result: its story and paragraph, its object index there and the text.
+type FieldResult = (StoryRef, Path, usize, String);
+
+/// The SEQ numbering so far while the document is walked in order.
+#[derive(Default)]
+struct SeqCount {
+    /// How many headings of each level there have been (for `\s`).
+    headings: [u32; 9],
+    /// Per sequence: its number, and the heading count it was last restarted at.
+    seq: std::collections::HashMap<String, (u32, u32)>,
+    /// Text boxes already counted: a story shown twice, or inside itself, counts once.
+    boxes: std::collections::HashSet<u32>,
+    out: Vec<FieldResult>,
+}
+
+/// The fresh results of the unlocked SEQ fields in the body and in the text boxes anchored there
+/// ([`update_seq`]). A text box's fields count where the box is anchored, before the fields after
+/// the anchor in its paragraph and after those before it (measured in Word for Windows).
+fn seq_results(doc: &wordcraft_doc::Document) -> Vec<FieldResult> {
+    let mut count = SeqCount::default();
+    for path in doc.para_paths(StoryRef::Body) {
+        let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
         if let Some(l) = heading_style_level(p)
             && let Some(k) = (l as usize).checked_sub(1)
-            && let Some(count) = headings.get_mut(k)
+            && let Some(n) = count.headings.get_mut(k)
         {
-            *count = count.saturating_add(1);
+            *n = n.saturating_add(1);
         }
-        let mut updates: Vec<(usize, String)> = Vec::new();
-        for (k, o) in p.objects.iter().enumerate() {
-            let InlineObject::Field { instr, locked: false, .. } = o else { continue };
-            let f = FieldCode::parse(instr);
-            match f.name.as_str() {
-                "SEQ" => {
-                    let Some(id) = f.args.first() else { continue };
-                    let restart =
-                        f.arg('s').and_then(|l| l.parse::<usize>().ok()).and_then(|l| l.checked_sub(1)).and_then(|l| headings.get(l)).copied();
-                    let n = seq.entry(id.clone()).or_insert((0, 0));
-                    if let Some(epoch) = restart
-                        && n.1 != epoch
-                    {
-                        *n = (0, epoch);
-                    }
-                    if let Some(r) = f.arg('r').and_then(|r| r.parse::<u32>().ok()) {
-                        n.0 = r;
-                    } else if !f.has('c') {
-                        n.0 = n.0.saturating_add(1);
-                    }
-                    let fmt = wordcraft_layout::fields::format_switch(instr).unwrap_or_default();
-                    updates.push((k, if f.has('h') { String::new() } else { wordcraft_layout::fields::field_number(instr, fmt, n.0) }));
-                }
-                "STYLEREF" => {
-                    let ix = styles.get_or_insert_with(|| wordcraft_layout::styleref::StyleIndex::build(&s.doc));
-                    if let Some(i) = ix.index_of(&path) {
-                        updates.push((k, text_result(instr, ix.eval(instr, wordcraft_layout::styleref::At::Body(i)))));
+        count_seq(doc, StoryRef::Body, &path, p, &mut count);
+    }
+    count.out
+}
+
+/// Number the SEQ fields of paragraph `p` (at `path` in `story`) and of the text boxes anchored in it.
+fn count_seq(doc: &wordcraft_doc::Document, story: StoryRef, path: &Path, p: &Paragraph, count: &mut SeqCount) {
+    for (k, o) in p.objects.iter().enumerate() {
+        for id in o.text_boxes() {
+            if count.boxes.insert(id) {
+                let part = StoryRef::Part(id);
+                for bp in doc.para_paths(part) {
+                    if let Some(boxed) = doc.para(part, &bp) {
+                        count_seq(doc, part, &bp, boxed, count);
                     }
                 }
-                _ => {}
             }
         }
-        if updates.is_empty() {
+        let InlineObject::Field { instr, locked: false, .. } = o else { continue };
+        let f = FieldCode::parse(instr);
+        if f.name != "SEQ" {
             continue;
         }
-        let para = s.doc.para_mut(StoryRef::Body, &path)?;
-        for (k, r) in updates {
-            if let Some(InlineObject::Field { result, dirty, .. }) = para.objects.get_mut(k) {
-                // A computed result is no longer stale: Word's F9 clears `w:dirty` too.
-                *result = r;
-                *dirty = false;
+        let Some(id) = f.args.first() else { continue };
+        let restart = f.arg('s').and_then(|l| l.parse::<usize>().ok()).and_then(|l| l.checked_sub(1)).and_then(|l| count.headings.get(l)).copied();
+        let n = count.seq.entry(id.clone()).or_insert((0, 0));
+        if let Some(epoch) = restart
+            && n.1 != epoch
+        {
+            *n = (0, epoch);
+        }
+        if let Some(r) = f.arg('r').and_then(|r| r.parse::<u32>().ok()) {
+            n.0 = r;
+        } else if !f.has('c') {
+            n.0 = n.0.saturating_add(1);
+        }
+        let fmt = wordcraft_layout::fields::format_switch(instr).unwrap_or_default();
+        let r = if f.has('h') { String::new() } else { wordcraft_layout::fields::field_number(instr, fmt, n.0) };
+        count.out.push((story, path.clone(), k, r));
+    }
+}
+
+/// The fresh results of the body's unlocked STYLEREF fields ([`update_seq`]), from the text
+/// `doc` holds: the SEQ fields in the headings they find should already show their numbers.
+fn styleref_results(doc: &wordcraft_doc::Document) -> Vec<FieldResult> {
+    let mut out = Vec::new();
+    // Built on the first STYLEREF.
+    let mut styles: Option<wordcraft_layout::styleref::StyleIndex> = None;
+    for path in doc.para_paths(StoryRef::Body) {
+        let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
+        for (k, o) in p.objects.iter().enumerate() {
+            let InlineObject::Field { instr, locked: false, .. } = o else { continue };
+            if FieldCode::parse(instr).name != "STYLEREF" {
+                continue;
             }
+            let ix = styles.get_or_insert_with(|| wordcraft_layout::styleref::StyleIndex::build(doc));
+            if let Some(i) = ix.index_of(&path) {
+                out.push((StoryRef::Body, path.clone(), k, text_result(instr, ix.eval(instr, wordcraft_layout::styleref::At::Body(i)))));
+            }
+        }
+    }
+    out
+}
+
+/// What Word prints for a `REF` to a bookmark the document doesn't have.
+pub const REFERENCE_NOT_FOUND: &str = "Error! Reference source not found.";
+
+/// The fresh results of the body's unlocked REF fields as output shows them: the bookmark's
+/// text, or Word's error when the document lacks the bookmark (measured in Word for Windows);
+/// `\p` ("above" or "below") and the paragraph number switches `\r`, `\n` and `\w` keep the
+/// stored result, and so does a REF to a bookmark that ends in a later paragraph: Word shows such
+/// a bookmark's paragraphs as paragraphs of the result, which a field's one-paragraph result
+/// can't hold (measured in Word for Windows). A bookmark in a header, footer, footnote, endnote,
+/// comment or text box is found too, and a REF to it shows that text as `stored` holds it, its
+/// own fields not yet refreshed, as Word's output does (measured in Word for Windows). The
+/// document's bookmarks are looked up once, and each bookmark's text read once, however many
+/// fields refer to it.
+fn ref_results(doc: &wordcraft_doc::Document, stored: &wordcraft_doc::Document) -> Vec<FieldResult> {
+    let mut out = Vec::new();
+    let mut starts: std::collections::HashMap<String, Pos> = std::collections::HashMap::new();
+    for (name, start) in doc.bookmarks().into_iter().chain(part_bookmarks(doc)) {
+        // The first of two bookmarks with one name, as `bookmark_text` takes.
+        starts.entry(name).or_insert(start);
+    }
+    // A bookmark's text, `None` when it ends in a later paragraph.
+    let mut texts: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
+    for path in doc.para_paths(StoryRef::Body) {
+        let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
+        for (k, o) in p.objects.iter().enumerate() {
+            let InlineObject::Field { instr, locked: false, .. } = o else { continue };
+            // `\r`, `\n` and `\w` show the bookmarked paragraph's number, which isn't computed
+            // here: those keep their stored result rather than print the paragraph's text.
+            if wordcraft_layout::fields::field_name(instr) != "REF" || ['p', 'r', 'n', 'w'].iter().any(|&sw| has_switch(instr, sw)) {
+                continue;
+            }
+            let f = FieldCode::parse(instr);
+            let target = f.args.first().map(|s| s.split('\\').next().unwrap_or("").trim_matches('"')).unwrap_or("");
+            let Some(start) = starts.get(target) else {
+                out.push((StoryRef::Body, path.clone(), k, REFERENCE_NOT_FOUND.to_string()));
+                continue;
+            };
+            let text = texts.entry(target.to_string()).or_insert_with(|| {
+                let source = if start.story == StoryRef::Body { doc } else { stored };
+                bookmark_ends_in_its_paragraph(source, target, start).then(|| bookmark_text_at(source, target, start)).flatten()
+            });
+            if let Some(r) = text.clone() {
+                out.push((StoryRef::Body, path.clone(), k, text_result(instr, r)));
+            }
+        }
+    }
+    out
+}
+
+/// The bookmarks outside the body (headers, footers, notes, comments and text boxes), in story
+/// order.
+fn part_bookmarks(doc: &wordcraft_doc::Document) -> Vec<(String, Pos)> {
+    let mut out = Vec::new();
+    for id in doc.parts.keys() {
+        let story = StoryRef::Part(*id);
+        for path in doc.para_paths(story) {
+            let Some(p) = doc.para(story, &path) else { continue };
+            for (off, o) in p.objects_with_offsets() {
+                if let InlineObject::BookmarkStart { name } = o {
+                    out.push((name.clone(), Pos { story, path: path.clone(), off }));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Put `results` into their fields, clearing `w:dirty` (a computed result is no longer stale:
+/// Word's F9 clears it too).
+fn apply_results(doc: &mut wordcraft_doc::Document, results: Vec<FieldResult>) -> Result<(), CmdError> {
+    for (story, path, k, r) in results {
+        let para = doc.para_mut(story, &path)?;
+        if let Some(InlineObject::Field { result, dirty, .. }) = para.objects.get_mut(k) {
+            *result = r;
+            *dirty = false;
         }
         para.touch();
     }
     Ok(())
+}
+
+/// `results` less those its fields already show.
+fn changed(doc: &wordcraft_doc::Document, mut results: Vec<FieldResult>) -> Vec<FieldResult> {
+    results.retain(|(story, path, k, r)| {
+        !matches!(doc.para(*story, path).and_then(|p| p.objects.get(*k)), Some(InlineObject::Field { result, .. }) if result == r)
+    });
+    results
+}
+
+/// The document as Word prints and exports it (PDF, print jobs, page images). Laying a document
+/// out for output, Word fills in the body's unlocked SEQ, STYLEREF and REF fields, even with
+/// "Update fields before printing" off, while NUMWORDS, FILENAME, the summary properties and
+/// formulas keep their stored results (measured with Word for Windows, printing and exporting
+/// fields whose stored results were wrong). The document itself keeps its stored results.
+/// `None` when every such field already shows its fresh result, so nothing is copied then.
+pub fn output_fields(doc: &wordcraft_doc::Document) -> Option<wordcraft_doc::Document> {
+    // Numbers first, then the fields that read them: a STYLEREF to a heading holding a SEQ field,
+    // and a REF to a bookmarked caption, show the new number.
+    let seq = changed(doc, seq_results(doc));
+    let mut out = (!seq.is_empty()).then(|| doc.clone());
+    if let Some(d) = out.as_mut() {
+        apply_results(d, seq).ok()?;
+    }
+    let styles = changed(out.as_ref().unwrap_or(doc), styleref_results(out.as_ref().unwrap_or(doc)));
+    if !styles.is_empty() {
+        apply_results(out.get_or_insert_with(|| doc.clone()), styles).ok()?;
+    }
+    let refs = changed(out.as_ref().unwrap_or(doc), ref_results(out.as_ref().unwrap_or(doc), doc));
+    if !refs.is_empty() {
+        apply_results(out.get_or_insert_with(|| doc.clone()), refs).ok()?;
+    }
+    out
 }
 
 /// Whether `instr` has the one-letter switch `\sw`, also run together with another (`\p\h`).
@@ -181,7 +336,15 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
     // The document properties as the fields read and set them (`SUBJECT "New subject"`): a field
     // after one that sets a property shows the new value.
     let mut core = s.doc.core.clone();
-    for (story, path) in stories.into_iter().flat_map(|st| s.doc.para_paths(st).into_iter().map(move |p| (st, p))).collect::<Vec<_>>() {
+    // Build each body lookup once, only when a supported numeric REF needs it.
+    let mut numbers = None;
+    let mut bookmark_paths = None;
+    let paths: Vec<(StoryRef, Path)> = stories.into_iter().flat_map(|st| s.doc.para_paths(st).into_iter().map(move |p| (st, p))).collect();
+    // SET <name> "<text>" (ECMA-376 §17.16.5.58): the values it gives, which REF <name> shows; a
+    // REF before the SET shows the last value set, as Word's bookmark does after an update.
+    let last_set = set_values(s, &paths);
+    let mut set: std::collections::HashMap<String, String> = Default::default();
+    for (story, path) in paths {
         let Some(p) = s.doc.para(story, &path) else { continue };
         if !p.objects.iter().any(|o| matches!(o, InlineObject::Field { .. })) {
             continue;
@@ -213,7 +376,22 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     let f = FieldCode::parse(instr);
                     let target = f.args.first().map(|s| s.split('\\').next().unwrap_or("").trim_matches('"')).unwrap_or("");
                     let r = if name == "REF" {
-                        if !has_switch(instr, 'p') { bookmark_text(&s.doc, target) } else { None }
+                        if has_switch(instr, 'p') {
+                            None
+                        } else if let Some(sw) = ['w', 'r', 'n'].into_iter().find(|c| has_switch(instr, *c)) {
+                            if has_switch(instr, 'd') || has_switch(instr, 't') {
+                                continue; // Preserve cached results for unsupported delimiter/text switches.
+                            }
+                            let numbers = numbers.get_or_insert_with(|| para_numbers(&s.doc));
+                            let from = (story == StoryRef::Body).then_some(&path);
+                            let paths = bookmark_paths.get_or_insert_with(|| body_bookmark_paths(&s.doc));
+                            paths.get(target).and_then(|tp| ref_number(numbers, tp, from, sw))
+                        } else {
+                            bookmark_text(&s.doc, target).or_else(|| {
+                                let key = target.to_lowercase();
+                                set.get(&key).or_else(|| last_set.get(&key)).cloned()
+                            })
+                        }
                     } else if !has_switch(instr, 'p') {
                         pages.get(target).map(|(num, page_fmt)| {
                             let fmt = wordcraft_layout::fields::format_switch(instr).unwrap_or(*page_fmt);
@@ -226,6 +404,14 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                         updates.push((k, if name == "REF" { text_result(instr, r) } else { r }));
                     }
                 }
+                // A value given a name (the layout draws nothing for it; its result stays).
+                "SET" => {
+                    if let Some((n, v)) = set_args(instr)
+                        && set.len() < MAX_SET
+                    {
+                        set.insert(n, v);
+                    }
+                }
                 // The summary properties; a quoted text after the name replaces the property.
                 "TITLE" | "SUBJECT" | "AUTHOR" | "KEYWORDS" | "COMMENTS" => {
                     if let Some(v) = new_property_value(instr) {
@@ -234,6 +420,16 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     updates.push((k, text_result(instr, summary_property(&core, &name).to_string())));
                 }
                 "LASTSAVEDBY" => updates.push((k, text_result(instr, core.last_modified_by.clone()))),
+                // The user's name and initials (File › Options › General); a quoted text after
+                // the name is shown instead.
+                "USERNAME" | "USERINITIALS" => {
+                    let v = match new_property_value(instr) {
+                        Some(v) => v.to_string(),
+                        None if name == "USERNAME" => s.author.clone(),
+                        None => s.user_initials(),
+                    };
+                    updates.push((k, text_result(instr, v)));
+                }
                 "NUMWORDS" => updates.push((k, count_text(instr, s.doc.word_count()))),
                 "NUMCHARS" => {
                     let chars = s.doc.plain_text(StoryRef::Body).chars().filter(|c| !c.is_whitespace()).count();
@@ -315,4 +511,33 @@ pub fn refresh_date_fields(doc: &mut wordcraft_doc::Document) {
             para.touch();
         }
     }
+}
+
+/// Most names SET fields give values.
+const MAX_SET: usize = 10_000;
+
+/// A SET field's name (lower case: names are a bookmark's, which ignore case) and value.
+fn set_args(instr: &str) -> Option<(String, String)> {
+    let f = FieldCode::parse(instr);
+    let name = f.args.first().map(|n| n.trim()).filter(|n| !n.is_empty() && n.chars().count() <= 40)?;
+    let value: String = f.args.get(1..).map(|v| v.join(" ")).unwrap_or_default().chars().take(MAX_SET).collect();
+    Some((name.to_lowercase(), value))
+}
+
+/// The value each name has after the last SET giving it one, in the stories at `paths`.
+fn set_values(s: &Session, paths: &[(StoryRef, Path)]) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for (story, path) in paths {
+        let Some(p) = s.doc.para(*story, path) else { continue };
+        for o in &p.objects {
+            if let InlineObject::Field { instr, .. } = o
+                && wordcraft_layout::fields::field_name(instr) == "SET"
+                && let Some((n, v)) = set_args(instr)
+                && out.len() < MAX_SET
+            {
+                out.insert(n, v);
+            }
+        }
+    }
+    out
 }

@@ -22,6 +22,8 @@ struct Breaker<'e> {
     first_left: f32,
     default_tab: f32,
     hanging_at: Option<f32>,
+    /// Where default tab stops are counted from (see [`next_tab`]).
+    tab_origin: f32,
     /// Word 2013+ (compatibility mode 15) fits more text on a justified line by shrinking its
     /// spaces (`space_room`); never on lines with tabs.
     shrink_spaces: bool,
@@ -107,7 +109,7 @@ fn has_content(pl: &ParaLayout, c0: usize, j: usize) -> bool {
 /// control's start, a bookmark) and floating objects' anchors take no room and don't count (Word:
 /// a picture a little wider than the line, after an anchor, stays on the first line rather than
 /// leaving the anchor a line of its own).
-fn takes_room(c: &Cluster) -> bool {
+pub(crate) fn takes_room(c: &Cluster) -> bool {
     c.kind != ClKind::Marker && !(matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0)
 }
 
@@ -186,6 +188,7 @@ impl<'e> Breaker<'e> {
             first_left: rp.indent_left + rp.indent_first,
             default_tab: settings.default_tab,
             hanging_at: if rp.indent_first < 0.0 { Some(rp.indent_left) } else { None },
+            tab_origin: if settings.odf.is_some_and(|o| o.tabs_from_indent) { rp.indent_left } else { 0.0 },
             shrink_spaces: rp.align == Align::Justify && settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT,
             expand_break: !settings.do_not_expand_shift_return,
             zone: Some(settings.hyphenation_zone).filter(|z| z.is_finite() && *z >= 0.0).unwrap_or(HYPHENATION_ZONE).min(1584.0),
@@ -295,7 +298,7 @@ impl<'e> Breaker<'e> {
         let end = lab.x + lab.width;
         match self.level.map(|l| l.suffix).unwrap_or(LevelSuffix::Tab) {
             LevelSuffix::Tab => {
-                let t = next_tab(end, &self.rp.tabs, self.default_tab, self.hanging_at).pos;
+                let t = next_tab(end, &self.rp.tabs, self.default_tab, self.hanging_at, self.tab_origin).pos;
                 // The level's own tab stop after the number, when it comes first.
                 match self.level.and_then(|l| l.tab).filter(|p| p.is_finite() && *p > end + 0.01) {
                     Some(p) if p < t => p,
@@ -404,7 +407,7 @@ impl<'e> Breaker<'e> {
     /// tallest picture on it (which sits on the baseline).
     fn extents(&self, pl: &ParaLayout, (c0, c1): (usize, usize)) -> Extents {
         let rp = &self.rp;
-        let mut ex = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0 };
+        let mut ex = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0, obj_desc: 0.0, text: false };
         let mut any = false;
         let dropped = pl.drop_cap.map_or(0, |d| d.0);
         for (k, c) in pl.clusters.get(c0..c1).into_iter().flatten().enumerate() {
@@ -417,15 +420,26 @@ impl<'e> Breaker<'e> {
                 continue;
             }
             let Some(st) = pl.styles.get(c.style as usize) else { continue };
-            // A picture sits on the baseline of its run: the line keeps that font's ascent
-            // and descent, and grows above the baseline to fit a taller picture.
-            let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h > 0.0 {
-                if pl.maths.iter().any(|(k, _)| c.kind == ClKind::Object(*k)) {
+            let object = if let ClKind::Object(o) = c.kind { Some(o) } else { None };
+            let math = object.is_some_and(|o| pl.maths.iter().any(|(k, _)| *k == o));
+            let check_box = object.is_some_and(|o| pl.check_boxes.contains(&o));
+            // A picture sits on the baseline of its run (raised or lowered by its position):
+            // the line keeps that font's ascent and descent, and grows to fit it.
+            let (a, d) = if check_box {
+                // Word sizes a line by a legacy check box as by text of the box's size (measured
+                // with Arial at 10 and 20 pt: a 20 pt box's line is 23 pt, times the spacing).
+                let (a, d) = st.line_extent();
+                let k = if st.ascent > 0.0 { c.obj_h / st.ascent } else { 1.0 };
+                (a * k, d * k)
+            } else if object.is_some() && c.obj_h + c.obj_d > 0.0 {
+                if math {
                     // Exact spacing keeps the run's baseline; tall math may overflow the
                     // fixed line box without moving adjacent text up by its denominator.
                     if matches!(rp.line_spacing, LineSpacing::Exactly(_)) { (st.ascent, st.descent) } else { (c.obj_h, c.obj_d) }
                 } else {
                     ex.obj_asc = ex.obj_asc.max(c.obj_h);
+                    // A lowered picture reaches below the baseline.
+                    ex.obj_desc = ex.obj_desc.max(c.obj_d);
                     (st.ascent, st.descent)
                 }
             } else {
@@ -436,6 +450,9 @@ impl<'e> Breaker<'e> {
             ex.asc = ex.asc.max(a);
             ex.desc = ex.desc.max(d);
             any = true;
+            // Text needs its descent below the line; so do inline math (an object with its own
+            // descent) and a check box. A line break ending the line is no text.
+            ex.text |= math || check_box || !matches!(c.kind, ClKind::Object(_) | ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak);
         }
         if (!any || (ex.asc == 0.0 && ex.desc == 0.0))
             && let Some(st) = pl.styles.get(self.mark_style as usize)
@@ -449,10 +466,30 @@ impl<'e> Breaker<'e> {
     /// The line's height, baseline and text extent.
     fn measure(&self, pl: &ParaLayout, range: (usize, usize)) -> Measure {
         let rp = &self.rp;
-        let Extents { mut asc, mut desc, obj_asc } = self.extents(pl, range);
-        let text_natural = asc + desc;
+        let Extents { mut asc, mut desc, obj_asc, obj_desc, text } = self.extents(pl, range);
+        let mut text_natural = asc + desc;
+        let font_desc = desc;
+        desc = desc.max(obj_desc);
         let (text_asc, text_desc) = (asc.max(obj_asc), desc);
-        let text_pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
+        // With multiple spacing a line of only pictures (and spaces) is as tall as they reach,
+        // raised or lowered, and never less than its font's height, a list label's font counting
+        // too: they end at its bottom, and the spacing adds its share of the font's height. Beside
+        // text they take the text's ascent and descent too, each only where it reaches further.
+        // Word, measured with Arial at 10 and 20 pt, single, 1.15 and 1.5 spacing: a 30 pt picture
+        // alone takes 30, 30 + 0.15 and 30 + 0.5 times the font's height, lowered 10 or 30 pt or
+        // not; raised 10 pt, 10 more; a 6 pt one, the font's height; beside text and lowered
+        // 10 pt, 30. Not on a line lowered further than the picture's height, which layout limits
+        // to that height where Word's line keeps growing.
+        let spacing = if let LineSpacing::Multiple(m) = rp.line_spacing { Some(m) } else { None };
+        let pictures_alone = !text && obj_asc + obj_desc > 0.0 && spacing.is_some();
+        let below = if pictures_alone { obj_desc } else { desc };
+        let text_pictures = if pictures_alone {
+            obj_asc + obj_desc
+        } else if obj_asc > asc || obj_desc > font_desc {
+            asc.max(obj_asc) + desc
+        } else {
+            0.0
+        };
         let mut label_extra = 0.0;
         if self.first
             && let Some(lab) = &pl.label
@@ -462,6 +499,12 @@ impl<'e> Breaker<'e> {
                 // overflow adds room, unscaled by the automatic spacing multiplier.
                 label_extra = (lab.ascent - asc).max(0.0);
                 asc = asc.max(lab.ascent);
+                if pictures_alone {
+                    let styles = lab.runs.iter().filter_map(|r| pl.styles.get(r.style as usize));
+                    let (a, d) = styles.fold((asc, font_desc), |(a, d), st| (a.max(st.ascent), d.max(st.descent)));
+                    text_natural = a + d;
+                    label_extra = 0.0;
+                }
             } else {
                 for st in lab.runs.iter().filter_map(|r| pl.styles.get(r.style as usize)) {
                     asc = asc.max(st.ascent);
@@ -469,10 +512,7 @@ impl<'e> Breaker<'e> {
                 }
             }
         }
-        // Keep the picture floor independent of list-label metrics and line-spacing multipliers.
-        // shortcut: Word leaves less than a full descent below a line of only pictures (0.5pt to
-        // 1.9pt in docxide-pdf's header fixtures case121/case123, where the descent is 3.3pt), and
-        // no rule tried so far (none, only the text's descent) matched both; it needs Word probes.
+        // Keep the picture floor independent of list-label metrics.
         let natural = asc + desc;
         let pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
         // Document grid: the line takes whole line pitches, its text centred in them.
@@ -480,15 +520,17 @@ impl<'e> Breaker<'e> {
         let (height, centred) = match (rp.line_spacing, grid) {
             (LineSpacing::Multiple(m), Some(g)) => ((g.snap_height(natural) * m).max(g.snap_height(pictures)), true),
             (LineSpacing::AtLeast(v), Some(g)) => (g.snap_height(natural.max(pictures)).max(v), true),
-            (LineSpacing::Multiple(m), None) => ((text_natural * m + label_extra).max(text_pictures), false),
+            (LineSpacing::Multiple(m), None) => ((text_natural * m + label_extra).max(text_pictures + (m - 1.0).max(0.0) * text_natural), false),
             (LineSpacing::AtLeast(v), None) => (natural.max(text_pictures).max(v), false),
             (LineSpacing::Exactly(v), _) => (v, false),
         };
         let baseline = if centred {
             let up = asc.max(obj_asc);
             self.top + ((height - up - desc) / 2.0).max(0.0) + up
+        } else if let Some(m) = spacing.filter(|_| pictures_alone) {
+            self.top + (text_natural * m.min(1.0) - text_pictures).max(0.0) + obj_asc
         } else {
-            self.top + baseline_offset(rp.line_spacing, asc, height, desc).max(obj_asc.min(height - desc))
+            self.top + baseline_offset(rp.line_spacing, asc, height, below).max(obj_asc.min(height - below))
         };
         Measure { height, baseline, text_asc, text_desc }
     }
@@ -511,7 +553,10 @@ impl<'e> Breaker<'e> {
             _ => 0.0,
         };
         if shift > 0.0 && slack > 0.0 {
-            for v in sc.xs.iter_mut().skip(align_from - c0) {
+            // Ordinary tabs move with paragraph alignment; positional tabs keep their anchors.
+            let whole_line = display.is_none() && pl.label.is_none() && !self.rtl_para && !pl.ptabs.iter().any(|(ci, ..)| *ci >= c0 && *ci < c1);
+            let shift_from = if whole_line { c0 } else { align_from };
+            for v in sc.xs.iter_mut().skip(shift_from - c0) {
                 *v += shift;
             }
             // After a tab the label stays, as the text before the tab does.
@@ -565,6 +610,13 @@ impl<'e> Breaker<'e> {
             (LineSpacing::AtLeast(v), None) => natural.max(v),
             (LineSpacing::Exactly(v), _) => v,
         };
+        // The empty line's caret follows the alignment, as an empty paragraph's does.
+        let slack = (self.base_right - rp.indent_left).max(0.0);
+        let shift = match rp.align {
+            Align::Center => slack / 2.0,
+            Align::Right => slack,
+            _ => 0.0,
+        };
         let (width, x0) = (self.width, rp.indent_left);
         let (x0, left, right) = if self.rtl_para { (width - x0, width - self.base_right, width - x0) } else { (x0, x0, self.base_right) };
         self.lines.push(Line {
@@ -575,7 +627,7 @@ impl<'e> Breaker<'e> {
             text_desc: desc,
             c0: self.n,
             c1: self.n,
-            xs: vec![x0],
+            xs: vec![if self.rtl_para { x0 - shift } else { x0 + shift }],
             leaders: Vec::new(),
             end: LineEnd::Para,
             start: pl.text_len,
@@ -599,8 +651,11 @@ impl<'e> Breaker<'e> {
         let short = lines.len() < dl as usize;
         let dy = if short { (dl as f32 - 1.0) * l0.height } else { ln.baseline - l0.baseline };
         let lead = self.first_x0.unwrap_or(0.0) - self.first_left.max(rp.indent_left);
-        // In margin, the letter's right edge stays the distance away from the text's edge.
-        let dx = if rp.drop_cap_margin { lead.max(0.0) + pl.drop_cap_w + rp.drop_cap_distance } else { dw.min(lead) };
+        // In margin, the letter's right edge stays the distance left of the text column (or of a
+        // hanging first line), whatever the alignment or first-line indent: always in the margin.
+        let edge = self.first_left.min(rp.indent_left);
+        let in_margin = (self.first_x0.unwrap_or(0.0) - edge).max(0.0) + pl.drop_cap_w + rp.drop_cap_distance;
+        let dx = if rp.drop_cap_margin { in_margin } else { dw.min(lead) };
         // Toward the start edge: left, or right (and from the letter's right edge) when mirrored.
         let dx = if self.rtl_para { pl.drop_cap_w - dx } else { dx };
         if short {
@@ -634,6 +689,10 @@ struct Extents {
     asc: f32,
     desc: f32,
     obj_asc: f32,
+    /// How far its lowest picture reaches below the baseline.
+    obj_desc: f32,
+    /// Whether the line holds text besides its pictures (spaces and tabs don't count).
+    text: bool,
 }
 
 /// A line's height and baseline, and the extent of its text.
@@ -665,16 +724,30 @@ fn content_end(pl: &ParaLayout, sc: &Scan, c1: usize) -> f32 {
 /// Stretch the line to its right edge: its spaces widen by `slack` between them, or all its
 /// clusters by an equal share when `distribute` (or there are no spaces).
 fn justify_line(pl: &ParaLayout, xs: &mut [f32], (c0, c1, align_from): (usize, usize, usize), (content_end, slack): (f32, f32), distribute: bool) {
-    // Spaces inside the content (after the last tab).
-    let spaces: Vec<usize> = (align_from..c1)
+    // Spaces before the line's first character (after the last tab) keep their width, as in Word:
+    // text indented with spaces stays where the spaces put it. Zero-width markers (a bookmark,
+    // hidden text), floating objects' anchors and the break a line ends with don't count as a
+    // character.
+    let blank = |k: usize| {
+        pl.clusters.get(k).is_some_and(|c| {
+            matches!(c.kind, ClKind::Space | ClKind::Marker | ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak)
+                || (matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0)
+        })
+    };
+    let text_from = (align_from..c1).find(|k| !blank(*k)).unwrap_or(c1);
+    // Spaces inside the content.
+    let spaces: Vec<usize> = (text_from..c1)
         .filter(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Space) && xs.get(k - c0).copied().unwrap_or(f32::MAX) < content_end - 0.01)
         .collect();
     if distribute || spaces.is_empty() {
-        let cnt = (c1 - align_from).saturating_sub(1).max(1) as f32;
+        // Distributed across the gaps between the first and last characters: spaces hanging at
+        // the line's end take none, so the last character reaches the margin.
+        let text_to = (text_from..c1).rev().find(|k| !blank(*k)).map_or(text_from, |k| k + 1);
+        let cnt = (text_to - text_from).saturating_sub(1).max(1) as f32;
         if distribute {
             let per = slack / cnt;
-            for (q, v) in xs.iter_mut().enumerate().skip(align_from - c0) {
-                let k = (q + c0 - align_from) as f32;
+            for (q, v) in xs.iter_mut().enumerate().skip(text_from - c0) {
+                let k = (q + c0 - text_from) as f32;
                 *v += per * k.min(cnt);
             }
         }
@@ -683,7 +756,7 @@ fn justify_line(pl: &ParaLayout, xs: &mut [f32], (c0, c1, align_from): (usize, u
     let per = slack / spaces.len() as f32;
     let mut add = 0.0;
     let mut si = 0;
-    for k in align_from..c1 {
+    for k in text_from..c1 {
         if let Some(v) = xs.get_mut(k - c0) {
             *v += add;
         }
@@ -730,7 +803,7 @@ impl Scan {
         resolve_tab(pl, &mut self.pending_tab, &mut self.xs, self.c0, self.x, &mut self.x);
         let rp = &bk.rp;
         let ptab = pl.ptabs.iter().find(|t| t.0 == j).map(|&(_, a, b, l)| ptab_stop(a, b, l, bk.width, (rp.indent_left, rp.indent_right)));
-        let stop = ptab.unwrap_or_else(|| next_tab(self.x, &rp.tabs, bk.default_tab, bk.hanging_at));
+        let stop = ptab.unwrap_or_else(|| next_tab(self.x, &rp.tabs, bk.default_tab, bk.hanging_at, bk.tab_origin));
         // A positional tab whose place the text has passed goes there on the next line
         // (ECMA-376 §17.3.3.23); a line with nothing but markers on it is empty.
         if ptab.is_some() && stop.pos < self.x - 0.01 && has_content(pl, self.c0, j) {
