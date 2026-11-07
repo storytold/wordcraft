@@ -35,6 +35,9 @@ pub(crate) struct Ctx<'a> {
     /// Whether tracked deletions are left out in the story being laid out
     /// ([`LayoutOptions::hides_deleted`]): the body's, or the story of the [`layout_box`] at work.
     pub(crate) hide_deleted: HideDeleted,
+    /// The turned table cell whose text the next [`crate::layout_box`] lays out, if any: where
+    /// its floating objects keep text clear in the turned text's frame.
+    pub(crate) turned_cell: Option<crate::table::TurnedCell>,
     /// Whether body text (or its notes) laid out so far shows a page total (`NUMPAGES`,
     /// `SECTIONPAGES`), which is only known once the whole body is paginated.
     pub(crate) uses_totals: bool,
