@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde_json::{Value, json};
-use wordcraft_engine::Session;
+use wordcraft_engine::{CmdError, Session};
 
 const USAGE: &str = "\
 wordcraft-cli — WordCraft from the command line
@@ -412,6 +412,17 @@ fn run_source_paths(rest: &[String], script: Option<&script::Script>) -> (Option
     (from_file, from_template)
 }
 
+fn update_fields(s: &mut Session) -> Result<(), Failure> {
+    if let Err(e) = s.run("references.updateFields", &json!({})) {
+        if matches!(e, CmdError::Disabled(_)) {
+            eprintln!("wordcraft-cli: warning: {e}");
+        } else {
+            return Err(e.to_string().into());
+        }
+    }
+    Ok(())
+}
+
 /// Run the subcommand named by `args` (the command line after the program name). Files named
 /// there are opened by their real names, which may not be valid Unicode.
 fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
@@ -442,7 +453,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let password = password_from(&rest)?;
             let mut s = open(&i, password.as_deref())?;
             if rest.iter().any(|a| a == "--update-fields") {
-                s.run("references.updateFields", &json!({})).map_err(|e| e.to_string())?;
+                update_fields(&mut s)?;
             }
             let r = if o.to_ascii_lowercase().ends_with(".png") {
                 s.run("file.exportPng", &json!({"path": o, "page": 1, "markup": markup}))
