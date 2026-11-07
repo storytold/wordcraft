@@ -387,6 +387,7 @@ impl FontFace {
     }
 }
 
+/// Does a lowercased family name explicitly identify a sans-serif font?
 fn is_explicit_sans(f: &str) -> bool {
     f.contains("sans")
         || f.contains("gothic")
@@ -408,6 +409,7 @@ fn is_explicit_sans(f: &str) -> bool {
         || f.contains("verdana")
 }
 
+/// Does a lowercased family name explicitly identify a serif font?
 fn is_explicit_serif(f: &str) -> bool {
     f.contains("serif")
         || f.contains("mincho")

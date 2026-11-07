@@ -707,6 +707,8 @@ fn catalog_postscript_names() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Sans-serif primary fonts prefer sans-serif fallbacks and serif primaries prefer serif fallbacks,
+/// and changing user fonts invalidates the run-fallback cache even when the face count stays equal.
 #[test]
 fn fallback_order_matches_primary_font_serif_nature() {
     // #5672: When picking fallback faces, sans-serif primary fonts prefer sans-serif fallback fonts,
@@ -735,6 +737,19 @@ fn fallback_order_matches_primary_font_serif_nature() {
     let pos_mincho_serif = for_serif.iter().position(|f| f.family == "Test Mincho").unwrap();
     let pos_gothic_serif = for_serif.iter().position(|f| f.family == "Test Gothic").unwrap();
     assert!(pos_mincho_serif < pos_gothic_serif, "serif primary prefers serif fallback font (Mincho before Gothic)");
+    drop(faces);
+
+    // Replacing a user font with another of the same face count invalidates run_fallbacks.
+    db.install_font("UserGothic.ttf", &mapping("SourceSans3-Regular.ttf", "User1 Gothic1", 0xF_0001, 0xF_0002)).unwrap();
+    let run = ['\u{F0001}', '\u{F0002}'];
+    let first = db.fallback_for_run(&run, serif_primary.id(), false, false).unwrap();
+    assert_eq!(first.family, "User1 Gothic1");
+    let face_count = db.read_faces().len();
+    db.remove_user_font("User1 Gothic1").unwrap();
+    db.install_font("UserMincho.ttf", &mapping("SourceSans3-Regular.ttf", "User2 Mincho2", 0xF_0001, 0xF_0002)).unwrap();
+    assert_eq!(db.read_faces().len(), face_count);
+    let updated = db.fallback_for_run(&run, serif_primary.id(), false, false).unwrap();
+    assert_eq!(updated.family, "User2 Mincho2");
 
     let _ = std::fs::remove_dir_all(dir);
 }

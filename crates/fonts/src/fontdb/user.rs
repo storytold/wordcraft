@@ -537,8 +537,9 @@ impl FontDb {
 
     /// Forget cached fallback choices and tell watchers ([`FontDb::generation`]).
     fn fonts_changed(&self) {
-        self.fallbacks.write().unwrap_or_else(|e| e.into_inner()).map.clear();
         self.generation.fetch_add(1, Ordering::AcqRel);
+        self.fallbacks.write().unwrap_or_else(|e| e.into_inner()).map.clear();
+        *self.run_fallbacks.write().unwrap_or_else(|e| e.into_inner()) = super::RunFallbackCache::default();
     }
 
     /// Remove the user fonts that added `family` (a typographic or legacy family name): their
