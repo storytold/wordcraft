@@ -324,34 +324,47 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         };
         let double = rc.double_strike || del_mark == Some(DeleteMark::DoubleStrikethrough);
         let struck = rc.strike || double || ins_mark == Some(InsertMark::Strikethrough) || del_mark == Some(DeleteMark::Strikethrough);
-        let spans = if underline != Underline::None || struck { line.spans(run_start, end_k) } else { Vec::new() };
-        for (x0, x1) in spans.into_iter().map(|(a, b)| (x + a, x + b)).filter(|(a, b)| b > a) {
-            if underline != Underline::None {
-                let uy = base - st.shift + st.size * 0.12;
-                let ucolor = rc.underline_color.unwrap_or(color);
-                if underline == Underline::Words {
-                    for kk in run_start..end_k {
-                        let Some(c) = pl.clusters.get(kk) else { continue };
-                        if c.kind != ClKind::Text {
-                            continue;
+        // Decorations follow the baseline of their clusters. Glyph collection may split this
+        // run at a shift boundary too, but keep decoration placement correct independently of
+        // that grouping: an inline picture and its following text can share a character style.
+        let mut decor_start = run_start;
+        while decor_start < end_k && (underline != Underline::None || struck) {
+            let shift = line.shift_at(decor_start);
+            let mut decor_end = decor_start + 1;
+            while decor_end < end_k && line.shift_at(decor_end) == shift {
+                decor_end += 1;
+            }
+            let decor_base = ctx.base + shift;
+            let spans = line.spans(decor_start, decor_end);
+            for (x0, x1) in spans.into_iter().map(|(a, b)| (x + a, x + b)).filter(|(a, b)| b > a) {
+                if underline != Underline::None {
+                    let uy = decor_base - st.shift + st.size * 0.12;
+                    let ucolor = rc.underline_color.unwrap_or(color);
+                    if underline == Underline::Words {
+                        for kk in decor_start..decor_end {
+                            let Some(c) = pl.clusters.get(kk) else { continue };
+                            if c.kind != ClKind::Text {
+                                continue;
+                            }
+                            let a = x + line.cl_left(kk).unwrap_or(0.0);
+                            let b = x + line.cl_right(kk).unwrap_or(a - x);
+                            if a < x0 - 0.01 || b > x1 + 0.01 {
+                                continue; // drawn with its own span
+                            }
+                            out.push(Draw::Line { x0: a, y0: uy, x1: b, y1: uy, width: thick, color: ucolor, stroke: Stroke::Solid, alpha, text_bg });
                         }
-                        let a = x + line.cl_left(kk).unwrap_or(0.0);
-                        let b = x + line.cl_right(kk).unwrap_or(a - x);
-                        if a < x0 - 0.01 || b > x1 + 0.01 {
-                            continue; // drawn with its own span
-                        }
-                        out.push(Draw::Line { x0: a, y0: uy, x1: b, y1: uy, width: thick, color: ucolor, stroke: Stroke::Solid, alpha, text_bg });
+                    } else {
+                        let w = if underline == Underline::Thick { thick * 2.0 } else { thick };
+                        out.push(Draw::Line { x0, y0: uy, x1, y1: uy, width: w, color: ucolor, stroke: stroke_of(underline), alpha, text_bg });
                     }
-                } else {
-                    let w = if underline == Underline::Thick { thick * 2.0 } else { thick };
-                    out.push(Draw::Line { x0, y0: uy, x1, y1: uy, width: w, color: ucolor, stroke: stroke_of(underline), alpha, text_bg });
+                }
+                if struck {
+                    let sy = decor_base - st.shift - st.size * 0.28;
+                    let stroke = if double { Stroke::Double } else { Stroke::Solid };
+                    out.push(Draw::Line { x0, y0: sy, x1, y1: sy, width: thick, color, stroke, alpha, text_bg });
                 }
             }
-            if struck {
-                let sy = base - st.shift - st.size * 0.28;
-                let stroke = if double { Stroke::Double } else { Stroke::Solid };
-                out.push(Draw::Line { x0, y0: sy, x1, y1: sy, width: thick, color, stroke, alpha, text_bg });
-            }
+            decor_start = decor_end;
         }
         // Emphasis marks (Font › Emphasis mark): one over (or under) each character.
         if rc.emphasis != wordcraft_doc::props::EmphasisMark::None {
@@ -361,7 +374,8 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 }
                 let a = x + line.cl_left(kk).unwrap_or(0.0);
                 let b = x + line.cl_right(kk).unwrap_or(a - x);
-                out.push(emphasis_mark(rc.emphasis, (a + b) / 2.0, base - st.shift, st.size, color));
+                let mark_base = ctx.base + line.shift_at(kk) - st.shift;
+                out.push(emphasis_mark(rc.emphasis, (a + b) / 2.0, mark_base, st.size, color));
             }
         }
     }
