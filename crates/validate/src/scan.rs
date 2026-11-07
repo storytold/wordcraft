@@ -20,6 +20,8 @@ pub(crate) struct PartRole {
     pub is_comments: bool,
     pub is_footnotes: bool,
     pub is_endnotes: bool,
+    /// A settings part (by effective content type or a `settings` relationship).
+    pub is_settings: bool,
 }
 
 /// Ids collected from the story parts, pooled document-wide.
@@ -27,6 +29,9 @@ pub(crate) struct PartRole {
 pub(crate) struct StoryFacts {
     pub comment_defs: Vec<(String, String)>,
     pub comment_refs: Vec<(String, String)>,
+    /// `w:commentRangeStart` occurrences across this part. A plain counter, not
+    /// a pooled fact: 32k ranges must not consume the pooled fact budget.
+    pub comment_range_starts: usize,
     /// `w14:paraId` values on paragraphs in comments.xml (for `COMMENTEX-LINK`).
     pub comment_para_ids: Vec<(String, String)>,
     pub docpr: Vec<(String, String)>,
@@ -55,6 +60,9 @@ pub(crate) struct RefFact {
 /// Pool another part's story facts into the document-wide collection, honouring the per-category
 /// budget. Returns `true` when the budget stopped a category from taking more.
 pub(crate) fn merge_facts(into: &mut StoryFacts, from: StoryFacts, cap: usize) -> bool {
+    // The range counter is summed unconditionally: it is not a pooled fact and
+    // must stay exact even when a fact set caps out.
+    into.comment_range_starts += from.comment_range_starts;
     let mut capped = false;
     macro_rules! pool {
         ($field:ident) => {{
@@ -807,10 +815,64 @@ fn check_math_placement(state: &State, id: &ElemId, role: PartRole, part: &str, 
     }
 }
 
+/// `PROTECTION-PASSWORD` (MS-OI29500 Part 1 §17.15.1.93 note (c)): in a settings
+/// part, a `w:documentProtection` or `w:writeProtection` element carrying any
+/// AG_Password attribute must carry algorithmName, hashValue, and spinCount
+/// together, or Word will not open the file. AG_Password is exactly the four
+/// attributes algorithmName, hashValue, saltValue, spinCount in both the Strict
+/// and the Transitional wml.xsd; the separate AG_TransitionalPassword group
+/// (cryptProviderType, cryptAlgorithmClass, …, hash, salt) is the legacy
+/// protection format Word itself writes and opens, so it never triggers this
+/// rule. A password attribute repeated under a second prefix bound to the
+/// same namespace is reported here rather than silently read as present (a
+/// same-prefix duplicate is rejected earlier, as a malformed attribute).
+fn check_protection(id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole, part: &str, acc: &mut Acc) {
+    if !role.is_settings || !id.w() || !matches!(id.local.as_str(), "documentProtection" | "writeProtection") {
+        return;
+    }
+    let count = |name: &str| -> usize {
+        let w_form =
+            attrs.iter().filter(|a| ns_matches(res.resolve_attribute(a.key).0, NS_W) && a.key.local_name().as_ref() == name.as_bytes()).count();
+        let plain_form = attrs
+            .iter()
+            .filter(|a| {
+                let k = a.key.as_ref();
+                !k.contains(&b':') && k == name.as_bytes()
+            })
+            .count();
+        w_form + plain_form
+    };
+    let names = ["algorithmName", "hashValue", "saltValue", "spinCount"];
+    if !names.iter().any(|n| count(n) > 0) {
+        return;
+    }
+    if let Some(dup) = names.iter().find(|n| count(n) > 1) {
+        acc.add(
+            "PROTECTION-PASSWORD",
+            Some(part.to_string()),
+            format!("w:{} in {part} carries the password attribute {dup} more than once", id.local),
+        );
+        return;
+    }
+    let missing: Vec<&str> = ["algorithmName", "hashValue", "spinCount"].into_iter().filter(|n| count(n) == 0).collect();
+    if !missing.is_empty() {
+        acc.add(
+            "PROTECTION-PASSWORD",
+            Some(part.to_string()),
+            format!(
+                "w:{} in {part} carries password attributes without {}; Word requires algorithmName, hashValue, and spinCount together",
+                id.local,
+                missing.join(", ")
+            ),
+        );
+    }
+}
+
 /// Handle element start tags: update structural flags, deletion depth, IDs, and element structure.
 fn on_open(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole, part: &str, acc: &mut Acc) {
     mark_block_content(state, id);
     check_math_placement(state, id, role, part, acc);
+    check_protection(id, attrs, res, role, part, acc);
     if id.w() && id.local == "del" {
         state.del_depth += 1;
     }
@@ -822,6 +884,7 @@ fn on_open(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceR
 fn on_empty(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole, part: &str, acc: &mut Acc) {
     mark_block_content(state, id);
     check_math_placement(state, id, role, part, acc);
+    check_protection(id, attrs, res, role, part, acc);
     if id.w() && id.local == "tc" && role.is_main {
         acc.add("STRUCT-TC-NO-P", Some(part.to_string()), format!("w:tc in {part} has no block-level content"));
     }
@@ -854,6 +917,9 @@ fn record_comment_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: 
         }
         "commentReference" if id.w() => {
             push_capped(&mut state.facts.comment_refs, cap, &mut state.fact_capped, attr_ns(attrs, res, NS_W, b"id"), part);
+        }
+        "commentRangeStart" if id.w() => {
+            state.facts.comment_range_starts += 1;
         }
         "p" if id.w() && role.is_comments => {
             push_capped(&mut state.facts.comment_para_ids, cap, &mut state.fact_capped, attr_ns(attrs, res, NS_W14, b"paraId").map(hex_ident), part);

@@ -279,6 +279,18 @@ pub(crate) const STRUCT_END_P: RuleSpec = RuleSpec { id: "STRUCT-END-P", severit
 /// state Word fails to open the file; the base standard allows every one of these
 /// constructs, so this is a documented-divergence rule with no oracle run yet.
 pub(crate) const MATH_PLACEMENT: RuleSpec = RuleSpec { id: "MATH-PLACEMENT", severity: Severity::Error, evidence: Evidence::MsDocumented };
+/// `COMMENT-RANGE-COUNT`: more than 32,767 comment ranges in the document.
+/// MS-OI29500 Part 1 §17.13.4.4 note (a): the standard allows an unbounded
+/// number of comment ranges, but "Word will not open a file with more than
+/// 32767 comment ranges". Ranges are counted across every story part.
+pub(crate) const COMMENT_RANGE_COUNT: RuleSpec = RuleSpec { id: "COMMENT-RANGE-COUNT", severity: Severity::Error, evidence: Evidence::MsDocumented };
+/// `PROTECTION-PASSWORD`: a `w:documentProtection` or `w:writeProtection`
+/// element in settings carrying any AG_Password attribute (algorithmName,
+/// hashValue, saltValue, spinCount) while missing at least one of
+/// algorithmName, hashValue, spinCount. MS-OI29500 Part 1 §17.15.1.93
+/// note (c): if any AG_Password attribute is present, Word requires those
+/// three, and otherwise will not open the file.
+pub(crate) const PROTECTION_PASSWORD: RuleSpec = RuleSpec { id: "PROTECTION-PASSWORD", severity: Severity::Error, evidence: Evidence::MsDocumented };
 /// `STRUCT-DELTEXT`: a `w:t` inside `w:del`, or a `w:delText` outside one. Observed (web): lenient
 /// recovery, the text renders as a tracked deletion anyway, so Warning.
 pub(crate) const STRUCT_DELTEXT: RuleSpec = RuleSpec { id: "STRUCT-DELTEXT", severity: Severity::Warning, evidence: Evidence::Observed };
@@ -309,6 +321,8 @@ pub(crate) const RULES: &[RuleSpec] = &[
     XML_INVALID_CHAR,
     STRUCT_END_P,
     MATH_PLACEMENT,
+    COMMENT_RANGE_COUNT,
+    PROTECTION_PASSWORD,
     REL_DUP_ID,
     REL_DANGLING,
     REL_TYPED,
@@ -620,6 +634,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     acc.ran("XML-INVALID-CHAR");
     acc.ran("STRUCT-END-P");
     acc.ran("MATH-PLACEMENT");
+    acc.ran("PROTECTION-PASSWORD");
     let roles = story_roles(pkg);
     let mut facts = scan::StoryFacts::default();
     let mut refs: Vec<(String, Vec<RefFact>)> = Vec::new();
@@ -740,6 +755,7 @@ fn content_type_role(ct: Option<&str>) -> Option<scan::PartRole> {
         package::HEADER_CONTENT_TYPE | package::FOOTER_CONTENT_TYPE | package::GLOSSARY_CONTENT_TYPE => {
             scan::PartRole { is_story: true, ..scan::PartRole::default() }
         }
+        package::SETTINGS_CONTENT_TYPE => scan::PartRole { is_settings: true, ..scan::PartRole::default() },
         _ => return None,
     };
     Some(role)
@@ -747,6 +763,13 @@ fn content_type_role(ct: Option<&str>) -> Option<scan::PartRole> {
 
 /// Classify a part role from the relationship type that targets it.
 fn relationship_role(kind: &str) -> Option<scan::PartRole> {
+    // The settings role is matched on the complete relationship type, not the
+    // tail: PROTECTION-PASSWORD emits Error findings from it, and a custom
+    // relationship type that merely ends in "/settings" must not turn an
+    // application-owned part into Word settings.
+    if kind == "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" {
+        return Some(scan::PartRole { is_settings: true, ..scan::PartRole::default() });
+    }
     Some(match tail(kind) {
         "comments" => scan::PartRole { is_story: true, is_comments: true, ..scan::PartRole::default() },
         "footnotes" => scan::PartRole { is_story: true, is_footnotes: true, ..scan::PartRole::default() },
@@ -1022,6 +1045,14 @@ fn check_typed_content(pkg: &Package, acc: &mut Acc) {
 
 /// Check cross-document story identifier families (comments, docPr, bookmarks, revisions, notes, styles, headers).
 fn check_story(pkg: &Package, facts: &scan::StoryFacts, acc: &mut Acc) {
+    acc.ran("COMMENT-RANGE-COUNT");
+    if facts.comment_range_starts > 32_767 {
+        acc.add(
+            "COMMENT-RANGE-COUNT",
+            None,
+            format!("the document contains {} comment ranges (w:commentRangeStart), more than the 32767 Word will open", facts.comment_range_starts),
+        );
+    }
     acc.ran("ID-COMMENT-DUP");
     report_dups(acc, "ID-COMMENT-DUP", &facts.comment_defs, "w:comment id");
     acc.ran("ID-COMMENT-REF");

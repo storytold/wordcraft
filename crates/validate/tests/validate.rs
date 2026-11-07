@@ -39,11 +39,13 @@ const ALL_CHECKS: &[&str] = &[
     "XML-INVALID-CHAR",
     "STRUCT-END-P",
     "MATH-PLACEMENT",
+    "PROTECTION-PASSWORD",
     "REL-DUP-ID",
     "REL-DANGLING",
     "REL-TYPED",
     "REL-REF-MISSING",
     "CT-MISMATCH",
+    "COMMENT-RANGE-COUNT",
     "ID-COMMENT-DUP",
     "ID-COMMENT-REF",
     "ID-DOCPR-DUP",
@@ -1504,6 +1506,172 @@ fn math_placement_header_root_direct_child() {
     let report = validate(&d);
     assert_finding(&report, "MATH-PLACEMENT", Some("word/header1.xml"));
     assert_eq!(math_findings(&report), 2, "{:?}", report.findings);
+}
+
+/// A main part whose single paragraph holds `starts` comment range starts.
+fn range_doc(starts: usize) -> Doc {
+    let mut d = Doc::minimal();
+    let mut body = String::from("<w:p>");
+    for _ in 0..starts {
+        body.push_str("<w:commentRangeStart w:id=\"0\"/>");
+    }
+    body.push_str("</w:p>");
+    d.set_document(&body);
+    d
+}
+
+/// How many COMMENT-RANGE-COUNT findings a report carries.
+fn range_count_findings(report: &Report) -> usize {
+    report.findings.iter().filter(|f| f.rule == "COMMENT-RANGE-COUNT").count()
+}
+
+/// The boundary pair: exactly 32,767 comment ranges is the most Word opens.
+#[test]
+fn comment_range_count_at_limit_is_clean() {
+    let report = validate(&range_doc(32_767));
+    assert_clean(&report);
+    assert!(!has(&report, "COMMENT-RANGE-COUNT"));
+}
+
+/// 32,768 comment ranges: Word will not open the file. One document-level
+/// finding.
+#[test]
+fn comment_range_count_over_limit() {
+    let report = validate(&range_doc(32_768));
+    assert_finding(&report, "COMMENT-RANGE-COUNT", None);
+    assert_eq!(range_count_findings(&report), 1, "{:?}", report.findings);
+}
+
+/// Ranges are summed across story parts: 20,000 in the main part and 20,000
+/// in a header cross the limit together.
+#[test]
+fn comment_range_count_sums_across_stories() {
+    let mut d = range_doc(20_000);
+    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/header1.xml", CT_HEADER)]));
+    let mut hdr = String::from("<w:hdr xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:p>");
+    for _ in 0..20_000 {
+        hdr.push_str("<w:commentRangeStart w:id=\"0\"/>");
+    }
+    hdr.push_str("</w:p></w:hdr>");
+    d.set("word/header1.xml", hdr.into_bytes());
+    let report = validate(&d);
+    assert_finding(&report, "COMMENT-RANGE-COUNT", None);
+    assert_eq!(range_count_findings(&report), 1, "{:?}", report.findings);
+}
+
+/// A settings part whose `w:settings` holds `inner`.
+fn settings_doc(inner: &str) -> Doc {
+    let mut d = Doc::minimal();
+    d.add_with_override("word/settings.xml", CT_SETTINGS, format!("<?xml version=\"1.0\"?><w:settings xmlns:w=\"{W_NS}\">{inner}</w:settings>"));
+    d
+}
+
+/// A protection element carrying a password hash but not the full required
+/// trio: Word will not open the file.
+#[test]
+fn protection_password_partial_attributes() {
+    let d = settings_doc("<w:documentProtection w:edit=\"readOnly\" w:hashValue=\"aGFzaA==\"/>");
+    let report = validate(&d);
+    assert_finding(&report, "PROTECTION-PASSWORD", Some("word/settings.xml"));
+}
+
+/// Same for writeProtection carrying only a salt (start/end element form).
+#[test]
+fn protection_password_write_protection_salt_only() {
+    let d = settings_doc("<w:writeProtection w:saltValue=\"c2FsdA==\"></w:writeProtection>");
+    let report = validate(&d);
+    assert_finding(&report, "PROTECTION-PASSWORD", Some("word/settings.xml"));
+}
+
+/// Missing exactly one of the required three (spinCount) still fires.
+#[test]
+fn protection_password_missing_spin_count() {
+    let d = settings_doc("<w:documentProtection w:algorithmName=\"SHA-512\" w:hashValue=\"aGFzaA==\"/>");
+    let report = validate(&d);
+    assert_finding(&report, "PROTECTION-PASSWORD", Some("word/settings.xml"));
+    assert_eq!(report.findings.iter().filter(|f| f.rule == "PROTECTION-PASSWORD").count(), 1, "{:?}", report.findings);
+}
+
+/// A password attribute repeated under a second prefix bound to the same
+/// namespace is reported, not silently read as present. (A same-prefix
+/// duplicate never reaches this check: the XML reader rejects it as a
+/// malformed attribute first.)
+#[test]
+fn protection_password_duplicate_attribute() {
+    let mut d = Doc::minimal();
+    d.add_with_override(
+        "word/settings.xml",
+        CT_SETTINGS,
+        format!("<?xml version=\"1.0\"?><w:settings xmlns:w=\"{W_NS}\" xmlns:w2=\"{W_NS}\"><w:documentProtection w:algorithmName=\"SHA-512\" w2:algorithmName=\"SHA-256\" w:hashValue=\"aGFzaA==\" w:spinCount=\"100000\"/></w:settings>"),
+    );
+    let report = validate(&d);
+    assert_finding(&report, "PROTECTION-PASSWORD", Some("word/settings.xml"));
+}
+
+/// A custom relationship type that merely ends in "/settings" does not make
+/// its target a settings part: the role is matched on the complete type.
+#[test]
+fn protection_password_custom_settings_tail_is_not_settings() {
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/custom.xml", "application/xml")]));
+    d.set(
+        "word/_rels/document.xml.rels",
+        rels_xml(r#"<Relationship Id="rC" Type="https://example.com/relationships/settings" Target="custom.xml"/>"#),
+    );
+    d.set(
+        "word/custom.xml",
+        format!("<?xml version=\"1.0\"?><custom xmlns:w=\"{W_NS}\"><w:documentProtection w:hashValue=\"aGFzaA==\"/></custom>").into_bytes(),
+    );
+    let report = validate(&d);
+    assert!(!has(&report, "PROTECTION-PASSWORD"), "{:?}", report.findings);
+}
+
+/// A genuine settings relationship classifies its target as settings even
+/// under an unusual name and a generic content type.
+#[test]
+fn protection_password_real_settings_relationship() {
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/oddname.xml", "application/xml")]));
+    d.set(
+        "word/_rels/document.xml.rels",
+        rels_xml(
+            r#"<Relationship Id="rS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="oddname.xml"/>"#,
+        ),
+    );
+    d.set(
+        "word/oddname.xml",
+        format!("<?xml version=\"1.0\"?><w:settings xmlns:w=\"{W_NS}\"><w:documentProtection w:hashValue=\"aGFzaA==\"/></w:settings>").into_bytes(),
+    );
+    let report = validate(&d);
+    assert_finding(&report, "PROTECTION-PASSWORD", Some("word/oddname.xml"));
+}
+
+/// Legacy transitional protection attributes alone (the AG_TransitionalPassword
+/// group: crypt* names, hash, salt) are the format Word itself writes for
+/// legacy protection — they are not AG_Password and never trigger the rule.
+#[test]
+fn protection_password_legacy_attributes_are_clean() {
+    let d = settings_doc(
+        "<w:writeProtection w:cryptProviderType=\"rsaFull\" w:cryptAlgorithmClass=\"hash\" w:cryptAlgorithmType=\"typeAny\" w:cryptAlgorithmSid=\"14\" w:cryptSpinCount=\"10000\" w:hash=\"aGFzaA==\" w:salt=\"c2FsdA==\"/>",
+    );
+    let report = validate(&d);
+    assert_clean(&report);
+    assert!(!has(&report, "PROTECTION-PASSWORD"));
+}
+
+/// The full trio (with or without a salt) is clean, as is a protection
+/// element with no password attributes at all.
+#[test]
+fn protection_password_complete_or_absent_is_clean() {
+    let d = settings_doc(
+        "<w:documentProtection w:algorithmName=\"SHA-512\" w:hashValue=\"aGFzaA==\" w:saltValue=\"c2FsdA==\" w:spinCount=\"100000\"/><w:writeProtection w:algorithmName=\"SHA-512\" w:hashValue=\"aGFzaA==\" w:spinCount=\"100000\"/>",
+    );
+    let report = validate(&d);
+    assert_clean(&report);
+    assert!(!has(&report, "PROTECTION-PASSWORD"));
+    let d = settings_doc("<w:documentProtection w:edit=\"readOnly\" w:enforcement=\"1\"/>");
+    let report = validate(&d);
+    assert!(!has(&report, "PROTECTION-PASSWORD"), "{:?}", report.findings);
 }
 
 /// Math content placed directly inside an oMathPara, with no oMath around it, is
