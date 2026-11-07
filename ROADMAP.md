@@ -840,6 +840,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-03 | trivial | Progress log: the missing-pack bar on a fresh install, the caret's typing language, and the spelling menu heading in the interface language (CP4.3) |
 | 2026-11-03 | trivial | Progress log: Options › Language and Proofing redesign (CP4.3) |
 | 2026-10-30 | trivial | Progress log: layout resource caps — repeated table headers are bounded by item counts, the wrap cache by decoded pixels and linked text box layout by its lines and items; PDF export, hit testing, tracked changes, clipped tables and long endnote selections cost linear time (#3867, #3866) |
+| 2026-10-26 | trivial | Linux system theme reads the standard portal setting and follows change notifications, including Settings v1 compatibility, portal restarts, failed-read recovery, missing settings and watcher shutdown; private-bus regression tests include a Read-only portal; contributor confirmed live switching on Linux |
 | 2026-10-17 | trivial | Progress log: RTF on the system clipboard |
 | 2026-11-03 | trivial | Progress log: craft-proof pin, French elision suggestions and Valencian (CP4.3) |
 | 2026-11-03 | trivial | Progress log: a long comment's card and balloon stop at ten lines (#3382) |
