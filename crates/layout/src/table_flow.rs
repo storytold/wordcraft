@@ -123,12 +123,7 @@ fn row_fits_notes(pb: &PageBuilder, row: &table::RowLayout, notes: &[NoteBox], c
 }
 
 /// Split against the notes of the retained lines, not notes whose references move on.
-fn split_noted_row(
-    pb: &PageBuilder,
-    row: &table::RowLayout,
-    notes: &[NoteBox],
-    whole_cells: bool,
-) -> Option<(table::RowLayout, table::RowLayout)> {
+fn split_noted_row(pb: &PageBuilder, row: &table::RowLayout, notes: &[NoteBox], whole_cells: bool) -> Option<(table::RowLayout, table::RowLayout)> {
     let split = |cut| if whole_cells { table::split_row_keeping_cells(row, cut) } else { table::split_row(row, cut) };
     let subset = |part: &table::RowLayout| {
         let ids = table_note_ids(&part.items);
