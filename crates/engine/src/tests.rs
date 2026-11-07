@@ -4980,6 +4980,98 @@ fn copy_paste_text_box_makes_an_independent_copy() {
 }
 
 #[test]
+fn copy_and_paste_selected_custom_text_box_duplicates_dimensions_styling_and_text() {
+    let mut s = s();
+    let id = run(
+        &mut s,
+        "insert.textBox",
+        json!({
+            "text": "Custom content",
+            "width": 180.0,
+            "height": 90.0
+        }),
+    )["story"]
+        .as_u64()
+        .unwrap() as u32;
+
+    // Apply custom styling (fill and outline).
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "shape.fill", json!({"color": "FFEEDD"}));
+    run(&mut s, "shape.outline", json!({"color": "112233", "width": 2.5}));
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    let orig_obj = para.objects[0].clone();
+    let wordcraft_doc::InlineObject::Shape { w, h, stroke_width, fill, stroke, .. } = &orig_obj else { panic!("not a shape") };
+    assert_eq!((*w, *h), (180.0, 90.0));
+    assert_eq!(*stroke_width, 2.5);
+    assert!(fill.is_some());
+    assert!(stroke.is_some());
+
+    // Copy with collapsed selection at object anchor (a == b, #5785).
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    assert_eq!(s.sel.anchor, s.sel.focus);
+    let copy_res = run(&mut s, "edit.copy", json!({}));
+    assert_eq!(copy_res["text"], "Custom content");
+    assert_eq!(s.clipboard_text, "Custom content");
+    assert!(s.clipboard.is_some());
+
+    // Move caret after original and paste.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 3)}));
+    run(&mut s, "edit.paste", json!({}));
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 2);
+    let pasted = &para.objects[1];
+
+    let wordcraft_doc::InlineObject::Shape { w: pw, h: ph, stroke_width: psw, fill: pfill, stroke: pstroke, story: pstory, .. } = pasted else {
+        panic!("pasted not a shape");
+    };
+
+    assert_eq!((*pw, *ph), (180.0, 90.0), "dimensions duplicated");
+    assert_eq!(*psw, 2.5, "stroke width duplicated");
+    assert_eq!(pfill, fill, "fill duplicated");
+    assert_eq!(pstroke, stroke, "stroke duplicated");
+    assert!(pstory.is_some());
+    assert_ne!(pstory.unwrap(), id, "independent story ID");
+    assert_eq!(s.doc.plain_text(StoryRef::Part(pstory.unwrap())), "Custom content", "inner text duplicated");
+
+    // Cut the pasted text box with collapsed selection at its position (caret right after it).
+    let pasted_pos = Pos::body(0, 6);
+    run(&mut s, "caret.set", json!({"pos": pasted_pos}));
+    let cut_res = run(&mut s, "edit.cut", json!({}));
+    assert_eq!(cut_res["text"], "Custom content");
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 1);
+    assert_eq!(para.objects[0].text_box(), Some(id));
+
+    // Paste it back.
+    run(&mut s, "edit.paste", json!({}));
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 2);
+
+    // Copy and paste a shape without text.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 6)}));
+    run(&mut s, "insert.shape", json!({"kind": "star", "width": 64.0, "height": 48.0}));
+    run(&mut s, "shape.fill", json!({"color": "00FF00"}));
+
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 6), "focus": Pos::body(0, 9)}));
+    run(&mut s, "edit.copy", json!({}));
+    assert!(s.clipboard.is_some());
+
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 9)}));
+    run(&mut s, "edit.paste", json!({}));
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 4);
+    let star_copy = &para.objects[3];
+    let wordcraft_doc::InlineObject::Shape { kind, w, h, fill, .. } = star_copy else { panic!("not a shape") };
+    assert_eq!(*kind, wordcraft_doc::para::ShapeKind::Star);
+    assert_eq!((*w, *h), (64.0, 48.0));
+    assert!(fill.is_some());
+}
+
+#[test]
 fn word_count_includes_text_boxes_by_default() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "one two "}));

@@ -32,9 +32,9 @@ fn has_text_sel(s: &Session) -> Option<&'static str> {
     if s.sel.is_collapsed() { Some("nothing is selected") } else { None }
 }
 
-/// Something to cut: text, or whole table cells (an empty cell's selection has no length, #1744).
+/// Something to cut: text, an object, or whole table cells (an empty cell's selection has no length, #1744).
 fn has_sel(s: &Session) -> Option<&'static str> {
-    if s.sel.is_collapsed() && s.cell_range().is_none() { Some("nothing is selected") } else { None }
+    if s.sel.is_collapsed() && s.cell_range().is_none() && super::objects::selected(s).is_none() { Some("nothing is selected") } else { None }
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -189,7 +189,14 @@ fn copy_with(s: &mut Session, whole: Option<&Path>) -> CmdResult {
     };
     let f = match table {
         Some(f) => f,
-        None if a == b => return Ok(json!({"text": ""})),
+        None if a == b => {
+            if let Some((pos, _)) = super::objects::selected(s) {
+                let end = Pos { off: pos.off + wordcraft_doc::para::OBJ.len_utf8(), ..pos.clone() };
+                s.doc.copy_range(&pos, &end)
+            } else {
+                return Ok(json!({"text": ""}));
+            }
+        }
         None => s.doc.copy_range(&a, &b),
     };
     s.clipboard_text = f.clipboard_text();
@@ -227,6 +234,14 @@ pub(crate) fn copy_result(s: &mut Session) -> Value {
 
 fn cut(s: &mut Session, _: &Value) -> CmdResult {
     let whole = super::table::selected_table(s);
+    if whole.is_none()
+        && s.cell_range().is_none()
+        && s.sel.is_collapsed()
+        && let Some((pos, _)) = super::objects::selected(s)
+    {
+        let end = Pos { off: pos.off + wordcraft_doc::para::OBJ.len_utf8(), ..pos.clone() };
+        s.sel = Selection { anchor: pos, focus: end };
+    }
     let r = copy_with(s, whole.as_ref())?;
     // A whole table selected: Cut removes the table, as Delete Table does (#1744). With Track
     // Changes on, the cut below marks its text deleted (a tracked cut may become a move).

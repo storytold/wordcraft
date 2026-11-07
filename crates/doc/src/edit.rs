@@ -24,12 +24,27 @@ pub struct Fragment {
 
 impl Fragment {
     pub fn plain_text(&self) -> String {
-        self.to_document().plain_text(crate::StoryRef::Body)
+        let d = self.to_document();
+        let text = d.plain_text(crate::StoryRef::Body);
+        if text.is_empty() && !self.parts.is_empty() {
+            let parts: Vec<String> = self
+                .parts
+                .iter()
+                .filter(|(_, p)| p.kind == crate::PartKind::TextBox)
+                .map(|(id, _)| d.plain_text(crate::StoryRef::Part(*id)))
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !parts.is_empty() {
+                return parts.join("\n");
+            }
+        }
+        text
     }
     /// The fragment as the body of a new document (default styles).
     pub fn to_document(&self) -> Document {
         let mut d = Document::new();
         d.body = self.blocks.iter().cloned().map(Arc::new).collect();
+        d.parts = self.parts.clone();
         d
     }
     /// Whether the fragment holds an equation (in tables too), which a copy also puts on the
@@ -64,7 +79,21 @@ impl Fragment {
     /// The text a copy puts on the clipboard: [`Self::plain_text`] with symbol-font characters
     /// (Wingdings…) as their Unicode equivalents.
     pub fn clipboard_text(&self) -> String {
-        self.to_document().shown_text(crate::StoryRef::Body)
+        let d = self.to_document();
+        let text = d.shown_text(crate::StoryRef::Body);
+        if text.is_empty() && !self.parts.is_empty() {
+            let parts: Vec<String> = self
+                .parts
+                .iter()
+                .filter(|(_, p)| p.kind == crate::PartKind::TextBox)
+                .map(|(id, _)| d.shown_text(crate::StoryRef::Part(*id)))
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !parts.is_empty() {
+                return parts.join("\n");
+            }
+        }
+        text
     }
     /// Add `piece` at the end, followed by a paragraph mark unless it already ends with one: how
     /// Word's Spike collects what it cuts. The piece's text box stories get ids after this
