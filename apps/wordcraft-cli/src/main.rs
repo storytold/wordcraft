@@ -412,6 +412,8 @@ fn run_source_paths(rest: &[String], script: Option<&script::Script>) -> (Option
     (from_file, from_template)
 }
 
+/// Explicitly update unlocked fields before saving. If field updates are disabled by document
+/// protection, log a warning and continue rather than aborting the conversion.
 fn update_fields(s: &mut Session) -> Result<(), Failure> {
     if let Err(e) = s.run("references.updateFields", &json!({})) {
         if matches!(e, CmdError::Disabled(_)) {
