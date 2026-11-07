@@ -309,6 +309,7 @@ CSL and library import are separate work.
 
 ## Revision history
 
+> 2026-11-05 · DOCX property ordering follows the schema for table cell spacing, cell Fit Text and paragraph Suppress Overlap. Auto/nil cell-spacing widths allow surrounding whitespace; the reader retains the percentage kind but ignores its numeric width.
 > 2026-11-03 · Section `w:chapStyle` values preserve the full unsigned-byte range, including 10, while values above 255 are rejected.
 
 | 2026-10-30 | trivial | DOCX section metadata now preserves independent printer trays, section endnote suppression, chapter numbering settings, and footnote columns through native JSON and repeated save/reopen |

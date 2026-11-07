@@ -817,6 +817,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-04 | trivial | Progress log: MHT quoted MIME parameters; readiness estimates unchanged |
 | 2026-10-30 | trivial | Progress log: typed n-ary operators such as ∫ and ∑ wait for their limits, and any character that cannot continue a math name corrects it, as observed in Word for Windows on #4938; Enter, arrow keys and nested operators are WordCraft's own choices (#4917); readiness unchanged |
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` is preserved with true, false and absent values; OOXML properties follow schema order. Grid layout remains open. |
+| 2026-11-05 | trivial | DOCX table cell-spacing widths accept padded auto/nil values; regression tests pin property schema order and bounded widths. Real-world corpus qualification remains open. |
 | 2026-10-28 | trivial | Per-page ink object lookups, #3614. Drawing order, geometry and saved data retain their behavior; no readiness estimate change |
 | 2026-10-28 | trivial | Shared MATH construction records reuse variants and assembly data without changing glyph mappings or existing limits (#3630); readiness estimates unchanged |
 | 2026-10-29 | trivial | Page drawing indexes text-box warp lookups per paragraph (#3614); requested offsets only, bounded prefix traversal, original Linux display and persistence controls; readiness estimates unchanged |

@@ -337,6 +337,7 @@ impl PropCtx {
                 "w:adjustRightInd" => p.adjust_right_indent = Some(on_off(k)),
                 "w:suppressAutoHyphens" => p.suppress_hyphens = Some(on_off(k)),
                 "w:suppressLineNumbers" => p.suppress_line_numbers = Some(on_off(k)),
+                "w:suppressOverlap" => p.suppress_overlap = Some(on_off(k)),
                 "w:bidi" => p.bidi = Some(on_off(k)),
                 "w:kinsoku" => p.kinsoku = Some(on_off(k)),
                 "w:wordWrap" => p.word_wrap = Some(on_off(k)),
@@ -517,6 +518,29 @@ pub fn margins(e: &El) -> [f32; 4] {
     margin_sides(e).map(|side| side.unwrap_or(0.0))
 }
 
+/// `w:tblCellSpacing` keeps its bounded width and supported measurement type; malformed forms are ignored.
+fn cell_spacing(e: &El) -> Option<wordcraft_doc::props::CellSpacing> {
+    use wordcraft_doc::props::CellSpacingKind;
+
+    let kind = match e.attr("w:type") {
+        Some(value) => CellSpacingKind::from_ooxml(value)?,
+        None => CellSpacingKind::Dxa,
+    };
+    let width = match (kind, e.attr("w:w")) {
+        (_, None) | (CellSpacingKind::Pct, Some(_)) => 0,
+        (CellSpacingKind::Dxa, Some(value)) => {
+            let points = measure(value, 20.0).filter(|points| *points >= 0.0)?;
+            (points * 20.0).round().clamp(0.0, 31_680.0) as u32
+        }
+        (CellSpacingKind::Auto | CellSpacingKind::Nil, Some(value)) => value.trim().parse::<u32>().ok()?,
+    };
+    let max = match kind {
+        CellSpacingKind::Pct => 50_000,
+        CellSpacingKind::Dxa | CellSpacingKind::Auto | CellSpacingKind::Nil => 31_680,
+    };
+    Some(wordcraft_doc::props::CellSpacing { width: width.min(max), kind })
+}
+
 fn margin_sides(e: &El) -> [Option<f32>; 4] {
     let get = |names: &[&str]| names.iter().find_map(|n| e.child(n)).and_then(|c| tw(c, "w:w")).map(|v| v.clamp(0.0, 1584.0));
     [get(&["w:top"]), get(&["w:left", "w:start"]), get(&["w:bottom"]), get(&["w:right", "w:end"])]
@@ -548,6 +572,7 @@ impl PropCtx {
                 "w:tblLayout" => t.fixed = k.attr("w:type") == Some("fixed"),
                 "w:bidiVisual" => t.bidi_visual = on_off(k),
                 "w:tblCellMar" => t.cell_margins = Some(margins(k)),
+                "w:tblCellSpacing" => t.cell_spacing = cell_spacing(k),
                 "w:tblLook" => t.look = look(k),
                 "w:tblpPr" => t.float = Some(table_float(k)),
                 "w:tblOverlap" => {
@@ -652,6 +677,7 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
             "w:tcBorders" => c.borders = Some(pc.borders(k)),
             "w:shd" => c.shading = pc.shd_fill(k),
             "w:noWrap" => c.no_wrap = on_off(k),
+            "w:tcFitText" => c.fit_text = Some(on_off(k)),
             "w:hideMark" => c.hide_mark = on_off(k),
             "w:tcMar" => {
                 let sides = margin_sides(k);
