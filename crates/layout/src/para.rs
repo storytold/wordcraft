@@ -20,7 +20,7 @@ mod bidi;
 mod builder;
 mod chars;
 mod grid;
-mod justify;
+pub(crate) mod justify;
 mod lines;
 mod model;
 mod paragraph;
