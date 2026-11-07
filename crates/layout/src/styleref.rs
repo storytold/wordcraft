@@ -383,6 +383,7 @@ mod tests {
 
     #[test]
     fn parses_names_levels_and_switches() {
+        crate::test_fonts();
         let c = parse(r#"STYLEREF "Heading 1" \l \n \t \* MERGEFORMAT"#);
         assert_eq!(c.style, "Heading 1");
         assert!(c.last && c.suppress && !c.position);
@@ -441,6 +442,7 @@ mod tests {
 
     #[test]
     fn suppress_keeps_the_number() {
+        crate::test_fonts();
         assert_eq!(suppress("Chapter 2.", &[("2".into(), true)]), "2");
         assert_eq!(chapter_number("Chapter IV."), "IV");
     }
