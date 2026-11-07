@@ -89,6 +89,48 @@ pub fn field_name(instr: &str) -> String {
     instr.split_whitespace().next().unwrap_or("").trim_start_matches('=').to_ascii_uppercase()
 }
 
+/// The fields an `INFO` field can stand for: the fields the Field dialog lists under Document
+/// Information.
+pub const INFO_TYPES: &[&str] = &[
+    "AUTHOR",
+    "COMMENTS",
+    "FILENAME",
+    "FILESIZE",
+    "KEYWORDS",
+    "LASTSAVEDBY",
+    "NUMCHARS",
+    "NUMPAGES",
+    "NUMWORDS",
+    "REVNUM",
+    "SUBJECT",
+    "TEMPLATE",
+    "TITLE",
+];
+
+/// The instruction an `INFO` field stands for: `INFO NumPages \* Roman` is the field
+/// `NumPages \* Roman`, and `INFO Subject "Draft"` is `Subject "Draft"`. Any other instruction,
+/// or `INFO` with a type not in [`INFO_TYPES`], is returned as it is.
+pub fn info_target(instr: &str) -> &str {
+    let Some((head, rest)) = instr.trim_start().split_once(char::is_whitespace) else { return instr };
+    let rest = rest.trim_start();
+    if head.eq_ignore_ascii_case("INFO") && INFO_TYPES.contains(&field_name(rest).as_str()) { rest } else { instr }
+}
+
+/// The `INFO` types that keep their stored result: the date and editing-time properties.
+pub const INFO_KEPT_TYPES: &[&str] = &["CREATEDATE", "EDITTIME", "PRINTDATE", "SAVEDATE"];
+
+/// Whether `instr` is an `INFO` field without a type, or with a type that is in neither
+/// [`INFO_TYPES`] nor [`INFO_KEPT_TYPES`] (`INFO`, `INFO Bogus`).
+pub fn info_type_unknown(instr: &str) -> bool {
+    let instr = instr.trim_start();
+    let (head, rest) = instr.split_once(char::is_whitespace).unwrap_or((instr, ""));
+    if !head.eq_ignore_ascii_case("INFO") {
+        return false;
+    }
+    let ty = field_name(rest.trim_start());
+    !INFO_TYPES.contains(&ty.as_str()) && !INFO_KEPT_TYPES.contains(&ty.as_str())
+}
+
 /// REF's hyperlink switch links its cached result without updating that result.
 pub(crate) fn reference_link(instr: &str) -> Option<String> {
     let (name, args) = instr.trim_start().split_once(char::is_whitespace)?;
@@ -286,6 +328,7 @@ pub fn field_text(instr: &str, result: &str, ctx: &FieldCtx) -> (String, bool) {
 
 /// Display text for a field on page `page` (see [`field_text`]).
 pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (String, bool) {
+    let instr = info_target(instr);
     let name = field_name(instr);
     let fmt = format_switch(instr);
     match name.as_str() {
@@ -486,6 +529,19 @@ mod tests {
         assert_eq!(field_text("set Codice COD", "COD", &ctx).0, "");
         // Other fields still show their stored result.
         assert_eq!(field_text("MERGEFIELD NOME", "«NOME»", &ctx).0, "«NOME»");
+    }
+
+    /// `INFO NumPages` shows what `NUMPAGES` shows, switches included; INFO with a type it doesn't
+    /// stand for keeps its stored result.
+    #[test]
+    fn info_fields_show_the_field_they_name() {
+        let ctx = FieldCtx { page: 2, pages: 12, title: "Plan".into(), ..Default::default() };
+        assert_eq!(field_text("INFO NumPages", "", &ctx), ("12".into(), true));
+        assert_eq!(field_text(r" info  NUMPAGES \* ROMAN ", "", &ctx).0, "XII");
+        assert_eq!(field_text(r"INFO Title \* Upper", "", &ctx).0, "PLAN");
+        assert_eq!(field_text("INFO Page", "3", &ctx), ("3".into(), false));
+        assert_eq!(field_text("INFO", "kept", &ctx), ("kept".into(), false));
+        assert_eq!(info_target(r#"INFO Subject "Draft""#), r#"Subject "Draft""#);
     }
 
     #[test]

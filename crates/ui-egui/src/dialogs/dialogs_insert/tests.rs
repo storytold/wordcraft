@@ -154,7 +154,7 @@ fn field_dialog_builds_the_instruction() {
 #[test]
 fn field_dialog_lists_the_document_information_fields() {
     let listed: Vec<&str> = FIELDS.iter().filter(|(_, cat, _)| *cat == "Document Information").map(|(n, _, _)| *n).collect();
-    for name in ["COMMENTS", "KEYWORDS", "LASTSAVEDBY", "NUMCHARS", "REVNUM", "SUBJECT"] {
+    for name in ["COMMENTS", "FILESIZE", "KEYWORDS", "LASTSAVEDBY", "NUMCHARS", "REVNUM", "SUBJECT", "TEMPLATE"] {
         assert!(listed.contains(&name), "{name} in {listed:?}");
     }
     let a = app();
@@ -165,4 +165,7 @@ fn field_dialog_lists_the_document_information_fields() {
     assert_eq!(f.instruction(), r"REVNUM \* ROMAN");
     f.select("SUBJECT");
     assert_eq!(f.instruction(), "SUBJECT");
+    f.select("FILESIZE");
+    f.number_format = "CardText".into();
+    assert_eq!(f.instruction(), r"FILESIZE \* CardText");
 }
