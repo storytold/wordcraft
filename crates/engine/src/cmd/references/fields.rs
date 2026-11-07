@@ -83,6 +83,13 @@ fn unlocked_field_instr(o: &InlineObject) -> Option<&str> {
     field_instr_and_locked(o).and_then(|(instr, locked)| (!locked).then_some(instr))
 }
 
+fn is_anchor_object(o: &InlineObject) -> bool {
+    matches!(
+        o,
+        InlineObject::BookmarkStart { .. } | InlineObject::BookmarkEnd { .. } | InlineObject::CommentStart { .. } | InlineObject::CommentEnd { .. }
+    )
+}
+
 fn range_field_result_span(para: &Paragraph, k: usize) -> Option<(usize, usize, usize)> {
     let offs = para.object_offsets();
     let &start_off = offs.get(k)?;
@@ -101,7 +108,10 @@ fn range_field_result_span(para: &Paragraph, k: usize) -> Option<(usize, usize, 
             _ => {}
         }
     }
-    let end_k = end_idx.filter(|&end_k| end_k == k + 1)?;
+    let end_k = end_idx?;
+    if !para.objects.get(k + 1..end_k)?.iter().all(is_anchor_object) {
+        return None;
+    }
     let &end_off = offs.get(end_k)?;
     let content_start = start_off + wordcraft_doc::para::OBJ.len_utf8();
     if content_start > end_off {
@@ -112,6 +122,10 @@ fn range_field_result_span(para: &Paragraph, k: usize) -> Option<(usize, usize, 
         return None;
     }
     Some((start_off, content_start, end_off))
+}
+
+fn range_field_plain_text(para: &Paragraph, content_start: usize, end_off: usize) -> Option<String> {
+    Some(para.text.get(content_start..end_off)?.chars().filter(|&c| c != wordcraft_doc::para::OBJ).collect())
 }
 
 fn apply_field_update(para: &mut Paragraph, k: usize, r: String, clear_dirty: bool) {
@@ -134,8 +148,35 @@ fn apply_field_update(para: &mut Paragraph, k: usize, r: String, clear_dirty: bo
         .unwrap_or_else(|| para.props_of_char(start_off).clone());
     props.ins = None;
     props.del = None;
-    let _ = para.delete(content_start, end_off);
-    if para.insert_text(content_start, &r, &props).is_ok()
+    let obj_len = wordcraft_doc::para::OBJ.len_utf8();
+    let mut spans = Vec::new();
+    let mut seg_start = content_start;
+    if let Some(slice) = para.text.get(content_start..end_off) {
+        for (rel, ch) in slice.char_indices() {
+            if ch == wordcraft_doc::para::OBJ {
+                let at = content_start + rel;
+                if seg_start < at {
+                    spans.push((seg_start, at));
+                }
+                seg_start = at + obj_len;
+            }
+        }
+    }
+    if seg_start < end_off {
+        spans.push((seg_start, end_off));
+    }
+    for (a, b) in spans.into_iter().rev() {
+        let _ = para.delete(a, b);
+    }
+    let mut insert_at = content_start;
+    let mut obj_idx = k + 1;
+    while para.text.get(insert_at..).is_some_and(|s| s.starts_with(wordcraft_doc::para::OBJ))
+        && para.objects.get(obj_idx).is_some_and(|o| matches!(o, InlineObject::BookmarkStart { .. } | InlineObject::CommentStart { .. }))
+    {
+        insert_at += obj_len;
+        obj_idx += 1;
+    }
+    if para.insert_text(insert_at, &r, &props).is_ok()
         && clear_dirty
         && let Some(InlineObject::FieldStart { dirty, .. }) = para.objects.get_mut(k)
     {
@@ -342,7 +383,7 @@ fn changed(doc: &wordcraft_doc::Document, mut results: Vec<FieldResult>) -> Vec<
         match p.objects.get(*k) {
             Some(InlineObject::Field { result, .. }) => result != r,
             Some(InlineObject::FieldStart { .. }) => {
-                range_field_result_span(p, *k).and_then(|(_, cs, eo)| p.text.get(cs..eo)).is_some_and(|cur| cur != r)
+                range_field_result_span(p, *k).and_then(|(_, cs, eo)| range_field_plain_text(p, cs, eo)).is_some_and(|cur| cur != *r)
             }
             _ => false,
         }

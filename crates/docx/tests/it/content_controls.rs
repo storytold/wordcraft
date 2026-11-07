@@ -399,11 +399,11 @@ fn range_toc_without_control_stays_unwrapped_and_section_break_toc_control_hands
 
 #[test]
 fn field_result_rpr_change_and_form_field_round_trip() {
-    let fld = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> REF _Ref1 \h </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:color w:val="auto"/><w:rPrChange w:id="582" w:author="Author"><w:rPr><w:b/></w:rPr></w:rPrChange></w:rPr><w:t>Section 3.1(s)</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+    let fld = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> REF _Ref1 \h </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:color w:val="auto"/><w:rPrChange w:id="582" w:author="Author"><w:rPr><w:b/></w:rPr></w:rPrChange></w:rPr><w:t>Section </w:t></w:r><w:r><w:rPr><w:i/><w:rPrChange w:id="583" w:author="Author"><w:rPr/></w:rPrChange></w:rPr><w:t>3.1(s)</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
     let form_fld = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="Field1"/><w:enabled/><w:textInput/></w:ffData></w:fldChar></w:r><w:r><w:instrText xml:space="preserve"> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:ins w:id="10" w:author="Alice"><w:r><w:t>Added </w:t></w:r></w:ins><w:r><w:rPr><w:b/><w:rPrChange w:id="11" w:author="Bob"><w:rPr/></w:rPrChange></w:rPr><w:t>Tail</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
     let d = read(&package(&format!("{fld}{form_fld}"))).unwrap();
     let xml = document_xml(&write(&d).unwrap());
     assert!(xml.contains(r#"<w:name w:val="Field1"/>"#), "{xml}");
     assert!(xml.contains("Added ") && xml.contains("<w:ins "), "{xml}");
-    assert_eq!(xml.matches("<w:rPrChange ").count(), 2, "{xml}");
+    assert_eq!(xml.matches("<w:rPrChange ").count(), 3, "{xml}");
 }
