@@ -852,13 +852,17 @@ fn table_float(e: &El) -> TableFloat {
         _ => text,
     };
     let align = |n: &str| e.attr(n).and_then(FloatAlign::from_ooxml);
+    let v_align = align("w:tblpYSpec");
+    // Like Word (#5669), a vertical alignment with no `w:vertAnchor` is measured in the margin:
+    // a table aligned to the bottom sits at the bottom margin, not at its paragraph.
+    let v_text = if v_align.is_some() && e.attr("w:vertAnchor").is_none() { Anchor::Margin } else { Anchor::Paragraph };
     TableFloat {
         h_rel: rel("w:horzAnchor", Anchor::Column),
-        v_rel: rel("w:vertAnchor", Anchor::Paragraph),
+        v_rel: rel("w:vertAnchor", v_text),
         x: pt("w:tblpX"),
         y: pt("w:tblpY"),
         h_align: align("w:tblpXSpec"),
-        v_align: align("w:tblpYSpec"),
+        v_align,
         dist: [dist("w:leftFromText"), dist("w:topFromText"), dist("w:rightFromText"), dist("w:bottomFromText")],
         overlap: true,
     }
