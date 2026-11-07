@@ -3837,3 +3837,23 @@ fn issues_1281_1045_english_dialects_proof_typed_text() {
     let words: Vec<&str> = issues.as_array().unwrap().iter().filter(|i| i["kind"] == "spelling").filter_map(|i| i["text"].as_str()).collect();
     assert_eq!(words, ["21th"]);
 }
+
+/// AutoFormat Now: an apostrophe inside a word closes, a hyphenated word and a list-less "- "
+/// mid-line stay, the switches are honoured, and the caret stays where it was.
+#[test]
+fn autoformat_now_follows_the_switches_and_keeps_the_caret() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("don't re-use 'it'"));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "format.autoFormatNow", json!({}));
+    let text = |s: &Session| s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().text.clone();
+    assert_eq!(text(&s), "don\u{2019}t re-use \u{2018}it\u{2019}");
+    assert_eq!(s.sel.focus.off, text(&s).len());
+
+    let mut s = Session::new(wordcraft_doc::Document::from_text("a -- \"b\""));
+    s.prefs.autocorrect.smart_quotes = false;
+    s.prefs.autocorrect.dashes = false;
+    let depth = s.undo_depth();
+    run(&mut s, "format.autoFormatNow", json!({}));
+    assert_eq!(text(&s), "a -- \"b\"");
+    assert_eq!(s.undo_depth(), depth, "nothing changed, no undo step");
+}

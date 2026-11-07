@@ -17,7 +17,12 @@ fn autoformat(s: &mut Session, text: &str) -> Option<String> {
     let f = &s.sel.focus;
     let para = s.doc.para_at(f)?;
     let before = para.text.get(..f.off)?;
-    let prev = before.chars().next_back();
+    smart_quote(before.chars().next_back(), c).map(String::from)
+}
+
+/// The curly form of a straight quote `c` that follows `prev` (`None` at a paragraph's start):
+/// opening after a space, an opening bracket, a dash or the other opening quote, else closing.
+pub(super) fn smart_quote(prev: Option<char>, c: char) -> Option<&'static str> {
     let opening = prev.is_none_or(|p| {
         p.is_whitespace()
             || "([{<\u{2014}\u{2013}\u{00AB}\u{2039}\u{201E}\u{201A}".contains(p)
@@ -25,8 +30,8 @@ fn autoformat(s: &mut Session, text: &str) -> Option<String> {
             || (c == '\'' && p == '\u{201C}')
     });
     match c {
-        '"' => Some(if opening { "\u{201C}" } else { "\u{201D}" }.into()),
-        '\'' => Some(if opening { "\u{2018}" } else { "\u{2019}" }.into()),
+        '"' => Some(if opening { "\u{201C}" } else { "\u{201D}" }),
+        '\'' => Some(if opening { "\u{2018}" } else { "\u{2019}" }),
         _ => None,
     }
 }
@@ -140,7 +145,17 @@ fn list_autoformat(s: &mut Session) -> Result<bool, CmdError> {
         return Ok(false);
     }
     let Some(prefix) = para.text.get(..f.off) else { return Ok(false) };
-    let kind = match prefix {
+    let Some(kind) = list_kind(prefix) else { return Ok(false) };
+    if !apply_list(s, f.story, &f.path, f.off, kind)? {
+        return Ok(false);
+    }
+    s.sel = Selection::caret(Pos { off: 0, ..f });
+    Ok(true)
+}
+
+/// The list a typed label ("* ", "1. "…) at the start of a paragraph starts.
+pub(super) fn list_kind(prefix: &str) -> Option<ListKind> {
+    Some(match prefix {
         "* " => ListKind::Bullet,
         "- " => ListKind::BulletChar('-'),
         // Arrow bullets (Word draws these from a symbol font; we use the Unicode arrows).
@@ -154,8 +169,20 @@ fn list_autoformat(s: &mut Session) -> Result<bool, CmdError> {
         "A. " => ListKind::UpperLetter,
         "i. " => ListKind::LowerRoman,
         "I. " => ListKind::Outline,
-        _ => return Ok(false),
-    };
+        _ => return None,
+    })
+}
+
+/// Make the paragraph at `path` a `kind` list item and delete its first `len` bytes (the label),
+/// when the AutoFormat option for bullets or numbering is on. Returns whether it did.
+pub(super) fn apply_list(s: &mut Session, story: StoryRef, path: &Path, len: usize, kind: ListKind) -> Result<bool, CmdError> {
+    let Some(para) = s.doc.para(story, path) else { return Ok(false) };
+    // A style-linked list (a heading-linked Multilevel List preset, #1793) numbers the paragraph
+    // without `props.numbering` itself being set: resolve it, so autoformat doesn't paper over an
+    // already-numbered heading with a fresh bullet.
+    if s.doc.styles.resolve_para(&para.props).numbering.is_some_and(|n| n.num != 0) {
+        return Ok(false);
+    }
     let ac = &s.prefs.autocorrect;
     if !(if kind.is_bullet() { ac.bullets } else { ac.numbering }) {
         return Ok(false);
@@ -167,14 +194,13 @@ fn list_autoformat(s: &mut Session) -> Result<bool, CmdError> {
         Some(n) => n,
         None => Arc::make_mut(&mut s.doc.numbering).try_add_list(kind)?,
     };
-    let para = s.doc.para_mut(f.story, &f.path)?;
-    para.delete(0, f.off)?;
+    let para = s.doc.para_mut(story, path)?;
+    para.delete(0, len)?;
     para.props.numbering = Some(NumRef { num, level: 0 });
     // A heading stays a heading (Word: "1. " in a Heading 1 gives a numbered Heading 1).
     if para.props.style.as_deref().is_none_or(|st| st == "Normal") {
         para.props.style = Some("ListParagraph".into());
     }
-    s.sel = Selection::caret(Pos { off: 0, ..f });
     Ok(true)
 }
 

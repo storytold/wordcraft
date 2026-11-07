@@ -9,11 +9,13 @@ use super::{delete_selection, delete_selection_effect, non_mac, sel_result, spli
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 mod autoformat;
+mod autoformat_now;
 mod delete;
 mod enter_tab;
 mod unicode;
 
 use autoformat::insert;
+use autoformat_now::autoformat_now;
 use delete::{backspace, delete, delete_word_back, delete_word_fwd};
 pub use enter_tab::MAX_TYPED_PARAGRAPHS;
 use enter_tab::{back_tab, new_paragraph, tab};
@@ -49,6 +51,8 @@ pub fn specs() -> Vec<CommandSpec> {
         // Alt+numpad codes: the shell collects the keypad digits while Alt is held (#961).
         CommandSpec::new("text.typeCode", "Type Character Code", "Editing", insert_code)
             .params(r#"{"code": string (decimal digits as typed on the keypad, e.g. "0233"), "ansi"?: 874 | 1250–1258 (the leading-0 code page, default 1252), "oem"?: 437 | 737 | 850 | 852 | 857 | 866 (default from the locale)}"#),
+        // Format › AutoFormat › AutoFormat now: Alt+Ctrl+K in Word for Windows; none on macOS.
+        CommandSpec::new("format.autoFormatNow", "AutoFormat Now", "Format", autoformat_now).key(non_mac("Ctrl+Alt+K")),
         CommandSpec::new("text.emDash", "Em Dash", "Insert › Symbols", |s, _| ins_char(s, '—')).key("Mod+Alt+-"),
         // On macOS Option+G / R / 2 / ; type these directly, so Word for Mac has no Cmd shortcut.
         CommandSpec::new("text.copyright", "Copyright Sign", "Insert › Symbols", |s, _| ins_char(s, '©')).key(non_mac("Mod+Alt+C")),
