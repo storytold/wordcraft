@@ -654,6 +654,12 @@ mod tests {
         let x = b"<x:document xmlns:x=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><x:t>a\r\nb\rc&#13;d<![CDATA[e\r\nf]]></x:t></x:document>";
         let e = parse(x).unwrap();
         assert_eq!(e.child("w:t").unwrap().text(), "a\nb\nc\rde\nf");
+        // The writer escapes a CR, so a CR in the text survives a save.
+        let x = format!(
+            "<x:document xmlns:x=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><x:t>{}</x:t></x:document>",
+            esc("a\r\nb\rc")
+        );
+        assert_eq!(parse(x.as_bytes()).unwrap().child("w:t").unwrap().text(), "a\r\nb\rc");
     }
 
     #[test]
