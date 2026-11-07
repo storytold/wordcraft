@@ -203,6 +203,8 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
     s.touch();
     let origin = s.layout().object(&at, page).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?.origin;
     edit_float(s, &at, |f| {
+        // On its paragraph now: a page it was anchored to is gone, not only hidden.
+        f.page = 0;
         f.h_rel = Anchor::Column;
         f.v_rel = Anchor::Paragraph;
         f.x = (x - origin.x).clamp(-MAX_OFFSET, MAX_OFFSET);

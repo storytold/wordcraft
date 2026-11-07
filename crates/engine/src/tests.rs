@@ -5115,6 +5115,10 @@ fn an_odt_frame_moved_from_its_page_loses_the_page_number() {
     run(&mut s, "arrange.bounds", json!({"page": 0, "x": 200, "y": 300}));
     let tag = frame_tag(&s);
     assert!(!tag.contains("anchor-page-number") && !tag.contains(r#"text:anchor-type="page""#), "moved: {tag}");
+    // Moved, then placed by the margins: the file's page number is gone, not only hidden.
+    run(&mut s, "arrange.position", json!({"preset": "topLeft"}));
+    let tag = frame_tag(&s);
+    assert!(!tag.contains("anchor-page-number"), "moved, then placed: {tag}");
 }
 
 /// An object dropped near the bottom of a page lands there, though at the top of the paragraph

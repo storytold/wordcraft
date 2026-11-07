@@ -427,6 +427,7 @@ fn a_page_number_on_another_anchor_is_no_page_anchor() {
     assert!(!c.contains("anchor-page-number"), "{c}");
 }
 
+#[test]
 fn a_frame_offering_several_formats_shows_the_first_it_can_read() {
     // LibreOffice's letter templates: its own metafile, then a PNG. Taking the first left nothing
     // to show, and the picture was gone once the paragraph was written from the model.
