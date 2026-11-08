@@ -180,10 +180,17 @@ fn incremental_layout_keeps_no_space_before_after_a_paragraph_ending_in_a_page_b
     });
     assert_eq!(top, first, "no space before at the top of the page");
     caret_in(&mut s, i + 3, 5);
+    // The user dictionary is process-wide: a test adding a word on another thread bumps the
+    // generation the layout cache is keyed on, which makes the next layout a full one. Only a
+    // layout under a dictionary unchanged since the previous one has to be incremental.
+    let mut generation = wordcraft_proof::dictionary_generation();
     for key in 0..3 {
         s.run("text.insert", &json!({"text": "x"})).unwrap();
         // (The first key also lays out the paragraph the word was being typed in before.)
-        assert!(key == 0 || s.layout().blocks_placed < s.doc.body.len(), "laid out incrementally");
+        let placed = s.layout().blocks_placed;
+        let unchanged = generation == wordcraft_proof::dictionary_generation();
+        assert!(key == 0 || !unchanged || placed < s.doc.body.len(), "laid out incrementally");
+        generation = wordcraft_proof::dictionary_generation();
         assert_same_as_full(&mut s, "typing on the page after the break");
     }
 }
