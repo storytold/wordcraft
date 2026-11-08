@@ -161,6 +161,7 @@ impl WordApp {
         let WordApp {
             // App-wide.
             session: _,
+            ribbon_preview: _,
             services: _,
             printing: _,
             print_feedback_seen: _,

@@ -150,16 +150,28 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
             t.row(|r| {
                 r.cell(|ui| ui.label(egui::RichText::new(tl!("Left:")).small()));
                 r.cell(|ui| {
-                    if ui
-                        .add_sized(FIELD, egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2))
-                        .changed()
-                    {
+                    let field = ui.add_sized(
+                        FIELD,
+                        egui::DragValue::new(&mut l)
+                            .speed(3.6 / k)
+                            .range(-792.0 / k..=1584.0 / k)
+                            .measure(u)
+                            .max_decimals(2)
+                            .update_while_editing(false),
+                    );
+                    let cancelled = esc_cancelled(ui, &field, egui::Id::new(("layout_para_field", "left")));
+                    if field.changed() && l != rp.indent_left / k && !cancelled {
                         let _ = app.run("para.indents", json!({"left": l * k}));
                     }
                 });
                 r.cell(|ui| spaced(ui, egui::RichText::new(tl!("Before:")).small()));
                 r.cell(|ui| {
-                    if ui.add_sized(FIELD, egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
+                    let field = ui.add_sized(
+                        FIELD,
+                        egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt"))).update_while_editing(false),
+                    );
+                    let cancelled = esc_cancelled(ui, &field, egui::Id::new(("layout_para_field", "before")));
+                    if field.changed() && b != rp.space_before && !cancelled {
                         let _ = app.run("para.spacing", json!({"before": b}));
                     }
                 });
@@ -169,16 +181,28 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
             t.row(|r| {
                 r.cell(|ui| ui.label(egui::RichText::new(tl!("Right:")).small()));
                 r.cell(|ui| {
-                    if ui
-                        .add_sized(FIELD, egui::DragValue::new(&mut right).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2))
-                        .changed()
-                    {
+                    let field = ui.add_sized(
+                        FIELD,
+                        egui::DragValue::new(&mut right)
+                            .speed(3.6 / k)
+                            .range(-792.0 / k..=1584.0 / k)
+                            .measure(u)
+                            .max_decimals(2)
+                            .update_while_editing(false),
+                    );
+                    let cancelled = esc_cancelled(ui, &field, egui::Id::new(("layout_para_field", "right")));
+                    if field.changed() && right != rp.indent_right / k && !cancelled {
                         let _ = app.run("para.indents", json!({"right": right * k}));
                     }
                 });
                 r.cell(|ui| spaced(ui, egui::RichText::new(tl!("After:")).small()));
                 r.cell(|ui| {
-                    if ui.add_sized(FIELD, egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
+                    let field = ui.add_sized(
+                        FIELD,
+                        egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt"))).update_while_editing(false),
+                    );
+                    let cancelled = esc_cancelled(ui, &field, egui::Id::new(("layout_para_field", "after")));
+                    if field.changed() && a != rp.space_after && !cancelled {
                         let _ = app.run("para.spacing", json!({"after": a}));
                     }
                 });
@@ -220,4 +244,18 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
             rotate_menu(ui, app, None);
         });
     });
+}
+
+/// Drop a delayed DragValue edit when Escape cancelled its text entry.
+fn esc_cancelled(ui: &Ui, response: &egui::Response, id: egui::Id) -> bool {
+    let now = ui.ctx().cumulative_pass_nr();
+    let focus_key = id.with("focused");
+    let esc_key = id.with("esc");
+    let focused = response.has_focus();
+    let had_focus = ui.data(|d| d.get_temp::<bool>(focus_key)).unwrap_or(false);
+    ui.data_mut(|d| d.insert_temp(focus_key, focused));
+    if had_focus && !focused && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        ui.data_mut(|d| d.insert_temp(esc_key, now));
+    }
+    ui.data(|d| d.get_temp::<u64>(esc_key)).is_some_and(|at| now.saturating_sub(at) <= 2)
 }
