@@ -2177,13 +2177,14 @@ pub(crate) fn parse_style_defs(text: &str, cap: usize, guard: &mut ParseGuard) -
                                 style_type: attr_ns(&attrs, reader.resolver(), NS_W, b"type"),
                                 ..StyleDef::default()
                             });
-                        } else if id.w() && id.local == "name" && depth == 3 {
-                            if let Some(def) = current.as_mut()
-                                && !def.name_seen
-                            {
-                                def.name_seen = true;
-                                def.name = attr_ns(&attrs, reader.resolver(), NS_W, b"val");
-                            }
+                        } else if id.w()
+                            && id.local == "name"
+                            && depth == 3
+                            && let Some(def) = current.as_mut()
+                            && !def.name_seen
+                        {
+                            def.name_seen = true;
+                            def.name = attr_ns(&attrs, reader.resolver(), NS_W, b"val");
                         }
                     }
                 }
@@ -2208,13 +2209,14 @@ pub(crate) fn parse_style_defs(text: &str, cap: usize, guard: &mut ParseGuard) -
                                     ..StyleDef::default()
                                 });
                             }
-                        } else if id.w() && id.local == "name" && depth + 1 == 3 {
-                            if let Some(def) = current.as_mut()
-                                && !def.name_seen
-                            {
-                                def.name_seen = true;
-                                def.name = attr_ns(&attrs, reader.resolver(), NS_W, b"val");
-                            }
+                        } else if id.w()
+                            && id.local == "name"
+                            && depth + 1 == 3
+                            && let Some(def) = current.as_mut()
+                            && !def.name_seen
+                        {
+                            def.name_seen = true;
+                            def.name = attr_ns(&attrs, reader.resolver(), NS_W, b"val");
                         }
                     }
                 }
