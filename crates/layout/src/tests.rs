@@ -1522,6 +1522,63 @@ fn footnotes_on_the_page_a_break_leaves_to_a_continuous_section_keep_its_margins
 }
 
 #[test]
+fn a_mark_with_page_break_before_after_a_page_break_is_laid_out_as_before() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    // #2109 review: the empty mark closing section 1 has page break before, directly or from its
+    // style. Not measured in Word, so the layout is the one from before #2109's change: the break
+    // starts page 2, still section 1's, and section 2 starts at its top, the mark taking no room.
+    for by_style in [false, true] {
+        let mut d = Document::from_text(&format!("Before\n\u{000C}\n\n{}", "After\n".repeat(80)));
+        if by_style {
+            Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
+                id: "BreakFirst".into(),
+                name: "BreakFirst".into(),
+                para: ParaProps { page_break_before: Some(true), ..Default::default() },
+                ..Default::default()
+            });
+        }
+        let mark = d.para_mut(StoryRef::Body, &Path::top(2)).unwrap();
+        mark.section = Some(Box::new(SectionProps::default()));
+        if by_style {
+            mark.props.style = Some("BreakFirst".into());
+        } else {
+            mark.props.page_break_before = Some(true);
+        }
+        d.last_section.start = SectionStart::Continuous;
+        d.last_section.title_page = true;
+        let l = lay(&d);
+        let pages: Vec<(usize, HfSlot)> = l.pages.iter().map(|p| (p.section, p.hf_slot)).collect();
+        assert!(pages.len() >= 3, "{by_style}: {pages:?}");
+        assert_eq!(pages[..3], [(0, HfSlot::Default), (0, HfSlot::Default), (1, HfSlot::First)], "{by_style}: {pages:?}");
+        let (mark, first) = (l.caret(&Pos::body(2, 0)).unwrap(), l.caret(&Pos::body(3, 0)).unwrap());
+        assert_eq!((mark.page, first.page), (1, 1), "{by_style}");
+        assert_eq!(first.top, mark.top, "{by_style}: section 2 starts at the top of page 2");
+    }
+}
+
+#[test]
+fn a_break_in_the_paragraph_closing_the_section_before_is_laid_out_as_before() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    // #2109 review: "Before" and a page break end section 1 in one paragraph, section 2 is one
+    // empty mark and continuous, and so is section 3. The break is not in the mark's section. Not
+    // measured in Word, so the layout is the one from before #2109's change: page 2 is section
+    // 1's, and section 3 starts at its top, the mark taking no room.
+    let mut d = Document::from_text(&format!("Before\u{000C}\n\n{}", "After\n".repeat(80)));
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(SectionProps::default()));
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().section =
+        Some(Box::new(SectionProps { start: SectionStart::Continuous, title_page: true, ..Default::default() }));
+    d.last_section.start = SectionStart::Continuous;
+    d.last_section.title_page = true;
+    let l = lay(&d);
+    let pages: Vec<(usize, HfSlot)> = l.pages.iter().map(|p| (p.section, p.hf_slot)).collect();
+    assert!(pages.len() >= 3, "{pages:?}");
+    assert_eq!(pages[..3], [(0, HfSlot::Default), (0, HfSlot::Default), (2, HfSlot::First)], "{pages:?}");
+    let (mark, first) = (l.caret(&Pos::body(1, 0)).unwrap(), l.caret(&Pos::body(2, 0)).unwrap());
+    assert_eq!((mark.page, first.page), (1, 1));
+    assert_eq!(first.top, mark.top, "section 3 starts at the top of page 2");
+}
+
+#[test]
 fn a_picture_closing_a_section_after_a_page_break_goes_on_the_new_page() {
     use wordcraft_doc::section::{SectionProps, SectionStart};
     // #2109 review: the paragraph closing section 1 has a hidden mark and only a picture. Left on

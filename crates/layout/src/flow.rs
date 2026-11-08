@@ -892,14 +892,20 @@ fn only_markers(p: &Paragraph, range: std::ops::Range<usize>) -> bool {
 /// break's page, so the next section starts at the top of the new page, which is its first page
 /// and takes its first-page header (#2109). A mark holding anything but markers, such as a hidden
 /// mark's paragraph holding a picture, goes on the new page. One column only: a section with
-/// columns lays its last page out again to balance them.
+/// columns lays its last page out again to balance them. Two cases not measured in Word keep the
+/// layout from before: a break in a paragraph that itself closes a section, the mark after it
+/// being the next section's, and a mark with page break before, directly or from its style.
 fn next_section_takes_break_page(ctx: &Ctx, pb: &PageBuilder, block: usize) -> bool {
     let Some(next) = block.checked_add(1) else { return false };
+    let para = |i: usize| ctx.doc.body.get(i).and_then(|b| b.as_para());
     !pb.web
         && !pb.next_starts_page
         && pb.cols.len() <= 1
         && ctx.quiet_marks.binary_search(&next).is_ok()
-        && matches!(ctx.doc.body.get(next).map(|b| &**b), Some(Block::Para(mark)) if mark.section.is_some() && only_markers(mark, 0..mark.text.len()))
+        && para(block).is_some_and(|p| p.section.is_none())
+        && para(next).is_some_and(|mark| {
+            mark.section.is_some() && only_markers(mark, 0..mark.text.len()) && !ctx.doc.styles.resolve_para(&mark.props).page_break_before
+        })
 }
 
 /// The outline of the body for an Outline view pass.
