@@ -143,19 +143,23 @@ impl Paragraph {
     /// The objects whose anchor character is not inside a tracked deletion, in order: the `k`-th
     /// entry answers the `k`-th object character of [`Self::final_text`].
     pub fn final_objects(&self) -> Vec<&InlineObject> {
-        let dropped = self.deleted_ranges();
+        // The same membership test as `text_without` just below, as a linear sorted sweep:
+        // objects × deleted ranges checks would make a crafted paragraph with many alternating
+        // deleted and kept runs quadratic on every inspect.
+        let mut sorted = self.deleted_ranges();
+        sorted.sort_unstable_by_key(|r| r.start);
+        let mut next = sorted.iter().peekable();
         let mut out = Vec::new();
         let mut k = 0;
         for (i, c) in self.text.char_indices() {
-            if c != OBJ {
-                continue;
+            while next.next_if(|r| r.end <= i).is_some() {}
+            let keep = next.peek().is_none_or(|r| r.start > i);
+            if c == OBJ {
+                if keep && let Some(o) = self.objects.get(k) {
+                    out.push(o);
+                }
+                k += 1;
             }
-            if let Some(o) = self.objects.get(k)
-                && !dropped.iter().any(|r| r.contains(&i))
-            {
-                out.push(o);
-            }
-            k += 1;
         }
         out
     }

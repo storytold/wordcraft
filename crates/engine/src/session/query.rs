@@ -290,6 +290,16 @@ impl Session {
         let (a, b) = self.sel.ordered();
         self.doc.copy_range(&a, &b).plain_text()
     }
+
+    /// Selected plain text with tracked deletions dropped: what the selection reads with every
+    /// change accepted.
+    pub fn selected_final_text(&self) -> String {
+        if let Some(segs) = self.column_segments() {
+            return segs.iter().map(|(a, b)| self.doc.copy_range(a.min(b), a.max(b)).final_text()).collect::<Vec<_>>().join("\n");
+        }
+        let (a, b) = self.sel.ordered();
+        self.doc.copy_range(&a, &b).final_text()
+    }
 }
 
 /// A new blank document on `region`'s paper (see [`Session::blank_document`]).
