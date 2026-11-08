@@ -4,12 +4,13 @@
 //! The check runs on the layout and display options the export itself uses, so what it reports is
 //! what the output lacks.
 
+use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
 
 use serde_json::{Value, json};
 use wordcraft_doc::{Document, MAX_MISSING_PICTURES, MissingPicture};
 use wordcraft_layout::display::DisplayOptions;
-use wordcraft_layout::{DocLayout, LayoutCache};
+use wordcraft_layout::{DocLayout, LayoutCache, MAX_MISSING_GLYPHS, StrictOutput};
 
 use crate::io::ExportOptions;
 
@@ -22,14 +23,21 @@ pub struct StrictReport {
     /// (code point, times drawn), sorted by code point.
     pub glyphs: Vec<(char, u64)>,
     pub pictures: Vec<MissingPicture>,
-    /// A cap was hit: more were found than are listed.
-    pub truncated: bool,
+    /// More distinct characters were missing than are listed.
+    pub glyphs_truncated: bool,
+    /// More pictures were missing than are listed.
+    pub pictures_truncated: bool,
 }
 
 impl StrictReport {
     /// Nothing is missing: the strict export passes.
     pub fn passed(&self) -> bool {
-        self.glyphs.is_empty() && self.pictures.is_empty() && !self.truncated
+        self.glyphs.is_empty() && self.pictures.is_empty() && !self.truncated()
+    }
+
+    /// Either list was cut at its cap.
+    pub fn truncated(&self) -> bool {
+        self.glyphs_truncated || self.pictures_truncated
     }
 
     /// The schema-1 JSON of the report.
@@ -39,7 +47,9 @@ impl StrictReport {
             "strict": if self.passed() { "passed" } else { "failed" },
             "missing_glyphs": self.glyphs.iter().map(|(c, n)| json!({"cp": code_point(*c), "count": n})).collect::<Vec<_>>(),
             "missing_pictures": self.pictures.iter().map(|p| json!({"part": p.part, "in": story_label(&p.story), "reason": p.reason.label()})).collect::<Vec<_>>(),
-            "truncated": self.truncated,
+            "truncated": self.truncated(),
+            "glyphs_truncated": self.glyphs_truncated,
+            "pictures_truncated": self.pictures_truncated,
         })
     }
 
@@ -49,7 +59,7 @@ impl StrictReport {
         let glyphs: Vec<(String, u64)> = self.glyphs.iter().map(|(c, n)| (code_point(*c), *n)).collect();
         let pictures: Vec<(String, String, String)> =
             self.pictures.iter().map(|p| (p.part.clone(), story_label(&p.story).to_string(), p.reason.label().to_string())).collect();
-        human_parts(&glyphs, &pictures, self.truncated)
+        human_parts(&glyphs, &pictures, self.glyphs_truncated, self.pictures_truncated)
     }
 
     /// The human lines, each `strict: …`.
@@ -64,11 +74,11 @@ impl StrictReport {
 }
 
 /// The human text of a report: (code point text, count) and (part, in, reason) as the JSON has them.
-fn human_parts(glyphs: &[(String, u64)], pictures: &[(String, String, String)], truncated: bool) -> Vec<String> {
+fn human_parts(glyphs: &[(String, u64)], pictures: &[(String, String, String)], glyphs_cut: bool, pictures_cut: bool) -> Vec<String> {
     let mut out = Vec::new();
     if !glyphs.is_empty() {
         let list: Vec<String> = glyphs.iter().map(|(cp, n)| format!("{cp} (×{n})")).collect();
-        let more = if truncated { ", …" } else { "" };
+        let more = if glyphs_cut { ", …" } else { "" };
         let n = glyphs.len();
         out.push(format!("{n} character{} cannot be drawn: {}{more}", if n == 1 { "" } else { "s" }, list.join(", ")));
     }
@@ -77,11 +87,8 @@ fn human_parts(glyphs: &[(String, u64)], pictures: &[(String, String, String)], 
             .iter()
             .map(|(part, at, reason)| if at.is_empty() { format!("{part}: {reason}") } else { format!("{part} ({at}): {reason}") })
             .collect();
-        let more = if truncated { "; …" } else { "" };
+        let more = if pictures_cut { "; …" } else { "" };
         out.push(format!("{} picture(s) left out: {}{more}", pictures.len(), list.join("; ")));
-    }
-    if out.is_empty() && truncated {
-        out.push("more is missing than the report lists".to_string());
     }
     out
 }
@@ -100,8 +107,13 @@ pub fn lines_from_json(report: &Value) -> Vec<String> {
         .and_then(Value::as_array)
         .map(|a| a.iter().map(|p| (text(p, "part"), text(p, "in"), text(p, "reason"))).collect())
         .unwrap_or_default();
-    let truncated = report.get("truncated").and_then(Value::as_bool).unwrap_or(false);
-    human_parts(&glyphs, &pictures, truncated).into_iter().map(|p| format!("strict: {p}")).collect()
+    let flag = |k: &str| report.get(k).and_then(Value::as_bool).unwrap_or(false);
+    // A report without the per-list flags (the top-level one alone) marks both lists.
+    let (glyphs_cut, pictures_cut) = match (report.get("glyphs_truncated"), report.get("pictures_truncated")) {
+        (None, None) => (flag("truncated"), flag("truncated")),
+        _ => (flag("glyphs_truncated"), flag("pictures_truncated")),
+    };
+    human_parts(&glyphs, &pictures, glyphs_cut, pictures_cut).into_iter().map(|p| format!("strict: {p}")).collect()
 }
 
 /// `U+2D30`: upper-case hex, at least four digits.
@@ -114,25 +126,51 @@ fn story_label(story: &str) -> &str {
     story.strip_prefix("word/").unwrap_or(story)
 }
 
-/// The report of `doc` as drawn by `lay` with `display`, on `pages` (0-based; `None` is every
-/// page). The pictures dropped when the document was opened are added to those that can't be
-/// decoded now, capped like each.
-pub fn strict_report(doc: &Document, lay: &DocLayout, display: &DisplayOptions, pages: Option<RangeInclusive<usize>>) -> StrictReport {
-    let missing = lay.missing_glyphs(doc, display, pages.clone());
-    let (undecodable, pictures_truncated) = wordcraft_layout::undecodable_pictures(doc, lay, pages, display);
+/// The report of `doc` as drawn by `lay` with `display` into `output`, on `pages` (0-based; `None`
+/// is every page). The watermark is checked with the page, and the pictures dropped when the
+/// document was opened are added to those that can't be decoded now, capped like each.
+pub fn strict_report(
+    doc: &Document,
+    lay: &DocLayout,
+    display: &DisplayOptions,
+    pages: Option<RangeInclusive<usize>>,
+    output: StrictOutput,
+) -> StrictReport {
+    let mut missing = lay.missing_glyphs(doc, display, pages.clone());
+    let any_page = lay.pages.iter().enumerate().any(|(n, _)| pages.as_ref().is_none_or(|r| r.contains(&n)));
+    if any_page && let Some(wm) = &doc.settings.watermark {
+        let max = match output {
+            StrictOutput::Pdf => wordcraft_pdf::WATERMARK_MAX_CHARS,
+            StrictOutput::Png => usize::MAX,
+        };
+        let wm_missing = wordcraft_layout::missing_watermark_glyphs(wm, max);
+        let mut all: BTreeMap<char, u64> = missing.chars.iter().copied().collect();
+        missing.truncated |= wm_missing.truncated;
+        for (c, n) in wm_missing.chars {
+            if let Some(count) = all.get_mut(&c) {
+                *count = count.saturating_add(n);
+            } else if all.len() < MAX_MISSING_GLYPHS {
+                all.insert(c, n);
+            } else {
+                missing.truncated = true;
+            }
+        }
+        missing.chars = all.into_iter().collect();
+    }
+    let (undecodable, mut pictures_truncated) = wordcraft_layout::undecodable_pictures(doc, lay, pages, display, output);
+    pictures_truncated |= doc.missing_pictures.truncated;
     let mut pictures: Vec<MissingPicture> = Vec::new();
-    let mut truncated = missing.truncated || pictures_truncated || doc.missing_pictures.truncated;
     for p in doc.missing_pictures.list.iter().cloned().chain(undecodable) {
         if pictures.contains(&p) {
             continue;
         }
         if pictures.len() >= MAX_MISSING_PICTURES {
-            truncated = true;
+            pictures_truncated = true;
             break;
         }
         pictures.push(p);
     }
-    StrictReport { glyphs: missing.chars, pictures, truncated }
+    StrictReport { glyphs: missing.chars, pictures, glyphs_truncated: missing.truncated, pictures_truncated }
 }
 
 /// The PDF export's options for `opts`: the one place they are built, shared by the export and
@@ -153,7 +191,7 @@ pub(crate) fn png_display() -> DisplayOptions {
 pub(crate) fn pdf_report(doc: &Document, opts: &ExportOptions) -> StrictReport {
     let pdf = pdf_options(opts);
     let lay = wordcraft_layout::layout(doc, &mut LayoutCache::new(), &pdf.layout_options());
-    strict_report(doc, &lay, &pdf.display_options(), None)
+    strict_report(doc, &lay, &pdf.display_options(), None, StrictOutput::Pdf)
 }
 
 /// The PDF of `doc`; with `opts.strict`, only if nothing is missing, laid out once for the check
@@ -164,7 +202,7 @@ pub(crate) fn export_pdf(doc: &Document, opts: &ExportOptions) -> Result<Vec<u8>
         return wordcraft_pdf::export(doc, &pdf).map_err(|e| e.to_string());
     }
     let lay = wordcraft_layout::layout(doc, &mut LayoutCache::new(), &pdf.layout_options());
-    let report = strict_report(doc, &lay, &pdf.display_options(), None);
+    let report = strict_report(doc, &lay, &pdf.display_options(), None, StrictOutput::Pdf);
     if !report.passed() {
         return Err(report.refusal());
     }

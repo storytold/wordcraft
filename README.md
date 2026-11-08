@@ -183,7 +183,7 @@ and `truncated` says so. Only characters the output draws count (not hidden text
 without `--markup`), and a character a fallback font draws is fine. A Private Use Area character
 fails only if no installed font maps it. The result depends on the fonts installed on the host
 (see #5624 for a fixed font set). An external picture target is never fetched: it is reported, not
-loaded. Pictures dropped when a DOCX is opened are reported for DOCX input only. `--strict` is for
+loaded. Pictures dropped when a DOCX is opened (a missing part, an external target, or a `link only` picture with no embedded copy) are reported for DOCX input only. They have no page, so a PNG of page 1 is also refused for a missing or external picture anywhere in the document, unused headers included. `--strict` is for
 `convert`; the engine takes `strict: true` on `file.save`, `file.exportPdf` and `file.exportPng`,
 and `file.strictReport` returns the report without writing.
 

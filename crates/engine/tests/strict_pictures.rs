@@ -3,7 +3,7 @@
 use std::io::Write;
 use wordcraft_doc::{Document, MissingPictureReason};
 use wordcraft_layout::display::DisplayOptions;
-use wordcraft_layout::{LayoutCache, LayoutOptions, layout, media_check, undecodable_pictures};
+use wordcraft_layout::{LayoutCache, LayoutOptions, StrictOutput, layout, media_check, undecodable_pictures};
 
 const NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture""#;
 const REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -59,7 +59,7 @@ fn docx(header_media: &[u8], body_media: &[u8]) -> Vec<u8> {
 
 fn report(d: &Document, pages: Option<std::ops::RangeInclusive<usize>>) -> Vec<(String, String, MissingPictureReason)> {
     let l = layout(d, &mut LayoutCache::new(), &LayoutOptions::default());
-    let (list, truncated) = undecodable_pictures(d, &l, pages, &DisplayOptions::default());
+    let (list, truncated) = undecodable_pictures(d, &l, pages, &DisplayOptions::default(), StrictOutput::Pdf);
     assert!(!truncated);
     list.into_iter().map(|m| (m.part, m.story, m.reason)).collect()
 }
@@ -93,7 +93,7 @@ fn only_the_selected_pages_are_checked() {
 
 #[test]
 fn the_check_names_what_the_exporters_draw() {
-    assert_eq!(media_check(&png()), Ok(()));
-    assert!(media_check(b"").is_err());
-    assert!(media_check(&[1, 0, 0, 0, 88, 0, 0, 0]).is_err(), "a metafile that doesn't parse is a grey box");
+    assert_eq!(media_check(&png(), StrictOutput::Pdf), Ok(()));
+    assert!(media_check(b"", StrictOutput::Pdf).is_err());
+    assert!(media_check(&[1, 0, 0, 0, 88, 0, 0, 0], StrictOutput::Pdf).is_err(), "a metafile that doesn't parse is a grey box");
 }

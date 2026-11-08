@@ -477,7 +477,7 @@ fn strict_report(s: &mut Session, v: &Value) -> CmdResult {
             if l.pages.get(page).is_none() {
                 return Err(CmdError::Params(format!("no page {}", page + 1)));
             }
-            crate::strict::strict_report(&s.doc, &l, &crate::strict::png_display(), Some(page..=page))
+            crate::strict::strict_report(&s.doc, &l, &crate::strict::png_display(), Some(page..=page), wordcraft_layout::StrictOutput::Png)
         }
         None => {
             let out = super::references::output_fields(&s.doc);
@@ -505,7 +505,7 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
         return Err(CmdError::Params("path must end in .png".into()));
     }
     if strict {
-        let report = crate::strict::strict_report(&s.doc, &l, &opts.display, Some(page..=page));
+        let report = crate::strict::strict_report(&s.doc, &l, &opts.display, Some(page..=page), wordcraft_layout::StrictOutput::Png);
         if !report.passed() {
             return Err(CmdError::Failed(report.refusal()));
         }

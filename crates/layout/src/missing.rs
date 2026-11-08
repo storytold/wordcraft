@@ -54,6 +54,33 @@ impl DocLayout {
     }
 }
 
+/// How the watermark text is shaped for output, as the PDF export and the page raster both do:
+/// its first `max_chars` characters in the font its name resolves to (no fallback face), so a
+/// character that font lacks shapes to glyph id 0. Strict export checks these same glyphs
+/// ([`missing_watermark_glyphs`]), so the check and the exporters can't drift. `None` for a
+/// blank watermark.
+pub fn watermark_run(wm: &wordcraft_doc::Watermark, max_chars: usize) -> Option<(wordcraft_fonts::FaceRef, String, Vec<ShapedGlyph>)> {
+    if wm.text.trim().is_empty() {
+        return None;
+    }
+    let face = wordcraft_fonts::word::resolve(&wm.font, false, false).face;
+    let text: String = wm.text.chars().take(max_chars).collect();
+    let shaped = wordcraft_fonts::shape(&face, &text, &[], |c| c);
+    Some((face, text, shaped))
+}
+
+/// The characters of the watermark that draw as an empty box (glyph id 0), counted as
+/// [`DocLayout::missing_glyphs`] counts them; sorted by code point. The watermark is on every
+/// page, so it counts once.
+pub fn missing_watermark_glyphs(wm: &wordcraft_doc::Watermark, max_chars: usize) -> MissingGlyphs {
+    let mut found = Found::default();
+    if let Some((face, text, shaped)) = watermark_run(wm, max_chars) {
+        let ranges = cluster_ranges(&text, &shaped);
+        found.run(&face, shaped.iter().map(|g| g.gid), &text, &ranges);
+    }
+    MissingGlyphs { chars: found.counts.into_iter().collect(), truncated: found.truncated }
+}
+
 #[derive(Default)]
 struct Found {
     counts: BTreeMap<char, u64>,
@@ -63,36 +90,40 @@ struct Found {
 impl Found {
     fn walk(&mut self, d: &Draw) {
         match d {
-            Draw::Glyphs { face, glyphs, text, ranges, .. } => {
-                let one_each = ranges.is_empty() && text.chars().count() == glyphs.len();
-                let mut chars = text.chars();
-                for (k, (gid, ..)) in glyphs.iter().enumerate() {
-                    // A run without ranges (a list label) maps one character to one glyph, when
-                    // the counts agree; else it can't be traced and isn't counted.
-                    let own = chars.next();
-                    if *gid != 0 {
-                        continue;
-                    }
-                    let shown: Vec<char> = if one_each {
-                        own.into_iter().collect()
-                    } else {
-                        ranges.get(k).and_then(|r| text.get(r.clone())).map(|t| t.chars().collect()).unwrap_or_default()
-                    };
-                    let drawn: Vec<char> = shown.into_iter().filter(|c| draws_something(*c)).collect();
-                    // A cluster of several characters drew one empty box: it is the one the face
-                    // lacks, not the letter beside it.
-                    let lacking: Vec<char> = drawn.iter().copied().filter(|c| !face.covers(*c)).collect();
-                    for c in if lacking.is_empty() { drawn } else { lacking } {
-                        self.count(c);
-                    }
-                }
-            }
+            Draw::Glyphs { face, glyphs, text, ranges, .. } => self.run(face, glyphs.iter().map(|g| g.0), text, ranges),
             Draw::Figure { draws: items, .. } | Draw::Turned { items, .. } | Draw::Rotated { items, .. } | Draw::Clip { items, .. } => {
                 for d in items {
                     self.walk(d);
                 }
             }
             _ => {}
+        }
+    }
+
+    /// A run of glyphs of `face` (`gids`) showing `text`, glyph `k` showing `ranges[k]`.
+    fn run(&mut self, face: &wordcraft_fonts::FaceRef, gids: impl Iterator<Item = u32>, text: &str, ranges: &[Range<usize>]) {
+        let glyph_count = gids.size_hint().1.unwrap_or(0);
+        let one_each = ranges.is_empty() && text.chars().count() == glyph_count;
+        let mut chars = text.chars();
+        for (k, gid) in gids.enumerate() {
+            // A run without ranges (a list label) maps one character to one glyph, when the
+            // counts agree; else it can't be traced and isn't counted.
+            let own = chars.next();
+            if gid != 0 {
+                continue;
+            }
+            let shown: Vec<char> = if one_each {
+                own.into_iter().collect()
+            } else {
+                ranges.get(k).and_then(|r| text.get(r.clone())).map(|t| t.chars().collect()).unwrap_or_default()
+            };
+            let drawn: Vec<char> = shown.into_iter().filter(|c| draws_something(*c)).collect();
+            // A cluster of several characters drew one empty box: it is the one the face
+            // lacks, not the letter beside it.
+            let lacking: Vec<char> = drawn.iter().copied().filter(|c| !face.covers(*c)).collect();
+            for c in if lacking.is_empty() { drawn } else { lacking } {
+                self.count(c);
+            }
         }
     }
 

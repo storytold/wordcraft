@@ -2951,3 +2951,52 @@ fn undecodable_pictures_keep_their_grey_box_bytes() {
     let h = a.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x100000001b3));
     assert_eq!(h, 0x1edbbffab353d744, "{h:#x}");
 }
+
+/// A page with a chart label and an equation, exported without compression. Chart and equation
+/// runs carry the text each glyph shows since strict export (#6005); this pins the PDF they
+/// produce, ToUnicode maps included, to what they were before.
+#[test]
+fn chart_and_equation_text_keep_their_pdf_bytes() {
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
+    let mut d = Document::from_text("Body text");
+    d.core.created = "2024-01-02T03:04:05Z".into();
+    let items = vec![GraphicItem::Text {
+        rect: [0.0, 100.0, 216.0, 20.0],
+        text: "Revenue 2024".into(),
+        size: 10.0,
+        color: wordcraft_doc::props::Rgb::BLACK,
+        bold: false,
+        align: TextAlign::Center,
+        font: None,
+    }];
+    let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
+    let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+    d.insert_object(&wordcraft_doc::Pos::body(0, 0), obj, &CharProps::default()).unwrap();
+    let linear = "x^2+1/2";
+    let math = wordcraft_doc::math::Math { nodes: wordcraft_doc::math::parse_linear(linear), ..Default::default() };
+    let n = d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().len();
+    d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0))
+        .unwrap()
+        .insert_object(n, InlineObject::Equation { linear: linear.into(), display: false, math }, &CharProps::default())
+        .unwrap();
+    let opts = PdfOptions { compress: false, ..Default::default() };
+    let a = export(&d, &opts).unwrap();
+    assert_eq!(a, export(&d, &opts).unwrap(), "the export must be deterministic for the golden hash to mean anything");
+    // What the ToUnicode maps say each glyph shows, across all fonts: the text of the body, the
+    // chart label and the equation (a mathematical italic x is one character beyond the BMP).
+    // Recorded on the code before strict export: the maps are the same. (The whole file's hash
+    // is not pinned: it follows the fonts the host resolves, which differ between runs.)
+    let text = String::from_utf8_lossy(&a).into_owned();
+    let mut shown = std::collections::BTreeSet::new();
+    for block in text.split("beginbfchar").skip(1) {
+        for line in block.split("endbfchar").next().unwrap_or("").lines() {
+            let Some((_, to)) = line.trim().split_once("> <") else { continue };
+            let units: Vec<u16> =
+                to.trim_end_matches('>').as_bytes().chunks(4).filter_map(|c| u16::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok()).collect();
+            shown.insert(String::from_utf16_lossy(&units));
+        }
+    }
+    let expected: std::collections::BTreeSet<String> =
+        ["B", "o", "d", "y", " ", "t", "e", "x", "R", "v", "n", "u", "2", "0", "4", "+", "1", "\u{1D465}"].into_iter().map(String::from).collect();
+    assert_eq!(shown, expected);
+}

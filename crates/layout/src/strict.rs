@@ -13,21 +13,41 @@ use wordcraft_geom::picture::DrawFailure;
 use crate::display::{DisplayOptions, Draw, ItemDisplay};
 use crate::{DocLayout, Placed};
 
-/// The widest or tallest picture the PDF export draws, pixels (its decoder limit, the tighter of
-/// the exporters').
-pub const MAX_PICTURE_SIDE: u32 = 30_000;
+/// The widest or tallest picture the PDF export draws, pixels (its decoder limit).
+pub const MAX_PDF_PICTURE_SIDE: u32 = 30_000;
 
-/// Whether `bytes` are a picture the exporters draw: a metafile that parses, or a raster picture
-/// that decodes within the decode budget. The same decision `wordcraft-pdf` and `wordcraft-render`
-/// take, so a picture that fails here is drawn as a grey box by both.
-pub fn media_check(bytes: &[u8]) -> Result<(), DrawFailure> {
+/// The widest or tallest picture the page raster draws, pixels (what a `Pixmap` holds).
+pub const MAX_PNG_PICTURE_SIDE: u32 = u16::MAX as u32;
+
+/// The output a strict export checks, which decides what its exporter can draw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StrictOutput {
+    Pdf,
+    Png,
+}
+
+impl StrictOutput {
+    /// The widest or tallest picture this output decodes.
+    pub fn max_picture_side(self) -> u32 {
+        match self {
+            StrictOutput::Pdf => MAX_PDF_PICTURE_SIDE,
+            StrictOutput::Png => MAX_PNG_PICTURE_SIDE,
+        }
+    }
+}
+
+/// Whether `bytes` are a picture `output` draws: a metafile that parses, or a raster picture that
+/// decodes within the decode budget. The same decision `wordcraft-pdf` and `wordcraft-render`
+/// take, so a picture that fails here is drawn as a grey box (or not at all) by that output.
+pub fn media_check(bytes: &[u8], output: StrictOutput) -> Result<(), DrawFailure> {
     if wordcraft_metafile::is_metafile(bytes) && wordcraft_metafile::parse(bytes).is_ok_and(|p| p.has_size()) {
         return Ok(());
     }
-    wordcraft_geom::picture::check_for_drawing(bytes, MAX_PICTURE_SIDE)
+    wordcraft_geom::picture::check_for_drawing(bytes, output.max_picture_side())
 }
 
-/// The pictures drawn on `pages` (0-based, `None` for every page) that fail [`media_check`], one
+/// The pictures drawn on `pages` (0-based, `None` for every page) that fail [`media_check`] for
+/// `output`, the page's background picture included (named `background`), one
 /// per picture and story, at most [`MAX_MISSING_PICTURES`]; the flag says more were found.
 ///
 /// `part` is the part the bytes were read from when the document knows it (a DOCX opened by the
@@ -41,6 +61,7 @@ pub fn undecodable_pictures(
     layout: &DocLayout,
     pages: Option<RangeInclusive<usize>>,
     opts: &DisplayOptions,
+    output: StrictOutput,
 ) -> (Vec<MissingPicture>, bool) {
     let mut out: Vec<MissingPicture> = Vec::new();
     let mut truncated = false;
@@ -60,7 +81,7 @@ pub fn undecodable_pictures(
                 collect_media(&draws, &mut media);
                 for key in media {
                     let verdict = *verdicts.entry(key.clone()).or_insert_with(|| match doc.media.get(&key) {
-                        Some(bytes) => media_check(bytes).err(),
+                        Some(bytes) => media_check(bytes, output).err(),
                         None => Some(DrawFailure::Undecodable),
                     });
                     let Some(failure) = verdict else { continue };
@@ -79,6 +100,28 @@ pub fn undecodable_pictures(
                     }
                     out.push(item);
                 }
+            }
+        }
+    }
+    // The page picture is drawn behind every page, outside the display list.
+    if let Some(pic) = &doc.settings.page_picture
+        && layout.pages.iter().enumerate().any(|(n, _)| range.contains(&n))
+    {
+        let failure = match doc.media.get(&pic.media) {
+            Some(bytes) => media_check(bytes, output).err(),
+            None => Some(DrawFailure::Undecodable),
+        };
+        if let Some(failure) = failure {
+            let reason = match failure {
+                DrawFailure::Undecodable => MissingPictureReason::Undecodable,
+                DrawFailure::UnsupportedFormat => MissingPictureReason::UnsupportedFormat,
+            };
+            let part = doc.missing_pictures.media_parts.get(&pic.media).cloned().unwrap_or_else(|| pic.media.clone());
+            let item = MissingPicture { part, story: "background".into(), reason };
+            if out.len() >= MAX_MISSING_PICTURES {
+                truncated = true;
+            } else if !out.contains(&item) {
+                out.push(item);
             }
         }
     }

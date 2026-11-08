@@ -75,7 +75,7 @@ pub fn render_png(doc: &Document, page: usize, scale: f32, opts: &crate::io::Exp
     let l = wordcraft_layout::layout(doc, &mut wordcraft_layout::LayoutCache::new(), &lo);
     let p = l.pages.get(page).ok_or_else(|| format!("no page {}", page + 1))?;
     if opts.strict {
-        let report = crate::strict::strict_report(doc, &l, &crate::strict::png_display(), Some(page..=page));
+        let report = crate::strict::strict_report(doc, &l, &crate::strict::png_display(), Some(page..=page), wordcraft_layout::StrictOutput::Png);
         if !report.passed() {
             return Err(report.refusal());
         }

@@ -72,7 +72,7 @@ use exporter::Exporter;
 use glyphs::{baseline, cluster_ends, left_to_right, split_clusters, visual_order};
 #[cfg(test)]
 use metadata::{civil, parse_iso};
-pub use options::{PdfError, PdfOptions};
+pub use options::{PdfError, PdfOptions, WATERMARK_MAX_CHARS};
 #[cfg(test)]
 use paint::shape_path;
 #[cfg(test)]

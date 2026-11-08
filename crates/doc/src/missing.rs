@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 pub const MAX_MISSING_PICTURES: usize = 256;
 
 /// Why a picture is not in the document or not drawn.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MissingPictureReason {
     /// The relationship names a part the file does not contain, or no relationship at all.
     MissingPart,
@@ -37,7 +37,7 @@ impl MissingPictureReason {
 }
 
 /// One picture that is missing.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MissingPicture {
     /// The target as written, or the part name it resolved to (a media key for a decoded one).
     pub part: String,
@@ -63,18 +63,21 @@ pub struct MissingPictures {
     /// A [`crate::Document::media`] key to the part its bytes were read from
     /// (`word/media/image2.bin`).
     pub media_parts: std::collections::BTreeMap<String, String>,
+    /// What `list` holds, for an O(1) test of "already there" (a hostile file has many).
+    seen: std::collections::HashSet<MissingPicture>,
 }
 
 impl MissingPictures {
     /// Add one (the same part, story and reason once).
     pub fn push(&mut self, item: MissingPicture) {
-        if self.list.contains(&item) {
+        if self.seen.contains(&item) {
             return;
         }
         if self.list.len() >= MAX_MISSING_PICTURES {
             self.truncated = true;
             return;
         }
+        self.seen.insert(item.clone());
         self.list.push(item);
     }
 }
