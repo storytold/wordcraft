@@ -38,6 +38,62 @@ fn basic_reader() {
 }
 
 #[test]
+fn unicode_fallback_uses_the_declared_count() {
+    for (rtf, expected) in [
+        (br"{\rtf1\uc18\u8804less than or equal rest}".as_slice(), "≤ rest"),
+        (br"{\rtf1\uc10\u233\'30\'31\'32\'33\'34\'35\'36\'37\'38\'39 rest}", "é rest"),
+        (br"{\rtf1\uc2\u8804\:ab rest}", "≤b rest"),
+        (br"{\rtf1\uc18\u8804\:12345678901234567 rest}", "≤ rest"),
+        (br"{\rtf1\uc1\u8804\:ab rest}", "≤ab rest"),
+        (br"{\rtf1\uc0\u8804\:ab rest}", "≤ab rest"),
+        (br"{\rtf1\uc9\u233abcdefgh\par VISIBLE}", "éVISIBLE"),
+        (br"{\rtf1\uc1\u233\pard VISIBLE}", "éVISIBLE"),
+        (br"{\rtf1\uc1\u233\cell VISIBLE}", "éVISIBLE"),
+        (br"{\rtf1\uc1\u233\row VISIBLE}", "éVISIBLE"),
+        (br"{\rtf1\uc0\u233\par VISIBLE}", "é\nVISIBLE"),
+        (b"{\\rtf1\\uc9\\u233abcdefgh\\\nVISIBLE}", "éVISIBLE"),
+        (b"{\\rtf1\\uc9\\u233abcdefgh\\\rVISIBLE}", "éVISIBLE"),
+        (br"{\rtf1\uc9\u233abcdefgh\*VISIBLE}", "éVISIBLE"),
+        (b"{\\rtf1\\uc0\\u233\\\nVISIBLE}", "é\nVISIBLE"),
+        (b"{\\rtf1\\uc0\\u233\\\rVISIBLE}", "é\nVISIBLE"),
+        (br"{\rtf1\uc0\u233\*VISIBLE}", "éVISIBLE"),
+        (br"{\rtf1\uc0\u233X}", "éX"),
+        (br"{\rtf1\uc1\u233?X}", "éX"),
+        (br"{\rtf1{\uc2147483647\u233?}X}", "éX"),
+        (br"{\rtf1\uc-1\u233X}", "éX"),
+    ] {
+        let doc = import(rtf).unwrap();
+        assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), expected, "{rtf:?}");
+    }
+}
+
+#[test]
+fn unicode_fallback_info_words_preserve_following_metadata() {
+    for (rtf, title, body) in [
+        (br"{\rtf1{\info{\title\uc9\u233abcdefgh\info X}{\author Alice}} Text}".as_slice(), "éX", "Text"),
+        (br"{\rtf1{\info{\title\uc1\u233\info X}{\author Alice}} Text}", "éX", "Text"),
+        (br"{\rtf1{\info{\title\uc0\u233X}{\author Alice}} Text}", "éX", "Text"),
+        (br"{\rtf1\uc0\u233{\info{\title Plain}{\author Alice}}Text}", "Plain", "éText"),
+    ] {
+        let doc = import(rtf).unwrap();
+        assert_eq!(doc.core.title, title, "{rtf:?}");
+        assert_eq!(doc.core.creator, "Alice", "{rtf:?}");
+        assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), body, "{rtf:?}");
+    }
+}
+
+#[test]
+fn unicode_fallback_in_revision_authors_counts_control_words() {
+    for (rtf, expected) in [
+        (br"{\rtf1{\*\revtbl{Unknown;}{\uc9\u233abcdefgh\par Zed;}}{\revised\revauth1 text}}".as_slice(), "éZed"),
+        (br"{\rtf1{\*\revtbl{Unknown;}{\uc0\u233\par Zed;}}{\revised\revauth1 text}}", "éZed"),
+    ] {
+        let doc = import(rtf).unwrap();
+        assert_eq!(doc.revisions.first().map(|r| r.author.as_str()), Some(expected), "{rtf:?}");
+    }
+}
+
+#[test]
 fn paragraph_borders() {
     // A heading with a grey rule under it, as hh.ru résumés write their section titles.
     let rtf = br"{\rtf1\ansi{\colortbl;\red0\green0\blue0;\red216\green216\blue216;}
