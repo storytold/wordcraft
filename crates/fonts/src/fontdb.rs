@@ -23,7 +23,7 @@ mod lookup;
 mod names;
 
 use face::{BUNDLED, FontBytes};
-pub use face::{FALLBACK_FAMILY, FaceRef, FontFace, bundled, is_serif_family};
+pub use face::{FALLBACK_FAMILY, FaceRef, FontFace, bundled};
 #[cfg(not(target_arch = "wasm32"))]
 use fallback_data::{CoverageIndex, SysFallback};
 use fallback_data::{FallbackCache, RunFallbackCache};

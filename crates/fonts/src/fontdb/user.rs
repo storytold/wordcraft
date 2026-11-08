@@ -475,6 +475,20 @@ impl FontDb {
         added
     }
 
+    /// Remove document fonts added for `families`: their faces leave the font list
+    /// and cached fallback choices are forgotten ([`FontDb::generation`]).
+    pub fn remove_document_fonts(&self, families: &[&str]) {
+        let ids: Vec<u32> = {
+            let faces = self.read_faces();
+            faces.iter().filter(|f| families.iter().any(|name| f.named(name))).map(|f| f.id).collect()
+        };
+        if ids.is_empty() {
+            return;
+        }
+        self.faces.write().unwrap_or_else(|e| e.into_inner()).retain(|f| !ids.contains(&f.id));
+        self.fonts_changed();
+    }
+
     /// Check the faces in `sfnt` and add the new ones, recording them as a user font.
     fn add_user_faces(&self, name: &str, sfnt: Vec<u8>, path: Option<PathBuf>) -> Result<UserFont, UserFontError> {
         if self.read_user().fonts.len() >= MAX_USER_FONTS {

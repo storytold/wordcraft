@@ -707,36 +707,43 @@ fn catalog_postscript_names() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// Sans-serif primary fonts prefer sans-serif fallbacks and serif primaries prefer serif fallbacks,
-/// and changing user fonts invalidates the run-fallback cache even when the face count stays equal.
+/// Diagram fallback matches the primary font's serif/sans classification while body-text
+/// fallback preserves loaded order (#5672), and changing user fonts invalidates run fallbacks.
 #[test]
 fn fallback_order_matches_primary_font_serif_nature() {
-    // #5672: When picking fallback faces, sans-serif primary fonts prefer sans-serif fallback fonts,
-    // and serif primary fonts prefer serif fallback fonts.
+    // #5672: When picking fallback faces for diagrams, sans-serif primary fonts prefer sans-serif
+    // fallback fonts, and serif primary fonts prefer serif fallback fonts. Body text fallback
+    // order remains unaffected.
     use crate::fontdb::fallback_data::fallback_order;
     let dir = font_dir("serif-sans-fallback");
-    std::fs::write(dir.join("TestMincho.ttf"), named_face("SourceSans3-Regular.ttf", "Test Mincho")).unwrap();
-    std::fs::write(dir.join("TestGothic.ttf"), named_face("SourceSans3-Regular.ttf", "Test Gothic")).unwrap();
+    std::fs::write(dir.join("TestMincho.ttf"), mapping("SourceSans3-Regular.ttf", "Test Mincho 1", 0xF_0010, 0xF_0011)).unwrap();
+    std::fs::write(dir.join("TestGothic.ttf"), mapping("SourceSans3-Regular.ttf", "Test Gothic 1", 0xF_0010, 0xF_0011)).unwrap();
     let db = FontDb::with_font_dirs(vec![dir.clone()]);
     db.set_system_fallback(false);
-    let mincho = db.face("Test Mincho", "Regular");
-    let gothic = db.face("Test Gothic", "Regular");
+    let mincho = db.face("Test Mincho 1", "Regular");
+    let gothic = db.face("Test Gothic 1", "Regular");
     assert!(mincho.is_serif(), "Mincho is serif");
     assert!(!gothic.is_serif(), "Gothic is sans");
 
     let sans_primary = db.face("Source Sans 3", "Regular");
     let serif_primary = db.face("Source Serif 4", "Regular");
 
+    // Diagram fallback: matches serif/sans nature of primary font.
+    let diag_run = ['\u{F0010}', '\u{F0011}'];
+    let diag_sans = db.fallback_for_diagram(&diag_run, sans_primary.id(), sans_primary.is_serif()).unwrap();
+    assert_eq!(diag_sans.family, "Test Gothic 1", "sans-serif diagram prefers sans-serif fallback (Gothic)");
+    let diag_serif = db.fallback_for_diagram(&diag_run, serif_primary.id(), serif_primary.is_serif()).unwrap();
+    assert_eq!(diag_serif.family, "Test Mincho 1", "serif diagram prefers serif fallback (Mincho)");
+
+    // Body text fallback: fallback_order is not altered by the primary font's serif/sans nature.
     let faces = db.read_faces();
     let for_sans = fallback_order(&faces, sans_primary.id(), false, None);
-    let pos_mincho_sans = for_sans.iter().position(|f| f.family == "Test Mincho").unwrap();
-    let pos_gothic_sans = for_sans.iter().position(|f| f.family == "Test Gothic").unwrap();
-    assert!(pos_gothic_sans < pos_mincho_sans, "sans-serif primary prefers sans-serif fallback font (Gothic before Mincho)");
-
     let for_serif = fallback_order(&faces, serif_primary.id(), false, None);
-    let pos_mincho_serif = for_serif.iter().position(|f| f.family == "Test Mincho").unwrap();
-    let pos_gothic_serif = for_serif.iter().position(|f| f.family == "Test Gothic").unwrap();
-    assert!(pos_mincho_serif < pos_gothic_serif, "serif primary prefers serif fallback font (Mincho before Gothic)");
+    let mincho_sans = for_sans.iter().position(|f| f.family == "Test Mincho 1").unwrap();
+    let gothic_sans = for_sans.iter().position(|f| f.family == "Test Gothic 1").unwrap();
+    let mincho_serif = for_serif.iter().position(|f| f.family == "Test Mincho 1").unwrap();
+    let gothic_serif = for_serif.iter().position(|f| f.family == "Test Gothic 1").unwrap();
+    assert_eq!(mincho_sans < gothic_sans, mincho_serif < gothic_serif, "body text fallback order does not invert between sans and serif primaries");
     drop(faces);
 
     // Replacing a user font with another of the same face count invalidates run_fallbacks.
