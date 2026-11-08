@@ -352,6 +352,7 @@ mod tests {
             float: Default::default(),
             crop: [0.0; 4],
             ole: Some(ole),
+            fx: Default::default(),
         };
         let mut s = Session::new(doc);
         let at = s.sel.focus.clone();
@@ -363,8 +364,16 @@ mod tests {
     fn picture(key: &str, bytes: &[u8]) -> Document {
         let mut doc = session().doc;
         doc.media.insert(key.into(), std::sync::Arc::new(bytes.to_vec()));
-        let img =
-            InlineObject::Image { media: key.into(), w: 10.0, h: 10.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+        let img = InlineObject::Image {
+            media: key.into(),
+            w: 10.0,
+            h: 10.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            fx: Default::default(),
+        };
         let mut s = Session::new(doc);
         let at = s.sel.focus.clone();
         s.doc.insert_object(&at, img, &Default::default()).unwrap();
