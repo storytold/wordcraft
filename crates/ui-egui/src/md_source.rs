@@ -32,48 +32,64 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
     let doc_id = app.session.document_id();
     let id = box_id(doc_id);
-    let Some(src) = app.session.md_source.as_mut() else { return };
-    if src.loses_content {
-        egui::Frame::NONE.fill(t.hover).inner_margin(egui::Margin::symmetric(12, 6)).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(tl!("This document has content Markdown can't hold. Changing the text here removes it; one Undo afterwards brings it back."));
+    let mut changed = false;
+    let mut truncated = false;
+    {
+        let Some(src) = app.session.md_source.as_mut() else { return };
+        if src.loses_content {
+            egui::Frame::NONE.fill(t.hover).inner_margin(egui::Margin::symmetric(12, 6)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(tl!(
+                    "This document has content Markdown can't hold. Changing the text here removes it; one Undo afterwards brings it back."
+                ));
+            });
+        }
+        egui::ScrollArea::vertical().id_salt(id).auto_shrink(false).show(ui, |ui| {
+            let size = ui.available_size();
+            let mut out = egui::TextEdit::multiline(&mut src.text)
+                .id(id)
+                .hint_text(tl!("Markdown Source"))
+                .font(FontId::monospace(14.0))
+                .desired_width(f32::INFINITY)
+                .min_size(size)
+                .frame(egui::Frame::NONE.inner_margin(16))
+                .text_color(t.text)
+                .char_limit(wordcraft_engine::cmd::md_source::MAX_SOURCE_BYTES)
+                .lock_focus(true)
+                .show(ui);
+            changed = out.response.changed();
+            if changed && src.text.len() > wordcraft_engine::cmd::md_source::MAX_SOURCE_BYTES {
+                let limit = src.text.floor_char_boundary(wordcraft_engine::cmd::md_source::MAX_SOURCE_BYTES);
+                src.text.truncate(limit);
+                src.caret = src.caret.min(limit);
+                truncated = true;
+            }
+            let caret_changed = if src.place_caret {
+                src.place_caret = false;
+                let char_idx = src.text.get(..src.caret).map_or(0, |s| s.chars().count());
+                let caret = CCursor::new(char_idx);
+                out.state.cursor.set_char_range(Some(CCursorRange::one(caret)));
+                out.state.store(ui.ctx(), id);
+                out.response.request_focus();
+                let spot = out.galley.pos_from_cursor(caret).translate(out.galley_pos.to_vec2());
+                ui.scroll_to_rect(spot, Some(egui::Align::Center));
+                true
+            } else if let Some(range) = out.cursor_range {
+                let old_caret = src.caret;
+                let char_idx: usize = range.primary.index.into();
+                src.caret = src.text.char_indices().nth(char_idx).map_or(src.text.len(), |(b, _)| b);
+                old_caret != src.caret
+            } else {
+                false
+            };
+            if changed || caret_changed {
+                invalidate_undo_cache(ui.ctx(), doc_id);
+            }
         });
     }
-    let mut changed = false;
-    egui::ScrollArea::vertical().id_salt(id).auto_shrink(false).show(ui, |ui| {
-        let size = ui.available_size();
-        let mut out = egui::TextEdit::multiline(&mut src.text)
-            .id(id)
-            .hint_text(tl!("Markdown Source"))
-            .font(FontId::monospace(14.0))
-            .desired_width(f32::INFINITY)
-            .min_size(size)
-            .frame(egui::Frame::NONE.inner_margin(16))
-            .text_color(t.text)
-            .char_limit(wordcraft_engine::cmd::md_source::MAX_SOURCE_BYTES)
-            .lock_focus(true)
-            .show(ui);
-        changed = out.response.changed();
-        let caret_changed = if src.place_caret {
-            src.place_caret = false;
-            let caret = CCursor::new(src.caret);
-            out.state.cursor.set_char_range(Some(CCursorRange::one(caret)));
-            out.state.store(ui.ctx(), id);
-            out.response.request_focus();
-            let spot = out.galley.pos_from_cursor(caret).translate(out.galley_pos.to_vec2());
-            ui.scroll_to_rect(spot, Some(egui::Align::Center));
-            true
-        } else if let Some(range) = out.cursor_range {
-            let old_caret = src.caret;
-            src.caret = range.primary.index.into();
-            old_caret != src.caret
-        } else {
-            false
-        };
-        if changed || caret_changed {
-            invalidate_undo_cache(ui.ctx(), doc_id);
-        }
-    });
+    if truncated {
+        app.status(tl!("Markdown Source takes up to 2 MB of text"));
+    }
     if changed {
         app.session.dirty = true;
         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(APPLY_EVERY_MS / 1000.0));
@@ -169,7 +185,15 @@ mod tests {
 
     /// A saved Markdown file, with its folder for the test to remove.
     fn opened(name: &str) -> (WordApp, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!("wordcraft-ui-md-source-{name}-{}", std::process::id()));
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "wordcraft-ui-md-source-{name}-{}-{}-{}",
+            std::process::id(),
+            id,
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("note.md");
         std::fs::write(&path, "# Heading\n\nSome text.\n").unwrap();
@@ -250,6 +274,25 @@ mod tests {
         a.run("view.markdownSource", json!({})).unwrap();
         assert_eq!(a.session.why_disabled("format.bold"), Some("leave Markdown Source first"));
         assert_eq!(a.session.why_disabled("view.markdownSource"), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Verifies that typing beyond `MAX_SOURCE_BYTES` truncates at boundary and warns.
+    #[test]
+    fn text_exceeding_max_source_bytes_is_truncated_and_warns() {
+        let (mut a, dir) = opened("oversize");
+        a.run("view.markdownSource", json!({})).unwrap();
+        let limit = wordcraft_engine::cmd::md_source::MAX_SOURCE_BYTES;
+        let half = limit / 2;
+        a.session.md_source.as_mut().unwrap().text = "é".repeat(half);
+        let mut h = harness(a);
+        h.run();
+        h.event(egui::Event::Text("ééééé".into()));
+        h.run();
+        let text_len = h.state().session.md_source.as_ref().unwrap().text.len();
+        assert_eq!(text_len, limit);
+        let status = h.state().status_msg.as_ref().map(|(s, _)| s.as_str());
+        assert_eq!(status, Some("Markdown Source takes up to 2 MB of text"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

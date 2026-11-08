@@ -191,6 +191,7 @@ fn title(path: Option<&FsPath>, file_name: Option<&str>, doc: &Document, untitle
 impl Session {
     /// Swap the active document's state with `d`'s: `d` then holds the document that was active.
     fn swap_doc(&mut self, d: &mut DocState) {
+        crate::cmd::md_source::apply(self);
         use std::mem::swap;
         // Every field is listed, so a new one doesn't build until someone decides whether each
         // open document has its own (then it goes in `DocState` and is swapped below) or the

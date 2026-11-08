@@ -46,7 +46,11 @@ impl Session {
     /// A command that changes nothing is not an edit: it adds no undo step, marks no
     /// unsaved changes, forces no relayout and leaves the redo stack alone (#23).
     fn unchanged(&self, doc: &Document, sel: &Selection, column: &Option<ColumnBlock>, pending: &Option<CharProps>) -> bool {
-        doc.same_content(&self.doc) && *sel == self.sel && *column == self.column && *pending == self.pending
+        doc.same_content(&self.doc)
+            && *sel == self.sel
+            && *column == self.column
+            && *pending == self.pending
+            && !self.md_source.as_ref().is_some_and(|src| src.is_pending())
     }
 
     /// Run a command by id with JSON params (the single entry point for the UI, CLI, MCP and
@@ -171,7 +175,7 @@ impl Session {
         // Whether this command pushed an undo step (a no-op command's step is dropped below,
         // leaving its undo group without one).
         let mut pushed = false;
-        if spec.mutates {
+        if spec.mutates && spec.id != "view.markdownSourceText" {
             let label = if typing { "Typing" } else { spec.label };
             // A joined command merges into its group's step; a group whose first command
             // changed nothing has none, so the next command in it starts one (#4001).

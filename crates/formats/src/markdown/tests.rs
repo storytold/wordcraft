@@ -797,3 +797,16 @@ fn heading_trailing_hash_survives_round_trip() {
         assert_eq!(export(&import(&md)), want, "second export of {src:?}");
     }
 }
+
+#[test]
+fn block_line_mapping() {
+    let md = "# Title\n\nFirst paragraph.\n\n## Second\n\n- one\n- two\n\n```\ncode\n```\n\nLast paragraph.\n";
+    let (flow, lines) = parse_with_lines(md);
+    assert_eq!(flow.blocks.len(), lines.len());
+    let (doc, doc_lines) = import_on_with_lines(md, &wordcraft_doc::SectionProps::default());
+    assert_eq!(doc.body.len(), doc_lines.len());
+    assert_eq!(lines, doc_lines);
+    assert_eq!(lines[0], 0);
+    assert_eq!(lines[1], 2);
+    assert_eq!(lines[2], 4);
+}

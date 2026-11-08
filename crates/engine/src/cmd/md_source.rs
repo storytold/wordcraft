@@ -12,6 +12,9 @@
 //! the document, the view shows it and Save writes it, unchanged. An edit in the formatted view
 //! makes the document something only writing it out again can say.
 
+use std::cell::RefCell;
+use std::sync::Arc;
+
 use serde_json::{Value, json};
 use wordcraft_doc::{Document, Path, Pos, StoryRef};
 
@@ -28,7 +31,7 @@ const LABEL: &str = "Markdown Source";
 pub struct MdSource {
     /// What the view shows and edits.
     pub text: String,
-    /// The caret in `text`, in characters. The front end keeps it current.
+    /// The caret in `text`, as a byte offset. The front end keeps it current.
     pub caret: usize,
     /// The front end still has to put its caret at `caret` and show it.
     pub place_caret: bool,
@@ -37,19 +40,21 @@ pub struct MdSource {
     /// When the front end last applied the text while it was being typed, on its own clock.
     pub applied_at_ms: f64,
     /// The text on entry.
-    entry_text: String,
+    entry_text: Arc<str>,
     /// The document on entry, which that text stands for: back to it, nothing is lost.
-    entry_doc: Document,
+    entry_doc: Arc<Document>,
     /// The text the document now holds.
-    applied: String,
+    applied: Arc<str>,
     /// The visit has its undo step.
     has_step: bool,
+    /// The line each top-level block starts on, from the last parse.
+    block_lines: Vec<usize>,
 }
 
 impl MdSource {
     /// The text holds edits the document doesn't have yet.
     pub fn is_pending(&self) -> bool {
-        self.text != self.applied
+        self.text != *self.applied
     }
 }
 
@@ -61,6 +66,7 @@ impl MdSource {
 pub struct FileText {
     saved: Option<String>,
     latest: Option<String>,
+    cached_exact: RefCell<Option<(u64, Option<String>)>>,
 }
 
 impl FileText {
@@ -69,12 +75,12 @@ impl FileText {
     pub fn from_bytes(bytes: &[u8]) -> Self {
         let keep = !bytes.is_empty() && bytes.len() <= MAX_SOURCE_BYTES && !bytes.starts_with(b"\xEF\xBB\xBF");
         let saved = keep.then(|| std::str::from_utf8(bytes).ok()).flatten().map(str::to_string);
-        Self { saved, latest: None }
+        Self { saved, latest: None, cached_exact: RefCell::new(None) }
     }
 
     /// The text just written to the file, which is the file's own text now.
     pub fn saved(text: Option<String>) -> Self {
-        Self { saved: text, latest: None }
+        Self { saved: text, latest: None, cached_exact: RefCell::new(None) }
     }
 
     /// No text is kept.
@@ -85,8 +91,15 @@ impl FileText {
 
 /// The kept text that stands for the document as it is, if one does: the latest first.
 fn exact_text(s: &Session) -> Option<String> {
+    if let Some((cached_rev, ref res)) = *s.md_file.cached_exact.borrow()
+        && cached_rev == s.rev()
+    {
+        return res.clone();
+    }
     let kept = [s.md_file.latest.as_deref(), s.md_file.saved.as_deref()];
-    kept.into_iter().flatten().find(|text| parse(&s.doc, text).same_content(&s.doc)).map(str::to_string)
+    let res = kept.into_iter().flatten().find(|text| parse(&s.doc, text).same_content(&s.doc)).map(str::to_string);
+    *s.md_file.cached_exact.borrow_mut() = Some((s.rev(), res.clone()));
+    res
 }
 
 /// What Save writes to the Markdown file `path`, in place of the document written out again: the
@@ -105,9 +118,8 @@ pub fn specs() -> Vec<CommandSpec> {
         // Not `pure`: leaving edits the document. Entering changes nothing, so it adds no undo step.
         CommandSpec::new(TOGGLE, LABEL, "View › Views", toggle).params(r#"{"value"?: bool}"#).when(can_toggle),
         CommandSpec::new(TEXT, "Markdown Source Text", "View › Views", text)
-            .params(r#"{"text"?: string, "caret"?: number}"#)
-            .when(|s| s.md_source.is_none().then_some("only in Markdown Source"))
-            .pure(),
+            .params(r#"{"text"?: string (up to 2 MB), "caret"?: integer >= 0}"#)
+            .when(|s| s.md_source.is_none().then_some("only in Markdown Source")),
     ]
 }
 
@@ -160,19 +172,28 @@ fn text(s: &mut Session, v: &Value) -> CmdResult {
     if new_text.is_some_and(|t| t.len() > MAX_SOURCE_BYTES) {
         return Err(CmdError::Params(too_long()));
     }
+    if let Some(cv) = v.get("caret").filter(|c| !c.is_null())
+        && cv.as_u64().is_none()
+    {
+        return Err(CmdError::Params("`caret` must be a non-negative integer".into()));
+    }
     let Some(src) = s.md_source.as_mut() else { return Err(CmdError::Disabled("only in Markdown Source".into())) };
     let mut edited = false;
     if let Some(t) = new_text {
         edited = src.text != t;
         src.text = t.to_string();
-        src.caret = src.caret.min(src.text.chars().count());
+        src.caret = src.text.floor_char_boundary(src.caret.min(src.text.len()));
     }
     if let Some(caret) = v.get("caret").and_then(Value::as_u64) {
-        src.caret = usize::try_from(caret).unwrap_or(usize::MAX).min(src.text.chars().count());
+        let caret = usize::try_from(caret).unwrap_or(usize::MAX).min(src.text.len());
+        src.caret = src.text.floor_char_boundary(caret);
     }
-    let result = json!({"text": src.text, "caret": src.caret, "losesContent": src.loses_content});
     if edited {
         s.dirty = true;
+    }
+    let mut result = json!({"caret": src.caret, "losesContent": src.loses_content});
+    if new_text.is_none() {
+        result["text"] = json!(&src.text);
     }
     Ok(result)
 }
@@ -185,29 +206,36 @@ fn too_long() -> String {
 /// Enters Markdown Source view, preparing source text and mapping caret position.
 fn enter(s: &mut Session) -> Result<(), CmdError> {
     // The file's own text when it still says what the document holds, so nothing is lost.
-    let (text, loses_content) = match exact_text(s) {
-        Some(text) => (text, false),
+    let (text, loses_content, block_lines) = match exact_text(s) {
+        Some(text) => {
+            let (_, lines) = parse_with_lines(&s.doc, &text);
+            (text, false, lines)
+        }
         None => {
             let text = wordcraft_formats::markdown::export(&s.doc);
             if text.len() > MAX_SOURCE_BYTES {
-                return Err(CmdError::Failed(too_long()));
+                return Err(CmdError::Params(too_long()));
             }
-            let loses_content = !parse(&s.doc, &text).same_content(&s.doc);
-            (text, loses_content)
+            let (doc, lines) = parse_with_lines(&s.doc, &text);
+            let loses_content = !doc.same_content(&s.doc);
+            (text, loses_content, lines)
         }
     };
     let block = if s.sel.focus.story == StoryRef::Body { s.sel.focus.path.0.first().copied().unwrap_or(0) as usize } else { 0 };
-    let caret = line_start_char(&text, line_of_block(&text, block));
+    let line = block_lines.get(block).copied().unwrap_or(0);
+    let caret = line_start_byte(&text, line);
+    let text_arc: Arc<str> = Arc::from(text.as_str());
     s.md_source = Some(MdSource {
         caret,
         place_caret: true,
         loses_content,
         applied_at_ms: 0.0,
-        entry_doc: s.doc.clone(),
-        entry_text: text.clone(),
-        applied: text.clone(),
+        entry_doc: Arc::new(s.doc.clone()),
+        entry_text: text_arc.clone(),
+        applied: text_arc,
         text,
         has_step: false,
+        block_lines,
     });
     Ok(())
 }
@@ -224,9 +252,9 @@ fn leave(s: &mut Session) {
     }
     apply(s);
     if let Some(src) = s.md_source.take()
-        && (had_step || src.text != src.entry_text)
+        && (had_step || src.text != *src.entry_text)
     {
-        let block = block_of_caret(&src.text, src.caret, &s.doc);
+        let block = block_of_caret(&src.text, src.caret, &s.doc, &src.block_lines);
         s.sel = Selection::caret(block);
     }
 }
@@ -234,9 +262,14 @@ fn leave(s: &mut Session) {
 /// The text into the document, if it has edits the document lacks. Its first change in a visit
 /// takes the visit's undo step. Save, AutoSave and crash recovery see the text this way.
 pub fn apply(s: &mut Session) {
-    let Some(src) = s.md_source.as_ref().filter(|src| src.is_pending()) else { return };
-    let doc = if src.text == src.entry_text { src.entry_doc.clone() } else { parse(&s.doc, &src.text) };
-    let (text, has_step) = (src.text.clone(), src.has_step);
+    let (text, entry_text, entry_doc, has_step, block_lines) = {
+        let Some(src) = s.md_source.as_ref().filter(|src| src.is_pending()) else { return };
+        if src.text.len() > MAX_SOURCE_BYTES {
+            return;
+        }
+        (src.text.clone(), src.entry_text.clone(), src.entry_doc.clone(), src.has_step, src.block_lines.clone())
+    };
+    let (doc, lines) = if text == *entry_text { ((*entry_doc).clone(), block_lines) } else { parse_with_lines(&s.doc, &text) };
     if !has_step {
         s.checkpoint(LABEL);
     }
@@ -246,71 +279,60 @@ pub fn apply(s: &mut Session) {
     s.touch();
     s.clamp_selection();
     s.md_file.latest = Some(text.clone());
+    *s.md_file.cached_exact.borrow_mut() = Some((s.rev(), Some(text.clone())));
     if let Some(src) = s.md_source.as_mut() {
-        src.applied = text;
+        src.applied = Arc::from(text.as_str());
+        src.block_lines = lines;
         src.has_step = true;
     }
+}
+
+/// `text` as a document and block lines, with what isn't in Markdown from `current`: its page, settings,
+/// properties and language, as opening the file gave it.
+fn parse_with_lines(current: &Document, text: &str) -> (Document, Vec<usize>) {
+    let (mut doc, lines) = wordcraft_formats::markdown::import_on_with_lines(text, &current.last_section);
+    doc.ensure_nonempty();
+    doc.settings = current.settings.clone();
+    doc.core = current.core.clone();
+    Arc::make_mut(&mut doc.styles).default_chr.lang = current.styles.default_chr.lang.clone();
+    (doc, lines)
 }
 
 /// `text` as a document, with what isn't in Markdown from `current`: its page, settings,
 /// properties and language, as opening the file gave it.
 fn parse(current: &Document, text: &str) -> Document {
-    let mut doc = wordcraft_formats::markdown::import_on(text, &current.last_section);
-    doc.ensure_nonempty();
-    doc.settings = current.settings.clone();
-    doc.core = current.core.clone();
-    std::sync::Arc::make_mut(&mut doc.styles).default_chr.lang = current.styles.default_chr.lang.clone();
-    doc
+    parse_with_lines(current, text).0
 }
 
-/// The line of `text` that top-level block `block` starts on: the first line that, read with the
-/// lines before it, makes more blocks than that. Found by halving, as the count only grows.
-fn line_of_block(text: &str, block: usize) -> usize {
-    if block == 0 {
-        return 0;
-    }
-    let ends: Vec<usize> = text.match_indices('\n').map(|(i, _)| i.saturating_add(1)).chain(std::iter::once(text.len())).collect();
-    let (mut lo, mut hi) = (0, ends.len().saturating_sub(1));
-    while lo < hi {
-        let mid = lo + (hi - lo) / 2;
-        let end = ends.get(mid).copied().unwrap_or(text.len());
-        let blocks = wordcraft_formats::markdown::import(text.get(..end).unwrap_or(text)).body.len();
-        if blocks > block {
-            hi = mid;
-        } else {
-            lo = mid.saturating_add(1);
-        }
-    }
-    lo
-}
-
-/// The character where `line` starts, or the end of a text with fewer lines.
-fn line_start_char(text: &str, line: usize) -> usize {
+/// The byte offset where `line` starts, or the end of a text with fewer lines.
+fn line_start_byte(text: &str, line: usize) -> usize {
     if line == 0 {
         return 0;
     }
     let mut lines = 0;
-    for (i, c) in text.chars().enumerate() {
-        if c == '\n' {
+    for (i, &b) in text.as_bytes().iter().enumerate() {
+        if b == b'\n' {
             lines += 1;
             if lines == line {
                 return i.saturating_add(1);
             }
         }
     }
-    text.chars().count()
+    text.len()
 }
 
-/// Where the caret at character `caret` of `text` lands in `doc`, read from that text: at the
+/// The 0-based line that byte offset `byte` belongs to.
+fn line_of_byte(text: &str, byte: usize) -> usize {
+    let slice = text.as_bytes().get(..byte).unwrap_or(text.as_bytes());
+    slice.iter().filter(|&&b| b == b'\n').count()
+}
+
+/// Where the caret at byte offset `caret` of `text` lands in `doc`: at the
 /// start of the top-level block its line belongs to.
-fn block_of_caret(text: &str, caret: usize, doc: &Document) -> Pos {
-    let end = text.char_indices().nth(caret).map_or(text.len(), |(i, _)| i);
-    let head = text.get(..end).unwrap_or(text);
-    // The caret's line whole, so a block it is at the start of counts.
-    let line_end = text.get(end..).and_then(|rest| rest.find('\n')).map_or(text.len(), |n| end.saturating_add(n));
-    let before = text.get(..line_end).unwrap_or(head);
-    let blocks = wordcraft_formats::markdown::import(before).body.len();
-    let top = blocks.saturating_sub(1).min(doc.body.len().saturating_sub(1));
+fn block_of_caret(text: &str, caret: usize, doc: &Document, block_lines: &[usize]) -> Pos {
+    let caret_line = line_of_byte(text, caret);
+    let top = if block_lines.is_empty() { 0 } else { block_lines.partition_point(|&l| l <= caret_line).saturating_sub(1) };
+    let top = top.min(doc.body.len().saturating_sub(1));
     let top = u32::try_from(top).unwrap_or(0);
     let path = doc.para_paths(StoryRef::Body).into_iter().find(|path| path.0.first().is_some_and(|b| *b >= top));
     match path {
@@ -397,9 +419,17 @@ mod tests {
         assert!(s.can_redo());
     }
 
+    static TEST_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn unique_temp_dir(tag: &str) -> PathBuf {
+        let n = TEST_DIR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        std::env::temp_dir().join(format!("wordcraft-md-{tag}-{}-{n}-{nanos}", std::process::id()))
+    }
+
     #[test]
     fn save_writes_the_text_and_the_visit_stays_one_undo_step() {
-        let dir = std::env::temp_dir().join(format!("wordcraft-md-source-{}", std::process::id()));
+        let dir = unique_temp_dir("source-save");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("saved.md");
         let mut s = session(SAMPLE);
@@ -421,7 +451,7 @@ mod tests {
         assert_eq!(s.undo_depth(), depth + 1, "one step for the whole visit");
         s.run("edit.undo", &json!({})).unwrap();
         assert!(s.doc.same_content(&before));
-        std::fs::remove_dir_all(&dir).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -500,7 +530,7 @@ mod tests {
         s.run(TOGGLE, &json!({})).unwrap();
         s.set_document(Document::from_text(&"x".repeat(MAX_SOURCE_BYTES + 1)));
         s.path = Some(PathBuf::from("/tmp/a.md"));
-        assert!(s.run(TOGGLE, &json!({})).is_err());
+        assert!(matches!(s.run(TOGGLE, &json!({})), Err(CmdError::Params(_))));
         assert!(s.md_source.is_none());
     }
 
@@ -516,10 +546,10 @@ mod tests {
         s.sel = Selection::caret(Pos { story: StoryRef::Body, path: target.clone(), off: 2 });
         s.run(TOGGLE, &json!({})).unwrap();
         let src = s.md_source.as_ref().unwrap();
-        let line: String = src.text.chars().skip(src.caret).take_while(|c| *c != '\n').collect();
+        let line: String = src.text[src.caret..].chars().take_while(|c| *c != '\n').collect();
         assert!(line.contains("Last"), "caret on {line:?} in {:?}", src.text);
         let changed = src.text.replace("First paragraph.", "First changed paragraph.");
-        let caret = changed.chars().collect::<String>().find("Last").map(|byte| changed[..byte].chars().count()).unwrap();
+        let caret = changed.find("Last").unwrap();
         s.run(TEXT, &json!({"text": changed, "caret": caret})).unwrap();
         s.run(TOGGLE, &json!({})).unwrap();
         let para = s.doc.para(StoryRef::Body, &s.sel.focus.path).unwrap();
@@ -561,7 +591,7 @@ mod tests {
 
     /// A scratch folder holding `name` with `text`, opened in a new session.
     fn open_file(dir: &str, name: &str, text: &[u8]) -> (Session, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("wordcraft-md-own-{dir}-{}", std::process::id()));
+        let dir = unique_temp_dir(&format!("own-{dir}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(name);
@@ -666,7 +696,7 @@ mod tests {
         }
         // A Word document saved as Markdown is a copy written out as always.
         let mut s = Session::new(Document::from_text("Hello"));
-        let dir = std::env::temp_dir().join(format!("wordcraft-md-own-docx-{}", std::process::id()));
+        let dir = unique_temp_dir("own-docx");
         std::fs::create_dir_all(&dir).unwrap();
         s.path = Some(dir.join("a.docx"));
         let r = s.run("file.saveAs", &json!({"path": dir.join("a.md").to_string_lossy()})).unwrap();
@@ -686,7 +716,7 @@ mod tests {
         s.sel = Selection::caret(Pos { story: StoryRef::Body, path: target, off: 0 });
         s.run(TOGGLE, &json!({})).unwrap();
         let src = s.md_source.as_ref().unwrap();
-        let line: String = src.text.chars().skip(src.caret).take_while(|c| *c != '\n').collect();
+        let line: String = src.text[src.caret..].chars().take_while(|c| *c != '\n').collect();
         assert_eq!(line, "Last paragraph.");
         done(&path);
     }
@@ -697,5 +727,21 @@ mod tests {
         s.run(TOGGLE, &json!({})).unwrap();
         s.set_document(Document::from_text("New"));
         assert!(s.md_source.is_none());
+    }
+
+    #[test]
+    fn invalid_and_negative_carets_are_refused() {
+        let mut s = session(SAMPLE);
+        s.run(TOGGLE, &json!({})).unwrap();
+        for bad in [json!({"caret": -1}), json!({"caret": -100}), json!({"caret": 2.5}), json!({"caret": "three"})] {
+            assert!(matches!(s.run(TEXT, &bad), Err(CmdError::Params(_))), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn markdown_source_text_is_not_marked_pure() {
+        let s = session(SAMPLE);
+        let spec = s.registry.get(TEXT).unwrap();
+        assert!(spec.mutates, "view.markdownSourceText mutates session and dirty state");
     }
 }
