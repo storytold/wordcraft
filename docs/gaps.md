@@ -194,6 +194,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-11-03 | trivial | Field argument parsing follows Word quoted backslash escapes; body PAGE formatting follows the active section in paragraphs and tables; no ranked gap changed |
 | 2026-11-07 | trivial | Pagination gap #4: An in-line picture lowered past its own height (`w:position`) lowers its line as far, as in Word; all 156 synthetic lines measured for #3984 match Word (#5796). |
 | 2026-10-31 | trivial | A list level with numFmt none shows its literal text as its label and still counts, as in Word (#4985); no ranked gap changed; readiness estimates unchanged |
+| 2026-11-02 | trivial | Picture hyperlinks show on hover, follow on Ctrl/⌘+click and round-trip as Word stores them (#5267); no ranked gap changed; readiness estimates unchanged |
 | 2026-11-02 | trivial | #26 narrowed: MHT opens and `w:altChunk` content is brought in on open; saving MHT remains |
 | 2026-11-01 | trivial | Preserve table rows and cells inside selected alternate-content branches (#5219); readiness estimates unchanged. |
 | 2026-11-06 | trivial | Print helpers remove loaded PDF/settings files before driver work, tolerate prior removal and report cleanup errors; a held-driver regression checks the files are already absent (#5710) |
