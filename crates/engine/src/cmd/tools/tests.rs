@@ -193,6 +193,8 @@ fn compare_bounds_total_diff_work() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), revised);
 }
 
+mod compare_completeness;
+
 #[test]
 fn macros_record_and_run() {
     let mut s = Session::new(Document::new());

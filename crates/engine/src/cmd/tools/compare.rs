@@ -329,7 +329,8 @@ fn flatten_region(out: &mut Vec<Op>, region: &[(Op, usize, Kind)]) {
 }
 
 /// A token of a changed paragraph: a word (or character), or an inline object without text
-/// of its own (a text box anchor, a picture, a bookmark…), which is compared and kept whole.
+/// of its own (a text box anchor, a picture, a bookmark…) or an equation, which is compared and
+/// kept whole.
 enum Tok<'a> {
     Text(String),
     Obj(&'a InlineObject),
@@ -358,7 +359,7 @@ fn same_objects(doc: &Document, a: &Paragraph, b: &Paragraph) -> bool {
 }
 
 /// Words with the spaces after them ("The ", "cat "), or single characters, and the objects
-/// between them. Objects with text (fields, equations…) count as their text.
+/// between them. Objects with text (fields, ruby…) count as their text; equations are kept whole.
 fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
     fn push(v: &mut Vec<Tok<'_>>, cur: &mut String, c: char, characters: bool) {
         cur.push(c);
@@ -375,7 +376,10 @@ fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
             continue;
         }
         match objects.next() {
-            Some(o) if o.plain_text().is_empty() => {
+            // An equation's linear text is a stand-in, not the file's text. Flattened, the result
+            // gets that text in place of the equation, glued to the word beside it ("m149" +
+            // "x+1" saved as one `w:t` "m149x+1"), and the equation leaves the file (#5924).
+            Some(o) if o.plain_text().is_empty() || matches!(o, InlineObject::Equation { .. }) => {
                 if !cur.is_empty() {
                     v.push(Tok::Text(std::mem::take(&mut cur)));
                 }
@@ -425,7 +429,11 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ins: u32, del: u32, o
     let ops = if chars { collapse_noise_matches(&ops) } else { ops };
     let mut p = Paragraph::new();
     p.props = b.props.clone();
-    let base = a.runs.first().map(|r| r.props.clone()).unwrap_or_default();
+    let mut base = a.runs.first().map(|r| r.props.clone()).unwrap_or_default();
+    // A symbol's font belongs to that one character (a manual bullet opening the paragraph).
+    // Given to every token, it makes the writer save each of them as a `w:sym`, so the words
+    // leave the file's text, deleted ones included (#5924).
+    base.sym_font = None;
     let (mut i, mut j) = (0, 0);
     for op in ops {
         match op {
