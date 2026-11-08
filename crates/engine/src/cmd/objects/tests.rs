@@ -1071,6 +1071,66 @@ fn picture_size_past_the_limit_keeps_the_proportions() {
     }
 }
 
+/// A side the call leaves as it was keeps its size, even outside 1–4000 pt: a straight line's 0
+/// stays 0 when only its length is typed. Sides set in proportion (the original, or a size whose
+/// sides both have a length) fit the limits together; any other side the call sets, on its own.
+#[test]
+fn picture_size_keeps_the_side_it_leaves() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.shape", &json!({"kind": "straightConnector", "width": 100.0, "height": 0.0})).unwrap();
+    let size = |s: &Session| obj_size(&selected(s).unwrap().1);
+    // A side a scale sets on its own: 0 has no length to scale.
+    let scaled = |x: f32, k: f32| if x == 0.0 { 0.0 } else { (x * k).clamp(1.0, 4000.0) };
+    // Sizes with both sides follow each other: they fit 1–4000 pt by the one factor nearest 1, worked out by hand
+    // for the calls `width` locked, `height` locked, `scale` 50 and `scale` 200 with a width (in that order).
+    let states = [
+        ((100.0, 0.0), None),
+        ((0.0, 100.0), None),
+        ((5000.0, 0.0), None),
+        ((0.0, 5000.0), None),
+        ((100.0, 0.5), Some([(200.0, 1.0), (4000.0, 20.0), (200.0, 1.0), (200.0, 1.0)])),
+        ((5000.0, 50.0), Some([(200.0, 2.0), (4000.0, 40.0), (2500.0, 25.0), (200.0, 2.0)])),
+        ((100.0, 50.0), Some([(200.0, 100.0), (400.0, 200.0), (50.0, 25.0), (200.0, 100.0)])),
+    ];
+    for ((w0, h0), together) in states {
+        let follow = |i: usize, alone: (f32, f32)| together.map_or(alone, |t: [(f32, f32); 4]| t[i]);
+        let cases = [
+            (json!({"width": 200.0, "lockAspect": false}), (200.0, h0)),
+            (json!({"height": 200.0, "lockAspect": false}), (w0, 200.0)),
+            (json!({"width": 200.0}), follow(0, (200.0, h0))),
+            (json!({"height": 200.0}), follow(1, (w0, 200.0))),
+            (json!({"scale": 50}), follow(2, (scaled(w0, 0.5), scaled(h0, 0.5)))),
+            (json!({"scale": 200, "width": 200.0}), follow(3, (200.0, scaled(h0, 2.0)))),
+            (json!({"scale": 100}), (w0, h0)),
+            (json!({}), (w0, h0)),
+            // The Size dialog: both sides sent, the height as it was.
+            (json!({"width": 200.0, "height": h0, "lockAspect": false}), (200.0, h0)),
+            (json!({"width": 200.0, "height": 300.0}), (200.0, 300.0)),
+        ];
+        for (v, (ew, eh)) in cases {
+            with_obj(&mut s, |o| o.set_size(w0, h0)).unwrap();
+            s.run("picture.size", &v).unwrap();
+            let (w, h) = size(&s);
+            assert!((w - ew).abs() < 1e-3 && (h - eh).abs() < 1e-3, "{w0}×{h0} {v}: {w}×{h}, not {ew}×{eh}");
+        }
+    }
+    // Both sides of a picture's original size fit together, whatever size it had, even when the
+    // height comes out as it was: 4050×1012.5 pt is 4000×1000, not 4000×1012.5.
+    let data = super::super::insert::base64_encode(&png(400, 100));
+    s.run("insert.picture", &json!({"data": data})).unwrap();
+    for (w0, h0) in [(3000.0, 1012.5), (4050.0, 0.0), (100.0, 100.0)] {
+        with_obj(&mut s, |o| o.set_size(w0, h0)).unwrap();
+        s.run("picture.size", &json!({"original": true, "scale": 1350})).unwrap();
+        let (w, h) = size(&s);
+        assert!((w - 4000.0).abs() < 0.01 && (h - 1000.0).abs() < 0.01, "{w0}×{h0}: {w}×{h}");
+    }
+    // A height the original sets is set, though it is the one the picture had: 300×75 pt at
+    // 5400 % is 16200×4050, so with a width of 200 the height fits to 4000.
+    with_obj(&mut s, |o| o.set_size(100.0, 4050.0)).unwrap();
+    s.run("picture.size", &json!({"original": true, "scale": 5400, "width": 200.0, "lockAspect": false})).unwrap();
+    assert_eq!(size(&s), (200.0, 4000.0));
+}
+
 /// A crop handle drop: `picture.crop` with the new size is one edit, one undo step.
 #[test]
 fn picture_crop_with_size_is_one_undo_step() {

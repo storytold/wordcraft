@@ -473,6 +473,8 @@ fn anchor_floats_but(
     late: &[usize],
 ) -> (HashMap<usize, Rect>, Arc<ParaLayout>, Vec<para::Exclusion>) {
     let FloatAnchor { p, block, y0, before, excl_mark, label, place } = anchor;
+    ctx.fields.page = pb.number;
+    ctx.fields.page_format = pb.page_format;
     let (col_x, width) = (pb.col_x(), pb.col_w());
     let mut rects = HashMap::new();
     if !pb.web && place {
@@ -759,7 +761,8 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 }
             } else {
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
-                display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, (c.obj_h, c.obj_d), pl.rule_room(line, k))
+                let modern = ctx.doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT;
+                display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, (c.obj_h, c.obj_d), pl.rule_room(line, k), modern)
             };
             let (mut behind, mut front) = (Vec::new(), Vec::new());
             let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };

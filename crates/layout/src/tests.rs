@@ -1821,6 +1821,30 @@ fn lists_get_labels_and_indent() {
 }
 
 #[test]
+fn a_none_format_label_shows_its_text_and_tabs_to_the_indent() {
+    // #4985: Word draws a "none" level's literal text ("RESPONSE:"), and an empty one still tabs
+    // the text to a hanging indent, as a numbered item's. An empty label already at the left indent
+    // takes no tab (Word's Chapter 1 list: Heading 2 starts at the margin, not at 0.5").
+    use wordcraft_doc::section::NumFormat;
+    for (text, indent, hanging, want) in [("RESPONSE:", 72.0, 72.0, 144.0), ("", 72.0, 72.0, 144.0), ("", 0.0, 0.0, 72.0), ("", 50.0, 0.0, 122.0)] {
+        let mut d = Document::from_text("X");
+        let id = std::sync::Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+        for a in &mut std::sync::Arc::make_mut(&mut d.numbering).abstracts {
+            if let Some(l) = a.levels.first_mut() {
+                l.format = NumFormat::None;
+                l.text = text.into();
+                (l.indent, l.hanging) = (indent, hanging);
+            }
+        }
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 1), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
+        let l = lay(&d);
+        assert_eq!(labels(&l), [text]);
+        let x = l.caret(&Pos::body(0, 0)).unwrap().x;
+        assert!((x - want).abs() < 0.5, "{text:?} at {indent}/{hanging}: {x}, not {want}");
+    }
+}
+
+#[test]
 fn break_only_list_has_no_label() {
     use wordcraft_doc::ListKind;
     for kind in [ListKind::Numbered, ListKind::Bullet] {
@@ -5569,7 +5593,7 @@ fn inline_picture_keeps_room_for_its_effects() {
     assert_eq!((c.adv, c.obj_h), (124.0, 89.0), "picture plus effect extents");
     // Drawn inside that room.
     let obj = picture(100.0, 50.0, shadow);
-    let r = display::inline_rect(Some(&obj), 10.0, 200.0, c.adv, (c.obj_h, c.obj_d), c.adv);
+    let r = display::inline_rect(Some(&obj), 10.0, 200.0, c.adv, (c.obj_h, c.obj_d), c.adv, true);
     assert_eq!((r.x, r.y, r.w, r.h), (16.0, 123.0, 100.0, 50.0));
 }
 
@@ -5596,15 +5620,65 @@ fn an_inline_picture_moves_with_its_runs_position() {
     let (c, line, _) = line_of(-30.0);
     assert_eq!((c.obj_h, c.obj_d), (0.0, 30.0));
     assert!(line.top + line.height - line.baseline >= 30.0 - 0.01, "{line:?}");
-    let r = display::inline_rect(Some(&picture(40.0, 30.0, Default::default())), 0.0, 100.0, c.adv, (c.obj_h, c.obj_d), c.adv);
+    let r = display::inline_rect(Some(&picture(40.0, 30.0, Default::default())), 0.0, 100.0, c.adv, (c.obj_h, c.obj_d), c.adv, true);
     assert_eq!((r.y, r.h), (100.0, 30.0));
-    // Lowered further than that: still only to its top.
-    assert_eq!(line_of(-500.0).0.obj_d, 30.0);
+    // Lowered further than that: the line reaches as far down, the picture's top staying on the
+    // baseline (Word).
+    let (c, line, _) = line_of(-500.0);
+    assert_eq!((c.obj_h, c.obj_d), (-470.0, 500.0));
+    assert!(line.top + line.height - line.baseline >= 500.0 - 0.01, "{line:?}");
+    let r = display::inline_rect(Some(&picture(40.0, 30.0, Default::default())), 0.0, 100.0, c.adv, (c.obj_h, c.obj_d), c.adv, true);
+    assert_eq!((r.y, r.h), (100.0, 30.0));
     // Raised: it stands clear of the baseline, as tall as before.
     let (c, _, _) = line_of(6.0);
     assert_eq!((c.obj_h, c.obj_d), (36.0, -6.0));
-    let r = display::inline_rect(Some(&picture(40.0, 30.0, Default::default())), 0.0, 100.0, c.adv, (c.obj_h, c.obj_d), c.adv);
+    let r = display::inline_rect(Some(&picture(40.0, 30.0, Default::default())), 0.0, 100.0, c.adv, (c.obj_h, c.obj_d), c.adv, true);
     assert_eq!((r.y, r.h), (64.0, 30.0));
+}
+
+/// A turned inline picture whose file kept no room for the turn: Word keeps its line to the frame
+/// (Word 2007 layout) or to the frame with width and height exchanged near a quarter turn (Word
+/// 2013+), and the picture overhangs it. One with room recorded takes its rotated bounds.
+#[test]
+fn bare_turned_inline_picture_keeps_its_frame() {
+    let room = |rot: f32, bare_turn: bool, compat: u32| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = compat;
+        let float = wordcraft_doc::para::Float { rot, bare_turn, ..Default::default() };
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+            p.insert_object(0, picture(120.0, 60.0, float), &Default::default()).unwrap();
+        }
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        let c = para.clusters.iter().find(|c| matches!(c.kind, para::ClKind::Object(_))).unwrap();
+        // Drawn unscaled, centred in that room.
+        let obj = picture(120.0, 60.0, wordcraft_doc::para::Float { rot, bare_turn, ..Default::default() });
+        let r = display::inline_rect(Some(&obj), 0.0, 200.0, c.adv, (c.obj_h, c.obj_d), c.adv, compat >= 15);
+        assert_eq!((r.w, r.h), (120.0, 60.0), "{rot}° bare {bare_turn} compat {compat}");
+        assert_eq!((r.x + r.w / 2.0, r.y + r.h / 2.0), (c.adv / 2.0, 200.0 - c.obj_h / 2.0));
+        // Only a bare turn that overhangs its line is cut, at the line's top and bottom.
+        let overhangs =
+            bare_turn && (c.obj_h as f64) < 120.0 * (rot as f64).to_radians().sin().abs() + 60.0 * (rot as f64).to_radians().cos().abs() - 0.1;
+        let clips: Vec<Rect> = display::page_display(&d, &l.pages[0], &Default::default())
+            .iter()
+            .filter_map(|i| if let display::Draw::Clip { rect, .. } = i { Some(*rect) } else { None })
+            .collect();
+        assert_eq!(clips.len(), usize::from(overhangs), "{rot}° bare {bare_turn} compat {compat}: {clips:?}");
+        if let Some(band) = clips.first() {
+            assert!(band.h >= c.obj_h && band.w > 4000.0, "{band:?}");
+        }
+        (c.adv.round(), c.obj_h.round())
+    };
+    assert_eq!(room(90.0, true, 12), (120.0, 60.0));
+    assert_eq!(room(45.0, true, 12), (120.0, 60.0));
+    assert_eq!(room(180.0, true, 12), (120.0, 60.0));
+    assert_eq!(room(90.0, true, 15), (60.0, 120.0));
+    assert_eq!(room(45.0, true, 15), (60.0, 120.0));
+    assert_eq!(room(135.0, true, 15), (120.0, 60.0));
+    assert_eq!(room(270.0, true, 15), (60.0, 120.0));
+    // Room recorded (Word's own files, WordCraft's turns): the rotated bounds, in any layout.
+    assert_eq!(room(90.0, false, 12), (60.0, 120.0));
+    assert_eq!(room(45.0, false, 15), (127.0, 127.0));
 }
 
 /// Tops of the body text lines drawn on page one, in order.
@@ -10209,6 +10283,20 @@ fn empty_page_section_keeps_line() {
 /// side by side). A section break on a paragraph with text keeps its line, and so does any break
 /// before a section on a new page. The SARP form's fields drifted a line lower at each of its
 /// many continuous breaks.
+/// A continuous section starting mid-page leaves its first paragraph's page break before in
+/// force, measured in Word for Mac: "Cover", an empty mark closing a continuous section, then
+/// "Heading" with page break before puts "Heading" on page 2.
+#[test]
+fn a_page_break_before_after_a_continuous_mark_starts_a_page() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    let mut d = Document::from_text("Cover\n\nHeading");
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().section =
+        Some(Box::new(SectionProps { start: SectionStart::Continuous, ..Default::default() }));
+    d.para_mut(StoryRef::Body, &Path::top(2)).unwrap().props.page_break_before = Some(true);
+    d.last_section.start = SectionStart::Continuous;
+    assert_eq!(lay(&d).caret(&Pos::body(2, 0)).unwrap().page, 1);
+}
+
 #[test]
 fn an_empty_continuous_section_mark_takes_no_room() {
     use wordcraft_doc::section::{SectionProps, SectionStart};
@@ -13462,6 +13550,61 @@ fn a_non_breaking_hyphen_and_a_minus_sign_stay_unbreakable() {
     }
 }
 
+/// #3408: Word breaks a compound right after a hyphen that a slash follows ("Dataprotection-" /
+/// "/Secrecyviolation"), where UAX #14 forbids a break before the slash. The first width that
+/// wraps must break after the hyphen, not move the compound whole, and the slash stays with its
+/// word. Table auto-fit reads the same break, so such a column no longer widens to the compound.
+/// Word keeps "fitness-/1589" whole: a slash before a digit gains no break.
+#[test]
+fn a_hyphen_before_a_slash_is_a_break_opportunity_like_word() {
+    let digits = "Deed fitness-/1589";
+    let mut wrapped = false;
+    for m in 100..=540 {
+        let mut d = Document::from_text(digits);
+        d.last_section.margin_right = m as f32;
+        let l = lay(&d);
+        let lines: Vec<&str> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| if let Placed::Lines { para, l0, l1, .. } = it { Some(&para.lines[*l0..*l1]) } else { None })
+            .flatten()
+            .map(|line| &digits[line.start..line.stop])
+            .collect();
+        if lines.len() >= 2 {
+            assert_eq!(lines, ["Deed ", "fitness-/1589"], "the first wrap breaks at the space, not after the hyphen");
+            wrapped = true;
+            break;
+        }
+    }
+    assert!(wrapped, "no width in the sweep wrapped the digit case");
+
+    let text = "Deed Dataprotection-/Secrecyviolation";
+    for m in 100..=540 {
+        let mut d = Document::from_text(text);
+        d.last_section.margin_right = m as f32;
+        let l = lay(&d);
+        let lines: Vec<String> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| {
+                if let Placed::Lines { para, l0, l1, .. } = it {
+                    Some(para.lines[*l0..*l1].iter().map(|line| text[line.start..line.stop].to_string()).collect::<Vec<_>>())
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect();
+        if lines.len() < 2 {
+            continue; // still fits on one line at this width
+        }
+        assert_eq!(lines[0], "Deed Dataprotection-", "the first wrap breaks after the hyphen: {lines:?}");
+        assert_eq!(lines[1], "/Secrecyviolation", "the slash starts the next line with its word: {lines:?}");
+        return;
+    }
+    panic!("no width in the sweep wrapped the paragraph");
+}
+
 #[test]
 fn layout_cache_invalidates_on_changed_filename() {
     let mut doc = Document::new();
@@ -13694,7 +13837,7 @@ fn lowered_pictures_and_check_boxes_take_words_line_heights() {
         let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
         let c = para.clusters.iter().find(|c| matches!(c.kind, para::ClKind::Object(_))).unwrap();
         let (line, st) = (&para.lines[0], &para.styles[c.style as usize]);
-        (line.height, line.baseline - c.obj_h - line.top, st.ascent + st.descent)
+        (line.height, line.baseline - c.obj_h.max(0.0) - line.top, st.ascent + st.descent)
     };
     for m in [1.0, 1.15, 1.5] {
         let share = |font: f32| (m - 1.0) * font;
@@ -13711,10 +13854,36 @@ fn lowered_pictures_and_check_boxes_take_words_line_heights() {
             let (h, top, font) = line_of("", m, 6.0, raise);
             assert!((h - font * m).abs() < 0.01 && (top - (font - reach)).abs() < 0.01, "{raise} at {m}: {h}, {top}");
         }
+        // Lowered further than its height: as far down as it's lowered, the font's height at least,
+        // its top on the baseline (Word: a 6 pt picture lowered 10 pt takes the font's 11.5 pt,
+        // lowered 30 pt 30 pt; beside text, the text's ascent and the 30 pt).
+        let (h, top, font) = line_of("", m, 6.0, -10.0);
+        assert!((h - font * m).abs() < 0.01 && (top - (font - 10.0)).abs() < 0.01, "6 lowered 10 at {m}: {h}, {top}");
+        let (h, top, font) = line_of("", m, 6.0, -30.0);
+        assert!((h - 30.0 - share(font)).abs() < 0.01 && top.abs() < 0.01, "6 lowered 30 at {m}: {h}, {top}");
+        let (h, top, font) = line_of("x", m, 6.0, -30.0);
+        let asc = h - 30.0 - share(font);
+        assert!(asc > 0.0 && asc < font && (top - asc).abs() < 0.01, "6 lowered 30 beside text at {m}: {h}, {top}");
         // Beside text, lowered: the text's ascent is no matter, the picture reaching further.
         let (h, top, font) = line_of("x", m, 30.0, -10.0);
         assert!((h - 30.0 - share(font)).abs() < 0.01 && top.abs() < 0.01, "beside text at {m}: {h}, {top}");
     }
+    // Exact spacing keeps the line's box and its baseline: a picture lowered past its height sits
+    // where one lowered by its height does.
+    let exact = |raise: f32| {
+        let mut d = Document::from_text("x");
+        let props = wordcraft_doc::CharProps { position: Some(raise), ..Default::default() };
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.props.line_spacing = Some(LineSpacing::Exactly(20.0));
+        let at = p.len();
+        p.insert_object(at, picture(40.0, 6.0, Default::default()), &props).unwrap();
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        (para.lines[0].height, para.lines[0].baseline - para.lines[0].top)
+    };
+    let (h, base) = exact(-6.0);
+    assert!((h - 20.0).abs() < 0.01, "{h}");
+    assert_eq!(exact(-30.0), (h, base));
     // A check box sizes its line as text of its size, alone or beside text.
     let box_line = |lead: &str, m: f32, size: u32| {
         let mut d = Document::from_text(lead);
