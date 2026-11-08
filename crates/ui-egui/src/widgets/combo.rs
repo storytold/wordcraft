@@ -266,7 +266,7 @@ struct ComboSearch {
     items_len: usize,
     matches: std::sync::Arc<Vec<usize>>,
     /// Index among the entries: the recent families shown, then `matches`.
-    highlight: usize,
+    highlight: Option<usize>,
     /// Up or Down moved the highlight since the query last changed.
     moved: bool,
     /// Rows the list drew last frame; 0 while it is hidden.
@@ -335,11 +335,12 @@ fn consume_arrow_steps(ui: &mut Ui, open: bool, has_focus: bool) -> i32 {
 /// Clicking the text box (`resp.clicked()`) when the dropdown is closed sets `s.open = true`,
 /// `s.typed = false`, `s.moved = false`, `*reveal = true`, and selects all text with [`select_all_text`].
 /// Clicking while already open preserves caret positioning for partial edits without re-selecting all text.
-/// Gaining focus alone (`resp.gained_focus()` without click, such as on Tab navigation) selects all text
-/// for typing without opening the 420px dropdown popup.
+/// Gaining focus alone (`resp.gained_focus()` when `!was_open`, such as on Tab navigation) selects all text
+/// for typing without opening the 420px dropdown popup, while regaining focus when already open (e.g. after
+/// interacting with the popup scrollbar) preserves query text and caret placement without re-selecting all.
 /// Clicking the dropdown arrow (`aresp.clicked()`) toggles `s.open`; when opening, it requests focus on `te_id`,
 /// resets `typed` and `moved`, sets `*reveal = true`, and selects all text.
-/// Changing the text (`resp.changed()`) opens the dropdown with `s.typed = true`, resets `s.highlight = 0`,
+/// Changing the text (`resp.changed()`) opens the dropdown with `s.typed = true`, clears `s.highlight`,
 /// clears `s.moved`, and sets `*reveal = true`.
 fn handle_search_interactions(
     ui: &mut Ui,
@@ -359,7 +360,7 @@ fn handle_search_interactions(
             *reveal = true;
             select_all_text(ui.ctx(), te_id, text);
         }
-    } else if resp.gained_focus() {
+    } else if resp.gained_focus() && !was_open {
         select_all_text(ui.ctx(), te_id, text);
     } else if aresp.clicked() {
         if was_open {
@@ -375,7 +376,7 @@ fn handle_search_interactions(
     } else if resp.changed() {
         s.open = true;
         s.typed = true;
-        s.highlight = 0;
+        s.highlight = None;
         s.moved = false;
         *reveal = true;
     }
@@ -387,12 +388,12 @@ fn handle_search_interactions(
 /// - When `s.typed` is `false` (the combo is opened without active typing), resets `s.matches` to
 ///   the full list of `items` in original order, clears `s.query`, and if `s.moved` is `false`,
 ///   initializes `s.highlight` to the position of `current` in `recent_shown` or in `items`
-///   (offset by `recent_shown.len()`).
-/// - When `s.typed` is `true`, filters `items` matching `text` using [`font_matches`] and stores the
-///   active `text` in `s.query`.
+///   (offset by `recent_shown.len()`), leaving `s.highlight = None` if `current` is not in either list.
+/// - When `s.typed` is `true`, filters `items` matching `text` using [`font_matches`], stores the
+///   active `text` in `s.query`, and if `s.moved` is `false`, highlights the first match if any.
 ///
-/// Finally, adjusts `s.highlight` by `step` (+1 for Down, -1 for Up), marks `s.moved = true` when
-/// `step != 0`, and clamps `s.highlight` to the valid range across `recent_shown` and `s.matches`.
+/// Finally, if `step != 0`, marks `s.moved = true`, adjusts `s.highlight` by `step` (+1 for Down, -1 for Up),
+/// and clamps `s.highlight` to the valid range across `recent_shown` and `s.matches`.
 fn update_search_matches(s: &mut ComboSearch, text: &str, items: &[String], recent_shown: &[String], current: &str, step: i32) {
     if !s.typed {
         if !s.query.is_empty() || s.matches.len() != items.len() || s.items_len != items.len() {
@@ -402,36 +403,55 @@ fn update_search_matches(s: &mut ComboSearch, text: &str, items: &[String], rece
         }
         if !s.moved {
             if let Some(pos) = recent_shown.iter().position(|r| r == current) {
-                s.highlight = pos;
+                s.highlight = Some(pos);
             } else if let Some(pos) = s.matches.iter().position(|&i| items.get(i).is_some_and(|it| it == current)) {
-                s.highlight = recent_shown.len().saturating_add(pos);
+                s.highlight = Some(recent_shown.len().saturating_add(pos));
+            } else {
+                s.highlight = None;
             }
         }
     } else if s.query != text || s.items_len != items.len() {
         s.matches = std::sync::Arc::new(font_matches(text, items));
         s.query = text.to_string();
         s.items_len = items.len();
+        if !s.moved {
+            s.highlight = if s.matches.is_empty() { None } else { Some(0) };
+        }
     }
-    let last = recent_shown.len().saturating_add(s.matches.len()).saturating_sub(1);
-    s.moved |= step != 0;
-    s.highlight = match step {
-        1.. => s.highlight.saturating_add(1),
-        0 => s.highlight,
-        _ => s.highlight.saturating_sub(1),
+    let total_len = recent_shown.len().saturating_add(s.matches.len());
+    if total_len > 0 {
+        let last = total_len.saturating_sub(1);
+        if step != 0 {
+            s.moved = true;
+            s.highlight = match (s.highlight, step) {
+                (Some(cur), 1..) => Some(cur.saturating_add(step as usize).min(last)),
+                (Some(cur), ..=-1) => Some(cur.saturating_sub((-step) as usize)),
+                (Some(cur), 0) => Some(cur),
+                (None, 1..) => Some(0),
+                (None, ..=-1) => Some(last),
+                (None, 0) => None,
+            };
+        }
+    } else {
+        s.highlight = None;
     }
-    .min(last);
 }
 
 /// Returns the font name at the current highlight index in the combined recent and matched lists.
 ///
-/// Falls back to returning `text` if the highlight index is out of bounds or resolves to no item.
-/// When the text edit box has been cleared (`text.trim().is_empty()`) and the user has not explicitly
-/// moved the highlight via arrow keys (`!s.moved`), `text` is returned as-is so a cleared box is not
-/// unintentionally replaced with the first font.
+/// If the user has neither typed a query nor moved the highlight via arrow keys (`!s.typed && !s.moved`),
+/// or if no item is currently highlighted (`s.highlight` is `None`), the edit field's current `text` is
+/// returned as-is so an unchanged or uninstalled font is not replaced. When the text edit box has been
+/// cleared (`text.trim().is_empty()`) and the user has not explicitly moved the highlight via arrow keys
+/// (`!s.moved`), `text` is returned as-is.
 fn pick_highlighted_font(s: &ComboSearch, text: &str, items: &[String], recent_shown: &[String]) -> String {
-    let picked = recent_shown
-        .get(s.highlight)
-        .or_else(|| s.highlight.checked_sub(recent_shown.len()).and_then(|k| s.matches.get(k)).and_then(|&i| items.get(i)));
+    if !s.typed && !s.moved {
+        return text.to_string();
+    }
+    let Some(hl) = s.highlight else {
+        return text.to_string();
+    };
+    let picked = recent_shown.get(hl).or_else(|| hl.checked_sub(recent_shown.len()).and_then(|k| s.matches.get(k)).and_then(|&i| items.get(i)));
     match picked {
         Some(name) if !text.trim().is_empty() || s.moved => name.clone(),
         _ => text.to_string(),
@@ -584,7 +604,7 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
         if s.open && n > 0 {
             let matches = s.matches.clone();
             let scroll = reveal.then_some((s.offset, s.view_h));
-            let lit = highlight_row(s.highlight, recent_shown.len());
+            let lit = s.highlight.map(|hl| highlight_row(hl, recent_shown.len()));
             // A list of a new length is sized again (an area keeps its last size, so a list that
             // once held one match stayed one row tall). That pass draws nothing, so it is
             // discarded and the frame drawn again, as egui does for its own sizing passes.
@@ -602,7 +622,7 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
                         let row = |k: usize| section_row(k, recent_shown, &item);
                         let (mut picked, offset, view_h) = list_rows(
                             ui,
-                            RowListOptions { width, current, n, row: &row, highlight: Some(lit), scroll, preview, recent_rows: recent_shown.len() },
+                            RowListOptions { width, current, n, row: &row, highlight: lit, scroll, preview, recent_rows: recent_shown.len() },
                         );
                         if !s.typed {
                             ui.separator();
