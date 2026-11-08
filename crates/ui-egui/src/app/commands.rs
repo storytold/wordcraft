@@ -44,10 +44,9 @@ impl WordApp {
             self.dialog = dialogs::Dialog::open(name, self);
             return Ok(json!({"pending": name}));
         }
-        if (self.session.dirty || self.save_unconfirmed() || refused.is_some())
-            && discards_document(id, &params)
-            && !self.closes_only_its_window(id, &params)
-        {
+        // The same unsaved work the control channel's refusal covers, so the prompt and the
+        // refusal can't drift apart (#3274).
+        if (self.document_unsaved() || refused.is_some()) && discards_document(id, &params) && !self.closes_only_its_window(id, &params) {
             let name = self.prompt_name();
             self.dialog = Some(dialogs::Dialog::SaveChanges {
                 name,
@@ -118,6 +117,13 @@ impl WordApp {
         }
         if id == "file.close" {
             return self.close_document(&params);
+        }
+        // `file.closeDocument` closes the document its `id` names (the active one by default):
+        // the same unsaved work would go with it, so it needs the same explicit `force` (#3274).
+        if id == "file.closeDocument"
+            && let Some(e) = crate::control::close_refused(self, id, &params)
+        {
+            return Err(e.into());
         }
         if id == "file.autosave" {
             return self.set_autosave(&params);
@@ -312,7 +318,8 @@ impl WordApp {
                 file_dialogs::Asked::Busy => Ok(json!({"saved": false})),
             };
         }
-        let retry = (id == "file.open").then(|| params.clone());
+        // Opening a file, or a new document from a template, reads a file that may be protected.
+        let retry = matches!(id, "file.open" | "file.newFromTemplate").then(|| params.clone());
         let retry_path = retry.clone();
         let r = self.execute(id, params);
         if let (Err(e), Some(params)) = (&r, retry)
@@ -320,7 +327,8 @@ impl WordApp {
         {
             let path = params.get("path").and_then(Value::as_str).unwrap_or("");
             let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
-            self.dialog = Some(dialogs::Dialog::Password { name, params, password: Default::default(), message: String::new() });
+            self.dialog =
+                Some(dialogs::Dialog::Password { name, then: id.to_string(), params, password: Default::default(), message: String::new() });
             return Ok(json!({"pending": "password"}));
         }
         // Whoever asked, a failed open names the file and the cause (#1103).
@@ -469,6 +477,7 @@ impl WordApp {
         if req.get("close").is_some() {
             self.quit_requested = true;
         }
+        crate::windows::arrange::request(self, req);
     }
 
     /// A request made for document `document`, which isn't shown and which no other window
@@ -749,6 +758,7 @@ impl WordApp {
             // Native printing submits the selected queue on a worker; the browser owns its dialog.
             "ui.printSettings" => return Some(printing::settings(&mut self.printing, p, self.services.printers.as_ref())),
             "ui.print" | "ui.printSubmit" => return Some(self.print_to_system(p)),
+            "ui.printCancel" => return Some(printing::cancel(self)),
             // File › Options › General › Make WordCraft the default… changes the user's system
             // default apps (Linux) or opens system settings (Windows), so only a click on that
             // button does it ([`WordApp::make_default_app`]); scripts, the control channel and
@@ -1085,6 +1095,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "tools.customizeKeyboard"
             | "tools.customizeRibbon"
             | "view.darkMode"
+            | "view.paperColor"
             | "view.marks"
             | "view.ruler"
             | "view.numeral"
@@ -1102,6 +1113,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.language"
             | "ui.saveChanges"
             | "ui.openFileDialog"
+            | "ui.printCancel"
             | "ui.fileBrowser"
             | "ui.makeDefaultApp"
             | "ui.discord"

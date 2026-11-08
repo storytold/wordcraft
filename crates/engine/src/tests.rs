@@ -12,9 +12,11 @@ use crate::{Session, cmd};
 
 mod bidi;
 mod documents;
+mod find_apostrophes;
 mod font_sizes;
 mod fonts;
 mod ime_noop;
+mod para_tools;
 mod revision_checks;
 mod typing;
 mod wordart;
@@ -4681,10 +4683,8 @@ fn typed_paragraphs_are_capped_for_every_caller() {
     assert!(!body_texts(&s).iter().any(|p| p.contains('y')));
 }
 
-#[test]
-fn hostile_params_never_panic() {
-    let reg = cmd::registry();
-    let junk = [
+fn hostile_junk() -> [serde_json::Value; 8] {
+    [
         json!(null),
         json!({}),
         json!({"text": 5, "size": "x", "path": [], "pos": {"block": 9999, "off": 99999}}),
@@ -4693,11 +4693,23 @@ fn hostile_params_never_panic() {
         json!({"page": 0, "x": 1e30, "y": -1e30, "extend": 1}),
         json!({"width": 1e-9, "height": 1e30, "top": -1e9, "left": 1e9}),
         json!({"section": {"pageW": -1e308, "pageH": 0, "marginTop": 1e30, "header": -5, "columns": {"count": 1000000, "space": -1e300, "widths": [[0, 0]]}}}),
-    ];
+    ]
+}
+
+/// `file.*`, `insert.picture` and `insert.textFromFile`: `hostile_file_params_never_panic` runs
+/// them, held to a folder of its own, and `hostile_params_never_panic` every other command.
+fn reaches_files(id: &str) -> bool {
+    id.starts_with("file.") || id == "insert.picture" || id == "insert.textFromFile"
+}
+
+#[test]
+fn hostile_params_never_panic() {
+    let reg = cmd::registry();
+    let junk = hostile_junk();
     for spec in reg.all() {
-        // These reach outside the session (files). Read Aloud (`review.readAloud`, `readAloud.*`)
-        // is fuzzed too: under `cfg(test)` its backend is the silent `Hold`, asserted below.
-        if spec.id.starts_with("file.") || spec.id == "insert.picture" || spec.id == "insert.textFromFile" {
+        // Read Aloud (`review.readAloud`, `readAloud.*`) is fuzzed too: under `cfg(test)` its
+        // backend is the silent `Hold`, asserted below.
+        if reaches_files(spec.id) {
             continue;
         }
         for j in &junk {
@@ -4709,6 +4721,127 @@ fn hostile_params_never_panic() {
             let _ = s.layout();
         }
     }
+}
+
+/// `file.*`, `insert.picture` and `insert.textFromFile` take junk params and paths to files they
+/// can't use (#3719). They may read only `in` and write only `out`, so a save can't replace a file
+/// another run is meant to find broken, and nothing outside those folders is touched.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn hostile_file_params_never_panic() {
+    /// What is directly in `dir`: each name with its bytes (`None` for a folder).
+    fn contents(dir: &std::path::Path) -> std::collections::BTreeMap<String, Option<Vec<u8>>> {
+        let entries = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path());
+        entries.map(|p| (p.file_name().unwrap().to_string_lossy().into_owned(), std::fs::read(&p).ok())).collect()
+    }
+    /// The names whose bytes differ, so a failure lists them instead of printing every file.
+    fn changed(before: &std::collections::BTreeMap<String, Option<Vec<u8>>>, dir: &std::path::Path) -> Vec<String> {
+        let after = contents(dir);
+        let names: std::collections::BTreeSet<_> = before.keys().chain(after.keys()).collect();
+        names.into_iter().filter(|n| before.get(*n) != after.get(*n)).cloned().collect()
+    }
+    let reg = cmd::registry();
+    let base = scratch_dir("hostile-files");
+    let (input, output, outside) = (base.join("in"), base.join("out"), base.join("outside"));
+    for dir in [&outside, &input.join("folder.docx"), &output.join("folder.docx")] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let at = |dir: &std::path::Path, name: &str| dir.join(name).to_string_lossy().into_owned();
+
+    // Fixed bytes, so a failure comes back on the next run.
+    let noise: Vec<u8> = (0..512u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8).collect();
+    let picture_exts = ["png", "jpg", "gif", "bmp", "svg", "emf"];
+    let mut paths = vec![];
+    for ext in crate::io::OPEN_EXTS.iter().chain(&picture_exts) {
+        let name = format!("random.{ext}");
+        std::fs::write(input.join(&name), &noise).unwrap();
+        paths.push(at(&input, &name));
+    }
+    paths.extend(crate::io::SAVE_EXTS.iter().map(|ext| at(&output, &format!("new.{ext}"))));
+    std::fs::write(input.join("empty"), b"").unwrap();
+    std::fs::write(input.join("empty.docx"), b"").unwrap();
+    std::fs::write(input.join("good.txt"), "Good text").unwrap();
+    std::fs::write(input.join("good.png"), tiny_png()).unwrap();
+    paths.extend(["empty", "empty.docx", "folder.docx", "missing", "missing.docx"].map(|name| at(&input, name)));
+    paths.extend(["folder.docx", "missing/new.docx", &format!("{}.docx", "x".repeat(5000))].map(|name| at(&output, name)));
+    // Outside the roots, however it is spelled, and not paths at all.
+    paths.extend(["new.docx", "new"].map(|name| at(&outside, name)));
+    paths.push(format!("{}/../outside/new.docx", input.to_string_lossy()));
+    paths.extend(["hostile-relative.docx", "hostile-relative", "", "\0", "a\0b.docx"].map(String::from));
+
+    // Every path alone; each of these also with every other kind of junk param. The numbers that
+    // cost time (`copies`, `scale`) stay small: huge ones are #3720.
+    let mut params: Vec<serde_json::Value> = hostile_junk().into();
+    params.extend(paths.iter().map(|p| json!({"path": p})));
+    for name in [
+        "in/random.docx",
+        "in/empty.docx",
+        "in/folder.docx",
+        "in/missing.docx",
+        "in/good.txt",
+        "in/good.png",
+        "out/new.docx",
+        "out/new.pdf",
+        "out/new.png",
+    ] {
+        let path = at(&base, name);
+        params.extend([
+            json!({"path": path, "password": "x", "format": "wordml2003", "markup": "x", "confirmDamaged": 1}),
+            json!({"path": path, "password": 5, "format": 5, "markup": true}),
+            json!({"path": path, "page": 0, "scale": 0, "width": -1e308, "alt": 5}),
+            json!({"path": path, "data": "not base64!"}),
+            json!({"path": path, "data": "AAAA"}),
+            json!({"path": path, "pagesPerSheet": 7, "range": "x", "pages": "9-1,,", "parity": "x", "copies": 3, "paper": "x"}),
+            json!({"dir": path, "name": path, "template": path, "userTemplatesFolder": path, "id": 1e30, "restore": 1e30, "save": path}),
+        ]);
+    }
+
+    let before = contents(&input);
+    let working_dir = std::path::Path::new(".");
+    let working_dir_before = contents(working_dir);
+    let roots = crate::file_access::AutomationRoots::new(Some(&input), Some(&output)).unwrap();
+    let confined = |s: &mut Session, id: &str, v: &serde_json::Value| crate::file_access::confine(roots.as_ref(), || s.run(id, v));
+    for spec in reg.all() {
+        if !reaches_files(spec.id) {
+            continue;
+        }
+        for v in &params {
+            let mut s = Session::new(crate::sample::sample_document());
+            let r = confined(&mut s, spec.id, v);
+            assert!(!caught_panic(&reg, &r), "{} panicked on {v}: {r:?}", spec.id);
+            s.clamp_selection();
+            let _ = s.layout();
+        }
+    }
+
+    let nothing = Vec::<String>::new();
+    assert_eq!(changed(&before, &input), nothing, "the read root is only read");
+    assert_eq!(changed(&Default::default(), &outside), nothing, "nothing outside the write root");
+    // Every name counts: an empty path comes out as `.pdf` or `.dotx` here.
+    assert_eq!(changed(&working_dir_before, working_dir), nothing, "nothing in the working directory");
+
+    // The junk above met the files, not a closed door: usable files work through the same roots...
+    let mut s = s();
+    confined(&mut s, "file.open", &json!({"path": at(&input, "good.txt")})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Good text");
+    confined(&mut s, "insert.textFromFile", &json!({"path": at(&input, "good.txt")})).unwrap();
+    confined(&mut s, "insert.picture", &json!({"path": at(&input, "good.png")})).unwrap();
+    let saved: [(&str, &str, &[u8]); 3] =
+        [("file.saveAs", "control.docx", b"PK\x03\x04"), ("file.exportPdf", "control.pdf", b"%PDF-"), ("file.exportPng", "control.png", b"\x89PNG")];
+    for (id, name, signature) in saved {
+        confined(&mut s, id, &json!({"path": at(&output, name)})).unwrap();
+        assert_eq!(std::fs::read(output.join(name)).unwrap().get(..signature.len()), Some(signature), "{name}");
+    }
+    // ...the noise is refused by the reader, and only a path outside by the roots.
+    let refused = |s: &mut Session, path: String| match confined(s, "file.open", &json!({"path": path})) {
+        Err(crate::CmdError::Failed(m)) => m,
+        r => panic!("not refused: {r:?}"),
+    };
+    let unreadable = refused(&mut s, at(&input, "random.docx"));
+    assert!(!unreadable.contains("automation path rejected"), "{unreadable}");
+    let rejected = refused(&mut s, at(&outside, "new.docx"));
+    assert!(rejected.contains("automation path rejected"), "{rejected}");
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 /// A panic that `Session::run`'s guard turned into an error, in a command or one it ran: still a
@@ -5613,6 +5746,39 @@ fn opening_a_named_pipe_or_device_is_refused_without_blocking() {
     let [pipe, device] = got.expect("opening a named pipe blocked");
     assert!(pipe.unwrap_err().contains("not a file"));
     assert!(device.unwrap_err().contains("not a file"));
+}
+
+#[cfg(unix)]
+#[test]
+fn reading_a_template_title_from_a_named_pipe_is_refused_without_blocking() {
+    let dir = scratch_dir("template-title-fifo");
+    let fifo = dir.join("pipe.dotx");
+
+    let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+    if !made.is_ok_and(|s| s.success()) {
+        let _ = std::fs::remove_dir_all(&dir);
+        eprintln!("mkfifo unavailable; skipping");
+        return;
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let path = fifo.clone();
+
+    std::thread::spawn(move || {
+        let title = crate::io::package_title(&path, 64 << 20, 64 << 10);
+        let _ = tx.send(title);
+    });
+
+    let result = rx.recv_timeout(std::time::Duration::from_secs(10));
+
+    if result.is_err() {
+        // Unblock a stuck reader so the test thread can finish.
+        let _ = std::os::unix::fs::OpenOptionsExt::custom_flags(std::fs::OpenOptions::new().write(true), libc::O_NONBLOCK).open(&fifo);
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(result.expect("reading a template title blocked on a named pipe"), None);
 }
 
 #[cfg(unix)]
@@ -7810,6 +7976,97 @@ fn colour_commands_take_any_custom_hex() {
     assert_eq!(shading, wordcraft_doc::Rgb::parse("C0FFEE"));
     run(&mut s, "design.pageColor", json!({"color": "123ABC"}));
     assert_eq!(s.doc.settings.page_color, wordcraft_doc::Rgb::parse("123ABC"));
+}
+
+/// #4685: Home › Paragraph › Shading on text selected inside a paragraph shades that text, as in
+/// Word, so No Color takes off a text shading a file gave it (an orange "highlight" from a .docx is
+/// `w:shd`, which Text Highlight Color › No Color leaves, in Word too). A caret or a whole
+/// paragraph still shades the paragraph.
+#[test]
+fn shading_selected_text_shades_the_text_and_no_color_clears_it() {
+    let orange = wordcraft_doc::Rgb::parse("FFA500");
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Orange text here"}));
+    run(&mut s, "select.text", json!({"text": "Orange"}));
+    run(&mut s, "para.shading", json!({"color": "FFA500"}));
+    let p = s.doc.para_at(&s.sel.focus).unwrap();
+    assert_eq!((p.props.shading, p.props_of_char(0).shading, p.props_of_char(7).shading), (None, orange, None));
+    // Highlight › No Color doesn't take it off; Shading › No Color does.
+    run(&mut s, "format.highlight", json!({"color": "none"}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().props_of_char(0).shading, orange);
+    run(&mut s, "para.shading", json!({"color": null}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().props_of_char(0).shading, None);
+    // A caret, or the whole paragraph, shades the paragraph and leaves the text alone.
+    for whole in [false, true] {
+        let mut s = self::s();
+        run(&mut s, "text.insert", json!({"text": "Orange text here"}));
+        run(&mut s, if whole { "select.all" } else { "caret.left" }, json!({}));
+        run(&mut s, "para.shading", json!({"color": "FFA500"}));
+        let p = s.doc.para_at(&s.sel.focus).unwrap();
+        assert_eq!((p.props.shading, p.props_of_char(0).shading), (orange, None), "whole: {whole}");
+    }
+    // All the text of a paragraph that isn't the last is still text: a selection with its mark
+    // would end at the next paragraph's start.
+    let mut s = self::s();
+    run(
+        &mut s,
+        "document.setText",
+        json!({"text": "Word
+More"}),
+    );
+    run(&mut s, "select.text", json!({"text": "Word"}));
+    run(&mut s, "para.shading", json!({"color": "FFA500"}));
+    let p = s.doc.para_at(&s.sel.focus).unwrap();
+    assert_eq!((p.props.shading, p.props_of_char(0).shading), (None, orange));
+    // A selected text box shades its anchor's paragraph, not every line of the box.
+    let mut s = self::s();
+    run(&mut s, "text.insert", json!({"text": "Anchor"}));
+    run(&mut s, "insert.textBox", json!({"text": "Inside"}));
+    let id = s.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::TextBox).map(|(id, _)| *id).unwrap();
+    let end = s.doc.text_box_anchor(id).unwrap();
+    let start = wordcraft_doc::Pos { off: end.off - wordcraft_doc::para::OBJ.len_utf8(), ..end.clone() };
+    run(&mut s, "select.range", json!({"anchor": start, "focus": end}));
+    run(&mut s, "para.shading", json!({"color": "FFA500"}));
+    let boxed = s.doc.parts.get(&id).and_then(|p| p.blocks.first()).and_then(|b| b.as_para()).unwrap();
+    assert_eq!(boxed.props_of_char(0).shading, None, "the box's text isn't shaded");
+    assert_eq!(s.doc.para_at(&end).unwrap().props.shading, orange);
+    // A selected field is text (its object character isn't a drawing): No Color clears its shading.
+    let mut s = self::s();
+    run(&mut s, "text.insert", json!({"text": "Page "}));
+    run(&mut s, "insert.pageNumber", json!({"position": "current"}));
+    let end = s.sel.focus.clone();
+    let start = wordcraft_doc::Pos { off: end.off - wordcraft_doc::para::OBJ.len_utf8(), ..end.clone() };
+    run(&mut s, "select.range", json!({"anchor": start, "focus": end}));
+    run(&mut s, "para.shading", json!({"color": "FFA500"}));
+    let p = s.doc.para_at(&end).unwrap();
+    assert_eq!((p.props.shading, p.props_of_char(start.off).shading), (None, orange), "the field is shaded");
+    run(&mut s, "para.shading", json!({"color": null}));
+    assert_eq!(s.doc.para_at(&end).unwrap().props_of_char(start.off).shading, None);
+    // Borders and Shading › Apply to: Paragraph shades the paragraph, whatever is selected.
+    run(&mut s, "select.text", json!({"text": "Page"}));
+    run(&mut s, "para.shading", json!({"color": "FFA500", "paragraph": true}));
+    let p = s.doc.para_at(&s.sel.focus).unwrap();
+    assert_eq!((p.props.shading, p.props_of_char(0).shading), (orange, None));
+}
+
+/// #4685 review: in a cell's last paragraph all of its text stands for the paragraph with its
+/// mark (a selection can't reach the next paragraph's start there), so Shading shades the
+/// paragraph; part of the text is text.
+#[test]
+fn shading_all_of_a_cells_last_paragraph_shades_the_paragraph() {
+    let orange = wordcraft_doc::Rgb::parse("FFA500");
+    for (from, to, paragraph) in [(0, 9, true), (0, 4, false)] {
+        let mut s = s();
+        run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+        run(&mut s, "text.insert", json!({"text": "Cell text"}));
+        let cell = s.sel.focus.clone();
+        assert!(cell.path.cell().is_some());
+        run(&mut s, "select.range", json!({"anchor": Pos { off: from, ..cell.clone() }, "focus": Pos { off: to, ..cell.clone() }}));
+        run(&mut s, "para.shading", json!({"color": "FFA500"}));
+        let p = s.doc.para_at(&cell).unwrap();
+        let want = if paragraph { (orange, None) } else { (None, orange) };
+        assert_eq!((p.props.shading, p.props_of_char(0).shading), want, "{from}..{to}");
+    }
 }
 
 /// #2738: Home › Underline › Underline Color sets the underline's own colour and leaves its style
@@ -10167,6 +10424,73 @@ fn column_texts(s: &Session) -> Vec<String> {
     t.rows.iter().map(|r| r.cells[0].blocks.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect::<String>()).collect()
 }
 
+#[test]
+fn table_sort_rejects_invalid_columns_without_changing_rows_or_history() {
+    for column in [
+        json!(-1),
+        json!(0.5),
+        json!(0.0),
+        json!("0"),
+        json!(null),
+        json!(true),
+        json!([]),
+        json!({}),
+        json!(1),
+        json!(u32::MAX as u64 + 1),
+        json!(u64::MAX),
+    ] {
+        let mut s = column_table("en-US", &["Charlie", "Alpha", "Bravo"]);
+        s.close_typing();
+        run(&mut s, "text.insert", json!({"text": "!"}));
+        let before = s.doc.clone();
+        let selection = s.sel.clone();
+        let dirty = s.dirty;
+        assert!(s.run("table.sort", &json!({"column": column, "header": false})).is_err(), "column {column}");
+        assert_eq!(s.doc, before, "column {column}");
+        assert_eq!(s.sel, selection, "column {column}");
+        assert_eq!(s.dirty, dirty, "column {column}");
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(column_texts(&s), ["Charlie", "Alpha", "Bravo"], "column {column}: refusal must not consume Undo");
+        run(&mut s, "edit.redo", json!({}));
+        assert_eq!(s.doc, before, "column {column}: Redo must restore the preceding edit");
+    }
+}
+
+#[test]
+fn table_sort_keeps_default_and_valid_columns() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 2}));
+    for (k, value) in ["Charlie", "1", "Alpha", "3", "Bravo", "2"].into_iter().enumerate() {
+        if k > 0 {
+            run(&mut s, "text.tab", json!({}));
+        }
+        run(&mut s, "text.insert", json!({"text": value}));
+    }
+    let original = s.doc.clone();
+    for params in [json!({"header": false}), json!({"column": 0, "header": false})] {
+        run(&mut s, "table.sort", params);
+        assert_eq!(column_texts(&s), ["Alpha", "Bravo", "Charlie"]);
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(s.doc, original);
+    }
+    run(&mut s, "table.sort", json!({"column": 1, "header": false}));
+    assert_eq!(column_texts(&s), ["Charlie", "Bravo", "Alpha"]);
+    run(&mut s, "table.sort", json!({"column": 1, "header": false, "descending": true}));
+    assert_eq!(column_texts(&s), ["Alpha", "Bravo", "Charlie"]);
+    // A column may be missing in some rows. Its present cells still sort normally.
+    let at = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap() as u32;
+    let table = s.doc.table_mut(StoryRef::Body, &wordcraft_doc::Path(vec![at])).unwrap();
+    table.rows[0].cells.remove(1);
+    run(&mut s, "table.sort", json!({"column": 1, "header": false}));
+    assert_eq!(column_texts(&s), ["Charlie", "Bravo", "Alpha"]);
+
+    let mut s = column_table("en-US", &["Title", "3", "1", "2"]);
+    let at = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap() as u32;
+    s.doc.table_mut(StoryRef::Body, &wordcraft_doc::Path(vec![at])).unwrap().rows[0].props.header = true;
+    run(&mut s, "table.sort", json!({"column": 0}));
+    assert_eq!(column_texts(&s), ["Title", "1", "2", "3"]);
+}
+
 /// #836: table sort reads numbers in the text's language: `1,5` is one and a half in Polish.
 #[test]
 fn table_sort_reads_decimal_comma_in_polish() {
@@ -10465,6 +10789,44 @@ fn insert_picture_takes_a_windows_metafile() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn window_commands_need_the_desktop_and_name_a_window() {
+    use crate::cmd::view::OtherWindow;
+    let mut s = s();
+    // Web, CLI, MCP: one window, so View › Window is disabled.
+    for id in ["view.arrangeAll", "view.sideBySide", "view.syncScroll"] {
+        assert!(s.run(id, &json!({})).is_err(), "{id} without a window host");
+    }
+    s.windows.available = true;
+    run(&mut s, "view.arrangeAll", json!({}));
+    assert_eq!(s.ui_requests.pop(), Some(json!({"windows": "arrange"})));
+    assert!(s.run("view.sideBySide", &json!({})).is_err(), "no other window");
+    s.windows.others = vec![OtherWindow { id: 7, title: "Notes".into() }, OtherWindow { id: 9, title: "Draft".into() }];
+    let e = s.run("view.sideBySide", &json!({})).unwrap_err().to_string();
+    assert!(e.contains("7 (Notes)") && e.contains("9 (Draft)"), "several windows: say which: {e}");
+    assert!(s.run("view.sideBySide", &json!({"window": 8})).is_err(), "an unknown window");
+    assert!(s.run("view.sideBySide", &json!({"window": "9"})).is_err());
+    // Side by Side pairs with one window and scrolls together until turned off.
+    assert!(s.run("view.syncScroll", &json!({})).is_err(), "only while Side by Side is on");
+    let r = run(&mut s, "view.sideBySide", json!({"window": 7}));
+    assert_eq!((r["value"].as_bool(), s.windows.side_by_side, s.windows.sync_scroll), (Some(true), Some(7), true));
+    assert_eq!(s.ui_requests.pop(), Some(json!({"windows": "sideBySide", "with": 7})));
+    run(&mut s, "view.syncScroll", json!({}));
+    assert!(!s.windows.sync_scroll);
+    assert_eq!(s.ui_requests.pop(), Some(json!({"windows": "syncScroll", "with": 7, "value": false})));
+    // Asking again for the partner it already has keeps scrolling off and pairs nothing anew.
+    let r = run(&mut s, "view.sideBySide", json!({"window": 7, "value": true}));
+    assert_eq!((r["syncScroll"].as_bool(), s.windows.sync_scroll), (Some(false), false));
+    assert!(s.ui_requests.is_empty());
+    // Another partner replaces the first; the bare button turns it off.
+    run(&mut s, "view.sideBySide", json!({"window": 9}));
+    assert_eq!(std::mem::take(&mut s.ui_requests), [json!({"windows": "sideBySide", "off": 7}), json!({"windows": "sideBySide", "with": 9})]);
+    run(&mut s, "view.sideBySide", json!({}));
+    assert_eq!((s.windows.side_by_side, s.windows.sync_scroll), (None, false));
+    assert_eq!(s.ui_requests.pop(), Some(json!({"windows": "sideBySide", "off": 9})));
+    assert!(!s.dirty, "window commands never touch the document");
+}
+
 /// Change Picture must keep the replacement's own format: the part's name and content type
 /// come from the extension, so a JPEG stored as `imageN.png` saves declared `image/png` (Word
 /// and LibreOffice then show a broken picture).
@@ -10491,6 +10853,44 @@ fn picture_change_keeps_the_replacement_format() {
     assert!(media.ends_with(".jpeg") || media.ends_with(".jpg"), "the JPEG keeps its format: {media}");
     let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
     assert_eq!(back.media.get(&media).map(|b| b.as_slice()), Some(jpeg.as_slice()), "the saved part is the JPEG");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Change Picture keeps the width and takes the replacement's aspect ratio: swapping a figure for
+/// a revised one of a different shape must not stretch it into the old frame.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn picture_change_keeps_width_and_takes_new_aspect() {
+    let dir = scratch_dir("picture-change-aspect");
+    let mut wide = Vec::new();
+    image::RgbImage::from_pixel(40, 20, image::Rgb([200, 30, 30])).write_to(&mut std::io::Cursor::new(&mut wide), image::ImageFormat::Png).unwrap();
+    let mut tall = Vec::new();
+    image::RgbImage::from_pixel(30, 60, image::Rgb([30, 30, 200])).write_to(&mut std::io::Cursor::new(&mut tall), image::ImageFormat::Png).unwrap();
+    let (first, second) = (dir.join("wide.png"), dir.join("tall.png"));
+    std::fs::write(&first, &wide).unwrap();
+    std::fs::write(&second, &tall).unwrap();
+
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "insert.picture", json!({"path": first.to_string_lossy()}));
+    let size = |s: &Session| {
+        let mut out = (0.0f32, 0.0f32, [1.0f32; 4]);
+        s.doc.objects_in_reading_order(&mut |o| {
+            if let wordcraft_doc::para::InlineObject::Image { w, h, crop, .. } = o {
+                out = (*w, *h, *crop);
+            }
+        });
+        out
+    };
+    let (w0, h0, _) = size(&s);
+    assert!((w0 / h0 - 2.0).abs() < 1e-3, "inserted at its own 2:1 shape: {w0} x {h0}");
+    run(&mut s, "picture.crop", json!({"left": 0.1}));
+    let (w_cropped, _, crop) = size(&s);
+    assert!(crop[0] > 0.0, "cropped before the change");
+    run(&mut s, "picture.change", json!({"path": second.to_string_lossy()}));
+    let (w1, h1, crop) = size(&s);
+    assert!((w1 - w_cropped).abs() < 1e-3, "the width is kept: {w_cropped} -> {w1}");
+    assert!((h1 / w1 - 2.0).abs() < 1e-3, "the height follows the new 1:2 picture: {w1} x {h1}");
+    assert_eq!(crop, [0.0; 4], "the old picture's crop is dropped");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -12207,6 +12607,40 @@ fn export_png_rejects_a_page_number_that_does_not_fit() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn screen_paper_color_is_a_persistent_preference_not_document_formatting() {
+    use crate::cmd::view::PaperColor;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Screen paper test", "raw": true}));
+    let before = serde_json::to_value(&s.doc).unwrap();
+    let docx_before = wordcraft_docx::write(&s.doc).unwrap();
+    s.dirty = false;
+    let dirty = s.dirty;
+    s.view.dark_mode = true;
+    for (value, expected) in
+        [("green", PaperColor::Green), ("cream", PaperColor::Cream), ("gray", PaperColor::Gray), ("document", PaperColor::Document)]
+    {
+        run(&mut s, "view.paperColor", json!({"value": value}));
+        assert_eq!(s.prefs.paper_color, expected);
+        assert_eq!(serde_json::to_value(&s.doc).unwrap(), before);
+        assert_eq!(s.dirty, dirty);
+        assert_eq!(wordcraft_docx::write(&s.doc).unwrap(), docx_before);
+        assert!(!s.view.dark_mode, "choosing a tint turns off dark paper");
+        let saved = serde_json::to_value(&s.prefs).unwrap();
+        let restored: crate::Prefs = serde_json::from_value(saved).unwrap();
+        assert_eq!(restored.paper_color, expected);
+    }
+    for v in [json!({}), json!({"value": "red"}), json!({"value": 42})] {
+        assert!(s.run("view.paperColor", &v).is_err());
+        assert_eq!(s.prefs.paper_color, PaperColor::Document);
+    }
+    let legacy: crate::Prefs = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(legacy.paper_color, PaperColor::Document);
+    let future: crate::Prefs = serde_json::from_value(json!({"paperColor":"future", "countNotes":false})).unwrap();
+    assert_eq!(future.paper_color, PaperColor::Document);
+    assert!(!future.count_notes);
+}
+
 /// Font › Emphasis mark puts a mark over (or under) each selected character, and the layout
 /// draws one per character; Format state reports it, and none takes it off.
 #[test]
@@ -12496,4 +12930,49 @@ fn page_down_extends_a_selection_that_ends_in_collapsed_outline_text() {
     assert_eq!(s.sel.anchor, anchor, "the anchor stays");
     assert!(s.sel.focus.path.0[0] > 6, "Page Down extends the selection a page on: {:?}", s.sel.focus);
     assert!(s.layout().caret(&s.sel.focus).is_some(), "to a place the outline shows");
+}
+
+/// Issue #5667's document: `Intro`, then an inserted `Appendix` paragraph whose mark carries a
+/// section break (Normal, indented), then `Body` in Heading 1. The whole of `Appendix` is
+/// tracked as an insertion by `rev`, or as a deletion when `delete`.
+fn sectioned_revision(delete: bool) -> Session {
+    use wordcraft_doc::{Revision, RevisionKind};
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Intro\nAppendix\nBody"));
+    run(&mut s, "caret.set", json!({"pos": {"block": 2, "off": 0}}));
+    run(&mut s, "para.style", json!({"style": "Heading1"}));
+    let kind = if delete { RevisionKind::Delete } else { RevisionKind::Insert };
+    s.doc.revisions.push(Revision { kind, author: "Ada".into(), date: String::new(), move_name: None });
+    s.doc.last_section.margin_left = 72.0;
+    let mut sect = s.doc.last_section.clone();
+    sect.margin_left = 144.0;
+    let p = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path(vec![1])).unwrap();
+    let len = p.len();
+    p.format(0, len, &|c| if delete { c.del = Some(0) } else { c.ins = Some(0) }).unwrap();
+    if delete {
+        p.mark.del = Some(0)
+    } else {
+        p.mark.ins = Some(0)
+    }
+    p.props.indent_left = Some(36.0);
+    p.section = Some(Box::new(sect));
+    s
+}
+
+#[test]
+fn resolving_away_an_empty_paragraph_with_a_section_break_keeps_the_next_paragraphs_properties() {
+    // #5667: the resolved paragraph was left empty but kept for its section break, so the next
+    // paragraph joined it and took its properties (Normal, its indent). It goes whole instead,
+    // as an empty paragraph without a break does, and its section joins the following one.
+    for (delete, cmd) in [(false, "review.rejectAll"), (true, "review.acceptAll")] {
+        let mut s = sectioned_revision(delete);
+        assert_eq!(s.doc.sections().len(), 2);
+        run(&mut s, cmd, json!({}));
+        assert_eq!(body_texts(&s), ["Intro", "Body"], "{cmd}");
+        let body = s.doc.para(StoryRef::Body, &wordcraft_doc::Path(vec![1])).unwrap();
+        assert_eq!(body.props.style.as_deref(), Some("Heading1"), "{cmd}: Body keeps its style");
+        assert_eq!(body.props.indent_left, None, "{cmd}: and not the removed paragraph's indent");
+        assert!(s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.section.is_none()), "{cmd}: the break went with it");
+        assert_eq!(s.doc.sections().len(), 1, "{cmd}");
+        assert_eq!(s.doc.last_section.margin_left, 72.0, "{cmd}: the following section's setup stays");
+    }
 }

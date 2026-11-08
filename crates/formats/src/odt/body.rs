@@ -79,6 +79,10 @@ pub(super) struct Body<'a> {
     /// drawings were waiting before it.
     loose_open: Option<(usize, usize, usize)>,
     fmt: Vec<Fmt>,
+    /// For each paragraph being read: the size its heading, title or code style gives its text.
+    para_sizes: Vec<(Option<f32>, bool)>,
+    /// That size for the paragraph being finished.
+    para_size: Option<f32>,
     para: Option<Para>,
     /// The text read last ended in a space collapsed from XML whitespace (not a `text:s`).
     xml_space_end: bool,
@@ -128,6 +132,9 @@ pub(super) struct Body<'a> {
     paras_done: usize,
     /// `(width, height, picture bytes, alt text, equation read from an embedded `draw:object`)`.
     frame: Option<Frame>,
+    /// The first picture the open frame offers that WordCraft can't show: an object coming after it
+    /// keeps it as its replacement.
+    frame_unread: Option<Vec<u8>>,
     in_desc: bool,
     /// The master pages' page setups.
     pages: &'a Pages,
@@ -237,6 +244,8 @@ impl<'a> Body<'a> {
             xml_space_end: false,
             spaces_left: MAX_EXTRA_SPACES,
             para_cont: false,
+            para_sizes: Vec::new(),
+            para_size: None,
             lists: Vec::new(),
             lists_saved: Vec::new(),
             item_used: Vec::new(),
@@ -259,6 +268,7 @@ impl<'a> Body<'a> {
             pending_master: None,
             paras_done: 0,
             frame: None,
+            frame_unread: None,
             in_desc: false,
             pages,
             sec: page.clone(),
@@ -952,6 +962,8 @@ impl Body<'_> {
         } else {
             self.para_cont = false;
         }
+        let kind_size = matches!(kind, Kind::Code | Kind::Heading(_) | Kind::Title).then(|| style.and_then(|s| self.styles.named_size(s))).flatten();
+        self.para_sizes.push((kind_size, style.is_some_and(|s| self.styles.states_size(s))));
         self.fmt.push(base);
         // Drawings waiting outside a paragraph come first in it, when it is the text's own (not
         // a text box's, a note's or a cell's).
@@ -970,6 +982,7 @@ impl Body<'_> {
         self.index_marks.clear();
         let Some(mut p) = self.para.take() else { return };
         self.glue_connectors(&mut p);
+        self.para_size = self.para_sizes.pop().and_then(|(size, stated)| size.filter(|_| stated));
         // A paragraph without text has its own text formatting as its mark's: its size is its
         // height, and its drawings' runs have it.
         if let Some(base) = self.fmt.pop()
@@ -1020,13 +1033,18 @@ impl Body<'_> {
             p.kind = Kind::Normal;
         }
         if matches!(p.kind, Kind::Code | Kind::Heading(_) | Kind::Title) {
+            // The style says the size of its text, stated again or not: text of another size keeps
+            // its own.
+            let style_size = self.para_size;
             for i in &mut p.inlines {
                 if let Inline::Text(_, f) = i {
                     if p.kind == Kind::Code {
                         f.code = false;
                         f.font = None;
                     }
-                    f.size = None;
+                    if f.size == style_size {
+                        f.size = None;
+                    }
                 }
             }
         }
@@ -1323,6 +1341,7 @@ impl Body<'_> {
                 let w = get(a, "svg:width").and_then(length);
                 let h = get(a, "svg:height").and_then(length);
                 self.frame = Some((w, h, None, String::new(), None, None, None));
+                self.frame_unread = None;
                 let g = get(a, "draw:style-name").map(|s| self.styles.graphic(s)).unwrap_or_default();
                 self.frame_float = Some(super::frames::place(a, w.unwrap_or(0.0), h.unwrap_or(0.0), &g, self.text_size()));
                 self.member_start(a, w.unwrap_or(0.0), h.unwrap_or(0.0), None);
@@ -1372,19 +1391,23 @@ impl Body<'_> {
         // LibreOffice's tables keep their columns' widths, whatever their content (and however
         // far past the margins): Word's fixed layout.
         let space = get(a, "table:style-name").map(|s| self.styles.table_space(s)).unwrap_or_default();
-        let extra = model::TableExtra { align, width: None, width_pct, heights: Vec::new(), fixed: true, space, header_rows: 0 };
+        let extra =
+            model::TableExtra { align, width: None, width_pct, heights: Vec::new(), keep_rows: Vec::new(), fixed: true, space, header_rows: 0 };
         self.tables.push(TableB { rows: Vec::new(), row: Vec::new(), hcover: 0, widths: Vec::new(), extra });
     }
 
     /// A table row (`table:table-row`) begins: its height, kept as rows are (see the row's end).
     fn start_row(&mut self, a: &Attrs) {
         let height = get(a, "table:style-name").and_then(|s| self.styles.row_height(s));
+        let keep = self.styles.row_keep(get(a, "table:style-name"));
         if let Some(t) = self.tables.last_mut() {
             t.row.clear();
             t.hcover = 0;
             if t.extra.heights.len() < wordcraft_doc::table::MAX_ROWS {
                 t.extra.heights.truncate(t.rows.len());
                 t.extra.heights.push(height);
+                t.extra.keep_rows.truncate(t.rows.len());
+                t.extra.keep_rows.push(keep);
             }
         }
     }
@@ -1429,12 +1452,25 @@ impl Body<'_> {
                     && fr.2.is_none()
                     && fr.4.is_none()
                     && fr.5.is_none()
-                    && fr.6.as_ref().is_none_or(|o| o.replacement.is_none())
                 {
                     let path = href.trim_start_matches("./");
-                    fr.2 = (self.zip)(path);
-                    if let Some(o) = &mut fr.6 {
-                        o.replacement = fr.2.clone().map(std::sync::Arc::new);
+                    // A frame may offer one picture in several formats, in order of preference
+                    // (LibreOffice writes its own `.svm` metafile before a PNG): the first
+                    // WordCraft can read. An object's replacement is the first, kept whatever it
+                    // is, also when the object is still to come.
+                    if let Some(d) = (self.zip)(path) {
+                        let readable = drawing::readable_picture(&d);
+                        match &mut fr.6 {
+                            Some(o) if o.replacement.is_none() => o.replacement = Some(std::sync::Arc::new(d.clone())),
+                            Some(_) => {}
+                            None if !readable => {
+                                self.frame_unread.get_or_insert_with(|| d.clone());
+                            }
+                            None => {}
+                        }
+                        if readable {
+                            fr.2 = Some(d);
+                        }
                     }
                 }
             }
@@ -1478,9 +1514,9 @@ impl Body<'_> {
             // A chart is kept whole too, to be written back as it was while it is unchanged.
             if fr.4.is_none() {
                 fr.6 = super::objects::gather(href, ole, self.entries, self.manifest, &mut *self.zip);
-                // A replacement picture read before the object.
+                // A replacement picture read before the object: the first the frame offered.
                 if let Some(o) = &mut fr.6 {
-                    o.replacement = fr.2.clone().map(std::sync::Arc::new);
+                    o.replacement = self.frame_unread.take().or_else(|| fr.2.clone()).map(std::sync::Arc::new);
                 }
             }
         }
@@ -1526,7 +1562,20 @@ impl Body<'_> {
         match local(q) {
             "span" => {
                 let base = self.cur_fmt();
-                let fmt = get(a, "text:style-name").map_or_else(|| base.clone(), |s| self.styles.span_fmt(s, &base));
+                // A size in percent is of the size it is in: its heading's, where nothing nearer
+                // states one.
+                let sized = Fmt { size: base.size.or(self.para_sizes.last().and_then(|(size, _)| *size)), ..base.clone() };
+                let fmt = get(a, "text:style-name").map_or_else(
+                    || base.clone(),
+                    |s| {
+                        let mut fmt = self.styles.span_fmt(s, &sized);
+                        // That size is only for working out a percent: saying nothing of size, it has none.
+                        if base.size.is_none() && self.styles.span_fmt(s, &base).size.is_none() {
+                            fmt.size = None;
+                        }
+                        fmt
+                    },
+                );
                 self.fmt.push(fmt);
             }
             "a" => {
