@@ -13012,6 +13012,7 @@ fn a_range_paste_formatting_keeps_the_targets_link() {
     let c = s.doc.para_at(&a).map(|p| p.props_of_char(a.off).clone()).unwrap_or_default();
     assert!(c.link.is_some(), "the target kept its hyperlink");
     assert_eq!(c.bold, Some(true));
+}
 
 /// Issue #5667's document: `Intro`, then an inserted `Appendix` paragraph whose mark carries a
 /// section break (Normal, indented), then `Body` in Heading 1. The whole of `Appendix` is
