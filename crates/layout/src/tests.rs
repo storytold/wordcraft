@@ -9,6 +9,7 @@ mod bidi;
 mod budget;
 mod cell_floats;
 mod complex;
+mod float_top;
 mod grid;
 mod ligature;
 pub(crate) mod linear;
@@ -7014,6 +7015,48 @@ fn floating_tables_take_no_room_and_text_wraps_beside_them() {
     assert!(bx + bleft > nx + 200.0, "body text at {}, right of the narrow table", bx + bleft);
 }
 
+/// Before Word 2013 layout a floating table moved below another keeps its own left edge, also
+/// when its first cell has no left margin (docxide `displaced-anchor-*-compat12-overlap0-*`), in
+/// the body and in a table cell.
+#[test]
+fn a_floating_table_moved_below_another_keeps_its_edge_before_word_2013_layout() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let narrow_x = |mode: u32, in_cell: bool| {
+        let mut d = Document::from_text("Body.");
+        d.settings.compat_mode = mode;
+        let table = |w: f32, text: &str, dist: [f32; 4]| {
+            let mut t = Table::new(1, 1, w);
+            t.props.cell_margins = Some([0.0; 4]);
+            t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+            t.props.float = Some(TableFloat { h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, dist, overlap: false, ..Default::default() });
+            t
+        };
+        let floats = [table(300.0, "Wide", [0.0; 4]), table(100.0, "Narrow", [9.0, 0.0, 9.0, 0.0])];
+        if in_cell {
+            let mut outer = Table::new(1, 1, 468.0);
+            outer.rows[0].cells[0].blocks = floats.into_iter().map(|t| std::sync::Arc::new(wordcraft_doc::Block::Table(t))).collect();
+            outer.rows[0].cells[0].blocks.push(wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Cell.", Default::default())));
+            d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(outer)).unwrap();
+        } else {
+            for (i, t) in floats.into_iter().enumerate() {
+                d.insert_block(StoryRef::Body, &Path::top(i), wordcraft_doc::Block::Table(t)).unwrap();
+            }
+        }
+        let l = lay(&d);
+        let xs: Vec<(f32, f32)> =
+            l.pages[0].items.iter().filter_map(|i| if let Placed::Lines { x, y, .. } = i { Some((*x, *y)) } else { None }).collect();
+        let [(wx, wy), (nx, ny), ..] = xs.as_slice() else { panic!("{xs:?}") };
+        assert!(*ny > *wy + 10.0, "mode {mode}, in cell {in_cell}: narrow at {ny}, below the wide table at {wy}: {xs:?}");
+        nx - wx
+    };
+    for in_cell in [false, true] {
+        let (old, new) = (narrow_x(12, in_cell), narrow_x(15, in_cell));
+        assert!(old.abs() < 0.01, "mode 12, in cell {in_cell}: narrow table {old} right of the wide one");
+        assert!((new - 9.0).abs() < 0.01, "mode 15, in cell {in_cell}: narrow table {new} right of the wide one");
+    }
+}
+
 /// A margin-anchored floating table is placed from the anchor page's margin even when a body
 /// paragraph keeps trailing empty lines: all 24 preceding paragraphs stay on page one and every
 /// table row is drawn exactly once there.
@@ -8935,6 +8978,34 @@ fn superscript_and_subscript_lines_are_as_tall_as_full_size_text() {
     }
     let lowered = height(&[("Hxg ", 11.0, VertAlign::Baseline, 0.0), ("max", 11.0, VertAlign::Subscript, -6.0)]);
     assert!((lowered - plain - 6.0).abs() < 0.01, "lowered {lowered} vs plain {plain}");
+}
+
+#[test]
+fn superscript_digits_advance_at_the_half_point_size() {
+    use wordcraft_doc::props::VertAlign;
+    // Word sets an 11pt superscript at 7pt (0.65 × 11 = 7.15, rounded to the half point): its
+    // digits advance by 7pt digit widths (Word for Mac, measured from its PDF export).
+    let width = |size: f32, vert_align: VertAlign| {
+        let mut p = wordcraft_doc::Paragraph::new();
+        let props =
+            wordcraft_doc::CharProps { font: Some(WRAP_TEST_FONT.into()), size: Some(size), vert_align: Some(vert_align), ..Default::default() };
+        p.runs.push(wordcraft_doc::para::Run { len: 10, props: props.clone() });
+        p.text.push_str("1234567890");
+        p.mark = props;
+        let mut d = Document::new();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        // From the first digit's start to the last's: nine digit advances.
+        let xs = l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| if let Placed::Lines { para, .. } = it { para.lines.first().map(|x| x.xs.clone()) } else { None })
+            .unwrap();
+        xs.last().unwrap() - xs.first().unwrap()
+    };
+    let seven = width(7.0, VertAlign::Baseline);
+    assert!((width(11.0, VertAlign::Superscript) - seven).abs() < 0.01, "{} vs {seven}", width(11.0, VertAlign::Superscript));
+    assert!((width(11.0, VertAlign::Subscript) - seven).abs() < 0.01);
 }
 
 #[test]
@@ -13674,6 +13745,36 @@ fn a_hyphen_before_a_slash_is_a_break_opportunity_like_word() {
         }
         assert_eq!(lines[0], "Deed Dataprotection-", "the first wrap breaks after the hyphen: {lines:?}");
         assert_eq!(lines[1], "/Secrecyviolation", "the slash starts the next line with its word: {lines:?}");
+        return;
+    }
+    panic!("no width in the sweep wrapped the paragraph");
+}
+
+/// docxide-pdf `dot-open-token*`: UAX #14 allows a break between a full stop and an opening
+/// parenthesis, Word doesn't. The first width that wraps `Deed 2023.(Example` breaks at the space.
+#[test]
+fn a_full_stop_before_a_parenthesis_is_no_break() {
+    let text = "Deed 2023.(Example";
+    for m in 100..=540 {
+        let mut d = Document::from_text(text);
+        d.last_section.margin_right = m as f32;
+        let l = lay(&d);
+        let lines: Vec<String> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| {
+                if let Placed::Lines { para, l0, l1, .. } = it {
+                    Some(para.lines[*l0..*l1].iter().map(|line| text[line.start..line.stop].to_string()).collect::<Vec<_>>())
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect();
+        if lines.len() < 2 {
+            continue; // still fits on one line at this width
+        }
+        assert_eq!(lines, ["Deed ", "2023.(Example"], "the first wrap breaks at the space");
         return;
     }
     panic!("no width in the sweep wrapped the paragraph");
