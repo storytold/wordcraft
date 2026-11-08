@@ -85,6 +85,8 @@ With **Regular expressions** on (Search Options), Replace with expands capture g
 
 Find selects the Results tab, including when it prefills selected text. Editing the search query also reveals matching or empty results. Manual Headings and Pages navigation remains available until the next search action.
 
+Under the search box, a line says which result is selected and how many there are ("Result 2 of 21", or "21 results" while the selection is on none of them, "No results"), with Previous and Next result arrows that go round from the last result to the first (#5019). Enter in the search box goes to the next result and Shift+Enter to the previous one, and the box keeps the keyboard. The Results list marks the result the arrows are on and scrolls to it. The arrows run Find Previous and Find Next (`edit.findPrevious`, `edit.findNext`), so they search with the dialog's options. Not compared with Word's own Navigation pane yet. Pinned by `panes::tests::navigation_arrows_and_enter_step_through_the_search_results`.
+
 Footnote and endnote editing keeps body and note text at normal opacity, on light and dark pages. Headers and footers still dim outside their editing context (#2545).
 
 Protected typing at editable-region boundaries (#3614) walks consecutive permission starts or ends without repeated paragraph-prefix counts or ID-vector searches. Existing author matching, start-before-end movement, typing and Enter behavior, refusals and saved content remain unchanged. Native desktop behavior has not been newly tested.
@@ -109,6 +111,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-11-07 | trivial | Page Setup also bounds the unfocused margin display after a long numeric paste; the accepted value is retained (#5650). |
 | 2026-11-06 | trivial | The document's scroll bars are always drawn, in the room beside the page left for them, with a grey thumb that stands out from its track in both themes; they were invisible until the pointer reached the window's right edge, so without a mouse wheel nothing showed how to reach page 2 (#5746) |
 | 2026-11-05 | trivial | Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. |
+| 2026-10-31 | trivial | Navigation pane: a Result k of N line with Previous and Next result arrows, and Enter / Shift+Enter in the search box, step through the search results, round at the ends (#5019) |
 | 2026-10-17 | trivial | Drawing Canvas members are selected with a click and dragged, resized, turned, nudged, formatted, deleted and copied on their own inside the canvas; a click in a text box member's text puts the caret there (#2637) |
 | 2026-11-05 | trivial | On-canvas objects: dragging an In Line with Text picture, shape or text box shows a bold, solid insertion cursor, twice the caret's width, as in Word; the dashed one was hard to see (#4195) |
 | 2026-10-28 | trivial | Protected typing boundary lookup counts preceding objects once and indexes editable permission IDs (#3614); caret movement and enforcement policy are unchanged. |
