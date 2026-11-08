@@ -76,6 +76,24 @@ fn font_changes_invalidate_cached_style_preview_textures() {
     assert!(previews.tex.is_empty(), "a new font can replace the fallback used by cached style previews");
 }
 
+/// Previews instances (such as other open windows) that missed an active `watch_fonts` call
+/// invalidate their cached preview textures on their next lookup once the font generation advances (#5957).
+#[test]
+fn stale_previews_invalidate_on_next_lookup() {
+    let ctx = egui::Context::default();
+    let mut previews = Previews::default();
+    let texture = ctx.load_texture("test-style-preview", egui::ColorImage::new([1, 1], vec![egui::Color32::BLACK]), egui::TextureOptions::LINEAR);
+    previews.tex.insert("style:Normal:cached".into(), texture);
+    // Simulate this Previews instance having rendered at an older font generation.
+    previews.font_gen = wordcraft_fonts::FontDb::global().generation().wrapping_sub(1);
+    let mut made = false;
+    let _ = previews.get_or(&ctx, "style:Normal:cached", || {
+        made = true;
+        Some(egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]))
+    });
+    assert!(made, "the cached preview was invalidated and re-rendered because the font generation changed");
+}
+
 /// Regression test for #2: a style gallery label longer than its tile was painted at full width
 /// and ran into the neighbouring tiles; it is now cut with an ellipsis to fit the tile.
 #[test]

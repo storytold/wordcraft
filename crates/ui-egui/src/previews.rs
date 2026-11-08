@@ -180,13 +180,20 @@ fn font_key(name: &str, ppp: f32) -> String {
 }
 
 impl Previews {
+    /// Ensure the cached family lists and style preview textures match the current font generation.
+    fn check_fonts(&mut self) {
+        let generation = wordcraft_fonts::FontDb::global().generation();
+        if self.font_gen != generation {
+            self.fonts_changed();
+        }
+    }
+
     /// The font list: installed families, each by its name in the interface language when it has
     /// one (宋体 for SimSun in Chinese, #505), like Word's.
     pub fn families(&mut self) -> Vec<String> {
+        self.check_fonts();
         let lang = crate::i18n::current().code();
-        let generation = wordcraft_fonts::FontDb::global().generation();
-        if self.families.as_ref().is_none_or(|(l, _)| *l != lang) || self.font_gen != generation {
-            self.font_gen = generation;
+        if self.families.as_ref().is_none_or(|(l, _)| *l != lang) {
             let db = wordcraft_fonts::FontDb::global();
             let mut f: Vec<String> = db.families_in(lang).into_iter().filter(|f| !f.starts_with('.')).collect();
             for w in [wordcraft_doc::styles::BODY_FONT, wordcraft_doc::styles::HEADING_FONT] {
@@ -245,6 +252,7 @@ impl Previews {
         self.east_asian = None;
         // Style previews may have been rasterised with a fallback face before a font was installed.
         self.tex.clear();
+        self.font_gen = wordcraft_fonts::FontDb::global().generation();
     }
 
     /// A closure drawing a font-menu entry in its own face, from the fonts' atlas.
@@ -302,7 +310,10 @@ impl Previews {
         })
     }
 
+    /// Look up a cached preview texture under `key`, or render and insert it if missing.
+    /// Invalidates the cache first if the font generation has changed.
     pub(crate) fn get_or(&mut self, ctx: &egui::Context, key: &str, make: impl FnOnce() -> Option<egui::ColorImage>) -> Option<TextureHandle> {
+        self.check_fonts();
         if let Some(t) = self.tex.get(key) {
             return Some(t.clone());
         }
