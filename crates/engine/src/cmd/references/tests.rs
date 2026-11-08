@@ -1,3 +1,4 @@
+use super::properties::{new_property_value, text_result};
 use super::*;
 
 fn fields(s: &Session) -> Vec<(String, String)> {
@@ -446,7 +447,7 @@ fn update_fields_apply_the_capitalization_switches() {
             "seventh",
             "Seventh",
             "BUDGET",
-            "new \\* Upper"
+            "new * Upper"
         ]
     );
 }
@@ -612,6 +613,19 @@ fn filename_field_in_a_header_follows_rename() {
     s.run("references.updateFields", &json!({})).unwrap();
     assert_eq!(story_fields(&s, StoryRef::Part(hdr))[0].1, "report_v3.docx");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A backslash in a quoted field argument makes the next character literal, so `\*` there is an
+/// asterisk and not the `\* Upper` switch (Word shows `x * Upper` for `TITLE "x \* Upper"`).
+#[test]
+fn quoted_field_argument_backslash_escapes() {
+    for (instr, shown) in [(r#"TITLE "x \* Upper""#, "x * Upper"), (r#"TITLE "x \\* Upper""#, r"x \* Upper"), (r#"TITLE "a \"b\" c""#, r#"a "b" c"#)]
+    {
+        let value = new_property_value(instr).unwrap();
+        assert_eq!(value, shown, "{instr}");
+        assert_eq!(text_result(instr, value), shown, "{instr}");
+    }
+    assert_eq!(text_result(r#"TITLE "ab" \* Upper"#, new_property_value(r#"TITLE "ab" \* Upper"#).unwrap()), "AB");
 }
 
 /// Output (PDF, print, page images) shows the body's unlocked SEQ, STYLEREF and REF fields with

@@ -1346,6 +1346,74 @@ fn copying_bold_text_puts_html_on_the_clipboard() {
     assert_eq!(s.clipboard_html, html);
 }
 
+/// Bold and italic of a paragraph's character, in a document.
+fn emphasis_at(d: &wordcraft_doc::Document, block: usize, off: usize) -> (bool, bool) {
+    match d.body.get(block).map(|b| &**b) {
+        Some(wordcraft_doc::Block::Para(p)) => {
+            let c = p.props_of_char(off);
+            (c.bold.unwrap_or(false), c.italic.unwrap_or(false))
+        }
+        _ => (false, false),
+    }
+}
+
+#[test]
+fn copying_puts_rtf_on_the_clipboard() {
+    // gap-clipboard-rtf: a copy carries RTF beside its text and HTML, for programs that read RTF.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "plain bold\nsome italic"}));
+    s.doc.format_range(&Pos::body(0, 6), &Pos::body(0, 10), &|c| c.bold = Some(true)).unwrap();
+    s.doc.format_range(&Pos::body(1, 5), &Pos::body(1, 11), &|c| c.italic = Some(true)).unwrap();
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let rtf = r["rtf"].as_str().unwrap_or_default().to_string();
+    assert!(rtf.starts_with("{\\rtf1"), "{r}");
+    assert_eq!(s.clipboard_rtf, rtf);
+    let d = wordcraft_formats::rtf::import(rtf.as_bytes()).unwrap();
+    let paras: Vec<String> =
+        d.body.iter().filter_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { Some(p.text.clone()) } else { None }).collect();
+    assert_eq!(paras.get(..2), Some(&["plain bold".to_string(), "some italic".to_string()][..]), "{paras:?}");
+    assert_eq!(emphasis_at(&d, 0, 0), (false, false));
+    assert_eq!(emphasis_at(&d, 0, 7), (true, false));
+    assert_eq!(emphasis_at(&d, 1, 7), (false, true));
+
+    // Pasting it elsewhere keeps the formatting.
+    let mut t = Session::new(wordcraft_doc::Document::new());
+    run(&mut t, "edit.paste", json!({"rtf": rtf}));
+    assert!(text(&t).starts_with("plain bold\nsome italic"), "{}", text(&t));
+    assert_eq!(emphasis_at(&t.doc, 0, 7), (true, false));
+    assert_eq!(emphasis_at(&t.doc, 1, 7), (false, true));
+
+    // Cut carries it too.
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 6}, "focus": {"block": 0, "off": 10}}));
+    let r = run(&mut s, "edit.cut", json!({}));
+    assert!(r["rtf"].as_str().is_some_and(|t| t.starts_with("{\\rtf1") && t.contains("bold")), "{r}");
+    assert_eq!(text(&s).lines().next(), Some("plain "));
+
+    // Nothing selected: nothing copied, no RTF.
+    run(&mut s, "caret.docEnd", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    assert!(r.get("rtf").is_none(), "{r}");
+}
+
+#[test]
+fn pasting_hostile_rtf_never_panics() {
+    let deep = format!("{{\\rtf1 {}x{}", "{\\b ".repeat(5000), "}".repeat(5000));
+    let junk = ["{\\rtf1", "{\\rtf1 {\\b bo", "{\\rtf1\\ansi\\u-99999999999? \\bin999999999 x}", "{\\rtf1 \\'zz\\fonttbl{", "{\\rtf\u{0}\u{FFFF}}"];
+    for rtf in junk.iter().map(|j| j.to_string()).chain([deep]) {
+        for id in ["edit.paste", "edit.pasteMerge", "edit.pasteSpecial"] {
+            let mut t = Session::new(wordcraft_doc::Document::new());
+            // `Session::run` turns a panic into an error: look for it.
+            for v in [json!({"rtf": rtf, "as": "rtf"}), json!({"rtf": rtf, "text": "fallback"})] {
+                if let Err(e) = t.run(id, &v) {
+                    assert!(!e.to_string().contains("panicked"), "{id}: {e}");
+                }
+                let _ = t.layout();
+            }
+        }
+    }
+}
+
 #[test]
 fn copying_symbol_font_text_puts_the_unicode_symbols_on_the_clipboard() {
     let mut s = s();
@@ -4613,10 +4681,8 @@ fn typed_paragraphs_are_capped_for_every_caller() {
     assert!(!body_texts(&s).iter().any(|p| p.contains('y')));
 }
 
-#[test]
-fn hostile_params_never_panic() {
-    let reg = cmd::registry();
-    let junk = [
+fn hostile_junk() -> [serde_json::Value; 8] {
+    [
         json!(null),
         json!({}),
         json!({"text": 5, "size": "x", "path": [], "pos": {"block": 9999, "off": 99999}}),
@@ -4625,11 +4691,23 @@ fn hostile_params_never_panic() {
         json!({"page": 0, "x": 1e30, "y": -1e30, "extend": 1}),
         json!({"width": 1e-9, "height": 1e30, "top": -1e9, "left": 1e9}),
         json!({"section": {"pageW": -1e308, "pageH": 0, "marginTop": 1e30, "header": -5, "columns": {"count": 1000000, "space": -1e300, "widths": [[0, 0]]}}}),
-    ];
+    ]
+}
+
+/// `file.*`, `insert.picture` and `insert.textFromFile`: `hostile_file_params_never_panic` runs
+/// them, held to a folder of its own, and `hostile_params_never_panic` every other command.
+fn reaches_files(id: &str) -> bool {
+    id.starts_with("file.") || id == "insert.picture" || id == "insert.textFromFile"
+}
+
+#[test]
+fn hostile_params_never_panic() {
+    let reg = cmd::registry();
+    let junk = hostile_junk();
     for spec in reg.all() {
-        // These reach outside the session (files). Read Aloud (`review.readAloud`, `readAloud.*`)
-        // is fuzzed too: under `cfg(test)` its backend is the silent `Hold`, asserted below.
-        if spec.id.starts_with("file.") || spec.id == "insert.picture" || spec.id == "insert.textFromFile" {
+        // Read Aloud (`review.readAloud`, `readAloud.*`) is fuzzed too: under `cfg(test)` its
+        // backend is the silent `Hold`, asserted below.
+        if reaches_files(spec.id) {
             continue;
         }
         for j in &junk {
@@ -4641,6 +4719,127 @@ fn hostile_params_never_panic() {
             let _ = s.layout();
         }
     }
+}
+
+/// `file.*`, `insert.picture` and `insert.textFromFile` take junk params and paths to files they
+/// can't use (#3719). They may read only `in` and write only `out`, so a save can't replace a file
+/// another run is meant to find broken, and nothing outside those folders is touched.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn hostile_file_params_never_panic() {
+    /// What is directly in `dir`: each name with its bytes (`None` for a folder).
+    fn contents(dir: &std::path::Path) -> std::collections::BTreeMap<String, Option<Vec<u8>>> {
+        let entries = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path());
+        entries.map(|p| (p.file_name().unwrap().to_string_lossy().into_owned(), std::fs::read(&p).ok())).collect()
+    }
+    /// The names whose bytes differ, so a failure lists them instead of printing every file.
+    fn changed(before: &std::collections::BTreeMap<String, Option<Vec<u8>>>, dir: &std::path::Path) -> Vec<String> {
+        let after = contents(dir);
+        let names: std::collections::BTreeSet<_> = before.keys().chain(after.keys()).collect();
+        names.into_iter().filter(|n| before.get(*n) != after.get(*n)).cloned().collect()
+    }
+    let reg = cmd::registry();
+    let base = scratch_dir("hostile-files");
+    let (input, output, outside) = (base.join("in"), base.join("out"), base.join("outside"));
+    for dir in [&outside, &input.join("folder.docx"), &output.join("folder.docx")] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let at = |dir: &std::path::Path, name: &str| dir.join(name).to_string_lossy().into_owned();
+
+    // Fixed bytes, so a failure comes back on the next run.
+    let noise: Vec<u8> = (0..512u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8).collect();
+    let picture_exts = ["png", "jpg", "gif", "bmp", "svg", "emf"];
+    let mut paths = vec![];
+    for ext in crate::io::OPEN_EXTS.iter().chain(&picture_exts) {
+        let name = format!("random.{ext}");
+        std::fs::write(input.join(&name), &noise).unwrap();
+        paths.push(at(&input, &name));
+    }
+    paths.extend(crate::io::SAVE_EXTS.iter().map(|ext| at(&output, &format!("new.{ext}"))));
+    std::fs::write(input.join("empty"), b"").unwrap();
+    std::fs::write(input.join("empty.docx"), b"").unwrap();
+    std::fs::write(input.join("good.txt"), "Good text").unwrap();
+    std::fs::write(input.join("good.png"), tiny_png()).unwrap();
+    paths.extend(["empty", "empty.docx", "folder.docx", "missing", "missing.docx"].map(|name| at(&input, name)));
+    paths.extend(["folder.docx", "missing/new.docx", &format!("{}.docx", "x".repeat(5000))].map(|name| at(&output, name)));
+    // Outside the roots, however it is spelled, and not paths at all.
+    paths.extend(["new.docx", "new"].map(|name| at(&outside, name)));
+    paths.push(format!("{}/../outside/new.docx", input.to_string_lossy()));
+    paths.extend(["hostile-relative.docx", "hostile-relative", "", "\0", "a\0b.docx"].map(String::from));
+
+    // Every path alone; each of these also with every other kind of junk param. The numbers that
+    // cost time (`copies`, `scale`) stay small: huge ones are #3720.
+    let mut params: Vec<serde_json::Value> = hostile_junk().into();
+    params.extend(paths.iter().map(|p| json!({"path": p})));
+    for name in [
+        "in/random.docx",
+        "in/empty.docx",
+        "in/folder.docx",
+        "in/missing.docx",
+        "in/good.txt",
+        "in/good.png",
+        "out/new.docx",
+        "out/new.pdf",
+        "out/new.png",
+    ] {
+        let path = at(&base, name);
+        params.extend([
+            json!({"path": path, "password": "x", "format": "wordml2003", "markup": "x", "confirmDamaged": 1}),
+            json!({"path": path, "password": 5, "format": 5, "markup": true}),
+            json!({"path": path, "page": 0, "scale": 0, "width": -1e308, "alt": 5}),
+            json!({"path": path, "data": "not base64!"}),
+            json!({"path": path, "data": "AAAA"}),
+            json!({"path": path, "pagesPerSheet": 7, "range": "x", "pages": "9-1,,", "parity": "x", "copies": 3, "paper": "x"}),
+            json!({"dir": path, "name": path, "template": path, "userTemplatesFolder": path, "id": 1e30, "restore": 1e30, "save": path}),
+        ]);
+    }
+
+    let before = contents(&input);
+    let working_dir = std::path::Path::new(".");
+    let working_dir_before = contents(working_dir);
+    let roots = crate::file_access::AutomationRoots::new(Some(&input), Some(&output)).unwrap();
+    let confined = |s: &mut Session, id: &str, v: &serde_json::Value| crate::file_access::confine(roots.as_ref(), || s.run(id, v));
+    for spec in reg.all() {
+        if !reaches_files(spec.id) {
+            continue;
+        }
+        for v in &params {
+            let mut s = Session::new(crate::sample::sample_document());
+            let r = confined(&mut s, spec.id, v);
+            assert!(!caught_panic(&reg, &r), "{} panicked on {v}: {r:?}", spec.id);
+            s.clamp_selection();
+            let _ = s.layout();
+        }
+    }
+
+    let nothing = Vec::<String>::new();
+    assert_eq!(changed(&before, &input), nothing, "the read root is only read");
+    assert_eq!(changed(&Default::default(), &outside), nothing, "nothing outside the write root");
+    // Every name counts: an empty path comes out as `.pdf` or `.dotx` here.
+    assert_eq!(changed(&working_dir_before, working_dir), nothing, "nothing in the working directory");
+
+    // The junk above met the files, not a closed door: usable files work through the same roots...
+    let mut s = s();
+    confined(&mut s, "file.open", &json!({"path": at(&input, "good.txt")})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Good text");
+    confined(&mut s, "insert.textFromFile", &json!({"path": at(&input, "good.txt")})).unwrap();
+    confined(&mut s, "insert.picture", &json!({"path": at(&input, "good.png")})).unwrap();
+    let saved: [(&str, &str, &[u8]); 3] =
+        [("file.saveAs", "control.docx", b"PK\x03\x04"), ("file.exportPdf", "control.pdf", b"%PDF-"), ("file.exportPng", "control.png", b"\x89PNG")];
+    for (id, name, signature) in saved {
+        confined(&mut s, id, &json!({"path": at(&output, name)})).unwrap();
+        assert_eq!(std::fs::read(output.join(name)).unwrap().get(..signature.len()), Some(signature), "{name}");
+    }
+    // ...the noise is refused by the reader, and only a path outside by the roots.
+    let refused = |s: &mut Session, path: String| match confined(s, "file.open", &json!({"path": path})) {
+        Err(crate::CmdError::Failed(m)) => m,
+        r => panic!("not refused: {r:?}"),
+    };
+    let unreadable = refused(&mut s, at(&input, "random.docx"));
+    assert!(!unreadable.contains("automation path rejected"), "{unreadable}");
+    let rejected = refused(&mut s, at(&outside, "new.docx"));
+    assert!(rejected.contains("automation path rejected"), "{rejected}");
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 /// A panic that `Session::run`'s guard turned into an error, in a command or one it ran: still a
@@ -6043,6 +6242,22 @@ fn props_colours_take_hex_strings() {
         assert!(matches!(r, Err(crate::CmdError::Params(_))), "{bad}: {r:?}");
         assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props.shading, Some(Rgb(1, 2, 3)), "{bad} changes nothing");
     }
+}
+
+#[test]
+fn para_set_frame_geometry_keeps_anchor_lock_unless_replaced() {
+    use wordcraft_doc::props::TextFrame;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Framed text"}));
+    let paragraph = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    paragraph.props.frame = Some(TextFrame { anchor_lock: Some(true), ..TextFrame::default() });
+
+    run(&mut s, "para.set", json!({"props": {"frame": {"x": 36.0, "y": 72.0, "w": 108.0}}}));
+    let frame = s.doc.para_at(&Pos::body(0, 0)).unwrap().props.frame.as_ref().unwrap();
+    assert_eq!((frame.x, frame.y, frame.w, frame.anchor_lock), (36.0, 72.0, Some(108.0), Some(true)));
+
+    run(&mut s, "para.set", json!({"props": {"frame": {"x": 54.0, "anchorLock": false}}}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props.frame.as_ref().unwrap().anchor_lock, Some(false));
 }
 
 /// #555: Update Heading 2 to Match Selection (the styles pane's context menu) makes Heading 2
