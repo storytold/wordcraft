@@ -288,6 +288,57 @@ fn background_plus_small_header_logo_keeps_background() {
     assert!(back.settings.page_picture.is_some(), "saved ODT must preserve page background picture");
 }
 
+/// An ODT document with a page background and a full-page behind-text header picture
+/// preserves both the header picture and the page background on export and re-import (#5803).
+#[test]
+fn full_page_header_picture_with_background_round_trips() {
+    let bg_png = {
+        let img = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let header_png = {
+        let img = image::RgbImage::from_pixel(4, 8, image::Rgb([30, 30, 200]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let mut d = Document::new();
+    let bg_media = d.add_media(bg_png, "png");
+    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: bg_media, fill_type: "frame".into(), title: "PageBackground".into() });
+    let header_media = d.add_media(header_png, "png");
+    let mut hp = wordcraft_doc::Paragraph::new();
+    hp.text = format!("{}", wordcraft_doc::para::OBJ);
+    hp.objects.push(wordcraft_doc::para::InlineObject::Image {
+        media: header_media,
+        w: 595.0,
+        h: 842.0,
+        alt: "Full page header picture".into(),
+        float: wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::BehindText, ..Default::default() },
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    });
+    hp.runs = vec![wordcraft_doc::para::Run { len: hp.text.len(), props: Default::default() }];
+    d.parts.insert(
+        1,
+        wordcraft_doc::Part { kind: wordcraft_doc::PartKind::Header, blocks: vec![wordcraft_doc::para_block(hp)], body: Default::default() },
+    );
+    d.last_section.headers.default = Some(1);
+
+    let saved = export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(s.contains("draw:fill=\"bitmap\""), "page layout must declare draw:fill=\"bitmap\": {s}");
+    assert!(s.contains("style:background-image"), "legacy background-image fallback must be present: {s}");
+    assert!(s.contains("<draw:fill-image"), "draw:fill-image must be declared in office:styles: {s}");
+
+    let back = import(&saved).unwrap();
+    assert!(back.settings.page_picture.is_some(), "page background picture must survive round trip");
+    let header_part = back.last_section.headers.default.and_then(|id| back.parts.get(&id));
+    assert!(header_part.is_some(), "header part must survive round trip");
+}
+
 /// A table cell style with a background image survives the kept styles path (#5803).
 #[test]
 fn cell_style_picture_survives_kept_path() {
@@ -385,6 +436,18 @@ fn no_unreferenced_images_left_in_package() {
     let saved = export(&d).unwrap();
     let styles_xml = crate::odt::tests::entry(&saved, "styles.xml");
     let content_xml = crate::odt::tests::entry(&saved, "content.xml");
+
+    // Verify modern draw:fill bitmap and legacy style:background-image resolve to the same image target
+    let fill_name =
+        styles_xml.split("draw:fill-image-name=\"").nth(1).and_then(|s| s.split('"').next()).expect("styles.xml must contain draw:fill-image-name");
+    let draw_fill_pattern = format!("<draw:fill-image draw:name=\"{fill_name}\" xlink:href=\"");
+    let draw_href = styles_xml.split(&draw_fill_pattern).nth(1).and_then(|s| s.split('"').next()).expect("draw:fill-image must define xlink:href");
+    let legacy_href = styles_xml
+        .split("<style:background-image xlink:href=\"")
+        .nth(1)
+        .and_then(|s| s.split('"').next())
+        .expect("legacy background-image must define xlink:href");
+    assert_eq!(draw_href, legacy_href, "modern and legacy background image references must match");
 
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
     let file_names: Vec<String> = (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().to_string()).collect();

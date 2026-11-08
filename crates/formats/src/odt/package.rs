@@ -781,30 +781,30 @@ fn styles_as_read(doc: &Document, kept: Option<&wordcraft_doc::kept::KeptXml>, s
 }
 
 /// The package files the file's own definitions refer to, and those the markup written as read
-/// links to (`used`), written as read with them (added to `files` and `manifest` where no file
-/// `taken` has the path). A picture only an edited paragraph showed isn't written.
+/// links to (`w.kept_files_used`, `w.kept_used`), written as read with them (added to `files` and
+/// `manifest` where no file `taken` has the path). A picture only an edited paragraph showed isn't written.
 fn with_kept_files(
     doc: &Document,
     kept: Option<&wordcraft_doc::kept::KeptXml>,
     styles: &str,
-    used: &std::collections::BTreeSet<String>,
+    w: &Writer,
     taken: &dyn Fn(&str) -> bool,
     files: &mut Vec<(String, std::sync::Arc<Vec<u8>>)>,
     manifest: &mut String,
 ) {
     let Some(k) = kept else { return };
-    let mut wanted = used.clone();
+    let mut wanted = w.kept_files_used.clone();
     let pages_kept = k.pages_as_read(doc);
     let styles_kept = k.styles_as_read(doc);
     for (key, d) in &k.defs {
         if !pages_kept && (key.starts_with("sauto:") || key.starts_with("master:")) {
             continue;
         }
-        if !styles_kept && key.starts_with("common:") {
-            continue;
-        }
-        if key.starts_with("common:") && super::kept::defined(styles, d) {
-            continue;
+        if key.starts_with("common:") {
+            let restored = key.strip_prefix("common:").is_some_and(|n| w.kept_used.1.contains_key(n));
+            if (!styles_kept && !restored) || super::kept::defined(styles, d) {
+                continue;
+            }
         }
         super::kept::hrefs(d, &mut wanted);
     }
@@ -1200,7 +1200,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         w.objects.iter().map(|(d, _, _)| d).chain(w.object_dirs.iter().map(|(d, _)| d)).map(|d| format!("{}/", d.trim_end_matches('/'))).collect();
     let taken = |p: &str| w.pictures.iter().any(|(n, _, _)| n == p) || dirs.iter().any(|d| p.starts_with(d.as_str()));
     let mut kept_files: Vec<_> = kept_files.into_iter().filter(|(p, _)| !taken(p)).collect();
-    with_kept_files(doc, kept, &styles, &w.kept_files_used, &taken, &mut kept_files, &mut manifest);
+    with_kept_files(doc, kept, &styles, &w, &taken, &mut kept_files, &mut manifest);
     for (path, mime) in &kept_entries {
         if (path.ends_with('/') && kept_files.iter().any(|(p, _)| p.starts_with(path.as_str()))) || kept_files.iter().any(|(p, _)| p == path) {
             manifest.push_str(&format!("<manifest:file-entry manifest:full-path=\"{}\" manifest:media-type=\"{}\"/>\n", x(path), x(mime)));

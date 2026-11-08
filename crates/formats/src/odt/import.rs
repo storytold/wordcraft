@@ -1130,6 +1130,17 @@ fn page_layout_fill(a: &super::xml::Attrs, fill_images: &HashMap<String, String>
     Some(((href.clone(), fill), name.to_string()))
 }
 
+/// The page background picture and fill from legacy `background-image` attributes `a` (§17.3).
+fn legacy_background_fill(a: &super::xml::Attrs) -> Option<(String, &'static str)> {
+    let href = get(a, "xlink:href").map(str::trim).filter(|h| !h.is_empty() && h.len() <= 1024)?;
+    let fill = match get(a, "style:repeat").map(str::trim) {
+        Some("no-repeat") => "center",
+        Some("stretch") => "frame",
+        _ => "tile",
+    };
+    Some((href.trim_start_matches("./").to_string(), fill))
+}
+
 /// The page setups, background images, and master page definitions declared in `styles.xml` (§16.2),
 /// with default paper size `paper`.
 fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
@@ -1170,16 +1181,12 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
             }
             // A page background picture (§17.3, in `style:page-layout-properties`): §20.249
             // `style:repeat` (repeat is the default) as WordCraft's tile, stretch, or centre.
+            // Ignored when modern `draw:fill="bitmap"` has already set the layout's image (§16.42).
             "background-image" if q.starts_with("style:") => {
-                if let (Some(l), Some(href)) =
-                    (cur.as_ref().and_then(|n| layouts.get_mut(n)), get(&a, "xlink:href").map(str::trim).filter(|h| !h.is_empty() && h.len() <= 1024))
+                if let Some(l) = cur.as_ref().and_then(|n| layouts.get_mut(n))
+                    && l.image.is_none()
                 {
-                    let fill = match get(&a, "style:repeat").map(str::trim) {
-                        Some("no-repeat") => "center",
-                        Some("stretch") => "frame",
-                        _ => "tile",
-                    };
-                    l.image = Some((href.trim_start_matches("./").to_string(), fill));
+                    l.image = legacy_background_fill(&a);
                 }
             }
             // A band whose height isn't stated is LibreOffice's default, 0.5 cm (measured; see
