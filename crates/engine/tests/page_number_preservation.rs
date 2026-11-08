@@ -338,3 +338,61 @@ fn user_owned_page_number_lookalikes_are_preserved() {
         assert_eq!(s.doc, before, "preserve {kind} rather than claim the PAGE as generated");
     }
 }
+
+#[test]
+fn reopened_cached_page_numbers_keep_noops_and_gallery_changes() {
+    for (command, position) in [("insert.header", "top"), ("insert.footer", "bottom")] {
+        for format in ["plain", "x of y"] {
+            let mut s = Session::new(Document::from_text("Body"));
+            let id = s.run(command, &json!({"text": "Keep this"})).unwrap()["story"].as_u64().unwrap() as u32;
+            let story = StoryRef::Part(id);
+            s.run("insert.pageNumber", &json!({"position": position, "format": format})).unwrap();
+            for object in &mut s.doc.para_mut(story, &Path::top(1)).unwrap().objects {
+                if let InlineObject::Field { instr, result, .. } = object {
+                    *result = if instr == "PAGE" { "7" } else { "12" }.into();
+                }
+            }
+            let doc = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+            let id = if position == "top" { doc.last_section.headers.default } else { doc.last_section.footers.default }.unwrap();
+            let story = StoryRef::Part(id);
+            let mut s = Session::new(doc);
+            let cached = |s: &Session, name: &str| {
+                s.doc.para(story, &Path::top(1)).unwrap().objects.iter().find_map(|object| match object {
+                    InlineObject::Field { instr, result, .. } if instr == name => Some(result.clone()),
+                    _ => None,
+                })
+            };
+            assert_eq!(cached(&s, "PAGE").as_deref(), Some("7"), "the fixture must retain the refreshed PAGE cache after reopen");
+            assert_eq!(cached(&s, "NUMPAGES").as_deref(), (format == "x of y").then_some("12"));
+            let kept = s.doc.story(story).unwrap()[0].clone();
+            let mark = s.doc.para(story, &Path::top(1)).unwrap().mark.clone();
+            let selection = s.sel.clone();
+            s.dirty = false;
+            let before = s.doc.clone();
+            let depth = s.undo_depth();
+            s.run("insert.pageNumber", &json!({"position": position, "format": format})).unwrap();
+            assert_eq!(s.doc, before, "identical requests must retain refreshed results");
+            assert_eq!(s.undo_depth(), depth);
+            assert!(!s.dirty);
+            for (next_format, align) in [("x of y", "right"), ("plain", "left")] {
+                let before = s.doc.clone();
+                s.run("insert.pageNumber", &json!({"position": position, "format": next_format, "align": align})).unwrap();
+                assert_eq!(s.doc.story(story).unwrap()[0], kept);
+                assert_eq!(s.sel, selection);
+                assert_eq!(s.doc.para(story, &Path::top(1)).unwrap().mark, mark);
+                assert_eq!(s.doc.para(story, &Path::top(1)).unwrap().props.align, Some(if align == "right" { Align::Right } else { Align::Left }));
+                assert_eq!(fields(&s.doc, story, "PAGE"), 1);
+                assert_eq!(fields(&s.doc, story, "NUMPAGES"), usize::from(next_format == "x of y"));
+                assert_eq!(cached(&s, "PAGE").as_deref(), Some("7"));
+                if format == "x of y" && next_format == "x of y" {
+                    assert_eq!(cached(&s, "NUMPAGES").as_deref(), Some("12"));
+                }
+                let after = s.doc.clone();
+                s.run("edit.undo", &json!({})).unwrap();
+                assert_eq!(s.doc, before);
+                s.run("edit.redo", &json!({})).unwrap();
+                assert_eq!(s.doc, after);
+            }
+        }
+    }
+}
