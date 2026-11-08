@@ -1188,15 +1188,17 @@ fn accept_or_reject_at_the_caret_resolves_a_section_break_change() {
     }
 }
 
-/// Every kind of change `change_at_selection` looks for: tracked deletion and formatting runs, a
-/// paragraph's formatting and numbering, a paragraph mark's formatting, and a table's, row's and
-/// cell's formatting. Each gives the session and the selections to try, the first one on the change.
+/// A kind of change, and a session with one plus the selections to try, the first one on the change.
 type ChangeFixture = (&'static str, fn() -> (Session, Vec<crate::Selection>));
 
+/// Every kind of change `change_at_selection` looks for: tracked deletion and formatting runs, a
+/// paragraph's formatting and numbering, a paragraph mark's formatting, and a table's, row's and
+/// cell's formatting.
 fn changes_of_each_kind() -> Vec<ChangeFixture> {
     use crate::Selection;
     use wordcraft_doc::props::{NumChange, PropChange};
     use wordcraft_doc::{Path, Pos, RevisionKind, StoryRef};
+    /// A session on `text` with Track Changes on.
     fn tracked(text: &str) -> Session {
         let mut s = Session::new(Document::from_text(text));
         s.run("review.trackChanges", &json!({"value": true})).unwrap();
@@ -1216,6 +1218,7 @@ fn changes_of_each_kind() -> Vec<ChangeFixture> {
         }
         out
     }
+    /// Body paragraph `block`, to put a change on it directly.
     fn body_para_mut(s: &mut Session, block: usize) -> &mut wordcraft_doc::Paragraph {
         s.doc.para_mut(StoryRef::Body, &Path::top(block)).unwrap()
     }

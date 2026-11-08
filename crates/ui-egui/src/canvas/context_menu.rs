@@ -59,6 +59,8 @@ pub(crate) fn issue_heading(issue: &serde_json::Value) -> String {
     tl!(issue.get("message").and_then(|m| m.as_str()).unwrap_or("")).to_string()
 }
 
+/// The text's right-click menu: a proofing issue's suggestions, Accept and Reject Change on a
+/// tracked change, then Cut, Copy, Paste and the rest (an equation has a menu of its own).
 pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     if app.session.math.is_some() {
         return equation_menu(app, ui);

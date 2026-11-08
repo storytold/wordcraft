@@ -338,6 +338,8 @@ enum CaretChange {
     Cell,
 }
 
+/// The change Accept or Reject resolves at the caret `a`, if any (see [`CaretChange`]). Shared by
+/// `resolve_sel` and [`change_at_selection`], so the context menu and the commands agree.
 fn caret_change(s: &Session, a: &Pos) -> Option<CaretChange> {
     let p = s.doc.para_at(a);
     if let Some(r) = p.and_then(|p| revision_span(p, a.off)) {
@@ -378,6 +380,9 @@ pub fn change_at_selection(s: &Session) -> bool {
     })
 }
 
+/// `review.accept` / `review.reject`: accept (`accept`) or reject the change at the caret or the
+/// changes in the selection, then with `next` select the next one; with nothing to resolve at a
+/// caret, move to the next change instead.
 fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     // The style change Next / Previous Change selected: that one alone. A caret put at the
     // document start any other way resolves no style change.
