@@ -3,7 +3,7 @@
 //! moves whole rows or splits them between lines (`split_row`).
 
 use wordcraft_doc::numbering::Counters;
-use wordcraft_doc::props::{Align, Border, Borders, HeightRule, Rgb, TextDirection, VAlign, VMerge};
+use wordcraft_doc::props::{Align, Border, Borders, HeightRule, Rgb, TableFloat, TextDirection, TextFrame, VAlign, VMerge};
 use wordcraft_doc::styles::{PartSet, TablePart, TableStyleProps};
 use wordcraft_doc::{Block, Blocks, Paragraph, Row, StoryRef, Table};
 use wordcraft_geom::Rect;
@@ -484,7 +484,67 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     TableFrame { ncols, colx, acc, total, margins_def, tborders, rtl, x }
 }
 
+/// The text frame a table stands in: every paragraph in its cells carries the frame (`w:framePr`,
+/// the same position on each; adjacent paragraphs with identical frame properties form one frame,
+/// ECMA-376 Part 1 §17.3.1.11), and the whole table is placed where the frame says. `None` for a floating table, or unless each paragraph directly in its cells has
+/// a frame at the first one's position.
+pub(crate) fn text_frame(ctx: &Ctx, t: &Table) -> Option<TextFrame> {
+    if t.props.float.is_some() {
+        return None;
+    }
+    let same = |a: &TextFrame, b: &TextFrame| {
+        (a.h_anchor.as_str(), a.v_anchor.as_str(), a.x_align.as_deref(), a.y_align.as_deref())
+            == (b.h_anchor.as_str(), b.v_anchor.as_str(), b.x_align.as_deref(), b.y_align.as_deref())
+            && (a.x - b.x).abs() < 0.01
+            && (a.y - b.y).abs() < 0.01
+    };
+    let mut first: Option<TextFrame> = None;
+    for p in t.rows.iter().flat_map(|r| &r.cells).flat_map(|c| &c.blocks).filter_map(|b| b.as_para()) {
+        let fr = ctx.doc.styles.resolve_para(&p.props).frame?;
+        match &first {
+            Some(f) if !same(f, &fr) => return None,
+            Some(_) => {}
+            None => first = Some(fr),
+        }
+    }
+    first
+}
+
+/// Where a table floats: its own floating position, or the text frame it stands in.
+pub(crate) fn float(ctx: &Ctx, t: &Table) -> Option<TableFloat> {
+    t.props.float.or_else(|| text_frame(ctx, t).map(|fr| crate::boxes::frame_table_float(&fr)))
+}
+
+/// Before Word 2013 layout (compatibility mode 15) a floating table's offset places the first
+/// cell's text, so its edge sits a cell margin further out. The same goes for the offset of the
+/// text frame a table stands in: in Word for Windows' print of a framed table in mode 11 the first
+/// cell's text starts at the frame's offset, in mode 15 the table's border does.
+pub(crate) fn legacy_offset(ctx: &Ctx, t: &Table) -> f32 {
+    if ctx.doc.settings.compat_mode < 15 && float(ctx, t).is_some() { first_cell_left_margin(ctx, t) } else { 0.0 }
+}
+
+/// The area text keeps clear of around a floating table, as its frame wraps text: none for a
+/// frame text runs over (`w:wrap="none"`), above and below only for one text isn't beside
+/// (`notBeside`), and around it otherwise.
+pub(crate) fn float_wrap(ctx: &Ctx, t: &Table, area: Rect) -> Option<crate::floats::WrapArea> {
+    let wrap = text_frame(ctx, t).map(|fr| fr.wrap);
+    match wrap.as_deref() {
+        Some("none") => None,
+        Some("notBeside") => Some((area, true, None, wordcraft_doc::para::WrapText::BothSides, true)),
+        _ => Some((area, false, None, wordcraft_doc::para::WrapText::BothSides, true)),
+    }
+}
+
 pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], avail: f32, depth: usize) -> TableLayout {
+    // In a text frame, the frame places the table: its cells' paragraphs run with their text.
+    let outer = ctx.in_framed_table;
+    ctx.in_framed_table = outer || text_frame(ctx, t).is_some();
+    let layout = layout_table_unframed(ctx, story, t, path, avail, depth);
+    ctx.in_framed_table = outer;
+    layout
+}
+
+fn layout_table_unframed(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], avail: f32, depth: usize) -> TableLayout {
     let style = table_style(ctx, t);
     // Cell text formatting and looks per set of style parts, built once per table.
     let mut cell_text: Vec<(Region, CellText)> = Vec::new();

@@ -108,6 +108,7 @@ fn new_ctx<'a>(
         header_tables: HashMap::new(),
         footer_wraps: HashMap::new(),
         pin: None,
+        in_framed_table: false,
         floats_above: HashMap::new(),
         hf: Arc::new(HfLinks::new(doc.sections())),
         alphas: Default::default(),
