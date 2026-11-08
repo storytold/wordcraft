@@ -943,6 +943,8 @@ pub struct TableExtra {
     pub width_pct: Option<f32>,
     /// Each row's height (points) and whether it is exact (else at least), by row.
     pub heights: Vec<Option<(f32, bool)>>,
+    /// Whether each row keeps from breaking across pages, by row.
+    pub keep_rows: Vec<bool>,
     /// Its columns keep their widths, never fitted to their content (Word's fixed layout,
     /// `w:tblLayout`): an ODT table's always do.
     pub fixed: bool,
