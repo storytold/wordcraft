@@ -318,7 +318,7 @@ fn keep_sections(p: &mut Paragraph, original: Option<&Paragraph>) {
 fn import_revised(doc: &mut Document, revised: Document, dropped: &mut Vec<Value>) -> Vec<Arc<Block>> {
     use std::collections::BTreeMap;
     use wordcraft_doc::{Part, PartKind};
-    let im = crate::cmd::paste::import_resources(doc, &revised, true);
+    let im = super::compare_import::import_resources(doc, &revised, true);
     let mut blocks: Vec<Block> = revised.body.iter().map(|b| (**b).clone()).collect();
     for b in &mut blocks {
         im.remap_block(b);
@@ -374,7 +374,7 @@ fn import_revised(doc: &mut Document, revised: Document, dropped: &mut Vec<Value
 struct Refs<'a> {
     doc: &'a mut Document,
     src: &'a Document,
-    im: &'a crate::cmd::paste::Imported,
+    im: &'a super::compare_import::Imported,
     notes: std::collections::BTreeMap<u32, Option<u32>>,
     comments: std::collections::BTreeMap<u32, Option<u32>>,
     /// Note references and comment marks left out: their story couldn't be brought over.

@@ -15,6 +15,7 @@ use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 mod actions;
 mod autocorrect;
 mod compare;
+mod compare_import;
 mod inspect;
 mod specs;
 mod typing;
