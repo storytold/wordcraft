@@ -21,6 +21,7 @@ mod file_dialogs;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
 mod logging;
+mod prefs_saver;
 mod print;
 mod region;
 #[cfg(target_os = "macos")]
@@ -34,8 +35,9 @@ use wordcraft_ui_egui::{
 
 /// The app, the restored window geometry (or, with none, the default: no position) until the
 /// first frame that knows the monitor has checked it, the control server's key file (removed on
-/// exit), the file dialogs the app asked for, this frame's raw host window state and, on macOS,
-/// the documents opened from Finder.
+/// exit), the file dialogs the app asked for, this frame's raw host window state, what saves the
+/// preferences when they change (none when preferences are off) and, on macOS, the documents
+/// opened from Finder.
 struct App(
     WordApp,
     Option<WindowGeometry>,
@@ -44,6 +46,7 @@ struct App(
     // The host's answer for this frame. `InputState` still describes the last painted frame on
     // a hidden logic tick.
     RawWindowState,
+    Option<prefs_saver::PrefsSaver>,
     #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
 );
 
@@ -53,8 +56,12 @@ impl eframe::App for App {
     /// on unsaved changes and active printing.
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
-        apple_events::poll(&self.5, &mut self.0, ctx);
+        apple_events::poll(&self.6, &mut self.0, ctx);
         self.0.logic(ctx);
+        // A changed setting is saved now, not only on a clean exit (#5740).
+        if let Some(saver) = &mut self.5 {
+            save_changed_prefs(saver, &mut AppPrefs { app: &self.0, path: prefs_path() }, ctx, std::time::Instant::now());
+        }
         self.3.show(frame);
         let mut window = self.4;
         // Only until the off-screen check below has run: it is the one reader.
@@ -129,7 +136,11 @@ impl eframe::App for App {
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
         self.0.session.finish_recovery();
-        save_prefs(&self.0);
+        // What this run changed and hasn't saved yet; without a saver (preferences off), as ever.
+        match &mut self.5 {
+            Some(saver) => saver.flush(&mut AppPrefs { app: &self.0, path: prefs_path() }),
+            None => save_prefs(&self.0),
+        }
         if let Some(key_file) = &self.2 {
             key_file.remove();
         }
@@ -302,22 +313,58 @@ fn save_prefs(app: &WordApp) {
     if !prefs_enabled() {
         return;
     }
-    if let Some(p) = prefs_path() {
-        if let Some(dir) = p.parent()
-            && let Err(e) = std::fs::create_dir_all(dir)
-        {
-            log::warn!("preferences: cannot create {}: {e}", dir.display());
-            return;
-        }
-        match serde_json::to_vec_pretty(&app.prefs()) {
-            Ok(bytes) => {
-                if let Err(e) = write_prefs(&p, &bytes) {
-                    log::warn!("preferences: cannot save {}: {e}", p.display());
-                }
-            }
-            Err(e) => log::warn!("preferences: cannot serialize: {e}"),
-        }
+    let Some(p) = prefs_path() else { return };
+    match serde_json::to_vec_pretty(&app.prefs()).map_err(|e| format!("cannot serialize: {e}")).and_then(|bytes| store_prefs(&p, &bytes)) {
+        Ok(()) => {}
+        Err(e) => log::warn!("preferences: {e}"),
     }
+}
+
+/// The running app's preferences and `ui.json` at `path`, for [`prefs_saver`].
+struct AppPrefs<'a> {
+    app: &'a WordApp,
+    path: Option<std::path::PathBuf>,
+}
+
+impl prefs_saver::Store for AppPrefs<'_> {
+    fn current(&mut self) -> Option<serde_json::Value> {
+        serde_json::to_value(self.app.prefs()).map_err(|e| log::warn!("preferences: cannot serialize: {e}")).ok()
+    }
+    fn disk(&mut self) -> Option<serde_json::Value> {
+        self.path.as_deref().and_then(read_prefs_as_saved)
+    }
+    fn write(&mut self, bytes: &[u8]) -> Result<(), String> {
+        let path = self.path.as_deref().ok_or("no settings folder")?;
+        store_prefs(path, bytes)
+    }
+}
+
+/// `ui.json` at `path` as this WordCraft reads it and would write it back: settings it only reads
+/// to migrate them (the old dark-mode switch) or doesn't know (a newer version's) are left out,
+/// so a save never brings them back.
+fn read_prefs_as_saved(path: &std::path::Path) -> Option<serde_json::Value> {
+    let ui = UiState::from_json(&std::fs::read(path).ok()?)?;
+    serde_json::to_value(ui).ok()
+}
+
+/// One frame's part in saving the preferences as they change (#5740): the check, when due, and
+/// the wake-up for the next one. After a check, a frame with input (which its drawing may still
+/// act on) asks to be woken for the next check too, so a setting changed later in the frame is
+/// saved without waiting for more input. An idle window isn't woken.
+fn save_changed_prefs(saver: &mut prefs_saver::PrefsSaver, store: &mut impl prefs_saver::Store, ctx: &egui::Context, now: std::time::Instant) {
+    match saver.tick(now, store) {
+        Some(wait) => ctx.request_repaint_after(wait),
+        None if ctx.input(|i| !i.events.is_empty()) => ctx.request_repaint_after(prefs_saver::INTERVAL),
+        None => {}
+    }
+}
+
+/// Write `bytes` to `ui.json` at `path`, making its folder.
+fn store_prefs(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    }
+    write_prefs(path, bytes).map_err(|e| format!("cannot save {}: {e}", path.display()))
 }
 
 /// Writes `bytes` to a sibling temporary file and renames it over `path`, so a failed or
@@ -636,6 +683,16 @@ fn main() -> eframe::Result {
             for f in other_files {
                 open_non_unicode(&mut app, &f);
             }
+            // From here on, a changed preference is saved as it changes (#5740). What this run
+            // changed is measured from the file as read: a setting migrated or cleaned up on
+            // reading is this run's to save.
+            let saver = if prefs_enabled() {
+                let mut store = AppPrefs { app: &app, path: prefs_path() };
+                let start = prefs_saver::Store::disk(&mut store).or_else(|| prefs_saver::Store::current(&mut store));
+                start.map(|v| prefs_saver::PrefsSaver::new(v, std::time::Instant::now()))
+            } else {
+                None
+            };
             Ok(Box::new(App(
                 app,
                 // With nothing restored, the window the system placed is checked all the same.
@@ -643,6 +700,7 @@ fn main() -> eframe::Result {
                 key_file,
                 dialogs,
                 RawWindowState::default(),
+                saver,
                 #[cfg(target_os = "macos")]
                 apple_events.connect(&cc.egui_ctx),
             )))
@@ -771,7 +829,90 @@ mod launch_arg_tests {
 
 #[cfg(test)]
 mod prefs_tests {
-    use super::write_prefs;
+    use super::{AppPrefs, Services, Session, UiState, WordApp, prefs_saver, read_prefs_as_saved, save_changed_prefs, write_prefs};
+    use prefs_saver::Store;
+
+    /// One frame as the desktop app runs its saver part (`App::logic` → [`save_changed_prefs`]),
+    /// at `now`, with `events` as its input; the wake-up it asked for, if any.
+    fn frame(
+        ctx: &egui::Context,
+        saver: &mut prefs_saver::PrefsSaver,
+        app: &WordApp,
+        path: &std::path::Path,
+        now: std::time::Instant,
+        events: Vec<egui::Event>,
+    ) -> Option<std::time::Duration> {
+        let out = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+            save_changed_prefs(saver, &mut AppPrefs { app, path: Some(path.to_path_buf()) }, ui.ctx(), now);
+        });
+        let delay = out.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.repaint_delay);
+        out.drop_without_applying_deltas();
+        delay.filter(|d| *d < std::time::Duration::MAX)
+    }
+
+    fn temp(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("wordcraft-prefs-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// #5740: turning Check spelling as you type off is saved while the app runs, through the
+    /// frame the app runs: the frame that changes it asks to be woken when the check is due, and
+    /// the woken frame writes it, with no clean exit. Another WordCraft started then (a document
+    /// opened from the file manager) or after this one dies reads it off. An idle window with
+    /// nothing to save isn't woken.
+    #[test]
+    fn a_changed_setting_is_saved_while_the_app_runs() {
+        let dir = temp("frame");
+        let path = dir.join("ui.json");
+        let ctx = egui::Context::default();
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        assert!(app.session.view.proofing, "on by default");
+        let t0 = std::time::Instant::now();
+        let start = AppPrefs { app: &app, path: Some(path.clone()) }.current().unwrap();
+        let mut saver = prefs_saver::PrefsSaver::new(start, t0);
+
+        app.run("review.proofing", serde_json::json!({"value": false})).unwrap();
+        let wake = frame(&ctx, &mut saver, &app, &path, t0, Vec::new());
+        assert!(wake.is_some_and(|d| d <= prefs_saver::INTERVAL), "woken when the check is due: {wake:?}");
+        assert!(!path.exists(), "nothing written before the check is due");
+        let due = t0 + prefs_saver::INTERVAL;
+        frame(&ctx, &mut saver, &app, &path, due, Vec::new());
+        let saved = UiState::from_json(&std::fs::read(&path).unwrap()).unwrap();
+        let mut next = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        next.apply_prefs(saved);
+        assert!(!next.session.view.proofing, "the next WordCraft starts with it off");
+
+        // Idle, nothing changed: no wake-up. A frame with input after a check asks for one, as
+        // its drawing may still change a setting.
+        let later = due + prefs_saver::INTERVAL;
+        assert_eq!(frame(&ctx, &mut saver, &app, &path, later, Vec::new()), None, "an idle window isn't woken");
+        let click = vec![egui::Event::PointerMoved(egui::pos2(10.0, 10.0))];
+        let wake = frame(&ctx, &mut saver, &app, &path, later + prefs_saver::INTERVAL, click);
+        assert!(wake.is_some_and(|d| d <= prefs_saver::INTERVAL), "{wake:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #5740 review: a `ui.json` from before the theme setting (`"dark": true`) is migrated to the
+    /// Dark theme on reading. The first save writes the theme and leaves the old key out, so the
+    /// migration is kept and the old key can't override a later theme.
+    #[test]
+    fn a_migrated_setting_is_saved_and_the_old_key_goes() {
+        let dir = temp("migrate");
+        let path = dir.join("ui.json");
+        std::fs::write(&path, br#"{"dark": true, "recent": []}"#).unwrap();
+        let ctx = egui::Context::default();
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        app.apply_prefs(UiState::from_json(&std::fs::read(&path).unwrap()).unwrap());
+        let t0 = std::time::Instant::now();
+        let mut saver = prefs_saver::PrefsSaver::new(read_prefs_as_saved(&path).unwrap(), t0);
+        frame(&ctx, &mut saver, &app, &path, t0 + prefs_saver::INTERVAL, Vec::new());
+        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["theme"], serde_json::json!(app.ui.theme), "{saved}");
+        assert!(saved.get("dark").is_none(), "{saved}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn failed_preferences_write_keeps_the_old_file_and_reports_the_error() {
