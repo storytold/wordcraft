@@ -24,10 +24,13 @@ from the paragraph-selection rules in #5964.
 
 A whole paragraph's text suffices; explicitly selecting its paragraph mark is
 not necessary. Starting a shorter selection at offset zero does not suffice.
-The engine regression matrix covers
-partial/whole source selection, with and without marks, against
-first-word, middle-word, and whole-paragraph targets for both commands. Additional
-caret and cross-paragraph tests cover the native destination rules.
+The engine regression matrix covers partial/whole source selections against
+first-word, middle-word, and whole-paragraph targets for both commands. Its
+`mark=true` cases represent a selection ending at offset zero of the next
+paragraph; they do not exercise a real paragraph-mark selection. The matrix rows
+above report native observations, including the rows with and without the mark;
+the synthetic cases do not establish UI paragraph-mark selection coverage.
+Additional caret and cross-paragraph tests cover the native destination rules.
 
 Scope: the tests dispatch engine commands directly. Existing UI coupling between
 Copy Formatting and the armed brush, copied-buffer lifetime, and platform shortcut
