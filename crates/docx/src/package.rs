@@ -299,7 +299,7 @@ impl Package {
     }
 
     /// Charge `count` elements a parsed part built against the budget.
-    fn charge(&self, count: usize) -> Result<(), DocxError> {
+    pub(crate) fn charge(&self, count: usize) -> Result<(), DocxError> {
         let left = self.budget.get();
         if count > left {
             return Err(DocxError::Limit(format!("{count} XML elements, {left} left of the package's {} budget", self.budget_cap)));

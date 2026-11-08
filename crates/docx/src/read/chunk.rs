@@ -97,8 +97,8 @@ impl Reader<'_> {
         // fresh cap — nesting goes deep, so 5 packages each getting 16M is the OOM class the
         // budget exists for. The container's own parse spent part of the chain, so the cap is
         // the lesser of the chain and what the container has left.
-        let elements = self.chunks.elements.min(self.pkg.elements_left());
-        let pkg = Package::open_limited_within(bytes, MAX_PART, self.chunks.bytes, elements)
+        let cap = self.chunks.elements.min(self.pkg.elements_left());
+        let pkg = Package::open_limited_within(bytes, MAX_PART, self.chunks.bytes, cap)
             .map_err(|e| log::warn!("docx: unreadable nested document chunk: {e}"))
             .ok()?;
         self.chunks.bytes = self.chunks.bytes.saturating_sub(pkg.size());
@@ -109,6 +109,15 @@ impl Reader<'_> {
         self.chunks.bytes = bytes;
         self.chunks.graphic = graphic;
         self.chunks.elements = elements;
+        // The nested document's XML usage comes out of the container's budget too: a later
+        // sibling chunk and the container's own remaining parts parse against what is left
+        // of it. The charge can't refuse: the cap is the lesser of the file's remaining
+        // elements and what the container has left, and the container's budget doesn't move
+        // while the nested read goes.
+        let spent = cap - elements;
+        if let Err(e) = self.pkg.charge(spent) {
+            log::warn!("docx: nested document chunk outspent the container's element budget: {e}");
+        }
         Some(doc)
     }
 }
@@ -231,5 +240,49 @@ mod tests {
         // innermost is left out instead of getting one of its own (before this, each nested
         // package started with the full 16M).
         assert_eq!(read(10), (true, false));
+    }
+
+    #[test]
+    fn a_nested_documents_elements_charge_the_container() {
+        // The nested document's XML usage comes out of the container's budget too: the cap
+        // the nested package was given, minus its returned remainder, is charged, so the
+        // container's remaining parts parse against what is left of the shared cap — not a
+        // budget that ignores the chunk.
+        let nested = package(r#"<w:p><w:r><w:t>inner</w:t></w:r></w:p>"#, ("rIdZ", "chart", "charts/z.xml"), ("word/charts/z.xml", b"<a/>"));
+        let body = r#"<w:p><w:r><w:t>after</w:t></w:r></w:p>"#;
+        let with = package(&format!(r#"<w:altChunk r:id="rIdC"/>{body}"#), ("rIdC", "aFChunk", "afchunk.docx"), ("word/afchunk.docx", &nested));
+        let without = package(body, ("rIdZ", "chart", "charts/z.xml"), ("word/charts/z.xml", b"<a/>"));
+        let read = |outer: &[u8]| {
+            let pkg = Package::open(outer).unwrap();
+            let (d, .., elements) = super::super::read_opened_in(&pkg, ChunkState { elements: 10, ..ChunkState::new(None) }).unwrap();
+            (has(&d, "inner"), pkg.elements_left())
+        };
+        let (inner_in, charged) = read(&with);
+        assert!(inner_in);
+        let (_, base) = read(&without);
+        assert!(charged < base, "the nested document's usage is the container's: {charged} of {base}");
+    }
+
+    #[test]
+    fn a_grandchilds_reservation_charges_every_level() {
+        // Three levels: the innermost's reservation comes out of the inner's budget, and the
+        // inner's out of the outer's — the chain charges every container, so the outer's
+        // remainder is smaller with the deeper chain than with a shallow one.
+        let innermost = package(r#"<w:p><w:r><w:t>leaf</w:t></w:r></w:p>"#, ("rIdZ", "chart", "charts/z.xml"), ("word/charts/z.xml", b"<a/>"));
+        let inner = package(
+            r#"<w:p><w:r><w:t>mid</w:t></w:r></w:p><w:altChunk r:id="rIdD"/>"#,
+            ("rIdD", "aFChunk", "afchunk.docx"),
+            ("word/afchunk.docx", &innermost),
+        );
+        let outer = package(r#"<w:altChunk r:id="rIdC"/>"#, ("rIdC", "aFChunk", "afchunk.docx"), ("word/afchunk.docx", &inner));
+        let pkg = Package::open(&outer).unwrap();
+        let (d, .., elements) = super::super::read_opened_in(&pkg, ChunkState::new(None)).unwrap();
+        assert!(has(&d, "mid"), "the inner document didn't flow in");
+        assert!(has(&d, "leaf"), "the innermost document didn't flow in");
+        // The same container with a shallow chain: one reservation instead of two.
+        let shallow = package(r#"<w:altChunk r:id="rIdC"/>"#, ("rIdC", "aFChunk", "afchunk.docx"), ("word/afchunk.docx", &innermost));
+        let pkg = Package::open(&shallow).unwrap();
+        let (.., shallow_elements) = super::super::read_opened_in(&pkg, ChunkState::new(None)).unwrap();
+        assert!(elements < shallow_elements, "every level's reservation is charged: {elements} of {shallow_elements}");
     }
 }
