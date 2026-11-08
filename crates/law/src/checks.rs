@@ -59,6 +59,7 @@ fn check_id(c: &CheckSpec, index: usize) -> String {
 }
 
 /// Run one profile check and add its findings to `out`.
+#[allow(clippy::too_many_arguments)]
 fn run_one(
     doc: &Document,
     spec: &DocSpec,
