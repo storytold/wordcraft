@@ -101,9 +101,11 @@ impl SessionModel {
                 "pending": pending,
             })),
             // Engine commands have no inverse here; per-user undo covers
-            // primitives and structural operations (ADR-0010).
+            // primitives and structural operations (ADR-0010). The forward
+            // operation names the step so undo reports `unsupported` instead of
+            // skipping over it to an older step.
             inverse: Vec::new(),
-            forward: Vec::new(),
+            forward: vec![op.clone()],
             label: format!("Command {command}"),
         })
     }

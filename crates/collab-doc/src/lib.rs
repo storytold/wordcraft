@@ -270,6 +270,7 @@ fn inverse_op(kind: OpKind, op: &Op, story: StoryRef, node_id: u32, off: usize, 
         kind,
         target: Target { story: story_name(story), node_id, off },
         payload,
+        history: None,
     }
 }
 

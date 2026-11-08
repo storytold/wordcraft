@@ -16,10 +16,16 @@ use wordcraft_collab_ws::{Event, TransportEvent, spawn};
 
 const WAIT: Duration = Duration::from_secs(10);
 
-async fn next_client_msg(socket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>) -> ClientMsg {
-    let message = timeout(WAIT, socket.next()).await.expect("a client frame").expect("a frame").expect("a text frame");
-    let Message::Text(text) = message else { panic!("expected text, got {message:?}") };
-    serde_json::from_str(&text).expect("a protocol message")
+async fn next_client_msg(socket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>, what: &str) -> ClientMsg {
+    loop {
+        let message = timeout(WAIT, socket.next()).await.unwrap_or_else(|_| panic!("no {what} frame")).expect("a frame").expect("a text frame");
+        match message {
+            Message::Text(text) => return serde_json::from_str(&text).expect("a protocol message"),
+            // The transport's heartbeat may arrive between protocol frames.
+            Message::Ping(_) | Message::Pong(_) => continue,
+            other => panic!("expected text, got {other:?}"),
+        }
+    }
 }
 
 async fn send_server_msg(socket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>, msg: &ServerMsg) {
@@ -28,7 +34,7 @@ async fn send_server_msg(socket: &mut tokio_tungstenite::WebSocketStream<tokio::
 }
 
 async fn welcome(socket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>, last_version: Option<u64>) {
-    match next_client_msg(socket).await {
+    match next_client_msg(socket, "auth").await {
         ClientMsg::Auth { last_version: seen, .. } => assert_eq!(seen, last_version),
         other => panic!("expected auth, got {other:?}"),
     }
@@ -50,7 +56,7 @@ async fn an_unconfirmed_operation_is_resent_after_a_reconnect() {
         let (stream, _) = listener.accept().await.expect("first connection");
         let mut socket = tokio_tungstenite::accept_async(stream).await.expect("handshake");
         welcome(&mut socket, None).await;
-        let first = match next_client_msg(&mut socket).await {
+        let first = match next_client_msg(&mut socket, "first op").await {
             ClientMsg::Op { op } => op,
             other => panic!("expected op, got {other:?}"),
         };
@@ -60,7 +66,7 @@ async fn an_unconfirmed_operation_is_resent_after_a_reconnect() {
         let (stream, _) = listener.accept().await.expect("second connection");
         let mut socket = tokio_tungstenite::accept_async(stream).await.expect("handshake");
         welcome(&mut socket, None).await;
-        let second = match next_client_msg(&mut socket).await {
+        let second = match next_client_msg(&mut socket, "resent op").await {
             ClientMsg::Op { op } => op,
             other => panic!("expected resent op, got {other:?}"),
         };

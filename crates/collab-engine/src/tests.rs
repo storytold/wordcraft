@@ -18,7 +18,7 @@ fn node(room: &mut Room<SessionModel>) -> u32 {
 }
 
 fn op(client: &str, seq: u64, base: u64, kind: OpKind, node: u32, off: usize, payload: serde_json::Value) -> Op {
-    Op { op_id: OpId::new(client, seq), base_version: base, epoch: None, kind, target: Target::new("body", node, off), payload }
+    Op { op_id: OpId::new(client, seq), base_version: base, epoch: None, kind, target: Target::new("body", node, off), payload, history: None }
 }
 
 fn body_text(room: &Room<SessionModel>) -> String {
@@ -115,4 +115,24 @@ fn the_server_session_keeps_no_undo_history() {
     room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Command, node, 0, json!({"command": "text.insert", "params": {"text": "Hi"}})))
         .expect("command applies");
     assert_eq!(room.model().session().undo_depth(), 0);
+}
+
+#[test]
+fn a_command_is_an_undo_barrier() {
+    let mut room = room();
+    let node = node(&mut room);
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Command, node, 0, json!({"command": "text.insert", "params": {"text": "Hi"}})))
+        .expect("command applies");
+    let undo = Op {
+        op_id: wordcraft_collab::wire::OpId::new("a", 2),
+        base_version: 1,
+        epoch: None,
+        kind: OpKind::Command,
+        target: Target::new("body", node, 0),
+        payload: serde_json::Value::Null,
+        history: Some(wordcraft_collab::wire::HistoryAction::Undo { op_id: wordcraft_collab::wire::OpId::new("a", 1) }),
+    };
+    let err = room.submit("alice", Role::Editor, undo).expect_err("a command has no inverse");
+    assert_eq!(err.code, RejectCode::Unsupported);
+    assert_eq!(body_text(&room), "Hi", "the refused undo changed nothing");
 }

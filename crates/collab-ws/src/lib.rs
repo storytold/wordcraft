@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
-use tokio::time::{MissedTickBehavior, interval, sleep};
+use tokio::time::{Instant, MissedTickBehavior, interval_at, sleep};
 use tokio_tungstenite::tungstenite::Message;
 
 use wordcraft_collab::wire::{ClientMsg, OpKind, ServerMsg, Target};
@@ -106,7 +106,9 @@ async fn session(
         return !events.is_closed();
     }
 
-    let mut heartbeat = interval(Duration::from_secs(15));
+    // The first heartbeat is one period away: an immediate ping would race the
+    // handshake and add a control frame before the session is usable.
+    let mut heartbeat = interval_at(Instant::now() + Duration::from_secs(15), Duration::from_secs(15));
     heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut resend_after_welcome = false;
     let mut waiting: VecDeque<Intent> = VecDeque::new();

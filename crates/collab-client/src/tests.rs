@@ -3,7 +3,7 @@
 use serde_json::json;
 
 use wordcraft_collab::room::{Role, Room};
-use wordcraft_collab::wire::{Applied, ClientMsg, OpId, OpKind, Reject, RejectCode, ServerMsg, Target, Version};
+use wordcraft_collab::wire::{Applied, ClientMsg, HistoryAction, OpId, OpKind, Reject, RejectCode, ServerMsg, Target, Version};
 use wordcraft_collab_doc::DocModel;
 use wordcraft_doc::Document;
 
@@ -104,6 +104,100 @@ fn unconfirmed_operations_resend_with_the_same_ids() {
         ClientMsg::Op { op: resent } => assert_eq!(resent.op_id, op.op_id),
         other => panic!("expected an op, got {other:?}"),
     }
+}
+
+#[test]
+fn undo_and_redo_move_the_client_stack_only_when_confirmed() {
+    let mut client = Client::new("alice");
+    let _ = client.on(ServerMsg::Welcome {
+        session_id: "s".into(),
+        role: "editor".into(),
+        version: 0,
+        epoch: 0,
+        participants: Vec::new(),
+        resync: false,
+    });
+    let op = client.op(OpKind::Primitive, Target::new("body", 1, 0), json!({"op": "insert_text", "text": "a"}));
+    let _ = client.on(applied(op.op_id.clone(), 1, 0));
+    assert_eq!(client.history_depth(), (1, 0));
+
+    let undo = client.undo().expect("a step");
+    assert_eq!(undo.history, Some(HistoryAction::Undo { op_id: op.op_id.clone() }));
+    assert!(undo.payload.is_null());
+    assert_eq!(client.history_depth(), (1, 0), "nothing moves before the server answers");
+
+    let _ = client.on(applied(undo.op_id, 2, 0));
+    assert_eq!(client.history_depth(), (0, 1));
+
+    // A refused redo leaves the step where it was.
+    let refused = client.redo().expect("a redo step");
+    let reject = Reject::new(refused.op_id.clone(), RejectCode::UndoConflict, "touched later");
+    let _ = client.on(ServerMsg::Rejected { reject });
+    assert_eq!(client.history_depth(), (0, 1));
+
+    let redo = client.redo().expect("a redo step");
+    assert_eq!(redo.history, Some(HistoryAction::Redo { op_id: op.op_id }));
+    let _ = client.on(applied(redo.op_id, 3, 0));
+    assert_eq!(client.history_depth(), (1, 0));
+}
+
+#[test]
+fn a_new_local_edit_clears_the_redo_branch() {
+    let mut client = Client::new("alice");
+    let _ = client.on(ServerMsg::Welcome {
+        session_id: "s".into(),
+        role: "editor".into(),
+        version: 0,
+        epoch: 0,
+        participants: Vec::new(),
+        resync: false,
+    });
+    let first = client.op(OpKind::Primitive, Target::new("body", 1, 0), json!({"op": "insert_text", "text": "a"}));
+    let _ = client.on(applied(first.op_id.clone(), 1, 0));
+    let undo = client.undo().expect("a step");
+    let _ = client.on(applied(undo.op_id, 2, 0));
+    assert_eq!(client.history_depth(), (0, 1));
+
+    let second = client.op(OpKind::Primitive, Target::new("body", 1, 0), json!({"op": "insert_text", "text": "b"}));
+    let _ = client.on(applied(second.op_id, 3, 0));
+    assert_eq!(client.history_depth(), (1, 0), "a new edit drops redo");
+    assert!(client.redo().is_none());
+}
+
+#[test]
+fn undo_round_trips_through_the_room() {
+    let mut room: Room<DocModel> = Room::new(DocModel::new(Document::new()));
+    let plan = room.join(None, false);
+    let node = plan.nodes.first().expect("a body node").id;
+    let mut client = Client::new("alice");
+    let _ = client.on(ServerMsg::Welcome {
+        session_id: "s".into(),
+        role: "editor".into(),
+        version: plan.version,
+        epoch: plan.epoch,
+        participants: Vec::new(),
+        resync: false,
+    });
+    let text_of = |room: &Room<DocModel>| -> String {
+        room.model().document().body.first().and_then(|block| block.as_para()).map(|para| para.text.clone()).unwrap_or_default()
+    };
+
+    let op = client.op(OpKind::Primitive, Target::new("body", node, 0), json!({"op": "insert_text", "text": "Hello"}));
+    let applied = room.submit("alice", Role::Editor, op).expect("insert");
+    let _ = client.on(ServerMsg::Applied { applied });
+    assert_eq!(text_of(&room), "Hello");
+
+    let undo = client.undo().expect("a step");
+    let applied = room.submit("alice", Role::Editor, undo).expect("undo");
+    assert_eq!(applied.version, 2);
+    let _ = client.on(ServerMsg::Applied { applied });
+    assert_eq!(text_of(&room), "");
+
+    let redo = client.redo().expect("a step");
+    let applied = room.submit("alice", Role::Editor, redo).expect("redo");
+    assert_eq!(applied.version, 3);
+    let _ = client.on(ServerMsg::Applied { applied });
+    assert_eq!(text_of(&room), "Hello");
 }
 
 #[test]

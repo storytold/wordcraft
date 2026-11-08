@@ -86,6 +86,24 @@ pub struct Op {
     pub target: Target,
     #[serde(default)]
     pub payload: serde_json::Value,
+    /// Set when the operation moves the sender's history instead of making a
+    /// new step (ADR-0010). The server checks the step still holds, applies its
+    /// inverse (undo) or original operations (redo), and journals the result as
+    /// one new operation with its own version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<HistoryAction>,
+}
+
+/// Which way one actor's history moves. Undo is a new operation in every
+/// case: it is sent with `base_version = head`, checked like any other, and
+/// gets its own version. `op_id` names the step being taken back (the client's
+/// id for the operation that created it), so a stale menu cannot undo a
+/// different step.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum HistoryAction {
+    Undo { op_id: OpId },
+    Redo { op_id: OpId },
 }
 
 /// Server answer to an accepted operation (ADR-0001).
@@ -124,6 +142,10 @@ pub enum RejectCode {
     TooLarge,
     /// Malformed operation.
     Invalid,
+    /// Undo or redo would overwrite a change made after the step (ADR-0010).
+    UndoConflict,
+    /// The adapter does not implement the operation in this version.
+    Unsupported,
 }
 
 impl RejectCode {
@@ -271,6 +293,7 @@ mod tests {
             kind: OpKind::Primitive,
             target: Target::new("body", 18, 42),
             payload: serde_json::json!({"text": "Привет"}),
+            history: None,
         };
         let text = serde_json::to_string(&op).expect("serialize");
         let back: Op = serde_json::from_str(&text).expect("deserialize");

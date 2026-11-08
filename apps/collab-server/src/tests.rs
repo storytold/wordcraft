@@ -6,7 +6,7 @@ use serde_json::json;
 use tokio::time::{Duration, timeout};
 use tokio_tungstenite::tungstenite::Message;
 
-use wordcraft_collab::wire::{ClientMsg, Op, OpId, OpKind, ServerMsg, Target};
+use wordcraft_collab::wire::{ClientMsg, HistoryAction, Op, OpId, OpKind, ServerMsg, Target};
 
 use crate::{AppState, Claims, Config, app};
 
@@ -115,6 +115,7 @@ fn insert(client: &str, seq: u64, base: u64, node: u32, off: usize, text: &str) 
         kind: OpKind::Primitive,
         target: Target::new("body", node, off),
         payload: json!({"op": "insert_text", "text": text}),
+        history: None,
     }
 }
 
@@ -281,6 +282,7 @@ async fn a_command_operation_runs_on_the_server() {
         kind: OpKind::Command,
         target: Target::new("body", node, 0),
         payload: json!({"command": "text.insert", "params": {"text": "Hi"}}),
+        history: None,
     };
     alice.send(Message::Text(serde_json::to_string(&ClientMsg::Op { op: command }).expect("json").into())).await.expect("send");
     match next_msg(&mut alice).await {
@@ -296,6 +298,7 @@ async fn a_command_operation_runs_on_the_server() {
         kind: OpKind::Command,
         target: Target::new("body", node, 0),
         payload: json!({"command": "file.new"}),
+        history: None,
     };
     alice.send(Message::Text(serde_json::to_string(&ClientMsg::Op { op: forbidden }).expect("json").into())).await.expect("send");
     match next_msg(&mut alice).await {
@@ -336,4 +339,82 @@ async fn the_transport_client_edits_through_the_server() {
             None => panic!("the transport ended before the answer"),
         }
     }
+}
+
+fn committed_text(cfg: &Config) -> String {
+    let bytes = std::fs::read(cfg.data_dir.join("doc-1").join("source.docx")).expect("a committed file");
+    let doc = wordcraft_docx::read_with_password(&bytes, None).expect("read the committed docx");
+    doc.body.iter().filter_map(|block| block.as_para()).map(|para| para.text.clone()).collect::<Vec<_>>().join("\n")
+}
+
+#[tokio::test]
+async fn undo_and_redo_over_the_socket_change_the_committed_text() {
+    let (url, cfg) = spawn_server().await;
+    let mut owner = connect(&url, &cfg, "owner", "owner").await;
+    let _ = next_msg(&mut owner).await;
+    let node = node_of(&mut owner).await;
+
+    owner
+        .send(Message::Text(serde_json::to_string(&ClientMsg::Op { op: insert("owner", 1, 0, node, 0, "Hello") }).expect("json").into()))
+        .await
+        .expect("insert");
+    match next_msg(&mut owner).await {
+        ServerMsg::Applied { applied } => assert_eq!(applied.version, 1),
+        other => panic!("expected applied, got {other:?}"),
+    }
+
+    let undo = Op {
+        op_id: OpId::new("owner", 2),
+        base_version: 1,
+        epoch: None,
+        kind: OpKind::Primitive,
+        target: Target::new("body", node, 0),
+        payload: json!({}),
+        history: Some(HistoryAction::Undo { op_id: OpId::new("owner", 1) }),
+    };
+    owner.send(Message::Text(serde_json::to_string(&ClientMsg::Op { op: undo }).expect("json").into())).await.expect("undo");
+    match next_msg(&mut owner).await {
+        ServerMsg::Applied { applied } => assert_eq!(applied.version, 2),
+        other => panic!("expected applied, got {other:?}"),
+    }
+
+    owner
+        .send(Message::Text(
+            serde_json::to_string(&ClientMsg::Commit { op_id: OpId::new("owner", 3), expected_version: 2, etag: None }).expect("json").into(),
+        ))
+        .await
+        .expect("commit");
+    match next_msg(&mut owner).await {
+        ServerMsg::Committed { version, .. } => assert_eq!(version, 2),
+        other => panic!("expected committed, got {other:?}"),
+    }
+    assert_eq!(committed_text(&cfg), "", "the undo removed the typed text from the file");
+
+    let redo = Op {
+        op_id: OpId::new("owner", 4),
+        base_version: 2,
+        epoch: None,
+        kind: OpKind::Primitive,
+        target: Target::new("body", node, 0),
+        payload: json!({}),
+        history: Some(HistoryAction::Redo { op_id: OpId::new("owner", 1) }),
+    };
+    owner.send(Message::Text(serde_json::to_string(&ClientMsg::Op { op: redo }).expect("json").into())).await.expect("redo");
+    match next_msg(&mut owner).await {
+        ServerMsg::Applied { applied } => assert_eq!(applied.version, 3),
+        other => panic!("expected applied, got {other:?}"),
+    }
+
+    owner
+        .send(Message::Text(
+            serde_json::to_string(&ClientMsg::Commit { op_id: OpId::new("owner", 5), expected_version: 3, etag: None }).expect("json").into(),
+        ))
+        .await
+        .expect("commit");
+    match next_msg(&mut owner).await {
+        ServerMsg::Committed { version, .. } => assert_eq!(version, 3),
+        other => panic!("expected committed, got {other:?}"),
+    }
+    assert_eq!(committed_text(&cfg), "Hello", "the redo brought the text back");
+    let _ = std::fs::remove_dir_all(&cfg.data_dir);
 }

@@ -13,7 +13,7 @@ fn node(ids: &mut NodeIds, block: u32) -> u32 {
 }
 
 fn op(client: &str, seq: u64, base: u64, kind: OpKind, node_id: u32, off: usize, payload: serde_json::Value) -> Op {
-    Op { op_id: OpId::new(client, seq), base_version: base, epoch: None, kind, target: Target::new("body", node_id, off), payload }
+    Op { op_id: OpId::new(client, seq), base_version: base, epoch: None, kind, target: Target::new("body", node_id, off), payload, history: None }
 }
 
 fn room() -> Room<DocModel> {

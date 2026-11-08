@@ -99,6 +99,24 @@ accepted: `file.`, `tools.`, `ui.`, `view.`, `caret.`, `select.`, `collab.`,
 `forbidden`. The server session keeps no undo history: per-user undo is the
 protocol's (ADR-0010), and a command has no inverse there.
 
+## Undo and redo
+
+The client moves its own history by sending an ordinary operation with a
+`history` field (ADR-0010); there is no separate message:
+
+```json
+{"type":"op","op":{"opId":{"client":"alice","seq":7},"baseVersion":3,"kind":"primitive",
+ "target":{"story":"body","nodeId":18,"off":0},"payload":null,
+ "history":{"action":"undo","opId":{"client":"alice","seq":6}}}}
+```
+
+The server takes only the actor's newest step, verifies the named step is that
+one, and replays its inverse operations under the request. The request gets one
+version; the replayed operations are not journaled separately. A target touched
+after the step yields `rejected{code:"undoConflict"}` and changes nothing. A
+step of several operations is `unsupported` until a transaction exists. A
+command has no inverse and acts as a barrier, so undo never skips over it.
+
 ## What is not here yet
 
 - Client connection and UI (feature flag `collab`), PR-4.

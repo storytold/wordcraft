@@ -22,6 +22,9 @@ use crate::wire::Op;
 pub struct UndoStep {
     /// Human label for the undo menu (`Typing`, `Insert table`).
     pub label: String,
+    /// Document version right after this step landed. An undo is refused when
+    /// another operation touched the same targets later (ADR-0010).
+    pub version: crate::wire::Version,
     /// Operations that undo this step, already addressed and ready to send.
     pub inverse: Vec<Op>,
     /// Operations that redo it (the originals), kept for the redo stack.
@@ -29,8 +32,8 @@ pub struct UndoStep {
 }
 
 impl UndoStep {
-    pub fn new(label: impl Into<String>, inverse: Vec<Op>, forward: Vec<Op>) -> UndoStep {
-        UndoStep { label: label.into(), inverse, forward }
+    pub fn new(label: impl Into<String>, version: crate::wire::Version, inverse: Vec<Op>, forward: Vec<Op>) -> UndoStep {
+        UndoStep { label: label.into(), version, inverse, forward }
     }
 }
 
@@ -69,28 +72,53 @@ impl UndoStacks {
         }
     }
 
+    /// The newest step `actor` can undo, without moving the stacks. The caller
+    /// applies its inverse and then calls [`UndoStacks::finish_undo`].
+    pub fn peek_undo(&self, actor: &str) -> Option<UndoStep> {
+        self.actors.get(actor)?.done.last().cloned()
+    }
+
+    /// Move the newest step to the redo stack after its inverse landed at
+    /// `version`. That version becomes the step's new baseline: a redo is
+    /// allowed until something else touches the same targets.
+    pub fn finish_undo(&mut self, actor: &str, version: crate::wire::Version) {
+        let Some(history) = self.actors.get_mut(actor) else { return };
+        if let Some(mut step) = history.done.pop() {
+            step.version = version;
+            history.undone.push(step);
+        }
+    }
+
     /// Take the newest step to undo (the caller sends [`UndoStep::inverse`] as
     /// a new operation and then calls [`UndoStacks::finish_undo`]).
     pub fn undo(&mut self, actor: &str) -> Option<UndoStep> {
-        let history = self.actors.get_mut(actor)?;
-        let step = history.done.pop()?;
-        history.undone.push(step.clone());
+        let step = self.peek_undo(actor)?;
+        self.finish_undo(actor, step.version);
         Some(step)
     }
 
-    /// Put the step back on the redo stack if the inverse operation landed.
-    pub fn finish_undo(&mut self, _actor: &str) {}
+    /// The newest step `actor` can redo, without moving the stacks.
+    pub fn peek_redo(&self, actor: &str) -> Option<UndoStep> {
+        self.actors.get(actor)?.undone.last().cloned()
+    }
+
+    /// Move the newest undone step back to the done stack after it replayed at
+    /// `version`.
+    pub fn finish_redo(&mut self, actor: &str, version: crate::wire::Version) {
+        let Some(history) = self.actors.get_mut(actor) else { return };
+        if let Some(mut step) = history.undone.pop() {
+            step.version = version;
+            history.done.push(step);
+        }
+    }
 
     /// Take the newest undone step to redo (the caller sends
     /// [`UndoStep::forward`], then calls [`UndoStacks::finish_redo`]).
     pub fn redo(&mut self, actor: &str) -> Option<UndoStep> {
-        let history = self.actors.get_mut(actor)?;
-        let step = history.undone.pop()?;
-        history.done.push(step.clone());
+        let step = self.peek_redo(actor)?;
+        self.finish_redo(actor, step.version);
         Some(step)
     }
-
-    pub fn finish_redo(&mut self, _actor: &str) {}
 
     /// `(undoable, redoable)` for the menu and the UI state.
     pub fn depth(&self, actor: &str) -> (usize, usize) {
@@ -121,11 +149,12 @@ mod tests {
             kind: OpKind::Primitive,
             target: Target::new("body", 1, 0),
             payload: serde_json::Value::Null,
+            history: None,
         }
     }
 
     fn step(label: &str, client: &str, seq: u64) -> UndoStep {
-        UndoStep::new(label, vec![op(client, seq)], vec![op(client, seq + 100)])
+        UndoStep::new(label, seq, vec![op(client, seq)], vec![op(client, seq + 100)])
     }
 
     #[test]

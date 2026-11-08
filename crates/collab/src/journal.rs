@@ -183,6 +183,7 @@ mod tests {
             kind,
             target: Target::new("body", 1, 0),
             payload: serde_json::Value::Null,
+            history: None,
         }
     }
 
