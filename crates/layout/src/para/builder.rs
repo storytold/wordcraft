@@ -5,7 +5,8 @@ use super::chars::{
 };
 use super::grid::east_asian;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
-use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, RubyAlign, SOFT_HYPHEN};
+use super::paragraph::break_positions;
+use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, ResolvedPara, RubyAlign, SOFT_HYPHEN};
 use wordcraft_fonts::ShapeContext;
 
 pub(super) struct Builder<'a> {
@@ -50,6 +51,17 @@ struct SegmentInput<'a> {
     lbase: usize,
     use_levels: bool,
     context: &'a [bool],
+}
+
+/// Resolve the base embedding level for an isolate embedded at `surrounding`.
+fn isolate_base_level(surrounding: u8, rtl_base: bool) -> u8 {
+    if rtl_base {
+        if surrounding % 2 == 1 { surrounding } else { surrounding + 1 }
+    } else if surrounding.is_multiple_of(2) {
+        surrounding
+    } else {
+        surrounding + 1
+    }
 }
 
 impl<'a> Builder<'a> {
@@ -448,6 +460,7 @@ impl<'a> Builder<'a> {
                     obj_h: 0.0,
                     obj_d: 0.0,
                     dot: s == "." || s == ",",
+                    level: None,
                 });
             }
             if matches!(dir, Dir::Para) {
@@ -499,8 +512,8 @@ impl<'a> Builder<'a> {
         // Right-to-left text in the result reads like ordinary text (UAX #9, #1670): the result is
         // an isolate whose direction is its first strong letter's (else the text's around the
         // field), and each level run is shaped (mirrored, joined) and placed in that direction.
-        let around = self.levels.get(start).is_some_and(|l| l % 2 == 1);
-        let rtl_base = text.chars().find_map(strong_rtl).unwrap_or(around);
+        let surrounding = self.levels.get(start).copied().unwrap_or(0);
+        let rtl_base = text.chars().find_map(strong_rtl).unwrap_or(surrounding % 2 == 1);
         let lv = bidi_levels(text, rtl_base);
         let before = self.clusters.len();
         self.shape_with(text, start, rc, None, if lv.is_empty() { Dir::Guess } else { Dir::Own(&lv) });
@@ -520,6 +533,7 @@ impl<'a> Builder<'a> {
                 obj_h: 0.0,
                 obj_d: 0.0,
                 dot: false,
+                level: None,
             });
             return;
         };
@@ -552,8 +566,235 @@ impl<'a> Builder<'a> {
         let g0 = first.g0;
         let style = first.style;
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
+        let cl_level = isolate_base_level(surrounding, rtl_base);
         self.shown.push((self.clusters.len(), text.to_string(), ranges));
-        self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
+        self.clusters.push(Cluster {
+            start,
+            end,
+            adv: x,
+            kind: ClKind::Text,
+            style,
+            g0,
+            g1,
+            break_after: false,
+            obj_h: 0.0,
+            obj_d: 0.0,
+            dot: false,
+            level: Some(cl_level),
+        });
+    }
+
+    /// Shape field result `text` into breakable clusters across multiple lines.
+    ///
+    /// # Invariants and Layout Rules
+    /// - All emitted clusters share the field slot's `start..end` in the document paragraph text.
+    /// - Word and space groupings are determined by `break_positions` (UAX #14) and whitespace transitions.
+    /// - Embedding levels for bidi reordering are resolved via [`isolate_base_level`] and internal `lv`.
+    /// - Unbroken words wider than `max_line_w` (accounting for column width, paragraph indents, and float
+    ///   exclusions) are chunked into smaller clusters so that line breaking can emergency-split without
+    ///   overflowing margins, where each emitted cluster allocates its displayed string and glyph-range slice.
+    /// - Glyphs within a word are grouped into style runs so fallback font styles are preserved without
+    ///   introducing spurious line breaks.
+    pub(super) fn shape_field(&mut self, text: &str, start: usize, end: usize, rc: &Arc<ResolvedChar>, rp: &ResolvedPara) {
+        if text.is_empty() {
+            let si = self.style(rc, None, false);
+            let g = self.glyphs.len() as u32;
+            self.clusters.push(Cluster {
+                start,
+                end,
+                adv: 0.0,
+                kind: ClKind::Marker,
+                style: si,
+                g0: g,
+                g1: g,
+                break_after: false,
+                obj_h: 0.0,
+                obj_d: 0.0,
+                dot: false,
+                level: None,
+            });
+            return;
+        }
+        let surrounding = self.levels.get(start).copied().unwrap_or(0);
+        let rtl_base = text.chars().find_map(strong_rtl).unwrap_or(surrounding % 2 == 1);
+        let lv = bidi_levels(text, rtl_base);
+        let iso_base = isolate_base_level(surrounding, rtl_base);
+        let base_internal = if rtl_base { 1 } else { 0 };
+        let before = self.clusters.len();
+        self.shape_with(text, start, rc, None, if lv.is_empty() { Dir::Guess } else { Dir::Own(&lv) });
+        let added: Vec<Cluster> = self.clusters.drain(before..).collect();
+        if added.is_empty() {
+            let si = self.style(rc, None, false);
+            let g = self.glyphs.len() as u32;
+            self.clusters.push(Cluster {
+                start,
+                end,
+                adv: 0.0,
+                kind: ClKind::Marker,
+                style: si,
+                g0: g,
+                g1: g,
+                break_after: false,
+                obj_h: 0.0,
+                obj_d: 0.0,
+                dot: false,
+                level: None,
+            });
+            return;
+        }
+
+        let opps = break_positions(text, rp);
+
+        // Group `added` clusters into word and space chunks based on `break_positions` and whitespace kind.
+        let mut group_start = 0;
+        let n_added = added.len();
+        let indents = rp.indent_left + rp.indent_right + rp.indent_first.abs();
+        let mut max_line_w = (self.env.width - indents).max(20.0);
+        for ex in self.env.exclusions {
+            let ex_w = (ex.right - ex.left).max(0.0);
+            max_line_w = max_line_w.min((self.env.width - ex_w - indents).max(20.0));
+        }
+
+        while group_start < n_added {
+            let is_space = added[group_start].kind == ClKind::Space;
+            let mut group_end = group_start + 1;
+            while group_end < n_added {
+                if (added[group_end].kind == ClKind::Space) != is_space {
+                    break;
+                }
+                let t_end = added[group_end - 1].end.saturating_sub(start);
+                if opps.binary_search(&t_end).is_ok() {
+                    break;
+                }
+                group_end += 1;
+            }
+            let group = &added[group_start..group_end];
+            let last = &group[group.len() - 1];
+            let w_end = last.end.saturating_sub(start);
+
+            let group_adv: f32 = group.iter().map(|c| c.adv).sum();
+            // If an unbroken text word exceeds available line width (including indents and floats),
+            // emit grapheme clusters individually so `Scan::break_long_word` can emergency-split
+            // across lines with exact plain-text parity.
+            if !is_space && group.len() > 1 && group_adv > max_line_w {
+                let mut ci = 0;
+                while ci < group.len() {
+                    let mut c_end = ci + 1;
+                    // Keep glyphless followers (such as ligature tails) grouped with their head cluster
+                    // so emergency line breaking never splits a ligature across lines.
+                    while c_end < group.len() && group[c_end].g1 <= group[c_end].g0 && group[c_end].style == group[ci].style {
+                        c_end += 1;
+                    }
+                    let sub = &group[ci..c_end];
+                    let first = &sub[0];
+                    let last = &sub[sub.len() - 1];
+                    let is_last = c_end == group.len();
+                    let cs = first.start.saturating_sub(start);
+                    let ce = last.end.saturating_sub(start);
+                    let ct = text.get(cs..ce).unwrap_or("");
+                    let cl_byte = first.start.saturating_sub(start);
+                    let cl_base = lv.get(cl_byte).copied().unwrap_or(base_internal);
+                    let cl_lvl = iso_base + cl_base.saturating_sub(base_internal);
+                    let adv: f32 = sub.iter().map(|c| c.adv).sum();
+                    let g0 = first.g0;
+                    let g1 = sub.iter().map(|c| c.g1).max().unwrap_or(first.g1);
+                    let ranges = vec![0..ct.len(); (g1 - g0) as usize];
+                    self.shown.push((self.clusters.len(), ct.to_string(), ranges));
+                    self.clusters.push(Cluster {
+                        start,
+                        end,
+                        adv,
+                        kind: first.kind,
+                        style: first.style,
+                        g0,
+                        g1,
+                        break_after: is_last && opps.binary_search(&w_end).is_ok(),
+                        obj_h: 0.0,
+                        obj_d: 0.0,
+                        dot: ct == "." || ct == ",",
+                        level: Some(cl_lvl),
+                    });
+                    ci = c_end;
+                }
+            } else {
+                // Keep glyphs grouped in style runs within the word so style changes retain
+                // their respective fonts without introducing unwanted line breaks.
+                let mut run_start = 0;
+                while run_start < group.len() {
+                    let run_style = group[run_start].style;
+                    let mut run_end = run_start + 1;
+                    while run_end < group.len() && group[run_end].style == run_style {
+                        run_end += 1;
+                    }
+                    let sub_run = &group[run_start..run_end];
+                    let first_c = &sub_run[0];
+                    let last_c = &sub_run[sub_run.len() - 1];
+                    let sub_w_start = first_c.start.saturating_sub(start);
+                    let sub_w_end = last_c.end.saturating_sub(start);
+                    let sub_text = text.get(sub_w_start..sub_w_end).unwrap_or("");
+
+                    let sub_cl_lv: Vec<u8> = sub_run
+                        .iter()
+                        .map(|c| {
+                            let byte_idx = c.start.saturating_sub(start);
+                            lv.get(byte_idx).copied().unwrap_or(base_internal)
+                        })
+                        .collect();
+                    let base_sub_lv = sub_cl_lv.first().copied().unwrap_or(base_internal);
+                    let sub_cluster_level = iso_base + base_sub_lv.saturating_sub(base_internal);
+                    let sub_order = visual_order(&sub_cl_lv);
+
+                    let mut adv = 0.0f32;
+                    for &i in &sub_order {
+                        if let Some(c) = sub_run.get(i) {
+                            for g in self.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
+                                g.dx += adv;
+                            }
+                            adv += c.adv;
+                        }
+                    }
+
+                    let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+                    for c in sub_run {
+                        let a = c.start.saturating_sub(start).saturating_sub(sub_w_start);
+                        let b = c.end.saturating_sub(start).saturating_sub(sub_w_start);
+                        if c.g1 <= c.g0 {
+                            let from = ranges.last().map(|r| r.start);
+                            for r in ranges.iter_mut().rev().take_while(|r| Some(r.start) == from) {
+                                r.end = b;
+                            }
+                        }
+                        ranges.extend((c.g0..c.g1).map(|_| a..b));
+                    }
+
+                    let is_last_run = run_end == group.len();
+                    let break_after = is_last_run && opps.binary_search(&w_end).is_ok();
+                    let kind = if is_space { ClKind::Space } else { ClKind::Text };
+                    let g0 = first_c.g0;
+                    let g1 = last_c.g1;
+
+                    self.shown.push((self.clusters.len(), sub_text.to_string(), ranges));
+                    self.clusters.push(Cluster {
+                        start,
+                        end,
+                        adv,
+                        kind,
+                        style: run_style,
+                        g0,
+                        g1,
+                        break_after,
+                        obj_h: 0.0,
+                        obj_d: 0.0,
+                        dot: sub_text == "." || sub_text == ",",
+                        level: Some(sub_cluster_level),
+                    });
+
+                    run_start = run_end;
+                }
+            }
+
+            group_start = group_end;
+        }
     }
 
     /// Shape `texts` on top of one another as one cluster for `start..end`: each aligned within
@@ -603,7 +844,20 @@ impl<'a> Builder<'a> {
         if !text.is_empty() {
             self.shown.push((k, text, ranges));
         }
-        self.clusters.push(Cluster { start, end, adv, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
+        self.clusters.push(Cluster {
+            start,
+            end,
+            adv,
+            kind: ClKind::Text,
+            style,
+            g0,
+            g1,
+            break_after: false,
+            obj_h: 0.0,
+            obj_d: 0.0,
+            dot: false,
+            level: None,
+        });
         Some(k)
     }
 }

@@ -49,6 +49,7 @@ struct Slot {
 }
 
 impl Slot {
+    /// Build a cluster spanning this slot with the given kind and dimensions.
     fn cluster(self, kind: ClKind, adv: f32, (obj_h, obj_d): (f32, f32)) -> Cluster {
         Cluster {
             start: self.start,
@@ -62,6 +63,7 @@ impl Slot {
             obj_h,
             obj_d,
             dot: false,
+            level: None,
         }
     }
 }
@@ -442,6 +444,7 @@ impl<'a> Shaped<'a> {
         self.check_boxes.push(k);
     }
 
+    /// Shape a field result or overstrike equation into paragraph clusters.
     fn field_result(&mut self, cx: &Cx, (instr, result): (&str, &str), slot: Slot, rc: &Arc<ResolvedChar>) {
         let (start, end) = (slot.start, slot.end);
         match wordcraft_doc::eq::parse_overstrike(instr) {
@@ -449,7 +452,7 @@ impl<'a> Shaped<'a> {
             None => {
                 let (t, page_dep) = field_text_on(instr, result, cx.env.fields, cx.env.fields.page_at(start));
                 self.has_page_fields |= page_dep;
-                self.b.shape_atomic(&t, start, end, &linked(rc, instr));
+                self.b.shape_field(&t, start, end, &linked(rc, instr), cx.rp);
             }
         }
     }
@@ -525,8 +528,12 @@ impl<'a> BreakText<'a> {
 /// Mark the clusters a line may break after.
 fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &ResolvedPara) {
     let opps: std::collections::HashSet<usize> = break_positions(&bt.text, rp).into_iter().filter_map(|i| bt.to_para(i)).collect();
-    for c in clusters {
-        c.break_after = opps.contains(&c.end) || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);
+    let n = clusters.len();
+    for i in 0..n {
+        let is_last_of_object = i + 1 == n || clusters[i + 1].start != clusters[i].start;
+        let c = &mut clusters[i];
+        let break_at_end = is_last_of_object && opps.contains(&c.end);
+        c.break_after = c.break_after || break_at_end || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);
     }
 }
 
@@ -810,7 +817,8 @@ fn break_text<'a>(source: &'a str, skip: &[std::ops::Range<usize>]) -> (std::bor
     }
 }
 
-fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec<usize> {
+/// Compute UAX #14 line break opportunities in `text`, respecting slash-break rules.
+pub(super) fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec<usize> {
     let mut found = Vec::new();
     for (i, o) in unicode_linebreak::linebreaks(text) {
         // Word keeps "and/or" and web addresses whole: no break right after a slash (a word

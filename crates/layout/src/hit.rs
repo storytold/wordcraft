@@ -677,17 +677,40 @@ impl DocLayout {
             }
             None => in_row(&cands, gx, dir),
         };
+        let line_pos_x = |l: &LineHit| -> (Pos, f32) {
+            let mut off = l.para.off_at_x(l.li, gx - l.x);
+            if l.para.is_line_continuation(l.li)
+                && let Some(line) = l.para.lines.get(l.li)
+                && let Some(c0) = l.para.clusters.get(line.c0)
+            {
+                let mut k_end = line.c0;
+                while k_end < line.c1 && l.para.clusters.get(k_end).is_some_and(|c| c.start == c0.start && c.end == c0.end) {
+                    k_end += 1;
+                }
+                let lx = gx - l.x;
+                let x0 = line.xs.first().copied().unwrap_or(0.0);
+                let x1 = line.xs.get(k_end - line.c0).copied().unwrap_or(f32::MAX);
+                let (min_x, max_x) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
+                let targets_field = k_end == line.c1 || (lx >= min_x && lx <= max_x);
+                if targets_field {
+                    if dir < 0 {
+                        off = c0.start;
+                    } else if dir > 0 && (l.path != &pos.path || off <= pos.off) {
+                        off = c0.end;
+                    }
+                }
+            }
+            (Pos { story: l.story, path: l.path.clone(), off }, gx)
+        };
         if let Some(l) = target {
-            let off = l.para.off_at_x(l.li, gx - l.x);
-            return Some((Pos { story: l.story, path: l.path.clone(), off }, gx));
+            return Some(line_pos_x(l));
         }
         // Next/previous page.
         let np = if dir < 0 { c.page.checked_sub(1)? } else { c.page + 1 };
         let p = self.pages.get(np)?;
         let lines = page_lines(p, pos.story);
         let l = if dir < 0 { lines.iter().max_by(|a, b| a.top.total_cmp(&b.top))? } else { lines.iter().min_by(|a, b| a.top.total_cmp(&b.top))? };
-        let off = l.para.off_at_x(l.li, gx - l.x);
-        Some((Pos { story: l.story, path: l.path.clone(), off }, gx))
+        Some(line_pos_x(l))
     }
 
     /// Page Up (`dir < 0`) or Page Down within the caret's page: of the lines above (or below)
@@ -721,7 +744,8 @@ impl DocLayout {
             } else if l.end == crate::LineEnd::Wrap {
                 // Before the wrapped line's trailing space: its last reachable offset, in logical
                 // order (the far edge is the left one in right-to-left text).
-                end = para.line_offsets(li).into_iter().max().unwrap_or(end);
+                let max_off = para.line_offsets(li).into_iter().max().unwrap_or(end);
+                end = if para.is_line_continuation(li + 1) { max_off.max(l.stop) } else { max_off };
             }
             let mk = |off| Pos { story: pos.story, path: pos.path.clone(), off };
             return Some((mk(l.start), mk(end)));
@@ -774,7 +798,7 @@ impl DocLayout {
             }
             let l = para.lines.get(li)?;
             let next = para.lines.get(li.saturating_add(1));
-            let end = next.map_or(l.stop, |n| n.start).max(l.start);
+            let end = next.map_or(l.stop, |n| if n.start > l.start { n.start } else { l.stop }).max(l.start);
             let mk = |off| Pos { story: pos.story, path: pos.path.clone(), off };
             return Some((mk(l.start), mk(end), next.is_none()));
         }

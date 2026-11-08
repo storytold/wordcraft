@@ -99,7 +99,8 @@ pub(super) fn reorder_line(pl: &ParaLayout, line: &mut Line, width: f32) {
         return;
     }
     let para_level = u8::from(rtl_para);
-    let mut levels: Vec<u8> = (c0..c1).map(|k| pl.clusters.get(k).and_then(|c| pl.bidi_levels.get(c.start)).copied().unwrap_or(para_level)).collect();
+    let mut levels: Vec<u8> =
+        (c0..c1).map(|k| pl.clusters.get(k).and_then(|c| c.level.or_else(|| pl.bidi_levels.get(c.start).copied())).unwrap_or(para_level)).collect();
     // L1: tabs and breaks, and the whitespace before them or at the end of the line, take the
     // paragraph level (so trailing spaces stay at the line's end edge).
     let mut trailing = true;
