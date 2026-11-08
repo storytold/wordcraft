@@ -351,6 +351,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 
 | Date | What landed |
 | 2026-11-04 | The CLI opens a non-Unicode input filename even after options such as `--page 2` or `--format flatopc`; text option values still require Unicode; `run --file` and `run --script` retain native paths. |
+| 2026-11-06 | Accept All and Reject All no longer restyle the paragraph after an empty one carrying a section break (#5667): a Compare that added a section, then Reject All, left `Body` in the removed paragraph's Normal style and indents. The empty paragraph now goes whole and its section joins the following one, as deleting the break does. |
 | 2026-11-04 | Pictures keep the brightness, contrast and transparency their file gives them (#1711, #1766): a "Washout" picture watermark (VML `gain`/`blacklevel`) and a washed-out letterhead picture behind the text (`a:lum`) are drawn faded on screen and in PDF instead of at full colour, with the pixel curve measured on Word's own PDF export; `a:alphaModFix` transparency too. Saved back as DrawingML (and as VML `gain`/`blacklevel` in Word 2003 XML, without the transparency). Picture Format › Corrections, Transparency and Color › Washout replace the file's values (other Color modes leave them alone), and Reset Picture discards them all, as in Word; the PDF embeds the corrected pixels once per picture |
 |---|---|
 | 2026-10-17 | Copies keep their formatting in programs that read RTF rather than HTML: Copy and Cut put RTF beside the text and HTML on the system clipboard on Windows, macOS and Wayland (an X11 copy stays text and HTML, since arboard owns the selection there; a copy of only pictures or shapes carries no HTML or RTF, so pasting it back keeps every detail), and Paste reads another program's RTF on macOS and X11 too, not only on Windows and Wayland |
@@ -869,6 +870,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-06 | trivial | Windows print submissions isolated per helper process; cancelled driver work cannot block a retry (#5710) |
 | 2026-11-06 | trivial | Progress log: print cancellation before sending, including without a document, and the Windows repeated-conversion limitation (#5710) |
 | 2026-11-06 | trivial | Progress log: the printer list no longer waits on printer drivers (#5710) |
+| 2026-11-06 | trivial | Progress log: resolving away an empty paragraph with a section break keeps the next paragraph's properties, #5667; readiness estimates unchanged |
 | 2026-11-05 | trivial | PR #4545: eligible cell floats retain in-bounds offsets and touch the outer cell edge only on overflow, ignoring wrap distances for object placement. Front-of-text, turned-cell and outside-cell opt-outs remain. Synthetic geometry controls; native front/behind-text parity remains unqualified. |
 | 2026-11-04 | trivial | Progress log: CLI convert format options; readiness estimates unchanged |
 | 2026-11-04 | trivial | Progress log: MHT quoted MIME parameters; readiness estimates unchanged |
