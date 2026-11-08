@@ -269,3 +269,42 @@ fn a_list_items_further_paragraph_stays_in_it_in_html_and_markdown() {
     let md = crate::markdown::export(&d);
     assert!(md.contains("1. One\n\n   Cont\n\n2. Two"), "{md}");
 }
+
+/// Only a list item's own further paragraph stays in it: an indented paragraph between two lists
+/// joined by `text:continue-list` ends the list, and a last item's further paragraph (a one-item
+/// list's too) stays in it.
+#[test]
+fn only_an_items_own_further_paragraph_stays_in_it() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><text:list-style style:name="L"><text:list-level-style-number text:level="1" style:num-format="1" style:num-suffix="."/></text:list-style></office:styles></office:document-styles>"#
+    );
+    let open = |body: &str| {
+        // (An indent of its own: LibreOffice writes one as an automatic style.)
+        let auto = r#"<office:automatic-styles><style:style style:name="Ind" style:family="paragraph"><style:paragraph-properties fo:margin-left="0.5in" fo:text-indent="0in"/></style:style></office:automatic-styles>"#;
+        let content =
+            format!("<office:document-content {NS_T}>{auto}<office:body><office:text>{body}</office:text></office:body></office:document-content>");
+        import(&package(&content, Some(&styles))).unwrap()
+    };
+    // A paragraph of its own between two parts of one list.
+    let d = open(
+        r#"<text:list xml:id="a" text:style-name="L"><text:list-item><text:p>One</text:p></text:list-item></text:list><text:p text:style-name="Ind">Between</text:p><text:list text:continue-list="a" text:style-name="L"><text:list-item><text:p>Two</text:p></text:list-item></text:list>"#,
+    );
+    let between = d.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == "Between").unwrap();
+    assert_eq!(between.props.indent_left, Some(36.0));
+    let html = crate::html::export(&d);
+    assert_eq!(html.matches("<ol").count(), 2, "{html}");
+    assert!(!html.contains("<p>Between</p></li>") && !html.contains("<li>One<p>"), "{html}");
+    let md = crate::markdown::export(&d);
+    assert!(md.contains("\n\nBetween\n\n") && !md.contains(" Between"), "{md}");
+    // A last item's further paragraph, and a one-item list's.
+    for body in [
+        r#"<text:list text:style-name="L"><text:list-item><text:p>One</text:p></text:list-item><text:list-item><text:p>Two</text:p><text:p>Cont</text:p></text:list-item></text:list><text:p>After</text:p>"#,
+        r#"<text:list text:style-name="L"><text:list-item><text:p>Two</text:p><text:p>Cont</text:p></text:list-item></text:list><text:p>After</text:p>"#,
+    ] {
+        let d = open(body);
+        let html = crate::html::export(&d);
+        assert!(html.contains("<li>Two<p>Cont</p></li>"), "{html}");
+        let md = crate::markdown::export(&d);
+        assert!(md.contains("1. Two\n\n   Cont\n\nAfter") || md.contains("2. Two\n\n   Cont\n\nAfter"), "{md}");
+    }
+}

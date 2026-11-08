@@ -480,6 +480,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
         wrap: None,
         index: None,
         group: None,
+        item: p.props.list_item.filter(|_| list.is_none()).map(|l| l.min(8)),
     };
     if opts.paras {
         out.extra = para_extra(doc, &p.props);
@@ -523,11 +524,13 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                         wrap: None,
                         index: None,
                         group: None,
+                        item: None,
                     };
                     let prev = std::mem::replace(&mut out, next);
                     if prev.inlines.is_empty() {
                         out.page_break |= prev.page_break;
                         out.list = prev.list;
+                        out.item = prev.item;
                     } else {
                         done.push(prev);
                     }

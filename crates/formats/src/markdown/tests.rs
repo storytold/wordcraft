@@ -797,3 +797,28 @@ fn heading_trailing_hash_survives_round_trip() {
         assert_eq!(export(&import(&md)), want, "second export of {src:?}");
     }
 }
+
+/// A list item's further paragraph is read as a paragraph of its own in the item, with no number:
+/// written and read again, it stays one, and the list goes on after it.
+#[test]
+fn an_items_further_paragraph_round_trips() {
+    let src = "1. One\n\n   Cont\n\n2. Two\n    - Sub\n\n   More\n";
+    let shape = |d: &Document| {
+        d.body.iter().filter_map(|b| b.as_para()).map(|p| (p.text.clone(), p.props.numbering.map(|n| n.num), p.props.indent_left)).collect::<Vec<_>>()
+    };
+    let d = import(src);
+    let rows = shape(&d);
+    assert_eq!(rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["One", "Cont", "Two", "Sub", "More"], "{rows:?}");
+    for (t, at) in [("Cont", 36.0), ("More", 36.0)] {
+        let r = rows.iter().find(|r| r.0 == t).unwrap();
+        assert_eq!((r.1, r.2), (None, Some(at)), "{t}: no number, at the item's text: {rows:?}");
+    }
+    assert_eq!(rows[0].1, rows[2].1, "one list: {rows:?}");
+    let md = export(&d);
+    assert!(md.starts_with("1. One\n\n   Cont\n\n2. Two\n"), "{md}");
+    assert!(md.contains("\n\n   More"), "{md}");
+    assert_eq!(shape(&import(&md)), rows, "{md}");
+    // A numbered sublist after an item's further paragraph starts again.
+    let md = export(&import("1. One\n    1. a\n    2. b\n\n   More\n\n    1. c\n"));
+    assert!(md.contains("\n    1. c"), "{md}");
+}

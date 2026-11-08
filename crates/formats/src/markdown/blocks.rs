@@ -682,21 +682,19 @@ fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut
         }
         for b in inner {
             match b {
-                FBlock::Para(mut p) if p.list.is_none() => {
+                FBlock::Para(mut p) if p.list.is_none() && p.item.is_none() => {
                     if !placed {
                         p.list = Some(li);
                         placed = true;
-                        out.push(FBlock::Para(p));
-                    } else if let Some(FBlock::Para(prev)) = out.last_mut()
-                        && prev.list.is_some_and(|x| x.level == li.level)
-                    {
-                        // A continuation paragraph joins the item with a line break.
-                        prev.push_text("\n", &Fmt::default());
-                        prev.inlines.extend(p.inlines);
+                    } else if p.kind == Kind::Normal {
+                        // The item's further paragraph: one with no number, at the item's text.
+                        p.item = Some(li.level);
+                        p.spacing.left = Some((f32::from(li.level) + 1.0) * 36.0);
+                        p.spacing.first = Some(0.0);
                     } else {
                         p.list = Some(li);
-                        out.push(FBlock::Para(p));
                     }
+                    out.push(FBlock::Para(p));
                 }
                 FBlock::Para(p) => {
                     if !placed {

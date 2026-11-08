@@ -506,6 +506,11 @@ pub struct ParaProps {
     /// file (not laid out yet); Word sizes a line by it, so dropping it changes Word's pages.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_alignment: Option<TextAlignment>,
+    /// A list item's paragraph after its first (or a list header's), with no number of its own,
+    /// at this list level (0..=8): formats with list items (ODT, HTML, Markdown) keep it in the
+    /// item. Set only directly, never by a style.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list_item: Option<u8>,
 }
 
 impl ParaProps {

@@ -144,6 +144,9 @@ fn para_props(p: &Para, list_num: Option<u32>) -> ParaProps {
         }
         out.numbering = Some(NumRef { num, level: li.level.min(8) });
     }
+    if p.list.is_none() {
+        out.list_item = p.item.map(|l| l.min(8));
+    }
     out.align = p.align;
     let sp = p.spacing;
     out.space_before = sp.before;
@@ -761,7 +764,14 @@ impl<'a> Builder<'a> {
                     let mut top: Option<bool> = None;
                     let id = p.list.map_or(0, |l| l.list);
                     while let Some(FBlock::Para(q)) = blocks.get(j) {
-                        let Some(li) = q.list else { break };
+                        let Some(li) = q.list else {
+                            // An item's further paragraph is in the list: it goes on after it.
+                            if super::continues_list(blocks, j).is_some() {
+                                j += 1;
+                                continue;
+                            }
+                            break;
+                        };
                         if li.list != id {
                             break;
                         }

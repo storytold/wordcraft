@@ -709,6 +709,9 @@ pub struct Para {
     pub index: Option<Box<(std::sync::Arc<str>, usize)>>,
     /// The group of paragraphs its markup kept as read belongs to (see [`Group`]).
     pub group: Option<Box<Group>>,
+    /// A list item's further paragraph, with no number of its own (`list` is `None`): the level
+    /// of the item it belongs to.
+    pub item: Option<u8>,
 }
 
 /// Paragraphs whose markup kept as read ties them together (a comment from one to another, a
@@ -1087,21 +1090,11 @@ pub fn clean_text(s: &str) -> String {
     s.chars().filter(|c| *c != OBJ && (!c.is_control() || matches!(c, '\t' | '\n' | '\u{000C}' | '\u{000E}'))).collect()
 }
 
-/// Whether the paragraph at `i` in `blocks` is a list item's further paragraph: one no list numbers,
-/// at an indent, between items of one list (one level of it), which goes on after it.
-/// HTML and Markdown keep it in its item, so the list doesn't start again after it.
-pub fn continues_list(blocks: &[FBlock], i: usize) -> bool {
-    let further = |b: Option<&FBlock>| matches!(b, Some(FBlock::Para(p)) if p.list.is_none() && p.kind == Kind::Normal && p.spacing.left.is_some_and(|l| l > 0.0));
-    let list_at = |j: usize| match blocks.get(j) {
-        // (By its list, or where the flow keeps no lists' identity, its level and kind.)
-        Some(FBlock::Para(p)) => p.list.map(|l| (l.list, l.level, l.ordered)),
+/// Whether the paragraph at `i` in `blocks` is a list item's further paragraph, and the level of
+/// its item: HTML and Markdown keep it in its item, so the list doesn't start again after it.
+pub fn continues_list(blocks: &[FBlock], i: usize) -> Option<u8> {
+    match blocks.get(i) {
+        Some(FBlock::Para(p)) if p.list.is_none() && p.kind == Kind::Normal => p.item.map(|l| l.min(8)),
         _ => None,
-    };
-    if !further(blocks.get(i)) {
-        return false;
     }
-    // (A run of them, to 64.)
-    let before = (i.saturating_sub(64)..i).rev().take_while(|j| list_at(*j).is_some() || further(blocks.get(*j))).find_map(list_at);
-    let after = (i + 1..i.saturating_add(65)).take_while(|j| list_at(*j).is_some() || further(blocks.get(*j))).find_map(list_at);
-    before.is_some() && before == after
 }

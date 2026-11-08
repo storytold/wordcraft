@@ -222,6 +222,7 @@ fn unnumbered(p: &mut Para) {
     let indent = li.label.and_then(|l| l.indent).map_or((f32::from(li.level) + 1.0) * 36.0, |i| f32::from(i) / 20.0);
     p.spacing.left = p.spacing.left.or(Some(indent));
     p.spacing.first = p.spacing.first.or(Some(0.0));
+    p.item = Some(li.level.min(8));
 }
 
 impl<'a> Body<'a> {
