@@ -234,37 +234,42 @@ fn a_page_borders_padding_keeps_the_text_where_it_was() {
     assert_eq!(s.page_borders.and_then(|b| b.left).map(|b| (b.width, b.space)), Some((3.0, 24.0)));
 }
 
-/// An ODT document with a pre-existing page background picture (legacy
-/// `<style:background-image>`) suppresses that background and its package image
-/// when a header contains a picture (#5803).
+/// An ODT document with a page background and an active header containing a logo
+/// preserves the page background (both modern draw:fill and legacy fallback) and the header logo (#5803).
 #[test]
-fn header_picture_removes_orphaned_legacy_background_image_on_odt_export() {
-    // #5803: an ODT document with a pre-existing page background picture (legacy
-    // <style:background-image>) shouldn't retain that background picture as an orphan
-    // when a header picture is inserted/present.
+fn background_plus_small_header_logo_keeps_background() {
     let png = {
         let img = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30]));
         let mut out = std::io::Cursor::new(Vec::new());
         img.write_to(&mut out, image::ImageFormat::Png).unwrap();
         out.into_inner()
     };
+    let logo_png = {
+        let img = image::RgbImage::from_pixel(4, 4, image::Rgb([30, 200, 30]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
     let mut d = Document::new();
-    let bg_media = d.add_media(png.clone(), "png");
-    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: bg_media, fill_type: "frame".into(), title: String::new() });
-    let header_media = d.add_media(png.clone(), "png");
+    let bg_media = d.add_media(png, "png");
+    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: bg_media, fill_type: "frame".into(), title: "PageBackground".into() });
+    let logo_media = d.add_media(logo_png, "png");
     let mut hp = wordcraft_doc::Paragraph::new();
-    hp.text = format!("{}", wordcraft_doc::para::OBJ);
+    hp.text = format!("Company {}", wordcraft_doc::para::OBJ);
     hp.objects.push(wordcraft_doc::para::InlineObject::Image {
-        media: header_media,
-        w: 595.0,
-        h: 842.0,
-        alt: "Header picture".into(),
-        float: wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::BehindText, ..Default::default() },
+        media: logo_media,
+        w: 50.0,
+        h: 20.0,
+        alt: "Logo".into(),
+        float: Default::default(),
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
     });
-    hp.runs = vec![wordcraft_doc::para::Run { len: hp.text.len(), props: Default::default() }];
+    hp.runs = vec![
+        wordcraft_doc::para::Run { len: 8, props: Default::default() },
+        wordcraft_doc::para::Run { len: wordcraft_doc::para::OBJ.len_utf8(), props: Default::default() },
+    ];
     d.parts.insert(
         1,
         wordcraft_doc::Part { kind: wordcraft_doc::PartKind::Header, blocks: vec![wordcraft_doc::para_block(hp)], body: Default::default() },
@@ -273,17 +278,38 @@ fn header_picture_removes_orphaned_legacy_background_image_on_odt_export() {
 
     let saved = export(&d).unwrap();
     let s = crate::odt::tests::entry(&saved, "styles.xml");
-    assert!(!s.contains("style:background-image"), "legacy background-image must not be written when header picture is present: {s}");
-    assert!(!s.contains("Pictures/page-background.png"), "orphan page-background image must not be referenced: {s}");
+    // Verify both draw:fill="bitmap" and style:background-image are emitted consistently
+    assert!(s.contains("draw:fill=\"bitmap\""), "page layout must declare draw:fill=\"bitmap\": {s}");
+    assert!(s.contains("style:background-image"), "legacy background-image fallback must be present: {s}");
+    assert!(s.contains("<draw:fill-image"), "draw:fill-image must be declared in office:styles: {s}");
 
-    // Also verify that the package does not contain Pictures/page-background.png
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
-    let names: Vec<String> = (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().to_string()).collect();
-    assert!(!names.iter().any(|n| n.contains("page-background")), "page-background file must not exist in package: {names:?}");
-
-    // Reading the saved ODT back has no page_picture
+    // Reading the saved ODT back preserves page_picture
     let back = import(&saved).unwrap();
-    assert!(back.settings.page_picture.is_none(), "saved ODT must not import an orphaned page picture");
+    assert!(back.settings.page_picture.is_some(), "saved ODT must preserve page background picture");
+}
+
+/// A table cell style with a background image survives the kept styles path (#5803).
+#[test]
+fn cell_style_picture_survives_kept_path() {
+    let png = {
+        let img = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let ns = crate::odt::tests::NS_T;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:styles><style:style style:name="CellBg" style:family="table-cell"><style:table-cell-properties><style:background-image xlink:href="Pictures/cell-bg.png" xlink:type="simple" xlink:actuate="onLoad"/></style:table-cell-properties></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}><office:body><office:text><text:p>Cell test</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/cell-bg.png", &png)]);
+    let d = import(&pkg).unwrap();
+    let saved = export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(s.contains("style:background-image"), "cell style background-image must survive on kept path: {s}");
+    assert!(s.contains("Pictures/cell-bg.png"), "cell background picture path must survive: {s}");
 }
 
 /// An ODT document with a text-only header retains its legacy page background image
@@ -314,50 +340,62 @@ fn text_header_keeps_page_background_picture() {
     assert!(s.contains("Pictures/page-background.png"));
 }
 
-/// An imported ODT document with a retained page layout containing `<style:background-image>`
-/// suppresses that background image when an active header contains a picture (#5803).
+/// Every picture written into the ODT zip archive must be referenced by styles.xml or content.xml (#5803).
 #[test]
-fn retained_page_layout_suppresses_background_image_when_header_has_picture() {
+fn no_unreferenced_images_left_in_package() {
     let png = {
         let img = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30]));
         let mut out = std::io::Cursor::new(Vec::new());
         img.write_to(&mut out, image::ImageFormat::Png).unwrap();
         out.into_inner()
     };
-    // Create an initial ODT document with a page background image.
-    let mut d = Document::new();
-    let bg_media = d.add_media(png.clone(), "png");
-    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: bg_media, fill_type: "frame".into(), title: String::new() });
-    let initial_odt = export(&d).unwrap();
+    let ns = crate::odt::tests::NS_T;
+    let nsd = r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:xlink="http://www.w3.org/1999/xlink""#;
+    // An imported ODT with modern draw:fill="bitmap" and draw:fill-image
+    let styles = format!(
+        r#"<office:document-styles {ns} {nsd}><office:styles><draw:fill-image draw:name="Bg1" xlink:href="Pictures/original.png" xlink:type="simple"/><style:style style:name="Standard" style:family="paragraph"/></office:styles><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in" draw:fill="bitmap" draw:fill-image-name="Bg1"><style:background-image xlink:href="Pictures/original.png" xlink:type="simple" xlink:actuate="onLoad" style:repeat="stretch"/></style:page-layout-properties></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}><office:body><office:text><text:p>Body text.</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/original.png", &png)]);
+    let mut d = import(&pkg).unwrap();
 
-    // Import it: this populates doc.kept and keeps page definitions as read.
-    let mut imported = import(&initial_odt).unwrap();
-
-    // Now insert an active header containing a picture.
-    let header_media = imported.add_media(png, "png");
+    // Now insert a header picture into the document, changing page setup
+    let header_media = d.add_media(png.clone(), "png");
     let mut hp = wordcraft_doc::Paragraph::new();
     hp.text = format!("{}", wordcraft_doc::para::OBJ);
     hp.objects.push(wordcraft_doc::para::InlineObject::Image {
         media: header_media,
-        w: 595.0,
-        h: 842.0,
-        alt: "Header picture".into(),
-        float: wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::BehindText, ..Default::default() },
+        w: 100.0,
+        h: 50.0,
+        alt: "Header logo".into(),
+        float: Default::default(),
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
     });
     hp.runs = vec![wordcraft_doc::para::Run { len: hp.text.len(), props: Default::default() }];
-    imported.parts.insert(
-        999,
+    d.parts.insert(
+        1,
         wordcraft_doc::Part { kind: wordcraft_doc::PartKind::Header, blocks: vec![wordcraft_doc::para_block(hp)], body: Default::default() },
     );
-    imported.last_section.headers.default = Some(999);
+    d.last_section.headers.default = Some(1);
 
-    // Re-export: retained page layout definitions must have their background-image removed.
-    let reexported = export(&imported).unwrap();
-    let s = crate::odt::tests::entry(&reexported, "styles.xml");
-    assert!(!s.contains("style:background-image"), "retained page layout must not retain background-image when header has picture: {s}");
+    let saved = export(&d).unwrap();
+    let styles_xml = crate::odt::tests::entry(&saved, "styles.xml");
+    let content_xml = crate::odt::tests::entry(&saved, "content.xml");
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
+    let file_names: Vec<String> = (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().to_string()).collect();
+
+    let pic_files: Vec<&String> = file_names.iter().filter(|n| n.starts_with("Pictures/")).collect();
+    assert!(!pic_files.is_empty(), "package should contain picture files");
+
+    for pic in pic_files {
+        let is_referenced = styles_xml.contains(pic.as_str()) || content_xml.contains(pic.as_str());
+        assert!(is_referenced, "package image {pic} must be referenced in styles.xml or content.xml: styles={styles_xml}");
+    }
 }
 
 /// An inactive header (e.g. `first` when `title_page` is false, or `even` when `even_odd_headers`

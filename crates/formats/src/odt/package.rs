@@ -784,7 +784,9 @@ fn styles_as_read(doc: &Document, kept: Option<&wordcraft_doc::kept::KeptXml>, s
 /// links to (`used`), written as read with them (added to `files` and `manifest` where no file
 /// `taken` has the path). A picture only an edited paragraph showed isn't written.
 fn with_kept_files(
+    doc: &Document,
     kept: Option<&wordcraft_doc::kept::KeptXml>,
+    styles: &str,
     used: &std::collections::BTreeSet<String>,
     taken: &dyn Fn(&str) -> bool,
     files: &mut Vec<(String, std::sync::Arc<Vec<u8>>)>,
@@ -792,7 +794,18 @@ fn with_kept_files(
 ) {
     let Some(k) = kept else { return };
     let mut wanted = used.clone();
-    for d in k.defs.values() {
+    let pages_kept = k.pages_as_read(doc);
+    let styles_kept = k.styles_as_read(doc);
+    for (key, d) in &k.defs {
+        if !pages_kept && (key.starts_with("sauto:") || key.starts_with("master:")) {
+            continue;
+        }
+        if !styles_kept && key.starts_with("common:") {
+            continue;
+        }
+        if key.starts_with("common:") && super::kept::defined(styles, d) {
+            continue;
+        }
         super::kept::hrefs(d, &mut wanted);
     }
     // A file linked, or one in a folder linked (an object's).
@@ -1146,7 +1159,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     if w.indexes + hw.indexes > 0 {
         draw_xml.push_str("<style:style style:name=\"Index_20_Link\" style:display-name=\"Index Link\" style:family=\"text\"/>");
     }
-    let styles = page_background(doc, &mut w, &pages, styles_xml(doc, &pages, &parts, &hw.style_defs(), &named));
+    let styles = page_background(doc, &mut w, styles_xml(doc, &pages, &parts, &hw.style_defs(), &named));
     let styles = styles.replacen(
         "</office:styles>",
         // The Frame style text boxes derive from (it states nothing: their own styles do).
@@ -1187,7 +1200,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         w.objects.iter().map(|(d, _, _)| d).chain(w.object_dirs.iter().map(|(d, _)| d)).map(|d| format!("{}/", d.trim_end_matches('/'))).collect();
     let taken = |p: &str| w.pictures.iter().any(|(n, _, _)| n == p) || dirs.iter().any(|d| p.starts_with(d.as_str()));
     let mut kept_files: Vec<_> = kept_files.into_iter().filter(|(p, _)| !taken(p)).collect();
-    with_kept_files(kept, &w.kept_files_used, &taken, &mut kept_files, &mut manifest);
+    with_kept_files(doc, kept, &styles, &w.kept_files_used, &taken, &mut kept_files, &mut manifest);
     for (path, mime) in &kept_entries {
         if (path.ends_with('/') && kept_files.iter().any(|(p, _)| p.starts_with(path.as_str()))) || kept_files.iter().any(|(p, _)| p == path) {
             manifest.push_str(&format!("<manifest:file-entry manifest:full-path=\"{}\" manifest:media-type=\"{}\"/>\n", x(path), x(mime)));
@@ -1208,7 +1221,10 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     // Style definitions as read while nobody changed them: the file's own `office:styles`.
     let styles = styles_as_read(doc, kept, styles, &mut w.kept_used);
     // Page setup as read while nobody changed it: the file's own page layouts and master pages.
-    let styles = kept_pages_styles(doc, kept, &pages, styles);
+    let styles = match kept.filter(|k| k.pages_as_read(doc)) {
+        Some(k) => super::kept::with_pages_as_read(&styles, &k.defs, &k.order),
+        None => styles,
+    };
     let (content, styles) = with_kept_defs(content, styles, &w.kept_used, &w.kept_defs);
     for (name, data) in [
         ("META-INF/manifest.xml", manifest.as_bytes()),
@@ -1344,17 +1360,12 @@ fn variables(doc: &Document) -> std::collections::BTreeSet<String> {
     out
 }
 
-/// `styles` with the page background picture (Design › Page Color › Fill Effects › Picture) in
-/// each page layout (§17.3 `style:background-image`, first in `style:page-layout-properties`),
-/// the picture written into the package by `w`: tiled, stretched, or centred at its own size
-/// (§20.249 `style:repeat`).
-///
-/// When a header contains a picture, a pre-existing legacy background image is suppressed
-/// so it doesn't survive as an orphan or overlap with the header's graphic (#5803).
-fn page_background(doc: &Document, w: &mut Writer, pages: &[(String, SectionProps)], styles: String) -> String {
-    if has_header_picture(doc, pages) {
-        return styles;
-    }
+/// `styles` with the page background picture (Design › Page Color › Fill Effects › Picture) declared
+/// in `<office:styles>` as `<draw:fill-image>`, referenced in each page layout's properties
+/// (`draw:fill="bitmap"`, `draw:fill-image-name`), and as legacy fallback (§17.3
+/// `style:background-image`), with the picture written into the package by `w` (§20.249
+/// `style:repeat`).
+fn page_background(doc: &Document, w: &mut Writer, mut styles: String) -> String {
     let Some(pic) = doc.settings.page_picture.as_ref() else { return styles };
     let Some(data) = doc.media.get(&pic.media) else { return styles };
     let Some(ext) = model::sniff_image(data) else { return styles };
@@ -1367,154 +1378,43 @@ fn page_background(doc: &Document, w: &mut Writer, pages: &[(String, SectionProp
         "center" => "no-repeat",
         _ => "stretch",
     };
-    let el = format!(
+    let fill_name = if !pic.title.is_empty() { pic.title.clone() } else { "PageBackground".to_string() };
+    let fill_image_def =
+        format!("<draw:fill-image draw:name=\"{}\" xlink:href=\"{}\" xlink:type=\"simple\" xlink:actuate=\"onLoad\"/>", x(&fill_name), x(&name));
+    if !styles.contains(&format!("draw:name=\"{}\"", x(&fill_name))) {
+        styles = styles.replacen("</office:styles>", &format!("{fill_image_def}</office:styles>"), 1);
+    }
+    let bg_el = format!(
         "<style:background-image xlink:href=\"{}\" xlink:type=\"simple\" xlink:actuate=\"onLoad\" style:position=\"center center\" style:repeat=\"{repeat}\"/>",
         x(&name)
     );
+    let fill_attrs = format!(" draw:fill=\"bitmap\" draw:fill-image-name=\"{}\" style:repeat=\"{repeat}\"", x(&fill_name));
+
     // After each layout's properties' opening tag.
-    let mut out = String::with_capacity(styles.len() + el.len() * 4);
+    let mut out = String::with_capacity(styles.len() + bg_el.len() * 4);
     let mut rest = styles.as_str();
     while let Some(at) = rest.find("<style:page-layout-properties") {
+        let tag_start = at + "<style:page-layout-properties".len();
         let Some(end) = rest.get(at..).and_then(|r| r.find('>')).map(|e| at + e) else { break };
         let self_closing = rest.get(end.saturating_sub(1)..end) == Some("/");
         if self_closing {
-            out.push_str(rest.get(..end.saturating_sub(1)).unwrap_or_default());
+            let before_slash = end.saturating_sub(1);
+            out.push_str(rest.get(..tag_start).unwrap_or_default());
+            out.push_str(&fill_attrs);
+            out.push_str(rest.get(tag_start..before_slash).unwrap_or_default());
             out.push('>');
-            out.push_str(&el);
+            out.push_str(&bg_el);
             out.push_str("</style:page-layout-properties>");
         } else {
-            out.push_str(rest.get(..=end).unwrap_or_default());
-            out.push_str(&el);
+            out.push_str(rest.get(..tag_start).unwrap_or_default());
+            out.push_str(&fill_attrs);
+            out.push_str(rest.get(tag_start..=end).unwrap_or_default());
+            out.push_str(&bg_el);
         }
-        rest = rest.get(end + 1..).unwrap_or_default();
+        rest = rest.get(end.saturating_add(1)..).unwrap_or_default();
     }
     out.push_str(rest);
     out
-}
-
-/// Page setup definitions from retained markup while nobody changed them, with background
-/// images stripped if active headers have pictures (#5803).
-fn kept_pages_styles(doc: &Document, kept: Option<&wordcraft_doc::kept::KeptXml>, pages: &[(String, SectionProps)], styles: String) -> String {
-    match kept.filter(|k| k.pages_as_read(doc)) {
-        Some(k) => {
-            let s = super::kept::with_pages_as_read(&styles, &k.defs, &k.order);
-            if has_header_picture(doc, pages) { remove_background_images(&s) } else { s }
-        }
-        None => styles,
-    }
-}
-
-/// Strips `<style:background-image>` elements (empty `<.../>` or start-tag through
-/// `</style:background-image>`) from page layout XML markup using XML event boundaries.
-///
-/// When an imported document whose page settings were retained is exported, any
-/// pre-existing background images in the page layout definitions must be removed
-/// when active headers contain pictures (#5803).
-fn remove_background_images(xml: &str) -> String {
-    let mut remove_ranges: Vec<(usize, usize)> = Vec::new();
-    let mut depth: usize = 0;
-    let mut open_from: Option<usize> = None;
-    super::xml::events_at(xml.as_bytes(), |ev, at| match ev {
-        super::xml::Ev::Start(q, _) => {
-            if q == "style:background-image" {
-                if depth == 0 {
-                    open_from = Some(at.0);
-                }
-                depth += 1;
-            } else if depth > 0 {
-                depth += 1;
-            }
-        }
-        super::xml::Ev::End(q) => {
-            if depth > 0 {
-                depth = depth.saturating_sub(1);
-                if depth == 0
-                    && let Some(from) = open_from.take()
-                {
-                    remove_ranges.push((from, at.1));
-                }
-            } else if q == "style:background-image" {
-                remove_ranges.push(at);
-            }
-        }
-        super::xml::Ev::Text(_) => {}
-    });
-
-    if remove_ranges.is_empty() {
-        return xml.to_string();
-    }
-
-    let mut out = String::with_capacity(xml.len());
-    let mut last = 0;
-    for (start, end) in remove_ranges {
-        if start >= last {
-            out.push_str(xml.get(last..start).unwrap_or_default());
-            last = end;
-        }
-    }
-    out.push_str(xml.get(last..).unwrap_or_default());
-    out
-}
-
-/// Whether any active header emitted for `doc` contains a picture.
-///
-/// Checks only the header parts for sections represented in `pages` (those that produce a master
-/// page) and that `page_parts` actually emits:
-/// - `sec.headers.default` (always active if present)
-/// - `sec.headers.even` (active only when `doc.settings.even_odd_headers` is true)
-/// - `sec.headers.first` (active only when `sec.title_page` is true)
-fn has_header_picture(doc: &Document, pages: &[(String, SectionProps)]) -> bool {
-    let even = doc.settings.even_odd_headers;
-    let mut active_ids = std::collections::HashSet::new();
-    for (_, sec) in pages {
-        if let Some(id) = sec.headers.default {
-            active_ids.insert(id);
-        }
-        if even && let Some(id) = sec.headers.even {
-            active_ids.insert(id);
-        }
-        if sec.title_page
-            && let Some(id) = sec.headers.first
-        {
-            active_ids.insert(id);
-        }
-    }
-    for id in active_ids {
-        if let Some(part) = doc.parts.get(&id)
-            && blocks_have_picture(&part.blocks, 0)
-        {
-            return true;
-        }
-    }
-    false
-}
-
-/// Whether any block in `blocks` contains an image, recursing into table cells up to `depth`.
-fn blocks_have_picture(blocks: &[std::sync::Arc<wordcraft_doc::Block>], depth: usize) -> bool {
-    if depth > 16 {
-        return false;
-    }
-    blocks.iter().any(|b| match &**b {
-        wordcraft_doc::Block::Para(p) => para_has_picture(p, depth),
-        wordcraft_doc::Block::Table(t) => t.rows.iter().any(|r| r.cells.iter().any(|c| blocks_have_picture(&c.blocks, depth + 1))),
-    })
-}
-
-/// Whether paragraph `p` contains an inline or grouped image object up to `depth`.
-fn para_has_picture(p: &wordcraft_doc::Paragraph, depth: usize) -> bool {
-    p.objects.iter().any(|o| object_has_picture(o, depth))
-}
-
-/// Whether inline object `o` is an image or a group containing an image, up to `depth`.
-fn object_has_picture(o: &wordcraft_doc::InlineObject, depth: usize) -> bool {
-    if depth > 16 {
-        return false;
-    }
-    match o {
-        wordcraft_doc::InlineObject::Image { .. } => true,
-        wordcraft_doc::InlineObject::Group { children, .. } => children.iter().any(|c| object_has_picture(&c.obj, depth + 1)),
-        _ => false,
-    }
 }
 
 /// `xml` (content.xml or styles.xml) with each font family it uses declared once (§16.21
