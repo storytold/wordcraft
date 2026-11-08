@@ -383,7 +383,7 @@ fn contextual_spacing_applies_across_a_continuous_section_break() {
     let gap = |contextual: bool, different_style: bool, empty_mark: bool| {
         let mut d = Document::new();
         for id in ["SpacingA", "SpacingB"] {
-            d.styles.upsert(wordcraft_doc::Style { id: id.into(), name: id.into(), ..Default::default() });
+            Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style { id: id.into(), name: id.into(), ..Default::default() });
         }
         let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
         let props = ParaProps {
@@ -437,7 +437,7 @@ fn contextual_spacing_applies_across_a_continuous_section_break() {
 fn spaced_section_boxes(paras: &[(f32, f32, bool, Option<wordcraft_doc::section::SectionProps>, usize)]) -> (DocLayout, Vec<(usize, f32, f32, f32)>) {
     use wordcraft_doc::props::LineSpacing;
     let mut d = Document::new();
-    d.styles.upsert(wordcraft_doc::Style { id: "SpacingA".into(), name: "SpacingA".into(), ..Default::default() });
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style { id: "SpacingA".into(), name: "SpacingA".into(), ..Default::default() });
     let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
     d.body = paras
         .iter()
