@@ -107,6 +107,7 @@ fn character_styles_and_paragraph_numbers() {
 /// has no number to list.
 #[test]
 fn full_context_keeps_the_parent_of_a_none_level_heading() {
+    crate::test_fonts();
     let mut d = doc(CHAPTERS, &[r#"STYLEREF "Heading 2" \w"#, r#"STYLEREF "Heading 2" \r"#]);
     let num = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
     if let Some(n) = Arc::make_mut(&mut d.numbering).nums.iter_mut().find(|n| n.id == num) {
@@ -123,6 +124,7 @@ fn full_context_keeps_the_parent_of_a_none_level_heading() {
 /// empty label of its own adds no part in full context: `3`, not `3.`.
 #[test]
 fn a_none_level_heading_s_number_has_no_text_and_no_trailing_period() {
+    crate::test_fonts();
     let numbered = |text: &str, codes: &[&str]| {
         let mut d = doc(CHAPTERS, codes);
         let num = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);

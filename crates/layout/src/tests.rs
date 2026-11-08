@@ -1940,6 +1940,7 @@ fn lists_get_labels_and_indent() {
 
 #[test]
 fn a_none_format_label_shows_its_text_and_tabs_to_the_indent() {
+    crate::test_fonts();
     // #4985: Word draws a "none" level's literal text ("RESPONSE:"), and an empty one still tabs
     // the text to a hanging indent, as a numbered item's. An empty label already at the left indent
     // takes no tab (Word's Chapter 1 list: Heading 2 starts at the margin, not at 0.5").
@@ -7845,6 +7846,7 @@ fn graphic_text_in_a_degenerate_rectangle_is_not_drawn() {
 
 #[test]
 fn chart_text_the_font_lacks_is_drawn_in_a_fallback_face() {
+    crate::test_fonts();
     // #4720: a Chinese legend in a chart drawn in the body font (which has no Chinese) showed boxes.
     use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
     use wordcraft_doc::props::Rgb;
