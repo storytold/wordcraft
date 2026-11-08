@@ -102,7 +102,7 @@ fn resolve_cell(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, ac
         }
         let drop_row = c == 0 && t.rows.get(r).is_some_and(|row| (row.props.del.is_some() && accept) || (row.props.ins.is_some() && !accept));
         if drop_row {
-            t.rows.remove(r);
+            t.delete_row(r);
         } else if let Some(row) = t.rows.get_mut(r) {
             if c == 0 {
                 row.props.ins = None;
@@ -118,7 +118,7 @@ fn resolve_cell(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, ac
                 fmt_revisions::resolve_cell(cell, accept);
             }
             if row.cells.is_empty() {
-                t.rows.remove(r);
+                t.delete_row(r);
             }
         }
         t.rows.is_empty()

@@ -174,6 +174,7 @@ pub fn open_change(w: &mut W, tag: &str, a: &ChangeAttrs) {
     w.open(tag, &refs);
 }
 
+/// Write a self-closing tracked revision element (`w:ins`, `w:del`, `w:cellIns`, `w:cellDel`).
 fn empty_change(w: &mut W, tag: &str, a: &ChangeAttrs) {
     let refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
     w.empty(tag, &refs);
@@ -557,7 +558,8 @@ fn tblpr_inner(w: &mut W, t: &TableProps) {
     }
 }
 
-/// `w:trPr` (when the row has any), with a tracked change last as for [`tblpr`].
+/// `w:trPr` (when the row has any), with `ex_change` for `w:tblPrExChange`, `ins_del` for
+/// `(w:ins, w:del)`, and `change` for `w:trPrChange` last as for [`tblpr`].
 pub fn trpr(
     w: &mut W,
     r: &RowProps,
@@ -598,6 +600,7 @@ fn tblprex(w: &mut W, t: &TableProps, change: Option<&ChangeAttrs>) {
     w.close("w:tblPrEx");
 }
 
+/// Inner properties of `w:tblPrEx` (used for both current exceptions and `w:tblPrExChange`).
 fn tblprex_inner(w: &mut W, t: &TableProps) {
     if let Some(p) = t.width_pct {
         w.empty("w:tblW", &[("w:w", &n(round(p.clamp(0.0, 1000.0) * 50.0))), ("w:type", "pct")]);
@@ -653,14 +656,14 @@ fn trpr_inner(w: &mut W, r: &RowProps) {
     }
 }
 
-/// `w:tcPr`, with a tracked change last as for [`tblpr`].
+/// `w:tcPr`, with `ins_del` for `(w:cellIns, w:cellDel)` (`CT_TcPr` choice group: at most one)
+/// and `change` for `w:tcPrChange` last as for [`tblpr`].
 pub fn tcpr(w: &mut W, c: &CellProps, change: Option<&ChangeAttrs>, ins_del: (Option<&ChangeAttrs>, Option<&ChangeAttrs>)) {
     w.open("w:tcPr", &[]);
     tcpr_inner(w, c);
     if let Some(a) = ins_del.0 {
         empty_change(w, "w:cellIns", a);
-    }
-    if let Some(a) = ins_del.1 {
+    } else if let Some(a) = ins_del.1 {
         empty_change(w, "w:cellDel", a);
     }
     if let (Some(a), Some(ch)) = (change, &c.fmt_change) {

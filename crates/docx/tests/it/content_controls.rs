@@ -399,10 +399,23 @@ fn range_toc_without_control_stays_unwrapped_and_section_break_toc_control_hands
 
 #[test]
 fn table_revisions_round_trip() {
-    let tbl = r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2880"/></w:tblGrid><w:tr><w:tblPrEx><w:tblW w:w="2880" w:type="dxa"/><w:tblPrExChange w:id="1" w:author="Alice"><w:tblPrEx><w:tblW w:w="1440" w:type="dxa"/></w:tblPrEx></w:tblPrExChange></w:tblPrEx><w:trPr><w:ins w:id="2" w:author="Bob"/></w:trPr><w:tc><w:tcPr><w:tcW w:w="2880" w:type="dxa"/><w:cellIns w:id="3" w:author="Carol"/></w:tcPr><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+    let tbl = r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2880"/><w:gridCol w:w="2880"/></w:tblGrid><w:tr><w:tblPrEx><w:tblW w:w="2880" w:type="dxa"/><w:tblPrExChange w:id="1" w:author="Alice"><w:tblPrEx><w:tblW w:w="1440" w:type="dxa"/></w:tblPrEx></w:tblPrExChange></w:tblPrEx><w:trPr><w:ins w:id="2" w:author="Bob"/></w:trPr><w:tc><w:tcPr><w:tcW w:w="2880" w:type="dxa"/><w:cellIns w:id="3" w:author="Carol"/></w:tcPr><w:p><w:r><w:t>Cell 1</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:w="2880" w:type="dxa"/><w:cellDel w:id="4" w:author="Dave"/></w:tcPr><w:p><w:r><w:t>Cell 2</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:trPr><w:del w:id="5" w:author="Eve"/></w:trPr><w:tc><w:tcPr><w:tcW w:w="5760" w:type="dxa"/><w:gridSpan w:val="2"/></w:tcPr><w:p><w:r><w:t>Row 2</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
     let d = read(&package(tbl)).unwrap();
+    let t = d.body[0].as_table().unwrap();
+    let ex = t.rows[0].props.exceptions.as_ref().unwrap();
+    assert_eq!(ex.width, Some(144.0));
+    let ex_ch = ex.fmt_change.as_ref().unwrap();
+    assert_eq!(ex_ch.old.width, Some(72.0));
+    assert_eq!(d.revisions[ex_ch.rev as usize].author, "Alice");
+    assert_eq!(d.revisions[t.rows[0].props.ins.unwrap() as usize].author, "Bob");
+    assert_eq!(d.revisions[t.rows[0].cells[0].props.ins.unwrap() as usize].author, "Carol");
+    assert_eq!(d.revisions[t.rows[0].cells[1].props.del.unwrap() as usize].author, "Dave");
+    assert_eq!(d.revisions[t.rows[1].props.del.unwrap() as usize].author, "Eve");
     let xml = document_xml(&write(&d).unwrap());
-    assert!(xml.contains("<w:tblPrExChange "), "{xml}");
-    assert!(xml.contains("<w:trPr><w:ins "), "{xml}");
-    assert!(xml.contains("<w:cellIns "), "{xml}");
+    assert!(xml.contains(r#"<w:tblPrExChange w:id=""#), "{xml}");
+    assert!(xml.contains(r#"<w:tblPrEx><w:tblW w:w="1440" w:type="dxa"/></w:tblPrEx></w:tblPrExChange>"#), "{xml}");
+    assert!(xml.contains(r#"<w:trPr><w:ins "#), "{xml}");
+    assert!(xml.contains(r#"<w:trPr><w:del "#), "{xml}");
+    assert!(xml.contains(r#"<w:cellIns "#), "{xml}");
+    assert!(xml.contains(r#"<w:cellDel "#), "{xml}");
 }

@@ -12999,3 +12999,45 @@ fn ranged_reject_resolves_table_cells_before_earlier_paragraph_removal_shifts_bl
     assert_eq!(tbl.rows[0].cells.len(), 1);
     assert_eq!(tbl.rows[0].cells[0].blocks[0].as_para().unwrap().text, "Outer sibling");
 }
+
+#[test]
+fn inserting_or_splitting_rows_and_cells_clears_inherited_revisions_and_dropping_rows_promotes_vmerge() {
+    use std::sync::Arc;
+    use wordcraft_doc::props::{PropChange, RowProps, VMerge};
+    use wordcraft_doc::{Block, Revision, RevisionKind, Table};
+
+    let mut t = Table::new(2, 2, 200.0);
+    t.rows[0].props.ins = Some(0);
+    t.rows[0].props.del = Some(1);
+    t.rows[0].props.fmt_change = Some(Box::new(PropChange { rev: 0, old: RowProps::default() }));
+    t.rows[0].cells[0].props.ins = Some(0);
+    t.rows[0].cells[0].props.del = Some(1);
+    t.insert_row(1, 0);
+    assert_eq!((t.rows[1].props.ins, t.rows[1].props.del, t.rows[1].props.fmt_change.is_some()), (None, None, false));
+    assert_eq!((t.rows[1].cells[0].props.ins, t.rows[1].cells[0].props.del), (None, None));
+
+    assert!(t.split_cell_grid(0, 0, 1, 2));
+    assert_eq!((t.rows[1].props.ins, t.rows[1].props.del), (None, None));
+    assert_eq!((t.rows[1].cells[0].props.ins, t.rows[1].cells[0].props.del), (None, None));
+
+    // Dropping a row that starts a vertical merge (via review.acceptAll or review.accept) promotes the row below to VMerge::Restart.
+    for use_all in [false, true] {
+        let mut d = wordcraft_doc::Document::new();
+        d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: String::new(), move_name: None });
+        let mut mt = Table::new(3, 2, 200.0);
+        mt.merge(0, 2, 0, 0);
+        mt.rows[0].props.del = Some(0);
+        d.body = vec![Arc::new(Block::Table(mt))];
+        let mut s = Session::new(d);
+        if use_all {
+            run(&mut s, "review.acceptAll", json!({}));
+        } else {
+            s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 0, 0]), off: 0 });
+            run(&mut s, "review.accept", json!({}));
+        }
+        let tbl = s.doc.body[0].as_table().unwrap();
+        assert_eq!(tbl.rows.len(), 2);
+        assert_eq!(tbl.rows[0].cells[0].props.vmerge, VMerge::Restart, "use_all={use_all}");
+        assert_eq!(tbl.rows[1].cells[0].props.vmerge, VMerge::Continue, "use_all={use_all}");
+    }
+}

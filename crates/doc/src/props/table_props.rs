@@ -248,11 +248,26 @@ pub struct RowProps {
     /// Tracked formatting change (`w:trPrChange`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fmt_change: Option<Box<PropChange<RowProps>>>,
-    /// Tracked row insertion (`w:ins` in `w:trPr`) / deletion (`w:del` in `w:trPr`).
+    /// Tracked row insertion (`w:ins` in `w:trPr`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ins: Option<u32>,
+    /// Tracked row deletion (`w:del` in `w:trPr`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub del: Option<u32>,
+}
+
+impl RowProps {
+    /// Copy of this row's formatting without tracked revisions, for a newly inserted or split row.
+    #[must_use]
+    pub fn without_revisions(mut self) -> Self {
+        self.ins = None;
+        self.del = None;
+        self.fmt_change = None;
+        if let Some(ex) = self.exceptions.as_deref_mut() {
+            ex.fmt_change = None;
+        }
+        self
+    }
 }
 
 fn is_zero(v: &u32) -> bool {
@@ -309,9 +324,10 @@ pub struct CellProps {
     /// none).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub picture: Option<Box<CellPicture>>,
-    /// Tracked cell insertion (`w:cellIns`) / deletion (`w:cellDel`).
+    /// Tracked cell insertion (`w:cellIns` in `w:tcPr`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ins: Option<u32>,
+    /// Tracked cell deletion (`w:cellDel` in `w:tcPr`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub del: Option<u32>,
 }
@@ -352,5 +368,14 @@ impl CellProps {
             return margins;
         }
         self.partial_margins.map_or(defaults, |sides| std::array::from_fn(|i| sides[i].unwrap_or(defaults[i])))
+    }
+
+    /// Copy of this cell's formatting without tracked revisions, for a newly inserted or split cell.
+    #[must_use]
+    pub fn without_revisions(mut self) -> Self {
+        self.ins = None;
+        self.del = None;
+        self.fmt_change = None;
+        self
     }
 }

@@ -353,14 +353,17 @@ pub fn resolve_containers(blocks: &mut Blocks, accept: bool, depth: usize) {
                 resolve_table(t, accept);
                 let drop_row = |r: &Row| (r.props.del.is_some() && accept) || (r.props.ins.is_some() && !accept);
                 let drop_cell = |c: &Cell| (c.props.del.is_some() && accept) || (c.props.ins.is_some() && !accept);
-                t.rows.retain_mut(|r| {
-                    if drop_row(r) {
-                        return false;
+                let mut r = 0;
+                while r < t.rows.len() {
+                    if drop_row(&t.rows[r]) {
+                        t.delete_row(r);
+                        continue;
                     }
-                    r.props.ins = None;
-                    r.props.del = None;
-                    resolve_row(r, accept);
-                    r.cells.retain_mut(|c| {
+                    let row = &mut t.rows[r];
+                    row.props.ins = None;
+                    row.props.del = None;
+                    resolve_row(row, accept);
+                    row.cells.retain_mut(|c| {
                         if drop_cell(c) {
                             return false;
                         }
@@ -370,8 +373,12 @@ pub fn resolve_containers(blocks: &mut Blocks, accept: bool, depth: usize) {
                         resolve_containers(&mut c.blocks, accept, depth + 1);
                         true
                     });
-                    !r.cells.is_empty()
-                });
+                    if t.rows[r].cells.is_empty() {
+                        t.delete_row(r);
+                    } else {
+                        r += 1;
+                    }
+                }
             }
         }
     }
