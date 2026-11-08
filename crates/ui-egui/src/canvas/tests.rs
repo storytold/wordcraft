@@ -4941,16 +4941,31 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
 #[test]
 fn pages_are_hinted_again_once_a_zoom_stops() {
     let platform = screen_render_options().hinting;
-    assert_eq!(hint_pages(1.0, false), platform, "at rest, as the platform draws text");
+    assert_eq!(hint_pages(1.0, false, true), platform, "at rest, as the platform draws text");
     for zoom in [1.1, 0.9, 1.002, 0.998, f32::NAN, f32::INFINITY, 0.0] {
-        assert!(!hint_pages(zoom, true), "{zoom}: the scale changes under a pointer zoom");
-        assert_eq!(hint_pages(zoom, false), platform, "{zoom}: at 10 % or 500 %, or over the ribbon: nothing changes");
+        assert!(!hint_pages(zoom, true, true), "{zoom}: the scale changes under a gliding pointer zoom");
+        assert_eq!(hint_pages(zoom, false, true), platform, "{zoom}: at 10 % or 500 %, or over the ribbon: nothing changes");
+        assert_eq!(hint_pages(zoom, true, false), platform, "{zoom}: a wheel step with animation effects off lands finished");
     }
-    assert_eq!(hint_pages(1.0, true), platform, "the Zoom dialog or slider, a fit zoom: hinted at once");
+    assert_eq!(hint_pages(1.0, true, true), platform, "the Zoom dialog or slider, a fit zoom: hinted at once");
     // The hinting is part of the page's key: the last zoom frame's raster is replaced.
     let doc = wordcraft_doc::Document::from_text("Hello WordCraft");
     let app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
     assert_ne!(view_key(&app, false, None, true), view_key(&app, false, None, false));
+}
+
+/// While a zoom goes on, a page raster stands in for one up to half again larger or smaller.
+#[test]
+fn a_raster_is_stretched_at_most_half_again_during_a_zoom() {
+    // A 612 pt page rendered 816 px wide (100 % at 1x): 1.333 px per point.
+    assert!(stretch_fits(816, 612.0, 816.0 / 612.0));
+    assert!(stretch_fits(816, 612.0, 1.9), "zoomed in 43 %");
+    assert!(!stretch_fits(816, 612.0, 2.1), "zoomed in 58 %: rendered again");
+    assert!(stretch_fits(816, 612.0, 0.95), "zoomed out to 71 %");
+    assert!(!stretch_fits(816, 612.0, 0.85), "zoomed out to 64 %: rendered again");
+    for hostile in [(0, 612.0, 1.0), (816, 0.0, 1.0), (816, 612.0, f32::NAN), (816, 612.0, f32::INFINITY), (816, f32::NAN, 1.0)] {
+        assert!(!stretch_fits(hostile.0, hostile.1, hostile.2), "{hostile:?}");
+    }
 }
 
 #[test]

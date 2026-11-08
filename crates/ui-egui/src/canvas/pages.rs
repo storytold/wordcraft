@@ -84,6 +84,14 @@ impl PageKeys {
     }
 }
 
+/// What page `i` shows, whatever its size: its content and the view (`view_key` with the
+/// hinting fixed). A raster that showed this may be stretched to stand in for the page.
+pub(super) fn page_shows(app: &mut WordApp, layout: &std::sync::Arc<DocLayout>, i: usize, view: u64) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (view, app.canvas.page_keys.content(layout, i)).hash(&mut h);
+    h.finish()
+}
+
 /// The texture cache key of page `i`: its content, the view, and the raster scale.
 pub(super) fn page_key(app: &mut WordApp, layout: &std::sync::Arc<DocLayout>, i: usize, view: u64, scale_px: f32) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();

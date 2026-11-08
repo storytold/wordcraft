@@ -1940,6 +1940,7 @@ fn lists_get_labels_and_indent() {
 
 #[test]
 fn a_none_format_label_shows_its_text_and_tabs_to_the_indent() {
+    crate::test_fonts();
     // #4985: Word draws a "none" level's literal text ("RESPONSE:"), and an empty one still tabs
     // the text to a hanging indent, as a numbered item's. An empty label already at the left indent
     // takes no tab (Word's Chapter 1 list: Heading 2 starts at the margin, not at 0.5").
