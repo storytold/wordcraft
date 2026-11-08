@@ -35,6 +35,9 @@ pub(crate) struct PageBuilder<'a> {
     /// The previous paragraph ended with a page break (its mark stayed with the break): the next
     /// paragraph, first on the new page, gets no space before (Word).
     pub(crate) after_break_mark: bool,
+    /// A continuous section started on this page right under the paragraph above (`prev`): not
+    /// under a taller column of the section before.
+    pub(crate) prev_at_top: bool,
     /// The next section starts on a new page: this section's closing mark, when empty, needs no
     /// room (Word leaves it on a full page rather than starting a page for it).
     pub(crate) next_starts_page: bool,
