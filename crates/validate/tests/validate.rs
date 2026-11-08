@@ -1420,12 +1420,16 @@ fn math_placement_nested_omath() {
 }
 
 /// A stray math island — math content with no oMath ancestor — is reported once,
-/// at its root element, not once per descendant.
+/// at its root element, not once per descendant. Batch b6: Word for the
+/// web tolerated exactly this shape (opened clean, rendered as plain
+/// text) while the placement cases drew the corruption banner, so the
+/// stray case is a Warning where the others are Errors.
 #[test]
 fn math_placement_stray_island_reported_once() {
     let d = math_doc("<w:p><m:f><m:num><m:r><m:t>1</m:t></m:r></m:num></m:f></w:p>");
     let report = validate(&d);
-    assert_finding(&report, "MATH-PLACEMENT", Some("word/document.xml"));
+    let f = assert_finding(&report, "MATH-PLACEMENT", Some("word/document.xml"));
+    assert_eq!(f.severity, Severity::Warning, "{:?}", report.findings);
     assert_eq!(math_findings(&report), 1, "{:?}", report.findings);
 }
 
@@ -1757,16 +1761,18 @@ fn note_pr_listing_in_sectpr_does_not_satisfy() {
 }
 
 /// §17.11.9 grades non-conformance on the note being "required by the
-/// document content": a separator is required when an ordinary footnote
-/// is actually referenced — Error. A continuation separator's necessity
-/// depends on pagination, so the same document leaves it a Warning.
+/// document content", and batch b6 tested exactly this shape — a
+/// referenced ordinary footnote with unlisted separators: Word for the
+/// web opened it clean and rendered the footnote with its separator.
+/// So even the required case is a Warning now; necessity no longer
+/// grades severity.
 #[test]
-fn note_pr_listing_error_when_required() {
+fn note_pr_listing_warning_even_when_required() {
     let mut d = special_footnotes_doc();
     d.set_document(r#"<w:p><w:r><w:footnoteReference w:id="2"/></w:r></w:p>"#);
     let report = validate(&d);
     let sep = report.findings.iter().find(|f| f.rule == "NOTE-PR-LISTING" && f.message.contains("type separator")).expect("separator finding");
-    assert_eq!(sep.severity, Severity::Error, "{:?}", report.findings);
+    assert_eq!(sep.severity, Severity::Warning, "{:?}", report.findings);
     let cont =
         report.findings.iter().find(|f| f.rule == "NOTE-PR-LISTING" && f.message.contains("continuationSeparator")).expect("continuation finding");
     assert_eq!(cont.severity, Severity::Warning, "{:?}", report.findings);
@@ -1882,13 +1888,14 @@ fn settings_doc(inner: &str) -> Doc {
 }
 
 /// HEADERSOURCE-PRESENT: a w:headerSource under w:mailMerge in settings
-/// is an Error — Word fails to open such documents (§17.14.16 (a)).
+/// is an Error — Word fails to open such documents (§17.14.16 (a);
+/// batch b6: corruption banner in Word for the web — Observed).
 #[test]
 fn header_source_present_fires() {
     let d = settings_doc(r#"<w:mailMerge><w:mainDocumentType w:val="formLetters"/><w:headerSource r:id="rId1"/></w:mailMerge>"#);
     let report = validate(&d);
     let f = assert_finding(&report, "HEADERSOURCE-PRESENT", Some("word/settings.xml"));
-    assert_eq!(f.evidence, wordcraft_validate::Evidence::MsDocumented);
+    assert_eq!(f.evidence, wordcraft_validate::Evidence::Observed);
 }
 
 /// A mailMerge without headerSource is clean, and a headerSource
@@ -1963,14 +1970,16 @@ fn move_body(from: usize, to: usize) -> String {
     body
 }
 
-/// The bookmark boundary pair under compat mode: 16,380 is the most Word
-/// opens with uiCompat97to2003 set; 16,381 fails to open.
+/// The bookmark boundary pair under compat mode: 16,380 is the documented
+/// limit with uiCompat97to2003 set; 16,381 exceeds it. Batch b6: Word
+/// for the web opened 16,381 clean, so the finding is a Warning.
 #[test]
 fn bookmark_count_compat_boundary() {
     let report = validate(&counted_doc(&bookmark_body(16_380), true));
     assert!(!has(&report, "BOOKMARK-COUNT"), "{:?}", report.findings);
     let report = validate(&counted_doc(&bookmark_body(16_381), true));
-    assert_finding(&report, "BOOKMARK-COUNT", None);
+    let f = assert_finding(&report, "BOOKMARK-COUNT", None);
+    assert_eq!(f.severity, Severity::Warning, "{:?}", report.findings);
     assert_eq!(report.findings.iter().filter(|f| f.rule == "BOOKMARK-COUNT").count(), 1, "{:?}", report.findings);
 }
 
@@ -2076,13 +2085,16 @@ fn compat_counts_unknown_settings_incomplete() {
 /// A settings part whose `w:settings` holds `inner` — `settings_doc`
 /// (defined with the note-Pr tests above) builds it.
 
-/// A protection element carrying a password hash but not the full required
-/// trio: Word will not open the file.
+/// A protection element carrying a password hash but not the full
+/// required trio. MS-OI29500 says Word will not open the file; batch b6
+/// found Word for the web opening a partial set clean, so the finding
+/// is a Warning.
 #[test]
 fn protection_password_partial_attributes() {
     let d = settings_doc("<w:documentProtection w:edit=\"readOnly\" w:hashValue=\"aGFzaA==\"/>");
     let report = validate(&d);
-    assert_finding(&report, "PROTECTION-PASSWORD", Some("word/settings.xml"));
+    let f = assert_finding(&report, "PROTECTION-PASSWORD", Some("word/settings.xml"));
+    assert_eq!(f.severity, Severity::Warning, "{:?}", report.findings);
 }
 
 /// Same for writeProtection carrying only a salt (start/end element form).

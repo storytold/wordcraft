@@ -277,7 +277,11 @@ pub(crate) const STRUCT_END_P: RuleSpec = RuleSpec { id: "STRUCT-END-P", severit
 /// outside any `w:p`, or an `m:oMathPara` descended from a math element. MS-OI29500
 /// Part 1 §22.1.2.77 notes (b), (d), (e), (f) and §22.1.2.78 notes (b), (c), (d) each
 /// state Word fails to open the file; the base standard allows every one of these
-/// constructs, so this is a documented-divergence rule with no oracle run yet.
+/// constructs, so this is a documented-divergence rule. Batch b6 (Word for the web,
+/// 2026-11-07): the nested-oMath, outside-any-p and oMathPara-in-math cases all drew
+/// the corruption banner (Error confirmed), but a lone stray math element outside any
+/// oMath opened clean and rendered as plain text — that one case is reported at
+/// Warning instead (see scan.rs).
 pub(crate) const MATH_PLACEMENT: RuleSpec = RuleSpec { id: "MATH-PLACEMENT", severity: Severity::Error, evidence: Evidence::MsDocumented };
 /// `COMMENT-RANGE-COUNT`: more than 32,767 comment ranges in the document.
 /// MS-OI29500 Part 1 §17.13.4.4 note (a): the standard allows an unbounded
@@ -289,38 +293,54 @@ pub(crate) const COMMENT_RANGE_COUNT: RuleSpec = RuleSpec { id: "COMMENT-RANGE-C
 /// hashValue, saltValue, spinCount) while missing at least one of
 /// algorithmName, hashValue, spinCount. MS-OI29500 Part 1 §17.15.1.93
 /// note (c): if any AG_Password attribute is present, Word requires those
-/// three, and otherwise will not open the file.
-pub(crate) const PROTECTION_PASSWORD: RuleSpec = RuleSpec { id: "PROTECTION-PASSWORD", severity: Severity::Error, evidence: Evidence::MsDocumented };
+/// three, and otherwise will not open the file. Batch b6 (Word for the
+/// web, 2026-11-07): a partial set opened clean and stayed editable, so
+/// the documented claim is not enforced there and the rule reports at
+/// Warning. Desktop behaviour unrecorded.
+pub(crate) const PROTECTION_PASSWORD: RuleSpec =
+    RuleSpec { id: "PROTECTION-PASSWORD", severity: Severity::Warning, evidence: Evidence::MsDocumented };
 /// `HEADERSOURCE-PRESENT`: a `w:headerSource` element under `w:mailMerge`
 /// in a settings part. MS-OI29500 Part 1 §17.14.16 note (a): "Word fails
 /// to open WordprocessingML documents in which this element is present."
-pub(crate) const HEADERSOURCE_PRESENT: RuleSpec =
-    RuleSpec { id: "HEADERSOURCE-PRESENT", severity: Severity::Error, evidence: Evidence::MsDocumented };
+/// Batch b6 (Word for the web, 2026-11-07): corruption banner, view-only
+/// — observed.
+pub(crate) const HEADERSOURCE_PRESENT: RuleSpec = RuleSpec { id: "HEADERSOURCE-PRESENT", severity: Severity::Error, evidence: Evidence::Observed };
 /// `CONTENTPART-TYPE`: a `w:contentPart` element whose relationship target's
 /// effective content type is not `text/xml`. MS-OI29500 Part 1 §17.3.3.2
 /// note (a): "Word will fail to load the document if the content part's
-/// content type is not text/xml."
-pub(crate) const CONTENTPART_TYPE: RuleSpec = RuleSpec { id: "CONTENTPART-TYPE", severity: Severity::Error, evidence: Evidence::MsDocumented };
+/// content type is not text/xml." Batch b6 (Word for the web, 2026-11-07):
+/// an image/png target drew the corruption banner while the text/xml twin
+/// opened clean — observed.
+pub(crate) const CONTENTPART_TYPE: RuleSpec = RuleSpec { id: "CONTENTPART-TYPE", severity: Severity::Error, evidence: Evidence::Observed };
 /// `BOOKMARK-COUNT`: more than 16,380 bookmarks while settings carries
 /// `w:uiCompat97to2003`. MS-OI29500 Part 1 §17.13.6 note (b): Word fails to
-/// open such a file (the limit without the flag is 2,147,483,647).
-pub(crate) const BOOKMARK_COUNT: RuleSpec = RuleSpec { id: "BOOKMARK-COUNT", severity: Severity::Error, evidence: Evidence::MsDocumented };
+/// open such a file (the limit without the flag is 2,147,483,647). Batch
+/// b6 (Word for the web, 2026-11-07): 16,381 bookmarks with the flag
+/// opened clean, so the documented claim is not enforced there and the
+/// rule reports at Warning. Desktop behaviour unrecorded.
+pub(crate) const BOOKMARK_COUNT: RuleSpec = RuleSpec { id: "BOOKMARK-COUNT", severity: Severity::Warning, evidence: Evidence::MsDocumented };
 /// `PERM-COUNT`: more than 32,752 range permissions while settings carries
 /// `w:uiCompat97to2003`. MS-OI29500 Part 1 §17.13.7.1 note (b) and
-/// §17.13.7.2 note (d).
-pub(crate) const PERM_COUNT: RuleSpec = RuleSpec { id: "PERM-COUNT", severity: Severity::Error, evidence: Evidence::MsDocumented };
+/// §17.13.7.2 note (d). Batch b6 (Word for the web, 2026-11-07): 32,753
+/// range permissions with the flag opened clean — Warning, as for
+/// BOOKMARK-COUNT.
+pub(crate) const PERM_COUNT: RuleSpec = RuleSpec { id: "PERM-COUNT", severity: Severity::Warning, evidence: Evidence::MsDocumented };
 /// `MOVE-RANGE-COUNT`: more than 32,751 moveFrom/moveTo ranges while
 /// settings carries `w:uiCompat97to2003`. MS-OI29500 Part 1 §17.13.5.24
-/// note (a).
-pub(crate) const MOVE_RANGE_COUNT: RuleSpec = RuleSpec { id: "MOVE-RANGE-COUNT", severity: Severity::Error, evidence: Evidence::MsDocumented };
+/// note (a). Batch b6 (Word for the web, 2026-11-07): 32,752 move ranges
+/// (65,504 start markers) with the flag opened clean, so neither counting
+/// unit is enforced there — Warning, as for BOOKMARK-COUNT.
+pub(crate) const MOVE_RANGE_COUNT: RuleSpec = RuleSpec { id: "MOVE-RANGE-COUNT", severity: Severity::Warning, evidence: Evidence::MsDocumented };
 /// `NOTE-PR-LISTING`: a special footnote/endnote (separator,
 /// continuationSeparator, continuationNotice) whose id no `footnotePr` /
-/// `endnotePr` lists. ECMA-376 Part 1 §17.11.9: it "shall not be loaded";
-/// the document is non-conformant when the note "is required by the
-/// document content" — statically establishable only for a separator
-/// when an ordinary note of the same kind is referenced — so only that
-/// case is an Error; the rest are Warnings.
-pub(crate) const NOTE_PR_LISTING: RuleSpec = RuleSpec { id: "NOTE-PR-LISTING", severity: Severity::Error, evidence: Evidence::ByConstruction };
+/// `endnotePr` lists. ECMA-376 Part 1 §17.11.9: it "shall not be loaded",
+/// and the document is non-conformant when the note "is required by the
+/// document content" — a conformance claim, graded ByConstruction.
+/// Batch b6 (Word for the web, 2026-11-07): an unlisted separator set
+/// opened clean and the footnote rendered with its separator, so the
+/// load failure the standard describes is not observed there and every
+/// case reports at Warning. Desktop behaviour unrecorded.
+pub(crate) const NOTE_PR_LISTING: RuleSpec = RuleSpec { id: "NOTE-PR-LISTING", severity: Severity::Warning, evidence: Evidence::ByConstruction };
 /// `NOTE-PR-DANGLING`: a `footnotePr` / `endnotePr` listing names a note
 /// id that no footnote/endnote defines. Nothing documents Word loading or
 /// rejecting such a listing; it is dead configuration, reported at the
@@ -915,15 +935,12 @@ fn append_content_parts(content_parts: &mut Vec<(String, Vec<String>)>, total: &
 /// cap, a definition, or a listing — yields a coverage note and an
 /// INCOMPLETE run instead of a guess.
 ///
-/// Severity follows the cited text: the definition "shall not be
-/// loaded" unconditionally, but the document is non-conformant only
-/// when the note "is required by the document content". Necessity is
-/// established per note: a separator is required when an ordinary
-/// note of the same kind is actually referenced (referenced notes
-/// render behind a separator); whether a continuation separator or
-/// notice is required depends on pagination, which a static checker
-/// cannot know — so those stay Warnings, as does a separator nothing
-/// references.
+/// Severity: the cited text makes the finding a conformance claim
+/// ("shall not be loaded"; non-conformant when the note "is required
+/// by the document content"). Batch b6 found Word for the web loading
+/// and rendering an unlisted separator set normally, so no case is
+/// graded above Warning on this evidence; necessity is not graded
+/// per note.
 fn check_note_pr(facts: &scan::StoryFacts, xml: &XmlScan, acc: &mut Acc) {
     acc.ran("NOTE-PR-LISTING");
     acc.ran("NOTE-PR-DANGLING");
@@ -947,24 +964,18 @@ fn check_note_pr(facts: &scan::StoryFacts, xml: &XmlScan, acc: &mut Acc) {
     if forward_ok {
         let listed_f: HashSet<&str> = xml.note_listings.0.iter().map(String::as_str).collect();
         let listed_e: HashSet<&str> = xml.note_listings.1.iter().map(String::as_str).collect();
-        let special_f: HashSet<&str> = xml.special_notes.iter().filter(|(_, _, e, _)| !e).map(|(_, id, _, _)| id.as_str()).collect();
-        let special_e: HashSet<&str> = xml.special_notes.iter().filter(|(_, _, e, _)| *e).map(|(_, id, _, _)| id.as_str()).collect();
-        let refs_f: HashSet<&str> = facts.footnote_refs.iter().map(|(id, _)| id.as_str()).collect();
-        let refs_e: HashSet<&str> = facts.endnote_refs.iter().map(|(id, _)| id.as_str()).collect();
-        let required_f = refs_f.iter().any(|id| defs_f.contains(id) && !special_f.contains(id));
-        let required_e = refs_e.iter().any(|id| defs_e.contains(id) && !special_e.contains(id));
         for (part, id, is_end, t) in &xml.special_notes {
             let listed = if *is_end { listed_e.contains(id.as_str()) } else { listed_f.contains(id.as_str()) };
             if !listed {
                 let (note, pr) = if *is_end { ("endnote", "endnotePr") } else { ("footnote", "footnotePr") };
-                let required = t == "separator" && ((*is_end && required_e) || (!*is_end && required_f));
-                let severity = if required { Severity::Error } else { Severity::Warning };
                 acc.add_graded(
                     "NOTE-PR-LISTING",
-                    severity,
+                    Severity::Warning,
                     Evidence::ByConstruction,
                     Some(part.clone()),
-                    format!("the {note} with id {id} in {part} has type {t} but is not listed in any {pr}, so it will not be loaded"),
+                    format!(
+                        "the {note} with id {id} in {part} has type {t} but is not listed in any {pr}; ECMA-376 says such a note shall not be loaded"
+                    ),
                 );
             }
         }
@@ -1389,7 +1400,10 @@ fn check_story(pkg: &Package, facts: &scan::StoryFacts, compat: Compat, acc: &mu
                 acc.add(
                     "BOOKMARK-COUNT",
                     None,
-                    format!("the document contains {} bookmarks, more than the 16380 Word opens when uiCompat97to2003 is set", facts.bookmark_starts),
+                    format!(
+                        "the document contains {} bookmarks, more than the 16380 documented for Word when uiCompat97to2003 is set",
+                        facts.bookmark_starts
+                    ),
                 );
             }
             if facts.perm_starts > 32_752 {
@@ -1397,7 +1411,7 @@ fn check_story(pkg: &Package, facts: &scan::StoryFacts, compat: Compat, acc: &mu
                     "PERM-COUNT",
                     None,
                     format!(
-                        "the document contains {} range permissions, more than the 32752 Word opens when uiCompat97to2003 is set",
+                        "the document contains {} range permissions, more than the 32752 documented for Word when uiCompat97to2003 is set",
                         facts.perm_starts
                     ),
                 );
@@ -1407,7 +1421,7 @@ fn check_story(pkg: &Package, facts: &scan::StoryFacts, compat: Compat, acc: &mu
                     "MOVE-RANGE-COUNT",
                     None,
                     format!(
-                        "the document contains {} move ranges, more than the 32751 Word opens when uiCompat97to2003 is set",
+                        "the document contains {} move ranges, more than the 32751 documented for Word when uiCompat97to2003 is set",
                         facts.move_range_starts
                     ),
                 );

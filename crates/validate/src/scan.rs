@@ -872,7 +872,17 @@ fn check_math_placement(state: &State, id: &ElemId, role: PartRole, part: &str, 
         // Paragraph properties are a legal child of oMathPara, not stray content.
         "oMathParaPr" if in_omath_para => {}
         _ if !in_omath && !in_stray && !in_parapr => {
-            acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:{} in {part} is math content outside any m:oMath", id.local));
+            // Batch b6 (Word for the web, 2026-11-07): a lone stray math
+            // element opened clean and rendered as plain text, unlike the
+            // placement cases above, which drew the corruption banner —
+            // so this one case reports at Warning, not the rule's Error.
+            acc.add_graded(
+                "MATH-PLACEMENT",
+                crate::Severity::Warning,
+                crate::Evidence::MsDocumented,
+                Some(part.to_string()),
+                format!("m:{} in {part} is math content outside any m:oMath", id.local),
+            );
         }
         _ => {}
     }
@@ -881,7 +891,9 @@ fn check_math_placement(state: &State, id: &ElemId, role: PartRole, part: &str, 
 /// `PROTECTION-PASSWORD` (MS-OI29500 Part 1 §17.15.1.93 note (c)): in a settings
 /// part, a `w:documentProtection` or `w:writeProtection` element carrying any
 /// AG_Password attribute must carry algorithmName, hashValue, and spinCount
-/// together, or Word will not open the file. AG_Password is exactly the four
+/// together, or Word will not open the file. (Batch b6: Word for the web
+/// opens a partial set clean, so the finding reports at Warning.)
+/// AG_Password is exactly the four
 /// attributes algorithmName, hashValue, saltValue, spinCount in both the Strict
 /// and the Transitional wml.xsd; the separate AG_TransitionalPassword group
 /// (cryptProviderType, cryptAlgorithmClass, …, hash, salt) is the legacy
@@ -923,7 +935,7 @@ fn check_protection(id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, r
             "PROTECTION-PASSWORD",
             Some(part.to_string()),
             format!(
-                "w:{} in {part} carries password attributes without {}; Word requires algorithmName, hashValue, and spinCount together",
+                "w:{} in {part} carries password attributes without {}; MS-OI29500 documents algorithmName, hashValue, and spinCount as required together",
                 id.local,
                 missing.join(", ")
             ),
