@@ -4036,3 +4036,79 @@ fn issues_1281_1045_english_dialects_proof_typed_text() {
     let words: Vec<&str> = issues.as_array().unwrap().iter().filter(|i| i["kind"] == "spelling").filter_map(|i| i["text"].as_str()).collect();
     assert_eq!(words, ["21th"]);
 }
+
+/// #6017: applying Numbering strips a typed label when it is the label the new list gives that
+/// paragraph; a label that does not match stays as text.
+#[test]
+fn numbering_strips_typed_labels_that_match_the_new_list() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("1. alpha\n2. beta\n3. gamma"));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.numbering", json!({}));
+    assert_eq!(paras(&s).into_iter().map(|p| p.0).collect::<Vec<_>>(), ["alpha", "beta", "gamma"]);
+    assert_eq!(numbers(&mut s).into_iter().map(|p| p.0).collect::<Vec<_>>(), [Some("1.".into()), Some("2.".into()), Some("3.".into())]);
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(paras(&s).into_iter().map(|p| p.0).collect::<Vec<_>>(), ["1. alpha", "2. beta", "3. gamma"]);
+
+    let mut s = Session::new(wordcraft_doc::Document::from_text("1. alpha\n2. beta\n5. gamma"));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.numbering", json!({}));
+    assert_eq!(paras(&s).into_iter().map(|p| p.0).collect::<Vec<_>>(), ["alpha", "beta", "5. gamma"]);
+    assert_eq!(numbers(&mut s).into_iter().map(|p| p.0).collect::<Vec<_>>(), [Some("1.".into()), Some("2.".into()), Some("3.".into())]);
+}
+
+/// #6017: the first typed label starts a new list, as Word does: 2., 3., 4. stays 2., 3., 4.
+#[test]
+fn numbering_starts_at_the_first_typed_label() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("2. alpha\n3. beta\n4. gamma"));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.numbering", json!({}));
+    assert_eq!(paras(&s).into_iter().map(|p| p.0).collect::<Vec<_>>(), ["alpha", "beta", "gamma"]);
+    assert_eq!(numbers(&mut s).into_iter().map(|p| p.0).collect::<Vec<_>>(), [Some("2.".into()), Some("3.".into()), Some("4.".into())]);
+}
+
+/// #6017: a typed numeric label is removed when bullets are applied, but a typed dash stays.
+#[test]
+fn bullets_strip_typed_numbers_but_keep_typed_dashes() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("1. alpha\n2. beta"));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.bullets", json!({}));
+    assert_eq!(paras(&s).into_iter().map(|p| p.0).collect::<Vec<_>>(), ["alpha", "beta"]);
+
+    let mut s = Session::new(wordcraft_doc::Document::from_text("- alpha\n- beta"));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.bullets", json!({}));
+    assert_eq!(paras(&s).into_iter().map(|p| p.0).collect::<Vec<_>>(), ["- alpha", "- beta"]);
+}
+
+/// #6017: letter and Roman typed labels are stripped when the chosen list kind shows the same.
+#[test]
+fn numbering_strips_typed_letter_and_roman_labels() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("a. alpha\nb. beta"));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.numbering", json!({"kind": "lowerLetterDot"}));
+    assert_eq!(paras(&s).into_iter().map(|p| p.0).collect::<Vec<_>>(), ["alpha", "beta"]);
+    assert_eq!(numbers(&mut s).into_iter().map(|p| p.0).collect::<Vec<_>>(), [Some("a.".into()), Some("b.".into())]);
+
+    let mut s = Session::new(wordcraft_doc::Document::from_text("i. alpha\nii. beta"));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.numbering", json!({"kind": "lowerRoman"}));
+    assert_eq!(paras(&s).into_iter().map(|p| p.0).collect::<Vec<_>>(), ["alpha", "beta"]);
+    assert_eq!(numbers(&mut s).into_iter().map(|p| p.0).collect::<Vec<_>>(), [Some("i.".into()), Some("ii.".into())]);
+}
+
+/// #6017: Word counts the typed label, whichever delimiter or letter form it uses, but a normal
+/// word ending in a period is not a label.
+#[test]
+fn numbering_strips_other_typed_labels_and_keeps_words() {
+    for text in ["1) alpha\n2) beta", "a. alpha\nb. beta", "a) alpha\nb) beta", "i. alpha\nii. beta"] {
+        let mut s = Session::new(wordcraft_doc::Document::from_text(text));
+        run(&mut s, "select.all", json!({}));
+        run(&mut s, "para.numbering", json!({}));
+        assert_eq!(paras(&s).into_iter().map(|p| p.0).collect::<Vec<_>>(), ["alpha", "beta"], "{text}");
+    }
+
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Hello. world\nGoodbye. world"));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.bullets", json!({}));
+    assert_eq!(paras(&s).into_iter().map(|p| p.0).collect::<Vec<_>>(), ["Hello. world", "Goodbye. world"]);
+}

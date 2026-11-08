@@ -1,17 +1,21 @@
 use super::format::fmt;
 use super::{CmdError, CmdResult, LineSpacing, ListKind, NumRef, ParaProps, Session, Style, StyleKind, Value, json, p, sel_result};
 use std::sync::Arc;
+use wordcraft_doc::numbering::Level;
+use wordcraft_doc::section::NumFormat;
+use wordcraft_doc::{Path, StoryRef};
 
 /// Toggle lists using effective paragraph numbering; an explicit off request removes numbering.
 pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
     let kind = p::str(v, "kind").and_then(ListKind::parse).unwrap_or(default);
     let off = p::bool(v, "off").unwrap_or(false);
     let a = s.sel.ordered().0;
+    let paths = crate::cmd::selected_paths(s);
+    let typed: Vec<Option<String>> =
+        paths.iter().map(|path| s.doc.para(a.story, path).and_then(|x| leading_label(&x.text)).map(str::to_string)).collect();
     // Toggle: if every selected paragraph already has this kind of list, remove it.
-    let current: Vec<Option<NumRef>> = crate::cmd::selected_paths(s)
-        .iter()
-        .map(|p| s.doc.para(a.story, p).and_then(|x| s.doc.styles.resolve_para(&x.props).numbering).filter(|n| n.num != 0))
-        .collect();
+    let current: Vec<Option<NumRef>> =
+        paths.iter().map(|p| s.doc.para(a.story, p).and_then(|x| s.doc.styles.resolve_para(&x.props).numbering).filter(|n| n.num != 0)).collect();
     let same_kind = |n: &NumRef| {
         s.doc.numbering.level(n.num, n.level).is_some_and(|l| {
             let want = wordcraft_doc::numbering::levels_for(kind);
@@ -41,6 +45,7 @@ pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
         .prev_para(a.story, &a.path)
         .and_then(|q| s.doc.para(a.story, &q).and_then(|x| x.props.numbering))
         .filter(|n| n.num != 0 && same_kind(&NumRef { level: 0, ..*n }));
+    let continuing = prev_num.is_some();
     let num = match prev_num {
         Some(n) => n.num,
         None => match kind {
@@ -51,6 +56,16 @@ pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
             _ => Arc::make_mut(&mut s.doc.numbering).try_add_list(kind)?,
         },
     };
+    // Word starts a new list at the first label the author typed when that is a label this
+    // list kind would show (2. alpha, 3. beta becomes 2., 3., not 1., 2.).
+    if !continuing
+        && !kind.is_bullet()
+        && let Some(start) =
+            typed.first().and_then(Option::as_deref).and_then(|label| s.doc.numbering.level(num, 0).and_then(|level| typed_start(label, level)))
+        && let Some(n) = Arc::make_mut(&mut s.doc.numbering).nums.iter_mut().find(|x| x.id == num)
+    {
+        n.start_overrides.push((0, start));
+    }
     fmt(s, &|p| {
         let level = p.numbering.filter(|n| n.num != 0).map(|n| n.level).unwrap_or(0);
         p.numbering = Some(NumRef { num, level });
@@ -61,7 +76,134 @@ pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
         if p.style.is_none() || p.style.as_deref() == Some("Normal") {
             p.style = Some("ListParagraph".into());
         }
+    })?;
+    strip_typed_labels(s, a.story, &paths, &typed, kind)?;
+    sel_result(s)
+}
+
+/// The first word of a paragraph, when a space or tab follows it: the only place a typed list
+/// label can be (the label itself never contains whitespace).
+fn leading_label(text: &str) -> Option<&str> {
+    let end = text.find(char::is_whitespace)?;
+    (end > 0).then(|| &text[..end])
+}
+
+/// The label's text and delimiter (`.` or `)`) without its count.
+fn label_parts(label: &str) -> Option<(&str, char)> {
+    if let Some(body) = label.strip_suffix('.') {
+        return (!body.is_empty()).then_some((body, '.'));
+    }
+    if let Some(body) = label.strip_suffix(')') {
+        return (!body.is_empty()).then_some((body, ')'));
+    }
+    let body = label.strip_prefix('(')?.strip_suffix(')')?;
+    (!body.is_empty()).then_some((body, ')'))
+}
+
+/// A typed label's count, when this level would show the same text for it.
+fn typed_start(label: &str, level: &Level) -> Option<u32> {
+    let (body, _) = label_parts(label)?;
+    let value = match level.format {
+        NumFormat::Decimal | NumFormat::DecimalZero | NumFormat::Ordinal => body.parse().ok()?,
+        NumFormat::UpperLetter | NumFormat::LowerLetter => letter_value(body)?,
+        NumFormat::UpperRoman | NumFormat::LowerRoman => roman_value(body)?,
+        _ => return None,
+    };
+    (level.format.format(value) == body).then_some(value)
+}
+
+/// Whether a typed label is a number, for the bullet rule; a typed dash or word is not.
+fn bullet_label(label: &str) -> bool {
+    let Some((body, _)) = label_parts(label) else { return false };
+    body.parse::<u32>().is_ok()
+}
+
+/// A typed label's possible counts (`i` is Roman 1 or letter 9; both are tried).
+fn label_values(label: &str) -> [Option<u32>; 3] {
+    let Some((body, _)) = label_parts(label) else { return [None; 3] };
+    [body.parse().ok(), letter_value(body), roman_value(body)]
+}
+
+fn same_label_count(a: &str, b: &str) -> bool {
+    let (a, b) = (label_values(a), label_values(b));
+    a.iter().flatten().any(|x| b.iter().flatten().any(|y| x == y))
+}
+
+fn letter_value(s: &str) -> Option<u32> {
+    if s.is_empty() || !s.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    s.chars().try_fold(0u32, |n, c| {
+        let d = c.to_ascii_lowercase() as u32 - 'a' as u32 + 1;
+        n.checked_mul(26)?.checked_add(d)
     })
+}
+
+fn roman_value(s: &str) -> Option<u32> {
+    let mut total = 0u32;
+    let mut prev = 0u32;
+    for c in s.chars().rev() {
+        let v = match c.to_ascii_uppercase() {
+            'I' => 1,
+            'V' => 5,
+            'X' => 10,
+            'L' => 50,
+            'C' => 100,
+            'D' => 500,
+            'M' => 1000,
+            _ => return None,
+        };
+        if v < prev {
+            total = total.checked_sub(v)?;
+        } else {
+            total = total.checked_add(v)?;
+            prev = v;
+        }
+    }
+    (total > 0).then_some(total)
+}
+
+/// Remove typed labels that the applied list now shows itself. A typed numeric label is
+/// removed for bullets too; a typed bullet character (`-`, `•`) stays (Word).
+fn strip_typed_labels(s: &mut Session, story: StoryRef, paths: &[Path], typed: &[Option<String>], kind: ListKind) -> Result<(), CmdError> {
+    if typed.iter().all(Option::is_none) {
+        return Ok(());
+    }
+    let rendered = rendered_labels(s, paths);
+    let mut changed = false;
+    for ((path, typed), rendered) in paths.iter().zip(typed).zip(rendered) {
+        let Some(typed) = typed else { continue };
+        let strip = if kind.is_bullet() { bullet_label(typed) } else { rendered.as_deref().is_some_and(|label| same_label_count(typed, label)) };
+        if !strip {
+            continue;
+        }
+        let para = s.doc.para_mut(story, path)?;
+        let mut end = typed.len();
+        end += para.text[end..].chars().take_while(|c| c.is_whitespace()).map(char::len_utf8).sum::<usize>();
+        para.delete(0, end)?;
+        para.touch();
+        changed = true;
+    }
+    if changed {
+        s.relayout();
+    }
+    Ok(())
+}
+
+fn rendered_labels(s: &mut Session, paths: &[Path]) -> Vec<Option<String>> {
+    let layout = s.layout();
+    let mut out = vec![None; paths.len()];
+    for page in &layout.pages {
+        for item in &page.items {
+            if let wordcraft_layout::Placed::Lines { path, para, l0: 0, .. } = item
+                && let Some(label) = &para.label
+                && let Some(i) = paths.iter().position(|p| p == path)
+            {
+                out[i] = Some(label.text.clone());
+            }
+        }
+    }
+    out
 }
 
 pub(super) fn restart_numbering(s: &mut Session, _: &Value) -> CmdResult {
