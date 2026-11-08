@@ -96,6 +96,55 @@ fn title_stem_omits_nul_from_each_title_source() {
     }
 }
 
+/// #5793: a name from a paragraph's first words, as Word suggests one: up to the first sentence or
+/// clause end, without what a file name can't hold, at most 50 characters at a word's end.
+#[test]
+fn a_suggested_name_is_the_first_words_of_the_text() {
+    use crate::app::suggested_stem as stem;
+    assert_eq!(stem("Quarterly report for the board. More follows here.").as_deref(), Some("Quarterly report for the board"));
+    assert_eq!(stem("Minutes of the meeting, 6 November").as_deref(), Some("Minutes of the meeting, 6 November"));
+    assert_eq!(stem("What happened? Nobody knows").as_deref(), Some("What happened"));
+    assert_eq!(stem("Plan: phase one").as_deref(), Some("Plan"));
+    assert_eq!(stem("Q3 / Q4 \"draft\" <final> *v2* | a\\b").as_deref(), Some("Q3 Q4 draft final v2 a b"));
+    assert_eq!(stem("  Leading   and   inner   spaces  ").as_deref(), Some("Leading and inner spaces"));
+    assert_eq!(stem("日本語の文書。続きの文").as_deref(), Some("日本語の文書"));
+    let long = "Annual report of the regional committee on transport and infrastructure planning";
+    let got = stem(long).unwrap();
+    assert!(got.chars().count() <= 50 && long.starts_with(&got) && long[got.len()..].starts_with(' '), "{got:?}");
+    assert_eq!(stem(&"x".repeat(80)).map(|s| s.chars().count()), Some(50), "one long word is cut at 50");
+    for nothing in ["", "   ", "...", "?", "/ * |", "\u{1}"] {
+        assert_eq!(stem(nothing), None, "{nothing:?}");
+    }
+}
+
+/// #5793: Save As suggests the first words for a document that was never saved and has no title
+/// of its own (the first paragraph with text, past empty ones); a title, a file name or a path
+/// still name it.
+#[test]
+fn save_as_suggests_the_first_words_of_a_new_document() {
+    let mut app = app();
+    assert_eq!(app.default_save_name(), format!("{}.docx", app.title_stem()), "an empty document");
+    for c in [
+        json!(["text.newParagraph", {}]),
+        json!(["text.insert", {"text": "Minutes of the board meeting. Present: all"}]),
+        json!(["text.newParagraph", {}]),
+        json!(["text.insert", {"text": "Second paragraph"}]),
+    ] {
+        app.session.run(c[0].as_str().unwrap(), &c[1]).unwrap();
+    }
+    assert_eq!(app.default_save_name(), "Minutes of the board meeting.docx");
+    assert_eq!(
+        app.title_stem(),
+        crate::documents::untitled_title(&app.session.resolved_filenames().0).unwrap_or_else(|| "Document1".into()),
+        "the window title stays Document1"
+    );
+    app.session.doc.core.title = "Board minutes".into();
+    assert_eq!(app.default_save_name(), "Board minutes.docx", "a title wins");
+    app.session.doc.core.title.clear();
+    app.session.path = Some(std::path::PathBuf::from("/tmp/kept.docm"));
+    assert_eq!(app.default_save_name(), "kept.docm", "a saved file keeps its name and format");
+}
+
 /// #1678: Focus and Full Screen View put the window in full screen, asked of the system once
 /// per change (switching between the two keeps it), and the usual window comes back after.
 #[test]
@@ -539,6 +588,25 @@ fn title_and_account_buttons_work() {
     assert_eq!(h.state().ui.backstage_page, "options");
     assert_eq!(h.state().ui.options_pane, "general");
     assert!(h.query_by_label("User name:").is_some());
+}
+
+/// The Options toggle hides the community pill in the title bar; the backstage menu's
+/// Discord link hides with it — one setting, everywhere the link shows.
+#[test]
+fn the_community_button_off_hides_the_backstage_discord_link_too() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.run("ui.backstage", json!({"value": true})).unwrap();
+    let mut h = harness(a);
+    h.run_steps(2);
+    assert!(h.query_by_label("Discord community").is_some(), "the community link shows by default");
+
+    let mut a = app();
+    a.ui.show_discord = false;
+    a.run("ui.backstage", json!({"value": true})).unwrap();
+    let mut h = harness(a);
+    h.run_steps(2);
+    assert!(h.query_by_label("Discord community").is_none(), "the backstage link honors the same setting");
 }
 
 /// File › Options › Advanced › Editing: alignment guides are a UI command, on by default and
