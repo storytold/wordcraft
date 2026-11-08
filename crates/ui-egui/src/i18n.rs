@@ -123,7 +123,7 @@ pub static LANGUAGES: [LangInfo; 28] = [
     // Danish; `da`, `da-DK` and `da_DK.UTF-8` resolve here.
     LangInfo { code: "da", prefer_hans: false, editing_lang: None },
     // Romanian; `ro`, `ro-RO`, `ro_RO.UTF-8` and `ro-MD` resolve here.
-    LangInfo { code: "ro", prefer_hans: false, editing_lang: None },
+    LangInfo { code: "ro", prefer_hans: false, editing_lang: Some("ro-RO") },
     // Arabic (Modern Standard); `ar` and every `ar-*` locale (`ar-MA`, `ar-EG`, `ar-SA` …) resolve
     // here. Right to left: see [`RTL_LANGUAGES`] and [`Lang::rtl`].
     LangInfo { code: "ar", prefer_hans: false, editing_lang: None },
