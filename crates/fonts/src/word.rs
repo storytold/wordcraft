@@ -32,7 +32,10 @@ fn substitutes(family: &str) -> &'static [&'static str] {
 /// as Liberation Serif for Times New Roman, or the same design under another name), rather than
 /// the generic lists any unknown font gets?
 pub fn has_named_substitutes(family: &str) -> bool {
-    family.split(';').map(str::trim).filter(|f| !f.is_empty()).any(|f| substitutes_by_name(charset_base_family(f)).1)
+    if family.contains(';') {
+        return list_class(family).named;
+    }
+    substitutes_by_name(charset_base_family(family)).1
 }
 
 const SANS: &[&str] = &["Carlito", "Helvetica Neue", "Arial", "Liberation Sans", "Noto Sans", "DejaVu Sans", "Source Sans 3"];
@@ -371,10 +374,61 @@ fn is_thai_serif(f: &str) -> bool {
 /// Is `family` a Thai document font ([`is_thai`])? A missing one is drawn in a Thai face for the
 /// whole run, never in a Latin substitute (#1549).
 pub fn is_thai_family(family: &str) -> bool {
+    if family.contains(';') {
+        return list_class(family).thai;
+    }
+    let f = family.trim().to_ascii_lowercase();
+    is_thai(&f) || is_thai_serif(&f)
+}
+
+/// What the name-based predicates answer about one semicolon-separated fallback list. Shaping asks
+/// them for every piece of every run set in the list, so the answer is worked out once per list
+/// rather than once per piece.
+#[derive(Clone, Copy, Default)]
+struct ListClass {
+    /// [`is_thai_family`].
+    thai: bool,
+    /// [`has_named_substitutes`].
+    named: bool,
+}
+
+/// [`ListClass`] of the semicolon-separated `family`, memoised by its text.
+fn list_class(family: &str) -> ListClass {
+    let key = family_list_key(family);
+    let generation = FontDb::global().generation();
+    {
+        let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if c.generation != generation {
+            *c = FallbackListMemo { generation, ..Default::default() };
+        } else if let Some((cached, class)) = c.classes.get(&key)
+            && cached == family
+        {
+            return *class;
+        }
+    }
+    let class = ListClass { thai: classify_thai(family), named: classify_named(family) };
+    let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if c.generation == generation {
+        if c.classes.len() >= FAMILY_CACHE_MAX {
+            c.classes.clear();
+        }
+        c.classes.insert(key, (family.to_string(), class));
+    }
+    class
+}
+
+/// Whether any family of the list is a Thai document font: what [`is_thai_family`] answers.
+fn classify_thai(family: &str) -> bool {
     family.split(';').map(str::trim).filter(|f| !f.is_empty()).any(|f| {
         let f = f.to_ascii_lowercase();
         is_thai(&f) || is_thai_serif(&f)
     })
+}
+
+/// Whether any family of the list has substitutes of its own: what [`has_named_substitutes`]
+/// answers.
+fn classify_named(family: &str) -> bool {
+    family.split(';').map(str::trim).filter(|f| !f.is_empty()).any(|f| substitutes_by_name(charset_base_family(f)).1)
 }
 
 /// Khmer document fonts: the Khmer OS family, Khmer Mool1 and the like, Windows' and the Mac's
@@ -447,6 +501,7 @@ struct FallbackListMemo {
     probed: HashMap<String, bool>,
     lists: HashMap<(u64, usize), (String, (String, bool))>,
     long_resolved: HashMap<(u64, usize, bool, bool), (String, Resolved)>,
+    classes: HashMap<(u64, usize), (String, ListClass)>,
 }
 
 /// Shared cache for fallback-list resolutions and candidate availability checks.
@@ -1063,5 +1118,29 @@ mod tests {
         assert_eq!(r1.face.family, "Source Serif 4");
         assert_eq!(r1.face.id(), r2.face.id());
         assert!(!resolve_cache().lock().unwrap_or_else(|e| e.into_inner()).1.keys().any(|k| k.0.len() > FAMILY_KEY_MAX));
+    }
+
+    /// The name-based predicates look at every candidate, and their answer is cached per list: a
+    /// later Thai or named fallback still counts, and a list is classified once rather than for
+    /// every piece of text shaped in it.
+    #[test]
+    fn list_classification_reads_every_candidate_and_is_cached() {
+        // The Thai family is last, past any shorter bound, and still classifies the list.
+        let mut candidates: Vec<String> = (0..200).map(|i| format!("MissingCandidateFont{i}")).collect();
+        candidates.push("TH Sarabun New".to_string());
+        let thai_list = candidates.join(";");
+        assert!(is_thai_family(&thai_list), "a later Thai family still counts");
+
+        // A named substitute at the end classifies too (Times New Roman has Liberation Serif).
+        candidates.pop();
+        candidates.push("Times New Roman".to_string());
+        let named_list = candidates.join(";");
+        assert!(has_named_substitutes(&named_list), "a later named fallback still counts");
+
+        // Both are memoised by list text: a second ask answers without rescanning, and a list
+        // whose text differs only after the key's hash is not mistaken for the cached one.
+        assert!(is_thai_family(&thai_list) && !is_thai_family(&named_list));
+        let cached = fallback_list_cache().lock().unwrap_or_else(|e| e.into_inner()).classes.len();
+        assert!(cached >= 2, "{cached} lists classified");
     }
 }
