@@ -189,6 +189,9 @@ impl WordApp {
                 // The host page keeps the file under this name now, as a desktop save would.
                 if self.services.host_save.is_some() {
                     self.session.path = Some(std::path::PathBuf::from(&name));
+                    // An explicit save to the page lets AutoSave keep writing there, as a desktop
+                    // save does (the web result has no "saved" field for the check below).
+                    self.autosave_path = self.session.path.clone();
                 }
             }
             // The browser's picker writes the file later (#1315): until it says how that went,

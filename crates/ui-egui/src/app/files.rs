@@ -388,7 +388,7 @@ impl WordApp {
     /// user saved to in this session, in a format that keeps everything, and never in the browser
     /// (a page can't write to the user's files; saving there is a download, #176).
     pub fn autosave_block(&self) -> Option<AutoSaveBlock> {
-        if self.services.download.is_some() {
+        if self.services.download.is_some() && !self.host_autosaves() {
             return Some(AutoSaveBlock::Browser);
         }
         let Some(path) = &self.session.path else { return Some(AutoSaveBlock::Unsaved) };
@@ -400,6 +400,12 @@ impl WordApp {
             return Some(AutoSaveBlock::NotSavedHere);
         }
         None
+    }
+
+    /// Web, framed by a page that stores every save in place and said so: AutoSave hands its
+    /// writes to that page, so the browser's "no file to write to" block doesn't apply.
+    pub(crate) fn host_autosaves(&self) -> bool {
+        self.services.host_save.is_some() && self.services.host_autosave.as_ref().is_some_and(|c| c.get())
     }
 
     /// Whether AutoSave covers the document: it is on and nothing blocks it ([`Self::autosave_block`]).
@@ -425,10 +431,12 @@ impl WordApp {
     pub(crate) fn autosave_tick(&mut self, now: f64) {
         if self.autosaves() && self.session.dirty && now - self.last_autosave > 2500.0 && now - self.canvas.caret_visible_since > 1500.0 {
             self.last_autosave = now;
-            if let Err(e) = self.session.run("file.save", &json!({})) {
+            // Hosted in a page: Save hands the bytes to the page (an overwrite of the opened file).
+            let saved = if self.host_autosaves() { self.execute("file.save", json!({})).map(drop) } else { self.session.run("file.save", &json!({})).map(drop).map_err(|e| e.to_string()) };
+            if let Err(e) = saved {
                 log::warn!("AutoSave failed: {e}");
                 self.autosave_path = None;
-                self.status(i18n::fmt(tl!("AutoSave failed: {error}. Save the document to turn AutoSave back on."), &[("error", &e.to_string())]));
+                self.status(i18n::fmt(tl!("AutoSave failed: {error}. Save the document to turn AutoSave back on."), &[("error", &e)]));
             }
         }
     }

@@ -4881,6 +4881,40 @@ fn a_host_save_that_fails_leaves_the_document_unsaved() {
     assert!(a.session.dirty);
 }
 
+/// Framed by a page that says it stores every save in place, AutoSave is available in the
+/// browser: once the user has saved, it hands each later change to the page as an ordinary Save
+/// (not Save As), like the desktop writes the file.
+#[test]
+fn host_autosave_hands_writes_to_a_page_that_stores_saves_in_place() {
+    let (mut a, got) = host_app(false);
+    host_open(&mut a, "report.docx");
+    assert!(matches!(a.autosave_block(), Some(crate::AutoSaveBlock::Browser)), "the page hasn't said it stores in place");
+    a.services.host_autosave = Some(std::rc::Rc::new(std::cell::Cell::new(true)));
+    assert!(matches!(a.autosave_block(), Some(crate::AutoSaveBlock::NotSavedHere)), "a file only opened isn't rewritten");
+    a.execute("file.save", json!({})).unwrap();
+    assert!(a.autosaves(), "saved to the page: AutoSave covers the file");
+    a.run("text.insert", json!({"text": "More "})).unwrap();
+    assert!(a.session.dirty);
+    a.autosave_tick(now_ms() + 10_000.0);
+    assert!(!a.session.dirty, "AutoSave handed the change to the page");
+    let calls: Vec<(String, bool)> = got.borrow().iter().map(|(n, s, _)| (n.clone(), *s)).collect();
+    assert_eq!(calls, [("report.docx".to_string(), false), ("report.docx".to_string(), false)]);
+}
+
+/// A page that fails to take an AutoSave write turns AutoSave off for the file until the next save.
+#[test]
+fn host_autosave_failure_turns_autosave_off() {
+    let (mut a, _) = host_app(false);
+    host_open(&mut a, "report.docx");
+    a.services.host_autosave = Some(std::rc::Rc::new(std::cell::Cell::new(true)));
+    a.execute("file.save", json!({})).unwrap();
+    a.services.host_save = Some(Box::new(|_, _, _| Err("the page is gone".into())));
+    a.run("text.insert", json!({"text": "More "})).unwrap();
+    a.autosave_tick(now_ms() + 10_000.0);
+    assert!(a.session.dirty);
+    assert!(!a.autosaves(), "AutoSave is off until the next save");
+}
+
 /// Macro-enabled documents and templates keep everything (#172), so once saved in this
 /// session AutoSave covers them like a .docx.
 #[test]

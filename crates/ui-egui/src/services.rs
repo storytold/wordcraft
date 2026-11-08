@@ -45,6 +45,10 @@ pub struct Services {
     /// under its own name and format, as on the desktop, and a Save or Save As that keeps
     /// everything makes that name the document's file, so the next Save goes to it.
     pub host_save: Option<HostSaveFn>,
+    /// Web, framed by a page that keeps the files: set once the page says (`host` message) it
+    /// stores every save in place. Then AutoSave is available in the browser: it hands each
+    /// write to the page through [`Self::host_save`] instead of writing a file.
+    pub host_autosave: Option<std::rc::Rc<std::cell::Cell<bool>>>,
     /// Web: told whether the document has unsaved changes after each pass, for the browser's
     /// leave-page guard (`beforeunload` runs between frames and can't ask the app).
     pub on_dirty: Option<Box<dyn Fn(bool)>>,
