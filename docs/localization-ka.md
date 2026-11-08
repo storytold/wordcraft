@@ -8,7 +8,7 @@ language (`ka`, `ka-GE`, `ka_GE.UTF-8`). The catalog code is `ka`; `ui.language`
 screenshot or a launch while the preference is `auto`. The choice is saved with the other interface
 settings. Document text, command ids, CLI/MCP/control responses and file paths do not change.
 
-craft-i18n's `locales/ka/wordcraft.tsv` (storytold/craft-i18n) has 2,788 entries: every key of the other catalogs (built-in style
+craft-i18n's `locales/ka/wordcraft.tsv` (storytold/craft-i18n) has 3,074 entries: every key of the other catalogs (built-in style
 names, equation gallery labels, paper sizes, watermarks, greetings and citation style names
 included) and everything the interface audit finds. It is written from the meaning of the English
 labels; no proprietary translation resources were consulted. A native speaker reviewed the 2,610
