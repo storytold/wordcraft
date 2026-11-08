@@ -1,5 +1,7 @@
 # MCP server
 
+> **Last updated:** 2026-10-31 · Delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
+
 WordCraft speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio, so
 Claude and other agents can write and edit documents.
 
@@ -17,6 +19,22 @@ loopback addresses; see [Keys](control-protocol.md#keys). The bridge serves even
 isn't open yet: tool calls return "not reachable … will retry on each call" and succeed once the
 app's port opens (#4078), so a client that starts before WordCraft doesn't lose the server for
 its whole session.
+
+## Delivery failures
+
+The connected bridge retries a request once if no write was attempted (for example, a failed
+connection). Once sending starts, a write or flush failure can mean the app already received
+the complete JSON body, even if its newline was not delivered. A lost reply has the same
+uncertainty. Mutations then return an `outcome unknown` error and are never automatically
+resent; inspect the document before deciding whether to repeat the operation yourself.
+
+Read-only inspection and in-memory `ui.render` / `ui.screenshot` calls may retry once. With a
+string `path`, rendering or taking a screenshot writes a file and is not retried after an
+unknown outcome. Unreadable replies are reported as errors without replaying the request.
+
+On stdio, an invalid UTF-8 request line returns JSON-RPC parse error `-32700`. It never reaches
+the backend, and the server continues with the next line instead of substituting characters
+in text or paths.
 
 ## Scripts from the command line
 
