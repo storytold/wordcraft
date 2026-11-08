@@ -269,3 +269,22 @@ fn each_list_says_for_itself_that_it_was_cut() {
     assert!(lines[0].ends_with(", …"), "{}", lines[0]);
     assert!(!lines[1].contains('…'), "{}", lines[1]);
 }
+
+#[test]
+fn strict_off_gives_the_same_png_as_before_even_with_a_missing_character() {
+    let c = uncovered();
+    let d = dir("pngsame");
+    let mut s = Session::new(Document::from_text(&format!("Hello {c}")));
+    let png: Vec<Vec<u8>> = [json!({}), json!({"strict": false})]
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut p)| {
+            p["path"] = json!(d.join(format!("{i}.png")));
+            s.run("file.exportPng", &p).unwrap();
+            std::fs::read(d.join(format!("{i}.png"))).unwrap()
+        })
+        .collect();
+    assert!(png[0].starts_with(b"\x89PNG"));
+    assert_eq!(png[0], png[1]);
+    std::fs::remove_dir_all(d).unwrap();
+}

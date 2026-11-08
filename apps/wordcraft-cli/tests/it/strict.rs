@@ -271,3 +271,69 @@ fn strict_with_another_output_type_exits_1_before_the_input_is_read() {
     assert!(!stderr(&r).contains("--strict"));
     std::fs::remove_dir_all(d).unwrap();
 }
+
+fn render(input: &Path, output: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_wordcraft-cli")).arg("render").arg(input).arg(output).args(args).output().unwrap()
+}
+
+/// Page 1 has `a{c}b`, page 2 plain text.
+fn two_page_input(d: &Path, text: &str) -> PathBuf {
+    let mut doc = Document::from_text(&format!("{text}\nSecond page"));
+    doc.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().props.page_break_before = Some(true);
+    let path = d.join("two.json");
+    std::fs::write(&path, serde_json::to_vec(&doc).unwrap()).unwrap();
+    path
+}
+
+#[test]
+fn render_strict_refuses_an_uncovered_character_on_the_page_with_no_stdout_or_file() {
+    let c = uncovered();
+    let cp = format!("U+{:04X}", c as u32);
+    let d = dir("render-glyph");
+    let input = two_page_input(&d, &format!("a{c}b"));
+    let out = d.join("p1.png");
+    let r = render(&input, &out, &["--strict"]);
+    assert_eq!(r.status.code(), Some(3), "{}", stderr(&r));
+    assert!(r.stdout.is_empty(), "{}", String::from_utf8_lossy(&r.stdout));
+    assert!(!out.exists());
+    let text = stderr(&r);
+    assert!(text.contains(&format!("wordcraft-cli: strict: 1 character cannot be drawn: {cp} (×1)")), "{text}");
+    assert_eq!(report_json(&r)["missing_glyphs"][0]["cp"], cp.as_str());
+    eprintln!("{text}");
+
+    // The character is not on page 2, and --scale does not matter to the check.
+    let out2 = d.join("p2.png");
+    let r = render(&input, &out2, &["--page", "2", "--strict", "--scale", "0.5"]);
+    assert_eq!(r.status.code(), Some(0), "{}", stderr(&r));
+    assert!(out2.exists());
+    assert!(String::from_utf8_lossy(&r.stdout).contains("\"path\""));
+    // And the same page 1 without --strict renders, with the usual stdout.
+    let out3 = d.join("lenient.png");
+    let r = render(&input, &out3, &[]);
+    assert_eq!(r.status.code(), Some(0), "{}", stderr(&r));
+    assert!(out3.exists());
+    let json: serde_json::Value = serde_json::from_slice(&r.stdout).unwrap();
+    assert_eq!(json["path"], out3.to_string_lossy().as_ref());
+    assert!(json["width"].as_u64().is_some() && json["bytes"].as_u64().is_some());
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn render_strict_refuses_a_corrupt_header_picture_and_bad_input_still_exits_1() {
+    let d = dir("render-pic");
+    let input = d.join("in.docx");
+    std::fs::write(&input, docx_with_header_picture(b"corrupt bytes, not a picture")).unwrap();
+    let out = d.join("out.png");
+    let r = render(&input, &out, &["--strict"]);
+    assert_eq!(r.status.code(), Some(3), "{}", stderr(&r));
+    assert!(r.stdout.is_empty());
+    assert!(stderr(&r).contains("word/media/image2.bin (header2.xml)"), "{}", stderr(&r));
+    assert!(!out.exists());
+
+    let bad = d.join("bad.docx");
+    std::fs::write(&bad, b"this is plainly not a zip archive").unwrap();
+    let (plain, strict) = (render(&bad, &out, &[]), render(&bad, &out, &["--strict"]));
+    assert_eq!((plain.status.code(), strict.status.code()), (Some(1), Some(1)));
+    assert_eq!(stderr(&plain), stderr(&strict));
+    std::fs::remove_dir_all(d).unwrap();
+}

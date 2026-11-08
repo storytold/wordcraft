@@ -30,7 +30,10 @@ USAGE:
   wordcraft-cli info <file>                   pages, words, paragraphs, properties (JSON)
   wordcraft-cli text <file>                   plain text
   wordcraft-cli inspect <file>                document structure (JSON)
-  wordcraft-cli render <file> <out.png> [--page N] [--scale S]
+  wordcraft-cli render <file> <out.png> [--page N] [--scale S] [--strict]
+                                              --strict writes nothing and exits 3 if a character on the
+                                              page can't be drawn or a picture is missing or undecodable
+                                              (report on stderr, as for convert --strict)
   wordcraft-cli run [--file F | --template T] [--script FILE|-] --cmd 'id={json}' [--cmd …]
                     [--save OUT] [--print] [--author NAME]
                                               run commands headlessly, then save (--author names
@@ -318,6 +321,7 @@ const CONVERT_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--password-file", takes_value: true },
 ];
 const RENDER_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--strict", takes_value: false },
     OptionSpec { name: "--page", takes_value: true },
     OptionSpec { name: "--scale", takes_value: true },
     OptionSpec { name: "--password", takes_value: true },
@@ -410,15 +414,19 @@ fn valid_connect_addr(addr: &str) -> bool {
     !host.is_empty() && port.parse::<u16>().is_ok()
 }
 
-/// What `convert --strict` prints when it refuses: each line of the report as `wordcraft-cli: …`,
-/// then the report's JSON on one line.
-fn strict_report_text(s: &mut Session, markup: bool, png: bool) -> String {
-    let mut params = json!({"markup": markup});
-    if png {
-        params["page"] = json!(1);
+/// A failed `--strict` export: a strict refusal becomes [`Failure::Strict`] carrying what stderr
+/// shows (each line of the report as `wordcraft-cli: …`, then its JSON on one line, from
+/// `file.strictReport` for `page` of a page image, else the PDF); any other error is an ordinary
+/// failure.
+fn refusal(s: &mut Session, e: wordcraft_engine::CmdError, markup: bool, page: Option<u64>) -> Failure {
+    if !matches!(&e, wordcraft_engine::CmdError::Failed(m) if m.starts_with("strict: ")) {
+        return e.to_string().into();
     }
-    let report = s.run("file.strictReport", &params).map_err(|e| e.to_string());
-    match report {
+    let mut params = json!({"markup": markup});
+    if let Some(page) = page {
+        params["page"] = json!(page);
+    }
+    Failure::Strict(match s.run("file.strictReport", &params).map_err(|e| e.to_string()) {
         Ok(json) => {
             let mut text = String::new();
             for line in report_lines(&json) {
@@ -427,7 +435,7 @@ fn strict_report_text(s: &mut Session, markup: bool, png: bool) -> String {
             text + &json.to_string()
         }
         Err(e) => format!("wordcraft-cli: strict: refused, and the report could not be made: {e}"),
-    }
+    })
 }
 
 /// The report's human lines, from its JSON (the engine's `StrictReport::lines`).
@@ -469,8 +477,7 @@ fn run_convert(rest: &[String], open: impl Fn(&str, Option<&str>) -> Result<Sess
         s.run("file.save", &params)
     };
     if let Err(e) = r {
-        let refused = strict && matches!(&e, wordcraft_engine::CmdError::Failed(m) if m.starts_with("strict: "));
-        return Err(if refused { Failure::Strict(strict_report_text(&mut s, markup, to_png)) } else { e.to_string().into() });
+        return Err(if strict { refusal(&mut s, e, markup, to_png.then_some(1)) } else { e.to_string().into() });
     }
     eprintln!("wrote {o}");
     Ok(())
@@ -548,7 +555,17 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let page = parse_page_arg("render", &rest)?.unwrap_or(1);
             let scale = parse_scale_arg("render", &rest)?.unwrap_or(2.0);
             let mut s = open(&i, password.as_deref())?;
-            let r = s.run("file.exportPng", &json!({"path": o, "page": page, "scale": scale})).map_err(|e| e.to_string())?;
+            let strict = rest.iter().any(|a| a == "--strict");
+            let mut params = json!({"path": o, "page": page, "scale": scale, "strict": strict});
+            if strict {
+                // The check and its report must see the page as it is written.
+                params["markup"] = json!(false);
+            }
+            let r = match s.run("file.exportPng", &params) {
+                Ok(r) => r,
+                Err(e) if strict => return Err(refusal(&mut s, e, false, Some(page))),
+                Err(e) => return Err(e.to_string().into()),
+            };
             write_stdout(|o| writeln!(o, "{r}"))
         }
         "run" => {

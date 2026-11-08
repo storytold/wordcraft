@@ -165,8 +165,8 @@ wordcraft-cli run --template sample \
 wordcraft-cli run --script job.json                 # the same from a file: commands, then save to docx and pdf
 ```
 
-`convert --strict` (a `.pdf` or `.png` output only) refuses a silently incomplete render: it exits 3
-and writes nothing if the output would draw a character no font has (an empty box) or leave out a
+`convert --strict` (a `.pdf` or `.png` output only) and `render --strict` (a PNG of one page) refuse a silently incomplete render: they exit 3
+and write nothing if the output would draw a character no font has (an empty box) or leave out a
 picture. Exit codes are 0 (written), 1 (unreadable input, usage error, or `--strict` with another
 output type, checked before the input is read) and 3 (strict refusal). On exit 3, stderr has one
 `wordcraft-cli: strict: …` line per kind, then one JSON line:
@@ -183,8 +183,9 @@ and `truncated` says so. Only characters the output draws count (not hidden text
 without `--markup`), and a character a fallback font draws is fine. A Private Use Area character
 fails only if no installed font maps it. The result depends on the fonts installed on the host
 (see #5624 for a fixed font set). An external picture target is never fetched: it is reported, not
-loaded. Pictures dropped when a DOCX is opened (a missing part, an external target, or a `link only` picture with no embedded copy) are reported for DOCX input only. They have no page, so a PNG of page 1 is also refused for a missing or external picture anywhere in the document, unused headers included. `--strict` is for
-`convert`; the engine takes `strict: true` on `file.save`, `file.exportPdf` and `file.exportPng`,
+loaded. Pictures dropped when a DOCX is opened (a missing part, an external target, or a `link only` picture with no embedded copy) are reported for DOCX input only. They have no page, so a PNG of any page is also refused for a missing or external picture anywhere in the document, unused headers included. `render --strict` checks only the page it
+writes (`--page`; `--scale` doesn't matter), prints nothing on stdout when it refuses, and reports the
+same way. The engine takes `strict: true` on `file.save`, `file.exportPdf` and `file.exportPng`,
 and `file.strictReport` returns the report without writing.
 
 Web: `cd apps/wordcraft-web && trunk serve`, then open <http://127.0.0.1:8771/?sample>.
