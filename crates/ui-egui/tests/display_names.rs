@@ -147,7 +147,9 @@ fn production_display_names_stay_neutral() {
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut failures = Vec::new();
     for root in ROOTS {
-        check_tree(&base.join(root), &mut failures);
+        let path = base.join(root);
+        assert!(path.exists(), "guard source root must exist: {}", path.display());
+        check_tree(&path, &mut failures);
     }
     assert!(failures.is_empty(), "Banned display names:\n{}", failures.join("\n"));
 }
