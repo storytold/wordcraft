@@ -4,6 +4,7 @@
 //! the number and the number's font.
 
 use serde_json::{Value, json};
+use std::sync::Arc;
 use wordcraft_doc::StoryRef;
 use wordcraft_doc::numbering::{Level, LevelSuffix, ListKind, levels_for};
 use wordcraft_doc::props::{Align, NumRef, Rgb, TextColor};
@@ -183,26 +184,26 @@ fn define(s: &mut Session, v: &Value) -> CmdResult {
         Some(n) => {
             // Change the list in place: every list sharing its definition follows.
             let aid = s.doc.numbering.num(n).map(|x| x.abstract_id).ok_or_else(|| CmdError::Params("no such list".into()))?;
-            if let Some(a) = s.doc.numbering.abstracts.iter_mut().find(|a| a.id == aid) {
+            if let Some(a) = Arc::make_mut(&mut s.doc.numbering).abstracts.iter_mut().find(|a| a.id == aid) {
                 a.levels = levels.clone();
                 if name.is_some() {
                     a.name = name;
                 }
             }
-            if let Some(x) = s.doc.numbering.nums.iter_mut().find(|x| x.id == n) {
+            if let Some(x) = Arc::make_mut(&mut s.doc.numbering).nums.iter_mut().find(|x| x.id == n) {
                 x.level_overrides.clear();
             }
             let sharing: Vec<u32> = s.doc.numbering.nums.iter().filter(|x| x.abstract_id == aid).map(|x| x.id).collect();
             touch_lists(s, &sharing)?;
             n
         }
-        None => s.doc.numbering.try_add_levels(name, levels.clone())?,
+        None => Arc::make_mut(&mut s.doc.numbering).try_add_levels(name, levels.clone())?,
     };
     // Levels linked to a paragraph style number every paragraph in that style.
     let mut linked = Vec::new();
     for (i, l) in levels.iter().enumerate() {
         let Some(id) = l.style.as_deref().map(|st| s.doc.styles.find(st).map(|x| x.id.clone()).unwrap_or_else(|| st.to_string())) else { continue };
-        if let Some(st) = s.doc.styles.get_mut(&id) {
+        if let Some(st) = Arc::make_mut(&mut s.doc.styles).get_mut(&id) {
             st.para.numbering = Some(NumRef { num, level: i as u8 });
             linked.push(id);
         }
@@ -292,11 +293,11 @@ fn preset_levels(preset: &str) -> Option<Vec<Level>> {
 fn preset(s: &mut Session, v: &Value) -> CmdResult {
     let id = p::req_str(v, "preset")?;
     let levels = preset_levels(id).ok_or_else(|| CmdError::Params("`preset` must be headings, article, outlineHeadings or chapter".into()))?;
-    let num = s.doc.numbering.try_add_levels(None, levels)?;
+    let num = Arc::make_mut(&mut s.doc.numbering).try_add_levels(None, levels)?;
     let mut linked = Vec::new();
     for n in 1..=LEVELS as u8 {
         let id = super::para::ensure_heading_style(s, n);
-        if let Some(st) = s.doc.styles.get_mut(&id) {
+        if let Some(st) = Arc::make_mut(&mut s.doc.styles).get_mut(&id) {
             st.para.numbering = Some(NumRef { num, level: n - 1 });
             linked.push(id);
         }
@@ -449,6 +450,36 @@ mod tests {
         assert_eq!(back.styles.get("Heading2").and_then(|st| st.para.numbering).map(|x| x.level), Some(1), "numPr on the style");
         let mut b = Session::new(back);
         assert_eq!(numbered(&mut b), want);
+    }
+
+    /// #5757: a list numbered in Thai digits shows them on the page, with the level's text around
+    /// them (`๑.`, `(๒)`), and keeps its format through a save to .docx and back.
+    #[test]
+    fn a_thai_numbered_list_shows_thai_digits_and_survives_docx() {
+        let mut s = Session::new(Document::new());
+        for (i, t) in ["หนึ่ง", "สอง", "สาม", "a", "b", "c", "d", "e", "f", "g", "h"].iter().enumerate() {
+            if i > 0 {
+                s.run("text.newParagraph", &json!({})).unwrap();
+            }
+            s.run("text.insert", &json!({"text": t})).unwrap();
+        }
+        s.run("select.all", &json!({})).unwrap();
+        let levels = json!([{"format": "thaiNumbers", "text": "%1.", "start": 1}]);
+        s.run("list.define", &json!({"levels": levels})).unwrap();
+        let page: Vec<Option<String>> = numbered(&mut s).into_iter().map(|x| x.0).collect();
+        let want: Vec<Option<String>> =
+            ["๑.", "๒.", "๓.", "๔.", "๕.", "๖.", "๗.", "๘.", "๙.", "๑๐.", "๑๑."].iter().map(|l| Some(l.to_string())).collect();
+        assert_eq!(page, want);
+        let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+        let mut b = Session::new(back);
+        let again: Vec<Option<String>> = numbered(&mut b).into_iter().map(|x| x.0).collect();
+        assert_eq!(again, want, "thaiNumbers survives .docx");
+        // In parentheses too.
+        let mut s = Session::new(Document::new());
+        s.run("text.insert", &json!({"text": "x"})).unwrap();
+        s.run("select.all", &json!({})).unwrap();
+        s.run("list.define", &json!({"levels": [{"format": "thaiNumbers", "text": "(%1)", "start": 2}]})).unwrap();
+        assert_eq!(numbered(&mut s)[0].0.as_deref(), Some("(๒)"));
     }
 
     /// #1793: the other heading presets of Word's List Library, level by level.
