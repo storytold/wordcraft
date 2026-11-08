@@ -91,7 +91,7 @@ pub fn note_options(app: &mut WordApp, ui: &mut Ui, f: &mut NoteForm) -> bool {
     };
     heading(ui, "Location");
     let mut convert = None;
-    egui::Grid::new("notes_location").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("notes_location").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
         let label = ui.radio_value(&mut f.endnote, false, tl!("Footnotes"));
         ui.add_enabled_ui(!f.endnote, |ui| {
             choice(ui, "notes_fpos", &mut f.pos[0], &[("pageBottom", "Bottom of Page"), ("beneathText", "Below text")], true, label.id);
@@ -104,12 +104,15 @@ pub fn note_options(app: &mut WordApp, ui: &mut Ui, f: &mut NoteForm) -> bool {
         ui.end_row();
         ui.label("");
         ui.menu_button(format!("{}…", tl!("Convert")), |ui| {
-            for (to, l) in [("endnote", "Footnotes to endnotes"), ("footnote", "Endnotes to footnotes"), ("swap", "Swap footnotes and endnotes")] {
-                if ui.button(tl!(l)).clicked() {
-                    convert = Some(to);
-                    ui.close();
+            crate::rtl::root(ui, |ui| {
+                for (to, l) in [("endnote", "Footnotes to endnotes"), ("footnote", "Endnotes to footnotes"), ("swap", "Swap footnotes and endnotes")]
+                {
+                    if ui.button(tl!(l)).clicked() {
+                        convert = Some(to);
+                        ui.close();
+                    }
                 }
-            }
+            })
         });
         ui.end_row();
     });
@@ -120,39 +123,54 @@ pub fn note_options(app: &mut WordApp, ui: &mut Ui, f: &mut NoteForm) -> bool {
     }
     heading(ui, "Format");
     let k = usize::from(f.endnote);
-    egui::Grid::new("notes_format").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        let label = ui.label(tl!("Number format"));
-        if let Some(v) = f.fmt.get_mut(k) {
-            choice(ui, "notes_fmt", v, &FORMATS, false, label.id);
-        }
-        ui.end_row();
-        let label = ui.label(tl!("Custom mark:"));
-        ui.add(egui::TextEdit::singleline(&mut f.mark).desired_width(60.0).char_limit(10)).labelled_by(label.id);
-        ui.end_row();
-        let label = ui.label(tl!("Start at:"));
-        if let Some(v) = f.start.get_mut(k) {
-            ui.add(egui::DragValue::new(v).range(1..=32_767).speed(0.2)).labelled_by(label.id);
-        }
-        ui.end_row();
-        let label = ui.label(tl!("Numbering"));
-        if let Some(v) = f.restart.get_mut(k) {
-            let each_page: &[(&str, &str)] = if f.endnote { &[] } else { &[("eachPage", "Restart Each Page")] };
-            let options: Vec<(&str, &str)> =
-                [("continuous", "Continuous numbering"), ("eachSect", "Restart Each Section")].into_iter().chain(each_page.iter().copied()).collect();
-            choice(ui, "notes_restart", v, &options, true, label.id);
-        }
-        ui.end_row();
-        let label = ui.label(tl!("Apply to:"));
-        let mut scope = if f.whole { "document" } else { "section" }.to_string();
-        choice(ui, "notes_scope", &mut scope, &[("document", "Whole document"), ("section", "This section")], true, label.id);
-        f.whole = scope == "document";
-        ui.end_row();
+    crate::rtl::Table::new("notes_format").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
+        t.row(|r| {
+            let label = r.cell(|ui| ui.label(tl!("Number format")));
+            r.cell(|ui| {
+                if let Some(v) = f.fmt.get_mut(k) {
+                    choice(ui, "notes_fmt", v, &FORMATS, false, label.id);
+                }
+            });
+        });
+        t.row(|r| {
+            let label = r.cell(|ui| ui.label(tl!("Custom mark:")));
+            r.cell(|ui| ui.add(egui::TextEdit::singleline(&mut f.mark).desired_width(60.0).char_limit(10)).labelled_by(label.id));
+        });
+        t.row(|r| {
+            let label = r.cell(|ui| ui.label(tl!("Start at:")));
+            r.cell(|ui| {
+                if let Some(v) = f.start.get_mut(k) {
+                    ui.add(egui::DragValue::new(v).range(1..=32_767).speed(0.2)).labelled_by(label.id);
+                }
+            });
+        });
+        t.row(|r| {
+            let label = r.cell(|ui| ui.label(tl!("Numbering")));
+            r.cell(|ui| {
+                if let Some(v) = f.restart.get_mut(k) {
+                    let each_page: &[(&str, &str)] = if f.endnote { &[] } else { &[("eachPage", "Restart Each Page")] };
+                    let options: Vec<(&str, &str)> = [("continuous", "Continuous numbering"), ("eachSect", "Restart Each Section")]
+                        .into_iter()
+                        .chain(each_page.iter().copied())
+                        .collect();
+                    choice(ui, "notes_restart", v, &options, true, label.id);
+                }
+            });
+        });
+        t.row(|r| {
+            let label = r.cell(|ui| ui.label(tl!("Apply to:")));
+            r.cell(|ui| {
+                let mut scope = if f.whole { "document" } else { "section" }.to_string();
+                choice(ui, "notes_scope", &mut scope, &[("document", "Whole document"), ("section", "This section")], true, label.id);
+                f.whole = scope == "document";
+            });
+        });
     });
     // Insert / Apply / Cancel.
     let (mut insert, mut apply, mut cancel) = (false, false, false);
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             let label = if f.endnote { "Insert Endnote" } else { "Insert Footnote" };
             let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
             if cfg!(target_os = "macos") {

@@ -62,20 +62,29 @@ pub(super) fn drop_cap_ui(app: &mut WordApp, ui: &mut Ui, f: &mut DropCapForm) -
     let preview = app.previews.font_preview_fn();
     let unit = crate::options::unit();
     ui.add_enabled_ui(f.position != "none", |ui| {
-        egui::Grid::new("dropcap").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-            ui.label(tl!("Font:"));
-            if let Some(v) = crate::widgets::font_combo(ui, "dropcap_font", 190.0, &f.font, &fams, Some(&*preview))
-                && v != crate::widgets::ADD_FONT
-            {
-                f.font = v;
-            }
-            ui.end_row();
-            ui.label(tl!("Lines to drop:"));
-            ui.add(egui::DragValue::new(&mut f.lines).range(1..=10));
-            ui.end_row();
-            ui.label(tl!("Distance from text:"));
-            ui.add(egui::DragValue::new(&mut f.distance).speed(0.01).range(0.0..=22.0 * 72.0 / unit.pt_per_unit()).measure(unit).max_decimals(2));
-            ui.end_row();
+        crate::rtl::Table::new("dropcap").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
+            t.row(|r| {
+                r.cell(|ui| ui.label(tl!("Font:")));
+                r.cell(|ui| {
+                    if let Some(v) = crate::widgets::font_combo(ui, "dropcap_font", 190.0, &f.font, &fams, Some(&*preview))
+                        && v != crate::widgets::ADD_FONT
+                    {
+                        f.font = v;
+                    }
+                });
+            });
+            t.row(|r| {
+                r.cell(|ui| ui.label(tl!("Lines to drop:")));
+                r.cell(|ui| ui.add(egui::DragValue::new(&mut f.lines).range(1..=10)));
+            });
+            t.row(|r| {
+                r.cell(|ui| ui.label(tl!("Distance from text:")));
+                r.cell(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut f.distance).speed(0.01).range(0.0..=22.0 * 72.0 / unit.pt_per_unit()).measure(unit).max_decimals(2),
+                    )
+                });
+            });
         });
     });
     let (ok, cancel) = buttons(ui, "OK", "Cancel", true);
@@ -287,6 +296,9 @@ impl ColumnsForm {
 
 /// A preset tile: a small page with its columns.
 fn preset_tile(ui: &mut Ui, label: &str, widths: &[f32], on: bool, t: &Tokens) -> bool {
+    if crate::rtl::on() {
+        return preset_tile_mirrored(ui, label, widths, on, t);
+    }
     let resp = ui
         .vertical(|ui| {
             let (r, resp) = ui.allocate_exact_size(vec2(44.0, 52.0), Sense::click());
@@ -318,6 +330,42 @@ fn preset_tile(ui: &mut Ui, label: &str, widths: &[f32], on: bool, t: &Tokens) -
             resp
         })
         .inner;
+    resp.clicked()
+}
+
+/// A preset tile in a mirrored interface: a caption longer than the 44 pt tile (it is longer in
+/// Arabic) widens the tile's column and is centred under it, so it never runs into the next tile.
+fn preset_tile_mirrored(ui: &mut Ui, label: &str, widths: &[f32], on: bool, t: &Tokens) -> bool {
+    let galley = ui.painter().layout_no_wrap(tl!(label).to_string(), egui::TextStyle::Small.resolve(ui.style()), t.text);
+    let column = galley.size().x.max(44.0);
+    let (cell, resp) = ui.allocate_exact_size(vec2(column, 52.0 + 2.0 + galley.size().y), Sense::click());
+    let r = Rect::from_min_size(pos2(cell.center().x - 22.0, cell.min.y), vec2(44.0, 52.0));
+    let fill = if on {
+        t.checked
+    } else if resp.hovered() {
+        t.hover
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect(r, 3.0, fill, Stroke::new(1.0, if on { t.accent } else { t.border }), egui::StrokeKind::Inside);
+    let page = Rect::from_min_size(r.min + vec2(9.0, 7.0), vec2(26.0, 38.0));
+    ui.painter().rect(page, 0.0, t.input, Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
+    let inner = page.shrink(4.0);
+    let gap = 3.5;
+    let total: f32 = widths.iter().sum::<f32>().max(1.0);
+    let avail = inner.width() - gap * (widths.len() as f32 - 1.0);
+    let mut x = inner.min.x;
+    for w in widths {
+        let cw = avail * w / total;
+        let mut y = inner.min.y;
+        while y + 1.5 <= inner.max.y {
+            ui.painter().line_segment([pos2(x, y), pos2(x + cw, y)], Stroke::new(1.0, t.text_dim));
+            y += 3.0;
+        }
+        x += cw + gap;
+    }
+    let at = pos2(cell.center().x - galley.size().x / 2.0, r.max.y + 2.0);
+    ui.painter().galley(at, galley, t.text);
     resp.clicked()
 }
 
@@ -380,35 +428,42 @@ pub(super) fn columns_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ColumnsForm) ->
     });
     ui.add_space(6.0);
     ui.label(egui::RichText::new(tl!("Width and spacing")).font(semibold(12.5)));
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
+    crate::rtl::horizontal_top(ui, |ui| {
+        crate::rtl::vertical(ui, |ui| {
             let mut changed = None;
             egui::ScrollArea::vertical().id_salt("columns_widths").max_height(130.0).show(ui, |ui| {
-                egui::Grid::new("columns_grid").num_columns(3).spacing(vec2(12.0, 4.0)).show(ui, |ui| {
-                    ui.label(tl!("Col #:"));
-                    ui.label(tl!("Width:"));
-                    ui.label(tl!("Spacing:"));
-                    ui.end_row();
+                crate::rtl::Table::new("columns_grid").columns(3).spacing(vec2(12.0, 4.0)).show(ui, |t| {
+                    t.row(|r| {
+                        r.cell(|ui| ui.label(tl!("Col #:")));
+                        r.cell(|ui| ui.label(tl!("Width:")));
+                        r.cell(|ui| ui.label(tl!("Spacing:")));
+                    });
                     let n = f.cols.len();
                     let max = f.text_width.max(0.1);
                     for i in 0..n {
                         let editable = i == 0 || !f.equal;
-                        ui.label(format!("{}:", i + 1));
-                        if let Some(c) = f.cols.get_mut(i) {
-                            let w = egui::DragValue::new(&mut c.0).speed(0.01).range(ColumnsForm::min_w()..=max).measure(unit).max_decimals(2);
-                            if ui.add_enabled(editable, w).changed() {
-                                changed = Some(i);
+                        t.row(|r| {
+                            r.cell(|ui| ui.label(format!("{}:", i + 1)));
+                            if let Some(c) = f.cols.get_mut(i) {
+                                r.cell(|ui| {
+                                    let w =
+                                        egui::DragValue::new(&mut c.0).speed(0.01).range(ColumnsForm::min_w()..=max).measure(unit).max_decimals(2);
+                                    if ui.add_enabled(editable, w).changed() {
+                                        changed = Some(i);
+                                    }
+                                });
+                                r.cell(|ui| {
+                                    if i + 1 < n {
+                                        let s = egui::DragValue::new(&mut c.1).speed(0.01).range(0.0..=max).measure(unit).max_decimals(2);
+                                        if ui.add_enabled(editable, s).changed() {
+                                            changed = Some(i);
+                                        }
+                                    } else {
+                                        ui.label("");
+                                    }
+                                });
                             }
-                            if i + 1 < n {
-                                let s = egui::DragValue::new(&mut c.1).speed(0.01).range(0.0..=max).measure(unit).max_decimals(2);
-                                if ui.add_enabled(editable, s).changed() {
-                                    changed = Some(i);
-                                }
-                            } else {
-                                ui.label("");
-                            }
-                        }
-                        ui.end_row();
+                        });
                     }
                 });
             });
@@ -416,7 +471,7 @@ pub(super) fn columns_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ColumnsForm) ->
                 f.rebalance(i);
             }
             let mut equal = f.equal;
-            if ui.add_enabled(f.count > 1, egui::Checkbox::new(&mut equal, tl!("Equal column width"))).changed() {
+            if ui.add_enabled_ui(f.count > 1, |ui| ui.checkbox(&mut equal, tl!("Equal column width"))).inner.changed() {
                 f.equal = equal;
                 if equal {
                     f.even_out();
@@ -424,7 +479,8 @@ pub(super) fn columns_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ColumnsForm) ->
             }
         });
         ui.add_space(8.0);
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
+            ui.set_min_width(96.0);
             ui.label(tl!("Preview"));
             columns_preview(ui, f, &t);
         });
