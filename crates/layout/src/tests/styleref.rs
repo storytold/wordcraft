@@ -88,13 +88,56 @@ fn character_styles_and_paragraph_numbers() {
     // Bold a word on page 2 with the Strong character style.
     d.format_range(&Pos::body(3, 8), &Pos::body(3, 11), &|c: &mut CharProps| c.style = Some("Strong".into())).unwrap();
     // Number the headings 1., 2., 3. and the section under them 3.1 (full context).
-    let num = d.numbering.add_list(ListKind::Numbered);
+    let num = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
     for (i, lvl) in [(0, 0u8), (2, 0), (5, 0), (6, 1)] {
         d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.numbering = Some(NumRef { num, level: lvl });
     }
     let h = headers(&d);
     assert_eq!(h[1], ["two", "2", "3.a", "2"]);
     assert_eq!(h[3], ["two", "3", "3.a", "3"]);
+}
+
+/// #4985: a heading on a "none" list level (its label is its text, `Note`) shows its parent's
+/// number in full context (`\w`): the parent is not taken for the heading's own level, which
+/// has no number to list.
+#[test]
+fn full_context_keeps_the_parent_of_a_none_level_heading() {
+    let mut d = doc(CHAPTERS, &[r#"STYLEREF "Heading 2" \w"#, r#"STYLEREF "Heading 2" \r"#]);
+    let num = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
+    if let Some(n) = Arc::make_mut(&mut d.numbering).nums.iter_mut().find(|n| n.id == num) {
+        let note = wordcraft_doc::numbering::Level { format: wordcraft_doc::section::NumFormat::None, text: "Note".into(), ..Default::default() };
+        n.level_overrides = vec![(1, note)];
+    }
+    for (i, lvl) in [(0, 0u8), (2, 0), (5, 0), (6, 1)] {
+        d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.numbering = Some(NumRef { num, level: lvl });
+    }
+    assert_eq!(headers(&d)[3], ["3.Note", "3.Note"]);
+}
+
+/// #4985 review: `\t` leaves a "none" level's label, which holds no number, with nothing, and an
+/// empty label of its own adds no part in full context: `3`, not `3.`.
+#[test]
+fn a_none_level_heading_s_number_has_no_text_and_no_trailing_period() {
+    let numbered = |text: &str, codes: &[&str]| {
+        let mut d = doc(CHAPTERS, codes);
+        let num = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
+        if let Some(n) = Arc::make_mut(&mut d.numbering).nums.iter_mut().find(|n| n.id == num) {
+            let level = wordcraft_doc::numbering::Level { format: wordcraft_doc::section::NumFormat::None, text: text.into(), ..Default::default() };
+            n.level_overrides = vec![(1, level)];
+        }
+        for (i, lvl) in [(0, 0u8), (2, 0), (5, 0), (6, 1)] {
+            d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.numbering = Some(NumRef { num, level: lvl });
+        }
+        headers(&d)[3].clone()
+    };
+    assert!(numbered("Note", &[r#"STYLEREF "Heading 2" \n \t"#]).is_empty(), "nothing is drawn");
+    // `\s` is a chapter number: a "none" label isn't one, so the heading's count stands in; a
+    // label showing its parent's number (`%1`, `%1 Response`) gives that number.
+    assert_eq!(numbered("Note", &[r#"STYLEREF "Heading 2" \s"#]), ["1"]);
+    assert_eq!(numbered("%1", &[r#"STYLEREF "Heading 2" \s"#]), ["3"]);
+    assert_eq!(numbered("%1 Response", &[r#"STYLEREF "Heading 2" \s"#, r#"STYLEREF "Heading 2" \n \t"#]), ["3", "3"]);
+    assert_eq!(numbered("Section%1", &[r#"STYLEREF "Heading 2" \n \t"#]), ["3"]);
+    assert_eq!(numbered("", &[r#"STYLEREF "Heading 2" \w"#, r#"STYLEREF "Heading 2" \r"#]), ["3", "3"]);
 }
 
 /// Editing a heading updates the headers that show it, through the paragraph cache.
@@ -133,7 +176,7 @@ fn style_index_is_reused_until_the_body_or_styles_change() {
     assert!(after[0].iter().any(|t| t.contains("Openings")), "{after:?}");
     // A style change rebuilds it too.
     let second = index(&c);
-    if let Some(st) = d.styles.styles.iter_mut().find(|s| s.id == "Heading1") {
+    if let Some(st) = Arc::make_mut(&mut d.styles).styles.iter_mut().find(|s| s.id == "Heading1") {
         st.name = "Chapter Title".into();
     }
     let _ = pages(&d, &mut c);
@@ -145,7 +188,7 @@ fn style_index_is_reused_until_the_body_or_styles_change() {
 fn heading_level_matches_a_localized_style_id() {
     let paras: Vec<(&str, &str, bool)> = CHAPTERS.iter().map(|(s, t, b)| (if *s == "Heading1" { "berschrift1" } else { *s }, *t, *b)).collect();
     let mut d = doc(&paras, &["STYLEREF 1"]);
-    let st = d.styles.styles.iter_mut().find(|s| s.id == "Heading1").unwrap();
+    let st = Arc::make_mut(&mut d.styles).styles.iter_mut().find(|s| s.id == "Heading1").unwrap();
     st.id = "berschrift1".into();
     st.name = "heading 1".into();
     let h = headers(&d);
