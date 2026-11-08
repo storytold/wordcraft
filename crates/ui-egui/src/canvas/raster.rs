@@ -54,8 +54,9 @@ const ZOOM_SETTLE: f64 = 0.12;
 const SHARPEN: f64 = 1.0;
 /// What a frame may spend rasterising to sharpen pages or fill tiles just out of view (ms).
 const BUDGET_MS: f64 = 4.0;
-/// Tiles one frame renders at once for an edit or a discrete zoom: more than a window's worth.
-const URGENT_TILES: usize = 16;
+/// Scales of tiles left from earlier zooms a page keeps drawing (the nearest to the current one)
+/// until its tiles at the current scale are all in.
+const OLD_SCALES: usize = 2;
 
 /// One page's share of a frame.
 pub(super) struct PageJob<'a> {
@@ -142,13 +143,13 @@ impl Rasterizer {
     }
 
     /// Whether a render that only sharpens (the right content at another scale is on screen)
-    /// goes ahead now: never during a zoom gesture, within the budget just after one, else when
-    /// `cap` allows (a discrete zoom renders at once).
+    /// goes ahead now: never during a zoom gesture; just after one, within the budget and at
+    /// least one a frame; else when `cap` allows (a discrete zoom renders at once).
     fn may_sharpen(&self, cap: bool) -> bool {
         if self.zooming() {
             false
         } else if self.gesture_age < SHARPEN {
-            self.budget_left()
+            self.budget_left() || self.rendered() == 0
         } else {
             cap
         }
@@ -208,10 +209,11 @@ impl Rasterizer {
                 let id = TileId { page: i, scale: bits, row, col };
                 self.keep.insert(id);
                 let have = app.canvas.tiles.get(&id).map(|r| r.content == job.content);
+                // All of the view at once for an edit or a discrete zoom: it is bounded by the window.
                 let render = match have {
                     Some(true) => false,
-                    Some(false) => forced || self.tiles_rendered < URGENT_TILES,
-                    None => forced || self.may_sharpen(self.tiles_rendered < URGENT_TILES),
+                    Some(false) => true,
+                    None => forced || self.may_sharpen(true),
                 };
                 if have == Some(true) {
                     sharp.push(id);
@@ -253,8 +255,8 @@ impl Rasterizer {
         if let Some(r) = app.canvas.textures.get(&i).filter(|r| r.content == job.content) {
             images.push((r.tex.id(), job.rect));
         }
-        // Tiles from before the zoom, stretched, until this scale's tiles are all in. Two zooms in
-        // a row can leave tiles of two scales: the sharper one (the larger scale) is drawn on top.
+        // Tiles from before the zoom, stretched, until this scale's tiles are all in. Zooms in a
+        // row leave tiles of several scales: the nearest few are kept, the sharpest drawn on top.
         if !complete {
             let mut old: Vec<_> = app
                 .canvas
@@ -264,6 +266,12 @@ impl Rasterizer {
                 .map(|(id, r)| (*id, r.scale, r.tex.id(), tile_rect(job.rect.min, *id, tile, job.screen_scale / r.scale, r.tex.size_vec2())))
                 .filter(|(.., at)| at.intersects(job.view))
                 .collect();
+            let mut scales: Vec<f32> = old.iter().map(|o| o.1).collect();
+            scales.sort_by(f32::total_cmp);
+            scales.dedup();
+            scales.sort_by(|a, b| (a / s).ln().abs().total_cmp(&(b / s).ln().abs()));
+            scales.truncate(OLD_SCALES);
+            old.retain(|o| scales.contains(&o.1));
             old.sort_by(|a, b| a.1.total_cmp(&b.1));
             for (id, _, tex, at) in old {
                 self.keep.insert(id);

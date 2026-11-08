@@ -5048,6 +5048,41 @@ fn a_pinch_zoom_renders_nothing_until_it_holds_still() {
     assert_eq!(a.canvas.scale, zoomed);
 }
 
+/// An edit during a pinch zoom is drawn in the next frame, never left stale under the stretch,
+/// and a zoom from the Zoom box just after a pinch renders at once, not within a budget.
+#[test]
+fn edits_and_discrete_zooms_render_at_once_around_a_pinch() {
+    let ctx = egui::Context::default();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+    let mut t = 0.0;
+    let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        t += 1.0 / 120.0;
+        frame_at(&ctx, a, t, events)
+    };
+    for _ in 0..3 {
+        frame(&mut a, Vec::new());
+    }
+    let pointer = a.canvas.canvas_rect.unwrap().center();
+    frame(&mut a, vec![egui::Event::PointerMoved(pointer)]);
+    while frame(&mut a, Vec::new()) {}
+    for _ in 0..5 {
+        frame(&mut a, vec![egui::Event::Zoom(1.03)]);
+    }
+    a.run("text.insert", json!({"text": "x"})).unwrap();
+    frame(&mut a, vec![egui::Event::Zoom(1.03)]);
+    assert!(a.canvas.rendered > 0, "the edit was rendered during the pinch");
+    for n in 0..5 {
+        frame(&mut a, vec![egui::Event::Zoom(1.03)]);
+        assert_eq!(a.canvas.rendered, 0, "frame {n} after the edit had stale pages left");
+    }
+    a.run("view.zoom", json!({"value": 300})).unwrap();
+    frame(&mut a, Vec::new());
+    assert_eq!(a.canvas.zoom_gesture_at, f64::NEG_INFINITY, "the Zoom box ends the pinch's sharpening budget");
+    let scale = a.canvas.scale;
+    let (_, tiles) = a.canvas.raster_sizes();
+    assert!(tiles.iter().any(|(s, _)| (s - scale).abs() < 1e-4), "sharp in the frame of the zoom: {tiles:?}");
+}
+
 /// Zoomed far in, a page is tiles over the part in view: what is rendered (and kept on the GPU)
 /// is bounded by the window, not the zoom. A Letter page at 500% would be 4080×5280 px.
 #[test]

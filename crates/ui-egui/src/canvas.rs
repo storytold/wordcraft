@@ -557,7 +557,8 @@ fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> C
     let opts = ui.ctx().options(|o| o.input_options);
     let zoom_delta = ui.input(|i| app.canvas.wheel.zoom(i, &opts, animate));
     let mut zoom_anchor = None;
-    if (zoom_delta - 1.0).abs() > 1e-3 && ui.rect_contains_pointer(area) {
+    let gesture = (zoom_delta - 1.0).abs() > 1e-3 && ui.rect_contains_pointer(area);
+    if gesture {
         if !read_mode && let Some(p) = ui.input(|i| i.pointer.latest_pos()) {
             zoom_anchor = page_at(&app.canvas.page_layout_rects, layout, app.canvas.scale, p).map(|at| (p, at));
         }
@@ -575,6 +576,10 @@ fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> C
     }
     if (geo.scale - app.canvas.scale).abs() > 1e-6 {
         ui.ctx().request_repaint();
+        // A zoom by command or the Zoom box renders at once, even just after a pinch.
+        if !gesture {
+            app.canvas.zoom_gesture_at = f64::NEG_INFINITY;
+        }
     }
     app.canvas.scale = geo.scale;
     sync_fit_zoom(app, geo.scale);
