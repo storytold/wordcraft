@@ -46,6 +46,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
                 let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
+                let warning = app.font_box_warning(&font);
                 let font = app.previews.font_shown(&font);
                 let fams = app.previews.families();
                 let recent: Vec<String> = app.ui.recent_fonts.iter().map(|f| app.previews.font_shown(f)).collect();
@@ -60,6 +61,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                         recent: &recent,
                         preview: Some(&*prev),
                         tip: tl!("Font"),
+                        shown_as: warning.as_deref(),
                     },
                 ) {
                     let _ = if f == crate::widgets::ADD_FONT {
@@ -167,7 +169,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Paragraph", Some("para.dialog"), app, |ui, app| {
-        let rp = app.session.doc.para_at(&app.session.sel.focus).map(|p| app.session.doc.styles.resolve_para(&p.props));
+        let rp = app.session.doc.para_at(&app.session.sel.focus).map(|_| wordcraft_engine::cmd::para::selection_para(&app.session));
         // The buttons show alignment as seen on the page (Align Right is a right-to-left paragraph's start).
         let align = rp.as_ref().map(|r| r.align.visual(r.bidi)).unwrap_or_default();
         let rtl = rp.as_ref().is_some_and(|r| r.bidi);
