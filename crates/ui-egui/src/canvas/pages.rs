@@ -8,7 +8,7 @@ pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u
     let mut h = std::collections::hash_map::DefaultHasher::new();
     let v = &app.session.view;
     (v.marks, app.session.prefs.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink, v.draw.replay).hash(&mut h);
-    (v.read_mode, v.read_page_color).hash(&mut h);
+    (v.read_mode, v.read_page_color, app.session.prefs.paper_color).hash(&mut h);
     app.session.prefs.markup.hash(&mut h);
     dim_body.hash(&mut h);
     format!("{:?}{:?}{:?}", app.session.doc.settings.page_color, app.session.doc.settings.page_picture, app.session.doc.settings.watermark)
@@ -252,19 +252,34 @@ pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_re
     opts.display.revisions = app.session.prefs.markup.clone();
     opts.dark = dark_page(app);
     opts.dark_paper = wordcraft_render::DARK_PAPER;
-    // In Read Mode the Page color sets the paper.
+    // A screen tint (View › Paper color) paints the page, unless the page is drawn dark.
+    if !opts.dark {
+        opts.paper = app.session.prefs.paper_color.color();
+    }
+    // In Read Mode the Page color sets the paper: Sepia and Inverse as before, None the
+    // selected screen tint (white without one).
     if app.session.view.read_mode {
         use wordcraft_engine::cmd::view::ReadPageColor;
-        let color = app.session.view.read_page_color;
-        opts.read_paper = Some(if color == ReadPageColor::Sepia { wordcraft_render::SEPIA_PAPER } else { wordcraft_doc::props::Rgb::WHITE });
+        opts.read_paper = Some(match app.session.view.read_page_color {
+            ReadPageColor::None => app.session.prefs.paper_color.color(),
+            ReadPageColor::Sepia => wordcraft_render::SEPIA_PAPER,
+            ReadPageColor::Inverse => wordcraft_doc::props::Rgb::WHITE,
+        });
     }
     opts.display.dim_header = !dim_body;
     opts.display.dim_body = dim_body;
     opts
 }
 
-/// Render options for page rasters shown on screen: on macOS, text is darkened the way the system
-/// draws it, so a page looks as it does in other Mac apps (exports never are).
+/// Render options for page rasters shown on screen, so a page looks as text does in the
+/// platform's other apps (exports never change): on macOS, text is darkened the way the system
+/// draws it; on Linux and the BSDs it is hinted lightly, as FreeType's `hintslight` draws it
+/// there (not darkened: hinted text already has FreeType's weight, and darkening made it
+/// look semi-bold).
 pub(crate) fn screen_render_options() -> wordcraft_render::RenderOptions {
-    wordcraft_render::RenderOptions { text_darkening: cfg!(target_os = "macos"), ..Default::default() }
+    wordcraft_render::RenderOptions {
+        text_darkening: cfg!(target_os = "macos"),
+        hinting: cfg!(all(unix, not(target_os = "macos"))),
+        ..Default::default()
+    }
 }

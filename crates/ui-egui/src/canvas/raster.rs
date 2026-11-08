@@ -16,11 +16,12 @@ use wordcraft_layout::Page;
 use super::WordApp;
 use super::pages::{page_doc, page_image, page_render_options, texel_aligned_rect, visible_tiles};
 
-/// A page's raster on the GPU, or one tile of it: the content key it shows and its scale in
-/// device pixels per page point.
+/// A page's raster on the GPU, or one tile of it: the content key it shows, its scale in device
+/// pixels per page point, and whether its text is hinted.
 pub(super) struct Raster {
     content: u64,
     scale: f32,
+    hinted: bool,
     tex: TextureHandle,
 }
 
@@ -95,6 +96,8 @@ pub(super) struct Rasterizer {
     /// Seconds since the last wheel or pinch zoom step.
     gesture_age: f64,
     dim_body: bool,
+    /// Whether this frame renders text hinted (not while a pointer zoom moves, `hint_pages`).
+    hinted: bool,
     ppp: f32,
     /// The GPU's largest texture side, in pixels.
     max_tex: f32,
@@ -110,12 +113,13 @@ pub(super) struct Rasterizer {
 
 impl Rasterizer {
     /// `now` and `zoom_gesture_at` are egui input times (seconds).
-    pub(super) fn new(now: f64, zoom_gesture_at: f64, dim_body: bool, ppp: f32, max_tex: f32) -> Self {
+    pub(super) fn new(now: f64, zoom_gesture_at: f64, dim_body: bool, hinted: bool, ppp: f32, max_tex: f32) -> Self {
         let gesture_age = now - zoom_gesture_at;
         Rasterizer {
             t0: crate::now_ms(),
             gesture_age: if gesture_age.is_nan() { f64::INFINITY } else { gesture_age },
             dim_body,
+            hinted,
             ppp,
             max_tex,
             tile: TILE_PX.min(max_tex as usize).max(1),
@@ -130,6 +134,12 @@ impl Rasterizer {
     /// Renders done this frame.
     pub(super) fn rendered(&self) -> usize {
         self.rendered + self.tiles_rendered
+    }
+
+    /// Whether `r` is at scale `s` and hinted as this frame wants: an unhinted raster from a
+    /// zoom frame doesn't pass for a hinted one.
+    fn fits(&self, r: &Raster, s: f32) -> bool {
+        r.scale == s && (r.hinted || !self.hinted)
     }
 
     /// A wheel or pinch zoom is under way: rasters are stretched, not rendered again.
@@ -171,22 +181,22 @@ impl Rasterizer {
     fn whole(&mut self, app: &mut WordApp, ctx: &egui::Context, job: &PageJob<'_>, s: f32) -> PageDraw {
         let i = job.index;
         let forced = job.hide.is_some();
-        let render = match app.canvas.textures.get(&i).map(|r| (r.content == job.content, r.scale == s)) {
+        let render = match app.canvas.textures.get(&i).map(|r| (r.content == job.content, self.fits(r, s))) {
             Some((true, true)) => false,
             Some((true, false)) => forced || self.may_sharpen(self.rendered < 2),
             Some((false, _)) => forced || self.rendered < 2,
             None => forced || self.rendered < 4,
         };
         if render {
-            let img = rasterize(app, job.page, None, s, self.dim_body, job.hide.as_ref());
-            upload(ctx, &mut app.canvas.textures, i, || format!("page{i}"), img, job.content, s);
+            let img = rasterize(app, job.page, None, s, self.dim_body, self.hinted, job.hide.as_ref());
+            upload(ctx, &mut app.canvas.textures, i, || format!("page{i}"), img, (job.content, s, self.hinted));
             self.rendered += 1;
         }
         let Some(r) = app.canvas.textures.get(&i) else {
             self.deferred = true;
             return PageDraw { rect: job.rect, images: Vec::new() };
         };
-        self.deferred |= r.content != job.content || r.scale != s;
+        self.deferred |= r.content != job.content || !self.fits(r, s);
         // On the pixel grid at this scale's raster size even while stretched, so the page doesn't
         // shift when it sharpens.
         let size = vec2(raster_px(job.page.w, s) as f32, raster_px(job.page.h, s) as f32);
@@ -208,20 +218,22 @@ impl Rasterizer {
             for col in cols.clone() {
                 let id = TileId { page: i, scale: bits, row, col };
                 self.keep.insert(id);
-                let have = app.canvas.tiles.get(&id).map(|r| r.content == job.content);
+                let have = app.canvas.tiles.get(&id).map(|r| (r.content == job.content, self.fits(r, s)));
                 // All of the view at once for an edit or a discrete zoom: it is bounded by the window.
                 let render = match have {
-                    Some(true) => false,
-                    Some(false) => true,
-                    None => forced || self.may_sharpen(true),
+                    Some((true, true)) => false,
+                    Some((false, _)) => true,
+                    Some((true, false)) | None => forced || self.may_sharpen(true),
                 };
-                if have == Some(true) {
-                    sharp.push(id);
-                } else if render {
+                if render {
                     // An empty tile (past the page's last pixel) has nothing to show or wait for.
                     if self.render_tile(app, ctx, job.page, id, job.content, job.hide.as_ref()) {
                         sharp.push(id);
                     }
+                } else if let Some((true, hinted)) = have {
+                    // An unhinted tile from a zoom frame shows until it is rendered hinted.
+                    self.deferred |= !hinted;
+                    sharp.push(id);
                 } else {
                     complete = false;
                 }
@@ -243,8 +255,8 @@ impl Rasterizer {
         if !complete && app.canvas.textures.get(&i).is_none_or(|r| r.content != job.content) {
             if forced || self.rendered < 4 {
                 let u = underlay_scale(job.page, self.max_tex).min(s);
-                let img = rasterize(app, job.page, None, u, self.dim_body, job.hide.as_ref());
-                upload(ctx, &mut app.canvas.textures, i, || format!("page{i}"), img, job.content, u);
+                let img = rasterize(app, job.page, None, u, self.dim_body, self.hinted, job.hide.as_ref());
+                upload(ctx, &mut app.canvas.textures, i, || format!("page{i}"), img, (job.content, u, self.hinted));
                 self.rendered += 1;
             } else {
                 self.deferred = true;
@@ -300,8 +312,8 @@ impl Rasterizer {
         }
         // The tiny subtraction keeps render_area's ceil() from rounding up to an extra pixel.
         let area = wordcraft_geom::Rect::new(x0 as f32 / s, y0 as f32 / s, (w as f32 - 0.01).max(0.01) / s, (h as f32 - 0.01).max(0.01) / s);
-        let img = rasterize(app, page, Some(area), s, self.dim_body, hide);
-        upload(ctx, &mut app.canvas.tiles, id, || format!("page{}-tile{}-{}", id.page, id.row, id.col), img, content, s);
+        let img = rasterize(app, page, Some(area), s, self.dim_body, self.hinted, hide);
+        upload(ctx, &mut app.canvas.tiles, id, || format!("page{}-tile{}-{}", id.page, id.row, id.col), img, (content, s, self.hinted));
         self.tiles_rendered += 1;
         true
     }
@@ -319,6 +331,7 @@ impl Rasterizer {
             }
         }
         app.canvas.tiles.retain(|id, _| self.keep.contains(id));
+        app.canvas.rasters += self.rendered as u64;
         if self.deferred {
             if self.zooming() {
                 ctx.request_repaint_after(std::time::Duration::from_secs_f64((ZOOM_SETTLE - self.gesture_age).clamp(0.0, ZOOM_SETTLE)));
@@ -350,8 +363,17 @@ fn tile_rect(origin: egui::Pos2, id: TileId, tile: usize, k: f32, size: egui::Ve
 }
 
 /// Page `page` (or its `area`, in points) rendered at `s` pixels per point, without `hide`.
-fn rasterize(app: &WordApp, page: &Page, area: Option<wordcraft_geom::Rect>, s: f32, dim_body: bool, hide: Option<&Pos>) -> egui::ColorImage {
+fn rasterize(
+    app: &WordApp,
+    page: &Page,
+    area: Option<wordcraft_geom::Rect>,
+    s: f32,
+    dim_body: bool,
+    hinted: bool,
+    hide: Option<&Pos>,
+) -> egui::ColorImage {
     let mut opts = page_render_options(app, dim_body);
+    opts.hinting &= hinted;
     // Only on the page it is on: the `Pos` can't match an object of another page.
     opts.display.hide_object = hide.cloned();
     let img = match area {
@@ -361,25 +383,24 @@ fn rasterize(app: &WordApp, page: &Page, area: Option<wordcraft_geom::Rect>, s: 
     page_image(&img)
 }
 
-/// Puts `img` on the GPU under `key`, reusing the texture already there.
+/// Puts `img` (showing `content` at `scale`, `hinted` or not) on the GPU under `key`, reusing
+/// the texture already there.
 fn upload<K: Eq + Hash>(
     ctx: &egui::Context,
     map: &mut HashMap<K, Raster>,
     key: K,
     name: impl FnOnce() -> String,
     img: egui::ColorImage,
-    content: u64,
-    scale: f32,
+    (content, scale, hinted): (u64, f32, bool),
 ) {
     match map.get_mut(&key) {
         Some(r) => {
             r.tex.set(img, egui::TextureOptions::LINEAR);
-            r.content = content;
-            r.scale = scale;
+            (r.content, r.scale, r.hinted) = (content, scale, hinted);
         }
         None => {
             let tex = ctx.load_texture(name(), img, egui::TextureOptions::LINEAR);
-            map.insert(key, Raster { content, scale, tex });
+            map.insert(key, Raster { content, scale, hinted, tex });
         }
     }
 }
