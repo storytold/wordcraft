@@ -349,6 +349,10 @@ fn compare_keeps_text_boxes_equations_and_controls_of_a_diffed_paragraph() {
     // The equation stays an equation: its linear text never stands in for it as body text.
     assert_eq!(xml.matches("<m:oMath>").count(), 1, "the equation must be saved once, as OMML");
     assert!(!xml.contains("m149x+1"), "the word before the equation must keep its own text");
+    // And it keeps its content: an empty `m:oMath` shell would pass the count above.
+    let omath = xml.split("<m:oMath>").nth(1).and_then(|t| t.split("</m:oMath>").next()).unwrap_or("");
+    let mt: String = omath.split("<m:t>").skip(1).map(|t| t.split("</m:t>").next().unwrap_or("")).collect();
+    assert_eq!(mt, "x+1", "the saved equation lost its content");
 }
 
 #[test]
