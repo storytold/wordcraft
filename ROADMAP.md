@@ -1,5 +1,7 @@
 # WordCraft roadmap
 
+> **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
+
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -323,6 +325,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
+| 2026-11-04 | The CLI opens a non-Unicode input filename even after options such as `--page 2` or `--format flatopc`; text option values still require Unicode; `run --file` and `run --script` retain native paths. |
 | 2026-11-04 | Pictures keep the brightness, contrast and transparency their file gives them (#1711, #1766): a "Washout" picture watermark (VML `gain`/`blacklevel`) and a washed-out letterhead picture behind the text (`a:lum`) are drawn faded on screen and in PDF instead of at full colour, with the pixel curve measured on Word's own PDF export; `a:alphaModFix` transparency too. Saved back as DrawingML (and as VML `gain`/`blacklevel` in Word 2003 XML, without the transparency). Picture Format › Corrections, Transparency and Color › Washout replace the file's values (other Color modes leave them alone), and Reset Picture discards them all, as in Word; the PDF embeds the corrected pixels once per picture |
 |---|---|
 | 2026-10-17 | Copies keep their formatting in programs that read RTF rather than HTML: Copy and Cut put RTF beside the text and HTML on the system clipboard on Windows, macOS and Wayland (an X11 copy stays text and HTML, since arboard owns the selection there; a copy of only pictures or shapes carries no HTML or RTF, so pasting it back keeps every detail), and Paste reads another program's RTF on macOS and X11 too, not only on Windows and Wayland |
@@ -829,6 +832,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-04 | trivial | Progress log: CLI convert format options; readiness estimates unchanged |
 | 2026-11-04 | trivial | Progress log: MHT quoted MIME parameters; readiness estimates unchanged |
 | 2026-10-30 | trivial | Progress log: typed n-ary operators such as ∫ and ∑ wait for their limits, and any character that cannot continue a math name corrects it, as observed in Word for Windows on #4938; Enter, arrow keys and nested operators are WordCraft's own choices (#4917); readiness unchanged |
+| 2026-11-04 | trivial | CLI input paths keep their native filename when a value-taking option comes first; regression coverage includes conversion to Flat OPC and rejection of non-Unicode option values. |
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` is preserved with true, false and absent values; OOXML properties follow schema order. Grid layout remains open. |
 | 2026-11-04 | trivial | Progress log: RTF Unicode fallback counts; readiness estimates unchanged |
 | 2026-10-28 | trivial | Per-page ink object lookups, #3614. Drawing order, geometry and saved data retain their behavior; no readiness estimate change |
