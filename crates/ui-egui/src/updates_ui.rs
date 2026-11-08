@@ -51,6 +51,25 @@ impl WordApp {
     pub fn set_startup_update_check(&mut self, on: bool) {
         self.updates_rt.startup_check = on;
     }
+
+    /// Turns the self-update off for the rest of this process: no update is offered, and Help ▸
+    /// Check for Updates says why. For a process that still carries another program's AppImage
+    /// variables, which the update would take for this copy's file and replace (#5653).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn disable_self_update(&mut self) {
+        let rt = &mut self.updates_rt;
+        rt.startup_check = false;
+        rt.updater = Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_source(refused_check());
+    }
+}
+
+/// A check for updates that never finds one and gives the reason as its error, which Help ▸ Check
+/// for Updates shows.
+#[cfg(not(target_arch = "wasm32"))]
+fn refused_check() -> craft_update::updater::CheckSource {
+    let why = tl!("Updates are off in this window: WordCraft was started with another program's AppImage settings. Start WordCraft from its own menu entry to update it.")
+        .to_string();
+    std::sync::Arc::new(move || Err(why.clone()))
 }
 
 pub(crate) fn check(app: &mut WordApp) {
@@ -132,5 +151,31 @@ pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
             app.updates_rt.manual_window_open = false;
             app.updates_rt.status_message = None;
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use craft_update::updater::Status;
+
+    /// With the self-update off, a startup check is never made, and Help ▸ Check for Updates (the
+    /// command's own path) ends in the reason instead of a release to install (#5653).
+    #[test]
+    fn with_the_self_update_off_a_check_finds_nothing_and_says_why() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.set_startup_update_check(true);
+        app.disable_self_update();
+        assert!(!app.updates_rt.startup_check, "no check at start");
+        let ctx = egui::Context::default();
+        super::check(&mut app);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !matches!(app.updates_rt.updater.status(), Status::Failed(_)) {
+            assert!(std::time::Instant::now() < deadline, "the check never ended: {:?}", app.updates_rt.updater.status());
+            super::tick(&mut app, &ctx);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let status = app.updates_rt.updater.status();
+        assert!(matches!(status, Status::Failed(why) if why.contains("another program's AppImage")), "{status:?}");
+        assert!(!app.updates_rt.updater.prompt_open(), "no update offered");
     }
 }
