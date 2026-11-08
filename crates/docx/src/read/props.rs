@@ -65,6 +65,15 @@ pub struct PropCtx {
     pub alias: HashMap<String, String>,
     /// The theme's colours (for WordArt effects in theme colours).
     pub theme: Vec<Rgb>,
+    /// The file's styles were read: without them its table styles are the built-in ones, which
+    /// are ours and not the file's.
+    pub styles_read: bool,
+    /// The file flags a Normal Table style as the default table style.
+    pub default_normal_table: bool,
+    /// The table styles the file flags as default.
+    pub default_table_styles: Vec<String>,
+    /// The table styles that set a `w:tblInd` of their own.
+    pub table_styles_with_indent: Vec<String>,
 }
 
 /// A `w:numPr` that gives a level (`w:ilvl`) and no list (`w:numId`): the list is the one the

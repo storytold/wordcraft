@@ -771,6 +771,118 @@ fn table_style_whole_table_shading_and_margins() {
     assert_eq!(merged.parts.cell_margins, Some([1.0, 14.4, 0.0, 14.4]), "from Base");
 }
 
+/// The first table in a file: `styles` is the styles part's content (`None`, no part), `tbl_pr` the
+/// table's `w:tblPr` content.
+fn table_in_file(mode: u32, styles: Option<&str>, tbl_pr: &str, nested: bool) -> wordcraft_doc::Table {
+    let inner = format!(
+        r#"<w:tbl><w:tblPr>{tbl_pr}</w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/><w:tcMar><w:left w:w="300" w:type="dxa"/></w:tcMar></w:tcPr><w:p/></w:tc></w:tr></w:tbl>"#
+    );
+    let body = if nested {
+        format!(r#"<w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc>{inner}<w:p/></w:tc></w:tr></w:tbl><w:p/>"#)
+    } else {
+        format!("{inner}<w:p/>")
+    };
+    let settings = format!(
+        r#"<w:settings {W_NS}><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="{mode}"/></w:compat></w:settings>"#
+    );
+    let styles = styles.map(|s| format!("<w:styles {W_NS}>{s}</w:styles>"));
+    let mut rels = vec![("rId1", "settings", "settings.xml")];
+    let mut parts = vec![("word/settings.xml", settings.as_str())];
+    if let Some(s) = &styles {
+        rels.push(("rId2", "styles", "styles.xml"));
+        parts.push(("word/styles.xml", s.as_str()));
+    }
+    let d = wordcraft_docx::read(&docx(&body, &rels, &parts)).unwrap();
+    let t = d.body[0].as_table().unwrap().clone();
+    if nested { t.rows[0].cells[0].blocks[0].as_table().unwrap().clone() } else { t }
+}
+
+/// Before mode 15, with no Normal Table behind a table, its edge is at the margin rather than out by
+/// its first cell's margin, as measured in Word for Windows. That goes on the table as the indent
+/// that cancels the margin, and a save keeps it.
+#[test]
+fn a_table_without_normal_table_starts_at_the_margin() {
+    let normal = r#"<w:style w:type="table" w:default="1" w:styleId="TN"><w:name w:val="Normal Table"/></w:style>"#;
+    let not_flagged = r#"<w:style w:type="table" w:styleId="TN"><w:name w:val="Normal Table"/></w:style>"#;
+    let other_default = r#"<w:style w:type="table" w:default="1" w:styleId="TN"><w:name w:val="TableNormal"/></w:style>"#;
+    let alone = r#"<w:style w:type="table" w:styleId="T"><w:name w:val="T"/></w:style>"#;
+    let child = r#"<w:style w:type="table" w:styleId="T"><w:name w:val="T"/><w:basedOn w:val="TN"/></w:style>"#;
+    let broken = r#"<w:style w:type="table" w:styleId="T"><w:name w:val="T"/><w:basedOn w:val="Gone"/></w:style>"#;
+    let indented = r#"<w:style w:type="table" w:styleId="T"><w:name w:val="T"/><w:tblPr><w:tblInd w:w="600" w:type="dxa"/></w:tblPr></w:style>"#;
+    let default_indented =
+        r#"<w:style w:type="table" w:default="1" w:styleId="F"><w:name w:val="Foo"/><w:tblPr><w:tblInd w:w="600" w:type="dxa"/></w:tblPr></w:style>"#;
+    let margins = r#"<w:style w:type="table" w:styleId="T"><w:name w:val="T"/><w:tblPr><w:tblCellMar><w:left w:w="200" w:type="dxa"/><w:right w:w="200" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>"#;
+    let own = r#"<w:tblCellMar><w:left w:w="75" w:type="dxa"/><w:right w:w="75" w:type="dxa"/></w:tblCellMar>"#;
+    let named = format!(r#"<w:tblStyle w:val="T"/>{own}"#);
+    let gone = format!(r#"<w:tblStyle w:val="Gone"/>{own}"#);
+    let indent = |mode, styles: Option<&str>, pr: &str| table_in_file(mode, styles, pr, false).props.indent;
+    // Normal Table is behind it: no indent to add.
+    for (styles, pr) in [
+        (normal.to_string(), own),
+        (normal.to_string(), gone.as_str()),
+        (format!("{normal}{child}"), named.as_str()),
+        (format!("{not_flagged}{child}"), named.as_str()),
+    ] {
+        assert_eq!(indent(14, Some(&styles), pr), None, "{styles} {pr}");
+    }
+    // It isn't: no part, no default, a default of another name, or a style with no way to it. The
+    // first cell's own 15pt left margin is how far the edge would otherwise have stood out.
+    for (styles, pr) in [
+        (None, own),
+        (None, named.as_str()),
+        (Some(String::new()), own),
+        (Some(not_flagged.to_string()), own),
+        (Some(other_default.to_string()), own),
+        (Some(format!("{normal}{alone}")), named.as_str()),
+        (Some(format!("{normal}{broken}")), named.as_str()),
+        (Some(String::new()), gone.as_str()),
+    ] {
+        assert_eq!(indent(14, styles.as_deref(), pr), Some(15.0), "{styles:?} {pr}");
+        assert_eq!(indent(15, styles.as_deref(), pr), None, "{styles:?} {pr}: mode 15 is at the margin anyway");
+    }
+    // The table's own indent stays, and a style's margins count.
+    assert_eq!(indent(14, None, &format!(r#"<w:tblInd w:w="240" w:type="dxa"/>{own}"#)), Some(12.0));
+    assert_eq!(indent(14, Some(margins), r#"<w:tblStyle w:val="T"/>"#), Some(15.0));
+    // Word has no margin to cancel without one from the table or its style, and an indent for ours
+    // would move the table once saved.
+    assert_eq!(indent(14, None, ""), None);
+    assert_eq!(indent(14, Some(alone), r#"<w:tblStyle w:val="T"/>"#), None);
+    // A style's indent is where Word starts, whichever way the table has that style.
+    assert_eq!(indent(14, Some(indented), &named), None);
+    assert_eq!(indent(14, Some(default_indented), own), None);
+    // Not in a cell, where the edge doesn't follow this rule.
+    assert_eq!(table_in_file(14, None, own, true).props.indent, None);
+    // A margin of zero has nothing to cancel, and Word would read an indent of zero as set.
+    let zero = r#"<w:tblCellMar><w:left w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tblCellMar>"#;
+    let bytes = docx(
+        &format!(r#"<w:tbl><w:tblPr>{zero}</w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p/>"#),
+        &[],
+        &[],
+    );
+    assert_eq!(wordcraft_docx::read(&bytes).unwrap().body[0].as_table().unwrap().props.indent, None);
+    // A save keeps it.
+    let bytes = docx(
+        &format!(r#"<w:tbl><w:tblPr>{own}</w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p/>"#),
+        &[],
+        &[],
+    );
+    let saved = wordcraft_docx::write(&wordcraft_docx::read(&bytes).unwrap()).unwrap();
+    assert_eq!(wordcraft_docx::read(&saved).unwrap().body[0].as_table().unwrap().props.indent, Some(3.75));
+}
+
+/// A saved WordCraft file has Table Grid with no base: it keeps the margins it was written with, in
+/// WordCraft and, after a save, in Word.
+#[test]
+fn table_grid_saved_with_no_base_takes_normal_table() {
+    let normal = r#"<w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/></w:style>"#;
+    let grid = r#"<w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/></w:style>"#;
+    let own = r#"<w:tblStyle w:val="TableGrid"/><w:tblCellMar><w:left w:w="75" w:type="dxa"/></w:tblCellMar>"#;
+    assert_eq!(table_in_file(14, Some(&format!("{normal}{grid}")), own, false).props.indent, None);
+    assert_eq!(table_in_file(14, Some(&format!("{grid}{normal}")), own, false).props.indent, None, "in either order");
+    // Without Normal Table in the file there's nothing to base it on.
+    assert_eq!(table_in_file(14, Some(grid), own, false).props.indent, Some(15.0));
+}
+
 fn gallery_ids(styles: &str) -> Vec<String> {
     let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", styles)]);
     let d = wordcraft_docx::read(&bytes).unwrap();

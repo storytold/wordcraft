@@ -355,7 +355,9 @@ impl Reader<'_> {
                     continue;
                 }
                 let mut blocks = Blocks::new();
+                sc.cell_depth += 1;
                 self.read_blocks(sc, tc, rels, &mut blocks, depth + 4);
+                sc.cell_depth -= 1;
                 self.flush_pending(sc, &mut blocks);
                 row.cells.push(Cell { props, blocks, controls: cell_controls });
             }
@@ -370,6 +372,40 @@ impl Reader<'_> {
             let cols = table.cols().clamp(1, MAX_COLS);
             table.grid = vec![72.0; cols];
         }
+        if sc.cell_depth == 0 {
+            self.settle_start_without_normal_table(&mut table);
+        }
         Some(table)
+    }
+
+    /// Before mode 15 Word stands a table out by its first cell's margin only with Normal Table
+    /// behind it: the table's style is based on it, or it names no style and the file flags it the
+    /// default. Otherwise its edge is at the margin (measured in Word for Windows). That goes on
+    /// the table as the indent that cancels the margin, so the layout need not know the file's
+    /// styles and a save, which may add Normal Table, looks the same in Word.
+    ///
+    /// Not without a margin from the table or its style: Word has no margin then, and an indent
+    /// for ours would move the table once saved. Not with an indent from a style: that's the
+    /// indent Word starts from.
+    fn settle_start_without_normal_table(&self, table: &mut Table) {
+        if self.doc.settings.compat_mode >= 15 || table.props.indent.is_some() || table.props.float.is_some() {
+            return;
+        }
+        let styles = &self.doc.styles;
+        let read = self.pc.styles_read;
+        let named = table.props.style.as_deref().filter(|id| read && styles.table_style(id).is_some());
+        if read && named.map_or(self.pc.default_normal_table, |id| styles.table_style_has_normal_table(id)) {
+            return;
+        }
+        let sets_indent = |id: &String| styles.chain(id).iter().any(|s| self.pc.table_styles_with_indent.contains(&s.id));
+        let indented = match named {
+            Some(id) => sets_indent(&id.to_string()),
+            None => read && self.pc.default_table_styles.iter().any(sets_indent),
+        };
+        let margins = table.props.cell_margins.or_else(|| styles.table_style(named?)?.parts.cell_margins);
+        if let (false, Some(margins)) = (indented, margins) {
+            // A margin of zero has nothing to cancel, and Word would read an indent of zero as set.
+            table.props.indent = table.rows.first().and_then(|r| r.cells.first()).map(|c| c.props.resolved_margins(margins)[1]).filter(|m| *m > 0.0);
+        }
     }
 }
