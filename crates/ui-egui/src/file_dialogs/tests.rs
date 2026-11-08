@@ -252,6 +252,143 @@ fn answer_all(shown: &Shown, picked: &[&str]) {
     tx.send(Ok(picked.iter().map(|p| p.to_string()).collect())).unwrap();
 }
 
+/// #5890: delayed native and fallback answers report failures in the still-open dialog.
+#[test]
+fn toolbar_transfers_report_delayed_errors_and_clear_them_on_retry() {
+    use crate::dialogs::Dialog;
+    let dir = scratch("toolbar-errors");
+    let invalid = dir.join("invalid.json");
+    let valid = dir.join("valid.json");
+    std::fs::write(&invalid, b"not json").unwrap();
+    let (mut a, shown) = async_app();
+    a.ui.backstage = true;
+    crate::dialogs_ribbon::open(&mut a, crate::dialogs_ribbon::Page::QuickAccess);
+    let before = a.session.ribbon.clone();
+    let message = |a: &WordApp| match &a.dialog {
+        Some(Dialog::CustomizeRibbon { form }) => form.message.clone(),
+        _ => panic!("customization dialog must stay open"),
+    };
+    for (importing, path) in [(true, invalid.to_string_lossy().into_owned()), (false, dir.to_string_lossy().into_owned())] {
+        let req = if importing {
+            FileDialogRequest::Open { purpose: "qat".into() }
+        } else {
+            FileDialogRequest::SaveToolbar { name: "toolbar.json".into() }
+        };
+        assert!(matches!(a.ask_file(req, AfterPick::Toolbar { importing }), Asked::Pending));
+        answer(&shown, Some(&path));
+        assert!(a.poll_file_dialog().unwrap().is_err());
+        assert!(!message(&a).is_empty(), "errors must be in the dialog, not only the hidden status bar");
+        assert_eq!(a.session.ribbon, before);
+    }
+    a.ask_file(FileDialogRequest::SaveToolbar { name: "toolbar.json".into() }, AfterPick::Toolbar { importing: false });
+    answer(&shown, Some(&valid.to_string_lossy()));
+    a.poll_file_dialog().unwrap().unwrap();
+    assert!(message(&a).is_empty(), "successful retry clears the error");
+    // The fallback browser completes through the same handler.
+    a.show_file_browser(FileDialogRequest::Open { purpose: "qat".into() }, AfterPick::Toolbar { importing: true }, true);
+    a.close_file_browser(Some(invalid));
+    assert!(!message(&a).is_empty());
+    assert_eq!(a.session.ribbon, before);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Zenity's save filter doesn't append extensions: normalize native answers before saving.
+#[test]
+fn toolbar_export_appends_json_to_extensionless_native_answers() {
+    let dir = scratch("toolbar-extension");
+    let (mut a, shown) = async_app();
+    a.session.run("tools.customizeRibbon", &json!({"qatAdd": "format.bold"})).unwrap();
+    let expected = a.session.ribbon.clone();
+    let bare = dir.join("portable");
+    let json_path = bare.with_extension("json");
+    assert!(matches!(
+        a.ask_file(FileDialogRequest::SaveToolbar { name: "toolbar.json".into() }, AfterPick::Toolbar { importing: false }),
+        Asked::Pending
+    ));
+    answer(&shown, Some(&bare.to_string_lossy()));
+    a.poll_file_dialog().unwrap().unwrap();
+    assert!(json_path.is_file());
+    assert!(!bare.exists());
+    assert!(crate::file_browser::matches(&json_path, &["json".into()]));
+    a.run("tools.customizeRibbon", json!({"reset": "qat"})).unwrap();
+    a.finish_pick(AfterPick::Toolbar { importing: true }, Some(json_path.to_string_lossy().into_owned())).unwrap();
+    assert_eq!(a.session.ribbon, expected);
+    // Legacy blocking hosts need the same normalization.
+    a.services.file_dialog = None;
+    let blocking = dir.join("blocking");
+    let picked = blocking.to_string_lossy().into_owned();
+    a.services.pick_save = Some(Box::new(move |_| Some(picked.clone())));
+    assert!(matches!(
+        a.ask_file(FileDialogRequest::SaveToolbar { name: "toolbar.json".into() }, AfterPick::Toolbar { importing: false }),
+        Asked::Done(Ok(_))
+    ));
+    assert!(blocking.with_extension("json").is_file());
+    assert!(!blocking.exists());
+    // Explicit engine paths are an API contract, not native-picker suggestions.
+    let explicit = dir.join("explicit");
+    a.run("tools.customizeRibbon", json!({"qatExport": explicit})).unwrap();
+    assert!(explicit.is_file());
+    assert!(!explicit.with_extension("json").exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn toolbar_export_confirms_the_final_json_destination_before_replacing() {
+    use crate::file_browser::Step;
+    let dir = scratch("toolbar-replace-json");
+    let bare = dir.join("portable");
+    let final_path = bare.with_extension("json");
+    let original = b"Keep this existing file";
+    std::fs::write(&final_path, original).unwrap();
+    let (mut a, shown) = async_app();
+    for cancel in [true, false] {
+        a.ask_file(FileDialogRequest::SaveToolbar { name: "toolbar.json".into() }, AfterPick::Toolbar { importing: false });
+        answer(&shown, Some(&bare.to_string_lossy()));
+        a.poll_file_dialog().unwrap().unwrap();
+        assert!(a.file_browser_open(), "the native picker never confirmed the suffixed destination");
+        assert_eq!(std::fs::read(&final_path).unwrap(), original);
+        assert!(!bare.exists());
+        let browser = a.file_browser.open.as_mut().unwrap();
+        assert_eq!(browser.accept(), Step::Stay, "ask before replacing the final .json file");
+        if cancel {
+            a.close_file_browser(None);
+            assert_eq!(std::fs::read(&final_path).unwrap(), original);
+        } else {
+            assert_eq!(browser.accept(), Step::Pick(final_path.clone()));
+            a.close_file_browser(Some(final_path.clone()));
+            let file: Value = serde_json::from_slice(&std::fs::read(&final_path).unwrap()).unwrap();
+            assert_eq!(file["format"], "wordcraft-qat");
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn toolbar_export_retry_respects_a_newly_selected_folder() {
+    use crate::file_browser::Step;
+    let dir = scratch("toolbar-retry-folder");
+    let original_dir = dir.join("A");
+    let chosen_dir = dir.join("B");
+    std::fs::create_dir(&original_dir).unwrap();
+    std::fs::create_dir(&chosen_dir).unwrap();
+    let original = original_dir.join("portable.json");
+    let sentinel = b"Keep the original toolbar file";
+    std::fs::write(&original, sentinel).unwrap();
+    let (mut a, shown) = async_app();
+    a.ask_file(FileDialogRequest::SaveToolbar { name: "toolbar.json".into() }, AfterPick::Toolbar { importing: false });
+    answer(&shown, Some(&original_dir.join("portable").to_string_lossy()));
+    a.poll_file_dialog().unwrap().unwrap();
+    let browser = a.file_browser.open.as_mut().expect("final-path collision opens the retry browser");
+    browser.navigate(chosen_dir.clone());
+    let destination = chosen_dir.join("portable.json");
+    assert_eq!(browser.accept(), Step::Pick(destination.clone()), "the new folder has no file to replace");
+    a.close_file_browser(Some(destination.clone()));
+    let file: Value = serde_json::from_slice(&std::fs::read(destination).unwrap()).unwrap();
+    assert_eq!(file["format"], "wordcraft-qat");
+    assert_eq!(std::fs::read(original).unwrap(), sentinel);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 fn typed(a: &mut WordApp) {
     a.run("text.insert", json!({"text": UNSAVED})).unwrap();
     assert!(a.session.dirty);

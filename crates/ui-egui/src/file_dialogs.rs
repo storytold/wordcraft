@@ -28,6 +28,8 @@ pub enum FileDialogRequest {
     /// Pick a path to save to, given a suggested file name and, if it matters, the folder to
     /// start in (Save as Word Template starts in the user templates folder, #2852).
     Save { name: String, dir: Option<String> },
+    /// Export a toolbar configuration as JSON, never a document format.
+    SaveToolbar { name: String },
 }
 
 /// The host's answer to a [`FileDialogRequest`]: the picked paths (one for everything but
@@ -50,6 +52,7 @@ pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'stati
         "picture" => &[("Pictures", PICTURES)],
         "font" => &[("Fonts", wordcraft_fonts::FONT_FILE_EXTS)],
         "sources" => &[("Word sources", &["xml"]), ("All files", &["*"])],
+        "qat" => &[("WordCraft toolbar", &["json"]), ("All files", &["*"])],
         "recipients" => &[("Recipient lists", wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS), ("All files", &["*"])],
         _ => &[("Documents", DOCUMENTS), ("Word document", &["docx"]), ("All files", &["*"])],
     }
@@ -75,6 +78,9 @@ pub(crate) enum AfterPick {
     /// document through Manage Sources (#2640).
     #[cfg(not(target_arch = "wasm32"))]
     Sources,
+    /// Import or export only the Quick Access Toolbar, not ribbon or document settings (#5890).
+    #[cfg(not(target_arch = "wasm32"))]
+    Toolbar { importing: bool },
     /// Hand the picked path to the open dialog (`WordApp::dialog_pick`): Templates and Add-ins,
     /// Organizer (#377).
     ForDialog,
@@ -147,7 +153,7 @@ impl WordApp {
             FileDialogRequest::Open { purpose } | FileDialogRequest::OpenMany { purpose } => {
                 self.services.pick_open.as_ref().and_then(|f| f(purpose))
             }
-            FileDialogRequest::Save { name, .. } => self.services.pick_save.as_ref().and_then(|f| f(name)),
+            FileDialogRequest::Save { name, .. } | FileDialogRequest::SaveToolbar { name } => self.services.pick_save.as_ref().and_then(|f| f(name)),
         };
         Asked::Done(self.finish_pick(after, picked))
     }
@@ -275,6 +281,32 @@ impl WordApp {
                     self.status(msg);
                 }
                 r
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            AfterPick::Toolbar { importing } => {
+                let Some(mut path) = picked else { return Ok(json!({"cancelled": true})) };
+                let target = std::path::Path::new(&path);
+                if !importing && target.extension().is_none() && !target.is_dir() {
+                    // GTK/Zenity filters don't append extensions. Only picker answers receive
+                    // a default: explicitly supplied engine-command paths must stay unchanged.
+                    let target = std::path::absolute(target.with_extension("json")).map_err(|e| e.to_string())?;
+                    path = target.to_string_lossy().into_owned();
+                    if target.exists() {
+                        // The native picker confirmed the bare name, not this final destination.
+                        // Reuse the built-in browser's replace confirmation before writing it.
+                        self.show_file_browser(FileDialogRequest::SaveToolbar { name: path }, AfterPick::Toolbar { importing: false }, false);
+                        return Ok(json!({"pending": "toolbarExport"}));
+                    }
+                }
+                let key = if importing { "qatImport" } else { "qatExport" };
+                let result = self.run("tools.customizeRibbon", json!({key: path}));
+                if let Some(crate::dialogs::Dialog::CustomizeRibbon { form }) = &mut self.dialog {
+                    form.message = result.as_ref().err().cloned().unwrap_or_default();
+                }
+                if result.is_ok() {
+                    self.status(if importing { tl!("Imported Quick Access Toolbar") } else { tl!("Exported Quick Access Toolbar") });
+                }
+                result
             }
             AfterPick::ForDialog => {
                 let picked = picked.filter(|p| !p.is_empty());

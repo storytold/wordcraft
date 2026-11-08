@@ -383,6 +383,22 @@ fn qat_page(app: &mut WordApp, ui: &mut Ui, f: &mut RibbonForm, h: f32) {
                 }
             });
         });
+        #[cfg(not(target_arch = "wasm32"))]
+        ui.horizontal(|ui| {
+            use crate::file_dialogs::{AfterPick, Asked, FileDialogRequest};
+            for (label, importing) in [("Import…", true), ("Export…", false)] {
+                if ui.add_enabled(!app.file_dialog_open(), egui::Button::new(tl!(label))).clicked() {
+                    let request = if importing {
+                        FileDialogRequest::Open { purpose: "qat".into() }
+                    } else {
+                        FileDialogRequest::SaveToolbar { name: "Quick Access Toolbar.json".into() }
+                    };
+                    if let Asked::Done(result) = app.ask_file(request, AfterPick::Toolbar { importing }) {
+                        f.message = result.err().unwrap_or_default();
+                    }
+                }
+            }
+        });
         // The same switch as the toolbar menu's Hide Quick Access Toolbar (#1945).
         ui.add_space(4.0);
         let mut shown = app.ui.quick_access_toolbar;
@@ -428,6 +444,58 @@ mod tests {
         c.apply_prefs(serde_json::from_str(r#"{"ribbon": {"tabs": 3, "qat": ["gone.command", "edit.undo"]}}"#).unwrap());
         assert!(c.session.ribbon.ribbon_is_default());
         assert_eq!(c.session.ribbon.qat(), ["edit.undo"]);
+    }
+
+    /// #5890: both buttons use the host picker, import persists, and cancellation is harmless.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn qat_file_buttons_round_trip_and_cancel_without_changing_preferences() {
+        use egui_kittest::kittest::Queryable;
+        let path = std::env::temp_dir().join(format!("wc-qat-ui-{}.json", std::process::id()));
+        let mut a = app();
+        a.run("tools.customizeRibbon", json!({"qatAdd": "format.bold"})).unwrap();
+        let expected = a.session.ribbon.qat().into_iter().map(str::to_string).collect::<Vec<_>>();
+        let save_path = path.to_string_lossy().into_owned();
+        let open_path = save_path.clone();
+        a.services.pick_save = Some(Box::new(move |name| {
+            assert_eq!(name, "Quick Access Toolbar.json");
+            Some(save_path.clone())
+        }));
+        a.services.pick_open = Some(Box::new(move |purpose| {
+            assert_eq!(purpose, "qat");
+            Some(open_path.clone())
+        }));
+        super::open(&mut a, super::Page::QuickAccess);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        h.get_by_label("Export…").click();
+        h.run_steps(2);
+        assert!(path.is_file());
+        h.state_mut().run("tools.customizeRibbon", json!({"reset": "qat"})).unwrap();
+        h.get_by_label("Import…").click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.ribbon.qat(), expected);
+        assert!(matches!(h.state().dialog, Some(Dialog::CustomizeRibbon { .. })));
+        let saved = serde_json::to_string(&h.state().prefs()).unwrap();
+        let mut restarted = app();
+        restarted.apply_prefs(serde_json::from_str(&saved).unwrap());
+        assert_eq!(restarted.session.ribbon.qat(), expected);
+        h.state_mut().services.pick_open = Some(Box::new(|_| None));
+        h.state_mut().services.pick_save = Some(Box::new(|_| None));
+        let before = h.state().prefs();
+        for label in ["Import…", "Export…"] {
+            h.get_by_label(label).click();
+            h.run_steps(2);
+            assert_eq!(serde_json::to_value(h.state().prefs()).unwrap(), serde_json::to_value(&before).unwrap());
+        }
+        std::fs::remove_file(path).unwrap();
     }
 
     /// A context with the interface fonts and theme (they take effect from the next frame).

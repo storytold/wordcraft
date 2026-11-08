@@ -151,6 +151,12 @@ impl FileBrowser {
             FileDialogRequest::Open { purpose } | FileDialogRequest::OpenMany { purpose } => {
                 (String::new(), open_filters(purpose).iter().map(|(l, e)| ((*l).to_string(), e.iter().map(|x| (*x).to_string()).collect())).collect())
             }
+            FileDialogRequest::SaveToolbar { name } => {
+                // The request's parent selects the starting folder; an absolute filename would
+                // override later navigation and could replace a file in the previous folder.
+                let name = Path::new(name).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                (name, vec![("WordCraft toolbar".into(), vec!["json".into()])])
+            }
             FileDialogRequest::Save { name, .. } => {
                 let ext = Path::new(name).extension().and_then(std::ffi::OsStr::to_str).filter(|e| !e.is_empty());
                 let mut f: Vec<(String, Vec<String>)> = ext.map(|e| (format!("*.{e}"), vec![e.to_string()])).into_iter().collect();
@@ -217,7 +223,7 @@ impl FileBrowser {
                 self.note = Note::NotFound(self.name.trim().to_string());
                 Step::Stay
             }
-            FileDialogRequest::Save { .. } => {
+            FileDialogRequest::Save { .. } | FileDialogRequest::SaveToolbar { .. } => {
                 if path.extension().is_none()
                     && let Some(ext) = self.exts().first().filter(|e| e.as_str() != "*")
                 {
@@ -244,14 +250,14 @@ impl FileBrowser {
     fn title(&self) -> &'static str {
         match self.req {
             FileDialogRequest::Open { .. } | FileDialogRequest::OpenMany { .. } => "Open",
-            FileDialogRequest::Save { .. } => "Save As",
+            FileDialogRequest::Save { .. } | FileDialogRequest::SaveToolbar { .. } => "Save As",
         }
     }
 
     fn ok_label(&self) -> &'static str {
         match self.req {
             FileDialogRequest::Open { .. } | FileDialogRequest::OpenMany { .. } => "Open",
-            FileDialogRequest::Save { .. } => "Save",
+            FileDialogRequest::Save { .. } | FileDialogRequest::SaveToolbar { .. } => "Save",
         }
     }
 }
@@ -262,6 +268,7 @@ impl WordApp {
         // A folder the request names (the user templates folder, #2852) comes first.
         let asked = match &req {
             FileDialogRequest::Save { dir: Some(d), .. } => Some(PathBuf::from(d)).filter(|d| d.is_dir()),
+            FileDialogRequest::SaveToolbar { name } => Path::new(name).parent().map(Path::to_path_buf).filter(|d| d.is_dir()),
             _ => None,
         };
         let start = asked
@@ -543,6 +550,18 @@ mod tests {
         assert!(capped.truncated);
         assert!(list_dir(&dir.join("missing"), &exts(&["*"]), 10).is_err(), "an unreadable folder is an error, not a panic");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn toolbar_save_offers_only_json_and_adds_its_extension() {
+        let dir = scratch("toolbar-filter");
+        let req = FileDialogRequest::SaveToolbar { name: "toolbar.json".into() };
+        let mut b = FileBrowser::new(req, AfterPick::Toolbar { importing: false }, dir.clone(), false);
+        assert_eq!(b.filters, vec![("WordCraft toolbar".to_string(), vec!["json".to_string()])]);
+        b.name = "portable".into();
+        assert_eq!(b.accept(), Step::Pick(dir.join("portable.json")));
+        assert!(matches(&dir.join("portable.json"), &["json".into()]));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// Save As in the browser: a typed folder is opened, a bare name gets the type's extension,

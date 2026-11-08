@@ -266,6 +266,9 @@ pub(super) fn search_commands(s: &mut Session, v: &Value) -> CmdResult {
 /// Toolbar ([`crate::RibbonLayout`]). Without params it opens the dialog; with any, it only does
 /// what they ask (no dialog).
 pub(super) fn customize_ribbon(s: &mut Session, v: &Value) -> CmdResult {
+    if v.get("qatImport").is_some() || v.get("qatExport").is_some() {
+        return super::qat::transfer(s, v);
+    }
     let reg = s.registry.clone();
     let l = &mut s.ribbon;
     let e = CmdError::Params;

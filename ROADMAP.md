@@ -1,5 +1,7 @@
 # WordCraft roadmap
 
+> **Toolbar update:** 2026-11-07 · minor: native Quick Access Toolbar import/export (#5890); readiness estimates unchanged.
+
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -143,6 +145,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
    (20–30 h).
 
 ## Progress log
+
+- 2026-11-07: Customize Ribbon › Quick Access Toolbar imports and exports a versioned WordCraft JSON file (#5890). Command order, defaults and empty toolbars round-trip; invalid imports leave settings intact. Ribbon tabs, toolbar visibility and document content are not transferred. Desktop only; Microsoft Word toolbar files remain unsupported. Readiness estimates unchanged.
 
 - 2026-11-05: ODT pictures offered in several formats show and survive a save (gap 19): LibreOffice's letter templates lost theirs.
 - 2026-11-06: Windows print submissions run in separate helper processes (#5710). A helper acknowledges cancellation before it stops, so a driver stalled in a cancelled job cannot hold another job’s provider lock. A private temporary PDF and bounded settings messages cross the process boundary; normal shutdown reaps helpers and removes their inputs. The helper erases its plaintext inputs before driver work; a hard app crash during startup can still leave private temporary files. Jobs already sending still complete. Readiness estimates unchanged.
@@ -796,6 +800,8 @@ Section page-numbering settings preserve `w:chapStyle` values across the full un
 MATH glyphs that reference the same construction now share its immutable variants and assembly data (#3630). Glyph mappings, values and the existing partial-record fallback stay unchanged. Repeated glyph IDs keep their last valid reference without retaining superseded constructions. Distinct overlapping constructions and assembly-only sharing remain separate.
 
 ## Revision history
+
+- 2026-11-07 · minor: portable Quick Access Toolbar files (#5890), with atomic validation and existing preference persistence; readiness estimates unchanged.
 
 > 2026-11-03 · Arabic dialogs read right to left (rtl::Table); recorded in the progress log, readiness unchanged.
 >

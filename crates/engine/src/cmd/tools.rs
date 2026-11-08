@@ -16,6 +16,7 @@ mod actions;
 mod autocorrect;
 mod compare;
 mod inspect;
+mod qat;
 mod specs;
 mod typing;
 

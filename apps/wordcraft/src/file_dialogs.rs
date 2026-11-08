@@ -93,6 +93,10 @@ fn picker(dialog: rfd::AsyncFileDialog, req: &FileDialogRequest) -> Picking {
     match req.clone() {
         FileDialogRequest::Open { purpose } => Box::pin(async move { open_filters(dialog, &purpose).pick_file().await.into_iter().collect() }),
         FileDialogRequest::OpenMany { purpose } => Box::pin(async move { open_filters(dialog, &purpose).pick_files().await.unwrap_or_default() }),
+        FileDialogRequest::SaveToolbar { name } => {
+            let dialog = dialog.set_file_name(name).add_filter("WordCraft toolbar (*.json)", &["json"]);
+            Box::pin(async move { dialog.save_file().await.into_iter().collect() })
+        }
         FileDialogRequest::Save { name, dir } => {
             let mut dialog = dialog.set_file_name(name.clone());
             // Save as Word Template starts in the user templates folder (#2852).
