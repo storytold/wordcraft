@@ -161,10 +161,27 @@ pub(crate) fn draw_carets(app: &WordApp, painter: &Painter, layout: &DocLayout, 
         if participant.client_id == own {
             continue;
         }
+        let color = participant_color(participant.color.as_deref(), index);
+        if let Some((anchor, focus)) = &participant.selection
+            && let (Some(a), Some(b)) = (collab.cursor_position(anchor), collab.cursor_position(focus))
+        {
+            let (a, b) = if a <= b { (a, b) } else { (b, a) };
+            for (page, rect) in layout.selection_rects(&app.session.doc, &a, &b, 0) {
+                if let Some(screen) = geo.rects.get(page)
+                    && let Some(page_layout) = layout.pages.get(page)
+                {
+                    let scale = crate::canvas::page_screen_scale(*screen, page_layout, geo.scale);
+                    let on_screen = egui::Rect::from_min_size(
+                        Pos2::new(screen.min.x + rect.x * scale, screen.min.y + rect.y * scale),
+                        egui::vec2(rect.w * scale, rect.h * scale),
+                    );
+                    painter.rect_filled(on_screen, 0.0, color.gamma_multiply(0.22));
+                }
+            }
+        }
         let Some(cursor) = &participant.cursor else { continue };
         let Some(pos) = collab.cursor_position(cursor) else { continue };
         if let Some(at) = caret_at(layout, geo, &pos) {
-            let color = participant_color(participant.color.as_deref(), index);
             painter.line_segment([at.0, at.1], Stroke::new(1.5, color));
             painter.text(Pos2::new(at.0.x + 2.0, at.0.y - 2.0), Align2::LEFT_BOTTOM, &participant.client_id, FontId::proportional(10.0), color);
         }
