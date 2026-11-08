@@ -7831,6 +7831,49 @@ fn smart_art_diagram_cjk_labels_maintain_consistent_fallback_font() {
         assert_eq!(face.family, "DiagBothMincho", "CJK label {t:?} should use serif fallback DiagBothMincho");
         assert!(face.is_serif(), "fallback face must be serif");
     }
+
+    // 3. Real CJK check (reconciled with synthetic fixtures, #5672):
+    // Synthetic fixtures above provide deterministic coverage for both sans-serif and serif
+    // diagrams across all platforms and CI runners without depending on installed CJK fonts.
+    // When the host environment does have a real sans-serif CJK candidate available, also
+    // verify that real CJK labels in a SmartArt diagram resolve consistently to a sans-serif
+    // fallback face across nodes.
+    let minor = wordcraft_fonts::word::resolve(&Document::default().settings.minor_font, false, false);
+    if db.fallback_for('新', minor.face.id()).is_some_and(|f| !f.is_serif()) && db.fallback_for('样', minor.face.id()).is_some_and(|f| !f.is_serif())
+    {
+        let labels = ["新建文档", "施加样式", "导出验证"];
+        let real_items = ["新建文档 \u{F0129}", "施加样式", "导出验证", "\u{F0129}"]
+            .iter()
+            .enumerate()
+            .map(|(i, &label)| GraphicItem::Text {
+                rect: [0.0, (i as f32) * 30.0, 100.0, 20.0],
+                text: label.into(),
+                size: 12.0,
+                color: Rgb::BLACK,
+                bold: false,
+                align: TextAlign::Center,
+                font: None,
+            })
+            .collect();
+        let real_graphic = Graphic { kind: GraphicKind::Diagram, items: real_items, ..Default::default() };
+        let real_obj = InlineObject::Graphic { w: 300.0, h: 200.0, alt: String::new(), float: Default::default(), graphic: Arc::new(real_graphic) };
+        let mut real_doc = Document::from_text("Diagram");
+        real_doc.insert_object(&Pos::body(0, 0), real_obj, &Default::default()).unwrap();
+        let real_draws = flat(display::page_display(&real_doc, &lay(&real_doc).pages[0], &Default::default()));
+        let real_cjk_draws: Vec<_> = real_draws
+            .iter()
+            .filter_map(|x| if let display::Draw::Glyphs { face, text, .. } = x { Some((text.clone(), *face)) } else { None })
+            .filter(|(text, _)| labels.iter().any(|l| text.trim().starts_with(l)))
+            .collect();
+
+        assert_eq!(real_cjk_draws.len(), 3, "all three real CJK diagram labels were drawn");
+        let first_family = real_cjk_draws[0].1.family.clone();
+        assert!(!real_cjk_draws[0].1.is_serif(), "diagram fallback font should be sans-serif, was {first_family}");
+        for (text, face) in &real_cjk_draws {
+            assert_eq!(face.family, first_family, "label {text:?} used a different font family from first node");
+            assert!(!face.is_serif(), "label {text:?} rendered in serif font {}", face.family);
+        }
+    }
 }
 
 /// In a mixed-font diagram where the first label's primary font covers characters missing from

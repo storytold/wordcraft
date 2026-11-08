@@ -760,3 +760,31 @@ fn fallback_order_matches_primary_font_serif_nature() {
 
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn diagram_fallback_checks_system_fonts_when_loaded_face_mismatches_serif() {
+    let dir = font_dir("diag-mismatch");
+    let regular = "SourceSans3-Regular.ttf";
+    // Installed system font: Gothic (sans-serif), covers 0xF_0020 .. 0xF_0021.
+    std::fs::write(dir.join("SysGothic.ttf"), mapping(regular, "Sys Gothic 11", 0xF_0020, 0xF_0021)).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    // Pre-load a serif font covering the same characters into db as a document font.
+    db.add_document_fonts(vec![(mapping(regular, "Load Mincho 1", 0xF_0020, 0xF_0021), "Load Mincho 1".to_string())]);
+    let mincho = db.face("Load Mincho 1", "Regular");
+    assert!(mincho.is_serif());
+
+    let run = ['\u{F0020}', '\u{F0021}'];
+    // 1. Sans-serif diagram: loaded face is serif (mismatched), so search_diagram checks system fonts
+    // and finds & loads "Sys Gothic 11" (sans-serif).
+    let sans = db.fallback_for_diagram(&run, 0, false).unwrap();
+    assert_eq!(sans.family, "Sys Gothic 11", "sans diagram checks system fonts to find matching sans candidate");
+    assert!(!sans.is_serif());
+
+    // 2. When no matching candidate covers the run, retain the mismatched loaded face.
+    let uncataloged_run = ['\u{F0020}'];
+    let retained = db.fallback_for_diagram(&uncataloged_run, sans.id(), false).unwrap();
+    assert_eq!(retained.family, "Load Mincho 1", "retains loaded face when no matching candidate covers the run");
+
+    db.remove_document_fonts(&["Load Mincho 1"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
