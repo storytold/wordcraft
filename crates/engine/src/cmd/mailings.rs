@@ -7,6 +7,7 @@ use wordcraft_doc::props::{Align, CharProps};
 use wordcraft_doc::section::{SectionProps, SectionStart};
 use wordcraft_doc::{Block, Blocks, Document, Paragraph, Part, PartKind, Pos, StoryRef, Table, para_block};
 
+use super::references::{field_arg, field_words, quoted};
 use super::{delete_selection, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
@@ -122,7 +123,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("mailings.insertField", "Insert Merge Field", "Mailings › Write & Insert Fields", |s, v| {
             let f = p::req_str(v, "field")?.to_string();
-            insert_field(s, &format!("MERGEFIELD {}", quote(&f)), &format!("«{f}»"))
+            insert_field(s, &format!("MERGEFIELD {}", field_arg(&f)), &format!("«{f}»"))
         })
         .params(r#"{"field": string}"#)
         .key(super::non_mac("Alt+Shift+F")),
@@ -136,14 +137,14 @@ pub fn specs() -> Vec<CommandSpec> {
             let rule = p::str(v, "rule").unwrap_or("NEXT").to_ascii_uppercase();
             let instr = match rule.as_str() {
                 "IF" => format!(
-                    "IF {{ MERGEFIELD {} }} = \"{}\" \"{}\" \"{}\"",
-                    quote(p::str(v, "field").unwrap_or("Field")),
-                    p::str(v, "value").unwrap_or(""),
-                    p::str(v, "then").unwrap_or(""),
-                    p::str(v, "else").unwrap_or("")
+                    "IF {{ MERGEFIELD {} }} = {} {} {}",
+                    field_arg(p::str(v, "field").unwrap_or("Field")),
+                    quoted(p::str(v, "value").unwrap_or("")),
+                    quoted(p::str(v, "then").unwrap_or("")),
+                    quoted(p::str(v, "else").unwrap_or(""))
                 ),
                 "SKIPIF" | "NEXTIF" => {
-                    format!("{rule} {{ MERGEFIELD {} }} = \"{}\"", quote(p::str(v, "field").unwrap_or("Field")), p::str(v, "value").unwrap_or(""))
+                    format!("{rule} {{ MERGEFIELD {} }} = {}", field_arg(p::str(v, "field").unwrap_or("Field")), quoted(p::str(v, "value").unwrap_or("")))
                 }
                 "MERGEREC" => "MERGEREC".into(),
                 _ => "NEXT".into(),
@@ -225,10 +226,6 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"text"?: string, "product"?: "letter-3x10|letter-2x10|letter-2x7|letter-2x5|letter-4x20|a4-3x7|a4-2x7|a4-3x8|a4-2x4", "rows"?: n, "cols"?: n, "fromRecipients"?: bool (one label per selected recipient, continuing across sheets), "single"?: {"row": n, "col": n}}"#,
         ),
     ]
-}
-
-fn quote(f: &str) -> String {
-    if f.contains(' ') { format!("\"{f}\"") } else { f.to_string() }
 }
 
 fn insert_field(s: &mut Session, instr: &str, placeholder: &str) -> CmdResult {
