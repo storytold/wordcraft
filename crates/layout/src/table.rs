@@ -622,7 +622,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 turned = Some(Turned { turn, len, across, snap, region, ci, top: margins[0] + band_t });
                 (items, len)
             } else {
-                let BoxLayout { mut items, mut height, floats_bottom, last_top, .. } = layout_box(
+                let BoxLayout { mut items, mut height, floats_bottom, last_top, mark_top, .. } = layout_box(
                     ctx,
                     BoxInput {
                         context: BoxContext::Cell { text, left: -margins[1], right: x1 - x0 - margins[1], clamp: true },
@@ -635,6 +635,11 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                     height = last_top;
                 } else {
                     collapsed = false;
+                    // Nor does the mark's own line after a closing line break, with the space
+                    // after (Word: "text<w:br/>¶" rows are as tall as their text, 0 or 12pt after).
+                    if let Some(top) = mark_top.filter(|_| cell.props.hide_mark) {
+                        height = top;
+                    }
                 }
                 for it in &mut items {
                     it.translate(x0 + margins[1], margins[0] + band_t);
@@ -1203,14 +1208,20 @@ fn align_in_part(
     let mut kept = f32::MIN;
     for (((items, splits), _), end) in cells.iter().zip(splits).zip(realign).zip(ends.iter()).filter(|((_, al), _)| al.is_none()) {
         // No further than the cell's content: its last paragraph may have dropped its space after.
-        let end = end.unwrap_or(f32::MAX);
+        let stop = end.unwrap_or(f32::MAX);
         for (it, &split) in items.iter().zip(splits) {
             let bottom = match (it.turned_bounds(), it) {
                 (Some(r), _) => Some(r.bottom()),
+                // A hidden end-of-cell mark kept with its paragraph ends at the cell's content end.
+                (None, Placed::Lines { para, l0, y, .. })
+                    if split > *l0 && split == para.lines.len() && end.is_some_and(|e| hidden_mark(para, (*l0, split - 1), *y, e)) =>
+                {
+                    *end
+                }
                 // A paragraph kept whole ends with its space after.
                 (None, Placed::Lines { para, l0, y, .. }) if split > *l0 => crate::item_bottom(*y, para, *l0, split)
                     .filter(|&b| b <= limit + 0.01)
-                    .map(|b| if split == para.lines.len() { (b + para.rp.space_after).min(end.max(b)).min(limit) } else { b }),
+                    .map(|b| if split == para.lines.len() { (b + para.rp.space_after).min(stop.max(b)).min(limit) } else { b }),
                 (None, Placed::Image { rect, .. } | Placed::Shape { rect, .. } | Placed::Graphic { rect, .. } | Placed::Clip { rect, .. }) => {
                     Some(rect.bottom())
                 }
@@ -1259,7 +1270,11 @@ fn line_split(para: &ParaLayout, (l0, l1): (usize, usize), y: f32, limit: f32, e
     let mut k = l0;
     while k < l1 {
         let Some(bottom) = crate::item_bottom(y, para, l0, k + 1) else { break };
-        let bottom = if k + 1 == n { end.map_or(bottom, |e| e.max(bottom)) } else { bottom };
+        let bottom = match end {
+            Some(e) if hidden_mark(para, (l0, k), y, e) => e,
+            Some(e) if k + 1 == n => e.max(bottom),
+            _ => bottom,
+        };
         if bottom > limit + 0.01 {
             break;
         }
@@ -1323,6 +1338,13 @@ fn cell_picture(pic: &wordcraft_doc::props::CellPicture, rect: Rect, story: Stor
         }
         _ => Vec::new(),
     }
+}
+
+/// Whether line `k` of `para` (placed with line `l0`'s top at `y`) is a hidden end-of-cell mark
+/// alone on its line after a closing break: it starts at or below the cell's content `end`, so it
+/// ends there, above it, and takes no room.
+fn hidden_mark(para: &ParaLayout, (l0, k): (usize, usize), y: f32, end: f32) -> bool {
+    crate::boxes::mark_alone(para, k) && para.lines.get(k).zip(para.lines.get(l0)).is_some_and(|(l, f)| y + l.top - f.top >= end - 0.01)
 }
 
 /// The parts of `r` above `cut` and below it, the latter moved up by `shift` (onto the

@@ -10074,6 +10074,126 @@ fn a_hidden_cell_mark_takes_no_room() {
     assert!((text - line).abs() < 0.5, "text stays, the empty mark after it goes: {text} vs {line}");
 }
 
+/// A hidden end-of-cell mark left alone on the line after a closing line break takes no room,
+/// with its space after: maine_criminal_history_record's "…this Bureau.<w:br/>" rows set
+/// `w:after="240"` themselves (Normal has no automatic spacing) and step 16.75pt in Word, one 13.8pt
+/// line and the cell spacing. With two breaks, the empty line between them stays.
+#[test]
+fn a_hidden_cell_mark_after_a_closing_break_takes_no_room() {
+    let br = wordcraft_doc::para::LINE_BREAK.to_string();
+    let row = |hide: bool, text: &str, after: f32, next: Option<&str>| {
+        let mut d = Document::from_text("Above");
+        let mut t = Table::new(2, 1, 300.0);
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props.space_after = Some(after);
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+        t.rows[0].cells[0].blocks.extend(next.map(|n| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(n, Default::default()))));
+        t.rows[0].cells[0].props.hide_mark = hide;
+        t.rows[1].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("R2", Default::default()))];
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let at = |r: u32| l.caret(&Pos { story: StoryRef::Body, path: Path(vec![1, r, 0, 0]), off: 0 }).unwrap().top;
+        at(1) - at(0)
+    };
+    let row1 = |hide: bool, text: &str, after: f32| row(hide, text, after, None);
+    let line = row1(false, "Tx", 0.0);
+    let one = row1(true, &format!("Tx{br}"), 12.0);
+    assert!((one - line).abs() < 0.5, "the mark's line and space after go: {one} vs {line}");
+    let shown = row1(false, &format!("Tx{br}"), 12.0);
+    assert!(shown > 2.0 * line + 11.0, "without hideMark both stay: {shown} vs {line}");
+    let two = row1(true, &format!("Tx{br}{br}"), 12.0);
+    assert!((two - 2.0 * line).abs() < 1.0, "only the mark's own line goes: {two} vs {line}");
+    // The rule is the cell's last paragraph's: a paragraph after the break's keeps the row.
+    let next = row(true, &format!("Tx{br}"), 0.0, Some("Ty"));
+    assert!(next > 2.5 * line, "a break mid-cell stays, the next paragraph too: {next} vs {line}");
+}
+
+/// A row split across pages: a hidden end-of-cell mark after a closing line break doesn't need
+/// room above the cut, so the text above it stays on the page instead of widow control taking
+/// its last line along to the next one.
+#[test]
+fn a_hidden_cell_mark_after_a_closing_break_needs_no_room_above_a_row_split() {
+    use wordcraft_doc::props::LineSpacing;
+    let plain = ParaProps { space_before: Some(0.0), space_after: Some(0.0), line_spacing: Some(LineSpacing::Exactly(12.0)), ..Default::default() };
+    let para = |text: &str, props: ParaProps| {
+        let mut p = Paragraph::with_text(text, Default::default());
+        p.props = props;
+        wordcraft_doc::para_block(p)
+    };
+    let mut d = Document::new();
+    d.last_section.page_w = 400.0;
+    d.last_section.page_h = 360.0;
+    (d.last_section.margin_top, d.last_section.margin_bottom, d.last_section.margin_left, d.last_section.margin_right) = (36.0, 36.0, 36.0, 36.0);
+    let mut t = Table::new(1, 2, 328.0);
+    t.props.style = None;
+    t.props.cell_margins = Some([0.0; 4]);
+    t.rows[0].cells[0].blocks = (0..30).map(|i| para(&format!("Line {i}"), plain.clone())).collect();
+    // 23 lines of text fit above the cut (282pt below the table's top); the mark's line wouldn't.
+    let br = wordcraft_doc::para::LINE_BREAK.to_string();
+    let text: String = (0..23).map(|i| format!("Text {i}{br}")).collect();
+    t.rows[0].cells[1].blocks = vec![para(&text, ParaProps { widow_control: Some(true), ..plain.clone() })];
+    t.rows[0].cells[1].props.hide_mark = true;
+    d.body = vec![para("Filler", ParaProps { line_spacing: Some(LineSpacing::Exactly(6.0)), ..plain }), Arc::new(Block::Table(t))];
+    let l = lay(&d);
+    let kept = l.pages.first().and_then(|page| {
+        page.items.iter().find_map(|item| match item {
+            Placed::Lines { path, para, l1, .. } if path.0 == [1, 0, 1, 0] => Some((*l1, para.lines.len())),
+            _ => None,
+        })
+    });
+    let (l1, n) = kept.unwrap();
+    assert_eq!(n, 24, "23 lines of text and the mark's");
+    assert!(l1 >= 23, "all 23 lines of text stay on the first page: {l1}");
+}
+
+/// A middle-aligned cell of a row split across pages is centred in the part left on the page as
+/// tall as its neighbour's text: a hidden end-of-cell mark after that text's closing break adds
+/// nothing to the part.
+#[test]
+fn a_hidden_cell_mark_after_a_closing_break_leaves_a_split_rows_centred_cell_in_place() {
+    use wordcraft_doc::props::LineSpacing;
+    let exactly = |h: f32| ParaProps {
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        line_spacing: Some(LineSpacing::Exactly(h)),
+        widow_control: Some(false),
+        ..Default::default()
+    };
+    let para = |text: &str, props: ParaProps| {
+        let mut p = Paragraph::with_text(text, Default::default());
+        p.props = props;
+        wordcraft_doc::para_block(p)
+    };
+    let centred_top = |text: &str| {
+        let mut d = Document::new();
+        d.last_section.page_w = 400.0;
+        d.last_section.page_h = 360.0;
+        (d.last_section.margin_top, d.last_section.margin_bottom, d.last_section.margin_left, d.last_section.margin_right) = (36.0, 36.0, 36.0, 36.0);
+        let mut t = Table::new(1, 3, 328.0);
+        t.props.style = None;
+        t.props.cell_margins = Some([0.0; 4]);
+        t.rows[0].cells[0].props.valign = Some(wordcraft_doc::props::VAlign::Center);
+        t.rows[0].cells[0].blocks = vec![para("Label", exactly(12.0))];
+        // 23 lines (276pt) above the cut, 282pt below the table's top; the 25pt lines keep 275pt.
+        t.rows[0].cells[1].blocks = vec![para(text, exactly(12.0))];
+        t.rows[0].cells[1].props.hide_mark = true;
+        t.rows[0].cells[2].blocks = (0..20).map(|i| para(&format!("Line {i}"), exactly(25.0))).collect();
+        d.body = vec![para("Filler", exactly(6.0)), Arc::new(Block::Table(t))];
+        let l = lay(&d);
+        l.pages.first().and_then(|page| {
+            page.items.iter().find_map(|item| match item {
+                Placed::Lines { path, y, .. } if path.0 == [1, 0, 0, 0] => Some(*y),
+                _ => None,
+            })
+        })
+    };
+    let br = wordcraft_doc::para::LINE_BREAK.to_string();
+    let lines: Vec<String> = (0..23).map(|i| format!("Text {i}")).collect();
+    let plain = centred_top(&lines.join(&br)).unwrap();
+    let hidden = centred_top(&format!("{}{br}", lines.join(&br))).unwrap();
+    assert!((plain - hidden).abs() < 0.01, "the hidden mark's line doesn't move the centred cell: {hidden} vs {plain}");
+}
+
 /// A text frame in a header, footer or cell (NIH's footers put the page number in one, centred,
 /// with the footer text wrapping around it) is placed apart: it takes no room in the flow, sits
 /// where its alignment says, and the text beside it keeps clear of it. WordCraft laid it out as
