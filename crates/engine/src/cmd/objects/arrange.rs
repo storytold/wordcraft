@@ -253,9 +253,6 @@ pub fn moves_with_text(f: &Float) -> bool {
 
 /// Arrange › Wrap Text › Move with Text / Fix Position on Page: anchor the selected floating
 /// object's vertical position to its paragraph or to the page, keeping it where it is now.
-/// When the object has no horizontal alignment, its horizontal anchor is also adjusted between
-/// column and page to keep its coordinates consistent. Aligned objects retain their horizontal
-/// anchor so their alignment area and visual position remain unchanged.
 pub(super) fn move_with_text(s: &mut Session, with_text: bool) -> CmdResult {
     use wordcraft_doc::para::Anchor;
     let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
@@ -265,13 +262,8 @@ pub(super) fn move_with_text(s: &mut Session, with_text: bool) -> CmdResult {
     }
     let hit = s.layout().object(&pos, s.page_hint).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?;
     // Paragraph offsets start at the paragraph's top (the hit's origin), page offsets at the page's.
-    let x = if with_text { hit.rect.x - hit.origin.x } else { hit.rect.x };
     let y = if with_text { hit.rect.y - hit.origin.y } else { hit.rect.y };
     let o = edit_float(s, &pos, |f| {
-        if f.h_align.is_none() {
-            f.h_rel = if with_text { Anchor::Column } else { Anchor::Page };
-            f.x = x.clamp(-MAX_OFFSET, MAX_OFFSET);
-        }
         f.v_rel = if with_text { Anchor::Paragraph } else { Anchor::Page };
         f.v_align = None;
         f.y = y.clamp(-MAX_OFFSET, MAX_OFFSET);

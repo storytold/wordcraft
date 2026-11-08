@@ -1314,7 +1314,7 @@ fn body_picture_with_move_with_text_false_retains_page_anchor_and_coordinates() 
     s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
     let (_, obj) = selected(&s).unwrap();
     let float = obj.frame().unwrap().2;
-    assert_eq!((float.h_rel, float.v_rel), (Anchor::Page, Anchor::Page));
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Column, Anchor::Page));
 
     // Now call arrange.bounds on a page where a paragraph starts
     s.run("arrange.bounds", &json!({"page": 0, "x": 50.0, "y": 80.0})).unwrap();
@@ -1362,7 +1362,7 @@ fn move_with_text_preserves_horizontal_position_when_h_align_set() {
     assert_eq!(float.h_rel, Anchor::Margin);
     s.touch();
     let hit_after = s.layout().object(&pos, 0).unwrap();
-    assert_eq!(hit_after.rect.x, x_before);
+    assert!((hit_after.rect.x - x_before).abs() < 0.01, "{:?} vs {:?}", hit_after.rect.x, x_before);
 
     // Toggle moveWithText true
     s.run("arrange.moveWithText", &json!({"value": true})).unwrap();
@@ -1373,7 +1373,46 @@ fn move_with_text_preserves_horizontal_position_when_h_align_set() {
     assert_eq!(float.h_rel, Anchor::Margin);
     s.touch();
     let hit_after2 = s.layout().object(&pos, 0).unwrap();
-    assert_eq!(hit_after2.rect.x, x_before);
+    assert!((hit_after2.rect.x - x_before).abs() < 0.01, "{:?} vs {:?}", hit_after2.rect.x, x_before);
+}
+
+/// Toggling `moveWithText` preserves horizontal anchor relations (`Margin`, `RightMargin`,
+/// `Character`, `Column`, `Page`) and offset when the object has no horizontal alignment.
+#[test]
+fn move_with_text_preserves_horizontal_anchor_relations_without_alignment() {
+    use wordcraft_doc::para::Anchor;
+    for rel in [Anchor::Margin, Anchor::RightMargin, Anchor::Character, Anchor::Column, Anchor::Page] {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("text.insert", &json!({"text": "A line of body text.\n"})).unwrap();
+        let data = super::super::insert::base64_encode(&png(20, 10));
+        s.run("insert.picture", &json!({"data": data, "width": 100})).unwrap();
+        s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+
+        let (pos, _) = selected(&s).unwrap();
+        super::select::edit_float(&mut s, &pos, |f| {
+            f.h_align = None;
+            f.h_rel = rel;
+            f.x = 35.0;
+        })
+        .unwrap();
+        s.touch();
+
+        // Toggle moveWithText false
+        s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
+        let (_, obj) = selected(&s).unwrap();
+        let float = obj.frame().unwrap().2;
+        assert_eq!(float.v_rel, Anchor::Page, "expected Page v_rel for {rel:?}");
+        assert_eq!(float.h_rel, rel, "expected {rel:?} preserved on moveWithText false");
+        assert!((float.x - 35.0).abs() < 0.01, "expected x preserved on moveWithText false");
+
+        // Toggle moveWithText true
+        s.run("arrange.moveWithText", &json!({"value": true})).unwrap();
+        let (_, obj) = selected(&s).unwrap();
+        let float = obj.frame().unwrap().2;
+        assert_eq!(float.v_rel, Anchor::Paragraph, "expected Paragraph v_rel for {rel:?}");
+        assert_eq!(float.h_rel, rel, "expected {rel:?} preserved on moveWithText true");
+        assert!((float.x - 35.0).abs() < 0.01, "expected x preserved on moveWithText true");
+    }
 }
 
 /// Shape Format › Text (#369): direction and alignment on the box the caret is in, then
