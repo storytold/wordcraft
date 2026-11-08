@@ -8237,9 +8237,17 @@ fn ribbon_font_and_size_return_focus_and_preserve_typing_font() {
     assert!(h.state().canvas.focused, "committing font size returns focus to the document");
     assert_eq!(h.state().session.pending.as_ref().and_then(|p| p.size), Some(18.0));
 
-    // Setting the caret to its current position preserves pending font and size
-    let pos = h.state().session.sel.focus.clone();
-    h.state_mut().run("caret.set", json!({"pos": pos})).unwrap();
+    // Clicking where the caret already rests keeps pending font and size (#5580)
+    let before_pos = h.state().session.sel.focus.clone();
+    let (caret_pos, height) = canvas::caret_screen(h.state_mut()).expect("caret is on screen");
+    let at = caret_pos + egui::vec2(0.0, height / 2.0);
+    h.event(egui::Event::PointerMoved(at));
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.step();
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+
+    assert_eq!(h.state().session.sel.focus, before_pos, "caret remains in place after click");
     assert_eq!(h.state().session.pending.as_ref().and_then(|p| p.font.as_deref()), Some("Recent Font Alpha"));
     assert_eq!(h.state().session.pending.as_ref().and_then(|p| p.size), Some(18.0));
 
