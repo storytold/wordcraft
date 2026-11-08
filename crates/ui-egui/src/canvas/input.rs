@@ -229,6 +229,14 @@ fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
     show_hover_link(app, &pointer);
 }
 
+/// Click and Type starts only below the last line: beside a line, the double-click belongs to
+/// word selection, not to a caret the command would consume it for.
+fn below_last_body_line(layout: &DocLayout, page: usize, y: f32) -> bool {
+    let Some(p) = layout.pages.get(page) else { return false };
+    let last = wordcraft_layout::hit::page_lines(p, StoryRef::Body).into_iter().map(|line| line.bottom).fold(p.body.y, f32::max);
+    y > last
+}
+
 fn handle_primary_press(
     app: &mut WordApp,
     pointer: &PagePointer<'_>,
@@ -334,6 +342,7 @@ fn handle_primary_press(
         && !mods.shift
         && !mods.alt
         && !mods.command
+        && below_last_body_line(layout, page, y)
         && layout.line_at_point(page, x, y, story).is_none()
         && app.run("caret.clickAndType", json!({"page": page, "x": x, "y": y})).is_ok()
     {
