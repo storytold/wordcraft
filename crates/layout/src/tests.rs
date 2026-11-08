@@ -5630,11 +5630,22 @@ fn justified_spaces_shrink_a_quarter_at_most_and_by_the_word() {
 }
 
 /// Measured in Word for Windows (compatibility mode 15, a word after a run of 1, 3, 6 or 12
-/// spaces, Latin and Thai): the word may overrun the line by 0.355 of its width with the whole run
-/// before it, not one space (a run typed to push the text along, as letters often are). A
-/// bookmark inside the run doesn't cut it short.
+/// spaces, Latin and Thai): the word may overrun the line by a quarter of the line's spaces,
+/// capped at 0.355 of its width with the whole run before it, not one space (a run typed to push
+/// the text along, as letters often are). Each run length is checked 0.1 pt inside and outside
+/// that room, and Thai text after a run of 12. A bookmark inside the run doesn't cut it short.
+/// Left-aligned and distributed lines never shrink: the DOCX reader maps `thaiDistribute`, which
+/// Word never shrinks, to distributed until #3072 tells the two apart.
 #[test]
 fn a_word_after_a_run_of_spaces_overruns_with_the_whole_run() {
+    for (word, run) in [("nn", 1), ("nn", 3), ("nn", 6), ("nn", 12), ("\u{0E01}\u{0E01}", 12)] {
+        overruns_with_the_whole_run(word, run);
+    }
+}
+
+/// [`a_word_after_a_run_of_spaces_overruns_with_the_whole_run`] for `word` six times, a run of
+/// `run` spaces, then more of `word`.
+fn overruns_with_the_whole_run(word: &str, run: usize) {
     let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
     let para = |text: &str, align: Align, right: f32| {
         let mut d = Document::new();
@@ -5651,7 +5662,7 @@ fn a_word_after_a_run_of_spaces_overruns_with_the_whole_run() {
         let text = &d.para(StoryRef::Body, &Path::top(0)).unwrap().text[line.start..line.stop];
         text.split(|c: char| c.is_whitespace() || c == wordcraft_doc::para::OBJ).filter(|w| !w.is_empty()).count()
     };
-    let (word, n, run) = ("nn", 6, 6);
+    let n = 6;
     let probe = para(&format!("{word} {word}"), Align::Left, 0.0);
     let l = lay(&probe);
     let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
@@ -5659,7 +5670,9 @@ fn a_word_after_a_run_of_spaces_overruns_with_the_whole_run() {
     let sw = pl.x_of(0, word.len() + 1).unwrap() - pl.x_of(0, word.len()).unwrap();
     let spaces = (n - 1 + run) as f32 * sw;
     let room = (0.25 * spaces).min(0.355 * (w + run as f32 * sw));
-    assert!(room > 0.355 * (w + sw) + 0.5, "the run must allow more than one space would: {room:.2}");
+    if run >= 6 {
+        assert!(room > 0.355 * (w + sw) + 0.5, "{word} after {run}: the run must allow more than one space would: {room:.2}");
+    }
     let text = format!("{}{}{}", vec![word; n].join(" "), " ".repeat(run), vec![word; 20].join(" "));
     let full = probe.last_section.text_width();
     let width = |overrun: f32| (n + 1) as f32 * w + spaces - overrun;
@@ -5671,10 +5684,12 @@ fn a_word_after_a_run_of_spaces_overruns_with_the_whole_run() {
             if marked {
                 d.insert_object(&Pos::body(0, mid_run), InlineObject::BookmarkStart { name: "mid".into() }, &Default::default()).unwrap();
             }
-            assert_eq!(first(&d), words, "bookmark in the run {marked}: overrun {overrun:.2} of {room:.2} allowed");
+            assert_eq!(first(&d), words, "{word} after {run}, bookmark in the run {marked}: overrun {overrun:.2} of {room:.2} allowed");
         }
     }
-    assert_eq!(first(&para(&text, Align::Left, full - width(0.1))), n, "left-aligned text never shrinks");
+    for align in [Align::Left, Align::Distribute] {
+        assert_eq!(first(&para(&text, align, full - width(0.1))), n, "{word} after {run}: {align:?} text never shrinks");
+    }
 }
 
 #[test]
