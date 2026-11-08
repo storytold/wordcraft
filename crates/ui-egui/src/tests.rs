@@ -1086,6 +1086,82 @@ fn hyperlink_shortcut_focuses_address_and_preserves_document() {
     }
 }
 
+/// #5915: Editing the "Text to display" field in the Hyperlink dialog updates the document text
+/// and applies the hyperlink to the replacement text.
+#[test]
+fn hyperlink_dialog_modifying_display_text_updates_document() {
+    let ctx = egui::Context::default();
+    let mut a = app();
+    a.run("text.insert", json!({"text": "Selected phrase in body"})).unwrap();
+    a.run("select.text", json!({"text": "phrase"})).unwrap();
+    let frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+            a.logic(ui.ctx());
+            a.ui(ui);
+        })
+        .drop_without_applying_deltas();
+    };
+    for _ in 0..3 {
+        frame(&mut a, Vec::new());
+    }
+    let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    frame(&mut a, vec![key(egui::Key::K, egui::Modifiers::COMMAND)]);
+    for _ in 0..2 {
+        frame(&mut a, Vec::new());
+    }
+    let Some(dialogs::Dialog::Link { url, text, .. }) = &mut a.dialog else { panic!("no Link dialog") };
+    assert_eq!(text, "phrase");
+    *text = "cas pratique".into();
+    *url = "https://example.com/target".into();
+    frame(&mut a, vec![key(egui::Key::Enter, egui::Modifiers::NONE)]);
+    for _ in 0..2 {
+        frame(&mut a, Vec::new());
+    }
+    assert!(a.dialog.is_none(), "Enter closes the Link dialog");
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Selected cas pratique in body");
+    let p = a.session.doc.body[0].as_para().expect("body para");
+    let links: Vec<_> = p.run_ranges().filter_map(|(r, c)| c.link.as_deref().map(|l| (l, &p.text[r]))).collect();
+    assert_eq!(links, vec![("https://example.com/target", "cas pratique")]);
+}
+
+/// #5915: Leaving "Text to display" empty in the Hyperlink dialog preserves the selected text
+/// and formats it with the hyperlink in place.
+#[test]
+fn hyperlink_dialog_empty_display_text_preserves_selected_text_and_links() {
+    let ctx = egui::Context::default();
+    let mut a = app();
+    a.run("text.insert", json!({"text": "Selected phrase in body"})).unwrap();
+    a.run("select.text", json!({"text": "phrase"})).unwrap();
+    let frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+            a.logic(ui.ctx());
+            a.ui(ui);
+        })
+        .drop_without_applying_deltas();
+    };
+    for _ in 0..3 {
+        frame(&mut a, Vec::new());
+    }
+    let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    frame(&mut a, vec![key(egui::Key::K, egui::Modifiers::COMMAND)]);
+    for _ in 0..2 {
+        frame(&mut a, Vec::new());
+    }
+    let Some(dialogs::Dialog::Link { url, text, .. }) = &mut a.dialog else { panic!("no Link dialog") };
+    assert_eq!(text, "phrase");
+    *text = String::new();
+    *url = "https://example.com/target".into();
+    frame(&mut a, vec![key(egui::Key::Enter, egui::Modifiers::NONE)]);
+    for _ in 0..2 {
+        frame(&mut a, Vec::new());
+    }
+    assert!(a.dialog.is_none(), "Enter closes the Link dialog");
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Selected phrase in body");
+    let p = a.session.doc.body[0].as_para().expect("body para");
+    let links: Vec<_> = p.run_ranges().filter_map(|(r, c)| c.link.as_deref().map(|l| (l, &p.text[r]))).collect();
+    assert_eq!(links, vec![("https://example.com/target", "phrase")]);
+}
+
 /// Issue #139: Ctrl+wheel over the page didn't zoom.
 #[test]
 fn ctrl_wheel_over_canvas_zooms() {

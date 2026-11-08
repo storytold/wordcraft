@@ -1,4 +1,4 @@
-use super::{CharProps, CmdError, CmdResult, InlineObject, Pos, Selection, Session, StoryRef, Value, json, p, sel_result};
+use super::{CharProps, CmdError, CmdResult, InlineObject, Pos, Selection, Session, StoryRef, Value, delete_selection, json, p, sel_result};
 
 /// What a link can point to inside the document (Insert › Link › Place in This Document): the top
 /// of the document, its headings (body block, level, text) and its bookmarks, without the hidden
@@ -39,6 +39,19 @@ fn place_target(s: &mut Session, v: &Value) -> Result<Option<(String, String)>, 
     Ok(None)
 }
 
+/// Inserts or updates a hyperlink pointing to an external URL or an internal document target.
+///
+/// When the selection is collapsed, the link is inserted at the caret with the specified
+/// display text (falling back to the target URL/label). An empty `"text"` value is treated as
+/// omitted.
+///
+/// When text is selected, if a custom display text is provided that differs from the existing
+/// selection, the selected text is deleted and replaced with the new display text formatted as a
+/// link (#5915), and the selection collapses to a caret immediately following the inserted text.
+/// If Track Changes is enabled, this replacement records a tracked deletion of the selected range
+/// and an insertion revision on the new text. Otherwise (if custom display text is omitted, empty,
+/// or matches the existing selection), the existing selected range is formatted in place with the
+/// link target.
 pub(super) fn link(s: &mut Session, v: &Value) -> CmdResult {
     let (url, label) = match p::str(v, "url") {
         Some(url) => (url.to_string(), url.to_string()),
@@ -54,15 +67,14 @@ pub(super) fn link(s: &mut Session, v: &Value) -> CmdResult {
         return Err(CmdError::Params("bad url".into()));
     }
     let style = Some("Hyperlink".to_string());
+    let custom_text = p::str(v, "text").filter(|t| !t.is_empty());
     if s.sel.is_collapsed() {
-        let text = p::str(v, "text").unwrap_or(&label).to_string();
-        let mut props = s.typing_props();
-        props.link = Some(url.clone());
-        props.style = style;
-        let at = s.sel.focus.clone();
-        let end = s.doc.insert_text(&at, &text, &props)?;
-        s.sel = Selection::caret(end);
-        s.pending = Some(CharProps::default());
+        let text = custom_text.unwrap_or(&label);
+        insert_link_text(s, text, &url, style)?;
+    } else if let Some(text) = custom_text
+        && text != s.selected_text()
+    {
+        insert_link_text(s, text, &url, style)?;
     } else {
         let (a, b) = s.sel.ordered();
         s.doc.format_range(&a, &b, &|c| {
@@ -71,6 +83,34 @@ pub(super) fn link(s: &mut Session, v: &Value) -> CmdResult {
         })?;
     }
     sel_result(s)
+}
+
+/// Inserts hyperlink text at the selection, deleting any selected range first.
+///
+/// Ensures character properties reflect a clean text insertion: clears any formatting change
+/// or RTL override from the typing properties, and marks the inserted run with an insertion
+/// revision if Track Changes is enabled (or clears any inherited revision metadata if disabled).
+fn insert_link_text(s: &mut Session, text: &str, url: &str, style: Option<String>) -> Result<(), CmdError> {
+    let prepared = crate::cmd::controls::prepare_edit(s)?;
+    let mut props = prepared.unwrap_or_else(|| s.typing_props());
+    props.link = Some(url.to_string());
+    props.style = style;
+    let at = delete_selection(s)?;
+    // Inserting new link text establishes fresh runs: clear typing-state formatting
+    // changes or RTL overrides, and record an insertion revision only when tracking changes.
+    props.fmt_change = None;
+    props.rtl = None;
+    if s.doc.settings.track_changes && !text.is_empty() {
+        props.ins = Some(crate::cmd::new_revision(s, wordcraft_doc::RevisionKind::Insert));
+        props.del = None;
+    } else {
+        props.ins = None;
+        props.del = None;
+    }
+    let end = s.doc.insert_text(&at, text, &props)?;
+    s.sel = Selection::caret(end);
+    s.pending = Some(CharProps::default());
+    Ok(())
 }
 
 /// Whether `name` can name a bookmark: starts with a letter or underscore, contains only alphanumeric characters

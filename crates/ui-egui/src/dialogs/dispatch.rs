@@ -701,6 +701,11 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ok || cancel
 }
 
+/// The Insert Hyperlink dialog (Cmd+K / Ctrl+K).
+///
+/// When accepting the dialog, `"text"` is omitted from command parameters if the display
+/// text field was left empty, preserving the document's current selection and preventing
+/// accidental replacement with an empty string (#5915).
 fn link_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     let Dialog::Link { url, text, place, targets, pick, focus } = d else {
         return false;
@@ -783,6 +788,8 @@ fn link_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     }
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
+        // Omit "text" when empty so insert.link formats the existing selection in place
+        // without replacing it with empty text (#5915).
         if *place {
             let Some((mut params, _)) = pick.clone() else { return false };
             if !text.is_empty() {
@@ -790,7 +797,11 @@ fn link_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             let _ = app.run("insert.link", params);
         } else {
-            let _ = app.run("insert.link", json!({"url": url, "text": text}));
+            let mut params = json!({"url": url});
+            if !text.is_empty() {
+                params["text"] = json!(text);
+            }
+            let _ = app.run("insert.link", params);
         }
     }
     ok || cancel

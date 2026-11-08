@@ -1502,6 +1502,71 @@ fn links(s: &Session) -> Vec<(String, bool)> {
         .collect()
 }
 
+/// #5915: Modifying the "Text to display" field when inserting a hyperlink on a selected
+/// word or phrase must replace the selected text with the custom display text.
+#[test]
+fn inserting_link_over_selection_with_custom_display_text_replaces_text() {
+    let mut s = typed("Select a phrase here for testing.");
+    run(&mut s, "select.text", json!({"text": "phrase"}));
+    run(&mut s, "insert.link", json!({"url": "https://example.com/target", "text": "cas pratique"}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Select a cas pratique here for testing.");
+    assert_eq!(links(&s), [("cas pratique".into(), false)]);
+
+    // Undo restores original text and selection
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Select a phrase here for testing.");
+    assert_eq!(links(&s), [(String::new(), false)]);
+    assert_eq!(s.selected_text(), "phrase");
+    assert_eq!(s.sel.ordered(), (Pos::body(0, 9), Pos::body(0, 15)));
+
+    // Redo reapplies the replacement
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Select a cas pratique here for testing.");
+    assert_eq!(links(&s), [("cas pratique".into(), false)]);
+    assert!(s.sel.is_collapsed(), "redo collapses selection to caret");
+    assert_eq!(s.sel.focus, Pos::body(0, 21));
+}
+
+/// #5915: Empty or unchanged display text preserves the existing selection and formats it in place.
+#[test]
+fn inserting_link_with_empty_or_unchanged_display_text_preserves_selection_and_formats_in_place() {
+    let mut s = typed("Select a phrase here for testing.");
+    run(&mut s, "select.text", json!({"text": "phrase"}));
+    // Empty "text" is treated as omitted: formats selected "phrase" in place
+    run(&mut s, "insert.link", json!({"url": "https://example.com/target", "text": ""}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Select a phrase here for testing.");
+    assert_eq!(links(&s), [("phrase".into(), false)]);
+
+    // Display text identical to current selection also formats in place without deletion
+    run(&mut s, "select.text", json!({"text": "phrase"}));
+    run(&mut s, "insert.link", json!({"url": "https://example.com/updated", "text": "phrase"}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Select a phrase here for testing.");
+    assert_eq!(links(&s), [("phrase".into(), false)]);
+}
+
+/// #5915: Replacing selected text with custom display text under Track Changes records an insertion revision.
+#[test]
+fn inserting_link_over_selection_with_track_changes_tracks_replacement() {
+    let mut s = typed("Select a phrase here for testing.");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "phrase"}));
+    run(&mut s, "insert.link", json!({"url": "https://example.com/target", "text": "cas pratique"}));
+
+    // Before rejection: active text reflects replacement, link is present, and inserted range has an insertion revision
+    let p = s.doc.body[0].as_para().expect("body para");
+    let active_text: String = p.run_ranges().filter(|(_, c)| c.del.is_none()).map(|(r, _)| &p.text[r]).collect();
+    assert_eq!(active_text, "Select a cas pratique here for testing.");
+    assert_eq!(links(&s), [("cas pratique".into(), false)]);
+    let ins_run = p.run_ranges().find(|(_, c)| c.ins.is_some()).expect("inserted range with revision");
+    assert_eq!(&p.text[ins_run.0], "cas pratique");
+    assert_eq!(ins_run.1.link.as_deref(), Some("https://example.com/target"));
+
+    // Rejecting all changes removes the inserted link and restores the deleted original text
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Select a phrase here for testing.");
+    assert_eq!(links(&s), [(String::new(), false)]);
+}
+
 #[test]
 fn a_link_covers_only_its_own_text() {
     // Issue #413: linking a whole paragraph also linked its mark, so Enter carried the link into
