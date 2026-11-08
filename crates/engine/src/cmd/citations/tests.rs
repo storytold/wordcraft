@@ -802,6 +802,7 @@ fn lookup_session(tags: &[&str]) -> Session {
                 dirty: true,
                 code: false,
                 form: String::new(),
+                code_xml: String::new(),
             },
             &CharProps::default(),
         )
@@ -833,7 +834,7 @@ fn citation_source_lookups_keep_first_duplicates_case_and_style_order() {
         update_citations(&mut s).unwrap();
         let p = s.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
         for (k, (source, number)) in [(1, 1), (0, 2), (usize::MAX, 0), (3, 3), (0, 2)].into_iter().enumerate() {
-            let InlineObject::Field { instr, result, locked, dirty, code, form } = &p.objects[k] else { panic!() };
+            let InlineObject::Field { instr, result, locked, dirty, code, form, .. } = &p.objects[k] else { panic!() };
             let InlineObject::Field { instr: before, .. } = &original.para(StoryRef::Body, &Path::top(0)).unwrap().objects[k] else { panic!() };
             assert_eq!(instr, before);
             let expected = original.sources.get(source).map(|x| cite(x, st.name, number, "")).unwrap_or_else(|| "Original cache".into());
@@ -863,6 +864,7 @@ fn citation_refresh_source_lookup_work_scales_with_document_size() {
                 dirty: false,
                 code: false,
                 form: String::new(),
+                code_xml: String::new(),
             })
             .collect();
         let mut d = Document::new();

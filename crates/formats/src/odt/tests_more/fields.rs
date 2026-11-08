@@ -100,6 +100,7 @@ fn field_para(parts: &[(&str, Option<&str>)]) -> std::sync::Arc<wordcraft_doc::B
                     dirty: false,
                     code: false,
                     form: String::new(),
+                    code_xml: String::new(),
                 });
             }
             None => p.text.push_str(s),

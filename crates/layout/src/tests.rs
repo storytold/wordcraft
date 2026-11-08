@@ -10851,7 +10851,15 @@ fn a_hidden_mark_with_a_check_box_keeps_its_room() {
         d.last_section.start = SectionStart::Continuous;
         if boxed {
             let form = r#"<w:ffData><w:name w:val="Box"/><w:checkBox><w:sizeAuto/></w:checkBox></w:ffData>"#.to_string();
-            let field = InlineObject::Field { instr: "FORMCHECKBOX".into(), result: String::new(), locked: false, dirty: false, code: false, form };
+            let field = InlineObject::Field {
+                instr: "FORMCHECKBOX".into(),
+                result: String::new(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form,
+                code_xml: String::new(),
+            };
             d.insert_object(&Pos::body(1, 0), field, &Default::default()).unwrap();
         }
         lay(&d).caret(&Pos::body(2, 0)).unwrap()
@@ -14644,7 +14652,15 @@ fn lowered_pictures_and_check_boxes_take_words_line_heights() {
     let box_line = |lead: &str, m: f32, size: u32| {
         let mut d = Document::from_text(lead);
         let form = format!(r#"<w:ffData><w:name w:val="Box"/><w:checkBox><w:size w:val="{size}"/></w:checkBox></w:ffData>"#);
-        let field = InlineObject::Field { instr: "FORMCHECKBOX".into(), result: String::new(), locked: false, dirty: false, code: false, form };
+        let field = InlineObject::Field {
+            instr: "FORMCHECKBOX".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form,
+            code_xml: String::new(),
+        };
         let props = wordcraft_doc::CharProps { size: Some(10.0), ..Default::default() };
         let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
         p.props.line_spacing = Some(LineSpacing::Multiple(m));
