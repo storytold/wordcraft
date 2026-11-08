@@ -4620,7 +4620,7 @@ fn toc_entries_carry_heading_numbers() {
 /// A TOC of numbered headings (`1.`…`10.`, `1.1`) builds and updates.
 fn numbered_toc(styles: impl FnOnce(&mut wordcraft_doc::StyleSheet)) -> Session {
     let mut s = s();
-    styles(&mut s.doc.styles);
+    styles(Arc::make_mut(&mut s.doc.styles));
     run(&mut s, "references.toc", json!({}));
     run(&mut s, "caret.docEnd", json!({}));
     for (k, name) in ["One", "Section", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"].iter().enumerate() {
@@ -4628,7 +4628,7 @@ fn numbered_toc(styles: impl FnOnce(&mut wordcraft_doc::StyleSheet)) -> Session 
         run(&mut s, if k == 1 { "para.heading2" } else { "para.heading1" }, json!({}));
         run(&mut s, "text.newParagraph", json!({}));
     }
-    let num = s.doc.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let num = Arc::make_mut(&mut s.doc.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     for b in s.doc.body.iter_mut() {
         if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
             let level = match p.props.style.as_deref() {
@@ -4705,7 +4705,7 @@ fn toc_number_tab_follows_the_number() {
     // A style stop a cached Clear removes doesn't serve the tab either.
     let mut s = numbered_toc(|_| {});
     let left = |pos| TabStop { pos, align: TabAlign::Left, leader: TabLeader::None };
-    s.doc.styles.get_mut("TOC2").unwrap().para.tabs = Some(vec![left(60.0)]);
+    Arc::make_mut(&mut s.doc.styles).get_mut("TOC2").unwrap().para.tabs = Some(vec![left(60.0)]);
     for b in s.doc.body.iter_mut() {
         if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b)
             && p.props.style.as_deref() == Some("TOC2")
