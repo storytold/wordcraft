@@ -72,12 +72,13 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let mut note_map = std::collections::HashMap::new();
     let mut paired_notes = Vec::new();
     let mut inserted_notes = Vec::new();
+    let mut deleted_notes = Vec::new();
 
     if compare_notes {
         for kind in [wordcraft_doc::PartKind::Footnote, wordcraft_doc::PartKind::Endnote] {
             let orig_ids = document_note_ids(&s.doc, kind);
             let rev_ids = document_note_ids(&revised, kind);
-            let (paired, inserted, _) = align_notes(&s.doc, &orig_ids, &revised, &rev_ids, &opts, &mut budget);
+            let (paired, inserted, deleted) = align_notes(&s.doc, &orig_ids, &revised, &rev_ids, kind, &opts, &mut budget);
             for (o, r) in paired {
                 note_map.insert(r, o);
                 paired_notes.push((o, r));
@@ -88,6 +89,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                 note_map.insert(r, new_id);
                 inserted_notes.push((new_id, r));
             }
+            deleted_notes.extend(deleted);
         }
         if !note_map.is_empty() {
             revised.body = revised.body.iter().map(|b| Arc::new(remap_note_refs(b, &note_map, 0))).collect();
@@ -130,7 +132,16 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
             }
             changes += note_changes;
         }
-        changes += inserted_notes.len();
+        for &(new_id, _) in &inserted_notes {
+            if let Some(part) = s.doc.parts.get_mut(&new_id) {
+                part.blocks = part.blocks.iter().map(|b| Arc::new(mark_block(b, &|c| c.ins = Some(run.ins), 0))).collect();
+            }
+        }
+        for orig_id in deleted_notes {
+            if let Some(part) = s.doc.parts.get_mut(&orig_id) {
+                part.blocks = part.blocks.iter().map(|b| Arc::new(mark_block(b, &|c| c.del = Some(run.del), 0))).collect();
+            }
+        }
     }
     s.doc.ensure_nonempty();
     s.note_body_replaced();
@@ -273,7 +284,222 @@ fn document_note_ids(doc: &Document, kind: wordcraft_doc::PartKind) -> Vec<u32> 
     ids
 }
 
-/// Pairs original and revised note IDs using sequence alignment over note plain text.
+/// Minimum similarity score (on 0..=1000 scale) to allow pairing between two notes.
+const NOTE_SIMILARITY_THRESHOLD: u32 = 400;
+
+/// Maximum number of tokens inspected per note when computing similarity.
+const MAX_SIMILARITY_TOKENS: usize = 200;
+
+/// Metadata and content summary for aligning footnote and endnote parts.
+struct NoteInfo {
+    /// Note ID.
+    id: u32,
+    /// Normalized plain text key of the note content.
+    key: String,
+    /// Tokens for similarity comparison.
+    tokens: Vec<String>,
+    /// Location of the note reference: (body_block_index, paragraph_key).
+    ref_pos: Option<(usize, String)>,
+}
+
+/// Computes a map from note ID to its reference location: (body_block_index, paragraph_key).
+fn note_reference_map(doc: &Document, kind: wordcraft_doc::PartKind, opts: &CompareOptions) -> std::collections::HashMap<u32, (usize, String)> {
+    let note_kind = match kind {
+        wordcraft_doc::PartKind::Footnote => wordcraft_doc::para::NoteKind::Footnote,
+        wordcraft_doc::PartKind::Endnote => wordcraft_doc::para::NoteKind::Endnote,
+        _ => return std::collections::HashMap::new(),
+    };
+    let mut map = std::collections::HashMap::new();
+    doc.objects_in_reading_order_by_block(&mut |block_idx, para, obj_idx| {
+        if let Some(InlineObject::NoteRef { kind: k, id, .. }) = para.objects.get(obj_idx)
+            && *k == note_kind
+        {
+            map.entry(*id).or_insert_with(|| (block_idx, opts.key(&para.plain_text())));
+        }
+        true
+    });
+    map
+}
+
+/// Extracts [`NoteInfo`] for a list of note IDs in reading order.
+fn collect_note_info(doc: &Document, ids: &[u32], kind: wordcraft_doc::PartKind, opts: &CompareOptions) -> Vec<NoteInfo> {
+    let mut ref_map = note_reference_map(doc, kind, opts);
+    ids.iter()
+        .map(|&id| {
+            let text = doc.parts.get(&id).map(part_text).unwrap_or_default();
+            let key = opts.key(&text);
+            let tokens: Vec<String> = if opts.characters {
+                key.chars().filter(|c| !c.is_whitespace()).take(MAX_SIMILARITY_TOKENS).map(|c| c.to_string()).collect()
+            } else {
+                key.split_whitespace().take(MAX_SIMILARITY_TOKENS).map(str::to_string).collect()
+            };
+            let ref_pos = ref_map.remove(&id);
+            NoteInfo { id, key, tokens, ref_pos }
+        })
+        .collect()
+}
+
+/// Computes the length of the longest common subsequence between two slices.
+fn lcs_len<T: PartialEq>(a: &[T], b: &[T]) -> usize {
+    if a.is_empty() || b.is_empty() {
+        return 0;
+    }
+    let pre = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    let a_mid = a.get(pre..).unwrap_or_default();
+    let b_mid = b.get(pre..).unwrap_or_default();
+    let suf = a_mid.iter().rev().zip(b_mid.iter().rev()).take_while(|(x, y)| x == y).count();
+    let a_core = a_mid.get(..a_mid.len() - suf).unwrap_or_default();
+    let b_core = b_mid.get(..b_mid.len() - suf).unwrap_or_default();
+    let n = a_core.len();
+    let m = b_core.len();
+    if n == 0 || m == 0 {
+        return pre + suf;
+    }
+    let mut prev = vec![0u32; m + 1];
+    let mut curr = vec![0u32; m + 1];
+    for x in a_core {
+        for (j, y) in b_core.iter().enumerate() {
+            curr[j + 1] = if x == y { prev[j] + 1 } else { prev[j + 1].max(curr[j]) };
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    pre + suf + prev[m] as usize
+}
+
+/// Scores similarity between an original note and a revised note on a 0..=1000 scale.
+///
+/// Combines text similarity of the note content with reference location in the body:
+/// - Exact text match: 1000.
+/// - Text LCS similarity: 0..=1000.
+/// - Reference paragraph match bonus: if the body paragraph containing the note reference
+///   matches between original and revised, gives a substantial bonus or pairs directly.
+fn note_score(a: &NoteInfo, b: &NoteInfo, budget: &mut u64) -> u32 {
+    if !a.key.is_empty() && a.key == b.key {
+        return 1000;
+    }
+    let same_ref_para = match (&a.ref_pos, &b.ref_pos) {
+        (Some((_, text_a)), Some((_, text_b))) if !text_a.is_empty() => text_a == text_b,
+        _ => false,
+    };
+    let same_ref_idx = match (&a.ref_pos, &b.ref_pos) {
+        (Some((idx_a, _)), Some((idx_b, _))) => idx_a == idx_b,
+        _ => false,
+    };
+
+    let total_tokens = a.tokens.len().saturating_add(b.tokens.len());
+    let min_tokens = a.tokens.len().min(b.tokens.len());
+    let text_sim = if total_tokens == 0 {
+        1000
+    } else {
+        let max_possible = (2000u64 * min_tokens as u64) / total_tokens as u64;
+        if max_possible < NOTE_SIMILARITY_THRESHOLD as u64 && !same_ref_para && !same_ref_idx {
+            0
+        } else {
+            let cells = (a.tokens.len() as u64).saturating_mul(b.tokens.len() as u64);
+            *budget = budget.saturating_sub(cells);
+            let lcs = lcs_len(&a.tokens, &b.tokens);
+            ((2000u64 * lcs as u64) / total_tokens as u64) as u32
+        }
+    };
+
+    if same_ref_para {
+        text_sim.max(500).saturating_add(200).min(1000)
+    } else if same_ref_idx && text_sim >= 300 {
+        text_sim.saturating_add(100).min(1000)
+    } else {
+        text_sim
+    }
+}
+
+/// Aligns a run of original notes and revised notes using dynamic programming over note similarity and reference context.
+fn align_note_run(old_notes: &[NoteInfo], new_notes: &[NoteInfo], budget: &mut u64) -> (Vec<(u32, u32)>, Vec<u32>, Vec<u32>) {
+    let n = old_notes.len();
+    let m = new_notes.len();
+    if n == 0 {
+        return (Vec::new(), new_notes.iter().map(|info| info.id).collect(), Vec::new());
+    }
+    if m == 0 {
+        return (Vec::new(), Vec::new(), old_notes.iter().map(|info| info.id).collect());
+    }
+
+    let mut scores = vec![vec![0u32; m]; n];
+    for (row, a) in scores.iter_mut().zip(old_notes.iter()) {
+        for (cell, b) in row.iter_mut().zip(new_notes.iter()) {
+            *cell = note_score(a, b, budget);
+        }
+    }
+
+    let mut dp = vec![vec![0u32; m + 1]; n + 1];
+    for u in 0..n {
+        for v in 0..m {
+            let skip_old = dp.get(u).and_then(|r| r.get(v + 1)).copied().unwrap_or(0);
+            let skip_new = dp.get(u + 1).and_then(|r| r.get(v)).copied().unwrap_or(0);
+            let mut best = skip_old.max(skip_new);
+            let s = scores.get(u).and_then(|r| r.get(v)).copied().unwrap_or(0);
+            if s >= NOTE_SIMILARITY_THRESHOLD {
+                let diag = dp.get(u).and_then(|r| r.get(v)).copied().unwrap_or(0);
+                best = best.max(diag.saturating_add(s));
+            }
+            if let Some(cell) = dp.get_mut(u + 1).and_then(|r| r.get_mut(v + 1)) {
+                *cell = best;
+            }
+        }
+    }
+
+    let mut u = n;
+    let mut v = m;
+    let mut pairs = Vec::new();
+    let mut dels = Vec::new();
+    let mut inss = Vec::new();
+
+    while u > 0 || v > 0 {
+        if u > 0 && v > 0 {
+            let s = scores.get(u - 1).and_then(|r| r.get(v - 1)).copied().unwrap_or(0);
+            let prev_diag = dp.get(u - 1).and_then(|r| r.get(v - 1)).copied().unwrap_or(0);
+            let curr = dp.get(u).and_then(|r| r.get(v)).copied().unwrap_or(0);
+            if s >= NOTE_SIMILARITY_THRESHOLD && curr == prev_diag.saturating_add(s) {
+                pairs.push((u - 1, v - 1));
+                u -= 1;
+                v -= 1;
+                continue;
+            }
+        }
+        let skip_old = if u > 0 { dp.get(u - 1).and_then(|r| r.get(v)).copied().unwrap_or(0) } else { 0 };
+        let curr = dp.get(u).and_then(|r| r.get(v)).copied().unwrap_or(0);
+        if u > 0 && (v == 0 || curr == skip_old) {
+            dels.push(u - 1);
+            u -= 1;
+        } else if v > 0 {
+            inss.push(v - 1);
+            v -= 1;
+        } else {
+            break;
+        }
+    }
+
+    pairs.reverse();
+    dels.reverse();
+    inss.reverse();
+
+    // Fall back to 1-to-1 positional pairing only when counts match (n == m) and no pair met threshold.
+    if pairs.is_empty() && n == m {
+        let paired = old_notes.iter().zip(new_notes.iter()).map(|(o, r)| (o.id, r.id)).collect();
+        return (paired, Vec::new(), Vec::new());
+    }
+
+    let mut paired_out = Vec::new();
+    for (u_idx, v_idx) in pairs {
+        if let (Some(o), Some(r)) = (old_notes.get(u_idx), new_notes.get(v_idx)) {
+            paired_out.push((o.id, r.id));
+        }
+    }
+    let deleted_out = dels.into_iter().filter_map(|idx| old_notes.get(idx).map(|info| info.id)).collect();
+    let inserted_out = inss.into_iter().filter_map(|idx| new_notes.get(idx).map(|info| info.id)).collect();
+
+    (paired_out, inserted_out, deleted_out)
+}
+
+/// Pairs original and revised note IDs using sequence alignment over note plain text and body reference positions.
 ///
 /// Returns `(paired, inserted, deleted)`:
 /// - `paired`: `(orig_id, rev_id)` pairs to be diffed against each other.
@@ -284,11 +510,14 @@ fn align_notes(
     orig_ids: &[u32],
     rev_doc: &Document,
     rev_ids: &[u32],
+    kind: wordcraft_doc::PartKind,
     opts: &CompareOptions,
     budget: &mut u64,
 ) -> (Vec<(u32, u32)>, Vec<u32>, Vec<u32>) {
-    let keys_orig: Vec<String> = orig_ids.iter().map(|&id| opts.key(&orig_doc.parts.get(&id).map(part_text).unwrap_or_default())).collect();
-    let keys_rev: Vec<String> = rev_ids.iter().map(|&id| opts.key(&rev_doc.parts.get(&id).map(part_text).unwrap_or_default())).collect();
+    let old_info = collect_note_info(orig_doc, orig_ids, kind, opts);
+    let new_info = collect_note_info(rev_doc, rev_ids, kind, opts);
+    let keys_orig: Vec<String> = old_info.iter().map(|n| n.key.clone()).collect();
+    let keys_rev: Vec<String> = new_info.iter().map(|n| n.key.clone()).collect();
     let ops = lcs_ops(&keys_orig, &keys_rev, budget);
     let mut paired = Vec::new();
     let mut inserted = Vec::new();
@@ -308,26 +537,12 @@ fn align_notes(
                 let run = ops.get(k..).unwrap_or_default().iter().take_while(|o| **o != Op::Same).count();
                 let dels = ops.get(k..k + run).unwrap_or_default().iter().filter(|o| **o == Op::Del).count();
                 let inss = run - dels;
-                let pair_count = dels.min(inss);
-                for x in 0..pair_count {
-                    if let (Some(&o), Some(&r)) = (orig_ids.get(i + x), rev_ids.get(j + x)) {
-                        paired.push((o, r));
-                    }
-                }
-                if dels > pair_count {
-                    for x in pair_count..dels {
-                        if let Some(&o) = orig_ids.get(i + x) {
-                            deleted.push(o);
-                        }
-                    }
-                }
-                if inss > pair_count {
-                    for x in pair_count..inss {
-                        if let Some(&r) = rev_ids.get(j + x) {
-                            inserted.push(r);
-                        }
-                    }
-                }
+                let old_slice = old_info.get(i..i + dels).unwrap_or_default();
+                let new_slice = new_info.get(j..j + inss).unwrap_or_default();
+                let (p, ins, del) = align_note_run(old_slice, new_slice, budget);
+                paired.extend(p);
+                inserted.extend(ins);
+                deleted.extend(del);
                 i += dels;
                 j += inss;
                 k += run.max(1);

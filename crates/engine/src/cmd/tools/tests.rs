@@ -433,10 +433,27 @@ fn compare_handles_inserted_and_deleted_footnotes() {
     orig.run("caret.set", &json!({"pos": Pos::body(1, "Para two.".len())})).unwrap();
     orig.run("references.footnote", &json!({"text": "Second note."})).unwrap();
 
-    // Revised deletes the first footnote and keeps the second.
-    let mut rev = Session::new(Document::from_text("Para one.\nPara two."));
+    // Revised deletes the first footnote, keeps the second, and inserts a third.
+    let mut rev = Session::new(Document::from_text("Para one.\nPara two.\nPara three."));
     rev.run("caret.set", &json!({"pos": Pos::body(1, "Para two.".len())})).unwrap();
     rev.run("references.footnote", &json!({"text": "Second note."})).unwrap();
+    rev.run("caret.set", &json!({"pos": Pos::body(2, "Para three.".len())})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Third note."})).unwrap();
+
+    let fn1_id = orig.doc.body[0]
+        .as_para()
+        .unwrap()
+        .objects
+        .iter()
+        .find_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None })
+        .unwrap();
+    let fn2_id = orig.doc.body[1]
+        .as_para()
+        .unwrap()
+        .objects
+        .iter()
+        .find_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None })
+        .unwrap();
 
     let rev_path = std::env::temp_dir().join(format!("wc-rev-fndel-{}.docx", std::process::id()));
     crate::io::save_path(&rev_path, &rev.doc).unwrap();
@@ -455,6 +472,67 @@ fn compare_handles_inserted_and_deleted_footnotes() {
     let p2 = s.doc.body[1].as_para().unwrap();
     let unchanged_ref = p2.runs.iter().all(|r| r.props.del.is_none() && r.props.ins.is_none());
     assert!(unchanged_ref, "unchanged footnote reference is retained");
+
+    // Deleted footnote part content is marked with del.
+    let fn1_part = s.doc.parts.get(&fn1_id).unwrap();
+    assert!(fn1_part.blocks[0].as_para().unwrap().runs.iter().all(|r| r.props.del.is_some()), "deleted note content marked with del");
+
+    // Unchanged footnote part content has no del or ins.
+    let fn2_part = s.doc.parts.get(&fn2_id).unwrap();
+    assert!(
+        fn2_part.blocks[0].as_para().unwrap().runs.iter().all(|r| r.props.del.is_none() && r.props.ins.is_none()),
+        "unchanged note content has no tracked marks"
+    );
+
+    // Para three has inserted footnote reference, and inserted footnote part content is marked with ins.
+    let p3 = s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.plain_text().contains("Para three")).unwrap();
+    let fn3_id = p3.objects.iter().find_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None }).unwrap();
+    let fn3_part = s.doc.parts.get(&fn3_id).unwrap();
+    assert!(fn3_part.blocks[0].as_para().unwrap().runs.iter().all(|r| r.props.ins.is_some()), "inserted note content marked with ins");
+}
+
+/// #5842: When original has two footnotes (note 1 and note 2), and revised deletes note 1
+/// and lightly edits note 2, note 2 must be paired with note 2 (not note 1).
+/// Paragraph 2 retains its unchanged footnote reference, and note 2 content diffs cleanly.
+#[test]
+fn compare_pairs_notes_across_deletion_and_edit() {
+    let mut orig = Session::new(Document::from_text("Para one.\nPara two."));
+    orig.run("caret.set", &json!({"pos": Pos::body(0, "Para one.".len())})).unwrap();
+    orig.run("references.footnote", &json!({"text": "First footnote content."})).unwrap();
+    orig.run("caret.set", &json!({"pos": Pos::body(1, "Para two.".len())})).unwrap();
+    orig.run("references.footnote", &json!({"text": "Second footnote content."})).unwrap();
+
+    // Revised deletes footnote 1 from Para one and lightly edits footnote 2 in Para two.
+    let mut rev = Session::new(Document::from_text("Para one.\nPara two."));
+    rev.run("caret.set", &json!({"pos": Pos::body(1, "Para two.".len())})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Second footnote content revised."})).unwrap();
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-fnpair-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1);
+
+    // Para one: footnote reference was deleted.
+    let p1 = s.doc.body[0].as_para().unwrap();
+    let p1_has_del_ref = p1.runs.iter().any(|r| r.props.del.is_some());
+    assert!(p1_has_del_ref, "Para one footnote reference is tracked as deleted");
+
+    // Para two: footnote reference to Note 2 must be retained without deletion/insertion markup!
+    let p2 = s.doc.body[1].as_para().unwrap();
+    let p2_ref_clean = p2.runs.iter().all(|r| r.props.del.is_none() && r.props.ins.is_none());
+    assert!(p2_ref_clean, "Para two retains footnote reference cleanly without del/ins markup");
+
+    // Note 2 part: must contain the edit ("revised" inserted), rather than note 1 being rewritten.
+    let fn2_id = p2.objects.iter().find_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None }).unwrap();
+    let fn2_part = s.doc.parts.get(&fn2_id).unwrap();
+    let fn2_text = fn2_part.blocks[0].as_para().unwrap().plain_text();
+    assert!(fn2_text.contains("Second footnote content"), "Note 2 content retained: {fn2_text}");
+    let has_ins = fn2_part.blocks[0].as_para().unwrap().runs.iter().any(|r| r.props.ins.is_some());
+    assert!(has_ins, "Note 2 tracks insertion of revised text");
 }
 
 /// #5842: DOCX roundtrip preserves footnote tracked revisions (`w:ins`, `w:del`) produced by compare.
