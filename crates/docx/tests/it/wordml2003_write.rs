@@ -149,6 +149,90 @@ fn round_trips_through_the_2003_reader() {
 }
 
 /// Features 2003 XML can't carry drop out without an error, and the text stays.
+/// A cell's text direction is written as 2003's `w:textFlow` (hyphenated values, `tb-rl-v`) and a
+/// fixed layout as `Fixed`, and both read back.
+#[test]
+fn cell_text_direction_round_trips_as_text_flow() {
+    use wordcraft_doc::props::TextDirection;
+    let mut d = Document::new();
+    let mut t = Table::new(1, 2, 300.0);
+    t.props.fixed = true;
+    t.rows[0].cells[0].props.text_direction = TextDirection::Down;
+    t.rows[0].cells[0].props.text_direction_set = true;
+    t.rows[0].cells[1].props.text_direction = TextDirection::Up;
+    t.rows[0].cells[1].props.text_direction_set = true;
+    d.body = vec![Arc::new(Block::Table(t)), Arc::new(Block::Para(Paragraph::default()))];
+    let xml = write_wordml2003(&d).unwrap();
+    let text = String::from_utf8_lossy(&xml);
+    assert!(text.contains(r#"<w:textFlow w:val="tb-rl"/>"#) && text.contains(r#"<w:textFlow w:val="bt-lr"/>"#), "2003 spelling");
+    assert!(!text.contains("textDirection"), "no ECMA-376 name in a 2003 file");
+    assert!(text.contains(r#"<w:tblLayout w:type="Fixed"/>"#), "2003 capitalises the layout");
+    let back = read_xml(&xml).unwrap();
+    let Some(Block::Table(t)) = back.body.iter().map(|b| &**b).find(|b| matches!(b, Block::Table(_))) else { panic!("no table") };
+    let dirs: Vec<TextDirection> = t.rows[0].cells.iter().map(|c| c.props.text_direction).collect();
+    assert_eq!(dirs, [TextDirection::Down, TextDirection::Up]);
+    assert!(t.props.fixed, "a fixed layout reads back");
+}
+
+/// A frame's anchors and distances from text are written in 2003's lower case (`w:hanchor`…) and
+/// read back.
+#[test]
+fn frame_anchors_round_trip() {
+    use wordcraft_doc::props::TextFrame;
+    let mut d = Document::new();
+    let mut p = Paragraph::with_text("Framed", CharProps::default());
+    p.props.frame = Some(TextFrame {
+        x: 5.0,
+        y: -17.7,
+        h_anchor: "margin".into(),
+        v_anchor: "text".into(),
+        wrap: "around".into(),
+        h_space: 9.0,
+        v_space: 2.0,
+        ..Default::default()
+    });
+    d.body = vec![para_block(p)];
+    let xml = write_wordml2003(&d).unwrap();
+    let text = String::from_utf8_lossy(&xml);
+    assert!(text.contains(r#"w:hanchor="margin""#) && text.contains(r#"w:vanchor="text""#) && text.contains("w:hspace="), "2003 spelling: {text}");
+    let back = read_xml(&xml).unwrap();
+    let f = paras(&back)[0].props.frame.clone().expect("a frame");
+    assert_eq!((f.h_anchor.as_str(), f.v_anchor.as_str()), ("margin", "text"));
+    assert!((f.h_space - 9.0).abs() < 0.01 && (f.v_space - 2.0).abs() < 0.01 && (f.y + 17.7).abs() < 0.05, "{f:?}");
+}
+
+/// Enumerated values are written in 2003's hyphenated spelling (`at-least`, `dot-dash`,
+/// `thin-thick-thin-small-gap`, `decimal-full-width2`, `hebrew-1`) and read back.
+#[test]
+fn hyphenated_values_round_trip() {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders, LineSpacing, Underline};
+    let mut d = Document::new();
+    let mut p = Paragraph::with_text("Text", CharProps { underline: Some(Underline::DotDash), ..Default::default() });
+    p.props.line_spacing = Some(LineSpacing::AtLeast(18.0));
+    let bottom = Border { style: BorderStyle::ThinThickThinSmallGap, width: 3.0, color: None, space: 1.0 };
+    p.props.borders = Some(Borders { bottom: Some(bottom), ..Default::default() });
+    d.body = vec![para_block(p)];
+    // A number format's digit takes no hyphen (`pct-5` is a pattern's).
+    d.last_section.page_num_format = wordcraft_doc::section::NumFormat::DecimalFullWidth2;
+    let xml = write_wordml2003(&d).unwrap();
+    let text = String::from_utf8_lossy(&xml);
+    for v in [r#""at-least""#, r#"w:val="dot-dash""#, r#"w:val="thin-thick-thin-small-gap""#, r#""decimal-full-width2""#] {
+        assert!(text.contains(v), "{v} in 2003 spelling: {text}");
+    }
+    let back = read_xml(&xml).unwrap();
+    let p = paras(&back)[0];
+    assert_eq!(p.props.line_spacing, Some(LineSpacing::AtLeast(18.0)));
+    assert_eq!(p.props.borders.as_ref().and_then(|b| b.bottom.as_ref()).map(|b| b.style), Some(BorderStyle::ThinThickThinSmallGap));
+    assert_eq!(p.runs.first().and_then(|r| r.props.underline), Some(Underline::DotDash));
+    assert_eq!(back.last_section.page_num_format, wordcraft_doc::section::NumFormat::DecimalFullWidth2);
+
+    // The Hebrew formats do take one (`hebrew-1`).
+    d.last_section.page_num_format = wordcraft_doc::section::NumFormat::Hebrew1;
+    let xml = write_wordml2003(&d).unwrap();
+    assert!(String::from_utf8_lossy(&xml).contains(r#"w:fmt="hebrew-1""#));
+    assert_eq!(read_xml(&xml).unwrap().last_section.page_num_format, wordcraft_doc::section::NumFormat::Hebrew1);
+}
+
 #[test]
 fn control_characters_and_unsupported_content_do_not_break_the_file() {
     let mut d = Document::new();
