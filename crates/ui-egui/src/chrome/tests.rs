@@ -517,3 +517,31 @@ fn the_autosave_knob_sits_right_when_on_and_mirrors_right_to_left() {
     assert_eq!(autosave_knob_x(true, true, track), 108.0, "right to left, on: left");
     assert_eq!(autosave_knob_x(true, false, track), 122.0, "right to left, off: right");
 }
+
+/// #4495 review: a disabled Quick Access Toolbar command (Undo with nothing to undo) can't take
+/// the keyboard focus, so Tab never rings a button Enter can't run; once it can run, Tab reaches
+/// it.
+#[test]
+fn tab_skips_a_disabled_quick_access_command() {
+    let ctx = ctx();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mut n = 0;
+    let tab = || egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() };
+    let undo = qat_button_id("edit.undo");
+    let mut tabbed = |a: &mut WordApp| {
+        frame(&ctx, &mut n, vec![], a);
+        ctx.memory_mut(|m| m.surrender_focus(m.focused().unwrap_or(egui::Id::NULL)));
+        let mut seen = Vec::new();
+        for _ in 0..30 {
+            frame(&ctx, &mut n, vec![tab()], a);
+            seen.push(ctx.memory(|m| m.focused()));
+        }
+        seen
+    };
+    assert!(!a.session.can_undo(), "nothing to undo yet");
+    let seen = tabbed(&mut a);
+    assert!(seen.iter().any(Option::is_some), "Tab focuses the title bar's controls");
+    assert!(!seen.contains(&Some(undo)), "the disabled Undo took the focus");
+    a.run("text.insert", json!({"text": "Hello"})).unwrap();
+    assert!(tabbed(&mut a).contains(&Some(undo)), "Undo, now enabled, is reached with Tab");
+}

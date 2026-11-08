@@ -956,6 +956,38 @@ mod tests {
         }
     }
 
+    /// #4495 review: on a colour swatch the focus ring is two-tone (`widgets::swatch_focus_ring`),
+    /// the focus colour and its partner inside it: one of the two reaches 3:1 on every colour (each
+    /// highlight, the standard colours, greys and a sweep of the colour cube), black and white
+    /// included, in both themes. The focus colour alone doesn't: it vanishes on a swatch of its
+    /// own lightness.
+    #[test]
+    fn a_swatchs_focus_ring_reads_on_every_colour() {
+        use egui::Color32;
+        let mut colors: Vec<Color32> = wordcraft_doc::props::Highlight::ALL.iter().filter_map(|h| h.rgb()).map(super::c32).collect();
+        for hex in ["C00000", "FF0000", "FFC000", "FFFF00", "92D050", "00B050", "00B0F0", "0070C0", "002060", "7030A0"] {
+            colors.push(super::c32(wordcraft_doc::Rgb::parse(hex).unwrap()));
+        }
+        colors.extend((0..=255u8).step_by(5).map(Color32::from_gray));
+        let steps = [0u8, 51, 102, 153, 204, 255];
+        for r in steps {
+            for g in steps {
+                for b in steps {
+                    colors.push(Color32::from_rgb(r, g, b));
+                }
+            }
+        }
+        for t in [super::Tokens::light(), super::Tokens::dark()] {
+            let partner = crate::widgets::ring_partner(t.focus);
+            for c in &colors {
+                let best = contrast(t.focus, *c).max(contrast(partner, *c));
+                assert!(best >= 3.0, "dark={}: the swatch ring on {c:?} is {best:.2}:1", t.dark);
+            }
+            let own = if t.dark { Color32::WHITE } else { Color32::BLACK };
+            assert!(contrast(t.focus, own) < 3.0, "dark={}: the partner is needed on {own:?}", t.dark);
+        }
+    }
+
     /// #4495: the keyboard focus ring reaches 3:1 against every fill a focused control can have and
     /// everything it sits on, in both themes, and is not the accent a checked control is drawn in.
     /// On the File page's side bar the ring is white, as its text is.

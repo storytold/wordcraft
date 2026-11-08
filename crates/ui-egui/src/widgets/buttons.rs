@@ -67,6 +67,27 @@ pub fn focus_ring_with(ui: &Ui, r: Rect, resp: &Response, corner_radius: impl In
     }
 }
 
+/// The focus ring on a colour swatch: [`focus_ring_with`] in `focus`, and inside it a line of
+/// the opposite tone ([`ring_partner`]). The focus colour is near black or near white, so on a
+/// swatch of about its own lightness (black in the light theme, white or yellow in the dark one)
+/// it would vanish; one of the two tones stands out from any colour.
+pub fn swatch_focus_ring(ui: &Ui, r: Rect, resp: &Response, corner_radius: impl Into<CornerRadius>, focus: Color32) {
+    if resp.has_focus() {
+        let radius = corner_radius.into();
+        ui.painter().rect_stroke(r, radius, Stroke::new(FOCUS_RING_W, focus), egui::StrokeKind::Inside);
+        ui.painter().rect_stroke(r.shrink(FOCUS_RING_W), radius, Stroke::new(SWATCH_RING_INNER_W, ring_partner(focus)), egui::StrokeKind::Inside);
+    }
+}
+
+/// The inner line of [`swatch_focus_ring`].
+pub const SWATCH_RING_INNER_W: f32 = 1.0;
+
+/// White for a dark focus colour, black for a light one.
+pub fn ring_partner(focus: Color32) -> Color32 {
+    let light = u32::from(focus.r()) * 299 + u32::from(focus.g()) * 587 + u32::from(focus.b()) * 114 > 128_000;
+    if light { Color32::BLACK } else { Color32::WHITE }
+}
+
 /// [`focus_ring_with`] in the theme's focus colour with the ribbon buttons' rounding.
 pub fn focus_ring(ui: &Ui, r: Rect, resp: &Response, t: &Tokens) {
     focus_ring_with(ui, r, resp, CornerRadius::same(4), t.focus);

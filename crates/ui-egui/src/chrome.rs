@@ -33,7 +33,8 @@ pub(crate) fn qat_button_id(id: &str) -> egui::Id {
 fn qat_button(ui: &mut Ui, app: &mut WordApp, icon: &str, tip: &str, id: &str, enabled: bool) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::hover());
-    let resp = ui.interact(r, qat_button_id(id), Sense::click());
+    // A disabled command only shows its tooltip: Tab passes it by, as `undo_list_button` does.
+    let resp = ui.interact(r, qat_button_id(id), if enabled { Sense::click() } else { Sense::hover() });
     if resp.hovered() && enabled {
         ui.painter().rect_filled(r, 4.0, t.hover);
     }

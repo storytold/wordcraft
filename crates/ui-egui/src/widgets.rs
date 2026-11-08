@@ -16,7 +16,7 @@ mod tooltip;
 pub(crate) use buttons::focus_rings;
 pub use buttons::{
     BIG_ICON_Y, BIG_LABEL_Y, ButtonAction, CONTENT_H, DROPDOWN, FOCUS_RING_W, LABEL_H, LABEL_LINE_H, LABEL_PITCH, MenuButtonOptions, big, big_toggle,
-    enabled, focus_ring, focus_ring_with, label_line, menu_button, menu_enabled, small, split,
+    enabled, focus_ring, focus_ring_with, label_line, menu_button, menu_enabled, ring_partner, small, split, swatch_focus_ring,
 };
 pub(crate) use buttons::{bg, run_from_ribbon};
 pub use combo::{

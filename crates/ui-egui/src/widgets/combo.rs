@@ -1,4 +1,4 @@
-use super::buttons::{DROPDOWN, focus_ring_with};
+use super::buttons::{DROPDOWN, focus_ring_with, swatch_focus_ring};
 use super::tooltip::{keytip_badge, show_hint};
 use super::{Color32, CornerRadius, Rect, Response, Sense, Stroke, Tokens, Ui, icons, pos2, regular, vec2};
 
@@ -87,7 +87,9 @@ pub(crate) fn swatch(ui: &mut Ui, c: wordcraft_doc::Rgb) -> bool {
         Stroke::new(if resp.hovered() { 1.5 } else { 0.5 }, if resp.hovered() { t.accent } else { t.border_strong }),
         egui::StrokeKind::Inside,
     );
-    focus_ring_with(ui, r, &resp, 0, t.focus);
+    // Two-tone, inside the swatch: one tone stands out from any colour, in either theme. The
+    // current colour's accent outline is outside it.
+    swatch_focus_ring(ui, r, &resp, 0, t.focus);
     if resp.hovered() {
         note_hover(ui.ctx(), c.hex());
     }

@@ -302,6 +302,50 @@ fn a_ribbon_button_reached_with_tab_draws_a_focus_ring() {
     }
 }
 
+/// #4495 review: a colour swatch reached with Tab draws the two-tone ring inside itself (the
+/// focus colour, then its partner), clear of the accent outline marking the current colour, so a
+/// white swatch in the dark theme and a black one in the light theme still show it.
+#[test]
+fn a_swatch_reached_with_tab_draws_a_two_tone_ring() {
+    for (appearance, rgb) in
+        [(crate::theme::Appearance::Dark, wordcraft_doc::Rgb(255, 255, 255)), (crate::theme::Appearance::Light, wordcraft_doc::Rgb(0, 0, 0))]
+    {
+        let mut swatch_rect = None;
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(80.0, 40.0))
+            .with_context_setup(move |ctx| {
+                ctx.set_fonts(crate::theme::font_definitions(false, false));
+                crate::theme::apply(ctx, appearance);
+            })
+            .build_ui(|ui| {
+                let before = ui.cursor().min;
+                swatch(ui, rgb);
+                swatch_rect = Some(Rect::from_min_size(before, vec2(15.0, 15.0)));
+            });
+        h.run_steps(2);
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+        let t = Tokens::get(&h.ctx);
+        let partner = ring_partner(t.focus);
+        let strokes: Vec<(Rect, f32, Color32)> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Rect(r) if r.stroke.width > 0.0 => Some((r.rect, r.stroke.width, r.stroke.color)),
+                _ => None,
+            })
+            .collect();
+        drop(h);
+        let r = swatch_rect.unwrap();
+        assert!(strokes.contains(&(r, FOCUS_RING_W, t.focus)), "{appearance:?}: the focus-colour ring on the swatch: {strokes:?}");
+        assert!(
+            strokes.contains(&(r.shrink(FOCUS_RING_W), crate::widgets::buttons::SWATCH_RING_INNER_W, partner)),
+            "{appearance:?}: its partner inside it: {strokes:?}"
+        );
+    }
+}
+
 #[test]
 fn font_matches_puts_exact_and_prefix_before_substring() {
     let items: Vec<String> = ["Arial Black", "Arial", "Courier New", "Times New Roman", "Roman Serif"].map(String::from).to_vec();
