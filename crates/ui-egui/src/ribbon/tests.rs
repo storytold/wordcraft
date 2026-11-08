@@ -113,6 +113,93 @@ fn design_style_set_gallery_stays_in_its_box() {
     assert!(next_x >= gallery.right() + 8.0 - 0.01, "{next_x} {gallery:?}");
 }
 
+/// #5043: Home › Paragraph Tools: the drop-down's entries each run their own command over the
+/// selection; "in the Whole Document" entries run the same command with `scope: "all"`.
+#[test]
+fn paragraph_tools_menu_entries_run_their_commands() {
+    use egui_kittest::kittest::Queryable;
+    let a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("a  b\n\nc   d")), crate::Services::default());
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(vec2(900.0, 300.0))
+        .with_context_setup(|ctx| ctx.set_fonts(crate::theme::font_definitions(false, false)))
+        .build_ui_state(|ui, app: &mut WordApp| super::home::home(app, ui), a);
+    h.run_steps(2);
+    // The accessible label is the menu button's tip, "Paragraph Tools".
+    h.get_by_label("Paragraph Tools").click();
+    h.run_steps(2);
+    // Items carry their (empty) shortcut text in the label, so match by containment.
+    for name in [
+        "Split Lines into Paragraphs",
+        "Add Blank Paragraphs Between",
+        "Separate Paragraphs",
+        "Delete Blank Paragraphs",
+        "Remove Leading Spaces",
+        "Remove Extra Spaces",
+        "Indent Leading Spaces",
+        "Indents to Leading Spaces",
+        "Join Lines",
+        "Delete Blank Paragraphs in the Whole Document",
+        "Remove Leading Spaces in the Whole Document",
+        "Remove Extra Spaces in the Whole Document",
+    ] {
+        assert!(!h.query_all_by_label_contains(name).collect::<Vec<_>>().is_empty(), "{name} is a named entry");
+    }
+    // A caret, not a selection: the whole-document entries cover both paragraphs.
+    h.get_by_label_contains("Remove Extra Spaces in the Whole Document").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "a b\n\nc d");
+    // The menu closed with the click; open it again for the next entry.
+    h.get_by_label("Paragraph Tools").click();
+    h.run_steps(2);
+    // Both entries match by containment; the plain one is first in the menu.
+    h.query_all_by_label_contains("Delete Blank Paragraphs").min_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y)).unwrap().click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.undo_depth(), 2, "the second entry is its own undo step");
+}
+
+/// #5750: in a right-to-left interface, the Design tab's style-set gallery lays out from the
+/// right: the first style set ("default") is at the right edge, the remaining thumbnails read to
+/// the left, and the next controls start after a gap to the left of the gallery.
+#[test]
+fn design_style_set_gallery_reads_from_the_right_in_rtl() {
+    crate::i18n::set_current(crate::i18n::fixture_lang("ar", "\tHome\tالرئيسية\n"));
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mut seen = None;
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 200.0)).build_ui(|ui| {
+        crate::rtl::root(ui, |ui| {
+            crate::rtl::horizontal_top(ui, |ui| {
+                let (gallery, used) = style_set_box(&mut app, ui);
+                seen = Some((gallery, used, ui.cursor().max.x));
+            });
+        });
+    });
+    h.run_steps(2);
+    let tiles: Vec<Rect> = h.ctx.viewport(|v| {
+        v.prev_pass
+            .widgets
+            .layers()
+            .flat_map(|(_, w)| w.iter())
+            .filter(|w| (w.rect.width() - crate::previews::STYLE_SET_W).abs() < 0.1 && (w.rect.height() - CONTENT_H).abs() < 0.1)
+            .map(|w| w.rect)
+            .collect()
+    });
+    drop(h);
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+
+    let (gallery, used, next_x) = seen.unwrap();
+    assert!((gallery.width() - crate::previews::STYLE_SET_GALLERY_W).abs() < 0.01);
+    assert!(used.left() >= gallery.left() - 0.01, "{used:?} {gallery:?}");
+    assert!(used.right() <= gallery.right() + 0.01, "{used:?} {gallery:?}");
+    assert!(next_x <= gallery.left() - 8.0 + 0.01, "{next_x} {gallery:?}");
+
+    assert_eq!(tiles.len(), 7, "7 style set tiles");
+    assert!((tiles[0].right() - gallery.right()).abs() < 0.01, "default tile at the right edge: {tiles:?} {gallery:?}");
+    assert!((tiles[6].left() - gallery.left()).abs() < 0.01, "minimalist tile at the left edge: {tiles:?} {gallery:?}");
+    for i in 1..tiles.len() {
+        assert!(tiles[i].right() <= tiles[i - 1].left(), "tile {i} is to the left of tile {}", i - 1);
+    }
+}
+
 /// #2738: Home › Underline's drop-down: every line sample is a named entry (assistive
 /// technology, tooltips) that applies its own style; Words only, None and Underline Color ›
 /// Automatic do what they say.

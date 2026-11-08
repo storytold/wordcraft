@@ -157,6 +157,7 @@ impl Session {
             ribbon: crate::RibbonLayout::default(),
             editing_lang: None,
             read_aloud: Default::default(),
+            windows: Default::default(),
             password,
             #[cfg(not(target_arch = "wasm32"))]
             recovery: None,
