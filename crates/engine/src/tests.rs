@@ -3284,9 +3284,9 @@ fn tracked_style_definition_changes_are_recorded_and_resolved() {
     assert!(d.contains("Chr") && d.contains("bold") && d.contains("Para") && d.contains("align"), "{d}");
     assert_eq!(ch[0]["start"]["path"], json!([0]), "the change sits at the start of the document");
 
-    // Reject the change at the start of the document (where Word shows it): the old definition
-    // comes back and the change is gone.
-    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 0}}));
+    // Go to the change (at the start of the document, where Word shows it) and reject it: the old
+    // definition comes back and the change is gone.
+    run(&mut s, "review.nextChange", json!({}));
     run(&mut s, "review.reject", json!({}));
     let st = s.doc.styles.get("Heading1").unwrap();
     assert_eq!((st.chr.bold, st.para.align), (None, None), "rejecting restores the style as it was");
@@ -3378,6 +3378,66 @@ fn a_navigated_style_change_can_be_resolved_at_its_anchor() {
     let st = s.doc.styles.get("Heading1").unwrap();
     assert_eq!(st.chr.bold, None);
     assert!(st.para_change.is_none() && st.chr_change.is_none());
+}
+
+/// #2697 review: every style change sits at the same collapsed anchor, so Accept or Reject of
+/// the navigated one must resolve that revision only, not another author's style change. A caret
+/// put at the document start by other means resolves none of them; Accept/Reject All still
+/// resolve them all.
+#[test]
+fn a_navigated_style_change_is_resolved_alone() {
+    for (command, accept) in [("review.accept", true), ("review.reject", false)] {
+        let mut s = s();
+        run(&mut s, "document.setText", json!({"text": "body"}));
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        s.author = "Ana".into();
+        run(&mut s, "styles.modify", json!({"style": "Heading1", "chr": {"bold": true}}));
+        s.author = "Bo".into();
+        run(&mut s, "styles.modify", json!({"style": "Heading2", "chr": {"italic": true}}));
+        let changed = |s: &Session, id: &str| s.doc.styles.get(id).unwrap().chr_change.is_some();
+        let authors =
+            |v: &serde_json::Value| v.as_array().unwrap().iter().map(|c| c["author"].as_str().unwrap_or_default().to_string()).collect::<Vec<_>>();
+        let start = s.doc.start_of(StoryRef::Body);
+
+        // An ordinary caret at the document start is not a navigated style change, even right
+        // after navigating to one and moving away.
+        s.sel = crate::Selection::caret(s.doc.end_of(StoryRef::Body));
+        run(&mut s, "review.nextChange", json!({}));
+        assert_eq!(s.sel.ordered(), (start.clone(), start.clone()));
+        run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 2}}));
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 0}}));
+        run(&mut s, command, json!({}));
+        assert!(changed(&s, "Heading1") && changed(&s, "Heading2"), "{command} at a plain caret resolved a style change");
+
+        // Next Change reaches each style change in turn, though both share the anchor.
+        s.sel = crate::Selection::caret(s.doc.end_of(StoryRef::Body));
+        run(&mut s, "review.nextChange", json!({}));
+        assert_eq!(s.sel.ordered(), (start.clone(), start.clone()));
+        run(&mut s, "review.nextChange", json!({}));
+        assert_eq!(s.sel.ordered(), (start.clone(), start.clone()));
+        run(&mut s, command, json!({}));
+        assert!(changed(&s, "Heading1"), "{command} on Bo's style change resolved Ana's too");
+        assert!(!changed(&s, "Heading2"), "{command} left the navigated change");
+        assert_eq!(s.doc.styles.get("Heading2").unwrap().chr.italic, accept.then_some(true));
+        assert_eq!(authors(&run(&mut s, "review.changes", json!({}))), ["Ana"]);
+
+        // Previous Change from the end reaches the one left, and resolves it.
+        s.sel = crate::Selection::caret(s.doc.end_of(StoryRef::Body));
+        run(&mut s, "review.previousChange", json!({}));
+        run(&mut s, command, json!({}));
+        assert!(!changed(&s, "Heading1"), "{command} left the navigated change");
+        assert_eq!(s.doc.styles.get("Heading1").unwrap().chr.bold, accept.then_some(true));
+
+        // Accept/Reject All still resolve every style change.
+        s.author = "Ana".into();
+        run(&mut s, "styles.modify", json!({"style": "Heading1", "chr": {"italic": true}}));
+        s.author = "Bo".into();
+        run(&mut s, "styles.modify", json!({"style": "Heading2", "chr": {"bold": true}}));
+        assert_eq!(authors(&run(&mut s, "review.changes", json!({}))), ["Ana", "Bo"]);
+        run(&mut s, if accept { "review.acceptAll" } else { "review.rejectAll" }, json!({}));
+        assert!(!changed(&s, "Heading1") && !changed(&s, "Heading2"));
+        assert_eq!(run(&mut s, "review.changes", json!({})), json!([]));
+    }
 }
 
 /// #2697 review: identity, relationships, table formatting and gallery metadata do not have a

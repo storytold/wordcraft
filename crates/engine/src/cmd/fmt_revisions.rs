@@ -474,6 +474,17 @@ pub fn resolve_style(st: &mut Style, accept: bool) {
     }
 }
 
+/// Accept or reject one revision's property changes in a style definition (in a file the paragraph
+/// and run properties can carry different revisions).
+pub fn resolve_style_rev(st: &mut Style, rev: u32, accept: bool) {
+    if let Some(ch) = st.para_change.take_if(|ch| ch.rev == rev).filter(|_| !accept) {
+        st.para = ch.old;
+    }
+    if let Some(ch) = st.chr_change.take_if(|ch| ch.rev == rev).filter(|_| !accept) {
+        st.chr = ch.old;
+    }
+}
+
 /// Accept or reject a section's change (its headers and footers stay).
 pub fn resolve_section(s: &mut SectionProps, accept: bool) {
     let Some(ch) = s.fmt_change.take() else { return };
