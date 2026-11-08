@@ -8178,30 +8178,77 @@ fn recent_list_edits_work_without_a_document() {
 /// and preserves pending formatting for immediate typing.
 #[test]
 fn ribbon_font_and_size_return_focus_and_preserve_typing_font() {
-    let mut a = app();
-    a.run("text.insert", json!({"text": "Hello "})).unwrap();
-    a.canvas.want_focus = false;
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, Queryable};
 
-    // Font selection via ribbon hands focus back to canvas.
-    crate::widgets::run_from_ribbon(&mut a, "format.font", json!({"name": "JetBrains Mono"}));
-    assert!(a.canvas.want_focus, "ribbon font selection hands focus back to canvas");
-    assert_eq!(a.session.pending.as_ref().and_then(|p| p.font.as_deref()), Some("JetBrains Mono"));
+    let mut a = typed();
+    a.run("format.font", json!({"name": "Recent Font Alpha"})).unwrap();
+    a.run("format.font", json!({"name": "Recent Font Beta"})).unwrap();
+    let end = a.session.doc.end_of(wordcraft_doc::StoryRef::Body);
+    a.run("caret.set", json!({"pos": end})).unwrap();
 
-    // Size selection via ribbon hands focus back to canvas.
-    a.canvas.want_focus = false;
-    crate::widgets::run_from_ribbon(&mut a, "format.size", json!({"size": 18.0}));
-    assert!(a.canvas.want_focus, "ribbon font size selection hands focus back to canvas");
-    assert_eq!(a.session.pending.as_ref().and_then(|p| p.size), Some(18.0));
+    let mut h = harness(a);
+    h.run_steps(6);
 
-    // Refocusing or clicking where the caret already was keeps pending font & size.
-    let pos = a.session.sel.focus.clone();
-    a.run("caret.set", json!({"pos": pos})).unwrap();
-    assert_eq!(a.session.pending.as_ref().and_then(|p| p.font.as_deref()), Some("JetBrains Mono"));
-    assert_eq!(a.session.pending.as_ref().and_then(|p| p.size), Some(18.0));
+    let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
 
-    // Typing immediately inherits both font and size.
-    a.run("text.insert", json!({"text": "world"})).unwrap();
-    let p = a.session.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).unwrap();
-    assert_eq!(p.props_of_char(6).font.as_deref(), Some("JetBrains Mono"));
-    assert_eq!(p.props_of_char(6).size, Some(18.0));
+    // Pick "Recent Font Alpha" from the font combo via the ribbon UI
+    h.get(By::new().role(Role::TextInput).value("Recent Font Beta")).focus();
+    h.step();
+    assert!(!h.state().canvas.focused, "the font box took keyboard focus");
+
+    h.event(key(egui::Key::A, egui::Modifiers::COMMAND));
+    h.step();
+    h.event(egui::Event::Text("x".into()));
+    h.run_steps(2);
+    h.event(key(egui::Key::Backspace, egui::Modifiers::NONE));
+    h.run_steps(2);
+    // Down moves to "Recent Font Alpha", Enter applies it
+    h.event(key(egui::Key::ArrowDown, egui::Modifiers::NONE));
+    h.step();
+    h.event(key(egui::Key::Enter, egui::Modifiers::NONE));
+    h.run_steps(3);
+
+    // Font combo in home.rs dispatched through run_from_ribbon:
+    assert!(h.state().canvas.focused, "picking a font from the ribbon returns focus to the document");
+    assert_eq!(h.state().session.pending.as_ref().and_then(|p| p.font.as_deref()), Some("Recent Font Alpha"));
+
+    // Pick a new size from the size combo via the ribbon UI
+    let size = h
+        .state_mut()
+        .session
+        .run("format.state", &json!({}))
+        .unwrap()
+        .get("size")
+        .and_then(Value::as_f64)
+        .map(|s| format!("{s:.0}"))
+        .unwrap_or_else(|| "11".into());
+    h.get(By::new().role(Role::TextInput).value(&size)).focus();
+    h.step();
+    assert!(!h.state().canvas.focused, "the font size box took keyboard focus");
+
+    h.event(key(egui::Key::A, egui::Modifiers::COMMAND));
+    h.step();
+    h.event(egui::Event::Text("18".into()));
+    h.step();
+    h.event(key(egui::Key::Enter, egui::Modifiers::NONE));
+    h.run_steps(3);
+
+    assert!(h.state().canvas.focused, "committing font size returns focus to the document");
+    assert_eq!(h.state().session.pending.as_ref().and_then(|p| p.size), Some(18.0));
+
+    // Refocusing or clicking where the caret already was keeps pending font and size
+    let pos = h.state().session.sel.focus.clone();
+    h.state_mut().run("caret.set", json!({"pos": pos})).unwrap();
+    assert_eq!(h.state().session.pending.as_ref().and_then(|p| p.font.as_deref()), Some("Recent Font Alpha"));
+    assert_eq!(h.state().session.pending.as_ref().and_then(|p| p.size), Some(18.0));
+
+    // Typing immediately inherits both font and size across the whole inserted run
+    h.state_mut().run("text.insert", json!({"text": " extra"})).unwrap();
+    let p = h.state().session.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).unwrap();
+    let base_len = UNSAVED.len();
+    for i in base_len..p.len() {
+        assert_eq!(p.props_of_char(i).font.as_deref(), Some("Recent Font Alpha"), "char at {i} has font");
+        assert_eq!(p.props_of_char(i).size, Some(18.0), "char at {i} has size");
+    }
 }

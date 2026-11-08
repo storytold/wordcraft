@@ -77,7 +77,7 @@ fn extend(v: &Value) -> bool {
 }
 
 fn apply(s: &mut Session, to: Pos, ext: bool) {
-    let moved = ext || s.sel.anchor != to || s.sel.focus != to;
+    let moved = if ext { s.sel.focus != to } else { s.sel.anchor != to || s.sel.focus != to };
     if ext {
         s.sel.focus = to;
     } else {

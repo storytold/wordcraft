@@ -65,9 +65,9 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                     },
                 ) {
                     if f == crate::widgets::ADD_FONT {
-                        crate::widgets::run_from_ribbon(app, "font.add", json!({}));
+                        let _ = app.run("font.add", json!({}));
                     } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
-                        crate::widgets::run_from_ribbon(app, "font.loadSystem", json!({}));
+                        let _ = app.run("font.loadSystem", json!({}));
                     } else {
                         let f = app.previews.font_stored(&f);
                         crate::widgets::run_from_ribbon(app, "format.font", json!({"name": f}));

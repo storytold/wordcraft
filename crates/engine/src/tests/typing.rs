@@ -4041,22 +4041,53 @@ fn issues_1281_1045_english_dialects_proof_typed_text() {
 fn setting_caret_to_same_position_preserves_pending_formatting() {
     let mut s = typed("Hello ");
     run(&mut s, "format.font", json!({"name": "JetBrains Mono"}));
+    run(&mut s, "format.size", json!({"size": 18.0}));
     assert_eq!(s.pending.as_ref().and_then(|p| p.font.as_deref()), Some("JetBrains Mono"));
+    assert_eq!(s.pending.as_ref().and_then(|p| p.size), Some(18.0));
 
     // Setting the caret to the exact same position (e.g. clicking the sheet at the caret)
     // must not drop pending formatting (#5580).
     let pos = s.sel.focus.clone();
     run(&mut s, "caret.set", json!({"pos": pos}));
     assert_eq!(s.pending.as_ref().and_then(|p| p.font.as_deref()), Some("JetBrains Mono"));
+    assert_eq!(s.pending.as_ref().and_then(|p| p.size), Some(18.0));
 
-    // Subsequent typing takes the pending font.
+    // Extending to the same focus (no-op shift extend) preserves pending formatting.
+    run(&mut s, "caret.set", json!({"pos": pos, "extend": true}));
+    assert_eq!(s.pending.as_ref().and_then(|p| p.font.as_deref()), Some("JetBrains Mono"));
+    assert_eq!(s.pending.as_ref().and_then(|p| p.size), Some(18.0));
+
+    // Subsequent typing takes the pending font and size across the whole inserted run.
     typ(&mut s, "world");
     let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
-    assert_eq!(p.props_of_char(6).font.as_deref(), Some("JetBrains Mono"));
+    for off in 6..11 {
+        assert_eq!(p.props_of_char(off).font.as_deref(), Some("JetBrains Mono"), "char at {off} font");
+        assert_eq!(p.props_of_char(off).size, Some(18.0), "char at {off} size");
+    }
 
     // Moving the caret away drops pending formatting.
     run(&mut s, "format.font", json!({"name": "Georgia"}));
+    run(&mut s, "format.size", json!({"size": 24.0}));
     assert_eq!(s.pending.as_ref().and_then(|p| p.font.as_deref()), Some("Georgia"));
+    assert_eq!(s.pending.as_ref().and_then(|p| p.size), Some(24.0));
     run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
     assert!(s.pending.is_none());
+
+    // Collapsing a non-empty selection to its focus drops pending formatting.
+    run(&mut s, "format.font", json!({"name": "Georgia"}));
+    assert!(s.pending.is_some());
+    s.sel = crate::Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 5) };
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 5)}));
+    assert!(s.pending.is_none());
+
+    // No-op navigation at a document boundary (e.g. left arrow at doc start) preserves pending formatting.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    run(&mut s, "format.font", json!({"name": "Courier New"}));
+    assert_eq!(s.pending.as_ref().and_then(|p| p.font.as_deref()), Some("Courier New"));
+    run(&mut s, "caret.left", json!({}));
+    assert_eq!(s.sel.focus, Pos::body(0, 0));
+    assert_eq!(s.pending.as_ref().and_then(|p| p.font.as_deref()), Some("Courier New"));
+    run(&mut s, "caret.left", json!({"extend": true}));
+    assert_eq!(s.sel.focus, Pos::body(0, 0));
+    assert_eq!(s.pending.as_ref().and_then(|p| p.font.as_deref()), Some("Courier New"));
 }
