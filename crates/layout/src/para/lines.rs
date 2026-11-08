@@ -297,6 +297,9 @@ impl<'e> Breaker<'e> {
         };
         let end = lab.x + lab.width;
         match self.level.map(|l| l.suffix).unwrap_or(LevelSuffix::Tab) {
+            // An empty label (a "none" level with no text) that ends right at the left indent takes
+            // no tab: the text starts there, as in Word (#4985), and not at the next stop.
+            LevelSuffix::Tab if lab.width <= 0.01 && (end - self.rp.indent_left).abs() <= 0.01 => end,
             LevelSuffix::Tab => {
                 let t = next_tab(end, &self.rp.tabs, self.default_tab, self.hanging_at, self.tab_origin).pos;
                 // The level's own tab stop after the number, when it comes first.
@@ -438,8 +441,10 @@ impl<'e> Breaker<'e> {
                     if matches!(rp.line_spacing, LineSpacing::Exactly(_)) { (st.ascent, st.descent) } else { (c.obj_h, c.obj_d) }
                 } else {
                     ex.obj_asc = ex.obj_asc.max(c.obj_h);
-                    // A lowered picture reaches below the baseline.
-                    ex.obj_desc = ex.obj_desc.max(c.obj_d);
+                    // A lowered picture reaches below the baseline, with exact spacing no further
+                    // than its height (the line's box is fixed; its baseline stays where it was).
+                    let reach = if matches!(rp.line_spacing, LineSpacing::Exactly(_)) { c.obj_d.min(c.obj_h + c.obj_d) } else { c.obj_d };
+                    ex.obj_desc = ex.obj_desc.max(reach);
                     (st.ascent, st.descent)
                 }
             } else {
