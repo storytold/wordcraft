@@ -12969,3 +12969,87 @@ fn range_field_update_and_tracked_changes_preserved_on_open() {
     assert!(para2.run_ranges().any(|(rng, p)| p.ins == Some(0) && &para2.text[rng] == "2025"));
     assert!(para2.run_ranges().any(|(rng, p)| p.del == Some(1) && &para2.text[rng] == "2024"));
 }
+
+#[test]
+fn range_field_update_preserves_anchors_and_first_run_formatting_and_handles_seq_page_and_malformed_spans() {
+    use wordcraft_doc::para::InlineObject;
+    use wordcraft_doc::props::CharProps;
+
+    // 1. Bookmark/comment anchors inside a range-field result span survive, and the updated text
+    // inherits the first non-deleted result run's CharProps (with ins/del cleared).
+    let mut p = wordcraft_doc::Paragraph::new();
+    p.insert_object(0, InlineObject::BookmarkStart { name: "bm".into() }, &CharProps::default()).unwrap();
+    p.insert_text(p.len(), "Fresh", &CharProps::default()).unwrap();
+    p.insert_object(p.len(), InlineObject::BookmarkEnd { name: "bm".into() }, &CharProps::default()).unwrap();
+    p.insert_object(
+        p.len(),
+        InlineObject::FieldStart { instr: " REF bm ".into(), locked: false, dirty: true, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    let bold = CharProps { bold: Some(true), ..Default::default() };
+    p.insert_object(p.len(), InlineObject::BookmarkStart { name: "inner_bm".into() }, &bold).unwrap();
+    p.insert_object(p.len(), InlineObject::CommentStart { id: 1 }, &bold).unwrap();
+    p.insert_text(p.len(), "Old", &bold).unwrap();
+    p.insert_object(p.len(), InlineObject::CommentEnd { id: 1 }, &bold).unwrap();
+    p.insert_object(p.len(), InlineObject::BookmarkEnd { name: "inner_bm".into() }, &bold).unwrap();
+    p.insert_object(p.len(), InlineObject::FieldEnd, &CharProps::default()).unwrap();
+
+    // 2. Range SEQ and AUTHOR fields in a second paragraph also update.
+    let mut p2 = wordcraft_doc::Paragraph::new();
+    for instr in [" SEQ Fig ", " AUTHOR "] {
+        p2.insert_object(
+            p2.len(),
+            InlineObject::FieldStart { instr: instr.into(), locked: false, dirty: true, form: String::new() },
+            &CharProps::default(),
+        )
+        .unwrap();
+        p2.insert_text(p2.len(), "0", &CharProps::default()).unwrap();
+        p2.insert_object(p2.len(), InlineObject::FieldEnd, &CharProps::default()).unwrap();
+    }
+
+    // 3. Unclosed FieldStart and nested FieldStart..FieldStart..FieldEnd..FieldEnd stay untouched.
+    let mut p3 = wordcraft_doc::Paragraph::new();
+    p3.insert_object(
+        0,
+        InlineObject::FieldStart { instr: " REF bm ".into(), locked: false, dirty: true, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    p3.insert_object(
+        p3.len(),
+        InlineObject::FieldStart { instr: " REF bm ".into(), locked: false, dirty: true, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    p3.insert_text(p3.len(), "Nested", &CharProps::default()).unwrap();
+    p3.insert_object(p3.len(), InlineObject::FieldEnd, &CharProps::default()).unwrap();
+    p3.insert_object(p3.len(), InlineObject::FieldEnd, &CharProps::default()).unwrap();
+    p3.insert_object(
+        p3.len(),
+        InlineObject::FieldStart { instr: " REF bm ".into(), locked: false, dirty: true, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    p3.insert_text(p3.len(), "Unclosed", &CharProps::default()).unwrap();
+
+    let mut d = wordcraft_doc::Document::new();
+    d.core.creator = "Ada".into();
+    d.body = vec![wordcraft_doc::para_block(p), wordcraft_doc::para_block(p2), wordcraft_doc::para_block(p3)];
+    let mut s = Session::new(d);
+    run(&mut s, "references.updateFields", json!({"all": true}));
+
+    let para0 = s.doc.body[0].as_para().unwrap();
+    assert_eq!(para0.plain_text(), "FreshFresh");
+    assert!(para0.objects.iter().any(|o| matches!(o, InlineObject::BookmarkStart { name } if name == "inner_bm")));
+    assert!(para0.objects.iter().any(|o| matches!(o, InlineObject::BookmarkEnd { name } if name == "inner_bm")));
+    assert!(para0.objects.iter().any(|o| matches!(o, InlineObject::CommentStart { id: 1 })));
+    assert!(para0.objects.iter().any(|o| matches!(o, InlineObject::CommentEnd { id: 1 })));
+    assert!(para0.run_ranges().any(|(rng, pr)| pr.bold == Some(true) && para0.text[rng].contains("Fresh")));
+
+    let para1 = s.doc.body[1].as_para().unwrap();
+    assert_eq!(para1.plain_text(), "1Ada");
+
+    let para2 = s.doc.body[2].as_para().unwrap();
+    assert!(para2.plain_text().ends_with("Unclosed"), "unclosed range field stays untouched: {}", para2.plain_text());
+}
