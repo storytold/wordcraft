@@ -106,6 +106,10 @@ pub(super) struct Body<'a> {
     depth: usize,
     /// The markup being read (`content.xml`), for keeping paragraphs' own (empty: none kept).
     pub(super) raw: &'a [u8],
+    /// The markup being read, body's or a header's, and where the start tag being read ends in it:
+    /// for looking into a picture before reading it (empty: not known).
+    pub(super) markup: &'a [u8],
+    pub(super) tag_end: usize,
     /// The paragraph whose markup is being kept (see [`KeptOpen`]).
     kept_open: Option<KeptOpen>,
     /// The body table whose markup is being kept (its `done`: the container's length before it).
@@ -257,6 +261,8 @@ impl<'a> Body<'a> {
             skip: 0,
             depth: 0,
             raw: &[],
+            markup: &[],
+            tag_end: 0,
             kept_open: None,
             kept_table: None,
             kept_index: None,
@@ -455,6 +461,7 @@ impl<'a> Body<'a> {
     /// whole and refers to nothing outside itself keeps its markup (`Para::kept`), so a save
     /// that doesn't change it writes it as it was (see `wordcraft_doc::kept`).
     pub(super) fn feed_at(&mut self, ev: Ev, at: (usize, usize)) {
+        self.tag_end = at.1;
         self.hide_read();
         self.hidden_section(&ev);
         // A body index, kept whole: its settings and templates, which WordCraft writes its own.
@@ -1434,14 +1441,42 @@ impl Body<'_> {
     }
 
     /// Part of a frame: its picture, embedded object, description or contour.
+    /// Whether the `draw:image` just started holds any text, from its markup; `true` when the
+    /// markup isn't known, so nothing in it is skipped unread.
+    fn picture_holds_words(&self) -> bool {
+        let (Some(before), Some(rest)) = (self.markup.get(..self.tag_end), self.markup.get(self.tag_end..)) else { return true };
+        if before.is_empty() {
+            return true;
+        }
+        if before.ends_with(b"/>") {
+            return false;
+        }
+        let close = b"</draw:image>";
+        let Some(end) = rest.windows(close.len()).position(|w| w == close) else { return true };
+        let mut in_tag = false;
+        rest.get(..end).unwrap_or_default().iter().any(|&b| match b {
+            b'<' => {
+                in_tag = true;
+                false
+            }
+            b'>' => {
+                in_tag = false;
+                false
+            }
+            _ => !in_tag && !b.is_ascii_whitespace(),
+        })
+    }
+
     fn frame_part(&mut self, q: &str, a: &Attrs) {
         match local(q) {
             "image" => {
                 // What a picture holds (§10.4.4 lets it hold text; LibreOffice writes an empty
                 // paragraph in one it draws as a shape, as it does every picture in a group) isn't
-                // the text's: read as a paragraph, it ended the one around the frame. It isn't
-                // shown, and stays in the paragraph's markup as read.
-                if q == "draw:image" {
+                // the text's: read as a paragraph, it ended the one around the frame. An empty one
+                // isn't read. Words in one still are, as a paragraph of their own (which still ends
+                // the one around it): skipped, they'd be lost on the paragraph's first edit or a
+                // save to another format.
+                if q == "draw:image" && !self.picture_holds_words() {
                     self.skip = 1;
                 }
                 // A chart's replacement picture (what readers that can't draw it show): kept with

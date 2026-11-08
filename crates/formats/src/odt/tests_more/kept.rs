@@ -235,18 +235,45 @@ fn a_picture_holding_a_paragraph_in_a_cell_or_a_text_box_stays_in_its_own() {
     assert_eq!(saved.matches(inner.as_str()).count(), 2, "as read: {saved}");
 }
 
+/// All the text of `blocks`, paragraph by paragraph.
+fn texts(blocks: &[std::sync::Arc<wordcraft_doc::Block>]) -> Vec<String> {
+    blocks.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect()
+}
+
 #[test]
-fn a_picture_holding_words_is_written_as_read_and_they_stay_out_of_the_text() {
-    // LibreOffice draws them on the picture. WordCraft doesn't show them, but they aren't the
-    // body's: the paragraphs stay as they are and the words stay where they were.
+fn words_in_a_picture_are_not_lost() {
+    // LibreOffice draws them on the picture. Skipped like an empty paragraph, they were only in the
+    // paragraph's markup as read: gone once the paragraph was edited, or saved to another format.
     let held = SHAPE_PICTURE.replace("<text:p/>", r#"<text:p text:style-name="P1">Words on it</text:p>"#);
     let first = format!(r#"<text:p text:style-name="Standard">{held}</text:p>"#);
     let (pkg, _) = shape_picture_doc(&format!("{first}{AFTER_PICTURE}"));
-    let d = import(&pkg).unwrap();
-    assert_eq!(d.body.len(), 2);
-    assert_eq!(d.body[0].as_para().unwrap().text, "\u{FFFC}", "only the picture");
-    assert_eq!(d.body[1].as_para().unwrap().text, "Text after it.");
-    assert!(content_of(&export(&d).unwrap()).contains(&format!("{first}\n{AFTER_PICTURE}")));
+    let mut d = import(&pkg).unwrap();
+    assert!(texts(&d.body).iter().any(|t| t.contains("Words on it")), "{:?}", texts(&d.body));
+    assert!(String::from_utf8(crate::txt::export(&d)).unwrap().contains("Words on it"));
+    d.kept.clear();
+    assert!(content_of(&export(&d).unwrap()).contains("Words on it"));
+}
+
+#[test]
+fn a_picture_in_a_header_holding_an_empty_paragraph_stays_in_its_own_and_words_stay() {
+    let header = |held: &str| {
+        let styles = format!(
+            r#"<office:document-styles {NS_T} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink"><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>Head {held} line</text:p></style:header></style:master-page></office:master-styles></office:document-styles>"#
+        );
+        let png = [b"\x89PNG\r\n\x1a\n".as_slice(), &[5u8; 64]].concat();
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:body><office:text><text:p>Body</text:p></office:text></office:body></office:document-content>"#
+        );
+        let pkg = crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/x.png", &png)]);
+        let d = import(&pkg).unwrap();
+        let part = d.parts.values().find(|p| p.kind == wordcraft_doc::PartKind::Header).expect("a header");
+        texts(&part.blocks)
+    };
+    // An empty paragraph in the picture doesn't end the header's.
+    assert_eq!(header(SHAPE_PICTURE), vec!["Head \u{FFFC} line".to_string()]);
+    // Words in one are read.
+    let held = SHAPE_PICTURE.replace("<text:p/>", "<text:p>Words on it</text:p>");
+    assert!(header(&held).iter().any(|t| t.contains("Words on it")), "{:?}", header(&held));
 }
 
 #[test]
