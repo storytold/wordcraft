@@ -1,10 +1,11 @@
 use super::{Ui, WordApp, json};
 
 /// The spelling suggestions and synonyms the context menu offers for the selection or the word
-/// at the caret.
+/// at the caret, and whether it offers Accept and Reject Change: worked out once, as it opens.
 pub(super) fn context_suggestions(app: &mut WordApp) {
     app.canvas.context_issue = app.session.run("review.suggestions", &json!({})).ok().filter(|v| !v.is_null());
     app.canvas.context_synonyms = app.session.run("review.thesaurus", &json!({})).ok().and_then(|v| v.get("synonyms").cloned());
+    app.canvas.context_change = wordcraft_engine::cmd::review::change_at_selection(&app.session);
 }
 
 /// Right-click inside an equation: its structures' actions, display and conversion.
@@ -97,7 +98,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         ui.separator();
     }
     // A tracked change at the caret or in the selection: resolve it from here, as in Word.
-    if wordcraft_engine::cmd::review::change_at_selection(&app.session) {
+    if app.canvas.context_change {
         item(ui, app, "Accept Change", "review.accept", json!({}));
         item(ui, app, "Reject Change", "review.reject", json!({}));
         ui.separator();
