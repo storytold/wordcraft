@@ -707,6 +707,13 @@ impl<'r> Builder<'r> {
         c.push(FBlock::Para(p));
     }
 
+    fn inside_table_parts(&self) -> bool {
+        matches!(
+            self.stack.iter().rev().find(|e| matches!(e.kind, ElKind::Table | ElKind::Tr | ElKind::Cell)).map(|e| e.kind),
+            Some(ElKind::Table | ElKind::Tr)
+        )
+    }
+
     /// Text whose white space is the author's, not the source's indentation (see
     /// [`super::lexer::Tok::Spaced`]): each space and tab is written as it is, so a pasted tab
     /// stop keeps its tabs and a run of spaces keeps its spaces.
@@ -718,6 +725,11 @@ impl<'r> Builder<'r> {
             return;
         }
         let code = self.stack.iter().any(|e| e.kind == ElKind::Pre);
+        // White space between a table's parts is layout, as it is in `text`: a reference to it
+        // there adds no paragraph.
+        if !code && self.inside_table_parts() {
+            return;
+        }
         let f = self.fmt();
         if code {
             let line = t.trim_end_matches('\r');
@@ -742,10 +754,7 @@ impl<'r> Builder<'r> {
         if t.is_empty() {
             return;
         }
-        let inside_table_only = matches!(
-            self.stack.iter().rev().find(|e| matches!(e.kind, ElKind::Table | ElKind::Tr | ElKind::Cell)).map(|e| e.kind),
-            Some(ElKind::Table | ElKind::Tr)
-        );
+        let inside_table_only = self.inside_table_parts();
         if inside_table_only && t.trim().is_empty() {
             return;
         }
