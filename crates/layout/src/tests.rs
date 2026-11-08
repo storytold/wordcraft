@@ -9,6 +9,7 @@ mod bidi;
 mod budget;
 mod cell_floats;
 mod complex;
+mod float_top;
 mod grid;
 mod ligature;
 pub(crate) mod linear;
@@ -8977,6 +8978,34 @@ fn superscript_and_subscript_lines_are_as_tall_as_full_size_text() {
     }
     let lowered = height(&[("Hxg ", 11.0, VertAlign::Baseline, 0.0), ("max", 11.0, VertAlign::Subscript, -6.0)]);
     assert!((lowered - plain - 6.0).abs() < 0.01, "lowered {lowered} vs plain {plain}");
+}
+
+#[test]
+fn superscript_digits_advance_at_the_half_point_size() {
+    use wordcraft_doc::props::VertAlign;
+    // Word sets an 11pt superscript at 7pt (0.65 × 11 = 7.15, rounded to the half point): its
+    // digits advance by 7pt digit widths (Word for Mac, measured from its PDF export).
+    let width = |size: f32, vert_align: VertAlign| {
+        let mut p = wordcraft_doc::Paragraph::new();
+        let props =
+            wordcraft_doc::CharProps { font: Some(WRAP_TEST_FONT.into()), size: Some(size), vert_align: Some(vert_align), ..Default::default() };
+        p.runs.push(wordcraft_doc::para::Run { len: 10, props: props.clone() });
+        p.text.push_str("1234567890");
+        p.mark = props;
+        let mut d = Document::new();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        // From the first digit's start to the last's: nine digit advances.
+        let xs = l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| if let Placed::Lines { para, .. } = it { para.lines.first().map(|x| x.xs.clone()) } else { None })
+            .unwrap();
+        xs.last().unwrap() - xs.first().unwrap()
+    };
+    let seven = width(7.0, VertAlign::Baseline);
+    assert!((width(11.0, VertAlign::Superscript) - seven).abs() < 0.01, "{} vs {seven}", width(11.0, VertAlign::Superscript));
+    assert!((width(11.0, VertAlign::Subscript) - seven).abs() < 0.01);
 }
 
 #[test]
