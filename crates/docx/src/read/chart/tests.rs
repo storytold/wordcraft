@@ -528,3 +528,65 @@ fn negative_sections_and_scientific_numbers() {
     assert_eq!(format_value(0.0, "0.00E+00", 1.0), "0.00E+00");
     assert_eq!(format_value(-12345.0, "0.0E-00", 1.0), "-1.2E04");
 }
+
+// An automatic series colour follows the series' `c:idx`, not its place in the file (#5963), as
+// measured in Word: `idx` 3 then 0 are accent4 then accent1, a lone `idx` 2 is accent3, and
+// `c:order` changes nothing.
+
+/// The fill colours of the bars of a column chart of `sers`, and of its legend swatches.
+fn column_colours(sers: &[String]) -> (Vec<Rgb>, Vec<Rgb>) {
+    let plot = format!(
+        r#"<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:varyColors val="0"/>{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#,
+        sers.concat()
+    );
+    let items = with_legend(&plot, "r", 300.0, 200.0);
+    let bars = filled(&items).iter().map(|b| b.0).collect();
+    let keys = items
+        .iter()
+        .filter_map(|it| if let GraphicItem::Shape { rect, fill, .. } = it { (rect[2] == SWATCH).then_some(*fill).flatten() } else { None })
+        .collect();
+    (bars, keys)
+}
+
+/// `ser` with its `c:idx` / `c:order` replaced by `idx_order` (an empty string drops them).
+fn renumbered(ser: &str, idx_order: &str) -> String {
+    let start = ser.find("<c:idx").expect("ser writes c:idx");
+    let end = ser.find("<c:tx>").expect("ser writes c:tx");
+    format!("{}{idx_order}{}", &ser[..start], &ser[end..])
+}
+
+#[test]
+fn automatic_series_colours_follow_c_idx() {
+    let accent = |k: usize| theme()[4 + k];
+    let a = ser(0, "A", None, &["Q1"], &["1"]);
+    let b = ser(1, "B", None, &["Q1"], &["2"]);
+    // idx 3 first, idx 0 second: accent4, accent1, in the bars and the legend.
+    let sers = [renumbered(&a, r#"<c:idx val="3"/><c:order val="0"/>"#), renumbered(&b, r#"<c:idx val="0"/><c:order val="1"/>"#)];
+    assert_eq!(column_colours(&sers), (vec![accent(3), accent(0)], vec![accent(3), accent(0)]));
+    // A lone series with idx 2 is accent3.
+    let lone = [renumbered(&a, r#"<c:idx val="2"/><c:order val="0"/>"#)];
+    assert_eq!(column_colours(&lone).0, [accent(2)]);
+    // c:order doesn't matter: idx 0 and 1 stay accent1 and accent2 with their orders swapped.
+    let swapped = [renumbered(&a, r#"<c:idx val="0"/><c:order val="1"/>"#), renumbered(&b, r#"<c:idx val="1"/><c:order val="0"/>"#)];
+    assert_eq!(column_colours(&swapped).0, [accent(0), accent(1)]);
+    // A series' own colour still wins.
+    let own = [renumbered(&ser(0, "A", Some("FF0000"), &["Q1"], &["1"]), r#"<c:idx val="3"/><c:order val="0"/>"#)];
+    assert_eq!(column_colours(&own).0, [Rgb(0xFF, 0, 0)]);
+}
+
+#[test]
+fn series_without_a_usable_c_idx_take_their_place() {
+    let accent = |k: usize| theme()[4 + k];
+    let a = ser(0, "A", None, &["Q1"], &["1"]);
+    let b = ser(1, "B", None, &["Q1"], &["2"]);
+    // No c:idx at all: the place in the file.
+    assert_eq!(column_colours(&[renumbered(&a, ""), renumbered(&b, "")]).0, [accent(0), accent(1)]);
+    // Junk, negative and out-of-range values: no panic, the place in the file.
+    for junk in ["x", "-1", "1e3", "99999999999999999999999"] {
+        let sers = [renumbered(&a, &format!(r#"<c:idx val="{junk}"/>"#)), renumbered(&b, &format!(r#"<c:idx val="{junk}"/>"#))];
+        assert_eq!(column_colours(&sers).0, [accent(0), accent(1)], "{junk:?}");
+    }
+    // The largest unsignedInt `c:idx` allows draws, without a panic.
+    let big = [renumbered(&a, &format!(r#"<c:idx val="{}"/>"#, u32::MAX))];
+    assert_eq!(column_colours(&big).0.len(), 1);
+}
