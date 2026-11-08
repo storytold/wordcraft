@@ -84,9 +84,12 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
         ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.primary_released(), i.pointer.latest_pos()));
     let starts = pressed && resp.contains_pointer();
     match mode {
-        DrawMode::Pen(tool) | DrawMode::ActionPen => {
+        DrawMode::Pen(_) | DrawMode::ActionPen => {
             let action = mode == DrawMode::ActionPen;
-            let tool = if action { InkTool::Pen } else { tool };
+            let tool = match mode {
+                DrawMode::Pen(t) => t,
+                _ => InkTool::Pen,
+            };
             if starts && let Some((page, x, y)) = at.and_then(|p| page_at(rects, layout, scale, p)) {
                 app.canvas.ink = Some(InkDrag { page, tool, pts: vec![[x, y]], action });
             } else if down

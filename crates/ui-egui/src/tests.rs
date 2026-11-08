@@ -7974,7 +7974,7 @@ fn the_action_pen_loop_selects_words_with_the_pointer() {
     a.run("format.bold", json!({})).unwrap();
     assert_eq!(body_text(&a), "alpha beta gamma\nsecond line");
     let para = a.session.doc.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
-    assert!(para.runs.first().is_some_and(|r| r.props.bold), "the selected word is bold: {:?}", para.runs);
+    assert!(para.runs.first().is_some_and(|r| r.props.bold == Some(true)), "the selected word is bold: {:?}", para.runs);
 }
 
 /// A line drawn through text with the Action Pen deletes it with the pointer, in one undo step.

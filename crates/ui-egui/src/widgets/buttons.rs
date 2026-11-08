@@ -101,7 +101,7 @@ pub fn big_split_toggle(
         label_line(ui, r.center().x, y, l, regular(11.5), if on { t.text } else { t.text_disabled }, false);
         y += LABEL_PITCH;
     }
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(ar.center().x, r.max.y - 5.0), vec2(DROPDOWN, DROPDOWN)), c, a);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(ar.center().x, r.max.y - 5.0), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, a);
     let resp = tooltip(app, resp, &label.replace('\n', " "), id);
     command_menu(&resp, app, id);
     if resp.clicked() && on {
