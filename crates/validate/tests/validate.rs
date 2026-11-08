@@ -8,9 +8,10 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use common::{
-    CT_CHART, CT_COMMENTS, CT_COMMENTS_EXT, CT_COMMENTS_IDS, CT_CUSTOMXML_PROPS, CT_ENDNOTES, CT_FOOTER, CT_FOOTNOTES, CT_GLOSSARY, CT_HEADER,
-    CT_MAIN, CT_NUMBERING, CT_PEOPLE, CT_SETTINGS, CT_STYLES, CT_TEMPLATE_MAIN, CT_WEB_SETTINGS, Doc, add_header, claim_entry_method,
-    content_types_xml, corrupt_entry_data, document_xml, ns, rels_xml, replace_all, rich_content_types, utf16_le_with_bom,
+    CT_CHART, CT_COMMENTS, CT_COMMENTS_EXT, CT_COMMENTS_IDS, CT_CUSTOM_PROPS, CT_CUSTOMXML_PROPS, CT_ENDNOTES, CT_FONT_TABLE, CT_FOOTER,
+    CT_FOOTNOTES, CT_GLOSSARY, CT_HEADER, CT_MAIN, CT_NUMBERING, CT_PEOPLE, CT_SETTINGS, CT_STYLES, CT_TEMPLATE_MAIN, CT_WEB_SETTINGS, Doc,
+    add_header, claim_entry_method, content_types_xml, corrupt_entry_data, document_xml, ns, rels_xml, replace_all, rich_content_types,
+    utf16_le_with_bom,
 };
 use wordcraft_validate::{Finding, Report, Severity, Verdict, validate_bytes, validate_path};
 
@@ -64,6 +65,14 @@ const ALL_CHECKS: &[&str] = &[
     "REF-NOTE",
     "REF-HEADER",
     "REF-STYLE",
+    "STYLE-DUP-ID",
+    "STYLE-DUP-NAME",
+    "STYLE-RESERVED-NAME",
+    "STYLE-RESERVED-ID",
+    "STYLE-COUNT",
+    "STYLE-ID-LENGTH",
+    "FONT-DUP-NAME",
+    "PROP-DUP-NAME",
     "NUM-DANGLING",
     "FLD-UNBALANCED",
     "STRUCT-TC-NO-P",
@@ -4119,4 +4128,150 @@ fn relationship_only_classified_part_decode_error_is_processed() {
     let report = validate(&d);
     assert_eq!(report.verdict, Verdict::Fail, "findings: {:?}", report.findings);
     assert_finding(&report, "XML-MALFORMED", Some("customXml/item1.dat"));
+}
+
+// ---------------------------------------------------------------------------
+// Vocabulary family (PR 3): style id/name collisions and reserved
+// vocabulary in styles.xml, collisions in fontTable.xml and
+// docProps/custom.xml. Severities and grades were set by the batch-5
+// Word for the web fixtures; the reserved-name table is MS-OI29500
+// section 17.7.4.9(d)'s.
+
+/// A document whose styles part holds `inner` style definitions.
+fn styles_doc(inner: &str) -> Doc {
+    let mut d = Doc::minimal();
+    d.add_with_override("word/styles.xml", CT_STYLES, format!(r#"<?xml version="1.0"?><w:styles xmlns:w="{W_NS}">{inner}</w:styles>"#));
+    d.set_doc_rels(
+        r#"<Relationship Id="rS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#,
+    );
+    d
+}
+
+#[test]
+fn style_dup_id_fires_once_case_folded() {
+    // Exact second definition wins silently in Word for the web, and
+    // ids differing only by case are one id there. Three definitions,
+    // one finding.
+    let d = styles_doc(
+        r#"<w:style w:type="paragraph" w:styleId="Dup"><w:name w:val="One"/></w:style><w:style w:type="paragraph" w:styleId="DUP"><w:name w:val="Two"/></w:style><w:style w:type="paragraph" w:styleId="Dup"><w:name w:val="Three"/></w:style>"#,
+    );
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Pass, "findings: {:?}", report.findings);
+    let f = assert_finding(&report, "STYLE-DUP-ID", Some("word/styles.xml"));
+    assert_eq!(f.severity, Severity::Warning);
+    assert_eq!(report.findings.iter().filter(|x| x.rule == "STYLE-DUP-ID").count(), 1);
+}
+
+#[test]
+fn style_dup_name_fires_after_trim_and_fold() {
+    let d = styles_doc(
+        r#"<w:style w:type="paragraph" w:styleId="A"><w:name w:val="My Style"/></w:style><w:style w:type="paragraph" w:styleId="B"><w:name w:val="  my style"/></w:style>"#,
+    );
+    let report = validate(&d);
+    let f = assert_finding(&report, "STYLE-DUP-NAME", Some("word/styles.xml"));
+    assert_eq!(f.severity, Severity::Warning);
+}
+
+#[test]
+fn style_reserved_name_wrong_or_missing_type_fires() {
+    let d = styles_doc(
+        r#"<w:style w:type="character" w:styleId="Heading1"><w:name w:val="heading 1"/></w:style><w:style w:styleId="QuoteStyle"><w:name w:val="Quote"/></w:style>"#,
+    );
+    let report = validate(&d);
+    assert_eq!(report.findings.iter().filter(|x| x.rule == "STYLE-RESERVED-NAME").count(), 2, "findings: {:?}", report.findings);
+    let f = assert_finding(&report, "STYLE-RESERVED-NAME", Some("word/styles.xml"));
+    assert_eq!(f.severity, Severity::Warning);
+}
+
+#[test]
+fn style_reserved_names_with_their_types_are_clean() {
+    // The normal built-in form: reserved names WITH their reserved
+    // types, and the three reserved ids WITH their reserved types
+    // (payload included, as in Word's own output).
+    let d = styles_doc(
+        r#"<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/></w:style><w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/></w:style><w:style w:type="numbering" w:styleId="NoList"><w:name w:val="No List"/></w:style><w:style w:type="table" w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:tblPr><w:tblCellMar/></w:tblPr></w:style><w:style w:type="character" w:styleId="DefaultParagraphFont"><w:name w:val="Default Paragraph Font"/></w:style><w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/></w:style>"#,
+    );
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Pass, "findings: {:?}", report.findings);
+    for rule in ["STYLE-DUP-ID", "STYLE-DUP-NAME", "STYLE-RESERVED-NAME", "STYLE-RESERVED-ID", "STYLE-COUNT", "STYLE-ID-LENGTH"] {
+        assert!(!has(&report, rule), "{rule} fired: {:?}", report.findings);
+    }
+}
+
+#[test]
+fn style_reserved_id_wrong_type_fires() {
+    let d = styles_doc(r#"<w:style w:type="paragraph" w:styleId="TableNormal"><w:name w:val="My Table"/></w:style>"#);
+    let report = validate(&d);
+    let f = assert_finding(&report, "STYLE-RESERVED-ID", Some("word/styles.xml"));
+    assert_eq!(f.severity, Severity::Warning);
+}
+
+#[test]
+fn style_count_over_4079_fires() {
+    let mut inner = String::new();
+    for i in 0..4080 {
+        inner.push_str(&format!(r#"<w:style w:type="paragraph" w:styleId="S{i}"><w:name w:val="Style {i}"/></w:style>"#));
+    }
+    let d = styles_doc(&inner);
+    let report = validate(&d);
+    let f = assert_finding(&report, "STYLE-COUNT", Some("word/styles.xml"));
+    assert_eq!(f.severity, Severity::Warning);
+}
+
+#[test]
+fn style_id_over_253_chars_fires() {
+    let long = "a".repeat(254);
+    let d = styles_doc(&format!(r#"<w:style w:type="paragraph" w:styleId="{long}"><w:name w:val="Long"/></w:style>"#));
+    let report = validate(&d);
+    let f = assert_finding(&report, "STYLE-ID-LENGTH", Some("word/styles.xml"));
+    assert_eq!(f.severity, Severity::Warning);
+}
+
+#[test]
+fn malformed_styles_part_fails_as_malformed() {
+    // The part itself is XML-checked like every part; the vocabulary
+    // pass's own could-not-run note adds INCOMPLETE on top, which the
+    // Fail verdict outranks.
+    let mut d = Doc::minimal();
+    d.add_with_override("word/styles.xml", CT_STYLES, "<w:styles".to_string());
+    d.set_doc_rels(
+        r#"<Relationship Id="rS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#,
+    );
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Fail, "findings: {:?}", report.findings);
+    assert_finding(&report, "XML-MALFORMED", Some("word/styles.xml"));
+}
+
+#[test]
+fn font_dup_name_is_an_error() {
+    let mut d = Doc::minimal();
+    d.add_with_override(
+        "word/fontTable.xml",
+        CT_FONT_TABLE,
+        format!(
+            r#"<?xml version="1.0"?><w:fonts xmlns:w="{W_NS}"><w:font w:name="Calibri"><w:family w:val="swiss"/></w:font><w:font w:name="CALIBRI"><w:family w:val="swiss"/></w:font><w:font w:name="Cambria"><w:family w:val="roman"/></w:font></w:fonts>"#
+        ),
+    );
+    d.set_doc_rels(
+        r#"<Relationship Id="rF" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>"#,
+    );
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Fail, "findings: {:?}", report.findings);
+    let f = assert_finding(&report, "FONT-DUP-NAME", Some("word/fontTable.xml"));
+    assert_eq!(f.severity, Severity::Error);
+    assert_eq!(report.findings.iter().filter(|x| x.rule == "FONT-DUP-NAME").count(), 1);
+}
+
+#[test]
+fn prop_dup_name_is_an_error() {
+    let mut d = Doc::minimal();
+    d.add_with_override(
+        "docProps/custom.xml",
+        CT_CUSTOM_PROPS,
+        r#"<?xml version="1.0"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="Reviewer"><vt:lpwstr>A</vt:lpwstr></property><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="3" name="REVIEWER"><vt:lpwstr>B</vt:lpwstr></property></Properties>"#.to_string(),
+    );
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Fail, "findings: {:?}", report.findings);
+    let f = assert_finding(&report, "PROP-DUP-NAME", Some("docProps/custom.xml"));
+    assert_eq!(f.severity, Severity::Error);
 }

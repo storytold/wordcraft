@@ -52,6 +52,8 @@ pub(crate) const CHART_CONTENT_TYPE: &str = "application/vnd.openxmlformats-offi
 pub(crate) const XML_CONTENT_TYPE: &str = "application/xml";
 /// A custom-XML item-properties part's content type.
 pub(crate) const CUSTOM_XML_PROPS_CONTENT_TYPE: &str = "application/vnd.openxmlformats-officedocument.customXmlProperties+xml";
+/// The custom document-properties part's content type (docProps/custom.xml).
+pub(crate) const CUSTOM_PROPERTIES_CONTENT_TYPE: &str = "application/vnd.openxmlformats-officedocument.custom-properties+xml";
 
 /// One zip entry, held once for every check.
 pub(crate) struct Entry {

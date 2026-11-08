@@ -22,6 +22,7 @@ mod model;
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod model_tests;
 mod package;
+mod reserved;
 mod scan;
 
 use std::collections::HashMap;
@@ -284,6 +285,60 @@ pub(crate) const REF_NOTE: RuleSpec = RuleSpec { id: "REF-NOTE", severity: Sever
 pub(crate) const REF_HEADER: RuleSpec = RuleSpec { id: "REF-HEADER", severity: Severity::Error, evidence: Evidence::Observed };
 /// `REF-STYLE`: a style reference with no matching style. Observed (web): tolerated, Warning.
 pub(crate) const REF_STYLE: RuleSpec = RuleSpec { id: "REF-STYLE", severity: Severity::Warning, evidence: Evidence::Observed };
+/// `STYLE-DUP-ID`: the same styleId on two `w:style` definitions in
+/// one styles part. ECMA-376 §17.7.4.17 requires the identifier to be
+/// unique and spells out the harm (later definitions are reassigned;
+/// references are not repaired). Batch 5 (Word for the web): the
+/// second definition silently wins, and ids differing only by case
+/// are treated as one — comparison folds case.
+pub(crate) const STYLE_DUP_ID: RuleSpec = RuleSpec { id: "STYLE-DUP-ID", severity: Severity::Warning, evidence: Evidence::Observed };
+/// `STYLE-DUP-NAME`: two styles in one part whose primary names
+/// collide after Word's documented trim (§17.7.4.9(c)), compared
+/// case-insensitively. No uniqueness statement exists for names;
+/// batch 5 observed the collision in Word for the web at the
+/// formatting-loss tier. Which definition name-keyed machinery binds
+/// is undocumented, and the message does not claim a direction.
+pub(crate) const STYLE_DUP_NAME: RuleSpec = RuleSpec { id: "STYLE-DUP-NAME", severity: Severity::Warning, evidence: Evidence::Observed };
+/// `STYLE-RESERVED-NAME`: a style whose primary name is one of the
+/// 267 reserved built-in names (MS-OI29500 §17.7.4.9(d) table) while
+/// its type differs from the reserved type, or its type is omitted —
+/// Word renames the style or changes its type on load. A reserved
+/// name WITH its reserved type is the normal form and never fires.
+/// The table is the en-US table; built-in names are localised, so
+/// wrong-type styles named in other languages are missed by design.
+pub(crate) const STYLE_RESERVED_NAME: RuleSpec =
+    RuleSpec { id: "STYLE-RESERVED-NAME", severity: Severity::Warning, evidence: Evidence::MsDocumented };
+/// `STYLE-RESERVED-ID`: one of the three styleIds MS-OI29500
+/// §17.7.4.17(a) documents as special — `NoList`,
+/// `DefaultParagraphFont`, `TableNormal`, whose child elements Word
+/// ignores — declared with a type different from its reserved type.
+/// Payload under a correctly typed reserved id is the normal form
+/// (Word's own files carry it) and never fires; an omitted type is
+/// not flagged either (the narrowed, documented trigger only).
+pub(crate) const STYLE_RESERVED_ID: RuleSpec = RuleSpec { id: "STYLE-RESERVED-ID", severity: Severity::Warning, evidence: Evidence::MsDocumented };
+/// `STYLE-COUNT`: more than 4,079 styles in one styles part.
+/// MS-OI29500 §17.7.4.17(c): "Word does not open a document
+/// containing more than 4,079 styles." Batch 5 found Word for the
+/// web opening 4,080 styles cleanly, so the rule is a Warning with
+/// that caveat, mirroring the compat-count family.
+pub(crate) const STYLE_COUNT: RuleSpec = RuleSpec { id: "STYLE-COUNT", severity: Severity::Warning, evidence: Evidence::MsDocumented };
+/// `STYLE-ID-LENGTH`: a styleId over 253 characters. MS-OI29500
+/// §17.7.4.17(b) says Word ignores such a value, leaving the style
+/// unreferenceable; batch 5 found Word for the web applying a
+/// 254-character id, so the grade stays Inferred.
+pub(crate) const STYLE_ID_LENGTH: RuleSpec = RuleSpec { id: "STYLE-ID-LENGTH", severity: Severity::Warning, evidence: Evidence::Inferred };
+/// `FONT-DUP-NAME`: the same font name twice in one fontTable part,
+/// compared case-insensitively (ECMA-376 §17.8.3.10 makes the name
+/// the join key for the font record; MS-OI29500 §17.8.3.10(b)
+/// documents case-insensitivity). Batch 5: Word for the web showed
+/// the corruption banner — Error grade.
+pub(crate) const FONT_DUP_NAME: RuleSpec = RuleSpec { id: "FONT-DUP-NAME", severity: Severity::Error, evidence: Evidence::Observed };
+/// `PROP-DUP-NAME`: the same custom-property name twice in
+/// docProps/custom.xml, compared case-insensitively (ECMA-376 §22.3
+/// identifies properties by name; MS-OI29500 §22.3.2.2(g) requires a
+/// "case-insensitive unique name"). Batch 5: Word for the web showed
+/// the corruption banner — Error grade.
+pub(crate) const PROP_DUP_NAME: RuleSpec = RuleSpec { id: "PROP-DUP-NAME", severity: Severity::Error, evidence: Evidence::Observed };
 /// `NUM-DANGLING`: a list-numbering reference or abstract-number reference with no definition, or a
 /// duplicate definition. Inferred (the compare/merge residue class).
 pub(crate) const NUM_DANGLING: RuleSpec = RuleSpec { id: "NUM-DANGLING", severity: Severity::Warning, evidence: Evidence::Inferred };
@@ -438,6 +493,14 @@ pub(crate) const RULES: &[RuleSpec] = &[
     REF_NOTE,
     REF_HEADER,
     REF_STYLE,
+    STYLE_DUP_ID,
+    STYLE_DUP_NAME,
+    STYLE_RESERVED_NAME,
+    STYLE_RESERVED_ID,
+    STYLE_COUNT,
+    STYLE_ID_LENGTH,
+    FONT_DUP_NAME,
+    PROP_DUP_NAME,
     NUM_DANGLING,
     COMMENTEX_LINK,
     FLD_UNBALANCED,
@@ -482,6 +545,14 @@ const ABSENCE_RULES: &[&str] = &[
     "REF-NOTE",
     "REF-HEADER",
     "REF-STYLE",
+    "STYLE-DUP-ID",
+    "STYLE-DUP-NAME",
+    "STYLE-RESERVED-NAME",
+    "STYLE-RESERVED-ID",
+    "STYLE-COUNT",
+    "STYLE-ID-LENGTH",
+    "FONT-DUP-NAME",
+    "PROP-DUP-NAME",
     "NUM-DANGLING",
     "COMMENTEX-LINK",
     "CUSTOMXML-SCHEMA",
@@ -1514,6 +1585,7 @@ fn check_story(pkg: &Package, facts: &scan::StoryFacts, compat: Compat, acc: &mu
     check_header_footer_refs(pkg, facts, acc);
     acc.ran("REF-STYLE");
     check_style_refs(pkg, facts, acc);
+    check_vocabulary(pkg, acc);
     check_numbering(pkg, facts, acc);
     check_commentex(pkg, facts, acc);
     acc.ran("FLD-UNBALANCED");
@@ -1774,6 +1846,178 @@ fn check_style_refs(pkg: &Package, facts: &scan::StoryFacts, acc: &mut Acc) {
         let Some(Some(defs)) = per_owner.get(owner) else { continue };
         if !defs.contains(id) && reported.insert((id.as_str(), part.as_str())) {
             acc.add("REF-STYLE", Some(part.clone()), format!("style id {id} in {part} has no definition in the package"));
+        }
+    }
+}
+
+/// The vocabulary family: id and name collisions inside the styles,
+/// fontTable, and custom-properties parts. Each part is judged in its
+/// own scope; a part that is present but cannot be read or parsed
+/// makes the run INCOMPLETE for these rules rather than passing them
+/// silently (absence of the part itself is legitimate and silent).
+fn check_vocabulary(pkg: &Package, acc: &mut Acc) {
+    let cap = acc.limits.facts;
+    let owners = owner_scopes(pkg);
+    for owner in &owners {
+        if let Some(entry) = supporting_part(pkg, owner.as_deref(), "styles", package::STYLES_CONTENT_TYPE) {
+            check_styles_vocabulary(entry, cap, acc);
+        }
+        if let Some(entry) = supporting_part(pkg, owner.as_deref(), "fontTable", package::FONT_TABLE_CONTENT_TYPE) {
+            check_name_dups(entry, cap, acc, true);
+        }
+    }
+    if let Some(entry) = find_by_type(pkg, package::CUSTOM_PROPERTIES_CONTENT_TYPE) {
+        check_name_dups(entry, cap, acc, false);
+    }
+    acc.ran("STYLE-DUP-ID");
+    acc.ran("STYLE-DUP-NAME");
+    acc.ran("STYLE-RESERVED-NAME");
+    acc.ran("STYLE-RESERVED-ID");
+    acc.ran("STYLE-COUNT");
+    acc.ran("STYLE-ID-LENGTH");
+    acc.ran("FONT-DUP-NAME");
+    acc.ran("PROP-DUP-NAME");
+}
+
+/// Evaluate the six styles-part vocabulary rules for one styles part.
+fn check_styles_vocabulary(entry: &package::Entry, cap: usize, acc: &mut Acc) {
+    let part = entry.name.clone();
+    let mut guard = scan::ParseGuard::new(acc.limits.events, acc.limits.depth);
+    let parsed = entry.decoded.as_deref().map(|text| scan::parse_style_defs(text, cap, &mut guard));
+    if guard.exhausted() {
+        acc.note(format!("{part} exceeded the XML {} budget; style vocabulary was not checked", guard.budget()));
+        acc.set_incomplete();
+        return;
+    }
+    let Some(Some((defs, capped, total))) = parsed else {
+        acc.note(format!("{part} is present but does not parse; style vocabulary was not checked"));
+        acc.set_incomplete();
+        return;
+    };
+    if capped {
+        acc.note(format!("{part} exceeded the {cap}-entry budget; later style definitions were not recorded"));
+        acc.set_incomplete();
+    }
+    if total > 4079 {
+        acc.add(
+            "STYLE-COUNT",
+            Some(part.clone()),
+            format!("{part} defines {total} styles; MS-OI29500 states Word does not open a document containing more than 4,079 styles (Word for the web was observed opening 4,080 cleanly)"),
+        );
+    }
+    let mut ids: HashMap<String, String> = HashMap::new();
+    let mut names: HashMap<String, String> = HashMap::new();
+    let mut reported_keys: HashSet<(&'static str, String)> = HashSet::new();
+    for def in &defs {
+        if let Some(id) = &def.id {
+            if id.chars().count() > 253 {
+                acc.add(
+                    "STYLE-ID-LENGTH",
+                    Some(part.clone()),
+                    format!("styleId {id} in {part} is longer than 253 characters; MS-OI29500 states Word ignores such a value, leaving the style unreferenceable"),
+                );
+            }
+            let folded = id.to_lowercase();
+            if let Some(first) = ids.get(&folded) {
+                if reported_keys.insert(("STYLE-DUP-ID", folded.clone())) {
+                    acc.add(
+                        "STYLE-DUP-ID",
+                        Some(part.clone()),
+                        format!("styleId {first} is defined more than once in {part} (again as {id}); duplicate definitions are reassigned arbitrarily and their references are not repaired"),
+                    );
+                }
+            } else {
+                ids.insert(folded.clone(), id.clone());
+            }
+            let reserved_type = match folded.as_str() {
+                "nolist" => Some("numbering"),
+                "defaultparagraphfont" => Some("character"),
+                "tablenormal" => Some("table"),
+                _ => None,
+            };
+            if let Some(required) = reserved_type
+                && let Some(declared) = &def.style_type
+                && declared.to_lowercase() != required
+                && reported_keys.insert(("STYLE-RESERVED-ID", folded.clone()))
+            {
+                acc.add(
+                    "STYLE-RESERVED-ID",
+                    Some(part.clone()),
+                    format!("style {id} in {part} has type {declared}; MS-OI29500 documents this id as a {required} style whose child elements Word ignores"),
+                );
+            }
+        }
+        if let Some(name) = &def.name {
+            let folded = name.trim().to_lowercase();
+            if let Some(first) = names.get(&folded) {
+                if reported_keys.insert(("STYLE-DUP-NAME", folded.clone())) {
+                    acc.add(
+                        "STYLE-DUP-NAME",
+                        Some(part.clone()),
+                        format!("primary style name {first} is used by more than one style in {part} (again as {})", name.trim()),
+                    );
+                }
+            } else {
+                names.insert(folded.clone(), name.trim().to_string());
+            }
+            if let Some(required) = reserved::reserved_style_type(&folded)
+                && !def.style_type.as_deref().is_some_and(|t| t.to_lowercase() == required)
+                && reported_keys.insert(("STYLE-RESERVED-NAME", folded.clone()))
+            {
+                let declared = def.style_type.as_deref().unwrap_or("(omitted)");
+                acc.add(
+                    "STYLE-RESERVED-NAME",
+                    Some(part.clone()),
+                    format!("style name {} in {part} is a reserved built-in name requiring type {required}, but the style has type {declared}; Word renames the style or changes its type on load", name.trim()),
+                );
+            }
+        }
+    }
+}
+
+/// FONT-DUP-NAME / PROP-DUP-NAME: one folded-name collision report
+/// per duplicated name in a fontTable or custom-properties part.
+fn check_name_dups(entry: &package::Entry, cap: usize, acc: &mut Acc, fonts: bool) {
+    let part = entry.name.clone();
+    let rule = if fonts { "FONT-DUP-NAME" } else { "PROP-DUP-NAME" };
+    let mut guard = scan::ParseGuard::new(acc.limits.events, acc.limits.depth);
+    let parsed = entry
+        .decoded
+        .as_deref()
+        .map(|text| if fonts { scan::parse_font_names(text, cap, &mut guard) } else { scan::parse_custom_prop_names(text, cap, &mut guard) });
+    if guard.exhausted() {
+        acc.note(format!("{part} exceeded the XML {} budget; {rule} was not checked", guard.budget()));
+        acc.set_incomplete();
+        return;
+    }
+    let Some(Some((names, capped))) = parsed else {
+        acc.note(format!("{part} is present but does not parse; {rule} was not checked"));
+        acc.set_incomplete();
+        return;
+    };
+    if capped {
+        acc.note(format!("{part} exceeded the {cap}-entry budget; later names were not recorded"));
+        acc.set_incomplete();
+    }
+    let mut seen: HashMap<String, String> = HashMap::new();
+    let mut reported: HashSet<String> = HashSet::new();
+    for name in &names {
+        let folded = name.to_lowercase();
+        if let Some(first) = seen.get(&folded) {
+            if reported.insert(folded) {
+                let message = if fonts {
+                    format!(
+                        "font name {first} appears more than once in {part} (again as {name}); font names are case-insensitive join keys, and Word shows a corruption notice for this collision"
+                    )
+                } else {
+                    format!(
+                        "custom property name {first} appears more than once in {part} (again as {name}); property names must be case-insensitively unique, and Word shows a corruption notice for this collision"
+                    )
+                };
+                acc.add(rule, Some(part.clone()), message);
+            }
+        } else {
+            seen.insert(folded, name.clone());
         }
     }
 }

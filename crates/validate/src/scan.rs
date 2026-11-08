@@ -2111,6 +2111,177 @@ pub(crate) fn parse_style_ids(text: &str, cap: usize, guard: &mut ParseGuard) ->
     Some((defs, capped))
 }
 
+/// One `w:style` definition from a styles part: its id, primary name
+/// (the first `w:name` child's value), and declared type, as written.
+#[derive(Default)]
+pub(crate) struct StyleDef {
+    /// The `w:style/@w:styleId` value, if present.
+    pub id: Option<String>,
+    /// The first `w:name/@w:val` inside the style, if present.
+    pub name: Option<String>,
+    /// The `w:style/@w:type` value, if present.
+    pub style_type: Option<String>,
+}
+
+/// The style definitions of a styles part, for the vocabulary rules:
+/// the definitions (capped at `cap`), whether the cap dropped any,
+/// and the total number of `w:style` elements seen. `None` when the
+/// part does not parse. Definitions inside a skipped
+/// `mc:AlternateContent` branch are not collected.
+pub(crate) fn parse_style_defs(text: &str, cap: usize, guard: &mut ParseGuard) -> Option<(Vec<StyleDef>, bool, usize)> {
+    let mut reader = NsReader::from_reader(text.as_bytes());
+    let mut buf = Vec::new();
+    let mut defs: Vec<StyleDef> = Vec::new();
+    let mut capped = false;
+    let mut total = 0usize;
+    let mut current: Option<StyleDef> = None;
+    let mut alt = AltSuppress::new();
+    loop {
+        if !guard.tick() {
+            break;
+        }
+        match reader.read_event_into(&mut buf) {
+            Err(_) => return None,
+            Ok(Event::Eof) => break,
+            Ok(Event::Start(e)) => match aux_open(guard, &mut alt, reader.resolver(), &e, false) {
+                None => return None,
+                Some(AuxOpen::Stop) => break,
+                Some(AuxOpen::Skip) => {}
+                Some(AuxOpen::Process(id, attrs)) => {
+                    if id.w() && id.local == "style" {
+                        total += 1;
+                        // Styles do not nest; on a (malformed) nested
+                        // open the first definition stays current.
+                        if current.is_none() {
+                            current = Some(StyleDef {
+                                id: attr_ns(&attrs, reader.resolver(), NS_W, b"styleId"),
+                                style_type: attr_ns(&attrs, reader.resolver(), NS_W, b"type"),
+                                ..StyleDef::default()
+                            });
+                        }
+                    } else if id.w() && id.local == "name" {
+                        if let Some(def) = current.as_mut()
+                            && def.name.is_none()
+                        {
+                            def.name = attr_ns(&attrs, reader.resolver(), NS_W, b"val");
+                        }
+                    }
+                }
+            },
+            Ok(Event::Empty(e)) => match aux_open(guard, &mut alt, reader.resolver(), &e, true) {
+                None => return None,
+                Some(AuxOpen::Stop) => break,
+                Some(AuxOpen::Skip) => {}
+                Some(AuxOpen::Process(id, attrs)) => {
+                    if id.w() && id.local == "style" {
+                        total += 1;
+                        if defs.len() >= cap {
+                            capped = true;
+                        } else {
+                            defs.push(StyleDef {
+                                id: attr_ns(&attrs, reader.resolver(), NS_W, b"styleId"),
+                                style_type: attr_ns(&attrs, reader.resolver(), NS_W, b"type"),
+                                ..StyleDef::default()
+                            });
+                        }
+                    } else if id.w() && id.local == "name" {
+                        if let Some(def) = current.as_mut()
+                            && def.name.is_none()
+                        {
+                            def.name = attr_ns(&attrs, reader.resolver(), NS_W, b"val");
+                        }
+                    }
+                }
+            },
+            Ok(Event::End(e)) => {
+                let local = e.name().local_name();
+                alt.close(local.as_ref());
+                guard.leave();
+                if local.as_ref() == b"style"
+                    && let Some(def) = current.take()
+                {
+                    if defs.len() >= cap {
+                        capped = true;
+                    } else {
+                        defs.push(def);
+                    }
+                }
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+    Some((defs, capped, total))
+}
+
+/// The `w:font/@w:name` values of a fontTable part (capped), or
+/// `None` when the part does not parse.
+pub(crate) fn parse_font_names(text: &str, cap: usize, guard: &mut ParseGuard) -> Option<(Vec<String>, bool)> {
+    parse_part_names(text, cap, guard, NS_W, "font", true)
+}
+
+/// The `property/@name` values of a custom-properties part (capped),
+/// or `None` when the part does not parse. The elements live in the
+/// custom-properties namespace and the attribute is unprefixed.
+pub(crate) fn parse_custom_prop_names(text: &str, cap: usize, guard: &mut ParseGuard) -> Option<(Vec<String>, bool)> {
+    parse_part_names(text, cap, guard, NS_CUSTOM_PROPS, "property", false)
+}
+
+/// The custom-properties namespace (docProps/custom.xml).
+const NS_CUSTOM_PROPS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties";
+
+/// Shared walker for the two name-list parts: collect the name
+/// attribute of every `elem` element in namespace `ns` — as a
+/// `w:`-style namespaced attribute when `namespaced_attr`, else as
+/// the unprefixed attribute of the same local name.
+fn parse_part_names(text: &str, cap: usize, guard: &mut ParseGuard, ns: &str, elem: &str, namespaced_attr: bool) -> Option<(Vec<String>, bool)> {
+    let mut reader = NsReader::from_reader(text.as_bytes());
+    let mut buf = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+    let mut capped = false;
+    let mut alt = AltSuppress::new();
+    loop {
+        if !guard.tick() {
+            break;
+        }
+        let handle = |id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, names: &mut Vec<String>, capped: &mut bool| {
+            if id.ns.as_deref() == Some(ns) && id.local == elem {
+                let value = if namespaced_attr { attr_ns(attrs, res, NS_W, b"name") } else { attr_plain(attrs, b"name") };
+                if let Some(v) = value {
+                    if names.len() >= cap {
+                        *capped = true;
+                    } else {
+                        names.push(v);
+                    }
+                }
+            }
+        };
+        match reader.read_event_into(&mut buf) {
+            Err(_) => return None,
+            Ok(Event::Eof) => break,
+            Ok(Event::Start(e)) => match aux_open(guard, &mut alt, reader.resolver(), &e, false) {
+                None => return None,
+                Some(AuxOpen::Stop) => break,
+                Some(AuxOpen::Skip) => {}
+                Some(AuxOpen::Process(id, attrs)) => handle(&id, &attrs, reader.resolver(), &mut names, &mut capped),
+            },
+            Ok(Event::Empty(e)) => match aux_open(guard, &mut alt, reader.resolver(), &e, true) {
+                None => return None,
+                Some(AuxOpen::Stop) => break,
+                Some(AuxOpen::Skip) => {}
+                Some(AuxOpen::Process(id, attrs)) => handle(&id, &attrs, reader.resolver(), &mut names, &mut capped),
+            },
+            Ok(Event::End(e)) => {
+                alt.close(e.name().local_name().as_ref());
+                guard.leave();
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+    Some((names, capped))
+}
+
 /// Extract and insert a `w:style/@w:styleId` definition into the set, respecting the capacity cap.
 fn push_style_id(defs: &mut HashSet<String>, capped: &mut bool, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, cap: usize) {
     if id.w()
