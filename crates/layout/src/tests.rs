@@ -3851,6 +3851,40 @@ fn extreme_page_and_line_number_starts_do_not_overflow() {
     assert!(l.pages.len() >= 3, "{} pages", l.pages.len());
 }
 
+/// Line numbers take the document's character formatting through the "Line Number" style, as in
+/// Word (Aptos 12 pt black in a document whose defaults are Aptos 12 pt), not a fixed small grey.
+#[test]
+fn line_numbers_follow_the_line_number_style() {
+    let number_runs = |d: &Document| {
+        let l = lay(d);
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Lines { story, para, .. } if *story == DECOR_STORY => para.styles.first().map(|s| (s.size, s.rc.color)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut d = Document::from_text("one\ntwo\nthree");
+    d.last_section.line_numbers = Some(Default::default());
+    Arc::make_mut(&mut d.styles).default_chr.size = Some(12.0);
+    let plain = number_runs(&d);
+    assert_eq!(plain.len(), 3);
+    assert!(plain.iter().all(|(size, color)| *size == 12.0 && *color == wordcraft_doc::TextColor::Auto), "{plain:?}");
+
+    let red = wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(0xC0, 0, 0));
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
+        id: "LineNumber".into(),
+        name: "line number".into(),
+        kind: wordcraft_doc::StyleKind::Character,
+        chr: CharProps { size: Some(8.0), color: Some(red), ..Default::default() },
+        ..Default::default()
+    });
+    let styled = number_runs(&d);
+    assert!(styled.iter().all(|(size, color)| *size == 8.0 && *color == red), "{styled:?}");
+}
+
 #[test]
 fn line_numbers_borders_text_boxes() {
     let mut d = Document::from_text("one\ntwo\nthree");
