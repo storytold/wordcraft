@@ -1580,7 +1580,10 @@ impl Styles {
         let borders = own().find_map(|(_, s)| s.para_borders).filter(|b| b.takes_room());
         let shading = own().find_map(|(_, s)| s.para_shading).flatten();
         let contextual = own().find_map(|(_, s)| s.contextual);
-        let rtl = own().find_map(|(_, s)| s.rtl);
+        // Left to right only over a style under it that reads right to left: elsewhere it is the
+        // default.
+        let under_rtl = chain.iter().skip(kind_at).find_map(|(_, s)| s.rtl) == Some(true);
+        let rtl = own().find_map(|(_, s)| s.rtl).filter(|r| *r || under_rtl);
         let drop_cap = own().find_map(|(_, s)| s.drop_cap);
         let keep_lines = own().find_map(|(_, s)| s.keep_lines);
         let widow_control = own().find_map(|(_, s)| s.widow_control);

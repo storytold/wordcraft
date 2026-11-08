@@ -271,6 +271,7 @@ fn add_custom_styles(doc: &mut Document, named: &[super::styles::NamedStyle], od
             Parent::Named(p) => style_id(p),
         };
         let look = &def.look;
+        let parent_rtl = doc.styles.resolve_para(&wordcraft_doc::props::ParaProps { style: Some(based_on.clone()), ..Default::default() }).bidi;
         let sp = &look.spacing;
         let para = wordcraft_doc::props::ParaProps {
             space_before: sp.before,
@@ -295,7 +296,9 @@ fn add_custom_styles(doc: &mut Document, named: &[super::styles::NamedStyle], od
                 tabs
             }),
             contextual_spacing: look.contextual,
-            bidi: look.rtl.filter(|r| *r),
+            // Left to right only when it overrides a style it is based on that reads right to left
+            // (the parents are added first); otherwise it is the default anyway.
+            bidi: look.rtl.filter(|r| *r || parent_rtl),
             ..Default::default()
         };
         let name = super::writer::generating_style(name).map_or_else(|| def.name.clone(), |(_, n)| n);

@@ -187,7 +187,8 @@ fn para_extra(doc: &Document, p: &wordcraft_doc::props::ParaProps) -> Option<Box
         shading: p.shading,
         style,
         contextual_spacing: p.contextual_spacing,
-        bidi: p.bidi.filter(|b| *b),
+        // Left to right only where it overrides a right-to-left style.
+        bidi: p.bidi.filter(|b| *b || doc.styles.resolve_para(&wordcraft_doc::props::ParaProps { bidi: None, ..p.clone() }).bidi),
         drop_cap: p.drop_cap.filter(|l| *l > 1),
         drop_cap_distance: p.drop_cap_distance.filter(|_| p.drop_cap.is_some_and(|l| l > 1)),
         keep_lines: p.keep_lines.filter(|k| *k),
