@@ -270,3 +270,12 @@ fn flat_opc_limits_count_what_is_not_kept() {
     // A part nothing reads, one element over what the XML tree reader takes in a part (8 000 000).
     assert!(limited(&format!(r#"<pkg:part pkg:name="/word/unused.xml"><pkg:xmlData><r>{}</r></pkg:xmlData></pkg:part>"#, "<y/>".repeat(8_000_000))));
 }
+
+/// A Word 2003 XML Document saved with Windows line ends: XML reads CR LF as one line feed (XML
+/// 1.0 §2.11), so a line break inside `w:t` is one space, not two.
+#[test]
+fn word_2003_xml_with_windows_line_ends_reads_one_space_per_line_break() {
+    let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<w:wordDocument xmlns:w=\"http://schemas.microsoft.com/office/word/2003/wordml\">\r\n<w:body><w:p><w:r><w:t>a\r\nb</w:t></w:r></w:p></w:body></w:wordDocument>\r\n";
+    let d = read_xml(xml.as_bytes()).unwrap();
+    assert_eq!(paras(&d)[0].plain_text(), "a b");
+}
