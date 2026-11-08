@@ -24,6 +24,8 @@ agent control. This page is the summary; the assessment is
 
 > **Comment command update:** 2026-10-14 · malformed explicit IDs rejected; synthetic refusal, undo/redo and DOCX save/reopen checks (#1690 finding 3). Readiness estimates unchanged.
 
+Table Sort refuses tables with vertically merged cells before moving any rows (#5535). Ordinary and horizontally merged tables keep their sorting behavior. Readiness estimates are unchanged.
+
 ## Headline numbers (2026-10-10)
 
 | Number | Value | Kind |
@@ -877,6 +879,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-01 | trivial | Progress log: SEQ, STYLEREF and REF fields show fresh results in output |
 | 2026-10-29 | trivial | Progress log: Print Markup balloon anchors use one object walk per paragraph (#3614); readiness estimates unchanged |
 | 2026-10-28 | trivial | Print Markup text-copy comment discovery walks paragraph objects once (#3614); quotes, order, limits and readiness estimates unchanged |
+| 2026-11-04 | trivial | Table Sort refuses vertical merges before row reordering (#5535); ordinary and horizontal-merge sorting remains available. |
 | 2026-11-03 | trivial | Progress log: Language pack languages in every language list (CP4.3) |
 | 2026-11-03 | trivial | Progress log: the missing-pack bar on a fresh install, the caret's typing language, and the spelling menu heading in the interface language (CP4.3) |
 | 2026-11-03 | trivial | Progress log: Options › Language and Proofing redesign (CP4.3) |

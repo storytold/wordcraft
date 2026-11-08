@@ -73,6 +73,7 @@ Set Proofing Language › Set As Default now persists in user preferences and ap
 Text context menus now include the existing formatting mini toolbar (#2959), including at a caret. Object, equation and whole-cell menus keep their own controls; Read Mode and the mini-toolbar preference suppress it. The toolbar reuses the selection toolbar's commands; additional controls from Word's toolbar are not added. Context-menu paste choices remain tracked by #2583 / PR #2599.
 
 Page drawing indexes text-box warp lookups by paragraph and story for the current call (#3614). Ordinary text boxes no longer rescan every preceding marker to find that they have no warp. Only requested offsets are retained; traversal stops after the last requested character. Original Linux display and save/reopen checks cover the correction; other drawing and command scans remain open. Gap and readiness estimates are unchanged.
+Table Sort refuses a table containing vertically merged cells before reordering its rows (#5535). This keeps merge continuations with their starts and leaves the document and Undo/Redo unchanged on refusal. Horizontal merges and merges inside a nested table do not prevent sorting its parent table. Native Word and desktop comparison remain untested; readiness estimates are unchanged.
 
 ## Ranked
 
@@ -214,6 +215,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-11-01 | trivial | #10 narrowed: text in a turned text box is drawn turned with it on screen and in PNG and PDF (upside down when flipped across, never mirrored); editing it still goes by its upright text; estimate unchanged |
 | 2026-10-29 | trivial | Print Markup balloon anchor discovery no longer repeats paragraph-prefix scans (#3614); readiness estimates unchanged |
 | 2026-10-28 | trivial | Print Markup text-copy comment discovery walks paragraph objects once (#3614); quotes, order, limits and readiness estimates unchanged |
+| 2026-11-04 | trivial | Table Sort refuses vertical merges before row reordering (#5535); ordinary and horizontal-merge sorting remains available. |
 | 2026-10-30 | trivial | #20 narrowed: layout resource caps and linear-time passes (#3867, #3866) |
 | 2026-10-17 | trivial | UI/UX gaps: copies put RTF on the clipboard (Windows, macOS, Wayland; not X11), and paste reads RTF on macOS and X11 too |
 | 2026-11-03 | minor | #11: Arabic interface with mirrored shell (#1195); key languages missing are now hi and id (plus pt-PT); Hebrew UI still open |
