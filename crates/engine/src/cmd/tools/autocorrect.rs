@@ -1,4 +1,4 @@
-use super::typing::{INITIAL_CAPS_EXCEPTIONS, NOT_SENTENCE_END};
+use super::typing::{GERMAN_NOT_SENTENCE_END, INITIAL_CAPS_EXCEPTIONS, NOT_SENTENCE_END};
 use super::{CmdError, CmdResult, Deserialize, Pos, Serialize, Session, Value, json, p};
 
 /// Smileys replaced even when typed straight after a word ("ok:)"), as Word does.
@@ -378,7 +378,9 @@ pub(super) fn autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(e) = p::str(v, "deleteException") {
         let e = e.trim().to_lowercase();
         ac.exceptions.retain(|r| *r != e);
-        if NOT_SENTENCE_END.contains(&e.as_str()) && !ac.exceptions_removed.contains(&e) {
+        // A built-in one (English, or German for German text) is remembered as removed.
+        let built_in = NOT_SENTENCE_END.contains(&e.as_str()) || GERMAN_NOT_SENTENCE_END.contains(&e.as_str());
+        if built_in && !ac.exceptions_removed.contains(&e) {
             ac.exceptions_removed.push(e);
         }
     }
