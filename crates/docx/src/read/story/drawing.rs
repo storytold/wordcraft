@@ -41,6 +41,7 @@ impl Reader<'_> {
             }
             let source = self.keep_embedded(c.child("a:graphic")?, rels, &[])?;
             float.set_spin(xfrm_spin(content.child("w14:xfrm")));
+            float.bare_turn = !anchored && float.rot != 0.0 && float.effect == [0.0; 4];
             let (px, py) = float.spin_pad(w, h);
             for (e, p) in float.effect.iter_mut().zip([px, py, px, py]) {
                 if *e != 0.0 {
@@ -106,7 +107,11 @@ impl Reader<'_> {
         self.set_shape_id(&mut obj, c.child("wp:docPr").and_then(|p| p.attr("id")));
         // Word's effect extent also covers a rotated object's overhang; the model keeps that
         // apart (it follows from the angle), so take it back out.
+        // Shadow or glow room the file didn't record: saving records it (and the turn's room).
+        let fx_room = matches!(&obj, InlineObject::Shape { effects, .. } if effects.extent() != [0.0; 4]);
         if let Some(f) = obj.float_mut() {
+            // None recorded: Word keeps an inline one's line to the frame (see `Float::bare_turn`).
+            f.bare_turn = !anchored && !fx_room && f.rot != 0.0 && f.effect == [0.0; 4];
             let (px, py) = f.spin_pad(w, h);
             for (e, p) in f.effect.iter_mut().zip([px, py, px, py]) {
                 // Zero adds no effects room when rotation contracts this axis.
