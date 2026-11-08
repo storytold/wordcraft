@@ -149,7 +149,8 @@ test source in File › Options › Language and on the bar's Install.
 | Tool | What it does |
 |---|---|
 | `list_commands` | every command (filter with `query`) — over 270 of them |
-| `execute` | run one command: `{command: "insert.table", params: {rows: 3, cols: 4}}` |
+| `execute` | run one command: `{command: "insert.table", params: {rows: 3, cols: 4}}` (an empty table; for a filled one use `insert_table`) |
+| `insert_table` | insert a filled table in one call: `{values: [["Month", "Cases"], ["January", 12]], header: true, style?}` (same as `insert.spreadsheet`) |
 | `batch` | run several commands in order |
 | `new_document` | blank, sample, letter, resume, report; opens beside the open documents |
 | `open_document` / `save_document` | docx, doc (open only), odt, rtf, html, md, tex, txt, json; save also pdf, png |
@@ -172,7 +173,7 @@ document beside the ones already open and make it the active one; their reply ca
 active again (`alreadyOpen`). `list_documents` lists the open documents with their ids.
 
 Tools work on the active document. `execute`, `batch`, `type_text`, `select_text`, `get_text`,
-`inspect_document`, `render_page` and `save_document` also take `doc`, the id of another open
+`insert_table`, `inspect_document`, `render_page` and `save_document` also take `doc`, the id of another open
 document: the tool works on that document and the active one stays active.
 
 ```json
