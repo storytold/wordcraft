@@ -948,11 +948,19 @@ fn draw_ink(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
     let (Draw::Ink { pts, color: c, width: raw_width, alpha } | Draw::NativeInk { pts, color: c, width: raw_width, alpha }) = it else { return };
     let Some(width) = it.ink_width() else { return };
     let Some(path) = ink_path(pts) else { return };
-    if !path.bounding_box().inflate(*raw_width as f64, *raw_width as f64).overlaps(*fr.visible) {
+    let bounds = path.bounding_box();
+    if !bounds.inflate(*raw_width as f64, *raw_width as f64).overlaps(*fr.visible) {
         return;
     }
     ctx.set_transform(fr.view);
     ctx.set_paint(color(fr.opts.ink(*c), *alpha));
+    // The stroker discards zero-length segments, including stationary samples and
+    // coordinates collapsed by page-space rounding. Native taps still paint their nib.
+    if matches!(it, Draw::NativeInk { .. }) && bounds.width() == 0.0 && bounds.height() == 0.0 {
+        let radius = f64::from(width) / 2.0;
+        ctx.fill_path(&shape_path(ShapeKind::Ellipse, bounds.inflate(radius, radius), None));
+        return;
+    }
     ctx.set_stroke(kurbo::Stroke::new(width as f64).with_caps(kurbo::Cap::Round).with_join(kurbo::Join::Round));
     ctx.stroke_path(&path);
 }

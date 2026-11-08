@@ -59,6 +59,52 @@ fn ink_extreme_widths_are_not_clamped() {
 }
 
 #[test]
+fn native_stationary_strokes_paint_their_round_nib() {
+    for (width, area, scale) in [
+        (0.01, Rect::new(9.9, 9.9, 0.2, 0.2), 100.0),
+        (6.0, Rect::new(0.0, 0.0, 20.0, 20.0), 4.0),
+        (400.0, Rect::new(-200.0, -200.0, 400.0, 400.0), 0.1),
+    ] {
+        for alpha in [0.5, 1.0] {
+            for clipped in [false, true] {
+                let render = |item| {
+                    let item = if clipped { Draw::Clip { rect: Rect::new(9.75, 7.25, 1.5, 5.5), items: vec![item] } } else { item };
+                    render_items(&Document::new(), &[item], area, scale, &RenderOptions::default())
+                };
+                let control = render(Draw::Shape {
+                    rect: Rect::new(10.0 - width / 2.0, 10.0 - width / 2.0, width, width),
+                    kind: ShapeKind::Ellipse,
+                    fill: Some(Paint::Solid(Rgb::BLACK, alpha)),
+                    stroke: None,
+                    stroke_width: 0.0,
+                    effects: Default::default(),
+                    corner: None,
+                    dash: Vec::new(),
+                    cap: Default::default(),
+                });
+                assert!(control.pixels.as_chunks::<4>().0.iter().any(|p| p[3] > 0), "the control tap must paint");
+                for count in [1, 2, 4] {
+                    let ink = Draw::NativeInk { pts: vec![(10.0, 10.0); count], color: Rgb::BLACK, width, alpha };
+                    let actual = render(ink);
+                    assert!(actual.pixels == control.pixels, "width={width}, alpha={alpha}, clipped={clipped}, count={count}");
+                }
+            }
+        }
+    }
+    let render = |pts| {
+        render_items(
+            &Document::new(),
+            &[Draw::NativeInk { pts, color: Rgb::BLACK, width: 4.0, alpha: 0.5 }],
+            Rect::new(0.0, 0.0, 20.0, 20.0),
+            2.0,
+            &RenderOptions::default(),
+        )
+    };
+    let control = render(vec![(5.0, 5.0), (15.0, 5.0)]);
+    assert!(render(vec![(5.0, 5.0), (5.0, 5.0), (15.0, 5.0)]).pixels == control.pixels, "moving strokes keep their full path");
+}
+
+#[test]
 fn mask_ink_obeys_the_shared_path_extent_guard() {
     let draw = |extent: f32| Draw::MaskInk {
         segs: vec![PathSeg::Move(0.0, 0.0), PathSeg::Cubic(extent, 0.0, extent, extent, 0.0, extent), PathSeg::Close],
