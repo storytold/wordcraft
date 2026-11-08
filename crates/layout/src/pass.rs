@@ -13,6 +13,7 @@ use super::{
     Arc, Block, Counters, DocLayout, Document, FieldCtx, HashMap, InlineObject, LayoutOptions, Page, Paragraph, Path, SectionProps, SectionStart,
     StoryRef, TextDirection, ViewMode, balloons, para, vertical,
 };
+use wordcraft_doc::legacy_form::LegacyForm;
 
 /// How the view lays the document out: `web` for the continuous views, `reflow` for those and
 /// the reading view, which both ignore the sections' page geometry.
@@ -136,15 +137,24 @@ fn section_marks(doc: &Document, opts: &LayoutOptions, sections: &[(usize, &Sect
     (stacked, quiet)
 }
 
-/// An in-line picture, shape or chart, or a note reference mark, is visible content with no plain
-/// text, so its line keeps its room even when the paragraph mark is hidden (#5288). Not one the
-/// layout leaves out (a hidden drawing, or one in hidden or deleted text).
+/// An in-line picture, shape or chart, a note reference mark, or a field shown as something other
+/// than its result, is visible content with no plain text, so its line keeps its room even when
+/// the paragraph mark is hidden (#5288). Not one the layout leaves out (a hidden drawing, or one
+/// in hidden or deleted text).
 fn has_inline_content(doc: &Document, opts: &LayoutOptions, p: &Paragraph) -> bool {
     let left_out = left_out_objects(doc, p, None, opts.show_hidden, opts.hides_deleted(StoryRef::Body));
+    // As the paragraph layout shows a field: its code, a legacy check box, a drop-down's entry.
+    let shown_field = |o: &InlineObject| match o {
+        InlineObject::Field { code, .. } => {
+            *code != opts.field_codes
+                || o.legacy_form().is_some_and(|f| matches!(f, LegacyForm::CheckBox { .. }) || f.shown_text().is_some_and(|t| !t.is_empty()))
+        }
+        _ => false,
+    };
     p.objects
         .iter()
         .enumerate()
-        .any(|(k, o)| !left_out(k) && (matches!(o, InlineObject::NoteRef { .. }) || (o.frame().is_some() && !o.is_floating())))
+        .any(|(k, o)| !left_out(k) && (matches!(o, InlineObject::NoteRef { .. }) || (o.frame().is_some() && !o.is_floating()) || shown_field(o)))
 }
 
 /// The page the continuous views lay out on: the first section's, as wide as the window (and as
