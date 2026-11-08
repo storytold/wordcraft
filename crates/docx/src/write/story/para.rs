@@ -133,7 +133,7 @@ impl Writer<'_> {
         // Taken first: a text box in this paragraph writes paragraphs of its own.
         let inline = std::mem::take(&mut self.inline_controls);
         // Split into pieces with their props.
-        let mut pieces: Vec<(Piece, &CharProps)> = Vec::new();
+        let mut pieces: Vec<(Piece, &CharProps, usize)> = Vec::new();
         let mut k = 0usize;
         // Runs of mixed direction are split so Word orders them as WordCraft does (#1543).
         let rtl_para = self.doc.styles.resolve_para(&p.props).bidi;
@@ -143,6 +143,8 @@ impl Writer<'_> {
         let spans = crate::write::bidi::direction_spans(&p.text, rtl_para, p.run_ranges(), |c| {
             para_lang || crate::write::bidi::char_style_has_lang_bidi(styles, c)
         });
+        let source_runs: Vec<_> = p.run_ranges().map(|(range, _)| range).collect();
+        let mut source_run_idx = 0;
         for (range, props) in &spans {
             let props: &CharProps = props;
             let range = range.clone();
@@ -150,7 +152,16 @@ impl Writer<'_> {
             let Some(text) = p.text.get(range) else { continue };
             let sym_font = props.sym_font.as_deref().filter(|f| !f.trim().is_empty());
             let mut buf = String::new();
+            let mut buf_source_run = None;
             for (ci, c) in text.char_indices() {
+                let absolute = base + ci;
+                while source_runs.get(source_run_idx).is_some_and(|range| range.end <= absolute) {
+                    source_run_idx += 1;
+                }
+                let source_run = source_run_idx;
+                if !buf.is_empty() && buf_source_run != Some(source_run) {
+                    pieces.push((Piece::Text(std::mem::take(&mut buf)), props, buf_source_run.unwrap_or(source_run)));
+                }
                 let special = match c {
                     '\t' => Some(Piece::Tab),
                     '\n' => Some(Piece::Br(None)),
@@ -174,22 +185,25 @@ impl Writer<'_> {
                 match special {
                     Some(sp) => {
                         if !buf.is_empty() {
-                            pieces.push((Piece::Text(std::mem::take(&mut buf)), props));
+                            pieces.push((Piece::Text(std::mem::take(&mut buf)), props, buf_source_run.unwrap_or(source_run)));
                         }
-                        pieces.push((sp, props));
+                        pieces.push((sp, props, source_run));
                     }
-                    None => buf.push(c),
+                    None => {
+                        buf_source_run = Some(source_run);
+                        buf.push(c);
+                    }
                 }
             }
             if !buf.is_empty() {
-                pieces.push((Piece::Text(buf), props));
+                pieces.push((Piece::Text(buf), props, buf_source_run.unwrap_or(source_run_idx)));
             }
         }
 
         let mut open_link: Option<String> = None;
         let mut i = 0;
         while i < pieces.len() {
-            let Some((piece, props)) = pieces.get(i) else { break };
+            let Some((piece, props, source_run)) = pieces.get(i) else { break };
             let props: &CharProps = props;
             // Content control boundaries: written inline when the plan says so (else they are
             // written around the paragraph, or were left without a partner). A hyperlink never
@@ -231,8 +245,9 @@ impl Writer<'_> {
                 _ => {
                     // Gather simple pieces sharing these props into one run.
                     let mut j = i;
-                    while let Some((pc, pr)) = pieces.get(j) {
-                        if matches!(pc, Piece::Obj(..)) || !(std::ptr::eq(*pr, props) || *pr == props) {
+                    while let Some((pc, pr, piece_source_run)) = pieces.get(j) {
+                        let same_source_run = piece_source_run == source_run && **pr == *props;
+                        if matches!(pc, Piece::Obj(..)) || (j > i && !same_source_run && !wordcraft_doc::para::runs_can_merge(pr, props)) {
                             break;
                         }
                         j += 1;
@@ -243,7 +258,7 @@ impl Writer<'_> {
                     self.rev_open(w, props);
                     w.open("w:r", &[]);
                     self.rpr(w, props);
-                    for (pc, _) in pieces.get(i..j).unwrap_or(&[]) {
+                    for (pc, _, _) in pieces.get(i..j).unwrap_or(&[]) {
                         match pc {
                             Piece::Text(t) if !t.is_empty() => w.leaf(if del { "w:delText" } else { "w:t" }, &[("xml:space", "preserve")], t),
                             Piece::Tab => w.empty("w:tab", &[]),

@@ -120,6 +120,75 @@ fn table_alternate_content_keeps_nested_row_and_cell_controls() {
 }
 
 #[test]
+fn fit_text_width_and_group_id_survive_two_save_reopen_cycles() {
+    let mut doc = read_body(r#"<w:p><w:r><w:rPr><w:fitText w:val="720" w:id="1"/></w:rPr><w:t>abcdefghij</w:t></w:r></w:p>"#);
+    let expected = wordcraft_doc::props::FitText { width: Some(720), id: Some(1) };
+    for cycle in 1..=2 {
+        let bytes = wordcraft_docx::write(&doc).unwrap();
+        doc = wordcraft_docx::read(&bytes).unwrap();
+        let para = doc.body.first().and_then(|b| b.as_para()).unwrap();
+        assert_eq!(para.runs.first().map(|r| &r.props.fit_text), Some(&Some(expected.clone())), "cycle {cycle}");
+    }
+}
+
+#[test]
+fn fit_text_group_id_above_i32_range_survives_save_and_reopen() {
+    let mut doc = read_body(r#"<w:p><w:r><w:rPr><w:fitText w:val="720" w:id="2147483648"/></w:rPr><w:t>text</w:t></w:r></w:p>"#);
+    let expected = wordcraft_doc::props::FitText { width: Some(720), id: Some(2_147_483_648) };
+    assert_eq!(paras(&doc)[0].runs[0].props.fit_text, Some(expected.clone()));
+
+    let bytes = wordcraft_docx::write(&doc).unwrap();
+    doc = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(paras(&doc)[0].runs[0].props.fit_text, Some(expected));
+}
+
+#[test]
+fn fit_text_unit_width_and_source_run_children_round_trip() {
+    let mut doc = read_body(r#"<w:p><w:r><w:rPr><w:fitText w:val="0.5in"/></w:rPr><w:t>a</w:t><w:tab/><w:t>b</w:t></w:r></w:p>"#);
+    let para = doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(para.text, "a\tb");
+    assert_eq!(para.runs.len(), 1);
+    assert_eq!(para.runs[0].props.fit_text.as_ref().and_then(|fit| fit.width), Some(720));
+
+    for _ in 0..2 {
+        let bytes = wordcraft_docx::write(&doc).unwrap();
+        doc = wordcraft_docx::read(&bytes).unwrap();
+        let para = doc.body.first().and_then(|b| b.as_para()).unwrap();
+        assert_eq!(para.text, "a\tb");
+        assert_eq!(para.runs.len(), 1);
+        assert_eq!(para.runs[0].props.fit_text.as_ref().and_then(|fit| fit.width), Some(720));
+    }
+}
+
+#[test]
+fn fit_text_hyperlink_field_replays_source_run_children_together() {
+    let xml = r#"<w:p><w:fldSimple w:instr="HYPERLINK &quot;https://example.org&quot;"><w:r><w:rPr><w:fitText w:val="720"/></w:rPr><w:t>a</w:t><w:tab/><w:t>b</w:t></w:r></w:fldSimple></w:p>"#;
+    let doc = read_body(xml);
+    let para = doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(para.text, "a\tb");
+    assert_eq!(para.runs.len(), 1);
+    assert_eq!(para.runs[0].props.fit_text.as_ref().and_then(|fit| fit.width), Some(720));
+    assert_eq!(para.runs[0].props.link.as_deref(), Some("https://example.org"));
+
+    let reopened = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+    let para = reopened.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(para.text, "a\tb");
+    assert_eq!(para.runs.len(), 1);
+    assert_eq!(para.runs[0].props.fit_text.as_ref().and_then(|fit| fit.width), Some(720));
+}
+
+#[test]
+fn fit_text_without_width_is_omitted_on_save() {
+    let mut doc = read_body(r#"<w:p><w:r><w:rPr><w:fitText w:id="1"/></w:rPr><w:t>text</w:t></w:r></w:p>"#);
+    let para = doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(para.runs.first().and_then(|r| r.props.fit_text.as_ref()).and_then(|f| f.width), None);
+
+    doc = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+    let para = doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(para.runs.first().and_then(|r| r.props.fit_text.as_ref()), None);
+}
+
+#[test]
 fn repeated_style_ids_use_last() {
     let styles = format!(
         r#"<w:styles {W_NS}>
