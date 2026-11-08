@@ -157,12 +157,35 @@ Command line:
 
 ```sh
 wordcraft-cli convert report.docx report.pdf        # docx, pdf, odt, rtf, html, md, tex, txt, png
+wordcraft-cli convert report.docx report.pdf --strict   # exit 3, no file, if a character or picture would be left out
 wordcraft-cli text report.docx                      # plain text
 wordcraft-cli inspect report.docx                   # structure as JSON
 wordcraft-cli run --template sample \
   --cmd 'select.text={"text":"Membership"}' --cmd format.bold --save out.docx
 wordcraft-cli run --script job.json                 # the same from a file: commands, then save to docx and pdf
 ```
+
+`convert --strict` (a `.pdf` or `.png` output only) refuses a silently incomplete render: it exits 3
+and writes nothing if the output would draw a character no font has (an empty box) or leave out a
+picture. Exit codes are 0 (written), 1 (unreadable input, usage error, or `--strict` with another
+output type, checked before the input is read) and 3 (strict refusal). On exit 3, stderr has one
+`wordcraft-cli: strict: …` line per kind, then one JSON line:
+
+```sh
+wordcraft-cli convert in.docx out.pdf --strict
+# wordcraft-cli: strict: 1 character cannot be drawn: U+2D30 (×3)
+# {"schema":1,"strict":"failed","missing_glyphs":[{"cp":"U+2D30","count":3}],"missing_pictures":[],"truncated":false}
+```
+
+`missing_pictures` entries are `{"part", "in", "reason"}`; the reasons are `missing part`,
+`external target`, `link only`, `undecodable` and `unsupported format`. Lists stop at 256 entries
+and `truncated` says so. Only characters the output draws count (not hidden text, or deleted text
+without `--markup`), and a character a fallback font draws is fine. A Private Use Area character
+fails only if no installed font maps it. The result depends on the fonts installed on the host
+(see #5624 for a fixed font set). An external picture target is never fetched: it is reported, not
+loaded. Pictures dropped when a DOCX is opened are reported for DOCX input only. `--strict` is for
+`convert`; the engine takes `strict: true` on `file.save`, `file.exportPdf` and `file.exportPng`,
+and `file.strictReport` returns the report without writing.
 
 Web: `cd apps/wordcraft-web && trunk serve`, then open <http://127.0.0.1:8771/?sample>.
 

@@ -6,6 +6,8 @@ use wordcraft_doc::props::NumRef;
 use wordcraft_doc::{Block, CharProps, Document, ListKind, Paragraph, Table, Watermark, para_block};
 
 use crate::*;
+use wordcraft_layout::LayoutOptions;
+use wordcraft_layout::display::DisplayOptions;
 
 /// Verify preset lines and connectors emit the requested PDF line-cap operator.
 #[test]

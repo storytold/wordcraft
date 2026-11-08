@@ -17,13 +17,16 @@ const USAGE: &str = "\
 wordcraft-cli — WordCraft from the command line
 
 USAGE:
-  wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--format wordml2003|flatopc]
+  wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--strict] [--format wordml2003|flatopc]
                                               convert between formats (docx, doc [read], pdf, odt, rtf, html, md, tex, txt, json, png,
                                               xml); --update-fields refreshes unlocked fields before saving;
                                               an .xml file is a Word XML Document (Flat OPC), or with
                                               --format wordml2003 a Word 2003 XML Document;
                                               --markup (Print Markup): comments beside each page and
-                                              tracked changes in pdf/png, a comment list in html/md/txt
+                                              tracked changes in pdf/png, a comment list in html/md/txt;
+                                              --strict (pdf or png output only) writes nothing and exits 3
+                                              if a character can't be drawn or a picture is missing or
+                                              undecodable; the report is on stderr, with one JSON line
   wordcraft-cli info <file>                   pages, words, paragraphs, properties (JSON)
   wordcraft-cli text <file>                   plain text
   wordcraft-cli inspect <file>                document structure (JSON)
@@ -310,6 +313,7 @@ const CONVERT_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--markup", takes_value: false },
     OptionSpec { name: "--format", takes_value: true },
     OptionSpec { name: "--update-fields", takes_value: false },
+    OptionSpec { name: "--strict", takes_value: false },
     OptionSpec { name: "--password", takes_value: true },
     OptionSpec { name: "--password-file", takes_value: true },
 ];
@@ -350,6 +354,9 @@ enum Failure {
     /// Whoever read stdout closed it (`wordcraft-cli commands --json | head`): there is nobody left
     /// to write to, so stop quietly and exit 0 like other command-line tools.
     StdoutClosed,
+    /// `convert --strict` refused: the text for stderr (the report's lines, then its JSON line).
+    /// Exit status 3.
+    Strict(String),
 }
 
 impl fmt::Display for Failure {
@@ -357,6 +364,7 @@ impl fmt::Display for Failure {
         match self {
             Failure::Error(e) => f.write_str(e),
             Failure::StdoutClosed => f.write_str("stdout closed"),
+            Failure::Strict(report) => f.write_str(report),
         }
     }
 }
@@ -402,6 +410,72 @@ fn valid_connect_addr(addr: &str) -> bool {
     !host.is_empty() && port.parse::<u16>().is_ok()
 }
 
+/// What `convert --strict` prints when it refuses: each line of the report as `wordcraft-cli: …`,
+/// then the report's JSON on one line.
+fn strict_report_text(s: &mut Session, markup: bool, png: bool) -> String {
+    let mut params = json!({"markup": markup});
+    if png {
+        params["page"] = json!(1);
+    }
+    let report = s.run("file.strictReport", &params).map_err(|e| e.to_string());
+    match report {
+        Ok(json) => {
+            let mut text = String::new();
+            for line in report_lines(&json) {
+                text += &format!("wordcraft-cli: {line}\n");
+            }
+            text + &json.to_string()
+        }
+        Err(e) => format!("wordcraft-cli: strict: refused, and the report could not be made: {e}"),
+    }
+}
+
+/// The report's human lines, from its JSON (the engine's `StrictReport::lines`).
+fn report_lines(json: &Value) -> Vec<String> {
+    wordcraft_engine::strict::lines_from_json(json)
+}
+
+/// `convert <in> <out>`: `rest` is the command line after `convert`, `open` opens the input.
+fn run_convert(rest: &[String], open: impl Fn(&str, Option<&str>) -> Result<Session, String>) -> Result<(), Failure> {
+    validate_options("convert", rest, CONVERT_OPTIONS)?;
+    // `--format wordml2003` (or `flatopc`) picks the kind of `.xml` file; its value isn't a path.
+    let format = match find_option_arg(rest, "--format") {
+        OptionArg::Absent => None,
+        OptionArg::Duplicate => return Err("convert: duplicate --format option".into()),
+        OptionArg::MissingValue => return Err("convert: --format requires a value".into()),
+        OptionArg::Value(value) => Some(value),
+    };
+    let paths = positionals(rest, CONVERT_OPTIONS);
+    let (i, o) = (paths.first().ok_or_else(missing_argument)?.to_string(), paths.get(1).ok_or_else(missing_argument)?.to_string());
+    let markup = rest.iter().any(|a| a == "--markup");
+    let strict = rest.iter().any(|a| a == "--strict");
+    // Before the input is opened: a wrong output type is a usage error, not a file error.
+    let to_png = o.to_ascii_lowercase().ends_with(".png");
+    if strict && !(to_png || o.to_ascii_lowercase().ends_with(".pdf")) {
+        return Err("convert: --strict needs a .pdf or .png output".into());
+    }
+    let password = password_from(rest)?;
+    let mut s = open(&i, password.as_deref())?;
+    if rest.iter().any(|a| a == "--update-fields") {
+        s.run("references.updateFields", &json!({})).map_err(|e| e.to_string())?;
+    }
+    let r = if to_png {
+        s.run("file.exportPng", &json!({"path": o, "page": 1, "markup": markup, "strict": strict}))
+    } else {
+        let mut params = json!({"path": o, "markup": markup, "strict": strict});
+        if let Some(f) = format {
+            params["format"] = json!(f);
+        }
+        s.run("file.save", &params)
+    };
+    if let Err(e) = r {
+        let refused = strict && matches!(&e, wordcraft_engine::CmdError::Failed(m) if m.starts_with("strict: "));
+        return Err(if refused { Failure::Strict(strict_report_text(&mut s, markup, to_png)) } else { e.to_string().into() });
+    }
+    eprintln!("wrote {o}");
+    Ok(())
+}
+
 fn load_run_script(rest: &[String], script_path: Option<&Path>) -> Result<Option<script::Script>, Failure> {
     match arg_value(rest, "--script") {
         Some(path) if !path.starts_with("--") => {
@@ -438,36 +512,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
         return write_stdout(|o| write!(o, "{USAGE}"));
     }
     match cmd {
-        "convert" => {
-            validate_options("convert", &rest, CONVERT_OPTIONS)?;
-            // `--format wordml2003` (or `flatopc`) picks the kind of `.xml` file; its value isn't a path.
-            let format = match find_option_arg(&rest, "--format") {
-                OptionArg::Absent => None,
-                OptionArg::Duplicate => return Err("convert: duplicate --format option".into()),
-                OptionArg::MissingValue => return Err("convert: --format requires a value".into()),
-                OptionArg::Value(value) => Some(value),
-            };
-            let paths = positionals(&rest, CONVERT_OPTIONS);
-            let (i, o) = (paths.first().ok_or_else(missing_argument)?.to_string(), paths.get(1).ok_or_else(missing_argument)?.to_string());
-            let markup = rest.iter().any(|a| a == "--markup");
-            let password = password_from(&rest)?;
-            let mut s = open(&i, password.as_deref())?;
-            if rest.iter().any(|a| a == "--update-fields") {
-                s.run("references.updateFields", &json!({})).map_err(|e| e.to_string())?;
-            }
-            let r = if o.to_ascii_lowercase().ends_with(".png") {
-                s.run("file.exportPng", &json!({"path": o, "page": 1, "markup": markup}))
-            } else {
-                let mut params = json!({"path": o, "markup": markup});
-                if let Some(f) = format {
-                    params["format"] = json!(f);
-                }
-                s.run("file.save", &params)
-            };
-            r.map_err(|e| e.to_string())?;
-            eprintln!("wrote {o}");
-            Ok(())
-        }
+        "convert" => run_convert(&rest, open),
         "info" => {
             validate_options("info", &rest, PASSWORD_OPTIONS)?;
             let paths = positionals(&rest, PASSWORD_OPTIONS);
@@ -785,6 +830,10 @@ fn main() -> ExitCode {
         Err(Failure::Error(e)) => {
             eprintln!("wordcraft-cli: {e}");
             ExitCode::FAILURE
+        }
+        Err(Failure::Strict(report)) => {
+            eprintln!("{report}");
+            ExitCode::from(3)
         }
     }
 }
