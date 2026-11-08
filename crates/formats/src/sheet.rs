@@ -201,6 +201,7 @@ struct Package<'a> {
 
 impl<'a> Package<'a> {
     fn open(bytes: &'a [u8]) -> Result<Self, String> {
+        wordcraft_doc::zip_guard::check(bytes, crate::MAX_ZIP_ENTRIES)?;
         let zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("not a valid spreadsheet package ({e})"))?;
         Ok(Package { zip, total: 0 })
     }
@@ -322,11 +323,13 @@ fn attr(e: &BytesStart<'_>, name: &[u8]) -> Option<String> {
     })
 }
 
-/// `s` + `t`, keeping `s` at most [`MAX_CELL_CHARS`] characters.
-fn push_capped(s: &mut String, t: &str) {
-    let have = s.chars().count();
-    if have < MAX_CELL_CHARS {
-        s.extend(t.chars().take(MAX_CELL_CHARS - have));
+/// `s` + `t`, keeping `s` at most [`MAX_CELL_CHARS`] characters. `have` is `s`'s character
+/// count, kept up to date here: counting `s` again for every piece of text made a full cell
+/// cost its length per further text event.
+fn push_capped(s: &mut String, have: &mut usize, t: &str) {
+    for c in t.chars().take(MAX_CELL_CHARS.saturating_sub(*have)) {
+        s.push(c);
+        *have += 1;
     }
 }
 
@@ -402,6 +405,14 @@ mod tests {
     use std::io::Write;
 
     #[test]
+    fn a_package_declaring_too_many_entries_is_refused() {
+        // #3660: refused before `zip` reserves and parses them.
+        let bomb = wordcraft_doc::zip_guard::zip64_entry_count_sample(crate::MAX_ZIP_ENTRIES + 1);
+        assert!(sheet_names(&bomb).is_err_and(|e| e.contains("declares")));
+        assert!(crate::odt::parse(&bomb).is_err_and(|e| e.contains("declares")));
+    }
+
+    #[test]
     fn negative_zero_formats_as_zero() {
         assert_eq!(number(-0.0), "0");
     }
@@ -418,6 +429,27 @@ mod tests {
 
     const RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
 
+    #[test]
+    fn workbook_sheets_find_their_relationships_by_index() {
+        // Every sheet searched every relationship; 4,096 sheets over 20,000 relationships.
+        let sheets: String = (0..MAX_SHEETS).map(|i| format!(r#"<sheet name="S{i}" sheetId="{i}" r:id="rId{i}"/>"#)).collect();
+        let wb = format!(
+            r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>{sheets}</sheets></workbook>"#
+        );
+        let mut rels = String::from(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#);
+        // A chart sheet sharing a worksheet's id doesn't hide it.
+        rels.push_str(r#"<Relationship Id="rId0" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" Target="chartsheets/c.xml"/>"#);
+        for i in 0..20_000 {
+            rels.push_str(&format!(
+                r#"<Relationship Id="rId{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{i}.xml"/>"#
+            ));
+        }
+        rels.push_str("</Relationships>");
+        let names = sheet_names(&zip(&[("_rels/.rels", RELS), ("xl/workbook.xml", &wb), ("xl/_rels/workbook.xml.rels", &rels)])).unwrap();
+        assert_eq!(names.len(), MAX_SHEETS);
+        assert_eq!(names.first().map(String::as_str), Some("S0"));
+    }
+
     fn xlsx(sheet1: &str) -> Vec<u8> {
         let wb = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><workbookPr/><sheets><sheet name="People" sheetId="1" r:id="rId1"/><sheet name="Chart" sheetId="2" r:id="rId9"/><sheet name="Notes" sheetId="3" r:id="rId2"/></sheets></workbook>"#;
         let wb_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="/xl/worksheets/sheet2.xml"/><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" Target="chartsheets/sheet1.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
@@ -433,6 +465,22 @@ mod tests {
             ("xl/worksheets/sheet1.xml", sheet1),
             ("xl/worksheets/sheet2.xml", sheet2),
         ])
+    }
+
+    #[test]
+    fn a_full_cell_takes_further_text_without_recounting() {
+        let (mut s, mut n) = (String::new(), 0usize);
+        push_capped(&mut s, &mut n, "é");
+        push_capped(&mut s, &mut n, &"x".repeat(MAX_CELL_CHARS));
+        assert_eq!((s.chars().count(), n), (MAX_CELL_CHARS, MAX_CELL_CHARS));
+        // A million more text events on the full cell each cost nothing (they used to count it).
+        let t = std::time::Instant::now();
+        for _ in 0..1_000_000 {
+            push_capped(&mut s, &mut n, "y");
+        }
+        assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+        assert_eq!(s.chars().count(), MAX_CELL_CHARS);
+        assert!(!s.contains('y'));
     }
 
     /// #1287: one long shared string in thousands of cells stays under the text budget.

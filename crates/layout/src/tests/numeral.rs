@@ -35,8 +35,37 @@ fn line_gids(l: &DocLayout, text: &str) -> Vec<Vec<u32>> {
     panic!("body paragraph not laid out");
 }
 
+/// The face of each cluster on the first line, as [`line_gids`] walks them.
+fn line_faces(l: &DocLayout) -> Vec<u32> {
+    for p in &l.pages {
+        for it in &p.items {
+            if let Placed::Lines { story: StoryRef::Body, para, .. } = it {
+                let line = &para.lines[0];
+                return para.clusters[line.c0..line.c1].iter().map(|cl| para.styles[cl.style as usize].face.id()).collect();
+            }
+        }
+    }
+    panic!("body paragraph not laid out");
+}
+
+/// [`line_gids`] of `text` laid out as `a` and then as `b` (right-to-left paragraph, numeral
+/// mode). The tests running alongside share the font database: one loading a font between the
+/// two layouts can change the face a character falls back to (U+06DD in Segoe UI, then in Noto
+/// Sans Arabic), so the pair is made again until both draw with the same faces, as two layouts
+/// with the same fonts loaded do.
+fn gids_pair(text: &str, a: (bool, NumeralMode), b: (bool, NumeralMode)) -> (Vec<Vec<u32>>, Vec<Vec<u32>>) {
+    for _ in 0..5 {
+        let (la, lb) = (lay_opts(text, a.0, a.1), lay_opts(text, b.0, b.1));
+        if line_faces(&la) == line_faces(&lb) {
+            return (line_gids(&la, text), line_gids(&lb, text));
+        }
+    }
+    panic!("{text:?} draws with other faces in {b:?} than in {a:?}");
+}
+
 #[test]
 fn parse_accepts_the_four_modes_any_case() {
+    crate::test_fonts();
     assert_eq!(NumeralMode::parse("arabic"), Some(NumeralMode::Arabic));
     assert_eq!(NumeralMode::parse("hindi"), Some(NumeralMode::Hindi));
     assert_eq!(NumeralMode::parse("context"), Some(NumeralMode::Context));
@@ -50,6 +79,7 @@ fn parse_accepts_the_four_modes_any_case() {
 
 #[test]
 fn map_substitutes_ascii_digits_only() {
+    crate::test_fonts();
     for d in '0'..='9' {
         let hindi = char::from_u32(0x660 + (d as u32 - '0' as u32)).unwrap();
         assert_eq!(NumeralMode::Hindi.map(d, false), hindi);
@@ -73,6 +103,7 @@ fn map_substitutes_ascii_digits_only() {
 
 #[test]
 fn resolve_uses_the_given_system_locale() {
+    crate::test_fonts();
     for m in [NumeralMode::Arabic, NumeralMode::Hindi, NumeralMode::Context] {
         assert_eq!(m.resolve(Some("ar-EG")), m, "only System is resolved");
     }
@@ -87,6 +118,7 @@ fn resolve_uses_the_given_system_locale() {
 
 #[test]
 fn context_mode_on_a_very_long_digit_run_stays_linear() {
+    crate::test_fonts();
     // Every digit used to scan back over all the digits and spaces before it (O(n²)).
     let text = format!("سنة {}", "1 ".repeat(100_000));
     let start = std::time::Instant::now();
@@ -95,11 +127,13 @@ fn context_mode_on_a_very_long_digit_run_stays_linear() {
     assert!(start.elapsed() < std::time::Duration::from_secs(60), "took {:?}", start.elapsed());
     // The digits follow the Arabic word before them.
     let short = "سنة 1 2 3";
-    assert_eq!(line_gids(&lay_opts(short, false, NumeralMode::Context), short), line_gids(&lay_opts(short, false, NumeralMode::Hindi), short));
+    let (ctx, hin) = gids_pair(short, (false, NumeralMode::Context), (false, NumeralMode::Hindi));
+    assert_eq!(ctx, hin);
 }
 
 #[test]
 fn hindi_mode_reshapes_digits_but_keeps_offsets() {
+    crate::test_fonts();
     let text = "Year 2024!";
     let latin = lay_opts(text, false, NumeralMode::Arabic);
     let hindi = lay_opts(text, false, NumeralMode::Hindi);
@@ -121,33 +155,32 @@ fn hindi_mode_reshapes_digits_but_keeps_offsets() {
 
 #[test]
 fn arabic_mode_keeps_typed_hindi_digits() {
+    crate::test_fonts();
     let text = "عام ٢٠٢٤";
-    let hindi = line_gids(&lay_opts(text, true, NumeralMode::Hindi), text);
-    let arabic = line_gids(&lay_opts(text, true, NumeralMode::Arabic), text);
+    let (hindi, arabic) = gids_pair(text, (true, NumeralMode::Hindi), (true, NumeralMode::Arabic));
     assert_eq!(hindi, arabic, "typed Hindi digits display as typed in Arabic mode");
 }
 
 #[test]
 fn context_mode_follows_run_direction() {
+    crate::test_fonts();
     // Right-to-left paragraph: digits behave like Hindi mode.
     let rtl = "سنة 2024";
-    let ctx = line_gids(&lay_opts(rtl, true, NumeralMode::Context), rtl);
-    let hin = line_gids(&lay_opts(rtl, true, NumeralMode::Hindi), rtl);
+    let (ctx, hin) = gids_pair(rtl, (true, NumeralMode::Context), (true, NumeralMode::Hindi));
     assert_eq!(ctx, hin, "digits in RTL text show Hindi in Context mode");
     // Left-to-right paragraph: digits behave like Arabic mode.
     let ltr = "Year 2024";
-    let ctx = line_gids(&lay_opts(ltr, false, NumeralMode::Context), ltr);
-    let ara = line_gids(&lay_opts(ltr, false, NumeralMode::Arabic), ltr);
+    let (ctx, ara) = gids_pair(ltr, (false, NumeralMode::Context), (false, NumeralMode::Arabic));
     assert_eq!(ctx, ara, "digits in LTR text show Western in Context mode");
     // Mixed paragraph: digits next to Arabic show Hindi even in a left-to-right paragraph.
     let mixed = "Year سنة 2024";
-    let ctx = line_gids(&lay_opts(mixed, false, NumeralMode::Context), mixed);
-    let hin = line_gids(&lay_opts(mixed, false, NumeralMode::Hindi), mixed);
+    let (ctx, hin) = gids_pair(mixed, (false, NumeralMode::Context), (false, NumeralMode::Hindi));
     assert_eq!(ctx, hin, "digits by Arabic text show Hindi in Context mode");
 }
 
 #[test]
 fn remap_range_maps_display_bytes_to_original() {
+    crate::test_fonts();
     use crate::para::remap_range;
     // "a5ب": '5' (1 byte) displays as '٥' (2 bytes), so display offsets shift after it.
     let orig = "a5ب";
@@ -180,9 +213,8 @@ fn arabic_mode_keeps_arabic_indic_digits_as_typed() {
         }
         let typed = format!("\u{6dd}{hindi}");
         let western = format!("\u{6dd}{ascii}");
-        let t = line_gids(&lay_opts(&typed, true, NumeralMode::default()), &typed);
+        let (t, h) = gids_pair(&typed, (true, NumeralMode::default()), (true, NumeralMode::Hindi));
         let w = line_gids(&lay_opts(&western, true, NumeralMode::default()), &western);
-        let h = line_gids(&lay_opts(&typed, true, NumeralMode::Hindi), &typed);
         assert_ne!(t, w, "U+{:04X} is not shaped as ASCII {ascii:?} in the default mode", 0x660 + n);
         assert_eq!(t, h, "U+{:04X} shapes the same as in Hindi mode", 0x660 + n);
     }

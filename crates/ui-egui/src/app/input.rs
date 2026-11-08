@@ -42,6 +42,16 @@ impl WordApp {
         self.synthetic_injected = n;
     }
 
+    /// Whether this pass's input came from the control channel (`ui.click`, `ui.key`, `ui.drag`,
+    /// `ui.text`…, which MCP's `click`, `key` and `type` tools send). Decisions that are only the
+    /// user's ignore it: letting agent messages through again, and answering an agent's question
+    /// (#959 review). A real click in the same frame as a control step is ignored too, which errs
+    /// the safe way.
+    pub(crate) fn input_from_control(&self, ctx: &egui::Context) -> bool {
+        let viewport = ctx.viewport_id();
+        self.synthetic_pending || ctx.with_plugin(|p: &mut crate::windows::ViewportInput| p.injected == Some(viewport)).unwrap_or(false)
+    }
+
     /// The control channel's next input frame, taken off the queue.
     pub(crate) fn next_synthetic(&mut self) -> Option<Vec<egui::Event>> {
         let (events, n) = self.peek_synthetic()?;
@@ -77,7 +87,9 @@ impl WordApp {
         #[cfg(not(target_arch = "wasm32"))]
         if ctx.current_pass_index() == 0 {
             let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
-            if !dropped.is_empty() {
+            // A drop behind a modal dialog does nothing: it would insert a picture or open a
+            // document under it.
+            if !dropped.is_empty() && !self.modal_open() {
                 self.open_dropped_files(dropped);
                 let lang = i18n::Lang::from_pref(&self.ui.language);
                 self.install_ui_fonts(ctx, lang);
@@ -86,7 +98,12 @@ impl WordApp {
         // SmartArt Text Pane (#2701): Tab demotes and Shift+Tab promote the focused item, as
         // Word's pane does. This is an input action, so it runs in the first UI pass only; hidden
         // `run_logic` ticks still see the previous shown frame's keys.
-        if ctx.current_pass_index() == 0 && self.session.view.smart_art_pane && self.smart_art_row_focused && self.smart_art_item.is_some() {
+        if ctx.current_pass_index() == 0
+            && self.session.view.smart_art_pane
+            && self.smart_art_row_focused
+            && self.smart_art_item.is_some()
+            && !self.modal_open()
+        {
             let shift_tab = ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab));
             let tab = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab));
             if shift_tab || tab {
