@@ -324,6 +324,9 @@ fn click_and_type(s: &mut Session, v: &Value) -> CmdResult {
     let (Some(x), Some(y)) = (p::f32(v, "x"), p::f32(v, "y")) else {
         return Err(CmdError::Params("`x` and `y` are required".into()));
     };
+    if !matches!(s.view.mode, ViewMode::Print | ViewMode::Web) {
+        return Err(CmdError::Disabled("Click and Type is only available in Print and Web Layout".into()));
+    }
     let l = s.layout();
     let Some(pg) = l.pages.get(page) else { return Err(CmdError::Params(format!("no page {}", page.saturating_add(1)))) };
     let body = pg.body;
@@ -331,15 +334,26 @@ fn click_and_type(s: &mut Session, v: &Value) -> CmdResult {
     let in_body = x >= body.x && x <= body.right() && y >= body.y && y <= body.bottom();
     let on_line = lines.iter().any(|ln| y >= ln.top && y <= ln.bottom);
     let last_bottom = lines.iter().map(|ln| ln.bottom).fold(body.y, f32::max);
-    let below = y - last_bottom;
     let original_body = s.doc.body.len();
-    if in_body && !on_line && l.cell_at(page, x, y).is_none() && page == l.pages.len().saturating_sub(1) && below > 0.0 {
-        let line_h = lines.last().map(|ln| (ln.bottom - ln.top).max(1.0)).unwrap_or(12.0);
-        let n = ((below / line_h).ceil() as usize).clamp(1, MAX_CLICK_AND_TYPE_PARAGRAPHS);
-        super::text::append_paragraphs(s, n)?;
-        // The command's own layout is still the pre-append one until the command finishes, so
-        // lay the new paragraphs out before hit-testing the click point.
-        s.relayout();
+    if in_body && !on_line && l.cell_at(page, x, y).is_none() && page == l.pages.len().saturating_sub(1) && y > last_bottom {
+        // Add one paragraph at a time until the last line reaches the click, laying out after
+        // each one: an inline picture or a large Title line can be much taller than the empty
+        // Click and Type paragraphs that follow it, so one estimate cannot place the caret.
+        let mut added = 0;
+        while added < MAX_CLICK_AND_TYPE_PARAGRAPHS {
+            let l = s.layout();
+            let Some(pg) = l.pages.get(page) else { break };
+            if l.pages.len().saturating_sub(1) != page || l.cell_at(page, x, y).is_some() {
+                break;
+            }
+            let last_bottom = page_lines(pg, StoryRef::Body).into_iter().map(|ln| ln.bottom).fold(pg.body.y, f32::max);
+            if y <= last_bottom {
+                break;
+            }
+            super::text::append_paragraphs(s, 1)?;
+            s.relayout();
+            added += 1;
+        }
     }
     let l = s.layout();
     let Some(mut pos) = l.hit(page, x, y, StoryRef::Body) else { return Err(CmdError::Params("no text on that page".into())) };
@@ -383,6 +397,7 @@ fn select_all(s: &mut Session, v: &Value) -> CmdResult {
     }
     let st = s.sel.focus.story;
     s.sel = Selection { anchor: s.doc.start_of(st), focus: s.doc.end_of(st) };
+    s.pending = None;
     s.column = None;
     s.column_mode = false;
     sel_result(s)
@@ -392,6 +407,7 @@ fn select_range(s: &mut Session, v: &Value) -> CmdResult {
     let a = v.get("anchor").and_then(parse_pos).ok_or_else(|| CmdError::Params("bad `anchor`".into()))?;
     let b = v.get("focus").and_then(parse_pos).ok_or_else(|| CmdError::Params("bad `focus`".into()))?;
     s.sel = Selection { anchor: s.doc.clamp(&a), focus: s.doc.clamp(&b) };
+    s.pending = None;
     sel_result(s)
 }
 
@@ -452,6 +468,7 @@ fn select_unit(s: &mut Session, unit: Unit) -> CmdResult {
     if s.doc.para_at(&f).is_some() {
         let (a, b) = unit_range(s, &f, unit);
         s.sel = Selection { anchor: a, focus: b };
+        s.pending = None;
     }
     sel_result(s)
 }
@@ -546,6 +563,9 @@ fn select_text(s: &mut Session, v: &Value) -> CmdResult {
             if count == n {
                 s.sel =
                     Selection { anchor: Pos { story, path: path.clone(), off: i }, focus: Pos { story, path: path.clone(), off: i + needle.len() } };
+                // Formatting picked for the old caret doesn't carry over (as `select.word`): what
+                // replaces the selection takes its formatting.
+                s.pending = None;
                 return sel_result(s);
             }
         }
