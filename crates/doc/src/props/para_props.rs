@@ -26,6 +26,67 @@ impl Align {
     }
 }
 
+/// Paragraph-level text flow (`w:pPr/w:textDirection`, ECMA-376 §17.3.1.41).
+///
+/// Kept separate from [`super::TextDirection`], whose three values model the table-cell direction
+/// control. These values preserve the exact OOXML direction through JSON and DOCX saves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ParagraphTextDirection {
+    LrTb,
+    LrTbV,
+    Tb,
+    TbRl,
+    TbRlV,
+    TbLr,
+    TbLrV,
+    BtLr,
+    TbV,
+    Rl,
+    RlV,
+    Lr,
+    LrV,
+}
+
+impl ParagraphTextDirection {
+    pub fn from_ooxml(value: &str) -> Option<Self> {
+        match value {
+            "lrTb" => Some(Self::LrTb),
+            "lrTbV" => Some(Self::LrTbV),
+            "tb" => Some(Self::Tb),
+            "tbRl" => Some(Self::TbRl),
+            "tbRlV" => Some(Self::TbRlV),
+            "tbLr" => Some(Self::TbLr),
+            "tbLrV" => Some(Self::TbLrV),
+            "btLr" => Some(Self::BtLr),
+            "tbV" => Some(Self::TbV),
+            "rl" => Some(Self::Rl),
+            "rlV" => Some(Self::RlV),
+            "lr" => Some(Self::Lr),
+            "lrV" => Some(Self::LrV),
+            _ => None,
+        }
+    }
+
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            Self::LrTb => "lrTb",
+            Self::LrTbV => "lrTbV",
+            Self::Tb => "tb",
+            Self::TbRl => "tbRl",
+            Self::TbRlV => "tbRlV",
+            Self::TbLr => "tbLr",
+            Self::TbLrV => "tbLrV",
+            Self::BtLr => "btLr",
+            Self::TbV => "tbV",
+            Self::Rl => "rl",
+            Self::RlV => "rlV",
+            Self::Lr => "lr",
+            Self::LrV => "lrV",
+        }
+    }
+}
+
 /// Vertical alignment of characters of different sizes on a line (`w:textAlignment`,
 /// ECMA-376 §17.3.1.39).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -305,6 +366,9 @@ pub struct TextFrame {
     pub v_anchor: String,
     /// `around`, `auto`, `notBeside`, `none`, `tight` or `through`.
     pub wrap: String,
+    /// Whether the frame stays fixed to its page anchor when its paragraph moves.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor_lock: Option<bool>,
     /// Distance from the text left and right, and above and below.
     pub h_space: f32,
     pub v_space: f32,
@@ -359,6 +423,9 @@ pub struct ParaProps {
     /// outside ones, so they swap sides on even (left-hand) pages.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mirror_indents: Option<bool>,
+    /// `w:adjustRightInd`: automatically adjust the right indent for the document grid when enabled; keep the specified right indent when disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adjust_right_indent: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keep_next: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -385,6 +452,9 @@ pub struct ParaProps {
     pub suppress_line_numbers: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bidi: Option<bool>,
+    /// Paragraph text direction (`w:textDirection`); `None` inherits from the paragraph style.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_direction: Option<ParagraphTextDirection>,
     /// Drop cap: lines to drop (0 = none) — applies to the first character(s).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drop_cap: Option<u8>,
@@ -447,7 +517,7 @@ impl ParaProps {
 
     fn overlay_layout(&mut self, patch: &ParaProps) {
         overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars,
-            space_before, space_after, space_before_auto, space_after_auto, line_spacing, contextual_spacing, mirror_indents, tabs, shading, borders);
+            space_before, space_after, space_before_auto, space_after_auto, line_spacing, contextual_spacing, mirror_indents, adjust_right_indent, tabs, shading, borders);
     }
 
     fn overlay_pagination(&mut self, patch: &ParaProps) {
@@ -456,6 +526,7 @@ impl ParaProps {
     }
 
     fn overlay_script_layout(&mut self, patch: &ParaProps) {
+        overlay_fields!(self, patch; bidi, text_direction, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn);
         overlay_fields!(self, patch; bidi, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn, text_alignment);
     }
     pub fn overlaid(mut self, patch: &ParaProps) -> ParaProps {
