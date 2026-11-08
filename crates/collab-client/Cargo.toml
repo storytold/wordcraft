@@ -11,6 +11,11 @@ repository.workspace = true
 wordcraft-collab = { path = "../collab" }
 serde_json = { workspace = true }
 
+# A random suffix for the client id in the browser; native uses the process id
+# and the clock (`session_client_id`).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+
 [dev-dependencies]
 wordcraft-collab-doc = { path = "../collab-doc" }
 wordcraft-doc = { workspace = true }

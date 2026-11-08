@@ -90,6 +90,23 @@ with them.
 After the craft-libs PR merges, change the URL back to
 `storytold/craft-libs` and pin the merge commit; nothing else in the app moves.
 
+## Checked with two clients (2026-11-09)
+
+The trunk build was hosted by a page that speaks this contract and driven
+headlessly in Chrome: two same-origin iframes of
+`index.html?host=parent&webgl&author=<name>`, `session` in, typing in both
+panes, `session-state` and `presence` out, `commit` out and `committed` in.
+The whole chain worked on one origin; what is not covered (two machines, the
+real cabinet's storage, the visible commit confirmation) is listed in
+`STATUS.md` §5.1.
+
+That run also showed that a client id made from the document id alone is not
+unique: a document id is a per-process counter, so both panes joined as
+`web-1`, one peer replaced the other and the second client's operation ids
+were deduplicated as the first's. The id now comes from
+`wordcraft_collab_client::session_client_id` (per session, not per document;
+`ui-…` on the desktop, `web-…` in the browser).
+
 ## Until then
 
 The desktop build connects directly to the sync server: `collab.enable` stores the

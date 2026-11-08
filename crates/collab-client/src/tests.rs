@@ -7,10 +7,23 @@ use wordcraft_collab::wire::{Applied, ClientMsg, HistoryAction, OpId, OpKind, Re
 use wordcraft_collab_doc::DocModel;
 use wordcraft_doc::Document;
 
-use crate::{Client, Event, State};
+use crate::{Client, Event, State, session_client_id};
 
 fn applied(op_id: OpId, version: Version, epoch: u64) -> ServerMsg {
     ServerMsg::Applied { applied: Applied { op_id, version, epoch, delta: None, conflict: false } }
+}
+
+/// Two windows on the same document must not share an op id space: with one id
+/// the server treats one client's operations as the other's duplicates and the
+/// participant list collapses to a single peer (found by the two-client host
+/// test, docs/collab/STATUS.md §5.1).
+#[test]
+fn two_sessions_on_one_document_get_different_client_ids() {
+    let first = session_client_id("web", 1);
+    let second = session_client_id("web", 1);
+    assert_ne!(first, second, "two clients must not share an op id space");
+    assert!(first.starts_with("web-1-"), "{first}");
+    assert!(session_client_id("ui", 7).starts_with("ui-7-"));
 }
 
 #[test]

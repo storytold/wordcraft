@@ -21,6 +21,9 @@ use wordcraft_collab::room::Role;
 use wordcraft_collab::wire::{ClientMsg, OpKind, ServerMsg, Target, Version};
 pub use wordcraft_collab_app::{Cursor, ParticipantView, Status};
 use wordcraft_collab_app::{Outcome, SyncState};
+/// An id for one editing session: two apps on the same document must not share
+/// an operation id space (`wordcraft_collab_client::session_client_id`).
+pub use wordcraft_collab_client::session_client_id;
 use wordcraft_collab_client::{Client, Event};
 use wordcraft_doc::Pos as DocPos;
 use wordcraft_engine::Session;

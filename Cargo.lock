@@ -7441,6 +7441,7 @@ dependencies = [
 name = "wordcraft-collab-client"
 version = "0.15.1"
 dependencies = [
+ "js-sys",
  "serde_json",
  "wordcraft-collab",
  "wordcraft-collab-doc",

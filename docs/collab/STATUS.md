@@ -3,8 +3,8 @@
 - Date: 2026-11-09
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
-- HEAD at this writing: the craft-libs pin commit on top of the web
-  host-bridge slice (`60f30f0a`)
+- HEAD at this writing: the two-client host-scenario fix on top of the
+  craft-libs pin (`376231e1`)
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
   `host-bridge.md`.
 
@@ -64,6 +64,11 @@ missing, and where the next session should start.
 - Operation ids, unconfirmed queue, per-client undo/redo mirrors, duplicate
   detection after reconnect, resync on a stale/retryable refusal and on a version
   gap.
+- A client id belongs to a session, not to a document:
+  `wordcraft_collab_client::session_client_id` mixes a native suffix (process id,
+  clock, counter) or a browser random one into `ui-<doc>`/`web-<doc>`. Before, two
+  windows on `Document1` both called themselves `web-1`/`ui-1`, one replaced the
+  other in the room and their `(clientId, seq)` operation ids collided (§5.1).
 - WebSocket task: auth with `lastVersion`, welcome, tail/snapshot, presence
   (throttled by the app), commit, resync and token renewal. A bounded server
   queue can drop messages; the client notices the version gap and requests a
@@ -146,6 +151,8 @@ missing, and where the next session should start.
 | RFC, protocol, tests, documentation | done | `rfc.md`, `server.md`, `README.md`, this page |
 | PR to upstream | open (draft) | PR #5834; GitHub CI waits for maintainer approval |
 | Web host bridge | done; `craft-web-host` pinned to the fork revision `7666e2b1` | `host.rs`, `collab-web`, `host-bridge.md` |
+| Two clients through a cabinet-like host page | done headlessly: one browser, two iframes | §5.1: session → edit → presence → commit → `committed`; 30 ops, 0 rejects |
+| Two real machines and the real cabinet storage | not run | §5.1 "What remains for a person" |
 
 ## 3. Verification
 
@@ -164,18 +171,20 @@ cargo xtask fmt / clippy / test / doctest / assets / layers / wasm
 
 Results at this writing:
 
-- 114 protocol/adapter/client/server tests (113 unit + 1 socket reconnect) + 1
-  LibreOffice gate, all green; 4 of them are new for the undo transaction and the
-  `transaction` delta.
+- 120 protocol/adapter/client/server tests (119 unit + 1 socket reconnect), all
+  green; the LibreOffice commit gate stays the one ignored test. One of the unit
+  tests is new: `two_sessions_on_one_document_get_different_client_ids`.
 - 5 engine collaboration tests, all green.
-- 1137 UI tests, green.
+- 1137 UI tests, green (3 ignored).
 - 5 web-session tests (`wordcraft-collab-web`: session/token redaction, commit
   result, single-user default, status words, participant mapping) and 9
   `wordcraft-web` tests (3 new host-routing tests plus the existing prefs/save
   ones), all green.
-- `cargo clippy --all-targets -- -D warnings` on `collab-app`, `collab-web`,
-  `ui-egui` and `wordcraft-web`, `cargo fmt --all --check`, `cargo xtask layers`
-  (27 crates) and `cargo xtask wasm` (22 crates) are green.
+- `cargo clippy --all-targets -- -D warnings` on `collab-client`, `collab-app`,
+  `collab-web`, `ui-egui` and `wordcraft-web`, `cargo fmt --all --check`,
+  `cargo xtask layers` (27 crates) and `cargo check -p wordcraft-web --target
+  wasm32-unknown-unknown` were re-run for this slice on the `agents` build host
+  and are green.
 - These runs used `craft-web-host` from a path to the `craft-libs`
   `feat/collab-session-messages` checkout; the manifest now pins that branch as
   a git dependency of the `copoka` fork (see §4).
@@ -186,6 +195,13 @@ Results at this writing:
   (14 tests) run from the committed manifest, green.
 - `trunk build` in `apps/wordcraft-web` (trunk 0.22.1) finished on the pin and
   wrote `dist/web` (`index.html`, the JS glue, a 76.9 MB dev `_bg.wasm`).
+- Two-client host run (2026-11-09): Chrome 154 headless (SwiftShader WebGL), the
+  same `dist/web` served from one origin, two iframes hosted by a page that
+  speaks the `craft-web-host` contract, and the sync server on HS256 dev tokens
+  with one `sid`. Both clients synchronized, 30 operations accepted with 0
+  rejects, the same text on both screens and in the server snapshot (version
+  30), presence from both, the owner's commit posted and the cabinet's
+  `committed` answered. Details and limits: §5.1.
 - The workspace test step excludes three proofing tests that fail on `main` in
   this environment too (French fallback marks text without a French dictionary);
   with `CRAFT_I18N_DIR` pointing at the pinned `craft-i18n` checkout the Swiss
@@ -205,9 +221,14 @@ Results at this writing:
   that pin (see §3 and `host-bridge.md` §"Build note"). After the craft-libs PR
   merges, point the URL back at `storytold/craft-libs` and pin the merge commit;
   nothing else in the app changes.
-- Web collab has no manual browser test yet; the state machine, the host
-  routing, the status words and the participant mapping are covered headlessly
-  (`wordcraft-collab-web`, `wordcraft-web`).
+- Web collab has been run with two clients only inside one headless browser
+  (two iframes through a cabinet-like host page, §5.1). Two real machines, the
+  real cabinet page and its storage, and the visible commit status stay manual.
+- A peer that was already connected learns about a newcomer only through
+  `presence`, which carries the caret and not the role, so its participant list
+  shows `participant` until a role-bearing update arrives (the newcomer itself
+  sees every role from the welcome). A join broadcast or a role in presence is
+  the follow-up.
 - A step of several operations is now one transaction (every inverse or none);
   commands still have no inverse and act as an undo barrier. The `opId` dedup
   window is in memory and is cleared when a room is restored from a snapshot, so
@@ -224,20 +245,80 @@ Results at this writing:
 
 ## 5. Next session
 
+### 5.1 Two-client host scenario (run 2026-11-09)
+
+The acceptance scenario from `TASK.md` and `host-bridge.md`: through the trunk
+build, a cabinet-like page hosts two WordCraft clients and drives
+`wordcraft:session` → edit → `presence` → `commit` → `wordcraft:committed`.
+
+**Environment.** Chrome 154.0.8037.92 headless (`--use-angle=swiftshader`,
+`--enable-unsafe-swiftshader`, device pixel ratio 2), the `dist/web` produced by
+`trunk build` (trunk 0.22.1, dev profile, 76.9 MB wasm, 4 m 36 s), and
+`wordcraft-collab-server` on `127.0.0.1:8087` with HS256 development tokens
+(`aud:"collab"`, `doc:"doc-1"`, `app:"wordcraft"`, one `sid:"session-1"` for both
+clients, roles `owner` and `editor`). The host page is served from the same
+origin as the app; each pane is `/index.html?host=parent&webgl&author=<name>`
+in an iframe, and the page speaks the `craft-web-host` contract: it answers
+`ready` with `host` + `session`, records `session-state` / `presence`, and
+answers `commit` with `committed`. Input went through the Chrome DevTools
+Protocol (mouse and key events), not a person.
+
+**Result.**
+
+| Step | What was observed |
+|---|---|
+| `wordcraft:ready` | both iframes posted it; the host answered `host` `{version:"1"}` and `session` with their token and role |
+| join | `session-state` `synced` in both; the participant list has two ids (`…-2733a7df` owner, `…-2405b064` editor) |
+| edit | "Alice was here. " typed in one pane, "Bob was here. " in the other; both screens and the server snapshot read `Bob was here. Alice was here. ` |
+| operations | 30 accepted, 0 rejects; snapshot `version=30`; `commits_total` stays 0 (the cabinet owns the file) |
+| presence | both apps post `presence` at ~10 Hz; each carries both participant ids; no version moves |
+| commit | the owner's Commit button posts `wordcraft:commit {sessionId:"session-1"}` with no `bytes`; the editor has no button; the host answers `wordcraft:committed {version:41, etag:"\"cabinet-etag-41\""}` |
+| committed | `HostState` stores the version/etag and shows the status line (unit-tested; see the limitation below on seeing it) |
+
+**A bug this run found (fixed).** Both web clients called themselves
+`web-<document_id>`, and a document id is a per-process counter starting at 1:
+the two panes both joined as `web-1`. The room keys peers by client id, so the
+second join replaced the first peer, each window listed only itself, and the
+second client's `(web-1, seq)` operation ids were deduplicated as the first
+client's: the text it typed stayed in its own window and never reached the
+other. The id now comes from `wordcraft_collab_client::session_client_id`: it
+mixes the process id, the clock and a counter natively and a random suffix in
+the browser, and is made once per session so reconnects keep their id and
+retries stay deduplicated. Call sites: `crates/ui-egui/src/collab.rs` (desktop)
+and `apps/wordcraft-web/src/web.rs` (web); test
+`two_sessions_on_one_document_get_different_client_ids`.
+
+**What remains for a person.**
+
+1. Two real machines or two real browser profiles over a network, with the real
+   cabinet page (its own tokens, iframe policy and `wss://`). This run used one
+   headless browser and two same-origin iframes on loopback.
+2. The cabinet's own commit: fetch or assemble the file, store it, and return
+   the real version and etag. Here the host answered synthetically and, as the
+   contract allows when the cabinet owns the file (no `bytes`), stored nothing.
+3. The visible confirmation of `committed`: the status line lives for 6 s in the
+   status bar and at 1328×771 the Collaboration window covers it; check it on a
+   wider window or with the panel collapsed.
+4. The human acceptance run: a 100+ page document, then commit and reopen the
+   file in Word/LibreOffice.
+5. The role shown for a new peer on the side that was already connected (§4).
+
+### 5.2 What is left
+
 1. The `craft-libs` git pin is in place (ADR-0016 §3, `7666e2b1`) and the web
    app builds with trunk on it; the same revision still has to be used by the
-   other four apps. Remaining: run a manual two-client test through a
-   cabinet-like host page (`wordcraft:session` → edit → `presence` → `commit` →
-   `wordcraft:committed`).
+   other four apps. The two-client host run is done (§5.1); the manual parts are
+   listed there.
 2. Mark PR #5834 ready once CI has run and the pin is acceptable to the
    maintainers (GitHub reports `action_required` for fork PRs until a maintainer
    approves).
 3. Optional hardening: command inverses for the common engine commands, persisting
    the `opId` dedup window across a snapshot restore, table-cell node ids and
-   property primitives, offline queue. (The multi-operation undo transaction is
-   done: `a_step_of_several_operations_lands_as_one_transaction`.)
-4. Manual acceptance: two desktops over the real server, 100+ page document,
-   commit and reopen in Word/LibreOffice.
+   property primitives, offline queue, the role in presence or a join broadcast.
+   (The multi-operation undo transaction is done:
+   `a_step_of_several_operations_lands_as_one_transaction`.)
+4. Manual acceptance (desktop): two desktops over the real server, a 100+ page
+   document, commit and reopen in Word/LibreOffice.
 
 ## 6. Where things live
 

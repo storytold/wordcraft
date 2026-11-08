@@ -248,7 +248,7 @@ impl WebShell {
         for event in events {
             match self.host_state.on_event(event) {
                 HostAction::Connect(session) => {
-                    let client_id = format!("web-{}", self.app.session.document_id());
+                    let client_id = wordcraft_collab_web::session_client_id("web", self.app.session.document_id());
                     let actor = self.app.session.author.clone();
                     let name = session.session_id().to_string();
                     // Store the session first, then dial: an app without it makes

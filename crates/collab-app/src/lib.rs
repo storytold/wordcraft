@@ -29,6 +29,11 @@ use wordcraft_doc::Pos as DocPos;
 use wordcraft_doc::{Document, Path, StoryRef};
 use wordcraft_engine::Session;
 
+/// An id for one editing session: two apps on the same document must not share
+/// an operation id space (`wordcraft_collab_client::session_client_id`).
+#[cfg(not(target_arch = "wasm32"))]
+pub use wordcraft_collab_client::session_client_id;
+
 /// Where the session is in its handshake.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {

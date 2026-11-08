@@ -14,6 +14,32 @@ use serde_json::Value;
 
 use wordcraft_collab::wire::{Applied, ClientMsg, HistoryAction, Op, OpId, OpKind, Participant, Reject, RejectCode, ServerMsg, Target, Version};
 
+/// An id for one editing session, unique among the windows, tabs and machines
+/// working on the same document.
+///
+/// A document id is unique only inside one process (it is a counter that starts
+/// at 1), so two apps editing `Document1` would both call themselves `ui-1` or
+/// `web-1`: the server files their `(clientId, seq)` operations as duplicates of
+/// each other, one joins as the other, and the participant list shows a single
+/// peer. The suffix is what each target offers cheaply: the process id, the wall
+/// clock and a counter natively; a random number in the browser. It is made once
+/// per session, so a reconnect keeps the id and its retries stay deduplicated.
+pub fn session_client_id(prefix: &str, document: u64) -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let random = (js_sys::Math::random() * f64::from(u32::MAX)) as u32;
+        format!("{prefix}-{document}-{random:x}")
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|elapsed| elapsed.as_nanos() as u64).unwrap_or(0);
+        let count = NEXT.fetch_add(1, Ordering::Relaxed);
+        format!("{prefix}-{document}-{:x}-{nanos:x}-{count}", std::process::id())
+    }
+}
+
 /// Where the client is in the session handshake.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
