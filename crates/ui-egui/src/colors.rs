@@ -674,7 +674,7 @@ fn custom(ui: &mut Ui, d: &mut ColorsDialog) {
     ui.add_space(8.0);
     crate::rtl::Table::new("colors_custom").columns(2).spacing(vec2(10.0, 5.0)).show(ui, |t| {
         t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Color model:")));
+            let label = r.cell(|ui| ui.label(tl!("Color model:")));
             r.cell(|ui| {
                 craft_ui::ComboBox::from_id_salt("colors_model")
                     .selected_text(match d.model {
@@ -685,7 +685,9 @@ fn custom(ui: &mut Ui, d: &mut ColorsDialog) {
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut d.model, Model::Rgb, "RGB");
                         ui.selectable_value(&mut d.model, Model::Hsl, "HSL");
-                    });
+                    })
+                    .response
+                    .labelled_by(label.id);
             });
         });
         match d.model {
@@ -694,10 +696,10 @@ fn custom(ui: &mut Ui, d: &mut ColorsDialog) {
                 let mut changed = false;
                 for (i, label) in ["Red:", "Green:", "Blue:"].into_iter().enumerate() {
                     t.row(|r| {
-                        r.cell(|ui| ui.label(tl!(label)));
+                        let label = r.cell(|ui| ui.label(tl!(label)));
                         r.cell(|ui| {
                             if let Some(v) = c.get_mut(i) {
-                                changed |= ui.add(egui::DragValue::new(v).range(0..=255).speed(1.0)).changed();
+                                changed |= ui.add(egui::DragValue::new(v).range(0..=255).speed(1.0)).labelled_by(label.id).changed();
                             }
                         });
                     });
@@ -713,10 +715,10 @@ fn custom(ui: &mut Ui, d: &mut ColorsDialog) {
                 let mut changed = false;
                 for (i, label) in ["Hue:", "Sat:", "Lum:"].into_iter().enumerate() {
                     t.row(|r| {
-                        r.cell(|ui| ui.label(tl!(label)));
+                        let label = r.cell(|ui| ui.label(tl!(label)));
                         r.cell(|ui| {
                             if let Some(x) = v.get_mut(i) {
-                                changed |= ui.add(egui::DragValue::new(x).range(0..=255).speed(1.0)).changed();
+                                changed |= ui.add(egui::DragValue::new(x).range(0..=255).speed(1.0)).labelled_by(label.id).changed();
                             }
                         });
                     });
@@ -727,12 +729,12 @@ fn custom(ui: &mut Ui, d: &mut ColorsDialog) {
             }
         }
         t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Hex:")));
+            let label = r.cell(|ui| ui.label(tl!("Hex:")));
             r.cell(|ui| {
                 ui.horizontal(|ui| {
                     ui.label("#");
                     let mut text = d.hex.clone();
-                    let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(80.0).char_limit(16));
+                    let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(80.0).char_limit(16)).labelled_by(label.id);
                     if edit.changed() {
                         d.hex = text.clone();
                         d.set_text(&text);

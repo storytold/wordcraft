@@ -11,13 +11,15 @@ pub(super) fn manage_styles(app: &mut WordApp, ui: &mut Ui, alphabetical: &mut b
         *selected = list.first().map(|x| str_of(x, "id")).unwrap_or_default();
     }
     ui.horizontal(|ui| {
-        ui.label(tl!("Sort order:"));
+        let label = ui.label(tl!("Sort order:"));
         craft_ui::ComboBox::from_id_salt("manage_styles_sort")
             .selected_text(if *alphabetical { tl!("Alphabetical") } else { tl!("As Recommended") })
             .show_ui(ui, |ui| {
                 ui.selectable_value(alphabetical, false, tl!("As Recommended"));
                 ui.selectable_value(alphabetical, true, tl!("Alphabetical"));
-            });
+            })
+            .response
+            .labelled_by(label.id);
     });
     let t = Tokens::get(ui.ctx());
     let shown = egui::Id::unique("manage_styles_shown");

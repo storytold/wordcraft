@@ -68,14 +68,19 @@ impl NoteForm {
 }
 
 /// A choice from `options` ((value, label)) in a drop-down; `tr` translates the labels.
-fn choice(ui: &mut Ui, id: &str, value: &mut String, options: &[(&str, &str)], tr: bool) {
+fn choice(ui: &mut Ui, id: &str, value: &mut String, options: &[(&str, &str)], tr: bool, name: egui::Id) {
     let show = |l: &str| if tr { tl!(l).to_string() } else { l.to_string() };
     let label = options.iter().find(|(v, _)| *v == value.as_str()).map(|(_, l)| show(l)).unwrap_or_default();
-    craft_ui::ComboBox::from_id_salt(id).selected_text(label).width(170.0).show_ui(ui, |ui| {
-        for (v, l) in options {
-            ui.selectable_value(value, v.to_string(), show(l));
-        }
-    });
+    craft_ui::ComboBox::from_id_salt(id)
+        .selected_text(label)
+        .width(170.0)
+        .show_ui(ui, |ui| {
+            for (v, l) in options {
+                ui.selectable_value(value, v.to_string(), show(l));
+            }
+        })
+        .response
+        .labelled_by(name);
 }
 
 /// Footnote and Endnote. Returns true to close.
@@ -87,14 +92,14 @@ pub fn note_options(app: &mut WordApp, ui: &mut Ui, f: &mut NoteForm) -> bool {
     heading(ui, "Location");
     let mut convert = None;
     crate::rtl::grid(ui, egui::Grid::new("notes_location").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
-        ui.radio_value(&mut f.endnote, false, tl!("Footnotes"));
+        let label = ui.radio_value(&mut f.endnote, false, tl!("Footnotes"));
         ui.add_enabled_ui(!f.endnote, |ui| {
-            choice(ui, "notes_fpos", &mut f.pos[0], &[("pageBottom", "Bottom of Page"), ("beneathText", "Below text")], true);
+            choice(ui, "notes_fpos", &mut f.pos[0], &[("pageBottom", "Bottom of Page"), ("beneathText", "Below text")], true, label.id);
         });
         ui.end_row();
-        ui.radio_value(&mut f.endnote, true, tl!("Endnotes"));
+        let label = ui.radio_value(&mut f.endnote, true, tl!("Endnotes"));
         ui.add_enabled_ui(f.endnote, |ui| {
-            choice(ui, "notes_epos", &mut f.pos[1], &[("sectEnd", "End of section"), ("docEnd", "End of document")], true);
+            choice(ui, "notes_epos", &mut f.pos[1], &[("sectEnd", "End of section"), ("docEnd", "End of document")], true, label.id);
         });
         ui.end_row();
         ui.label("");
@@ -120,27 +125,27 @@ pub fn note_options(app: &mut WordApp, ui: &mut Ui, f: &mut NoteForm) -> bool {
     let k = usize::from(f.endnote);
     crate::rtl::Table::new("notes_format").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
         t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Number format")));
+            let label = r.cell(|ui| ui.label(tl!("Number format")));
             r.cell(|ui| {
                 if let Some(v) = f.fmt.get_mut(k) {
-                    choice(ui, "notes_fmt", v, &FORMATS, false);
+                    choice(ui, "notes_fmt", v, &FORMATS, false, label.id);
                 }
             });
         });
         t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Custom mark:")));
-            r.cell(|ui| ui.add(egui::TextEdit::singleline(&mut f.mark).desired_width(60.0).char_limit(10)));
+            let label = r.cell(|ui| ui.label(tl!("Custom mark:")));
+            r.cell(|ui| ui.add(egui::TextEdit::singleline(&mut f.mark).desired_width(60.0).char_limit(10)).labelled_by(label.id));
         });
         t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Start at:")));
+            let label = r.cell(|ui| ui.label(tl!("Start at:")));
             r.cell(|ui| {
                 if let Some(v) = f.start.get_mut(k) {
-                    ui.add(egui::DragValue::new(v).range(1..=32_767).speed(0.2));
+                    ui.add(egui::DragValue::new(v).range(1..=32_767).speed(0.2)).labelled_by(label.id);
                 }
             });
         });
         t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Numbering")));
+            let label = r.cell(|ui| ui.label(tl!("Numbering")));
             r.cell(|ui| {
                 if let Some(v) = f.restart.get_mut(k) {
                     let each_page: &[(&str, &str)] = if f.endnote { &[] } else { &[("eachPage", "Restart Each Page")] };
@@ -148,15 +153,15 @@ pub fn note_options(app: &mut WordApp, ui: &mut Ui, f: &mut NoteForm) -> bool {
                         .into_iter()
                         .chain(each_page.iter().copied())
                         .collect();
-                    choice(ui, "notes_restart", v, &options, true);
+                    choice(ui, "notes_restart", v, &options, true, label.id);
                 }
             });
         });
         t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Apply to:")));
+            let label = r.cell(|ui| ui.label(tl!("Apply to:")));
             r.cell(|ui| {
                 let mut scope = if f.whole { "document" } else { "section" }.to_string();
-                choice(ui, "notes_scope", &mut scope, &[("document", "Whole document"), ("section", "This section")], true);
+                choice(ui, "notes_scope", &mut scope, &[("document", "Whole document"), ("section", "This section")], true, label.id);
                 f.whole = scope == "document";
             });
         });

@@ -125,6 +125,9 @@ pub(super) fn icons_body(app: &mut WordApp, ui: &mut Ui, query: &mut String, cat
             for icon in &hits {
                 let (rect, resp) = ui.allocate_exact_size(vec2(56.0, 56.0), Sense::click());
                 let on = *selected == icon.id;
+                // A tile is a picture: a screen reader hears the icon's name and whether it is the
+                // one picked, not a nameless control (the name was only a hover tip).
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, icon.name));
                 let fill = if on {
                     t.checked
                 } else if resp.hovered() {

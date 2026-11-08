@@ -129,7 +129,7 @@ pub(super) fn hyphenation_ui(app: &mut WordApp, ui: &mut Ui, f: &mut Hyphenation
             });
         });
         t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Limit consecutive hyphens to:")));
+            let label = r.cell(|ui| ui.label(tl!("Limit consecutive hyphens to:")));
             r.cell(|ui| {
                 let no_limit = tl!("No limit").to_string();
                 ui.add(
@@ -137,6 +137,7 @@ pub(super) fn hyphenation_ui(app: &mut WordApp, ui: &mut Ui, f: &mut Hyphenation
                         .range(0..=99)
                         .custom_formatter(move |n, _| if n < 0.5 { no_limit.clone() } else { format!("{n:.0}") }),
                 )
+                .labelled_by(label.id)
             });
         });
     });

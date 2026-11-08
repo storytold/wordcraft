@@ -335,7 +335,8 @@ fn tree_rows_ui(app: &mut WordApp, ui: &mut Ui, f: &mut RibbonForm, rows: &[Row]
             ui.add_space(if row.depth == 0 { 0.0 } else { 24.0 + f32::from(row.depth.saturating_sub(1)) * 16.0 });
             if let Some(shown) = row.shown {
                 let mut on = shown;
-                if ui.checkbox(&mut on, "").changed() {
+                // The box shows or hides the tab named beside it, and says so by its name.
+                if ui.checkbox(&mut on, "").accessible_name(row.text.as_str()).changed() {
                     let key = if on { "show" } else { "hide" };
                     change(app, f, json!({ key: row.item.tab }));
                 }

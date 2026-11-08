@@ -49,19 +49,24 @@ impl FormulaForm {
 }
 
 pub(super) fn formula_ui(app: &mut WordApp, ui: &mut Ui, f: &mut FormulaForm) -> bool {
-    ui.label(tl!("Formula:"));
-    ui.add(egui::TextEdit::singleline(&mut f.formula).desired_width(300.0));
+    let label = ui.label(tl!("Formula:"));
+    ui.add(egui::TextEdit::singleline(&mut f.formula).desired_width(300.0)).labelled_by(label.id);
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.label(tl!("Paste function:"));
+        let label = ui.label(tl!("Paste function:"));
         let mut picked = None;
-        craft_ui::ComboBox::from_id_salt("formula_paste").selected_text("").width(140.0).show_ui(ui, |ui| {
-            for name in FORMULA_FUNCTIONS {
-                if ui.selectable_label(false, name).clicked() {
-                    picked = Some(name);
+        craft_ui::ComboBox::from_id_salt("formula_paste")
+            .selected_text("")
+            .width(140.0)
+            .show_ui(ui, |ui| {
+                for name in FORMULA_FUNCTIONS {
+                    if ui.selectable_label(false, name).clicked() {
+                        picked = Some(name);
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .labelled_by(label.id);
         if let Some(name) = picked {
             f.paste(name);
         }
@@ -120,12 +125,17 @@ impl SortForm {
 pub(super) fn sort_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SortForm) -> bool {
     heading(ui, "Sort by");
     ui.horizontal(|ui| {
-        craft_ui::ComboBox::from_id_salt("sort_column").selected_text(f.column_label(f.column)).width(180.0).show_ui(ui, |ui| {
-            for i in 0..f.headers.len() {
-                let label = f.column_label(i);
-                ui.selectable_value(&mut f.column, i, label);
-            }
-        });
+        craft_ui::ComboBox::from_id_salt("sort_column")
+            .selected_text(f.column_label(f.column))
+            .width(180.0)
+            .show_ui(ui, |ui| {
+                for i in 0..f.headers.len() {
+                    let label = f.column_label(i);
+                    ui.selectable_value(&mut f.column, i, label);
+                }
+            })
+            .response
+            .accessible_name(tl!("Sort by"));
         crate::rtl::vertical(ui, |ui| {
             ui.radio_value(&mut f.descending, false, tl!("Ascending"));
             ui.radio_value(&mut f.descending, true, tl!("Descending"));
@@ -255,12 +265,12 @@ pub(super) fn split_cells_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SplitCellsF
     let rows_on = f.cells <= 1 || f.merge_first;
     crate::rtl::Table::new("split_cells").columns(2).show(ui, |t| {
         t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Number of columns:")));
-            r.cell(|ui| ui.add(egui::DragValue::new(&mut f.columns).range(1..=63)));
+            let label = r.cell(|ui| ui.label(tl!("Number of columns:")));
+            r.cell(|ui| ui.add(egui::DragValue::new(&mut f.columns).range(1..=63)).labelled_by(label.id));
         });
         t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Number of rows:")));
-            r.cell(|ui| ui.add_enabled(rows_on, egui::DragValue::new(&mut f.rows).range(1..=63)));
+            let label = r.cell(|ui| ui.label(tl!("Number of rows:")));
+            r.cell(|ui| ui.add_enabled(rows_on, egui::DragValue::new(&mut f.rows).range(1..=63)).labelled_by(label.id));
         });
     });
     let mut merge = f.merge_first;
@@ -383,8 +393,8 @@ pub(super) fn text_to_table_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TextToTab
     heading(ui, "Table size");
     crate::rtl::Table::new("text_to_table").columns(2).show(ui, |t| {
         t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Number of columns:")));
-            r.cell(|ui| ui.add(egui::DragValue::new(&mut f.columns).range(1..=63)));
+            let label = r.cell(|ui| ui.label(tl!("Number of columns:")));
+            r.cell(|ui| ui.add(egui::DragValue::new(&mut f.columns).range(1..=63)).labelled_by(label.id));
         });
         t.row(|r| {
             r.cell(|ui| ui.label(tl!("Number of rows:")));
@@ -393,8 +403,8 @@ pub(super) fn text_to_table_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TextToTab
     });
     heading(ui, "AutoFit behavior");
     ui.horizontal(|ui| {
-        ui.radio_value(&mut f.autofit, "initial".to_string(), tl!("Initial column width:"));
-        ui.add_enabled(f.autofit == "initial", egui::TextEdit::singleline(&mut f.width).desired_width(72.0));
+        let label = ui.radio_value(&mut f.autofit, "initial".to_string(), tl!("Initial column width:"));
+        ui.add_enabled(f.autofit == "initial", egui::TextEdit::singleline(&mut f.width).desired_width(72.0)).labelled_by(label.id);
     });
     ui.radio_value(&mut f.autofit, "contents".to_string(), tl!("AutoFit to contents"));
     ui.radio_value(&mut f.autofit, "window".to_string(), tl!("AutoFit to window"));
@@ -408,8 +418,8 @@ pub(super) fn text_to_table_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TextToTab
             r.cell(|ui| ui.radio_value(&mut f.separator, "tab".to_string(), tl!("Tabs")));
             r.cell(|ui| {
                 ui.horizontal(|ui| {
-                    ui.radio_value(&mut f.separator, "other".to_string(), tl!("Other:"));
-                    let edit = ui.add(egui::TextEdit::singleline(&mut f.other_char).char_limit(1).desired_width(24.0));
+                    let label = ui.radio_value(&mut f.separator, "other".to_string(), tl!("Other:"));
+                    let edit = ui.add(egui::TextEdit::singleline(&mut f.other_char).char_limit(1).desired_width(24.0)).labelled_by(label.id);
                     if edit.changed() {
                         f.separator = "other".into();
                     }
@@ -468,8 +478,8 @@ pub(super) fn table_to_text_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TableToTe
     ui.radio_value(&mut f.separator, "tab".to_string(), tl!("Tabs"));
     ui.radio_value(&mut f.separator, "comma".to_string(), tl!("Commas"));
     ui.horizontal(|ui| {
-        ui.radio_value(&mut f.separator, "other".to_string(), tl!("Other:"));
-        let r = ui.add(egui::TextEdit::singleline(&mut f.other_char).char_limit(1).desired_width(24.0));
+        let label = ui.radio_value(&mut f.separator, "other".to_string(), tl!("Other:"));
+        let r = ui.add(egui::TextEdit::singleline(&mut f.other_char).char_limit(1).desired_width(24.0)).labelled_by(label.id);
         if r.changed() {
             f.separator = "other".into();
         }

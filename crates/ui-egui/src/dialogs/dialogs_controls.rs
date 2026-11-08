@@ -115,17 +115,17 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: &mut ControlForm) -> bool {
     ui.set_width(420.0);
     crate::rtl::Table::new("cc_props").columns(2).spacing(egui::vec2(10.0, 6.0)).show(ui, |t| {
         t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Title")));
-            r.cell(|ui| ui.add(egui::TextEdit::singleline(&mut f.title).desired_width(280.0)));
+            let label = r.cell(|ui| ui.label(tl!("Title")));
+            r.cell(|ui| ui.add(egui::TextEdit::singleline(&mut f.title).desired_width(280.0)).labelled_by(label.id));
         });
         t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Tag")));
-            r.cell(|ui| ui.add(egui::TextEdit::singleline(&mut f.tag).desired_width(280.0)));
+            let label = r.cell(|ui| ui.label(tl!("Tag")));
+            r.cell(|ui| ui.add(egui::TextEdit::singleline(&mut f.tag).desired_width(280.0)).labelled_by(label.id));
         });
         if !matches!(f.kind.as_str(), "checkBox" | "picture" | "repeatingSection" | "repeatingSectionItem") {
             t.row(|r| {
-                r.cell(|ui| ui.label(tl!("Placeholder text")));
-                r.cell(|ui| ui.add(egui::TextEdit::singleline(&mut f.placeholder).desired_width(280.0)));
+                let label = r.cell(|ui| ui.label(tl!("Placeholder text")));
+                r.cell(|ui| ui.add(egui::TextEdit::singleline(&mut f.placeholder).desired_width(280.0)).labelled_by(label.id));
             });
         }
     });
@@ -141,8 +141,8 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: &mut ControlForm) -> bool {
         "date" => {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label(tl!("Date format"));
-                ui.add(egui::TextEdit::singleline(&mut f.format).desired_width(160.0));
+                let label = ui.label(tl!("Date format"));
+                ui.add(egui::TextEdit::singleline(&mut f.format).desired_width(160.0)).labelled_by(label.id);
             });
             ui.horizontal(|ui| {
                 for pic in ["M/d/yyyy", "d.M.yyyy", "yyyy-MM-dd", "dddd, MMMM d, yyyy"] {
@@ -155,10 +155,10 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: &mut ControlForm) -> bool {
         "checkBox" => {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label(tl!("Checked symbol"));
-                ui.add(egui::TextEdit::singleline(&mut f.checked_symbol).desired_width(40.0));
-                ui.label(tl!("Unchecked symbol"));
-                ui.add(egui::TextEdit::singleline(&mut f.unchecked_symbol).desired_width(40.0));
+                let label = ui.label(tl!("Checked symbol"));
+                ui.add(egui::TextEdit::singleline(&mut f.checked_symbol).desired_width(40.0)).labelled_by(label.id);
+                let label = ui.label(tl!("Unchecked symbol"));
+                ui.add(egui::TextEdit::singleline(&mut f.unchecked_symbol).desired_width(40.0)).labelled_by(label.id);
             });
         }
         _ => {}
@@ -194,8 +194,17 @@ fn entries(ui: &mut Ui, f: &mut ControlForm) {
         });
         for (i, e) in f.items.iter_mut().enumerate() {
             t.row(|r| {
-                r.cell(|ui| ui.add(egui::TextEdit::singleline(&mut e.display).desired_width(170.0)));
-                r.cell(|ui| ui.add(egui::TextEdit::singleline(&mut e.value).desired_width(140.0)));
+                // Each row's boxes are named by their column and row ("Display text 2").
+                r.cell(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut e.display).desired_width(170.0)).accessible_name(format!(
+                        "{} {}",
+                        tl!("Display text"),
+                        i + 1
+                    ))
+                });
+                r.cell(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut e.value).desired_width(140.0)).accessible_name(format!("{} {}", tl!("Value"), i + 1))
+                });
                 r.cell(|ui| {
                     if ui.small_button(tl!("Remove")).clicked() {
                         remove = Some(i);
