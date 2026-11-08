@@ -1,4 +1,4 @@
-use super::chrome::buttons;
+use super::chrome::{buttons, focus_when_shown};
 use super::{Sense, Tokens, Ui, WordApp, json, vec2};
 
 /// The innermost bookmark around the caret, which the Bookmark dialog opens on (as Word does);
@@ -98,9 +98,7 @@ pub(super) fn icons_body(app: &mut WordApp, ui: &mut Ui, query: &mut String, cat
     ui.set_width(560.0);
     // Typing goes to the search box (never to the document behind the dialog).
     let r = ui.add(egui::TextEdit::singleline(query).hint_text(tl!("Search icons")).desired_width(560.0));
-    if !r.has_focus() {
-        r.request_focus();
-    }
+    focus_when_shown(ui, &r);
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
