@@ -129,8 +129,11 @@ The server takes only the actor's newest step, verifies the named step is that
 one, and replays its inverse operations under the request. The request gets one
 version; the replayed operations are not journaled separately. A target touched
 after the step yields `rejected{code:"undoConflict"}` and changes nothing. A
-step of several operations is `unsupported` until a transaction exists. A
-command has no inverse and acts as a barrier, so undo never skips over it.
+step of several operations replays as one transaction: either every inverse
+lands or the ones already applied are taken back, and the version does not move.
+Replicas get the step as one `{"op":"transaction","ops":[…]}` delta and apply it
+on a scratch copy. A command has no inverse and acts as a barrier, so undo never
+skips over it.
 
 ## What is not here yet
 

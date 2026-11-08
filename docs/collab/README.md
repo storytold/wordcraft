@@ -75,8 +75,8 @@ The same session can be driven headlessly through the control channel or MCP:
   single-user path only; the app does not send them.
 - A table edit is sent as a command; if the server refuses it the session asks
   for a snapshot instead of guessing.
-- A step of several operations is not undone yet (`unsupported`); commands have
-  no inverse and act as an undo barrier.
+- A step of several operations replays as one transaction (all inverses or
+  none); commands have no inverse and act as an undo barrier.
 - `kept`/`passthrough` are not in the protocol: the authoritative server keeps
   the source `.docx` next to the model, and commit says what it could not keep.
 - Web: blocked on `craft-web-host` messages (`host-bridge.md`).

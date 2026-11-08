@@ -2,8 +2,8 @@
 
 - Date: 2026-11-08
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
-- PR: <https://github.com/storytold/wordcraft/pull/5834> (draft, 24 commits)
-- HEAD at this writing: `2b4aab2d`
+- PR: <https://github.com/storytold/wordcraft/pull/5834> (draft, 27 commits on the branch)
+- HEAD at this writing: `0a505109` (this page's commit follows)
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host blocker:
   `host-bridge.md`.
 
@@ -21,8 +21,9 @@ missing, and where the next session should start.
 - Session node ids with tombstones and path shifts; a fresh node map is sent when
   an operation moves paths or adds ids (ADR-0002).
 - Per-user undo/redo as an operation with a `history` field: one version per undo,
-  `undoConflict` when the step's target changed, `unsupported` for a step of
-  several operations, and commands act as an undo barrier (ADR-0010).
+  `undoConflict` when the step's target changed, a step of several operations
+  replayed as one all-or-nothing transaction (a refused inverse takes back the
+  ones already applied), and commands act as an undo barrier (ADR-0010).
 - Role gates: viewer cannot write; commenter may only add/resolve comments
   (including the `review.*Comment` commands); owner alone commits (ADR-0008).
 - Snapshot = model JSON + source `.docx`; `Document::kept` is taken back from the
@@ -126,7 +127,7 @@ Run from `upstream/`:
 ```bash
 cargo test -p wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine \
   -p wordcraft-collab-client -p wordcraft-collab-ws -p wordcraft-collab-app \
-  -p wordcraft-collab-server          # 107 tests, 1 ignored (LibreOffice gate)
+  -p wordcraft-collab-server          # 113 unit + 1 socket test, 1 ignored (LibreOffice gate)
 cargo test -p wordcraft-collab-server -- --ignored   # commit → LibreOffice
 cargo test -p wordcraft-engine collab::              # 5 flag/remote tests
 cargo test -p wordcraft-ui-egui --lib                # 1137 tests
@@ -135,7 +136,9 @@ cargo xtask fmt / clippy / test / doctest / assets / layers / wasm
 
 Results at this writing:
 
-- 107 protocol/adapter/client/server tests + 1 LibreOffice gate, all green.
+- 114 protocol/adapter/client/server tests (113 unit + 1 socket reconnect) + 1
+  LibreOffice gate, all green; 4 of them are new for the undo transaction and the
+  `transaction` delta.
 - 5 engine collaboration tests, all green.
 - 1137 UI tests, green.
 - Workspace `cargo clippy --all-targets -- -D warnings`, fmt, doctest, assets
@@ -152,8 +155,10 @@ Results at this writing:
   `session/session-state/presence/commit`. The exact patch and the app-side plan
   are in `host-bridge.md`. The web build therefore stays single-user; the desktop
   build connects directly.
-- A step of several operations cannot be undone yet (`unsupported`); commands have
-  no inverse and act as an undo barrier.
+- A step of several operations is now one transaction (every inverse or none);
+  commands still have no inverse and act as an undo barrier. The `opId` dedup
+  window is in memory and is cleared when a room is restored from a snapshot, so
+  a retry that crosses a restart is not deduplicated yet.
 - A command that allocates ids (comments, tables, shapes, footnotes…) makes
   replicas request a snapshot after it; there is no id delta on the wire yet.
 - Node ids address top-level paragraphs and story parts; a table cell has no id,
@@ -171,9 +176,10 @@ Results at this writing:
    wasm transport and the `Message::Session` → `Collab` wiring in `apps/wordcraft-web`.
 2. Mark PR #5834 ready once the host-bridge item is resolved and CI has run
    (GitHub reports `action_required` for fork PRs until a maintainer approves).
-3. Optional hardening: multi-operation undo transaction (apply all inverses or
-   none), command inverses for the common engine commands, table-cell node ids and
-   property primitives, offline queue.
+3. Optional hardening: command inverses for the common engine commands, persisting
+   the `opId` dedup window across a snapshot restore, table-cell node ids and
+   property primitives, offline queue. (The multi-operation undo transaction is
+   done: `a_step_of_several_operations_lands_as_one_transaction`.)
 4. Manual acceptance: two desktops over the real server, 100+ page document,
    commit and reopen in Word/LibreOffice.
 
