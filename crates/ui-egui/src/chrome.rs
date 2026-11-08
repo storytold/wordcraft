@@ -364,12 +364,16 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     qat_end = if rtl { ui.min_rect().min.x } else { ui.min_rect().max.x };
                     ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
                         // Account / community.
-                        let (r, resp) = ui.allocate_exact_size(vec2(control_h, control_h), Sense::click());
+                        // The embedded editor's author is the host's, so there the chip is a
+                        // plain picture: not a button that does nothing.
+                        let sense = if app.embed.is_some() { Sense::hover() } else { Sense::click() };
+                        let (r, resp) = ui.allocate_exact_size(vec2(control_h, control_h), sense);
                         ui.painter().circle_filled(r.center(), control_h / 2.0 - 1.0, t.accent);
-                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Account")));
+                        if app.embed.is_none() {
+                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Account")));
+                        }
                         let initials: String = app.session.user_initials().chars().take(2).collect();
                         ui.painter().text(r.center(), Align2::CENTER_CENTER, initials, semibold(10.5), t.on_accent);
-                        // The embedded editor's author is the host's: no Options page to offer.
                         if app.embed.is_none() && resp.on_hover_text(format!("{} — set your name in File › Options", app.session.author)).clicked()
                         {
                             let _ = app.run("ui.backstage", json!({"value": true, "page": "options", "pane": "general"}));
@@ -708,10 +712,13 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                             if count > SHOWN {
                                 ui.label(crate::i18n::tn((count - SHOWN) as u64, "…and {n} more", "…and {n} more"));
                             }
-                            ui.separator();
-                            if ui.button(tl!("Add Font…")).clicked() {
-                                let _ = app.run("font.add", json!({}));
-                                ui.close();
+                            // The embedded editor takes no fonts from the file system.
+                            if app.embed.is_none() {
+                                ui.separator();
+                                if ui.button(tl!("Add Font…")).clicked() {
+                                    let _ = app.run("font.add", json!({}));
+                                    ui.close();
+                                }
                             }
                         });
                     }

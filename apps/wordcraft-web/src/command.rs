@@ -40,9 +40,10 @@ pub(crate) fn over_cap(text: &str) -> bool {
 pub(crate) const MAX_PENDING_FILES: usize = 8;
 pub(crate) const MAX_PENDING_FILE_BYTES: u64 = 512 << 20;
 
-/// Whether a delivered file may join the open queue (`queued` files totalling `queued_bytes`).
+/// Whether a delivered file may join the open queue (`queued` files, their bytes plus the
+/// incoming file's own, totalling `queued_bytes`). A total exactly at the budget is fine.
 pub(crate) fn file_queue_full(queued: usize, queued_bytes: u64) -> bool {
-    queued >= MAX_PENDING_FILES || queued_bytes >= MAX_PENDING_FILE_BYTES
+    queued >= MAX_PENDING_FILES || queued_bytes > MAX_PENDING_FILE_BYTES
 }
 
 /// A command the host asked to run.
@@ -170,12 +171,14 @@ mod tests {
         assert_eq!(req_id_of(&data), "kept", "a readable request id is echoed on errors");
     }
 
-    /// The delivered-file queue refuses past either bound.
+    /// The delivered-file queue refuses past either bound; a total exactly at the byte
+    /// budget is allowed (only files *over* the per-file cap are refused upstream).
     #[test]
     fn caps_the_file_queue() {
         assert!(!super::file_queue_full(0, 0));
         assert!(super::file_queue_full(super::MAX_PENDING_FILES, 0));
-        assert!(super::file_queue_full(1, super::MAX_PENDING_FILE_BYTES));
+        assert!(super::file_queue_full(1, super::MAX_PENDING_FILE_BYTES + 1));
+        assert!(!super::file_queue_full(1, super::MAX_PENDING_FILE_BYTES));
     }
 
     /// A message over the size cap is refused before any parse.
