@@ -612,3 +612,93 @@ fn a_page_ends_when_a_multiple_spaced_lines_text_no_longer_fits() {
         assert!(past_margin > 0, "{multiple}: some shift should leave the last line's leading past the margin");
     }
 }
+
+/// A body PAGE field shows the page number in the section's number format, as Word does (a
+/// cardinal-text section shows "one"), and `\*` overrides it.
+#[test]
+fn body_page_field_uses_the_section_number_format() {
+    let mut d = Document::from_text("Page \nPage ");
+    d.last_section.page_num_format = wordcraft_doc::section::NumFormat::CardinalText;
+    for (i, instr) in ["PAGE", "PAGE \\* Upper"].into_iter().enumerate() {
+        let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+        let off = p.len();
+        let field = InlineObject::Field { instr: instr.into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() };
+        p.insert_object(off, field, &Default::default()).unwrap();
+    }
+    let l = lay(&d);
+    let shown: Vec<String> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| if let Placed::Lines { para, .. } = it { Some(para.shown.iter().map(|x| x.1.clone()).collect::<String>()) } else { None })
+        .collect();
+    assert_eq!(shown, ["one", "ONE"], "{shown:?}");
+}
+
+#[test]
+fn reflow_page_field_uses_the_current_section_number_format() {
+    let mut d = Document::from_text("First section\nSecond section");
+    let first = d.last_section.clone();
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(first));
+    d.last_section.page_num_format = wordcraft_doc::section::NumFormat::CardinalText;
+    let p = d.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+    let off = p.len();
+    p.insert_object(
+        off,
+        InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
+        &Default::default(),
+    )
+    .unwrap();
+
+    for view in [ViewMode::Web, ViewMode::Draft, ViewMode::Read, ViewMode::Outline] {
+        let mut cache = LayoutCache::new();
+        let layout = layout(&d, &mut cache, &LayoutOptions { view, ..Default::default() });
+        let shown: Vec<_> = layout
+            .pages
+            .iter()
+            .flat_map(|page| {
+                page.items.iter().filter_map(move |item| {
+                    if let Placed::Lines { para, path, .. } = item {
+                        (path == &Path::top(1)).then(|| (page.number, para.shown.iter().map(|x| x.1.as_str()).collect::<String>()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
+        assert!(!shown.is_empty(), "{view:?}: no second-section text");
+        for (number, text) in shown {
+            let expected = wordcraft_doc::section::NumFormat::CardinalText.format(number).to_lowercase();
+            assert!(text.ends_with(&expected), "{view:?}, page {number}: {text:?}, expected {expected:?}");
+        }
+    }
+}
+
+/// A PAGE field in a table that opens the body uses the section's number format too: the table
+/// is placed without the paragraph path that sets it.
+#[test]
+fn table_cell_page_field_uses_the_section_number_format() {
+    use wordcraft_doc::Table;
+    let mut d = Document::from_text("after");
+    d.last_section.page_num_format = wordcraft_doc::section::NumFormat::CardinalText;
+    let mut t = Table::new(1, 1, 200.0);
+    let mut p = wordcraft_doc::Paragraph::with_text("", Default::default());
+    let field = InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() };
+    p.insert_object(0, field, &Default::default()).unwrap();
+    if let Some(c) = t.rows.first_mut().and_then(|r| r.cells.first_mut()) {
+        c.blocks = vec![para_block(p)];
+    }
+    d.insert_block(StoryRef::Body, &Path::top(0), Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let shown: String = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| {
+            if let Placed::Lines { para, path, .. } = it {
+                (path.0.len() > 1).then(|| para.shown.iter().map(|x| x.1.clone()).collect::<String>())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(shown, "one");
+}
