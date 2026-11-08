@@ -346,3 +346,51 @@ fn input_method_joins_stay_with_their_window() {
     assert_eq!(text(&s).trim(), "Hello", "B's typing is its own undo step");
     drop(a);
 }
+
+/// Check spelling as you type is one setting for the app, not one per open document (#5740):
+/// turned off (File › Options › Proofing, or Review's command) with one document active, it is off
+/// in the others too, and switching to another document doesn't turn it back on, so what is saved
+/// for the next run is what was chosen, whichever document is active then.
+#[test]
+fn check_spelling_is_one_setting_for_every_open_document() {
+    let mut s = s();
+    let a = s.document_id();
+    run(&mut s, "file.new", json!({}));
+    let b = s.document_id();
+    run(&mut s, "file.new", json!({}));
+    let c = s.document_id();
+    assert!(s.view.proofing);
+    s.activate(a).unwrap();
+    run(&mut s, "file.options", json!({"checkSpelling": false}));
+    for id in [b, c, a] {
+        s.activate(id).unwrap();
+        assert!(!s.view.proofing, "off in document {id}");
+        assert!(!s.prefs.check_spelling);
+    }
+    run(&mut s, "review.proofing", json!({"value": true}));
+    for id in [b, c] {
+        s.activate(id).unwrap();
+        assert!(s.view.proofing, "back on in document {id}");
+    }
+    // A document opened now starts with the setting as it is.
+    run(&mut s, "review.proofing", json!({"value": false}));
+    run(&mut s, "file.new", json!({}));
+    assert!(!s.view.proofing);
+}
+
+/// A window's view put back after Check spelling as you type changed in another window takes the
+/// setting as it is now, not as it was when the window's view was taken (#5740): every view made
+/// active follows the saved preference.
+#[test]
+fn a_window_view_put_back_follows_the_spelling_setting() {
+    let mut s = s();
+    assert!(s.view.proofing);
+    let held = s.take_view();
+    run(&mut s, "file.options", json!({"checkSpelling": false}));
+    s.put_view(held);
+    assert!(!s.view.proofing, "the view taken with spelling on comes back with it off");
+    let held = s.take_view();
+    run(&mut s, "review.proofing", json!({"value": true}));
+    s.put_view(held);
+    assert!(s.view.proofing);
+}
