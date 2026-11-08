@@ -61,7 +61,7 @@ fn landing(s: &Session, pos: &Pos, to: &Pos) -> Result<Pos, CmdError> {
 
 /// Move the In Line with Text object at `pos` to the text position `to`, where it stays In Line
 /// with Text, keeping its character formatting: Word's drag of an inline picture, which lands
-/// where its dashed insertion cursor was (#2233, #2234). Dropped on itself, nothing changes.
+/// where its insertion cursor was (#2233, #2234). Dropped on itself, nothing changes.
 /// Returns the object's position afterwards.
 fn move_in_text(s: &mut Session, pos: Pos, to: &Pos) -> Result<Pos, CmdError> {
     let to = landing(s, &pos, to)?;

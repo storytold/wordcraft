@@ -15,6 +15,7 @@ use crate::WordApp;
 use crate::theme::{Tokens, regular, semibold};
 
 mod balloons;
+mod column_ruler;
 mod context_menu;
 #[cfg(test)]
 pub(crate) use context_menu::issue_heading;
@@ -48,6 +49,7 @@ use geometry::{floating_comments, on_page_gap, on_visible_page, white_space_hidd
 use input::{EDGE_MARGIN, EDGE_MAX_DT, EDGE_SPEED_MAX};
 use input::{UnitDrag, clamped_scroll, edge_scroll, mouse, wheel_hovered};
 pub(crate) use input::{hold_document_selection, press_count};
+pub(crate) use links::follow_link;
 #[cfg(test)]
 use links::{field_link, is_followable_link, is_generated_bookmark_link};
 #[cfg(test)]
@@ -62,8 +64,8 @@ use navigation::{scrollbar_page_tip, viewed_page};
 use pages::{DRAWING_GRID_MAX_LINES, DRAWING_GRID_MIN_PX};
 pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options};
 use pages::{
-    drawing_grid, drawing_grid_step, gridline_cells, page_image, page_key, page_render_options, shown_layout, texel_aligned_rect, view_key,
-    visible_tiles,
+    drawing_grid, drawing_grid_step, gridline_cells, page_image, page_key, page_render_options, page_shows, shown_layout, texel_aligned_rect,
+    view_key, visible_tiles,
 };
 pub(crate) use reading::turn_read_page;
 #[cfg(test)]
@@ -90,8 +92,29 @@ const TILE_HEIGHT_PX: usize = 1024;
 /// are rendered again when they come back.
 const TEXTURE_KEEP_SCREENS: f32 = 3.0;
 
+/// The document's scroll bars (#5746): solid, so they show wherever the pointer is (egui's
+/// floating ones are invisible until the pointer nears them), and with their margin exactly as
+/// wide as the [`SCROLLBAR`] room the pages leave, so they neither cover nor move the pages.
+fn canvas_scroll_style() -> egui::style::ScrollStyle {
+    let solid = egui::style::ScrollStyle::solid();
+    egui::style::ScrollStyle { bar_width: SCROLLBAR - solid.bar_inner_margin - solid.bar_outer_margin, ..solid }
+}
+
+/// The document's scroll bar thumb (#5746): egui paints a solid bar's track in
+/// `extreme_bg_color` and its thumb in the widget fills, which our palette sets alike (`input`), so
+/// the thumb would vanish into its track. Grey at rest, darker (lighter in the dark theme) under
+/// the pointer and while dragged. Only the scroll area's own visuals: the pages' contents keep theirs.
+fn canvas_scroll_thumb(visuals: &mut egui::Visuals, t: &Tokens) {
+    visuals.widgets.inactive.bg_fill = t.border_strong;
+    visuals.widgets.hovered.bg_fill = t.input_border;
+    visuals.widgets.active.bg_fill = t.text_dim;
+}
+
 pub struct CanvasState {
-    textures: HashMap<usize, (u64, TextureHandle)>,
+    /// Page rasters: (key, what the page showed, texture). The key ([`page_key`]) includes the
+    /// raster scale; what the page showed ([`page_shows`]) doesn't, so a zoom can tell whether
+    /// a raster may stand in for the page at another size.
+    textures: HashMap<usize, (u64, u64, TextureHandle)>,
     /// Visible full-resolution tiles of pages too tall for one GPU texture.
     tiles: HashMap<(usize, usize), (u64, TextureHandle)>,
     /// Page content fingerprints of the current layout, for the texture cache (#811).
@@ -148,6 +171,10 @@ pub struct CanvasState {
     pub viewed_page: Option<usize>,
     /// Effective scale (screen points per document point).
     pub scale: f32,
+    /// Whether this frame's pages were drawn hinted ([`hint_pages`]).
+    pub(crate) pages_hinted: bool,
+    /// Page rasters rendered so far (whole pages, not tiles), for tests.
+    pub(crate) rasters: u64,
     pub canvas_rect: Option<Rect>,
     pub focused: bool,
     /// The page's widget id and the pass that last drew it, so a click elsewhere can hand the
@@ -203,6 +230,10 @@ pub struct CanvasState {
     /// The viewport (the content's visible rect on screen) at the end of last frame; the
     /// drag-select edge auto-scroll decides this frame's scroll from it (#688).
     pub(crate) viewport: Option<egui::Rect>,
+    /// Synchronous Scrolling (#322): document points the partner window scrolled, still to apply…
+    pub(crate) sync_in: f32,
+    /// …and this window's own scrolling since the last frame, for the partner.
+    pub(crate) sync_out: f32,
     /// Pages per row last frame; when it changes the caret's page is scrolled back into view.
     pub cols: usize,
     /// The comment whose balloon is selected (its text is editable in place, like Word's).
@@ -378,6 +409,8 @@ impl Default for CanvasState {
             scrollbar_page: None,
             viewed_page: None,
             scale: PX_PER_PT,
+            pages_hinted: screen_render_options().hinting,
+            rasters: 0,
             canvas_rect: None,
             focused: false,
             widget_id: None,
@@ -420,6 +453,8 @@ impl Default for CanvasState {
             scroll_max: egui::Vec2::ZERO,
             scroll_request: None,
             viewport: None,
+            sync_in: 0.0,
+            sync_out: 0.0,
             cols: 1,
             balloon: None,
             balloon_focus: false,
@@ -500,11 +535,17 @@ struct CanvasView {
     vruler: Option<Rect>,
     paper: Color32,
     animate: bool,
+    /// A pointer zoom is moving the scale over several frames ([`pointer_zoom`]).
+    zooming: bool,
+    /// Whether this frame draws the pages hinted ([`hint_pages`]).
+    hinted: bool,
     opts: egui::InputOptions,
     geo: Geometry,
     dim_body: bool,
     grid_story: Option<StoryRef>,
     caret: Option<wordcraft_layout::hit::Caret>,
+    /// The zoom changed this frame (#322): the scroll offset moved with it, nobody scrolled.
+    rescaled: bool,
 }
 
 fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> CanvasView {
@@ -552,9 +593,18 @@ fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> C
     if read_mode {
         app.canvas.scroll_max = (geo.size - area.size()).max(egui::Vec2::ZERO);
     }
-    if (geo.scale - app.canvas.scale).abs() > 1e-6 {
+    let rescaled = (geo.scale - app.canvas.scale).abs() > 1e-6;
+    if rescaled {
         ui.ctx().request_repaint();
     }
+    // Does the zoom move over several frames? An eased wheel notch or a pinch does; with animation
+    // effects off a wheel step lands finished in its own frame (and is drawn so at once).
+    let gliding = animate || ui.input(|i| i.multi_touch().is_some() || i.events.iter().any(|e| matches!(e, egui::Event::Zoom(_))));
+    let zooming = pointer_zoom(zoom_delta, rescaled, gliding);
+    let hinted = hint_pages(zoom_delta, rescaled, gliding);
+    app.canvas.pages_hinted = hinted;
+    // A zoom moves the scroll offset without anyone scrolling: not passed on to a partner window.
+    let rescaled = (geo.scale - app.canvas.scale).abs() > 1e-4;
     app.canvas.scale = geo.scale;
     sync_fit_zoom(app, geo.scale);
     let anchored = if let Some((p, (page, x, y))) = zoom_anchor
@@ -582,7 +632,7 @@ fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> C
     {
         app.session.page_hint = c.page;
     }
-    CanvasView { area, hruler, vruler, paper, animate, opts, geo, dim_body, grid_story, caret }
+    CanvasView { area, hruler, vruler, paper, animate, zooming, hinted, opts, geo, dim_body, grid_story, caret, rescaled }
 }
 
 fn update_caret_scroll(app: &mut WordApp, view: &CanvasView) -> Option<Rect> {
@@ -686,7 +736,9 @@ fn scroll_motion(app: &mut WordApp, ui: &Ui, full: Rect, view: &CanvasView) -> S
     ScrollMotion { wheel: wheel_delta, auto: auto_delta, middle: middle_delta }
 }
 
-fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: ScrollMotion) -> egui::ScrollArea {
+/// The scroll area, and the vertical offset this frame starts from once the partner window's
+/// scrolling is applied (Synchronous Scrolling, #322): what the window scrolls beyond it is its own.
+fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: ScrollMotion) -> (egui::ScrollArea, f32) {
     let delta = motion.wheel + motion.auto + motion.middle;
     // The canvas scrolls itself on wheel/touchpad input (crate::scroll): touchpads 1:1 with
     // momentum, wheel notches eased in (or all at once with animation effects off). Applied
@@ -702,14 +754,24 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
     if app.session.view.read_mode {
         scroll_area = scroll_area.scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
     }
-    if delta != egui::Vec2::ZERO || app.canvas.scroll_request.is_some() || app.session.view.read_mode {
-        let before = app.canvas.scroll_offset;
+    // Synchronous Scrolling (#322): the partner window's scrolling, in document points.
+    let synced = std::mem::take(&mut app.canvas.sync_in) * view.geo.scale;
+    let before = app.canvas.scroll_offset;
+    let mut from_partner = 0.0;
+    if delta != egui::Vec2::ZERO || app.canvas.scroll_request.is_some() || app.session.view.read_mode || synced != 0.0 {
         let step = app.session.view.read_width * view.geo.scale + GAP;
         let snapped = if step.is_finite() && step > 0.0 { vec2((before.x / step).round() * step, 0.0) } else { egui::Vec2::ZERO };
         let after = match app.canvas.scroll_request.take() {
             Some(request) => request.clamp(egui::Vec2::ZERO, app.canvas.scroll_max),
             None if app.session.view.read_mode => snapped.clamp(egui::Vec2::ZERO, app.canvas.scroll_max),
             None => clamped_scroll(before, delta, app.canvas.scroll_max),
+        };
+        let after = if synced != 0.0 {
+            let y = (after.y + synced).clamp(0.0, app.canvas.scroll_max.y);
+            from_partner = y - after.y;
+            vec2(after.x, y)
+        } else {
+            after
         };
         if after == before && motion.wheel != egui::Vec2::ZERO {
             app.canvas.wheel.hit_edge();
@@ -723,7 +785,7 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
     if app.canvas.wheel.is_animating() {
         ui.ctx().request_repaint();
     }
-    scroll_area
+    (scroll_area, before.y + from_partner)
 }
 
 fn prepare_layout(app: &mut WordApp, ui: &Ui, full: Rect) -> std::sync::Arc<DocLayout> {
@@ -760,6 +822,17 @@ struct CanvasFinish<'a> {
     dim_body: bool,
     hruler: Option<Rect>,
     vruler: Option<Rect>,
+    scroll_base: f32,
+    rescaled: bool,
+}
+
+/// What a window's own scrolling is measured against for Synchronous Scrolling (#322).
+#[derive(Clone, Copy)]
+struct ScrollSync {
+    /// The vertical offset the frame started from, the partner's scrolling included.
+    base: f32,
+    /// The zoom changed: the offset moved, nobody scrolled.
+    rescaled: bool,
 }
 
 fn update_canvas_scroll_state(
@@ -769,6 +842,7 @@ fn update_canvas_scroll_state(
     geo: &Geometry,
     caret: Option<wordcraft_layout::hit::Caret>,
     out: &egui::scroll_area::ScrollAreaOutput<(egui::Response, Vec<Rect>)>,
+    sync: ScrollSync,
 ) {
     app.canvas.scroll_offset = out.state.clamped_offset();
     scrollbar_page_tip(app, ui, out.id, &geo.rects, &geo.bands, layout.pages.len());
@@ -784,6 +858,11 @@ fn update_canvas_scroll_state(
         viewed_page(extent, &geo.rects, &geo.bands, app.canvas.scroll_offset.y, out.inner_rect.height()).min(layout.pages.len().saturating_sub(1))
     });
     crate::ink::replay_bar(app, ui, out.inner_rect);
+    // This window's own scrolling (wheel, scroll bar, keys, caret), for a partner window.
+    let own = app.canvas.scroll_offset.y - sync.base;
+    if app.session.windows.sync_scroll && !sync.rescaled && own.abs() > 0.01 && geo.scale > 0.0 {
+        app.canvas.sync_out += own / geo.scale;
+    }
     app.canvas.scroll_max = (out.content_size - out.inner_rect.size()).max(egui::Vec2::ZERO);
     if app.session.view.read_mode {
         let step = app.session.view.read_width * geo.scale + GAP;
@@ -853,6 +932,10 @@ struct PagePaint<'a> {
     paper: Color32,
     hidden: Option<(usize, Pos)>,
     view: u64,
+    /// The view without the hinting, which a stretched raster may differ in (see `stretched`).
+    shown_view: u64,
+    zooming: bool,
+    hinted: bool,
     content_origin: Pos2,
     ppp: f32,
     max_tex: f32,
@@ -863,6 +946,39 @@ struct PagePaintOutput {
     rects: Vec<Rect>,
     visible_tile_keys: HashSet<(usize, usize)>,
     rendered: usize,
+}
+
+/// Are pages drawn hinted this frame (as [`screen_render_options`] says)? Not while a pointer
+/// zoom moving over several frames ([`pointer_zoom`]) changes the scale: each such frame is a new
+/// size shown for a moment, and hinting every one would cost each page about 1.5 ms more and fill
+/// the hint caches with sizes nobody rests on, pushing out the one the zoom ends at. The first
+/// frame at rest draws the page hinted (the hinting is in the page's key). A zoom that leaves the
+/// scale as it is (at 10 % or 500 %, or over the ribbon) keeps the pages hinted, and other scale
+/// changes (the Zoom dialog or slider, a fit zoom following the window, a wheel step with
+/// animation effects off) are drawn hinted at once.
+fn hint_pages(zoom_delta: f32, rescaled: bool, gliding: bool) -> bool {
+    screen_render_options().hinting && !pointer_zoom(zoom_delta, rescaled, gliding)
+}
+
+/// Is a pointer zoom (Ctrl/⌘+wheel, a pinch: `zoom_delta` other than 1) changing the scale this
+/// frame (`rescaled`) on its way over several frames (`gliding`: easing in, or following the
+/// fingers)? Its frames are in-between sizes, each shown for a moment. A wheel step with
+/// animation effects off lands finished in its frame: not in between.
+fn pointer_zoom(zoom_delta: f32, rescaled: bool, gliding: bool) -> bool {
+    let gesture = zoom_delta.is_nan() || (zoom_delta - 1.0).abs() > 1e-3;
+    gesture && rescaled && gliding
+}
+
+/// A page raster is stretched at most this much (either way) during a pointer zoom before it is
+/// rendered again at the zoom's current size.
+const STRETCH_MAX: f32 = 1.5;
+
+/// Can a page raster `tex_w` pixels wide, of a page `page_w` points wide, stand in for one at
+/// `scale_px` pixels per point while a zoom goes on ([`STRETCH_MAX`])?
+fn stretch_fits(tex_w: usize, page_w: f32, scale_px: f32) -> bool {
+    let had = tex_w as f32 / page_w.max(1.0);
+    let ratio = scale_px / had;
+    ratio.is_finite() && (1.0 / STRETCH_MAX..=STRETCH_MAX).contains(&ratio)
 }
 
 fn draw_page_gridlines(app: &WordApp, painter: &egui::Painter, t: &Tokens, page: &Page, visual_sr: Rect, page_scale: f32) {
@@ -897,7 +1013,25 @@ fn draw_page_gridlines(app: &WordApp, painter: &egui::Painter, t: &Tokens, page:
 }
 
 fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
-    let PagePaint { app, ui, layout, geo, t, painter, dim_body, paper, hidden, view, content_origin, ppp, max_tex, grid_story } = pass;
+    let PagePaint {
+        app,
+        ui,
+        layout,
+        geo,
+        t,
+        painter,
+        dim_body,
+        paper,
+        hidden,
+        view,
+        shown_view,
+        zooming,
+        hinted,
+        content_origin,
+        ppp,
+        max_tex,
+        grid_story,
+    } = pass;
     let mut visible_tile_keys = HashSet::new();
     let mut rendered = 0;
     let mut rects = Vec::with_capacity(geo.rects.len());
@@ -918,36 +1052,48 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
         let cached = !tiled && app.canvas.textures.contains_key(&i);
         let key =
             if visible || cached { page_key(app, layout, i, view, scale_px) ^ if tiled { (tile_height_px as u64) << 32 } else { 0 } } else { 0 };
-        let mut fresh = cached && app.canvas.textures.get(&i).is_some_and(|(k, _)| *k == key);
+        let mut fresh = cached && app.canvas.textures.get(&i).is_some_and(|(k, _, _)| *k == key);
         // The page a drag took an object off: render it this frame whatever the budget, or the
         // raster with the object still on it shows for a frame.
         let forced = hidden.as_ref().is_some_and(|(page, _)| *page == i);
         // Render before placing the page: a page re-rendered in this frame (a zoom step, an
         // edit) then sits on the pixel grid in this frame too, rather than a frame later.
-        if visible && !tiled && !fresh && (forced || rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
+        // During a pointer zoom the page's last raster is stretched to the new size instead of
+        // rendered at each in-between size (each shown for a frame, a few ms a page on a 4K
+        // screen): it is rendered once the zoom stops, or before stretching softens it too much.
+        // Only a raster of what the page shows now: a zoom that reflows the pages (Read Mode's
+        // text size, Web Layout's width) renders them anew.
+        let shows = if visible || cached { page_shows(app, layout, i, shown_view) } else { 0 };
+        let stretched = zooming
+            && !forced
+            && app.canvas.textures.get(&i).is_some_and(|(_, showed, tex)| *showed == shows && stretch_fits(tex.size()[0], page.w, scale_px));
+        if visible && !tiled && !fresh && !stretched && (forced || rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
             let mut opts = page_render_options(app, dim_body);
+            opts.hinting &= hinted;
             // Only on the page it is on: the `Pos` can't match an object of another page.
             opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
             let img = wordcraft_render::render_page(page_doc(app), page, scale_px, &opts);
             let ci = page_image(&img);
             match app.canvas.textures.get_mut(&i) {
-                Some((k, tex)) => {
+                Some((k, showed, tex)) => {
                     tex.set(ci, egui::TextureOptions::LINEAR);
                     *k = key;
+                    *showed = shows;
                 }
                 None => {
                     let tex = ui.ctx().load_texture(format!("page{i}"), ci, egui::TextureOptions::LINEAR);
-                    app.canvas.textures.insert(i, (key, tex));
+                    app.canvas.textures.insert(i, (key, shows, tex));
                 }
             }
             rendered += 1;
+            app.canvas.rasters += 1;
             fresh = true;
         } else if visible && !tiled && !fresh {
             ui.ctx().request_repaint();
         }
         let current_scale = geo.scale * ppp;
         let visual_sr = if fresh && (scale_px - current_scale).abs() <= 0.0001_f32.max(current_scale.abs() * 0.0001) {
-            app.canvas.textures.get(&i).map_or(sr, |(_, tex)| texel_aligned_rect(sr, tex.size_vec2(), ppp))
+            app.canvas.textures.get(&i).map_or(sr, |(_, _, tex)| texel_aligned_rect(sr, tex.size_vec2(), ppp))
         } else {
             sr
         };
@@ -979,6 +1125,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
                 let fresh = app.canvas.tiles.get(&id).is_some_and(|(k, _)| *k == key);
                 if !fresh && rendered < 4 {
                     let mut opts = page_render_options(app, dim_body);
+                    opts.hinting &= hinted;
                     // Only on the page it is on: the `Pos` can't match an object of another page.
                     opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
                     // The tiny subtraction avoids a 1px overshoot from round-tripping f32
@@ -1013,7 +1160,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
                     painter.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                 }
             }
-        } else if let Some((_, tex)) = app.canvas.textures.get(&i) {
+        } else if let Some((_, _, tex)) = app.canvas.textures.get(&i) {
             painter.image(tex.id(), visual_sr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
         let page_scale = page_screen_scale(visual_sr, page, geo.scale);
@@ -1182,8 +1329,8 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
 }
 
 fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollAreaOutput<(egui::Response, Vec<Rect>)>) {
-    let CanvasFinish { app, ui, layout, geo, caret, ime_geometry, ime_interrupt, area, dim_body, hruler, vruler } = finish;
-    update_canvas_scroll_state(app, ui, layout, geo, caret, &out);
+    let CanvasFinish { app, ui, layout, geo, caret, ime_geometry, ime_interrupt, area, dim_body, hruler, vruler, scroll_base, rescaled } = finish;
+    update_canvas_scroll_state(app, ui, layout, geo, caret, &out, ScrollSync { base: scroll_base, rescaled });
     let (resp, rects) = out.inner;
     // A click on the page leaves the selected comment balloon.
     dismiss_balloon_on_canvas_click(app, ui, &resp);
@@ -1386,13 +1533,18 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let view = prepare_view(app, ui, full, &layout);
     let scroll_target = if hold_scroll_for_preview(app) { None } else { update_caret_scroll(app, &view) };
     let motion = scroll_motion(app, ui, full, &view);
-    let scroll_area = configure_scroll_area(app, ui, &view, motion);
-    let CanvasView { area, hruler, vruler, paper, geo, dim_body, grid_story, caret, .. } = view;
+    let (scroll_area, scroll_base) = configure_scroll_area(app, ui, &view, motion);
+    let CanvasView { area, hruler, vruler, paper, zooming, hinted, geo, dim_body, grid_story, caret, rescaled, .. } = view;
     let mut origin = area.min;
     let mut ui_area = ui.new_child(egui::UiBuilder::new().max_rect(area));
+    // The bars are drawn with `ui_area`'s style; what the pages draw gets the inherited one back.
+    let inherited = std::sync::Arc::clone(ui_area.style());
+    ui_area.spacing_mut().scroll = canvas_scroll_style();
+    canvas_scroll_thumb(ui_area.visuals_mut(), &t);
     let mut ime_geometry: Option<(Rect, Rect)> = None;
     let mut ime_interrupt = false;
     let out = scroll_area.show_viewport(&mut ui_area, |ui, viewport| {
+        ui.set_style(inherited);
         origin = ui.min_rect().min - viewport.min.to_vec2();
         let content = Rect::from_min_size(ui.min_rect().min, geo.size);
         let resp = canvas_response(ui, content, scroll_target);
@@ -1404,7 +1556,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let max_tex = ui.ctx().input(|i| i.max_texture_side).min(wordcraft_render::MAX_SIDE as usize).max(1) as f32;
         let content_origin = ui.min_rect().min;
         let hidden = app.canvas.dragged_off_page();
-        let page_view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p));
+        let page_view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p), hinted);
+        // The view without the hinting, which a stretched raster may differ in (see `stretched`).
+        let shown_view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p), true);
         let t0 = crate::now_ms();
         let PagePaintOutput { rects, visible_tile_keys, rendered } = paint_pages(PagePaint {
             app,
@@ -1417,6 +1571,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             paper,
             hidden,
             view: page_view,
+            shown_view,
+            zooming,
+            hinted,
             content_origin,
             ppp,
             max_tex,
@@ -1672,7 +1829,21 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         (resp, rects)
     });
     finish_canvas_frame(
-        CanvasFinish { app, ui, layout: &layout, geo: &geo, caret, ime_geometry, ime_interrupt, area, dim_body, hruler, vruler },
+        CanvasFinish {
+            app,
+            ui,
+            layout: &layout,
+            geo: &geo,
+            caret,
+            ime_geometry,
+            ime_interrupt,
+            area,
+            dim_body,
+            hruler,
+            vruler,
+            scroll_base,
+            rescaled,
+        },
         out,
     );
 }

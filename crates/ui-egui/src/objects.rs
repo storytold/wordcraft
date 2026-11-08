@@ -9,8 +9,8 @@
 //! was on is drawn again without it (see [`dragged_off_page`]), so it is not left behind where it
 //! was. The drop is one command, one relayout.
 //!
-//! Dragging an In Line with Text object moves it within the text, as in Word: a dashed insertion
-//! cursor follows the pointer through the text (#2233) and the drop puts it there, still inline
+//! Dragging an In Line with Text object moves it within the text, as in Word: a bold insertion
+//! cursor follows the pointer through the text (#2233, #4195) and the drop puts it there, still inline
 //! (`arrange.bounds` / `arrange.copyTo` with `to`, #2234). A floating one goes where it's dropped.
 //!
 //! Moving a floating one snaps it to alignment guides ([`crate::guides`]): the page's edges and
@@ -66,7 +66,7 @@ pub struct ObjectDrag {
     /// The object drawn alone over its rotated bounds, for the preview: made once it moves.
     preview: Option<egui::TextureHandle>,
     /// Moving an In Line with Text object: the text position under the pointer, where it lands,
-    /// and the colour of the dashed insertion cursor drawn there.
+    /// and the colour of the bold insertion cursor drawn there.
     drop_at: Option<(Pos, Color32)>,
 }
 
@@ -354,11 +354,34 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         });
         return true;
     }
-    let grabbed = grab_at(app, layout, pages, scale, at).or_else(|| pressed.then(|| behind_drag_at(app, layout, pages, scale, at)).flatten());
+    let front = grab_at(app, layout, pages, scale, at);
+    // Ctrl/⌘+click inside a linked text box follows the text box's link (its text is not grabbed
+    // as the object, so the object branch below can't see it).
+    if pressed
+        && front.is_none()
+        && ui.input(|i| i.modifiers.command && !i.modifiers.shift)
+        && let Some(link) = text_box_at(layout, pages, scale, at).and_then(|object| object_link(app, &object))
+    {
+        crate::canvas::follow_link(app, link);
+        return true;
+    }
+    // A Behind Text object reached only for dragging lies under the text: text over it keeps its click.
+    let hit = front.is_some();
+    let grabbed = front.or_else(|| pressed.then(|| behind_drag_at(app, layout, pages, scale, at)).flatten());
     let Some((object, grab)) = grabbed else { return false };
     // Double-click a SmartArt graphic (selected by the first click) to edit its text.
     if resp.double_clicked() && wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).is_some() {
         let _ = app.run("smartArt.textPane", json!({"value": true}));
+        return true;
+    }
+    // Ctrl/⌘+click on a linked picture or shape follows its link, as on linked text (#5267).
+    if pressed
+        && hit
+        && grab == Grab::Move
+        && ui.input(|i| i.modifiers.command && !i.modifiers.shift)
+        && let Some(link) = object_link(app, &object)
+    {
+        crate::canvas::follow_link(app, link);
         return true;
     }
     // Shift/Ctrl+click adds an object to the selected ones (or takes it out), for Group.
@@ -589,6 +612,32 @@ pub fn select_at(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f
         let _ = app.run("select.range", json!({"anchor": pos, "focus": end}));
     }
     true
+}
+
+/// The hyperlink of the picture, shape or text box under `at` (Insert › Link with it selected,
+/// or a link read from the file), not of a frame handle: what hovering shows and Ctrl/⌘+click
+/// follows, as for linked text (#5267).
+pub fn link_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<String> {
+    match grab_at(app, layout, pages, scale, at) {
+        Some((object, Grab::Move)) => object_link(app, &object),
+        Some(_) => None,
+        // Inside a text box its text is what a click reaches, but a linked text box's link
+        // comes before its text's own, as for a picture or shape.
+        None => text_box_at(layout, pages, scale, at).and_then(|object| object_link(app, &object)),
+    }
+}
+
+/// The text box whose text is under `at`, if any.
+fn text_box_at(layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<ObjectHit> {
+    let (page, x, y) = crate::canvas::page_at(pages, layout, scale, at)?;
+    let StoryRef::Part(id) = layout.story_at(page, x, y)? else { return None };
+    layout.text_box(id, page)
+}
+
+/// The hyperlink on `object`'s character, if it has one.
+fn object_link(app: &WordApp, object: &ObjectHit) -> Option<String> {
+    let pos = object.pos();
+    app.session.doc.para_at(&pos)?.props_of_char(pos.off).link.clone().filter(|l| !l.is_empty())
 }
 
 /// What a press at `at` would grab: a handle of the shown frame, else an object of the story
@@ -822,12 +871,13 @@ pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, p
     }
 }
 
-/// The dashed insertion cursor where a dragged In Line with Text object will land.
+/// The insertion cursor where a dragged In Line with Text object will land: solid and twice as
+/// wide as the caret, so it stands out as Word's does (#4195).
 fn paint_drop_caret(d: &ObjectDrag, painter: &Painter, layout: &DocLayout, pages: &[Rect], scale: f32) {
     let Some((pos, color)) = &d.drop_at else { return };
     let Some(c) = layout.caret_on(pos, d.drag.to_page) else { return };
     let Some(r) = screen(pages, scale, c.page, wordcraft_geom::Rect::new(c.x, c.top, 0.0, c.height)) else { return };
-    painter.extend(egui::Shape::dashed_line(&[r.left_top(), r.left_bottom()], egui::Stroke::new(1.5, *color), 2.0, 2.0));
+    painter.line_segment([r.left_top(), r.left_bottom()], egui::Stroke::new(3.0, *color));
 }
 
 /// A connector's end being dragged: a line from its other end to the pointer, and the connection
