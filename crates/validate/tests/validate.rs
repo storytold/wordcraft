@@ -57,6 +57,8 @@ const ALL_CHECKS: &[&str] = &[
     "ID-BOOKMARK-DUP",
     "BOOKMARK-UNPAIRED",
     "COMMENT-RANGE-UNPAIRED",
+    "PARAID-DUP",
+    "PARAID-VALUE",
     "ID-REVISION-DUP",
     "NOTE-DUP",
     "REF-NOTE",
@@ -1865,6 +1867,301 @@ fn comment_range_pairing_is_per_part() {
     assert_finding(&report, "COMMENT-RANGE-UNPAIRED", Some("word/glossary.xml"));
 }
 
+/// PARAID-DUP: the same w14:paraId on two paragraphs in one part.
+/// MS-DOCX §2.6.2.3: a paraId is unique within the document part.
+#[test]
+fn paraid_dup_in_one_part() {
+    let mut d = Doc::minimal();
+    d.set_document(concat!(
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"><w:r><w:t>one</w:t></w:r></w:p>"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="22222222"><w:r><w:t>two</w:t></w:r></w:p>"#,
+    ));
+    let report = validate(&d);
+    let f = assert_finding(&report, "PARAID-DUP", Some("word/document.xml"));
+    assert_eq!(f.severity, Severity::Warning, "{:?}", report.findings);
+    assert_eq!(f.evidence, wordcraft_validate::Evidence::MsDocumented);
+    assert_eq!(report.findings.iter().filter(|f| f.rule == "PARAID-DUP").count(), 1, "{:?}", report.findings);
+}
+
+/// Values are compared as numbers: leading zeros and case do not make
+/// a distinct identity.
+#[test]
+fn paraid_dup_ignores_padding_and_case() {
+    let mut d = Doc::minimal();
+    d.set_document(concat!(
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="0000002A" w14:textId="11111111"/>"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="2a" w14:textId="22222222"/>"#,
+    ));
+    let report = validate(&d);
+    assert_finding(&report, "PARAID-DUP", Some("word/document.xml"));
+}
+
+/// Uniqueness is per part: the same paraId in the main part and in a
+/// header is not a duplicate.
+#[test]
+fn paraid_same_value_in_different_parts_is_clean() {
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/header1.xml", CT_HEADER)]));
+    d.set_document(r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#);
+    d.set(
+        "word/header1.xml",
+        r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/></w:hdr>"#
+            .as_bytes()
+            .to_vec(),
+    );
+    let report = validate(&d);
+    assert!(!has(&report, "PARAID-DUP"), "{:?}", report.findings);
+}
+
+/// The Alternate Content carve-out (MS-DOCX §2.6.2.3): a paraId need
+/// not be unique across the Choice and Fallback of one block.
+#[test]
+fn paraid_dup_across_alternate_content_branches_is_clean() {
+    let mut d = Doc::minimal();
+    d.set_document(concat!(
+        r#"<w:p><mc:AlternateContent><mc:Choice Requires="w">"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"</mc:Choice><mc:Fallback>"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"</mc:Fallback></mc:AlternateContent></w:p>"#,
+    ));
+    let report = validate(&d);
+    assert!(!has(&report, "PARAID-DUP"), "{:?}", report.findings);
+}
+
+/// The excuse is narrow: a value shared between ordinary content and
+/// a Choice branch is a duplicate — the exception covers only the two
+/// branches of one block against each other.
+#[test]
+fn paraid_dup_between_content_and_branch_fires() {
+    let mut d = Doc::minimal();
+    d.set_document(concat!(
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"<w:p><mc:AlternateContent><mc:Choice Requires="w">"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"</mc:Choice><mc:Fallback><w:p/></mc:Fallback></mc:AlternateContent></w:p>"#,
+    ));
+    let report = validate(&d);
+    assert_finding(&report, "PARAID-DUP", Some("word/document.xml"));
+}
+
+/// Two occurrences inside the SAME branch are a duplicate; so are
+/// occurrences in two different blocks; and a value appearing twice
+/// in a Choice is not excused by also appearing in the Fallback.
+#[test]
+fn paraid_dup_within_branch_and_across_blocks_fire() {
+    let mut d = Doc::minimal();
+    d.set_document(concat!(
+        r#"<w:p><mc:AlternateContent><mc:Choice Requires="w">"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"</mc:Choice><mc:Fallback><w:p/></mc:Fallback></mc:AlternateContent></w:p>"#,
+    ));
+    assert_finding(&validate(&d), "PARAID-DUP", Some("word/document.xml"));
+    let mut d = Doc::minimal();
+    d.set_document(concat!(
+        r#"<w:p><mc:AlternateContent><mc:Choice Requires="w">"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"</mc:Choice><mc:Fallback><w:p/></mc:Fallback></mc:AlternateContent></w:p>"#,
+        r#"<w:p><mc:AlternateContent><mc:Choice Requires="w">"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"</mc:Choice><mc:Fallback><w:p/></mc:Fallback></mc:AlternateContent></w:p>"#,
+    ));
+    assert_finding(&validate(&d), "PARAID-DUP", Some("word/document.xml"));
+}
+
+/// A block may carry several Choices: occurrences in two DIFFERENT
+/// Choices of one block are alternatives and do not coexist.
+#[test]
+fn paraid_two_choices_of_one_block_are_clean() {
+    let mut d = Doc::minimal();
+    d.set_document(concat!(
+        r#"<w:p><mc:AlternateContent><mc:Choice Requires="w">"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"</mc:Choice><mc:Choice Requires="x">"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"</mc:Choice><mc:Fallback><w:p/></mc:Fallback></mc:AlternateContent></w:p>"#,
+    ));
+    let report = validate(&d);
+    assert!(!has(&report, "PARAID-DUP"), "{:?}", report.findings);
+}
+
+/// More mutually excused occurrences of one value than the bounded
+/// collection retains (here, five Choices of one block sharing a
+/// value) make the verdict INCOMPLETE rather than a guessed pass —
+/// and no duplicate is reported.
+#[test]
+fn paraid_many_excused_occurrences_are_incomplete_not_passed() {
+    let mut body = String::from(r#"<w:p><mc:AlternateContent>"#);
+    for _ in 0..5 {
+        body.push_str(r#"<mc:Choice Requires="w">"#);
+        body.push_str(r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#);
+        body.push_str(r#"</mc:Choice>"#);
+    }
+    body.push_str(r#"<mc:Fallback><w:p/></mc:Fallback></mc:AlternateContent></w:p>"#);
+    let mut d = Doc::minimal();
+    d.set_document(&body);
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Incomplete, "{:?}", report.findings);
+    assert!(!has(&report, "PARAID-DUP"), "{:?}", report.findings);
+}
+
+/// Nesting: an occurrence inside a nested block within the outer
+/// Choice and one in the outer Fallback are in different branches of
+/// the OUTER block, so they cannot coexist either.
+#[test]
+fn paraid_outer_branch_difference_excuses_nested_repeat() {
+    let mut d = Doc::minimal();
+    d.set_document(concat!(
+        r#"<w:p><mc:AlternateContent><mc:Choice Requires="w">"#,
+        r#"<w:p><mc:AlternateContent><mc:Choice Requires="w">"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"</mc:Choice><mc:Fallback><w:p/></mc:Fallback></mc:AlternateContent></w:p>"#,
+        r#"</mc:Choice><mc:Fallback>"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"</mc:Fallback></mc:AlternateContent></w:p>"#,
+    ));
+    let report = validate(&d);
+    assert!(!has(&report, "PARAID-DUP"), "{:?}", report.findings);
+}
+
+/// …but two sibling blocks inside the SAME outer branch coexist, so
+/// a value shared between them is a duplicate.
+#[test]
+fn paraid_sibling_blocks_in_one_branch_fire() {
+    let mut d = Doc::minimal();
+    d.set_document(concat!(
+        r#"<w:p><mc:AlternateContent><mc:Choice Requires="w">"#,
+        r#"<w:p><mc:AlternateContent><mc:Choice Requires="w">"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"</mc:Choice><mc:Fallback><w:p/></mc:Fallback></mc:AlternateContent></w:p>"#,
+        r#"<w:p><mc:AlternateContent><mc:Choice Requires="w">"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"</mc:Choice><mc:Fallback><w:p/></mc:Fallback></mc:AlternateContent></w:p>"#,
+        r#"</mc:Choice><mc:Fallback><w:p/></mc:Fallback></mc:AlternateContent></w:p>"#,
+    ));
+    let report = validate(&d);
+    assert_finding(&report, "PARAID-DUP", Some("word/document.xml"));
+}
+
+/// Branch membership is scoped to the branch element: an (invalid,
+/// empty) Choice assigns nothing to the content after it, so a
+/// paragraph directly under the block is branch-less and its repeat
+/// in the Fallback is a duplicate. A branch element nested inside a
+/// paragraph likewise assigns nothing.
+#[test]
+fn paraid_branch_membership_is_scoped_and_direct() {
+    let mut d = Doc::minimal();
+    d.set_document(concat!(
+        r#"<w:p><mc:AlternateContent><mc:Choice Requires="w"/>"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"<mc:Fallback>"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"</mc:Fallback></mc:AlternateContent></w:p>"#,
+    ));
+    assert_finding(&validate(&d), "PARAID-DUP", Some("word/document.xml"));
+    // A mc:Choice buried inside a paragraph in the Fallback does not
+    // reassign the paragraph's content to a new branch: both
+    // occurrences are in the Fallback and the Choice of the block.
+    let mut d = Doc::minimal();
+    d.set_document(concat!(
+        r#"<w:p><mc:AlternateContent><mc:Choice Requires="w">"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"</mc:Choice><mc:Fallback><w:p><mc:Choice Requires="w">"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"</mc:Choice></w:p></mc:Fallback></mc:AlternateContent></w:p>"#,
+    ));
+    let report = validate(&d);
+    assert!(!has(&report, "PARAID-DUP"), "{:?}", report.findings);
+    // The discriminating case: two occurrences inside ONE Fallback,
+    // one of them inside a Choice buried in a paragraph. If the
+    // buried Choice stole membership, the pair would look excused;
+    // both are Fallback content, so the duplicate must fire.
+    let mut d = Doc::minimal();
+    d.set_document(concat!(
+        r#"<w:p><mc:AlternateContent><mc:Choice Requires="w"><w:p/></mc:Choice><mc:Fallback>"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"<w:p><mc:Choice Requires="w">"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"</mc:Choice></w:p></mc:Fallback></mc:AlternateContent></w:p>"#,
+    ));
+    assert_finding(&validate(&d), "PARAID-DUP", Some("word/document.xml"));
+    // Branch closure restores branchlessness: content after a closed
+    // (nonempty) Choice is in no branch, so its repeat in the
+    // Fallback is a duplicate.
+    let mut d = Doc::minimal();
+    d.set_document(concat!(
+        r#"<w:p><mc:AlternateContent><mc:Choice Requires="w"><w:p/></mc:Choice>"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"<mc:Fallback>"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D" w14:textId="11111111"/>"#,
+        r#"</mc:Fallback></mc:AlternateContent></w:p>"#,
+    ));
+    assert_finding(&validate(&d), "PARAID-DUP", Some("word/document.xml"));
+}
+
+/// PARAID-VALUE applies inside branches too: an out-of-range value in
+/// a Fallback and an unpaired textId in a Choice both fire.
+#[test]
+fn paraid_value_inside_branches_fires() {
+    let mut d = Doc::minimal();
+    d.set_document(concat!(
+        r#"<w:p><mc:AlternateContent><mc:Choice Requires="w">"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:textId="11111111"/>"#,
+        r#"</mc:Choice><mc:Fallback>"#,
+        r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="00000000" w14:textId="11111111"/>"#,
+        r#"</mc:Fallback></mc:AlternateContent></w:p>"#,
+    ));
+    let report = validate(&d);
+    assert_eq!(report.findings.iter().filter(|f| f.rule == "PARAID-VALUE").count(), 2, "{:?}", report.findings);
+}
+
+/// PARAID-VALUE: values must be greater than 0 and less than
+/// 0x80000000 (MS-DOCX §2.6.2.3 / §2.6.2.4) — both attributes, both
+/// boundaries, and a non-hex value.
+#[test]
+fn paraid_value_out_of_range() {
+    for (attr, value) in [
+        ("paraId", "00000000"),
+        ("paraId", "80000000"),
+        ("paraId", "ZZZZ"),
+        ("paraId", "+00000001"),
+        ("paraId", "-1"),
+        ("textId", "00000000"),
+        ("textId", "FFFFFFFF"),
+        ("textId", "+00000001"),
+        ("textId", "-1"),
+    ] {
+        let mut d = Doc::minimal();
+        let other = if attr == "paraId" { "textId" } else { "paraId" };
+        d.set_document(&format!(
+            r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:{attr}="{value}" w14:{other}="11111111"/>"#
+        ));
+        let report = validate(&d);
+        assert_finding(&report, "PARAID-VALUE", Some("word/document.xml"));
+    }
+    // In-range pair is clean.
+    let mut d = Doc::minimal();
+    d.set_document(r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="7FFFFFFF" w14:textId="00000001"/>"#);
+    let report = validate(&d);
+    assert!(!has(&report, "PARAID-VALUE"), "{:?}", report.findings);
+}
+
+/// A textId without a paraId violates MS-DOCX §2.6.2.4's MUST; the
+/// document states no reciprocal requirement, so a paraId without a
+/// textId is deliberately not flagged.
+#[test]
+fn paraid_value_pairing_is_one_directional() {
+    let mut d = Doc::minimal();
+    d.set_document(r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:textId="11111111"/>"#);
+    let report = validate(&d);
+    assert_finding(&report, "PARAID-VALUE", Some("word/document.xml"));
+    let mut d = Doc::minimal();
+    d.set_document(r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="11111111"/>"#);
+    let report = validate(&d);
+    assert!(!has(&report, "PARAID-VALUE"), "{:?}", report.findings);
+}
+
 /// A footnotes part holding a separator (id 0), a continuation separator
 /// (id 1), and one normal note (id 2).
 fn special_footnotes_doc() -> Doc {
@@ -2241,8 +2538,8 @@ fn compat_counts_unknown_settings_incomplete() {
     assert!(report.coverage_notes.iter().any(|n| n.contains("compatibility limits")), "{:?}", report.coverage_notes);
 }
 
-/// A settings part whose `w:settings` holds `inner` — `settings_doc`
-/// (defined with the note-Pr tests above) builds it.
+// A settings part whose `w:settings` holds `inner` — `settings_doc`
+// (defined with the note-Pr tests above) builds it.
 
 /// A protection element carrying a password hash but not the full
 /// required trio. MS-OI29500 says Word will not open the file; batch b6

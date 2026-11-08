@@ -3,7 +3,7 @@
 //! reference/id collection, structural checks and the small auxiliary parsers for numbering,
 //! settings and the comment-threading parts.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
@@ -332,6 +332,10 @@ struct Frame {
     is_wrapper: bool,
     /// This frame is an `mc:AlternateContent` element.
     alt: bool,
+    /// For an `mc:Choice` / `mc:Fallback` frame that assigned the
+    /// enclosing block's current branch: the branch value to restore
+    /// when this frame closes.
+    alt_branch_prev: Option<u32>,
     /// The element was opened inside a skipped `mc:AlternateContent` subtree, so its closing event
     /// must not touch the frame counters or report structural findings.
     suppressed: bool,
@@ -369,6 +373,21 @@ struct State {
     /// glossary stories, outside text boxes); paired at scan completion.
     comment_range_start_ids: BTreeSet<String>,
     comment_range_end_ids: BTreeSet<String>,
+    /// Canonical `w14:paraId` values seen in this part, with their
+    /// occurrence contexts (PARAID-DUP; judged at the prefix report —
+    /// a repeat across one block's Choice and Fallback is excused,
+    /// every other repeat is a duplicate).
+    para_ids: BTreeMap<String, ParaOcc>,
+    /// The stack of enclosing `mc:AlternateContent` blocks: a sequence
+    /// number per block and the branch instance the scan is currently
+    /// inside it (0 = inside no branch element).
+    alt_stack: Vec<AltCtx>,
+    /// Sequence number source for `alt_stack` entries.
+    alt_seq: u32,
+    /// Instance number source for branch elements (`mc:Choice` /
+    /// `mc:Fallback`): every branch element gets its own number, so
+    /// two Choices of one block are distinct alternatives.
+    alt_branch_seq: u32,
     /// Nonzero while inside an `mc:AlternateContent` subtree.
     alt_depth: usize,
     /// One coverage note per part that contains `mc:AlternateContent`.
@@ -564,6 +583,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 scan_attr_refs(part, &attrs, acc);
                 let was_suppressed = state.alt_depth > 0;
                 let is_alt = enter_alt(&mut state, &id, part, acc);
+                let branch_prev = assign_alt_branch(&mut state, &id);
                 let decls = declarations(&attrs);
                 state.declared.push(decls);
                 check_prefixes(&state.declared, &attrs, reader.resolver(), &[], &mut out);
@@ -571,8 +591,12 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                     collect_refs(&id, &attrs, reader.resolver(), &mut out.refs, acc.limits.facts, &mut state.refs_capped);
                     collect_content_part(&id, &attrs, reader.resolver(), &mut out.content_parts, acc.limits.facts, &mut out.content_part_capped);
                     on_open(&mut state, &id, &attrs, reader.resolver(), role, part, acc);
+                } else {
+                    // Suppressed content is skipped by every other check;
+                    // the paraId family is branch-aware and still applies.
+                    check_para_ids(&mut state, &id, &attrs, reader.resolver(), role, part, acc);
                 }
-                let frame = Frame { alt: is_alt, suppressed: was_suppressed, ..frame_for(&id) };
+                let frame = Frame { alt: is_alt, suppressed: was_suppressed, alt_branch_prev: branch_prev, ..frame_for(&id) };
                 state.frames.push(frame);
             }
             Ok(Event::Empty(e)) => {
@@ -591,23 +615,35 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 scan_attr_refs(part, &attrs, acc);
                 let was_suppressed = state.alt_depth > 0;
                 let is_alt = enter_alt(&mut state, &id, part, acc);
+                let branch_prev = assign_alt_branch(&mut state, &id);
                 let decls = declarations(&attrs);
                 check_prefixes(&state.declared, &attrs, reader.resolver(), &decls, &mut out);
                 if !was_suppressed {
                     collect_refs(&id, &attrs, reader.resolver(), &mut out.refs, acc.limits.facts, &mut state.refs_capped);
                     collect_content_part(&id, &attrs, reader.resolver(), &mut out.content_parts, acc.limits.facts, &mut out.content_part_capped);
                     on_empty(&mut state, &id, &attrs, reader.resolver(), role, part, acc);
+                } else {
+                    check_para_ids(&mut state, &id, &attrs, reader.resolver(), role, part, acc);
                 }
                 if is_alt {
                     state.alt_depth = state.alt_depth.saturating_sub(1);
+                    state.alt_stack.pop();
                 }
+                // An empty branch element opens and closes at once:
+                // restore the block's previous branch value.
+                restore_branch(&mut state, branch_prev);
             }
             Ok(Event::End(_)) => {
                 state.declared.pop();
                 if let Some(f) = state.frames.pop() {
                     if f.alt {
                         state.alt_depth = state.alt_depth.saturating_sub(1);
+                        state.alt_stack.pop();
                     }
+                    // A closing branch element restores the block's
+                    // previous branch value (branch membership is
+                    // scoped to the branch element's subtree).
+                    restore_branch(&mut state, f.alt_branch_prev);
                     if !f.suppressed {
                         if f.is_del {
                             state.del_depth -= 1;
@@ -705,6 +741,8 @@ fn enter_alt(state: &mut State, id: &ElemId, part: &str, acc: &mut Acc) -> bool 
     let is_alt = id.ns.as_deref() == Some(NS_MC) && id.local == "AlternateContent";
     if is_alt {
         state.alt_depth += 1;
+        state.alt_seq += 1;
+        state.alt_stack.push(AltCtx { seq: state.alt_seq, branch: 0 });
         if !state.alt_noted {
             acc.note(format!("{part} contains mc:AlternateContent; its contents were skipped"));
             state.alt_noted = true;
@@ -760,6 +798,7 @@ fn frame_for(id: &ElemId) -> Frame {
         is_del: w && local == "del",
         is_wrapper: w && matches!(local, "ins" | "del" | "moveFrom" | "moveTo"),
         alt: false,
+        alt_branch_prev: None,
         suppressed: false,
     }
 }
@@ -1021,11 +1060,216 @@ fn check_header_source(state: &State, id: &ElemId, role: PartRole, part: &str, a
     }
 }
 
+/// Parse an ST_LongHexNumber value lexically: the (trimmed) text must
+/// be non-empty and all hexadecimal digits before it is read as a
+/// number. (`u32::from_str_radix` alone would also accept a leading
+/// `+`, which is not a hexadecimal digit.)
+fn parse_hex_value(raw: &str) -> Option<u32> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || !trimmed.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    u32::from_str_radix(trimmed, 16).ok()
+}
+
+/// The canonical identity of a `w14:paraId` / `w14:textId` value: the
+/// parsed hex number without leading zeros, or the trimmed lowercased
+/// text when the value is not a hex number at all.
+fn hex_value_key(raw: &str) -> String {
+    match parse_hex_value(raw) {
+        Some(v) => format!("{v:x}"),
+        None => raw.trim().to_ascii_lowercase(),
+    }
+}
+
+/// Whether an ST_LongHexNumber value is outside the range MS-DOCX
+/// requires for paraId and textId: greater than 0 and less than
+/// 0x80000000. A value that is not a hex number is out of range by
+/// construction.
+fn hex_value_out_of_range(raw: &str) -> bool {
+    match parse_hex_value(raw) {
+        Some(v) => v == 0 || v >= 0x8000_0000,
+        None => true,
+    }
+}
+
+/// The AlternateContent ancestry of one `w14:paraId` occurrence: one
+/// `(block, branch instance)` pair per enclosing `mc:AlternateContent`
+/// block, outermost first. Branch instance 0 means the occurrence is
+/// inside the block but inside none of its branch elements.
+type ParaPath = Vec<(u32, u32)>;
+
+/// Whether two occurrences can coexist in the content a reader
+/// selects. They cannot — and the repeat is excused — exactly when
+/// some block enclosing both holds them in two different branch
+/// instances (two Choices, or a Choice and the Fallback): only one
+/// branch of a block is ever selected. A branch instance of 0 (the
+/// occurrence sits directly under the block) excuses nothing.
+fn paths_conflict(a: &ParaPath, b: &ParaPath) -> bool {
+    for (seq_a, branch_a) in a {
+        for (seq_b, branch_b) in b {
+            if seq_a == seq_b && *branch_a != 0 && *branch_b != 0 && branch_a != branch_b {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// How many mutually excused occurrences of one value are retained.
+/// Beyond this the collection cannot prove uniqueness, and the scan
+/// reports the part capped (INCOMPLETE) instead of guessing.
+const PARA_OCC_RETAINED: usize = 4;
+
+/// The occurrences of one paraId value in a part, in bounded form: a
+/// set of representative occurrence paths that are pairwise mutually
+/// excused, plus whether a conflicting pair has been seen.
+#[derive(Default)]
+struct ParaOcc {
+    /// Retained representative paths, pairwise non-conflicting.
+    reps: Vec<ParaPath>,
+    /// A pair of occurrences that can coexist was seen: a duplicate.
+    conflict: bool,
+    /// More mutually excused occurrences arrived than are retained;
+    /// uniqueness is unprovable for this value.
+    overflow: bool,
+}
+
+impl ParaOcc {
+    /// Record one occurrence at the given ancestry path.
+    fn record(&mut self, path: ParaPath) {
+        if self.conflict {
+            return;
+        }
+        if self.reps.iter().any(|r| paths_conflict(r, &path)) {
+            self.conflict = true;
+            return;
+        }
+        if self.reps.len() < PARA_OCC_RETAINED {
+            self.reps.push(path);
+        } else {
+            self.overflow = true;
+        }
+    }
+
+    /// Whether a coexisting repeat of this value was seen.
+    fn is_duplicate(&self) -> bool {
+        self.conflict
+    }
+}
+
+/// One enclosing `mc:AlternateContent` block on the scan stack.
+struct AltCtx {
+    /// This block's per-part sequence number.
+    seq: u32,
+    /// The branch instance the scan is currently inside: 0 = inside
+    /// no branch element, otherwise the instance number assigned to
+    /// the enclosing `mc:Choice` / `mc:Fallback` element.
+    branch: u32,
+}
+
+/// The `w14:paraId` / `w14:textId` family (MS-DOCX §2.6.2.3 and
+/// §2.6.2.4): PARAID-VALUE findings are emitted on the spot;
+/// PARAID-DUP occurrences are collected for the prefix report.
+/// Story parts only — paragraphs live in stories. The function runs
+/// for content inside `mc:AlternateContent` too (the event loop
+/// calls it for suppressed elements): value checks apply everywhere,
+/// and duplicate collection tracks each occurrence's full branch
+/// ancestry — a repeat is excused exactly when the two occurrences
+/// sit in different branch instances of some block enclosing both.
+fn check_para_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole, part: &str, acc: &mut Acc) {
+    if !role.is_story {
+        return;
+    }
+    let para = attr_ns(attrs, res, NS_W14, b"paraId");
+    let text = attr_ns(attrs, res, NS_W14, b"textId");
+    if let Some(raw) = &para {
+        if hex_value_out_of_range(raw) {
+            acc.add(
+                "PARAID-VALUE",
+                Some(part.to_string()),
+                format!(
+                    "w14:paraId value {raw} on w:{} in {part} is out of range; MS-DOCX requires values greater than 0 and less than 0x80000000",
+                    id.local
+                ),
+            );
+        }
+        let key = hex_value_key(raw);
+        if state.para_ids.len() >= state.fact_cap && !state.para_ids.contains_key(&key) {
+            state.fact_capped = true;
+        } else {
+            let path: ParaPath = state.alt_stack.iter().map(|ctx| (ctx.seq, ctx.branch)).collect();
+            let occ = state.para_ids.entry(key).or_default();
+            occ.record(path);
+            if occ.overflow {
+                state.fact_capped = true;
+            }
+        }
+    }
+    if let Some(raw) = &text {
+        if hex_value_out_of_range(raw) {
+            acc.add(
+                "PARAID-VALUE",
+                Some(part.to_string()),
+                format!(
+                    "w14:textId value {raw} on w:{} in {part} is out of range; MS-DOCX requires values greater than 0 and less than 0x80000000",
+                    id.local
+                ),
+            );
+        }
+        if para.is_none() {
+            acc.add(
+                "PARAID-VALUE",
+                Some(part.to_string()),
+                format!(
+                    "w:{} in {part} carries w14:textId without w14:paraId; MS-DOCX requires any element with a textId to also have a paraId",
+                    id.local
+                ),
+            );
+        }
+    }
+}
+
+/// Assign a branch instance for an `mc:Choice` / `mc:Fallback` opening.
+///
+/// Only a DIRECT child of an `mc:AlternateContent` element assigns:
+/// the element frame below the new one must be the block itself. A
+/// branch element nested deeper (inside a paragraph, say) is ordinary
+/// content of whatever branch encloses it and assigns nothing. Each
+/// assignment numbers a fresh instance — two Choices of one block
+/// are different alternatives — and returns the block's previous
+/// branch value, which the caller restores when the branch element
+/// closes (its frame carries it; an empty element restores at once).
+fn assign_alt_branch(state: &mut State, id: &ElemId) -> Option<u32> {
+    if id.ns.as_deref() != Some(NS_MC) || (id.local != "Choice" && id.local != "Fallback") {
+        return None;
+    }
+    if !state.frames.last().is_some_and(|f| f.alt) {
+        return None;
+    }
+    let ctx = state.alt_stack.last_mut()?;
+    let prev = ctx.branch;
+    state.alt_branch_seq += 1;
+    ctx.branch = state.alt_branch_seq;
+    Some(prev)
+}
+
+/// Restore the innermost block's branch value saved by
+/// `assign_alt_branch` when its branch element closes.
+fn restore_branch(state: &mut State, prev: Option<u32>) {
+    if let Some(prev) = prev
+        && let Some(ctx) = state.alt_stack.last_mut()
+    {
+        ctx.branch = prev;
+    }
+}
+
 fn on_open(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole, part: &str, acc: &mut Acc) {
     mark_block_content(state, id);
     check_math_placement(state, id, role, part, acc);
     check_protection(id, attrs, res, role, part, acc);
     check_header_source(state, id, role, part, acc);
+    check_para_ids(state, id, attrs, res, role, part, acc);
     record_compat_flag(state, id, attrs, res, role);
     record_note_pr(state, id, attrs, res, role);
     if id.w() && id.local == "del" {
@@ -1041,6 +1285,7 @@ fn on_empty(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &Namespace
     check_math_placement(state, id, role, part, acc);
     check_protection(id, attrs, res, role, part, acc);
     check_header_source(state, id, role, part, acc);
+    check_para_ids(state, id, attrs, res, role, part, acc);
     record_compat_flag(state, id, attrs, res, role);
     record_note_pr(state, id, attrs, res, role);
     if id.w() && id.local == "tc" && role.is_main {
@@ -1402,8 +1647,20 @@ fn report_bookmarks(acc: &mut Acc, part: &str, starts: &BTreeSet<String>, ends: 
 ///   the prefix already proves the end is unbalanced whatever follows.
 /// - `STRUCT-MOVE-UNPAIRED` for a duplicate move range-start id — once an id has appeared twice in
 ///   the prefix, the duplicate exists regardless of the rest.
+/// - `PARAID-DUP` for a repeated `w14:paraId` value in the part — same reasoning.
 fn finish_prefix(state: &State, part: &str, acc: &mut Acc) {
     report_duplicate_move_ids(acc, part, &state.move_start_ids);
+    for (key, occ) in &state.para_ids {
+        if occ.is_duplicate() {
+            acc.add(
+                "PARAID-DUP",
+                Some(part.to_string()),
+                format!(
+                    "w14:paraId value {key} appears on more than one element in {part}; MS-DOCX requires a paraId to be unique within the document part"
+                ),
+            );
+        }
+    }
     if state.fld_extra_end > 0 {
         acc.add("FLD-UNBALANCED", Some(part.to_string()), format!("{part} has {} w:fldChar end(s) with no open begin", state.fld_extra_end));
     }

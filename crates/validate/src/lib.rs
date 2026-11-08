@@ -248,6 +248,31 @@ pub(crate) const BOOKMARK_UNPAIRED: RuleSpec = RuleSpec { id: "BOOKMARK-UNPAIRED
 /// footer, text box, footnote, or endnote.
 pub(crate) const COMMENT_RANGE_UNPAIRED: RuleSpec =
     RuleSpec { id: "COMMENT-RANGE-UNPAIRED", severity: Severity::Warning, evidence: Evidence::MsDocumented };
+/// `PARAID-DUP`: the same `w14:paraId` value on two elements in one
+/// document part. MS-DOCX §2.6.2.3: a paraId "is unique within the
+/// document part … with the exception that it need not be unique
+/// across the choices or fallback of an Alternate Content block".
+/// The collection is branch-aware: a repeat is excused exactly when
+/// the two occurrences sit in different branch instances of some
+/// block enclosing both (two Choices of one block, a Choice and the
+/// Fallback, or different branches of an outer block around nested
+/// content) — only one branch of a block is ever selected, so such
+/// occurrences cannot coexist. Every other repeat is a duplicate.
+/// Values are compared as numbers (leading zeros and case are not
+/// distinct identities). MS-DOCX states no open-time consequence;
+/// the stake is paragraph identity for anything keyed by paraId.
+/// Capped collection goes INCOMPLETE rather than silently passing,
+/// including when one value has more mutually excused occurrences
+/// than the bounded collection retains.
+pub(crate) const PARAID_DUP: RuleSpec = RuleSpec { id: "PARAID-DUP", severity: Severity::Warning, evidence: Evidence::MsDocumented };
+/// `PARAID-VALUE`: a `w14:paraId` or `w14:textId` value outside the
+/// range MS-DOCX requires (greater than 0 and less than 0x80000000,
+/// §2.6.2.3 and §2.6.2.4), a value that is not a hex number at all, or
+/// a `w14:textId` on an element with no `w14:paraId` (§2.6.2.4: "Any
+/// element having this attribute MUST also have the paraId
+/// attribute"). MS-DOCX states no reciprocal requirement, so a
+/// paraId without a textId is deliberately NOT flagged.
+pub(crate) const PARAID_VALUE: RuleSpec = RuleSpec { id: "PARAID-VALUE", severity: Severity::Warning, evidence: Evidence::MsDocumented };
 /// `ID-REVISION-DUP`: duplicate revision ids. Observed (web): tolerated, Warning.
 pub(crate) const ID_REVISION_DUP: RuleSpec = RuleSpec { id: "ID-REVISION-DUP", severity: Severity::Warning, evidence: Evidence::Observed };
 /// `NOTE-DUP`: duplicate footnote or endnote ids within one note part. ECMA-376 §17.11.10.
@@ -406,6 +431,8 @@ pub(crate) const RULES: &[RuleSpec] = &[
     ID_BOOKMARK_DUP,
     BOOKMARK_UNPAIRED,
     COMMENT_RANGE_UNPAIRED,
+    PARAID_DUP,
+    PARAID_VALUE,
     ID_REVISION_DUP,
     NOTE_DUP,
     REF_NOTE,
@@ -1464,6 +1491,9 @@ fn check_story(pkg: &Package, facts: &scan::StoryFacts, compat: Compat, acc: &mu
     acc.ran("BOOKMARK-UNPAIRED");
     // COMMENT-RANGE-UNPAIRED likewise.
     acc.ran("COMMENT-RANGE-UNPAIRED");
+    // PARAID-DUP and PARAID-VALUE findings are produced by the streaming scan; registered here.
+    acc.ran("PARAID-DUP");
+    acc.ran("PARAID-VALUE");
     acc.ran("ID-REVISION-DUP");
     report_dups(acc, "ID-REVISION-DUP", &facts.revisions, "revision id");
     acc.ran("NOTE-DUP");
@@ -2753,6 +2783,57 @@ mod budget_tests {
         // Regression control: fully scanned, the unpaired ranges are reported.
         let full = validate_bytes(&zip);
         assert!(full.findings.iter().any(|f| f.rule == "COMMENT-RANGE-UNPAIRED"), "findings: {:?}", full.findings);
+    }
+
+    #[test]
+    /// The paraId collection rides the fact budget: more distinct values
+    /// than the cap makes the verdict INCOMPLETE, never a silent pass —
+    /// a duplicate hiding beyond the cap must not be reported as absent.
+    fn paraid_collection_beyond_the_fact_cap_is_incomplete() {
+        let mut body = String::new();
+        for i in 1..=6u32 {
+            body.push_str(&format!(r#"<w:p xmlns:w14="{NS_W14}" w14:paraId="{i:08X}" w14:textId="11111111"/>"#));
+        }
+        let doc = format!(r#"<?xml version="1.0"?><w:document xmlns:w="{NS_W}"><w:body>{body}</w:body></w:document>"#).into_bytes();
+        let zip = tiny_zip(&[
+            ("[Content_Types].xml", content_types()),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", doc),
+            ("word/_rels/document.xml.rels", doc_rels()),
+        ]);
+        let capped = validate_bytes_limited(&zip, Limits { facts: 3, ..Limits::default() });
+        assert_eq!(capped.verdict, Verdict::Incomplete, "findings: {:?}", capped.findings);
+        // Control: the same document under normal limits is a clean PASS.
+        let full = validate_bytes(&zip);
+        assert_eq!(full.verdict, Verdict::Pass, "findings: {:?}", full.findings);
+    }
+
+    #[test]
+    /// At the cap boundary the collection stays honest both ways: a
+    /// duplicate among the values that WERE collected is still
+    /// reported, and a duplicate among dropped values is not invented
+    /// (the verdict is INCOMPLETE instead).
+    fn paraid_cap_boundary_reports_kept_dups_and_invents_none() {
+        let doc_with = |ids: &[u32]| {
+            let mut body = String::new();
+            for i in ids {
+                body.push_str(&format!(r#"<w:p xmlns:w14="{NS_W14}" w14:paraId="{i:08X}" w14:textId="11111111"/>"#));
+            }
+            let doc = format!(r#"<?xml version="1.0"?><w:document xmlns:w="{NS_W}"><w:body>{body}</w:body></w:document>"#).into_bytes();
+            tiny_zip(&[
+                ("[Content_Types].xml", content_types()),
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", doc),
+                ("word/_rels/document.xml.rels", doc_rels()),
+            ])
+        };
+        // 1,2,3,1 at cap 3: the repeat value was collected — reported.
+        let kept = validate_bytes_limited(&doc_with(&[1, 2, 3, 1]), Limits { facts: 3, ..Limits::default() });
+        assert!(kept.findings.iter().any(|f| f.rule == "PARAID-DUP"), "findings: {:?}", kept.findings);
+        // 1,2,3,4,4 at cap 3: value 4 was dropped — no invented dup.
+        let dropped = validate_bytes_limited(&doc_with(&[1, 2, 3, 4, 4]), Limits { facts: 3, ..Limits::default() });
+        assert!(!dropped.findings.iter().any(|f| f.rule == "PARAID-DUP"), "findings: {:?}", dropped.findings);
+        assert_eq!(dropped.verdict, Verdict::Incomplete, "findings: {:?}", dropped.findings);
     }
 
     #[test]
