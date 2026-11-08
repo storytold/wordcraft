@@ -16,7 +16,12 @@ cargo run -p wordcraft-collab-server
 - `COLLAB_JWT_SECRET` — HS256 secret for local development.
 - `COLLAB_JWT_PEM` — ES256 **public** key for production (ADR-0008); set one of the two.
 - `COLLAB_DATA_DIR` — snapshots (`model.json`, `source.docx`, `meta`, one previous pair).
-- `GET /healthz`, `GET /metrics`, WebSocket at `/ws`. No token is logged.
+- `COLLAB_LEASE_TTL_SECS` — how long a cabinet session may be silent before another
+  session may take the lease (default 120).
+- `GET /healthz`, `GET /metrics`, WebSocket at `/ws`. No token is logged. `exp` is
+  checked on every frame, not only at the handshake; a running session therefore
+  gets `tokenExpired` and must reconnect with a fresh token. SIGTERM/SIGINT writes
+  every open room before exit.
 
 ## 2. Mint a session token
 

@@ -57,6 +57,9 @@ pub struct Config {
     pub jwt_pem: Option<String>,
     /// Where snapshots are written (ADR-0005, ADR-0011).
     pub data_dir: PathBuf,
+    /// How long a cabinet session may be silent before another session may take
+    /// the lease (ADR-0008). `0` for tests.
+    pub lease_ttl_secs: u64,
 }
 
 impl Config {
@@ -68,7 +71,8 @@ impl Config {
             return Err("set COLLAB_JWT_SECRET (HS256, local) or COLLAB_JWT_PEM (ES256 public key)".into());
         }
         let data_dir = std::env::var("COLLAB_DATA_DIR").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("collab-data"));
-        Ok(Config { bind, jwt_secret, jwt_pem, data_dir })
+        let lease_ttl_secs = std::env::var("COLLAB_LEASE_TTL_SECS").ok().and_then(|value| value.parse().ok()).unwrap_or(120);
+        Ok(Config { bind, jwt_secret, jwt_pem, data_dir, lease_ttl_secs })
     }
 }
 
@@ -88,6 +92,7 @@ pub struct Claims {
 /// One connected client.
 struct Peer {
     role: Role,
+    sid: String,
     out: mpsc::UnboundedSender<ServerMsg>,
 }
 
@@ -96,8 +101,11 @@ struct RoomState {
     room: Room<SessionModel>,
     peers: HashMap<String, Peer>,
     /// Cabinet session that holds the lease; a different session may join only
-    /// as `owner` (ADR-0008).
+    /// as `owner` or after the lease went silent (ADR-0008).
     session: String,
+    lease_seen: std::time::Instant,
+    /// Lease TTL for this room.
+    lease_ttl_secs: u64,
     /// Fixed-window operation counter, so one client cannot flood a room.
     window: std::time::Instant,
     ops_in_window: u32,
@@ -183,6 +191,8 @@ impl AppState {
                         room: Room::restore(SessionModel::from_document(document), snapshot.version, snapshot.epoch),
                         peers: HashMap::new(),
                         session: String::new(),
+                        lease_seen: std::time::Instant::now(),
+                        lease_ttl_secs: self.cfg.lease_ttl_secs,
                         window: std::time::Instant::now(),
                         ops_in_window: 0,
                     })
@@ -191,6 +201,8 @@ impl AppState {
                     room: Room::new(SessionModel::from_document(wordcraft_doc::Document::new())),
                     peers: HashMap::new(),
                     session: String::new(),
+                    lease_seen: std::time::Instant::now(),
+                    lease_ttl_secs: self.cfg.lease_ttl_secs,
                     window: std::time::Instant::now(),
                     ops_in_window: 0,
                 })))
@@ -349,14 +361,20 @@ fn register(
     }
     if guard.session.is_empty() {
         guard.session = sid.to_string();
-    } else if guard.session != sid && role != Role::Owner {
-        let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Lease, "another session holds this document");
-        return Err(reject);
+        guard.lease_seen = std::time::Instant::now();
     } else if guard.session != sid {
+        let lease_alive = guard.peers.values().any(|peer| peer.sid == guard.session);
+        let stale = guard.lease_seen.elapsed().as_secs() >= guard.lease_ttl_secs;
+        if role != Role::Owner && (lease_alive || !stale) {
+            let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Lease, "another session holds this document");
+            return Err(reject);
+        }
         guard.session = sid.to_string();
+        guard.lease_seen = std::time::Instant::now();
     }
+    guard.lease_seen = std::time::Instant::now();
     let plan = guard.room.join(wants_version, false);
-    guard.peers.insert(client_id.to_string(), Peer { role, out: tx.clone() });
+    guard.peers.insert(client_id.to_string(), Peer { role, sid: sid.to_string(), out: tx.clone() });
     let peers = guard
         .peers
         .iter()
@@ -410,6 +428,16 @@ async fn process_frame(
         Ok(msg) => msg,
         Err(reject) => return send(sink, &ServerMsg::Rejected { reject }).await.is_ok(),
     };
+    {
+        let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
+        if guard.session == claims.sid {
+            guard.lease_seen = std::time::Instant::now();
+        }
+    }
+    if now_secs() >= claims.exp {
+        let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::TokenExpired, "the session token expired");
+        return send(sink, &ServerMsg::Rejected { reject }).await.is_ok();
+    }
     match msg {
         ClientMsg::Op { op } => handle_op(state, room, sink, claims, role, client_id, op).await,
         ClientMsg::Presence { state: presence } => {
@@ -531,6 +559,10 @@ async fn handle_commit(
             send(sink, &ServerMsg::Rejected { reject }).await.is_ok()
         }
     }
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|elapsed| elapsed.as_secs()).unwrap_or(0)
 }
 
 fn parse_auth(cfg: &Config, text: &str) -> Result<(String, Claims, Option<Version>), Reject> {

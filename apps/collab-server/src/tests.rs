@@ -11,6 +11,10 @@ use wordcraft_collab::wire::{ClientMsg, HistoryAction, Op, OpId, OpKind, ServerM
 use crate::{AppState, Claims, Config, app};
 
 fn token(cfg: &Config, sub: &str, role: &str, app: &str, ttl: i64) -> String {
+    token_sid(cfg, sub, role, app, ttl, "session-1")
+}
+
+fn token_sid(cfg: &Config, sub: &str, role: &str, app: &str, ttl: i64, sid: &str) -> String {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|elapsed| elapsed.as_secs()).unwrap_or(0);
     let claims = Claims {
         sub: sub.into(),
@@ -18,7 +22,7 @@ fn token(cfg: &Config, sub: &str, role: &str, app: &str, ttl: i64) -> String {
         doc: "doc-1".into(),
         app: app.into(),
         role: role.into(),
-        sid: "session-1".into(),
+        sid: sid.into(),
         iat: now,
         exp: if ttl >= 0 { now + ttl as u64 } else { now.saturating_sub(ttl.unsigned_abs()) },
     };
@@ -28,7 +32,7 @@ fn token(cfg: &Config, sub: &str, role: &str, app: &str, ttl: i64) -> String {
 
 fn dev_config() -> Config {
     let dir = std::env::temp_dir().join(format!("wordcraft-collab-test-{}", std::process::id()));
-    Config { bind: "127.0.0.1:0".into(), jwt_secret: Some("test-secret".into()), jwt_pem: None, data_dir: dir }
+    Config { bind: "127.0.0.1:0".into(), jwt_secret: Some("test-secret".into()), jwt_pem: None, data_dir: dir, lease_ttl_secs: 120 }
 }
 
 #[test]
@@ -78,6 +82,19 @@ async fn connect(
     client: &str,
 ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
     connect_from(url, cfg, role, client, None).await
+}
+
+async fn connect_ttl(
+    url: &str,
+    cfg: &Config,
+    role: &str,
+    client: &str,
+    ttl: i64,
+) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.expect("connect");
+    let auth = ClientMsg::Auth { token: token(cfg, client, role, "wordcraft", ttl), client_id: client.into(), last_version: None };
+    ws.send(Message::Text(serde_json::to_string(&auth).expect("auth json").into())).await.expect("send auth");
+    ws
 }
 
 async fn connect_from(
@@ -708,4 +725,35 @@ async fn comments_and_tracked_changes_keep_the_jwt_actor() {
         doc.revisions
     );
     let _ = std::fs::remove_dir_all(&cfg.data_dir);
+}
+
+#[tokio::test]
+async fn an_expired_session_is_refused_on_the_next_operation() {
+    let (url, cfg) = spawn_server().await;
+    let mut editor = connect_ttl(&url, &cfg, "editor", "alice", 1).await;
+    let _ = next_msg(&mut editor).await;
+    let node = node_of(&mut editor).await;
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    editor
+        .send(Message::Text(serde_json::to_string(&ClientMsg::Op { op: insert("alice", 1, 0, node, 0, "late") }).expect("json").into()))
+        .await
+        .expect("op");
+    match next_msg(&mut editor).await {
+        ServerMsg::Rejected { reject } => assert_eq!(reject.code, wordcraft_collab::wire::RejectCode::TokenExpired),
+        other => panic!("expected tokenExpired, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_silent_session_loses_the_lease_after_its_ttl() {
+    let mut cfg = dev_config();
+    cfg.lease_ttl_secs = 0;
+    let state = AppState::new(cfg);
+    let room = state.room_for("doc-lease-ttl");
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    assert!(super::register(&room, "alice", "sid-1", wordcraft_collab::room::Role::Editor, &tx, None).is_ok());
+    // The only peer of sid-1 disconnected, and the TTL is zero.
+    room.lock().expect("room lock").peers.remove("alice");
+    assert!(super::register(&room, "bob", "sid-2", wordcraft_collab::room::Role::Editor, &tx, None).is_ok(), "a stale lease is taken over");
+    assert_eq!(room.lock().expect("room lock").session, "sid-2");
 }
