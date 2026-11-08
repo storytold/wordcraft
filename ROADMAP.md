@@ -914,6 +914,8 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-03 | trivial | Progress log: a picture in a paragraph whose hidden mark closes a section keeps its room (#5288) |
 | 2026-11-03 | trivial | Progress log: Replace and Remove Table of Contents with Word's title above a section break (#4041) |
 | 2026-11-03 | trivial | Progress log: language-packs-2 published and pinned, 75 Language packs |
+| 2026-11-03 | trivial | PR #4703 — Footer table fidelity (2026-11-03): DOCX saves retain a table-only footer ending without adding an empty paragraph. If every table has no writable rows, the footer still receives its fallback paragraph; skipped tables beside real content add no blank spacing. The Windows disappearance in #3114 and native Word/Windows GUI acceptance remain unqualified. |
+| 2026-11-03 | trivial | Preserve table-only footer endings and the empty-written-footer fallback; synthetic fidelity controls; #3114 and native Windows acceptance remain unqualified (#4703). |
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
