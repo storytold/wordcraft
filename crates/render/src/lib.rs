@@ -181,9 +181,12 @@ pub const SEPIA_PAPER: Rgb = Rgb(0xE2, 0xD9, 0xD0);
 
 impl RenderOptions {
     /// The on-screen color of the paper under `doc`'s pages: [`RenderOptions::read_paper`],
-    /// else the document's page color, else [`RenderOptions::paper`].
+    /// else the document's page color, else [`RenderOptions::paper`]. A gradient or pattern page
+    /// fill stores its first stop or back colour in `page_color` for older readers; that is the
+    /// fill, not the paper, so a translucent fill composites over the paper instead.
     pub fn paper_of(&self, doc: &Document) -> Rgb {
-        self.ink(self.read_paper.or(doc.settings.page_color).unwrap_or(self.paper))
+        let base = if doc.settings.page_gradient.is_some() || doc.settings.page_pattern.is_some() { None } else { doc.settings.page_color };
+        self.ink(self.read_paper.or(base).unwrap_or(self.paper))
     }
 
     /// The on-screen color of paper with no page color: [`RenderOptions::read_paper`], else

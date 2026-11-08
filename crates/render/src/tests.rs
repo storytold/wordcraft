@@ -380,6 +380,58 @@ fn page_pattern_is_painted_as_its_tile() {
     assert_eq!(px(10, 10), [20, 40, 60], "the tile repeats");
 }
 
+/// A translucent page fill composites over the page's paper, not over `page_color` — the
+/// fallback older readers use, which `design.pageFill` writes as a gradient's first stop or a
+/// pattern's back colour. Blending over that made a 50% gradient's left end solid, and left a
+/// pattern at full transparency showing its back colour instead of the paper.
+#[test]
+fn translucent_page_fills_composite_over_the_paper() {
+    use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind};
+    use wordcraft_doc::wordart::GradStop;
+    let paper = Rgb(0x20, 0xC0, 0x40);
+    let opts = RenderOptions { paper, ..Default::default() };
+    let at = |img: &Rendered, x: u32, y: u32| {
+        let i = ((y * img.width + x) * 4) as usize;
+        [img.pixels[i], img.pixels[i + 1], img.pixels[i + 2]]
+    };
+    let mut d = Document::new();
+    d.settings.page_color = Some(Rgb(255, 0, 0));
+    d.settings.page_gradient = Some(Gradient {
+        stops: vec![
+            GradStop { pos: 0.0, color: Rgb(255, 0, 0), transparency: 50.0 },
+            GradStop { pos: 100.0, color: Rgb(0, 0, 255), transparency: 50.0 },
+        ],
+        kind: GradientKind::Linear { angle: 0.0, scaled: false },
+        tile: None,
+        rot_with_shape: false,
+        flip: GradientFlip::None,
+    });
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let img = render_page(&d, &l.pages[0], 1.0, &opts);
+    let left = at(&img, 2, 300);
+    let want = [143, 96, 32];
+    assert!(left.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 8), "the left end is half red over the paper {want:?}: {left:?}");
+    // A pattern at full transparency is the paper alone; its back colour is not the paper.
+    d.settings.page_gradient = None;
+    d.settings.page_pattern =
+        Some(wordcraft_doc::PagePattern { preset: "lgCheck".into(), fore: Rgb(0, 0, 0), back: Rgb(255, 255, 255), transparency: 100.0 });
+    d.settings.page_color = Some(Rgb(255, 255, 255));
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let img = render_page(&d, &l.pages[0], 1.0, &opts);
+    assert_eq!(at(&img, 2, 2), [paper.0, paper.1, paper.2], "an invisible pattern leaves the paper");
+    assert_eq!(at(&img, 6, 2), [paper.0, paper.1, paper.2], "over the whole tile");
+    // At 50% the tile's ink and back colour composite over the paper too.
+    if let Some(p) = d.settings.page_pattern.as_mut() {
+        p.transparency = 50.0;
+    }
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let img = render_page(&d, &l.pages[0], 1.0, &opts);
+    let ink = at(&img, 2, 2);
+    assert!(ink.iter().zip([16, 96, 32]).all(|(a, b)| a.abs_diff(b) <= 8), "half black ink over the paper: {ink:?}");
+    let back = at(&img, 6, 2);
+    assert!(back.iter().zip([143, 223, 159]).all(|(a, b)| a.abs_diff(b) <= 8), "half the back colour over the paper: {back:?}");
+}
+
 /// A dark page inks a pattern's and a gradient's colours as it does every other colour, so a light
 /// fill doesn't stay light under the page's white text (#1252).
 #[test]
