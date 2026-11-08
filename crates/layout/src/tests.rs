@@ -13738,10 +13738,6 @@ fn lowered_pictures_and_check_boxes_take_words_line_heights() {
     }
 }
 
-/// A line of only a picture (and spaces) ends at the picture's bottom; with text beside the
-/// picture the text's descent goes below it too (Word, measured with Aptos, Arial and Times New
-/// Roman at 10 and 20 pt: a 30 pt picture alone or after spaces takes 30 pt at single spacing,
-/// after a word 30 pt plus the descent).
 #[test]
 fn an_exact_line_puts_its_baseline_four_fifths_down() {
     use wordcraft_doc::props::LineSpacing;
@@ -13773,8 +13769,23 @@ fn an_exact_line_puts_its_baseline_four_fifths_down() {
     // 50pt picture and text in a 30pt exact line, baseline 24pt down).
     let got = offset(11.0, 30.0, Some(50.0));
     assert!((got - 24.0).abs() < 0.01, "{got}");
+    // A line of only a picture keeps it standing on the font's descent above the line's bottom.
+    let mut d = Document::from_text("");
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.props.line_spacing = Some(LineSpacing::Exactly(30.0));
+        p.insert_object(0, picture(60.0, 10.0, Default::default()), &Default::default()).unwrap();
+    }
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    let desc = para.styles[0].descent;
+    let got = para.lines[0].baseline - para.lines[0].top;
+    assert!(desc > 1.0 && (got - (30.0 - desc)).abs() < 0.01, "a picture alone: baseline {got}, descent {desc}");
 }
 
+/// A line of only a picture (and spaces) ends at the picture's bottom; with text beside the
+/// picture the text's descent goes below it too (Word, measured with Aptos, Arial and Times New
+/// Roman at 10 and 20 pt: a 30 pt picture alone or after spaces takes 30 pt at single spacing,
+/// after a word 30 pt plus the descent).
 #[test]
 fn a_line_of_only_pictures_takes_no_descent() {
     use wordcraft_doc::props::LineSpacing;

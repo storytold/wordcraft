@@ -534,6 +534,10 @@ impl<'e> Breaker<'e> {
             // picture beside the text is cut off at the line's top (Word for Mac: a 50pt picture
             // and text in a 30pt exact line, baseline 24pt down).
             self.top + baseline_offset(rp.line_spacing, asc, height, below)
+        } else if matches!(rp.line_spacing, LineSpacing::Exactly(_)) {
+            // An exact line of only pictures keeps them standing on the font's descent above the
+            // line's bottom (not measured against Word).
+            self.top + height - below
         } else {
             self.top + baseline_offset(rp.line_spacing, asc, height, below).max(obj_asc.min(height - below))
         };
