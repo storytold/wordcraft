@@ -433,12 +433,13 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     let new_borders = ctx.doc.settings.compat_mode >= 15;
     let target = match (t.props.width_pct, t.props.width) {
         // Word keeps a percentage past 100%; the cap only bounds hostile input. From Word 2013
-        // (compatibility mode 15) a percentage reaches the outer edges of the table's outer
-        // borders, so its columns give up the halves of those borders standing outside the
-        // edges; a width in points is the columns' own (measured in Word for Windows).
+        // (compatibility mode 15) the columns are that share of the room left after the halves
+        // of the outer borders standing outside the edges: 50% of 451.3pt with 6pt lines is
+        // 222.65pt. A width in points is the columns' own (measured in Word for Windows, 25% to
+        // 120%, equal and unequal lines).
         (Some(p), _) if p > 0.0 => {
-            let w = pct_base * (p / 100.0).min(MAX_WIDTH_SHARE);
-            Some(if new_borders { (w - start_half - end_half).max(0.0) } else { w })
+            let room = if new_borders { (pct_base - start_half - end_half).max(0.0) } else { pct_base };
+            Some(room * (p / 100.0).min(MAX_WIDTH_SHARE))
         }
         (_, Some(w)) if w > 0.0 => Some(w),
         _ => None,
@@ -504,6 +505,9 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     // whatever its borders (measured too).
     let end_offset = if new_borders { end_half } else { 0.0 };
     let x = match (t.props.align, rtl) {
+        // Word 2013+ centres a left-to-right table's outer edges, its borders' outer halves included
+        // (measured in Word for Windows, a percentage or a width in points, unequal lines).
+        (Some(Align::Center), false) if new_borders => (avail - total + start_half - end_half) / 2.0,
         (Some(Align::Center), _) => (avail - total) / 2.0,
         // End alignment: the right margin, or the left one in a right-to-left table.
         (Some(Align::Right), false) => avail - total - end_offset,

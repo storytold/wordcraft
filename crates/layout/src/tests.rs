@@ -7253,6 +7253,67 @@ fn a_table_from_word_2013_ends_its_borders_by_mode_cell_side_and_direction() {
     }
 }
 
+/// Measured in Word for Windows (compatibility mode 15, two columns): the columns are the share of
+/// the text width left after the halves of the outer borders, not the share less those halves. 50%
+/// of 451.3pt with 6pt lines is 222.65pt; less the halves after taking the share it would be 219.65pt.
+#[test]
+fn a_percentage_table_from_word_2013_takes_its_share_after_its_outer_borders() {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    let line = |w: f32| Some(Border { style: BorderStyle::Single, width: w, color: None, space: 0.0 });
+    for pct in [25.0, 50.0, 75.0, 100.0, 120.0] {
+        for (start, end) in [(1.5, 1.5), (6.0, 6.0), (6.0, 0.75), (0.75, 6.0)] {
+            let mut d = Document::from_text("");
+            d.settings.compat_mode = 15;
+            let text_width = d.sections().first().map_or(0.0, |(_, s)| s.text_width());
+            let mut t = Table::new(1, 2, 200.0);
+            t.props.width_pct = Some(pct);
+            t.props.fixed = true;
+            t.props.borders =
+                Some(Borders { top: line(1.5), left: line(start), bottom: line(1.5), right: line(end), between: line(1.5), inside_v: line(1.5) });
+            d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+            let c = cell_edges(&d);
+            let got = c[1].1 - c[0].0;
+            let want = (text_width - start / 2.0 - end / 2.0) * pct / 100.0;
+            assert!((got - want).abs() < 0.01, "{pct}%, lines {start} and {end}: columns {got}, Word {want}");
+        }
+    }
+}
+
+/// Measured in Word for Windows (compatibility mode 15, left to right): a centred table's outer
+/// edges are centred, its borders' outer halves included, so unequal lines move its columns off the
+/// middle: a 300pt table with 6pt and 0.75pt lines stands 1.31pt to the right.
+#[test]
+fn a_centred_table_from_word_2013_centres_its_outer_edges() {
+    use wordcraft_doc::props::{Align, Border, BorderStyle, Borders};
+    let line = |w: f32| Some(Border { style: if w > 0.0 { BorderStyle::Single } else { BorderStyle::None }, width: w, color: None, space: 0.0 });
+    let edges = |pct: bool, start: f32, end: f32, align: Option<Align>| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = 15;
+        let mut t = Table::new(1, 2, 200.0);
+        if pct {
+            t.props.width_pct = Some(50.0);
+        } else {
+            t.props.width = Some(300.0);
+        }
+        t.props.fixed = true;
+        t.props.align = align;
+        t.props.borders =
+            Some(Borders { top: line(1.5), left: line(start), bottom: line(1.5), right: line(end), between: line(1.5), inside_v: line(1.5) });
+        d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+        let c = cell_edges(&d);
+        (c[0].0 - start / 2.0, c[1].1 + end / 2.0)
+    };
+    let (margin, _) = edges(false, 0.0, 0.0, None);
+    let d = Document::from_text("");
+    let middle = margin + d.sections().first().map_or(0.0, |(_, s)| s.text_width()) / 2.0;
+    for pct in [false, true] {
+        for (start, end) in [(6.0, 0.75), (0.75, 6.0), (6.0, 6.0)] {
+            let (l, r) = edges(pct, start, end, Some(Align::Center));
+            assert!(((l + r) / 2.0 - middle).abs() < 0.01, "{pct}, {start} and {end}: outer edges {l} to {r}, middle {middle}");
+        }
+    }
+}
+
 /// Measured in Word for Windows (compatibility mode 15): a table style with 6pt borders whose
 /// first-row part turns the left and right borders off gives its one-row 100% table its whole
 /// width while the table shows the first row's formatting, and takes the borders' halves off it
