@@ -41,6 +41,7 @@ pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"story": id}))
 }
 
+/// Insert date and time at the caret or selection, formatted with a Word picture or default format.
 pub(super) fn date_time(s: &mut Session, v: &Value) -> CmdResult {
     let language = p::str(v, "language");
     if language.is_some_and(|l| !matches!(l, "en-US" | "pt-BR")) {
@@ -51,6 +52,8 @@ pub(super) fn date_time(s: &mut Session, v: &Value) -> CmdResult {
         props.lang = Some(lang.to_string());
     }
     // Resolve the same run language used by refresh_date_fields on subsequent updates.
+    // Resolving language from the selection start ordered().0 is intentional for the fixed-text path
+    // so the typed text takes the character/paragraph styling where the insertion begins.
     let effective_language = s.doc.para_at(&s.sel.ordered().0).and_then(|p| s.doc.styles.resolve_char(p.props.style.as_deref(), &props).lang);
     // A missing picture follows the selected or inherited language, just like a DATE field
     // without a \\@ switch; an explicitly supplied picture is never overridden.
@@ -103,7 +106,9 @@ pub fn format_date_at_in(fmt: &str, lang: Option<&str>, unix: u64, offset_secs: 
 /// three-letter forms (`MMM`, `ddd`) being their first three letters, without a full stop.
 /// Weekdays start on Thursday (1970-01-01).
 struct DateNames {
+    /// Full month names (January through December).
     months: [&'static str; 12],
+    /// Weekday names starting on Thursday (1970-01-01).
     days: [&'static str; 7],
     /// The picture of a `DATE` field without `\@`.
     default: &'static str,

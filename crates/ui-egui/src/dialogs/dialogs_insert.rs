@@ -30,6 +30,7 @@ pub use symbol::{RECENT_SYMBOLS, RecentSymbol, SPECIAL, SUBSETS, SymbolForm, rem
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "form", rename_all = "camelCase")]
 pub enum InsertDialog {
+    /// Date & Time insertion dialog.
     DateTime(DateTimeForm),
     Columns(ColumnsForm),
     Symbol(SymbolForm),
@@ -41,6 +42,7 @@ pub enum InsertDialog {
 }
 
 impl InsertDialog {
+    /// The dialog name used in command dispatch and UI state.
     pub fn name(&self) -> &'static str {
         match self {
             InsertDialog::DateTime(_) => "dateTime",

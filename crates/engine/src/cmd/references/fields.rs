@@ -530,6 +530,7 @@ fn field_lang(doc: &wordcraft_doc::Document, p: &wordcraft_doc::Paragraph, k: us
     doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(off)).lang
 }
 
+/// Word's default date or time picture when a field instruction carries no `\@` picture switch.
 fn default_picture(name: &str, lang: Option<&str>) -> String {
     if name == "TIME" { "h:mm am/pm".into() } else { crate::cmd::insert::default_date_picture(lang).into() }
 }

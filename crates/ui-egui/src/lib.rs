@@ -294,9 +294,11 @@ pub struct UiState {
     pub recent: Vec<String>,
     /// Symbols inserted from the Symbol dialog, most recent first (#321).
     pub recent_symbols: Vec<dialogs_insert::RecentSymbol>,
-    /// Saved choices in Insert > Date & Time.
+    /// Saved choices in Insert > Date & Time: format picture.
     pub date_time_format: String,
+    /// Saved language tag in Insert > Date & Time.
     pub date_time_language: String,
+    /// Saved preference for updating inserted date/time fields automatically.
     pub date_time_update: bool,
     /// Colours picked in the Colors dialog (More Colors…), most recent first (#606).
     pub recent_colors: Vec<String>,

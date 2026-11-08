@@ -167,6 +167,7 @@ fn field_dialog_lists_the_document_information_fields() {
     assert_eq!(f.instruction(), "SUBJECT");
 }
 
+/// The Date & Time dialog uses the saved pt-BR editing language when present in UI preferences.
 #[test]
 fn date_time_dialog_uses_saved_pt_br_language() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
@@ -176,6 +177,20 @@ fn date_time_dialog_uses_saved_pt_br_language() {
     assert_eq!(f.params()["language"], "pt-BR");
     f.update = false;
     assert_eq!(f.params()["update"], false);
+}
+
+/// Language tags with primary subtag `pt` (such as `pt_BR` or `pt-PT`) are normalized to `pt-BR`.
+#[test]
+fn date_time_dialog_normalizes_portuguese_language_tags() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.ui.date_time_language = "pt_BR".into();
+    let InsertDialog::DateTime(f) = open("dateTime", &a).expect("dialog") else { panic!("not DateTime") };
+    assert_eq!(f.language, "pt-BR");
+    assert_eq!(f.format, "dd/MM/yyyy");
+
+    a.ui.date_time_language = "pt-PT".into();
+    let InsertDialog::DateTime(f) = open("dateTime", &a).expect("dialog") else { panic!("not DateTime") };
+    assert_eq!(f.language, "pt-BR");
 }
 
 /// Click the real egui language menu, date picture, checkbox and OK; ensure the resulting
