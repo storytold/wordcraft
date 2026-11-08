@@ -367,7 +367,16 @@ impl<'a> Builder<'a> {
                 // A crop of finite fractions that leaves something of the picture.
                 let crop = img.crop.map(|c| if c.is_finite() { c.clamp(0.0, 0.99) } else { 0.0 });
                 let crop = if crop[0] + crop[2] < 0.99 && crop[1] + crop[3] < 0.99 { crop } else { [0.0; 4] };
-                Some(InlineObject::Image { media: key, w, h, alt: img.alt.clone(), float: float.unwrap_or_default(), crop, ole })
+                Some(InlineObject::Image {
+                    media: key,
+                    w,
+                    h,
+                    alt: img.alt.clone(),
+                    float: float.unwrap_or_default(),
+                    crop,
+                    fx: Default::default(),
+                    ole,
+                })
             }
             // Its drawing is made from the chart by the program that opens the document
             // (`wordcraft_engine`'s chart drawing), which has the theme's colours.
@@ -835,6 +844,7 @@ impl<'a> Builder<'a> {
                 row.props.height = Some(h.min(1584.0));
                 row.props.height_rule = if exact { wordcraft_doc::props::HeightRule::Exact } else { wordcraft_doc::props::HeightRule::AtLeast };
             }
+            row.props.cant_split = t.extra.as_ref().is_some_and(|x| x.keep_rows.get(ri) == Some(&true));
             let mut g = 0usize;
             for c in r.iter().take(wordcraft_doc::table::MAX_COLS) {
                 let span = (c.colspan.clamp(1, 63) as usize).min(cols.saturating_sub(g).max(1));
