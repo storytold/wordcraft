@@ -70,18 +70,34 @@ pub fn import_on(ext: &str, bytes: &[u8], page: &wordcraft_doc::SectionProps) ->
     Some(Ok(doc))
 }
 
-/// Export `doc` in the format named by `ext`. `None` = not our format.
+/// The format [`export`] writes for the file extension `ext` (with or without its dot, in any
+/// case), by its usual extension: `text` is `txt`, `markdown` is `md`, `htm` and `xhtml` are
+/// `html`, `latex` and `ltx` are `tex`. `None` = not our format.
+pub fn export_format(ext: &str) -> Option<&'static str> {
+    Some(match ext.trim_start_matches('.').to_ascii_lowercase().as_str() {
+        "txt" | "text" => "txt",
+        "md" | "markdown" => "md",
+        "html" | "htm" | "xhtml" => "html",
+        "rtf" => "rtf",
+        "odt" => "odt",
+        "ott" => "ott",
+        "fodt" => "fodt",
+        "tex" | "latex" | "ltx" => "tex",
+        _ => return None,
+    })
+}
+
+/// Export `doc` in the format named by `ext` ([`export_format`]). `None` = not our format.
 pub fn export(ext: &str, doc: &Document) -> Option<Result<Vec<u8>, String>> {
-    let ext = ext.trim_start_matches('.').to_ascii_lowercase();
-    Some(match ext.as_str() {
-        "txt" | "text" => Ok(txt::export(doc)),
-        "md" | "markdown" => Ok(markdown::export(doc).into_bytes()),
-        "html" | "htm" | "xhtml" => Ok(html::export(doc).into_bytes()),
+    Some(match export_format(ext)? {
+        "txt" => Ok(txt::export(doc)),
+        "md" => Ok(markdown::export(doc).into_bytes()),
+        "html" => Ok(html::export(doc).into_bytes()),
         "rtf" => Ok(rtf::export(doc).into_bytes()),
         "odt" => odt::export(doc),
         "ott" => odt::export_template(doc),
         "fodt" => odt::export_flat(doc),
-        "tex" | "latex" | "ltx" => Ok(latex::export(doc).into_bytes()),
+        "tex" => Ok(latex::export(doc).into_bytes()),
         _ => return None,
     })
 }

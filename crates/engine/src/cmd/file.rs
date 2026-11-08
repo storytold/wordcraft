@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use wordcraft_doc::{Block, Document, StoryRef};
 
+use super::embedded_objects::Kept;
 use super::{pos_json, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 
@@ -94,7 +95,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("file.save", "Save", "File", save)
             .key("Mod+S / Shift+F12 / Alt+Shift+F2")
-            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format)} → {"saved", "path", "encrypted", "notShown"?: [embedded objects a PDF, text, Markdown, HTML or LaTeX copy shows only as their pictures, by program id]}"#)
+            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format)} → {"saved", "path", "encrypted", "notShown"?: [the embedded objects the file doesn't keep, by program id: every one in a PDF, HTML, RTF, text, Markdown, LaTeX or Word 2003 XML copy, OpenDocument objects in a Word file, Word's in an ODT], "notShownAs"?: "picture" | "nothing" (what of them the file shows: their pictures, or a placeholder at most)}"#)
             .pure(),
         CommandSpec::new("file.saveAs", "Save As", "File", save_as).key(super::mac_or("F12 / Mod+Shift+S", "F12 / Alt+F2")).params(r#"{"path": string, "password"?: string, "markup"?: bool, "format"?: string (as file.save)}"#).pure(),
         // Pure: the password must not land in Repeat or a recorded macro, and it isn't an edit
@@ -112,9 +113,9 @@ pub fn specs() -> Vec<CommandSpec> {
             let path = if path.to_ascii_lowercase().ends_with(".pdf") { path.to_string() } else { format!("{path}.pdf") };
             let opts = export_options(s, v);
             crate::io::save_path_with(std::path::Path::new(&path), &s.doc, None, &opts).map_err(CmdError::Failed)?;
-            Ok(with_not_shown(json!({"path": path, "markup": opts.markup}), &s.doc, "pdf"))
+            Ok(with_not_shown(json!({"path": path, "markup": opts.markup}), &s.doc, Kept::Pictures))
         })
-        .params(r#"{"path": string, "markup"?: bool (Print Markup: tracked changes marked up and each page scaled down beside the comments in balloons; default file.printMarkup)} → {"path", "markup", "notShown"?: [embedded objects drawn only as their pictures, by program id]}"#)
+        .params(r#"{"path": string, "markup"?: bool (Print Markup: tracked changes marked up and each page scaled down beside the comments in balloons; default file.printMarkup)} → {"path", "markup", "notShown"?: [embedded objects drawn only as their pictures, by program id], "notShownAs"?: "picture"}"#)
         .pure(),
         CommandSpec::new("file.exportPng", "Export Page as PNG", "File › Export", export_png)
             .params(r#"{"path": string, "page"?: n (1-based), "scale"?: px per pt, "markup"?: bool (the page with its comments in balloons beside it; default file.printMarkup)}"#)
@@ -416,15 +417,17 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         s.dirty = false;
         s.relayout();
     }
-    Ok(with_not_shown(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted}), &s.doc, &ext))
+    let kept = Kept::by(&ext, opts.word2003);
+    Ok(with_not_shown(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted}), &s.doc, kept))
 }
 
-/// `result` with `notShown`, the embedded objects a `ext` file shows only as their pictures
-/// (#5393), when there are any: a PDF, page image or text file doesn't hold what is inside them.
-fn with_not_shown(mut result: Value, doc: &wordcraft_doc::Document, ext: &str) -> Value {
-    let names = super::embedded_objects::not_shown_in(doc, ext);
+/// `result` with `notShown`, the embedded objects a file keeping `kept` doesn't keep (#5393),
+/// and `notShownAs`, what it shows of them, when there are any.
+fn with_not_shown(mut result: Value, doc: &wordcraft_doc::Document, kept: Kept) -> Value {
+    let names = super::embedded_objects::not_shown_in(doc, kept);
     if !names.is_empty() {
         result["notShown"] = json!(names);
+        result["notShownAs"] = json!(kept.shown_as());
     }
     result
 }
