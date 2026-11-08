@@ -799,6 +799,8 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 
 Footer page-table height and body wrapping are corrected. Other pagination gaps remain open.
 
+Quoted field escapes are interpreted like Word, and body `PAGE` fields use their active section number format in paragraphs and tables. Synthetic regressions cover fields and section layout.
+
 Section page-numbering settings preserve `w:chapStyle` values across the full unsigned-byte range.
 MATH glyphs that reference the same construction now share its immutable variants and assembly data (#3630). Glyph mappings, values and the existing partial-record fallback stay unchanged. Repeated glyph IDs keep their last valid reference without retaining superseded constructions. Distinct overlapping constructions and assembly-only sharing remain separate.
 
