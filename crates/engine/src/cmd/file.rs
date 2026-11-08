@@ -253,27 +253,8 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         );
     }
     let password = p::str(v, "password");
-    let (mut doc, encrypted) = if let Some(data) = p::str(v, "data") {
-        let bytes = super::insert::base64_decode(data).ok_or_else(|| CmdError::Params("bad base64".into()))?;
-        // An empty file (File Explorer's New › Microsoft Word Document makes one) opens as a new
-        // blank document that saves back to it (#1384).
-        if bytes.is_empty() {
-            (normal_document(s), false)
-        } else {
-            crate::io::open_bytes_in(path, &bytes, password, &s.region()).map_err(CmdError::Failed)?
-        }
-    } else if crate::io::is_empty_file(std::path::Path::new(path)) {
-        (normal_document(s), false)
-    } else {
-        crate::io::open_path_in(std::path::Path::new(path), password, &s.region()).map_err(CmdError::Failed)?
-    };
-    // Plain text and Markdown carry no language: they are in the editing language.
-    let ext = std::path::Path::new(path).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
-    if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref())
-        && matches!(ext.as_str(), "txt" | "text" | "md" | "markdown")
-    {
-        Arc::make_mut(&mut doc.styles).default_chr.lang = Some(lang.clone());
-    }
+    // An empty file opens as a new blank document that saves back to it (#1384).
+    let (doc, encrypted) = read_document(s, path, v)?;
     match s.used_because() {
         None => s.set_document(doc),
         Some(why) => {
@@ -292,6 +273,53 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     Ok(
         json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()}),
     )
+}
+
+/// The document the file at `path` holds (or its bytes, base64 in `data`, with `path` only
+/// naming it), read with `password`, and whether it was encrypted: what `file.open` and
+/// `file.newFromTemplate` read. An empty file (File Explorer's New › Microsoft Word Document makes
+/// one) is a new blank document (#1384). Plain text and Markdown carry no language, so they are
+/// in the editing language.
+fn read_document(s: &Session, path: &str, v: &Value) -> Result<(Document, bool), CmdError> {
+    let password = p::str(v, "password");
+    let (mut doc, encrypted) = if let Some(data) = p::str(v, "data") {
+        let bytes = super::insert::base64_decode(data).ok_or_else(|| CmdError::Params("bad base64".into()))?;
+        if bytes.is_empty() {
+            (normal_document(s), false)
+        } else {
+            crate::io::open_bytes_in(path, &bytes, password, &s.region()).map_err(CmdError::Failed)?
+        }
+    } else if crate::io::is_empty_file(std::path::Path::new(path)) {
+        (normal_document(s), false)
+    } else {
+        crate::io::open_path_in(std::path::Path::new(path), password, &s.region()).map_err(CmdError::Failed)?
+    };
+    let ext = std::path::Path::new(path).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
+    if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref())
+        && matches!(ext.as_str(), "txt" | "text" | "md" | "markdown")
+    {
+        Arc::make_mut(&mut doc.styles).default_chr.lang = Some(lang.clone());
+    }
+    Ok((doc, encrypted))
+}
+
+/// File › New from a template (#2852): a new, untitled document with the template's content,
+/// attached to the template as in Word, read as `file.open` reads a file (`data`, `password`).
+/// It opens beside the open documents, as `file.new` does. With `replaceBlank` an untouched blank
+/// document gives way to it, as to a file `file.open` opens: that is how a template the platform
+/// hands the app starts (#3433). The template is only read; the new document has no file, so
+/// saving it asks where to write, and a protected template's password doesn't come along.
+pub(crate) fn new_from_template(s: &mut Session, v: &Value) -> CmdResult {
+    let path = p::req_str(v, "path")?;
+    let (mut doc, _) = read_document(s, path, v)?;
+    doc.settings.attached_template = Some(path.to_string());
+    if p::bool(v, "replaceBlank") == Some(true) && s.used_because().is_none() {
+        s.set_document(doc);
+    } else {
+        s.add_document(doc);
+    }
+    s.dirty = true;
+    sel_result(s)
 }
 
 /// Close a document with no window to ask about it (agents, headless sessions).

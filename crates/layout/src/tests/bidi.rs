@@ -639,3 +639,149 @@ fn list_label_after_leading_page_break_uses_its_text_lines_alignment() {
         }
     }
 }
+
+/// The glyph ids of each letter of paragraph 0 as laid out (marks of runs left out have none).
+fn letters(l: &DocLayout) -> Vec<Vec<u32>> {
+    let (pl, _) = first_line(l, 0);
+    pl.clusters.iter().filter(|c| c.g1 > c.g0).map(|c| pl.glyphs[c.g0 as usize..c.g1 as usize].iter().map(|g| g.gid).collect()).collect()
+}
+
+/// `text` as one right-to-left paragraph with `format` applied to each `(start, end)` byte range.
+fn formatted(text: &str, splits: &[(usize, usize)], format: &dyn Fn(&mut wordcraft_doc::props::CharProps)) -> Document {
+    let mut d = doc_of(&[(text, true)]);
+    for &(start, end) in splits {
+        d.format_range(&Pos::body(0, start), &Pos::body(0, end), format).unwrap();
+    }
+    d
+}
+
+const BEH: usize = 'ب'.len_utf8();
+
+fn red(c: &mut wordcraft_doc::props::CharProps) {
+    c.color = Some(wordcraft_doc::props::TextColor::Rgb(wordcraft_doc::props::Rgb(0xC0, 0, 0)));
+}
+
+/// The reporter's symptom: after a change of formatting inside a word, the letters on either side
+/// took the forms of the end and the start of a word, which reads as a space in it (#4093).
+#[test]
+fn letters_join_across_a_change_of_formatting() {
+    if arabic_face().is_none() {
+        eprintln!("skipped: no font with Persian letters installed");
+        return;
+    }
+    let word = "بببب";
+    let whole = letters(&lay(&doc_of(&[(word, true)])));
+    assert_eq!(whole.len(), 4, "one cluster per letter: {whole:?}");
+    assert!(whole.first() != whole.get(1) && whole.get(1) != whole.last(), "initial, medial and final forms: {whole:?}");
+    // A letter of its own at each place, then the two middle letters, then every other letter.
+    let pieces: [&[(usize, usize)]; 6] =
+        [&[(0, BEH)], &[(BEH, 2 * BEH)], &[(2 * BEH, 3 * BEH)], &[(3 * BEH, 4 * BEH)], &[(BEH, 3 * BEH)], &[(0, BEH), (2 * BEH, 3 * BEH)]];
+    for runs in pieces {
+        let d = formatted(word, runs, &red);
+        assert!(d.para_at(&Pos::body(0, 0)).unwrap().runs.len() > 1, "{runs:?} split the run");
+        assert_eq!(letters(&lay(&d)), whole, "split at {runs:?}");
+    }
+}
+
+/// A letter joins what is on the page: with a tracked deletion shown, the deleted letter; with it
+/// left out, the letter past it. The same goes for hidden text.
+#[test]
+fn letters_join_past_text_left_out_of_the_layout() {
+    if arabic_face().is_none() {
+        eprintln!("skipped: no font with Persian letters installed");
+        return;
+    }
+    let (three, two) = (letters(&lay(&doc_of(&[("ببب", true)]))), letters(&lay(&doc_of(&[("بب", true)]))));
+    assert_eq!((three.len(), two.len()), (3, 2));
+    let middle = [(BEH, 2 * BEH)];
+
+    let deleted = formatted("ببب", &middle, &|c| c.del = Some(0));
+    assert_eq!(letters(&lay(&deleted)), three, "deletion shown: it joins both neighbours");
+    let mut c = LayoutCache::new();
+    let final_text = layout(&deleted, &mut c, &LayoutOptions { hide_deleted: true, ..LayoutOptions::default() });
+    assert_eq!(letters(&final_text), two, "deletion left out: its neighbours join each other");
+
+    let hidden = formatted("ببب", &middle, &|c| c.hidden = Some(true));
+    assert_eq!(letters(&lay(&hidden)), two, "hidden text left out: its neighbours join each other");
+    let mut c = LayoutCache::new();
+    let shown = layout(&hidden, &mut c, &LayoutOptions { show_hidden: true, ..LayoutOptions::default() });
+    assert_eq!(letters(&shown), three, "hidden text shown: it joins both neighbours");
+}
+
+/// A mark in a run of its own (a coloured vowel sign) doesn't stop the letters around it joining.
+#[test]
+fn letters_join_past_a_mark_in_a_run_of_its_own() {
+    if arabic_face().is_none() {
+        eprintln!("skipped: no font with Persian letters installed");
+        return;
+    }
+    let word = "بَب";
+    let whole = letters(&lay(&doc_of(&[(word, true)])));
+    let split = letters(&lay(&formatted(word, &[(BEH, BEH + 'َ'.len_utf8())], &red)));
+    assert_eq!(split.last(), whole.last(), "the letter after the mark stays joined");
+    // Together with the mark, the letter before it has more glyphs, in the shaper's order.
+    let (before, with_mark) = (split.first().unwrap(), whole.first().unwrap());
+    assert!(before.iter().all(|g| with_mark.contains(g)), "and the letter before it: {before:?} {with_mark:?}");
+}
+
+/// What can't join still doesn't: a tab between the letters, in one run or at the edge of a run, a
+/// Latin neighbour, and a letter beside a drop cap, which is drawn apart from the word.
+#[test]
+fn letters_stay_apart_where_nothing_joins_them() {
+    if arabic_face().is_none() {
+        eprintln!("skipped: no font with Persian letters installed");
+        return;
+    }
+    let alone = letters(&lay(&doc_of(&[("ب", true)])));
+    assert_eq!(alone.len(), 1);
+    let beh = alone.first();
+    let tabbed = "ب\tب";
+    for d in [doc_of(&[(tabbed, true)]), formatted(tabbed, &[(0, BEH)], &red), formatted(tabbed, &[(BEH + 1, tabbed.len())], &red)] {
+        let got = letters(&lay(&d));
+        assert_eq!((got.first(), got.last()), (beh, beh), "across a tab: {got:?}");
+    }
+    let got = letters(&lay(&formatted("xب", &[(0, 1)], &red)));
+    assert_eq!(got.last(), beh, "after a Latin letter: {got:?}");
+
+    // The drop cap in the word's run, and formatted on its own (a run of its own).
+    let two = letters(&lay(&doc_of(&[("بب", true)])));
+    for mut d in [doc_of(&[("ببب", true)]), formatted("ببب", &[(0, BEH)], &red)] {
+        let at = Pos::body(0, 0);
+        d.format_paragraphs(&at, &at, &|p: &mut ParaProps| p.drop_cap = Some(2)).unwrap();
+        let runs = d.para_at(&at).unwrap().runs.len();
+        let got = letters(&lay(&d));
+        assert_eq!(got.get(got.len().saturating_sub(2)..), two.get(..), "{runs} run(s): the letters after a drop cap start a word: {got:?} {two:?}");
+    }
+}
+
+#[test]
+fn the_shaper_takes_a_letters_form_from_the_text_around_it() {
+    use wordcraft_fonts::{ShapeContext, shape_run_in};
+    let Some(face) = arabic_face() else {
+        eprintln!("skipped: no font with Persian letters installed");
+        return;
+    };
+    let form = |around| cluster_glyphs(&shape_run_in(&face, "ب", &[], |c| c, true, around));
+    let isolated = form(ShapeContext::default());
+    let joined = cluster_glyphs(&wordcraft_fonts::shape_run(&face, "ببب", &[], |c| c, true));
+    assert_eq!(form(ShapeContext { before: "", after: "ب" }).first(), joined.first(), "initial");
+    assert_eq!(form(ShapeContext { before: "ب", after: "ب" }).first(), joined.get(1), "medial");
+    assert_eq!(form(ShapeContext { before: "ب", after: "" }).first(), joined.get(2), "final");
+    // A vowel sign is transparent, and ZWNJ and a Latin letter stop the join.
+    assert_eq!(form(ShapeContext { before: "بَ", after: "" }).first(), joined.get(2), "past a mark");
+    assert_eq!(form(ShapeContext { before: "ب\u{200C}", after: "" }), isolated, "after ZWNJ");
+    assert_eq!(form(ShapeContext { before: "a", after: "b" }), isolated, "between Latin letters");
+    // Only the letter's form depends on the context: nothing of it is drawn.
+    assert_eq!(form(ShapeContext { before: "ببب", after: "ببب" }).len(), 1);
+}
+
+#[test]
+fn scripts_that_join_their_letters_are_told_apart() {
+    use wordcraft_fonts::joins_cursively;
+    for c in ['ب', 'پ', 'ܐ', 'ᠠ', 'ߊ', '𞤀'] {
+        assert!(joins_cursively(c), "{c}");
+    }
+    for c in ['a', 'é', '’', 'я', 'א', '中', ' ', '\t', '\u{FFFC}', '\u{200C}', 'َ'] {
+        assert!(!joins_cursively(c), "{c:?}");
+    }
+}
