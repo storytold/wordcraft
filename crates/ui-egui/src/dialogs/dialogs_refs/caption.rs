@@ -105,19 +105,31 @@ pub(super) fn caption_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) ->
     });
     ui.add_space(6.0);
     let mut then = None;
-    egui::Grid::new("cap_opts").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        let label_label = ui.label(tl!("Label:"));
-        let labels: Vec<(String, &str)> = f.labels.iter().map(|l| (l.clone(), l.as_str())).collect();
-        let combo = craft_ui::ComboBox::from_id_salt("cap_label").selected_text(tl!(&f.label)).width(150.0).show_ui(ui, |ui| {
-            for (v, l) in &labels {
-                ui.selectable_value(&mut f.label, v.clone(), tl!(l));
-            }
+    crate::rtl::Table::new("cap_opts").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
+        t.row(|r| {
+            let label_label = r.cell(|ui| ui.label(tl!("Label:")));
+            r.cell(|ui| {
+                let labels: Vec<(String, &str)> = f.labels.iter().map(|l| (l.clone(), l.as_str())).collect();
+                let combo = craft_ui::ComboBox::from_id_salt("cap_label").selected_text(tl!(&f.label)).width(150.0).show_ui(ui, |ui| {
+                    for (v, l) in &labels {
+                        ui.selectable_value(&mut f.label, v.clone(), tl!(l));
+                    }
+                });
+                combo.response.labelled_by(label_label.id);
+            });
         });
-        combo.response.labelled_by(label_label.id);
-        ui.end_row();
-        let position_label = ui.label(tl!("Position:"));
-        choice(ui, "cap_pos", &mut f.position, &[("below".to_string(), "Below the item"), ("above".to_string(), "Above the item")], &position_label);
-        ui.end_row();
+        t.row(|r| {
+            let position_label = r.cell(|ui| ui.label(tl!("Position:")));
+            r.cell(|ui| {
+                choice(
+                    ui,
+                    "cap_pos",
+                    &mut f.position,
+                    &[("below".to_string(), "Below the item"), ("above".to_string(), "Above the item")],
+                    &position_label,
+                )
+            });
+        });
     });
     ui.checkbox(&mut f.exclude_label, tl!("Leave the label out of the caption"));
     ui.add_space(4.0);
@@ -150,29 +162,38 @@ pub(super) fn caption_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) ->
 /// Draws the caption numbering format, chapter-number toggle and chapter level and separator
 /// controls, returning to the caption dialog with the edited or original form.
 pub(super) fn numbering_ui(ui: &mut Ui, f: &mut CaptionForm, was: &CaptionForm) -> Next {
-    egui::Grid::new("cap_num").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        let format_label = ui.label(tl!("Format:"));
-        let opts: Vec<(String, &str)> = NUMBER_FORMATS.iter().map(|(v, l)| (v.to_string(), *l)).collect();
-        choice(ui, "cap_fmt", &mut f.format, &opts, &format_label);
-        ui.end_row();
+    crate::rtl::Table::new("cap_num").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
+        t.row(|r| {
+            let format_label = r.cell(|ui| ui.label(tl!("Format:")));
+            r.cell(|ui| {
+                let opts: Vec<(String, &str)> = NUMBER_FORMATS.iter().map(|(v, l)| (v.to_string(), *l)).collect();
+                choice(ui, "cap_fmt", &mut f.format, &opts, &format_label)
+            });
+        });
     });
     ui.checkbox(&mut f.chapter, tl!("Add the chapter number"));
     ui.add_enabled_ui(f.chapter, |ui| {
-        egui::Grid::new("cap_chap").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-            let chapter_label = ui.label(tl!("Chapters begin at:"));
-            let opts: Vec<(u8, String)> = (1..=9u8).map(|l| (l, crate::i18n::fmt(tl!("Heading {n}"), &[("n", &l.to_string())]))).collect();
-            let shown = opts.iter().find(|(l, _)| *l == f.chapter_level).map(|(_, s)| s.clone()).unwrap_or_default();
-            let combo = craft_ui::ComboBox::from_id_salt("cap_level").selected_text(shown).width(150.0).show_ui(ui, |ui| {
-                for (l, s) in &opts {
-                    ui.selectable_value(&mut f.chapter_level, *l, s);
-                }
+        crate::rtl::Table::new("cap_chap").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
+            t.row(|r| {
+                let chapter_label = r.cell(|ui| ui.label(tl!("Chapters begin at:")));
+                r.cell(|ui| {
+                    let opts: Vec<(u8, String)> = (1..=9u8).map(|l| (l, crate::i18n::fmt(tl!("Heading {n}"), &[("n", &l.to_string())]))).collect();
+                    let shown = opts.iter().find(|(l, _)| *l == f.chapter_level).map(|(_, s)| s.clone()).unwrap_or_default();
+                    let combo = craft_ui::ComboBox::from_id_salt("cap_level").selected_text(shown).width(150.0).show_ui(ui, |ui| {
+                        for (l, s) in &opts {
+                            ui.selectable_value(&mut f.chapter_level, *l, s);
+                        }
+                    });
+                    combo.response.labelled_by(chapter_label.id);
+                });
             });
-            combo.response.labelled_by(chapter_label.id);
-            ui.end_row();
-            let separator_label = ui.label(tl!("Separator:"));
-            let opts: Vec<(String, &str)> = SEPARATORS.iter().map(|(v, l)| (v.to_string(), *l)).collect();
-            choice(ui, "cap_sep", &mut f.separator, &opts, &separator_label);
-            ui.end_row();
+            t.row(|r| {
+                let separator_label = r.cell(|ui| ui.label(tl!("Separator:")));
+                r.cell(|ui| {
+                    let opts: Vec<(String, &str)> = SEPARATORS.iter().map(|(v, l)| (v.to_string(), *l)).collect();
+                    choice(ui, "cap_sep", &mut f.separator, &opts, &separator_label)
+                });
+            });
         });
     });
     ui.add_space(4.0);

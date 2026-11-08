@@ -68,9 +68,11 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
             mi_check(ui, app, "Draw Table", drawing, "table.draw", json!({}));
             mi(ui, app, "Convert Text to Table…", "table.fromText", json!({}));
             ui.menu_button(tl!("Quick Tables"), |ui| {
-                mi(ui, app, "Tabular List", "table.quick", json!({"kind": "tabular"}));
-                mi(ui, app, "Matrix", "table.quick", json!({"kind": "matrix"}));
-                mi(ui, app, "Calendar", "table.quick", json!({"kind": "calendar"}));
+                crate::rtl::root(ui, |ui| {
+                    mi(ui, app, "Tabular List", "table.quick", json!({"kind": "tabular"}));
+                    mi(ui, app, "Matrix", "table.quick", json!({"kind": "matrix"}));
+                    mi(ui, app, "Calendar", "table.quick", json!({"kind": "calendar"}));
+                })
             });
         });
     });
@@ -205,7 +207,7 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
                 }
             }
             items.truncate(30);
-            egui::Grid::new("syms").show(ui, |ui| {
+            crate::rtl::grid(ui, egui::Grid::new("syms"), |ui| {
                 for (i, (c, font)) in items.iter().enumerate() {
                     let b = ui.button(egui::RichText::new(c).size(16.0));
                     let b = if font.is_empty() { b } else { b.on_hover_text(font) };
@@ -227,12 +229,18 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+/// What a Drop Cap menu choice sends: the position, and `keep` so each selected paragraph that has
+/// a drop cap keeps its own lines, distance and font (None takes it all away).
+pub(super) fn drop_cap_payload(position: &str) -> serde_json::Value {
+    if position == "none" { json!({"position": position}) } else { json!({"position": position, "keep": true}) }
+}
+
 /// Insert › Drop Cap's menu (#2601): None, Dropped and In margin (the current one checked),
 /// then the Drop Cap dialog.
 fn drop_cap_items(ui: &mut Ui, app: &mut WordApp) {
-    let current = wordcraft_engine::cmd::insert::drop_cap_state(&app.session).position;
+    let state = wordcraft_engine::cmd::insert::drop_cap_state(&app.session);
     for (label, v) in [("None", "none"), ("Dropped", "dropped"), ("In margin", "margin")] {
-        mi_check(ui, app, label, current == v, "insert.dropCap", json!({"position": v}));
+        mi_check(ui, app, label, state.position == v, "insert.dropCap", drop_cap_payload(v));
     }
     ui.separator();
     mi(ui, app, "Drop Cap Options…", "ui.dialog", json!({"name": "dropCap"}));

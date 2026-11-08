@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use super::cache::{LayoutCache, Totals, env_hash, hash_of};
 use super::ctx::{Ctx, Pass, with_pct_base};
-use super::floats::{EarlyFloats, WrapArea, early_covered};
+use super::floats::{EarlyFloats, WrapArea, early_covered, left_out_objects};
 use super::flow::{OutlinePass, place_outline_para, place_para};
 use super::headers::{HfLinks, bookmark_pages, headers_footers, headers_footers_refer_to_pages, marks_key, mirror_even_pages, section_side};
 use super::notes::{MAX_NOTE_PAGES, NoteSeps, note_info, place_endnotes};
@@ -10,9 +10,10 @@ use super::page::{PageBuilder, body_top_for, foot_top_for, item_bottom};
 use super::placed::Placed;
 use super::table_flow::place_table;
 use super::{
-    Arc, Block, Counters, DocLayout, Document, FieldCtx, HashMap, LayoutOptions, Page, Path, SectionProps, SectionStart, StoryRef, TextDirection,
-    ViewMode, balloons, para, vertical,
+    Arc, Block, Counters, DocLayout, Document, FieldCtx, HashMap, InlineObject, LayoutOptions, Page, Paragraph, Path, SectionProps, SectionStart,
+    StoryRef, TextDirection, ViewMode, balloons, para, vertical,
 };
+use wordcraft_doc::legacy_form::LegacyForm;
 
 /// How the view lays the document out: `web` for the continuous views, `reflow` for those and
 /// the reading view, which both ignore the sections' page geometry.
@@ -43,6 +44,7 @@ struct Tops {
 struct Sec<'p> {
     si: usize,
     sect: &'p SectionProps,
+    page_format: wordcraft_doc::section::NumFormat,
     start: SectionStart,
     tops: Tops,
 }
@@ -109,6 +111,7 @@ fn new_ctx<'a>(
         floats_above: HashMap::new(),
         hf: Arc::new(HfLinks::new(doc.sections())),
         alphas: Default::default(),
+        header_repeats: 0,
     }
 }
 
@@ -125,16 +128,33 @@ fn section_marks(doc: &Document, opts: &LayoutOptions, sections: &[(usize, &Sect
             end.checked_sub(1).and_then(|i| doc.body.get(i)).and_then(|b| b.as_para()).is_some_and(|p| p.section.is_some() && p.text.is_empty())
         });
     if !opts.show_hidden {
-        quiet.extend(
-            doc.body
-                .iter()
-                .enumerate()
-                .filter_map(|(i, b)| b.as_para().filter(|p| p.mark.hidden == Some(true) && p.plain_text().is_empty()).map(|_| i)),
-        );
+        quiet.extend(doc.body.iter().enumerate().filter_map(|(i, b)| {
+            b.as_para().filter(|p| p.mark.hidden == Some(true) && p.plain_text().is_empty() && !has_inline_content(doc, opts, p)).map(|_| i)
+        }));
     }
     quiet.sort_unstable();
     quiet.dedup();
     (stacked, quiet)
+}
+
+/// An in-line picture, shape or chart, a note reference mark, or a field shown as something other
+/// than its result, is visible content with no plain text, so its line keeps its room even when
+/// the paragraph mark is hidden (#5288). Not one the layout leaves out (a hidden drawing, or one
+/// in hidden or deleted text).
+fn has_inline_content(doc: &Document, opts: &LayoutOptions, p: &Paragraph) -> bool {
+    let left_out = left_out_objects(doc, p, None, opts.show_hidden, opts.hides_deleted(StoryRef::Body));
+    // As the paragraph layout shows a field: its code, a legacy check box, a drop-down's entry.
+    let shown_field = |o: &InlineObject| match o {
+        InlineObject::Field { code, .. } => {
+            *code != opts.field_codes
+                || o.legacy_form().is_some_and(|f| matches!(f, LegacyForm::CheckBox { .. }) || f.shown_text().is_some_and(|t| !t.is_empty()))
+        }
+        _ => false,
+    };
+    p.objects
+        .iter()
+        .enumerate()
+        .any(|(k, o)| !left_out(k) && (matches!(o, InlineObject::NoteRef { .. }) || (o.frame().is_some() && !o.is_floating()) || shown_field(o)))
 }
 
 /// The page the continuous views lay out on: the first section's, as wide as the window (and as
@@ -157,10 +177,17 @@ fn reflow_sect(first: &SectionProps, opts: &LayoutOptions) -> SectionProps {
     s
 }
 
-fn new_page_builder<'p>(sect: &'p SectionProps, early: &'p EarlyFloats, web: bool, settle: bool) -> PageBuilder<'p> {
+fn new_page_builder<'p>(
+    sect: &'p SectionProps,
+    page_format: wordcraft_doc::section::NumFormat,
+    early: &'p EarlyFloats,
+    web: bool,
+    settle: bool,
+) -> PageBuilder<'p> {
     PageBuilder {
         pages: Vec::new(),
         sect,
+        page_format,
         sect_idx: 0,
         col: 0,
         cols: Vec::new(),
@@ -220,6 +247,7 @@ fn turned_sections(ctx: &mut Ctx, sections: &[(usize, &SectionProps)], web: bool
         .iter()
         .map(|(_, s)| {
             (!web && s.text_direction.is_turned()).then(|| {
+                ctx.fields.page_format = s.page_num_format;
                 let top = body_top_for(ctx, s, s.headers.default);
                 vertical::unturned_sect(s, top)
             })
@@ -231,6 +259,7 @@ fn turned_sections(ctx: &mut Ctx, sections: &[(usize, &SectionProps)], web: bool
 /// previous section's, and take its room. `fixed`: the margins are the room (continuous views and
 /// turned sections).
 fn section_tops(ctx: &mut Ctx, hf: &HfLinks, (si, sect): (usize, &SectionProps), fixed: bool) -> Tops {
+    ctx.fields.page_format = sect.page_num_format;
     let (heads, feet) = (hf.heads.set(si), hf.feet.set(si));
     let hb = |i: Option<u32>| hf.defining_width(false, si, i);
     let fb = |i: Option<u32>| hf.defining_width(true, si, i);
@@ -245,6 +274,8 @@ fn section_tops(ctx: &mut Ctx, hf: &HfLinks, (si, sect): (usize, &SectionProps),
 fn begin_section_state<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, sec: &Sec<'p>, totals: &Totals, web: bool) {
     let (doc, sect, si) = (ctx.doc, sec.sect, sec.si);
     pb.sect = sect;
+    pb.page_format = sec.page_format;
+    ctx.fields.page_format = sec.page_format;
     pb.sect_idx = si;
     pb.sect_beneath = doc.note_options(sect, false).pos == wordcraft_doc::section::NotePos::BeneathText;
     if !web && !doc.footnote_separators.is_empty() {
@@ -262,6 +293,8 @@ fn begin_section_state<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, sec: &Sec<'p
 fn end_previous_section<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<'p>, si: usize, block: usize) {
     let Some((_, prev)) = si.checked_sub(1).and_then(|k| hf.sections.get(k)) else { return };
     pb.sect = prev;
+    pb.page_format = prev.page_num_format;
+    ctx.fields.page_format = prev.page_num_format;
     pb.sect_idx = si - 1;
     let (ph, pf) = (hf.heads.set(si - 1), hf.feet.set(si - 1));
     let top = body_top_for(ctx, prev, ph.default);
@@ -280,6 +313,8 @@ fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<
     if filler && !mode.web {
         end_previous_section(ctx, pb, hf, sec.si, block);
         pb.sect = sec.sect;
+        pb.page_format = sec.page_format;
+        ctx.fields.page_format = sec.page_format;
         pb.sect_idx = sec.si;
     }
     if restart.is_some() {
@@ -306,7 +341,13 @@ fn continue_page(pb: &mut PageBuilder, sect: &SectionProps, block: usize) {
 /// again from the start of the block that reaches it, with shorter columns.
 fn prepare_section_end(pb: &mut PageBuilder, sections: &[(usize, &SectionProps)], (si, web): (usize, bool)) -> bool {
     let next = sections.get(si + 1).map(|(_, s)| s.start);
-    let balance = !web && pb.cols.len() > 1 && pb.sect.valign == wordcraft_doc::section::PageVAlign::Top && next == Some(SectionStart::Continuous);
+    // An ODF section may ask for balanced columns at the end of the document too, or for none.
+    let follows = match pb.sect.balance_columns {
+        None => next == Some(SectionStart::Continuous),
+        Some(true) => next.is_none() || next == Some(SectionStart::Continuous),
+        Some(false) => false,
+    };
+    let balance = !web && pb.cols.len() > 1 && pb.sect.valign == wordcraft_doc::section::PageVAlign::Top && follows;
     pb.col_break_page = None;
     pb.next_starts_page = !web && next.is_some_and(|s| s != SectionStart::Continuous);
     balance
@@ -485,7 +526,7 @@ pub(crate) fn layout_pass(
     let first_sect = sections.first().map_or(&default_sect, |(_, s)| *s);
     let web_sect = mode.reflow.then(|| reflow_sect(first_sect, opts));
     let sect_ref = web_sect.as_ref().unwrap_or(first_sect);
-    let mut pb = new_page_builder(sect_ref, early, mode.web, !may_rewrap && !mode.reflow);
+    let mut pb = new_page_builder(sect_ref, first_sect.page_num_format, early, mode.web, !may_rewrap && !mode.reflow);
     let mut endnotes = endnote_queue(&ctx);
     // Text boxes laid out in balancing attempts that were thrown away.
     let mut boxes_discarded = 0usize;
@@ -493,15 +534,23 @@ pub(crate) fn layout_pass(
     let turned = turned_sections(&mut ctx, sections, mode.web);
     let mut prev_turn = TextDirection::Horizontal;
     for (si, (end, sect)) in sections.iter().enumerate() {
+        let page_format = sect.page_num_format;
         let turn = if mode.reflow { TextDirection::Horizontal } else { sect.text_direction };
         let sect: &SectionProps = match turned.get(si) {
             Some(Some(t)) => t,
             _ if mode.reflow => sect_ref,
             _ => sect,
         };
+        ctx.fields.page_format = page_format;
         let tops = section_tops(&mut ctx, &hf, (si, sect), mode.reflow || turn.is_turned());
         let start = if si == 0 { SectionStart::NextPage } else { sect.start };
-        let sec = Sec { si, sect, start, tops };
+        let sec = Sec { si, sect, page_format, start, tops };
+        if !mode.web && !pb.pages.is_empty() && (start != SectionStart::Continuous || turn != prev_turn) {
+            // The page the section before ends on is finished with its own margins and footnote
+            // separators, before this section's replace them: the footnotes pending on it
+            // belong to the section whose page it is (#5289).
+            pb.finish_page();
+        }
         begin_section_state(&mut ctx, &mut pb, &sec, totals, mode.web);
         if mode.web && si > 0 {
             // one long page
@@ -560,6 +609,7 @@ struct Snap<'a> {
     eq_count: u32,
     page_field: u32,
     boxes: usize,
+    header_repeats: usize,
 }
 
 impl<'a> Snap<'a> {
@@ -577,6 +627,7 @@ impl<'a> Snap<'a> {
             eq_count: ctx.eq_count,
             page_field: ctx.fields.page,
             boxes: ctx.boxes.total(),
+            header_repeats: ctx.header_repeats,
         }
     }
 
@@ -599,6 +650,7 @@ impl<'a> Snap<'a> {
         ctx.counters = self.counters.clone();
         ctx.eq_count = self.eq_count;
         ctx.fields.page = self.page_field;
+        ctx.header_repeats = self.header_repeats;
     }
 }
 
