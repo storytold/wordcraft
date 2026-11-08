@@ -742,7 +742,7 @@ fn fallback_paths(path: &std::path::Path) -> Fallbacks {
 
 /// [`open_for_read`] with each step injectable, for tests: `open` opens a path, `retry` says whether
 /// an error is worth another route, and `fallbacks` lists those routes lazily.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(windows, test))]
 fn open_with(
     path: &std::path::Path,
     open: &dyn Fn(&std::path::Path) -> std::io::Result<std::fs::File>,
