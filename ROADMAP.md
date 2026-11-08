@@ -236,6 +236,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-11-03: Size keeps the side it isn't asked to change (#5469): typing only the width of a straight line keeps its height of 0 instead of making it 1 pt; the 1–4000 pt limits apply only to the sides a `picture.size` call changes. Readiness unchanged.
 - 2026-11-03: Find and Replace: a keyboard apostrophe also finds typographic single quotes, so smart-quoted typing stays searchable (#5388). Regex, wildcards, literal searches and numeric character codes remain exact. Original UTF-8 match ranges and replacement spelling are preserved; readiness unchanged.
 - 2026-11-03: Security: XLSX import finds each sheet's worksheet part through an index of the workbook's relationships, built once, instead of searching every relationship for every sheet. Readiness unchanged.
+- 2026-11-03: Layout: a row of a nested table marked Can't Split isn't split with its outer row any more. The outer row moves to the next page whole when that row comes first in it, as Word does (docxide-pdf `nested-first-row-*-cant1`), and otherwise splits above it (inferred, not yet checked in Word); on a fresh page a nested row taller than the room still splits rather than running into the margin. Readiness unchanged.
 - 2026-11-03: Layout: before Word 2013 layout a floating table that may not overlap another and is moved below it keeps its own left edge, as Word places it, also when its first cell has no left margin; the layout took a zero margin for Word 2013 layout and stepped the table in by its distance from the text. Readiness unchanged.
 - 2026-11-03: Security: pasting text boxes charges each copied story for its formatting too (run, mark, paragraph and section properties), not only its text and objects, so a story with huge style or font names can't copy past the paste's 32 MiB text box budget. Readiness unchanged.
 - 2026-11-03: Security: `.doc` import keeps one width, shading, alignment and merge override per table cell, the last one winning as before, instead of a copy every time a paragraph's properties repeat the sprm, so a shared PAPX can't pile up copies on every paragraph mark. Readiness unchanged.
@@ -352,6 +353,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 
 | Date | What landed |
 | 2026-11-04 | The CLI opens a non-Unicode input filename even after options such as `--page 2` or `--format flatopc`; text option values still require Unicode; `run --file` and `run --script` retain native paths. |
+| 2026-11-06 | Accept All and Reject All no longer restyle the paragraph after an empty one carrying a section break (#5667): a Compare that added a section, then Reject All, left `Body` in the removed paragraph's Normal style and indents. The empty paragraph now goes whole and its section joins the following one, as deleting the break does. |
 | 2026-11-04 | Pictures keep the brightness, contrast and transparency their file gives them (#1711, #1766): a "Washout" picture watermark (VML `gain`/`blacklevel`) and a washed-out letterhead picture behind the text (`a:lum`) are drawn faded on screen and in PDF instead of at full colour, with the pixel curve measured on Word's own PDF export; `a:alphaModFix` transparency too. Saved back as DrawingML (and as VML `gain`/`blacklevel` in Word 2003 XML, without the transparency). Picture Format › Corrections, Transparency and Color › Washout replace the file's values (other Color modes leave them alone), and Reset Picture discards them all, as in Word; the PDF embeds the corrected pixels once per picture |
 |---|---|
 | 2026-10-17 | Copies keep their formatting in programs that read RTF rather than HTML: Copy and Cut put RTF beside the text and HTML on the system clipboard on Windows, macOS and Wayland (an X11 copy stays text and HTML, since arboard owns the selection there; a copy of only pictures or shapes carries no HTML or RTF, so pasting it back keeps every detail), and Paste reads another program's RTF on macOS and X11 too, not only on Windows and Wayland |
@@ -366,6 +368,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-29 | Insert › Shapes shows the basic shapes as a grid of code-drawn icon tiles, each with an accessible name and tooltip, instead of a text list (#4349) |
 | 2026-11-03 | A password-protected file named on the command line (double-clicked in the file manager) asks for its password when the first blank document was replaced because File › Options chose a region; the window now follows that replacement at once, so the first frame no longer takes it for a document switch and drops the Password box (#5299) |
 | 2026-11-01 | Markdown export: a list inside a block quote stays in the quote (`> - item`), its continuation lines included; it was read as quoted list paragraphs but written without `>`, so the list moved out of the quote on every save |
+| 2026-11-01 | Rulers: in a section of several text columns the horizontal ruler shades the space between each two columns like the margins (Print Layout, in the main text outside tables, with the selection in one section); dragging an edge of a space changes the spacing (equal columns stay equal, as in Word for Mac), one undo step per drag (#5197) |
 | 2026-10-29 | Window sizing falls back to the screen rectangle when the reported inner size is invalid, and an Equation symbol tooltip no longer repeats a missing glyph's name or code point |
 | 2026-10-29 | A NUL in a document title no longer reaches the native window title, which panicked on X11 (#3634): displayed titles and suggested file names drop NUL characters and fall back to the untitled name when empty; the stored title is unchanged |
 | 2026-10-28 | The Traditional Chinese interface draws hanzi to the Taiwan standard: on the desktop an installed Traditional Chinese font (PingFang TC on macOS, Microsoft JhengHei on Windows, Noto Sans CJK TC on Linux) comes before the embedded Noto Sans CJK SC, which drew 說, 這, 為, 戶 in mainland shapes; without one, and on the web, nothing changes. |
@@ -870,6 +873,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-06 | trivial | Windows print submissions isolated per helper process; cancelled driver work cannot block a retry (#5710) |
 | 2026-11-06 | trivial | Progress log: print cancellation before sending, including without a document, and the Windows repeated-conversion limitation (#5710) |
 | 2026-11-06 | trivial | Progress log: the printer list no longer waits on printer drivers (#5710) |
+| 2026-11-06 | trivial | Progress log: resolving away an empty paragraph with a section break keeps the next paragraph's properties, #5667; readiness estimates unchanged |
 | 2026-11-05 | trivial | PR #4545: eligible cell floats retain in-bounds offsets and touch the outer cell edge only on overflow, ignoring wrap distances for object placement. Front-of-text, turned-cell and outside-cell opt-outs remain. Synthetic geometry controls; native front/behind-text parity remains unqualified. |
 | 2026-11-04 | trivial | Progress log: CLI convert format options; readiness estimates unchanged |
 | 2026-11-04 | trivial | Progress log: MHT quoted MIME parameters; readiness estimates unchanged |
@@ -911,6 +915,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-03 | trivial | Progress log: Shape Format › Size in the interface unit (#4196) |
 | 2026-11-03 | trivial | Find smart-quoted text with a keyboard apostrophe (#5388); exact search modes and replacement spelling preserved. |
 | 2026-11-03 | trivial | Progress log: a picture in a paragraph whose hidden mark closes a section keeps its room (#5288) |
+| 2026-11-03 | trivial | Progress log: a nested table's Can't Split row moves on with its outer row |
 | 2026-11-03 | trivial | Progress log: Replace and Remove Table of Contents with Word's title above a section break (#4041) |
 | 2026-11-03 | trivial | Progress log: language-packs-2 published and pinned, 75 Language packs |
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |
@@ -946,6 +951,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-28 | trivial | Note conversion walks reference offsets and formatting runs together, #4750; readiness estimates unchanged. |
 | 2026-10-29 | trivial | DOCX comment IDs use ordered paragraph lookup and one durable-ID reservation set; threading and ID rules unchanged |
 | 2026-10-28 | trivial | #4658: bound Markdown reference-label rejection work, preserving literal source and ordinary link matching |
+| 2026-11-01 | trivial | Progress log: the ruler shows the spaces between text columns (#5197) |
 | 2026-10-29 | trivial | Progress log: Insert › Shapes icon grid (#4349) |
 | 2026-10-29 | trivial | HTML import keeps preformatted lines with CR, CRLF or LF input newlines (#4810); numeric character references retain their separate meaning; readiness estimates unchanged. |
 | 2026-10-29 | trivial | Progress log: window fallback geometry and equation symbol tooltips |
