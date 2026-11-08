@@ -8495,12 +8495,14 @@ fn a_percentage_width_past_the_text_column_is_kept() {
 
 #[test]
 fn a_percentage_table_before_word_2013_adds_its_outer_cell_margins() {
-    // Measured in Word for Windows on a 100% table of two auto columns: in compatibility mode 14
-    // (and in files that name no mode) the table is the text width plus the first cell's left
-    // and the last cell's right margin; in mode 15 it is the text width.
-    let gap = |mode: u32, table_margins: (f32, f32), own: Option<f32>| {
+    // Measured in Word for Windows on tables of two auto columns: in compatibility mode 14 and
+    // earlier (Word reads a file naming no mode as mode 12) a percentage is a share of the text
+    // width plus the first cell's left and the last cell's right margin, those margins added
+    // before the share is taken; in mode 15 it is a share of the text width (Word reads mode 16
+    // as 15).
+    let gap_at = |pct: f32, mode: u32, table_margins: (f32, f32), own: Option<f32>| {
         let mut t = Table::new(1, 2, 225.0);
-        t.props.width_pct = Some(100.0);
+        t.props.width_pct = Some(pct);
         t.props.cell_margins = Some([0.0, table_margins.0, 0.0, table_margins.1]);
         for (i, c) in t.rows[0].cells.iter_mut().enumerate() {
             c.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("x", Default::default()))];
@@ -8517,8 +8519,22 @@ fn a_percentage_table_before_word_2013_adds_its_outer_cell_margins() {
         let [(x1, _, _)] = para_at(&l, &[0, 0, 1, 0])[..] else { panic!("second cell missing") };
         (x1 - x0, text_width)
     };
+    let gap = |mode: u32, table_margins: (f32, f32), own: Option<f32>| gap_at(100.0, mode, table_margins, own);
     let close =
         |got: f32, want: f32, case: &str| assert!((got - want).abs() < 0.3, "{case}: second cell's text is {got} pt after the first's, Word {want}");
+    // Half the width: Word's table is 229.5pt with 3.75pt margins and 235.75pt with 10pt margins.
+    // Adding the margins after taking the share would make them 233.2pt and 245.7pt.
+    let (g, tw) = gap_at(50.0, 14, (3.75, 3.75), None);
+    close(g, (tw + 7.5) / 4.0, "mode 14, 50%, 3.75pt margins");
+    let (g, tw) = gap_at(50.0, 14, (10.0, 10.0), None);
+    close(g, (tw + 20.0) / 4.0, "mode 14, 50%, 10pt margins");
+    let (g, tw) = gap_at(50.0, 15, (10.0, 10.0), None);
+    close(g, tw / 4.0, "mode 15, 50%");
+    // A file naming no mode is read as the legacy mode, and a mode above 15 sizes as 15.
+    let (g, tw) = gap(wordcraft_doc::LEGACY_COMPAT_MODE, (3.75, 3.75), None);
+    close(g, (tw + 7.5) / 2.0, "no mode named");
+    let (g, tw) = gap(16, (10.0, 10.0), None);
+    close(g, tw / 2.0, "mode 16");
     let (g, tw) = gap(14, (3.75, 3.75), None);
     close(g, (tw + 7.5) / 2.0, "mode 14, 3.75pt margins");
     let (g, tw) = gap(14, (2.5, 10.0), None);
