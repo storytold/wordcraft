@@ -259,6 +259,25 @@ fn the_ignored_paste_uses_up_its_paste_modifiers() {
     assert!(a.canvas.paste_event_mods.is_none());
 }
 
+/// #5616: with no text on the clipboard the browser sends no paste event after Mod+Shift+V; the
+/// wait for it ends, so a later menu-bar paste with no key or pointer press in between pastes.
+#[test]
+fn a_menu_bar_paste_after_an_unpaired_mod_shift_v_pastes() {
+    let mut a = copied_bold_app();
+    a.canvas.paste_event_follows_chord = true;
+    let ctx = egui::Context::default();
+    let chord = Modifiers::COMMAND | Modifiers::SHIFT;
+    let frame = |a: &mut WordApp, time: f64, events: Vec<egui::Event>| {
+        ctx.run_ui(egui::RawInput { time: Some(time), events, ..Default::default() }, |ui| canvas_events(a, ui.ctx())).drop_without_applying_deltas();
+    };
+    frame(&mut a, 10.0, vec![egui::Event::ModifiersChanged(chord), key_event(Key::V, true, chord)]);
+    assert!(a.canvas.ignore_next_paste, "the key waits for its paired paste");
+    frame(&mut a, 10.5, vec![egui::Event::ModifiersChanged(Modifiers::NONE)]);
+    assert!(a.canvas.ignore_next_paste, "still within the wait");
+    frame(&mut a, 12.0, vec![egui::Event::Paste("menu".into())]);
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "source menu", "the menu-bar paste pasted");
+}
+
 /// #5616: the browser paste event after a formatting paste is dropped before an open equation
 /// can type it.
 #[test]

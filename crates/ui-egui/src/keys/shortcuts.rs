@@ -143,6 +143,7 @@ pub(super) fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
             // rebinding to another key makes no paste event.
             let paste_follows = chord && app.canvas.paste_event_follows_chord;
             app.canvas.ignore_next_paste = formatting && paste_follows;
+            app.canvas.paste_wait_since = None;
             if !formatting && paste_follows {
                 return true;
             }

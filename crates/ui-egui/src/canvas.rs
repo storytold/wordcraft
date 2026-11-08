@@ -248,6 +248,9 @@ pub struct CanvasState {
     /// On the web, Mod+Shift+V pasted formatting from its key press: the browser's paste event
     /// that follows is the same keystroke and pastes nothing (#5616). Any other key press clears it.
     pub(crate) ignore_next_paste: bool,
+    /// When `ignore_next_paste` was set (input time, seconds): the browser's paired paste comes
+    /// with the key, so the wait ends after `PASTE_WAIT` and a later paste isn't dropped.
+    pub(crate) paste_wait_since: Option<f64>,
     /// The platform sends a paste event after Mod+Shift+V's key (a browser does; a desktop shell
     /// doesn't). Only then does the key leave a paste event to ignore or to let paste text.
     pub(crate) paste_event_follows_chord: bool,
@@ -434,6 +437,7 @@ impl Default for CanvasState {
             paste_mods: None,
             paste_event_mods: None,
             ignore_next_paste: false,
+            paste_wait_since: None,
             paste_event_follows_chord: cfg!(target_arch = "wasm32"),
             swallow_text: false,
             ime_join_text: None,
