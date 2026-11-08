@@ -184,20 +184,23 @@ pub(super) fn drawing_grid_step(spacing: f32, scale: f32) -> f32 {
 /// hovering over (#3931). The preview is laid out on a copy, so the document and its undo history
 /// change only when a square is clicked.
 pub(super) fn shown_layout(app: &mut WordApp) -> std::sync::Arc<DocLayout> {
-    let Some((rows, cols)) = app.canvas.table_preview.take() else {
+    let table = app.canvas.table_preview.take().map(|(rows, cols)| ("insert.table".to_string(), json!({"rows": rows, "cols": cols})));
+    let command = app.canvas.command_preview.take();
+    app.canvas.command_previewed = command.clone().filter(|_| table.is_none());
+    let Some((id, params)) = table.or(command) else {
         app.canvas.table_preview_layout = None;
         return app.session.layout();
     };
     // The caret can move, or the view change, with the grid still hovered: the table then goes
     // somewhere else, or the page is laid out to another width.
-    let key = ((rows, cols, app.session.document_id(), app.session.rev(), app.session.sel.clone()), app.session.layout());
+    let key = ((id.clone(), params.clone(), app.session.document_id(), app.session.rev(), app.session.sel.clone()), app.session.layout());
     if let Some((k, _, _, l)) = &app.canvas.table_preview_layout
         && k.0 == key.0
         && std::sync::Arc::ptr_eq(&k.1, &key.1)
     {
         return l.clone();
     }
-    match app.session.preview_layout("insert.table", &json!({"rows": rows, "cols": cols})) {
+    match app.session.preview_layout(&id, &params) {
         Some((doc, sel, l)) => {
             app.canvas.table_preview_layout = Some((key, doc, sel, l.clone()));
             l
