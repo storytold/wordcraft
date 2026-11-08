@@ -427,6 +427,27 @@ mod tests {
 
     const RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
 
+    #[test]
+    fn workbook_sheets_find_their_relationships_by_index() {
+        // Every sheet searched every relationship; 4,096 sheets over 20,000 relationships.
+        let sheets: String = (0..MAX_SHEETS).map(|i| format!(r#"<sheet name="S{i}" sheetId="{i}" r:id="rId{i}"/>"#)).collect();
+        let wb = format!(
+            r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>{sheets}</sheets></workbook>"#
+        );
+        let mut rels = String::from(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#);
+        // A chart sheet sharing a worksheet's id doesn't hide it.
+        rels.push_str(r#"<Relationship Id="rId0" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" Target="chartsheets/c.xml"/>"#);
+        for i in 0..20_000 {
+            rels.push_str(&format!(
+                r#"<Relationship Id="rId{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{i}.xml"/>"#
+            ));
+        }
+        rels.push_str("</Relationships>");
+        let names = sheet_names(&zip(&[("_rels/.rels", RELS), ("xl/workbook.xml", &wb), ("xl/_rels/workbook.xml.rels", &rels)])).unwrap();
+        assert_eq!(names.len(), MAX_SHEETS);
+        assert_eq!(names.first().map(String::as_str), Some("S0"));
+    }
+
     fn xlsx(sheet1: &str) -> Vec<u8> {
         let wb = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><workbookPr/><sheets><sheet name="People" sheetId="1" r:id="rId1"/><sheet name="Chart" sheetId="2" r:id="rId9"/><sheet name="Notes" sheetId="3" r:id="rId2"/></sheets></workbook>"#;
         let wb_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="/xl/worksheets/sheet2.xml"/><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" Target="chartsheets/sheet1.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
