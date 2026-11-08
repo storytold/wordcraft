@@ -1,5 +1,5 @@
 # File-format parity with Microsoft Word
-> **2026-11-07:** A page background can be a solid colour, a gradient, a pattern or a picture/texture (`w:background` with VML `v:background/v:fill`): DOCX reads and writes each with its transparency, and the screen, Print Layout and PDF draw them. Fill Effects is the `design.pageFill` command and Draw › Edit › Format Background. Part of #3930; see the row for what remains.
+> **2026-11-07:** A page background can be a solid colour, a gradient, a pattern or a picture/texture (`w:background` with VML `v:background/v:fill`): DOCX reads and writes each, with gradient and pattern transparency as VML's single `opacity` (a gradient's two ends share it, averaged on write; a solid fill keeps no transparency), and the screen, Print Layout and PDF draw them. Fill Effects is the `design.pageFill` command and Draw › Edit › Format Background. Part of #3930; see the row for what remains.
 > **2026-11-05:** A Word template opened from the file manager starts a new document based on it, and is never saved over (#3433).
 > **2026-11-05:** Strict Open XML documents open with their shapes, text boxes, groups and canvases (#3548).
 
