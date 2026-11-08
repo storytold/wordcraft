@@ -121,17 +121,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("file.recover", "Recover Unsaved Documents", "File › Info", |s, v| s.recover(v))
         .params(r#"{"restore"?: recoveryId, "discard"?: recoveryId, "refresh"?: true}; desktop only; returns {enabled,busy,documents,error}; restore loads asynchronously without a file path"#)
         .pure(),
-        CommandSpec::new("file.newFromTemplate", "New from Template", "File › New", |s, v| {
-            let path = p::req_str(v, "path")?;
-            let mut doc = crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?;
-            // As in Word, the new document is attached to the template it came from (#2852).
-            doc.settings.attached_template = Some(path.to_string());
-            s.add_document(doc);
-            s.dirty = true;
-            sel_result(s)
-        })
-        .params(r#"{"path": string} → a new, untitled document from the template, attached to it"#)
-        .pure(),
+        CommandSpec::new("file.newFromTemplate", "New from Template", "File › New", crate::cmd::file::new_from_template)
+            .params(
+                r#"{"path": string, "data"?: base64 (the template's bytes; `path` then only names it), "password"?: string (for a password-protected template), "replaceBlank"?: bool (an untouched blank document gives way to it, as to a file file.open opens)} → a new, untitled document from the template, attached to it"#,
+            )
+            .pure(),
         CommandSpec::new("file.saveTemplate", "Save as Template", "File › Save As", |s, v| {
             let path = p::req_str(v, "path")?;
             // A .dotm keeps its name (#2852); anything else becomes a .dotx.
