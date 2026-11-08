@@ -489,8 +489,8 @@ impl super::Writer<'_> {
         let mut used = HashSet::new();
         let counted = rel_attr_values(&root, &mut used, 0);
         // Every relationship the markup uses must be writable, or the object would be broken.
-        let writable = |id: &String| src.refs.iter().any(|r| r.id == *id && (r.external || self.embeds.available(&r.target)));
-        if !counted || !used.iter().all(writable) {
+        let writable: HashSet<&str> = src.refs.iter().filter(|r| r.external || self.embeds.available(&r.target)).map(|r| r.id.as_str()).collect();
+        if !counted || !used.iter().all(|id| writable.contains(id.as_str())) {
             log::warn!("docx: an embedded object's parts are missing; it is left out");
             self.embeds.lose(&object_name(src), LossKind::LeftOut, LEFT_OUT.into());
             return None;
@@ -643,8 +643,9 @@ impl super::Writer<'_> {
                 }
             }
             "wp:effectExtent" => {
-                // Word's effect extent also covers a rotated object's overhang (its rotated bounds).
-                let (px, py) = float.spin_pad(w, h);
+                // Word's effect extent also covers a rotated object's overhang (its rotated bounds),
+                // unless the file it came from kept none.
+                let (px, py) = if float.is_bare_turn() { (0.0, 0.0) } else { float.spin_pad(w, h) };
                 let [el, et, er, eb] = float.effect_extent();
                 let ext = [el + px, et + py, er + px, eb + py].map(emu);
                 e.attrs.retain(|(k, _)| !matches!(k.as_str(), "l" | "t" | "r" | "b"));
@@ -781,7 +782,6 @@ fn set_attr(e: &mut El, k: &str, v: &str) {
     }
 }
 
-/// Is attribute `k` a relationship id (see `read::embed::rel_ids`)?
 /// What [`missing_ids`] found.
 enum Ids {
     /// Not XML: it can't name relationships.
@@ -863,7 +863,8 @@ fn remove_optional_links(xml: &[u8], ids: &[String]) -> Vec<u8> {
     out
 }
 
-/// Add the relationship ids `e` uses to `out`. False past [`MAX_EMBEDDED_RELS`] distinct ids
+/// Add the distinct relationship ids `e` uses to `out`, a set so a large tree (a native
+/// document's markup never went through the reader's id limit) costs no scan per attribute. False past [`MAX_EMBEDDED_RELS`] distinct ids
 /// (the rest aren't collected).
 fn rel_attr_values(e: &El, out: &mut HashSet<String>, depth: usize) -> bool {
     if depth > MAX_DEPTH {
@@ -1079,6 +1080,24 @@ fn valid_part_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relationship_ids_are_collected_once_each() {
+        // A native document's embedded markup skips the reader's id limit: 40,000 distinct ids
+        // (each named twice) were a scan of every id collected so far, per attribute.
+        let mut xml = String::from(
+            r#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+        );
+        for i in 0..40_000 {
+            xml.push_str(&format!(r#"<w:r r:id="rId{i}"/><w:r r:id="rId{i}"/>"#));
+        }
+        xml.push_str("</w:p>");
+        let root = xml::parse(xml.as_bytes()).unwrap();
+        let mut used = HashSet::new();
+        rel_attr_values(&root, &mut used, 0);
+        assert_eq!(used.len(), 40_000);
+        assert!(used.contains("rId39999"));
+    }
 
     #[test]
     fn charts_cut_to_the_limits_on_save_say_so_once() {
