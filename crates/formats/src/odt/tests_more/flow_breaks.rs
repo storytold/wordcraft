@@ -186,8 +186,9 @@ fn columns_stating_only_their_shares_keep_their_proportions() {
         assert_eq!(g.len(), 2, "{junk}: {g:?}");
         assert!((g[0] - g[1]).abs() < 0.01, "{junk}: {g:?}");
     }
-    // A width stated beside a share is the width.
-    let stated = r#"<style:style style:name="A" style:family="table-column"><style:table-column-properties style:column-width="2in" style:rel-column-width="1*"/></style:style><style:style style:name="B" style:family="table-column"><style:table-column-properties style:column-width="1in" style:rel-column-width="1*"/></style:style>"#;
+    // A table filling the margins with a width stated beside each share keeps the widths: files
+    // give them in proportion, and the table is fitted to the margins.
+    let stated = r#"<style:style style:name="A" style:family="table-column"><style:table-column-properties style:column-width="2in" style:rel-column-width="2*"/></style:style><style:style style:name="B" style:family="table-column"><style:table-column-properties style:column-width="1in" style:rel-column-width="1*"/></style:style>"#;
     let g = grid(&doc(stated, table));
     assert!((g[0] / g[1] - 2.0).abs() < 0.01, "{g:?}");
 }
@@ -248,6 +249,28 @@ fn columns_by_shares_divide_the_right_width() {
         &table(&["A", "B"]),
     );
     near(&grid(&d), &[100.0, 300.0]);
+    // An aligned table whose every column states both: the shares (measured in LibreOffice 26.8).
+    let d = doc(
+        &format!(
+            "{}{}{}",
+            table_style(r#"style:width="400pt" table:align="left""#),
+            column("A", r#"style:column-width="300pt" style:rel-column-width="1*""#),
+            column("B", r#"style:column-width="100pt" style:rel-column-width="1*""#)
+        ),
+        &table(&["A", "B"]),
+    );
+    near(&grid(&d), &[200.0, 200.0]);
+    // A share too small for a column is the narrowest one, not the grid lost to the equal split.
+    let d = doc(
+        &format!(
+            "{}{}{}",
+            table_style(r#"style:width="400pt" table:align="left""#),
+            column("A", r#"style:rel-column-width="1*""#),
+            column("B", r#"style:rel-column-width="65535*""#)
+        ),
+        &table(&["A", "B"]),
+    );
+    near(&grid(&d), &[6.0, 400.0]);
     // The default style's share, for a column with none and one whose style says none.
     let styles = r#"<office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"><office:styles><style:default-style style:family="table-column"><style:table-column-properties style:rel-column-width="1000*"/></style:default-style></office:styles></office:document-styles>"#;
     let content = format!(
