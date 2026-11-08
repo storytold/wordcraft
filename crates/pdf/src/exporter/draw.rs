@@ -82,6 +82,7 @@ impl Exporter<'_> {
                 let mut pb = PathBuilder::new();
                 let mut used = 0usize;
                 let mut last = (0.0, 0.0);
+                let (mut min, mut max) = ((f32::INFINITY, f32::INFINITY), (f32::NEG_INFINITY, f32::NEG_INFINITY));
                 for &(x, y) in pts.iter().filter(|(x, y)| ok(*x) && ok(*y)) {
                     if used > 0 {
                         pb.line_to(x, y);
@@ -90,12 +91,25 @@ impl Exporter<'_> {
                     }
                     used += 1;
                     last = (x, y);
+                    min = (min.0.min(x), min.1.min(y));
+                    max = (max.0.max(x), max.1.max(y));
                 }
                 // A tap (one usable point): a zero-length line, which round caps draw as a dot.
                 if used == 1 {
                     pb.line_to(last.0, last.1);
                 }
                 let Some(p) = pb.finish() else { return };
+                // Repeated or lone stationary native samples collapse to a point, but krilla
+                // drops zero-size geometry, so paint the filled round nib the rasterizer shows.
+                if matches!(d, Draw::NativeInk { .. }) && min.0 == max.0 && min.1 == max.1 {
+                    s.set_stroke(None);
+                    s.set_fill(Some(fill(*color, *alpha)));
+                    if let Some(nib) = shape_path(ShapeKind::Ellipse, &Rect::new(last.0 - width / 2.0, last.1 - width / 2.0, width, width), None) {
+                        s.draw_path(&nib);
+                    }
+                    s.set_fill(None);
+                    return;
+                }
                 s.set_fill(None);
                 s.set_stroke(Some(Stroke {
                     paint: rgb::Color::new(color.0, color.1, color.2).into(),
