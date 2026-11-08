@@ -35,6 +35,7 @@ fn lay_in(math: &Math, lin: &str, display: bool, avail: f32, mp: &MathProps) -> 
 
 #[test]
 fn eq_array_rows_without_ampersand_are_centred() {
+    crate::test_fonts();
     // Word centres a row with no `&` in the array (#2617: a case row "a, n odd" above
     // "|a|, &n even"), whether or not the other rows have one.
     use wordcraft_doc::math::*;

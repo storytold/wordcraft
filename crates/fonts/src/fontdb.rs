@@ -7,15 +7,15 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use kurbo::BezPath;
 use skrifa::instance::{Location, LocationRef, Size};
-use skrifa::outline::{DrawSettings, Engine, Hinting, HintingInstance, HintingOptions, OutlinePen, Target};
+use skrifa::outline::{
+    DrawSettings, Engine, GlyphStyles, Hinting, HintingInstance, HintingOptions, OutlineGlyphFormat, OutlinePen, SmoothMode, Target,
+};
 use skrifa::raw::FileRef;
 use skrifa::string::StringId;
 use skrifa::{GlyphId, MetadataProvider};
 
 pub(crate) mod user;
 pub use user::{FONT_FILE_EXTS, FontFormat, Installed, MAX_FONT_FILE_BYTES, UserFont, UserFontError, decode_font_file, is_font_file_name, sniff};
-
-static GLOBAL: std::sync::OnceLock<FontDb> = std::sync::OnceLock::new();
 
 mod catalog;
 mod face;
@@ -41,10 +41,16 @@ use names::{MAX_NAME_CHARS, file_face_names, font_faces, mini_font, name};
 #[cfg(test)]
 pub(crate) use names::{last_resort_face, legacy_family};
 
+static GLOBAL: std::sync::OnceLock<FontDb> = std::sync::OnceLock::new();
+
 /// Process-wide font database.
 pub struct FontDb {
     faces: RwLock<Vec<Arc<FontFace>>>,
     outlines: Mutex<HashMap<(u32, u32), Arc<BezPath>>>,
+    /// Screen-hinted outlines per (face, glyph, ppem bits); `None` where the face can't be hinted.
+    hinted: Mutex<HashMap<(u32, u32, u32), Option<Arc<BezPath>>>>,
+    /// Light hinting instances per (face, ppem bits); `None` where the face can't be hinted.
+    hinters: Mutex<HashMap<(u32, u32), Option<Arc<HintingInstance>>>>,
     /// Fallback faces found per (character, excluded face), valid while the face count is the
     /// one stored (faces are only ever added). Layout asks once per uncovered character, and the
     /// search sorts every loaded face, so without this text in a script the requested font lacks
@@ -110,6 +116,8 @@ impl FontDb {
         Self {
             faces: RwLock::new(faces),
             outlines: Mutex::new(HashMap::new()),
+            hinted: Mutex::new(HashMap::new()),
+            hinters: Mutex::new(HashMap::new()),
             fallbacks: RwLock::new(FallbackCache::default()),
             run_fallbacks: RwLock::new(RunFallbackCache::default()),
             #[cfg(not(target_arch = "wasm32"))]
