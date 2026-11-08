@@ -13,6 +13,7 @@ fn image(item: Draw) -> Rendered {
     render_items(&Document::new(), &items, Rect::new(0.0, 0.0, 40.0, 40.0), 4.0, &RenderOptions::default())
 }
 
+/// Legacy freeform widths keep their clamp while invalid imported widths are rejected.
 #[test]
 fn legacy_ink_keeps_its_width_clamp_and_native_ink_refuses_invalid_widths() {
     for (width, expected) in [(0.01, 0.25), (400.0, 200.0)] {
@@ -30,6 +31,7 @@ fn legacy_ink_keeps_its_width_clamp_and_native_ink_refuses_invalid_widths() {
     }
 }
 
+/// Mask-aware clipping must not change isolated compositing for ordinary clip contents.
 #[test]
 fn ordinary_clips_keep_isolated_compositing() {
     let rect = Rect::new(4.0, 4.0, 24.0, 24.0);
@@ -45,6 +47,7 @@ fn ordinary_clips_keep_isolated_compositing() {
     }
 }
 
+/// Valid very thin and wide native strokes retain their requested width when rasterized.
 #[test]
 fn ink_extreme_widths_are_not_clamped() {
     for (width, area, scale, points, column, min_rows, max_rows) in [
@@ -58,6 +61,7 @@ fn ink_extreme_widths_are_not_clamped() {
     }
 }
 
+/// Stationary and repeated native samples render as the same round nib as a short stroke.
 #[test]
 fn native_stationary_strokes_paint_their_round_nib() {
     for (width, area, scale) in [
@@ -104,6 +108,7 @@ fn native_stationary_strokes_paint_their_round_nib() {
     assert!(render(vec![(5.0, 5.0), (5.0, 5.0), (15.0, 5.0)]).pixels == control.pixels, "moving strokes keep their full path");
 }
 
+/// Mask outlines obey the same transformed-path size guard as other rendered paths.
 #[test]
 fn mask_ink_obeys_the_shared_path_extent_guard() {
     let draw = |extent: f32| Draw::MaskInk {
@@ -119,6 +124,7 @@ fn mask_ink_obeys_the_shared_path_extent_guard() {
     assert!(rendered.pixel(4, 4)[3] > 0);
 }
 
+/// Dark-page binary masks invert the composited result rather than only the pen color.
 #[test]
 fn binary_mask_dark_mode_inverts_the_composite_not_just_the_pen() {
     let bounds = Rect::new(0.0, 0.0, 20.0, 20.0);
@@ -145,6 +151,7 @@ fn binary_mask_dark_mode_inverts_the_composite_not_just_the_pen() {
     }
 }
 
+/// Nested mask clips blend against the actual backdrop without painting outside their bounds.
 #[test]
 fn nested_clips_blend_masks_against_the_actual_backdrop() {
     let area = Rect::new(0.0, 0.0, 20.0, 20.0);
@@ -178,6 +185,7 @@ fn nested_clips_blend_masks_against_the_actual_backdrop() {
     }
 }
 
+/// Rotated clips preserve mask backdrop blending and the transformed clip boundary.
 #[test]
 fn rotated_clips_preserve_backdrop_blending_and_clip_boundaries() {
     let area = Rect::new(0.0, 0.0, 20.0, 20.0);
