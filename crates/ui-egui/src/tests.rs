@@ -1742,6 +1742,66 @@ fn wheel_notches_land_at_once_with_animation_effects_off() {
     assert!(first > 0.0 && first < notch, "a notch eases in again: {first}");
 }
 
+/// A Ctrl+wheel notch eases in over several frames, each a new size: those pages are drawn
+/// unhinted (they show for a moment, and hinting each size would fill the hint caches), and
+/// the first frame after the zoom stops draws them hinted, as the platform draws text.
+#[test]
+fn an_easing_zoom_draws_unhinted_pages_until_it_stops() {
+    let ctx = egui::Context::default();
+    let system = std::rc::Rc::new(std::cell::Cell::new(Some(true)));
+    let mut a = app_with_system_animations(&system);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+    let mut t = 0.0;
+    let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        t += 1.0 / 60.0;
+        let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
+        ctx.run_ui(input, |ui| {
+            a.logic(ui.ctx());
+            a.ui(ui);
+        })
+        .drop_without_applying_deltas();
+    };
+    for _ in 0..3 {
+        frame(&mut a, Vec::new());
+    }
+    let platform = crate::canvas::screen_render_options().hinting;
+    assert_eq!(a.canvas.pages_hinted, platform, "at rest");
+    let over_page = a.canvas.canvas_rect.unwrap().center();
+    frame(&mut a, vec![egui::Event::PointerMoved(over_page)]);
+    let wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        source: egui::MouseWheelSource::Unknown,
+        delta: egui::vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::COMMAND,
+    };
+    let before = a.canvas.scale;
+    frame(&mut a, vec![wheel]);
+    // The wheel's own frame already starts the zoom, unhinted.
+    assert_ne!(a.canvas.scale, before, "the zoom starts in the wheel's frame");
+    assert!(!platform || !a.canvas.pages_hinted, "the wheel's frame is unhinted");
+    let (mut eased, mut unhinted) = (0, 0);
+    let mut last = a.canvas.scale;
+    for _ in 0..60 {
+        frame(&mut a, Vec::new());
+        if a.canvas.scale != last {
+            eased += 1;
+            unhinted += usize::from(!a.canvas.pages_hinted);
+            last = a.canvas.scale;
+        } else {
+            break;
+        }
+    }
+    assert!(a.canvas.scale > before && eased >= 2, "the notch eased in over frames: {eased}");
+    if platform {
+        assert_eq!(unhinted, eased, "every in-between size unhinted");
+    }
+    // The frame after the zoom stops: hinted again, at the size it ended on.
+    frame(&mut a, Vec::new());
+    assert_eq!(a.canvas.scale, last);
+    assert_eq!(a.canvas.pages_hinted, platform, "hinted once the zoom stops");
+}
+
 /// With animation effects off a zoom step is finished in its own frame: Ctrl+wheel zooms the
 /// notch's whole step at once, the page is already placed and drawn as it will stay, and the
 /// status bar's zoom readout follows in the very next frame. Turns that arrive in small pieces
@@ -7914,4 +7974,108 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
     h.step();
     h.step();
     assert!(h.state().session.view.read_mode && shown(&h, "Focus"), "Immersive Reader keeps the status bar");
+}
+
+/// Issue #2716: taking documents off the recent list is final — the open document must not be
+/// pushed back by the after-command re-add — and the change goes to the settings at once, so
+/// it survives the app being killed. Junk params return errors, never panics.
+#[test]
+fn recent_list_edits_are_final_and_persist() {
+    let saved = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let saved_hook = saved.clone();
+    let mut a = app();
+    a.services.save_prefs = Some(Box::new(move |app: &WordApp| {
+        saved_hook.set(saved_hook.get() + 1);
+        let _ = serde_json::to_string(&app.prefs()).unwrap();
+        Ok(true)
+    }));
+    a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
+    // The open document is on the list, at the back.
+    a.session.path = Some(std::path::PathBuf::from("/tmp/beta.docx"));
+
+    // Removing the open document sticks: `after_command` must not re-add it.
+    let r = a.run("ui.recentRemove", json!({"path": "/tmp/beta.docx"})).unwrap();
+    assert_eq!(r["removed"], 1);
+    assert_eq!(r["recent"], json!(["/tmp/alpha.docx"]));
+    assert_eq!(r["saved"], true);
+    assert_eq!(a.ui.recent, ["/tmp/alpha.docx".to_string()], "the open document stays off the list");
+    assert_eq!(saved.get(), 1, "the change is written out at once");
+
+    // Removing an entry that isn't there is an error, not a silent success, and saves nothing.
+    assert!(a.run("ui.recentRemove", json!({"path": "/tmp/gamma.docx"})).is_err());
+    assert_eq!(saved.get(), 1, "a rejected command writes nothing");
+    // Hostile params: missing path, junk types.
+    for junk in [json!({}), json!({"path": 7}), json!({"path": null}), json!({"path": ["x"]})] {
+        assert!(a.run("ui.recentRemove", junk).is_err());
+    }
+    assert_eq!(a.ui.recent, ["/tmp/alpha.docx".to_string()], "junk params change nothing");
+
+    // A normal command re-adds the open document, as before.
+    a.run("text.insert", json!({"text": "x"})).unwrap();
+    assert_eq!(a.ui.recent.first(), Some(&"/tmp/beta.docx".to_string()));
+
+    // Clearing empties the list (the re-added open document is back, so both entries go) and
+    // keeps it empty through the next command.
+    let r = a.run("ui.recentClear", json!({})).unwrap();
+    assert_eq!(r["removed"], 2);
+    assert!(a.ui.recent.is_empty());
+    assert_eq!(saved.get(), 2, "the clear is written out at once");
+    a.run("text.insert", json!({"text": "y"})).unwrap();
+    assert_eq!(a.ui.recent.first(), Some(&"/tmp/beta.docx".to_string()), "the open document comes back after clearing");
+
+    // Clearing an empty list reports zero removed and is not an error.
+    a.ui.recent.clear();
+    assert_eq!(a.run("ui.recentClear", json!({})).unwrap()["removed"], 0);
+
+    // The list lives in the prefs, so a restart keeps the removal.
+    a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
+    a.run("ui.recentRemove", json!({"path": "/tmp/alpha.docx"})).unwrap();
+    let saved_prefs = serde_json::to_string(&a.prefs()).unwrap();
+    assert!(saved_prefs.contains(r#""recent":["/tmp/beta.docx"]"#), "{saved_prefs}");
+    let mut b = app();
+    b.apply_prefs(serde_json::from_str(&saved_prefs).unwrap());
+    assert_eq!(b.ui.recent, ["/tmp/beta.docx".to_string()]);
+}
+
+/// Issue #2716: when the immediate preferences write fails, both recent commands say so (result
+/// and status line) instead of reporting plain success; the removal still holds for this run.
+/// A host with no hook, or one that wrote nothing, reports `saved: null`.
+#[test]
+fn recent_list_edits_report_a_failed_preferences_save() {
+    let mut a = app();
+    a.services.save_prefs = Some(Box::new(|_: &WordApp| Err::<bool, _>("disk full".to_string())));
+    a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
+
+    let r = a.run("ui.recentRemove", json!({"path": "/tmp/alpha.docx"})).unwrap();
+    assert_eq!((&r["saved"], &r["saveError"]), (&json!(false), &json!("disk full")), "{r}");
+    assert_eq!(r["recent"], json!(["/tmp/beta.docx"]));
+    assert_eq!(a.ui.recent, ["/tmp/beta.docx".to_string()], "the removal holds for this run");
+    let status = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    assert!(status.contains("disk full") && !status.starts_with("Removed"), "{status}");
+
+    let r = a.run("ui.recentClear", json!({})).unwrap();
+    assert_eq!((&r["saved"], &r["saveError"]), (&json!(false), &json!("disk full")), "{r}");
+    assert_eq!(r["removed"], 1);
+    assert!(a.ui.recent.is_empty());
+
+    // No hook, or a hook that wrote nothing (preferences switched off): `saved` is null.
+    for hook in [None, Some(Box::new(|_: &WordApp| Ok(false)) as Box<dyn Fn(&WordApp) -> Result<bool, String>>)] {
+        a.services.save_prefs = hook;
+        a.ui.recent = vec!["/tmp/alpha.docx".into()];
+        let r = a.run("ui.recentClear", json!({})).unwrap();
+        assert!(r["saved"].is_null() && r.get("saveError").is_none(), "{r}");
+        assert!(a.status_msg.as_ref().is_some_and(|(m, _)| m.starts_with("Removed")), "{:?}", a.status_msg);
+    }
+}
+
+/// Issue #2716: taking documents off the list needs no open document — the Start screen shows
+/// the recent list, and its buttons must work from there.
+#[test]
+fn recent_list_edits_work_without_a_document() {
+    let mut a = app();
+    a.ui.recent = vec!["/tmp/alpha.docx".into()];
+    assert!(!a.session.dirty && a.session.path.is_none());
+    assert!(works_without_document("ui.recentRemove") && works_without_document("ui.recentClear"));
+    assert_eq!(a.run("ui.recentRemove", json!({"path": "/tmp/alpha.docx"})).unwrap()["removed"], 1);
+    assert_eq!(a.run("ui.recentClear", json!({})).unwrap()["removed"], 0);
 }
