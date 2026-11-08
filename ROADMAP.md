@@ -149,6 +149,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-01: Fields: updating fields (F9) fills a REF to a bookmark in a header, footer, footnote, endnote, comment or text box with the bookmarked text, and a PAGEREF to one with the page Word gives: the page a text box is anchored on, the page a note is referred to on, and 1 for a header, footer or comment. Such fields kept their old results.
 - 2026-11-08: Layout: a turned inline picture whose file keeps no room for the turn (no or a zero `wp:effectExtent`, as other tools write) keeps its line to its frame and overhangs it, cut at the line's top and bottom, as Word does: the frame as it is in Word 2007 layout, with width and height exchanged from 45° to 135° and 225° to 315° in Word 2013+ layout. Such a file saves the same way. Pictures with the room recorded (Word's own files) still take their rotated bounds. Readiness unchanged.
 - 2026-11-08: XML text and CDATA read with their line ends normalised (XML 1.0 §2.11): CR LF and a lone CR are one line feed, `&#13;` stays a CR, so a line break inside `w:t` in a file saved with Windows line ends is one space, not two (#5897); readiness estimates unchanged.
 - 2026-11-08: Layout: contextual spacing drops the space after a table cell's last paragraph when that paragraph is in the Normal style, the end-of-cell mark counting as a Normal paragraph next to it; a last paragraph in another style keeps its space after. The rule is inferred from docxide-pdf's notes and its `cell-end-*` fixtures (`cell-end-text-context`, `cell-end-empty-context`); a Word comparison that tells it apart from the neighbouring paragraph's style is still open. Readiness unchanged.
@@ -880,6 +881,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | trivial | Progress log: F9 finds REF and PAGEREF bookmarks in headers, footers, notes, comments and text boxes |
 | 2026-11-08 | trivial | Progress log: XML line ends in text normalised (#5897) |
 | 2026-11-08 | trivial | Progress log: contextual spacing drops the space after a cell's last Normal paragraph (#5450) |
 | 2026-11-06 | trivial | Progress log: the Arabic interface's Styles gallery reads from the right (#5566) |

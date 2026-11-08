@@ -197,6 +197,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | trivial | Updating fields (F9) fills a body REF to a bookmark in a header, footer, footnote, endnote, comment or text box with its text, and a PAGEREF with the page Word gives: a text box's anchor's page, a note's reference mark's page, and 1 for a header, footer or comment (measured in Word for Windows); they kept their stored results; no ranked gap changed; readiness estimates unchanged |
 | 2026-11-08 | trivial | #10 narrowed: a turned inline picture with no recorded effect extent keeps its line to its frame (exchanged near a quarter turn in Word 2013+ layout), cut at the line; gap stays open |
 | 2026-11-08 | trivial | #4 narrowed: a cell's last Normal paragraph drops its contextual space after, the end-of-cell mark counting as a Normal paragraph (#5450) |
 | 2026-11-07 | trivial | Page Setup also bounds the unfocused margin display after a long numeric paste; the accepted value is retained (#5650). |

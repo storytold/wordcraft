@@ -1,7 +1,7 @@
 use super::numbers::{body_bookmark_paths, para_numbers, ref_number};
 use super::properties::{
-    bookmark_ends_in_its_paragraph, bookmark_text, bookmark_text_at, count_text, date_picture, doc_property, doc_property_arg, new_property_value,
-    set_summary_property, summary_property, text_result,
+    all_bookmarks, bookmark_ends_in_its_paragraph, bookmark_spans_paragraphs_at, bookmark_text_at, count_text, date_picture, doc_property,
+    doc_property_arg, new_property_value, set_summary_property, summary_property, text_result,
 };
 use super::toc::{heading_style_level, update_toc};
 use super::{
@@ -202,7 +202,7 @@ pub const REFERENCE_NOT_FOUND: &str = "Error! Reference source not found.";
 fn ref_results(doc: &wordcraft_doc::Document, stored: &wordcraft_doc::Document) -> Vec<FieldResult> {
     let mut out = Vec::new();
     let mut starts: std::collections::HashMap<String, Pos> = std::collections::HashMap::new();
-    for (name, start) in doc.bookmarks().into_iter().chain(part_bookmarks(doc)) {
+    for (name, start) in all_bookmarks(doc) {
         // The first of two bookmarks with one name, as `bookmark_text` takes.
         starts.entry(name).or_insert(start);
     }
@@ -229,24 +229,6 @@ fn ref_results(doc: &wordcraft_doc::Document, stored: &wordcraft_doc::Document) 
             });
             if let Some(r) = text.clone() {
                 out.push((StoryRef::Body, path.clone(), k, text_result(instr, r)));
-            }
-        }
-    }
-    out
-}
-
-/// The bookmarks outside the body (headers, footers, notes, comments and text boxes), in story
-/// order.
-fn part_bookmarks(doc: &wordcraft_doc::Document) -> Vec<(String, Pos)> {
-    let mut out = Vec::new();
-    for id in doc.parts.keys() {
-        let story = StoryRef::Part(*id);
-        for path in doc.para_paths(story) {
-            let Some(p) = doc.para(story, &path) else { continue };
-            for (off, o) in p.objects_with_offsets() {
-                if let InlineObject::BookmarkStart { name } = o {
-                    out.push((name.clone(), Pos { story, path: path.clone(), off }));
-                }
             }
         }
     }
@@ -317,6 +299,40 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
     update_fields_in(s, false)
 }
 
+/// The document's bookmarks as F9's REF and PAGEREF fields find them: the first of each name and
+/// the page it is on, looked up once for all the fields.
+struct BookmarkIndex {
+    starts: std::collections::HashMap<String, Pos>,
+    pages: std::collections::HashMap<String, (u32, NumFormat)>,
+}
+
+/// Every bookmark's start and page (the first of each name). A bookmark's page is measured where
+/// it is, or for a text box or note at its anchor in the body ([`body_anchors`]); a header,
+/// footer or comment's is page 1.
+fn bookmark_index(s: &mut Session) -> BookmarkIndex {
+    let formats: Vec<NumFormat> = s.doc.sections().into_iter().map(|(_, sec)| sec.page_num_format).collect();
+    let anchors = body_anchors(&s.doc);
+    let marks = all_bookmarks(&s.doc);
+    let l = s.layout();
+    let mut index = BookmarkIndex { starts: Default::default(), pages: Default::default() };
+    for (name, pos) in marks {
+        if index.starts.contains_key(&name) {
+            continue;
+        }
+        let at = match pos.story {
+            StoryRef::Body => Some(&pos),
+            StoryRef::Part(id) => anchors.get(&id),
+        };
+        let page = at
+            .and_then(|at| l.caret(at))
+            .and_then(|c| l.pages.get(c.page))
+            .map_or((1, NumFormat::Decimal), |p| (p.number, formats.get(p.section).copied().unwrap_or_default()));
+        index.pages.insert(name.clone(), page);
+        index.starts.insert(name, pos);
+    }
+    index
+}
+
 /// [`update_fields`], or with `all` the whole document: the body (with SEQ, citations and TOC) and
 /// every part story, wherever the caret is (what printing needs).
 pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
@@ -325,21 +341,7 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
     if in_body {
         update_seq(s)?;
     }
-    let mut pages: std::collections::HashMap<String, (u32, NumFormat)> = Default::default();
-    let formats: Vec<NumFormat> = s.doc.sections().into_iter().map(|(_, sec)| sec.page_num_format).collect();
-    let marks = s.doc.bookmarks();
-    for (name, pos) in marks {
-        let l = s.layout();
-        let page_info = l
-            .caret(&pos)
-            .and_then(|c| l.pages.get(c.page))
-            .map(|p| {
-                let format = formats.get(p.section).copied().unwrap_or_default();
-                (p.number, format)
-            })
-            .unwrap_or((1, NumFormat::Decimal));
-        pages.entry(name).or_insert(page_info);
-    }
+    let BookmarkIndex { starts, pages } = bookmark_index(s);
     let stories: Vec<StoryRef> =
         if all { std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect() } else { vec![caret_story] };
     // The document properties as the fields read and set them (`SUBJECT "New subject"`): a field
@@ -395,11 +397,13 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                             let from = (story == StoryRef::Body).then_some(&path);
                             let paths = bookmark_paths.get_or_insert_with(|| body_bookmark_paths(&s.doc));
                             paths.get(target).and_then(|tp| ref_number(numbers, tp, from, sw))
+                        } else if let Some(start) = starts.get(target) {
+                            // A bookmark ending in a later paragraph keeps the REF's result: Word
+                            // shows its paragraphs, which a one-paragraph result can't hold.
+                            if bookmark_spans_paragraphs_at(&s.doc, target, start) { None } else { bookmark_text_at(&s.doc, target, start) }
                         } else {
-                            bookmark_text(&s.doc, target).or_else(|| {
-                                let key = target.to_lowercase();
-                                set.get(&key).or_else(|| last_set.get(&key)).cloned()
-                            })
+                            let key = target.to_lowercase();
+                            set.get(&key).or_else(|| last_set.get(&key)).cloned()
                         }
                     } else if !has_switch(instr, 'p') {
                         pages.get(target).map(|(num, page_fmt)| {
@@ -482,6 +486,48 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
     }
     crate::cmd::citations::update_citations(s)?;
     update_toc(s)
+}
+
+/// Where in the body each text box and note is anchored, for F9's PAGEREF (measured in Word for
+/// Windows): a text box's bookmarks are on the page of the box's anchor, a footnote's or
+/// endnote's on the page of its reference mark, a box or note inside another one taking the
+/// outer one's anchor. Headers, footers, comments and stories shown nowhere have none: Word's
+/// F9 puts page 1 for their bookmarks, even for a header first shown on a later page.
+fn body_anchors(doc: &wordcraft_doc::Document) -> std::collections::HashMap<u32, Pos> {
+    let mut out = std::collections::HashMap::new();
+    let mut todo: Vec<(u32, Pos)> = Vec::new();
+    let anchored = |o: &InlineObject| -> Vec<u32> {
+        let mut ids = o.text_boxes();
+        if let InlineObject::NoteRef { id, .. } = o {
+            ids.push(*id);
+        }
+        ids
+    };
+    for path in doc.para_paths(StoryRef::Body) {
+        let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
+        for (off, o) in p.objects_with_offsets() {
+            for id in anchored(o) {
+                todo.push((id, Pos { story: StoryRef::Body, path: path.clone(), off }));
+            }
+        }
+    }
+    // Breadth first, each story once: one shown twice, or inside itself, keeps its first anchor.
+    let mut k = 0;
+    while let Some((id, at)) = todo.get(k).cloned() {
+        k += 1;
+        if out.contains_key(&id) {
+            continue;
+        }
+        out.insert(id, at.clone());
+        let story = StoryRef::Part(id);
+        for path in doc.para_paths(story) {
+            let Some(p) = doc.para(story, &path) else { continue };
+            for o in &p.objects {
+                todo.extend(anchored(o).into_iter().map(|inner| (inner, at.clone())));
+            }
+        }
+    }
+    out
 }
 
 /// Refresh every unlocked `DATE` and `TIME` field to now, as Word does whenever it shows,
