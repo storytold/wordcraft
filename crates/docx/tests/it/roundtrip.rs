@@ -73,8 +73,8 @@ fn every_char_prop_round_trips() {
         style: Some("Strong".into()),
         font: Some("Georgia".into()),
         // Theme slots naming Georgia in the document's theme (set below).
-        font_ascii_theme: Some("majorHAnsi".into()),
-        font_hansi_theme: Some("majorAscii".into()),
+        font_ascii_theme: Some(wordcraft_doc::props::ThemeFont::MajorHAnsi),
+        font_hansi_theme: Some(wordcraft_doc::props::ThemeFont::MajorAscii),
         // The symbol's own font: the run is written as `w:sym` characters (#2036).
         sym_font: Some("Wingdings".into()),
         size: Some(10.5),
@@ -131,8 +131,8 @@ fn every_char_prop_round_trips() {
         cs: Some(true),
         font_cs: Some("B Nazanin".into()),
         font_ea: Some("宋体".into()),
-        font_ea_theme: Some("minorEastAsia".into()),
-        font_cs_theme: Some("minorBidi".into()),
+        font_ea_theme: Some(wordcraft_doc::props::ThemeFont::MinorEastAsia),
+        font_cs_theme: Some(wordcraft_doc::props::ThemeFont::MinorBidi),
         size_cs: Some(13.0),
         bold_cs: Some(false),
         italic_cs: Some(true),

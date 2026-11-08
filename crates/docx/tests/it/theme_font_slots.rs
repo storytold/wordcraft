@@ -45,7 +45,7 @@ fn theme_font_slots_survive_a_save() {
     let body = r#"<w:p><w:r><w:rPr><w:rFonts w:eastAsiaTheme="majorEastAsia" w:cstheme="bogus"/></w:rPr><w:t>“Quoted” text</w:t></w:r></w:p>"#;
     let d = wordcraft_docx::read(&docx(body, styles)).unwrap();
     let run = &d.body[0].as_para().unwrap().runs[0];
-    assert_eq!(run.props.font_ea_theme.as_deref(), Some("majorEastAsia"));
+    assert_eq!(run.props.font_ea_theme, Some(wordcraft_doc::props::ThemeFont::MajorEastAsia));
     assert_eq!(run.props.font_cs_theme, None, "a name outside ST_Theme is not kept");
 
     let out = wordcraft_docx::write(&d).unwrap();
@@ -60,7 +60,7 @@ fn theme_font_slots_survive_a_save() {
 
 #[test]
 fn a_named_east_asian_font_replaces_the_theme_slot() {
-    let mut base = wordcraft_doc::props::CharProps { font_ea_theme: Some("minorEastAsia".into()), ..Default::default() };
+    let mut base = wordcraft_doc::props::CharProps { font_ea_theme: Some(wordcraft_doc::props::ThemeFont::MinorEastAsia), ..Default::default() };
     base.overlay(&wordcraft_doc::props::CharProps { font_ea: Some("SimSun".into()), ..Default::default() });
     assert_eq!(base.font_ea.as_deref(), Some("SimSun"));
     assert_eq!(base.font_ea_theme, None, "the slot would otherwise win over the font just chosen");

@@ -50,9 +50,9 @@ const BODY: &str = r#"<w:p><w:r><w:rPr><w:rFonts w:asciiTheme="majorHAnsi" w:hAn
 fn latin_theme_slots_survive_a_save() {
     let d = wordcraft_docx::read(&docx(BODY, STYLES)).unwrap();
     assert_eq!(d.styles.default_chr.font.as_deref(), Some("Verdana"), "layout still reads the font the slot names");
-    assert_eq!(d.styles.default_chr.font_ascii_theme.as_deref(), Some("minorHAnsi"));
+    assert_eq!(d.styles.default_chr.font_ascii_theme, Some(wordcraft_doc::props::ThemeFont::MinorHAnsi));
     let run = &d.body[0].as_para().unwrap().runs[0];
-    assert_eq!((run.props.font.as_deref(), run.props.font_hansi_theme.as_deref()), (Some("Georgia"), Some("majorHAnsi")));
+    assert_eq!((run.props.font.as_deref(), run.props.font_hansi_theme), (Some("Georgia"), Some(wordcraft_doc::props::ThemeFont::MajorHAnsi)));
 
     let out = wordcraft_docx::write(&d).unwrap();
     let styles = rfonts(&part(&out, "word/styles.xml"));
@@ -61,7 +61,7 @@ fn latin_theme_slots_survive_a_save() {
     assert!(doc.iter().any(|f| f.contains(r#"w:asciiTheme="majorHAnsi""#) && f.contains(r#"w:hAnsiTheme="majorHAnsi""#)), "{doc:?}");
     // And again after a second round trip.
     let again = wordcraft_docx::read(&out).unwrap();
-    assert_eq!(again.styles.default_chr.font_ascii_theme.as_deref(), Some("minorHAnsi"));
+    assert_eq!(again.styles.default_chr.font_ascii_theme, Some(wordcraft_doc::props::ThemeFont::MinorHAnsi));
 }
 
 #[test]
@@ -91,13 +91,17 @@ fn a_named_font_overlaid_replaces_the_latin_slots() {
     use wordcraft_doc::props::CharProps;
     let mut base = CharProps {
         font: Some("Verdana".into()),
-        font_ascii_theme: Some("minorHAnsi".into()),
-        font_hansi_theme: Some("minorHAnsi".into()),
+        font_ascii_theme: Some(wordcraft_doc::props::ThemeFont::MinorHAnsi),
+        font_hansi_theme: Some(wordcraft_doc::props::ThemeFont::MinorHAnsi),
         ..Default::default()
     };
     base.overlay(&CharProps { font: Some("Courier New".into()), ..Default::default() });
     assert_eq!((base.font_ascii_theme, base.font_hansi_theme), (None, None));
     let mut themed = CharProps { font: Some("Verdana".into()), ..Default::default() };
-    themed.overlay(&CharProps { font: Some("Georgia".into()), font_ascii_theme: Some("majorHAnsi".into()), ..Default::default() });
-    assert_eq!(themed.font_ascii_theme.as_deref(), Some("majorHAnsi"));
+    themed.overlay(&CharProps {
+        font: Some("Georgia".into()),
+        font_ascii_theme: Some(wordcraft_doc::props::ThemeFont::MajorHAnsi),
+        ..Default::default()
+    });
+    assert_eq!(themed.font_ascii_theme, Some(wordcraft_doc::props::ThemeFont::MajorHAnsi));
 }

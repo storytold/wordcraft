@@ -2,7 +2,7 @@
 
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, EastAsianLayout, HeightRule, Highlight, LineSpacing, ParaProps, RowProps, TabAlign,
-    TabLeader, TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
+    TabLeader, TableFloat, TableLook, TableProps, TextColor, ThemeFont, VAlign, VMerge, VertAlign,
 };
 
 use crate::units::{n, twips};
@@ -33,10 +33,9 @@ impl Drop for ThemeFontsGuard {
 /// A Latin theme slot worth writing: it names `font` in the theme being saved. Otherwise (the
 /// font was changed, or the theme was, or no theme is known) it is left out, so Word shows
 /// `font` as WordCraft does.
-fn latin_slot<'a>(slot: Option<&'a String>, font: Option<&String>) -> Option<&'a str> {
+fn latin_slot(slot: Option<ThemeFont>, font: Option<&String>) -> Option<&'static str> {
     let (slot, font) = (slot?, font?);
-    let named =
-        THEME_FONTS.with(|t| t.borrow().as_ref().map(|(major, minor)| if slot.starts_with("major") { major.clone() } else { minor.clone() }))?;
+    let named = THEME_FONTS.with(|t| t.borrow().as_ref().map(|(major, minor)| if slot.is_major() { major.clone() } else { minor.clone() }))?;
     (!named.is_empty() && named.eq_ignore_ascii_case(font)).then_some(slot.as_str())
 }
 
@@ -65,17 +64,17 @@ fn rfonts(w: &mut W, c: &CharProps) {
     if let Some(cs) = &c.font_cs {
         fonts.push(("w:cs", cs));
     }
-    if let Some(t) = latin_slot(c.font_ascii_theme.as_ref(), c.font.as_ref()) {
+    if let Some(t) = latin_slot(c.font_ascii_theme, c.font.as_ref()) {
         fonts.push(("w:asciiTheme", t));
     }
-    if let Some(t) = latin_slot(c.font_hansi_theme.as_ref(), c.font.as_ref()) {
+    if let Some(t) = latin_slot(c.font_hansi_theme, c.font.as_ref()) {
         fonts.push(("w:hAnsiTheme", t));
     }
-    if let Some(t) = &c.font_ea_theme {
-        fonts.push(("w:eastAsiaTheme", t));
+    if let Some(t) = c.font_ea_theme {
+        fonts.push(("w:eastAsiaTheme", t.as_str()));
     }
-    if let Some(t) = &c.font_cs_theme {
-        fonts.push(("w:cstheme", t));
+    if let Some(t) = c.font_cs_theme {
+        fonts.push(("w:cstheme", t.as_str()));
     }
     if !fonts.is_empty() {
         w.empty("w:rFonts", &fonts);

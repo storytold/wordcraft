@@ -101,6 +101,64 @@ impl Ligatures {
     }
 }
 
+/// A theme font slot (ST_Theme, ISO/IEC 29500-1 §17.18.96): which of the theme's major
+/// (headings) or minor (body) fonts, for which script. One byte, where a string took 24 in every
+/// `CharProps`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThemeFont {
+    MajorEastAsia,
+    MajorBidi,
+    MajorAscii,
+    MajorHAnsi,
+    MinorEastAsia,
+    MinorBidi,
+    MinorAscii,
+    MinorHAnsi,
+}
+
+impl ThemeFont {
+    const ALL: [ThemeFont; 8] = [
+        ThemeFont::MajorEastAsia,
+        ThemeFont::MajorBidi,
+        ThemeFont::MajorAscii,
+        ThemeFont::MajorHAnsi,
+        ThemeFont::MinorEastAsia,
+        ThemeFont::MinorBidi,
+        ThemeFont::MinorAscii,
+        ThemeFont::MinorHAnsi,
+    ];
+
+    /// The slot's OOXML name (`minorHAnsi`…).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ThemeFont::MajorEastAsia => "majorEastAsia",
+            ThemeFont::MajorBidi => "majorBidi",
+            ThemeFont::MajorAscii => "majorAscii",
+            ThemeFont::MajorHAnsi => "majorHAnsi",
+            ThemeFont::MinorEastAsia => "minorEastAsia",
+            ThemeFont::MinorBidi => "minorBidi",
+            ThemeFont::MinorAscii => "minorAscii",
+            ThemeFont::MinorHAnsi => "minorHAnsi",
+        }
+    }
+
+    /// The slot named `s` (`None` for any other value).
+    pub fn parse(s: &str) -> Option<ThemeFont> {
+        ThemeFont::ALL.into_iter().find(|t| t.as_str() == s)
+    }
+
+    /// Whether the slot picks one of the theme's major (heading) fonts.
+    pub fn is_major(self) -> bool {
+        matches!(self, ThemeFont::MajorEastAsia | ThemeFont::MajorBidi | ThemeFont::MajorAscii | ThemeFont::MajorHAnsi)
+    }
+
+    /// Whether the slot is one of Latin text's (`w:asciiTheme`, `w:hAnsiTheme`).
+    pub fn is_latin(self) -> bool {
+        matches!(self, ThemeFont::MajorAscii | ThemeFont::MajorHAnsi | ThemeFont::MinorAscii | ThemeFont::MinorHAnsi)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum VertAlign {
@@ -240,9 +298,9 @@ pub struct CharProps {
     /// the theme's fonts in Word. Layout reads `font` only. Saving writes a slot only while it
     /// still names `font` in the document's theme, so a font chosen later is never hidden by it.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub font_ascii_theme: Option<String>,
+    pub font_ascii_theme: Option<ThemeFont>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub font_hansi_theme: Option<String>,
+    pub font_hansi_theme: Option<ThemeFont>,
     /// The symbol's own font (OOXML `w:sym/@w:font`, ECMA-376 §17.3.3.30), set on a symbol
     /// character from a `w:sym` or Insert › Symbol: it is shown in this font whatever `font` is,
     /// so changing the text's font keeps the symbol. `None` = the run's font.
@@ -342,11 +400,11 @@ pub struct CharProps {
     /// (over `font_ea`); losing it changes which font Word uses for CJK and East Asian punctuation,
     /// and so the line breaks. Layout doesn't read it: `font_ea` and inheritance decide there.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub font_ea_theme: Option<String>,
+    pub font_ea_theme: Option<ThemeFont>,
     /// The theme font slot of the complex-script font (`w:rFonts/@w:cstheme`: `minorBidi`…), kept
     /// so saving writes it back, like `font_ea_theme`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub font_cs_theme: Option<String>,
+    pub font_cs_theme: Option<ThemeFont>,
     /// Complex-script size, points (`w:szCs`). `None` leaves the inherited value unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size_cs: Option<f32>,
@@ -521,7 +579,7 @@ impl CharProps {
     fn minus_latin_theme(&mut self, base: &CharProps) {
         // A slot stays with a font that stays: overlaid alone, the font would clear the base's
         // slots (`overlay_latin_theme`), so dropping a slot equal to the base's would lose it.
-        let keep = (self.font_ascii_theme.clone(), self.font_hansi_theme.clone());
+        let keep = (self.font_ascii_theme, self.font_hansi_theme);
         drop_same_fields!(self, base; font_ascii_theme, font_hansi_theme);
         if self.font.is_some() {
             (self.font_ascii_theme, self.font_hansi_theme) = keep;
@@ -539,7 +597,7 @@ impl CharProps {
 
     fn minus_script_style(&mut self, base: &CharProps) {
         // As for the Latin slots: a slot stays while its named font does.
-        let keep = (self.font_ea_theme.clone(), self.font_cs_theme.clone());
+        let keep = (self.font_ea_theme, self.font_cs_theme);
         drop_same_fields!(self, base; cs, font_cs, font_ea, font_ea_theme, font_cs_theme, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout);
         if self.font_ea.is_some() {
             self.font_ea_theme = keep.0;

@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use wordcraft_doc::para::cap_alt;
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, HeightRule, Highlight, LineSpacing, NumRef,
-    ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextAlignment, TextColor, TextDirection, Underline,
-    VAlign, VMerge, VertAlign,
+    ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextAlignment, TextColor, TextDirection, ThemeFont,
+    Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{
     Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, NotePos, NoteProps, NoteRestart, NumFormat,
@@ -74,13 +74,6 @@ pub(crate) const LEVEL_ONLY: u32 = u32::MAX;
 /// The font Word draws a `minorBidi`/`majorBidi` theme slot in when the settings name no bidi
 /// language, or the theme has no font for it.
 const BIDI_THEME_FALLBACK_FONT: &str = "Times New Roman";
-
-/// The theme font slots a `w:rFonts` theme attribute may name (ECMA-376 `ST_Theme`).
-const THEME_FONT_SLOTS: [&str; 8] =
-    ["majorEastAsia", "majorBidi", "majorAscii", "majorHAnsi", "minorEastAsia", "minorBidi", "minorAscii", "minorHAnsi"];
-
-/// The theme font slots of Latin text (`w:asciiTheme`, `w:hAnsiTheme`).
-const LATIN_THEME_SLOTS: [&str; 4] = ["majorAscii", "majorHAnsi", "minorAscii", "minorHAnsi"];
 
 /// The script a language tag is written in, as a theme's `a:font script` names it (ISO 15924, and
 /// Office's own `Uigh` for Uyghur and `Viet` for Vietnamese): an explicit script subtag
@@ -257,12 +250,12 @@ impl PropCtx {
                     // The theme slots themselves are kept for saving: Word resolves them (over the
                     // named fonts) when it lays the text out, and dropping them changes its line
                     // breaks in a document with an East Asian language.
-                    c.font_ea_theme = k.attr("w:eastAsiaTheme").filter(|t| THEME_FONT_SLOTS.contains(t)).map(str::to_string);
-                    c.font_cs_theme = k.attr("w:cstheme").filter(|t| THEME_FONT_SLOTS.contains(t)).map(str::to_string);
+                    c.font_ea_theme = k.attr("w:eastAsiaTheme").and_then(ThemeFont::parse);
+                    c.font_cs_theme = k.attr("w:cstheme").and_then(ThemeFont::parse);
                     // The Latin slots too, when `font` came from them: saving writes them back while
                     // they still name `font`, so the text keeps following the theme in Word.
                     if c.font.is_some() {
-                        let latin = |a: &str| k.attr(a).filter(|t| LATIN_THEME_SLOTS.contains(t)).map(str::to_string);
+                        let latin = |a: &str| k.attr(a).and_then(ThemeFont::parse).filter(|t| t.is_latin());
                         c.font_ascii_theme = latin("w:asciiTheme");
                         c.font_hansi_theme = latin("w:hAnsiTheme");
                     }
