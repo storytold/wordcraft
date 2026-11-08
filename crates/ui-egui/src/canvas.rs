@@ -15,6 +15,7 @@ use crate::WordApp;
 use crate::theme::{Tokens, regular, semibold};
 
 mod balloons;
+mod column_ruler;
 mod context_menu;
 #[cfg(test)]
 pub(crate) use context_menu::issue_heading;
@@ -48,6 +49,7 @@ use geometry::{floating_comments, on_page_gap, on_visible_page, white_space_hidd
 use input::{EDGE_MARGIN, EDGE_MAX_DT, EDGE_SPEED_MAX};
 use input::{UnitDrag, clamped_scroll, edge_scroll, mouse, wheel_hovered};
 pub(crate) use input::{hold_document_selection, press_count};
+pub(crate) use links::follow_link;
 #[cfg(test)]
 use links::{field_link, is_followable_link, is_generated_bookmark_link};
 #[cfg(test)]

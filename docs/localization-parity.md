@@ -62,7 +62,7 @@ shared items below.
 | Simplified Chinese (Mandarin) | zh-hans | 929 entries; 98% of extracted, ~95% of visible | most; newer panes English | CJK ✅, IME ✅; Windows UI font fixed (#248); interface font chain covers every catalog character, installed CJK font after the embedded ones when it doesn't, PingFang found on macOS 12 (#486); font list by Chinese names (宋体, 微软雅黑, #505); word count counts each Han ideograph and kana as a word, not punctuation (#4547); no vertical text | no | partial | 3–5 |
 | Spanish | es | ~930; 98% / ~95% | most | Latin ✅ | no | partial | 1–2 |
 | Hindi | hi | 0 | ❌ | Devanagari shaping via HarfRust, untested; no hyphenation | no | none | 4–6 |
-| Arabic | ar | ~2,730 entries (craft-i18n `locales/ar/wordcraft.tsv`); 98% / ~95% | most; newer panes English | shaping, joining, lam-alef, bidi ✅ (#207); mirrored UI ✅ (#1195; dialogs, tables and galleries read right to left); Arabic UI font fallback; no kashida; no proofing | no | partial | 2–4 (review + kashida/proofing elsewhere) |
+| Arabic | ar | ~2,730 entries (craft-i18n `locales/ar/wordcraft.tsv`); 98% / ~95% | most; newer panes English | shaping, joining, lam-alef, bidi ✅ (#207); letters join across a change of formatting and past hidden or deleted text ✅ (#4093); mirrored UI ✅ (#1195; dialogs, tables and galleries read right to left); Arabic UI font fallback; no kashida; no proofing | no | partial | 2–4 (review + kashida/proofing elsewhere) |
 | French | fr | 2,615 entries (complete catalog) | all | Latin ✅ | no | partial (spelling and suggestions from the French Language pack, elided forms first: `Jadore` → `J'adore`; no grammar marks) | 1–2 (grammar) |
 | Portuguese | pt-br (pt-PT none) | ~930; 98% / ~95% (pt-BR) | most | Latin ✅ | no | partial | 2–4 (pt-BR finish + pt-PT) |
 | Indonesian | id | 0 | ❌ | Latin ✅ | no | none | 3–4 |
@@ -276,6 +276,7 @@ WordCraft keeps 2,54 cm).
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-06 | trivial | Arabic: the Home tab's Styles gallery reads from the right: Normal is the rightmost tile and the scroll arrows and More sit at the gallery's left end, as the rest of the mirrored ribbon (#5566); left to right is unchanged; regression test `the_styles_gallery_reads_from_the_right_in_a_right_to_left_interface` |
+| 2026-11-05 | trivial | Arabic letters join across a change of formatting and past hidden or deleted text (#4093) |
 | 2026-11-04 | trivial | Table sort and formulas read the Panamanian balboa's `B/.` around a number (`B/. 1,250.50`, `1,250.50 B/.`), as Word does; `B/.1,250.50` and `B/ 1,250.50` stay text, matching Word 16.0, and the sign is matched only at the ends of the text, so `1/.5` is unchanged |
 | 2026-11-04 | trivial | craft-i18n.rev at 9d6d54d (craft-i18n#145): 69 region names and the `{language} ({region})` template (full-width in ja, ko, zh) in 35 locales, AI-assisted without native-speaker review |
 | 2026-11-04 | trivial | craft-i18n.rev at cde4900 (craft-i18n#136): translated rows for Options › Language (Your languages, Add a language…, Set as default, Dictionary files), the missing-pack bar and 28 Language pack language names in 35 locales, AI-assisted without native-speaker review |
