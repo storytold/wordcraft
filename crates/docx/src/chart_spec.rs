@@ -540,9 +540,42 @@ pub(crate) fn spec_of(space: &El) -> Option<ChartSpec> {
         line: a.line,
     };
     let spec = ChartSpec { kind, categories, series, title, legend, data_labels, cat_axis: axis(cat_a), val_axis: axis(val_a) }.sanitized();
-    // Editable only when nothing would be lost: writing the model again gives the same part.
-    let again = xml::parse(chart_xml(&spec).as_bytes()).ok()?;
+    // Editable only when nothing would be lost: writing the model again gives the same part, as
+    // this writer or the earlier one wrote it.
+    let mut again = xml::parse(chart_xml(&spec).as_bytes()).ok()?;
+    if same(space, &again, 0) {
+        return Some(spec);
+    }
+    as_previous_writer(&mut again);
     same(space, &again, 0).then_some(spec)
+}
+
+/// `part` (what [`chart_xml`] writes) as the earlier WordCraft writer wrote the same model: it
+/// had no axis `c:numFmt` and no `c:marker` in scatter series. Only those elements go, and only
+/// with the values their absence reads as (General, linked to the source; the scatter series'
+/// default circle markers), so a part that matches still holds nothing the model leaves out.
+fn as_previous_writer(part: &mut El) {
+    fn els_mut(e: &mut El) -> impl Iterator<Item = &mut El> {
+        e.kids.iter_mut().filter_map(|n| match n {
+            Node::El(e) => Some(e),
+            Node::Text(_) => None,
+        })
+    }
+    fn drop_els(e: &mut El, drop: impl Fn(&El) -> bool) {
+        e.kids.retain(|n| !matches!(n, Node::El(c) if drop(c)));
+    }
+    let Some(plot) = els_mut(part).find(|e| e.name == "c:chart").and_then(|c| els_mut(c).find(|e| e.name == "c:plotArea")) else { return };
+    for e in els_mut(plot) {
+        match e.name.as_str() {
+            "c:catAx" | "c:valAx" => drop_els(e, |c| c.name == "c:numFmt" && c.attr("sourceLinked") == Some("1")),
+            "c:scatterChart" => {
+                for ser in els_mut(e).filter(|s| s.name == "c:ser") {
+                    drop_els(ser, |c| c.name == "c:marker" && c.child("c:symbol").and_then(|s| s.attr("val")) == Some("circle"));
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// The points of a `c:strLit` / `c:numLit` (or a cache) as texts by index, `ptCount` long.
@@ -654,6 +687,35 @@ mod tests {
         assert_eq!(spec_of(&xml::parse(x.as_bytes()).unwrap()), None);
         let x = chart_xml(&spec).replace("<c:v>3.2</c:v>", "<c:v>3.20</c:v>");
         assert_eq!(spec_of(&xml::parse(x.as_bytes()).unwrap()), None);
+    }
+
+    /// Chart parts as the previous WordCraft chart writer saved them (its output for
+    /// `ChartSpec::sample`): no axis `c:numFmt`, and scatter series with no `c:marker`.
+    const PREVIOUS_COLUMN: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><c:roundedCorners val="0"/><c:chart><c:autoTitleDeleted val="1"/><c:plotArea><c:layout/><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:varyColors val="0"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>Series 1</c:v></c:tx><c:invertIfNegative val="0"/><c:cat><c:strLit><c:ptCount val="4"/><c:pt idx="0"><c:v>Q1</c:v></c:pt><c:pt idx="1"><c:v>Q2</c:v></c:pt><c:pt idx="2"><c:v>Q3</c:v></c:pt><c:pt idx="3"><c:v>Q4</c:v></c:pt></c:strLit></c:cat><c:val><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="4"/><c:pt idx="0"><c:v>3.2</c:v></c:pt><c:pt idx="1"><c:v>4.1</c:v></c:pt><c:pt idx="2"><c:v>3.6</c:v></c:pt><c:pt idx="3"><c:v>5</c:v></c:pt></c:numLit></c:val></c:ser><c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>Series 2</c:v></c:tx><c:invertIfNegative val="0"/><c:cat><c:strLit><c:ptCount val="4"/><c:pt idx="0"><c:v>Q1</c:v></c:pt><c:pt idx="1"><c:v>Q2</c:v></c:pt><c:pt idx="2"><c:v>Q3</c:v></c:pt><c:pt idx="3"><c:v>Q4</c:v></c:pt></c:strLit></c:cat><c:val><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="4"/><c:pt idx="0"><c:v>2</c:v></c:pt><c:pt idx="1"><c:v>2.7</c:v></c:pt><c:pt idx="2"><c:v>3.9</c:v></c:pt><c:pt idx="3"><c:v>3.3</c:v></c:pt></c:numLit></c:val></c:ser><c:ser><c:idx val="2"/><c:order val="2"/><c:tx><c:v>Series 3</c:v></c:tx><c:invertIfNegative val="0"/><c:cat><c:strLit><c:ptCount val="4"/><c:pt idx="0"><c:v>Q1</c:v></c:pt><c:pt idx="1"><c:v>Q2</c:v></c:pt><c:pt idx="2"><c:v>Q3</c:v></c:pt><c:pt idx="3"><c:v>Q4</c:v></c:pt></c:strLit></c:cat><c:val><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="4"/><c:pt idx="0"><c:v>1.5</c:v></c:pt><c:pt idx="1"><c:v>2.2</c:v></c:pt><c:pt idx="2"><c:v>2.4</c:v></c:pt><c:pt idx="3"><c:v>3.8</c:v></c:pt></c:numLit></c:val></c:ser><c:gapWidth val="150"/><c:axId val="500000001"/><c:axId val="500000002"/></c:barChart><c:catAx><c:axId val="500000001"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="500000002"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/></c:catAx><c:valAx><c:axId val="500000002"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:majorGridlines/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:spPr><a:ln><a:noFill/></a:ln></c:spPr><c:crossAx val="500000001"/><c:crosses val="autoZero"/><c:crossBetween val="between"/></c:valAx></c:plotArea><c:legend><c:legendPos val="b"/><c:overlay val="0"/></c:legend><c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart><c:spPr><a:solidFill><a:schemeClr val="bg1"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr></c:chartSpace>"#;
+    const PREVIOUS_SCATTER: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><c:roundedCorners val="0"/><c:chart><c:autoTitleDeleted val="1"/><c:plotArea><c:layout/><c:scatterChart><c:scatterStyle val="lineMarker"/><c:varyColors val="0"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>Series 1</c:v></c:tx><c:spPr><a:ln w="19050"><a:noFill/></a:ln></c:spPr><c:xVal><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="4"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt><c:pt idx="2"><c:v>3</c:v></c:pt><c:pt idx="3"><c:v>4</c:v></c:pt></c:numLit></c:xVal><c:yVal><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="4"/><c:pt idx="0"><c:v>2.1</c:v></c:pt><c:pt idx="1"><c:v>3.4</c:v></c:pt><c:pt idx="2"><c:v>3</c:v></c:pt><c:pt idx="3"><c:v>4.6</c:v></c:pt></c:numLit></c:yVal><c:smooth val="0"/></c:ser><c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>Series 2</c:v></c:tx><c:spPr><a:ln w="19050"><a:noFill/></a:ln></c:spPr><c:xVal><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="4"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt><c:pt idx="2"><c:v>3</c:v></c:pt><c:pt idx="3"><c:v>4</c:v></c:pt></c:numLit></c:xVal><c:yVal><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="4"/><c:pt idx="0"><c:v>1.2</c:v></c:pt><c:pt idx="1"><c:v>1.9</c:v></c:pt><c:pt idx="2"><c:v>2.8</c:v></c:pt><c:pt idx="3"><c:v>3.1</c:v></c:pt></c:numLit></c:yVal><c:smooth val="0"/></c:ser><c:axId val="500000001"/><c:axId val="500000002"/></c:scatterChart><c:valAx><c:axId val="500000001"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="500000002"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx><c:valAx><c:axId val="500000002"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:majorGridlines/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:spPr><a:ln><a:noFill/></a:ln></c:spPr><c:crossAx val="500000001"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx></c:plotArea><c:legend><c:legendPos val="b"/><c:overlay val="0"/></c:legend><c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart><c:spPr><a:solidFill><a:schemeClr val="bg1"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr></c:chartSpace>"#;
+
+    #[test]
+    fn charts_saved_by_the_previous_writer_stay_editable() {
+        for (x, kind) in [(PREVIOUS_COLUMN, ChartType::Column), (PREVIOUS_SCATTER, ChartType::Scatter)] {
+            let spec = spec_of(&xml::parse(x.as_bytes()).unwrap()).unwrap_or_else(|| panic!("{kind:?}: the earlier part is read-only"));
+            assert_eq!((spec.kind, spec.series.len()), (kind, if kind == ChartType::Scatter { 2 } else { 3 }));
+            assert_eq!((spec.cat_axis.fmt.as_deref(), spec.val_axis.fmt.as_deref()), (None, None), "{kind:?}");
+            assert!(spec.series.iter().all(|s| s.markers.is_none()), "{kind:?}: default markers");
+            // Saved again, it is in the current shape and still reads back as the same model.
+            assert_eq!(spec_of(&parse(&spec)).as_ref(), Some(&spec), "{kind:?}");
+        }
+        // What neither writer writes still keeps such a part read-only: an axis format linked to
+        // the source that isn't General, a scatter marker other than the default, a marker size.
+        let edited = |x: &str, from: &str, to: &str| {
+            assert!(x.contains(from), "{from}");
+            spec_of(&xml::parse(x.replacen(from, to, 1).as_bytes()).unwrap())
+        };
+        let ax = r#"<c:axPos val="l"/><c:majorGridlines/>"#;
+        assert_eq!(edited(PREVIOUS_COLUMN, ax, &format!(r#"{ax}<c:numFmt formatCode="0.0" sourceLinked="1"/>"#)), None);
+        let ln = r#"<a:ln w="19050"><a:noFill/></a:ln></c:spPr>"#;
+        assert_eq!(edited(PREVIOUS_SCATTER, ln, &format!(r#"{ln}<c:marker><c:symbol val="square"/></c:marker>"#)), None);
+        assert_eq!(edited(PREVIOUS_SCATTER, ln, &format!(r#"{ln}<c:marker><c:symbol val="circle"/><c:size val="9"/></c:marker>"#)), None);
+        assert_eq!(edited(PREVIOUS_COLUMN, "<c:roundedCorners val=\"0\"/>", "<c:roundedCorners val=\"0\"/><c:style val=\"2\"/>"), None);
     }
 
     #[test]
