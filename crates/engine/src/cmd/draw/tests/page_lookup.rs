@@ -33,6 +33,7 @@ fn placed(story: StoryRef, path: Path, off: usize, x: f32) -> Placed {
         text_box: None,
         wrap: Wrap::InFrontOfText,
         origin: Default::default(),
+        group_boxes: Vec::new(),
     }
 }
 
