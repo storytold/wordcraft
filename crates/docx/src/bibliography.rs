@@ -90,13 +90,16 @@ pub(crate) fn parse(root: &El, seen: &mut Seen, room: usize) -> Sources {
         let tag = child_text(src_el, "Tag");
         let raw_kind = child_text(src_el, "SourceType");
         let kind = crate::write::from_source_type(&raw_kind);
-        let (author, editor) = match src_el.els().find(|e| e.local() == "Author") {
+        let (author, corporate, editor) = match src_el.els().find(|e| e.local() == "Author") {
             Some(a) => {
-                let auth = a.els().find(|e| e.local() == "Author").map(parse_persons).filter(|s| !s.is_empty()).unwrap_or_else(|| parse_persons(a));
+                let role = a.els().find(|e| e.local() == "Author");
+                let auth = role.map(parse_persons).filter(|s| !s.is_empty()).unwrap_or_else(|| parse_persons(a));
+                // Word's Corporate Author: one name, kept whole (`b:Corporate`, #4848).
+                let corporate = role.map(|r| child_text(r, "Corporate").trim().to_string()).unwrap_or_default();
                 let ed = a.els().find(|e| e.local() == "Editor").map(parse_persons).unwrap_or_default();
-                (auth, ed)
+                (auth, corporate, ed)
             }
-            None => (String::new(), String::new()),
+            None => (String::new(), String::new(), String::new()),
         };
         let editor = if editor.is_empty() { src_el.els().find(|e| e.local() == "Editor").map(parse_persons).unwrap_or_default() } else { editor };
         let title = child_text(src_el, "Title");
@@ -132,11 +135,12 @@ pub(crate) fn parse(root: &El, seen: &mut Seen, room: usize) -> Sources {
         };
 
         // Keep sources with some content, once each (by tag, or title and author untagged).
-        if tag.is_empty() && title.is_empty() && author.is_empty() && editor.is_empty() {
+        if tag.is_empty() && title.is_empty() && author.is_empty() && corporate.is_empty() && editor.is_empty() {
             continue;
         }
         let fresh = if tag.is_empty() {
-            seen.untagged.insert((title.clone(), if author.is_empty() { editor.clone() } else { author.clone() }))
+            let who = [&author, &corporate, &editor].into_iter().find(|w| !w.is_empty()).cloned().unwrap_or_default();
+            seen.untagged.insert((title.clone(), who))
         } else {
             seen.tags.insert(tag.clone())
         };
@@ -147,6 +151,7 @@ pub(crate) fn parse(root: &El, seen: &mut Seen, room: usize) -> Sources {
             tag,
             kind,
             author,
+            corporate,
             title,
             year,
             city,
@@ -263,6 +268,25 @@ mod tests {
         assert!(matches!(read_sources(b"not xml at all"), Err(DocxError::Xml(_))));
         assert!(read_sources(b"<Sources><Source><Tag>A</Tag></Source></Sources>").is_err(), "no namespace");
         assert!(read_sources(br#"<o:Sources xmlns:o="urn:example:other"><o:Source/></o:Sources>"#).is_err(), "an unrelated namespace");
+    }
+
+    /// #4848: a corporate author (Word's Corporate Author box, `b:Corporate`) is read whole, and
+    /// an untagged source with only a corporate author is still kept, once.
+    #[test]
+    fn a_corporate_author_is_read_whole() {
+        let xml = br#"<b:Sources xmlns:b="http://schemas.openxmlformats.org/officeDocument/2006/bibliography">
+  <b:Source><b:Tag>Wor20</b:Tag><b:SourceType>Report</b:SourceType>
+    <b:Author><b:Author><b:Corporate> World Health Organization </b:Corporate></b:Author></b:Author>
+    <b:Title>World report on hearing</b:Title><b:Year>2020</b:Year></b:Source>
+  <b:Source><b:SourceType>Book</b:SourceType>
+    <b:Author><b:Author><b:Corporate>Harbor Guild, Inc.</b:Corporate></b:Author></b:Author></b:Source>
+  <b:Source><b:SourceType>Book</b:SourceType>
+    <b:Author><b:Author><b:Corporate>Harbor Guild, Inc.</b:Corporate></b:Author></b:Author></b:Source>
+</b:Sources>"#;
+        let f = read_sources(xml).unwrap();
+        assert_eq!(f.sources.len(), 2, "{:?}", f.sources);
+        assert_eq!((f.sources[0].corporate.as_str(), f.sources[0].author.as_str()), ("World Health Organization", ""));
+        assert_eq!(f.sources[1].corporate, "Harbor Guild, Inc.", "a comma doesn't split a corporate name");
     }
 
     /// Word's own 2004/10 bibliography namespace (`Sources.xml` written by scripts and older

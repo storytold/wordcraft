@@ -156,6 +156,38 @@ fn zotero_fields_and_prefs_round_trip() {
 }
 
 #[test]
+fn custom_property_bookmark_links_survive_saves_and_value_edits() {
+    let props = r#"<c:Properties xmlns:c="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:v="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+<c:property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="Linked" linkTarget="OriginalBookmark"><v:lpwstr>Original value</v:lpwstr></c:property>
+<c:property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="3" name="Raw" linkTarget="RawBookmark"><v:vector size="1" baseType="lpwstr"><v:lpwstr>Ω</v:lpwstr></v:vector></c:property>
+<c:property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="4" name="Unlinked"><v:i4>17</v:i4></c:property>
+</c:Properties>"#;
+    let doc = format!(
+        r#"<w:document {W_NS}><w:body><w:p><w:bookmarkStart w:id="1" w:name="OriginalBookmark"/>{}<w:bookmarkEnd w:id="1"/></w:p><w:p><w:bookmarkStart w:id="2" w:name="RawBookmark"/>{}<w:bookmarkEnd w:id="2"/></w:p></w:body></w:document>"#,
+        t("Original value"),
+        t("Ω")
+    );
+    let bytes = zip(&[("_rels/.rels", ROOT_RELS.as_bytes()), ("word/document.xml", doc.as_bytes()), ("docProps/custom.xml", props.as_bytes())]);
+    let mut d = read(&bytes).unwrap();
+    for value in ["Original value", "Edited value"] {
+        d.set_custom_prop("linked", value);
+        let before = d.custom_props.clone();
+        for _ in 0..2 {
+            let out = write(&d).unwrap();
+            let mut z = zip::ZipArchive::new(std::io::Cursor::new(&out)).unwrap();
+            let mut xml = String::new();
+            std::io::Read::read_to_string(&mut z.by_name("docProps/custom.xml").unwrap(), &mut xml).unwrap();
+            assert!(xml.contains(r#"linkTarget="OriginalBookmark""#), "{xml}");
+            assert!(xml.contains(r#"linkTarget="RawBookmark""#), "{xml}");
+            assert_eq!(xml.matches("linkTarget=").count(), 2, "unlinked properties stay unlinked");
+            d = read(&out).unwrap();
+            assert_eq!(d.custom_props, before);
+            assert_eq!(d.custom_prop("Linked"), Some(value));
+        }
+    }
+}
+
+#[test]
 fn unterminated_and_resultless_addin_fields() {
     // A field left open at the end of the document, and one with no result at all.
     let body = format!(
