@@ -96,6 +96,55 @@ fn title_stem_omits_nul_from_each_title_source() {
     }
 }
 
+/// #5793: a name from a paragraph's first words, as Word suggests one: up to the first sentence or
+/// clause end, without what a file name can't hold, at most 50 characters at a word's end.
+#[test]
+fn a_suggested_name_is_the_first_words_of_the_text() {
+    use crate::app::suggested_stem as stem;
+    assert_eq!(stem("Quarterly report for the board. More follows here.").as_deref(), Some("Quarterly report for the board"));
+    assert_eq!(stem("Minutes of the meeting, 6 November").as_deref(), Some("Minutes of the meeting, 6 November"));
+    assert_eq!(stem("What happened? Nobody knows").as_deref(), Some("What happened"));
+    assert_eq!(stem("Plan: phase one").as_deref(), Some("Plan"));
+    assert_eq!(stem("Q3 / Q4 \"draft\" <final> *v2* | a\\b").as_deref(), Some("Q3 Q4 draft final v2 a b"));
+    assert_eq!(stem("  Leading   and   inner   spaces  ").as_deref(), Some("Leading and inner spaces"));
+    assert_eq!(stem("日本語の文書。続きの文").as_deref(), Some("日本語の文書"));
+    let long = "Annual report of the regional committee on transport and infrastructure planning";
+    let got = stem(long).unwrap();
+    assert!(got.chars().count() <= 50 && long.starts_with(&got) && long[got.len()..].starts_with(' '), "{got:?}");
+    assert_eq!(stem(&"x".repeat(80)).map(|s| s.chars().count()), Some(50), "one long word is cut at 50");
+    for nothing in ["", "   ", "...", "?", "/ * |", "\u{1}"] {
+        assert_eq!(stem(nothing), None, "{nothing:?}");
+    }
+}
+
+/// #5793: Save As suggests the first words for a document that was never saved and has no title
+/// of its own (the first paragraph with text, past empty ones); a title, a file name or a path
+/// still name it.
+#[test]
+fn save_as_suggests_the_first_words_of_a_new_document() {
+    let mut app = app();
+    assert_eq!(app.default_save_name(), format!("{}.docx", app.title_stem()), "an empty document");
+    for c in [
+        json!(["text.newParagraph", {}]),
+        json!(["text.insert", {"text": "Minutes of the board meeting. Present: all"}]),
+        json!(["text.newParagraph", {}]),
+        json!(["text.insert", {"text": "Second paragraph"}]),
+    ] {
+        app.session.run(c[0].as_str().unwrap(), &c[1]).unwrap();
+    }
+    assert_eq!(app.default_save_name(), "Minutes of the board meeting.docx");
+    assert_eq!(
+        app.title_stem(),
+        crate::documents::untitled_title(&app.session.resolved_filenames().0).unwrap_or_else(|| "Document1".into()),
+        "the window title stays Document1"
+    );
+    app.session.doc.core.title = "Board minutes".into();
+    assert_eq!(app.default_save_name(), "Board minutes.docx", "a title wins");
+    app.session.doc.core.title.clear();
+    app.session.path = Some(std::path::PathBuf::from("/tmp/kept.docm"));
+    assert_eq!(app.default_save_name(), "kept.docm", "a saved file keeps its name and format");
+}
+
 /// #1678: Focus and Full Screen View put the window in full screen, asked of the system once
 /// per change (switching between the two keeps it), and the usual window comes back after.
 #[test]
@@ -539,6 +588,25 @@ fn title_and_account_buttons_work() {
     assert_eq!(h.state().ui.backstage_page, "options");
     assert_eq!(h.state().ui.options_pane, "general");
     assert!(h.query_by_label("User name:").is_some());
+}
+
+/// The Options toggle hides the community pill in the title bar; the backstage menu's
+/// Discord link hides with it — one setting, everywhere the link shows.
+#[test]
+fn the_community_button_off_hides_the_backstage_discord_link_too() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.run("ui.backstage", json!({"value": true})).unwrap();
+    let mut h = harness(a);
+    h.run_steps(2);
+    assert!(h.query_by_label("Discord community").is_some(), "the community link shows by default");
+
+    let mut a = app();
+    a.ui.show_discord = false;
+    a.run("ui.backstage", json!({"value": true})).unwrap();
+    let mut h = harness(a);
+    h.run_steps(2);
+    assert!(h.query_by_label("Discord community").is_none(), "the backstage link honors the same setting");
 }
 
 /// File › Options › Advanced › Editing: alignment guides are a UI command, on by default and
@@ -2849,6 +2917,88 @@ fn a_command_line_file_still_asks_for_its_password_after_the_startup_document_is
     assert!(body_text(&a).contains("Locked away"), "{}", body_text(&a));
 }
 
+/// A template WordCraft can be handed, saved by the engine with `text` (and `password`).
+fn template_file(path: &std::path::Path, text: &str, password: Option<&str>) -> Vec<u8> {
+    let mut s = Session::new(wordcraft_doc::Document::from_text(text));
+    s.run("file.save", &json!({"path": path.to_string_lossy(), "password": password})).unwrap();
+    std::fs::read(path).unwrap()
+}
+
+/// #3433: a Word template the platform hands the app (the command line, a double-click in the
+/// file manager, the Finder) starts a new, untitled document based on it, in place of the
+/// untouched blank document, as Word does; saving can't write over the template. A document is
+/// still opened as itself, and File › Open still opens a template itself, to edit it.
+#[test]
+fn a_template_the_platform_hands_the_app_starts_a_new_document() {
+    let dir = scratch("platform-template");
+    let path = dir.join("Letterhead.DOTX");
+    let bytes = template_file(&path, "Letterhead text", None);
+    let name = path.to_string_lossy().to_string();
+
+    let mut a = app();
+    let r = a.open_from_platform(&name, None).unwrap();
+    assert_eq!(r.get("pending"), None, "{r}");
+    assert_eq!(a.session.documents().len(), 1, "the blank startup document gave way");
+    assert_eq!(a.session.path, None);
+    assert_eq!(a.session.doc.settings.attached_template.as_deref(), Some(name.as_str()));
+    assert!(body_text(&a).contains("Letterhead text"));
+    assert_eq!(a.title_stem(), "Document1");
+    a.run("text.insert", json!({"text": "Dear reader, "})).unwrap();
+    let _ = a.run("file.save", json!({}));
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "Save never writes over the template");
+    assert_eq!(a.session.path, None);
+
+    // A document opens as itself, beside the new one.
+    let doc = dir.join("Report.docx");
+    template_file(&doc, "Report text", None);
+    a.open_from_platform(&doc.to_string_lossy(), None).unwrap();
+    assert_eq!(a.session.path.as_deref(), Some(doc.as_path()));
+    // File › Open edits the template itself.
+    let mut b = app();
+    b.open_file(&name, None).unwrap();
+    assert_eq!(b.session.path.as_deref(), Some(path.as_path()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #3433: a protected template from the platform asks for its password, and the password box
+/// retries the command that asked, so the template still starts a new document instead of
+/// opening itself.
+#[test]
+fn a_protected_template_from_the_platform_asks_for_its_password_and_stays_a_new_document() {
+    let dir = scratch("platform-template-password");
+    let path = dir.join("Locked.dotm");
+    let bytes = template_file(&path, "Locked template", Some("sesame"));
+    let name = path.to_string_lossy().to_string();
+
+    let mut a = app();
+    a.open_from_platform(&name, None).unwrap();
+    assert_eq!(prompt(&a), Some("password"));
+    let (then, params) = match &a.dialog {
+        Some(crate::dialogs::Dialog::Password { then, params, .. }) => (then.clone(), params.clone()),
+        other => panic!("{:?}", other.as_ref().map(|d| d.name())),
+    };
+    assert_eq!(then, "file.newFromTemplate");
+    let mut with = params;
+    with["password"] = json!("sesame");
+    a.execute(&then, with).unwrap();
+    assert!(body_text(&a).contains("Locked template"), "{}", body_text(&a));
+    assert_eq!((a.session.path.as_ref(), a.session.password.is_some()), (None, false));
+    assert_eq!(a.session.documents().len(), 1);
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn word_templates_are_told_by_their_extension() {
+    use crate::documents::is_word_template;
+    for t in ["a.dotx", "a.dotm", "a.dot", "A.DOTX", "/x/y.Dotm", "C:\\x\\y.DOT"] {
+        assert!(is_word_template(t), "{t}");
+    }
+    for t in ["a.docx", "a.doc", "dotx", "a.dotx.docx", "a.ott", "", "a."] {
+        assert!(!is_word_template(t), "{t}");
+    }
+}
+
 /// #55: a password-protected document asks for its password (after Save Changes) instead of
 /// opening blank; scripts get the error instead of a dialog; Encrypt with Password asks for one.
 #[test]
@@ -4323,10 +4473,9 @@ fn alt_q_opens_search_and_typing_goes_there() {
     h.event(key(egui::Key::Q, egui::Modifiers::ALT));
     h.event(egui::Event::Text("q".into()));
     h.step();
-    let query = |h: &egui_kittest::Harness<WordApp>| match &h.state().dialog {
-        Some(dialogs::Dialog::Commands { query, .. }) => Some(query.clone()),
-        _ => None,
-    };
+    // The title bar shows the Search box, so Search opens there, in place (#5398).
+    let query = |h: &egui_kittest::Harness<WordApp>| crate::chrome::title_search_query(h.state(), &h.ctx);
+    assert!(h.state().dialog.is_none(), "no Search Commands dialog over the page");
     assert_eq!(query(&h).as_deref(), Some(""), "Search is open and empty");
     h.step();
     {
@@ -4340,7 +4489,8 @@ fn alt_q_opens_search_and_typing_goes_there() {
     h.event(key(egui::Key::Escape, egui::Modifiers::NONE));
     h.step();
     h.step();
-    assert!(h.state().dialog.is_none(), "Escape closes Search");
+    assert!(query(&h).is_none(), "Escape closes Search");
+    assert!(!h.state().session.view.full_screen_view);
     // Words that name no command: Enter finds them in the document, in the Navigation pane.
     h.event(key(egui::Key::Q, egui::Modifiers::ALT));
     h.step();
@@ -4352,9 +4502,192 @@ fn alt_q_opens_search_and_typing_goes_there() {
     h.event(key(egui::Key::Enter, egui::Modifiers::NONE));
     h.step();
     h.step();
-    assert!(h.state().dialog.is_none(), "Enter ran the search");
+    assert!(query(&h).is_none(), "Enter ran the search");
     assert!(h.state().session.view.nav_pane, "the Navigation pane shows the results");
     assert_eq!(h.state().session.find.results.len(), 1);
+}
+
+/// #5398: a click on the title bar's Search box types into that box, as in Word, with the
+/// results dropping down under it, instead of opening a second box in a dialog; a result's click
+/// runs it, and a click elsewhere closes Search.
+#[test]
+fn the_title_bar_search_box_is_typed_in_place() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app(),
+    );
+    h.run_steps(6);
+    let query = |h: &egui_kittest::Harness<WordApp>| crate::chrome::title_search_query(h.state(), &h.ctx);
+    let open = |h: &mut egui_kittest::Harness<WordApp>| {
+        h.get_by_label("Search commands and help").click();
+        h.run_steps(3);
+    };
+    open(&mut h);
+    assert!(h.state().dialog.is_none(), "no second box in a dialog");
+    assert_eq!(query(&h).as_deref(), Some(""));
+    assert!(h.ctx.text_edit_focused(), "the box itself takes the typing");
+    h.event(egui::Event::Text("word count".into()));
+    h.run_steps(2);
+    assert_eq!(query(&h).as_deref(), Some("word count"));
+    let body = |h: &egui_kittest::Harness<WordApp>| h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert_eq!(body(&h).trim(), "", "nothing typed into the document");
+    // The result is a row of the drop-down (the ribbon's own Word Count button has no "—").
+    let row = h
+        .query_all_by_label_contains("Word Count")
+        .find(|n| n.accesskit_node().label().is_some_and(|l| l.contains('—')))
+        .expect("Word Count among the results");
+    row.click();
+    h.run_steps(3);
+    assert!(query(&h).is_none(), "running a result closes Search");
+    assert!(h.state().dialog.is_some(), "and Word Count ran (its dialog is open)");
+    h.state_mut().dialog = None;
+    h.run_steps(2);
+    // A click elsewhere closes it.
+    open(&mut h);
+    assert!(query(&h).is_some());
+    for pressed in [true, false] {
+        let at = egui::pos2(720.0, 600.0);
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+        h.step();
+    }
+    h.run_steps(2);
+    assert!(query(&h).is_none(), "a click on the page closes Search");
+}
+
+/// #5398 (review): Focus hides the Search box, so Search there is the dialog, even on the frame
+/// Focus comes on; and Search left open when Focus comes on doesn't keep Escape from leaving it.
+#[test]
+fn focus_mode_search_never_opens_in_the_hidden_box() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app(),
+    );
+    h.run_steps(6);
+    let query = |h: &egui_kittest::Harness<WordApp>| crate::chrome::title_search_query(h.state(), &h.ctx);
+    let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    // Search, as Alt+Q opens it (Windows and Linux; macOS has no Alt+Q, Option+Q types a character).
+    let search = |h: &mut egui_kittest::Harness<WordApp>| {
+        let _ = h.state_mut().run("ui.dialog", json!({"name": "commands"}));
+    };
+    // The last frame drew the box; Focus comes on just before Search.
+    h.state_mut().run("view.focus", json!({"value": true})).unwrap();
+    search(&mut h);
+    h.step();
+    assert!(query(&h).is_none(), "no Search in a box Focus hides");
+    assert!(matches!(h.state().dialog, Some(dialogs::Dialog::Commands { .. })), "Search opens as the dialog");
+    h.state_mut().dialog = None;
+    h.state_mut().run("view.focus", json!({"value": false})).unwrap();
+    h.run_steps(3);
+    // Search open in the title bar, then Focus comes on: Escape leaves Focus.
+    search(&mut h);
+    h.run_steps(2);
+    assert!(query(&h).is_some());
+    h.state_mut().run("view.focus", json!({"value": true})).unwrap();
+    h.run_steps(3);
+    assert!(query(&h).is_none(), "Search whose box is gone is dropped");
+    h.event(key(egui::Key::Escape, egui::Modifiers::NONE));
+    h.run_steps(2);
+    assert!(!h.state().session.view.focus_mode, "Escape leaves Focus");
+}
+
+/// #5398 (review): what is typed on the very first frame after Search opens goes into the
+/// Search box, not into the document; and Enter on a result that opens a dialog (Word Count)
+/// leaves that dialog open: the same Enter doesn't also press its OK.
+#[test]
+fn title_bar_search_takes_the_first_keys_and_enter_opens_the_result() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app(),
+    );
+    h.run_steps(6);
+    let query = |h: &egui_kittest::Harness<WordApp>| crate::chrome::title_search_query(h.state(), &h.ctx);
+    let body = |h: &egui_kittest::Harness<WordApp>| h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    // Search as the ribbon's box and Alt+Q open it, then typing straight away.
+    let _ = h.state_mut().run("ui.dialog", json!({"name": "commands"}));
+    h.step();
+    h.event(egui::Event::Text("word count".into()));
+    h.step();
+    h.step();
+    assert_eq!(body(&h).trim(), "", "nothing typed into the document");
+    assert_eq!(query(&h).as_deref(), Some("word count"), "the first keys go into the Search box");
+    let enter = egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+    h.event(enter);
+    h.run_steps(4);
+    assert!(query(&h).is_none(), "Enter ran the first result");
+    assert!(matches!(h.state().dialog, Some(dialogs::Dialog::WordCount { .. })), "Word Count is open, not closed by the same Enter");
+}
+
+/// #5398 (review): Tab moves from the Search box to its results, and the box doesn't take the
+/// focus back, so a keyboard user can pick a result; Enter on it runs it.
+#[test]
+fn tab_moves_to_a_search_result_and_enter_runs_it() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app(),
+    );
+    h.run_steps(6);
+    let query = |h: &egui_kittest::Harness<WordApp>| crate::chrome::title_search_query(h.state(), &h.ctx);
+    let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+    let _ = h.state_mut().run("ui.dialog", json!({"name": "commands"}));
+    h.step();
+    h.event(egui::Event::Text("word count".into()));
+    h.run_steps(2);
+    let edit = h.state().window_id("title_search_edit");
+    assert!(h.ctx.memory(|m| m.has_focus(edit)), "the box has the keys");
+    h.event(key(egui::Key::Tab));
+    h.run_steps(3);
+    assert!(!h.ctx.memory(|m| m.has_focus(edit)), "the box didn't take the focus back");
+    assert!(h.ctx.memory(|m| m.focused()).is_some(), "a result has it");
+    assert_eq!(query(&h).as_deref(), Some("word count"), "Search is still open");
+    h.event(key(egui::Key::Enter));
+    h.run_steps(4);
+    assert!(query(&h).is_none(), "Enter ran the result that has the focus");
+    assert!(h.state().dialog.is_some(), "its dialog is open, not closed by the same Enter");
+}
+
+/// #5398 (review): Alt+Q pressed on the page opens Search while the page has the keys; what is
+/// typed on the very next frame goes into the Search box, not into the document.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn keys_typed_right_after_alt_q_go_into_search() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app(),
+    );
+    h.run_steps(6);
+    h.event(egui::Event::Text("Kilns".into()));
+    h.step();
+    let query = |h: &egui_kittest::Harness<WordApp>| crate::chrome::title_search_query(h.state(), &h.ctx);
+    h.event(egui::Event::Key { key: egui::Key::Q, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT });
+    h.step();
+    // Typing sends each key's press before its text.
+    h.event(egui::Event::Key { key: egui::Key::B, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.event(egui::Event::Text("bold".into()));
+    h.step();
+    h.step();
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Kilns", "nothing typed into the document");
+    assert_eq!(query(&h).as_deref(), Some("bold"), "the keys went into the Search box");
 }
 
 /// #819: `tools.search` with a query lists matching commands for scripts and agents; every
@@ -5502,6 +5835,51 @@ fn check_spelling_survives_restart() {
     let conflicting = serde_json::from_value(json!({"checkSpelling": true, "editing": {"checkSpelling": false}})).unwrap();
     second.apply_prefs(conflicting);
     assert!(second.session.prefs.check_spelling, "the live spelling setting and its saved copy agree");
+}
+
+/// With several documents open, turning Check spelling as you type off in one keeps it off in the
+/// others, and the next run starts with it off whichever document was active when the settings
+/// were saved (#5740: it came back on every time the file was opened again).
+#[test]
+fn check_spelling_off_survives_a_switch_and_a_restart() {
+    let mut first = app();
+    let a = first.session.document_id();
+    first.run("file.new", json!({})).unwrap();
+    first.run("file.options", json!({"checkSpelling": false})).unwrap();
+    first.session.activate(a).unwrap();
+    assert!(!first.session.view.proofing, "off in the other document too");
+    let saved = serde_json::to_vec(&first.prefs()).unwrap();
+
+    let mut second = app();
+    second.apply_prefs(serde_json::from_slice(&saved).unwrap());
+    assert!(!second.session.view.proofing && !second.session.prefs.check_spelling);
+}
+
+/// The same across windows: Check spelling as you type turned off in a second window on a document
+/// stays off when the first window's own view of it comes back, in a window on another document,
+/// back in the second window, and in the saved settings (#5740).
+#[test]
+fn check_spelling_off_in_a_second_window_stays_off_in_every_window() {
+    let mut a = app();
+    let first = a.windows.shown();
+    a.new_window();
+    let second = a.windows.shown();
+    assert_ne!(first, second, "View › New Window opened a window with its own view");
+    a.run("file.options", json!({"checkSpelling": false})).unwrap();
+
+    assert!(a.enter_window(first));
+    assert!(!a.session.view.proofing, "the first window's own view, put back, follows the setting");
+    a.run("file.new", json!({})).unwrap();
+    assert!(!a.session.view.proofing, "a new document's window");
+    assert!(a.enter_window(second));
+    assert!(!a.session.view.proofing, "back in the second window");
+    assert!(a.enter_window(first));
+    assert!(!a.session.view.proofing);
+
+    let saved = serde_json::to_vec(&a.prefs()).unwrap();
+    let mut b = app();
+    b.apply_prefs(serde_json::from_slice(&saved).unwrap());
+    assert!(!b.session.view.proofing && !b.session.prefs.check_spelling, "saved off, whichever window was drawn");
 }
 
 #[test]
