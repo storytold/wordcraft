@@ -28,10 +28,10 @@ fn font_menu_entries_leave_installed_families_unloaded() {
 /// returns the painted shapes of the last one and every texture picture uploaded on the way.
 fn run_gallery(mut doc: Document, style: wordcraft_doc::styles::Style) -> (Vec<egui::epaint::ClippedShape>, Vec<egui::ColorImage>) {
     // Only the style under test is in the gallery.
-    for other in &mut doc.styles.styles {
+    for other in &mut Arc::make_mut(&mut doc.styles).styles {
         other.quick = false;
     }
-    doc.styles.upsert(style);
+    Arc::make_mut(&mut doc.styles).upsert(style);
     let mut app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
     app.ui.language = "en".into();
     let ctx = egui::Context::default();
@@ -380,4 +380,82 @@ fn font_menu_entries_take_the_theme_text_colour() {
         }
         assert_eq!(images, 1, "{theme:?}: the entry draws its rendered name");
     }
+}
+
+/// Where the Home tab's Styles group, laid out as the ribbon lays it out in the current interface
+/// language, puts its parts, by their accessible rectangles: the gallery's first tiles in gallery
+/// order, the column of scroll arrows and "more" from the top (the unnamed buttons beside the
+/// tiles; only "more" has a name), and the button named for the Styles pane.
+fn styles_group_rects() -> (Vec<(String, Rect)>, Vec<Rect>, Option<Rect>) {
+    use egui_kittest::kittest::{Queryable, by};
+    let app = WordApp::new(wordcraft_engine::Session::new(Document::new()), Default::default());
+    let names: Vec<String> = app.session.doc.styles.gallery().iter().take(super::STYLE_TILES).map(|s| crate::i18n::style_name(s)).collect();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 200.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            crate::rtl::root(ui, |ui| {
+                crate::rtl::horizontal_top(ui, |ui| {
+                    crate::widgets::group(ui, "Styles", Some("styles.pane"), app, |ui, app| style_gallery(app, ui, &json!({})));
+                });
+            });
+        },
+        app,
+    );
+    h.run_steps(3);
+    let tiles: Vec<(String, Rect)> = names.iter().map(|n| (n.clone(), h.get_by_label(n).rect())).collect();
+    let row = tiles.first().map_or(Rect::NOTHING, |(_, r)| *r);
+    // The arrows are 14 points wide and stacked beside the tiles; the group's launcher is below them.
+    let mut arrows: Vec<Rect> = h
+        .query_all(by().predicate(|n| n.bounding_box().is_some()))
+        .map(|n| n.rect())
+        .filter(|r| r.width() <= 16.0 && (row.min.y..=row.max.y).contains(&r.center().y))
+        .collect();
+    arrows.sort_by(|a, b| a.min.y.total_cmp(&b.min.y));
+    let more = h.query_by_label(crate::i18n::t("Styles Pane")).map(|n| n.rect());
+    (tiles, arrows, more)
+}
+
+/// #5566: in a right-to-left interface the Styles gallery starts at the right, as the rest of
+/// the ribbon does: the first style (Normal) is the rightmost tile, and the scroll arrows and
+/// "more" sit at the gallery's left end. Left to right is unchanged.
+#[test]
+fn the_styles_gallery_reads_from_the_right_in_a_right_to_left_interface() {
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+    let (tiles, arrows, more) = styles_group_rects();
+    assert!(tiles.len() >= 2, "the gallery shows its tiles: {tiles:?}");
+    assert_eq!(arrows.len(), 3, "up, down and more: {arrows:?}");
+    assert!(tiles.windows(2).all(|w| w[0].1.center().x < w[1].1.center().x), "left to right, tiles run rightwards: {tiles:?}");
+    assert!(
+        arrows.iter().all(|a| tiles.iter().all(|(_, r)| a.min.x >= r.max.x)),
+        "left to right, the arrows are right of every tile: {arrows:?} {tiles:?}"
+    );
+    let ltr_more = (more, arrows.last().copied());
+
+    // An Arabic interface; its catalog is not needed (the harness has no Arabic font to draw it).
+    crate::i18n::set_current(crate::i18n::fixture_lang("ar", "\tHome\tالرئيسية\n"));
+    let (tiles, arrows, more) = styles_group_rects();
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+    assert_eq!(tiles.first().map(|(n, _)| n.as_str()), Some("Normal"), "the first tile is Normal");
+    assert_eq!(arrows.len(), 3, "up, down and more: {arrows:?}");
+    assert!(tiles.windows(2).all(|w| w[0].1.center().x > w[1].1.center().x), "right to left, tiles run leftwards: {tiles:?}");
+    assert!(
+        arrows.iter().all(|a| tiles.iter().all(|(_, r)| a.max.x <= r.min.x)),
+        "right to left, the arrows are left of every tile: {arrows:?} {tiles:?}"
+    );
+
+    // Screen readers find "more", the bottom arrow, by the pane it opens, in either direction.
+    for (more, bottom) in [ltr_more, (more, arrows.last().copied())] {
+        assert!(more.is_some() && more == bottom, "the bottom arrow ({bottom:?}) is named for the Styles pane ({more:?})");
+    }
+}
+
+#[test]
+fn font_sample_shows_small_caps_and_the_script_mark() {
+    let white = wordcraft_doc::Rgb(255, 255, 255);
+    let plain = CharProps { size: Some(20.0), ..Default::default() };
+    let draw = |p: &CharProps, mark, dark| font_sample("AaBbYyZz", p, mark, (200.0, 40.0, 1.0), white, dark).map(|i| i.pixels);
+    let small = CharProps { small_caps: Some(true), ..plain.clone() };
+    assert_ne!(draw(&plain, None, false), draw(&small, None, false), "small caps change the sample");
+    let sup = Some(wordcraft_doc::props::VertAlign::Superscript);
+    assert_ne!(draw(&plain, None, false), draw(&plain, sup, false), "the mark is drawn");
+    assert_ne!(draw(&plain, None, false), draw(&plain, None, true), "Switch Modes transforms the preview");
 }
