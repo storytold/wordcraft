@@ -231,6 +231,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-11-03: Shape Format › Size: the width and height fields show the interface unit (centimetres, inches…) instead of always points, and take a size typed in any unit, such as `3 cm` or `300 px`, applied once typed (Esc cancels), each side on its own, as Picture Format › Size does (#4196). In both, a field clicked and left with Enter or Tab without typing no longer resizes the object by the rounding of the size it shows (a 100 pt shape became 100.08 pt in inches).
 - 2026-11-03: Security: Paste Special with picture files on the clipboard refuses anything that isn't a regular file (a pipe or device reports no length and can produce endless data), and `cargo xtask stats` no longer follows directory symlinks. Readiness unchanged.
 - 2026-11-03: Size keeps the side it isn't asked to change (#5469): typing only the width of a straight line keeps its height of 0 instead of making it 1 pt; the 1–4000 pt limits apply only to the sides a `picture.size` call changes. Readiness unchanged.
+- 2026-11-03: Find and Replace: a keyboard apostrophe also finds typographic single quotes, so smart-quoted typing stays searchable (#5388). Regex, wildcards, literal searches and numeric character codes remain exact. Original UTF-8 match ranges and replacement spelling are preserved; readiness unchanged.
 - 2026-11-03: Security: pasting text boxes charges each copied story for its formatting too (run, mark, paragraph and section properties), not only its text and objects, so a story with huge style or font names can't copy past the paste's 32 MiB text box budget. Readiness unchanged.
 - 2026-11-03: Security: `.doc` import keeps one width, shading, alignment and merge override per table cell, the last one winning as before, instead of a copy every time a paragraph's properties repeat the sprm, so a shared PAPX can't pile up copies on every paragraph mark. Readiness unchanged.
 - 2026-11-03: Security: `.doc` import attaches each section to the paragraph that ends it through an index of paragraph ends, instead of scanning every paragraph for every section, so a file with a thousand sections that end nowhere can't multiply the work over its paragraphs. Readiness unchanged.
@@ -896,6 +897,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-03 | trivial | Progress log: craft-proof pin, French elision suggestions and Valencian (CP4.3) |
 | 2026-11-03 | trivial | Progress log: a long comment's card and balloon stop at ten lines (#3382) |
 | 2026-11-03 | trivial | Progress log: Shape Format › Size in the interface unit (#4196) |
+| 2026-11-03 | trivial | Find smart-quoted text with a keyboard apostrophe (#5388); exact search modes and replacement spelling preserved. |
 | 2026-11-03 | trivial | Progress log: Replace and Remove Table of Contents with Word's title above a section break (#4041) |
 | 2026-11-03 | trivial | Progress log: language-packs-2 published and pinned, 75 Language packs |
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |
