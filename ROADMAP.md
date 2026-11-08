@@ -385,6 +385,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-31 | A picture or shape anchored in a line of a long paragraph on a later page is drawn on that page, as in Word, instead of the page the paragraph starts on; one dropped on such a page stays where it was dropped (#4250) |
 | 2026-10-31 | A picture or shape anchored in a line of a long paragraph on a later page is drawn on that page, as in Word, instead of the page the paragraph starts on; one dropped on such a page stays where it was dropped (#4250) |
 | 2026-10-31 | A picture or shape dropped beside the first line after a page break inside a paragraph stays on the new page, as in Word, instead of going back to the page before the break (#4262) |
+| 2026-11-07 | A brace or bracket shape in a `.doc` file is drawn without a fill unless the file gives it one, as in Word, instead of as a white box that hides the text behind it (#5943) |
 | 2026-10-27 | Connector rerouting indexes laid-out object positions once per batch, preserving page hints, first-match order and same-page glue; synthetic equivalence, geometry and scaling regressions (#3631); routing policy and readiness estimates unchanged |
 | 2026-10-28 | Markdown import bounds nested undefined reference-label work within the existing link allowance; literal source and normal reference matching are preserved (#4658). |
 | 2026-10-23 | A command that changes nothing is not an edit: it adds no undo step, marks no unsaved changes and forces no relayout, so the redo stack survives it and five hundred of them can no longer push the user's own edits out of the undo history. |
@@ -905,6 +906,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-04 | trivial | Progress log: ODT element audit (gap 19) |
 | 2026-11-04 | trivial | Progress log: ODT checked against 220 files from other applications (gap 19) |
 | 2026-11-04 | trivial | Progress log: OpenDocument files shown in Microsoft Word style or LibreOffice style (gap 19) |
+| 2026-11-07 | trivial | Progress log: `.doc` brace and bracket shapes unfilled by default (#5943) |
 | 2026-11-04 | trivial | PR #4609: relative REF keeps context already displayed by the own or a needed ancestor label; six synthetic legal-template cases and separate-list context follow the Word for Windows measurements reported by @pakiat in PR discussion. Existing unknown-switch/cache boundaries and readiness estimates unchanged; no new native Word run. |
 | 2026-11-01 | trivial | Progress log: SEQ, STYLEREF and REF fields show fresh results in output |
 | 2026-10-29 | trivial | Progress log: Print Markup balloon anchors use one object walk per paragraph (#3614); readiness estimates unchanged |
