@@ -316,6 +316,46 @@ fn references_to_bullets_and_none_format_levels() {
     assert_eq!(got, ["\u{2022}", "\u{2022} above", "0"]);
 }
 
+/// A level whose format is none but has literal text ("RESPONSE:", "[%2]") counts (#4985), and a
+/// reference to its paragraph shows that text; below a numbered level only `\n` does, and `\w`
+/// keeps its stored result (Word for Windows shows `[]` for `\n` there, and its full context isn't
+/// stable).
+#[test]
+fn references_to_none_format_levels_with_literal_text() {
+    let mut s = open(
+        &[
+            para(Some((13, 0)), &marked("_Response", 112, "Synthetic response item")),
+            para(Some((4, 0)), &text("Synthetic clause")),
+            para(Some((14, 1)), &marked("_Bracket", 113, "Synthetic bracket item")),
+            para(
+                None,
+                &[
+                    field(r"REF _Response \n", "STALE"),
+                    field(r"REF _Response \r", "STALE"),
+                    field(r"REF _Response \w \p", "STALE"),
+                    field(r"REF _Bracket \n", "STALE"),
+                    field(r"REF _Bracket \w", "STALE"),
+                ]
+                .concat(),
+            ),
+        ]
+        .concat(),
+    );
+    let numbering = std::sync::Arc::make_mut(&mut s.doc.numbering);
+    for (id, base, level, text) in [(13u32, 1u32, 0u8, "RESPONSE:"), (14, 4, 1, "[%2]")] {
+        let mut n = numbering.nums.iter().find(|n| n.id == base).unwrap().clone();
+        n.id = id;
+        n.level_overrides = vec![(
+            level,
+            wordcraft_doc::numbering::Level { format: wordcraft_doc::section::NumFormat::None, text: text.into(), ..Default::default() },
+        )];
+        numbering.nums.push(n);
+    }
+    s.run("references.updateFields", &json!({"all":true})).unwrap();
+    let got: Vec<_> = fields(&s).into_iter().map(|(_, r)| r).collect();
+    assert_eq!(got, ["RESPONSE:", "RESPONSE:", "RESPONSE: above", "[]", "STALE"]);
+}
+
 /// Updating, undoing and saving keep the field instructions and their numeric results intact.
 #[test]
 fn numeric_refs_survive_undo_redo_and_docx_round_trip() {

@@ -24,6 +24,9 @@ pub(super) struct ParaNumbers {
     lists: std::collections::HashMap<u32, Vec<(usize, Path)>>,
     /// The bullet of each bullet item.
     bullets: std::collections::HashMap<Path, String>,
+    /// The literal text of each paragraph on a level whose format is none, when it has some
+    /// ("RESPONSE:"), and whether the levels above it count.
+    literals: std::collections::HashMap<Path, (String, bool)>,
 }
 
 impl ParaNumbers {
@@ -88,6 +91,14 @@ pub(super) fn para_numbers(doc: &wordcraft_doc::Document) -> ParaNumbers {
             out.bullets.insert(path, wordcraft_doc::symbol_fonts::map_text(font, &label));
             continue;
         }
+        if def.format == NumFormat::None {
+            // A level whose format is none counts (#4985) but has no number of its own: a
+            // reference to it shows 0, or its literal text when it has some (Word for Windows).
+            if !label.trim().is_empty() {
+                out.literals.insert(path, (label.trim().to_string(), n.level > 0));
+            }
+            continue;
+        }
         let level = usize::from(n.level.min(8));
         let values = counters.values(&doc.numbering, n.num).unwrap_or_default();
         let mut num = ParaNumber { list: n.num, ..Default::default() };
@@ -127,10 +138,16 @@ fn ref_part(label: &str) -> &str {
 /// A level above the target that its list never used shows the number it counted from: Word shows
 /// `1.1(a)` for an `(a)` item whose list has no clause above it. All measured in Word for Windows.
 /// A bullet item shows its bullet, and a body paragraph with no number (none at all, or a level
-/// whose format is none) shows 0, whatever the switch, as in Word. `None` (the stored result
-/// stays) when the number can't be put together without inventing a delimiter.
+/// whose format is none and no text) shows 0, whatever the switch, as in Word. A level whose
+/// format is none but has literal text shows that text ("RESPONSE:"); below a numbered level,
+/// only `\n` does, since Word's `\r` and `\w` there aren't stable (it put a stray number in
+/// front of "Note"), so those keep the stored result. `None` (the stored result stays) when the
+/// number can't be put together without inventing a delimiter.
 pub(super) fn ref_number(numbers: &ParaNumbers, target: &Path, from: Option<&Path>, switch: char) -> Option<String> {
     let Some(t) = numbers.numbers.get(target) else {
+        if let Some((text, below)) = numbers.literals.get(target) {
+            return (switch == 'n' || !below).then(|| text.clone());
+        }
         return Some(numbers.bullets.get(target).cloned().unwrap_or_else(|| "0".into()));
     };
     let level = t.values.len().checked_sub(1)?;
