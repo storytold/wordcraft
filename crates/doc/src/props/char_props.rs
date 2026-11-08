@@ -519,7 +519,13 @@ impl CharProps {
     }
 
     fn minus_latin_theme(&mut self, base: &CharProps) {
+        // A slot stays with a font that stays: overlaid alone, the font would clear the base's
+        // slots (`overlay_latin_theme`), so dropping a slot equal to the base's would lose it.
+        let keep = (self.font_ascii_theme.clone(), self.font_hansi_theme.clone());
         drop_same_fields!(self, base; font_ascii_theme, font_hansi_theme);
+        if self.font.is_some() {
+            (self.font_ascii_theme, self.font_hansi_theme) = keep;
+        }
     }
 
     fn minus_text_style(&mut self, base: &CharProps) {
@@ -532,7 +538,15 @@ impl CharProps {
     }
 
     fn minus_script_style(&mut self, base: &CharProps) {
+        // As for the Latin slots: a slot stays while its named font does.
+        let keep = (self.font_ea_theme.clone(), self.font_cs_theme.clone());
         drop_same_fields!(self, base; cs, font_cs, font_ea, font_ea_theme, font_cs_theme, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout);
+        if self.font_ea.is_some() {
+            self.font_ea_theme = keep.0;
+        }
+        if self.font_cs.is_some() {
+            self.font_cs_theme = keep.1;
+        }
     }
 
     fn minus_document_marks(&mut self, base: &CharProps) {

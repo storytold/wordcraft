@@ -12497,3 +12497,45 @@ fn page_down_extends_a_selection_that_ends_in_collapsed_outline_text() {
     assert!(s.sel.focus.path.0[0] > 6, "Page Down extends the selection a page on: {:?}", s.sel.focus);
     assert!(s.layout().caret(&s.sel.focus).is_some(), "to a place the outline shows");
 }
+
+/// The `word/document.xml` of a DOCX package.
+fn document_xml(bytes: &[u8]) -> String {
+    use std::io::Read;
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut out = String::new();
+    z.by_name("word/document.xml").unwrap().read_to_string(&mut out).unwrap();
+    out
+}
+
+/// A run whose fonts come from theme slots (`w:eastAsiaTheme`, `w:cstheme`, `w:asciiTheme`…).
+const THEMED_RUN: &str = r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="Aptos" w:hAnsi="Aptos" w:eastAsia="SimSun" w:cs="Arial" w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi" w:eastAsiaTheme="minorEastAsia" w:cstheme="minorBidi"/></w:rPr><w:t>Themed text</w:t></w:r></w:p>"#;
+
+/// Choosing a font drops the theme slot it replaces: Word reads the slot over the named font, so
+/// a slot saved beside the new font would show the theme's font instead of the one chosen.
+#[test]
+fn a_chosen_font_drops_its_theme_slot_on_save() {
+    let mut s = Session::new(wordcraft_docx::read(&docx_with_styles(THEMED_RUN, "")).unwrap());
+    let before = document_xml(&wordcraft_docx::write(&s.doc).unwrap());
+    assert!(before.contains("w:eastAsiaTheme") && before.contains("w:cstheme"), "the slots survive a plain save: {before}");
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.font", json!({"name": "Georgia", "eastAsia": "MS Mincho"}));
+    let xml = document_xml(&wordcraft_docx::write(&s.doc).unwrap());
+    assert!(xml.contains(r#"w:eastAsia="MS Mincho""#), "{xml}");
+    for slot in ["w:eastAsiaTheme", "w:cstheme", "w:asciiTheme", "w:hAnsiTheme"] {
+        assert!(!xml.contains(slot), "{slot} left beside the chosen font: {xml}");
+    }
+}
+
+/// Applying a paragraph style clears the runs' direct fonts and their theme slots with them, so
+/// the style's own East Asian font shows in Word.
+#[test]
+fn applying_a_style_drops_the_runs_theme_slots_on_save() {
+    let styles = style_xml("Gothic", "Gothic", "", r#"<w:rFonts w:eastAsia="MS Gothic"/>"#);
+    let mut s = Session::new(wordcraft_docx::read(&docx_with_styles(THEMED_RUN, &styles)).unwrap());
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.style", json!({"style": "Gothic"}));
+    let xml = document_xml(&wordcraft_docx::write(&s.doc).unwrap());
+    for slot in ["w:eastAsiaTheme", "w:cstheme", "w:asciiTheme", "w:hAnsiTheme"] {
+        assert!(!xml.contains(slot), "{slot} left after applying the style: {xml}");
+    }
+}

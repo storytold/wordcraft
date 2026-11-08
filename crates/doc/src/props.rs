@@ -38,6 +38,33 @@ pub use table_props::{
 mod tests {
     use super::*;
 
+    /// A run's theme slot equal to its base's stays while the run's named font differs: overlaid
+    /// alone, that font would clear the base's slot, so the round trip would lose the slot.
+    #[test]
+    fn minus_keeps_a_theme_slot_whose_font_stays() {
+        let s = |v: &str| Some(v.to_string());
+        let base = CharProps {
+            font: s("Aptos"),
+            font_ascii_theme: s("minorHAnsi"),
+            font_hansi_theme: s("minorHAnsi"),
+            font_ea: s("SimSun"),
+            font_ea_theme: s("minorEastAsia"),
+            font_cs: s("Arial"),
+            font_cs_theme: s("minorBidi"),
+            ..Default::default()
+        };
+        let run = CharProps { font: s("Georgia"), font_ea: s("MS Mincho"), font_cs: s("Times New Roman"), ..base.clone() };
+        let patch = run.clone().minus(&base);
+        assert_eq!((patch.font_ea_theme.as_deref(), patch.font_cs_theme.as_deref()), (Some("minorEastAsia"), Some("minorBidi")));
+        assert_eq!(patch.font_ascii_theme.as_deref(), Some("minorHAnsi"));
+        let mut back = base.clone();
+        back.overlay(&patch);
+        assert_eq!(back, run, "base plus the patch is the run again");
+        // A font equal to the base's goes, and its slot with it.
+        let same = base.clone().minus(&base);
+        assert_eq!((same.font_ea_theme, same.font_cs_theme, same.font_ascii_theme), (None, None, None));
+    }
+
     #[test]
     fn rgb_hex() {
         assert_eq!(Rgb(255, 0, 16).hex(), "FF0010");
