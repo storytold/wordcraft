@@ -531,6 +531,239 @@ fn edit_header_with_invalid_page_preserves_page_hint() {
 }
 
 #[test]
+fn unlinked_empty_footer_does_not_silently_relink_on_close_or_save() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "Section 1 text"})).unwrap();
+    s.run("insert.footer", &json!({"text": "Footer 1"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+
+    // Section break to Section 2
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("text.insert", &json!({"text": "Section 2 text"})).unwrap();
+
+    // Edit Section 2 footer and unlink it
+    s.run("insert.editFooter", &json!({"page": 1})).unwrap();
+    s.run("layout.linkToPrevious", &json!({"footer": true, "linked": false})).unwrap();
+    assert!(!crate::cmd::page::is_hf_linked(&s));
+
+    // Clear the footer content so it has only an empty paragraph
+    s.run("select.all", &json!({})).unwrap();
+    s.run("text.delete", &json!({})).unwrap();
+
+    // Close header
+    s.run("insert.closeHeader", &json!({})).unwrap();
+
+    // Must NOT have silently relinked or dropped the unlinked part
+    assert!(s.doc.sections()[1].1.footers.default.is_some(), "unlinked empty footer must retain its own part");
+
+    // Editing footer again confirms it remains unlinked
+    s.run("insert.editFooter", &json!({"page": 1})).unwrap();
+    assert!(!crate::cmd::page::is_hf_linked(&s));
+}
+
+#[test]
+fn unlinking_duplicates_text_boxes_into_independent_stories() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "Section 1"})).unwrap();
+
+    // Add a text box to Section 1's header
+    let tb_id = s.doc.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("DRAFT", Default::default()))]);
+    let shape = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w: 72.0,
+        h: 36.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.75,
+        float: Default::default(),
+        story: Some(tb_id),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let mut hp = Paragraph::new();
+    hp.insert_object(0, shape, &Default::default()).unwrap();
+    let h_id = s.doc.add_part(PartKind::Header, vec![para_block(hp)]);
+    s.doc.section_mut_at(0).headers.default = Some(h_id);
+
+    // Section break to Section 2
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("text.insert", &json!({"text": "Section 2"})).unwrap();
+
+    // Unlink Section 2's header
+    s.page_hint = 1;
+    s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
+
+    let s2_hid = s.doc.last_section.headers.default.unwrap();
+    assert_ne!(h_id, s2_hid, "header part was cloned");
+
+    // The cloned header must have its OWN text box part, not sharing tb_id!
+    let s2_part = s.doc.parts.get(&s2_hid).unwrap();
+    let s2_tb_id = match &*s2_part.blocks[0] {
+        Block::Para(p) => match &p.objects[0] {
+            InlineObject::Shape { story: Some(id), .. } => *id,
+            other => panic!("expected shape with story, got {other:?}"),
+        },
+        other => panic!("expected paragraph, got {other:?}"),
+    };
+    assert_ne!(tb_id, s2_tb_id, "text box story must be cloned into a new part");
+
+    // Editing Section 2's text box does not change Section 1's text box
+    s.doc.set_story(StoryRef::Part(s2_tb_id), vec![para_block(Paragraph::with_text("FINAL", Default::default()))]).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Part(tb_id)), "DRAFT");
+    assert_eq!(s.doc.plain_text(StoryRef::Part(s2_tb_id)), "FINAL");
+}
+
+#[test]
+fn unlinking_even_slot_copies_default_header_when_no_even_defined() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.doc.settings.even_odd_headers = true;
+    s.run("text.insert", &json!({"text": "Section 1 page 1"})).unwrap();
+    s.run("insert.header", &json!({"text": "Report Default"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+
+    // Section 1 page 2
+    s.run("layout.break", &json!({"kind": "page"})).unwrap();
+    s.run("text.insert", &json!({"text": "Section 1 page 2"})).unwrap();
+
+    // Section break to Section 2 (page 3)
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("text.insert", &json!({"text": "Section 2 page 3 (odd)"})).unwrap();
+
+    // Section 2 page 4 (even)
+    s.run("layout.break", &json!({"kind": "page"})).unwrap();
+    s.run("text.insert", &json!({"text": "Section 2 page 4 (even)"})).unwrap();
+
+    // Page 3 is index 3 (0-indexed: 4th page, which is even: page number 4)
+    s.run("insert.editHeader", &json!({"page": 3})).unwrap();
+    let layout = s.layout();
+    assert_eq!(layout.pages[3].hf_slot, wordcraft_layout::HfSlot::Even);
+
+    // Unlink Section 2's even header: no preceding section defines even, so it must copy the default header ("Report Default")
+    s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
+    assert!(!crate::cmd::page::is_hf_linked(&s));
+
+    let s2_even_id = s.doc.last_section.headers.even.unwrap();
+    let text = s.doc.plain_text(StoryRef::Part(s2_even_id));
+    assert!(text.contains("Report Default"), "unlinked even header copied default header: {text}");
+}
+
+#[test]
+fn insert_footer_from_section_header_attaches_to_current_section() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "Section 1"})).unwrap();
+
+    // Section break to Section 2
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("text.insert", &json!({"text": "Section 2"})).unwrap();
+
+    // Section 2 gives itself a header
+    s.run("insert.editHeader", &json!({"page": 1})).unwrap();
+    s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
+    s.run("text.insert", &json!({"text": "S2 Header"})).unwrap();
+
+    // While focused in Section 2's header, insert a footer
+    assert!(matches!(s.sel.focus.story, StoryRef::Part(_)));
+    s.run("insert.footer", &json!({"text": "Footer in S2"})).unwrap();
+
+    // Section 1's footer must remain None! Section 2 gets the footer.
+    assert_eq!(s.doc.sections()[0].1.footers.default, None, "Section 1 footer must not be created");
+    assert!(s.doc.last_section.footers.default.is_some(), "Section 2 footer must be created");
+}
+
+#[test]
+fn footer_and_first_page_slots_unlink_and_relink() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.doc.section_mut_at(0).title_page = true;
+    s.run("text.insert", &json!({"text": "Page 1"})).unwrap();
+    s.run("insert.header", &json!({"text": "First Page Header 1"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+
+    // Section break
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.doc.last_section.title_page = true;
+    s.run("text.insert", &json!({"text": "Page 2 (S2 first page)"})).unwrap();
+
+    // Unlink first page header
+    s.run("insert.editHeader", &json!({"page": 1})).unwrap();
+    assert_eq!(s.layout().pages[1].hf_slot, wordcraft_layout::HfSlot::First);
+    s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
+    assert!(!crate::cmd::page::is_hf_linked(&s));
+    assert!(s.doc.last_section.headers.first.is_some());
+
+    // Relink
+    s.run("layout.linkToPrevious", &json!({"linked": true})).unwrap();
+    assert!(crate::cmd::page::is_hf_linked(&s));
+    assert_eq!(s.doc.last_section.headers.first, None);
+}
+
+#[test]
+fn link_to_previous_undo_redo() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "Section 1"})).unwrap();
+    s.run("insert.header", &json!({"text": "Header 1"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("text.insert", &json!({"text": "Section 2"})).unwrap();
+
+    s.run("insert.editHeader", &json!({"page": 1})).unwrap();
+    assert!(crate::cmd::page::is_hf_linked(&s));
+
+    // Unlink
+    s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
+    assert!(!crate::cmd::page::is_hf_linked(&s));
+    assert!(s.doc.last_section.headers.default.is_some());
+
+    // Undo
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(crate::cmd::page::is_hf_linked(&s));
+    assert_eq!(s.doc.last_section.headers.default, None);
+
+    // Redo
+    s.run("edit.redo", &json!({})).unwrap();
+    assert!(!crate::cmd::page::is_hf_linked(&s));
+    assert!(s.doc.last_section.headers.default.is_some());
+}
+
+#[test]
+fn link_to_previous_disabled_when_inside_section_1_header() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "Section 1"})).unwrap();
+    s.run("insert.header", &json!({"text": "Header 1"})).unwrap();
+    // Caret is inside Section 1 header
+    assert!(matches!(s.sel.focus.story, StoryRef::Part(_)));
+    assert_eq!(crate::cmd::page::section_index_for_hf(&s), 0);
+    assert!(s.run("layout.linkToPrevious", &json!({})).is_err(), "must be disabled in section 1 header");
+}
+
+#[test]
+fn unlinked_header_docx_round_trip() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "Section 1 text"})).unwrap();
+    s.run("insert.header", &json!({"text": "Header 1"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("text.insert", &json!({"text": "Section 2 text"})).unwrap();
+
+    s.run("insert.editHeader", &json!({"page": 1})).unwrap();
+    s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
+    s.run("select.all", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": "Header 2 Independent"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+
+    let bytes = wordcraft_docx::write(&s.doc).unwrap();
+    let reloaded = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(reloaded.sections().len(), 2);
+    let s1_hid = reloaded.sections()[0].1.headers.default.unwrap();
+    let s2_hid = reloaded.sections()[1].1.headers.default.unwrap();
+    assert_ne!(s1_hid, s2_hid);
+    assert!(reloaded.plain_text(StoryRef::Part(s1_hid)).contains("Header 1"));
+    assert!(reloaded.plain_text(StoryRef::Part(s2_hid)).contains("Header 2 Independent"));
+}
+
+#[test]
 fn hf_nav_synchronizes_page_hint() {
     let mut s = Session::new(wordcraft_doc::Document::new());
     s.run("text.insert", &json!({"text": "Section 1"})).unwrap();

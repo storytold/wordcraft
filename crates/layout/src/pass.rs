@@ -216,12 +216,14 @@ fn endnote_queue(ctx: &Ctx) -> VecDeque<(u32, usize)> {
 }
 
 /// Vertical sections are laid out on their pages turned on their side (see `vertical`).
-fn turned_sections(ctx: &mut Ctx, sections: &[(usize, &SectionProps)], web: bool) -> Vec<Option<SectionProps>> {
-    sections
+fn turned_sections(ctx: &mut Ctx, hf: &HfLinks, web: bool) -> Vec<Option<SectionProps>> {
+    hf.sections
         .iter()
-        .map(|(_, s)| {
+        .enumerate()
+        .map(|(si, (_, s))| {
             (!web && s.text_direction.is_turned()).then(|| {
-                let top = body_top_for(ctx, s, s.headers.default);
+                let heads = hf.heads.set(si);
+                let top = body_top_for(ctx, s, heads.default);
                 vertical::unturned_sect(s, top)
             })
         })
@@ -497,7 +499,7 @@ pub(crate) fn layout_pass(
     // Text boxes laid out in balancing attempts that were thrown away.
     let mut boxes_discarded = 0usize;
     let mut block = 0usize;
-    let turned = turned_sections(&mut ctx, sections, mode.web);
+    let turned = turned_sections(&mut ctx, &hf, mode.web);
     let mut prev_turn = TextDirection::Horizontal;
     for (si, (end, sect)) in sections.iter().enumerate() {
         let turn = if mode.reflow { TextDirection::Horizontal } else { sect.text_direction };

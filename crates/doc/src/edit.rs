@@ -1380,6 +1380,17 @@ impl Document {
         blocks
     }
 
+    /// A clone of `blocks` with every text box given a new story of its own in this document
+    /// (as a copy and paste does), so the clone does not share text box stories with the source.
+    pub fn clone_blocks_with_text_boxes(&mut self, blocks: &[Arc<Block>]) -> Blocks {
+        let block_clones: Vec<Block> = blocks.iter().map(|b| (**b).clone()).collect();
+        let parts = self.text_box_parts(&block_clones);
+        let mut adopted = block_clones;
+        let mut budget = BoxBudget { local: false, ..BoxBudget::new() };
+        self.adopt_text_boxes(&mut adopted, &parts, 0, &mut budget);
+        adopted.into_iter().map(Arc::new).collect()
+    }
+
     /// Insert a fragment at `pos`; returns the position after the pasted content.
     pub fn insert_fragment(&mut self, pos: &Pos, frag: &Fragment) -> Result<Pos> {
         // Tables that would nest deeper than the limit here become their paragraphs (#1596).

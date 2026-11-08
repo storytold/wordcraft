@@ -119,6 +119,38 @@ fn headers_stay_horizontal_and_a_vertical_section_starts_a_page() {
     assert!(l.caret(&Pos::body(1, 0)).unwrap().width > 0.0);
 }
 
+#[test]
+fn vertical_section_reserves_space_for_inherited_header() {
+    use wordcraft_doc::section::SectionStart;
+    let mut d = Document::from_text("Sec1\nSec2 vertical");
+    let tall: Vec<_> =
+        (0..5).map(|i| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Header line {i}"), Default::default()))).collect();
+    let id = d.add_part(wordcraft_doc::PartKind::Header, tall);
+
+    // Section 1 defines a tall default header
+    let first = SectionProps {
+        start: SectionStart::NextPage,
+        headers: wordcraft_doc::section::HeaderSet { default: Some(id), ..Default::default() },
+        ..Default::default()
+    };
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(first));
+
+    // Section 2 is vertical, but has NO headers of its own (inherits section 1's tall header)
+    d.last_section.start = SectionStart::NextPage;
+    d.last_section.text_direction = TextDirection::Down;
+    d.last_section.headers = wordcraft_doc::section::HeaderSet::default();
+
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 2);
+    // Page 1 (Section 2) has inherited the header, and its body top must account for it
+    assert!(
+        l.pages[1].body.y > d.last_section.margin_top + 10.0,
+        "body.y {} should exceed margin_top {}",
+        l.pages[1].body.y,
+        d.last_section.margin_top
+    );
+}
+
 /// #2038 in a vertical section, where every line is turned: a click outside a floating table
 /// goes to the text beside or after it, not to a cell of the table nearer the click.
 #[test]

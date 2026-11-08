@@ -8,13 +8,13 @@ use wordcraft_doc::{Block, Paragraph, PartKind, Path, Pos, StoryRef, Table, para
 use super::{delete_selection, sel_result, split_para, type_text};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
-mod header_footer;
+pub(crate) mod header_footer;
 mod items;
 mod links;
 mod objects;
 
-pub(crate) use header_footer::saved_copy;
 use header_footer::{create_hf, edit_hf, header_footer, new_empty_headers, strip_headers};
+pub(crate) use header_footer::{link_to_previous, saved_copy};
 pub use items::{DropCapState, drop_cap_state, format_date, format_date_at, format_date_parts};
 use items::{cover_page, date_time, drop_cap, drop_cap_off, field, page_number, symbol};
 use links::{bookmark, delete_bookmark, link, link_targets};

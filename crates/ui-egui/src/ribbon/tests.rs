@@ -1025,4 +1025,12 @@ fn link_to_previous_button_states_follow_section_and_link() {
     // Re-linking toggles back
     a.run("layout.linkToPrevious", json!({})).unwrap();
     assert!(wordcraft_engine::cmd::page::is_hf_linked(&a.session), "Section 2 linked again");
+
+    // Inside Section 2 header, button is enabled and reflects unlinked/relinked state
+    a.run("insert.editHeader", json!({"page": 1})).unwrap();
+    assert!(crate::widgets::enabled(&a, "layout.linkToPrevious"));
+    a.run("layout.linkToPrevious", json!({})).unwrap();
+    assert!(!wordcraft_engine::cmd::page::is_hf_linked(&a.session));
+    a.run("layout.linkToPrevious", json!({})).unwrap();
+    assert!(wordcraft_engine::cmd::page::is_hf_linked(&a.session));
 }

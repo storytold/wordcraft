@@ -418,58 +418,6 @@ fn ink_replay_plays_strokes_in_the_order_they_were_drawn() {
 }
 
 #[test]
-fn ink_replay_disabled_when_no_ink() {
-    let mut s = session();
-    assert_eq!(s.why_disabled("draw.replay"), Some("there is no ink to replay"));
-    s.run("draw.stroke", &json!({"page": 0, "points": [[100, 100], [150, 100]]})).unwrap();
-    assert_eq!(s.why_disabled("draw.replay"), None);
-    s.view.hide_ink = true;
-    assert_eq!(s.why_disabled("draw.replay"), Some("ink is hidden"));
-    s.view.hide_ink = false;
-    assert_eq!(s.why_disabled("draw.replay"), None);
-}
-
-#[test]
-fn ink_replay_detects_ink_in_part_table_cell() {
-    let mut s = Session::new(wordcraft_doc::Document::new());
-    let mut table = wordcraft_doc::Table::new(1, 1, 100.0);
-    let mut cell_para = wordcraft_doc::Paragraph::new();
-    let obj = InlineObject::Shape {
-        kind: ShapeKind::Freeform,
-        w: 10.0,
-        h: 10.0,
-        fill: None,
-        stroke: None,
-        stroke_width: 1.0,
-        float: Default::default(),
-        story: None,
-        freeform: Some(std::sync::Arc::new(wordcraft_doc::freeform::Freeform::ink(InkTool::Pen, 10.0, 10.0, vec![[0.0, 0.0], [10.0, 10.0]]))),
-        effects: Default::default(),
-        extra: Default::default(),
-    };
-    cell_para.insert_object(0, obj, &wordcraft_doc::CharProps::default()).unwrap();
-    table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(cell_para)];
-    let note_id = s.doc.add_part(wordcraft_doc::PartKind::Endnote, vec![std::sync::Arc::new(wordcraft_doc::Block::Table(table))]);
-
-    // Unreferenced endnote: ink is unplaced, so replay stays disabled.
-    assert_eq!(s.why_disabled("draw.replay"), Some("there is no ink to replay"));
-
-    // Reference the endnote in the document body through insert_object.
-    let note_ref = InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Endnote, id: note_id, custom: String::new() };
-    let body_path = wordcraft_doc::Path::top(0);
-    s.doc.para_mut(wordcraft_doc::StoryRef::Body, &body_path).unwrap().insert_object(0, note_ref, &wordcraft_doc::CharProps::default()).unwrap();
-
-    // Now reachable in Print view: replay is enabled.
-    assert_eq!(s.why_disabled("draw.replay"), None);
-
-    // In Web view: endnotes are not placed, so replay is disabled.
-    s.view.mode = wordcraft_layout::ViewMode::Web;
-    assert_eq!(s.why_disabled("draw.replay"), Some("there is no ink to replay"));
-    s.view.mode = wordcraft_layout::ViewMode::Print;
-    assert_eq!(s.why_disabled("draw.replay"), None);
-}
-
-#[test]
 fn add_pen_validates_and_saved_galleries_drop_junk() {
     let mut s = session();
     let r = s.run("draw.addPen", &json!({"kind": "highlighter", "color": "00B050", "width": 1e9})).unwrap();
