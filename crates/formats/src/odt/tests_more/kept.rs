@@ -159,3 +159,161 @@ fn a_file_a_kept_definition_names_is_written_with_it() {
     let m = crate::odt::tests::entry(&saved, "META-INF/manifest.xml");
     assert!(m.contains(r#"manifest:full-path="Pictures/paper.png""#), "{m}");
 }
+
+#[test]
+fn the_files_font_declarations_are_kept() {
+    // A reader without a font picks its substitute by how the file declares it. WordCraft's own
+    // guess at a font's kind replaced the file's, and a document came back from a save with no
+    // edits 13 pages shorter in LibreOffice on a computer without its font.
+    let ns = NS_T;
+    let face = r#"<style:font-face style:name="Odd Roman" svg:font-family="&apos;Odd Roman&apos;" style:font-family-generic="roman"/>"#;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:font-face-decls>{face}</office:font-face-decls><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="Odd Roman" fo:font-size="12pt"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}><office:font-face-decls>{face}</office:font-face-decls><office:automatic-styles><style:style style:name="P1" style:family="paragraph"><style:text-properties style:font-name="Odd Roman"/></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">Text</text:p></office:text></office:body></office:document-content>"#
+    );
+    let check = |saved: &[u8], what: &str| {
+        for part in [styles_of(saved), content_of(saved)] {
+            assert!(part.contains(face), "{what}: {part}");
+            assert_eq!(part.matches(r#"<style:font-face style:name="Odd Roman""#).count(), 1, "{what}: declared once: {part}");
+        }
+    };
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    check(&export(&d).unwrap(), "no edits");
+    // Text edited, written from the model: still the file's declaration.
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.text.push('!');
+        if let Some(r) = p.runs.last_mut() {
+            r.len += 1;
+        }
+    }
+    check(&export(&d).unwrap(), "an edit");
+}
+
+/// A font's name spelled another way in XML (`O'Brien`, `O&#39;Brien`) is the same font: its
+/// declaration is the file's, once.
+#[test]
+fn a_fonts_name_spelled_another_way_is_declared_once_as_the_file_has_it() {
+    for spelled in ["O'Brien", "O&#39;Brien"] {
+        let face = format!(r#"<style:font-face style:name="{spelled}" svg:font-family="O&apos;Brien" style:font-family-generic="roman"/>"#);
+        let styles = format!(
+            r#"<office:document-styles {NS_T}><office:font-face-decls>{face}</office:font-face-decls><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="{spelled}" fo:font-size="12pt"/></style:default-style></office:styles></office:document-styles>"#
+        );
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:font-face-decls>{face}</office:font-face-decls><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties style:font-name="{spelled}"/></style:style></office:automatic-styles><office:body><office:text><text:p><text:span text:style-name="T1">One</text:span></text:p></office:text></office:body></office:document-content>"#
+        );
+        let mut d = import(&package(&content, Some(&styles))).unwrap();
+        // Text edited, written from the model.
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+            p.text.push('!');
+            if let Some(r) = p.runs.last_mut() {
+                r.len += 1;
+            }
+        }
+        let saved = export(&d).unwrap();
+        for part in [styles_of(&saved), content_of(&saved)] {
+            assert!(part.contains(&face), "{spelled}: the file's: {part}");
+            let is_it = |t: &&str| {
+                let name = t.split('>').next().and_then(|tag| tag.split("style:name=\"").nth(1)).and_then(|v| v.split('"').next());
+                name.is_some_and(|n| n == "O'Brien" || n == "O&#39;Brien" || n == "O&apos;Brien")
+            };
+            assert_eq!(part.split("<style:font-face ").skip(1).filter(is_it).count(), 1, "{spelled}: declared once: {part}");
+        }
+    }
+}
+
+/// A face named other than its family (`F1`, `Mystery`): text written from the model names the
+/// family, and that declaration says what the file's does, not WordCraft's guess at the font's kind.
+#[test]
+fn a_face_named_other_than_its_family_gives_the_family_the_files_declaration() {
+    let face =
+        r#"<style:font-face style:name="F1" svg:font-family="&apos;Mystery&apos;" style:font-family-generic="roman" style:font-pitch="variable"/>"#;
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:font-face-decls>{face}</office:font-face-decls><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="12pt"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:font-face-decls>{face}</office:font-face-decls><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties style:font-name="F1"/></style:style></office:automatic-styles><office:body><office:text><text:p><text:span text:style-name="T1">One</text:span></text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.text.push('!');
+        if let Some(r) = p.runs.last_mut() {
+            r.len += 1;
+        }
+    }
+    let saved = export(&d).unwrap();
+    let part = content_of(&saved);
+    assert!(part.contains(r#"style:font-name="Mystery""#), "{part}");
+    let mystery = part.split("<style:font-face ").find(|t| t.starts_with(r#"style:name="Mystery""#)).and_then(|t| t.split("/>").next());
+    let mystery = mystery.unwrap_or_else(|| panic!("declared: {part}"));
+    assert!(mystery.contains(r#"style:font-family-generic="roman""#), "{mystery}");
+}
+
+/// Only declarations are declarations: not a script's text that reads like one. And a face's name
+/// is its own attribute, not another with `style:name` in its name.
+#[test]
+fn a_face_is_found_and_named_by_its_own_markup() {
+    let script =
+        r#"<office:scripts><office:script script:language="x"><![CDATA[<style:font-face style:name="Mystery" />]]></office:script></office:scripts>"#;
+    let face = r#"<style:font-face xstyle:name="F1" style:name="F1" svg:font-family="&apos;Mystery&apos;" style:font-family-generic="roman"/>"#;
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:font-face-decls>{face}</office:font-face-decls><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="12pt"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}>{script}<office:font-face-decls>{face}</office:font-face-decls><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties style:font-name="F1"/></style:style></office:automatic-styles><office:body><office:text><text:p><text:span text:style-name="T1">One</text:span></text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.text.push('!');
+        if let Some(r) = p.runs.last_mut() {
+            r.len += 1;
+        }
+    }
+    let saved = export(&d).unwrap();
+    let part = content_of(&saved);
+    assert!(part.contains(script), "the script as it was: {part}");
+    let decls = part.split("<office:font-face-decls>").last().and_then(|t| t.split("</office:font-face-decls>").next()).unwrap();
+    assert!(decls.contains(r#"xstyle:name="F1" style:name="Mystery""#), "{decls}");
+    assert!(import(&saved).is_ok());
+}
+
+/// A font declaration in single quotes is the file's too: it replaces WordCraft's, and isn't
+/// declared a second time.
+#[test]
+fn a_font_declaration_in_single_quotes_is_kept() {
+    let ns = format!(r#"{NS_T} xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0""#);
+    let face = r#"<style:font-face style:name='Odd Roman' svg:font-family='Odd Roman' style:font-family-generic='roman'/>"#;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:font-face-decls>{face}</office:font-face-decls><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="Odd Roman" fo:font-size="12pt"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}><office:font-face-decls>{face}</office:font-face-decls><office:automatic-styles><style:style style:name="P1" style:family="paragraph"><style:text-properties style:font-name="Odd Roman"/></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">x</text:p></office:text></office:body></office:document-content>"#
+    );
+    let saved = export(&import(&package(&content, Some(&styles))).unwrap()).unwrap();
+    for part in [styles_of(&saved), content_of(&saved)] {
+        assert!(part.contains(face), "{part}");
+        assert_eq!(part.matches("<style:font-face").count(), part.matches("<style:font-face style:name=").count());
+        assert_eq!(part.matches(r#"style:name="Odd Roman""#).count(), 0, "declared once: {part}");
+        assert_eq!(part.matches("style:name='Odd Roman'").count(), 1, "declared once: {part}");
+    }
+}
+
+/// A name space only the declarations' container states goes with the declaration: without it the
+/// saved part isn't well-formed in its name spaces.
+#[test]
+fn a_name_space_on_the_font_declarations_goes_with_them() {
+    let ns = format!(r#"{NS_T} xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0""#);
+    let decls = r#"<office:font-face-decls xmlns:x="urn:example:x"><style:font-face style:name="Odd Roman" svg:font-family="Odd Roman" x:odd="1"/></office:font-face-decls>"#;
+    let styles = format!(
+        r#"<office:document-styles {ns}>{decls}<office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="Odd Roman" fo:font-size="12pt"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}>{decls}<office:automatic-styles><style:style style:name="P1" style:family="paragraph"><style:text-properties style:font-name="Odd Roman"/></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">x</text:p></office:text></office:body></office:document-content>"#
+    );
+    let saved = export(&import(&package(&content, Some(&styles))).unwrap()).unwrap();
+    for part in [styles_of(&saved), content_of(&saved)] {
+        assert!(part.contains(r#"x:odd="1""#), "{part}");
+        assert!(part.contains(r#"xmlns:x="urn:example:x""#), "{part}");
+    }
+}
