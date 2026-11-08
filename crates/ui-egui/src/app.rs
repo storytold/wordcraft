@@ -13,6 +13,8 @@ use super::{
 mod commands;
 mod control;
 mod files;
+#[cfg(test)]
+pub(crate) use files::suggested_stem;
 mod fonts;
 mod frame;
 mod input;
