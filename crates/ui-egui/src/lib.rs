@@ -435,26 +435,23 @@ pub const DEFAULT_TAB: &str = "Home";
 
 /// ⌘Q, which only the Mac sends: quit.
 const QUIT: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::MAC_CMD, egui::Key::Q);
-/// Ctrl+Shift+0 (⌘⇧0): back to the Auto interface size, whatever is on screen (#4030). Not
-/// Ctrl+Alt+0, which is AltGr+0 on some layouts and types a character there (#3424).
+/// Ctrl+Shift+0 (⌘⇧0): back to the Auto interface size (#4030). Not Ctrl+Alt+0, which is AltGr+0
+/// on some layouts and types a character there (#3424).
 const RESET_INTERFACE_SIZE: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT), egui::Key::Num0);
 
-/// Consume Ctrl+Shift+0 (⌘⇧0), also where Shift changes the zero key's logical character: on a
-/// German layout Shift+0 types `=`, which egui-winit reports as `Key::Equals` with `Num0` only as
-/// the physical key. The physical match is exact in Alt, so AltGr+0 still passes through.
+/// Consume Ctrl+Shift+0 (⌘⇧0), matched on the key the layout types and exactly these modifiers.
+/// Where Shift+0 types `=` (German, Swiss and Nordic layouts) the press is Ctrl+Shift+=, which
+/// stays Superscript; an extra Alt (AltGr+Shift+0) doesn't match.
 fn consume_reset_interface_size(input: &mut egui::InputState) -> bool {
-    let mut physical = false;
-    input.events.retain(|e| match e {
-        egui::Event::Key { physical_key: Some(egui::Key::Num0), pressed: true, modifiers, .. }
-            if modifiers.matches_exact(RESET_INTERFACE_SIZE.modifiers) =>
-        {
-            physical = true;
-            false
-        }
-        _ => true,
+    let mut found = false;
+    input.events.retain(|e| {
+        let hit = matches!(e, egui::Event::Key { key: egui::Key::Num0, pressed: true, modifiers, .. }
+            if modifiers.matches_exact(RESET_INTERFACE_SIZE.modifiers));
+        found |= hit;
+        !hit
     });
-    input.consume_shortcut(&RESET_INTERFACE_SIZE) || physical
+    found
 }
 /// Most recent documents kept (File › Options › Advanced offers 0–50, as Word does).
 pub const MAX_RECENT: usize = 50;

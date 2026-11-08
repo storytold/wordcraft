@@ -5836,20 +5836,86 @@ fn reset_interface_size_shortcut_and_capped_report() {
     assert_eq!(h.state().ui.interface_size.percent(), Some(300), "AltGr+0 doesn't reset");
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "}", "AltGr+0 types the character");
     let chord = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: true };
-    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: None, pressed: true, repeat: false, modifiers: chord });
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
     h.step();
     assert!(h.state().ui.interface_size.is_auto(), "Ctrl+Shift+0 returns to Auto");
-    // Where Shift changes the zero key's character (`=` on a German layout) egui-winit reports
-    // that character as the key and the zero only as the physical key.
-    h.state_mut().run("ui.interfaceSize", json!({"percent": 300})).unwrap();
-    h.event(egui::Event::Key { key: egui::Key::Equals, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
-    h.step();
-    assert!(h.state().ui.interface_size.is_auto(), "Ctrl+Shift+0 returns to Auto where Shift types =");
+    // AltGr+Shift+0, where the layout leaves the key a zero, doesn't reset either.
     h.state_mut().run("ui.interfaceSize", json!({"percent": 300})).unwrap();
     let altgr_shift = egui::Modifiers { alt: true, ctrl: true, shift: true, mac_cmd: false, command: true };
-    h.event(egui::Event::Key { key: egui::Key::Equals, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: altgr_shift });
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: altgr_shift });
     h.step();
     assert_eq!(h.state().ui.interface_size.percent(), Some(300), "AltGr+Shift+0 doesn't reset");
+    // With File › Options open, the place a too-large size pushes off screen, the chord resets.
+    h.state_mut().run("ui.backstage", json!({"value": true})).unwrap();
+    h.state_mut().ui.backstage_page = "options".into();
+    h.step();
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert!(h.state().ui.interface_size.is_auto(), "Ctrl+Shift+0 returns to Auto from File › Options");
+    // A modal dialog keeps the keys: Customize Keyboard records the chord instead.
+    h.state_mut().run("ui.backstage", json!({"value": false})).unwrap();
+    h.state_mut().run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    h.state_mut().run("ui.dialog", json!({"name": "customizeKeyboard"})).unwrap();
+    h.step();
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "no reset while a modal dialog is open");
+}
+
+/// #4030 review: where Shift+0 types `=` (German, Swiss and Nordic layouts) egui-winit reports `=`
+/// as the key and the zero only as the physical key. That press is Ctrl+Shift+=, Superscript, as
+/// on main; it doesn't reset the interface size.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn ctrl_shift_equals_on_the_zero_key_stays_superscript() {
+    let mut a = app();
+    a.run("document.setText", json!({"text": "x"})).unwrap();
+    a.run("select.all", json!({})).unwrap();
+    a.run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let chord = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Equals, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "Ctrl+Shift+= doesn't reset");
+    let pos = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 };
+    let props = h.state().session.doc.para_at(&pos).map(|p| p.props_of_char(0).clone()).unwrap_or_default();
+    assert_eq!(props.vert_align, Some(wordcraft_doc::props::VertAlign::Superscript), "Ctrl+Shift+= runs Superscript");
+}
+
+/// #4030 review: a Ctrl+Shift+0 the user binds in Customize Keyboard runs their command instead
+/// of resetting the interface size.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn a_bound_ctrl_shift_0_beats_the_interface_size_reset() {
+    let mut a = app();
+    a.run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    a.session.keymap = wordcraft_engine::keymap::KeyMap::from_value(&json!({"assigned": {"Mod+Shift+0": "view.focus"}}));
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let chord = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "the size stays");
+    assert!(h.state().session.view.focus_mode, "the user's binding runs");
 }
 
 /// #115: System follows the OS appearance (light when unknown); the manual choices ignore it.

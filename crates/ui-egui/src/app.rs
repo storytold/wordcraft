@@ -419,7 +419,12 @@ impl WordApp {
     /// ([`WordApp::handle_ui_input_events`]).
     pub(crate) fn window_input(&mut self, ctx: &egui::Context) {
         // The way back when a large interface size has pushed File › Options off screen (#4030).
-        if ctx.input_mut(super::consume_reset_interface_size) {
+        // A modal dialog keeps the keys (Customize Keyboard records them), and a command the user
+        // bound to the chord runs instead.
+        if !self.modal_open()
+            && self.session.keymap.resolve(&self.session.registry, "Mod+Shift+0").is_none()
+            && ctx.input_mut(super::consume_reset_interface_size)
+        {
             let _ = self.run("ui.interfaceSize", serde_json::json!({"value": "auto"}));
         }
         if self.windows.native() && ctx.input_mut(|i| i.consume_shortcut(&QUIT)) {
