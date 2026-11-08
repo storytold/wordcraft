@@ -163,7 +163,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("edit.formatPainter", "Format Painter", "Home › Clipboard", painter).params(r#"{"sticky"?: bool}"#).pure(),
         CommandSpec::new("edit.copyFormat", "Copy Formatting", "Home › Clipboard", |s, _| {
-            painter_pick(s);
+            painter_pick(s, false);
             sel_result(s)
         })
         .key("Mod+Shift+C")
@@ -819,12 +819,19 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
-fn painter_pick(s: &mut Session) {
+// Word for Mac 16.114.4: a caret or whole paragraph captures paragraph properties;
+// a partial text selection copies character formatting only (see #5964).
+fn paragraph_format_selection(s: &Session) -> bool {
+    let (a, b) = s.sel.ordered();
+    a == b || a.path != b.path || (a.off == 0 && s.doc.para_at(&b).is_some_and(|p| b.off == p.len()))
+}
+
+fn painter_pick(s: &mut Session, brush: bool) {
     let f = s.sel.ordered().0;
     // A symbol's own font isn't formatting to paint onto text.
     let chr = s.doc.para_at(&f).map(|p| p.props_of_char(f.off).clone().without_symbol()).unwrap_or_default();
-    let para = s.doc.para_at(&f).map(|p| p.props.clone()).unwrap_or_default();
-    s.painter = Some((chr, para, false));
+    let para = paragraph_format_selection(s).then(|| s.doc.para_at(&f).map(|p| p.props.clone()).unwrap_or_default());
+    s.painter = Some(crate::session::PainterFormat { chr, para, sticky: false, brush });
 }
 
 fn painter(s: &mut Session, v: &Value) -> CmdResult {
@@ -832,16 +839,18 @@ fn painter(s: &mut Session, v: &Value) -> CmdResult {
         s.painter = None;
         return Ok(json!({"active": false}));
     }
-    painter_pick(s);
-    if let Some((_, _, sticky)) = s.painter.as_mut() {
-        *sticky = p::bool(v, "sticky").unwrap_or(false);
+    painter_pick(s, true);
+    if let Some(format) = s.painter.as_mut() {
+        format.sticky = p::bool(v, "sticky").unwrap_or(false);
     }
     Ok(json!({"active": true}))
 }
 
 /// Apply the format painter's formatting to the selection.
 fn paste_format(s: &mut Session, _: &Value) -> CmdResult {
-    let Some((chr, para, sticky)) = s.painter.clone() else { return Err(CmdError::Failed("no formatting copied".into())) };
+    let Some(crate::session::PainterFormat { chr, para, sticky, brush }) = s.painter.clone() else {
+        return Err(CmdError::Failed("no formatting copied".into()));
+    };
     let (a, b) = s.sel.ordered();
     if a == b {
         // No selection: apply paragraph formatting (and word formatting like Word).
@@ -850,16 +859,17 @@ fn paste_format(s: &mut Session, _: &Value) -> CmdResult {
             let (x, y) = pp.word_at(f.off);
             s.doc.format_range(&Pos { off: x, ..f.clone() }, &Pos { off: y, ..f.clone() }, &|c| *c = chr.cleared().overlaid(&chr))?;
         }
-        s.doc.format_paragraphs(&a, &b, &|p| *p = para.clone())?;
     } else {
         s.doc.format_range(&a, &b, &|c| {
             let link = c.link.clone();
             *c = c.cleared().overlaid(&chr);
             c.link = link;
         })?;
-        if a.path != b.path || a.off == 0 {
-            s.doc.format_paragraphs(&a, &b, &|p| *p = para.clone())?;
-        }
+    }
+    // The toolbar brush paints a captured paragraph format even on a word;
+    // Paste Formatting requires a caret, whole paragraph, or cross-paragraph range.
+    if let Some(para) = para.filter(|_| brush || paragraph_format_selection(s)) {
+        s.doc.format_paragraphs(&a, &b, &|p| *p = para.clone())?;
     }
     if !sticky {
         s.painter = None;

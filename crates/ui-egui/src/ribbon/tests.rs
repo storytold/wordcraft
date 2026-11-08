@@ -77,11 +77,11 @@ fn the_shading_button_shows_the_last_picked_colour() {
 fn double_click_on_format_painter_makes_it_sticky() {
     let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
     app.run("edit.formatPainter", json!({})).unwrap();
-    assert!(matches!(app.session.painter, Some((_, _, false))), "one click arms it for one use");
+    assert!(app.session.painter.as_ref().is_some_and(|format| !format.sticky), "one click arms it for one use");
     app.run("edit.formatPainter", json!({})).unwrap();
     assert!(app.session.painter.is_none(), "the second click of a double-click turns it off");
     painter_double_click(&mut app);
-    assert!(matches!(app.session.painter, Some((_, _, true))), "the double-click leaves it sticky");
+    assert!(app.session.painter.as_ref().is_some_and(|format| format.sticky), "the double-click leaves it sticky");
 }
 
 fn png_data() -> String {

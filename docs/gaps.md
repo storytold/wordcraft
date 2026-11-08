@@ -1,3 +1,5 @@
+> 2026-11-08 · #5964: paragraph formatting capture and destination selection follow the measured Mac matrix; toolbar brush and Paste Formatting differ on partial targets. See [reference observations](format-painter-reference.md). No readiness estimate changes.
+
 # Where WordCraft falls short of Word
 
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.

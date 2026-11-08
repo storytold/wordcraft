@@ -41,6 +41,16 @@ pub use snapshot_types::EditSnapshot;
 use snapshot_types::{LayoutSlots, RunSnapshot};
 pub use view::{StylesPaneDock, ViewState};
 
+/// Formatting waiting to be applied by Paste Formatting or the toolbar brush.
+#[derive(Clone)]
+pub struct PainterFormat {
+    pub chr: CharProps,
+    /// Absent when only part of the source paragraph was selected.
+    pub para: Option<wordcraft_doc::props::ParaProps>,
+    pub sticky: bool,
+    pub brush: bool,
+}
+
 /// An editing session: the app-wide state (clipboard, preferences, macros, the command registry…)
 /// and the open documents. The active document's state is in the session's own fields, which
 /// every command works on; the other open documents wait in [`DocState`] values and are swapped
@@ -86,8 +96,8 @@ pub struct Session {
     pub author: String,
     /// Initials for comments (File › Options › General); empty = the name's initials.
     pub initials: String,
-    /// Format painter: copied formatting waiting to be applied (and whether it stays on).
-    pub painter: Option<(CharProps, wordcraft_doc::props::ParaProps, bool)>,
+    /// Copied character/optional paragraph formatting, sticky state, and toolbar-brush mode.
+    pub painter: Option<PainterFormat>,
     /// Last message for the status bar / agents.
     pub status: String,
     /// Headers/footers `insert.createHeader`/`insert.createFooter` made for a page that had none

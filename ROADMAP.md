@@ -1,3 +1,5 @@
+> 2026-11-08 · #5964: paragraph formatting capture and destination selection follow the measured Mac matrix; toolbar brush and Paste Formatting differ on partial targets. See [reference observations](docs/format-painter-reference.md). No readiness estimate changes.
+
 # WordCraft roadmap
 
 > **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
