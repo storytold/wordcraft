@@ -345,6 +345,7 @@ fn block_of_caret(text: &str, caret: usize, doc: &Document, block_lines: &[usize
 pub(crate) fn refusal(s: &Session, id: &str, mutates: bool) -> Option<&'static str> {
     (s.md_source.is_some()
         && id != TOGGLE
+        && id != TEXT
         && !LEAVES.contains(&id)
         && (mutates || matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo" | "edit.repeat")))
     .then_some("leave Markdown Source first")

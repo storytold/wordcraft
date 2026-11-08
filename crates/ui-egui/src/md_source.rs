@@ -127,7 +127,8 @@ fn history(app: &WordApp) -> Option<(egui::Context, egui::text_edit::TextEditSta
     let src = app.session.md_source.as_ref()?;
     let state = egui::text_edit::TextEditState::load(&ctx, box_id(app.session.document_id()))?;
     let undoer = state.undoer();
-    let range = state.cursor.char_range().unwrap_or(CCursorRange::one(CCursor::new(src.caret)));
+    let caret_chars = src.text[..src.text.floor_char_boundary(src.caret)].chars().count();
+    let range = state.cursor.char_range().unwrap_or(CCursorRange::one(CCursor::new(caret_chars)));
     Some((ctx, state, undoer, (range, src.text.clone())))
 }
 
@@ -159,7 +160,8 @@ pub fn undo(app: &mut WordApp, redo: bool) -> Result<serde_json::Value, String> 
     state.store(&ctx, box_id(app.session.document_id()));
     if let Some(src) = app.session.md_source.as_mut() {
         src.text = text;
-        src.caret = range.primary.index.into();
+        let char_idx: usize = range.primary.index.into();
+        src.caret = src.text.char_indices().nth(char_idx).map_or(src.text.len(), |(b, _)| b);
     }
     invalidate_undo_cache(&ctx, app.session.document_id());
     app.session.dirty = true;

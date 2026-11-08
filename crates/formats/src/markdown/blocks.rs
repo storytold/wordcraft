@@ -101,12 +101,18 @@ fn link_definition(line: &str) -> Option<(String, String)> {
 /// definition. A definition anywhere else stays in the document and reads as text, which is what
 /// it did before definitions were understood at all; deleting a line that was part of a
 /// paragraph would lose it silently.
-fn take_definitions(lines: &mut Vec<String>) -> Refs {
+///
+/// Returns the parsed references and the 0-based indexes of the removed lines.
+fn take_definitions(lines: &mut Vec<String>) -> (Refs, Vec<usize>) {
     let mut refs = Refs::new();
     let mut open: Option<(char, usize)> = None;
     // The start of the document begins a block.
     let mut starts_block = true;
+    let mut removed = Vec::new();
+    let mut at = 0usize;
     lines.retain(|line| {
+        let this = at;
+        at += 1;
         let t = line.trim_start_matches([' ', '\t']);
         // Four spaces of indentation is code, not a fence (`parse_blocks`), on both sides.
         let marker = (indent(line) < 4).then(|| fence(t)).flatten();
@@ -130,12 +136,25 @@ fn take_definitions(lines: &mut Vec<String>) -> Refs {
             // The first definition of a label wins, as CommonMark says, and definitions may
             // follow one another.
             refs.entry(label).or_insert(dest.into());
+            removed.push(this);
             return false;
         }
         starts_block = is_blank(line) || atx_heading(t).is_some() || thematic_break(t);
         true
     });
-    refs
+    (refs, removed)
+}
+
+/// Maps a line index in lines filtered of link definitions back to its original source line.
+fn original_line(removed: &[usize], mut l: usize) -> usize {
+    for &r in removed {
+        if r <= l {
+            l += 1;
+        } else {
+            break;
+        }
+    }
+    l
 }
 
 /// Context for block parsing: depth, nesting, reference definitions, cell budget, and line recording.
@@ -178,7 +197,7 @@ pub fn parse(text: &str) -> model::Flow {
 pub fn parse_with_lines(text: &str) -> (model::Flow, Vec<usize>) {
     let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
     let mut lines: Vec<String> = text.split('\n').map(|l| expand_tabs(l.trim_end_matches('\r'))).collect();
-    let refs = take_definitions(&mut lines);
+    let (refs, removed) = take_definitions(&mut lines);
     let budget = std::cell::Cell::new(super::MAX_TABLE_CELLS);
     let mut block_lines = Vec::new();
     let mut ctx = BlockCtx { depth: 0, level: 0, refs: &refs, budget: &budget, lines_out: Some(&mut block_lines) };
@@ -188,6 +207,7 @@ pub fn parse_with_lines(text: &str) -> (model::Flow, Vec<usize>) {
         blocks.push(FBlock::Para(Para::default()));
         block_lines.push(0);
     }
+    let block_lines = block_lines.into_iter().map(|l| original_line(&removed, l)).collect();
     (model::Flow { blocks, meta: Default::default() }, block_lines)
 }
 

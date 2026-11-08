@@ -809,4 +809,11 @@ fn block_line_mapping() {
     assert_eq!(lines[0], 0);
     assert_eq!(lines[1], 2);
     assert_eq!(lines[2], 4);
+
+    // Reference definitions are removed from blocks, but block line numbers must match original source lines.
+    let md_refs = "[link]: https://example.com\n# Title\n\n[other]: https://example.org\nParagraph with [link][].\n";
+    let (flow, lines) = parse_with_lines(md_refs);
+    assert_eq!(flow.blocks.len(), lines.len());
+    assert_eq!(lines[0], 1, "heading on line 1 after definition on line 0");
+    assert_eq!(lines[1], 4, "paragraph on line 4 after definition on line 3");
 }
