@@ -25,7 +25,7 @@ const ROW: f32 = 24.0;
 #[derive(Default)]
 pub(crate) struct State {
     pub(crate) open: Option<Box<FileBrowser>>,
-    last_dir: Option<PathBuf>,
+    pub(crate) last_dir: Option<PathBuf>,
 }
 
 /// One subfolder or file in the listing.
@@ -55,6 +55,9 @@ pub(crate) fn matches(path: &Path, exts: &[String]) -> bool {
 /// and each by name. Hidden entries (a leading dot) are left out; entries that can't be read are
 /// skipped.
 pub(crate) fn list_dir(dir: &Path, exts: &[String], cap: usize) -> std::io::Result<Listing> {
+    // Listing a folder is reading it: inside the control channel's roots, the read root only
+    // (#769, #3695).
+    wordcraft_engine::file_access::check_read(&dir.to_string_lossy()).map_err(std::io::Error::other)?;
     let mut listing = Listing::default();
     for (i, item) in std::fs::read_dir(dir)?.enumerate() {
         if i >= MAX_SCANNED {
@@ -130,7 +133,7 @@ pub(crate) struct FileBrowser {
     pub(crate) after: AfterPick,
     /// Opened because the system dialog couldn't be shown: say why, and how to get it.
     unavailable: bool,
-    dir: PathBuf,
+    pub(crate) dir: PathBuf,
     /// The folder field (edited by the user, applied on Enter).
     location: String,
     /// The file name field.
@@ -256,6 +259,21 @@ impl FileBrowser {
     }
 }
 
+/// Where the browser opens for an agent confined to roots (#3695): `start` if it may be read
+/// there (written, to save), else the root it may: the read root to open, the write root to save.
+fn confined_start(req: &FileDialogRequest, start: PathBuf) -> PathBuf {
+    use wordcraft_engine::file_access::{Access, current};
+    let Some(roots) = current() else { return start };
+    let (access, root) = match req {
+        FileDialogRequest::Save { .. } => (Access::Write, roots.write_root()),
+        FileDialogRequest::Open { .. } | FileDialogRequest::OpenMany { .. } => (Access::Read, roots.read_root()),
+    };
+    if roots.check(&start.to_string_lossy(), access).is_ok() {
+        return start;
+    }
+    root.map_or(start, Path::to_path_buf)
+}
+
 impl WordApp {
     /// Ask for a file in the built-in browser and do `after` with the answer when it closes.
     pub(crate) fn show_file_browser(&mut self, req: FileDialogRequest, after: AfterPick, unavailable: bool) {
@@ -270,6 +288,7 @@ impl WordApp {
             .or_else(home)
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("/"));
+        let start = confined_start(&req, start);
         self.file_browser.open = Some(Box::new(FileBrowser::new(req, after, start, unavailable)));
     }
 

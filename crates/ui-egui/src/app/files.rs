@@ -399,6 +399,13 @@ impl WordApp {
         if !self.saved_here() {
             return Some(AutoSaveBlock::NotSavedHere);
         }
+        // AutoSave saves on its own, on a frame with no control input, so it would write an
+        // agent's changes outside the roots; a confined channel keeps it inside them (#3695).
+        if let Some(roots) = &self.control_roots
+            && roots.check(&path.to_string_lossy(), wordcraft_engine::file_access::Access::Write).is_err()
+        {
+            return Some(AutoSaveBlock::OutsideWriteRoot);
+        }
         None
     }
 

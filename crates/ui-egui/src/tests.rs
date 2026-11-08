@@ -2467,6 +2467,356 @@ fn control_keys_are_confined_but_the_persons_are_not() {
     let _ = std::fs::remove_dir_all(inside.parent().unwrap());
 }
 
+/// The keys of a command's parameters that name a file or folder.
+const PATH_KEYS: [&str; 3] = ["path", "import", "dir"];
+
+/// Files outside the roots for an agent to try to read, each holding (and named for) `MARK`:
+/// a Word document, text, CSV, Markdown, HTML, a picture and a folder, and a name not taken yet.
+fn outside_targets(outside: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let doc = wordcraft_doc::Document::from_text(MARK_3695);
+    let docx = wordcraft_engine::io::save_bytes("x.docx", &doc).unwrap();
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(3, 2, image::Rgba([10, 200, 10, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let files: Vec<(String, Vec<u8>)> = vec![
+        (format!("{MARK_3695}.docx"), docx),
+        (format!("{MARK_3695}.txt"), MARK_3695.as_bytes().to_vec()),
+        (format!("{MARK_3695}.csv"), format!("Name,City\n{MARK_3695},Ljubljana\n").into_bytes()),
+        (format!("{MARK_3695}.md"), format!("# {MARK_3695}\n").into_bytes()),
+        (format!("{MARK_3695}.html"), format!("<p>{MARK_3695}</p>").into_bytes()),
+        (format!("{MARK_3695}.png"), png),
+    ];
+    let mut out: Vec<std::path::PathBuf> = files
+        .into_iter()
+        .map(|(name, bytes)| {
+            let p = outside.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            p
+        })
+        .collect();
+    let folder = outside.join(format!("{MARK_3695}-folder"));
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join(format!("{MARK_3695}.dotx")), b"x").unwrap();
+    out.push(folder);
+    out.push(outside.join("new.docx"));
+    out
+}
+
+const MARK_3695: &str = "Outside3695Marker";
+
+/// Every file under `dir` with its bytes, to see that nothing there changed.
+fn tree(dir: &std::path::Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                out.insert(p.clone(), Vec::new());
+                todo.push(p);
+            } else {
+                out.insert(p.clone(), std::fs::read(&p).unwrap_or_default());
+            }
+        }
+    }
+    out
+}
+
+/// #3695 review: every command that takes a file or folder (by the registry, so a command added
+/// later is covered too), sent through a confined control channel with a path outside the roots,
+/// is refused: nothing there is read into the document, the reply or the recipients, and nothing
+/// there is written, during the request or in the frames after it.
+#[test]
+fn every_command_path_from_the_control_channel_stays_inside_the_roots() {
+    let (inside, outside, roots) = confined_folders("table");
+    let targets = outside_targets(&outside);
+    let before = tree(&outside);
+    let ctx = egui::Context::default();
+    // Keys that name something other than a file, for these commands.
+    let not_files = [
+        ("document.paragraph", "path"), // a paragraph's path in the document
+        ("equation.edit", "path"),      // a place in the equation
+        ("equation.move", "dir"),       // a direction
+        ("shape.connect", "path"),      // a shape's path in the document
+        ("shape.textDirection", "dir"), // a text direction
+        ("view.switchWindows", "path"), // a field of its result
+        ("file.closeDocument", "path"), // a field of its result
+        ("file.listTemplates", "path"), // a field of its result (its folder is `dir`)
+    ];
+    // What a command needs before it gets as far as its file.
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 255, 255])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    std::fs::write(inside.join("pic.png"), png).unwrap();
+    std::fs::write(inside.join("list.csv"), "Name\nAnn\n").unwrap();
+    let prepare = |a: &mut WordApp, id: &str, params: &mut Value| match id {
+        "picture.change" => {
+            a.run("insert.picture", json!({"path": inside.join("pic.png")})).unwrap();
+            a.run("caret.left", json!({"extend": true})).unwrap();
+            a.session.doc.media.clear();
+        }
+        "mailings.finish" => {
+            a.run("mailings.recipients", json!({"path": inside.join("list.csv")})).unwrap();
+        }
+        "styles.copyFrom" => params["styles"] = json!(["Normal"]),
+        _ => {}
+    };
+    let ids: Vec<(&'static str, Vec<&'static str>)> = app()
+        .session
+        .registry
+        .all()
+        .iter()
+        .map(|c| {
+            (c.id, PATH_KEYS.into_iter().filter(|k| c.params.contains(&format!("\"{k}\"")) && !not_files.contains(&(c.id, *k))).collect::<Vec<_>>())
+        })
+        .filter(|(_, keys)| !keys.is_empty())
+        .collect();
+    assert!(ids.len() > 20, "the registry's path commands: {ids:?}");
+    let mut escaped = Vec::new();
+    let mut unrefused = Vec::new();
+    for (id, keys) in &ids {
+        for key in keys {
+            let mut refusals = 0;
+            for target in &targets {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let mut a = app().with_control(rx).with_control_roots(Some(roots.clone()));
+                a.run("document.setText", json!({"text": "Seed"})).unwrap();
+                let mut params = json!({*key: target});
+                prepare(&mut a, id, &mut params);
+                let (req, reply) = ControlRequest::new("engine.execute", json!({"command": id, "params": params}));
+                tx.send(req).unwrap();
+                for _ in 0..3 {
+                    control_frame(&mut a, &ctx, true);
+                }
+                let r = reply.try_recv().map(|v| v.to_string()).unwrap_or_default();
+                if r.contains("automation path rejected") || r.contains("automation filesystem access is not granted") {
+                    refusals += 1;
+                }
+                // The reply names the path it was given (and the marker with it); anything else
+                // with the marker was read from outside.
+                let echo = serde_json::to_string(&target.to_string_lossy()).unwrap_or_default();
+                let read = r.replace(echo.trim_matches('"'), "").contains(MARK_3695)
+                    || a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains(MARK_3695)
+                    || !a.session.doc.media.is_empty()
+                    || a.session.merge.source.iter().flatten().any(|c| c.contains(MARK_3695));
+                if read {
+                    escaped.push(format!("{id} {key}={}: {}", target.display(), r.chars().take(200).collect::<String>()));
+                }
+            }
+            if refusals == 0 {
+                unrefused.push(format!("{id} {key}"));
+            }
+        }
+    }
+    assert_eq!(tree(&outside), before, "nothing outside the roots was written");
+    assert!(escaped.is_empty(), "{} escaped the roots:\n{}", escaped.len(), escaped.join("\n"));
+    assert!(unrefused.is_empty(), "never refused a path outside the roots (or add them to `not_files` with why): {unrefused:?}");
+    let _ = std::fs::remove_dir_all(inside.parent().unwrap());
+}
+
+/// One frame as [`control_frame`] runs it, answering the screenshots it asks for with a white
+/// image of the window's size, as the host would.
+fn screenshot_frame(a: &mut WordApp, ctx: &egui::Context) {
+    let mut raw = egui::RawInput {
+        focused: true,
+        time: Some(ctx.input(|i| i.time) + 1.0 / 60.0),
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))),
+        ..Default::default()
+    };
+    a.raw_input_hook(ctx, &mut raw);
+    let mut out = ctx.run_ui(raw, |ui| {
+        a.logic(ui.ctx());
+        a.ui(ui);
+    });
+    let ppp = ctx.pixels_per_point();
+    for (_, viewport) in std::mem::take(&mut out.viewport_output) {
+        for cmd in viewport.commands {
+            if let egui::ViewportCommand::Screenshot(callback) = cmd {
+                let size = [(1280.0 * ppp).round() as usize, (800.0 * ppp).round() as usize];
+                callback.complete(std::sync::Arc::new(egui::ColorImage::filled(size, egui::Color32::WHITE)));
+            }
+        }
+    }
+    out.drop_without_applying_deltas();
+}
+
+/// #3695 review: a `ui.screenshot` is written frames after its request, which are no control
+/// input's: it is held to the write root all the same.
+#[test]
+fn a_control_screenshot_is_written_inside_the_roots_only() {
+    let (inside, outside, roots) = confined_folders("shots");
+    let ctx = egui::Context::default();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut a = app().with_control(rx).with_control_roots(Some(roots));
+    a.run("document.setText", json!({"text": "Seed"})).unwrap();
+    for _ in 0..4 {
+        screenshot_frame(&mut a, &ctx);
+    }
+    for (path, inside_root) in [(outside.join("shot.png"), false), (inside.join("shot.png"), true)] {
+        let (req, reply) = ControlRequest::new("ui.screenshot", json!({"path": path}));
+        tx.send(req).unwrap();
+        let mut answer = None;
+        for _ in 0..400 {
+            screenshot_frame(&mut a, &ctx);
+            if let Ok(v) = reply.try_recv() {
+                answer = Some(v);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let answer = answer.expect("the screenshot was answered");
+        if inside_root {
+            assert_eq!(answer["ok"], true, "{answer}");
+            assert!(path.is_file());
+        } else {
+            assert_eq!(answer["ok"], false, "{answer}");
+            assert!(answer["error"].as_str().unwrap().contains("automation path rejected"), "{answer}");
+            assert!(!path.exists(), "nothing written outside");
+        }
+    }
+    let _ = std::fs::remove_dir_all(inside.parent().unwrap());
+}
+
+/// #3695 review: what an agent picks in the built-in file browser for a dialog that reads it on
+/// a later frame (Organizer, Templates and Add-ins, Compare) is checked when it is picked; the
+/// person's pick isn't. The browser lists only folders the agent may read, and opens for it in
+/// its root.
+#[test]
+fn an_agents_file_browser_and_picks_stay_inside_the_roots() {
+    use crate::file_dialogs::{AfterPick, FileDialogRequest};
+    use wordcraft_engine::file_access::confine;
+    let (inside, outside, roots) = confined_folders("picks");
+    let secret = outside.join("styles.dotx");
+    std::fs::write(&secret, b"x").unwrap();
+    let mut a = app().with_control_roots(Some(roots.clone()));
+    let agent = Some(&roots);
+    // Picked for the Organizer: refused for the agent, so the dialog never gets it.
+    let r = confine(agent, || a.finish_pick(AfterPick::ForDialog, Some(secret.to_string_lossy().into_owned())));
+    assert!(r.is_err_and(|e| e.contains("automation path rejected")));
+    assert_eq!(a.dialog_pick, None);
+    let mine = inside.join("mine.dotx");
+    confine(agent, || a.finish_pick(AfterPick::ForDialog, Some(mine.to_string_lossy().into_owned()))).unwrap();
+    assert_eq!(a.dialog_pick.as_deref(), Some(mine.to_string_lossy().as_ref()));
+    // Compare's file, the same.
+    let r = confine(agent, || a.finish_pick(AfterPick::ComparePath { revised: true }, Some(secret.to_string_lossy().into_owned())));
+    assert!(r.is_err_and(|e| e.contains("automation path rejected")));
+    // The person picks what they like.
+    a.dialog_pick = None;
+    a.finish_pick(AfterPick::ForDialog, Some(secret.to_string_lossy().into_owned())).unwrap();
+    assert_eq!(a.dialog_pick.as_deref(), Some(secret.to_string_lossy().as_ref()));
+
+    // Listing a folder is reading it.
+    let listed = confine(agent, || crate::file_browser::list_dir(&outside, &["*".to_string()], 100));
+    assert!(listed.is_err_and(|e| e.to_string().contains("automation path rejected")));
+    assert!(confine(agent, || crate::file_browser::list_dir(&inside, &["*".to_string()], 100)).is_ok());
+    assert!(crate::file_browser::list_dir(&outside, &["*".to_string()], 100).is_ok(), "the person's listing");
+    // Opened for the agent, the browser starts in its read root (its write root to save).
+    a.file_browser.last_dir = Some(outside.clone());
+    confine(agent, || a.show_file_browser(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::ForDialog, false));
+    let dir = a.file_browser.open.as_ref().map(|b| b.dir.clone()).unwrap();
+    assert_eq!(std::fs::canonicalize(dir).unwrap(), std::fs::canonicalize(&inside).unwrap());
+    a.file_browser.open = None;
+    a.show_file_browser(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::ForDialog, false);
+    assert_eq!(a.file_browser.open.as_ref().map(|b| b.dir.clone()), Some(outside.clone()), "the person's starts where it left off");
+    let _ = std::fs::remove_dir_all(inside.parent().unwrap());
+}
+
+/// #3695 review: control input played in the UI pass is confined too. A control-channel Enter in
+/// the built-in file browser's Save As, with a name outside the write root, saves nothing there;
+/// the person's own Enter saves.
+#[test]
+fn a_control_key_in_the_file_browser_is_confined() {
+    use crate::file_dialogs::{AfterPick, AfterSave, FileDialogRequest};
+    let (inside, outside, roots) = confined_folders("browser-key");
+    let ctx = egui::Context::default();
+    let mut a = app().with_control_roots(Some(roots));
+    a.run("document.setText", json!({"text": "Seed"})).unwrap();
+    for _ in 0..4 {
+        control_frame(&mut a, &ctx, true);
+    }
+    let save_as = |a: &mut WordApp, target: &std::path::Path| {
+        let document = a.session.document_id();
+        let req = FileDialogRequest::Save { name: target.to_string_lossy().into_owned(), dir: None };
+        a.show_file_browser(req, AfterPick::SaveAs { after: AfterSave::Nothing, document }, false);
+        for _ in 0..3 {
+            control_frame(a, &ctx, true);
+        }
+    };
+    let agent = outside.join("agent.docx");
+    save_as(&mut a, &agent);
+    control_input(&mut a, &ctx, "ui.key", json!({"key": "Enter"}));
+    for _ in 0..4 {
+        control_frame(&mut a, &ctx, true);
+    }
+    assert!(a.synthetic.is_empty(), "the key was played");
+    assert!(a.file_browser.open.is_none(), "Enter answered the browser");
+    assert!(!agent.exists(), "the agent's Save As outside the write root wrote nothing");
+    assert_eq!(a.session.path, None);
+
+    let mine = outside.join("mine.docx");
+    save_as(&mut a, &mine);
+    let mut raw = egui::RawInput {
+        focused: true,
+        time: Some(ctx.input(|i| i.time) + 1.0 / 60.0),
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))),
+        events: vec![egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }],
+        ..Default::default()
+    };
+    a.raw_input_hook(&ctx, &mut raw);
+    ctx.run_ui(raw, |ui| {
+        a.logic(ui.ctx());
+        a.ui(ui);
+    })
+    .drop_without_applying_deltas();
+    assert!(mine.is_file(), "the person's Enter saved");
+    let _ = std::fs::remove_dir_all(inside.parent().unwrap());
+}
+
+/// #3695 review: AutoSave saves on frames with no control input, so with the control channel
+/// confined it covers only files inside the write root: an agent can't turn it on for one
+/// outside, and for one the person saved outside it stays off, saying why, instead of writing an
+/// agent's changes there (or failing, and turning itself off, when a control step lands in the
+/// same frame). Inside the root it works as ever.
+#[test]
+fn autosave_stays_inside_a_confined_channels_write_root() {
+    let (inside, outside, roots) = confined_folders("autosave");
+    let ctx = egui::Context::default();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut a = app().with_control(rx).with_control_roots(Some(roots));
+    let path = outside.join("notes.docx");
+    a.run("document.setText", json!({"text": "Seed"})).unwrap();
+    // The person saves outside: AutoSave is held back, with its reason.
+    a.run("file.saveAs", json!({"path": path})).unwrap();
+    let saved = std::fs::read(&path).unwrap();
+    assert_eq!(a.autosave_block(), Some(crate::AutoSaveBlock::OutsideWriteRoot));
+    assert!(!a.autosaves());
+    // The agent turns it on and edits: refused, and nothing is written there.
+    let (req, reply) = ControlRequest::new("engine.execute", json!({"command": "file.autosave", "params": {"value": true}}));
+    tx.send(req).unwrap();
+    control_frame(&mut a, &ctx, true);
+    let r = reply.try_recv().unwrap();
+    assert_eq!(r["ok"], false, "{r}");
+    let (req, _reply) = ControlRequest::new("engine.execute", json!({"command": "document.setText", "params": {"text": "Agent"}}));
+    tx.send(req).unwrap();
+    control_frame(&mut a, &ctx, true);
+    a.last_autosave = f64::NEG_INFINITY;
+    a.canvas.caret_visible_since = f64::NEG_INFINITY;
+    a.autosave_tick(crate::now_ms());
+    assert_eq!(std::fs::read(&path).unwrap(), saved, "AutoSave didn't write the agent's change outside");
+    assert!(a.session.dirty);
+
+    // Saved inside the write root, AutoSave covers it.
+    let path = inside.join("work.docx");
+    a.run("file.saveAs", json!({"path": path})).unwrap();
+    assert_eq!(a.autosave_block(), None);
+    a.run("text.insert", json!({"text": " more"})).unwrap();
+    a.last_autosave = f64::NEG_INFINITY;
+    a.canvas.caret_visible_since = f64::NEG_INFINITY;
+    a.autosave_tick(crate::now_ms());
+    assert!(!a.session.dirty, "AutoSave saved inside the root");
+    let _ = std::fs::remove_dir_all(inside.parent().unwrap());
+}
+
 /// Synthetic control text and keys target the focused background widget (the Find field), and
 /// Escape closes it. Closing a dirty document offers Save Changes, and Escape cancels without
 /// losing the document.

@@ -50,6 +50,9 @@ pub enum AutoSaveBlock {
     Format { name: String },
     /// A file that was opened but not yet saved in this session.
     NotSavedHere,
+    /// The control channel is confined (`--automation-write-root`, #3695) and the file is outside
+    /// its write root: AutoSave would write an agent's changes there on its own.
+    OutsideWriteRoot,
 }
 
 impl AutoSaveBlock {
@@ -66,6 +69,10 @@ impl AutoSaveBlock {
             ),
             AutoSaveBlock::NotSavedHere => {
                 tl!("Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)").to_string()
+            }
+            AutoSaveBlock::OutsideWriteRoot => {
+                tl!("AutoSave is off for files outside the folder automation may write to (--automation-write-root). Save to keep your changes.")
+                    .to_string()
             }
         }
     }
