@@ -10,6 +10,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod animations;
+#[cfg(target_os = "linux")]
+mod appimage_env;
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod clipboard;
@@ -421,14 +423,15 @@ fn without_launch_args(args: Vec<String>) -> Vec<String> {
 
 /// Open a file whose name isn't valid Unicode (#1440). `file.open` takes its path as text, so it
 /// gets the file's bytes under the lossy name, and the document then keeps the real path to save to.
-/// The bytes are read as `file.open` reads a path: only a regular file, and at most 2 GB.
+/// The bytes are read as `file.open` reads a path: only a regular file, and at most 2 GB. A Word
+/// template starts a new document instead ([`WordApp::open_from_platform`]), which has no path.
 fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
     let name = path.to_string_lossy();
     let opened = wordcraft_engine::io::read_document(path)
-        .and_then(|bytes| app.run("file.open", serde_json::json!({"path": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)})));
+        .and_then(|bytes| app.open_from_platform(&name, Some(&wordcraft_engine::cmd::insert::base64_encode(&bytes))));
     match opened {
         // Not when it waits for a password: that open names the document itself.
-        Ok(r) if r.get("pending").is_none() => app.session.path = Some(path.into()),
+        Ok(r) if r.get("pending").is_none() && !wordcraft_ui_egui::documents::is_word_template(&name) => app.session.path = Some(path.into()),
         Ok(_) => {}
         Err(e) => {
             app.report_open_failure(&name, &e);
@@ -449,9 +452,22 @@ fn main() -> eframe::Result {
     if let Some(result) = craft_update::self_update::finish(&wordcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
         std::process::exit(i32::from(result.is_err()));
     }
+    // Linux: before anything reads another program's AppImage variables, or a thread starts (#5653).
+    #[cfg(target_os = "linux")]
+    let start_over_failed = appimage_env::drop_inherited();
+    // Still carrying them, this process must never update itself: the update would replace the
+    // other program's file.
+    #[cfg(target_os = "linux")]
+    let updates_unsafe = start_over_failed.is_some();
+    #[cfg(not(target_os = "linux"))]
+    let updates_unsafe = false;
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     logging::install_panic_hook();
+    #[cfg(target_os = "linux")]
+    if let Some(e) = start_over_failed {
+        log::error!("couldn't start again without another program's AppImage variables, so the self-update is off in this window: {e}");
+    }
     let mut control_port: Option<u16> = std::env::var("WORDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut files = Vec::new();
     let mut sample = false;
@@ -566,6 +582,10 @@ fn main() -> eframe::Result {
             let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
             app.set_startup_update_check(true);
             load_prefs(&mut app);
+            // After the preferences, so the reason it gives is in the interface language.
+            if updates_unsafe {
+                app.disable_self_update();
+            }
             load_user_dictionary(&mut app);
             // Language packs from the suite's font store; an Install click is the person's own.
             wordcraft_engine::packs::use_font_store(true);
@@ -605,8 +625,9 @@ fn main() -> eframe::Result {
             if files.is_empty() && other_files.is_empty() && !sample && control_port.is_none() {
                 app.start_screen();
             }
+            // A Word template named here starts a new document based on it (#3433).
             for f in files {
-                if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
+                if let Err(e) = app.open_from_platform(&f, None) {
                     app.report_open_failure(&f, &e);
                 }
             }
