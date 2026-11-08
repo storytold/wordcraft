@@ -133,6 +133,7 @@ impl eframe::App for App {
         if let Some(key_file) = &self.2 {
             key_file.remove();
         }
+        self.0.start_pending_update();
     }
 }
 
@@ -192,6 +193,8 @@ fn schedule_macos_terminate(app: &mut WordApp, key_file: Option<&control_server:
     if let Some(key_file) = key_file {
         key_file.remove();
     }
+    // `terminate:` ends the process without dropping the app, so a ready update's helper starts here.
+    app.start_pending_update();
     dispatch2::DispatchQueue::main().exec_async(|| {
         if let Some(mtm) = objc2::MainThreadMarker::new() {
             objc2_app_kit::NSApplication::sharedApplication(mtm).terminate(None);
