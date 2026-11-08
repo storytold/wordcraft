@@ -808,6 +808,14 @@ impl StyleSheet {
             (l || set(s.para.indent_left, s.para.indent_left_chars), f || set(s.para.indent_first, s.para.indent_first_chars))
         })
     }
+    /// The indent a table is placed at, points: its own (`w:tblInd`), else its style's through
+    /// the based-on chain, else 0. What the layout draws, so editing reads it from here too.
+    pub fn table_indent(&self, t: &crate::props::TableProps) -> f32 {
+        t.indent
+            .or_else(|| t.style.as_deref().and_then(|id| self.table_style(id)).and_then(|s| s.parts.indent))
+            .filter(|i| i.is_finite())
+            .unwrap_or(0.0)
+    }
     /// Table style `id` with its based-on chain merged, base styles first (`None` when there is no
     /// such table style). Styles of other kinds in the chain are skipped.
     pub fn table_style(&self, id: &str) -> Option<TableStyleProps> {

@@ -267,7 +267,7 @@ impl TableForm {
                 _ => "left",
             }
             .into(),
-            indent: fin(t.props.indent.unwrap_or(0.0)) / k,
+            indent: fin(s.doc.styles.table_indent(&t.props)) / k,
             rtl: t.props.bidi_visual,
             row_height_on: row.height.is_some() && row.height_rule != HeightRule::Auto,
             row_height: fin(row.height.unwrap_or(18.0)) / k,

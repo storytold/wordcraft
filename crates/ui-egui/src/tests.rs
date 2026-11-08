@@ -925,6 +925,32 @@ fn table_properties_button_opens_the_dialog() {
     assert_eq!(g.changes(&basis), json!({"rtl": true}));
 }
 
+/// The dialog shows the indent the table is drawn at, its style's when it has none of its own,
+/// so OK with nothing changed leaves the table where it is.
+#[test]
+fn table_properties_show_a_style_indent() {
+    let mut a = app();
+    a.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    let doc = &mut a.session.doc;
+    std::sync::Arc::make_mut(&mut doc.styles).upsert(wordcraft_doc::styles::Style {
+        id: "Indented".into(),
+        name: "Indented".into(),
+        kind: wordcraft_doc::styles::StyleKind::Table,
+        table: Some(wordcraft_doc::styles::TableStyleParts { indent: Some(36.0), ..Default::default() }),
+        ..Default::default()
+    });
+    for b in &mut doc.body {
+        if let wordcraft_doc::Block::Table(t) = std::sync::Arc::make_mut(b) {
+            t.props.style = Some("Indented".into());
+            t.props.indent = None;
+        }
+    }
+    let k = crate::options::unit().pt_per_unit();
+    let f = dialogs::TableForm::read(&a).unwrap();
+    assert!((f.indent * k - 36.0).abs() < 0.01, "{} pt", f.indent * k);
+    assert_eq!(f.changes(&f.clone()), json!({}));
+}
+
 /// #4857: with the whole table selected, a row check box the rows differ in shows as mixed and
 /// changes nothing left alone; clicked, OK sets it for every selected row.
 #[test]
