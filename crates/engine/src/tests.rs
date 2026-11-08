@@ -10193,6 +10193,250 @@ fn outline_collapse_hides_descendants_and_expand_restores() {
     assert_eq!(s.selected_text(), "One\na\nTwo\nb");
 }
 
+/// Heading 1 "One", body "a", Heading 2 "Two", body "b", Heading 1 "Three", body "c", in Print
+/// Layout (the Navigation pane's view).
+fn heading_doc() -> Session {
+    let mut s = outline_doc();
+    run(&mut s, "view.printLayout", json!({}));
+    s
+}
+
+fn body_styles(s: &Session) -> Vec<String> {
+    s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.style.clone().unwrap_or_else(|| "Normal".into())).collect()
+}
+
+/// #3573: the Navigation pane's Delete removes a heading with everything under it, paragraph
+/// marks included, and leaves what follows (or, at the end, what comes before) as it was, in one
+/// undo step.
+#[test]
+fn delete_heading_and_content_removes_the_subtree() {
+    let all = ["One", "a", "Two", "b", "Three", "c"];
+    for (block, texts, styles) in [
+        (0, vec!["Three", "c"], vec!["Heading1", "Normal"]),
+        (2, vec!["One", "a", "Three", "c"], vec!["Heading1", "Normal", "Heading1", "Normal"]),
+        (4, vec!["One", "a", "Two", "b"], vec!["Heading1", "Normal", "Heading2", "Normal"]),
+    ] {
+        let mut s = heading_doc();
+        let before = body_styles(&s);
+        run(&mut s, "outline.deleteSubtree", json!({"block": block}));
+        assert_eq!(body_texts(&s), texts, "heading {block}");
+        assert_eq!(body_styles(&s), styles, "heading {block}: what is left keeps its style");
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(body_texts(&s), all, "heading {block}: one undo step");
+        assert_eq!(body_styles(&s), before);
+    }
+    // A first heading followed by a heading of another level: that one keeps its own style.
+    let mut s = heading_doc();
+    s.sel = crate::Selection::caret(Pos::body(0, 0));
+    run(&mut s, "para.style", json!({"style": "Heading2"}));
+    s.sel = crate::Selection::caret(Pos::body(2, 0));
+    run(&mut s, "para.style", json!({"style": "Heading1"}));
+    run(&mut s, "outline.deleteSubtree", json!({"block": 0}));
+    assert_eq!(body_texts(&s), ["Two", "b", "Three", "c"]);
+    assert_eq!(body_styles(&s), ["Heading1", "Normal", "Heading1", "Normal"]);
+    // Without `block`, the heading at the caret.
+    let mut s = heading_doc();
+    s.sel = crate::Selection::caret(Pos::body(2, 1));
+    run(&mut s, "outline.deleteSubtree", json!({}));
+    assert_eq!(body_texts(&s), ["One", "a", "Three", "c"]);
+}
+
+/// Delete takes headings only, and a bad index is an error that changes nothing.
+#[test]
+fn delete_heading_and_content_refuses_body_text_and_bad_indexes() {
+    let mut s = heading_doc();
+    for bad in [json!({"block": 1}), json!({"block": 99}), json!({"block": -1}), json!({"block": "x"})] {
+        assert!(s.run("outline.deleteSubtree", &bad).is_err(), "{bad}");
+    }
+    s.sel = crate::Selection::caret(Pos::body(3, 0));
+    assert!(s.run("outline.deleteSubtree", &json!({})).is_err(), "the caret in body text");
+    assert_eq!(body_texts(&s), ["One", "a", "Two", "b", "Three", "c"]);
+}
+
+/// With Track Changes on, the deleted heading and its content stay, marked as deleted, as any
+/// deletion does.
+#[test]
+fn delete_heading_and_content_is_tracked() {
+    let mut s = heading_doc();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "outline.deleteSubtree", json!({"block": 2}));
+    assert_eq!(body_texts(&s).len(), 6, "the paragraphs stay until the deletion is accepted");
+    run(&mut s, "review.acceptAll", json!({}));
+    assert_eq!(body_texts(&s), ["One", "a", "Three", "c"]);
+}
+
+/// A heading document whose blocks are `blocks`: a heading level (1–9) and its text, `0` for a
+/// Normal paragraph, or `None` for a 1×1 table holding "cell".
+fn blocks_doc(blocks: &[Option<(u8, &str)>]) -> Session {
+    let mut doc = wordcraft_doc::Document::new();
+    doc.body = blocks
+        .iter()
+        .map(|b| match b {
+            Some((level, text)) => {
+                let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+                if *level > 0 {
+                    p.props.style = Some(format!("Heading{level}"));
+                }
+                std::sync::Arc::new(wordcraft_doc::Block::Para(p))
+            }
+            None => {
+                let para = wordcraft_doc::Paragraph::with_text("cell", Default::default());
+                let cell = wordcraft_doc::Cell { blocks: vec![std::sync::Arc::new(wordcraft_doc::Block::Para(para))], ..Default::default() };
+                let row = wordcraft_doc::Row { cells: vec![cell], ..Default::default() };
+                std::sync::Arc::new(wordcraft_doc::Block::Table(wordcraft_doc::Table { rows: vec![row], ..Default::default() }))
+            }
+        })
+        .collect();
+    let mut s = Session::new(doc);
+    for n in 1..=9 {
+        crate::cmd::para::ensure_heading_style(&mut s, n);
+    }
+    s
+}
+
+/// Each body block as `(style, text)`, a table as `("table", "")`.
+fn blocks_of(s: &Session) -> Vec<(String, String)> {
+    s.doc
+        .body
+        .iter()
+        .map(|b| match b.as_para() {
+            Some(p) => (p.props.style.clone().unwrap_or_else(|| "Normal".into()), p.text.clone()),
+            None => ("table".into(), String::new()),
+        })
+        .collect()
+}
+
+fn owned(v: &[(&str, &str)]) -> Vec<(String, String)> {
+    v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+}
+
+/// #3573 review: a table right before the heading, or at the end of what is under it, is no
+/// reason to touch the paragraphs around it. The table before stays and the heading that follows
+/// keeps its style; a table under the heading goes with it.
+#[test]
+fn delete_heading_and_content_around_tables() {
+    // A table, then the heading (with and without text under it).
+    for with_body in [true, false] {
+        let mut blocks = vec![Some((1, "One")), Some((0, "a")), None, Some((1, "X"))];
+        if with_body {
+            blocks.push(Some((0, "x")));
+        }
+        blocks.push(Some((1, "Three")));
+        let mut s = blocks_doc(&blocks);
+        let at = 3;
+        run(&mut s, "outline.deleteSubtree", json!({"block": at}));
+        assert_eq!(blocks_of(&s), owned(&[("Heading1", "One"), ("Normal", "a"), ("table", ""), ("Heading1", "Three")]), "with body {with_body}");
+    }
+    // A table at the end of the subtree, for a heading in the middle and for the first one.
+    let blocks = [Some((1, "One")), Some((0, "a")), Some((1, "Two")), Some((0, "b")), None, Some((1, "Three")), Some((0, "c"))];
+    let mut s = blocks_doc(&blocks);
+    run(&mut s, "outline.deleteSubtree", json!({"block": 2}));
+    assert_eq!(blocks_of(&s), owned(&[("Heading1", "One"), ("Normal", "a"), ("Heading1", "Three"), ("Normal", "c")]));
+    let blocks = [Some((2, "One")), Some((0, "a")), None, Some((1, "Three")), Some((0, "c"))];
+    let mut s = blocks_doc(&blocks);
+    run(&mut s, "outline.deleteSubtree", json!({"block": 0}));
+    assert_eq!(blocks_of(&s), owned(&[("Heading1", "Three"), ("Normal", "c")]));
+    // A table ending the document under the last heading: a paragraph mark stays at the end, as
+    // body text.
+    let mut s = blocks_doc(&[Some((1, "One")), Some((0, "a")), Some((1, "Two")), None]);
+    run(&mut s, "outline.deleteSubtree", json!({"block": 2}));
+    assert_eq!(blocks_of(&s), owned(&[("Heading1", "One"), ("Normal", "a"), ("Normal", "")]));
+}
+
+/// #3573 review: a section break on the paragraph before the heading stays, with its page setup,
+/// whether the heading is followed by another or is the last.
+#[test]
+fn delete_heading_and_content_keeps_a_section_break_before_it() {
+    let landscape = || Box::new(wordcraft_doc::SectionProps { landscape: true, ..Default::default() });
+    // a (ends a landscape section) / Two / b / Three / c
+    let mut s = blocks_doc(&[Some((1, "One")), Some((0, "a")), Some((1, "Two")), Some((0, "b")), Some((1, "Three")), Some((0, "c"))]);
+    s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().section = Some(landscape());
+    run(&mut s, "outline.deleteSubtree", json!({"block": 2}));
+    assert_eq!(blocks_of(&s), owned(&[("Heading1", "One"), ("Normal", "a"), ("Heading1", "Three"), ("Normal", "c")]));
+    assert!(s.doc.body[1].as_para().unwrap().section.as_ref().is_some_and(|x| x.landscape), "the break before stays");
+
+    // The last heading: the break before stays, and the document ends with an empty paragraph.
+    let mut s = blocks_doc(&[Some((1, "One")), Some((0, "a")), Some((1, "Two")), Some((0, "b"))]);
+    s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().section = Some(landscape());
+    run(&mut s, "outline.deleteSubtree", json!({"block": 2}));
+    assert_eq!(blocks_of(&s), owned(&[("Heading1", "One"), ("Normal", "a"), ("Normal", "")]));
+    assert!(s.doc.body[1].as_para().unwrap().section.as_ref().is_some_and(|x| x.landscape));
+
+    // Without a break there, the last heading's section goes without leaving a paragraph.
+    let mut s = blocks_doc(&[Some((1, "One")), Some((0, "a")), Some((1, "Two")), Some((0, "b"))]);
+    run(&mut s, "outline.deleteSubtree", json!({"block": 2}));
+    assert_eq!(blocks_of(&s), owned(&[("Heading1", "One"), ("Normal", "a")]));
+}
+
+/// #3573 review: a document that is one heading and its text is left with one empty paragraph
+/// of body text, not an empty heading.
+#[test]
+fn delete_the_only_heading_leaves_body_text() {
+    for blocks in [vec![Some((1, "Only"))], vec![Some((1, "Only")), Some((0, "text"))], vec![Some((1, "Only")), Some((2, "Sub"))]] {
+        let mut s = blocks_doc(&blocks);
+        run(&mut s, "outline.deleteSubtree", json!({"block": 0}));
+        assert_eq!(blocks_of(&s), owned(&[("Normal", "")]), "{blocks:?}");
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(blocks_of(&s).len(), blocks.len(), "one undo step");
+    }
+}
+
+/// #3573 review: with Track Changes on, a paragraph the author inserted under the heading goes
+/// at once (its own insertion), and nothing else changes until the deletion is accepted: the
+/// deleted heading keeps its style, the following heading its own, and a section break on the
+/// deleted heading. Accept All leaves what followed as it was; Reject All brings the rest back.
+#[test]
+fn delete_heading_and_content_tracked_with_the_authors_own_insertion() {
+    let landscape = || Box::new(wordcraft_doc::SectionProps { landscape: true, ..Default::default() });
+    // Digits, which AutoCorrect doesn't capitalise when Enter ends the paragraph.
+    let original = owned(&[("Heading2", "One"), ("Normal", "42"), ("Heading1", "Two"), ("Normal", "b")]);
+    let prepared = || {
+        let mut s = blocks_doc(&[Some((2, "One")), Some((0, "42")), Some((1, "Two")), Some((0, "b"))]);
+        s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section = Some(landscape());
+        run(&mut s, "file.setAuthor", json!({"name": "Ann"}));
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        // Ann's own new paragraph under One, after "42".
+        s.sel = crate::Selection::caret(Pos::body(1, 2));
+        run(&mut s, "text.newParagraph", json!({}));
+        run(&mut s, "text.insert", json!({"text": "new"}));
+        s
+    };
+    let mut s = prepared();
+    run(&mut s, "outline.deleteSubtree", json!({"block": 0}));
+    let styles: Vec<String> = blocks_of(&s).into_iter().map(|(st, _)| st).collect();
+    assert_eq!(styles.first().map(String::as_str), Some("Heading2"), "the deleted heading keeps its style: {styles:?}");
+    assert!(s.doc.body[0].as_para().unwrap().section.as_ref().is_some_and(|x| x.landscape), "and its section break, until accepted");
+    assert!(!body_texts(&s).iter().any(|t| t.contains("new")), "Ann's own insertion went at once");
+    let two = s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == "Two").unwrap();
+    assert_eq!(two.props.style.as_deref(), Some("Heading1"), "the following heading keeps its style");
+
+    let mut accepted = prepared();
+    run(&mut accepted, "outline.deleteSubtree", json!({"block": 0}));
+    run(&mut accepted, "review.acceptAll", json!({}));
+    assert_eq!(blocks_of(&accepted), owned(&[("Heading1", "Two"), ("Normal", "b")]));
+    let two = accepted.doc.body[0].as_para().unwrap();
+    assert!(two.section.is_none(), "Two's own paragraph has no break of its own");
+
+    let mut rejected = prepared();
+    run(&mut rejected, "outline.deleteSubtree", json!({"block": 0}));
+    run(&mut rejected, "review.rejectAll", json!({}));
+    assert_eq!(blocks_of(&rejected), original, "everything but Ann's own insertion is back");
+    assert!(rejected.doc.body[0].as_para().unwrap().section.as_ref().is_some_and(|x| x.landscape));
+}
+
+/// #3573 review: a refused deletion (a read-only document) changes nothing, the selection
+/// included.
+#[test]
+fn a_refused_delete_heading_and_content_leaves_the_selection() {
+    let mut s = heading_doc();
+    s.sel = crate::Selection::caret(Pos::body(1, 1));
+    run(&mut s, "review.restrict", json!({"mode": "readOnly"}));
+    let sel = s.sel.clone();
+    assert!(s.run("outline.deleteSubtree", &json!({"block": 2})).is_err());
+    assert_eq!(s.sel, sel);
+    assert_eq!(body_texts(&s), ["One", "a", "Two", "b", "Three", "c"]);
+}
+
 /// #3621: with thousands of collapsed headings, an Enter above them (which shifts every index)
 /// finds them again without scanning the document once per heading, and a caret move doesn't
 /// redo the matching.

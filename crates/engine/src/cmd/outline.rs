@@ -54,7 +54,7 @@ fn run_joined(s: &mut Session, id: &str) -> CmdResult {
 }
 
 const LEVEL: &str = r#"{"level": 1-9 | "body"}"#;
-const BLOCK: &str = r#"{"block"?: body paragraph index (default: the selection)}"#;
+const BLOCK: &str = r#"{"block"?: body paragraph index (default: the paragraph at the caret)}"#;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -99,6 +99,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(BLOCK)
             .when(in_outline)
             .pure(),
+        CommandSpec::new("outline.deleteSubtree", "Delete Heading and Content", "View › Navigation Pane", delete_subtree).params(BLOCK),
         CommandSpec::new("outline.showLevel", "Show Level", "Outlining › Outline Tools", |s, v| {
             let level = match v.get("level") {
                 Some(Value::String(a)) if a.eq_ignore_ascii_case("all") => 0,
@@ -354,6 +355,104 @@ fn select_subtree(s: &mut Session, v: &Value) -> CmdResult {
     s.sel = Selection { anchor, focus };
     s.goal_x = None;
     sel_result(s)
+}
+
+/// The Navigation pane's Delete (#3573): heading `block` (default: the heading at the caret) goes
+/// with everything under it, up to the next heading of its level or higher, paragraph marks
+/// included, as in Word. It deletes through `text.delete`, so Track Changes, protection and
+/// what the deleted paragraphs anchor are handled as for any deletion, in one undo step.
+///
+/// What comes before the heading keeps its text, formatting and section break. The deletion runs
+/// from the heading's start to the start of the heading that follows, and that heading keeps its
+/// own paragraph (style, mark formatting, section) whatever is joined to it. With nothing after
+/// the subtree, it runs from the end of the paragraph before, which then ends the document, when
+/// that paragraph's mark holds no section break and Track Changes is off. Otherwise the
+/// document's last paragraph mark stays, as in Word: its paragraph is left empty, with its
+/// formatting, as body text.
+fn delete_subtree(s: &mut Session, v: &Value) -> CmdResult {
+    let levels = ol::levels(&s.doc);
+    let start = match v.get("block") {
+        Some(b) => {
+            let b =
+                b.as_u64().and_then(|b| usize::try_from(b).ok()).ok_or_else(|| CmdError::Params("`block` must be a body paragraph index".into()))?;
+            if levels.get(b).is_none_or(|l| *l >= BODY) {
+                return Err(CmdError::Params("`block` is not a heading".into()));
+            }
+            b
+        }
+        None => selected_blocks(s)
+            .map(|(i, _)| i)
+            .filter(|i| levels.get(*i).is_some_and(|l| *l < BODY))
+            .ok_or_else(|| CmdError::Failed("put the caret in a heading".into()))?,
+    };
+    let end = ol::subtree_end(&levels, start).max(start.saturating_add(1));
+    let len = s.doc.body.len();
+    let para_of = |b: &Block| b.as_para().map(|p| (p.props.clone(), p.mark.clone()));
+    // Where the deletion starts and ends, and the paragraph that ends up holding what is kept
+    // there (by its index counted from the end, or for the start, from the start), with the
+    // formatting it keeps.
+    let (anchor, focus, kept) = match s.doc.body.get(end).and_then(|b| para_of(b)) {
+        // To the start of the heading that follows (a block of the subtree's level or higher is
+        // always a paragraph), which keeps its own paragraph whatever is joined to it.
+        Some(follower) => (Pos::body(start, 0), Pos::body(end, 0), Kept::FromEnd(len.saturating_sub(end), follower)),
+        None => match start.checked_sub(1).and_then(|i| s.doc.body.get(i).and_then(|b| b.as_para()).map(|p| (i, p))) {
+            // The last heading: from the end of the paragraph before (and without it, the
+            // document's last mark), when that mark holds no section break and isn't kept as a
+            // tracked deletion, and the document ends with a paragraph to join it to; that
+            // paragraph keeps its formatting.
+            Some((i, p)) if p.section.is_none() && !s.doc.settings.track_changes && s.doc.body.last().is_some_and(|b| b.as_para().is_some()) => {
+                (Pos::body(i, p.text.len()), s.doc.end_of(StoryRef::Body), Kept::At(i, (p.props.clone(), p.mark.clone()), false))
+            }
+            // Otherwise the document's last paragraph mark stays, as in Word: its paragraph is
+            // left empty with its formatting, as body text. (After a table at the end, it is the
+            // empty paragraph the deletion leaves there.)
+            _ => {
+                let last = s.doc.body.last().and_then(|b| para_of(b)).unwrap_or_default();
+                (Pos::body(start, 0), s.doc.end_of(StoryRef::Body), Kept::At(start, last, true))
+            }
+        },
+    };
+    let before = std::mem::replace(&mut s.sel, Selection { anchor: s.doc.clamp(&anchor), focus: s.doc.clamp(&focus) });
+    s.goal_x = None;
+    s.join_next_undo();
+    if let Err(e) = s.run("text.delete", &json!({})) {
+        // Refused (protection, say): nothing changed, and the selection is as it was.
+        s.sel = before;
+        return Err(e);
+    }
+    let after = s.doc.body.len();
+    let (i, (props, mark), body_text) = match kept {
+        // The blocks after the deleted range are untouched, so the follower is where it was,
+        // counted from the end; or the paragraph it was joined to is: the heading's, emptied, or
+        // with Track Changes on one whose mark the author had inserted, and so took out.
+        Kept::FromEnd(n, f) => match after.checked_sub(n) {
+            Some(i) => (i, f, false),
+            None => return sel_result(s),
+        },
+        // At the end everything deleted was joined into one paragraph; with Track Changes on
+        // nothing was, and the paragraphs stay marked as deleted.
+        Kept::At(i, f, body_text) if after == i.saturating_add(1) => (i, f, body_text),
+        Kept::At(..) => return sel_result(s),
+    };
+    let path = wordcraft_doc::Path::top(i);
+    let para = s.doc.para_mut(StoryRef::Body, &path)?;
+    if para.props != props || para.mark != mark {
+        para.props = props;
+        para.mark = mark;
+        para.touch();
+    }
+    // The emptied last paragraph was this heading or one under it: it is body text now.
+    if body_text && ol::levels(&s.doc).get(i).is_some_and(|l| *l < BODY) {
+        super::para::set_heading(s, StoryRef::Body, &path, None)?;
+    }
+    sel_result(s)
+}
+
+/// Which paragraph [`delete_subtree`] gives back its formatting: the `n`th block counted from the
+/// end, or block `i` (and whether it is to be body text).
+enum Kept {
+    FromEnd(usize, (wordcraft_doc::ParaProps, wordcraft_doc::CharProps)),
+    At(usize, (wordcraft_doc::ParaProps, wordcraft_doc::CharProps), bool),
 }
 
 /// Apply Heading `level` (or body text, `None`) to the selected paragraphs.

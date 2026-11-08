@@ -541,6 +541,81 @@ fn a_long_comment_card_keeps_its_buttons_and_the_next_card_in_view() {
     assert!(go_to.iter().all(|r| r.max.y < 900.0), "both cards' buttons are in view: {go_to:?}");
 }
 
+/// #3573: right-clicking a heading in the Navigation pane offers Delete, which removes the
+/// heading with everything under it, and Collapse All / Expand All, which fold and open every
+/// heading that has headings under it.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_navigation_pane_heading_can_be_deleted_from_its_menu() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = crate::WordApp::new(
+        wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("One\na\nTwo\nb\nThree\nc")),
+        crate::Services::default(),
+    );
+    for (i, style) in [(0, "Heading1"), (2, "Heading2"), (4, "Heading1")] {
+        app.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(i, 0));
+        app.run("para.style", serde_json::json!({"style": style})).unwrap();
+    }
+    app.ui.nav_tab = "headings".into();
+    // Fonts take effect the frame after they are set (see the Styles pane test above).
+    let mut fonts = false;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(300.0, 600.0)).build_ui_state(
+        |ui, app: &mut crate::WordApp| {
+            if !fonts {
+                crate::theme::install_fonts(ui.ctx());
+                fonts = true;
+                return;
+            }
+            super::nav::nav(app, ui);
+        },
+        app,
+    );
+    h.run_steps(4);
+    let texts = |h: &egui_kittest::Harness<'_, crate::WordApp>| -> Vec<String> {
+        h.state().session.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect()
+    };
+
+    // Menu items are labelled with their shortcut after the name (none here), so by prefix.
+    h.get_by_label("One").click_secondary();
+    h.run_steps(3);
+    h.get_by_label_contains("Collapse All").click();
+    h.run_steps(3);
+    assert_eq!(h.state().ui.nav_collapsed.len(), 1, "One has Two under it; Three has no heading under it");
+    assert!(h.query_by_label("Two").is_none(), "Two is folded away under One");
+    h.get_by_label("One").click_secondary();
+    h.run_steps(3);
+    h.get_by_label_contains("Expand All").click();
+    h.run_steps(3);
+    assert!(h.state().ui.nav_collapsed.is_empty());
+
+    h.get_by_label("Two").click_secondary();
+    h.run_steps(3);
+    h.get_by_label_contains("Delete").click();
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["One", "a", "Three", "c"], "Two and its text are gone");
+    assert!(h.query_by_label("Two").is_none(), "and so is its row");
+    h.state_mut().run("edit.undo", serde_json::json!({})).unwrap();
+    assert_eq!(texts(&h), ["One", "a", "Two", "b", "Three", "c"], "one undo step brings them back");
+}
+
+/// #3573 review: collapsed headings are kept by body index, so a Delete forgets the ones it took
+/// out and moves the ones after it up with their headings.
+#[test]
+fn deleting_a_heading_moves_the_collapsed_headings_after_it() {
+    use wordcraft_doc::Path;
+    let paths = |v: &[&[u32]]| v.iter().map(|p| Path(p.to_vec())).collect::<std::collections::HashSet<_>>();
+    // Blocks 2..5 went: 0 stays, 2 and 4 were in what went, 5 and 9 move up 3, a heading in a
+    // table at block 7 moves with its table.
+    let mut collapsed = paths(&[&[0], &[2], &[4], &[5], &[9], &[7, 0, 1, 0]]);
+    super::nav::shift_collapsed(&mut collapsed, 2, 3);
+    assert_eq!(collapsed, paths(&[&[0], &[2], &[6], &[4, 0, 1, 0]]));
+    // Nothing removed (a tracked deletion keeps its paragraphs): nothing moves.
+    let mut collapsed = paths(&[&[3]]);
+    super::nav::shift_collapsed(&mut collapsed, 2, 0);
+    assert_eq!(collapsed, paths(&[&[3]]));
+}
+
 /// #4753: the Styles pane's scroll bar has a column of its own, so with the pointer over it the
 /// "a" and "¶" markers at the right of each row stay clear of it; its handle still shows, light
 /// or dark.
