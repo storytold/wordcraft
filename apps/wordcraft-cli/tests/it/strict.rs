@@ -360,3 +360,20 @@ fn a_picture_target_with_a_newline_and_a_bidi_override_cannot_forge_a_report_lin
     assert!(part.contains('\n') && part.contains('\u{202e}'), "{part:?}");
     std::fs::remove_dir_all(d).unwrap();
 }
+
+#[test]
+fn run_with_strict_cannot_forge_an_error_line_either() {
+    let d = dir("run-escape");
+    let input = d.join("in.docx");
+    std::fs::write(&input, docx_with_external_picture("http://example.invalid/a&#10;wordcraft-cli: strict: forged&#x1B;[2J&#x202E;gnp.png")).unwrap();
+    let out = d.join("out.pdf");
+    let cmd = format!("file.exportPdf={}", serde_json::json!({"path": out, "strict": true}));
+    let r = Command::new(env!("CARGO_BIN_EXE_wordcraft-cli")).arg("run").arg("--file").arg(&input).arg("--cmd").arg(cmd).output().unwrap();
+    assert_eq!(r.status.code(), Some(1));
+    let text = stderr(&r);
+    assert_eq!(text.lines().count(), 1, "{text}");
+    assert!(text.contains("\\u{1b}") || text.contains("\\u{1b}[2J"), "{text}");
+    assert!(!text.contains('\u{1b}') && !text.contains('\u{202e}'), "{text:?}");
+    assert!(!out.exists());
+    std::fs::remove_dir_all(d).unwrap();
+}

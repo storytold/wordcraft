@@ -792,30 +792,55 @@ fn clip(s: &str) -> String {
 /// overrides are shown as escapes (`\\`, `\n`, `\u{1b}`), so it can't end its line, drive the
 /// terminal or pass for other output.
 fn escape_peer(s: &str) -> String {
+    escape_text(s, true)
+}
+
+/// Whether `c` must not reach a terminal as itself: a control character, a line or paragraph
+/// separator, a bidi control, or one that shows nothing (soft hyphen, zero-width characters, word
+/// joiners, the byte order mark, tag characters), which can hide or reorder what a line says.
+fn is_unsafe_char(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{00ad}'
+                | '\u{061c}'
+                | '\u{200b}'..='\u{200f}'
+                | '\u{2028}'..='\u{202e}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{feff}'
+                | '\u{e0000}'..='\u{e007f}'
+        )
+}
+
+/// [`escape_peer`], with backslashes escaped only when `backslash` (error messages quote Windows
+/// paths, and a backslash can't forge or hide anything).
+fn escape_text(s: &str, backslash: bool) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
-            '\\' => out.push_str("\\\\"),
+            '\\' if backslash => out.push_str("\\\\"),
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if c.is_control() || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}') => {
-                out.extend(c.escape_unicode())
-            }
+            c if is_unsafe_char(c) => out.extend(c.escape_unicode()),
             c => out.push(c),
         }
     }
     out
 }
 
-/// A JSON line safe to print: serde escapes control characters below U+0020 but not C1 controls,
-/// line separators or bidi overrides, which a crafted file could put in a report. They become
-/// `\uXXXX` escapes, so the line parses to the same value and can't drive or spoof a terminal.
+/// A JSON line safe to print: serde escapes control characters below U+0020 but not the other
+/// characters [`is_unsafe_char`] names, which a crafted file could put in a report. They become
+/// `\uXXXX` escapes (a surrogate pair above U+FFFF), so the line parses to the same value and
+/// can't drive or spoof a terminal.
 fn json_line_safe(json: &str) -> String {
     let mut out = String::with_capacity(json.len());
     for c in json.chars() {
-        if c.is_control() || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}') {
-            out.push_str(&format!("\\u{:04x}", c as u32));
+        if is_unsafe_char(c) {
+            for unit in c.encode_utf16(&mut [0u16; 2]) {
+                out.push_str(&format!("\\u{unit:04x}"));
+            }
         } else {
             out.push(c);
         }
@@ -860,7 +885,8 @@ fn main() -> ExitCode {
     match run(&args) {
         Ok(()) | Err(Failure::StdoutClosed) => ExitCode::SUCCESS,
         Err(Failure::Error(e)) => {
-            eprintln!("wordcraft-cli: {e}");
+            // Messages can quote text from the file (a picture's part name, say).
+            eprintln!("wordcraft-cli: {}", escape_text(&e, false));
             ExitCode::FAILURE
         }
         Err(Failure::Strict(report)) => {

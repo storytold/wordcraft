@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 /// Most pictures remembered per document; past it [`MissingPictures::truncated`] is set.
 pub const MAX_MISSING_PICTURES: usize = 256;
 
+/// Most characters of a picture's part or story name a record keeps (names come from the file).
+pub const MAX_PICTURE_NAME_CHARS: usize = 1024;
+
 /// Why a picture is not in the document or not drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MissingPictureReason {
@@ -69,7 +72,12 @@ pub struct MissingPictures {
 
 impl MissingPictures {
     /// Add one (the same part, story and reason once).
-    pub fn push(&mut self, item: MissingPicture) {
+    pub fn push(&mut self, mut item: MissingPicture) {
+        for name in [&mut item.part, &mut item.story] {
+            if name.len() > MAX_PICTURE_NAME_CHARS {
+                *name = name.chars().take(MAX_PICTURE_NAME_CHARS).collect();
+            }
+        }
         if self.seen.contains(&item) {
             return;
         }

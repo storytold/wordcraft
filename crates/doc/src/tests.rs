@@ -788,6 +788,15 @@ fn lone_table_open_markers_mixed_tables_and_paired() {
 }
 
 #[test]
+fn missing_picture_names_are_capped_at_a_char_boundary() {
+    let mut d = Document::new();
+    let long: String = "é".repeat(5000);
+    d.missing_pictures.push(MissingPicture { part: long.clone(), story: long, reason: MissingPictureReason::MissingPart });
+    let item = &d.missing_pictures.list[0];
+    assert_eq!((item.part.chars().count(), item.story.chars().count()), (1024, 1024));
+}
+
+#[test]
 fn missing_pictures_are_capped_deduplicated_and_not_content() {
     let mut d = Document::new();
     let item = |n: usize| MissingPicture { part: format!("p{n}"), story: "word/document.xml".into(), reason: MissingPictureReason::MissingPart };
