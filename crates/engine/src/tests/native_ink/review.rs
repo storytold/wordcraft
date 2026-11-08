@@ -1,6 +1,64 @@
 use super::{DisplayOptions, Draw, Rgb, Session, document_with_ink, page_display};
 use wordcraft_doc::graphic::PathSeg;
 
+#[test]
+fn stationary_native_samples_paint_like_one_tap_in_all_placements() {
+    use std::sync::Arc;
+    use wordcraft_doc::{Block, para::InlineObject};
+
+    let source = |samples: &str| {
+        format!(
+            r##"<ink xmlns="http://www.w3.org/2003/InkML"><brush><brushProperty name="color" value="#2563EB"/><brushProperty name="width" value="4" units="pt"/></brush><trace>{samples}</trace></ink>"##
+        )
+    };
+    for placement in ["inline", "floating", "group", "canvas", "direct"] {
+        let resized = |samples: &str, sx: f32, sy: f32| {
+            let mut doc = crate::io::open_bytes("tap.docx", &document_with_ink(placement, &source(samples))).unwrap();
+            for block in &mut doc.body {
+                let Block::Para(para) = Arc::make_mut(block) else { continue };
+                for object in &mut para.objects {
+                    if placement != "direct"
+                        && matches!(object, InlineObject::Graphic { .. } | InlineObject::Group { .. })
+                        && let Some((w, h, _)) = object.frame()
+                    {
+                        object.set_size(w * sx, h * sy);
+                    }
+                }
+            }
+            doc
+        };
+        let fits: &[(f32, f32)] = if placement == "direct" { &[(1.0, 1.0)] } else { &[(1.0, 1.0), (2.0, 2.0), (1.5, 0.75)] };
+        for &(sx, sy) in fits {
+            for samples in ["5 7,5 7", "5 7,5 7,5 7,5 7", "5 7,5.00000001 7"] {
+                let ink = source(samples);
+                let mut doc = resized(samples, sx, sy);
+                let mut control_doc = resized("5 7", sx, sy);
+                for round in 0..2 {
+                    let mut control = Session::new(control_doc);
+                    let control_layout = control.layout();
+                    let expected = wordcraft_render::render_page(&control.doc, &control_layout.pages[0], 1.0, &Default::default());
+                    assert!(super::blue_pixels(&expected) > 0, "{placement}: the one-sample tap paints");
+                    let mut session = Session::new(doc);
+                    let layout = session.layout();
+                    let actual = wordcraft_render::render_page(&session.doc, &layout.pages[0], 1.0, &Default::default());
+                    assert!(
+                        actual.pixels == expected.pixels,
+                        "{placement}: {samples}, fit {sx} x {sy}, save/reopen {round}: {} blue pixels instead of {}; max channel delta {}",
+                        super::blue_pixels(&actual),
+                        super::blue_pixels(&expected),
+                        actual.pixels.iter().zip(&expected.pixels).map(|(a, b)| a.abs_diff(*b)).max().unwrap()
+                    );
+                    let saved = crate::io::save_bytes("tap.docx", &session.doc).unwrap();
+                    doc = crate::io::open_bytes("tap.docx", &saved).unwrap();
+                    let saved_control = crate::io::save_bytes("tap.docx", &control.doc).unwrap();
+                    control_doc = crate::io::open_bytes("tap.docx", &saved_control).unwrap();
+                    assert!(doc.passthrough.values().any(|bytes| bytes.as_slice() == ink.as_bytes()));
+                }
+            }
+        }
+    }
+}
+
 fn ink_width(draws: &[Draw]) -> Option<f32> {
     draws.iter().find_map(|draw| match draw {
         Draw::NativeInk { width, .. } => Some(*width),

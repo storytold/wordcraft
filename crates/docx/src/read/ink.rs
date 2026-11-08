@@ -66,6 +66,7 @@ fn read_part(bytes: &[u8], work: &mut usize) -> Option<Graphic> {
         ids: HashMap::new(),
         definitions: HashSet::new(),
         definition_traces: HashSet::new(),
+        definition_groups: HashMap::new(),
         contexts: HashMap::new(),
         work,
         strokes: Vec::new(),
@@ -73,7 +74,7 @@ fn read_part(bytes: &[u8], work: &mut usize) -> Option<Graphic> {
         default_context: Context::default(),
         tails: HashMap::new(),
     };
-    reader.index(&root, &mut 0, 0, false)?;
+    reader.index(&root, &mut 0, 0, false, None)?;
     reader.walk(&root, Context::default(), 0)?;
     if reader.strokes.is_empty() {
         // A valid pen-up-only part must not resurrect an unrelated picture fallback.
@@ -239,6 +240,9 @@ struct InkReader<'a, 'w> {
     /// Identity of definition-contained traces, including anonymous group children. Pointers
     /// are compared only, never dereferenced; the immutable XML tree outlives this reader.
     definition_traces: HashSet<*const El>,
+    /// Syntactic group parents of definition-backed traces, groups and views. Direct
+    /// references must retain the same inherited context as selection through a group.
+    definition_groups: HashMap<*const El, &'a El>,
     /// Contexts encountered in stream order retain their declaration-time defaults.
     contexts: HashMap<&'a str, Context<'a>>,
     /// Shared allowance for parsing, reference expansion, mappings, geometry and copying.
@@ -255,7 +259,7 @@ struct InkReader<'a, 'w> {
 
 impl<'a> InkReader<'a, '_> {
     /// Index uniquely identified elements and enforce nesting/node bounds before reference traversal.
-    fn index(&mut self, el: &'a El, nodes: &mut usize, depth: usize, in_definitions: bool) -> Option<()> {
+    fn index(&mut self, el: &'a El, nodes: &mut usize, depth: usize, in_definitions: bool, mut group: Option<&'a El>) -> Option<()> {
         spend(self.work, 1)?;
         *nodes += 1;
         if *nodes > MAX_NODES || depth > MAX_DEPTH {
@@ -265,6 +269,18 @@ impl<'a> InkReader<'a, '_> {
             return Some(());
         }
         let in_definitions = in_definitions || el.name == "ink:definitions";
+        if el.name == "ink:definitions" {
+            group = None;
+        }
+        if in_definitions && matches!(el.name.as_str(), "ink:trace" | "ink:traceGroup" | "ink:traceView") {
+            if let Some(parent) = group {
+                spend(self.work, 1)?;
+                self.definition_groups.insert(el as *const El, parent);
+            }
+            if el.name == "ink:traceGroup" {
+                group = Some(el);
+            }
+        }
         if in_definitions && el.name == "ink:trace" {
             self.definition_traces.insert(el as *const El);
         }
@@ -281,7 +297,7 @@ impl<'a> InkReader<'a, '_> {
             }
         }
         for child in el.els() {
-            self.index(child, nodes, depth + 1, in_definitions)?;
+            self.index(child, nodes, depth + 1, in_definitions, group)?;
         }
         Some(())
     }

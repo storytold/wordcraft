@@ -1,5 +1,89 @@
 use super::*;
 
+/// Referencing a nested definition trace retains the trace group's recorded format.
+#[test]
+fn direct_trace_view_keeps_enclosing_definition_context() {
+    let definitions = r##"
+        <definitions>
+          <context xml:id="recorded">
+            <traceFormat>
+              <channel name="X" units="pt"/>
+              <channel name="Y" units="pt"/>
+              <channel name="W" units="pt"/>
+            </traceFormat>
+          </context>
+          <traceGroup xml:id="group" contextRef="#recorded">
+            <trace xml:id="stroke">0 0 2, 10 0 2</trace>
+          </traceGroup>
+        </definitions>
+    "##;
+    for stream in [
+        "",
+        r##"<context><traceFormat><channel name="Y" units="in"/><channel name="X" units="in"/></traceFormat><brush><brushProperty name="color" value="#FF0000"/></brush></context>"##,
+    ] {
+        let through_group = ink(&format!(r##"{definitions}{stream}<traceView traceDataRef="#group" from="1" to="1"/>"##)).unwrap();
+        assert_eq!((through_group.w, through_group.h), (12.0, 2.0));
+        let [(segs, color, width)] = paths(&through_group).try_into().unwrap();
+        assert_eq!((color, width), (Rgb::BLACK, 2.0));
+        assert_eq!(segs, [PathSeg::Move(1.0, 1.0), PathSeg::Line(11.0, 1.0)]);
+        let directly = ink(&format!(r##"{definitions}{stream}<traceView traceDataRef="#stroke"/>"##));
+        assert_eq!(directly, Some(through_group));
+    }
+}
+
+/// Reused view selectors must not amplify long decimal strings outside the part work cap.
+#[test]
+fn repeated_view_selectors_spend_the_shared_work_budget() {
+    let body = |padding: usize| {
+        format!(
+            r##"<trace xml:id="stroke">0 0</trace><definitions><traceView xml:id="view" traceDataRef="#stroke" from="{}1"/></definitions>{}"##,
+            "0".repeat(padding),
+            r##"<traceView traceDataRef="#view"/>"##.repeat(512)
+        )
+    };
+    assert!(ink(&body(0)).is_some(), "ordinary annotation views remain supported");
+    let xml = format!(r#"<ink xmlns="http://www.w3.org/2003/InkML">{}</ink>"#, body(65_535));
+    assert!(xml.len() < MAX_BYTES);
+    let mut work = MAX_WORK;
+    let result = read(xml.as_bytes(), &mut work);
+    assert!(result.is_none(), "selector parsing must stay within the normal per-part cap");
+    assert!(work >= MAX_WORK - MAX_PART_WORK, "later parts retain their allowance");
+}
+
+/// A view's referring group can still supply a brush for a root definition trace.
+#[test]
+fn definition_view_keeps_reference_site_group_brush() {
+    let definitions = r##"<brush xml:id="red"><brushProperty name="color" value="#FF0000"/></brush><trace xml:id="stroke">0 0,10 0</trace>"##;
+    for body in [
+        format!(r##"<definitions>{definitions}</definitions><traceGroup brushRef="#red"><traceView traceDataRef="#stroke"/></traceGroup>"##),
+        format!(
+            r##"<definitions>{definitions}<traceGroup xml:id="group" brushRef="#red"><traceView traceDataRef="#stroke"/></traceGroup></definitions><traceView traceDataRef="#group"/>"##
+        ),
+    ] {
+        let graphic = ink(&body).unwrap();
+        assert_eq!(paths(&graphic)[0].1, Rgb(255, 0, 0));
+    }
+}
+
+/// Direct references to any nested group level retain inherited brushes and trace overrides.
+#[test]
+fn nested_definition_view_contexts_keep_specific_overrides() {
+    let brushes = r##"
+        <brush xml:id="red"><brushProperty name="color" value="#FF0000"/></brush>
+        <brush xml:id="blue"><brushProperty name="color" value="#0000FF"/></brush>
+    "##;
+    for (trace, color) in [("", Rgb(255, 0, 0)), (r##"brushRef="#blue""##, Rgb(0, 0, 255))] {
+        let definitions = format!(
+            r##"<definitions>{brushes}<traceGroup xml:id="outer" brushRef="#red"><traceGroup xml:id="inner"><trace xml:id="stroke" {trace}>0 0,10 0</trace></traceGroup></traceGroup></definitions>"##
+        );
+        let outer = ink(&format!(r##"{definitions}<traceView traceDataRef="#outer"/>"##)).unwrap();
+        assert_eq!(paths(&outer)[0].1, color);
+        for target in ["inner", "stroke"] {
+            assert_eq!(ink(&format!(r##"{definitions}<traceView traceDataRef="#{target}"/>"##)), Some(outer.clone()));
+        }
+    }
+}
+
 /// Referenced color literals cannot hide uncharged scans behind cheap brush lookups.
 #[test]
 fn padded_referenced_brush_colors_are_bounded() {

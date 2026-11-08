@@ -48,11 +48,26 @@ impl<'a> InkReader<'a, '_> {
             "ink:traceView" => {
                 let id = el.attr("traceDataRef")?.strip_prefix('#')?;
                 let target = *self.ids.get(id)?;
+                let context = self.reference_context(target, context, 0)?;
                 let selection = self.selection(target, context, depth + 1)?;
-                selection.slice(&indices(el.attr("from"))?, &indices(el.attr("to"))?, self.work)
+                selection.slice(&indices(el.attr("from"), self.work)?, &indices(el.attr("to"), self.work)?, self.work)
             }
             _ => None,
         }
+    }
+
+    /// A jump to a nested definition must not discard its enclosing groups' context.
+    /// Ordinary child traversal already supplies that context; only reference jumps use this.
+    fn reference_context(&mut self, el: &'a El, inherited: Context<'a>, depth: usize) -> Option<Context<'a>> {
+        spend(self.work, 1)?;
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        let Some(parent) = self.definition_groups.get(&(el as *const El)).copied() else {
+            return Some(inherited);
+        };
+        let inherited = self.reference_context(parent, inherited, depth + 1)?;
+        self.context(parent, inherited, 0)
     }
 
     /// Decode selected definition traces without duplicating original top-level ink.
@@ -114,10 +129,13 @@ impl Selection<'_> {
 }
 
 /// Parse at most MAX_DEPTH one-based selector components without accepting zero or signs.
-fn indices(value: Option<&str>) -> Option<Vec<usize>> {
+fn indices(value: Option<&str>, work: &mut usize) -> Option<Vec<usize>> {
     let Some(value) = value.filter(|v| !v.is_empty()) else {
         return Some(Vec::new());
     };
+    // The same definition-backed view can be selected many times. Reserve before
+    // scanning digits so long leading-zero indices cannot bypass the part's work cap.
+    spend(work, value.len().div_ceil(16))?;
     let mut out = Vec::new();
     for part in value.split(':') {
         if out.len() >= MAX_DEPTH || part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
@@ -130,4 +148,24 @@ fn indices(value: Option<&str>) -> Option<Vec<usize>> {
         out.push(n);
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::indices;
+
+    #[test]
+    fn selector_bytes_are_reserved_before_scanning() {
+        let selector = format!("{}1", "0".repeat(64));
+        let cost = selector.len().div_ceil(16);
+        let mut refused = cost - 1;
+        assert!(indices(Some(&selector), &mut refused).is_none());
+        assert_eq!(refused, cost - 1, "a refused reservation spends no work");
+        let mut exact = cost;
+        assert_eq!(indices(Some(&selector), &mut exact), Some(vec![1]));
+        assert_eq!(exact, 0);
+        let mut invalid = cost;
+        assert!(indices(Some(&format!("{}x", "0".repeat(64))), &mut invalid).is_none());
+        assert_eq!(invalid, 0, "accepted work remains charged when parsing fails");
+    }
 }
