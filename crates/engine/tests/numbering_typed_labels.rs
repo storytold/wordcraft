@@ -58,6 +58,19 @@ fn the_caret_stays_on_its_text_after_the_typed_label_is_removed() {
     assert_eq!(s.sel.focus.off, 5);
 }
 
+/// A selection of the text after the label moves with it: selecting "alpha" in "1. alpha bravo"
+/// and applying Numbering leaves "alpha" selected, not the last bytes of it.
+#[test]
+fn a_selection_after_the_typed_label_moves_with_the_text() {
+    use wordcraft_doc::Pos;
+    let mut s = doc("1. alpha bravo");
+    s.sel = wordcraft_engine::Selection { anchor: Pos::body(0, 3), focus: Pos::body(0, 8) };
+    run(&mut s, "para.numbering", json!({}));
+    assert_eq!(body(&s), ["alpha bravo"]);
+    let (a, b) = s.sel.ordered();
+    assert_eq!((a.off, b.off), (0, 5), "the selection still covers 'alpha'");
+}
+
 /// #6017: Numbering over paragraphs with typed numbers in front of them removes the typed ones,
 /// as Word does, so the list reads `1. alpha` rather than `1. 1. alpha`.
 #[test]
