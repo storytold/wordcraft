@@ -238,6 +238,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-11-03: Security: XLSX import finds each sheet's worksheet part through an index of the workbook's relationships, built once, instead of searching every relationship for every sheet. Readiness unchanged.
 - 2026-11-03: Layout: a row of a nested table marked Can't Split isn't split with its outer row any more. The outer row moves to the next page whole when that row comes first in it, as Word does (docxide-pdf `nested-first-row-*-cant1`), and otherwise splits above it (inferred, not yet checked in Word); on a fresh page a nested row taller than the room still splits rather than running into the margin. Readiness unchanged.
 - 2026-11-03: Layout: no line break between a full stop and an opening parenthesis. UAX #14 allows one there, Word doesn't: `29.05.2023г.(оформление ЗУ)` and `2023.(Example detail)` now wrap whole at the space before, as in the docxide-pdf `dot-open-token*` Word references. Readiness unchanged.
+- 2026-11-03: Layout: before Word 2013 layout a floating table that may not overlap another and is moved below it keeps its own left edge, as Word places it, also when its first cell has no left margin; the layout took a zero margin for Word 2013 layout and stepped the table in by its distance from the text. Readiness unchanged.
 - 2026-11-03: Layout: an empty paragraph after a document's leading floating table takes no space before, as in Word's PDFs of docxide-pdf's `leading-empty-before-float` cases (beside the table); below a full-width one it loses it too, which is untested. Readiness unchanged.
 - 2026-11-03: Security: pasting text boxes charges each copied story for its formatting too (run, mark, paragraph and section properties), not only its text and objects, so a story with huge style or font names can't copy past the paste's 32 MiB text box budget. Readiness unchanged.
 - 2026-11-03: Security: `.doc` import keeps one width, shading, alignment and merge override per table cell, the last one winning as before, instead of a copy every time a paragraph's properties repeat the sprm, so a shared PAPX can't pile up copies on every paragraph mark. Readiness unchanged.
@@ -849,6 +850,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 > 2026-11-07 · Progress log: VML text boxes keep their text direction (#5193).
 >
 > 2026-11-03 · Arabic dialogs read right to left (rtl::Table); recorded in the progress log, readiness unchanged.
+> 2026-11-03 · Before Word 2013 layout a floating table moved below another keeps its own left edge, also when its first cell has no left margin; readiness unchanged.
 >
 > 2026-10-30 · Technical synchronization: retain the Proofing pane and command/selection/undo contracts on main `3b7f7ed`; new-SHA validation pending, readiness unchanged.
 >
