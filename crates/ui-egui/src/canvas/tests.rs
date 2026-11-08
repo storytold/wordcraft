@@ -755,6 +755,86 @@ fn dragging_the_scrollbar_names_the_page_at_the_top() {
     }
 }
 
+/// #5746: the document's scroll bars are drawn wherever the pointer is: before it has moved and
+/// with it over the page, not only at the window's edge, with a thumb that stands out from its
+/// track in the light and the dark theme. The vertical one fills the room the pages leave for it,
+/// so it covers none of them; zoomed in, the horizontal one shows the same way.
+#[test]
+fn the_document_scroll_bars_show_with_the_pointer_away() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let bar = |h: &H, vertical: bool| {
+        h.query_all_by_role(Role::ScrollBar)
+            .map(|n| n.rect())
+            .filter(|r| (r.height() > r.width()) == vertical)
+            .max_by(|a, b| a.area().total_cmp(&b.area()))
+    };
+    // The opaque fills across the bar's whole width, longest first: its track, then its thumb.
+    let drawn = |h: &H, bar: Rect, vertical: bool| {
+        let across = |r: &Rect| if vertical { r.width() } else { r.height() };
+        let along = |r: &Rect| if vertical { r.height() } else { r.width() };
+        let mut fills: Vec<(f32, egui::Color32)> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Rect(r) if r.fill.a() > 0 && bar.expand(0.5).contains_rect(r.rect) && across(&r.rect) >= across(&bar) - 0.5 => {
+                    Some((along(&r.rect), r.fill))
+                }
+                _ => None,
+            })
+            .collect();
+        fills.sort_by(|a, b| b.0.total_cmp(&a.0));
+        fills
+    };
+    // The thumb shows on its track: a clear step in grey, not the same fill.
+    let thumb_shows = |fills: &[(f32, egui::Color32)], what: &str| {
+        let [(track_len, track), (thumb_len, thumb), ..] = fills else { panic!("{what}: a track and a thumb are drawn: {fills:?}") };
+        assert!(thumb_len < track_len, "{what}: the thumb is shorter than its track: {fills:?}");
+        let step = (0..3).map(|i| (i32::from(track[i]) - i32::from(thumb[i])).abs()).max().unwrap_or(0);
+        assert!(step >= 40, "{what}: the thumb {thumb:?} stands out from its track {track:?}");
+    };
+    for theme in ["light", "dark"] {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        for _ in 0..3 {
+            a.run("text.insert", json!({"text": "Page text"})).unwrap();
+            a.run("layout.break", json!({"kind": "page"})).unwrap();
+        }
+        a.run("view.commentsPane", json!({"value": false})).unwrap();
+        a.run("ui.theme", json!({"value": theme})).unwrap();
+        let mut h: H = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        assert_eq!(Tokens::get(&h.ctx).dark, theme == "dark", "the {theme} theme is on");
+        let v = bar(&h, true).expect("the document's vertical scroll bar");
+        thumb_shows(&drawn(&h, v, true), &format!("{theme}, before the pointer has moved"));
+        let viewport = h.state().canvas.viewport.expect("the canvas is shown");
+        assert!((v.right() - viewport.right() - SCROLLBAR).abs() < 0.5, "the bar fills the room left for it: {v:?} beside {viewport:?}");
+        assert!(h.state().canvas.page_rects.iter().all(|p| p.right() <= v.left()), "the bar covers no page");
+        let page = h.state().canvas.page_rects.first().copied().expect("a page on screen");
+        h.event(egui::Event::PointerMoved(page.center()));
+        for _ in 0..30 {
+            h.step();
+        }
+        let v = bar(&h, true).expect("the document's vertical scroll bar");
+        thumb_shows(&drawn(&h, v, true), &format!("{theme}, the pointer over the page"));
+        h.state_mut().run("view.zoom", json!({"value": 400.0})).unwrap();
+        for _ in 0..30 {
+            h.step();
+        }
+        let across = bar(&h, false).expect("zoomed in, a horizontal scroll bar");
+        thumb_shows(&drawn(&h, across, false), &format!("{theme}, the horizontal bar"));
+    }
+}
+
 /// #3880: the status bar names the page being looked at. With the caret scrolled out of view, that
 /// is the page at the top of the window; while the caret is on screen, its page.
 #[test]
@@ -4992,4 +5072,117 @@ fn a_pictures_corrections_and_crop_change_its_page_key() {
     let plain = pages::page_content_key(&at([0.0; 4], PicFx::default()));
     assert_ne!(plain, pages::page_content_key(&at([0.1, 0.0, 0.0, 0.0], PicFx::default())), "crop");
     assert_ne!(plain, pages::page_content_key(&at([0.0; 4], PicFx::new(10_000, 0, 0))), "brightness");
+}
+
+/// #5267: a picture linked from its context menu (Link…) keeps the link, shows it on hover and
+/// follows it on Ctrl/⌘+click, in line with the text and floating over it.
+#[test]
+fn a_picture_linked_from_its_context_menu_shows_and_follows_its_link() {
+    use egui_kittest::kittest::Queryable;
+    for floating in [false, true] {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("text.insert", json!({"text": "Text before the picture "})).unwrap();
+        a.run("select.text", json!({"text": "before"})).unwrap();
+        a.run("insert.bookmark", json!({"name": "Spot"})).unwrap();
+        a.run("caret.docEnd", json!({})).unwrap();
+        let mut png = Vec::new();
+        let img = image::RgbaImage::from_pixel(40, 20, image::Rgba([200, 30, 30, 255]));
+        image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        a.run("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png), "width": 160})).unwrap();
+        if floating {
+            a.run("arrange.wrap", json!({"wrap": "inFrontOfText"})).unwrap();
+        }
+        let pos = wordcraft_engine::cmd::objects::selected(&a.session).unwrap().0;
+        a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 0));
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        steps(&mut h, 6);
+        let rect = h.state_mut().session.layout().object(&pos, 0).expect("the picture is laid out").rect;
+        let at = crate::frame::to_screen(h.state().canvas.page_rects[0], h.state().canvas.scale, rect).center();
+        h.event(egui::Event::PointerMoved(at));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+            h.step();
+        }
+        h.step();
+        h.get_by_label_contains("Link…").click();
+        steps(&mut h, 4);
+        h.event(egui::Event::Text("https://example.com/picture".into()));
+        steps(&mut h, 3);
+        h.get_by_label_contains("OK").click();
+        steps(&mut h, 4);
+        let s = &h.state().session;
+        let link = s.doc.para_at(&pos).map(|p| p.props_of_char(pos.off).link.clone());
+        assert_eq!(link, Some(Some("https://example.com/picture".to_string())), "floating {floating}: the link is on the picture");
+        // Hovering the picture shows where it goes.
+        h.event(egui::Event::PointerMoved(at + egui::vec2(1.0, 0.0)));
+        steps(&mut h, 3);
+        assert!(h.query_by_label_contains("https://example.com/picture").is_some(), "floating {floating}: the hover tip names the link");
+        // Ctrl/⌘+click follows it, instead of picking the picture for a copy: here a link to a
+        // place in the document, which moves the caret (a web address goes to the browser).
+        h.state_mut().run("insert.link", json!({"bookmark": "Spot"})).unwrap();
+        steps(&mut h, 2);
+        let press = egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::COMMAND };
+        h.event_modifiers(press, egui::Modifiers::COMMAND);
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        steps(&mut h, 3);
+        let s = &h.state().session;
+        let (start, _) = wordcraft_engine::cmd::insert::bookmark_range(&s.doc, "Spot").unwrap();
+        assert!(s.sel.is_collapsed() && s.sel.focus == start, "floating {floating}: the caret went to the bookmark: {:?}", s.sel);
+        assert!(h.state().canvas.obj_drag.is_none(), "floating {floating}: no copy-drag started");
+    }
+}
+
+/// #5267: inside a linked text box, hovering shows the box's link and Ctrl/⌘+click follows it,
+/// although a click there reaches the box's text rather than the box.
+#[test]
+fn a_linked_text_box_shows_and_follows_its_link_from_inside() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Text before the box "})).unwrap();
+    a.run("select.text", json!({"text": "before"})).unwrap();
+    a.run("insert.bookmark", json!({"name": "Spot"})).unwrap();
+    a.run("caret.docEnd", json!({})).unwrap();
+    a.run("insert.textBox", json!({"text": "Boxed words"})).unwrap();
+    let link_box = |a: &mut WordApp, link: serde_json::Value| {
+        let bx = a.session.layout().find_object(0, |o| o.text_box.is_some()).expect("the box");
+        let end = Pos { off: bx.off + wordcraft_doc::para::OBJ.len_utf8(), ..bx.pos() };
+        a.run("select.range", json!({"anchor": bx.pos(), "focus": end})).unwrap();
+        a.run("insert.link", link).unwrap();
+        a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 0));
+        bx.pos()
+    };
+    let pos = link_box(&mut a, json!({"url": "https://example.com/box"}));
+    let link = a.session.doc.para_at(&pos).map(|p| p.props_of_char(pos.off).link.clone());
+    assert_eq!(link, Some(Some("https://example.com/box".to_string())), "the link is on the text box");
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 6);
+    let rect = h.state_mut().session.layout().find_object(0, |o| o.text_box.is_some()).expect("the box is laid out").rect;
+    let at = crate::frame::to_screen(h.state().canvas.page_rects[0], h.state().canvas.scale, rect).center();
+    h.event(egui::Event::PointerMoved(at));
+    steps(&mut h, 3);
+    assert!(h.query_by_label_contains("https://example.com/box").is_some(), "the hover tip names the box's link");
+    // Ctrl/⌘+click inside the box follows it: here a place in the document, which moves the caret.
+    link_box(h.state_mut(), json!({"bookmark": "Spot"}));
+    steps(&mut h, 2);
+    let press = egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::COMMAND };
+    h.event_modifiers(press, egui::Modifiers::COMMAND);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    steps(&mut h, 3);
+    let s = &h.state().session;
+    let (start, _) = wordcraft_engine::cmd::insert::bookmark_range(&s.doc, "Spot").unwrap();
+    assert!(s.sel.is_collapsed() && s.sel.focus == start, "the caret went to the bookmark: {:?}", s.sel);
 }
