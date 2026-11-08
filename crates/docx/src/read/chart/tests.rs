@@ -756,6 +756,28 @@ fn radar_points_take_their_marker_and_line_colours() {
     assert_eq!(filled(&items).iter().map(|f| f.0).collect::<Vec<_>>(), [accent(0)]);
 }
 
+/// Two `c:dPt` for the same point, as Word reads them (#5969 review, measured): the later one's
+/// `c:spPr` and `c:marker` each replace the earlier one's as a whole, and what it doesn't have
+/// stays.
+#[test]
+fn a_second_c_dpt_for_a_point_replaces_only_the_parts_it_has() {
+    let solid = |c: &str| format!(r#"<a:solidFill><a:srgbClr val="{c}"/></a:solidFill>"#);
+    let marker = format!(r#"<c:dPt><c:idx val="1"/><c:marker><c:spPr>{}</c:spPr></c:marker></c:dPt>"#, solid("FF0000"));
+    let line = format!(r#"<c:dPt><c:idx val="1"/><c:spPr><a:ln w="28575">{}</a:ln></c:spPr></c:dPt>"#, solid("0000FF"));
+    let fill = format!(r#"<c:dPt><c:idx val="1"/><c:spPr>{}</c:spPr></c:dPt>"#, solid("FF0000"));
+    let off = r#"<c:varyColors val="0"/>"#;
+    // A marker, then a line: both.
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &format!("{marker}{line}"));
+    let plot = format!(r#"<c:radarChart><c:radarStyle val="marker"/>{off}{s}</c:radarChart><c:valAx/>"#);
+    let items = chart_items(&space(&plot), &theme(), 300.0, 220.0);
+    assert_eq!(marker_colours(&items), [accent(0), RED, accent(0)]);
+    assert_eq!(strokes_in(&items, &[RED, BLUE]), [BLUE]);
+    // A fill, then an outline: the outline's c:spPr replaces the fill.
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &format!("{fill}{line}"));
+    let bars: Vec<Rgb> = filled(&chart_items(&space(&column_chart(off, &[s])), &theme(), 300.0, 200.0)).iter().map(|b| b.0).collect();
+    assert_eq!(bars, [accent(0); 3]);
+}
+
 #[test]
 fn the_legend_of_a_varied_chart_lists_the_categories() {
     let items = with_legend(&column_chart("", &[ser(0, "Sales", None, &CATS, &["1", "2", "3"])]), "r", 300.0, 200.0);

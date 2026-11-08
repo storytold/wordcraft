@@ -260,14 +260,15 @@ impl Series {
         let mut points = vec![PointFmt::default(); values.len()];
         for dpt in ser.children("c:dPt") {
             let i = dpt.child("c:idx").and_then(|e| e.attr("val")).and_then(int).and_then(|i| usize::try_from(i).ok());
-            let sp = dpt.child("c:spPr");
-            let fmt = PointFmt {
-                fill: sp.and_then(|p| fill_colour(p, theme)),
-                line: sp.and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)),
-                marker: dpt.child("c:marker").and_then(|m| m.child("c:spPr")).and_then(|p| fill_colour(p, theme)),
-            };
-            if let Some(slot) = i.and_then(|i| points.get_mut(i)) {
-                *slot = fmt;
+            let Some(slot) = i.and_then(|i| points.get_mut(i)) else { continue };
+            // A later `c:dPt` for the same point replaces only what it has, its `c:spPr` (fill and
+            // line) and its `c:marker` each as a whole, as Word reads it.
+            if let Some(sp) = dpt.child("c:spPr") {
+                slot.fill = fill_colour(sp, theme);
+                slot.line = sp.child("a:ln").and_then(|l| fill_colour(l, theme));
+            }
+            if let Some(m) = dpt.child("c:marker") {
+                slot.marker = m.child("c:spPr").and_then(|p| fill_colour(p, theme));
             }
         }
         let labels = show_values(ser.child("c:dLbls"));
