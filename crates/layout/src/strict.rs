@@ -1,0 +1,136 @@
+//! Pictures a layout draws that the exporters cannot decode, for strict export (#6005).
+//!
+//! The PDF export, the raster renderer and this check decide whether a picture is drawn the same
+//! way (`wordcraft_geom::picture::decode_for_drawing`, and the metafile parser): what fails here
+//! is what shows as a grey box there.
+
+use std::collections::HashMap;
+use std::ops::RangeInclusive;
+
+use wordcraft_doc::{Document, MAX_MISSING_PICTURES, MissingPicture, MissingPictureReason, StoryRef};
+use wordcraft_geom::picture::DrawFailure;
+
+use crate::display::{DisplayOptions, Draw, ItemDisplay};
+use crate::{DocLayout, Placed};
+
+/// The widest or tallest picture the PDF export draws, pixels (its decoder limit, the tighter of
+/// the exporters').
+pub const MAX_PICTURE_SIDE: u32 = 30_000;
+
+/// Whether `bytes` are a picture the exporters draw: a metafile that parses, or a raster picture
+/// that decodes within the decode budget. The same decision `wordcraft-pdf` and `wordcraft-render`
+/// take, so a picture that fails here is drawn as a grey box by both.
+pub fn media_check(bytes: &[u8]) -> Result<(), DrawFailure> {
+    if wordcraft_metafile::is_metafile(bytes) && wordcraft_metafile::parse(bytes).is_ok_and(|p| p.has_size()) {
+        return Ok(());
+    }
+    wordcraft_geom::picture::check_for_drawing(bytes, MAX_PICTURE_SIDE)
+}
+
+/// The pictures drawn on `pages` (0-based, `None` for every page) that fail [`media_check`], one
+/// per picture and story, at most [`MAX_MISSING_PICTURES`]; the flag says more were found.
+///
+/// `part` is the part the bytes were read from when the document knows it (a DOCX opened by the
+/// reader), else the media key. `story` is the source part of the header, footer, note or comment
+/// the picture is in (`word/header2.xml`), `word/document.xml` for the body; where the document
+/// holds no source names (a document not opened from a DOCX) it is `header`, `footer`,
+/// `footnote`, `endnote`, `comment`, `text box` or `body`. A picture in a text box or a shape is
+/// named for the header, footer or body area it is placed in, not for the box.
+pub fn undecodable_pictures(
+    doc: &Document,
+    layout: &DocLayout,
+    pages: Option<RangeInclusive<usize>>,
+    opts: &DisplayOptions,
+) -> (Vec<MissingPicture>, bool) {
+    let mut out: Vec<MissingPicture> = Vec::new();
+    let mut truncated = false;
+    let mut verdicts: HashMap<String, Option<DrawFailure>> = HashMap::new();
+    let range = pages.unwrap_or(0..=usize::MAX);
+    for (n, page) in layout.pages.iter().enumerate() {
+        if !range.contains(&n) {
+            continue;
+        }
+        let shown = ItemDisplay::new(doc, page);
+        let regions: [(&[Placed], Region); 3] =
+            [(&page.header, Region::Header(page.header_story)), (&page.footer, Region::Footer(page.footer_story)), (&page.items, Region::Body)];
+        for (items, region) in regions {
+            for it in items {
+                let mut media: Vec<String> = Vec::new();
+                let draws = shown.draws(it, opts);
+                collect_media(&draws, &mut media);
+                for key in media {
+                    let verdict = *verdicts.entry(key.clone()).or_insert_with(|| match doc.media.get(&key) {
+                        Some(bytes) => media_check(bytes).err(),
+                        None => Some(DrawFailure::Undecodable),
+                    });
+                    let Some(failure) = verdict else { continue };
+                    let reason = match failure {
+                        DrawFailure::Undecodable => MissingPictureReason::Undecodable,
+                        DrawFailure::UnsupportedFormat => MissingPictureReason::UnsupportedFormat,
+                    };
+                    let part = doc.missing_pictures.media_parts.get(&key).cloned().unwrap_or(key);
+                    let item = MissingPicture { part, story: story_name(doc, region, it), reason };
+                    if out.contains(&item) {
+                        continue;
+                    }
+                    if out.len() >= MAX_MISSING_PICTURES {
+                        truncated = true;
+                        return (out, truncated);
+                    }
+                    out.push(item);
+                }
+            }
+        }
+    }
+    (out, truncated)
+}
+
+#[derive(Clone, Copy)]
+enum Region {
+    Header(Option<u32>),
+    Footer(Option<u32>),
+    Body,
+}
+
+fn collect_media(draws: &[Draw], out: &mut Vec<String>) {
+    for d in draws {
+        match d {
+            Draw::Image { media, .. } => out.push(media.clone()),
+            Draw::Figure { draws, .. } => collect_media(draws, out),
+            Draw::Turned { items, .. } | Draw::Rotated { items, .. } | Draw::Clip { items, .. } => collect_media(items, out),
+            _ => {}
+        }
+    }
+}
+
+/// The story a placed item is in, named as [`undecodable_pictures`] says.
+fn story_name(doc: &Document, region: Region, it: &Placed) -> String {
+    let names = &doc.missing_pictures;
+    let known = |id: Option<u32>| id.and_then(|id| names.part_names.get(&id)).cloned();
+    match region {
+        Region::Header(id) => known(id).unwrap_or_else(|| "header".into()),
+        Region::Footer(id) => known(id).unwrap_or_else(|| "footer".into()),
+        Region::Body => {
+            let story = match it {
+                Placed::Lines { story, .. } | Placed::Image { story, .. } | Placed::Graphic { story, .. } => *story,
+                _ => StoryRef::Body,
+            };
+            match story {
+                StoryRef::Body if names.main.is_empty() => "body".into(),
+                StoryRef::Body => names.main.clone(),
+                StoryRef::Part(id) => known(Some(id)).unwrap_or_else(|| {
+                    use wordcraft_doc::PartKind::*;
+                    match doc.parts.get(&id).map(|p| p.kind) {
+                        Some(Header) => "header",
+                        Some(Footer) => "footer",
+                        Some(Footnote) => "footnote",
+                        Some(Endnote) => "endnote",
+                        Some(Comment) => "comment",
+                        Some(TextBox) | None => "text box",
+                    }
+                    .into()
+                }),
+            }
+        }
+    }
+}

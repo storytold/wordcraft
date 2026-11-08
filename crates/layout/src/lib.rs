@@ -50,6 +50,7 @@ mod notes;
 mod page;
 mod pass;
 mod placed;
+mod strict;
 mod substituted;
 mod table_flow;
 
@@ -79,6 +80,7 @@ use page::item_bottom;
 use pass::layout_pass;
 pub use pass::now_ms;
 pub use placed::{HfSlot, Placed, turn_point, turn_rect, unturn_point};
+pub use strict::{MAX_PICTURE_SIDE, media_check, undecodable_pictures};
 pub use substituted::MAX_SUBSTITUTED;
 
 /// How the document is viewed.
