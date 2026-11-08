@@ -7014,6 +7014,48 @@ fn floating_tables_take_no_room_and_text_wraps_beside_them() {
     assert!(bx + bleft > nx + 200.0, "body text at {}, right of the narrow table", bx + bleft);
 }
 
+/// Before Word 2013 layout a floating table moved below another keeps its own left edge, also
+/// when its first cell has no left margin (docxide `displaced-anchor-*-compat12-overlap0-*`), in
+/// the body and in a table cell.
+#[test]
+fn a_floating_table_moved_below_another_keeps_its_edge_before_word_2013_layout() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let narrow_x = |mode: u32, in_cell: bool| {
+        let mut d = Document::from_text("Body.");
+        d.settings.compat_mode = mode;
+        let table = |w: f32, text: &str, dist: [f32; 4]| {
+            let mut t = Table::new(1, 1, w);
+            t.props.cell_margins = Some([0.0; 4]);
+            t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+            t.props.float = Some(TableFloat { h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, dist, overlap: false, ..Default::default() });
+            t
+        };
+        let floats = [table(300.0, "Wide", [0.0; 4]), table(100.0, "Narrow", [9.0, 0.0, 9.0, 0.0])];
+        if in_cell {
+            let mut outer = Table::new(1, 1, 468.0);
+            outer.rows[0].cells[0].blocks = floats.into_iter().map(|t| std::sync::Arc::new(wordcraft_doc::Block::Table(t))).collect();
+            outer.rows[0].cells[0].blocks.push(wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Cell.", Default::default())));
+            d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(outer)).unwrap();
+        } else {
+            for (i, t) in floats.into_iter().enumerate() {
+                d.insert_block(StoryRef::Body, &Path::top(i), wordcraft_doc::Block::Table(t)).unwrap();
+            }
+        }
+        let l = lay(&d);
+        let xs: Vec<(f32, f32)> =
+            l.pages[0].items.iter().filter_map(|i| if let Placed::Lines { x, y, .. } = i { Some((*x, *y)) } else { None }).collect();
+        let [(wx, wy), (nx, ny), ..] = xs.as_slice() else { panic!("{xs:?}") };
+        assert!(*ny > *wy + 10.0, "mode {mode}, in cell {in_cell}: narrow at {ny}, below the wide table at {wy}: {xs:?}");
+        nx - wx
+    };
+    for in_cell in [false, true] {
+        let (old, new) = (narrow_x(12, in_cell), narrow_x(15, in_cell));
+        assert!(old.abs() < 0.01, "mode 12, in cell {in_cell}: narrow table {old} right of the wide one");
+        assert!((new - 9.0).abs() < 0.01, "mode 15, in cell {in_cell}: narrow table {new} right of the wide one");
+    }
+}
+
 /// A margin-anchored floating table is placed from the anchor page's margin even when a body
 /// paragraph keeps trailing empty lines: all 24 preceding paragraphs stay on page one and every
 /// table row is drawn exactly once there.
