@@ -18,6 +18,8 @@ Group connectors (gap 10): re-routing preserves displayed rotated and flipped fr
 
 > **Printing update:** 2026-10-12 · direct desktop printing through craft-print; details below.
 
+Table Sort rejects invalid explicit column selectors instead of silently sorting another column (#5531). This command-boundary correction leaves the ranked gaps and readiness estimates unchanged.
+
 The work list. One entry per shortfall, ranked by how much it stops a Word user from switching
 (**B** = blocks beta). Each says what's missing, the evidence, who it hurts, an Opus 5.5 agent
 wall-clock estimate, and which parity document tracks it. Agents: pick from the top, check open PRs
@@ -215,6 +217,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-11-01 | trivial | #10 narrowed: text in a turned text box is drawn turned with it on screen and in PNG and PDF (upside down when flipped across, never mirrored); editing it still goes by its upright text; estimate unchanged |
 | 2026-10-29 | trivial | Print Markup balloon anchor discovery no longer repeats paragraph-prefix scans (#3614); readiness estimates unchanged |
 | 2026-10-28 | trivial | Print Markup text-copy comment discovery walks paragraph objects once (#3614); quotes, order, limits and readiness estimates unchanged |
+| 2026-11-04 | trivial | Table Sort rejects malformed or nonexistent explicit columns before mutation; valid columns, the omitted-column default and history are retained (#5531). Readiness estimates unchanged. |
 | 2026-10-30 | trivial | #20 narrowed: layout resource caps and linear-time passes (#3867, #3866) |
 | 2026-10-17 | trivial | UI/UX gaps: copies put RTF on the clipboard (Windows, macOS, Wayland; not X11), and paste reads RTF on macOS and X11 too |
 | 2026-11-03 | trivial | #4 narrowed: a nested table's Can't Split row moves on with its outer row when the row splits across pages (#5456); Word shows this for a nested row first in its outer row, the split above a later one is inferred and not yet checked in Word; readiness estimates unchanged |
