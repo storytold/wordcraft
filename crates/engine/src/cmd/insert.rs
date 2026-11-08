@@ -25,6 +25,7 @@ pub use objects::{base64_decode, base64_encode};
 use objects::{icon, shape, table, text_box};
 pub(crate) use objects::{image_ext, picture};
 
+/// Command specifications for the Insert ribbon tab and menu.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("insert.pageBreak", "Page Break", "Insert › Pages", |s, _| {

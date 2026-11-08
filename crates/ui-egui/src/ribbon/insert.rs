@@ -44,6 +44,7 @@ pub(super) fn shape_gallery(ui: &mut Ui, app: &mut WordApp) {
     });
 }
 
+/// Render the Insert ribbon tab controls.
 pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Pages", None, app, |ui, app| {
         stack(ui, |ui| {

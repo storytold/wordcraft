@@ -175,6 +175,7 @@ fn date_time_dialog_uses_saved_pt_br_language() {
     let InsertDialog::DateTime(mut f) = open("dateTime", &a).expect("dialog") else { panic!("not DateTime") };
     assert_eq!(f.format, "dd/MM/yyyy");
     assert_eq!(f.params()["language"], "pt-BR");
+    assert!(!f.update);
     f.update = false;
     assert_eq!(f.params()["update"], false);
 }
@@ -224,6 +225,17 @@ fn date_time_dialog_controls_insert_portuguese_fixed_text() {
     let sample = wordcraft_engine::cmd::insert::format_date_in("d 'de' MMMM 'de' yyyy", Some("pt-BR"));
     h.get_by_label(&sample).click();
     h.run_steps(2);
+    // By default, update is unchecked (false). Toggle it on and off to verify the checkbox.
+    assert!(matches!(
+        h.state().dialog.as_ref(),
+        Some(crate::dialogs::Dialog::Insert(d)) if matches!(&**d, InsertDialog::DateTime(f) if !f.update)
+    ));
+    h.get_by_label("Update automatically").click();
+    h.run_steps(2);
+    assert!(matches!(
+        h.state().dialog.as_ref(),
+        Some(crate::dialogs::Dialog::Insert(d)) if matches!(&**d, InsertDialog::DateTime(f) if f.update)
+    ));
     h.get_by_label("Update automatically").click();
     h.run_steps(2);
     assert!(matches!(
@@ -238,6 +250,39 @@ fn date_time_dialog_controls_insert_portuguese_fixed_text() {
     let para = doc.para_at(&doc.start_of(wordcraft_doc::StoryRef::Body)).expect("inserted paragraph");
     assert_eq!(para.props_of_char(0).lang.as_deref(), Some("pt-BR"));
     assert!(para.objects.iter().all(|o| !matches!(o, wordcraft_doc::para::InlineObject::Field { .. })));
+}
+
+/// Checking 'Update automatically' inserts a refreshable dynamic DATE field.
+#[test]
+fn date_time_dialog_controls_insert_dynamic_field() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.ui.language = "en".into();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.state_mut().run("ui.dialog", json!({"name": "dateTime"})).unwrap();
+    h.run_steps(4);
+
+    h.get_by_label("Update automatically").click();
+    h.run_steps(2);
+    assert!(matches!(
+        h.state().dialog.as_ref(),
+        Some(crate::dialogs::Dialog::Insert(d)) if matches!(&**d, InsertDialog::DateTime(f) if f.update)
+    ));
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "successful insertion closes the dialog");
+    let doc = &h.state().session.doc;
+    let para = doc.para_at(&doc.start_of(wordcraft_doc::StoryRef::Body)).expect("inserted paragraph");
+    assert!(para.objects.iter().any(|o| matches!(o, wordcraft_doc::para::InlineObject::Field { .. })));
 }
 
 /// An invalid saved picture is reported in the modal, not silently dismissed when OK is clicked.

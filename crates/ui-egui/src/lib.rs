@@ -298,7 +298,7 @@ pub struct UiState {
     pub date_time_format: String,
     /// Saved language tag in Insert > Date & Time.
     pub date_time_language: String,
-    /// Saved preference for updating inserted date/time fields automatically.
+    /// Saved preference for updating inserted date/time fields automatically (defaults to false).
     pub date_time_update: bool,
     /// Colours picked in the Colors dialog (More Colors…), most recent first (#606).
     pub recent_colors: Vec<String>,
@@ -451,6 +451,7 @@ pub const MAX_RECENT_FONTS: usize = 10;
 pub const MAX_FONT_NAME_BYTES: usize = 128;
 
 impl Default for UiState {
+    /// Default user interface preferences matching Word defaults.
     fn default() -> Self {
         UiState {
             tab: DEFAULT_TAB.into(),
@@ -463,7 +464,7 @@ impl Default for UiState {
             recent_symbols: Vec::new(),
             date_time_format: String::new(),
             date_time_language: String::new(),
-            date_time_update: true,
+            date_time_update: false,
             recent_colors: Vec::new(),
             recent_fonts: Vec::new(),
             theme: theme::Appearance::default(),
