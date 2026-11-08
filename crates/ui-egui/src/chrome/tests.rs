@@ -517,3 +517,133 @@ fn the_autosave_knob_sits_right_when_on_and_mirrors_right_to_left() {
     assert_eq!(autosave_knob_x(true, true, track), 108.0, "right to left, on: left");
     assert_eq!(autosave_knob_x(true, false, track), 122.0, "right to left, off: right");
 }
+
+/// #4850: in a narrow window the title bar's search box gives up width first, then Discord its
+/// label, then the search box its text; a wide window keeps them as they were.
+#[test]
+fn the_title_bar_controls_fit_a_narrow_window() {
+    let fit = |room| TitleBarFit::new(room, true, 26.0);
+    assert_eq!(fit(1000.0), TitleBarFit { search: 260.0, discord_label: true });
+    assert_eq!(fit(300.0), TitleBarFit { search: 208.0, discord_label: true });
+    assert_eq!(fit(200.0), TitleBarFit { search: 170.0, discord_label: false });
+    assert_eq!(fit(120.0), TitleBarFit { search: 26.0, discord_label: false });
+    assert_eq!(TitleBarFit::new(200.0, false, 26.0).search, 200.0, "without Discord the search box has its room");
+}
+
+/// The labelled controls drawn by `draw` in a window `width` wide: (label, left, right), and
+/// whether the frame asked for its pass to be redone.
+fn labelled_on(ctx: &egui::Context, a: &mut WordApp, width: f32, draw: fn(&mut WordApp, &mut Ui)) -> (Vec<(String, f64, f64)>, bool) {
+    ctx.enable_accesskit();
+    let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(width, 700.0))), ..Default::default() };
+    let mut out = ctx.run_ui(input, |ui| draw(a, ui));
+    out.textures_delta.clear();
+    let redone = out.platform_output.num_completed_passes > 1;
+    assert!(out.platform_output.request_discard_reasons.is_empty(), "its last pass settled: {:?}", out.platform_output.request_discard_reasons);
+    let update = out.platform_output.accesskit_update.take().unwrap();
+    let nodes = update
+        .nodes
+        .iter()
+        .filter_map(|(_, node)| Some((node.label()?.to_string(), node.bounds()?)))
+        .filter(|(_, b)| b.width() > 0.0)
+        .map(|(l, b)| (l, b.x0, b.x1))
+        .collect();
+    (nodes, redone)
+}
+
+fn labelled(a: &mut WordApp, width: f32, draw: fn(&mut WordApp, &mut Ui)) -> Vec<(String, f64, f64)> {
+    labelled_on(&ctx(), a, width, draw).0
+}
+
+/// #4850: down to the new minimum width the title bar's controls don't overlap: the search box
+/// narrows instead of covering the Quick Access Toolbar.
+#[test]
+fn title_bar_controls_never_overlap_in_a_narrow_window() {
+    for width in [crate::window_geometry::MIN_SIZE.x, 680.0, 760.0, 1440.0] {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.ui.show_discord = true;
+        let nodes = labelled(&mut a, width, title_bar);
+        assert!(nodes.iter().any(|(l, ..)| l == "Search commands and help"), "{width}: {nodes:?}");
+        for (i, (la, a0, a1)) in nodes.iter().enumerate() {
+            assert!(*a1 <= f64::from(width) + 0.5, "{width}: {la} runs off the window");
+            for (lb, b0, b1) in nodes.iter().skip(i + 1) {
+                assert!(a1 <= b0 || b1 <= a0, "{width}: {la} ({a0}–{a1}) overlaps {lb} ({b0}–{b1})");
+            }
+        }
+    }
+}
+
+/// #4850: a search box too narrow for its text shows the magnifier alone, and isn't typed into
+/// in place (there is no room): Search opens Search Commands instead. A box with its text is.
+#[test]
+fn a_search_box_with_no_room_to_type_opens_search_commands() {
+    let ctx = ctx();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.ctx = Some(ctx.clone());
+    let draw = |a: &mut WordApp, width: f32| {
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(300.0, 40.0))), ..Default::default() };
+        ctx.run_ui(input, |ui| search_box(a, ui, 24.0, width)).drop_without_applying_deltas();
+    };
+    draw(&mut a, 24.0);
+    assert!(!open_title_search(&mut a), "the magnifier alone: Search Commands");
+    draw(&mut a, TitleBarFit::SEARCH_TEXT);
+    assert!(open_title_search(&mut a), "a box with its text takes the typing");
+    // Once the box narrows to the magnifier, the search typed into it is dropped.
+    draw(&mut a, 24.0);
+    assert_eq!(title_search_query(&a, &ctx), None);
+}
+
+/// #4850: the status bar's texts stop before its controls on the far side. In a narrow window a
+/// text that doesn't fit is shortened, the whole of it in its accessible name (and tooltip), so
+/// the language item, which opens the language menu, stays within reach; a text is left out only
+/// when not even "…" fits.
+#[test]
+fn status_bar_texts_stop_before_the_controls_in_a_narrow_window() {
+    let controls = ["Focus", "Read Mode", "Print Layout", "Web Layout", "Zoom Out", "Zoom", "Zoom In"];
+    let app = || {
+        let mut a =
+            WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Several words here")), crate::Services::default());
+        a.run("review.trackChanges", json!({"value": true})).unwrap();
+        a.run("text.overtype", json!({"value": true})).unwrap();
+        a.run("select.all", json!({})).unwrap();
+        a
+    };
+    let language = crate::ribbon::caret_language(&app());
+    let full_width = |nodes: &[(String, f64, f64)]| nodes.iter().find(|(l, ..)| *l == language).map(|(_, x0, x1)| x1 - x0);
+    let wide = full_width(&labelled(&mut app(), 1440.0, status_bar)).expect("the language at 1440 pt");
+    let mut shortened = false;
+    for width in [crate::window_geometry::MIN_SIZE.x, 560.0, 520.0, 680.0, 760.0, 1440.0] {
+        let nodes = labelled(&mut app(), width, status_bar);
+        let focus = nodes.iter().find(|(l, ..)| l == "Focus").unwrap_or_else(|| panic!("{width}: Focus is drawn")).1;
+        assert!(nodes.iter().any(|(l, ..)| l == "Page 1 of 1"), "{width}: the page is always shown: {nodes:?}");
+        for (label, _, right) in nodes.iter().filter(|(l, ..)| !controls.contains(&l.as_str()) && !l.ends_with('%')) {
+            assert!(*right <= focus, "{width}: {label} ends at {right}, past the controls at {focus}");
+        }
+        if let Some(w) = full_width(&nodes) {
+            shortened |= w + 1.0 < wide;
+        }
+        if width >= crate::window_geometry::MIN_SIZE.x {
+            assert!(full_width(&nodes).is_some(), "{width}: the language item, by its whole name, is within reach: {nodes:?}");
+        }
+        if width >= 1000.0 {
+            assert!(nodes.iter().any(|(l, ..)| l == "Track Changes: On"), "a wide window shows everything: {nodes:?}");
+        }
+    }
+    assert!(shortened, "a narrow window shortens the language item instead of leaving it out");
+}
+
+/// #4850 review: the controls' width the texts stop before is kept for each window, so two
+/// windows of different widths don't take turns redoing their passes; once it is known, a frame
+/// that doesn't change it isn't redone.
+#[test]
+fn the_status_bar_keeps_its_controls_width_per_window_and_settles() {
+    let ctx = ctx();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Words")), crate::Services::default());
+    let id = a.window_id("status_controls_width");
+    let (_, first) = labelled_on(&ctx, &mut a, 700.0, status_bar);
+    assert!(first, "the first frame learns the controls' width and redoes its pass");
+    assert!(ctx.data(|d| d.get_temp::<f32>(id)).is_some_and(|w| w > 100.0), "kept under the window's own id");
+    for _ in 0..3 {
+        let (_, redone) = labelled_on(&ctx, &mut a, 700.0, status_bar);
+        assert!(!redone, "a settled status bar isn't redone");
+    }
+}
