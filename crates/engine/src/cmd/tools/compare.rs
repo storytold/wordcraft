@@ -69,6 +69,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let author = p::str(v, "author").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).unwrap_or_else(|| s.author.clone());
     let date = crate::cmd::now_iso();
     let mut budget = MAX_COMPARE_CELLS;
+    let mut note_budget = MAX_NOTE_ALIGN_BUDGET;
     let mut note_map = std::collections::HashMap::new();
     let mut paired_notes = Vec::new();
     let mut inserted_notes = Vec::new();
@@ -78,7 +79,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         for kind in [wordcraft_doc::PartKind::Footnote, wordcraft_doc::PartKind::Endnote] {
             let orig_ids = document_note_ids(&s.doc, kind);
             let rev_ids = document_note_ids(&revised, kind);
-            let (paired, inserted, deleted) = align_notes(&s.doc, &orig_ids, &revised, &rev_ids, kind, &opts, &mut budget);
+            let (paired, inserted, deleted) = align_notes(&s.doc, &orig_ids, &revised, &rev_ids, kind, &opts, &mut note_budget);
             for (o, r) in paired {
                 note_map.insert(r, o);
                 paired_notes.push((o, r));
@@ -290,6 +291,12 @@ const NOTE_SIMILARITY_THRESHOLD: u32 = 400;
 /// Maximum number of tokens inspected per note when computing similarity.
 const MAX_SIMILARITY_TOKENS: usize = 200;
 
+/// Maximum comparison budget allocated specifically for aligning footnote and endnote sequences.
+const MAX_NOTE_ALIGN_BUDGET: u64 = 200_000;
+
+/// Maximum number of notes in a single run allowed for dynamic programming matrix allocation.
+const MAX_NOTE_ALIGN_RUN: usize = 200;
+
 /// Metadata and content summary for aligning footnote and endnote parts.
 struct NoteInfo {
     /// Note ID.
@@ -396,9 +403,13 @@ fn note_score(a: &NoteInfo, b: &NoteInfo, budget: &mut u64) -> u32 {
             0
         } else {
             let cells = (a.tokens.len() as u64).saturating_mul(b.tokens.len() as u64);
-            *budget = budget.saturating_sub(cells);
-            let lcs = lcs_len(&a.tokens, &b.tokens);
-            ((2000u64 * lcs as u64) / total_tokens as u64) as u32
+            if *budget < cells {
+                0
+            } else {
+                *budget = budget.saturating_sub(cells);
+                let lcs = lcs_len(&a.tokens, &b.tokens);
+                ((2000u64 * lcs as u64) / total_tokens as u64) as u32
+            }
         }
     };
 
@@ -420,6 +431,17 @@ fn align_note_run(old_notes: &[NoteInfo], new_notes: &[NoteInfo], budget: &mut u
     }
     if m == 0 {
         return (Vec::new(), Vec::new(), old_notes.iter().map(|info| info.id).collect());
+    }
+    if n > MAX_NOTE_ALIGN_RUN || m > MAX_NOTE_ALIGN_RUN {
+        if n == m {
+            let paired = old_notes.iter().zip(new_notes.iter()).map(|(o, r)| (o.id, r.id)).collect();
+            return (paired, Vec::new(), Vec::new());
+        }
+        let common = n.min(m);
+        let paired = old_notes.iter().take(common).zip(new_notes.iter().take(common)).map(|(o, r)| (o.id, r.id)).collect();
+        let deleted = old_notes.get(common..).unwrap_or_default().iter().map(|info| info.id).collect();
+        let inserted = new_notes.get(common..).unwrap_or_default().iter().map(|info| info.id).collect();
+        return (paired, inserted, deleted);
     }
 
     let mut scores = vec![vec![0u32; m]; n];
