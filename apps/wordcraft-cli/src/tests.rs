@@ -211,6 +211,10 @@ fn only_the_opened_file_may_be_other_than_unicode() {
     let ok = |raw: Vec<OsString>| text_args(&raw).unwrap().1;
     assert_eq!(ok(vec!["zotero".into(), "refresh".into(), latin1()]), Some(PathBuf::from(latin1())));
     assert_eq!(ok(vec!["render".into(), latin1(), "out.png".into(), "--page".into(), "2".into()]), Some(PathBuf::from(latin1())));
+    assert_eq!(ok(vec!["render".into(), "--page".into(), "2".into(), latin1(), "out.png".into()]), Some(PathBuf::from(latin1())));
+    assert_eq!(ok(vec!["convert".into(), "--format".into(), "flatopc".into(), latin1(), "out.xml".into()]), Some(PathBuf::from(latin1())));
+    assert_eq!(ok(vec!["info".into(), "--password".into(), "secret".into(), latin1()]), Some(PathBuf::from(latin1())));
+    assert_eq!(ok(vec!["zotero".into(), "--port".into(), "23119".into(), "refresh".into(), latin1()]), Some(PathBuf::from(latin1())));
     assert_eq!(ok(vec!["run".into(), "--print".into(), "--file".into(), latin1()]), Some(PathBuf::from(latin1())));
     assert_eq!(ok(vec!["info".into(), "in.docx".into()]), None);
     // Every command that opens a file reaches the open with it (no such file here), so
@@ -228,6 +232,7 @@ fn only_the_opened_file_may_be_other_than_unicode() {
     for (raw, n) in [
         (vec!["zotero".into(), latin1(), "in.docx".into()], 2),
         (vec!["render".into(), "in.docx".into(), latin1()], 3),
+        (vec!["render".into(), "--page".into(), latin1(), "in.docx".into(), "out.png".into()], 3),
         (vec!["run".into(), "--save".into(), latin1()], 3),
         (vec!["commands".into(), latin1()], 2),
     ] {
