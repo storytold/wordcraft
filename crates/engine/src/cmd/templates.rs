@@ -69,6 +69,14 @@ fn attach(s: &mut Session, v: &Value) -> CmdResult {
         return Err(CmdError::Params("`path` is too long".into()));
     }
     let path = path.to_string();
+    // The template is read later (Update Styles, or as the document opens with its styles
+    // linked), perhaps outside the roots an agent attaching it works in: it may attach only a
+    // file it may read (#3695).
+    if crate::file_access::current().is_some()
+        && let Some(file) = local_path(&path, s.path.as_deref())
+    {
+        crate::file_access::check_read(&file.to_string_lossy()).map_err(CmdError::Failed)?;
+    }
     s.doc.settings.attached_template = Some(path.clone());
     if let Some(on) = p::bool(v, "linkStyles") {
         s.doc.settings.link_styles = on;

@@ -1,8 +1,10 @@
-//! Parse `--automation-read-root` / `--automation-write-root` before the server starts. A malformed
-//! flag must not silently remove a root and leave the server unconfined.
+//! Parse `--automation-read-root` / `--automation-write-root` before automation starts: for
+//! `wordcraft-cli mcp` and the desktop app's control channel (`wordcraft --control`, #3695). A
+//! malformed flag must not silently remove a root and leave automation unconfined.
 
 use std::path::PathBuf;
 
+/// The root folders given on a command line, before they are opened ([`super::AutomationRoots::new`]).
 pub struct AutomationArgs {
     pub read_root: Option<PathBuf>,
     pub write_root: Option<PathBuf>,
@@ -11,8 +13,14 @@ pub struct AutomationArgs {
 }
 
 impl AutomationArgs {
+    /// Start from `read_root` and `write_root` (usually none), each flag not yet given.
     pub fn new(read_root: Option<PathBuf>, write_root: Option<PathBuf>) -> Self {
         Self { read_root, write_root, read_given: false, write_given: false }
+    }
+
+    /// Whether either flag was given.
+    pub fn any(&self) -> bool {
+        self.read_given || self.write_given
     }
 
     /// Returns whether this argument is a root flag. A second occurrence of a flag is an error,

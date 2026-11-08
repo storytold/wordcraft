@@ -1,7 +1,8 @@
 //! The folders automation may read and write (#769).
 //!
 //! `wordcraft-cli mcp --automation-read-root <dir> --automation-write-root <dir>` confines the
-//! files an agent's commands reach. [`AutomationRoots`] holds the two folders. While they are in force, every path a command
+//! files an agent's commands reach, and so do the same flags on the desktop app's control channel
+//! (`wordcraft --control <port> …`, #3695). [`AutomationRoots`] holds the two folders. While they are in force, every path a command
 //! reads goes through [`check_read`] and every path it writes through [`check_write`]:
 //!
 //! - The path is made absolute against the working directory, as the file system reads it. Its
@@ -22,6 +23,9 @@
 //! A path is checked, then opened: a process that can change the folders in between (swapping in
 //! a link) can still win that race. The roots keep an agent to the files it was given; they don't
 //! guard against other programs on the computer.
+
+mod args;
+pub use args::AutomationArgs;
 
 use std::cell::RefCell;
 use std::ffi::OsString;

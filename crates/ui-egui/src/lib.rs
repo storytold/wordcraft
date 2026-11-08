@@ -649,6 +649,9 @@ pub struct WordApp {
     /// Language pack installs, the missing-pack bar ([`language_packs`]).
     pub(crate) packs_rt: language_packs::Runtime,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
+    /// The folders the control channel may read and write (`wordcraft --control PORT
+    /// --automation-read-root DIR --automation-write-root DIR`, #3695); `None`: not confined.
+    control_roots: Option<std::sync::Arc<wordcraft_engine::file_access::AutomationRoots>>,
     /// Admitted `ui.screenshot` requests: count/byte budgets, retries and completion slots.
     shots: control::Shots,
     /// Monotonic geometry epoch; any size/DPI/zoom/surface/document change increments it,

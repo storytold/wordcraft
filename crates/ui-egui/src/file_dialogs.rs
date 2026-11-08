@@ -278,6 +278,11 @@ impl WordApp {
             }
             AfterPick::ForDialog => {
                 let picked = picked.filter(|p| !p.is_empty());
+                // The dialog reads it on a later frame, outside this one's roots: an agent's pick
+                // is checked now (#3695).
+                if let Some(p) = &picked {
+                    wordcraft_engine::file_access::check_read(p)?;
+                }
                 let r = json!({"picked": picked});
                 self.dialog_pick = picked;
                 Ok(r)
@@ -288,6 +293,9 @@ impl WordApp {
             }
             AfterPick::ComparePath { revised } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                // Compare reads it when its OK is clicked, perhaps on a frame with no control
+                // input: an agent's pick is checked now (#3695).
+                wordcraft_engine::file_access::check_read(&path)?;
                 crate::dialogs_review::set_compare_path(self, revised, path);
                 Ok(json!({"picked": true}))
             }

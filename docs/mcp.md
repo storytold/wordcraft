@@ -98,8 +98,24 @@ config works across the suite) keep the agent to the folders you give it:
   given once (`--flag <dir>` or `--flag=<dir>`).
 
 The flags confine the headless server; `--connect` with them is an error, since the server would
-otherwise talk to an app that isn't confined. WordCraft's desktop app has no equivalent flags yet,
-so a running app (`wordcraft --control`) is not confined.
+otherwise seem to confine an app it doesn't control. To confine a running app, give the app the
+same flags (#3695):
+
+```sh
+wordcraft --control 7981 --automation-read-root /work/project --automation-write-root /work/project/out
+wordcraft-cli mcp --connect 127.0.0.1:7981
+```
+
+The app then confines everything that comes through its control channel, so `--connect` and any
+other client: the commands, the screenshots they write, and what their clicks and keys (`click`,
+`key`, `type`) do in the window. A control-channel Ctrl+S on a document outside the write root is
+refused. Work the channel starts that finishes on a later frame is held to the roots as well: a
+screenshot, a file picked in the built-in file browser for a dialog that reads it afterwards, a
+template attached to be read later, and AutoSave, which then writes only files inside the write
+root (for a file outside it, AutoSave stays off and says why). The built-in file browser lists
+only folders inside the read root for the channel. What the person does in the window is usually
+not confined, but it is when the app handles it in the same frame as control-channel input. Without
+the flags a running app (`wordcraft --control`) is not confined.
 
 What the roots do not cover: commands that take no path (`text.insert`, `execute` of anything that
 works on the open document) can still read and change that document, and `get_text` and
