@@ -2,6 +2,7 @@
 
 use serde_json::Value;
 use wordcraft_doc::{Pos, StoryRef};
+use wordcraft_layout::ViewMode;
 
 use super::{parse_pos, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
@@ -254,16 +255,40 @@ fn line(s: &mut Session, v: &Value, home: bool) -> CmdResult {
     sel_result(s)
 }
 
+/// Page Up (`dir < 0`) / Page Down: the same place on the page before or after, or in the views
+/// that are one long page, the line a printed page's text above or below.
 fn page(s: &mut Session, v: &Value, dir: i32) -> CmdResult {
     let ext = extend(v);
     let l = s.layout();
     let from = s.sel.focus.clone();
+    // Web Layout, Draft and Outline lay the document out as one long page (#5290).
+    if !s.view.read_mode && matches!(s.view.mode, ViewMode::Web | ViewMode::Draft | ViewMode::Outline) {
+        // A selection can end in text a collapsed outline heading hides: page from where it shows.
+        let at = if l.caret_on(&from, s.page_hint).is_none() { super::outline::shown_pos(s, &from, false) } else { None };
+        let at = at.unwrap_or_else(|| from.clone());
+        let Some(c) = l.caret_on(&at, s.page_hint) else { return sel_result(s) };
+        let page_h = l.pages.get(c.page).map_or(0.0, |p| p.h);
+        let y = (c.top + 1.0 + dir as f32 * page_step(s, &at)).min(page_h).max(0.0);
+        let to = l.line_toward(&at, s.page_hint, c.x, y, dir).unwrap_or(from);
+        apply(s, to, ext);
+        return sel_result(s);
+    }
     let Some(c) = l.caret_on(&from, s.page_hint) else { return sel_result(s) };
     let np = if dir < 0 { c.page.saturating_sub(1) } else { (c.page + 1).min(l.pages.len().saturating_sub(1)) };
     let to = l.hit(np, c.x, c.top + 1.0, from.story).unwrap_or(from);
     s.page_hint = np;
     apply(s, to, ext);
     sel_result(s)
+}
+
+/// How far Page Up/Down move in the continuous views: the height of the text area of the
+/// section `at` is in (the first section when `at` isn't in the body), at least an inch.
+fn page_step(s: &Session, at: &Pos) -> f32 {
+    let block = if at.story == StoryRef::Body { at.path.0.first().map_or(0, |&i| i as usize) } else { 0 };
+    let sections = s.doc.sections();
+    let sect = sections.iter().find(|(end, _)| *end >= block).or(sections.last()).map(|(_, p)| *p);
+    let body = sect.map_or(0.0, |p| p.page_h - p.margin_top.abs() - p.margin_bottom.abs());
+    if body.is_finite() { body.max(72.0) } else { 72.0 }
 }
 
 fn set(s: &mut Session, v: &Value) -> CmdResult {
@@ -298,6 +323,7 @@ fn select_all(s: &mut Session, v: &Value) -> CmdResult {
     }
     let st = s.sel.focus.story;
     s.sel = Selection { anchor: s.doc.start_of(st), focus: s.doc.end_of(st) };
+    s.pending = None;
     s.column = None;
     s.column_mode = false;
     sel_result(s)
@@ -307,6 +333,7 @@ fn select_range(s: &mut Session, v: &Value) -> CmdResult {
     let a = v.get("anchor").and_then(parse_pos).ok_or_else(|| CmdError::Params("bad `anchor`".into()))?;
     let b = v.get("focus").and_then(parse_pos).ok_or_else(|| CmdError::Params("bad `focus`".into()))?;
     s.sel = Selection { anchor: s.doc.clamp(&a), focus: s.doc.clamp(&b) };
+    s.pending = None;
     sel_result(s)
 }
 
@@ -367,6 +394,7 @@ fn select_unit(s: &mut Session, unit: Unit) -> CmdResult {
     if s.doc.para_at(&f).is_some() {
         let (a, b) = unit_range(s, &f, unit);
         s.sel = Selection { anchor: a, focus: b };
+        s.pending = None;
     }
     sel_result(s)
 }
@@ -461,6 +489,9 @@ fn select_text(s: &mut Session, v: &Value) -> CmdResult {
             if count == n {
                 s.sel =
                     Selection { anchor: Pos { story, path: path.clone(), off: i }, focus: Pos { story, path: path.clone(), off: i + needle.len() } };
+                // Formatting picked for the old caret doesn't carry over (as `select.word`): what
+                // replaces the selection takes its formatting.
+                s.pending = None;
                 return sel_result(s);
             }
         }
