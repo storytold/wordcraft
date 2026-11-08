@@ -143,7 +143,12 @@ fn apply_field_update(para: &mut Paragraph, k: usize, r: String, clear_dirty: bo
     let Some((start_off, content_start, end_off)) = range_field_result_span(para, k) else { return };
     let mut props = para
         .run_ranges()
-        .find(|(rng, p)| rng.end > content_start && rng.start < end_off && p.del.is_none())
+        .find(|(rng, p)| {
+            rng.end > content_start
+                && rng.start < end_off
+                && p.del.is_none()
+                && para.text.get(rng.start.max(content_start)..rng.end.min(end_off)).is_some_and(|t| t.chars().any(|c| c != wordcraft_doc::para::OBJ))
+        })
         .map(|(_, p)| p.clone())
         .unwrap_or_else(|| para.props_of_char(start_off).clone());
     props.ins = None;
