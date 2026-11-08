@@ -365,6 +365,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-29 | Insert › Shapes shows the basic shapes as a grid of code-drawn icon tiles, each with an accessible name and tooltip, instead of a text list (#4349) |
 | 2026-11-03 | A password-protected file named on the command line (double-clicked in the file manager) asks for its password when the first blank document was replaced because File › Options chose a region; the window now follows that replacement at once, so the first frame no longer takes it for a document switch and drops the Password box (#5299) |
 | 2026-11-01 | Markdown export: a list inside a block quote stays in the quote (`> - item`), its continuation lines included; it was read as quoted list paragraphs but written without `>`, so the list moved out of the quote on every save |
+| 2026-11-01 | Rulers: in a section of several text columns the horizontal ruler shades the space between each two columns like the margins (Print Layout, in the main text outside tables, with the selection in one section); dragging an edge of a space changes the spacing (equal columns stay equal, as in Word for Mac), one undo step per drag (#5197) |
 | 2026-10-29 | Window sizing falls back to the screen rectangle when the reported inner size is invalid, and an Equation symbol tooltip no longer repeats a missing glyph's name or code point |
 | 2026-10-29 | A NUL in a document title no longer reaches the native window title, which panicked on X11 (#3634): displayed titles and suggested file names drop NUL characters and fall back to the untitled name when empty; the stored title is unchanged |
 | 2026-10-28 | The Traditional Chinese interface draws hanzi to the Taiwan standard: on the desktop an installed Traditional Chinese font (PingFang TC on macOS, Microsoft JhengHei on Windows, Noto Sans CJK TC on Linux) comes before the embedded Noto Sans CJK SC, which drew 說, 這, 為, 戶 in mainland shapes; without one, and on the web, nothing changes. |
@@ -944,6 +945,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-28 | trivial | Note conversion walks reference offsets and formatting runs together, #4750; readiness estimates unchanged. |
 | 2026-10-29 | trivial | DOCX comment IDs use ordered paragraph lookup and one durable-ID reservation set; threading and ID rules unchanged |
 | 2026-10-28 | trivial | #4658: bound Markdown reference-label rejection work, preserving literal source and ordinary link matching |
+| 2026-11-01 | trivial | Progress log: the ruler shows the spaces between text columns (#5197) |
 | 2026-10-29 | trivial | Progress log: Insert › Shapes icon grid (#4349) |
 | 2026-10-29 | trivial | HTML import keeps preformatted lines with CR, CRLF or LF input newlines (#4810); numeric character references retain their separate meaning; readiness estimates unchanged. |
 | 2026-10-29 | trivial | Progress log: window fallback geometry and equation symbol tooltips |
