@@ -55,6 +55,7 @@ fn line_width(text: &str) -> f32 {
 
 #[test]
 fn a_no_break_space_is_as_wide_as_a_space() {
+    crate::test_fonts();
     let face = wordcraft_fonts::word::resolve(wide_nbsp_family(), false, false).face;
     assert_eq!(face.family, wide_nbsp_family(), "the test font is installed under its own name");
     assert!(
