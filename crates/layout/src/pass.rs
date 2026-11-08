@@ -43,6 +43,7 @@ struct Tops {
 struct Sec<'p> {
     si: usize,
     sect: &'p SectionProps,
+    page_format: wordcraft_doc::section::NumFormat,
     start: SectionStart,
     tops: Tops,
 }
@@ -109,6 +110,7 @@ fn new_ctx<'a>(
         floats_above: HashMap::new(),
         hf: Arc::new(HfLinks::new(doc.sections())),
         alphas: Default::default(),
+        header_repeats: 0,
     }
 }
 
@@ -157,10 +159,17 @@ fn reflow_sect(first: &SectionProps, opts: &LayoutOptions) -> SectionProps {
     s
 }
 
-fn new_page_builder<'p>(sect: &'p SectionProps, early: &'p EarlyFloats, web: bool, settle: bool) -> PageBuilder<'p> {
+fn new_page_builder<'p>(
+    sect: &'p SectionProps,
+    page_format: wordcraft_doc::section::NumFormat,
+    early: &'p EarlyFloats,
+    web: bool,
+    settle: bool,
+) -> PageBuilder<'p> {
     PageBuilder {
         pages: Vec::new(),
         sect,
+        page_format,
         sect_idx: 0,
         col: 0,
         cols: Vec::new(),
@@ -196,6 +205,7 @@ fn new_page_builder<'p>(sect: &'p SectionProps, early: &'p EarlyFloats, web: boo
         early,
         seeded: 0,
         settle,
+        column_lines: None,
     }
 }
 
@@ -219,6 +229,7 @@ fn turned_sections(ctx: &mut Ctx, sections: &[(usize, &SectionProps)], web: bool
         .iter()
         .map(|(_, s)| {
             (!web && s.text_direction.is_turned()).then(|| {
+                ctx.fields.page_format = s.page_num_format;
                 let top = body_top_for(ctx, s, s.headers.default);
                 vertical::unturned_sect(s, top)
             })
@@ -230,6 +241,7 @@ fn turned_sections(ctx: &mut Ctx, sections: &[(usize, &SectionProps)], web: bool
 /// previous section's, and take its room. `fixed`: the margins are the room (continuous views and
 /// turned sections).
 fn section_tops(ctx: &mut Ctx, hf: &HfLinks, (si, sect): (usize, &SectionProps), fixed: bool) -> Tops {
+    ctx.fields.page_format = sect.page_num_format;
     let (heads, feet) = (hf.heads.set(si), hf.feet.set(si));
     let hb = |i: Option<u32>| hf.defining_width(false, si, i);
     let fb = |i: Option<u32>| hf.defining_width(true, si, i);
@@ -244,6 +256,8 @@ fn section_tops(ctx: &mut Ctx, hf: &HfLinks, (si, sect): (usize, &SectionProps),
 fn begin_section_state<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, sec: &Sec<'p>, totals: &Totals, web: bool) {
     let (doc, sect, si) = (ctx.doc, sec.sect, sec.si);
     pb.sect = sect;
+    pb.page_format = sec.page_format;
+    ctx.fields.page_format = sec.page_format;
     pb.sect_idx = si;
     pb.sect_beneath = doc.note_options(sect, false).pos == wordcraft_doc::section::NotePos::BeneathText;
     if !web && !doc.footnote_separators.is_empty() {
@@ -261,6 +275,8 @@ fn begin_section_state<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, sec: &Sec<'p
 fn end_previous_section<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<'p>, si: usize, block: usize) {
     let Some((_, prev)) = si.checked_sub(1).and_then(|k| hf.sections.get(k)) else { return };
     pb.sect = prev;
+    pb.page_format = prev.page_num_format;
+    ctx.fields.page_format = prev.page_num_format;
     pb.sect_idx = si - 1;
     let (ph, pf) = (hf.heads.set(si - 1), hf.feet.set(si - 1));
     let top = body_top_for(ctx, prev, ph.default);
@@ -279,6 +295,8 @@ fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<
     if filler && !mode.web {
         end_previous_section(ctx, pb, hf, sec.si, block);
         pb.sect = sec.sect;
+        pb.page_format = sec.page_format;
+        ctx.fields.page_format = sec.page_format;
         pb.sect_idx = sec.si;
     }
     if restart.is_some() {
@@ -289,12 +307,14 @@ fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<
 }
 
 /// Continuous: new column layout below the current text (its tallest column).
-fn continue_page(pb: &mut PageBuilder, sect: &SectionProps) {
+fn continue_page(pb: &mut PageBuilder, sect: &SectionProps, block: usize) {
+    pb.close_column_lines();
     pb.cols = sect.column_boxes();
     pb.col = 0;
     pb.top = pb.text_bottom();
     pb.y = pb.top;
     pb.max_y = pb.top;
+    pb.open_column_lines(block);
 }
 
 /// Whether the section's last page balances its columns (see [`balance_columns`]), and set what
@@ -303,7 +323,13 @@ fn continue_page(pb: &mut PageBuilder, sect: &SectionProps) {
 /// again from the start of the block that reaches it, with shorter columns.
 fn prepare_section_end(pb: &mut PageBuilder, sections: &[(usize, &SectionProps)], (si, web): (usize, bool)) -> bool {
     let next = sections.get(si + 1).map(|(_, s)| s.start);
-    let balance = !web && pb.cols.len() > 1 && pb.sect.valign == wordcraft_doc::section::PageVAlign::Top && next == Some(SectionStart::Continuous);
+    // An ODF section may ask for balanced columns at the end of the document too, or for none.
+    let follows = match pb.sect.balance_columns {
+        None => next == Some(SectionStart::Continuous),
+        Some(true) => next.is_none() || next == Some(SectionStart::Continuous),
+        Some(false) => false,
+    };
+    let balance = !web && pb.cols.len() > 1 && pb.sect.valign == wordcraft_doc::section::PageVAlign::Top && follows;
     pb.col_break_page = None;
     pb.next_starts_page = !web && next.is_some_and(|s| s != SectionStart::Continuous);
     balance
@@ -362,6 +388,7 @@ fn section_endnotes(ctx: &mut Ctx, pb: &mut PageBuilder, endnotes: &mut VecDeque
 /// the turned pages of vertical sections.
 fn finish_pages(pb: PageBuilder, doc: &Document, sections: &[(usize, &SectionProps)], web: bool) -> Vec<Page> {
     let mut pb = pb;
+    pb.close_column_lines();
     pb.apply_valign();
     pb.flush_notes();
     let last_block = doc.body.len().saturating_sub(1);
@@ -481,7 +508,7 @@ pub(crate) fn layout_pass(
     let first_sect = sections.first().map_or(&default_sect, |(_, s)| *s);
     let web_sect = mode.reflow.then(|| reflow_sect(first_sect, opts));
     let sect_ref = web_sect.as_ref().unwrap_or(first_sect);
-    let mut pb = new_page_builder(sect_ref, early, mode.web, !may_rewrap && !mode.reflow);
+    let mut pb = new_page_builder(sect_ref, first_sect.page_num_format, early, mode.web, !may_rewrap && !mode.reflow);
     let mut endnotes = endnote_queue(&ctx);
     // Text boxes laid out in balancing attempts that were thrown away.
     let mut boxes_discarded = 0usize;
@@ -489,22 +516,30 @@ pub(crate) fn layout_pass(
     let turned = turned_sections(&mut ctx, sections, mode.web);
     let mut prev_turn = TextDirection::Horizontal;
     for (si, (end, sect)) in sections.iter().enumerate() {
+        let page_format = sect.page_num_format;
         let turn = if mode.reflow { TextDirection::Horizontal } else { sect.text_direction };
         let sect: &SectionProps = match turned.get(si) {
             Some(Some(t)) => t,
             _ if mode.reflow => sect_ref,
             _ => sect,
         };
+        ctx.fields.page_format = page_format;
         let tops = section_tops(&mut ctx, &hf, (si, sect), mode.reflow || turn.is_turned());
         let start = if si == 0 { SectionStart::NextPage } else { sect.start };
-        let sec = Sec { si, sect, start, tops };
+        let sec = Sec { si, sect, page_format, start, tops };
+        if !mode.web && !pb.pages.is_empty() && (start != SectionStart::Continuous || turn != prev_turn) {
+            // The page the section before ends on is finished with its own margins and footnote
+            // separators, before this section's replace them: the footnotes pending on it
+            // belong to the section whose page it is (#5289).
+            pb.finish_page();
+        }
         begin_section_state(&mut ctx, &mut pb, &sec, totals, mode.web);
         if mode.web && si > 0 {
             // one long page
         } else if pb.pages.is_empty() || start != SectionStart::Continuous || turn != prev_turn {
             start_section_page(&mut ctx, &mut pb, &hf, &sec, (mode, block));
         } else {
-            continue_page(&mut pb, sect);
+            continue_page(&mut pb, sect, block);
         }
         prev_turn = turn;
         pb.foot_top = sec.tops.foot;
@@ -556,6 +591,7 @@ struct Snap<'a> {
     eq_count: u32,
     page_field: u32,
     boxes: usize,
+    header_repeats: usize,
 }
 
 impl<'a> Snap<'a> {
@@ -573,6 +609,7 @@ impl<'a> Snap<'a> {
             eq_count: ctx.eq_count,
             page_field: ctx.fields.page,
             boxes: ctx.boxes.total(),
+            header_repeats: ctx.header_repeats,
         }
     }
 
@@ -595,6 +632,7 @@ impl<'a> Snap<'a> {
         ctx.counters = self.counters.clone();
         ctx.eq_count = self.eq_count;
         ctx.fields.page = self.page_field;
+        ctx.header_repeats = self.header_repeats;
     }
 }
 
