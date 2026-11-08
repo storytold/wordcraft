@@ -428,9 +428,11 @@ fn clearing_a_font_query_keeps_the_recent_heading_visible() {
     }
 }
 
-/// #5914: clicking on the font name or anywhere in the font combo opens the dropdown list with
-/// the other fonts (Recently Used Fonts and All Fonts), focuses the field, and selects all text
-/// so typing immediately replaces the font name to search for a font, like in Microsoft Word.
+/// #5914: clicking on the font name or dropdown arrow opens the dropdown list with the other fonts
+/// (Recently Used Fonts and All Fonts), focuses the field, and selects all text so typing immediately
+/// replaces the font name to search for a font, like in Microsoft Word. Also verifies that focus alone
+/// (such as on Tab navigation) does not open the 420px dropdown, subsequent clicks preserve cursor placement,
+/// and clicking the arrow button toggles the dropdown open and closed.
 #[test]
 fn clicking_the_font_name_or_box_shows_other_fonts_and_selects_all_to_type() {
     use egui::accesskit::Role;
@@ -459,6 +461,12 @@ fn clicking_the_font_name_or_box_shows_other_fonts_and_selects_all_to_type() {
     assert_eq!(h.get(By::new().role(Role::TextInput)).value().as_deref(), Some("Arial"));
     assert!(h.query_by_label("All Fonts").is_none());
 
+    // Focus without click (e.g. keyboard navigation via Tab) selects text but does not open popup
+    h.get(By::new().role(Role::TextInput)).focus();
+    h.run_steps(2);
+    assert!(h.get(By::new().role(Role::TextInput)).is_focused(), "field takes focus on Tab/focus");
+    assert!(h.query_by_label("All Fonts").is_none(), "focusing without click does not open the 420px dropdown");
+
     // Click on the font name field
     h.get(By::new().role(Role::TextInput)).click();
     h.run_steps(2);
@@ -484,6 +492,31 @@ fn clicking_the_font_name_or_box_shows_other_fonts_and_selects_all_to_type() {
 
     assert_eq!(picked.borrow().as_deref(), Some("Times New Roman"));
     assert!(h.query_by_label("All Fonts").is_none(), "dropdown closes after applying");
+
+    // Exercise arrow button: clicking the arrow button opens the dropdown, focuses the text edit,
+    // and selects all text so typing immediately replaces the font name.
+    let arrow_btn = h.get(By::new().role(Role::Button).label_contains("Font options"));
+    arrow_btn.click();
+    h.run_steps(2);
+
+    assert!(h.query_by_label("All Fonts").is_some(), "dropdown opens on arrow click");
+    assert!(h.get(By::new().role(Role::TextInput)).is_focused(), "text edit has focus after arrow click");
+
+    // Clicking the text field while already open preserves caret placement rather than re-selecting all text
+    h.get(By::new().role(Role::TextInput)).click();
+    h.run_steps(2);
+    assert!(h.query_by_label("All Fonts").is_some(), "dropdown remains open on click inside field");
+
+    // Typing inserts at the clicked cursor position rather than replacing all text
+    h.event(egui::Event::Text("!".into()));
+    h.run_steps(2);
+    assert_eq!(h.get(By::new().role(Role::TextInput)).value().as_deref(), Some("Times New !Roman"));
+
+    // Clicking the arrow button again toggles the dropdown closed
+    let arrow_btn = h.get(By::new().role(Role::Button).label_contains("Font options"));
+    arrow_btn.click();
+    h.run_steps(2);
+    assert!(h.query_by_label("All Fonts").is_none(), "dropdown closes on arrow click toggle");
 }
 
 /// The rows of a sectioned font list, and where the keyboard highlight lands among them.

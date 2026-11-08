@@ -278,6 +278,9 @@ struct ComboSearch {
 }
 
 /// Selects all characters in the text edit widget with `id`.
+///
+/// Requires that `text` matches the widget's current content, since only its character
+/// count (`text.chars().count()`) is used to define the character selection range `0..len`.
 fn select_all_text(ctx: &egui::Context, id: egui::Id, text: &str) {
     if let Some(mut state) = egui::TextEdit::load_state(ctx, id) {
         let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(text.chars().count()));
@@ -287,6 +290,11 @@ fn select_all_text(ctx: &egui::Context, id: egui::Id, text: &str) {
 }
 
 /// Squares the inner corners between the text edit field and the dropdown arrow button.
+///
+/// Zeroes the right corners (`ne`, `se`) in left-to-right layouts or the left corners
+/// (`nw`, `sw`) in right-to-left (`rtl`) layouts across all widget visual states
+/// (`noninteractive`, `inactive`, `hovered`, `active`, `open`) so the text box and arrow button
+/// appear as a unified single border control.
 fn square_inner_corners(ui: &mut Ui, rtl: bool) {
     let w = &mut ui.visuals_mut().widgets;
     for v in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
@@ -296,7 +304,11 @@ fn square_inner_corners(ui: &mut Ui, rtl: bool) {
     }
 }
 
-/// Consumes Up and Down arrow key events to step through the open combo list.
+/// Consumes Up and Down arrow key events to step through the combo list.
+///
+/// Only consumes key events when the combo list is `open` and the text edit field `has_focus`.
+/// Returns `+1` when ArrowDown was pressed, `-1` when ArrowUp was pressed, or `0` if neither
+/// was pressed or if the preconditions were not met.
 fn consume_arrow_steps(ui: &mut Ui, open: bool, has_focus: bool) -> i32 {
     let mut step = 0i32;
     if open && has_focus {
@@ -313,6 +325,22 @@ fn consume_arrow_steps(ui: &mut Ui, open: bool, has_focus: bool) -> i32 {
 }
 
 /// Handles open/close state transitions, focus, and text selection for searchable combos.
+///
+/// - `resp`: the text edit field's interaction response.
+/// - `aresp`: the dropdown arrow button's interaction response.
+/// - `te_id`: the text edit widget ID used to inspect and manipulate focus and selection.
+/// - `text`: the current text string in the edit field.
+/// - `reveal`: set to `true` when opening or changing search query to scroll the list/highlight into view.
+///
+/// Clicking the text box (`resp.clicked()`) when the dropdown is closed sets `s.open = true`,
+/// `s.typed = false`, `s.moved = false`, `*reveal = true`, and selects all text with [`select_all_text`].
+/// Clicking while already open preserves caret positioning for partial edits without re-selecting all text.
+/// Gaining focus alone (`resp.gained_focus()` without click, such as on Tab navigation) selects all text
+/// for typing without opening the 420px dropdown popup.
+/// Clicking the dropdown arrow (`aresp.clicked()`) toggles `s.open`; when opening, it requests focus on `te_id`,
+/// resets `typed` and `moved`, sets `*reveal = true`, and selects all text.
+/// Changing the text (`resp.changed()`) opens the dropdown with `s.typed = true`, resets `s.highlight = 0`,
+/// clears `s.moved`, and sets `*reveal = true`.
 fn handle_search_interactions(
     ui: &mut Ui,
     s: &mut ComboSearch,
@@ -323,11 +351,15 @@ fn handle_search_interactions(
     reveal: &mut bool,
 ) {
     let was_open = s.open;
-    if !was_open && (resp.clicked() || resp.gained_focus()) {
-        s.open = true;
-        s.typed = false;
-        s.moved = false;
-        *reveal = true;
+    if resp.clicked() {
+        if !was_open {
+            s.open = true;
+            s.typed = false;
+            s.moved = false;
+            *reveal = true;
+            select_all_text(ui.ctx(), te_id, text);
+        }
+    } else if resp.gained_focus() {
         select_all_text(ui.ctx(), te_id, text);
     } else if aresp.clicked() {
         if was_open {
@@ -350,6 +382,17 @@ fn handle_search_interactions(
 }
 
 /// Refreshes the filtered list matches and updates keyboard navigation position.
+///
+/// Operates in one of two modes:
+/// - When `s.typed` is `false` (the combo is opened without active typing), resets `s.matches` to
+///   the full list of `items` in original order, clears `s.query`, and if `s.moved` is `false`,
+///   initializes `s.highlight` to the position of `current` in `recent_shown` or in `items`
+///   (offset by `recent_shown.len()`).
+/// - When `s.typed` is `true`, filters `items` matching `text` using [`font_matches`] and stores the
+///   active `text` in `s.query`.
+///
+/// Finally, adjusts `s.highlight` by `step` (+1 for Down, -1 for Up), marks `s.moved = true` when
+/// `step != 0`, and clamps `s.highlight` to the valid range across `recent_shown` and `s.matches`.
 fn update_search_matches(s: &mut ComboSearch, text: &str, items: &[String], recent_shown: &[String], current: &str, step: i32) {
     if !s.typed {
         if !s.query.is_empty() || s.matches.len() != items.len() || s.items_len != items.len() {
@@ -380,6 +423,11 @@ fn update_search_matches(s: &mut ComboSearch, text: &str, items: &[String], rece
 }
 
 /// Returns the font name at the current highlight index in the combined recent and matched lists.
+///
+/// Falls back to returning `text` if the highlight index is out of bounds or resolves to no item.
+/// When the text edit box has been cleared (`text.trim().is_empty()`) and the user has not explicitly
+/// moved the highlight via arrow keys (`!s.moved`), `text` is returned as-is so a cleared box is not
+/// unintentionally replaced with the first font.
 fn pick_highlighted_font(s: &ComboSearch, text: &str, items: &[String], recent_shown: &[String]) -> String {
     let picked = recent_shown
         .get(s.highlight)
@@ -512,8 +560,9 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
                 }
                 picked
             };
-            if let Some(v) = menu.show_rows_with_header(|_| (), row_h, |()| total, list) {
-                out = v;
+            let picked = menu.show_rows_with_header(|_| (), row_h, |()| total, list).flatten();
+            if let Some(v) = picked {
+                out = Some(v);
             }
         }
         ui.data_mut(|d| {
