@@ -462,15 +462,22 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
                     attach(&mut stack, &mut root, el);
                 }
             }
+            // Line ends are normalised as XML 1.0 says (§2.11): CR LF and a lone CR are read as
+            // LF, so a file saved with Windows line ends has no CR in its text. A CR written as
+            // `&#13;` is a character reference and stays.
             Event::Text(t) => {
                 if let Some(top) = stack.last_mut() {
-                    let s = t.decode().map_err(|e| DocxError::Xml(e.to_string()))?;
+                    let s = t.xml_content(XmlVersion::Explicit1_0).map_err(|e| DocxError::Xml(e.to_string()))?;
                     push_text(top, &s);
                 }
             }
             Event::CData(t) => {
                 if let Some(top) = stack.last_mut() {
-                    let s = String::from_utf8_lossy(&t).into_owned();
+                    // CDATA that isn't UTF-8 is decoded lossily, with its line ends normalised the same way.
+                    let s = t
+                        .xml_content(XmlVersion::Explicit1_0)
+                        .map(|s| s.into_owned())
+                        .unwrap_or_else(|_| String::from_utf8_lossy(&t).replace("\r\n", "\n").replace('\r', "\n"));
                     push_text(top, &s);
                 }
             }
@@ -722,6 +729,28 @@ mod tests {
         let t = p.child("w:t").unwrap();
         assert_eq!(t.text(), " hi A< ");
         assert_eq!(t.attr("xml:space"), Some("preserve"));
+    }
+
+    /// CDATA that isn't UTF-8 is decoded lossily, and its line ends are still normalised.
+    #[test]
+    fn line_ends_in_cdata_that_isnt_utf8_are_normalised() {
+        let x =
+            b"<x:document xmlns:x=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><x:t><![CDATA[a\xff\r\nb\rc]]></x:t></x:document>";
+        assert_eq!(parse(x).unwrap().child("w:t").unwrap().text(), "a\u{FFFD}\nb\nc");
+    }
+
+    /// XML 1.0 §2.11: CR LF and a lone CR in text and CDATA are read as LF; `&#13;` stays a CR.
+    #[test]
+    fn line_ends_in_text_are_normalised_but_a_cr_reference_stays() {
+        let x = b"<x:document xmlns:x=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><x:t>a\r\nb\rc&#13;d<![CDATA[e\r\nf]]></x:t></x:document>";
+        let e = parse(x).unwrap();
+        assert_eq!(e.child("w:t").unwrap().text(), "a\nb\nc\rde\nf");
+        // The writer escapes a CR, so a CR in the text survives a save.
+        let x = format!(
+            "<x:document xmlns:x=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><x:t>{}</x:t></x:document>",
+            esc("a\r\nb\rc")
+        );
+        assert_eq!(parse(x.as_bytes()).unwrap().child("w:t").unwrap().text(), "a\r\nb\rc");
     }
 
     #[test]

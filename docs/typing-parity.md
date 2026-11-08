@@ -584,11 +584,21 @@ command is one Undo step and still obeys editing protection and the 1–1638 pt
 limits. Original-fixture engine and Linux CLI/headless UI save/reopen checks cover
 this correction; native Windows interaction and Microsoft Word remain untested.
 
+## Empty paragraph removal
+
+Deleting a paragraph mark whose preceding paragraph was already empty preserves the
+following paragraph's paragraph properties and mark formatting. Existing inline runs
+remain intact. Delete, Backspace and selected marks share the model operation; joining
+two originally non-empty paragraphs retains the first paragraph's properties. Synthetic
+regressions cover body, header and cell containers, sections, outline/TOC membership,
+DOCX and Undo/Redo (Leaf #152). No new Word or native UI comparison was run.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-04 | trivial | Ctrl+K on a selection: a changed Text to display replaces the selected text before it is linked |
+| 2026-11-07 | trivial | Removing an already-empty paragraph preserves the following paragraph properties, mark and inline formatting. Delete, Backspace, selected marks, outline/TOC, DOCX and Undo/Redo have synthetic coverage (Leaf #152); no new Word or native acceptance run. |
 | 2026-10-30 | trivial | Equations: `\int` + Space waits for its limits; `_x^y` then Space builds them, Space alone builds the operator without, typing goes into its operand, and Enter or an arrow key builds it without going into the operand (#4917). Review: any character that can't continue `\name` corrects it (`\int_0^1`, `\alpha+`), and `∫∫` takes the operand into the inner operator; the Word rows are now observed in Word for Windows on #4938, Enter, arrows and `∫∫` are not |
 | 2026-11-06 | trivial | Track Changes: resolving away an empty paragraph with a section break removes it whole; the next paragraph keeps its style (#5667) |
 | 2026-11-03 | trivial | Alt+numpad codes type their character in text boxes too (Find what, dialog fields), not the digits or nothing (#4403) |
