@@ -985,6 +985,145 @@ fn opened_paper(app: &mut WordApp) -> ((f32, f32), Option<&'static str>) {
     ((paper.0 * ppu, paper.1 * ppu), paper_entry(paper))
 }
 
+/// #5650: a long paste scrolls inside Page Setup's number boxes instead of enlarging the
+/// dialog, including after leaving the field and reopening the dialog.
+#[test]
+fn page_setup_number_fields_do_not_expand_after_paste() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    for label in ["Bottom:", "Top:", "Left:", "Right:", "Width:", "Height:", "Characters per line:", "Lines per page:"] {
+        let mut h = app_harness(app_with("Page"));
+        h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+        if let Some(Dialog::PageSetup { grid, .. }) = h.state_mut().dialog.as_mut() {
+            grid.0 = 2; // Enable both document-grid number boxes.
+        }
+        h.run_steps(3);
+        let width =
+            |h: &egui_kittest::Harness<'_, WordApp>| h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Page Setup")))).unwrap().width();
+        let before = width(&h);
+        h.get_by_role_and_label(Role::SpinButton, label).click();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Paste("a".repeat(400)));
+        h.run_steps(3);
+        assert!(width(&h) <= before + 2.0, "{label}: pasted text grew the dialog from {before} to {}", width(&h));
+        h.key_press(egui::Key::Tab);
+        h.run_steps(3);
+        assert!(width(&h) <= before + 2.0, "{label}: leaving the field kept a larger dialog");
+        h.get_by_role_and_label(Role::Button, "Cancel").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+        h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+        h.run_steps(3);
+        assert!(width(&h) <= before + 2.0, "{label}: reopening kept a larger dialog");
+    }
+}
+
+/// A finite value can outgrow DragValue's unfocused button even when its editor clips.
+#[test]
+fn page_setup_large_numeric_margins_do_not_expand_after_leaving_field() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    for label in ["Bottom:", "Top:", "Left:", "Right:"] {
+        let mut h = app_harness(app_with("Page"));
+        h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+        h.run_steps(3);
+        let width =
+            |h: &egui_kittest::Harness<'_, WordApp>| h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Page Setup")))).unwrap().width();
+        let before = width(&h);
+        h.get_by_role_and_label(Role::SpinButton, label).click();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Paste(format!("1{}", "0".repeat(36))));
+        h.run_steps(3);
+        let Some(Dialog::PageSetup { top, bottom, left, right, .. }) = h.state().dialog.as_ref() else { panic!("no page setup dialog") };
+        let value = match label {
+            "Bottom:" => *bottom,
+            "Top:" => *top,
+            "Left:" => *left,
+            _ => *right,
+        };
+        assert!(value.is_finite() && value > 1e35, "{label}: the large finite paste was accepted: {value}");
+        assert!(width(&h) <= before + 2.0, "{label}: editing grew the dialog from {before} to {}", width(&h));
+        h.key_press(egui::Key::Tab);
+        h.run_steps(3);
+        let Some(Dialog::PageSetup { top, bottom, left, right, .. }) = h.state().dialog.as_ref() else { panic!("no page setup dialog") };
+        let after = match label {
+            "Bottom:" => *bottom,
+            "Top:" => *top,
+            "Left:" => *left,
+            _ => *right,
+        };
+        assert_eq!(after, value, "{label}: leaving the field keeps the accepted value");
+        assert!(width(&h) <= before + 2.0, "{label}: leaving the large numeric field grew the dialog from {before} to {}", width(&h));
+        h.get_by_role_and_label(Role::Button, "Cancel").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+    }
+}
+
+/// A clipped wide number in a mirrored form can still be clicked where it is visible.
+#[test]
+fn page_setup_rtl_large_margin_can_be_edited_again_after_blur() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut app = app_with("Page");
+    app.run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+    let ar = crate::i18n::fixture_lang("ar", "\tMargins\tMargins\n");
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            // Draw the actual dialog in a fixture language even without embedded catalogs.
+            crate::i18n::set_current(ar);
+            crate::rtl::sync(&ctx);
+            assert!(crate::rtl::on() && ctx.global_style().right_to_left);
+            show(app, &ctx);
+            crate::i18n::set_current(crate::i18n::Lang::EN);
+        },
+        app,
+    );
+    h.run_steps(4);
+    let initial = h.get_by_role_and_label(Role::SpinButton, "Bottom:").rect();
+    assert!(h.get_by_role_and_label(Role::SpinButton, "Top:").rect().center().x > initial.center().x, "the form is mirrored");
+    let window = |h: &egui_kittest::Harness<'_, WordApp>| h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Page Setup")))).unwrap();
+    let before = window(&h).width();
+    h.get_by_role_and_label(Role::SpinButton, "Bottom:").click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Paste(format!("1{}", "0".repeat(36))));
+    h.run_steps(3);
+    let value = match h.state().dialog.as_ref() {
+        Some(Dialog::PageSetup { bottom, .. }) => *bottom,
+        _ => panic!("no page setup dialog"),
+    };
+    assert!(value.is_finite() && value > 1e35);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert!(matches!(h.state().dialog.as_ref(), Some(Dialog::PageSetup { bottom, .. }) if *bottom == value));
+    let field = h.get_by_role_and_label(Role::SpinButton, "Bottom:");
+    assert!(!field.is_focused());
+    let wide = field.rect();
+    let visible = wide.intersect(initial).intersect(window(&h));
+    assert!(wide.width() > 80.0 && visible.is_positive() && !visible.contains(wide.center()));
+    assert!(window(&h).width() <= before + 2.0);
+    // The AccessKit bounds include clipped text: click the visible part, not their centre.
+    let pos = visible.center();
+    h.event(egui::Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    h.run_steps(3);
+    assert!(h.get_by_role_and_label(Role::SpinButton, "Bottom:").is_focused(), "the visible field enters editing");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Paste("2.5".into()));
+    h.run_steps(3);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert!(matches!(h.state().dialog.as_ref(), Some(Dialog::PageSetup { bottom, .. }) if *bottom == 2.5), "the field accepts a normal value again");
+    assert!(window(&h).width() <= before + 2.0);
+}
+
 /// #1433: Page Setup's Paper size shows the named size the section has, in either
 /// orientation, and Custom size (None) for anything else.
 #[test]
