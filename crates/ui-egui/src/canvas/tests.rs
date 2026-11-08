@@ -4960,10 +4960,10 @@ fn screen_paper_color_changes_raster_and_cache_without_changing_export_paper() {
     let layout = app.session.layout();
     let page = &layout.pages[0];
     let print_before = wordcraft_render::render_page(&app.session.doc, page, 0.1, &Default::default());
-    let mut keys = vec![view_key(&app, false, None)];
+    let mut keys = vec![view_key(&app, false, None, true)];
     for (value, expected) in [("green", Rgb(0xCC, 0xE8, 0xCF)), ("cream", Rgb(0xFA, 0xF0, 0xDC)), ("gray", Rgb(0xE8, 0xEA, 0xED))] {
         app.run("view.paperColor", json!({"value":value})).unwrap();
-        let key = view_key(&app, false, None);
+        let key = view_key(&app, false, None, true);
         assert!(!keys.contains(&key), "each preset invalidates page and tile caches");
         keys.push(key);
         let opts = page_render_options(&app, false);
