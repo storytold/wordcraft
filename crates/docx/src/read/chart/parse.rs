@@ -109,10 +109,10 @@ impl Chart {
         self.point(j, i).and_then(|p| p.line).unwrap_or_else(|| self.auto_point_colour(j, i))
     }
 
-    /// Colour of the marker of point `i` of series `j`: its `c:dPt` marker colour, else as
-    /// [`Self::point_colour`].
+    /// Colour of the marker of point `i` of series `j`: its `c:dPt` marker colour, else the
+    /// varied accent or the series colour. A point's fill doesn't colour a marker (Word).
     pub(super) fn marker_colour(&self, j: usize, i: usize) -> Rgb {
-        self.point(j, i).and_then(|p| p.marker).unwrap_or_else(|| self.point_colour(j, i))
+        self.point(j, i).and_then(|p| p.marker).unwrap_or_else(|| self.auto_point_colour(j, i))
     }
 
     /// Whether series `j`'s line is drawn a segment at a time: the chart varies colours by point,
@@ -122,11 +122,17 @@ impl Chart {
         !self.radar_fill && (self.vary || self.series.get(j).is_some_and(|s| s.points.iter().any(|p| p.line.is_some())))
     }
 
-    /// Colour of point `i`'s legend key: whichever of its own fill, marker or line colour it
-    /// has (bars and slices have a fill; Word saves line, scatter and radar points with a marker
-    /// and line colour), else the varied accent or the series colour.
+    /// Colour of point `i`'s legend key: the colour of what the point is drawn with, else the
+    /// varied accent or the series colour. For a bar or slice that's its fill (Word outlines
+    /// the key in a point's line colour but fills it as the bar); for a line, scatter or radar
+    /// point, its marker or else its line colour (Word draws the key's marker and line in them,
+    /// and ignores a fill).
     fn key_colour(&self, j: usize, i: usize) -> Rgb {
-        self.point(j, i).and_then(|p| p.fill.or(p.marker).or(p.line)).unwrap_or_else(|| self.auto_point_colour(j, i))
+        let own = self.point(j, i).and_then(|p| match self.kind {
+            Kind::Line | Kind::Scatter | Kind::Radar => p.marker.or(p.line),
+            Kind::Bar | Kind::Area | Kind::Pie | Kind::Doughnut => p.fill,
+        });
+        own.unwrap_or_else(|| self.auto_point_colour(j, i))
     }
 
     /// The `c:dPt` colours read for point `i` of series `j` (each `None` that the file doesn't

@@ -762,3 +762,50 @@ fn the_legend_of_a_varied_chart_lists_the_categories() {
     assert_eq!(swatch_colours(&items), [accent(0), accent(1), accent(2)]);
     assert!(!texts(&items).contains(&"Sales"), "{:?}", texts(&items));
 }
+
+// Each part of a `c:dPt` alone (#5980 review; Word's PDFs): a bar's or slice's legend key takes
+// only the point's fill (with only an outline, Word fills the key in the automatic colour and
+// outlines it), and a fill colours neither a line, scatter or radar marker nor its key (Word
+// colours their keys from the point's line and marker).
+
+/// A `c:dPt` for point 1 with only `part` in red: `c:spPr` content.
+fn dpt_part(part: &str) -> String {
+    let solid = r#"<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>"#;
+    let part = if part == "ln" { format!(r#"<a:ln w="28575">{solid}</a:ln>"#) } else { solid.to_string() };
+    format!(r#"<c:dPt><c:idx val="1"/><c:spPr>{part}</c:spPr></c:dPt>"#)
+}
+
+#[test]
+fn an_outline_alone_leaves_a_bar_or_slice_key_in_its_automatic_colour() {
+    let vary = r#"<c:varyColors val="1"/>"#;
+    let one = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &dpt_part("ln"));
+    for plot in [column_chart(vary, std::slice::from_ref(&one)), format!(r#"<c:pieChart>{vary}{one}</c:pieChart>"#)] {
+        let items = with_legend(&plot, "r", 300.0, 200.0);
+        assert_eq!(swatch_colours(&items), [accent(0), accent(1), accent(2)], "{plot}");
+        assert!(!filled(&items).iter().any(|f| f.0 == RED), "{plot}");
+    }
+    // A fill colours both.
+    let one = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &dpt_part("fill"));
+    let items = with_legend(&column_chart(vary, &[one]), "r", 300.0, 200.0);
+    assert_eq!(swatch_colours(&items), [accent(0), RED, accent(2)]);
+}
+
+#[test]
+fn a_fill_alone_colours_no_line_scatter_or_radar_marker_or_key() {
+    let vary = r#"<c:varyColors val="1"/>"#;
+    let fill = dpt_part("fill");
+    let marks = scatter(vary, true).replacen("<c:xVal>", &format!("{fill}<c:xVal>"), 1);
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &fill);
+    let radar = format!(r#"<c:radarChart><c:radarStyle val="marker"/>{vary}{s}</c:radarChart><c:valAx/>"#);
+    for plot in [&marks, &radar] {
+        let items = with_legend(plot, "r", 300.0, 220.0);
+        assert_eq!(marker_colours(&items), [accent(0), accent(1), accent(2)], "{plot}");
+        assert_eq!(swatch_colours(&items), [accent(0), accent(1), accent(2)], "{plot}");
+    }
+    let items = with_legend(&line_chart(vary, &s), "r", 300.0, 200.0);
+    assert_eq!(swatch_colours(&items), [accent(0), accent(1), accent(2)]);
+    // A line colour alone colours the key (Word draws the key's line in it).
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &dpt_part("ln"));
+    let items = with_legend(&line_chart(vary, &s), "r", 300.0, 200.0);
+    assert_eq!(swatch_colours(&items), [accent(0), RED, accent(2)]);
+}
