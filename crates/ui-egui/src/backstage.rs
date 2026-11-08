@@ -713,6 +713,11 @@ pub(crate) fn save_as_error_id() -> egui::Id {
     egui::Id::unique("backstage_save_as_error")
 }
 
+/// The Info page's cached `file.info` report, keyed by the document's revision and password.
+fn info_id() -> egui::Id {
+    egui::Id::unique("backstage_info")
+}
+
 /// Drop the Save As page's error once File is closed or a later save succeeds, so it doesn't
 /// come back next time.
 pub(crate) fn forget_save_as_error(ctx: &egui::Context) {
@@ -772,7 +777,18 @@ fn save_as_page(app: &mut WordApp, ui: &mut Ui) {
 
 fn info_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, "Info");
-    let info = app.session.run("file.info", &json!({})).unwrap_or_default();
+    // The report is read when the document changes, not every frame: `file.info` walks the
+    // document for hidden text, which a frame has no business repeating while nothing changed.
+    // The key keeps the password state, which `file.encrypt` changes without a document edit.
+    let key = (app.session.rev(), app.session.password.is_some());
+    let info = ui.ctx().data_mut(|d| match d.get_temp::<(u64, bool, serde_json::Value)>(info_id()) {
+        Some((rev, encrypted, v)) if (rev, encrypted) == key => v,
+        _ => {
+            let v = app.session.run("file.info", &json!({})).unwrap_or_default();
+            d.insert_temp(info_id(), (key.0, key.1, v.clone()));
+            v
+        }
+    });
     // Properties at the reading start, so at the right in a mirrored interface, Statistics after.
     let (first, second) = if crate::rtl::on() { (1, 0) } else { (0, 1) };
     ui.columns(2, |cols| {

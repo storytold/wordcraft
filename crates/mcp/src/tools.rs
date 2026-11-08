@@ -336,9 +336,6 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
         "get_text" => wrap(exec(b, "document.text", json!({}), doc)),
         "inspect_document" => match a.get("remove") {
             // With `remove`, the Document Inspector's cleanup (file.inspect) instead of the read.
-            // Through `engine.execute` (both backends address `doc` there): the desktop control
-            // handler runs a direct `file.inspect` on the active document, so a cleanup addressed
-            // to a background document would clean the wrong one and report success.
             // A present value that isn't an array is refused, not read as absent: a caller that
             // sent one meant to clean the document, and a successful read would say otherwise.
             // The items are checked against the categories the inspector removes: an unknown one
@@ -346,7 +343,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
             // though the content stays.
             Some(Value::Array(remove)) if !remove.is_empty() => {
                 if remove.iter().all(|c| REMOVE_CATEGORIES.contains(&c.as_str().unwrap_or(""))) {
-                    wrap(exec(b, "file.inspect", json!({"remove": remove}), doc))
+                    wrap(b.call("file.inspect", addressed(json!({"remove": remove}), doc)))
                 } else {
                     ToolResult::error("`remove` items must be \"comments\", \"revisions\", \"properties\", \"hidden\" or \"headers\"")
                 }
@@ -460,11 +457,10 @@ mod tests {
         let r = call_tool(&mut b, "inspect_document", &json!({"remove": ["hidden"], "doc": 3}));
         assert!(!r.is_error, "inspect_document failed: {:?}", r);
         let (method, call) = b.seen.take().expect("the backend was called");
-        // Through `engine.execute`, so both backends address `doc`: a direct `file.inspect`
-        // runs on the active document on the desktop control handler.
-        assert_eq!(method, "engine.execute");
-        assert_eq!(call["command"], json!("file.inspect"));
-        assert_eq!(call["params"]["remove"], json!(["hidden"]));
+        // A direct `file.inspect`, addressed: both backends list it among the doc methods, so a
+        // cleanup addressed to a background document cleans that one.
+        assert_eq!(method, "file.inspect");
+        assert_eq!(call["remove"], json!(["hidden"]));
         assert_eq!(call["doc"], json!(3));
     }
 

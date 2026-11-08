@@ -235,3 +235,26 @@ pub(super) fn strip_headers(doc: &mut wordcraft_doc::Document, ids: &[u32]) -> b
     }
     any
 }
+
+/// Remove Header / Remove Footer: every section's headers (or footers) — the last section and
+/// each paragraph-section break, via [`strip_headers`] — with the parts they referenced, which
+/// stay in `Document::parts` otherwise and kept the inspector's count after a removal said
+/// "Removed.". The selection is clamped when the parts go: the caret can be in the story this
+/// removes (Remove Footer while editing that footer).
+pub(super) fn remove_hf(s: &mut Session, header: bool) {
+    fn slots(set: &wordcraft_doc::section::HeaderSet) -> [&Option<u32>; 3] {
+        [&set.default, &set.first, &set.even]
+    }
+    let mut ids: Vec<u32> = Vec::new();
+    let last = if header { &s.doc.last_section.headers } else { &s.doc.last_section.footers };
+    ids.extend(slots(last).into_iter().flatten().copied());
+    for path in s.doc.para_paths(StoryRef::Body) {
+        let Some(sec) = s.doc.para(StoryRef::Body, &path).and_then(|p| p.section.as_deref()) else { continue };
+        let set = if header { &sec.headers } else { &sec.footers };
+        ids.extend(slots(set).into_iter().flatten().copied());
+    }
+    if strip_headers(&mut s.doc, &ids) {
+        s.touch();
+        s.clamp_selection();
+    }
+}

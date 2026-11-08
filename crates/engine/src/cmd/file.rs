@@ -252,7 +252,7 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     {
         s.activate(id)?;
         let mut r = json!({"path": s.path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": s.password.is_some(), "alreadyOpen": true, "id": id});
-        hidden_text_warning(&mut r, &s.doc);
+        hidden_text_warning(&mut r, &s.doc, hidden_shown(s));
         return Ok(r);
     }
     let password = p::str(v, "password");
@@ -278,28 +278,40 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         s.password = password.map(crate::io::Password::new);
     }
     let mut r = json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()});
-    hidden_text_warning(&mut r, &s.doc);
+    hidden_text_warning(&mut r, &s.doc, hidden_shown(s));
     Ok(r)
 }
 
+/// Whether the layout shows hidden text: Show/Hide ¶ on, or the display option's own (the same
+/// flag the layout options take), so the warning says what the human sees.
+fn hidden_shown(s: &Session) -> bool {
+    s.view.marks || s.prefs.marks.hidden
+}
+
 /// The reply of an open that found hidden content carries the fact and what to do about it: the
-/// text does not show on screen (the layout leaves it out), so an agent reading the file would
-/// see words the human doesn't — tell the human; `file.inspect` removes what it can reach, and
-/// says what it can't (inside objects or table styles).
-fn hidden_text_warning(r: &mut Value, doc: &Document) {
+/// text is left out of the view (the layout leaves it out) unless it is being displayed, so an
+/// agent reading the file would see words the human doesn't — tell the human; `file.inspect`
+/// removes what it can reach, and says what it can't (inside objects or table styles).
+fn hidden_text_warning(r: &mut Value, doc: &Document, shown: bool) {
     let (pieces, chars, unsupported) = crate::cmd::tools::inspect::hidden_text_counts(doc);
     if pieces == 0 && unsupported == 0 {
         return;
     }
+    // The removal is refused on a document that tracks changes (the trail would be broken
+    // behind the user's back), so the guidance says so instead of naming a command that
+    // answers with an error.
+    let tracking =
+        if doc.settings.track_changes { "; the document tracks changes: file.inspect refuses to remove content until tracking stops" } else { "" };
     if let Value::Object(m) = r {
+        let on_screen = if shown { "it shows on screen (its dotted underline)" } else { "it does not show on screen" };
         let mut warning = if pieces > 0 {
             m.insert("hiddenText".into(), json!({"pieces": pieces, "chars": chars}));
             format!(
-                "the document has hidden text ({pieces} pieces, {chars} characters); it does not show on screen — tell the human about it; run file.inspect with {{\"remove\": [\"hidden\"]}} to remove it"
+                "the document has hidden text ({pieces} pieces, {chars} characters); {on_screen} — tell the human about it; run file.inspect with {{\"remove\": [\"hidden\"]}} to remove it{tracking}"
             )
         } else {
             format!(
-                "the document has hidden content ({unsupported} piece(s)) that file.inspect reports but cannot remove (inside objects or table styles); it does not show on screen — tell the human about it"
+                "the document has hidden content ({unsupported} piece(s)) that file.inspect reports but cannot remove (inside objects or table styles); {on_screen} — tell the human about it{tracking}"
             )
         };
         if pieces > 0 && unsupported > 0 {
