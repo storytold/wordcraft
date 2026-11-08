@@ -212,6 +212,30 @@ mod tests {
         assert!(!read(0).0);
     }
 
+    /// A package whose body is `body`, with the document relationships `rels` (id, type, target)
+    /// and the parts `(name, bytes)` they name.
+    fn package_parts(body: &str, rels: &[(&str, &str, &str)], parts: &[(&str, &[u8])]) -> Vec<u8> {
+        let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main""#;
+        let rels_xml =
+            |inner: &str| format!(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{inner}</Relationships>"#);
+        let rel = |(id, ty, target): &(&str, &str, &str)| {
+            format!(r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{ty}" Target="{target}"/>"#)
+        };
+        let names: String = rels.iter().map(rel).collect::<Vec<_>>().join("");
+        let mut files: Vec<(&str, Vec<u8>)> = vec![
+            ("_rels/.rels", rels_xml(&rel(&("rId1", "officeDocument", "word/document.xml"))).into_bytes()),
+            ("word/document.xml", format!(r#"<w:document {ns}><w:body>{body}</w:body></w:document>"#).into_bytes()),
+            ("word/_rels/document.xml.rels", rels_xml(&names).into_bytes()),
+        ];
+        files.extend(parts.iter().map(|(name, bytes)| (*name, bytes.to_vec())));
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, bytes) in files {
+            zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            zw.write_all(&bytes).unwrap();
+        }
+        zw.finish().unwrap().into_inner()
+    }
+
     /// Whether the body holds a paragraph with `s`.
     fn has(d: &Document, s: &str) -> bool {
         d.body.iter().any(|b| b.as_para().map(|p| p.text.contains(s)).unwrap_or(false))
@@ -231,7 +255,7 @@ mod tests {
         let outer = package(r#"<w:altChunk r:id="rIdC"/>"#, ("rIdC", "aFChunk", "afchunk.docx"), ("word/afchunk.docx", &inner));
         let pkg = Package::open(&outer).unwrap();
         let read = |elements| {
-            let (d, .., elements) = super::super::read_opened_in(&pkg, ChunkState { elements, ..ChunkState::new(None) }).unwrap();
+            let (d, ..) = super::super::read_opened_in(&pkg, ChunkState { elements, ..ChunkState::new(None) }).unwrap();
             (has(&d, "inner"), has(&d, "innermost"))
         };
         // With room, both levels flow in.
@@ -254,7 +278,7 @@ mod tests {
         let without = package(body, ("rIdZ", "chart", "charts/z.xml"), ("word/charts/z.xml", b"<a/>"));
         let read = |outer: &[u8]| {
             let pkg = Package::open(outer).unwrap();
-            let (d, .., elements) = super::super::read_opened_in(&pkg, ChunkState { elements: 10, ..ChunkState::new(None) }).unwrap();
+            let (d, ..) = super::super::read_opened_in(&pkg, ChunkState { elements: 10, ..ChunkState::new(None) }).unwrap();
             (has(&d, "inner"), pkg.elements_left())
         };
         let (inner_in, charged) = read(&with);
@@ -284,5 +308,33 @@ mod tests {
         let pkg = Package::open(&shallow).unwrap();
         let (.., shallow_elements) = super::super::read_opened_in(&pkg, ChunkState::new(None)).unwrap();
         assert!(elements < shallow_elements, "every level's reservation is charged: {elements} of {shallow_elements}");
+    }
+
+    #[test]
+    fn a_charged_budget_bounds_the_containers_part_and_the_sibling_after_it() {
+        // The container's budget pays for the parts it parses (the section's header, read
+        // during the chunk's own walk) and for the chunks after the first one: with a budget
+        // that fits the grandchild chunk and the header but not the sibling document's XML,
+        // the sibling is left out; skip the header's charge and it would flow in.
+        let hdr = r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>head</w:t></w:r></w:p><w:p><w:r><w:t>head</w:t></w:r></w:p><w:p><w:r><w:t>head</w:t></w:r></w:p></w:hdr>"#;
+        let gc = package(r#"<w:p><w:r><w:t>gc</w:t></w:r></w:p>"#, ("rIdZ", "chart", "charts/z.xml"), ("word/charts/z.xml", b"<a/>"));
+        let sibling =
+            package(&r#"<w:p><w:r><w:t>sibling</w:t></w:r></w:p>"#.repeat(8), ("rIdZ", "chart", "charts/z.xml"), ("word/charts/z.xml", b"<a/>"));
+        let inner = package_parts(
+            r#"<w:p><w:r><w:t>mid</w:t></w:r></w:p><w:altChunk r:id="rIdD"/><w:p><w:pPr><w:sectPr><w:headerReference r:id="rIdH"/></w:sectPr></w:pPr></w:p><w:altChunk r:id="rIdS"/>"#,
+            &[("rIdD", "aFChunk", "afchunk.docx"), ("rIdH", "header", "header1.xml"), ("rIdS", "aFChunk", "afchunk2.docx")],
+            &[("word/afchunk.docx", &gc), ("word/header1.xml", hdr.as_bytes()), ("word/afchunk2.docx", &sibling)],
+        );
+        let outer = package(r#"<w:altChunk r:id="rIdC"/>"#, ("rIdC", "aFChunk", "afchunk.docx"), ("word/afchunk.docx", &inner));
+        let pkg = Package::open(&outer).unwrap();
+        let read = |elements| {
+            let (d, ..) = super::super::read_opened_in(&pkg, ChunkState { elements, ..ChunkState::new(None) }).unwrap();
+            (has(&d, "mid"), has(&d, "gc"), has(&d, "sibling"))
+        };
+        // With room, everything flows in.
+        assert_eq!(read(crate::xml::MAX_ELEMENTS_TOTAL), (true, true, true));
+        // The grandchild chunk and the header fit the file's budget; the sibling document's
+        // XML (8 paragraphs) doesn't, so it's left out instead of getting a fresh cap.
+        assert_eq!(read(60), (true, true, false));
     }
 }
