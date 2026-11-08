@@ -1,5 +1,4 @@
 //! WordCraft geometry and units.
-//!
 //! Layout works in **points** (1/72 inch, `f32`). File formats use other units: OOXML uses
 //! twentieths of a point (twips) for most lengths, half-points for font sizes, eighths of a point
 //! for borders and English Metric Units (EMU, 914 400 per inch) for drawings. The conversions live
@@ -25,26 +24,32 @@ pub const EMU_PER_PT: f32 = 12_700.0;
 pub const PT_PER_CM: f32 = 72.0 / 2.54;
 
 /// Twips → points.
+#[expect(clippy::cast_precision_loss, reason = "The f32 return type intentionally rounds i64 inputs to f32 precision.")]
 pub fn twips(v: i64) -> f32 {
     v as f32 / TWIPS_PER_PT
 }
 /// Points → twips (rounded).
+#[expect(clippy::cast_possible_truncation, reason = "The value is rounded first; Rust's float-to-integer cast saturates outside the i64 range.")]
 pub fn to_twips(pt: f32) -> i64 {
     finite(pt * TWIPS_PER_PT).round() as i64
 }
 /// EMU → points.
+#[expect(clippy::cast_precision_loss, reason = "The f32 return type intentionally rounds i64 inputs to f32 precision.")]
 pub fn emu(v: i64) -> f32 {
     v as f32 / EMU_PER_PT
 }
 /// Points → EMU (rounded).
+#[expect(clippy::cast_possible_truncation, reason = "The value is rounded first; Rust's float-to-integer cast saturates outside the i64 range.")]
 pub fn to_emu(pt: f32) -> i64 {
-    (finite(pt) as f64 * EMU_PER_PT as f64).round() as i64
+    (f64::from(finite(pt)) * f64::from(EMU_PER_PT)).round() as i64
 }
 /// Half-points (OOXML font sizes) → points.
+#[expect(clippy::cast_precision_loss, reason = "The f32 return type intentionally rounds i64 inputs to f32 precision.")]
 pub fn half_points(v: i64) -> f32 {
     v as f32 / 2.0
 }
 /// Points → half-points (rounded).
+#[expect(clippy::cast_possible_truncation, reason = "The value is rounded first; Rust's float-to-integer cast saturates outside the i64 range.")]
 pub fn to_half_points(pt: f32) -> i64 {
     (finite(pt) * 2.0).round() as i64
 }
@@ -123,8 +128,7 @@ pub fn parse_measure(s: &str, default: Unit) -> Option<f32> {
         "cm" => PT_PER_CM,
         "mm" => PT_PER_CM / 10.0,
         "pt" | "pts" | "point" | "points" => 1.0,
-        "pi" | "pc" | "pica" | "picas" => 12.0,
-        "li" | "line" | "lines" => 12.0,
+        "pi" | "pc" | "pica" | "picas" | "li" | "line" | "lines" => 12.0,
         "px" => 0.75,
         _ => return None,
     };
@@ -198,7 +202,7 @@ pub fn normalize_degrees(deg: f32) -> f32 {
 }
 
 /// How a drawing is turned about its centre: mirrored first (`flip_h` left to right, `flip_v` top
-/// to bottom), then rotated `deg` degrees clockwise (page space, y down), as DrawingML's `a:xfrm`
+/// to bottom), then rotated `deg` degrees clockwise (page space, y down), as `DrawingML`'s `a:xfrm`
 /// `flipH`, `flipV` and `rot` say (ECMA-376 §20.1.7.6).
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Spin {
@@ -219,7 +223,7 @@ impl Spin {
     }
 
     /// The linear part (a, b, c, d: x' = a·x + c·y, y' = b·x + d·y).
-    fn linear(&self) -> [f32; 4] {
+    fn linear(self) -> [f32; 4] {
         let r = normalize_degrees(self.deg).to_radians();
         let (s, c) = r.sin_cos();
         let fx = if self.flip_h { -1.0 } else { 1.0 };
@@ -237,17 +241,17 @@ impl Spin {
 
     /// Where point (`x`, `y`) goes when turned about (`cx`, `cy`).
     pub fn apply(&self, cx: f32, cy: f32, x: f32, y: f32) -> (f32, f32) {
-        let [a, b, c, d] = self.linear();
-        let (u, v) = (x - cx, y - cy);
-        (cx + a * u + c * v, cy + b * u + d * v)
+        let [x_from_x, y_from_x, x_from_y, y_from_y] = self.linear();
+        let (relative_x, relative_y) = (x - cx, y - cy);
+        (cx + x_from_x * relative_x + x_from_y * relative_y, cy + y_from_x * relative_x + y_from_y * relative_y)
     }
 
     /// The point that [`Spin::apply`] takes to (`x`, `y`).
     pub fn unapply(&self, cx: f32, cy: f32, x: f32, y: f32) -> (f32, f32) {
         // The linear part is orthogonal: its inverse is its transpose.
-        let [a, b, c, d] = self.linear();
-        let (u, v) = (x - cx, y - cy);
-        (cx + a * u + b * v, cy + c * u + d * v)
+        let [x_from_x, y_from_x, x_from_y, y_from_y] = self.linear();
+        let (relative_x, relative_y) = (x - cx, y - cy);
+        (cx + x_from_x * relative_x + y_from_x * relative_y, cy + x_from_y * relative_x + y_from_y * relative_y)
     }
 
     /// The axis-aligned box `r` covers once turned about its centre.
@@ -258,10 +262,10 @@ impl Spin {
 
     /// The width and height of the box a `w` × `h` rectangle covers once turned.
     pub fn extent(&self, w: f32, h: f32) -> (f32, f32) {
-        let (w, h) = (finite(w).abs(), finite(h).abs());
-        let r = normalize_degrees(self.deg).to_radians();
-        let (s, c) = (r.sin().abs(), r.cos().abs());
-        (w * c + h * s, w * s + h * c)
+        let (width, height) = (finite(w).abs(), finite(h).abs());
+        let radians = normalize_degrees(self.deg).to_radians();
+        let (sine, cosine) = (radians.sin().abs(), radians.cos().abs());
+        (width * cosine + height * sine, width * sine + height * cosine)
     }
 
     /// This spin applied inside `outer` (a group member's own spin within its group's): the one
@@ -343,11 +347,11 @@ mod tests {
 
     #[test]
     fn unit_round_trips() {
-        assert_eq!(twips(1440), 72.0);
+        assert_eq!(twips(1440).to_bits(), 72.0f32.to_bits());
         assert_eq!(to_twips(72.0), 1440);
-        assert_eq!(emu(914_400), 72.0);
+        assert_eq!(emu(914_400).to_bits(), 72.0f32.to_bits());
         assert_eq!(to_emu(72.0), 914_400);
-        assert_eq!(half_points(24), 12.0);
+        assert_eq!(half_points(24).to_bits(), 12.0f32.to_bits());
         assert_eq!(to_half_points(10.5), 21);
         assert_eq!(to_twips(f32::NAN), 0);
     }
@@ -429,7 +433,7 @@ mod tests {
         assert!(a.intersects(&b));
         assert_eq!(a.union(&b), Rect::new(0.0, 0.0, 15.0, 15.0));
         assert!(a.contains(Point::new(5.0, 5.0)));
-        assert_eq!(Rect::new(0.0, 0.0, -5.0, f32::NAN).w, 0.0);
+        assert_eq!(Rect::new(0.0, 0.0, -5.0, f32::NAN).w.to_bits(), 0.0f32.to_bits());
         assert_eq!(a.inset(1.0, 2.0, 3.0, 4.0), Rect::new(1.0, 2.0, 6.0, 4.0));
     }
 
