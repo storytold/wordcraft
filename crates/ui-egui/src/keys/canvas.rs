@@ -487,8 +487,6 @@ fn handle_event(app: &mut WordApp, ctx: &egui::Context, e: egui::Event) {
                     crate::dialogs_smart_art::SmartArtTypeResult::ConsumedNoChange => return,
                     crate::dialogs_smart_art::SmartArtTypeResult::NotHandled => {}
                 }
-                // Typing with a text box selected types into it.
-                crate::objects::enter_text_box(app);
                 type_text(app, &t, false);
             }
         }
@@ -561,6 +559,8 @@ pub(super) fn leave_full_screen(app: &mut WordApp, ctx: &egui::Context, key: Key
 /// around the insertion itself: a transformation the engine performs (AutoCorrect, AutoFormat)
 /// makes the frame [`egui::ImeChangeCause::Other`] instead.
 fn type_text(app: &mut WordApp, text: &str, ime: bool) {
+    // Typing with a shape selected types into it.
+    crate::objects::type_into_shape(app);
     let before = ime.then(|| ime_stamp(app));
     // Where the text lands, so a quote can be checked against what the engine actually inserted.
     let start = app.session.sel.ordered().0;

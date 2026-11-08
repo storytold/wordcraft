@@ -94,7 +94,7 @@ fn finish_alt_code(app: &mut WordApp) {
     if code.is_empty() {
         return;
     }
-    crate::objects::enter_text_box(app);
+    crate::objects::type_into_shape(app);
     let system_composes = cfg!(target_os = "windows");
     let mut params = json!({"code": code});
     if system_composes {

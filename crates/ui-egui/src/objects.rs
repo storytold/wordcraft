@@ -982,5 +982,13 @@ pub fn enter_text_box(app: &mut WordApp) -> bool {
     app.run("caret.set", json!({"pos": end})).is_ok()
 }
 
+/// Typing with a shape selected types into it: into its text, or into a new, empty story for a
+/// shape without text (`shape.addText`), so the shape isn't replaced by what is typed (#5911).
+pub fn type_into_shape(app: &mut WordApp) {
+    if selected(app).is_some() && crate::widgets::enabled(app, "shape.addText") {
+        let _ = app.run("shape.addText", json!({}));
+    }
+}
+
 #[cfg(test)]
 mod tests;
