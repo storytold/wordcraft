@@ -38,6 +38,7 @@ pub(crate) use chars::{ligature_features, remap_range, thai_run_face};
 pub use grid::{Exclusion, Grid, is_east_asian};
 #[cfg(test)]
 use lines::break_lines;
+pub(crate) use lines::takes_room;
 pub use model::{CellText, ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, Line, LineEnd, PARA_MARK_WIDTH, ParaEnv, RubyLayout, StyleRun, VisCl};
 pub use paragraph::layout_para;
 #[cfg(test)]
@@ -80,6 +81,8 @@ pub struct ParaLayout {
     pub drop_cap_w: f32,
     /// Laid-out equations by object index.
     pub maths: Vec<(usize, Arc<crate::math::MathLayout>)>,
+    /// The legacy check boxes among its objects (inline objects' indexes).
+    pub check_boxes: Vec<usize>,
     /// Ruby (Phonetic Guide) text over base-text clusters, in cluster order.
     pub rubies: Vec<RubyLayout>,
     /// Display equations (on lines of their own): cluster index and justification.
