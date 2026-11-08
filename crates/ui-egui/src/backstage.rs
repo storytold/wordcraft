@@ -55,6 +55,17 @@ fn back_chevron_c(band_min_x: f32, center_y: f32, fullscreen: bool, content_left
     pos2(band_min_x + x, center_y)
 }
 
+/// The bottom of the backstage menu: About, and the community link unless the user turned the
+/// community button off — the title bar pill honors the same setting, so the menu hides the
+/// link with it.
+fn bottom_links(app: &WordApp) -> Vec<(&'static str, &'static str)> {
+    let mut links = vec![("About", "about")];
+    if app.ui.show_discord {
+        links.push(("Discord community", "discord"));
+    }
+    links
+}
+
 /// `enter` runs 0 to 1 as the page comes in or goes out: the nav slides from the left edge and
 /// the page fades in beside it.
 pub fn show(app: &mut WordApp, ui: &mut Ui, enter: f32) {
@@ -167,7 +178,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui, enter: f32) {
                 }
             }
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                for (label, id) in [("About", "about"), ("Discord community", "discord")] {
+                for (label, id) in bottom_links(app) {
                     let (r, resp) = ui.allocate_exact_size(vec2(200.0, 32.0), Sense::click());
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!(label)));
                     let h = ui.ctx().animate_bool_responsive(resp.id.with("hover"), resp.hovered());
@@ -186,7 +197,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui, enter: f32) {
                 }
             });
         });
-    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon.gamma_multiply(enter)).inner_margin(egui::Margin::symmetric(40, 30))).show(
+    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon.gamma_multiply(enter)).inner_margin(egui::Margin::symmetric(0, 30))).show(
         ui,
         |panel| {
             let shift = vec2((1.0 - enter) * 40.0, 0.0);
@@ -196,22 +207,25 @@ pub fn show(app: &mut WordApp, ui: &mut Ui, enter: f32) {
                 slid.disable();
             }
             let ui = &mut slid;
+            let pad = egui::Frame::NONE.inner_margin(egui::Margin::symmetric(40, 0));
             // The Print page fills the pane and scrolls its settings and its preview itself (#1156).
             if app.ui.backstage_page == "print" {
-                crate::rtl::root(ui, |ui| export_page(app, ui));
+                pad.show(ui, |ui| crate::rtl::root(ui, |ui| export_page(app, ui)));
                 return;
             }
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                crate::rtl::root(ui, |ui| match app.ui.backstage_page.as_str() {
-                    "home" => home_page(app, ui),
-                    "new" => new_page(app, ui),
-                    "open" => open_page(app, ui),
-                    "saveAs" => save_as_page(app, ui),
-                    "info" => info_page(app, ui),
-                    "recover" => recovery_page(app, ui),
-                    "print" | "export" => export_page(app, ui),
-                    "options" => crate::options::page(app, ui),
-                    _ => home_page(app, ui),
+            egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
+                pad.show(ui, |ui| {
+                    crate::rtl::root(ui, |ui| match app.ui.backstage_page.as_str() {
+                        "home" => home_page(app, ui),
+                        "new" => new_page(app, ui),
+                        "open" => open_page(app, ui),
+                        "saveAs" => save_as_page(app, ui),
+                        "info" => info_page(app, ui),
+                        "recover" => recovery_page(app, ui),
+                        "print" | "export" => export_page(app, ui),
+                        "options" => crate::options::page(app, ui),
+                        _ => home_page(app, ui),
+                    })
                 })
             });
         },
