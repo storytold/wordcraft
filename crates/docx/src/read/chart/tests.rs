@@ -528,3 +528,78 @@ fn negative_sections_and_scientific_numbers() {
     assert_eq!(format_value(0.0, "0.00E+00", 1.0), "0.00E+00");
     assert_eq!(format_value(-12345.0, "0.0E-00", 1.0), "-1.2E04");
 }
+
+fn titled_doughnut(title: &str) -> Vec<GraphicItem> {
+    let plot =
+        format!(r#"<c:doughnutChart><c:varyColors val="1"/>{}<c:holeSize val="90"/></c:doughnutChart>"#, ser(0, "S", None, &["A", "B"], &["9", "1"]));
+    let x = format!(r#"<c:chartSpace {NS}><c:chart>{title}<c:autoTitleDeleted val="0"/><c:plotArea>{plot}</c:plotArea></c:chart></c:chartSpace>"#);
+    chart_items(&crate::xml::parse(x.as_bytes()).unwrap(), &theme(), 80.0, 110.0)
+}
+
+fn title_item(items: &[GraphicItem]) -> ([f32; 4], f32, Rgb, bool, TextAlign) {
+    items
+        .iter()
+        .find_map(|it| match it {
+            GraphicItem::Text { rect, text, size, color, bold, align, .. } if text == "90%" => Some((*rect, *size, *color, *bold, *align)),
+            _ => None,
+        })
+        .expect("title drawn")
+}
+
+#[test]
+fn a_manually_placed_title_is_drawn_where_the_file_puts_it() {
+    // A CV template's language ring: the percentage is the title, placed in the hole, white 12 pt.
+    let manual = r#"<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:rPr sz="1200" b="0"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:rPr><a:t>90%</a:t></a:r></a:p></c:rich></c:tx><c:layout><c:manualLayout><c:xMode val="edge"/><c:yMode val="edge"/><c:x val="0.3"/><c:y val="0.5"/></c:manualLayout></c:layout><c:overlay val="0"/></c:title>"#;
+    let (rect, size, color, bold, align) = title_item(&titled_doughnut(manual));
+    assert_eq!((rect[0], rect[1]), (24.0, 55.0), "top-left at 30 % / 50 % of the 80 x 110 chart");
+    assert_eq!((size, color, bold, align), (12.0, Rgb(0xFF, 0xFF, 0xFF), false, TextAlign::Left));
+
+    // Without a manual layout (or in factor mode) the title stays centred on top in the default style.
+    let plain = r#"<c:title><c:tx><c:rich><a:p><a:r><a:t>90%</a:t></a:r></a:p></c:rich></c:tx><c:layout><c:manualLayout><c:x val="0.3"/><c:y val="0.5"/></c:manualLayout></c:layout></c:title>"#;
+    let (rect, size, color, bold, align) = title_item(&titled_doughnut(plain));
+    assert_eq!((rect[1], size, color, bold, align), (PAD, TITLE_SIZE, TEXT, true, TextAlign::Center));
+}
+
+fn manual_title(x: &str, run: &str, overlay: &str) -> String {
+    format!(
+        r#"<c:title><c:tx><c:rich><a:bodyPr/><a:p>{run}</a:p></c:rich></c:tx><c:layout><c:manualLayout><c:xMode val="edge"/><c:yMode val="edge"/><c:x val="{x}"/><c:y val="0.5"/></c:manualLayout></c:layout><c:overlay val="{overlay}"/></c:title>"#
+    )
+}
+
+#[test]
+fn a_manually_placed_title_is_drawn_over_the_plot_inside_the_chart() {
+    let run = r#"<a:r><a:t>90%</a:t></a:r>"#;
+    // Drawn after the plot, so the ring can't cover it.
+    let items = titled_doughnut(&manual_title("0.3", run, "0"));
+    assert!(matches!(items.last(), Some(GraphicItem::Text { text, .. }) if text == "90%"), "{items:?}");
+    // A place near the right edge is shifted back so the title stays inside the 80 pt chart.
+    let (rect, ..) = title_item(&titled_doughnut(&manual_title("0.95", run, "0")));
+    assert!(rect[0] + rect[2] <= 80.0 && rect[0] >= 0.0, "{rect:?}");
+}
+
+#[test]
+fn an_overlay_title_takes_no_room_from_the_plot() {
+    let run = r#"<a:r><a:rPr sz="3000"/><a:t>90%</a:t></a:r>"#;
+    let ring_top = |items: &[GraphicItem]| -> f32 {
+        items
+            .iter()
+            .filter_map(|it| if let GraphicItem::Path { segs, .. } = it { Some(segs) } else { None })
+            .flatten()
+            .filter_map(|s| match s {
+                PathSeg::Move(_, y) | PathSeg::Line(_, y) | PathSeg::Cubic(_, _, _, _, _, y) => Some(*y),
+                PathSeg::Close => None,
+            })
+            .fold(f32::MAX, f32::min)
+    };
+    let reserved = ring_top(&titled_doughnut(&manual_title("0.3", run, "0")));
+    let overlaid = ring_top(&titled_doughnut(&manual_title("0.3", run, "1")));
+    assert!(overlaid < reserved, "overlay {overlaid} should start higher than {reserved}");
+}
+
+#[test]
+fn the_title_style_comes_from_its_first_run() {
+    // The first run has no properties of its own: a later run's size and colour don't apply.
+    let runs = r#"<a:r><a:t>9</a:t></a:r><a:r><a:rPr sz="2000"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:rPr><a:t>0%</a:t></a:r>"#;
+    let (_, size, color, ..) = title_item(&titled_doughnut(&manual_title("0.3", runs, "0")));
+    assert_eq!((size, color), (TITLE_SIZE, TEXT));
+}
