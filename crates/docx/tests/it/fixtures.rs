@@ -1766,12 +1766,27 @@ const CT_CHARTEX: &str = "application/vnd.ms-office.chartex+xml";
 /// A package holding one box & whisker chart the way Word writes it: the `cx:chart` in an
 /// `mc:Choice` requiring `requires` (bound to `requires_ns`), a picture of it in the `mc:Fallback`.
 fn chartex_docx(requires: &str, requires_ns: &str) -> Vec<u8> {
-    let frame = r#"<wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="2743200" cy="1371600"/><wp:docPr id="1" name="Chart 1"/><wp:cNvGraphicFramePr/>"#;
+    chartex_docx_linked(requires, requires_ns, false)
+}
+
+/// [`chartex_docx`], its drawing linked to a web address (`wp:docPr/a:hlinkClick`) when `link`,
+/// after a first choice linked elsewhere, which needs a namespace no reader knows, so a reader
+/// takes the chart's choice.
+fn chartex_docx_linked(requires: &str, requires_ns: &str, link: bool) -> Vec<u8> {
+    let click = if link { r#"<a:hlinkClick r:id="rIdWeb"/>"# } else { "" };
+    let other = if link {
+        r#"<mc:Choice xmlns:w99="urn:example:unsupported" Requires="w99"><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="254000" cy="254000"/><wp:docPr id="9" name="Other"><a:hlinkClick r:id="rIdOther"/></wp:docPr><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice>"#
+    } else {
+        ""
+    };
+    let frame = format!(
+        r#"<wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="2743200" cy="1371600"/><wp:docPr id="1" name="Chart 1">{click}</wp:docPr><wp:cNvGraphicFramePr/>"#
+    );
     let body = format!(
-        r#"<w:p><w:r><w:t>Spread</w:t></w:r><w:r><mc:AlternateContent><mc:Choice xmlns:{requires}="{requires_ns}" Requires="{requires}"><w:drawing>{frame}<a:graphic><a:graphicData uri="{CHARTEX_NS}"><cx:chart xmlns:cx="{CHARTEX_NS}" r:id="rIdCx"/></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice><mc:Fallback><w:drawing>{frame}<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="Chart 1"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdPic"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2743200" cy="1371600"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Fallback></mc:AlternateContent></w:r></w:p>"#
+        r#"<w:p><w:r><w:t>Spread</w:t></w:r><w:r><mc:AlternateContent>{other}<mc:Choice xmlns:{requires}="{requires_ns}" Requires="{requires}"><w:drawing>{frame}<a:graphic><a:graphicData uri="{CHARTEX_NS}"><cx:chart xmlns:cx="{CHARTEX_NS}" r:id="rIdCx"/></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice><mc:Fallback><w:drawing>{frame}<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="Chart 1"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdPic"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2743200" cy="1371600"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Fallback></mc:AlternateContent></w:r></w:p>"#
     );
     let doc = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {W_NS}><w:body>{body}</w:body></w:document>"#);
-    let doc_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdCx" Type="http://schemas.microsoft.com/office/2014/relationships/chartEx" Target="charts/chartEx1.xml"/><Relationship Id="rIdPic" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/></Relationships>"#;
+    let doc_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdCx" Type="http://schemas.microsoft.com/office/2014/relationships/chartEx" Target="charts/chartEx1.xml"/><Relationship Id="rIdPic" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/><Relationship Id="rIdWeb" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/chart" TargetMode="External"/><Relationship Id="rIdOther" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/other" TargetMode="External"/></Relationships>"#;
     let chart_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/package" Target="../embeddings/Microsoft_Excel_Worksheet.xlsx"/><Relationship Id="rId2" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="colors1.xml"/></Relationships>"#;
     let types = format!(
         r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="xlsx" ContentType="{CT_XLSX}"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/charts/chartEx1.xml" ContentType="{CT_CHARTEX}"/><Override PartName="/word/charts/colors1.xml" ContentType="application/vnd.ms-office.chartcolorstyle+xml"/></Types>"#
@@ -1824,6 +1839,25 @@ fn office_2016_chart_keeps_its_chart_part_and_fallback_through_saves() {
             let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
             d = wordcraft_docx::read(&zip(&entries)).unwrap();
         }
+    }
+}
+
+/// #5267: a link on an Office 2016 chart's drawing is the chart's link (not an earlier choice's),
+/// and saving keeps it on both branches (the writer rebuilds their frames).
+#[test]
+fn a_link_on_an_office_2016_charts_drawing_is_kept() {
+    let mut d = wordcraft_docx::read(&chartex_docx_linked("cx1", "http://schemas.microsoft.com/office/drawing/2015/9/8/chartex", true)).unwrap();
+    for _ in 0..2 {
+        let p = d.body[0].as_para().unwrap();
+        let off = p.object_offsets().into_iter().find(|o| matches!(p.object_at(*o), Some(InlineObject::Graphic { .. }))).unwrap();
+        assert_eq!(p.props_of_char(off).link.as_deref(), Some("https://example.com/chart"));
+        let files = unzip(&wordcraft_docx::write(&d).unwrap());
+        let body = text(&files, "word/document.xml");
+        let ids = attr_values(&body, "a:hlinkClick", "r:id");
+        assert_eq!(ids.len(), 2, "on the chart and its fallback picture: {body}");
+        assert_eq!(rel(&text(&files, "word/_rels/document.xml.rels"), &ids[0]).1, "https://example.com/chart");
+        let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
+        d = wordcraft_docx::read(&zip(&entries)).unwrap();
     }
 }
 
@@ -2460,6 +2494,31 @@ fn east_asian_number_formats_read_label_and_round_trip() {
     let out = wordcraft_docx::write(&d).unwrap();
     let back = wordcraft_docx::read(&out).unwrap();
     assert_eq!(formats(&back), want);
+}
+
+/// #4985: a level with numFmt none and literal text (`RESPONSE:`) labels its paragraph with that
+/// text, as in Word, and keeps both through a save.
+#[test]
+fn a_none_level_s_literal_text_is_its_label() {
+    use wordcraft_doc::numbering::Counters;
+    use wordcraft_doc::section::NumFormat;
+    let numbering = format!(
+        r#"<w:numbering {W_NS}><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="none"/><w:lvlText w:val="RESPONSE:"/><w:pPr><w:ind w:left="1440" w:hanging="1440"/></w:pPr></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>"#
+    );
+    let body = r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>X</w:t></w:r></w:p>"#;
+    let bytes = docx(body, &[("rId1", "numbering", "numbering.xml")], &[("word/numbering.xml", &numbering)]);
+    let label = |d: &Document| {
+        let n = paras(d).first().and_then(|p| p.props.numbering)?;
+        Counters::default().next_label(&d.numbering, n.num, n.level).map(|l| l.0)
+    };
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(label(&d).as_deref(), Some("RESPONSE:"));
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(
+        back.numbering.level(1, 0).map(|l| (l.format, l.text.as_str(), l.indent, l.hanging)),
+        Some((NumFormat::None, "RESPONSE:", 72.0, 72.0))
+    );
+    assert_eq!(label(&back).as_deref(), Some("RESPONSE:"));
 }
 
 /// #464: a bookmark whose end follows the document's final table keeps its end (it goes into
@@ -4293,6 +4352,54 @@ fn zero_effects_stay_zero_rotated() {
             assert!((h + 2.0 * py - expected.1).abs() < 0.001);
         }
     }
+}
+
+/// A turned picture whose file keeps no room for the turn (no or a zero `wp:effectExtent`) is
+/// marked so its line keeps to its frame as in Word, and saves that way; one with the room keeps
+/// its rotated bounds.
+#[test]
+fn bare_turns_are_kept_through_a_save() {
+    let pic = |effects: &str| {
+        format!(
+            r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="1524000" cy="762000"/>{effects}<wp:docPr id="1" name="Synthetic picture"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rId1"/></pic:blipFill><pic:spPr><a:xfrm rot="2700000"><a:off x="0" y="0"/><a:ext cx="1524000" cy="762000"/></a:xfrm></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
+        )
+    };
+    let read =
+        |body: &str| wordcraft_docx::read(&docx(body, &[("rId1", "image", "media/marker.png")], &[("word/media/marker.png", "synthetic")])).unwrap();
+    let bare = |d: &Document| paras(d)[0].objects[0].frame().unwrap().2.bare_turn;
+    for effects in ["", r#"<wp:effectExtent l="0" t="0" r="0" b="0"/>"#] {
+        let d = read(&pic(effects));
+        assert!(bare(&d), "{effects:?}");
+        let out = wordcraft_docx::write(&d).unwrap();
+        let body = text(&unzip(&out), "word/document.xml");
+        assert_eq!(attr_values(&body, "wp:effectExtent", "t"), ["0"]);
+        assert!(bare(&wordcraft_docx::read(&out).unwrap()));
+    }
+    // 120 × 60 pt at 45°: Word's rotated-bounds room, 3.64 pt wider and 33.64 pt taller each side.
+    let d = read(&pic(r#"<wp:effectExtent l="46210" t="427210" r="46210" b="427210"/>"#));
+    assert!(!bare(&d));
+    let mut d = read(&pic(""));
+    let f = first_object(&mut d).float_mut().unwrap();
+    f.set_spin(wordcraft_geom::Spin::new(30.0, false, false));
+    assert!(!f.bare_turn, "turned here: the rotated bounds again");
+    // A shadow's room added later: saved, and so laid out, with the turn's room again.
+    let mut d = read(&pic(""));
+    let f = first_object(&mut d).float_mut().unwrap();
+    f.effect = [2.0; 4];
+    assert!(!f.is_bare_turn());
+    let out = wordcraft_docx::write(&d).unwrap();
+    assert_ne!(attr_values(&text(&unzip(&out), "word/document.xml"), "wp:effectExtent", "t"), ["0"]);
+    // Made floating: saved with the turn's room, so it opens again as an ordinary turn.
+    let mut d = read(&pic(""));
+    let f = first_object(&mut d).float_mut().unwrap();
+    f.wrap = wordcraft_doc::para::Wrap::Square;
+    assert!(!f.is_bare_turn());
+    let out = wordcraft_docx::write(&d).unwrap();
+    assert_ne!(attr_values(&text(&unzip(&out), "word/document.xml"), "wp:effectExtent", "t"), ["0"]);
+    assert!(!bare(&wordcraft_docx::read(&out).unwrap()));
+    // Only inline ones: a floating one keeps text clear of its rotated bounds as before.
+    let anchored = pic("").replace("<wp:inline>", "<wp:anchor>").replace("</wp:inline>", "</wp:anchor>");
+    assert!(!bare(&read(&anchored)));
 }
 
 /// The math namespace, declared on the math element itself (the fixture root doesn't).
