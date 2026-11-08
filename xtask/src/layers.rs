@@ -47,12 +47,19 @@ pub const TABLE: &[(&str, Class)] = &[
     ("engine", Class::Layer(4)),
     ("mcp", Class::Layer(5)),
     ("zotero", Class::Layer(5)),
+    ("collab", Class::Layer(3)),
+    ("collab-doc", Class::Layer(4)),
+    ("collab-client", Class::Layer(4)),
+    ("collab-engine", Class::Layer(5)),
+    ("collab-ws", Class::Layer(5)),
+    ("collab-app", Class::Layer(5)),
     ("ui-egui", Class::Layer(6)),
     ("testkit", Class::Testkit),
     // apps and tooling
     ("wordcraft", Class::Exempt),
     ("cli", Class::Exempt),
     ("web", Class::Exempt),
+    ("collab-server", Class::Exempt),
     ("xtask", Class::Exempt),
 ];
 
@@ -60,7 +67,8 @@ pub const TABLE: &[(&str, Class)] = &[
 /// The L0 foundation is a small chain: `raster` builds on `color` and
 /// `geom`, which the §3 diagram draws on one line. The GPU backend (`gpu`)
 /// reuses the CPU reference (`compose`) for LUTs and parity tests.
-pub const INTRA_LAYER_ORDER: &[&[&str]] = &[&["doc", "fonts"]];
+pub const INTRA_LAYER_ORDER: &[&[&str]] =
+    &[&["doc", "fonts"], &["collab-doc", "collab-client"], &["collab-engine", "collab-app"], &["collab-ws", "collab-app"]];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {
     let (from, to) = (short_name(from), short_name(to));
