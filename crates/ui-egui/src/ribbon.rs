@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use crate::colors::{Remember, Target};
 use crate::options::MeasureExt;
 use crate::theme::{Tokens, medium, regular, semibold};
-use crate::widgets::{CONTENT_H, LABEL_H, big, big_toggle, group, menu_button, small, split};
+use crate::widgets::{CONTENT_H, LABEL_H, big, big_toggle, focus_ring, focus_ring_with, group, menu_button, small, split};
 use crate::{WordApp, icons};
 
 mod arrange;
@@ -196,6 +196,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 if plan.buttons < 2 { (((share_w + 36.0).max(74.0), 24.0), true) } else { ((30.0, 24.0), false) };
                             let (r, resp) = ui.allocate_exact_size(vec2(share_size.0, share_size.1), Sense::click());
                             ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.accent_text } else { t.accent });
+                            // Outside the accent fill.
+                            focus_ring_with(ui, r.expand(3.0), &resp, 7, t.focus);
                             let rtl = crate::rtl::on();
                             let icon_x = if share_text { crate::rtl::lead_x(rtl, r, 14.0) } else { r.center().x };
                             icons::paint(
@@ -280,6 +282,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 if resp.hovered() && !active && ghost.is_none() {
                                     ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
                                 }
+                                focus_ring(ui, r.shrink2(vec2(0.0, 4.0)), &resp, &t);
                                 // Entering and departing contextual tabs move and fade without changing layout.
                                 let entry = match ghost {
                                     Some((_, _, left)) => {
@@ -340,6 +343,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 if resp.hovered() {
                                     ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
                                 }
+                                focus_ring(ui, r.shrink2(vec2(0.0, 4.0)), &resp, &t);
                                 // The active tab is in the menu: the button says so.
                                 let holds_active = left_out.iter().any(|(tab, _)| *tab == app.ui.tab);
                                 ui.painter().text(

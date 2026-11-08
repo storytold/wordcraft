@@ -75,6 +75,42 @@ fn opening_a_missing_recent_file_keeps_file_open_with_the_error() {
     assert!(app.ui.backstage, "File stays open");
 }
 
+/// #4495: on File › Home a template tile reached by the keyboard is ringed in the focus colour
+/// around its page and caption, clear of the page, and a side bar row with a white ring inside
+/// it, as the bar's text is.
+#[test]
+fn keyboard_focus_rings_a_template_tile_and_a_side_bar_row() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.language = "en".into();
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let t = crate::theme::Tokens::get(&h.ctx);
+    assert!(crate::widgets::focus_rings(h.output(), t.focus).is_empty(), "a ring before anything has focus");
+
+    let tile = h.get_by_label("Blank document");
+    let tile_rect = tile.rect();
+    tile.focus();
+    h.run_steps(2);
+    let rings = crate::widgets::focus_rings(h.output(), t.focus);
+    assert!(rings.iter().any(|r| r.contains_rect(tile_rect) && *r != tile_rect), "no ring around the tile {tile_rect:?} and clear of it: {rings:?}");
+
+    let row = h.get_by_label("Open");
+    let row_rect = row.rect();
+    row.focus();
+    h.run_steps(2);
+    let white = crate::widgets::focus_rings(h.output(), egui::Color32::WHITE);
+    assert!(white.iter().any(|r| row_rect.contains_rect(*r)), "no white ring inside the Open row {row_rect:?}: {white:?}");
+    assert!(crate::widgets::focus_rings(h.output(), t.focus).is_empty(), "the tile kept its ring after Open took the focus");
+}
+
 /// #1873: the macOS back chevron sits beside the traffic lights windowed, at the plain
 /// control inset in full screen.
 #[test]

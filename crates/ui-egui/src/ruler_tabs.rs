@@ -128,6 +128,7 @@ pub(crate) fn selector(app: &mut WordApp, ui: &Ui, corner: Rect) {
     let p = ui.painter_at(corner);
     let b = Rect::from_center_size(corner.center(), vec2(14.0, 14.0));
     p.rect(b, 2.0, if r.hovered() { t.hover } else { t.ruler }, Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
+    crate::widgets::focus_ring_with(ui, b, &r, 2, t.focus);
     // Centre the glyph on its box: Left's foot runs right of its stem, Right's left.
     let nudge = match kind {
         TabAlign::Left => -2.0,

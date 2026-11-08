@@ -257,6 +257,7 @@ impl Previews {
             if resp.hovered() {
                 ui.painter().rect_filled(r, 3.0, t.hover);
             }
+            crate::widgets::focus_ring_with(ui, r, &resp, 3, t.focus);
             // The atlas lock is never held while the Context's is, nor the other way round.
             let generation = wordcraft_fonts::FontDb::global().generation();
             let hit = {
@@ -623,6 +624,7 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
         } else if resp.hovered() {
             ui.painter().rect_filled(r, 3.0, t.hover);
         }
+        crate::widgets::focus_ring_with(ui, r, &resp, 3, t.focus);
         let lang = crate::i18n::current().code();
         let dark_page = app.session.view.dark_mode;
         let key = format!("style:{id}:{skey}:{ppp}:{lang}:{dark_page}");
@@ -679,6 +681,7 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
         if resp.hovered() {
             ui.painter().rect_filled(br, 2.0, t.hover);
         }
+        crate::widgets::focus_ring_with(ui, br, &resp, 2, t.focus);
         crate::icons::paint(ui.painter(), br.shrink(2.0), icon, t.icon, t.accent);
         if resp.clicked() {
             if *delta == 0 {
@@ -707,6 +710,7 @@ pub fn style_set_gallery(app: &mut WordApp, ui: &mut Ui) {
         if resp.hovered() {
             ui.painter().rect_filled(r, 3.0, t.hover);
         }
+        crate::widgets::focus_ring_with(ui, r, &resp, 3, t.focus);
         let key = format!("set:{name}:{ppp}:{}", crate::i18n::current().code());
         let tex = app.previews.get_or(ui.ctx(), &key, || {
             let mut s = wordcraft_engine::Session::new(Document::new());
@@ -743,6 +747,7 @@ pub fn table_style_tile(ui: &mut Ui, app: &mut WordApp, style: &str) -> Response
     if resp.hovered() {
         ui.painter().rect_filled(r, 3.0, t.hover);
     }
+    crate::widgets::focus_ring_with(ui, r, &resp, 3, t.focus);
     // Keyed by the style sheet too, so a modified table style redraws.
     let skey = app.previews.styles_key(&app.session.doc, app.session.rev());
     let key = format!("tstyle:{style}:{skey}:{ppp}");

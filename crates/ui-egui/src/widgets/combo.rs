@@ -1,4 +1,4 @@
-use super::buttons::DROPDOWN;
+use super::buttons::{DROPDOWN, focus_ring_with, swatch_focus_ring};
 use super::tooltip::{keytip_badge, show_hint};
 use super::{Color32, CornerRadius, Rect, Response, Sense, Stroke, Tokens, Ui, icons, pos2, regular, vec2};
 
@@ -87,6 +87,9 @@ pub(crate) fn swatch(ui: &mut Ui, c: wordcraft_doc::Rgb) -> bool {
         Stroke::new(if resp.hovered() { 1.5 } else { 0.5 }, if resp.hovered() { t.accent } else { t.border_strong }),
         egui::StrokeKind::Inside,
     );
+    // Two-tone, inside the swatch: one tone stands out from any colour, in either theme. The
+    // current colour's accent outline is outside it.
+    swatch_focus_ring(ui, r, &resp, 0, t.focus);
     if resp.hovered() {
         note_hover(ui.ctx(), c.hex());
     }
@@ -413,6 +416,7 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
             show_hint(&resp, tip, &notes);
             show_hint(&aresp, tip, &notes);
         }
+        focus_ring_with(ui, ar, &aresp, ar_radius, t.focus);
         icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(DROPDOWN, DROPDOWN)), "dropdown", t.icon, t.accent);
         // The list drops from the box's left edge, as in Word, not from the arrow (#535).
         // The font list closes on a chosen entry or a click outside it, not on its headings.

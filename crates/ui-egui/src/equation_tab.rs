@@ -11,7 +11,7 @@ use wordcraft_engine::math_gallery::{BUILT_INS, STRUCTURES, SYMBOL_SETS, Templat
 
 use crate::WordApp;
 use crate::theme::{Tokens, regular, semibold};
-use crate::widgets::{BIG_ICON_Y, BIG_LABEL_Y, CONTENT_H, LABEL_PITCH, group, small};
+use crate::widgets::{BIG_ICON_Y, BIG_LABEL_Y, CONTENT_H, LABEL_PITCH, focus_ring, focus_ring_with, group, small};
 
 /// What each structure button shows.
 pub(crate) fn button_picture(id: &str) -> &'static str {
@@ -114,6 +114,7 @@ fn math_menu_button(ui: &mut Ui, app: &mut WordApp, picture: &str, label: &str, 
     if resp.hovered() {
         ui.painter().rect_filled(r, 4.0, t.hover);
     }
+    focus_ring(ui, r, &resp, &t);
     let pic = Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(40.0, 32.0));
     ui.painter().rect_filled(pic, 3.0, t.input);
     paint_math(app, ui, MathPreview { rect: pic, key: &format!("btn:{picture}"), linear: picture, nodes: None, display: false, points: 12.0 });
@@ -138,6 +139,7 @@ fn tile(ui: &mut Ui, app: &mut WordApp, tpl: &Template, size: egui::Vec2) -> boo
     if resp.hovered() {
         ui.painter().rect_stroke(r, 2.0, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
     }
+    focus_ring_with(ui, r, &resp, 2, t.focus);
     let pt = if size.x > 120.0 { 13.0 } else { 14.0 };
     paint_math(
         app,
@@ -191,6 +193,7 @@ pub fn builtin_menu(ui: &mut Ui, app: &mut WordApp) {
             if resp.hovered() {
                 ui.painter().rect_stroke(r, 2.0, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
             }
+            focus_ring_with(ui, r, &resp, 2, t.focus);
             paint_math(
                 app,
                 ui,
@@ -226,6 +229,7 @@ pub fn insert_button(ui: &mut Ui, app: &mut WordApp) {
         if resp.hovered() {
             ui.painter().rect_filled(rr, 4.0, t.hover);
         }
+        focus_ring(ui, rr, resp, &t);
     }
     crate::icons::paint(
         ui.painter(),
@@ -321,6 +325,7 @@ fn symbol_button(ui: &mut Ui, app: &mut WordApp, c: char, t: &Tokens) -> bool {
     if resp.hovered() {
         ui.painter().rect_stroke(r, 2.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
     }
+    focus_ring_with(ui, r, &resp, 2, t.focus);
     let s = c.to_string();
     let nodes = vec![wordcraft_doc::math::MNode::Run(wordcraft_doc::math::MRun { text: s.clone(), lit: true, ..Default::default() })];
     paint_math(app, ui, MathPreview { rect: r, key: &format!("sym:{s}"), linear: &s, nodes: Some(nodes), display: false, points: 11.0 });
