@@ -41,7 +41,11 @@ fn section_metadata_survives_native_json_and_two_docx_save_reopen_cycles() {
         assert!(xml.contains(r#"<w15:footnoteColumns w:val="3"/>"#), "cycle {cycle}: {xml}");
         assert!(xml.contains(r#"w:chapStyle="1" w:chapSep="hyphen""#), "cycle {cycle}: {xml}");
         assert!(xml.contains(r#"w:chapStyle="10" w:chapSep="colon""#), "cycle {cycle}: {xml}");
-        assert!(xml.contains("xmlns:w15=") && xml.contains("mc:Ignorable=\"w14 w15 wp14\""), "cycle {cycle}: {xml}");
+        let ignorable = xml.split_once("mc:Ignorable=\"").unwrap().1.split('"').next().unwrap();
+        assert!(
+            xml.contains("xmlns:w15=") && ["w14", "w15", "wp14"].iter().all(|p| ignorable.split_whitespace().any(|v| v == *p)),
+            "cycle {cycle}: {xml}"
+        );
         document = wordcraft_docx::read(&bytes).unwrap();
         let json = serde_json::to_vec(&document).unwrap();
         document = serde_json::from_slice(&json).unwrap();

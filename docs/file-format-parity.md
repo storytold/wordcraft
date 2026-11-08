@@ -319,7 +319,23 @@ CSL and library import are separate work.
 
 For field results, the engine parser treats a backslash in quoted arguments as escaping the next character, as Word does. The DOCX HYPERLINK target reader applies the same rule; escaped asterisks remain argument text instead of starting a format switch. Engine parser and DOCX import tests cover these cases.
 
+## Retained InkML and MathML namespaces
+
+> **Status:** 2026-11-08 · Canonical InkML/MathML prefixes in retained XML are declared on save.
+
+The shared DOCX XML namespace registry recognizes InkML and MathML aliases. Standalone
+embedded markup and retained content-control properties preserve their canonical namespace
+declarations and qualified attributes through repeated saves. Regenerated story roots also
+mark these optional extensions `mc:Ignorable`, so consumers without InkML/MathML support can
+still open the document. Local `mc:Ignorable` aliases are canonicalized before namespace
+scope is discarded; metadata namespaces used inside retained annotations, such as `xsi` and
+`dc`, are declared too. This is a retained-XML fix,
+not native ink rendering or general InkML conformance. Synthetic round-trip tests cover both
+paths; no new Word-file comparison is claimed.
+
 ## Revision history
+
+> 2026-11-08 · Retained InkML/MathML namespace declarations (#5731 split); standalone and content-control round-trip tests, separate from the native renderer.
 
 > 2026-11-07 · VML text boxes: `mso-layout-flow-alt:bottom-to-top` reads as `vert270` with any `layout-flow`, and `layout-flow:vertical` or `vertical-ideographic` otherwise as `vert`, so a compatibility-mode header's turned text box is drawn turned (#5193, `it::text_boxes::vml_text_boxes_keep_their_inset_fit_and_anchor`).
 

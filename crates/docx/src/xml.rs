@@ -29,6 +29,8 @@ pub const NAMESPACES: &[(&str, &str)] = &[
     ("mc", "http://schemas.openxmlformats.org/markup-compatibility/2006"),
     ("w14", "http://schemas.microsoft.com/office/word/2010/wordml"),
     ("wpi", "http://schemas.microsoft.com/office/word/2010/wordprocessingInk"),
+    ("ink", "http://www.w3.org/2003/InkML"),
+    ("mml", "http://www.w3.org/1998/Math/MathML"),
     ("w15", "http://schemas.microsoft.com/office/word/2012/wordml"),
     ("wp14", "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing"),
     ("wps", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"),
@@ -443,6 +445,27 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
                                 .collect::<Vec<_>>()
                                 .join(" ")
                         }
+                    } else if aname == "mc:Ignorable" {
+                        // These aliases can occur locally on retained extensions too.
+                        // Unknown namespaces have no serialized names in this tree.
+                        let prefixes: Vec<_> = val.split_whitespace().take(65).collect();
+                        if prefixes.len() > 64 || prefixes.iter().any(|p| p.len() > 128) {
+                            return Err(DocxError::Limit("too many or oversized ignorable prefixes".into()));
+                        }
+                        prefixes
+                            .into_iter()
+                            .filter_map(|prefix| {
+                                let qualified = format!("{prefix}:ignored");
+                                match r.resolver_mut().resolve_attribute(QName(qualified.as_bytes())).0 {
+                                    ResolveResult::Bound(ns) => {
+                                        let p = prefix_for(ns.as_ref(), &[]);
+                                        (p != "?").then_some(p)
+                                    }
+                                    _ => None,
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" ")
                     } else {
                         val
                     };
@@ -616,10 +639,18 @@ impl W {
     }
 }
 
-/// `xmlns:` declarations for the body-part namespaces, plus `mc:Ignorable`.
+/// Every canonical namespace that retained elements/attributes may use. Metadata
+/// namespaces can occur inside opaque annotations, not only in metadata parts.
+pub fn declared_namespaces() -> impl Iterator<Item = (&'static str, &'static str)> {
+    NAMESPACES.iter().chain(OTHER_NAMESPACES).copied().filter(|(p, _)| *p != "xml")
+}
+
+/// `xmlns:` declarations for body parts and retained markup, plus `mc:Ignorable`.
 pub fn body_ns() -> Vec<(String, String)> {
-    let mut v: Vec<(String, String)> = NAMESPACES.iter().map(|(p, u)| (format!("xmlns:{p}"), (*u).to_string())).collect();
-    v.push(("mc:Ignorable".into(), "w14 w15 wp14".into()));
+    let mut v: Vec<(String, String)> = declared_namespaces().map(|(p, u)| (format!("xmlns:{p}"), u.to_string())).collect();
+    // Retained InkML/MathML properties are optional extensions, not mandatory
+    // WordprocessingML. Readers without those namespaces must still open the file.
+    v.push(("mc:Ignorable".into(), "w14 w15 wp14 ink mml".into()));
     v
 }
 

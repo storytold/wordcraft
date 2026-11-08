@@ -18,7 +18,7 @@ use super::Reader;
 use crate::package::{
     CUSTOM_XML_ROOTS, ContentTypes, MAX_EMBEDDED_PARTS, MAX_EMBEDDED_RELS, MAX_EMBEDDED_XML, Rel, Rels, manifest_field_ok, rel_is, rt,
 };
-use crate::xml::{El, MAX_DEPTH, NAMESPACES, esc, is_rel_attr};
+use crate::xml::{El, MAX_DEPTH, declared_namespaces, esc, is_rel_attr};
 
 /// Relationship types (last path segment) the reader models or the writer produces itself, so
 /// they are never carried verbatim: carrying them would duplicate or contradict the written part.
@@ -293,7 +293,7 @@ fn standalone_xml(e: &El) -> Option<String> {
     let xml = e.to_xml();
     let rest = xml.get(1 + e.name.len()..).filter(|_| !xml.is_empty())?;
     let mut s = format!("<{}", e.name);
-    for (p, u) in NAMESPACES {
+    for (p, u) in declared_namespaces() {
         s.push_str(&format!(" xmlns:{p}=\"{}\"", esc(u)));
     }
     s.push_str(rest);
@@ -337,6 +337,20 @@ mod tests {
             zw.write_all(bytes).unwrap();
         }
         zw.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn standalone_embedded_ink_and_mathml_keep_their_namespaces() {
+        let xml = br#"<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><pen:trace xmlns:pen="http://www.w3.org/2003/InkML" xmlns:math="http://www.w3.org/1998/Math/MathML" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="math"><math:math math:id="formula" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.w3.org/1998/Math/MathML mathml.xsd"/></pen:trace></a:graphic>"#;
+        let root = crate::xml::parse(xml).unwrap();
+        let kept = super::standalone_xml(&root).unwrap();
+        assert!(kept.contains(r#"xmlns:ink="http://www.w3.org/2003/InkML""#), "{kept}");
+        assert!(kept.contains(r#"xmlns:mml="http://www.w3.org/1998/Math/MathML""#), "{kept}");
+        assert!(kept.contains(r#"xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance""#), "{kept}");
+        assert!(kept.contains(r#"mc:Ignorable="mml""#) && kept.contains("xsi:schemaLocation="), "{kept}");
+        let back = crate::xml::parse(kept.as_bytes()).unwrap();
+        let ink = back.child("ink:trace").unwrap();
+        assert_eq!(ink.child("mml:math").and_then(|e| e.attr("mml:id")), Some("formula"));
     }
 
     /// The parts the reader carries over unchanged, as one string.

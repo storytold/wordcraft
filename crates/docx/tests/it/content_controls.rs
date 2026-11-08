@@ -12,7 +12,11 @@ const NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/
 const ROOT_RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
 
 fn package(body: &str) -> Vec<u8> {
-    let doc = format!(r#"<w:document {NS}><w:body>{body}</w:body></w:document>"#);
+    package_ns(body, "")
+}
+
+fn package_ns(body: &str, extra_ns: &str) -> Vec<u8> {
+    let doc = format!(r#"<w:document {NS} {extra_ns}><w:body>{body}</w:body></w:document>"#);
     let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for (name, bytes) in [("_rels/.rels", ROOT_RELS.as_bytes()), ("word/document.xml", doc.as_bytes())] {
         zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
@@ -255,6 +259,25 @@ fn a_controls_run_properties_are_read_and_kept() {
     assert_eq!((rp.style.as_deref(), rp.size), (Some("Eingabe"), Some(10.0)));
     let out = document_xml(&write(&d).unwrap());
     assert!(out.contains(r#"<w:rPr><w:rStyle w:val="Eingabe"/><w:sz w:val="20"/></w:rPr>"#), "{out}");
+}
+
+#[test]
+fn retained_ink_and_mathml_properties_keep_declared_namespaces() {
+    let pr = r#"<w:id w:val="42"/><pen:annotation mc:Ignorable="math"><math:math math:id="formula" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.w3.org/1998/Math/MathML mathml.xsd"><math:cn>2</math:cn></math:math><d:creator xmlns:d="http://purl.org/dc/elements/1.1/">Study</d:creator></pen:annotation>"#;
+    let ns = r#"xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:pen="http://www.w3.org/2003/InkML" xmlns:math="http://www.w3.org/1998/Math/MathML" mc:Ignorable="pen math""#;
+    let mut d = read(&package_ns(&p(&sdt(pr, &t("Note"))), ns)).unwrap();
+    for _ in 0..2 {
+        let out = document_xml(&write(&d).unwrap());
+        assert!(out.contains(r#"xmlns:ink="http://www.w3.org/2003/InkML""#), "{out}");
+        assert!(out.contains(r#"xmlns:mml="http://www.w3.org/1998/Math/MathML""#), "{out}");
+        let ignorable = out.split_once("mc:Ignorable=\"").unwrap().1.split('"').next().unwrap();
+        assert!(ignorable.split_whitespace().any(|p| p == "ink") && ignorable.split_whitespace().any(|p| p == "mml"), "{ignorable}");
+        assert!(out.contains(r#"xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance""#), "{out}");
+        assert!(out.contains(r#"xmlns:dc="http://purl.org/dc/elements/1.1/""#), "{out}");
+        assert!(out.contains(r#"<ink:annotation mc:Ignorable="mml"><mml:math mml:id="formula" xsi:schemaLocation="http://www.w3.org/1998/Math/MathML mathml.xsd"><mml:cn>2</mml:cn></mml:math><dc:creator>Study</dc:creator></ink:annotation>"#), "{out}");
+        d = read(&write(&d).unwrap()).unwrap();
+        assert!(by_id(&d, 42).extra.iter().any(|x| x.contains(r#"<ink:annotation mc:Ignorable="mml"><mml:math"#)));
+    }
 }
 
 /// Word's Table of Contents control (`w:docPartObj`, #2427) around a TOC the engine's
