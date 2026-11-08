@@ -4056,14 +4056,22 @@ fn numbering_strips_typed_labels_that_match_the_new_list() {
     assert_eq!(numbers(&mut s).into_iter().map(|p| p.0).collect::<Vec<_>>(), [Some("1.".into()), Some("2.".into()), Some("3.".into())]);
 }
 
-/// #6017: the first typed label starts a new list, as Word does: 2., 3., 4. stays 2., 3., 4.
+/// #6017: a first typed label the list does not show stays; later labels in its sequence go.
 #[test]
-fn numbering_starts_at_the_first_typed_label() {
+fn numbering_keeps_a_first_typed_label_the_list_does_not_show() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("2. alpha\n3. beta\n4. gamma"));
     run(&mut s, "select.all", json!({}));
     run(&mut s, "para.numbering", json!({}));
-    assert_eq!(paras(&s).into_iter().map(|p| p.0).collect::<Vec<_>>(), ["alpha", "beta", "gamma"]);
-    assert_eq!(numbers(&mut s).into_iter().map(|p| p.0).collect::<Vec<_>>(), [Some("2.".into()), Some("3.".into()), Some("4.".into())]);
+    assert_eq!(paras(&s).into_iter().map(|p| p.0).collect::<Vec<_>>(), ["2. alpha", "beta", "gamma"]);
+    assert_eq!(numbers(&mut s).into_iter().map(|p| p.0).collect::<Vec<_>>(), [Some("1.".into()), Some("2.".into()), Some("3.".into())]);
+
+    for text in ["1. alpha", "2. alpha"] {
+        let mut s = Session::new(wordcraft_doc::Document::from_text(text));
+        run(&mut s, "select.all", json!({}));
+        run(&mut s, "para.numbering", json!({}));
+        let want = if text.starts_with('1') { "alpha" } else { "2. alpha" };
+        assert_eq!(paras(&s).into_iter().map(|p| p.0).collect::<Vec<_>>(), [want], "{text}");
+    }
 }
 
 /// #6017: a typed numeric label is removed when bullets are applied, but a typed dash stays.
@@ -4100,7 +4108,7 @@ fn numbering_strips_typed_letter_and_roman_labels() {
 /// word ending in a period is not a label.
 #[test]
 fn numbering_strips_other_typed_labels_and_keeps_words() {
-    for text in ["1) alpha\n2) beta", "a. alpha\nb. beta", "a) alpha\nb) beta", "i. alpha\nii. beta"] {
+    for text in ["1) alpha\n2) beta", "(1) alpha\n(2) beta", "a. alpha\nb. beta", "a) alpha\nb) beta", "(a) alpha\n(b) beta", "i. alpha\nii. beta"] {
         let mut s = Session::new(wordcraft_doc::Document::from_text(text));
         run(&mut s, "select.all", json!({}));
         run(&mut s, "para.numbering", json!({}));
@@ -4111,4 +4119,16 @@ fn numbering_strips_other_typed_labels_and_keeps_words() {
     run(&mut s, "select.all", json!({}));
     run(&mut s, "para.bullets", json!({}));
     assert_eq!(paras(&s).into_iter().map(|p| p.0).collect::<Vec<_>>(), ["Hello. world", "Goodbye. world"]);
+}
+
+/// #6017 review: removing a prefix moves a caret inside the paragraph with the text.
+#[test]
+fn numbering_moves_a_caret_inside_a_stripped_label() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("1. alpha"));
+    s.sel = crate::Selection::caret(Pos::body(0, 6));
+    run(&mut s, "para.numbering", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "alpha");
+    assert_eq!(s.sel.focus.off, 3);
+    run(&mut s, "text.insert", json!({"text": "X"}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "alpXha");
 }

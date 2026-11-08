@@ -1,8 +1,6 @@
 use super::format::fmt;
 use super::{CmdError, CmdResult, LineSpacing, ListKind, NumRef, ParaProps, Session, Style, StyleKind, Value, json, p, sel_result};
 use std::sync::Arc;
-use wordcraft_doc::numbering::Level;
-use wordcraft_doc::section::NumFormat;
 use wordcraft_doc::{Path, StoryRef};
 
 /// Toggle lists using effective paragraph numbering; an explicit off request removes numbering.
@@ -45,7 +43,6 @@ pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
         .prev_para(a.story, &a.path)
         .and_then(|q| s.doc.para(a.story, &q).and_then(|x| x.props.numbering))
         .filter(|n| n.num != 0 && same_kind(&NumRef { level: 0, ..*n }));
-    let continuing = prev_num.is_some();
     let num = match prev_num {
         Some(n) => n.num,
         None => match kind {
@@ -56,16 +53,6 @@ pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
             _ => Arc::make_mut(&mut s.doc.numbering).try_add_list(kind)?,
         },
     };
-    // Word starts a new list at the first label the author typed when that is a label this
-    // list kind would show (2. alpha, 3. beta becomes 2., 3., not 1., 2.).
-    if !continuing
-        && !kind.is_bullet()
-        && let Some(start) =
-            typed.first().and_then(Option::as_deref).and_then(|label| s.doc.numbering.level(num, 0).and_then(|level| typed_start(label, level)))
-        && let Some(n) = Arc::make_mut(&mut s.doc.numbering).nums.iter_mut().find(|x| x.id == num)
-    {
-        n.start_overrides.push((0, start));
-    }
     fmt(s, &|p| {
         let level = p.numbering.filter(|n| n.num != 0).map(|n| n.level).unwrap_or(0);
         p.numbering = Some(NumRef { num, level });
@@ -88,28 +75,18 @@ fn leading_label(text: &str) -> Option<&str> {
     (end > 0).then(|| &text[..end])
 }
 
-/// The label's text and delimiter (`.` or `)`) without its count.
+/// The label's text and delimiter (`.`, `)` or surrounding parentheses) without its count.
 fn label_parts(label: &str) -> Option<(&str, char)> {
+    if let Some(body) = label.strip_prefix('(').and_then(|label| label.strip_suffix(')')) {
+        return (!body.is_empty()).then_some((body, ')'));
+    }
     if let Some(body) = label.strip_suffix('.') {
         return (!body.is_empty()).then_some((body, '.'));
     }
     if let Some(body) = label.strip_suffix(')') {
         return (!body.is_empty()).then_some((body, ')'));
     }
-    let body = label.strip_prefix('(')?.strip_suffix(')')?;
-    (!body.is_empty()).then_some((body, ')'))
-}
-
-/// A typed label's count, when this level would show the same text for it.
-fn typed_start(label: &str, level: &Level) -> Option<u32> {
-    let (body, _) = label_parts(label)?;
-    let value = match level.format {
-        NumFormat::Decimal | NumFormat::DecimalZero | NumFormat::Ordinal => body.parse().ok()?,
-        NumFormat::UpperLetter | NumFormat::LowerLetter => letter_value(body)?,
-        NumFormat::UpperRoman | NumFormat::LowerRoman => roman_value(body)?,
-        _ => return None,
-    };
-    (level.format.format(value) == body).then_some(value)
+    None
 }
 
 /// Whether a typed label is a number, for the bullet rule; a typed dash or word is not.
@@ -127,6 +104,11 @@ fn label_values(label: &str) -> [Option<u32>; 3] {
 fn same_label_count(a: &str, b: &str) -> bool {
     let (a, b) = (label_values(a), label_values(b));
     a.iter().flatten().any(|x| b.iter().flatten().any(|y| x == y))
+}
+
+fn next_label_count(a: &str, b: &str) -> bool {
+    let (a, b) = (label_values(a), label_values(b));
+    a.iter().flatten().any(|x| b.iter().flatten().any(|y| y == &x.saturating_add(1)))
 }
 
 fn letter_value(s: &str) -> Option<u32> {
@@ -169,20 +151,27 @@ fn strip_typed_labels(s: &mut Session, story: StoryRef, paths: &[Path], typed: &
     if typed.iter().all(Option::is_none) {
         return Ok(());
     }
-    let rendered = rendered_labels(s, paths);
+    let rendered = rendered_labels(s, story, paths);
     let mut changed = false;
+    let mut previous: Option<&str> = None;
     for ((path, typed), rendered) in paths.iter().zip(typed).zip(rendered) {
         let Some(typed) = typed else { continue };
-        let strip = if kind.is_bullet() { bullet_label(typed) } else { rendered.as_deref().is_some_and(|label| same_label_count(typed, label)) };
-        if !strip {
-            continue;
+        let strip = if kind.is_bullet() {
+            bullet_label(typed)
+        } else {
+            rendered.as_deref().is_some_and(|label| same_label_count(typed, label))
+                || previous.is_some_and(|previous| next_label_count(previous, typed))
+        };
+        if strip {
+            let para = s.doc.para_mut(story, path)?;
+            let mut end = typed.len();
+            end += para.text[end..].chars().take_while(|c| c.is_whitespace()).map(char::len_utf8).sum::<usize>();
+            para.delete(0, end)?;
+            para.touch();
+            shift_selection(s, story, path, end);
+            changed = true;
         }
-        let para = s.doc.para_mut(story, path)?;
-        let mut end = typed.len();
-        end += para.text[end..].chars().take_while(|c| c.is_whitespace()).map(char::len_utf8).sum::<usize>();
-        para.delete(0, end)?;
-        para.touch();
-        changed = true;
+        previous = Some(typed);
     }
     if changed {
         s.relayout();
@@ -190,12 +179,21 @@ fn strip_typed_labels(s: &mut Session, story: StoryRef, paths: &[Path], typed: &
     Ok(())
 }
 
-fn rendered_labels(s: &mut Session, paths: &[Path]) -> Vec<Option<String>> {
+fn shift_selection(s: &mut Session, story: StoryRef, path: &Path, removed: usize) {
+    for pos in [&mut s.sel.anchor, &mut s.sel.focus] {
+        if pos.story == story && pos.path == *path {
+            pos.off = pos.off.saturating_sub(removed);
+        }
+    }
+}
+
+fn rendered_labels(s: &mut Session, story: StoryRef, paths: &[Path]) -> Vec<Option<String>> {
     let layout = s.layout();
     let mut out = vec![None; paths.len()];
     for page in &layout.pages {
-        for item in &page.items {
-            if let wordcraft_layout::Placed::Lines { path, para, l0: 0, .. } = item
+        for item in page.items.iter().chain(&page.header).chain(&page.footer) {
+            if let wordcraft_layout::Placed::Lines { story: item_story, path, para, l0: 0, .. } = item
+                && *item_story == story
                 && let Some(label) = &para.label
                 && let Some(i) = paths.iter().position(|p| p == path)
             {
