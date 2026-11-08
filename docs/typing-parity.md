@@ -8,6 +8,12 @@ WordCraft, results read back paragraph by paragraph) and pinned by tests in
 tests together. Line breaking and pagination are in [`layout-parity.md`](layout-parity.md); the
 overall picture is in [`target-app-parity.md`](target-app-parity.md).
 
+## Finding smart-quoted text (#5388)
+
+Ordinary Find and Replace treat a keyboard apostrophe (`'`) as a straight or typographic single quote (`‘`, `’`), so a search for `Tau'va` finds `Tau’va` typed with smart quotes. Partial queries, case options and whole-word matching still apply. Wildcards, regular expressions, literal searches (`special: false`) and numeric character codes such as `^u39` remain exact. A curly-quote query also stays exact, and the modifier-letter apostrophe `ʼ` is distinct. Replacement `^&` keeps the original matched spelling. This behavior is covered by original engine and CLI/MCP controls; no fresh Word or native desktop comparison is claimed.
+
+
+
 ## Highlight shortcut (#4085)
 
 On Windows/Linux, Ctrl+Alt+H toggles the last chosen highlighter colour (yellow in a
@@ -584,6 +590,7 @@ this correction; native Windows interaction and Microsoft Word remain untested.
 | 2026-11-04 | trivial | Ctrl+K on a selection: a changed Text to display replaces the selected text before it is linked |
 | 2026-10-30 | trivial | Equations: `\int` + Space waits for its limits; `_x^y` then Space builds them, Space alone builds the operator without, typing goes into its operand, and Enter or an arrow key builds it without going into the operand (#4917). Review: any character that can't continue `\name` corrects it (`\int_0^1`, `\alpha+`), and `∫∫` takes the operand into the inner operator; the Word rows are now observed in Word for Windows on #4938, Enter, arrows and `∫∫` are not |
 | 2026-11-03 | trivial | Alt+numpad codes type their character in text boxes too (Find what, dialog fields), not the digits or nothing (#4403) |
+| 2026-11-03 | trivial | Find smart-quoted text with a keyboard apostrophe (#5388); exact search modes and replacement spelling preserved. |
 | 2026-11-01 | minor | English spelling by dialect from SCOWL 2026: typed British, Canadian and Australian text, modern words and ordinals pinned (#40, #520, #1281, #1045; CP2) |
 | 2026-10-29 | trivial | Relative font-size commands preserve mixed sizes in the selection (#4903); existing button steps and one-point shortcuts are unchanged; readiness estimates unchanged |
 | 2026-10-28 | trivial | Highlighting at a caret leaves the word alone and sets the colour for what is typed next (#4086). |

@@ -118,6 +118,8 @@ full number from ~60% to ~75%. Everything else is depth on the way to full parit
 
 > **Three-column preset update:** 2026-10-15 · the header/footer preset uses editable table cells and screen-only editing guides (#2197). Synthetic command, undo/redo and repeated DOCX save/reopen checks cover this preset; broader template/layout gaps and readiness estimates remain unchanged.
 
+Normal Find and Replace now match a keyboard apostrophe against straight and typographic single quotes (#5388), including text entered with smart quotes. Exact search modes and numeric character codes retain their character identity. This fixes a focused editing case; ranked gaps and readiness estimates are unchanged.
+
 ## By kind
 
 List toggles now recognise numbering inherited from paragraph styles (related to #3459). This closes that command-level case; the broader issue and readiness estimates are unchanged. See [typing-parity.md](typing-parity.md) for the original-fixture and round-trip coverage.
@@ -222,6 +224,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-11-04 | trivial | Table Sort rejects malformed or nonexistent explicit columns before mutation; valid columns, the omitted-column default and history are retained (#5531). Readiness estimates unchanged. |
 | 2026-10-30 | trivial | #20 narrowed: layout resource caps and linear-time passes (#3867, #3866) |
 | 2026-10-17 | trivial | UI/UX gaps: copies put RTF on the clipboard (Windows, macOS, Wayland; not X11), and paste reads RTF on macOS and X11 too |
+| 2026-11-03 | trivial | Find smart-quoted text with a keyboard apostrophe (#5388); exact search modes and replacement spelling preserved. |
 | 2026-11-03 | minor | #11: Arabic interface with mirrored shell (#1195); key languages missing are now hi and id (plus pt-PT); Hebrew UI still open |
 | 2026-11-03 | trivial | #8 (CP4.3): one language list: Set Proofing Language, Review › Language and the status bar offer the Language pack languages (Bulgarian was in none); every published pack named in English; Valencian is `ca-ES-valencia`; gap 8 names built-in proofing |
 | 2026-11-03 | trivial | #8 (CP4.3): the missing-pack bar offers a language before the list of packs is fetched (a fresh install, or a list cached for an older pin) and gets it on Install; with downloading on, a missing or stale list is fetched once in the background; the caret's typing language counts; the spelling context menu's heading is in the interface language |
