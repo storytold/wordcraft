@@ -152,8 +152,10 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-11-05: ODT heading text of another size keeps it (gap 19): a smaller word in a heading came back at the heading's size in LibreOffice after a save.
 - 2026-11-05: ODT table rows kept from breaking across pages stay so (gap 19): they came back from a save free to break.
 - 2026-11-05: ODT: a watermark added, changed or removed, and Different Odd & Even Pages turned on or off, in a file read from ODT are saved.
+- 2026-11-05: ODT font declarations are kept (gap 19): replacing them made LibreOffice pick other substitutes for fonts not installed, reflowing a document from 83 pages to 70 on a save with no edits.
 - 2026-11-05: ODT pictures offered in several formats show and survive a save (gap 19): LibreOffice's letter templates lost theirs.
 - 2026-11-07: An in-line picture lowered past its own height (`w:position`) lowers its line as far, as in Word; all 156 synthetic lines measured for #3984 match Word (#5796). Exact spacing keeps the line's baseline.
+- 2026-11-03: Search types in place: a click on the title bar's Search box, or Alt+Q, takes the typing in that box, with the results under it, as in Word, instead of a second box in a dialog (#5398).
 - 2026-11-06: Windows print submissions run in separate helper processes (#5710). A helper acknowledges cancellation before it stops, so a driver stalled in a cancelled job cannot hold another job’s provider lock. A private temporary PDF and bounded settings messages cross the process boundary; normal shutdown reaps helpers and removes their inputs. The helper erases its plaintext inputs before driver work; a hard app crash during startup can still leave private temporary files. Jobs already sending still complete. Readiness estimates unchanged.
 - 2026-11-06: File › Print: before sending starts, Cancel printing stops a waiting job, frees the Print page and keeps the settings; a successfully cancelled job is never sent. Cancellation remains available after the last document closes. Quitting cancels waiting jobs and joins jobs already sending (#5710). On Windows, winprint repeats the DEVMODE conversion after sending starts. A stall during that repeat prevents cancellation and can keep shutdown waiting, even before a native job exists. Readiness estimates unchanged.
 - 2026-11-06: File › Print on Windows no longer waits on printer drivers to list printers (#5710). The list used to wait until each printer's driver said whether it prints on both sides, and a networked printer asleep in power save could keep it empty with Refresh unavailable; now discovery asks no driver (the Windows spooler still supplies the list), and printing still checks the job's options with the driver. The reporter's sleeping printer has not been retested yet. Readiness estimates unchanged.
@@ -162,6 +164,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-10-30: Equations: `\int`, `\sum` and the other n-ary operators typed with AutoCorrect wait for their limits. `\int` + Space, then `_0^1` and Space, gives ∫ with its limits and the caret in its operand, and `\int_0^1` typed in one go does the same, since any character that can't continue `\name` corrects it; this is observed in Word for Windows on #4938. Enter or an arrow key builds it without going into the operand, and `∫∫` puts the operand in the inner operator; those two are not observed in Word (#4917). Readiness unchanged.
 
 - 2026-11-04: RTF import skips the declared Unicode fallback count even when it exceeds eight fallback units, so longer ANSI alternatives do not leak into the document text. Skipping stays bounded by the available input and ends at a group boundary. Readiness estimates unchanged.
+- 2026-11-05: Linux: a WordCraft started by an AppImage app no longer takes that app's file for its own (#5653). The AppImage runtime's `APPIMAGE`, `APPDIR`, `ARGV0` and `OWD` pass to whatever the app starts, so an installed WordCraft opened through `xdg-open` saw another program's `APPIMAGE`, and its self-update replaced that program's file. The app now starts over without those variables unless its executable is under `APPDIR`, so the update goes through the package or plain file it really is. Should starting over fail, the self-update is off in that window and Help › Check for Updates says why. Readiness estimates unchanged.
 - 2026-11-05: A Word template (`.dotx`, `.dotm`, `.dot`) opened from the file manager, the command line or the Finder starts a new, untitled document based on it, as Word's default verb for a template does (#3433). It opened the template itself, so Save (and AutoSave) wrote over it. The new document is attached to the template and Save asks where to write; a protected template asks for its password and still starts a new document. File › Open and a file dropped on the window still open a template itself, to edit it.
 - 2026-10-28: Ink replay, eraser picking, lasso selection and arrow-candidate discovery reuse the paragraph prefixes they have already scanned (#3614). Page item order, stroke geometry and saved data retain their behavior. This narrows the stability work; ink import fidelity, native pen input and broader corpus qualification remain open.
 - 2026-10-29: Page drawing finds text-box warps without rescanning the paragraph for every box (#3614). Only requested offsets are indexed, and each paragraph walk stops after its last requested character. Original Linux discovery, complete display-output and CLI/MCP save/reopen controls; native Word comparison untested. Readiness estimates unchanged.
@@ -813,6 +816,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 ## Revision history
 
+> 2026-11-05 · Linux self-update ignores another program's AppImage variables (#5653); recorded in the progress log, readiness unchanged.
 > 2026-11-05 · A template opened from the file manager starts a new document instead of being edited and saved over (#3433); recorded in the progress log, readiness unchanged.
 >
 > 2026-11-03 · Arabic dialogs read right to left (rtl::Table); recorded in the progress log, readiness unchanged.
@@ -831,6 +835,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-07 | trivial | Page Setup also bounds the unfocused margin display after a long numeric paste; the accepted value is retained (#5650). |
 | 2026-11-05 | trivial | Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. |
 | 2026-11-07 | trivial | Progress log: An in-line picture lowered past its own height (`w:position`) lowers its line as far, as in Word; all 156 synthetic lines measured for #3984 match Word (#5796). |
+| 2026-11-03 | trivial | Progress log: the title bar's Search box takes the typing in place (#5398) |
 | 2026-11-06 | trivial | Print helpers remove loaded PDF/settings files before driver work, tolerate prior removal and report cleanup errors; a held-driver regression checks the files are already absent (#5710) |
 | 2026-11-06 | trivial | Windows print submissions isolated per helper process; cancelled driver work cannot block a retry (#5710) |
 | 2026-11-06 | trivial | Progress log: print cancellation before sending, including without a document, and the Windows repeated-conversion limitation (#5710) |
@@ -846,6 +851,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-05 | trivial | Progress log: ODT heading text of another size (gap 19) |
 | 2026-11-05 | trivial | Progress log: ODT table rows that don't break (gap 19) |
 | 2026-11-05 | trivial | Progress log: a watermark or odd and even headers change to a file is saved |
+| 2026-11-05 | trivial | Progress log: ODT font declarations kept (gap 19) |
 | 2026-11-05 | trivial | Progress log: ODT pictures offered in several formats (gap 19) |
 | 2026-10-28 | trivial | Shared MATH construction records reuse variants and assembly data without changing glyph mappings or existing limits (#3630); readiness estimates unchanged |
 | 2026-10-29 | trivial | Page drawing indexes text-box warp lookups per paragraph (#3614); requested offsets only, bounded prefix traversal, original Linux display and persistence controls; readiness estimates unchanged |
