@@ -302,6 +302,21 @@ fn automation_roots(
     Ok((roots, left))
 }
 
+/// Print `warning` on stderr, if there is one.
+fn warn(warning: Option<String>) {
+    if let Some(w) = warning {
+        eprintln!("wordcraft-cli: warning: {w}");
+    }
+}
+
+/// The warning for a save or export result's `notShown` (#5393): the embedded objects `output`
+/// doesn't keep, and whether it shows their pictures (`notShownAs`). `None` when there are none.
+fn not_shown_warning(result: &Value, output: &str) -> Option<String> {
+    let names: Vec<String> = result.get("notShown")?.as_array()?.iter().filter_map(|n| n.as_str().map(str::to_string)).collect();
+    let pictures = result.get("notShownAs").and_then(Value::as_str) != Some("nothing");
+    wordcraft_engine::cmd::embedded_objects::warning(&names, output, pictures)
+}
+
 /// The password a protected Word file is opened with: `--password` (which any other process on
 /// the machine can read from the command line), `--password-file`, or `WORDCRAFT_PASSWORD`.
 const PASSWORD_OPTIONS: &[OptionSpec] =
@@ -464,8 +479,10 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 }
                 s.run("file.save", &params)
             };
-            r.map_err(|e| e.to_string())?;
+            let r = r.map_err(|e| e.to_string())?;
             eprintln!("wrote {o}");
+            // Embedded objects the output shows only as their pictures (#5393): never silently.
+            warn(not_shown_warning(&r, &o));
             Ok(())
         }
         "info" => {
@@ -482,6 +499,9 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let password = password_from(&rest)?;
             let s = open(paths.first().ok_or_else(missing_argument)?, password.as_deref())?;
             let text = listed_text(&s.doc)?;
+            // An embedded object isn't in the text, nor its picture (#5393): say so on stderr.
+            use wordcraft_engine::cmd::embedded_objects::{Kept, not_shown_in, warning};
+            warn(warning(&not_shown_in(&s.doc, Kept::Nothing), "the text", false));
             write_stdout(|o| writeln!(o, "{text}"))
         }
         "inspect" => {
@@ -581,8 +601,9 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 } else {
                     s.run("file.save", &json!({"path": out}))
                 };
-                r.map_err(|e| e.to_string())?;
+                let r = r.map_err(|e| e.to_string())?;
                 eprintln!("wrote {out}");
+                warn(not_shown_warning(&r, &out));
             }
             Ok(())
         }
@@ -706,8 +727,9 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             }
             eprintln!("{} calls, {}", out.calls, if out.completed { "completed" } else { "ended without completing (cancelled?)" });
             if let Some(o) = arg_value(&rest, "--save") {
-                s.run("file.save", &json!({"path": o})).map_err(|e| e.to_string())?;
+                let r = s.run("file.save", &json!({"path": o})).map_err(|e| e.to_string())?;
                 eprintln!("wrote {o}");
+                warn(not_shown_warning(&r, &o));
             }
             Ok(())
         }

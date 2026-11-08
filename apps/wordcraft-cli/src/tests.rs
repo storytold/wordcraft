@@ -564,3 +564,22 @@ fn script_parse_resolves_paths_against_the_base() {
     assert_eq!(s.save, vec!["o.docx".to_string()]);
     assert_eq!(s.commands.len(), 1);
 }
+
+/// #5393: `convert` warns about the embedded objects its output shows only as their pictures, from
+/// the save's `notShown`, and says nothing when there are none.
+#[test]
+fn convert_warns_about_objects_shown_as_pictures() {
+    let r = json!({"saved": true, "notShown": ["Word.Document.12"], "notShownAs": "picture"});
+    assert_eq!(
+        super::not_shown_warning(&r, "out.pdf").as_deref(),
+        Some("1 embedded object (Word.Document.12) is shown as its picture; its content is not in out.pdf")
+    );
+    // A text copy has no picture, and the warning says so.
+    let r = json!({"saved": true, "notShown": ["Word.Document.12", "Package"], "notShownAs": "nothing"});
+    assert_eq!(
+        super::not_shown_warning(&r, "out.txt").as_deref(),
+        Some("2 embedded objects (Word.Document.12, Package) are left out; their content is not in out.txt")
+    );
+    assert_eq!(super::not_shown_warning(&json!({"saved": true}), "out.pdf"), None);
+    assert_eq!(super::not_shown_warning(&json!({"notShown": []}), "out.pdf"), None);
+}
