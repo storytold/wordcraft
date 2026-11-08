@@ -1,5 +1,5 @@
-use super::*;
 use super::generated::{has_switch, switch_value};
+use super::*;
 use crate::Session;
 
 #[test]
