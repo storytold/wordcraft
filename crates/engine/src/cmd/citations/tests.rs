@@ -340,6 +340,7 @@ fn table_of_figures_from_word_and_typed_captions() {
         dirty: false,
         code: false,
         form: String::new(),
+        math: None,
     };
     s.doc.insert_object(&at, field, &CharProps::default()).unwrap();
     s.run("references.updateFigures", &json!({})).unwrap();
@@ -389,6 +390,7 @@ fn table_of_figures_from_word_replaces_its_saved_list() {
         dirty: false,
         code: false,
         form: String::new(),
+        math: None,
     };
     p.insert_object(0, field, &CharProps::default()).unwrap();
     for _ in 0..2 {
@@ -411,6 +413,7 @@ fn table_of_figures_goes_by_the_seq_identifier() {
         dirty: false,
         code: false,
         form: String::new(),
+        math: None,
     };
     let plain = CharProps::default();
     let mut imported = Paragraph::new().styled("Caption");
@@ -444,6 +447,7 @@ fn caption_label_after_a_chapter_number_field() {
         dirty: false,
         code: false,
         form: String::new(),
+        math: None,
     };
     let plain = CharProps::default();
     // STYLEREF, " Specimen ", SEQ Figure, ": A rock"
@@ -798,6 +802,7 @@ fn lookup_session(tags: &[&str]) -> Session {
                 dirty: true,
                 code: false,
                 form: String::new(),
+                math: None,
             },
             &CharProps::default(),
         )
@@ -829,7 +834,7 @@ fn citation_source_lookups_keep_first_duplicates_case_and_style_order() {
         update_citations(&mut s).unwrap();
         let p = s.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
         for (k, (source, number)) in [(1, 1), (0, 2), (usize::MAX, 0), (3, 3), (0, 2)].into_iter().enumerate() {
-            let InlineObject::Field { instr, result, locked, dirty, code, form } = &p.objects[k] else { panic!() };
+            let InlineObject::Field { instr, result, locked, dirty, code, form, .. } = &p.objects[k] else { panic!() };
             let InlineObject::Field { instr: before, .. } = &original.para(StoryRef::Body, &Path::top(0)).unwrap().objects[k] else { panic!() };
             assert_eq!(instr, before);
             let expected = original.sources.get(source).map(|x| cite(x, st.name, number, "")).unwrap_or_else(|| "Original cache".into());
@@ -859,6 +864,7 @@ fn citation_refresh_source_lookup_work_scales_with_document_size() {
                 dirty: false,
                 code: false,
                 form: String::new(),
+                math: None,
             })
             .collect();
         let mut d = Document::new();

@@ -272,8 +272,15 @@ fn caret_in_a_continued_footnote_is_found_on_its_page() {
 #[test]
 fn page_references_in_footers_show_their_bookmarks_page() {
     crate::test_fonts();
-    let field =
-        |instr: &str| InlineObject::Field { instr: instr.into(), result: "9".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let field = |instr: &str| InlineObject::Field {
+        instr: instr.into(),
+        result: "9".into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+        math: None,
+    };
     let footer = |d: &mut Document, mark: &str| {
         let mut p = Paragraph::with_text("Page  of ", Default::default());
         p.insert_object(5, field("PAGE"), &Default::default()).unwrap();
@@ -371,6 +378,7 @@ fn page_ref_footer(d: &mut Document, marks: &[&str]) -> u32 {
             dirty: false,
             code: false,
             form: String::new(),
+            math: None,
         };
         p.insert_object(n, field, &Default::default()).unwrap();
     }
@@ -436,8 +444,15 @@ fn page_references_in_footer_text_boxes_are_resolved() {
     use wordcraft_doc::para::{Float, ShapeKind, Wrap};
     let text_box = |d: &mut Document| {
         let mut p = Paragraph::new();
-        let field =
-            InlineObject::Field { instr: "PAGEREF End".into(), result: "9".into(), locked: false, dirty: false, code: false, form: String::new() };
+        let field = InlineObject::Field {
+            instr: "PAGEREF End".into(),
+            result: "9".into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            math: None,
+        };
         p.insert_object(0, field, &Default::default()).unwrap();
         let story = d.add_part(PartKind::TextBox, vec![para_block(p)]);
         InlineObject::Shape {
@@ -558,6 +573,7 @@ fn a_roman_page_number_in_the_footer_stays_roman_with_the_page_count_in_the_body
         dirty: false,
         code: false,
         form: String::new(),
+        math: None,
     };
     let mut d = Document::new();
     let mut fp = Paragraph::new();
@@ -636,7 +652,15 @@ fn body_page_field_uses_the_section_number_format() {
     for (i, instr) in ["PAGE", "PAGE \\* Upper"].into_iter().enumerate() {
         let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
         let off = p.len();
-        let field = InlineObject::Field { instr: instr.into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() };
+        let field = InlineObject::Field {
+            instr: instr.into(),
+            result: "1".into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            math: None,
+        };
         p.insert_object(off, field, &Default::default()).unwrap();
     }
     let l = lay(&d);
@@ -658,7 +682,7 @@ fn reflow_page_field_uses_the_current_section_number_format() {
     let off = p.len();
     p.insert_object(
         off,
-        InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
+        InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new(), math: None },
         &Default::default(),
     )
     .unwrap();
@@ -696,7 +720,8 @@ fn table_cell_page_field_uses_the_section_number_format() {
     d.last_section.page_num_format = wordcraft_doc::section::NumFormat::CardinalText;
     let mut t = Table::new(1, 1, 200.0);
     let mut p = wordcraft_doc::Paragraph::with_text("", Default::default());
-    let field = InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let field =
+        InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new(), math: None };
     p.insert_object(0, field, &Default::default()).unwrap();
     if let Some(c) = t.rows.first_mut().and_then(|r| r.cells.first_mut()) {
         c.blocks = vec![para_block(p)];

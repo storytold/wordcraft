@@ -68,7 +68,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 return Err(CmdError::Params("select a citation or give `entry`".into()));
             }
             let (_, b) = s.sel.ordered();
-            s.doc.insert_object(&b, InlineObject::Field { instr: format!("TA \\l \"{}\"", entry.replace('"', "")), result: String::new(), locked: false, dirty: false, code: false, form: String::new() }, &CharProps { hidden: Some(true), ..Default::default() })?;
+            s.doc.insert_object(&b, InlineObject::Field { instr: format!("TA \\l \"{}\"", entry.replace('"', "")), result: String::new(), locked: false, dirty: false, code: false, form: String::new() ,
+    math: None,
+}, &CharProps { hidden: Some(true), ..Default::default() })?;
             Ok(json!({"entry": entry}))
         })
         .params(r#"{"entry"?: string}"#)

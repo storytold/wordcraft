@@ -60,6 +60,7 @@ mod tests {
                     dirty: false,
                     code: false,
                     form: String::new(),
+                    math: None,
                 };
                 p.insert_object(7, field, &Default::default()).unwrap();
             }

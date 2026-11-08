@@ -100,7 +100,15 @@ fn a_wordcraft_table_of_contents_is_written_as_an_odf_one() {
     let mut head = Paragraph::with_text("Contents", Default::default()).styled("TOCHeading");
     head.insert_object(
         head.len(),
-        InlineObject::Field { instr: TOC_INSTR.into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+        InlineObject::Field {
+            instr: TOC_INSTR.into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            math: None,
+        },
         &Default::default(),
     )
     .unwrap();

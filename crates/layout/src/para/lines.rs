@@ -425,7 +425,7 @@ impl<'e> Breaker<'e> {
             }
             let Some(st) = pl.styles.get(c.style as usize) else { continue };
             let object = if let ClKind::Object(o) = c.kind { Some(o) } else { None };
-            let math = object.is_some_and(|o| pl.maths.iter().any(|(k, _)| *k == o));
+            let math = object.is_some_and(|o| pl.maths.iter().chain(pl.field_maths.iter()).any(|(k, _)| *k == o));
             let check_box = object.is_some_and(|o| pl.check_boxes.contains(&o));
             // A picture sits on the baseline of its run (raised or lowered by its position):
             // the line keeps that font's ascent and descent, and grows to fit it.
