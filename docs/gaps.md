@@ -184,6 +184,8 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 |---|---|---|
 | 2026-11-07 | trivial | Page Setup also bounds the unfocused margin display after a long numeric paste; the accepted value is retained (#5650). |
 | 2026-11-05 | trivial | Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. |
+| 2026-11-04 | trivial | Field argument import and page-format-aware layout/cache follow-ups; no ranked gap changed |
+| 2026-11-03 | trivial | Field argument parsing follows Word quoted backslash escapes; body PAGE formatting follows the active section in paragraphs and tables; no ranked gap changed |
 | 2026-11-07 | trivial | Pagination gap #4: An in-line picture lowered past its own height (`w:position`) lowers its line as far, as in Word; all 156 synthetic lines measured for #3984 match Word (#5796). |
 | 2026-11-06 | trivial | Print helpers remove loaded PDF/settings files before driver work, tolerate prior removal and report cleanup errors; a held-driver regression checks the files are already absent (#5710) |
 | 2026-11-06 | trivial | Windows print submissions use a separate helper per job, preserving provider serialization inside the helper. An acknowledged cancellation stops that helper, so a stalled cancelled driver cannot block a later job; normal shutdown reaps helpers and removes temporary PDFs. The helper erases its plaintext inputs before driver work; a hard app crash during startup can still leave private temporary files. Startup requires an explicit start grant; after sending begins, jobs complete (#5710) |
