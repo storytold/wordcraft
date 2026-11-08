@@ -25,6 +25,7 @@ async fn main() -> ExitCode {
     };
     let bind = cfg.bind.clone();
     let state = AppState::new(cfg);
+    let serving = state.clone();
     let listener = match tokio::net::TcpListener::bind(&bind).await {
         Ok(listener) => listener,
         Err(err) => {
@@ -33,11 +34,34 @@ async fn main() -> ExitCode {
         }
     };
     eprintln!("wordcraft-collab-server: listening on {bind}");
-    match axum::serve(listener, app(state)).await {
+    let result = axum::serve(listener, app(serving)).with_graceful_shutdown(shutdown_signal()).await;
+    // SIGTERM from the container runtime: write every open room before exit.
+    if let Err(message) = state.persist_all() {
+        eprintln!("wordcraft-collab-server: final snapshot failed: {message}");
+    }
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("wordcraft-collab-server: stopped: {err}");
             ExitCode::FAILURE
         }
+    }
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        if let Ok(mut signal) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            signal.recv().await;
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
     }
 }

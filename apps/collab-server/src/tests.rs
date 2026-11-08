@@ -394,6 +394,26 @@ fn a_restored_room_takes_kept_markup_from_the_source_docx() {
 }
 
 #[test]
+fn a_shutdown_snapshot_keeps_every_open_room() {
+    let cfg = dev_config();
+    let state = AppState::new(cfg.clone());
+    let room = state.room_for("doc-shutdown");
+    let node = {
+        let mut guard = room.lock().expect("room lock");
+        guard.room.join(None, false).nodes.first().expect("a node").id
+    };
+    let op = insert("alice", 1, 0, node, 0, "Bye");
+    room.lock().expect("room lock").room.submit("alice", wordcraft_collab::room::Role::Editor, op).expect("apply");
+    state.persist_all().expect("persist on shutdown");
+    drop(room);
+    drop(state);
+
+    let restored = AppState::new(cfg);
+    let room = restored.room_for("doc-shutdown");
+    assert_eq!(room.lock().expect("room lock").room.version(), 1);
+}
+
+#[test]
 fn a_second_session_needs_the_owner_role() {
     let state = AppState::new(dev_config());
     let room = state.room_for("doc-lease");

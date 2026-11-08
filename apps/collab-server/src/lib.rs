@@ -38,6 +38,8 @@ use store::{Snapshot, Store};
 
 /// Largest WebSocket frame the server accepts (RFC §9).
 pub const MAX_FRAME: usize = 1 << 20;
+/// A document the server will hold and commit (matches the reader's budget).
+pub const MAX_DOCUMENT: usize = 64 << 20;
 /// Snapshot chunk size: a large document is sent in several frames.
 pub const SNAPSHOT_CHUNK: usize = 512 * 1024;
 /// A client that does not authenticate within this window is disconnected.
@@ -163,6 +165,10 @@ impl AppState {
             .entry(doc.to_string())
             .or_insert_with(|| {
                 let restored = self.store.load(doc).and_then(|snapshot| {
+                    if snapshot.model.len() > MAX_DOCUMENT {
+                        log::warn!("ignoring a snapshot of {} bytes for {doc}", snapshot.model.len());
+                        return None;
+                    }
                     let mut document = serde_json::from_slice::<wordcraft_doc::Document>(&snapshot.model).ok()?;
                     // `Document::kept` is not serialized (ADR-0011): take it from
                     // the source `.docx` so unchanged paragraphs still write their
@@ -194,6 +200,20 @@ impl AppState {
 
     pub fn room_count(&self) -> usize {
         self.rooms.lock().unwrap_or_else(|poison| poison.into_inner()).len()
+    }
+
+    /// Write every open room before the process exits. A container gets
+    /// SIGTERM; without this the last operations since the periodic snapshot
+    /// would be lost.
+    pub fn persist_all(&self) -> Result<(), String> {
+        let rooms: Vec<(String, Arc<Mutex<RoomState>>)> = {
+            let guard = self.rooms.lock().unwrap_or_else(|poison| poison.into_inner());
+            guard.iter().map(|(doc, room)| (doc.clone(), room.clone())).collect()
+        };
+        for (doc, room) in rooms {
+            self.persist(&doc, &room, None)?;
+        }
+        Ok(())
     }
 }
 
@@ -494,6 +514,10 @@ async fn handle_commit(
         return send(sink, &ServerMsg::Rejected { reject }).await.is_ok();
     }
     match build_docx(room) {
+        Ok((bytes, _warnings)) if bytes.len() > MAX_DOCUMENT => {
+            let reject = Reject::new(op_id, RejectCode::TooLarge, format!("the built file is {} bytes", bytes.len()));
+            send(sink, &ServerMsg::Rejected { reject }).await.is_ok()
+        }
         Ok((bytes, warnings)) => {
             Metrics::inc(&state.metrics.commits);
             let sha256 = hex(&sha2::Sha256::digest(&bytes));
