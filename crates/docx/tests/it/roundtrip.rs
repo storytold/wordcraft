@@ -1020,12 +1020,33 @@ fn tracked_equations_round_trip() {
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
     let mut xml = String::new();
     std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
-    assert!(xml.contains(r#"<w:ins w:id="#) && xml.contains(r#"<m:oMath"#), "{xml}");
-    assert!(xml.contains(r#"<w:del w:id="#) && xml.contains(r#"<m:oMathPara"#), "{xml}");
+    assert!(xml.contains(r#"<w:ins w:id="1" w:author="Alice" w:date="2026-05-01T10:00:00Z"><m:oMath>"#), "ins directly encloses inline math: {xml}");
+    assert!(
+        xml.contains(r#"<w:del w:id="2" w:author="Bob" w:date="2026-05-02T10:00:00Z"><m:oMathPara>"#),
+        "del directly encloses display math: {xml}"
+    );
+    assert!(
+        xml.contains(r#"<w:ins w:id="3" w:author="Alice" w:date="2026-05-01T10:00:00Z"><m:oMathPara>"#),
+        "ins directly encloses display math: {xml}"
+    );
+    assert!(xml.contains(r#"<w:del w:id="4" w:author="Bob" w:date="2026-05-02T10:00:00Z"><m:oMath>"#), "del directly encloses inline math: {xml}");
+    assert!(xml.contains(r#"</w:del><m:oMath>"#), "plain equation follows closing tag without revision wrapper: {xml}");
     let r = wordcraft_docx::read(&bytes).expect("read");
     assert_eq!(r.revisions, d.revisions);
     let got = &paras(&r)[0];
     assert_eq!(got.objects.len(), 5);
+    let eq_summary: Vec<(bool, String)> = got
+        .objects
+        .iter()
+        .map(|o| match o {
+            InlineObject::Equation { display, linear, .. } => (*display, linear.clone()),
+            _ => panic!("expected equation object, got {o:?}"),
+        })
+        .collect();
+    assert_eq!(
+        eq_summary,
+        vec![(false, "x+1".into()), (true, "E=mc^2".into()), (true, "a^2+b^2=c^2".into()), (false, "y=mx+b".into()), (false, "z=1".into()),]
+    );
     assert_eq!(got.runs, p.runs);
 }
 
