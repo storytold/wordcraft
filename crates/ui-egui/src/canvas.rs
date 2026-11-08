@@ -15,6 +15,7 @@ use crate::WordApp;
 use crate::theme::{Tokens, regular, semibold};
 
 mod balloons;
+mod column_ruler;
 mod context_menu;
 #[cfg(test)]
 pub(crate) use context_menu::issue_heading;
@@ -48,6 +49,7 @@ use geometry::{floating_comments, on_page_gap, on_visible_page, white_space_hidd
 use input::{EDGE_MARGIN, EDGE_MAX_DT, EDGE_SPEED_MAX};
 use input::{UnitDrag, clamped_scroll, edge_scroll, mouse, wheel_hovered};
 pub(crate) use input::{hold_document_selection, press_count};
+pub(crate) use links::follow_link;
 #[cfg(test)]
 use links::{field_link, is_followable_link, is_generated_bookmark_link};
 #[cfg(test)]
@@ -89,6 +91,24 @@ const TILE_HEIGHT_PX: usize = 1024;
 /// Page textures are kept for pages within this many viewport heights of the view; farther ones
 /// are rendered again when they come back.
 const TEXTURE_KEEP_SCREENS: f32 = 3.0;
+
+/// The document's scroll bars (#5746): solid, so they show wherever the pointer is (egui's
+/// floating ones are invisible until the pointer nears them), and with their margin exactly as
+/// wide as the [`SCROLLBAR`] room the pages leave, so they neither cover nor move the pages.
+fn canvas_scroll_style() -> egui::style::ScrollStyle {
+    let solid = egui::style::ScrollStyle::solid();
+    egui::style::ScrollStyle { bar_width: SCROLLBAR - solid.bar_inner_margin - solid.bar_outer_margin, ..solid }
+}
+
+/// The document's scroll bar thumb (#5746): egui paints a solid bar's track in
+/// `extreme_bg_color` and its thumb in the widget fills, which our palette sets alike (`input`), so
+/// the thumb would vanish into its track. Grey at rest, darker (lighter in the dark theme) under
+/// the pointer and while dragged. Only the scroll area's own visuals: the pages' contents keep theirs.
+fn canvas_scroll_thumb(visuals: &mut egui::Visuals, t: &Tokens) {
+    visuals.widgets.inactive.bg_fill = t.border_strong;
+    visuals.widgets.hovered.bg_fill = t.input_border;
+    visuals.widgets.active.bg_fill = t.text_dim;
+}
 
 pub struct CanvasState {
     textures: HashMap<usize, (u64, TextureHandle)>,
@@ -1390,9 +1410,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let CanvasView { area, hruler, vruler, paper, geo, dim_body, grid_story, caret, .. } = view;
     let mut origin = area.min;
     let mut ui_area = ui.new_child(egui::UiBuilder::new().max_rect(area));
+    // The bars are drawn with `ui_area`'s style; what the pages draw gets the inherited one back.
+    let inherited = std::sync::Arc::clone(ui_area.style());
+    ui_area.spacing_mut().scroll = canvas_scroll_style();
+    canvas_scroll_thumb(ui_area.visuals_mut(), &t);
     let mut ime_geometry: Option<(Rect, Rect)> = None;
     let mut ime_interrupt = false;
     let out = scroll_area.show_viewport(&mut ui_area, |ui, viewport| {
+        ui.set_style(inherited);
         origin = ui.min_rect().min - viewport.min.to_vec2();
         let content = Rect::from_min_size(ui.min_rect().min, geo.size);
         let resp = canvas_response(ui, content, scroll_target);
