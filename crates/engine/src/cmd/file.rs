@@ -1,6 +1,7 @@
 //! File tab (Backstage): new, open, save, export, print, properties; document inspection.
 
 use serde_json::{Value, json};
+use std::sync::Arc;
 use wordcraft_doc::{Block, Document, StoryRef};
 
 use super::{pos_json, sel_result};
@@ -127,7 +128,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("file.printPdf", "Print to PDF", "File › Print", crate::print::print_pdf_to_file)
             .params(
-                r#"{"path": string, "range"?: "all" | "current" | "selection" (the pages the selection touches) | "custom", "pages"?: "1-3,5" (implies custom), "parity"?: "all" | "odd" | "even", "copies"?: 1-999, "collate"?: bool (default true), "paper"?: "none" | "Letter" | "Legal" | "A4" | … (a Layout › Size name: scale every page to this paper, centred; the document keeps its size)}"#,
+                r#"{"path": string, "pagesPerSheet"?: 1 | 2 | 4 | 6 | 9 | 16 | "booklet" | "bookletReverse", "range"?: "all" | "current" | "selection" (the pages the selection touches) | "custom", "pages"?: "1-3,5" (implies custom), "parity"?: "all" | "odd" | "even", "copies"?: 1-999, "collate"?: bool (default true), "paper"?: "none" | "Letter" | "Legal" | "A4" | … (a Layout › Size name: scale every page to this paper, centred; the document keeps its size)}"#,
             )
             .pure(),
         CommandSpec::new("file.print", "Print", "File", |s, _| {
@@ -147,7 +148,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"id"?: n (an open document, see view.switchWindows; default the active one), "force"?: bool (discard unsaved changes; without it a document with unsaved changes is an error and stays open)} → {"closed": id, "active": id, "documents": [{"id", "title", "path", "dirty", "active"}]}; closing the last document leaves a new blank one"#)
             .pure(),
         CommandSpec::new("file.properties", "Properties", "File › Info", properties)
-            .params(r#"{"title"?, "subject"?, "author"?, "keywords"?, "comments"?, "category"?, "custom"?: {name: string | null (removes)}}"#),
+            .params(r#"{"title"?, "subject"?, "author"?, "keywords"?, "comments"?, "category"?, "custom"?: {name: string | {"value": string, "linkTarget"?: string | null} | null (removes)}}; text values and bookmark targets are at most 1 MiB; a string keeps an existing target, an object replaces it (omitted/null target unlinks)"#),
         CommandSpec::new("file.info", "Info", "File", info).pure(),
         CommandSpec::new("file.setAuthor", "User Name", "File › Options › General", set_author)
             .params(r#"{"name": string (author of new tracked changes and comments)}"#)
@@ -230,7 +231,7 @@ fn new(s: &mut Session, v: &Value) -> CmdResult {
 pub(crate) fn normal_document(s: &Session) -> Document {
     let mut d = s.blank_document();
     if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref()) {
-        d.styles.default_chr.lang = Some(lang.clone());
+        Arc::make_mut(&mut d.styles).default_chr.lang = Some(lang.clone());
     }
     d
 }
@@ -252,27 +253,8 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         );
     }
     let password = p::str(v, "password");
-    let (mut doc, encrypted) = if let Some(data) = p::str(v, "data") {
-        let bytes = super::insert::base64_decode(data).ok_or_else(|| CmdError::Params("bad base64".into()))?;
-        // An empty file (File Explorer's New › Microsoft Word Document makes one) opens as a new
-        // blank document that saves back to it (#1384).
-        if bytes.is_empty() {
-            (normal_document(s), false)
-        } else {
-            crate::io::open_bytes_in(path, &bytes, password, &s.region()).map_err(CmdError::Failed)?
-        }
-    } else if crate::io::is_empty_file(std::path::Path::new(path)) {
-        (normal_document(s), false)
-    } else {
-        crate::io::open_path_in(std::path::Path::new(path), password, &s.region()).map_err(CmdError::Failed)?
-    };
-    // Plain text and Markdown carry no language: they are in the editing language.
-    let ext = std::path::Path::new(path).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
-    if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref())
-        && matches!(ext.as_str(), "txt" | "text" | "md" | "markdown")
-    {
-        doc.styles.default_chr.lang = Some(lang.clone());
-    }
+    // An empty file opens as a new blank document that saves back to it (#1384).
+    let (doc, encrypted) = read_document(s, path, v)?;
     match s.used_because() {
         None => s.set_document(doc),
         Some(why) => {
@@ -291,6 +273,53 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     Ok(
         json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()}),
     )
+}
+
+/// The document the file at `path` holds (or its bytes, base64 in `data`, with `path` only
+/// naming it), read with `password`, and whether it was encrypted: what `file.open` and
+/// `file.newFromTemplate` read. An empty file (File Explorer's New › Microsoft Word Document makes
+/// one) is a new blank document (#1384). Plain text and Markdown carry no language, so they are
+/// in the editing language.
+fn read_document(s: &Session, path: &str, v: &Value) -> Result<(Document, bool), CmdError> {
+    let password = p::str(v, "password");
+    let (mut doc, encrypted) = if let Some(data) = p::str(v, "data") {
+        let bytes = super::insert::base64_decode(data).ok_or_else(|| CmdError::Params("bad base64".into()))?;
+        if bytes.is_empty() {
+            (normal_document(s), false)
+        } else {
+            crate::io::open_bytes_in(path, &bytes, password, &s.region()).map_err(CmdError::Failed)?
+        }
+    } else if crate::io::is_empty_file(std::path::Path::new(path)) {
+        (normal_document(s), false)
+    } else {
+        crate::io::open_path_in(std::path::Path::new(path), password, &s.region()).map_err(CmdError::Failed)?
+    };
+    let ext = std::path::Path::new(path).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
+    if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref())
+        && matches!(ext.as_str(), "txt" | "text" | "md" | "markdown")
+    {
+        Arc::make_mut(&mut doc.styles).default_chr.lang = Some(lang.clone());
+    }
+    Ok((doc, encrypted))
+}
+
+/// File › New from a template (#2852): a new, untitled document with the template's content,
+/// attached to the template as in Word, read as `file.open` reads a file (`data`, `password`).
+/// It opens beside the open documents, as `file.new` does. With `replaceBlank` an untouched blank
+/// document gives way to it, as to a file `file.open` opens: that is how a template the platform
+/// hands the app starts (#3433). The template is only read; the new document has no file, so
+/// saving it asks where to write, and a protected template's password doesn't come along.
+pub(crate) fn new_from_template(s: &mut Session, v: &Value) -> CmdResult {
+    let path = p::req_str(v, "path")?;
+    let (mut doc, _) = read_document(s, path, v)?;
+    doc.settings.attached_template = Some(path.to_string());
+    if p::bool(v, "replaceBlank") == Some(true) && s.used_because().is_none() {
+        s.set_document(doc);
+    } else {
+        s.add_document(doc);
+    }
+    s.dirty = true;
+    sel_result(s)
 }
 
 /// Close a document with no window to ask about it (agents, headless sessions).
@@ -345,7 +374,9 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
             return Err(CmdError::Params("`password` must be a non-empty string (file.encrypt removes a password)".into()));
         };
         if !crate::io::can_encrypt(&path.to_string_lossy()) {
-            return Err(CmdError::Params("only Word documents (.docx, .docm, .dotx, .dotm) can be saved with a password".into()));
+            return Err(CmdError::Params(
+                "only Word documents (.docx, .docm, .dotx, .dotm) and OpenDocument text files (.odt, .ott) can be saved with a password".into(),
+            ));
         }
         wordcraft_docx::check_password(pw).map_err(|e| CmdError::Params(e.to_string()))?;
         s.clear_recovery_before_password()?;
@@ -380,7 +411,7 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     // A save in a format that doesn't keep everything (plain text, Markdown, a page image) is a
     // copy, except over the document's own file: a note.txt opened and saved is saved (#2376).
     let own_file = s.path.as_deref() == Some(path.as_path());
-    if own_file || ["docx", "docm", "dotx", "dotm", "odt", "rtf", "json", "xml"].contains(&ext.as_str()) {
+    if own_file || ["docx", "docm", "dotx", "dotm", "odt", "ott", "fodt", "rtf", "json", "xml"].contains(&ext.as_str()) {
         s.path = Some(path.clone());
         s.dirty = false;
         s.relayout();
@@ -428,7 +459,7 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
         s.push_ui_request(json!({"open": "exportPng"}));
         return Ok(json!({"exported": false}));
     };
-    let page = p::u64(v, "page").unwrap_or(1).max(1) as usize - 1;
+    let page = crate::p::page_index(p::u64(v, "page").unwrap_or(1));
     let scale = p::f32(v, "scale").unwrap_or(2.0).clamp(0.1, 8.0);
     let l = s.export_layout_with(export_options(s, v).markup);
     let pg = l.pages.get(page).ok_or_else(|| CmdError::Params(format!("no page {}", page + 1)))?;
@@ -443,6 +474,15 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
     let png = img.to_png();
     crate::io::write_file(path, &png).map_err(CmdError::Failed)?;
     Ok(json!({"path": path, "width": img.width, "height": img.height, "bytes": png.len()}))
+}
+
+/// Text and its bookmark association cross the dialog/command boundary together on rename.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LinkedCustomText<'a> {
+    value: &'a str,
+    #[serde(borrow)]
+    link_target: Option<&'a str>,
 }
 
 fn properties(s: &mut Session, v: &Value) -> CmdResult {
@@ -460,7 +500,7 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
     set(&mut c.category, "category");
     if let Some(custom) = v.get("custom") {
         let Some(m) = custom.as_object() else {
-            return Err(CmdError::Params("`custom` must be an object of name → string or null".into()));
+            return Err(CmdError::Params("`custom` must be an object of name → text, linked text value, or null".into()));
         };
         // Removals first: a case-only rename sends the old spelling as null and the new one
         // with its value, and `set_custom_prop` matches names case-insensitively, so setting
@@ -471,17 +511,32 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
             }
         }
         for (name, val) in m {
-            match val {
-                // Removals took the name as stored above: a file opened from an older Word may
-                // hold one longer than today's limit, and it must still be deletable (#2982).
-                Value::Null => {}
-                Value::String(x) if x.len() <= MAX_CUSTOM_VALUE => {
-                    if name.trim().is_empty() || name.chars().count() > MAX_CUSTOM_NAME {
-                        return Err(CmdError::Params(format!("custom property names are 1–{MAX_CUSTOM_NAME} characters")));
-                    }
-                    s.doc.set_custom_prop(name, x);
+            let bad_value =
+                || CmdError::Params(format!("custom property `{name}` must be text (≤ {MAX_CUSTOM_VALUE} bytes), a linked text value, or null"));
+            let (value, target) = match val {
+                // Removal also accepts names longer than today's limit (#2982).
+                Value::Null => continue,
+                Value::String(value) => (value.as_str(), None),
+                Value::Object(_) => {
+                    let linked: LinkedCustomText<'_> = serde::Deserialize::deserialize(val).map_err(|_| bad_value())?;
+                    (linked.value, Some(linked.link_target))
                 }
-                _ => return Err(CmdError::Params(format!("custom property `{name}` must be a string (≤ {MAX_CUSTOM_VALUE} bytes) or null"))),
+                _ => return Err(bad_value()),
+            };
+            if value.len() > MAX_CUSTOM_VALUE {
+                return Err(bad_value());
+            }
+            if name.trim().is_empty() || name.chars().count() > MAX_CUSTOM_NAME {
+                return Err(CmdError::Params(format!("custom property names are 1–{MAX_CUSTOM_NAME} characters")));
+            }
+            if target.flatten().is_some_and(|t| t.len() > MAX_CUSTOM_VALUE) {
+                return Err(CmdError::Params(format!("custom property bookmark targets are at most {MAX_CUSTOM_VALUE} bytes")));
+            }
+            s.doc.set_custom_prop(name, value);
+            if let Some(target) = target
+                && let Some(prop) = s.doc.custom_props.iter_mut().find(|p| p.name.eq_ignore_ascii_case(name))
+            {
+                prop.link_target = target.map(str::to_string);
             }
         }
     }
@@ -495,7 +550,7 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
 /// Longest custom property name (Word's limit). The Custom Properties dialog validates with it
 /// too (#2982).
 pub const MAX_CUSTOM_NAME: usize = 255;
-/// Largest custom property value we accept from a command. The Custom Properties dialog
+/// Largest custom property value or bookmark target we accept from a command. The Custom Properties dialog
 /// validates with it too (#2982).
 pub const MAX_CUSTOM_VALUE: usize = 1024 * 1024;
 
