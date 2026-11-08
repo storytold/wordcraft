@@ -46,6 +46,7 @@ pub enum Resolve {
 }
 
 /// The id map of one room.
+#[derive(Clone, Debug)]
 pub struct NodeIds {
     forward: HashMap<NodeKey, NodeId>,
     back: HashMap<NodeId, NodeKey>,

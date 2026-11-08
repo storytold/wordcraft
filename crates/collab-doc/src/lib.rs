@@ -357,6 +357,24 @@ pub fn apply_delta(doc: &mut Document, ids: &mut NodeIds, delta: &Value) -> Resu
             ids.shift_top_blocks(&story_name(story), index + 1, -1);
         }
         "command" => return Err("a command delta needs a Session, not a bare Document".to_string()),
+        // One undo step may change several places; replicas must land all of
+        // them or none, so the whole transaction runs on a scratch copy.
+        "transaction" => {
+            let ops = delta.get("ops").and_then(Value::as_array).ok_or_else(|| "transaction has no `ops`".to_string())?;
+            if ops.is_empty() {
+                return Err("transaction has no operations".to_string());
+            }
+            let mut scratch_doc = doc.clone();
+            let mut scratch_ids = ids.clone();
+            for op in ops {
+                if op.get("op").and_then(Value::as_str) == Some("transaction") {
+                    return Err("a transaction cannot be nested".to_string());
+                }
+                apply_delta(&mut scratch_doc, &mut scratch_ids, op)?;
+            }
+            *doc = scratch_doc;
+            *ids = scratch_ids;
+        }
         other => return Err(format!("unknown delta {other:?}")),
     }
     Ok(())

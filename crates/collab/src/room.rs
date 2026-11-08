@@ -242,16 +242,18 @@ impl<M: Model> Room<M> {
             ));
         }
         let operations = if undo { &step.inverse } else { &step.forward };
-        if operations.len() != 1 {
-            // A step of several operations needs a transaction; applying half of
-            // it would leave the document between states.
-            return Err(Reject::new(op.op_id.clone(), RejectCode::Unsupported, "a step with several operations cannot be replayed yet"));
+        if operations.is_empty() {
+            return Err(Reject::new(op.op_id.clone(), RejectCode::Unsupported, "the step has no operations to replay"));
         }
         if self.step_conflicts(&step) {
             return Err(Reject::new(op.op_id.clone(), RejectCode::UndoConflict, "the step's targets changed after it landed"));
         }
 
-        let mut delta = None;
+        // A step may hold several operations (a replaced range, a block swap, a
+        // future command inverse). It is one transaction: every operation lands
+        // or none does, and the document moves once (ADR-0010).
+        let mut deltas = Vec::with_capacity(operations.len());
+        let mut landed: Vec<Effect> = Vec::with_capacity(operations.len());
         for operation in operations {
             let mut replayed = operation.clone();
             // The step's own ids were already used by the journal; the replay is
@@ -260,16 +262,33 @@ impl<M: Model> Room<M> {
             replayed.base_version = self.journal.head();
             replayed.epoch = None;
             replayed.history = None;
-            let effect = self.model.apply(actor, &replayed, &mut self.ids)?;
-            if effect.nodes_changed {
-                self.nodes_changed = true;
+            match self.model.apply(actor, &replayed, &mut self.ids) {
+                Ok(effect) => {
+                    if effect.nodes_changed {
+                        self.nodes_changed = true;
+                    }
+                    if let Some(delta) = effect.delta.clone() {
+                        deltas.push(delta);
+                    }
+                    landed.push(effect);
+                }
+                Err(mut reject) => {
+                    // All or none: take back what already landed before telling
+                    // the caller no. The inverses come from the same model, so a
+                    // rollback only fails on a broken adapter.
+                    let rolled_back = self.roll_back(actor, &landed);
+                    if !rolled_back {
+                        reject.message.push_str("; the step could not be rolled back, the room needs a snapshot");
+                    }
+                    return Err(reject);
+                }
             }
-            delta = match (delta.take(), effect.delta) {
-                (None, next) => next,
-                (Some(previous), Some(next)) => Some(serde_json::json!({"ops": [previous, next]})),
-                (previous, None) => previous,
-            };
         }
+        let delta = match deltas.len() {
+            0 => None,
+            1 => deltas.pop(),
+            _ => Some(serde_json::json!({"op": "transaction", "ops": deltas})),
+        };
 
         let applied = self.journal.accept(op, actor, delta, Vec::new());
         for operation in operations {
@@ -281,6 +300,36 @@ impl<M: Model> Room<M> {
             self.undo.finish_redo(actor, applied.version);
         }
         Ok(applied)
+    }
+
+    /// Take back operations of a step that landed before a later one was
+    /// refused, newest first, so the step is all or none. Returns whether the
+    /// whole rollback succeeded; the inverses come from the same model, so a
+    /// failure means a broken adapter, never hostile input.
+    fn roll_back(&mut self, actor: &str, landed: &[Effect]) -> bool {
+        let mut seq = 0_u64;
+        for effect in landed.iter().rev() {
+            if effect.inverse.is_empty() {
+                // Nothing was changed, or the operation has no inverse (a
+                // command); the latter cannot be part of a transaction.
+                if effect.delta.is_some() {
+                    return false;
+                }
+                continue;
+            }
+            for inverse in &effect.inverse {
+                seq = seq.saturating_add(1);
+                let mut replayed = inverse.clone();
+                replayed.op_id = OpId::new("history:rollback", seq);
+                replayed.base_version = self.journal.head();
+                replayed.epoch = None;
+                replayed.history = None;
+                if self.model.apply(actor, &replayed, &mut self.ids).is_err() {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     /// Whether another operation touched what `step` changed after it landed.

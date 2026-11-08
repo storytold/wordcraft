@@ -306,3 +306,47 @@ fn a_formatting_only_change_is_reported_as_unsupported() {
     // Keep the variable used: the before document is untouched by the diff.
     let _ = before.body.len();
 }
+
+fn body_line(doc: &Document) -> String {
+    doc.body.first().and_then(|b| b.as_para()).map(|p| p.text.clone()).unwrap_or_default()
+}
+
+#[test]
+fn a_transaction_delta_lands_all_or_nothing() {
+    let mut doc = typed("abcdef");
+    let mut ids = NodeIds::new();
+    DocModel::new(doc.clone()).index_nodes(&mut ids);
+    let first = node(&mut ids, 0);
+
+    crate::apply_delta(
+        &mut doc,
+        &mut ids,
+        &json!({"op": "transaction", "ops": [
+            {"op": "delete_range", "nodeId": first, "off": 0, "len": 1},
+            {"op": "delete_range", "nodeId": first, "off": 0, "len": 1}
+        ]}),
+    )
+    .expect("a step of two deletes replays as one delta");
+    assert_eq!(body_line(&doc), "cdef");
+
+    let err = crate::apply_delta(
+        &mut doc,
+        &mut ids,
+        &json!({"op": "transaction", "ops": [
+            {"op": "delete_range", "nodeId": first, "off": 0, "len": 1},
+            {"op": "insert_text", "nodeId": 9999, "off": 0, "text": "x"}
+        ]}),
+    )
+    .expect_err("the second operation addresses an unknown node");
+    assert!(err.contains("unknown node"), "{err}");
+    assert_eq!(body_line(&doc), "cdef", "the first operation was taken back with the second");
+}
+
+#[test]
+fn a_nested_transaction_is_refused() {
+    let mut doc = Document::new();
+    let mut ids = NodeIds::new();
+    let err = crate::apply_delta(&mut doc, &mut ids, &json!({"op": "transaction", "ops": [{"op": "transaction", "ops": []}]}))
+        .expect_err("nested transactions are not a wire form");
+    assert!(err.contains("nested"), "{err}");
+}

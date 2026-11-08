@@ -315,3 +315,123 @@ fn a_commenter_may_only_annotate() {
     comment.payload = json!({"op": "add_comment", "text": "please check"});
     room.submit("carol", Role::Commenter, comment).expect("a comment is allowed");
 }
+
+/// A model whose one step holds several inverse operations, so the room's
+/// transaction path is exercised without the real document adapter.
+/// `{"push": "AB"}` appends text and records one pop per character as its
+/// inverse; a pop is refused when `fail_pop` names it (0-based).
+#[derive(Default)]
+struct MultiStepModel {
+    text: String,
+    pops: usize,
+    fail_pop: Option<usize>,
+}
+
+fn push(node_id: u32, text: &str) -> Op {
+    Op {
+        op_id: OpId::new("server", 0),
+        base_version: 0,
+        epoch: None,
+        kind: OpKind::Primitive,
+        target: Target::new("body", node_id, 0),
+        payload: json!({"push": text}),
+        history: None,
+    }
+}
+
+fn pop(node_id: u32, len: usize) -> Op {
+    Op {
+        op_id: OpId::new("server", 0),
+        base_version: 0,
+        epoch: None,
+        kind: OpKind::Primitive,
+        target: Target::new("body", node_id, 0),
+        payload: json!({"pop": len}),
+        history: None,
+    }
+}
+
+impl Model for MultiStepModel {
+    fn apply(&mut self, _actor: &str, op: &Op, _ids: &mut crate::ids::NodeIds) -> Result<Effect, crate::wire::Reject> {
+        if let Some(text) = op.payload.get("push").and_then(serde_json::Value::as_str) {
+            self.text.push_str(text);
+            // Newest first: undoing the push pops one character per inverse.
+            let inverse = text.chars().rev().map(|_| pop(op.target.node_id, 1)).collect();
+            return Ok(Effect {
+                delta: Some(json!({"op": "push", "text": text})),
+                inverse,
+                forward: vec![op.clone()],
+                label: "Typing".into(),
+                nodes_changed: false,
+            });
+        }
+        let len = usize::try_from(op.payload.get("pop").and_then(serde_json::Value::as_u64).unwrap_or(0)).unwrap_or(usize::MAX);
+        let index = self.pops;
+        self.pops = self.pops.saturating_add(1);
+        if self.fail_pop == Some(index) {
+            return Err(crate::wire::Reject::new(op.op_id.clone(), RejectCode::Invalid, "the pop was refused"));
+        }
+        let chars = self.text.chars().count();
+        if len > chars {
+            return Err(crate::wire::Reject::new(op.op_id.clone(), RejectCode::Invalid, "not enough text to pop"));
+        }
+        let removed: String = self.text.chars().skip(chars - len).collect();
+        self.text.truncate(self.text.len() - removed.len());
+        Ok(Effect {
+            delta: Some(json!({"op": "pop", "len": len})),
+            inverse: vec![push(op.target.node_id, &removed)],
+            forward: vec![op.clone()],
+            label: "Delete".into(),
+            nodes_changed: false,
+        })
+    }
+
+    fn snapshot(&self) -> Vec<u8> {
+        self.text.clone().into_bytes()
+    }
+
+    fn index_nodes(&self, _ids: &mut crate::ids::NodeIds) {}
+}
+
+fn multi_step_push(text: &str) -> Op {
+    Op {
+        op_id: OpId::new("a", 1),
+        base_version: 0,
+        epoch: None,
+        kind: OpKind::Primitive,
+        target: Target::new("body", 1, 0),
+        payload: json!({"push": text}),
+        history: None,
+    }
+}
+
+#[test]
+fn a_step_of_several_operations_lands_as_one_transaction() {
+    let mut room = Room::new(MultiStepModel::default());
+    room.submit("alice", Role::Editor, multi_step_push("AB")).expect("type");
+    assert_eq!(room.model().text, "AB");
+    assert_eq!(room.undo_depth("alice"), (1, 0), "one step, two inverse operations behind it");
+
+    let applied = room.submit("alice", Role::Editor, undo_op("a", 2, 1, "a", 1)).expect("undo");
+    assert_eq!(applied.version, 2, "the whole step is one version");
+    assert_eq!(room.model().text, "");
+    assert_eq!(room.version(), 2);
+    assert_eq!(room.undo_depth("alice"), (0, 1));
+    assert_eq!(
+        applied.delta,
+        Some(json!({"op": "transaction", "ops": [{"op": "pop", "len": 1}, {"op": "pop", "len": 1}]})),
+        "replicas get the whole step as one delta"
+    );
+}
+
+#[test]
+fn a_refused_operation_takes_back_the_whole_step() {
+    let mut room = Room::new(MultiStepModel { fail_pop: Some(1), ..MultiStepModel::default() });
+    room.submit("alice", Role::Editor, multi_step_push("AB")).expect("type");
+
+    let err = room.submit("alice", Role::Editor, undo_op("a", 2, 1, "a", 1)).expect_err("the second inverse is refused");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(room.model().text, "AB", "the first inverse was rolled back");
+    assert_eq!(room.version(), 1, "a transaction that did not land moves no version");
+    assert_eq!(room.undo_depth("alice"), (1, 0), "the step is still undoable");
+}
