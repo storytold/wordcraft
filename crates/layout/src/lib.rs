@@ -46,6 +46,7 @@ mod ctx;
 mod floats;
 mod flow;
 mod headers;
+mod missing;
 mod notes;
 mod page;
 mod pass;
@@ -70,6 +71,7 @@ use headers::MAX_HEADER_ITEMS;
 #[cfg(test)]
 use headers::placed_cost;
 use headers::placed_cost_by;
+pub use missing::{MAX_MISSING_GLYPHS, MissingGlyphs};
 pub use notes::DECOR_STORY;
 pub(crate) use notes::NOTE_SEP_W;
 use notes::{MAX_NOTE_PASSES, footnote_pages};
