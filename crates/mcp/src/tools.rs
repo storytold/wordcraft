@@ -25,8 +25,17 @@ impl ToolResult {
     pub fn json(v: &Value) -> Self {
         Self::text(serde_json::to_string_pretty(v).unwrap_or_default())
     }
+    /// Preserve uppercase structured error codes in tool output so clients can distinguish
+    /// refused scope or lost ownership from ordinary prose errors.
     pub fn error(t: impl Into<String>) -> Self {
-        Self { content: vec![json!({"type": "text", "text": t.into()})], is_error: true }
+        let message = t.into();
+        let text = match message.split_once(':') {
+            Some((code, _)) if !code.is_empty() && code.chars().all(|c| c.is_ascii_uppercase() || c == '_') => {
+                json!({"errorCode":code,"error":message}).to_string()
+            }
+            _ => message,
+        };
+        Self { content: vec![json!({"type": "text", "text": text})], is_error: true }
     }
     pub fn image(png_base64: String, info: &Value) -> Self {
         Self {
@@ -58,8 +67,9 @@ fn with_doc(mut schema: Value) -> Value {
 
 const DOC_DESC: &str = "Id of the open document to work on (list_documents); the active document when left out. The active document stays active.";
 
+/// Build a tool schema with side-effect hints derived from its actual read-only classification.
 fn tool(name: &str, title: &str, desc: &str, schema: Value, ro: bool) -> Value {
-    json!({"name": name, "title": title, "description": desc, "inputSchema": schema, "annotations": {"title": title, "readOnlyHint": ro, "openWorldHint": false}})
+    json!({"name": name, "title": title, "description": desc, "inputSchema": schema, "annotations": {"title": title, "readOnlyHint": ro, "destructiveHint": !ro, "openWorldHint": false}})
 }
 
 /// Every MCP tool with its title, description, input schema and annotations (`tools/list`).
@@ -172,8 +182,43 @@ pub fn tool_definitions() -> Value {
             obj(json!({}), &[]),
             true
         ),
+        tool(
+            "wait_for_request",
+            "Wait for an Ask Agent request",
+            WAIT_DESCRIPTION,
+            json!({"type":"object","properties":{"timeout_s":{"type":"number","minimum":0,"default":30,"description":"Seconds to wait; capped at 60."},"agent":{"type":"string","description":"Optional display name; otherwise initialized MCP client name."}},"required":[],"additionalProperties":false}),
+            false
+        ),
+        tool(
+            "reply_to_request",
+            "Reply to an Ask Agent request",
+            REPLY_DESCRIPTION,
+            obj(
+                json!({
+                    "id": n("The request's id, from wait_for_request"),
+                    "text": s("What to show the person: a progress note, or your answer"),
+                    "error": s("Failure message: closes the request as failed"),
+                    "proposal": s("Unapplied proposal, displayed as plain text; never executed"),
+                    "format": s("Descriptive metadata only; never selects a parser or renderer"),
+                    "comment": s("Plain-text note to keep with the response"),
+                    "done": {"type": "boolean", "description": "true (default) closes the request; false is a progress note"},
+                }),
+                &["id"]
+            ),
+            false
+        ),
     ])
 }
+
+const WAIT_DESCRIPTION: &str = "Ask Agent: wait for the next request from the WordCraft window. \
+Returns {id, instruction, history, selection, document}, or {none: true} when nothing came within timeout_s. \
+Edit the document with normal commands tagged with request id, and answer with reply_to_request.";
+
+const REPLY_DESCRIPTION: &str = "Ask Agent: show a note or your answer for a request in the WordCraft window. \
+Send a progress note with done: false, or your final answer with done: true (the default), which closes the request.";
+
+/// Longest `wait_for_request` wait, in seconds (the app's own cap on `agent.listen`).
+const MAX_WAIT_S: f64 = 60.0;
 
 fn exec(b: &mut dyn Backend, id: &str, params: Value, doc: Option<&Value>) -> Result<Value, String> {
     b.call("engine.execute", addressed(json!({"command": id, "params": params}), doc))
@@ -317,6 +362,60 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
         "click" => wrap(b.call("ui.click", a.clone())),
         "key" => wrap(b.call("ui.key", a.clone())),
         "ui_inspect" => wrap(b.call("ui.inspect", json!({}))),
+        "wait_for_request" | "reply_to_request" if !b.has_ui() => ToolResult::error(crate::ASK_NEEDS_APP),
+        "wait_for_request" => {
+            if !a.is_null() && a.as_object().is_none_or(|o| o.keys().any(|k| !["timeout_s", "agent"].contains(&k.as_str()))) {
+                return ToolResult::error("INVALID_PARAMS: unknown wait parameter");
+            }
+            let secs = match a.get("timeout_s") {
+                None => 30.0,
+                Some(v) => match v.as_f64().filter(|n| n.is_finite() && *n >= 0.0) {
+                    Some(n) => n.min(MAX_WAIT_S),
+                    None => return ToolResult::error("INVALID_PARAMS: timeout_s must be nonnegative"),
+                },
+            };
+            let mut params = json!({"timeoutMs":(secs*1000.0).floor() as u64});
+            if let Some(agent) = a.get("agent") {
+                if !agent.is_string() {
+                    return ToolResult::error("INVALID_PARAMS: agent must be a string");
+                }
+                params["agent"] = agent.clone();
+            }
+            wrap(b.call("agent.listen", params))
+        }
+        "reply_to_request" => {
+            let Some(id) = a.get("id").and_then(Value::as_u64) else {
+                return ToolResult::error("missing `id`: the request's id from wait_for_request");
+            };
+            let mut params = json!({"id": id});
+            for (key, limit, bytes) in
+                [("text", 4000, false), ("error", 4000, false), ("proposal", 200000, true), ("format", 64, true), ("comment", 2000, false)]
+            {
+                match a.get(key) {
+                    None | Some(Value::Null) => {}
+                    Some(Value::String(text)) => {
+                        let length = if bytes { text.len() } else { text.chars().count() };
+                        if length > limit {
+                            return ToolResult::error(format!("LIMIT_EXCEEDED: {key} is too long"));
+                        }
+                        params[key] = json!(text);
+                    }
+                    Some(_) => return ToolResult::error(format!("INVALID_PARAMS: {key} must be a string")),
+                }
+            }
+            if params.get("text").and_then(Value::as_str).is_none_or(|text| text.trim().is_empty())
+                && params.get("proposal").and_then(Value::as_str).is_none_or(|text| text.trim().is_empty())
+                && params.get("error").is_none()
+            {
+                return ToolResult::error("INVALID_PARAMS: reply needs text, a proposal or an error");
+            }
+            match a.get("done") {
+                None => params["done"] = json!(true),
+                Some(Value::Bool(done)) => params["done"] = json!(done),
+                Some(_) => return ToolResult::error("INVALID_PARAMS: done must be a boolean"),
+            }
+            wrap(b.call("agent.reply", params))
+        }
         other => ToolResult::error(format!("unknown tool `{other}`")),
     }
 }

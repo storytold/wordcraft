@@ -9,34 +9,55 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use wordcraft_ui_egui::ControlRequest;
+use wordcraft_ui_egui::ask_agent::AgentHub;
 
 /// Longer request lines are refused (and the connection closed).
 const MAX_LINE: usize = 1 << 20;
 
-/// A connection that sends no authorised request in this time is closed.
+/// Maximum unused idle time and absolute line-completion budget. A live working owner
+/// may renew only an empty wait; partial frames and unused listeners retain this bound.
 const FIRST_REQUEST: Duration = Duration::from_secs(30);
+
+static NEXT_CONN: AtomicU64 = AtomicU64::new(1);
 
 /// The key file of a running control server; [`KeyFile::remove`] it when the window closes.
 pub struct KeyFile(PathBuf);
 
 impl KeyFile {
+    /// Return the key file's location without opening or disclosing its contents.
     pub fn path(&self) -> &Path {
         &self.0
     }
+    /// Best-effort cleanup on app shutdown; a missing key file is already removed.
     pub fn remove(&self) {
         let _ = std::fs::remove_file(&self.0);
     }
 }
 
-/// Bind `127.0.0.1:port`, write the key file into `settings` and serve. `None` when the port
-/// cannot be bound or there is no random key (the control channel is off); the key file is
-/// `None` when it could not be written (requests are then refused).
-pub fn start(port: u16, ctx: egui::Context, settings: Option<&Path>) -> Option<(Receiver<ControlRequest>, Option<KeyFile>)> {
+/// Probe EOF without consuming any request bytes. Restore blocking mode before the next read;
+/// an inconclusive mode-change failure does not by itself establish a disconnect.
+fn peer_open(s: &TcpStream) -> bool {
+    if s.set_nonblocking(true).is_err() {
+        return true;
+    }
+    let mut b = [0u8; 1];
+    let r = s.peek(&mut b);
+    let _ = s.set_nonblocking(false);
+    match r {
+        Ok(0) => false,
+        Ok(_) => true,
+        Err(e) => e.kind() == std::io::ErrorKind::WouldBlock,
+    }
+}
+
+/// Bind `127.0.0.1:port`, write the key file into `settings` and serve.
+pub fn start(port: u16, ctx: egui::Context, settings: Option<&Path>, hub: AgentHub) -> Option<(Receiver<ControlRequest>, Option<KeyFile>)> {
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
         Err(e) => {
@@ -71,18 +92,18 @@ pub fn start(port: u16, ctx: egui::Context, settings: Option<&Path>) -> Option<(
         Some(f) => log::info!("control server listening on 127.0.0.1:{port}, key in {}", f.path().display()),
         None => log::info!("control server listening on 127.0.0.1:{port}"),
     }
-    Some((serve_on(listener, ctx, key, FIRST_REQUEST), key_file))
+    Some((serve_on(listener, ctx, key, FIRST_REQUEST, hub), key_file))
 }
 
-/// A new key: 32 random bytes from the operating system, as hex.
+/// Generate a fresh window key from the OS random source, failing instead of using a fallback.
 fn random_key() -> Result<String, String> {
     let mut b = [0u8; 32];
     getrandom::fill(&mut b).map_err(|e| e.to_string())?;
     Ok(b.iter().map(|x| format!("{x:02x}")).collect())
 }
 
-/// Write the key file: a stale one (from a run that did not exit cleanly) is replaced; on Unix
-/// the new file is created with mode 0600.
+/// Replace the stale instance key with an exclusively created file (0600 on Unix). A creation
+/// race fails closed rather than following another process's file or symlink.
 fn write_key_file(p: &Path, key: &str) -> Result<(), String> {
     if let Some(d) = p.parent() {
         std::fs::create_dir_all(d).map_err(|e| format!("cannot create {}: {e}", d.display()))?;
@@ -96,33 +117,44 @@ fn write_key_file(p: &Path, key: &str) -> Result<(), String> {
     f.write_all(key.as_bytes()).map_err(|e| format!("cannot write {}: {e}", p.display()))
 }
 
-/// Compare a key with the window's in time that does not depend on where they differ. An
-/// empty key never matches.
+/// Require a nonempty, equal-length key and accumulate differences across all of its bytes.
 fn keys_match(given: &str, key: &str) -> bool {
     let (a, b) = (given.as_bytes(), key.as_bytes());
     !b.is_empty() && a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-fn serve_on(listener: TcpListener, ctx: egui::Context, key: String, first: Duration) -> Receiver<ControlRequest> {
+/// Accept independent sockets and allocate a lifetime-unique connection id before spawning
+/// their reader. Stop at counter exhaustion so a new peer can never inherit an old claim.
+fn serve_on(listener: TcpListener, ctx: egui::Context, key: String, first: Duration, hub: AgentHub) -> Receiver<ControlRequest> {
     let (tx, rx) = channel::<ControlRequest>();
     let key: Arc<str> = key.into();
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
-            let (tx, ctx, key) = (tx.clone(), ctx.clone(), key.clone());
-            std::thread::spawn(move || serve(stream, tx, ctx, &key, first));
+            let (tx, ctx, key, hub) = (tx.clone(), ctx.clone(), key.clone(), hub.clone());
+            let mut conn = NEXT_CONN.load(Ordering::SeqCst);
+            let allocated = loop {
+                let Some(next) = conn.checked_add(1) else { break false };
+                match NEXT_CONN.compare_exchange_weak(conn, next, Ordering::SeqCst, Ordering::SeqCst) {
+                    Ok(_) => break true,
+                    Err(current) => conn = current,
+                }
+            };
+            if !allocated {
+                break;
+            }
+            std::thread::spawn(move || serve(stream, tx, ctx, &key, first, &hub, conn));
         }
     });
     rx
 }
 
-/// The read side of a connection with an optional overall deadline: each read waits only for
-/// the time left, so blank lines, bad JSON or a slow drip of bytes cannot extend it.
 struct Timed {
     s: TcpStream,
     deadline: Option<Instant>,
 }
 
 impl Read for Timed {
+    /// Apply the remaining absolute budget to this socket read; receiving data never renews it.
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if let Some(d) = self.deadline {
             let left = d.checked_duration_since(Instant::now()).filter(|l| !l.is_zero()).ok_or(std::io::ErrorKind::TimedOut)?;
@@ -132,32 +164,58 @@ impl Read for Timed {
     }
 }
 
-impl Timed {
-    fn set_deadline(&mut self, d: Option<Instant>) {
-        self.deadline = d;
-        if d.is_none() {
-            let _ = self.s.set_read_timeout(None);
+/// Read one bounded UTF-8 line without discarding a prefix on a retry. Only a wholly empty
+/// read may renew its idle deadline; `keep_waiting` checks authenticated live work ownership.
+/// Once any byte arrives, one absolute frame deadline applies even to a working owner. Restore
+/// the prior idle deadline on return so blank lines cannot keep an unused connection alive.
+fn read_line(r: &mut BufReader<Timed>, period: Duration, keep_waiting: impl Fn() -> bool) -> Option<Result<String, &'static str>> {
+    let mut idle_deadline = r.get_ref().deadline;
+    let mut buf = Vec::new();
+    loop {
+        if !buf.is_empty() && r.get_ref().deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return None;
+        }
+        match r.fill_buf() {
+            Ok([]) => break,
+            Ok(bytes) => {
+                let end = bytes.iter().position(|&byte| byte == b'\n').map_or(bytes.len(), |index| index + 1);
+                let used = end.min(MAX_LINE + 1 - buf.len());
+                let complete = bytes.get(used.saturating_sub(1)) == Some(&b'\n');
+                let first = buf.is_empty();
+                buf.extend_from_slice(&bytes[..used]);
+                r.consume(used);
+                if first {
+                    let frame = Instant::now() + period;
+                    r.get_mut().deadline = Some(if keep_waiting() { frame } else { idle_deadline.map_or(frame, |idle| idle.min(frame)) });
+                }
+                if buf.len() > MAX_LINE {
+                    return Some(Err("line too long"));
+                }
+                if complete {
+                    break;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error)
+                if buf.is_empty() && matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) && keep_waiting() =>
+            {
+                idle_deadline = Some(Instant::now() + period);
+                r.get_mut().deadline = idle_deadline;
+            }
+            Err(_) => return None,
         }
     }
-}
-
-/// The next line (trimmed), `None` at the end of the stream or after a read error.
-fn read_line(r: &mut BufReader<Timed>) -> Option<Result<String, &'static str>> {
-    let mut buf = Vec::new();
-    let n = r.by_ref().take(MAX_LINE as u64 + 1).read_until(b'\n', &mut buf).ok()?;
-    if n == 0 {
+    r.get_mut().deadline = idle_deadline;
+    if buf.is_empty() {
         return None;
-    }
-    if buf.len() > MAX_LINE {
-        return Some(Err("line too long"));
     }
     Some(String::from_utf8(buf).map(|s| s.trim().to_string()).map_err(|_| "not UTF-8"))
 }
 
-/// Read and drop the rest of an oversize line, so closing the socket does not reset the
-/// connection before the client has read the error. At most 64 MiB, within 2 s.
+/// Drain a rejected oversized frame for at most two seconds and 64 MiB. This bounded cleanup
+/// lets the error reply reach a writer without granting an unlimited read or allocation.
 fn discard_rest_of_line(r: &mut BufReader<Timed>) {
-    r.get_mut().set_deadline(Some(Instant::now() + Duration::from_secs(2)));
+    r.get_mut().deadline = Some(Instant::now() + Duration::from_secs(2));
     let mut left: usize = 64 << 20;
     while left > 0 {
         let (used, done) = match r.fill_buf() {
@@ -175,15 +233,20 @@ fn discard_rest_of_line(r: &mut BufReader<Timed>) {
     }
 }
 
-fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context, key: &str, first: Duration) {
+/// Authenticate every request, then keep only long-poll listen on this socket thread. Native
+/// edits and replies use the window's serialized queue; idle grace queries hub ownership only.
+/// EOF, frame failure or failed writes always release this exact connection's claims.
+fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context, key: &str, first: Duration, hub: &AgentHub, connection: u64) {
     let Ok(read) = stream.try_clone() else { return };
+    let Ok(probe) = stream.try_clone() else { return };
     let mut out = stream;
-    // One overall deadline from accept to the first authorised request; after it, none.
+    if out.set_write_timeout(Some(first)).is_err() {
+        return;
+    }
     let mut reader = BufReader::new(Timed { s: read, deadline: Some(Instant::now() + first) });
     let mut authorised = false;
-    // The key an `auth` request gave this connection.
     let mut conn_key: Option<String> = None;
-    while let Some(line) = read_line(&mut reader) {
+    while let Some(line) = read_line(&mut reader, first, || authorised && hub.owns_work(connection) && peer_open(&probe)) {
         let line = match line {
             Ok(l) => l,
             Err(e) => {
@@ -199,9 +262,6 @@ fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context, key:
         }
         let msg = match serde_json::from_str::<Value>(&line) {
             Ok(m) => m,
-            // Close on a line that isn't JSON: an HTTP request (say, a web page's `fetch` to this
-            // port) starts with a request line that never parses, so it can't carry a command in
-            // its body, even before the key is checked.
             Err(e) => {
                 let _ = writeln!(out, "{}", json!({"ok": false, "error": format!("bad JSON: {e}; closing the connection")}));
                 break;
@@ -210,8 +270,6 @@ fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context, key:
         let id = msg.get("id").cloned().unwrap_or(Value::Null);
         let method = msg.get("method").and_then(Value::as_str).unwrap_or("").to_string();
         let params = msg.get("params").cloned().unwrap_or(json!({}));
-        // The top-level `key`; `auth` may carry it in its params. For other methods `params.key`
-        // is an ordinary parameter (`ui.key {"key": "Enter"}`).
         let given =
             msg.get("key").and_then(Value::as_str).or_else(|| if method == "auth" { params.get("key").and_then(Value::as_str) } else { None });
         let mut reply = |mut v: Value| -> bool {
@@ -220,7 +278,6 @@ fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context, key:
             }
             writeln!(out, "{v}").is_ok()
         };
-        // Checked on every request.
         let k = given.or(conn_key.as_deref()).unwrap_or("");
         if !keys_match(k, key) {
             let _ = reply(json!({"ok": false, "error": "unauthorized"}));
@@ -228,308 +285,236 @@ fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context, key:
         }
         if !authorised {
             authorised = true;
-            reader.get_mut().set_deadline(None);
+            reader.get_mut().deadline = Some(Instant::now() + first);
         }
         if method == "auth" {
             conn_key = Some(k.to_string());
             if !reply(json!({"ok": true, "result": {}})) {
                 break;
             }
+            reader.get_mut().deadline = Some(Instant::now() + first);
             continue;
         }
-        let (req, rrx) = ControlRequest::new(method, params);
+
+        // Only the long poll runs on the socket thread. Replies resolve and validate their
+        // captured document on the UI/document owner's serialized command queue.
+        if method == "agent.listen"
+            && let Some(r) = hub.handle(connection, &method, &params, || peer_open(&probe), |_| None)
+        {
+            ctx.request_repaint();
+            if !reply(r) {
+                break;
+            }
+            reader.get_mut().deadline = Some(Instant::now() + first);
+            continue;
+        }
+
+        let (mut req, rrx) = ControlRequest::new(method, params);
+        req.connection = Some(connection);
         if tx.send(req).is_err() {
+            hub.disconnect(connection);
             break;
         }
         ctx.request_repaint();
         let r = rrx.recv_timeout(Duration::from_secs(60)).unwrap_or_else(|_| json!({"ok": false, "error": "timeout"}));
         if !reply(r) {
+            hub.disconnect(connection);
             break;
         }
+        reader.get_mut().deadline = Some(Instant::now() + first);
     }
+    hub.disconnect(connection);
 }
 
 #[cfg(test)]
 mod tests {
+    mod idle;
     use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpStream;
+    use wordcraft_ui_egui::ask_agent::{Request, Target};
 
     const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-    fn boot_with(first: Duration) -> (u16, Receiver<ControlRequest>) {
+    /// Bind an ephemeral loopback listener with a synthetic key and an injectable deadline.
+    /// Return the UI queue and the same hub used by its socket threads.
+    fn boot_agents(first: Duration) -> (u16, Receiver<ControlRequest>, AgentHub) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
-        (port, serve_on(listener, egui::Context::default(), KEY.to_string(), first))
+        let hub = AgentHub::default();
+        (port, serve_on(listener, egui::Context::default(), KEY.to_string(), first, hub.clone()), hub)
     }
 
+    /// Use the production deadline for transport cases that do not measure idle expiry.
     fn boot() -> (u16, Receiver<ControlRequest>) {
-        boot_with(FIRST_REQUEST)
+        let (port, rx, _) = boot_agents(FIRST_REQUEST);
+        (port, rx)
     }
 
-    /// Answer the next request that reaches the UI with `ok`, and return it.
+    /// A client that authenticates but never reads cannot retain a listener slot forever.
+    #[test]
+    fn authenticated_client_that_never_reads_is_disconnected_after_idle_timeout() {
+        let (port, _rx, hub) = boot_agents(Duration::from_millis(200));
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        writeln!(stream, "{}", json!({"id":0,"method":"auth","key":KEY})).unwrap();
+        writeln!(stream, "{}", json!({"id":1,"method":"agent.listen","params":{"timeoutMs":0,"agent":"Never reads"}})).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut registered = false;
+        while Instant::now() < deadline {
+            if hub.agents().is_empty() {
+                if registered {
+                    return;
+                }
+            } else {
+                registered = true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(registered, "the authenticated long-poll connection was registered");
+        assert!(hub.agents().is_empty(), "idle authenticated clients release their slot even when no reply was read");
+    }
+
+    /// Acknowledge one queued request while returning its original connection metadata to the test.
     fn answer(rx: &Receiver<ControlRequest>) -> ControlRequest {
         let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
         let _ = req.reply.send(json!({"ok": true, "result": {}}));
         req
     }
 
-    /// One connection, several lines.
     struct Conn(BufReader<TcpStream>, TcpStream);
 
     impl Conn {
+        /// Connect a real test socket with a bounded receive wait, retaining separate read/write handles.
         fn open(port: u16) -> Self {
             let s = TcpStream::connect(("127.0.0.1", port)).unwrap();
             s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
             Self(BufReader::new(s.try_clone().unwrap()), s)
         }
+        /// Send exactly one newline-delimited request over the real TCP writer.
         fn send(&mut self, line: &str) {
             writeln!(self.1, "{line}").unwrap();
         }
+        /// Decode one server response; EOF or an unreadable reply produces null for explicit assertions.
         fn recv(&mut self) -> Value {
             let mut r = String::new();
             let _ = self.0.read_line(&mut r);
             serde_json::from_str(&r).unwrap_or_default()
         }
+        /// Perform a synchronous request/response exchange through the wire protocol.
         fn call(&mut self, line: &str) -> Value {
             self.send(line);
             self.recv()
         }
-        /// The server closed the connection.
+        /// Distinguish a clean server EOF from data or a receive timeout.
         fn closed(&mut self) -> bool {
             let mut r = String::new();
             matches!(self.0.read_line(&mut r), Ok(0))
         }
     }
 
-    #[test]
-    fn a_request_without_the_key_is_refused_and_closed() {
-        let (port, rx) = boot();
+    /// Authenticate once with the synthetic test key before exercising inherited per-socket credentials.
+    fn authed(port: u16) -> Conn {
         let mut c = Conn::open(port);
-        let r = c.call(r#"{"id":1,"method":"document.inspect"}"#);
-        assert_eq!((r["ok"].clone(), r["error"].clone(), r["id"].clone()), (json!(false), json!("unauthorized"), json!(1)));
-        assert!(c.closed());
-        assert!(rx.try_recv().is_err(), "nothing reached the UI");
+        assert_eq!(c.call(&format!(r#"{{"id":0,"method":"auth","key":"{KEY}"}}"#))["ok"], true);
+        c
     }
 
     #[test]
-    fn a_wrong_key_is_refused_and_closed() {
-        let (port, rx) = boot();
-        for key in ["nope", &KEY[..63], &format!("{KEY}0"), &KEY.to_uppercase()] {
-            let mut c = Conn::open(port);
-            assert_eq!(c.call(&format!(r#"{{"id":1,"key":"{key}","method":"document.inspect"}}"#))["error"], "unauthorized", "{key}");
-            assert!(c.closed());
-        }
-        assert!(rx.try_recv().is_err());
-    }
+    /// Progress and final replies cross the UI queue, while listen stays on the socket reader.
+    /// The final answer must retain the original request identity and complete its ownership.
+    fn agent_listen_and_reply_over_socket() {
+        let (port, rx, hub) = boot_agents(FIRST_REQUEST);
+        let id = hub
+            .ask(Request {
+                id: 0,
+                instruction: "Fix style".into(),
+                history: vec![],
+                selection: json!({"text": "sample"}),
+                document: json!({"title": "Doc.docx"}),
+                target: Target { document: "test".into(), revision: 1 },
+                agent: None,
+            })
+            .unwrap();
 
-    #[test]
-    fn the_key_on_each_request() {
-        let (port, rx) = boot();
-        let mut c = Conn::open(port);
-        c.send(&format!(r#"{{"id":7,"key":"{KEY}","method":"document.inspect","params":{{"text":true}}}}"#));
-        let req = answer(&rx);
-        assert_eq!((req.method.as_str(), &req.params), ("document.inspect", &json!({"text": true})));
-        let r = c.recv();
-        assert_eq!((r["ok"].clone(), r["id"].clone()), (json!(true), json!(7)));
-        // Every request needs it: one without the key is refused, also after good ones.
-        assert_eq!(c.call(r#"{"id":8,"method":"document.inspect"}"#)["error"], "unauthorized");
-        assert!(c.closed());
-    }
-
-    #[test]
-    fn auth_once_per_connection() {
-        let (port, rx) = boot();
-        let mut c = Conn::open(port);
-        assert_eq!(c.call(&format!(r#"{{"id":1,"method":"auth","key":"{KEY}"}}"#))["ok"], true);
-        for id in 2..4 {
-            c.send(&format!(r#"{{"id":{id},"method":"document.inspect"}}"#));
-            answer(&rx);
-            assert_eq!(c.recv()["ok"], true);
-        }
-        // `params.key` works for `auth` too.
-        let mut c = Conn::open(port);
-        assert_eq!(c.call(&format!(r#"{{"id":1,"method":"auth","params":{{"key":"{KEY}"}}}}"#))["ok"], true);
-        // A wrong key on an authenticated connection is still refused, and closes it.
-        assert_eq!(c.call(r#"{"id":2,"key":"nope","method":"document.inspect"}"#)["error"], "unauthorized");
-        assert!(c.closed());
-        // A failed auth closes the connection.
-        let mut c = Conn::open(port);
-        assert_eq!(c.call(r#"{"id":1,"method":"auth","key":"nope"}"#)["error"], "unauthorized");
-        assert!(c.closed());
-    }
-
-    #[test]
-    fn params_key_is_only_a_secret_for_auth() {
-        let (port, rx) = boot();
-        // `params.key` does not authenticate other methods.
-        let mut c = Conn::open(port);
-        assert_eq!(c.call(&format!(r#"{{"id":1,"method":"document.inspect","params":{{"key":"{KEY}"}}}}"#))["error"], "unauthorized");
-        // It is an ordinary parameter for them (`ui.key` presses a key).
-        let mut c = Conn::open(port);
-        c.send(&format!(r#"{{"id":1,"key":"{KEY}","method":"ui.key","params":{{"key":"Enter"}}}}"#));
-        let req = answer(&rx);
-        assert_eq!((req.method.as_str(), &req.params), ("ui.key", &json!({"key": "Enter"})));
-        assert_eq!(c.recv()["ok"], true);
-    }
-
-    #[test]
-    fn a_line_over_1_mib_is_refused_and_closed() {
-        let (port, rx) = boot();
-        let mut c = Conn::open(port);
-        let big = format!(r#"{{"id":1,"key":"{KEY}","method":"document.inspect","pad":"{}"}}"#, "x".repeat(MAX_LINE));
-        assert_eq!(c.call(&big)["error"], "line too long");
-        assert!(c.closed());
-        assert!(rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn a_silent_connection_is_closed() {
-        let (port, rx) = boot_with(Duration::from_millis(300));
-        let mut quiet = Conn::open(port);
-        let t0 = Instant::now();
-        assert!(quiet.closed());
-        assert!(t0.elapsed() < Duration::from_secs(3));
-        // After an authorised request the connection may stay idle.
-        let mut busy = Conn::open(port);
-        assert_eq!(busy.call(&format!(r#"{{"id":1,"method":"auth","key":"{KEY}"}}"#))["ok"], true);
-        std::thread::sleep(Duration::from_millis(600));
-        busy.send(r#"{"id":2,"method":"document.inspect"}"#);
-        answer(&rx);
-        assert_eq!(busy.recv()["ok"], true);
-    }
-
-    #[test]
-    fn the_first_request_limit_is_one_overall_deadline() {
-        // Blank lines and bad JSON do not keep a connection without the key open.
-        let (port, _rx) = boot_with(Duration::from_millis(300));
-        let s = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        let mut w = s.try_clone().unwrap();
-        let feeder = std::thread::spawn(move || {
-            for i in 0..40 {
-                if w.write_all(if i % 2 == 0 { b"\n" } else { b"not json\n" }).is_err() {
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(50));
+        // A real window dispatches replies on its document-owning thread. This fixture supplies
+        // that same serialized hop with a known, current document token.
+        let answer_hub = hub.clone();
+        let worker = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let request = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                assert_eq!(request.method, "agent.reply");
+                let response = answer_hub
+                    .handle(
+                        request.connection.unwrap(),
+                        &request.method,
+                        &request.params,
+                        || true,
+                        |_| Some(Target { document: "test".into(), revision: 1 }),
+                    )
+                    .unwrap();
+                request.reply.send(response).unwrap();
             }
         });
-        let t0 = Instant::now();
-        let mut r = BufReader::new(s);
-        r.get_ref().set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        let mut line = String::new();
-        loop {
-            line.clear();
-            if matches!(r.read_line(&mut line), Ok(0) | Err(_)) {
-                break;
-            }
-            assert!(line.contains("bad JSON"), "{line}");
-        }
-        let _ = feeder.join();
-        assert!(t0.elapsed() < Duration::from_millis(1500), "{:?}", t0.elapsed());
+
+        let mut c = authed(port);
+        let r = c.call(r#"{"id":1,"method":"agent.listen","params":{"timeoutMs":1000}}"#);
+        assert_eq!(r["result"]["id"], id);
+        assert_eq!(r["result"]["instruction"], "Fix style");
+
+        // Progress note
+        let r_note = c.call(&format!(r#"{{"id":2,"method":"agent.reply","params":{{"id":{id},"text":"Working","done":false}}}}"#));
+        assert_eq!(r_note["result"]["done"], false);
+
+        // Final answer
+        let r_ans = c.call(&format!(r#"{{"id":3,"method":"agent.reply","params":{{"id":{id},"text":"Done"}}}}"#));
+        assert_eq!(r_ans["result"]["done"], true);
+
+        let snap = hub.snapshot(id).unwrap();
+        assert_eq!(snap.answer.as_deref(), Some("Done"));
+        worker.join().unwrap();
     }
 
     #[test]
-    fn bad_json_closes_the_connection() {
-        let (port, rx) = boot();
-        let mut c = Conn::open(port);
-        assert_eq!(c.call("not json")["ok"], false);
-        assert!(c.closed());
-        assert!(rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn http_request_cannot_smuggle_a_command() {
-        // What a web page's `fetch("http://127.0.0.1:<port>/", {method: "POST", body})` sends,
-        // even with the key in the body.
-        let (port, rx) = boot();
-        let body = format!("\n{{\"key\":\"{KEY}\",\"method\":\"file.saveAs\",\"params\":{{\"path\":\"/tmp/x.docx\"}}}}\n");
-        let req = format!("POST / HTTP/1.1\r\nHost: 127.0.0.1:7981\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}", body.len());
-        let mut c = Conn::open(port);
-        c.1.write_all(req.as_bytes()).unwrap();
-        let _ = c.recv();
-        assert!(c.closed());
-        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
-    }
-
-    #[test]
-    fn keys_compare_whole() {
-        assert!(keys_match(KEY, KEY));
-        assert!(!keys_match(KEY, &KEY[..63]));
-        assert!(!keys_match(&KEY[..63], KEY));
-        assert!(!keys_match(KEY, &KEY.replace('f', "e")));
-        assert!(!keys_match("", ""), "an empty key never matches");
-    }
-
-    #[test]
-    fn random_keys_are_256_bits() {
-        let (a, b) = (random_key().unwrap(), random_key().unwrap());
-        assert_eq!(a.len(), 64);
-        assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
-        assert_ne!(a, b);
-    }
-
-    fn temp_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("wordcraft-control-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir
-    }
-
-    #[test]
-    fn the_key_file_is_written_after_the_bind_and_removed_on_exit() {
-        let dir = temp_dir("life");
-        // The port is taken: no key file.
-        let taken = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let port = taken.local_addr().unwrap().port();
-        assert!(start(port, egui::Context::default(), Some(&dir)).is_none());
-        assert!(!dir.exists() || std::fs::read_dir(&dir).unwrap().next().is_none(), "no key file after a failed bind");
-        drop(taken);
-        // Bound: the key file holds the key that opens the port.
-        let mut free_port = port.wrapping_add(1).max(1024);
-        let mut started = None;
-        for _ in 0..100 {
-            if let Some(res) = start(free_port, egui::Context::default(), Some(&dir)) {
-                started = Some((res, free_port));
-                break;
-            }
-            free_port = free_port.wrapping_add(1).max(1024);
-        }
-        let ((rx, key_file), port) = started.unwrap();
-        let key_file = key_file.unwrap();
-        assert_eq!(key_file.path(), wordcraft_control_key::key_path(&dir, port));
-        let key = std::fs::read_to_string(key_file.path()).unwrap();
-        assert_eq!(key.len(), 64);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(key_file.path()).unwrap().permissions().mode() & 0o777, 0o600);
-        }
-        let mut c = Conn::open(port);
-        c.send(&format!(r#"{{"id":1,"key":"{key}","method":"document.inspect"}}"#));
-        answer(&rx);
+    /// An engine request must carry the server's connection identity to the UI queue; a caller's
+    /// request number alone cannot identify the socket that owns the claim.
+    fn engine_requests_carry_their_connection_for_the_ownership_check() {
+        let (port, rx, hub) = boot_agents(FIRST_REQUEST);
+        let id = hub
+            .ask(Request {
+                id: 0,
+                instruction: "Edit".into(),
+                history: vec![],
+                selection: Value::Null,
+                document: Value::Null,
+                target: Target { document: "test".into(), revision: 1 },
+                agent: None,
+            })
+            .unwrap();
+        let mut c = authed(port);
+        assert_eq!(c.call(r#"{"id":1,"method":"agent.listen","params":{"timeoutMs":1000}}"#)["result"]["id"], id);
+        c.send(&format!(r#"{{"id":2,"method":"engine.execute","params":{{"command":"text.insert","params":{{"text":"a"}},"request":{id}}}}}"#));
+        assert!(answer(&rx).connection.is_some(), "the window checks ownership against this connection");
         assert_eq!(c.recv()["ok"], true);
-        key_file.remove();
-        assert!(!key_file.path().exists());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn a_stale_key_file_is_replaced() {
-        let dir = temp_dir("stale");
-        std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("control-key.test");
-        std::fs::write(&p, "old").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
-        }
-        write_key_file(&p, KEY).unwrap();
-        assert_eq!(std::fs::read_to_string(&p).unwrap(), KEY);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
-        }
-        let _ = std::fs::remove_dir_all(&dir);
+    /// Reject unauthenticated native access and close its socket instead of leaving a reusable session.
+    fn a_request_without_the_key_is_refused_and_closed() {
+        let (port, _rx) = boot();
+        let mut c = Conn::open(port);
+        let r = c.call(r#"{"id":1,"method":"document.inspect"}"#);
+        assert_eq!(r["error"], "unauthorized");
+        assert!(c.closed());
+    }
+
+    #[test]
+    /// A peer that sends no first request cannot retain a socket thread indefinitely.
+    fn a_silent_connection_is_closed() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let _ = serve_on(listener, egui::Context::default(), KEY.to_string(), Duration::from_millis(100), AgentHub::default());
+        let mut quiet = Conn::open(port);
+        std::thread::sleep(Duration::from_millis(250));
+        assert!(quiet.closed());
     }
 }

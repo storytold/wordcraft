@@ -201,7 +201,7 @@ Word. Their weighted sum is the **full ready for real work** number.
 | Platforms | 3% | 95% | 5–10 | [ROADMAP.md](../ROADMAP.md) | macOS (universal, signed), Windows x64/x86/arm64, Linux (AppImage/deb/rpm/Flatpak), FreeBSD, web. Beyond Word on Linux, BSD and the web; Word's iPad/iPhone/Android apps are out of scope |
 | Hardware | 1% | 40% | 20–40 | [hardware-parity.md](hardware-parity.md) | No native printing on desktop, no pen/ink, no dictation; GPU drawing and HiDPI fine. Ink hours are in the Features row (Draw tab) |
 | Ecosystem and plugins | 2% | 15% | 40–80 | [gaps.md](gaps.md) | Zotero built in, macros record/play commands, `.docm` macros preserved (#172). No VBA execution, no Office add-ins, no EndNote/Mendeley plugins, no cloud storage or co-authoring |
-| AI features | 0% | 40% | 15–30 | [gaps.md](gaps.md) | Beyond Word for external agents (MCP, CLI). No in-app writing assistant like Copilot yet (chat PR #178 open). Weight 0: Copilot is a paid add-on and not what decides a switch |
+| AI features | 0% | 40% | 15–30 | [gaps.md](gaps.md) | Beyond Word for external agents (MCP, CLI). Ask Agent hands a selection and an instruction to the agent the person already runs and shows its answer in the window; no in-app writing assistant like Copilot yet (chat PR #178 open). Weight 0: Copilot is a paid add-on and not what decides a switch |
 
 **Ready for real work ≈ 0.30·68 + 0.20·60 + 0.15·55 + 0.10·65 + 0.10·50 + 0.05·75 + 0.04·25 +
 0.03·95 + 0.01·40 + 0.02·15 ≈ 60%.**

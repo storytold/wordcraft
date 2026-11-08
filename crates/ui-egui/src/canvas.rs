@@ -37,7 +37,7 @@ pub use balloons::{deselect_balloon, select_balloon};
 use context_menu::{context_menu, context_suggestions};
 use cursor::{caret_color_at, preedit_cursor_chars};
 pub(crate) use cursor::{caret_color_on, caret_contrast};
-pub use cursor::{caret_screen, pos_from_screen};
+pub use cursor::{caret_screen, pos_from_screen, pos_screen};
 pub(crate) use geometry::SEAM;
 #[cfg(test)]
 pub(crate) use geometry::WHITE_SPACE_PAD;
@@ -1067,6 +1067,19 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
     PagePaintOutput { rects, visible_tile_keys, rendered }
 }
 
+/// Ask Agent: the ranges an agent holds, outlined in its colour.
+fn paint_held_ranges(app: &WordApp, painter: &egui::Painter, layout: &std::sync::Arc<DocLayout>, rects: &[Rect], scale: f32) {
+    for (a, b, [r, g, bl]) in crate::ask_agent::held_ranges(app) {
+        for (pi, hr) in layout.selection_rects(&app.session.doc, &a, &b, app.session.page_hint) {
+            if let Some(pr) = rects.get(pi) {
+                let scale = layout.pages.get(pi).map_or(scale, |page| page_screen_scale(*pr, page, scale));
+                let sr = Rect::from_min_size(pos2(pr.min.x + hr.x * scale, pr.min.y + hr.y * scale), vec2(hr.w * scale, hr.h * scale));
+                painter.rect_stroke(sr.expand(1.0), 2.0, Stroke::new(1.5, Color32::from_rgb(r, g, bl)), egui::StrokeKind::Outside);
+            }
+        }
+    }
+}
+
 fn paint_read_aloud_highlight(
     app: &mut WordApp,
     painter: &egui::Painter,
@@ -1201,6 +1214,8 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
     }
 }
 
+/// Finish input, accessibility and overlays after the page layout has stable geometry.
+/// Agent affordances use those native positions rather than agent-supplied screen rectangles.
 fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollAreaOutput<(egui::Response, Vec<Rect>)>) {
     let CanvasFinish { app, ui, layout, geo, caret, ime_geometry, ime_interrupt, area, dim_body, hruler, vruler } = finish;
     update_canvas_scroll_state(app, ui, layout, geo, caret, &out);
@@ -1326,6 +1341,8 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     {
         crate::mini_toolbar::show(app, ui.ctx(), sel, out.inner_rect);
     }
+    // Ask Agent: the instruction box at the selection, and the agent's answers (`ask_agent`).
+    crate::ask_agent::show(app, ui.ctx(), area);
     if app.session.view.read_mode {
         // Fixed navigation chrome, independent of the horizontally moving columns.
         let step = app.session.view.read_width * app.canvas.scale + GAP;
@@ -1399,6 +1416,8 @@ fn live_selection_screen_rects(app: &mut WordApp, rects: &[Rect], scale: f32) ->
         .collect()
 }
 
+/// Lay out and paint the document canvas, then publish its native selection geometry
+/// for overlays and control inspection before finishing this frame's interactions.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.available_rect_before_wrap();
@@ -1526,6 +1545,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // Anchor only to visible selection geometry. A selection can span pages, and its
         // document-first line may be scrolled offscreen; using it would pin the toolbar to an
         // old screen position unrelated to the visible selection.
+        // Ask Agent sits under the whole visible selection.
+        app.ask_agent.selection = screen_rects.iter().filter(|r| r.intersects(visible_clip)).copied().reduce(Rect::union);
+        // Ask Agent: text an agent is working on, outlined in its colour.
+        paint_held_ranges(app, &painter, &layout, &rects, geo.scale);
         // Alignment previews can move the selected text while the pointer is still over a mini
         // toolbar button. Keep the bar anchored to the live selection until the preview ends, or
         // it can move out from under the pointer and flicker between preview and live layouts.

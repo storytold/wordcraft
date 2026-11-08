@@ -37,9 +37,19 @@ cat ~/.config/wordcraft/control-key.local-7981   # Linux, outside Flatpak, port 
   `{"ok": false, "error": "unauthorized"}`, and the app closes the connection.
 - A line over 1 MiB gets `{"ok": false, "error": "line too long"}`, and the app closes the
   connection.
-- A connection that sends no authorised request within 30 s of being accepted is closed. That is
-  one limit: blank lines and bad JSON do not extend it. After an authorised request the
-  connection may stay idle.
+- A connection with no authorised request closes after 30 s; blank lines do not renew that
+  first-request deadline, and bad JSON closes it immediately. Authenticated idle listeners
+  without current work also expire after 30 s. A live authenticated connection that owns at
+  least one `Working` Ask Agent request can wait through further idle periods while thinking;
+  `done:false` keeps that ownership, while completion, cancellation or closing the conversation
+  removes the exemption when no other owned work remains. This is socket liveness, not an
+  independent proof that an external process is still reasoning.
+- The first byte of each request starts an absolute 30 s line deadline. Only working owners
+  get that full window when data arrives late; other clients also retain their earlier idle
+  deadline. Later bytes cannot extend either limit. Partial UTF-8/JSON stays in the same bounded
+  reader until the line completes; expiry closes the socket and requeues its unanswered work.
+  The 1 MiB line cap and bounded write deadline still apply. A real EOF or socket error releases
+  the connection immediately, rather than waiting for a reflection period.
 
 `wordcraft-cli mcp --connect` takes the key from `WORDCRAFT_CONTROL_KEY`, or else from the key
 file for the port it connects to, and reads it again on every new connection (the app may have
@@ -203,6 +213,61 @@ and their parameter documentation. Search is case-insensitive across IDs, labels
 and parameter descriptions. Listing commands never discovers printers, submits a job or opens
 a dialog. Settings inspection is always available; submission becomes enabled when the native
 printer is ready, or when the browser host provides its print flow.
+
+## Ask Agent
+
+With the authenticated loopback control channel enabled, the person explicitly selects text and
+sends an instruction to their own connected agent. A queued request remains in memory; nothing is
+sent while no agent is connected. WordCraft does not log instruction text or choose a model. The
+person's external agent may keep its own history according to its own settings.
+
+| Method | Params | Result |
+|---|---|---|
+| `agent.listen` | `timeoutMs?` (default 30000, max 60000), `agent?` | `{id, instruction, history, selection: {text, anchor, focus}, document: {title, saved, language}, target: {document, revision}}` or `{none: true}` |
+| `agent.reply` | `id`, `text?`, `done?`, `error?`, `proposal?`, `format?`, `comment?` | `{id, done}` |
+
+A mutating command is associated with the claimed request using **`request`**, not `request_id`.
+When present, this field must be an unsigned JSON integer: null, strings, booleans, arrays and
+objects are rejected before any command runs. Omit the field when no request is open.
+Ownership alone grants no document-wide permission: WordCraft checks the captured document,
+current content revision, actual selection and supported selection-scoped command. Text insertion
+replaces the captured selection or appends at its end; supported character-format commands require a nonempty range within it. Whole-cell, block and object
+selections, whole-document operations, macros and arbitrary structural replacements are refused.
+Agent text insertion is literal (`raw`), temporarily disables overtype and always replaces the
+selected text; the person's typing preferences are restored afterwards. This prevents AutoCorrect,
+word-wide formatting or overtype from changing text outside the requested interval. Creating
+paragraph structure (`paragraphs: true`), clearing paragraph formatting and typing into content controls, redirected field boundaries or protected exception boundaries require a separate structural-scope adapter and are refused.
+An inactive addressed document cannot bypass these checks; make the request's document active first.
+Synthetic UI input is refused while a request is open, so it cannot click the person's Keep/Undo.
+Remote close/reopen commands are also refused with `HUMAN_REVIEW_REQUIRED` while a real request
+exists, including after an answer or failure. The person keeps, undoes or closes that review in the
+app. Control access remains privileged: whoever has the key can run native document commands.
+
+Authorized successive edits advance the request's revision and selection and retain the same real
+undo checkpoint. An outside edit, another checkpoint or another document invalidates that guarantee.
+Undo then refuses to revert unrelated work and asks the person to use the Edit menu's Undo instead.
+Replies are resolved and accepted on the document-owning UI thread, so a changed or closed document
+cannot receive a stale response. A disconnected connection releases its ownership and unfinished
+work returns to the queue. Idle connections and blocked writes time out.
+
+Proposals and format metadata are **literal review text**, never commands or markup. A proposal-only
+reply is supported and labeled "Proposal (not applied)". Keep retains native tool edits already made
+and the saved response note; it never executes a proposal. Responses have bounded text, proposals,
+notes and total size (the common `craft-ask-agent` contract proposed in storytold/craft-libs#142).
+A failed request may already have made native edits: Keep retains those edits and the failure note,
+while Undo uses the same document/version/checkpoint guard. Retrying carries the rebased text and
+failure history. If the document refuses the review note, Keep leaves the conversation open and
+reports the refusal, so the person can recover or undo the edits.
+
+### Optional personal launcher
+
+By default WordCraft starts no agent process. After explicit Send, if no agent is listening, it can
+start an opt-in executable: an absolute file path in `WORDCRAFT_AGENT_LAUNCH`, or `agent/launch`
+(`agent/launch.cmd` on Windows) beside the WordCraft executable. It passes no instruction, selected
+text or token in arguments, builds no shell command from document content, starts no second copy
+while its previous launcher still runs, and uses no model configuration or key of its own. The
+launcher is the person's program and connects through the ordinary authenticated control channel.
+This facility is not built for WASM. The app does not kill the person's launcher on exit.
 
 ### Physical print sheet layout
 

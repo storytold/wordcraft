@@ -4,10 +4,10 @@ use super::file_browser;
 use super::services::Services;
 use super::state::{AutoSaveBlock, DefaultApp, PromptSave, SaveChoice, keeps_everything};
 use super::{
-    AwaitingSave, ControlRequest, DEFAULT_TAB, MAX_DICTIONARY, MAX_RECENT, QUIT, SaveInFlight, Session, UiState, Value, WordApp, applied_font,
-    async_saves, backstage, canvas, chrome, colors, content_controls, crop, desktop_theme, dialogs, dialogs_table_style, documents, file_dialogs,
-    i18n, json, keys, keytips, options, panes, paste_picture, printing, push_recent_font, read_aloud, recent_fonts_from, ribbon, scroll,
-    system_clipboard, table_pen, theme, updates_ui, widgets, window_ui, windows, zotero,
+    AgentHub, AwaitingSave, ControlRequest, DEFAULT_TAB, MAX_DICTIONARY, MAX_RECENT, QUIT, SaveInFlight, Session, UiState, Value, WordApp,
+    applied_font, ask_agent, async_saves, backstage, canvas, chrome, colors, content_controls, crop, desktop_theme, dialogs, dialogs_table_style,
+    documents, file_dialogs, i18n, json, keys, keytips, options, panes, paste_picture, printing, push_recent_font, read_aloud, recent_fonts_from,
+    ribbon, scroll, system_clipboard, table_pen, theme, updates_ui, widgets, window_ui, windows, zotero,
 };
 
 mod commands;
@@ -107,6 +107,7 @@ impl WordApp {
             updates_rt: updates_ui::Runtime::default(),
             packs_rt: Default::default(),
             control_rx: None,
+            ask_agent: ask_agent::AskAgent::default(),
             shots: crate::control::Shots::default(),
             capture_epoch: 0,
             surface_geometry: None,
@@ -194,6 +195,13 @@ impl WordApp {
         self
     }
 
+    /// The control channel's Ask Agent queue, shared with its connection threads, which answer
+    /// `agent.listen` and `agent.reply` from it ([`ask_agent`]).
+    pub fn with_agent_hub(mut self, hub: AgentHub) -> Self {
+        self.ask_agent.hub = Some(hub);
+        self
+    }
+
     /// Start-up with no document to open (#766): show File › Home (Blank document, the templates
     /// and Recent), as Word starts, when the Start screen setting is on (the default). No document
     /// is open until the user picks Blank document or a template or opens a file (#1129): Esc or
@@ -231,6 +239,8 @@ impl WordApp {
 
     /// Per-frame logic before layout: control requests, screenshots, shortcuts, file drops.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        ask_agent::sync(self);
+        ask_agent::escape(self, ctx);
         // #2726: egui's AccessKit update must carry the focused node in its node list; a frame
         // that drops it panics in `accesskit_consumer` and closes the window (see `a11y::FocusGuard`).
         ctx.add_plugin(super::a11y::FocusGuard);

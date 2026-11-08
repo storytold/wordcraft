@@ -4,6 +4,9 @@ use super::{Rect, Response, Ui, WordApp};
 /// Shortcut text for a command (`⌘B` on macOS, `Ctrl+B` elsewhere): its first key in effect,
 /// custom keys included (Customize Keyboard).
 pub fn shortcut_text(app: &WordApp, id: &str) -> String {
+    if id == "ui.askAgent" {
+        return key_text(crate::ask_agent::SHORTCUT);
+    }
     let keys = app.session.keymap.keys_for(&app.session.registry, id);
     keys.first().map(|k| key_text(k)).unwrap_or_default()
 }
@@ -119,6 +122,8 @@ pub(super) fn tooltip(app: &WordApp, resp: Response, label: &str, id: &str) -> R
     } else {
         Some(app.session.why_disabled(id).unwrap_or(""))
     };
+    let specific = (id == "ui.askAgent").then(|| app.ask_agent.unavailable()).flatten().map(|why| why.shown());
+    let reason = if reason == Some("") { specific.as_deref().or(reason) } else { reason };
     let (title, notes) = tooltip_lines(label, &shortcut_text(app, id), &desc, reason);
     show_hint(&resp, &title, &notes);
     resp
