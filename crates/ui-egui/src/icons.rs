@@ -1105,6 +1105,45 @@ fn paint_view_and_tables(pen: &Pen, name: &str) -> bool {
             pen.rect(2.5, 3.5, 17.5, 16.5, c);
             pen.line_c(&[(2.5, 6.5), (10.0, 6.5)], a);
         }
+        "themeLight" => {
+            // A sun: central circle and 8 rays.
+            pen.circle(10.0, 10.0, 3.5, c);
+            pen.line_c(&[(10.0, 2.0), (10.0, 4.5)], c);
+            pen.line_c(&[(10.0, 15.5), (10.0, 18.0)], c);
+            pen.line_c(&[(2.0, 10.0), (4.5, 10.0)], c);
+            pen.line_c(&[(15.5, 10.0), (18.0, 10.0)], c);
+            pen.line_c(&[(4.5, 4.5), (6.2, 6.2)], c);
+            pen.line_c(&[(13.8, 13.8), (15.5, 15.5)], c);
+            pen.line_c(&[(15.5, 4.5), (13.8, 6.2)], c);
+            pen.line_c(&[(4.5, 15.5), (6.2, 13.8)], c);
+        }
+        "themeDark" => {
+            // A crescent moon.
+            pen.fill(
+                &[
+                    (12.0, 3.5),
+                    (8.5, 4.5),
+                    (6.0, 7.5),
+                    (5.0, 11.0),
+                    (6.0, 14.5),
+                    (8.5, 17.0),
+                    (12.5, 17.5),
+                    (10.0, 15.5),
+                    (8.5, 13.0),
+                    (8.5, 9.0),
+                    (10.0, 6.0),
+                    (12.0, 3.5),
+                ],
+                c,
+            );
+        }
+        "themeSystem" => {
+            // A monitor with half-dark screen: follows the system appearance.
+            pen.rect(2.5, 3.0, 17.5, 14.0, c);
+            pen.frect(10.0, 3.0, 17.5, 14.0, c);
+            pen.line_c(&[(10.0, 14.0), (10.0, 17.0)], c);
+            pen.line_c(&[(6.0, 17.0), (14.0, 17.0)], c);
+        }
         "newWindow" => {
             pen.rect(2.5, 5.0, 13.0, 15.0, c);
             pen.rect(7.0, 2.5, 17.5, 12.5, a);

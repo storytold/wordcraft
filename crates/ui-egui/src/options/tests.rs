@@ -494,3 +494,63 @@ fn length_units_follow_the_interface_language() {
     h.run_steps(4);
     assert_eq!(length(72.0), "25,4 mm", "English keeps the English names");
 }
+
+/// Display tab offers the interface theme (Light / Dark / System) and interface scale / zoom
+/// options, which update theme and zoom factor, survive a restart in ui.json, and apply globally.
+#[test]
+fn display_tab_offers_interface_theme_and_scale_and_survives_restart() {
+    let mut a = app();
+    a.run("file.options", json!({"pane": "display"})).unwrap();
+    assert!(a.ui.backstage);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert!(h.query_all_by_label("Display").count() >= 2, "Display nav pane and section header are present");
+    assert!(h.query_by_label("Interface theme:").is_some(), "Interface theme label is present in Display tab");
+    assert!(h.query_by_label("Light").is_some(), "Light option button is present");
+    assert!(h.query_by_label("Dark").is_some(), "Dark option button is present");
+    assert!(h.query_by_label("System").is_some(), "System option button is present");
+    assert!(h.query_by_label("Interface size:").is_some(), "Interface size combo is present in Display tab");
+
+    // Clicking the "Dark" button in Display tab switches theme to Dark
+    h.get_by_label("Dark").click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.theme, Appearance::Dark);
+    assert!(h.state().ui_is_dark());
+
+    // Clicking the "Light" button in Display tab switches theme to Light
+    h.get_by_label("Light").click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.theme, Appearance::Light);
+    assert!(!h.state().ui_is_dark());
+
+    // Clicking the "System" button: when system reports dark, ui_is_dark is true; when light, false
+    h.state_mut().desktop_dark = Some(true);
+    h.get_by_label("System").click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.theme, Appearance::System);
+    assert!(h.state().ui_is_dark());
+
+    h.state_mut().desktop_dark = Some(false);
+    h.run_steps(4);
+    assert!(!h.state().ui_is_dark());
+
+    // Setting a 150% scale
+    h.state_mut().run("ui.interfaceSize", json!({"percent": 150})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.interface_size.percent(), Some(150));
+
+    // Survives restart in ui.json
+    h.state_mut().run("ui.theme", json!({"value": "dark"})).unwrap();
+    let saved = serde_json::to_vec(&h.state().prefs()).unwrap();
+    let mut b = app();
+    b.apply_prefs(UiState::from_json(&saved).unwrap());
+    assert_eq!(b.ui.theme, Appearance::Dark);
+    assert_eq!(b.ui.interface_size.percent(), Some(150));
+}

@@ -4,7 +4,7 @@
 //! desktop there — so "Use system setting" has to ask the desktop itself. The XDG Desktop Portal's
 //! Settings interface answers on GNOME, KDE and XFCE alike, over X11 and Wayland alike.
 
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 
 /// How often [`DesktopTheme::start`] re-reads the desktop's answer. The portal also publishes a
@@ -25,6 +25,8 @@ pub fn prefers_dark() -> Option<bool> {
 pub struct DesktopTheme {
     /// `None` when no watcher thread could be started; the one-shot read still works.
     changes: Option<Receiver<Option<bool>>>,
+    /// Whether the watcher thread has delivered at least one response.
+    received: bool,
 }
 
 impl DesktopTheme {
@@ -56,7 +58,7 @@ impl DesktopTheme {
                 }
             }
         });
-        Self { changes: started.ok().map(|_| rx) }
+        Self { changes: started.ok().map(|_| rx), received: false }
     }
 
     /// Whether a watcher thread is running.
@@ -64,18 +66,24 @@ impl DesktopTheme {
         self.changes.is_some()
     }
 
+    /// Whether the watcher has delivered at least one response.
+    pub fn received(&self) -> bool {
+        self.received
+    }
+
     /// The desktop's new answer if it changed since the last call, to be polled once a frame.
     /// Several changes in one frame collapse to the newest, and a desktop that stops answering
     /// leaves the last answer in place.
-    pub fn take_change(&mut self) -> Option<bool> {
+    pub fn take_change(&mut self) -> Option<Option<bool>> {
         let Some(changes) = &self.changes else { return None };
         let mut newest = None;
-        loop {
-            match changes.try_recv() {
-                Ok(changed) => newest = changed,
-                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => return newest,
-            }
+        let mut got_any = false;
+        while let Ok(changed) = changes.try_recv() {
+            newest = changed;
+            got_any = true;
+            self.received = true;
         }
+        if got_any { Some(newest) } else { None }
     }
 }
 
@@ -109,20 +117,27 @@ impl Bus {
 fn read(bus: &mut Bus) -> Option<bool> {
     const PORTAL: &str = "org.freedesktop.portal.Desktop";
     const SETTINGS: &str = "org.freedesktop.portal.Settings";
-    const SCHEMAS: [(&str, &str); 2] = [("org.gnome.desktop.interface", "color-scheme"), ("org.freedesktop.interface.color-scheme", "color-scheme")];
+    const SCHEMAS: [(&str, &str); 3] = [
+        ("org.freedesktop.appearance", "color-scheme"),
+        ("org.gnome.desktop.interface", "color-scheme"),
+        ("org.freedesktop.interface.color-scheme", "color-scheme"),
+    ];
     if bus.0.is_none() {
         bus.0 = zbus::blocking::Connection::session().ok();
     }
     let connection = bus.0.as_ref()?;
     let mut answered = false;
     for (schema, key) in SCHEMAS {
-        let Ok(reply) = connection.call_method(Some(PORTAL), "/org/freedesktop/portal/desktop", Some(SETTINGS), "ReadOne", &(schema, key)) else {
+        let reply = connection
+            .call_method(Some(PORTAL), "/org/freedesktop/portal/desktop", Some(SETTINGS), "ReadOne", &(schema, key))
+            .or_else(|_| connection.call_method(Some(PORTAL), "/org/freedesktop/portal/desktop", Some(SETTINGS), "Read", &(schema, key)));
+        let Ok(reply) = reply else {
             continue;
         };
         answered = true;
         let Ok((answer,)) = reply.body().deserialize::<(zbus::zvariant::OwnedValue,)>() else { continue };
-        if let Ok(scheme) = String::try_from(&*answer) {
-            return parse(&scheme);
+        if let Some(dark) = parse_value(&answer) {
+            return Some(dark);
         }
     }
     if !answered {
@@ -131,14 +146,42 @@ fn read(bus: &mut Bus) -> Option<bool> {
     None
 }
 
+/// Parse a variant value from the portal settings, which can be a u32 (1: dark, 2: light, 0: none)
+/// per the XDG Desktop Portal specification, or a string ("prefer-dark", "prefer-light").
+#[cfg(target_os = "linux")]
+fn parse_value(val: &zbus::zvariant::Value) -> Option<bool> {
+    match val {
+        zbus::zvariant::Value::Value(inner) => parse_value(inner),
+        zbus::zvariant::Value::U8(1)
+        | zbus::zvariant::Value::U16(1)
+        | zbus::zvariant::Value::U32(1)
+        | zbus::zvariant::Value::U64(1)
+        | zbus::zvariant::Value::I16(1)
+        | zbus::zvariant::Value::I32(1)
+        | zbus::zvariant::Value::I64(1) => Some(true),
+        zbus::zvariant::Value::U8(2)
+        | zbus::zvariant::Value::U16(2)
+        | zbus::zvariant::Value::U32(2)
+        | zbus::zvariant::Value::U64(2)
+        | zbus::zvariant::Value::I16(2)
+        | zbus::zvariant::Value::I32(2)
+        | zbus::zvariant::Value::I64(2) => Some(false),
+        zbus::zvariant::Value::Str(s) => parse(s.as_str()),
+        _ => None,
+    }
+}
+
 /// The portal's `color-scheme` answer. `default` means the desktop states no preference, so
 /// neither does the application.
 #[cfg(target_os = "linux")]
 fn parse(scheme: &str) -> Option<bool> {
-    match scheme {
-        "prefer-dark" => Some(true),
-        "prefer-light" => Some(false),
-        _ => None,
+    let s = scheme.trim();
+    if s.eq_ignore_ascii_case("prefer-dark") || s.eq_ignore_ascii_case("dark") || s == "1" {
+        Some(true)
+    } else if s.eq_ignore_ascii_case("prefer-light") || s.eq_ignore_ascii_case("light") || s == "2" {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -162,6 +205,20 @@ mod tests {
         assert_eq!(parse(""), None);
     }
 
+    /// The portal specification returns a u32 (1: dark, 2: light, 0: none) in a variant.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn portal_value_parsing_handles_u32_and_variants() {
+        use zbus::zvariant::Value;
+        assert_eq!(parse_value(&Value::U32(1)), Some(true));
+        assert_eq!(parse_value(&Value::U32(2)), Some(false));
+        assert_eq!(parse_value(&Value::U32(0)), None);
+        assert_eq!(parse_value(&Value::Value(Box::new(Value::U32(1)))), Some(true));
+        assert_eq!(parse_value(&Value::Value(Box::new(Value::U32(2)))), Some(false));
+        assert_eq!(parse_value(&Value::Str("prefer-dark".into())), Some(true));
+        assert_eq!(parse_value(&Value::Str("prefer-light".into())), Some(false));
+    }
+
     /// Off Linux the caller already has winit's answer, so this adds nothing.
     #[test]
     #[cfg(not(target_os = "linux"))]
@@ -173,6 +230,38 @@ mod tests {
     #[test]
     fn a_watcher_without_a_thread_is_inert() {
         assert_eq!(DesktopTheme::default().take_change(), None);
+    }
+
+    /// When the watcher thread delivers answers, `take_change` yields them and `received` turns true.
+    #[test]
+    fn take_change_delivers_answers_and_records_received() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut dt = DesktopTheme { changes: Some(rx), received: false };
+        assert!(!dt.received());
+        assert_eq!(dt.take_change(), None);
+        assert!(!dt.received());
+
+        // Send a dark preference.
+        tx.send(Some(true)).unwrap();
+        assert_eq!(dt.take_change(), Some(Some(true)));
+        assert!(dt.received());
+
+        // Empty channel leaves received true and returns None.
+        assert_eq!(dt.take_change(), None);
+        assert!(dt.received());
+
+        // Send a light preference.
+        tx.send(Some(false)).unwrap();
+        assert_eq!(dt.take_change(), Some(Some(false)));
+
+        // Multiple changes collapse to the newest.
+        tx.send(Some(false)).unwrap();
+        tx.send(Some(true)).unwrap();
+        assert_eq!(dt.take_change(), Some(Some(true)));
+
+        // Send None (no preference / portal stopped answering).
+        tx.send(None).unwrap();
+        assert_eq!(dt.take_change(), Some(None));
     }
 
     /// A new app doesn't watch the desktop (the app binary starts the watcher), so tests and
