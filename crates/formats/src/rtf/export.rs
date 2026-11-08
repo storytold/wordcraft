@@ -153,6 +153,15 @@ fn rtf_border_style(s: wordcraft_doc::props::BorderStyle) -> &'static str {
         BorderStyle::Triple => "\\brdrtriple",
         BorderStyle::DotDash => "\\brdrdashd",
         BorderStyle::Wave => "\\brdrwavy",
+        BorderStyle::ThinThickSmallGap => "\\brdrtnthsg",
+        BorderStyle::ThickThinSmallGap => "\\brdrthtnsg",
+        BorderStyle::ThinThickThinSmallGap => "\\brdrtnthtnsg",
+        BorderStyle::ThinThickMediumGap => "\\brdrtnthmg",
+        BorderStyle::ThickThinMediumGap => "\\brdrthtnmg",
+        BorderStyle::ThinThickThinMediumGap => "\\brdrtnthtnmg",
+        BorderStyle::ThinThickLargeGap => "\\brdrtnthlg",
+        BorderStyle::ThickThinLargeGap => "\\brdrthtnlg",
+        BorderStyle::ThinThickThinLargeGap => "\\brdrtnthtnlg",
     }
 }
 

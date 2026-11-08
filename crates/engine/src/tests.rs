@@ -12,6 +12,7 @@ use crate::{Session, cmd};
 
 mod bidi;
 mod documents;
+mod find_apostrophes;
 mod font_sizes;
 mod fonts;
 mod ime_noop;
@@ -1344,6 +1345,74 @@ fn copying_bold_text_puts_html_on_the_clipboard() {
     let html = r["html"].as_str().unwrap_or_default().to_string();
     assert!(html.contains("<strong>bold</strong>"), "{html}");
     assert_eq!(s.clipboard_html, html);
+}
+
+/// Bold and italic of a paragraph's character, in a document.
+fn emphasis_at(d: &wordcraft_doc::Document, block: usize, off: usize) -> (bool, bool) {
+    match d.body.get(block).map(|b| &**b) {
+        Some(wordcraft_doc::Block::Para(p)) => {
+            let c = p.props_of_char(off);
+            (c.bold.unwrap_or(false), c.italic.unwrap_or(false))
+        }
+        _ => (false, false),
+    }
+}
+
+#[test]
+fn copying_puts_rtf_on_the_clipboard() {
+    // gap-clipboard-rtf: a copy carries RTF beside its text and HTML, for programs that read RTF.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "plain bold\nsome italic"}));
+    s.doc.format_range(&Pos::body(0, 6), &Pos::body(0, 10), &|c| c.bold = Some(true)).unwrap();
+    s.doc.format_range(&Pos::body(1, 5), &Pos::body(1, 11), &|c| c.italic = Some(true)).unwrap();
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let rtf = r["rtf"].as_str().unwrap_or_default().to_string();
+    assert!(rtf.starts_with("{\\rtf1"), "{r}");
+    assert_eq!(s.clipboard_rtf, rtf);
+    let d = wordcraft_formats::rtf::import(rtf.as_bytes()).unwrap();
+    let paras: Vec<String> =
+        d.body.iter().filter_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { Some(p.text.clone()) } else { None }).collect();
+    assert_eq!(paras.get(..2), Some(&["plain bold".to_string(), "some italic".to_string()][..]), "{paras:?}");
+    assert_eq!(emphasis_at(&d, 0, 0), (false, false));
+    assert_eq!(emphasis_at(&d, 0, 7), (true, false));
+    assert_eq!(emphasis_at(&d, 1, 7), (false, true));
+
+    // Pasting it elsewhere keeps the formatting.
+    let mut t = Session::new(wordcraft_doc::Document::new());
+    run(&mut t, "edit.paste", json!({"rtf": rtf}));
+    assert!(text(&t).starts_with("plain bold\nsome italic"), "{}", text(&t));
+    assert_eq!(emphasis_at(&t.doc, 0, 7), (true, false));
+    assert_eq!(emphasis_at(&t.doc, 1, 7), (false, true));
+
+    // Cut carries it too.
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 6}, "focus": {"block": 0, "off": 10}}));
+    let r = run(&mut s, "edit.cut", json!({}));
+    assert!(r["rtf"].as_str().is_some_and(|t| t.starts_with("{\\rtf1") && t.contains("bold")), "{r}");
+    assert_eq!(text(&s).lines().next(), Some("plain "));
+
+    // Nothing selected: nothing copied, no RTF.
+    run(&mut s, "caret.docEnd", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    assert!(r.get("rtf").is_none(), "{r}");
+}
+
+#[test]
+fn pasting_hostile_rtf_never_panics() {
+    let deep = format!("{{\\rtf1 {}x{}", "{\\b ".repeat(5000), "}".repeat(5000));
+    let junk = ["{\\rtf1", "{\\rtf1 {\\b bo", "{\\rtf1\\ansi\\u-99999999999? \\bin999999999 x}", "{\\rtf1 \\'zz\\fonttbl{", "{\\rtf\u{0}\u{FFFF}}"];
+    for rtf in junk.iter().map(|j| j.to_string()).chain([deep]) {
+        for id in ["edit.paste", "edit.pasteMerge", "edit.pasteSpecial"] {
+            let mut t = Session::new(wordcraft_doc::Document::new());
+            // `Session::run` turns a panic into an error: look for it.
+            for v in [json!({"rtf": rtf, "as": "rtf"}), json!({"rtf": rtf, "text": "fallback"})] {
+                if let Err(e) = t.run(id, &v) {
+                    assert!(!e.to_string().contains("panicked"), "{id}: {e}");
+                }
+                let _ = t.layout();
+            }
+        }
+    }
 }
 
 #[test]
@@ -4613,10 +4682,8 @@ fn typed_paragraphs_are_capped_for_every_caller() {
     assert!(!body_texts(&s).iter().any(|p| p.contains('y')));
 }
 
-#[test]
-fn hostile_params_never_panic() {
-    let reg = cmd::registry();
-    let junk = [
+fn hostile_junk() -> [serde_json::Value; 8] {
+    [
         json!(null),
         json!({}),
         json!({"text": 5, "size": "x", "path": [], "pos": {"block": 9999, "off": 99999}}),
@@ -4625,11 +4692,23 @@ fn hostile_params_never_panic() {
         json!({"page": 0, "x": 1e30, "y": -1e30, "extend": 1}),
         json!({"width": 1e-9, "height": 1e30, "top": -1e9, "left": 1e9}),
         json!({"section": {"pageW": -1e308, "pageH": 0, "marginTop": 1e30, "header": -5, "columns": {"count": 1000000, "space": -1e300, "widths": [[0, 0]]}}}),
-    ];
+    ]
+}
+
+/// `file.*`, `insert.picture` and `insert.textFromFile`: `hostile_file_params_never_panic` runs
+/// them, held to a folder of its own, and `hostile_params_never_panic` every other command.
+fn reaches_files(id: &str) -> bool {
+    id.starts_with("file.") || id == "insert.picture" || id == "insert.textFromFile"
+}
+
+#[test]
+fn hostile_params_never_panic() {
+    let reg = cmd::registry();
+    let junk = hostile_junk();
     for spec in reg.all() {
-        // These reach outside the session (files). Read Aloud (`review.readAloud`, `readAloud.*`)
-        // is fuzzed too: under `cfg(test)` its backend is the silent `Hold`, asserted below.
-        if spec.id.starts_with("file.") || spec.id == "insert.picture" || spec.id == "insert.textFromFile" {
+        // Read Aloud (`review.readAloud`, `readAloud.*`) is fuzzed too: under `cfg(test)` its
+        // backend is the silent `Hold`, asserted below.
+        if reaches_files(spec.id) {
             continue;
         }
         for j in &junk {
@@ -4641,6 +4720,127 @@ fn hostile_params_never_panic() {
             let _ = s.layout();
         }
     }
+}
+
+/// `file.*`, `insert.picture` and `insert.textFromFile` take junk params and paths to files they
+/// can't use (#3719). They may read only `in` and write only `out`, so a save can't replace a file
+/// another run is meant to find broken, and nothing outside those folders is touched.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn hostile_file_params_never_panic() {
+    /// What is directly in `dir`: each name with its bytes (`None` for a folder).
+    fn contents(dir: &std::path::Path) -> std::collections::BTreeMap<String, Option<Vec<u8>>> {
+        let entries = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path());
+        entries.map(|p| (p.file_name().unwrap().to_string_lossy().into_owned(), std::fs::read(&p).ok())).collect()
+    }
+    /// The names whose bytes differ, so a failure lists them instead of printing every file.
+    fn changed(before: &std::collections::BTreeMap<String, Option<Vec<u8>>>, dir: &std::path::Path) -> Vec<String> {
+        let after = contents(dir);
+        let names: std::collections::BTreeSet<_> = before.keys().chain(after.keys()).collect();
+        names.into_iter().filter(|n| before.get(*n) != after.get(*n)).cloned().collect()
+    }
+    let reg = cmd::registry();
+    let base = scratch_dir("hostile-files");
+    let (input, output, outside) = (base.join("in"), base.join("out"), base.join("outside"));
+    for dir in [&outside, &input.join("folder.docx"), &output.join("folder.docx")] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let at = |dir: &std::path::Path, name: &str| dir.join(name).to_string_lossy().into_owned();
+
+    // Fixed bytes, so a failure comes back on the next run.
+    let noise: Vec<u8> = (0..512u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8).collect();
+    let picture_exts = ["png", "jpg", "gif", "bmp", "svg", "emf"];
+    let mut paths = vec![];
+    for ext in crate::io::OPEN_EXTS.iter().chain(&picture_exts) {
+        let name = format!("random.{ext}");
+        std::fs::write(input.join(&name), &noise).unwrap();
+        paths.push(at(&input, &name));
+    }
+    paths.extend(crate::io::SAVE_EXTS.iter().map(|ext| at(&output, &format!("new.{ext}"))));
+    std::fs::write(input.join("empty"), b"").unwrap();
+    std::fs::write(input.join("empty.docx"), b"").unwrap();
+    std::fs::write(input.join("good.txt"), "Good text").unwrap();
+    std::fs::write(input.join("good.png"), tiny_png()).unwrap();
+    paths.extend(["empty", "empty.docx", "folder.docx", "missing", "missing.docx"].map(|name| at(&input, name)));
+    paths.extend(["folder.docx", "missing/new.docx", &format!("{}.docx", "x".repeat(5000))].map(|name| at(&output, name)));
+    // Outside the roots, however it is spelled, and not paths at all.
+    paths.extend(["new.docx", "new"].map(|name| at(&outside, name)));
+    paths.push(format!("{}/../outside/new.docx", input.to_string_lossy()));
+    paths.extend(["hostile-relative.docx", "hostile-relative", "", "\0", "a\0b.docx"].map(String::from));
+
+    // Every path alone; each of these also with every other kind of junk param. The numbers that
+    // cost time (`copies`, `scale`) stay small: huge ones are #3720.
+    let mut params: Vec<serde_json::Value> = hostile_junk().into();
+    params.extend(paths.iter().map(|p| json!({"path": p})));
+    for name in [
+        "in/random.docx",
+        "in/empty.docx",
+        "in/folder.docx",
+        "in/missing.docx",
+        "in/good.txt",
+        "in/good.png",
+        "out/new.docx",
+        "out/new.pdf",
+        "out/new.png",
+    ] {
+        let path = at(&base, name);
+        params.extend([
+            json!({"path": path, "password": "x", "format": "wordml2003", "markup": "x", "confirmDamaged": 1}),
+            json!({"path": path, "password": 5, "format": 5, "markup": true}),
+            json!({"path": path, "page": 0, "scale": 0, "width": -1e308, "alt": 5}),
+            json!({"path": path, "data": "not base64!"}),
+            json!({"path": path, "data": "AAAA"}),
+            json!({"path": path, "pagesPerSheet": 7, "range": "x", "pages": "9-1,,", "parity": "x", "copies": 3, "paper": "x"}),
+            json!({"dir": path, "name": path, "template": path, "userTemplatesFolder": path, "id": 1e30, "restore": 1e30, "save": path}),
+        ]);
+    }
+
+    let before = contents(&input);
+    let working_dir = std::path::Path::new(".");
+    let working_dir_before = contents(working_dir);
+    let roots = crate::file_access::AutomationRoots::new(Some(&input), Some(&output)).unwrap();
+    let confined = |s: &mut Session, id: &str, v: &serde_json::Value| crate::file_access::confine(roots.as_ref(), || s.run(id, v));
+    for spec in reg.all() {
+        if !reaches_files(spec.id) {
+            continue;
+        }
+        for v in &params {
+            let mut s = Session::new(crate::sample::sample_document());
+            let r = confined(&mut s, spec.id, v);
+            assert!(!caught_panic(&reg, &r), "{} panicked on {v}: {r:?}", spec.id);
+            s.clamp_selection();
+            let _ = s.layout();
+        }
+    }
+
+    let nothing = Vec::<String>::new();
+    assert_eq!(changed(&before, &input), nothing, "the read root is only read");
+    assert_eq!(changed(&Default::default(), &outside), nothing, "nothing outside the write root");
+    // Every name counts: an empty path comes out as `.pdf` or `.dotx` here.
+    assert_eq!(changed(&working_dir_before, working_dir), nothing, "nothing in the working directory");
+
+    // The junk above met the files, not a closed door: usable files work through the same roots...
+    let mut s = s();
+    confined(&mut s, "file.open", &json!({"path": at(&input, "good.txt")})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Good text");
+    confined(&mut s, "insert.textFromFile", &json!({"path": at(&input, "good.txt")})).unwrap();
+    confined(&mut s, "insert.picture", &json!({"path": at(&input, "good.png")})).unwrap();
+    let saved: [(&str, &str, &[u8]); 3] =
+        [("file.saveAs", "control.docx", b"PK\x03\x04"), ("file.exportPdf", "control.pdf", b"%PDF-"), ("file.exportPng", "control.png", b"\x89PNG")];
+    for (id, name, signature) in saved {
+        confined(&mut s, id, &json!({"path": at(&output, name)})).unwrap();
+        assert_eq!(std::fs::read(output.join(name)).unwrap().get(..signature.len()), Some(signature), "{name}");
+    }
+    // ...the noise is refused by the reader, and only a path outside by the roots.
+    let refused = |s: &mut Session, path: String| match confined(s, "file.open", &json!({"path": path})) {
+        Err(crate::CmdError::Failed(m)) => m,
+        r => panic!("not refused: {r:?}"),
+    };
+    let unreadable = refused(&mut s, at(&input, "random.docx"));
+    assert!(!unreadable.contains("automation path rejected"), "{unreadable}");
+    let rejected = refused(&mut s, at(&outside, "new.docx"));
+    assert!(rejected.contains("automation path rejected"), "{rejected}");
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 /// A panic that `Session::run`'s guard turned into an error, in a command or one it ran: still a
@@ -6043,6 +6243,22 @@ fn props_colours_take_hex_strings() {
         assert!(matches!(r, Err(crate::CmdError::Params(_))), "{bad}: {r:?}");
         assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props.shading, Some(Rgb(1, 2, 3)), "{bad} changes nothing");
     }
+}
+
+#[test]
+fn para_set_frame_geometry_keeps_anchor_lock_unless_replaced() {
+    use wordcraft_doc::props::TextFrame;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Framed text"}));
+    let paragraph = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    paragraph.props.frame = Some(TextFrame { anchor_lock: Some(true), ..TextFrame::default() });
+
+    run(&mut s, "para.set", json!({"props": {"frame": {"x": 36.0, "y": 72.0, "w": 108.0}}}));
+    let frame = s.doc.para_at(&Pos::body(0, 0)).unwrap().props.frame.as_ref().unwrap();
+    assert_eq!((frame.x, frame.y, frame.w, frame.anchor_lock), (36.0, 72.0, Some(108.0), Some(true)));
+
+    run(&mut s, "para.set", json!({"props": {"frame": {"x": 54.0, "anchorLock": false}}}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props.frame.as_ref().unwrap().anchor_lock, Some(false));
 }
 
 /// #555: Update Heading 2 to Match Selection (the styles pane's context menu) makes Heading 2
@@ -7726,6 +7942,97 @@ fn colour_commands_take_any_custom_hex() {
     assert_eq!(shading, wordcraft_doc::Rgb::parse("C0FFEE"));
     run(&mut s, "design.pageColor", json!({"color": "123ABC"}));
     assert_eq!(s.doc.settings.page_color, wordcraft_doc::Rgb::parse("123ABC"));
+}
+
+/// #4685: Home › Paragraph › Shading on text selected inside a paragraph shades that text, as in
+/// Word, so No Color takes off a text shading a file gave it (an orange "highlight" from a .docx is
+/// `w:shd`, which Text Highlight Color › No Color leaves, in Word too). A caret or a whole
+/// paragraph still shades the paragraph.
+#[test]
+fn shading_selected_text_shades_the_text_and_no_color_clears_it() {
+    let orange = wordcraft_doc::Rgb::parse("FFA500");
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Orange text here"}));
+    run(&mut s, "select.text", json!({"text": "Orange"}));
+    run(&mut s, "para.shading", json!({"color": "FFA500"}));
+    let p = s.doc.para_at(&s.sel.focus).unwrap();
+    assert_eq!((p.props.shading, p.props_of_char(0).shading, p.props_of_char(7).shading), (None, orange, None));
+    // Highlight › No Color doesn't take it off; Shading › No Color does.
+    run(&mut s, "format.highlight", json!({"color": "none"}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().props_of_char(0).shading, orange);
+    run(&mut s, "para.shading", json!({"color": null}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().props_of_char(0).shading, None);
+    // A caret, or the whole paragraph, shades the paragraph and leaves the text alone.
+    for whole in [false, true] {
+        let mut s = self::s();
+        run(&mut s, "text.insert", json!({"text": "Orange text here"}));
+        run(&mut s, if whole { "select.all" } else { "caret.left" }, json!({}));
+        run(&mut s, "para.shading", json!({"color": "FFA500"}));
+        let p = s.doc.para_at(&s.sel.focus).unwrap();
+        assert_eq!((p.props.shading, p.props_of_char(0).shading), (orange, None), "whole: {whole}");
+    }
+    // All the text of a paragraph that isn't the last is still text: a selection with its mark
+    // would end at the next paragraph's start.
+    let mut s = self::s();
+    run(
+        &mut s,
+        "document.setText",
+        json!({"text": "Word
+More"}),
+    );
+    run(&mut s, "select.text", json!({"text": "Word"}));
+    run(&mut s, "para.shading", json!({"color": "FFA500"}));
+    let p = s.doc.para_at(&s.sel.focus).unwrap();
+    assert_eq!((p.props.shading, p.props_of_char(0).shading), (None, orange));
+    // A selected text box shades its anchor's paragraph, not every line of the box.
+    let mut s = self::s();
+    run(&mut s, "text.insert", json!({"text": "Anchor"}));
+    run(&mut s, "insert.textBox", json!({"text": "Inside"}));
+    let id = s.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::TextBox).map(|(id, _)| *id).unwrap();
+    let end = s.doc.text_box_anchor(id).unwrap();
+    let start = wordcraft_doc::Pos { off: end.off - wordcraft_doc::para::OBJ.len_utf8(), ..end.clone() };
+    run(&mut s, "select.range", json!({"anchor": start, "focus": end}));
+    run(&mut s, "para.shading", json!({"color": "FFA500"}));
+    let boxed = s.doc.parts.get(&id).and_then(|p| p.blocks.first()).and_then(|b| b.as_para()).unwrap();
+    assert_eq!(boxed.props_of_char(0).shading, None, "the box's text isn't shaded");
+    assert_eq!(s.doc.para_at(&end).unwrap().props.shading, orange);
+    // A selected field is text (its object character isn't a drawing): No Color clears its shading.
+    let mut s = self::s();
+    run(&mut s, "text.insert", json!({"text": "Page "}));
+    run(&mut s, "insert.pageNumber", json!({"position": "current"}));
+    let end = s.sel.focus.clone();
+    let start = wordcraft_doc::Pos { off: end.off - wordcraft_doc::para::OBJ.len_utf8(), ..end.clone() };
+    run(&mut s, "select.range", json!({"anchor": start, "focus": end}));
+    run(&mut s, "para.shading", json!({"color": "FFA500"}));
+    let p = s.doc.para_at(&end).unwrap();
+    assert_eq!((p.props.shading, p.props_of_char(start.off).shading), (None, orange), "the field is shaded");
+    run(&mut s, "para.shading", json!({"color": null}));
+    assert_eq!(s.doc.para_at(&end).unwrap().props_of_char(start.off).shading, None);
+    // Borders and Shading › Apply to: Paragraph shades the paragraph, whatever is selected.
+    run(&mut s, "select.text", json!({"text": "Page"}));
+    run(&mut s, "para.shading", json!({"color": "FFA500", "paragraph": true}));
+    let p = s.doc.para_at(&s.sel.focus).unwrap();
+    assert_eq!((p.props.shading, p.props_of_char(0).shading), (orange, None));
+}
+
+/// #4685 review: in a cell's last paragraph all of its text stands for the paragraph with its
+/// mark (a selection can't reach the next paragraph's start there), so Shading shades the
+/// paragraph; part of the text is text.
+#[test]
+fn shading_all_of_a_cells_last_paragraph_shades_the_paragraph() {
+    let orange = wordcraft_doc::Rgb::parse("FFA500");
+    for (from, to, paragraph) in [(0, 9, true), (0, 4, false)] {
+        let mut s = s();
+        run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+        run(&mut s, "text.insert", json!({"text": "Cell text"}));
+        let cell = s.sel.focus.clone();
+        assert!(cell.path.cell().is_some());
+        run(&mut s, "select.range", json!({"anchor": Pos { off: from, ..cell.clone() }, "focus": Pos { off: to, ..cell.clone() }}));
+        run(&mut s, "para.shading", json!({"color": "FFA500"}));
+        let p = s.doc.para_at(&cell).unwrap();
+        let want = if paragraph { (orange, None) } else { (None, orange) };
+        assert_eq!((p.props.shading, p.props_of_char(0).shading), want, "{from}..{to}");
+    }
 }
 
 /// #2738: Home › Underline › Underline Color sets the underline's own colour and leaves its style
@@ -9659,6 +9966,47 @@ fn smart_art_edits_undo_one_step_each() {
     run(&mut s, "picture.size", json!({"width": 200, "height": 120, "lockAspect": false}));
 }
 
+/// An item's own colour survives item edits and layout changes, and a style colour drops it.
+#[test]
+fn smart_art_item_colors_stay_until_a_style_is_picked() {
+    let mut s = s();
+    run(&mut s, "insert.smartArt", json!({"layout": "process"}));
+    let colors = |s: &Session| cmd::smart_art::selected_smart_art(s).unwrap().items.iter().map(|i| i.color.map(|c| c.hex())).collect::<Vec<_>>();
+    assert!(!cmd::smart_art::selected_smart_art(&s).unwrap().has_custom_colors());
+    run(&mut s, "smartArt.itemColor", json!({"index": 1, "color": "FF8800"}));
+    assert_eq!(colors(&s), [None, Some("FF8800".to_string()), None, None]);
+    run(&mut s, "smartArt.items", json!({"items": [{"text": "A"}, {"text": "B", "color": "#ff8800"}]}));
+    run(&mut s, "smartArt.layout", json!({"layout": "cycle"}));
+    run(&mut s, "smartArt.addShape", json!({"after": 0}));
+    assert_eq!(colors(&s), [None, None, Some("FF8800".to_string())]);
+    assert!(s.run("smartArt.itemColor", &json!({"index": 0, "color": "nope"})).is_err());
+    run(&mut s, "smartArt.itemColor", json!({"index": 2}));
+    assert!(!cmd::smart_art::selected_smart_art(&s).unwrap().has_custom_colors());
+    run(&mut s, "smartArt.itemColor", json!({"index": 0, "color": "00FF00"}));
+    run(&mut s, "smartArt.colors", json!({"variant": "accent2"}));
+    assert!(!cmd::smart_art::selected_smart_art(&s).unwrap().has_custom_colors());
+    run(&mut s, "edit.undo", json!({}));
+    assert!(cmd::smart_art::selected_smart_art(&s).unwrap().has_custom_colors(), "undo brings the colours back");
+}
+
+/// A malformed colour must not silently replace a coloured item with its style colour.
+#[test]
+fn smart_art_item_colors_reject_invalid_values_without_changing_the_graphic() {
+    let mut s = s();
+    run(&mut s, "insert.smartArt", json!({"items": [{"text": "Keep", "color": "123456"}]}));
+    let before = cmd::smart_art::selected_smart_art(&s).unwrap();
+    for command in ["insert.smartArt", "smartArt.items"] {
+        for color in [json!("nope"), json!(42), json!(true), json!([]), json!({})] {
+            assert!(s.run(command, &json!({"items": [{"text": "Replace", "color": color}]})).is_err(), "{command}: {color}");
+            assert_eq!(cmd::smart_art::selected_smart_art(&s).unwrap(), before);
+        }
+        run(&mut s, command, json!({"items": [{"text": "Default", "color": null}, {"text": "Omitted"}]}));
+        assert!(!cmd::smart_art::selected_smart_art(&s).unwrap().has_custom_colors());
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(cmd::smart_art::selected_smart_art(&s).unwrap(), before);
+    }
+}
+
 /// #497: hostile SmartArt params are capped or refused, never a panic.
 #[test]
 fn smart_art_hostile_params_are_capped() {
@@ -9680,6 +10028,7 @@ fn smart_art_hostile_params_are_capped() {
         "smartArt.demote",
         "smartArt.layout",
         "smartArt.colors",
+        "smartArt.itemColor",
         "smartArt.reset",
         "smartArt.textPane",
     ] {
@@ -10039,6 +10388,73 @@ fn column_table(lang: &str, cells: &[&str]) -> Session {
 fn column_texts(s: &Session) -> Vec<String> {
     let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
     t.rows.iter().map(|r| r.cells[0].blocks.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect::<String>()).collect()
+}
+
+#[test]
+fn table_sort_rejects_invalid_columns_without_changing_rows_or_history() {
+    for column in [
+        json!(-1),
+        json!(0.5),
+        json!(0.0),
+        json!("0"),
+        json!(null),
+        json!(true),
+        json!([]),
+        json!({}),
+        json!(1),
+        json!(u32::MAX as u64 + 1),
+        json!(u64::MAX),
+    ] {
+        let mut s = column_table("en-US", &["Charlie", "Alpha", "Bravo"]);
+        s.close_typing();
+        run(&mut s, "text.insert", json!({"text": "!"}));
+        let before = s.doc.clone();
+        let selection = s.sel.clone();
+        let dirty = s.dirty;
+        assert!(s.run("table.sort", &json!({"column": column, "header": false})).is_err(), "column {column}");
+        assert_eq!(s.doc, before, "column {column}");
+        assert_eq!(s.sel, selection, "column {column}");
+        assert_eq!(s.dirty, dirty, "column {column}");
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(column_texts(&s), ["Charlie", "Alpha", "Bravo"], "column {column}: refusal must not consume Undo");
+        run(&mut s, "edit.redo", json!({}));
+        assert_eq!(s.doc, before, "column {column}: Redo must restore the preceding edit");
+    }
+}
+
+#[test]
+fn table_sort_keeps_default_and_valid_columns() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 2}));
+    for (k, value) in ["Charlie", "1", "Alpha", "3", "Bravo", "2"].into_iter().enumerate() {
+        if k > 0 {
+            run(&mut s, "text.tab", json!({}));
+        }
+        run(&mut s, "text.insert", json!({"text": value}));
+    }
+    let original = s.doc.clone();
+    for params in [json!({"header": false}), json!({"column": 0, "header": false})] {
+        run(&mut s, "table.sort", params);
+        assert_eq!(column_texts(&s), ["Alpha", "Bravo", "Charlie"]);
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(s.doc, original);
+    }
+    run(&mut s, "table.sort", json!({"column": 1, "header": false}));
+    assert_eq!(column_texts(&s), ["Charlie", "Bravo", "Alpha"]);
+    run(&mut s, "table.sort", json!({"column": 1, "header": false, "descending": true}));
+    assert_eq!(column_texts(&s), ["Alpha", "Bravo", "Charlie"]);
+    // A column may be missing in some rows. Its present cells still sort normally.
+    let at = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap() as u32;
+    let table = s.doc.table_mut(StoryRef::Body, &wordcraft_doc::Path(vec![at])).unwrap();
+    table.rows[0].cells.remove(1);
+    run(&mut s, "table.sort", json!({"column": 1, "header": false}));
+    assert_eq!(column_texts(&s), ["Charlie", "Bravo", "Alpha"]);
+
+    let mut s = column_table("en-US", &["Title", "3", "1", "2"]);
+    let at = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap() as u32;
+    s.doc.table_mut(StoryRef::Body, &wordcraft_doc::Path(vec![at])).unwrap().rows[0].props.header = true;
+    run(&mut s, "table.sort", json!({"column": 0}));
+    assert_eq!(column_texts(&s), ["Title", "1", "2", "3"]);
 }
 
 /// #836: table sort reads numbers in the text's language: `1,5` is one and a half in Polish.
@@ -11636,6 +12052,87 @@ fn drop_cap_options_set_position_lines_distance_and_font() {
     run(&mut s, "text.insert", json!({"text": "Cell"}));
     assert!(s.sel.focus.path.cell().is_some());
     assert!(s.run("insert.dropCap", &json!({})).is_err(), "off in a table cell");
+
+    // A selection is as good as its worst paragraph: an empty one or one starting with a space
+    // refuses a drop cap for all (the button greys out); None works while there is one to take away.
+    let mut s = self::s();
+    run(&mut s, "text.insert", json!({"text": "First"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Third"}));
+    assert_eq!(s.doc.body.len(), 3);
+    run(&mut s, "select.all", json!({}));
+    assert!(s.run("insert.dropCap", &json!({"position": "dropped"})).is_err(), "an empty paragraph in the selection");
+    assert!(s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.props.drop_cap.is_none()), "nothing changed");
+    assert!(s.why_disabled("insert.dropCap").is_some(), "greyed out: nothing can take a drop cap or lose one");
+    run(&mut s, "select.range", json!({"anchor": {"block": 2, "off": 0}, "focus": {"block": 2, "off": 0}}));
+    run(&mut s, "insert.dropCap", json!({"position": "dropped"}));
+    // From the drop cap up into the empty paragraph (the caret there): None takes it away, the
+    // other positions are refused, as the enabled check says.
+    run(&mut s, "select.range", json!({"anchor": {"block": 2, "off": 5}, "focus": {"block": 1, "off": 0}}));
+    assert_eq!(s.why_disabled("insert.dropCap"), None, "a drop cap to take away");
+    assert!(s.run("insert.dropCap", &json!({"position": "margin"})).is_err(), "the empty paragraph can't take one");
+    assert!(s.run("insert.dropCap", &json!({"position": "none"})).is_ok(), "None takes it away");
+    assert!(s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.props.drop_cap.is_none()), "taken away");
+    let mut s = self::s();
+    run(&mut s, "text.insert", json!({"text": " first"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Second"}));
+    run(&mut s, "select.all", json!({}));
+    assert!(s.run("insert.dropCap", &json!({})).is_err(), "a paragraph starting with a space in the selection");
+}
+
+/// #2601: `keep` moves a whole selection to Dropped / In margin without flattening it: each
+/// paragraph keeps its own lines, distance and font, one without a drop cap gets the defaults,
+/// and it is one undo step. Without `keep` the options not given are reset, as before.
+#[test]
+fn drop_cap_keep_leaves_each_paragraphs_options() {
+    let caps = |s: &Session| {
+        s.doc
+            .body
+            .iter()
+            .filter_map(|b| b.as_para())
+            .map(|p| (p.props.drop_cap, p.props.drop_cap_margin, p.props.drop_cap_distance, p.props.drop_cap_font.clone()))
+            .collect::<Vec<_>>()
+    };
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "First"}));
+    for text in ["Second", "Third"] {
+        run(&mut s, "text.newParagraph", json!({}));
+        run(&mut s, "text.insert", json!({"text": text}));
+    }
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 0}}));
+    run(&mut s, "insert.dropCap", json!({"position": "dropped", "lines": 5, "distance": 7.0, "font": "Liberation Mono"}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 1, "off": 0}}));
+    run(&mut s, "insert.dropCap", json!({"position": "dropped", "lines": 2, "distance": 3.0}));
+    let before = caps(&s);
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "insert.dropCap", json!({"position": "margin", "keep": true}));
+    assert_eq!(
+        caps(&s),
+        vec![
+            (Some(5), Some(true), Some(7.0), Some("Liberation Mono".to_string())),
+            (Some(2), Some(true), Some(3.0), None),
+            (Some(3), Some(true), None, None),
+        ],
+        "each keeps its own options; the one without gets the defaults"
+    );
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(caps(&s), before, "one undo step");
+
+    // Options given explicitly win over the kept ones; a junk `keep` is false.
+    run(&mut s, "insert.dropCap", json!({"position": "dropped", "keep": true, "lines": 4}));
+    assert_eq!(caps(&s).iter().map(|c| c.0).collect::<Vec<_>>(), vec![Some(4); 3]);
+    assert_eq!(caps(&s).first().map(|c| (c.2, c.3.clone())), Some((Some(7.0), Some("Liberation Mono".to_string()))), "distance and font still kept");
+    // A blank font given with `keep` clears the kept font (the text's own again).
+    run(&mut s, "insert.dropCap", json!({"position": "dropped", "keep": true, "font": " "}));
+    assert_eq!(caps(&s).first().map(|c| c.3.clone()), Some(None), "blank font clears the kept one");
+    run(&mut s, "insert.dropCap", json!({"position": "dropped", "lines": 5, "distance": 7.0, "font": "Liberation Mono"}));
+    run(&mut s, "insert.dropCap", json!({"position": "margin", "keep": "yes"}));
+    assert_eq!(caps(&s), vec![(Some(3), Some(true), None, None); 3], "junk keep: reset what isn't given");
+    // None ignores keep.
+    run(&mut s, "insert.dropCap", json!({"position": "none", "keep": true}));
+    assert_eq!(caps(&s), vec![(None, None, None, None); 3]);
 }
 
 #[test]
