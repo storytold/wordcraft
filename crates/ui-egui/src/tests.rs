@@ -8237,7 +8237,7 @@ fn ribbon_font_and_size_return_focus_and_preserve_typing_font() {
     assert!(h.state().canvas.focused, "committing font size returns focus to the document");
     assert_eq!(h.state().session.pending.as_ref().and_then(|p| p.size), Some(18.0));
 
-    // Refocusing or clicking where the caret already was keeps pending font and size
+    // Setting the caret to its current position preserves pending font and size
     let pos = h.state().session.sel.focus.clone();
     h.state_mut().run("caret.set", json!({"pos": pos})).unwrap();
     assert_eq!(h.state().session.pending.as_ref().and_then(|p| p.font.as_deref()), Some("Recent Font Alpha"));
