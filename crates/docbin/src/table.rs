@@ -26,6 +26,7 @@ const T_DXA_GAP_HALF: u16 = 0x9602;
 const T_TABLE_HEADER: u16 = 0x3404;
 const T_TABLE_BORDERS_80: u16 = 0xD605;
 const T_ROW_HEIGHT: u16 = 0x9407;
+const T_AUTOFIT: u16 = 0x3615;
 const T_DEF_TABLE: u16 = 0xD608;
 const T_DEF_TABLE_SHD_80: u16 = 0xD609;
 /// `sprmTDefTableShd` / `Shd2nd` / `Shd3rd`: 10-byte `Shd`s for cells 0-21, 22-43, 44-62.
@@ -41,6 +42,8 @@ const T_CANT_SPLIT_90: u16 = 0x3403;
 const T_MERGE: u16 = 0x5624;
 const T_VERT_MERGE: u16 = 0xD62B;
 const T_VERT_ALIGN: u16 = 0xD62C;
+const T_SET_BRC_80: u16 = 0xD620;
+const T_SET_BRC: u16 = 0xD62F;
 const T_SET_SHD: u16 = 0xD62D;
 const T_CANT_SPLIT: u16 = 0x3466;
 const T_CELL_WIDTH: u16 = 0xD635;
@@ -66,9 +69,11 @@ pub(crate) struct RowInfo {
     height_rule: HeightRule,
     header: bool,
     cant_split: bool,
+    autofit: bool,
     align: Option<Align>,
     indent: Option<f32>,
     borders: Option<Borders>,
+    cell_borders: Vec<Borders>,
     /// Horizontal merges: (itcFirst, itcLim) cell-index ranges.
     merges: Vec<(u8, u8)>,
     /// Per-cell overrides keyed by (pre-merge) cell index.
@@ -139,7 +144,14 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
             P_IN_TABLE => r.in_table = prl.operand.first().copied().unwrap_or(0) != 0,
             P_TTP => r.ttp = prl.operand.first().copied().unwrap_or(0) != 0,
             P_ITAP => r.depth = i32_of(&prl).unwrap_or(0).max(0) as u32,
-            T_DEF_TABLE => r.edges = def_table_edges(prl.operand),
+            T_DEF_TABLE => {
+                r.edges = def_table_edges(prl.operand);
+                let count = prl.operand.get(2).copied().unwrap_or(0) as usize;
+                let records = prl.operand.get(3 + (count + 1) * 2..).unwrap_or(&[]);
+                r.cell_borders = records.as_chunks::<20>().0.iter().take(count.min(MAX_COLS)).map(tc80_borders).collect();
+            }
+            T_SET_BRC | T_SET_BRC_80 => set_cell_borders(&mut r.cell_borders, &prl),
+            T_AUTOFIT => r.autofit = prl.operand.first().copied().unwrap_or(0) != 0,
             T_TABLE_HEADER => r.header = prl.operand.first().copied().unwrap_or(0) != 0,
             T_CANT_SPLIT | T_CANT_SPLIT_90 => r.cant_split = prl.operand.first().copied().unwrap_or(0) != 0,
             T_ROW_HEIGHT => {
@@ -281,6 +293,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
     let mut cells: Vec<Cell> = Vec::new();
     let mut cell: Blocks = Vec::new();
     let mut grid: Vec<f32> = Vec::new();
+    let mut row_edges = Vec::new();
     let mut props = TableProps::default();
     let mut open = false;
     let mut depth_seen = 0u32;
@@ -295,6 +308,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
     fn build_row(mut cells: Vec<Cell>, info: &RowInfo) -> Row {
         // Per-cell overrides first (sprm cell indices count pre-merge cells), then merges.
         for (i, c) in cells.iter_mut().enumerate() {
+            c.props.borders = info.cell_borders.get(i).copied().filter(|b| *b != Borders::default());
             let i = i as u8;
             if let Some((_, m)) = info.vmerge.iter().find(|(k, _)| *k == i) {
                 c.props.vmerge = *m;
@@ -376,6 +390,10 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
     for p in paras {
         let Some(info) = p.row else {
             if open {
+                if cells.is_empty() && cell.is_empty() {
+                    apply_row_edges(&mut rows, &row_edges, &mut grid);
+                }
+                row_edges.clear();
                 flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
                 grid.clear();
                 // Table props are per-table (first row carrying the sprm wins within the
@@ -428,7 +446,12 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
                 flush_cell(&mut cells, &mut cell);
             }
             if info.ttp {
+                if rows.is_empty() {
+                    // MS-DOC tables keep the recorded column widths unless sprmTFAutofit opts in.
+                    props.fixed = !info.autofit && !info.edges.is_empty();
+                }
                 let row = build_row(std::mem::take(&mut cells), &info);
+                row_edges.push(info.edges);
                 rows.push(row);
             }
         } else {
@@ -436,13 +459,84 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
         }
     }
     if open {
+        if cells.is_empty() && cell.is_empty() {
+            apply_row_edges(&mut rows, &row_edges, &mut grid);
+        }
         flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
     }
     out
 }
 
+/// Binary DOC defines cell edges per row; the model uses one grid with column spans.
+fn apply_row_edges(rows: &mut [Row], row_edges: &[Vec<f32>], grid: &mut Vec<f32>) {
+    let mut edges = Vec::new();
+    for (row, boundaries) in rows.iter().zip(row_edges) {
+        let columns: usize = row.cells.iter().map(|cell| cell.span()).sum();
+        if boundaries.len() != columns + 1 || !boundaries.windows(2).all(|w| w[0] < w[1]) {
+            return;
+        }
+        // A horizontal merge consumes the interior edges of its source cells.
+        let ends = row.cells.iter().scan(0, |column, cell| {
+            *column += cell.span();
+            Some(*column)
+        });
+        for column in std::iter::once(0).chain(ends) {
+            let edge = &boundaries[column];
+            if let Err(i) = edges.binary_search_by(|value: &f32| value.total_cmp(edge)) {
+                if edges.len() > MAX_COLS {
+                    return;
+                }
+                edges.insert(i, *edge);
+            }
+        }
+    }
+    if edges.is_empty() || rows.len() != row_edges.len() {
+        return;
+    }
+    for (row, boundaries) in rows.iter_mut().zip(row_edges) {
+        let index = |edge: f32| edges.partition_point(|&x| x < edge);
+        let mut col = 0;
+        row.props.grid_before = index(boundaries[0]) as u32;
+        for cell in &mut row.cells {
+            let end = col + cell.span();
+            cell.props.span = (index(boundaries[end]) - index(boundaries[col])) as u32;
+            col = end;
+        }
+        row.props.grid_after = (edges.len() - 1 - index(boundaries[col])) as u32;
+    }
+    *grid = edges.windows(2).map(|w| w[1] - w[0]).collect();
+}
+
+/// Apply the four modelled sides to a bounded range of pre-merge cells.
+fn set_cell_borders(cells: &mut Vec<Borders>, prl: &Prl<'_>) {
+    let [_, first, limit, mask, bytes @ ..] = prl.operand else { return };
+    let first = usize::from(*first);
+    let limit = usize::from(*limit).min(MAX_COLS);
+    if first >= limit || mask & 0x0f == 0 {
+        return;
+    }
+    let border = if prl.op == T_SET_BRC { fmt::brc_bytes(bytes) } else { fmt::brc80(bytes) };
+    let Some(border) = border else { return };
+    if cells.len() < limit {
+        cells.resize(limit, Borders::default());
+    }
+    for cell in &mut cells[first..limit] {
+        for (bit, side) in [(1, &mut cell.top), (2, &mut cell.left), (4, &mut cell.bottom), (8, &mut cell.right)] {
+            if mask & bit != 0 {
+                *side = Some(border);
+            }
+        }
+    }
+}
+
+/// TC80 stores flags and width, then the top, left, bottom and right Brc80s.
+fn tc80_borders(tc: &[u8; 20]) -> Borders {
+    let side = |offset| tc.get(offset..offset + 4).and_then(fmt::brc80);
+    Borders { top: side(4), left: side(8), bottom: side(12), right: side(16), ..Default::default() }
+}
+
 /// Cell-edge positions (points) from a `sprmTDefTable` operand: cb u16, itcMac u8, then
-/// itcMac+1 twip boundaries followed by the TC80s (skipped). Edges are returned as stored:
+/// itcMac+1 twip boundaries followed by the TC80s. Edges are returned as stored:
 /// per-row, in operand order; sorting and capping happen when the table grid is assembled.
 fn def_table_edges(operand: &[u8]) -> Vec<f32> {
     let itc = operand.get(2).copied().unwrap_or(0) as usize;

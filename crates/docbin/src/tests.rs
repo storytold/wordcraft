@@ -3039,3 +3039,37 @@ fn formatting_runs_break_where_the_chpx_changes() {
     // (the run from the field to CP 20), "d(ee" italic.
     assert_eq!(shape, [(4, Some(true), None), (7, None, None), (3, Some(true), None), (4, None, Some(true))], "{shape:?}");
 }
+
+#[test]
+fn doc_cell_borders_survive_import_and_range_overrides() {
+    let mut row = t_def_table(&[0, 100, 200, 300, 400, 500]);
+    // Opcode, cb, cell count, six boundaries, then the first TC80's flags and width.
+    row[21..25].copy_from_slice(&[16, 1, 1, 0]); // top: single 2 pt
+    row.extend(sprm_cb(0xD620, &[0, 2, 4, 8, 1, 1, 0])); // bottom: single 1 pt
+    row.extend(sprm_cb(0xD62F, &[1, 2, 4, 0, 0, 0, 0, 0, 0, 0, 0])); // second cell: clear bottom
+    let doc = word_table_doc(row, vec![], vec![]);
+    let cells = &doc.body[0].as_table().expect("table").rows[0].cells;
+    let first = cells[0].props.borders.expect("first cell borders");
+    assert_eq!(first.top.expect("TC80 top").width, 2.0);
+    assert_eq!(first.bottom.expect("range bottom").width, 1.0);
+    assert!(!cells[1].props.borders.expect("second cell borders").bottom.expect("cleared border").is_visible());
+}
+
+#[test]
+fn doc_rows_share_grid_at_their_actual_cell_edges() {
+    let doc =
+        word_table_doc(t_def_edges(&[-100, 100, 400, 900, 1000, 1400]), t_def_edges(&[-100, 100, 500, 900, 1000, 1400]), t_def_edges(&[-100, 1400]));
+    let table = doc.body[0].as_table().expect("table");
+    assert!(table.props.fixed);
+    assert_eq!(table.grid, vec![10.0, 15.0, 5.0, 20.0, 5.0, 20.0]);
+    assert_eq!(table.rows[0].cells[2].span(), 2);
+    assert_eq!(table.rows[1].cells[1].span(), 2);
+    assert_eq!(table.rows[2].cells[0].span(), 6);
+}
+
+#[test]
+fn doc_table_autofit_is_preserved() {
+    let row = [t_def_edges(&[0, 100, 200, 300, 400, 500]), grpprl(&[(0x3615, &[1])])].concat();
+    let doc = word_table_doc(row, vec![], vec![]);
+    assert!(!doc.body[0].as_table().expect("table").props.fixed);
+}

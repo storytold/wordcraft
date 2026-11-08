@@ -147,7 +147,12 @@ fn brc(op: &[u8]) -> Option<Border> {
     if op.first() != Some(&8) {
         return None;
     }
-    let b = op.get(1..9)?;
+    brc_bytes(op.get(1..9)?)
+}
+
+/// The eight-byte Brc shared by paragraph and cell-border operands.
+pub(crate) fn brc_bytes(b: &[u8]) -> Option<Border> {
+    let b = b.get(..8)?;
     if b.iter().all(|x| *x == 0xFF) {
         return Some(Border::default());
     }
