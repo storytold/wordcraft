@@ -1,6 +1,6 @@
 # RFC: совместное редактирование DOCX в WordCraft
 
-- Статус: Draft
+- Статус: Draft (реализация — `STATUS.md`, PR #5834)
 - Автор: `wordcraft/envoy`
 - ADR: `../.craft/bus/decisions/0001…0010` (Phase 0 закрыт, 10/10 accepted)
 - Upstream issue/PR: PR в `storytold/wordcraft`, ветка `feature/realtime-collaboration`

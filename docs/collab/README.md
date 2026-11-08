@@ -1,5 +1,8 @@
 # Running a collaborative WordCraft session
 
+> Implementation status, verification results and the remaining web blocker:
+> [`STATUS.md`](STATUS.md).
+
 The sync server is `wordcraft-collab-server` (this workspace); the desktop app
 connects to it when the `collab` preference is on. The web app needs the cabinet's
 host bridge first (`host-bridge.md`). Nothing opens a socket while the flag is off.
