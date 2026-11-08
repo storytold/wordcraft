@@ -223,11 +223,6 @@ impl FontDb {
         let n = found.len();
         log::debug!("cataloged {n} system font faces");
         *self.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner) = found;
-        {
-            let mut coverage = self.coverage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            coverage.files.clear();
-            coverage.generation = None;
-        }
         self.catalog_gen.fetch_add(1, Ordering::AcqRel);
         {
             let mut sys = self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner);

@@ -155,13 +155,14 @@ pub(super) fn read_family_coverage(path: &std::path::Path) -> Box<[(u32, u32)]> 
         vec![0]
     };
     let mut all: Vec<(u32, u32)> = Vec::new();
+    let mut seen_cmaps = std::collections::HashSet::new();
     for start in starts {
         let Some(dir) = read_at(start.into(), 12) else { continue };
         let Some(tables) = dir.get(4..6).and_then(|s| s.try_into().ok()).map(u16::from_be_bytes) else { continue };
         let Some(records) = read_at(u64::from(start) + 12, usize::from(tables) * 16) else { continue };
         let Some(rec) = records.as_chunks::<16>().0.iter().find(|r| r.starts_with(b"cmap")) else { continue };
         let (Some(offset), Some(len)) = (be32(rec, 8), be32(rec, 12)) else { continue };
-        if len > MAX_CMAP {
+        if len > MAX_CMAP || !seen_cmaps.insert((offset, len)) {
             continue;
         }
         let Some(cmap) = read_at(offset.into(), len as usize) else { continue };
