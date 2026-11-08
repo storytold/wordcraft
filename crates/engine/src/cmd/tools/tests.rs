@@ -351,106 +351,154 @@ fn compare_pairs_paragraphs_across_insertions_and_deletions_retaining_within_dif
     assert_eq!(s.doc.plain_text(StoryRef::Body), revised);
 }
 
-/// #5861: Sentences sharing only sparse stop words (such as "the" twice) score below
-/// SIMILARITY_THRESHOLD and are not paired across an edit run, leaving them as clean
-/// wholesale deletions and insertions rather than an interleaved within-paragraph diff.
+/// #5861: Unrelated paragraphs scoring below SIMILARITY_THRESHOLD across edit runs are left
+/// unpaired as clean deletions and insertions rather than an interleaved within-paragraph diff.
 #[test]
-fn compare_leaves_unrelated_sentences_with_sparse_common_words_unpaired() {
-    let original = "The red car parked by the house.\nKeep anchor.";
-    let revised = "Preamble insertion.\nThe blue dog jumped over the river.\nKeep anchor.";
+fn compare_leaves_unrelated_paragraphs_unpaired() {
+    struct Case {
+        name: &'static str,
+        original: &'static str,
+        revised: &'static str,
+        level: Option<&'static str>,
+        expected_dels: &'static [&'static str],
+        expected_inss: &'static [&'static str],
+        anchor: &'static str,
+    }
+
+    let cases = [
+        Case {
+            name: "sparse common words (sentences sharing only 'the')",
+            original: "The red car parked by the house.\nKeep anchor.",
+            revised: "Preamble insertion.\nThe blue dog jumped over the river.\nKeep anchor.",
+            level: None,
+            expected_dels: &["The red car parked by the house."],
+            expected_inss: &["Preamble insertion.", "The blue dog jumped over the river."],
+            anchor: "Keep anchor.",
+        },
+        Case {
+            name: "single-token paragraphs across unequal counts",
+            original: "First\nSecond\nKeep anchor.",
+            revised: "Third\nFourth\nFifth\nKeep anchor.",
+            level: None,
+            expected_dels: &["First", "Second"],
+            expected_inss: &["Third", "Fourth", "Fifth"],
+            anchor: "Keep anchor.",
+        },
+        Case {
+            name: "unrelated CJK paragraphs across unequal counts",
+            original: "会议安排\n财务预算\n保持锚点。",
+            revised: "人事变动\n安全检查\n年终总结\n保持锚点。",
+            level: Some("character"),
+            expected_dels: &["会议安排", "财务预算"],
+            expected_inss: &["人事变动", "安全检查", "年终总结"],
+            anchor: "保持锚点。",
+        },
+    ];
+
+    for case in &cases {
+        let mut s = Session::new(Document::from_text(case.original));
+        let mut params = json!({"text": case.revised});
+        if let Some(level) = case.level {
+            params["level"] = json!(level);
+        }
+        s.run("review.compare", &params).unwrap();
+
+        let mut body_idx = 0;
+        for &expected_del in case.expected_dels {
+            let p = s.doc.body[body_idx].as_para().unwrap();
+            assert_eq!(p.plain_text(), expected_del, "case '{}' del text mismatch", case.name);
+            assert!(p.runs.iter().all(|r| r.props.del.is_some()), "case '{}' del run mismatch", case.name);
+            body_idx += 1;
+        }
+        for &expected_ins in case.expected_inss {
+            let p = s.doc.body[body_idx].as_para().unwrap();
+            assert_eq!(p.plain_text(), expected_ins, "case '{}' ins text mismatch", case.name);
+            assert!(p.runs.iter().all(|r| r.props.ins.is_some()), "case '{}' ins run mismatch", case.name);
+            body_idx += 1;
+        }
+
+        let p_anchor = s.doc.body[body_idx].as_para().unwrap();
+        assert_eq!(p_anchor.plain_text(), case.anchor, "case '{}' anchor text mismatch", case.name);
+        assert!(p_anchor.runs.iter().all(|r| r.props.del.is_none() && r.props.ins.is_none()), "case '{}' anchor must be unmarked", case.name);
+
+        let mut s_accept = Session::new(s.doc.clone());
+        s_accept.run("review.acceptAll", &json!({})).unwrap();
+        assert_eq!(s_accept.doc.plain_text(StoryRef::Body), case.revised, "case '{}' acceptAll mismatch", case.name);
+
+        let mut s_reject = Session::new(s.doc.clone());
+        s_reject.run("review.rejectAll", &json!({})).unwrap();
+        assert_eq!(s_reject.doc.plain_text(StoryRef::Body), case.original, "case '{}' rejectAll mismatch", case.name);
+    }
+}
+
+/// #5861: When no paragraph in an edit run meets SIMILARITY_THRESHOLD but both sides have
+/// equal block counts (n == m), paragraph blocks fall back to 1-to-1 positional pairing.
+/// This preserves paragraph slots for wholesale rewrites and ensures acceptAll / rejectAll
+/// restore the respective documents.
+#[test]
+fn compare_equal_count_unrelated_paragraphs_pairs_positionally() {
+    let original = "Alpha bravo charlie.\nDelta echo foxtrot.";
+    let revised = "Golf hotel india.\nJuliet kilo lima.";
     let mut s = Session::new(Document::from_text(original));
     s.run("review.compare", &json!({"text": revised})).unwrap();
-    // The original paragraph and the revised sentence must not be paired into an interleaved diff.
-    // The original paragraph must be deleted wholesale (every run marked del):
-    let p_del = s.doc.body[0].as_para().unwrap();
-    assert_eq!(p_del.plain_text(), "The red car parked by the house.");
-    assert!(p_del.runs.iter().all(|r| r.props.del.is_some()), "unrelated paragraph must be deleted wholesale");
-    let p_ins1 = s.doc.body[1].as_para().unwrap();
-    assert_eq!(p_ins1.plain_text(), "Preamble insertion.");
-    assert!(p_ins1.runs.iter().all(|r| r.props.ins.is_some()), "preamble must be inserted wholesale");
-    // And the revised sentence inserted wholesale:
-    let p_ins2 = s.doc.body[2].as_para().unwrap();
-    assert_eq!(p_ins2.plain_text(), "The blue dog jumped over the river.");
-    assert!(p_ins2.runs.iter().all(|r| r.props.ins.is_some()), "unrelated paragraph must be inserted wholesale");
-    // Anchor paragraph must remain unmarked:
-    let p_anchor = s.doc.body[3].as_para().unwrap();
-    assert_eq!(p_anchor.plain_text(), "Keep anchor.");
-    assert!(p_anchor.runs.iter().all(|r| r.props.del.is_none() && r.props.ins.is_none()));
+
+    // Because n == m == 2 and similarity is 0, positional fallback pairs paragraph 0 with 0
+    // and paragraph 1 with 1, producing exactly 2 Diff paragraphs rather than 2 deletions
+    // followed by 2 insertions.
+    assert_eq!(s.doc.body.len(), 2, "must preserve paragraph slots via positional pairing");
+
+    let p0 = s.doc.body[0].as_para().unwrap();
+    let p1 = s.doc.body[1].as_para().unwrap();
+
+    // Paragraph 0 has original text marked del and revised text marked ins:
+    assert!(p0.run_ranges().any(|(r, c)| c.del.is_some() && p0.text[r].contains("Alpha")));
+    assert!(p0.run_ranges().any(|(r, c)| c.ins.is_some() && p0.text[r].contains("Golf")));
+
+    // Paragraph 1 has original text marked del and revised text marked ins:
+    assert!(p1.run_ranges().any(|(r, c)| c.del.is_some() && p1.text[r].contains("Delta")));
+    assert!(p1.run_ranges().any(|(r, c)| c.ins.is_some() && p1.text[r].contains("Juliet")));
+
     let mut s_accept = Session::new(s.doc.clone());
     s_accept.run("review.acceptAll", &json!({})).unwrap();
     assert_eq!(s_accept.doc.plain_text(StoryRef::Body), revised);
+
     let mut s_reject = Session::new(s.doc.clone());
     s_reject.run("review.rejectAll", &json!({})).unwrap();
     assert_eq!(s_reject.doc.plain_text(StoryRef::Body), original);
 }
 
-/// #5861: Runs of unrelated single-token paragraphs across unequal counts score below
-/// SIMILARITY_THRESHOLD and are left unpaired as clean deletions and insertions.
+/// #5861: Verifies positional fallbacks in align_block_run when exceeding MAX_RUN_ALIGN_CELLS,
+/// when handling non-paragraph blocks (tables), or when work budget is exhausted.
 #[test]
-fn compare_leaves_unrelated_single_token_paragraphs_unpaired() {
-    let original = "First\nSecond\nKeep anchor.";
-    let revised = "Third\nFourth\nFifth\nKeep anchor.";
-    let mut s = Session::new(Document::from_text(original));
-    s.run("review.compare", &json!({"text": revised})).unwrap();
-    // Old paragraphs (First, Second) must be deleted wholesale; new ones (Third, Fourth, Fifth) inserted wholesale:
-    let p_del1 = s.doc.body[0].as_para().unwrap();
-    let p_del2 = s.doc.body[1].as_para().unwrap();
-    assert_eq!(p_del1.plain_text(), "First");
-    assert!(p_del1.runs.iter().all(|r| r.props.del.is_some()), "First deleted wholesale");
-    assert_eq!(p_del2.plain_text(), "Second");
-    assert!(p_del2.runs.iter().all(|r| r.props.del.is_some()), "Second deleted wholesale");
-    let p_ins1 = s.doc.body[2].as_para().unwrap();
-    let p_ins2 = s.doc.body[3].as_para().unwrap();
-    let p_ins3 = s.doc.body[4].as_para().unwrap();
-    assert_eq!(p_ins1.plain_text(), "Third");
-    assert!(p_ins1.runs.iter().all(|r| r.props.ins.is_some()), "Third inserted wholesale");
-    assert_eq!(p_ins2.plain_text(), "Fourth");
-    assert!(p_ins2.runs.iter().all(|r| r.props.ins.is_some()), "Fourth inserted wholesale");
-    assert_eq!(p_ins3.plain_text(), "Fifth");
-    assert!(p_ins3.runs.iter().all(|r| r.props.ins.is_some()), "Fifth inserted wholesale");
-    let p_anchor = s.doc.body[5].as_para().unwrap();
-    assert_eq!(p_anchor.plain_text(), "Keep anchor.");
-    assert!(p_anchor.runs.iter().all(|r| r.props.del.is_none() && r.props.ins.is_none()));
-    let mut s_accept = Session::new(s.doc.clone());
-    s_accept.run("review.acceptAll", &json!({})).unwrap();
-    assert_eq!(s_accept.doc.plain_text(StoryRef::Body), revised);
-    let mut s_reject = Session::new(s.doc.clone());
-    s_reject.run("review.rejectAll", &json!({})).unwrap();
-    assert_eq!(s_reject.doc.plain_text(StoryRef::Body), original);
-}
+fn align_block_run_oversize_and_budget_fallbacks() {
+    let dummy_para = Arc::new(Block::Para(Paragraph::with_text("Dummy paragraph text.", CharProps::default())));
+    let dummy_table = Arc::new(Block::Table(wordcraft_doc::Table::new(1, 1, 100.0)));
 
-/// #5861: Runs of unrelated CJK paragraphs across unequal counts score below
-/// SIMILARITY_THRESHOLD and are left unpaired as clean deletions and insertions.
-#[test]
-fn compare_leaves_unrelated_cjk_paragraphs_unpaired() {
-    let original = "会议安排\n财务预算\n保持锚点。";
-    let revised = "人事变动\n安全检查\n年终总结\n保持锚点。";
-    let mut s = Session::new(Document::from_text(original));
-    s.run("review.compare", &json!({"text": revised, "level": "character"})).unwrap();
-    // Even though "会议安排" and "安全检查" share the character '安', similarity is below threshold.
-    // They must not be paired; each old paragraph is deleted wholesale and each new is inserted wholesale:
-    let p_cjk_del1 = s.doc.body[0].as_para().unwrap();
-    let p_cjk_del2 = s.doc.body[1].as_para().unwrap();
-    assert_eq!(p_cjk_del1.plain_text(), "会议安排");
-    assert!(p_cjk_del1.runs.iter().all(|r| r.props.del.is_some()), "CJK para 1 deleted wholesale");
-    assert_eq!(p_cjk_del2.plain_text(), "财务预算");
-    assert!(p_cjk_del2.runs.iter().all(|r| r.props.del.is_some()), "CJK para 2 deleted wholesale");
-    let p_cjk_ins1 = s.doc.body[2].as_para().unwrap();
-    let p_cjk_ins2 = s.doc.body[3].as_para().unwrap();
-    let p_cjk_ins3 = s.doc.body[4].as_para().unwrap();
-    assert_eq!(p_cjk_ins1.plain_text(), "人事变动");
-    assert!(p_cjk_ins1.runs.iter().all(|r| r.props.ins.is_some()), "CJK para 1 inserted wholesale");
-    assert_eq!(p_cjk_ins2.plain_text(), "安全检查");
-    assert!(p_cjk_ins2.runs.iter().all(|r| r.props.ins.is_some()), "CJK para 2 inserted wholesale");
-    assert_eq!(p_cjk_ins3.plain_text(), "年终总结");
-    assert!(p_cjk_ins3.runs.iter().all(|r| r.props.ins.is_some()), "CJK para 3 inserted wholesale");
-    let p_anchor_cjk = s.doc.body[5].as_para().unwrap();
-    assert_eq!(p_anchor_cjk.plain_text(), "保持锚点。");
-    assert!(p_anchor_cjk.runs.iter().all(|r| r.props.del.is_none() && r.props.ins.is_none()));
-    let mut s_accept = Session::new(s.doc.clone());
-    s_accept.run("review.acceptAll", &json!({})).unwrap();
-    assert_eq!(s_accept.doc.plain_text(StoryRef::Body), revised);
-    let mut s_reject = Session::new(s.doc.clone());
-    s_reject.run("review.rejectAll", &json!({})).unwrap();
-    assert_eq!(s_reject.doc.plain_text(StoryRef::Body), original);
+    // 1. Oversize run: 1001 * 1000 = 1,001,000 > MAX_RUN_ALIGN_CELLS (1,000,000)
+    let mut old_blocks = vec![dummy_para.clone(); 1001];
+    old_blocks[5] = dummy_table.clone();
+    let new_blocks = vec![dummy_para.clone(); 1000];
+    let opts = CompareOptions::default();
+    let mut budget = 50_000_000u64;
+
+    let pairs = align_block_run(&old_blocks, &new_blocks, &opts, &mut budget);
+
+    assert_eq!(pairs.len(), 1002);
+    assert_eq!(pairs[0], RunPair::Diff(0, 0));
+    assert_eq!(pairs[5], RunPair::Del(5));
+    assert_eq!(pairs[6], RunPair::Ins(5));
+    assert_eq!(pairs[1001], RunPair::Del(1000));
+
+    // 2. Budget exhaustion: small run but budget = 0 falls back to positional pairing
+    let old_small = vec![
+        Arc::new(Block::Para(Paragraph::with_text("First paragraph changed.", CharProps::default()))),
+        Arc::new(Block::Para(Paragraph::with_text("Second paragraph changed.", CharProps::default()))),
+    ];
+    let new_small = vec![
+        Arc::new(Block::Para(Paragraph::with_text("First paragraph revised.", CharProps::default()))),
+        Arc::new(Block::Para(Paragraph::with_text("Second paragraph revised.", CharProps::default()))),
+    ];
+    let mut exhausted_budget = 0u64;
+    let pairs_budget = align_block_run(&old_small, &new_small, &opts, &mut exhausted_budget);
+    assert_eq!(pairs_budget, vec![RunPair::Diff(0, 0), RunPair::Diff(1, 1)]);
 }

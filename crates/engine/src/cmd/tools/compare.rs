@@ -8,15 +8,16 @@ use wordcraft_doc::para::OBJ;
 pub(super) const COMPARE_PARAMS: &str = r#"{"path"?: string (revised document), "text"?: string (revised text), "original"?: string (original document; default: this one), "author"?: string (label changes with), "caseChanges"?: bool, "whiteSpace"?: bool, "formatting"?: bool (default true: differences count), "level"?: "word|character", "showIn"?: "original|revised|new" (revised/new: an untitled document), "moves"|"comments"|"tables"|"headersFooters"|"footnotes"|"textBoxes"|"fields"?: bool (accepted; not honoured yet except tables, always compared)}"#;
 
 /// What Compare / Combine compares (the More >> settings of Word's dialog).
-struct CompareOptions {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct CompareOptions {
     /// Differences only in letter case count as changes.
-    case: bool,
+    pub(super) case: bool,
     /// Differences only in white space count as changes.
-    white_space: bool,
+    pub(super) white_space: bool,
     /// Formatting differences become tracked formatting changes.
-    formatting: bool,
+    pub(super) formatting: bool,
     /// Changed paragraphs are compared character by character (else word by word).
-    characters: bool,
+    pub(super) characters: bool,
 }
 
 impl CompareOptions {
@@ -129,7 +130,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                 let inss = run - dels;
                 let old_slice = old.get(i..i + dels).unwrap_or_default();
                 let new_slice = new.get(j..j + inss).unwrap_or_default();
-                let pairs = align_block_run(old_slice, new_slice, &opts);
+                let pairs = align_block_run(old_slice, new_slice, &opts, &mut budget);
                 for pair in pairs {
                     match pair {
                         RunPair::Diff(u, v) => {
@@ -193,6 +194,7 @@ fn mark_block(b: &Block, f: &dyn Fn(&mut CharProps), depth: usize) -> Block {
             let mut p = p.clone();
             let len = p.len();
             let _ = p.format(0, len, f);
+            // Marking the paragraph mark preserves accept/reject behavior for paragraph marks.
             f(&mut p.mark);
             Block::Para(p)
         }
@@ -211,7 +213,7 @@ fn mark_block(b: &Block, f: &dyn Fn(&mut CharProps), depth: usize) -> Block {
 /// An alignment step within a run of changed blocks: pairing an old block with a revised
 /// one for within-block diffing, or emitting an unpartnered block as deleted or inserted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RunPair {
+pub(super) enum RunPair {
     /// An original block at index `u` and a revised block at index `v` are paired and diffed.
     Diff(usize, usize),
     /// An original block at index `u` has no partner in the revised document and is deleted.
@@ -232,12 +234,98 @@ enum RunPair {
 const SIMILARITY_THRESHOLD: u32 = 400;
 
 /// Maximum number of DP cells (`old_len * new_len`) computed when aligning an edit run.
+///
+/// When an edit run exceeds this limit, alignment falls back to 1-to-1 positional pairing
+/// rather than computing the full similarity matrix, bounding compute time on very large runs
+/// at the cost of reintroducing mispairing risk for oversized runs.
 const MAX_RUN_ALIGN_CELLS: usize = 1_000_000;
 
-/// Pairs blocks in an edited run between exact matches: when counts match or an insertion/deletion
-/// occurred, paragraphs are aligned by text similarity so edited paragraphs retain their partners
-/// rather than collapsing into wholesale replacement.
-fn align_block_run(old_blocks: &[Arc<Block>], new_blocks: &[Arc<Block>], opts: &CompareOptions) -> Vec<RunPair> {
+/// Maximum number of word tokens considered per paragraph when computing similarity scores.
+const MAX_SIM_WORDS: usize = 500;
+
+/// Maximum number of characters considered per paragraph when computing character similarity scores.
+const MAX_SIM_CHARS: usize = 1000;
+
+/// Precomputed representation of a block for fast paragraph similarity scoring.
+enum PrecomputedBlock<'a> {
+    /// A non-paragraph block (e.g. table), which does not participate in similarity scoring.
+    NonPara,
+    /// A paragraph block with normalized text and token representations.
+    Para {
+        /// Normalized comparison key.
+        key: &'a str,
+        /// Whether the text contains CJK ideographs.
+        has_cjk: bool,
+        /// Word tokens (capped at `MAX_SIM_WORDS`).
+        words: Vec<&'a str>,
+        /// Whitespace-stripped character tokens (capped at `MAX_SIM_CHARS`).
+        chars: Vec<char>,
+    },
+}
+
+/// Extracts precomputed token representations for a sequence of blocks.
+///
+/// Normalizes paragraph plain text via `opts.key`, pre-scans for CJK ideographs,
+/// and extracts word and character tokens bounded by `MAX_SIM_WORDS` and `MAX_SIM_CHARS`.
+/// Non-paragraph blocks are marked as `NonPara`.
+fn precompute_blocks<'a>(blocks: &'a [Arc<Block>], keys: &'a [Option<String>]) -> Vec<PrecomputedBlock<'a>> {
+    blocks
+        .iter()
+        .zip(keys)
+        .map(|(b, k)| match (&**b, k) {
+            (Block::Para(_), Some(key)) => {
+                let chars: Vec<char> = key.chars().filter(|c| !c.is_whitespace()).take(MAX_SIM_CHARS).collect();
+                let has_cjk = chars.iter().copied().any(wordcraft_fonts::is_cjk);
+                let words: Vec<&'a str> = key.split_whitespace().take(MAX_SIM_WORDS).collect();
+                PrecomputedBlock::Para { key: key.as_str(), has_cjk, words, chars }
+            }
+            _ => PrecomputedBlock::NonPara,
+        })
+        .collect()
+}
+
+/// Builds a 1-to-1 positional pairing fallback for a block run.
+///
+/// Pairs paragraph blocks at matching indices as `RunPair::Diff`, and emits any non-paragraph
+/// blocks (such as tables) or excess blocks as deletions and insertions.
+fn positional_fallback(n: usize, m: usize, old_blocks: &[Arc<Block>], new_blocks: &[Arc<Block>]) -> Vec<RunPair> {
+    let mut pairs = Vec::with_capacity(n.max(m));
+    for x in 0..n.max(m) {
+        match (old_blocks.get(x), new_blocks.get(x)) {
+            (Some(a), Some(b)) if matches!((&**a, &**b), (Block::Para(_), Block::Para(_))) => {
+                pairs.push(RunPair::Diff(x, x));
+            }
+            _ => {
+                if x < n {
+                    pairs.push(RunPair::Del(x));
+                }
+                if x < m {
+                    pairs.push(RunPair::Ins(x));
+                }
+            }
+        }
+    }
+    pairs
+}
+
+/// Pairs blocks in an edited run between exact matches.
+///
+/// When an edit run occurs, paragraphs are aligned by text similarity using dynamic programming
+/// so that edited paragraphs retain their partners rather than collapsing into wholesale replacements.
+///
+/// Fallbacks and special cases:
+/// - Single-pair run (`n == 1 && m == 1`): If both are paragraphs, they are directly paired as
+///   `RunPair::Diff(0, 0)` without running alignment; non-paragraph blocks emit `Del(0)` and `Ins(0)`.
+/// - Oversize run (`n * m > MAX_RUN_ALIGN_CELLS`) or exhausted work budget: Falls back to 1-to-1
+///   positional pairing via [`positional_fallback`], bounding CPU time on untrusted input at the
+///   cost of reintroducing mispairing risk for very large edit runs.
+/// - Zero-similarity equal-count run (`dp == 0 && n == m`): When no paragraph pair meets
+///   [`SIMILARITY_THRESHOLD`] and both sides have equal block counts, paragraph blocks are paired
+///   positionally so that whole-run rewrites preserve paragraph slots and accept/reject cleanly.
+///   When counts differ, unpartnered blocks are emitted as independent deletions and insertions.
+/// - Non-paragraph blocks (such as tables): Do not participate in similarity scoring and are
+///   emitted as deletions and insertions.
+pub(super) fn align_block_run(old_blocks: &[Arc<Block>], new_blocks: &[Arc<Block>], opts: &CompareOptions, budget: &mut u64) -> Vec<RunPair> {
     let n = old_blocks.len();
     let m = new_blocks.len();
     if n == 0 {
@@ -253,38 +341,47 @@ fn align_block_run(old_blocks: &[Arc<Block>], new_blocks: &[Arc<Block>], opts: &
         };
     }
     if n.saturating_mul(m) > MAX_RUN_ALIGN_CELLS {
-        let mut pairs = Vec::with_capacity(n.max(m));
-        for x in 0..n.max(m) {
-            match (old_blocks.get(x), new_blocks.get(x)) {
-                (Some(a), Some(b)) if matches!((&**a, &**b), (Block::Para(_), Block::Para(_))) => {
-                    pairs.push(RunPair::Diff(x, x));
-                }
-                _ => {
-                    if x < n {
-                        pairs.push(RunPair::Del(x));
-                    }
-                    if x < m {
-                        pairs.push(RunPair::Ins(x));
-                    }
-                }
-            }
-        }
-        return pairs;
+        return positional_fallback(n, m, old_blocks, new_blocks);
     }
 
-    let scores = compute_align_scores(old_blocks, new_blocks, opts);
-    let mut dp = vec![vec![0u32; m + 1]; n + 1];
+    let old_keys: Vec<Option<String>> = old_blocks
+        .iter()
+        .map(|b| match &**b {
+            Block::Para(p) => Some(opts.key(&p.plain_text())),
+            _ => None,
+        })
+        .collect();
+    let new_keys: Vec<Option<String>> = new_blocks
+        .iter()
+        .map(|b| match &**b {
+            Block::Para(p) => Some(opts.key(&p.plain_text())),
+            _ => None,
+        })
+        .collect();
+
+    let pre_old = precompute_blocks(old_blocks, &old_keys);
+    let pre_new = precompute_blocks(new_blocks, &new_keys);
+
+    let scores = match compute_align_scores(&pre_old, &pre_new, opts, budget) {
+        Some(s) => s,
+        None => return positional_fallback(n, m, old_blocks, new_blocks),
+    };
+
+    let stride = m.saturating_add(1);
+    let total_dp_cells = (n.saturating_add(1)).saturating_mul(stride);
+    let mut dp = vec![0u32; total_dp_cells];
+
     for u in 0..n {
         for v in 0..m {
-            let skip_old = dp.get(u).and_then(|r| r.get(v + 1)).copied().unwrap_or(0);
-            let skip_new = dp.get(u + 1).and_then(|r| r.get(v)).copied().unwrap_or(0);
+            let skip_old = dp.get(u.saturating_mul(stride).saturating_add(v + 1)).copied().unwrap_or(0);
+            let skip_new = dp.get((u + 1).saturating_mul(stride).saturating_add(v)).copied().unwrap_or(0);
             let mut best = skip_old.max(skip_new);
-            let pair_score = scores.get(u).and_then(|r| r.get(v)).copied().unwrap_or(0);
+            let pair_score = scores.get(u.saturating_mul(m).saturating_add(v)).copied().unwrap_or(0);
             if pair_score > 0 {
-                let diag = dp.get(u).and_then(|r| r.get(v)).copied().unwrap_or(0);
+                let diag = dp.get(u.saturating_mul(stride).saturating_add(v)).copied().unwrap_or(0);
                 best = best.max(diag.saturating_add(pair_score));
             }
-            if let Some(cell) = dp.get_mut(u + 1).and_then(|r| r.get_mut(v + 1)) {
+            if let Some(cell) = dp.get_mut((u + 1).saturating_mul(stride).saturating_add(v + 1)) {
                 *cell = best;
             }
         }
@@ -293,53 +390,60 @@ fn align_block_run(old_blocks: &[Arc<Block>], new_blocks: &[Arc<Block>], opts: &
     // When no paragraph in the run shares enough similarity to form a confident pair,
     // and both sides have an equal number of blocks, pair positionally (1-to-1) so
     // wholesale replacements still preserve paragraph slots and reject cleanly.
-    if dp.get(n).and_then(|r| r.get(m)).copied().unwrap_or(0) == 0 && n == m {
-        let mut pairs = Vec::with_capacity(n);
-        for x in 0..n {
-            match (old_blocks.get(x), new_blocks.get(x)) {
-                (Some(a), Some(b)) if matches!((&**a, &**b), (Block::Para(_), Block::Para(_))) => {
-                    pairs.push(RunPair::Diff(x, x));
-                }
-                _ => {
-                    pairs.push(RunPair::Del(x));
-                    pairs.push(RunPair::Ins(x));
-                }
-            }
-        }
-        return pairs;
+    let final_dp = dp.get(n.saturating_mul(stride).saturating_add(m)).copied().unwrap_or(0);
+    if final_dp == 0 && n == m {
+        return positional_fallback(n, m, old_blocks, new_blocks);
     }
 
     backtrack_align_dp(&scores, &dp, n, m)
 }
 
-/// Computes a pairwise similarity score matrix for paragraphs in an edit run.
-fn compute_align_scores(old_blocks: &[Arc<Block>], new_blocks: &[Arc<Block>], opts: &CompareOptions) -> Vec<Vec<u32>> {
+/// Computes pairwise similarity scores for all block pairs in an edit run.
+///
+/// Stores scores in a flat `Vec<u32>` of length `n * m`. Pairs scoring below
+/// `SIMILARITY_THRESHOLD` or involving non-paragraph blocks are stored as zero.
+///
+/// Returns `None` if the total similarity computation exceeds the available `budget`,
+/// signaling that alignment should fall back to 1-to-1 positional pairing.
+/// Runs in worst-case `O(n * m)` time and space.
+fn compute_align_scores(
+    old_blocks: &[PrecomputedBlock<'_>],
+    new_blocks: &[PrecomputedBlock<'_>],
+    opts: &CompareOptions,
+    budget: &mut u64,
+) -> Option<Vec<u32>> {
     let n = old_blocks.len();
     let m = new_blocks.len();
-    let mut scores = vec![vec![0u32; m]; n];
+    let total_cells = n.saturating_mul(m);
+    let mut scores = vec![0u32; total_cells];
+    let mut dp_buf = Vec::new();
+
     for (u, a) in old_blocks.iter().enumerate() {
         for (v, b) in new_blocks.iter().enumerate() {
-            if let (Block::Para(pa), Block::Para(pb)) = (&**a, &**b) {
-                let sim = para_similarity(pa, pb, opts);
-                let score = if sim >= SIMILARITY_THRESHOLD { sim } else { 0 };
-                if let Some(cell) = scores.get_mut(u).and_then(|r| r.get_mut(v)) {
-                    *cell = score;
-                }
+            let score = para_similarity(a, b, opts, &mut dp_buf, budget)?;
+            if let Some(cell) = scores.get_mut(u.saturating_mul(m).saturating_add(v)) {
+                *cell = score;
             }
         }
     }
-    scores
+    Some(scores)
 }
 
 /// Backtracks an alignment DP table to produce the sequence of paired and unpartnered blocks.
-fn backtrack_align_dp(scores: &[Vec<u32>], dp: &[Vec<u32>], n: usize, m: usize) -> Vec<RunPair> {
+///
+/// The DP table `dp` has dimensions `(n + 1) * (m + 1)` and `scores` has dimensions `n * m`.
+/// Tie-breaking order prefers `RunPair::Diff` (pairing paragraphs diagonally), then
+/// `RunPair::Ins` (inserting from revised document), then `RunPair::Del` (deleting from
+/// original document). Operates in `O(n + m)` time.
+fn backtrack_align_dp(scores: &[u32], dp: &[u32], n: usize, m: usize) -> Vec<RunPair> {
+    let stride = m.saturating_add(1);
     let mut pairs = Vec::with_capacity(n.max(m));
     let (mut u, mut v) = (n, m);
     while u > 0 || v > 0 {
-        let cur_dp = dp.get(u).and_then(|r| r.get(v)).copied().unwrap_or(0);
-        let pair_score = if u > 0 && v > 0 { scores.get(u - 1).and_then(|r| r.get(v - 1)).copied().unwrap_or(0) } else { 0 };
-        let diag_dp = if u > 0 && v > 0 { dp.get(u - 1).and_then(|r| r.get(v - 1)).copied().unwrap_or(0) } else { 0 };
-        let prev_v_dp = if v > 0 { dp.get(u).and_then(|r| r.get(v - 1)).copied().unwrap_or(0) } else { 0 };
+        let cur_dp = dp.get(u.saturating_mul(stride).saturating_add(v)).copied().unwrap_or(0);
+        let pair_score = if u > 0 && v > 0 { scores.get((u - 1).saturating_mul(m).saturating_add(v - 1)).copied().unwrap_or(0) } else { 0 };
+        let diag_dp = if u > 0 && v > 0 { dp.get((u - 1).saturating_mul(stride).saturating_add(v - 1)).copied().unwrap_or(0) } else { 0 };
+        let prev_v_dp = if v > 0 { dp.get(u.saturating_mul(stride).saturating_add(v - 1)).copied().unwrap_or(0) } else { 0 };
 
         if u > 0 && v > 0 && pair_score > 0 && cur_dp == diag_dp.saturating_add(pair_score) {
             pairs.push(RunPair::Diff(u - 1, v - 1));
@@ -359,49 +463,75 @@ fn backtrack_align_dp(scores: &[Vec<u32>], dp: &[Vec<u32>], n: usize, m: usize) 
     pairs
 }
 
-/// Computes a text similarity score between two paragraphs, from 0 to 1000.
+/// Computes a text similarity score between two precomputed paragraphs, on a 0..=1000 scale.
 ///
-/// Uses order-aware longest-common-subsequence matching over word tokens for multi-word
-/// or whitespace-separated text, and over characters for non-space scripts (such as CJK)
-/// or character-level diffs.
-fn para_similarity(pa: &Paragraph, pb: &Paragraph, opts: &CompareOptions) -> u32 {
-    let key_a = opts.key(&pa.plain_text());
-    let key_b = opts.key(&pb.plain_text());
+/// Returns `None` if the similarity LCS cell budget is exceeded. Returns 0 if similarity
+/// falls below `SIMILARITY_THRESHOLD` or if the theoretical length-ratio upper bound cannot
+/// reach `SIMILARITY_THRESHOLD`.
+///
+/// Uses order-aware longest-common-subsequence matching over word tokens for multi-word or
+/// whitespace-separated text, and over whitespace-stripped characters for non-space scripts
+/// (such as CJK) or when character-level comparison is requested.
+///
+/// Similarity is scored using `(2000 * lcs) / total`, where `total = len_a + len_b`.
+fn para_similarity(
+    a: &PrecomputedBlock<'_>,
+    b: &PrecomputedBlock<'_>,
+    opts: &CompareOptions,
+    dp_buf: &mut Vec<u32>,
+    budget: &mut u64,
+) -> Option<u32> {
+    let (
+        PrecomputedBlock::Para { key: key_a, has_cjk: cjk_a, words: w_a, chars: ch_a },
+        PrecomputedBlock::Para { key: key_b, has_cjk: cjk_b, words: w_b, chars: ch_b },
+    ) = (a, b)
+    else {
+        return Some(0);
+    };
     if key_a == key_b {
-        return 1000;
+        return Some(1000);
     }
-    let use_chars = opts.characters || key_a.chars().any(wordcraft_fonts::is_cjk) || key_b.chars().any(wordcraft_fonts::is_cjk);
-    if use_chars {
-        let chars_a: Vec<char> = key_a.chars().filter(|c| !c.is_whitespace()).collect();
-        let chars_b: Vec<char> = key_b.chars().filter(|c| !c.is_whitespace()).collect();
-        if chars_a.is_empty() && chars_b.is_empty() {
-            return 1000;
-        }
-        if chars_a.is_empty() || chars_b.is_empty() {
-            return 0;
-        }
-        let lcs = lcs_len(&chars_a, &chars_b);
-        let total = chars_a.len().saturating_add(chars_b.len());
-        if total == 0 { 0 } else { ((2000u64 * lcs as u64) / total as u64) as u32 }
-    } else {
-        let words_a: Vec<&str> = key_a.split_whitespace().collect();
-        let words_b: Vec<&str> = key_b.split_whitespace().collect();
-        if words_a.is_empty() && words_b.is_empty() {
-            return 1000;
-        }
-        if words_a.is_empty() || words_b.is_empty() {
-            return 0;
-        }
-        let lcs = lcs_len(&words_a, &words_b);
-        let total = words_a.len().saturating_add(words_b.len());
-        if total == 0 { 0 } else { ((2000u64 * lcs as u64) / total as u64) as u32 }
-    }
+    let use_chars = opts.characters || *cjk_a || *cjk_b;
+    if use_chars { score_tokens(ch_a, ch_b, dp_buf, budget) } else { score_tokens(w_a, w_b, dp_buf, budget) }
 }
 
-/// Computes the length of the longest common subsequence between two slices.
-fn lcs_len<T: PartialEq>(a: &[T], b: &[T]) -> usize {
+/// Computes similarity on a slice of tokens (words or characters).
+///
+/// Applies a cheap length-ratio check first: maximum possible score is `2000 * min_len / total`.
+/// If that upper bound is below `SIMILARITY_THRESHOLD`, returns 0 immediately without running LCS.
+/// Otherwise runs `lcs_len`, charging core DP cells to `budget`.
+fn score_tokens<T: PartialEq>(tokens_a: &[T], tokens_b: &[T], dp_buf: &mut Vec<u32>, budget: &mut u64) -> Option<u32> {
+    let len_a = tokens_a.len();
+    let len_b = tokens_b.len();
+    if len_a == 0 && len_b == 0 {
+        return Some(1000);
+    }
+    if len_a == 0 || len_b == 0 {
+        return Some(0);
+    }
+    let total = len_a.saturating_add(len_b);
+    let min_len = len_a.min(len_b);
+    let max_possible = (2000u64 * min_len as u64) / total as u64;
+    if max_possible < SIMILARITY_THRESHOLD as u64 {
+        return Some(0);
+    }
+    let lcs = lcs_len(tokens_a, tokens_b, dp_buf, budget)?;
+    let score = ((2000u64 * lcs as u64) / total as u64) as u32;
+    Some(if score >= SIMILARITY_THRESHOLD { score } else { 0 })
+}
+
+/// Computes the length of the longest common subsequence between two token slices.
+///
+/// Strips common prefix and suffix tokens before building the DP table. When interior tokens
+/// remain, charges the core DP cell count (`a_core.len() * b_core.len()`) to `budget`,
+/// returning `None` if the budget is exceeded.
+///
+/// Uses `dp_buf` to compute LCS length in `O(short.len() * long.len())` time and
+/// `O(short.len())` space without per-call allocations. Returns `Some(pre + suf)` when either
+/// core sequence is empty.
+fn lcs_len<T: PartialEq>(a: &[T], b: &[T], dp_buf: &mut Vec<u32>, budget: &mut u64) -> Option<usize> {
     if a.is_empty() || b.is_empty() {
-        return 0;
+        return Some(0);
     }
     let pre = a.iter().zip(b).take_while(|(x, y)| x == y).count();
     let a_mid = a.get(pre..).unwrap_or_default();
@@ -411,29 +541,36 @@ fn lcs_len<T: PartialEq>(a: &[T], b: &[T]) -> usize {
     let b_core = b_mid.get(..b_mid.len().saturating_sub(suf)).unwrap_or_default();
 
     if a_core.is_empty() || b_core.is_empty() {
-        return pre.saturating_add(suf);
+        return Some(pre.saturating_add(suf));
     }
 
+    let cells = (a_core.len() as u64).saturating_mul(b_core.len() as u64);
+    if cells > *budget {
+        return None;
+    }
+    *budget -= cells;
+
     let (short, long) = if a_core.len() <= b_core.len() { (a_core, b_core) } else { (b_core, a_core) };
-    let mut dp = vec![0u32; short.len() + 1];
+    dp_buf.clear();
+    dp_buf.resize(short.len().saturating_add(1), 0);
     for item_l in long {
         let mut prev_diag = 0u32;
         for (j, item_s) in short.iter().enumerate() {
-            let temp = dp.get(j + 1).copied().unwrap_or(0);
+            let temp = dp_buf.get(j + 1).copied().unwrap_or(0);
             if item_l == item_s {
-                if let Some(c) = dp.get_mut(j + 1) {
+                if let Some(c) = dp_buf.get_mut(j + 1) {
                     *c = prev_diag.saturating_add(1);
                 }
             } else {
-                let left = dp.get(j).copied().unwrap_or(0);
-                if let Some(c) = dp.get_mut(j + 1) {
+                let left = dp_buf.get(j).copied().unwrap_or(0);
+                if let Some(c) = dp_buf.get_mut(j + 1) {
                     *c = (*c).max(left);
                 }
             }
             prev_diag = temp;
         }
     }
-    pre.saturating_add(suf).saturating_add(dp.last().copied().unwrap_or(0) as usize)
+    Some(pre.saturating_add(suf).saturating_add(dp_buf.last().copied().unwrap_or(0) as usize))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
