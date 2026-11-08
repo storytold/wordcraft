@@ -150,6 +150,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 ## Progress log
 
 - 2026-11-08: Layout: a turned inline picture whose file keeps no room for the turn (no or a zero `wp:effectExtent`, as other tools write) keeps its line to its frame and overhangs it, cut at the line's top and bottom, as Word does: the frame as it is in Word 2007 layout, with width and height exchanged from 45° to 135° and 225° to 315° in Word 2013+ layout. Such a file saves the same way. Pictures with the room recorded (Word's own files) still take their rotated bounds. Readiness unchanged.
+- 2026-11-08: XML text and CDATA read with their line ends normalised (XML 1.0 §2.11): CR LF and a lone CR are one line feed, `&#13;` stays a CR, so a line break inside `w:t` in a file saved with Windows line ends is one space, not two (#5897); readiness estimates unchanged.
 - 2026-11-06: Arabic interface: the Home tab's Styles gallery reads from the right, as the rest of the mirrored ribbon does (#5566). Normal is the rightmost tile, the next styles follow leftwards and the scroll arrows and More sit at the gallery's left end; left to right is unchanged. Readiness unchanged.
 - 2026-11-05: ODT heading text of another size keeps it (gap 19): a smaller word in a heading came back at the heading's size in LibreOffice after a save.
 - 2026-11-05: ODT table rows kept from breaking across pages stay so (gap 19): they came back from a save free to break.
@@ -359,6 +360,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | Date | What landed |
 | 2026-11-04 | The CLI opens a non-Unicode input filename even after options such as `--page 2` or `--format flatopc`; text option values still require Unicode; `run --file` and `run --script` retain native paths. |
 | 2026-11-06 | Accept All and Reject All no longer restyle the paragraph after an empty one carrying a section break (#5667): a Compare that added a section, then Reject All, left `Body` in the removed paragraph's Normal style and indents. The empty paragraph now goes whole and its section joins the following one, as deleting the break does. |
+| 2026-11-07 | Deleting a preceding empty paragraph keeps the following paragraph's style, outline and mark formatting rather than promoting body text to a heading (Leaf #152). Non-empty merges and section absorption retain their existing rules; synthetic model, command, DOCX and Undo/Redo coverage. |
 | 2026-11-04 | Pictures keep the brightness, contrast and transparency their file gives them (#1711, #1766): a "Washout" picture watermark (VML `gain`/`blacklevel`) and a washed-out letterhead picture behind the text (`a:lum`) are drawn faded on screen and in PDF instead of at full colour, with the pixel curve measured on Word's own PDF export; `a:alphaModFix` transparency too. Saved back as DrawingML (and as VML `gain`/`blacklevel` in Word 2003 XML, without the transparency). Picture Format › Corrections, Transparency and Color › Washout replace the file's values (other Color modes leave them alone), and Reset Picture discards them all, as in Word; the PDF embeds the corrected pixels once per picture |
 |---|---|
 | 2026-10-17 | Copies keep their formatting in programs that read RTF rather than HTML: Copy and Cut put RTF beside the text and HTML on the system clipboard on Windows, macOS and Wayland (an X11 copy stays text and HTML, since arboard owns the selection there; a copy of only pictures or shapes carries no HTML or RTF, so pasting it back keeps every detail), and Paste reads another program's RTF on macOS and X11 too, not only on Windows and Wayland |
@@ -866,6 +868,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-08 | trivial | Progress log: XML line ends in text normalised (#5897) |
 | 2026-11-06 | trivial | Progress log: the Arabic interface's Styles gallery reads from the right (#5566) |
 | 2026-11-07 | trivial | Page Setup also bounds the unfocused margin display after a long numeric paste; the accepted value is retained (#5650). |
 | 2026-11-05 | trivial | Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. |
