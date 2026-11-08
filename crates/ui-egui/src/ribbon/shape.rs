@@ -102,8 +102,8 @@ pub(super) fn shape_format(app: &mut WordApp, ui: &mut Ui) {
             });
         });
     }
-    group(ui, "WordArt Styles", None, app, |ui, app| {
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("wordArt", Some("Styles"), "WordArt Styles", true, ""), |ui, app| {
+    group(ui, "Decorative Text Styles", None, app, |ui, app| {
+        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("wordArt", Some("Styles"), "Decorative Text Styles", true, ""), |ui, app| {
             crate::wordart_menus::style_gallery(ui, app, "wordArt.style")
         });
         stack(ui, |ui| {

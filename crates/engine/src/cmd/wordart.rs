@@ -19,24 +19,24 @@ const EFFECT_PARAMS: &str = r#"{"style"?: "solid"|"outlined"|"hollow"|"gradient"
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("insert.wordArt", "WordArt", "Insert › Text", insert).params(
-            r#"{"text"?: string, "style"?: WordArt style id (see format.textEffects), "transform"?: "textArchUp"|"textArchDown"|"textCircle"|"textWave1"|… (a DrawingML preset text warp)}"#,
+        CommandSpec::new("insert.wordArt", "Decorative Text", "Insert › Text", insert).params(
+            r#"{"text"?: string, "style"?: Decorative Text style id (see format.textEffects), "transform"?: "textArchUp"|"textArchDown"|"textCircle"|"textWave1"|… (a DrawingML preset text warp)}"#,
         ),
         CommandSpec::new("format.textEffects", "Text Effects", "Home › Font", text_effects).params(EFFECT_PARAMS),
-        CommandSpec::new("wordArt.style", "WordArt Styles", "Shape Format › WordArt Styles", |s, v| {
+        CommandSpec::new("wordArt.style", "Decorative Text Styles", "Shape Format › Decorative Text Styles", |s, v| {
             let id = p::req_str(v, "style")?;
             text_effects(s, &json!({"style": id}))
         })
         .params(r#"{"style": "solid"|"outlined"|"hollow"|"gradient"|"shadowed"|"glowing"|"reflected"|"sunset"}"#),
-        CommandSpec::new("wordArt.textFill", "Text Fill", "Shape Format › WordArt Styles", |s, v| {
+        CommandSpec::new("wordArt.textFill", "Text Fill", "Shape Format › Decorative Text Styles", |s, v| {
             text_effects(s, &json!({"fill": v.get("fill").or_else(|| v.get("color")).cloned().unwrap_or(Value::Null)}))
         })
         .params(r#"{"fill": "RRGGBB"|"none"|{"gradient": ["RRGGBB", …], "angle"?: deg}|null}"#),
-        CommandSpec::new("wordArt.textOutline", "Text Outline", "Shape Format › WordArt Styles", |s, v| {
+        CommandSpec::new("wordArt.textOutline", "Text Outline", "Shape Format › Decorative Text Styles", |s, v| {
             text_effects(s, &json!({"outline": v.get("outline").cloned().unwrap_or_else(|| v.clone())}))
         })
         .params(r#"{"color"?: "RRGGBB"|null, "width"?: pt} or {"outline": "none"|null}"#),
-        CommandSpec::new("wordArt.transform", "Transform", "Shape Format › WordArt Styles", transform)
+        CommandSpec::new("wordArt.transform", "Transform", "Shape Format › Decorative Text Styles", transform)
             .params(r#"{"preset": "textArchUp"|"textArchDown"|"textCircle"|"textWave1"|"textSlantUp"|"textSlantDown"|"textInflate"|"textDeflate"|"textChevron"|"textChevronInverted"|"textTriangle"|"textTriangleInverted"|… (any DrawingML preset text warp)|"none", "adj"?: n (the preset's adjust value)}"#),
     ]
 }
@@ -186,7 +186,7 @@ fn text_effects(s: &mut Session, v: &Value) -> CmdResult {
     let theme = theme(s);
     let accent = theme.get(4).copied().unwrap_or(Rgb(0x15, 0x60, 0x82));
     let style = match p::str(v, "style") {
-        Some(id) => Some(art_style(id, &theme).ok_or_else(|| CmdError::Params(format!("unknown WordArt style `{id}`")))?),
+        Some(id) => Some(art_style(id, &theme).ok_or_else(|| CmdError::Params(format!("unknown decorative text style `{id}`")))?),
         None => None,
     };
     let clear = p::bool(v, "clear").unwrap_or(false);
@@ -244,11 +244,11 @@ fn transform(s: &mut Session, v: &Value) -> CmdResult {
             Some(w)
         }
     };
-    let pos = warp_target(s).ok_or_else(|| CmdError::Disabled("select a shape or WordArt first".into()))?;
+    let pos = warp_target(s).ok_or_else(|| CmdError::Disabled("select a shape or decorative text first".into()))?;
     let para = s.doc.para_mut(pos.story, &pos.path)?;
     match para.object_at_mut(pos.off) {
         Some(InlineObject::Shape { extra, .. }) => extra.warp = warp.clone(),
-        _ => return Err(CmdError::Disabled("select a shape or WordArt first".into())),
+        _ => return Err(CmdError::Disabled("select a shape or decorative text first".into())),
     }
     para.touch();
     Ok(json!({"transform": warp.map(|w| w.preset)}))
@@ -269,7 +269,7 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
     let text: String = p::str(v, "text").unwrap_or("Your text here").chars().filter(|c| !c.is_control()).take(1000).collect();
     let text = if text.trim().is_empty() { "Your text here".to_string() } else { text };
     let style = p::str(v, "style").unwrap_or("solid");
-    let fx = art_style(style, &theme(s)).ok_or_else(|| CmdError::Params(format!("unknown WordArt style `{style}`")))?;
+    let fx = art_style(style, &theme(s)).ok_or_else(|| CmdError::Params(format!("unknown decorative text style `{style}`")))?;
     let warp = match p::str(v, "transform") {
         None | Some("none") => None,
         Some(id) => Some(TextWarp::new(id).ok_or_else(|| CmdError::Params(format!("unknown text warp `{id}`")))?),

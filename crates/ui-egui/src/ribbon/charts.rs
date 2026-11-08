@@ -53,7 +53,7 @@ pub(super) fn smart_art_design(app: &mut WordApp, ui: &mut Ui) {
             }
         });
     });
-    group(ui, "SmartArt Styles", None, app, |ui, app| {
+    group(ui, "Diagram Styles", None, app, |ui, app| {
         menu_button(
             ui,
             app,
