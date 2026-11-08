@@ -211,25 +211,27 @@ pub(super) fn strip_headers(doc: &mut wordcraft_doc::Document, ids: &[u32]) -> b
     if ids.is_empty() {
         return false;
     }
-    let clear = |set: &mut wordcraft_doc::section::HeaderSet| {
+    let clear = |set: &mut wordcraft_doc::section::HeaderSet| -> bool {
+        let mut taken = false;
         for slot in [&mut set.default, &mut set.first, &mut set.even] {
             if slot.is_some_and(|id| ids.contains(&id)) {
                 *slot = None;
+                taken = true;
             }
         }
+        taken
     };
-    clear(&mut doc.last_section.headers);
-    clear(&mut doc.last_section.footers);
+    let mut any = clear(&mut doc.last_section.headers);
+    any |= clear(&mut doc.last_section.footers);
     for path in doc.para_paths(StoryRef::Body) {
         if doc.para(StoryRef::Body, &path).is_some_and(|p| p.section.is_some())
             && let Ok(p) = doc.para_mut(StoryRef::Body, &path)
             && let Some(sec) = p.section.as_mut()
         {
-            clear(&mut sec.headers);
-            clear(&mut sec.footers);
+            any |= clear(&mut sec.headers);
+            any |= clear(&mut sec.footers);
         }
     }
-    let mut any = false;
     for id in ids {
         any |= doc.parts.remove(id).is_some();
     }

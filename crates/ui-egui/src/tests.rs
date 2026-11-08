@@ -609,6 +609,62 @@ fn the_community_button_off_hides_the_backstage_discord_link_too() {
     assert!(h.query_by_label("Discord community").is_none(), "the backstage link honors the same setting");
 }
 
+/// #5676: the Info report reads again after a save: `file.save`/`file.saveAs` change the path
+/// and dirty state without advancing the revision, so a report keyed by the revision alone
+/// still said "Not saved yet." after the save.
+#[test]
+fn the_info_report_refreshes_after_a_save() {
+    use egui_kittest::kittest::Queryable;
+    let dir = scratch("info-refreshes-after-save");
+    let path = dir.join("report.docx").to_string_lossy().to_string();
+    let mut a = typed();
+    a.ui.backstage = true;
+    a.ui.backstage_page = "info".into();
+    let mut h = harness(a);
+    h.run_steps(6);
+    assert!(h.query_by_label_contains("Not saved yet").is_some(), "an unsaved document says so");
+
+    h.state_mut().run("file.saveAs", json!({"path": path})).unwrap();
+    h.run_steps(6);
+    assert!(h.query_by_label_contains("Not saved yet").is_none(), "the saved document shows its path");
+    // The location row truncates the tail of a long path (`fit_text`), so match on the
+    // scratch directory's name, which sits mid-path and survives the cut.
+    assert!(
+        h.query_by_label_contains("wordcraft-ui-info-refresh").is_some(),
+        "the report read again after the save"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #5676: the Info report is not shared between documents: two documents can carry the same
+/// revision and password state, so a key without the document id reused the first document's
+/// report — its word count and path showed for the blank one.
+#[test]
+fn the_info_report_is_not_shared_between_documents() {
+    use egui_kittest::kittest::Queryable;
+    let dir = scratch("info-two-documents");
+    let path = docx_on_disk(&dir, "Hello world");
+    let mut a = app();
+    a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+    a.ui.backstage = true;
+    a.ui.backstage_page = "info".into();
+    let mut h = harness(a);
+    h.run_steps(6);
+    assert!(h.query_by_label_contains("Words: 2").is_some(), "the opened document's report");
+
+    h.state_mut().run("file.new", json!({})).unwrap();
+    {
+        let a = h.state_mut();
+        a.ui.backstage = true;
+        a.ui.backstage_page = "info".into();
+    }
+    h.run_steps(6);
+    assert!(h.query_by_label_contains("Words: 2").is_none(), "the blank document reads its own report");
+    assert!(h.query_by_label_contains("Words: 0").is_some());
+    assert!(h.query_by_label_contains("Not saved yet").is_some());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// File › Options › Advanced › Editing: alignment guides are a UI command, on by default and
 /// kept between runs.
 #[test]

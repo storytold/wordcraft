@@ -713,7 +713,12 @@ pub(crate) fn save_as_error_id() -> egui::Id {
     egui::Id::unique("backstage_save_as_error")
 }
 
-/// The Info page's cached `file.info` report, keyed by the document's revision and password.
+/// The Info page's cached `file.info` report's key: which document, its revision, the password
+/// state (which `file.encrypt` changes without a document edit), and the path and dirty state
+/// (which `file.save` and `file.rename` change without one either).
+type InfoKey = (u64, u64, bool, Option<String>, bool);
+
+/// The Info page's cached `file.info` report.
 fn info_id() -> egui::Id {
     egui::Id::unique("backstage_info")
 }
@@ -779,13 +784,21 @@ fn info_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, "Info");
     // The report is read when the document changes, not every frame: `file.info` walks the
     // document for hidden text, which a frame has no business repeating while nothing changed.
-    // The key keeps the password state, which `file.encrypt` changes without a document edit.
-    let key = (app.session.rev(), app.session.password.is_some());
-    let info = ui.ctx().data_mut(|d| match d.get_temp::<(u64, bool, serde_json::Value)>(info_id()) {
-        Some((rev, encrypted, v)) if (rev, encrypted) == key => v,
+    // The key keeps the password state, which `file.encrypt` changes without a document edit,
+    // and the path and dirty state, which `file.save` and `file.rename` change without one
+    // either. The document id comes first: two documents can share a revision.
+    let key = (
+        app.session.document_id(),
+        app.session.rev(),
+        app.session.password.is_some(),
+        app.session.path.as_ref().map(|p| p.to_string_lossy().to_string()),
+        app.session.dirty,
+    );
+    let info = ui.ctx().data_mut(|d| match d.get_temp::<(InfoKey, serde_json::Value)>(info_id()) {
+        Some((k, v)) if k == key => v,
         _ => {
             let v = app.session.run("file.info", &json!({})).unwrap_or_default();
-            d.insert_temp(info_id(), (key.0, key.1, v.clone()));
+            d.insert_temp(info_id(), (key.clone(), v.clone()));
             v
         }
     });

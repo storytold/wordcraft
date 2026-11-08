@@ -56,6 +56,23 @@ fn remove_header_clears_every_section_and_its_part() {
 }
 
 #[test]
+fn a_dangling_reference_still_touches_the_document() {
+    // A section that names a footer whose part is gone: clearing the reference changes the
+    // document even though no part comes out of `parts`, so the removal touches it (the
+    // revision moves) — before, it returned false and the section edit went untallied.
+    let mut doc = Document::from_text("One.\nTwo.");
+    let dangling = doc.add_part(PartKind::Footer, vec![para_block(Paragraph::new().styled("Footer"))]);
+    doc.parts.remove(&dangling);
+    doc.last_section.footers.default = Some(dangling);
+    let mut s = Session::new(doc);
+    let before = s.rev();
+    s.run("insert.removeFooter", &json!({})).unwrap();
+    assert!(s.doc.last_section.footers.default.is_none(), "the dangling reference is cleared");
+    assert_ne!(s.rev(), before, "clearing the dangling reference touches the document");
+    assert_eq!(s.run("file.inspect", &json!({})).unwrap()["found"]["headers"], json!(0));
+}
+
+#[test]
 fn the_caret_in_a_removed_footer_leaves_a_valid_selection() {
     // Remove Footer while editing the footer it removes: the part goes, so the selection is
     // clamped back into the document instead of naming a story that is gone.

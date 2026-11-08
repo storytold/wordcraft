@@ -90,7 +90,7 @@ fn methods_address_an_open_document_by_id() {
 #[test]
 fn file_inspect_cleans_the_document_it_addresses() {
     let mut a = app();
-    let (first, second) = two_documents(&mut a);
+    let (first, _second) = two_documents(&mut a);
     // Hidden text in the parked document.
     a.session
         .with_document(first, |s| {
@@ -98,6 +98,7 @@ fn file_inspect_cleans_the_document_it_addresses() {
             s.run("select.text", &json!({"text": "secret"}))?;
             s.run("format.hidden", &json!({"value": true}))
         })
+        .unwrap()
         .unwrap();
     // The addressed one carries it, the active one reports none.
     let r = send(&mut a, "file.inspect", json!({"doc": first}));
