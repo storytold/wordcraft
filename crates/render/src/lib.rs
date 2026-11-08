@@ -21,7 +21,7 @@ mod media;
 #[cfg(test)]
 use media::{CACHE_BYTES, MediaCache, OVERSIZED_GLYPHS_NOTED, cacheable, decode_pixmap_within, note_oversized_glyphs, shrink};
 pub use media::{decode_pixmap, decode_pixmap_fx, image_size, metafile_size};
-use media::{draw_page_picture, draw_vector, lock, pixmap_for, premul_pixmap, vector_for};
+use media::{draw_page_background, draw_vector, lock, pixmap_for, premul_pixmap, vector_for};
 
 mod color_glyph;
 pub mod icon_lib;
@@ -297,7 +297,7 @@ fn render_region_capped(doc: &Document, page: &Page, w: u32, h: u32, view: Affin
     ctx.set_paint(color(opts.paper_of(doc), 1.0));
     ctx.fill_rect(&kurbo::Rect::new(0.0, 0.0, w16 as f64, h16 as f64));
     if opts.read_paper.is_none() {
-        draw_page_picture(&mut ctx, doc, page, view);
+        draw_page_background(&mut ctx, doc, page, view);
     }
     let visible = view.inverse().transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, w16 as f64, h16 as f64)).inflate(40.0, 40.0);
     if let Some(wm) = &doc.settings.watermark {

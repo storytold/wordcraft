@@ -162,6 +162,8 @@ impl WordApp {
             // App-wide.
             session: _,
             services: _,
+            background: _,
+            background_picture_pending: _,
             printing: _,
             print_feedback_seen: _,
             font_generation: _,

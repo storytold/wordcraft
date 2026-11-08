@@ -693,6 +693,15 @@ fn paint_draw_to_review(pen: &Pen, name: &str) -> bool {
             pen.page(4.0, 2.0, 16.0, 18.0);
             pen.rect(6.0, 6.5, 14.0, 15.5, a);
         }
+        // A page whose fill fades: Format Background.
+        "formatBackground" => {
+            pen.page(3.0, 1.5, 17.0, 18.5);
+            for (i, k) in [0.15, 0.3, 0.45, 0.6].into_iter().enumerate() {
+                let y = 7.0 + i as f32 * 2.5;
+                pen.frect(5.0, y, 15.0, y + 2.5, a.linear_multiply(k));
+            }
+            pen.line(&[(1.5, 8.0), (18.5, 8.0)]);
+        }
         // Layout
         "margins" => {
             pen.page(4.0, 2.0, 16.0, 18.0);

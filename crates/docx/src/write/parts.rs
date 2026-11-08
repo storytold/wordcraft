@@ -7,6 +7,9 @@ use super::{
     BTreeMap, Blocks, CT_WML, Document, DocxError, Flavor, HashMap, MAX_VBA_RELATED, PartRels, VBA_PROJECT_PART, VBA_RELATED, W, Writer, embed,
     glossary, rt, settings_merge, watermark, xml,
 };
+use std::sync::Arc;
+use wordcraft_doc::props::Rgb;
+use wordcraft_doc::wordart::GradStop;
 
 /// The parts of the package [`write_as`] zips, in order, `[Content_Types].xml` first: (part name
 /// without the leading `/`, bytes).
@@ -283,26 +286,70 @@ fn write_document_body(doc: &Document, wr: &mut Writer<'_>, rels: &mut PartRels,
     let mut w = W::new();
     w.open("w:document", ns_refs);
     let pic = doc.settings.page_picture.as_ref().filter(|p| wr.media_files.contains_key(&p.media) && doc.media.contains_key(&p.media));
-    if pic.is_some() || doc.settings.page_color.is_some() {
-        let color = doc.settings.page_color.map(|c| c.hex());
+    let grad = doc.settings.page_gradient.as_ref();
+    let pat = doc.settings.page_pattern.as_ref().map(|p| p.sanitized());
+    // The page colour is also what older readers show for a gradient or pattern fill.
+    let color = doc
+        .settings
+        .page_color
+        .or_else(|| grad.and_then(|g| g.stops.first().map(|s| s.color)))
+        .or_else(|| pat.as_ref().map(|p| p.back))
+        .map(|c| c.hex());
+    if pic.is_some() || grad.is_some() || pat.is_some() || doc.settings.page_color.is_some() {
         let attrs: Vec<(&str, &str)> = color.iter().map(|c| ("w:color", c.as_str())).collect();
         w.open("w:background", &attrs);
-        if let Some(p) = pic
-            && let Some(file) = wr.media_files.get(&p.media)
-        {
-            let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
-            wr.used_media.insert(p.media.clone());
+        if pic.is_some() || grad.is_some() || pat.is_some() {
             w.open("v:background", &[("id", "_x0000_s1025"), ("o:bwmode", "white")]);
-            let mut fa: Vec<(&str, &str)> = vec![("r:id", &rid)];
-            // VML has no centred fill (an ODT page background's): stretched to the page.
-            let kind = if p.fill_type.eq_ignore_ascii_case("center") { "frame" } else { p.fill_type.as_str() };
-            if !kind.is_empty() {
-                fa.push(("type", kind));
+            let opacity = |t: f32| format!("{:.4}", ((100.0 - t.clamp(0.0, 100.0)) / 100.0));
+            if let Some(p) = pic
+                && let Some(file) = wr.media_files.get(&p.media)
+            {
+                let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
+                wr.used_media.insert(p.media.clone());
+                let mut fa: Vec<(&str, &str)> = vec![("r:id", &rid)];
+                // VML has no centred fill (an ODT page background's): stretched to the page.
+                let kind = if p.fill_type.eq_ignore_ascii_case("center") { "frame" } else { p.fill_type.as_str() };
+                if !kind.is_empty() {
+                    fa.push(("type", kind));
+                }
+                if !p.title.is_empty() {
+                    fa.push(("o:title", &p.title));
+                }
+                let op = opacity(p.transparency);
+                if p.transparency > 0.0 {
+                    fa.push(("opacity", &op));
+                }
+                w.empty("v:fill", &fa);
+            } else if let Some(g) = grad {
+                let sanitized = wordcraft_doc::fill::Fill::Gradient(Arc::new(g.clone())).sanitized();
+                if let wordcraft_doc::fill::Fill::Gradient(g) = sanitized.unwrap_or(wordcraft_doc::fill::Fill::solid(Rgb::WHITE)) {
+                    let plain = GradStop { pos: 0.0, color: Rgb::WHITE, transparency: 0.0 };
+                    let (start, end) = match (g.stops.first(), g.stops.last()) {
+                        (Some(a), Some(b)) => (*a, *b),
+                        _ => (plain, plain),
+                    };
+                    let angle = match g.kind {
+                        wordcraft_doc::fill::GradientKind::Linear { angle, .. } => angle,
+                        wordcraft_doc::fill::GradientKind::Path { .. } => 90.0,
+                    };
+                    let (c1, c2) = (start.color.hex(), end.color.hex());
+                    let a = format!("{:.2}", angle.rem_euclid(360.0));
+                    let op = opacity((start.transparency + end.transparency) / 2.0);
+                    let mut fa: Vec<(&str, &str)> = vec![("type", "gradient"), ("color", &c1), ("color2", &c2), ("angle", &a)];
+                    if start.transparency > 0.0 || end.transparency > 0.0 {
+                        fa.push(("opacity", &op));
+                    }
+                    w.empty("v:fill", &fa);
+                }
+            } else if let Some(p) = &pat {
+                let (c1, c2) = (p.fore.hex(), p.back.hex());
+                let op = opacity(p.transparency);
+                let mut fa: Vec<(&str, &str)> = vec![("type", "pattern"), ("pattern", p.preset.as_str()), ("color", &c1), ("color2", &c2)];
+                if p.transparency > 0.0 {
+                    fa.push(("opacity", &op));
+                }
+                w.empty("v:fill", &fa);
             }
-            if !p.title.is_empty() {
-                fa.push(("o:title", &p.title));
-            }
-            w.empty("v:fill", &fa);
             w.close("v:background");
         }
         w.close("w:background");

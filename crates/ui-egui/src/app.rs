@@ -145,6 +145,8 @@ impl WordApp {
             saves_in_flight: Vec::new(),
             font_generation: wordcraft_fonts::FontDb::global().generation(),
             recovery_seen: false,
+            background: Default::default(),
+            background_picture_pending: false,
             no_document: None,
             comment_drafts: Default::default(),
             parked: Default::default(),

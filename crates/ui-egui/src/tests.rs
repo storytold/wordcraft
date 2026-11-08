@@ -1,6 +1,7 @@
 use super::*;
 use egui_kittest::kittest::Queryable;
 
+mod format_background;
 mod perf;
 
 fn mod_key(key: egui::Key) -> egui::Event {

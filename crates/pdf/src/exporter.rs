@@ -7,8 +7,8 @@ use super::tags::{Role, TagEntry, figure_alt, graphic_alt, holds_picture, holds_
 use super::{
     Annotation, Arc, Artifact, ArtifactType, ClKind, ContentTag, DisplayOptions, DocLayout, DocPath, Document, Draw, FaceRef, Fill, FillRule, Font,
     HashMap, HashSet, Identifier, Image, InlineObject, ItemDisplay, KrillaGlyph, LineCap, LineEnd, LineJoin, LineStyle, LinkAnnotation, Node,
-    NonZeroU16, Outline, OutlineNode, Page, PathBuilder, Placed, Point, Rect, Rgb, ShapeKind, Size, SpanTag, StoryRef, Stroke, StrokeDash, Surface,
-    Tag, TagGroup, TagKind, TagTree, Target, Transform, WriteError, XyzDestination, krilla, rgb, write,
+    NonZeroU16, NormalizedF32, Outline, OutlineNode, Page, PathBuilder, Placed, Point, Rect, Rgb, ShapeKind, Size, SpanTag, StoryRef, Stroke,
+    StrokeDash, Surface, Tag, TagGroup, TagKind, TagTree, Target, Transform, WriteError, XyzDestination, krilla, rgb, write,
 };
 use wordcraft_doc::picfx::PicFx;
 
@@ -231,8 +231,26 @@ impl Exporter<'_> {
                 s.set_fill(None);
             });
         }
+        if let Some(g) = self.doc.settings.page_gradient.clone() {
+            self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.page_gradient(s, &g, w, h));
+        }
+        if let Some(p) = self.doc.settings.page_pattern.clone() {
+            self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.page_pattern(s, &p, w, h));
+        }
         if let Some(pic) = self.doc.settings.page_picture.clone() {
-            self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.page_picture(s, &pic, w, h));
+            self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| {
+                let alpha = 1.0 - pic.transparency.clamp(0.0, 100.0) / 100.0;
+                if alpha <= 0.0 {
+                    return;
+                }
+                if alpha < 1.0 {
+                    s.push_opacity(NormalizedF32::new(alpha).unwrap_or(NormalizedF32::ONE));
+                }
+                me.page_picture(s, &pic, w, h);
+                if alpha < 1.0 {
+                    s.pop();
+                }
+            });
         }
         if let Some(wm) = self.doc.settings.watermark.clone()
             && !wm.text.trim().is_empty()

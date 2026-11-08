@@ -18,14 +18,17 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use wordcraft_doc::control::{ControlEvent, ControlKind, control_events, pair_events};
+use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind};
 use wordcraft_doc::graphic::{Graphic, GraphicKind};
 use wordcraft_doc::numbering::{AbstractNum, Level, LevelSuffix, Num};
 use wordcraft_doc::para::NoteKind;
 use wordcraft_doc::para::OBJ;
+use wordcraft_doc::pattern::PagePattern;
 use wordcraft_doc::props::Rgb;
 use wordcraft_doc::props::VAlign;
 use wordcraft_doc::section::NumFormat;
 use wordcraft_doc::styles::{PartFormat, Style, StyleKind, StyleSheet, TablePart, TableStyleParts};
+use wordcraft_doc::wordart::GradStop;
 use wordcraft_doc::{
     Block, Blocks, Comment, Document, InlineObject, PagePicture, Paragraph, PartKind, Revision, RevisionKind, Zoom, ZoomFit, para_block,
 };
@@ -264,20 +267,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         lenient("customXml bibliography", r.read_bibliography(path, &mut seen_sources));
     }
 
-    if let Some(bg) = root.child("w:background").and_then(|b| b.attr("w:color")).and_then(Rgb::parse) {
-        r.doc.settings.page_color = Some(bg);
-    }
-    // A picture or texture fill: `w:background/v:background/v:fill` with a relationship id.
-    if let Some(fill) = root.child("w:background").and_then(|b| b.child("v:background")).and_then(|b| b.child("v:fill")) {
-        let rid = fill.attr("r:id").or_else(|| fill.attr("r:embed")).or_else(|| fill.attr("o:relid"));
-        if let Some(media) = rid.and_then(|id| r.media_for(&rels, id)) {
-            r.doc.settings.page_picture = Some(PagePicture {
-                media,
-                fill_type: fill.attr("type").unwrap_or("").chars().take(32).collect(),
-                title: fill.attr("o:title").unwrap_or("").chars().take(255).collect(),
-            });
-        }
-    }
+    read_page_background(&mut r, &root, &rels);
     if let Some(body) = root.child("w:body") {
         let mut sc = StoryCtx::default();
         let mut blocks = Blocks::new();
@@ -435,6 +425,63 @@ fn link_text_boxes(doc: &mut Document, mut links: Vec<(u32, u32, u32)>) {
             }
         }
     }
+}
+
+/// The page background: `w:background/@w:color`, then its VML fill (`v:background/v:fill`), a
+/// picture or texture, a gradient or a pattern (ECMA-376 §17.15.1.13 and VML's `fill`).
+fn read_page_background(r: &mut Reader<'_>, root: &El, rels: &Rels) {
+    let background = root.child("w:background");
+    let bg_color = background.and_then(|b| b.attr("w:color")).and_then(Rgb::parse);
+    if bg_color.is_some() {
+        r.doc.settings.page_color = bg_color;
+    }
+    let Some(fill) = background.and_then(|b| b.child("v:background")).and_then(|b| b.child("v:fill")) else { return };
+    let kind = fill.attr("type").unwrap_or("");
+    let transparency = fill.attr("opacity").map_or(0.0, opacity_percent);
+    if kind.eq_ignore_ascii_case("gradient") {
+        let start = fill.attr("color").and_then(Rgb::parse).or(bg_color).unwrap_or(Rgb::WHITE);
+        let end = fill.attr("color2").and_then(Rgb::parse).unwrap_or(start);
+        let angle = fill.attr("angle").and_then(|a| a.trim().parse::<f32>().ok()).filter(|a| a.is_finite()).unwrap_or(90.0);
+        let stops = vec![GradStop { pos: 0.0, color: start, transparency }, GradStop { pos: 100.0, color: end, transparency }];
+        let gradient =
+            Gradient { stops, kind: GradientKind::Linear { angle, scaled: false }, tile: None, rot_with_shape: false, flip: GradientFlip::None };
+        r.doc.settings.page_gradient = wordcraft_doc::fill::Fill::Gradient(Arc::new(gradient)).sanitized().and_then(|g| match g {
+            wordcraft_doc::fill::Fill::Gradient(g) => Some((*g).clone()),
+            _ => None,
+        });
+    } else if kind.eq_ignore_ascii_case("pattern") {
+        let preset: String = fill.attr("pattern").unwrap_or("").chars().take(64).collect();
+        if PagePattern::known(&preset) {
+            r.doc.settings.page_pattern = Some(PagePattern {
+                preset,
+                fore: fill.attr("color").and_then(Rgb::parse).or(bg_color).unwrap_or(Rgb::BLACK),
+                back: fill.attr("color2").and_then(Rgb::parse).unwrap_or(Rgb::WHITE),
+                transparency,
+            });
+        }
+    } else if let Some(media) =
+        fill.attr("r:id").or_else(|| fill.attr("r:embed")).or_else(|| fill.attr("o:relid")).and_then(|id| r.media_for(rels, id))
+    {
+        r.doc.settings.page_picture = Some(PagePicture {
+            media,
+            fill_type: kind.chars().take(32).collect(),
+            title: fill.attr("o:title").unwrap_or("").chars().take(255).collect(),
+            transparency,
+        });
+    }
+}
+
+/// VML `opacity` as percent *transparent*: `"0.75"` and `"75%"` are a quarter opaque, `"0"`
+/// (or nothing) opaque and `"1"` fully transparent, as Word's Fill Effects transparency slider.
+fn opacity_percent(v: &str) -> f32 {
+    let v = v.trim();
+    let (n, percent) = match v.strip_suffix('%') {
+        Some(p) => (p.trim().parse::<f32>().ok(), true),
+        None => (v.parse::<f32>().ok(), false),
+    };
+    let Some(n) = n.filter(|n| n.is_finite()) else { return 0.0 };
+    let transparent = if percent || n > 1.0 { 100.0 - n } else { 100.0 * (1.0 - n) };
+    transparent.clamp(0.0, 100.0)
 }
 
 /// Drop the drawing ids read with shapes, except those connectors are glued to (so a shape

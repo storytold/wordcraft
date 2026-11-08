@@ -299,14 +299,16 @@ fn page_picture_is_painted_behind_the_text() {
     let mut d = Document::new();
     d.media.insert("bg.png".into(), Arc::new(png));
     for kind in ["tile", "frame"] {
-        d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "bg.png".into(), fill_type: kind.into(), title: String::new() });
+        d.settings.page_picture =
+            Some(wordcraft_doc::PagePicture { media: "bg.png".into(), fill_type: kind.into(), title: String::new(), transparency: 0.0 });
         let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
         let img = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
         let i = ((300 * img.width + 300) * 4) as usize;
         assert_eq!(&img.pixels[i..i + 3], &[10, 200, 30], "{kind}");
     }
     // Centred once at its own size (8 px = 6 pt), the rest of the page paper.
-    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "bg.png".into(), fill_type: "center".into(), title: String::new() });
+    d.settings.page_picture =
+        Some(wordcraft_doc::PagePicture { media: "bg.png".into(), fill_type: "center".into(), title: String::new(), transparency: 0.0 });
     let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
     let img = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
     let px = |x: u32, y: u32| {
@@ -320,6 +322,62 @@ fn page_picture_is_painted_behind_the_text() {
     let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
     let img = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
     assert_eq!(&img.pixels[0..3], &[255, 255, 255]);
+}
+
+/// A gradient page background runs at its angle across the whole page.
+#[test]
+fn page_gradient_is_painted_left_to_right_and_top_to_bottom() {
+    use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind};
+    use wordcraft_doc::wordart::GradStop;
+    let mut d = Document::new();
+    d.settings.page_gradient = Some(Gradient {
+        stops: vec![
+            GradStop { pos: 0.0, color: Rgb(255, 0, 0), transparency: 0.0 },
+            GradStop { pos: 100.0, color: Rgb(0, 0, 255), transparency: 0.0 },
+        ],
+        kind: GradientKind::Linear { angle: 0.0, scaled: false },
+        tile: None,
+        rot_with_shape: false,
+        flip: GradientFlip::None,
+    });
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let img = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
+    let px = |x: u32, y: u32| {
+        let i = ((y * img.width + x) * 4) as usize;
+        [img.pixels[i], img.pixels[i + 1], img.pixels[i + 2]]
+    };
+    let (left, mid, right) = (px(2, 300), px(img.width / 2, 300), px(img.width - 3, 300));
+    assert!(left[0] > 200 && left[2] < 40, "left is red: {left:?}");
+    assert!(right[2] > 200 && right[0] < 40, "right is blue: {right:?}");
+    assert!(mid[0] > 80 && mid[2] > 80, "middle is between them: {mid:?}");
+    // 90° runs downwards instead.
+    if let Some(g) = d.settings.page_gradient.as_mut() {
+        g.kind = GradientKind::Linear { angle: 90.0, scaled: false };
+    }
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let img = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
+    let top = &img.pixels[((5 * img.width + 300) * 4) as usize..][..3];
+    let bottom = &img.pixels[(((img.height - 5) * img.width + 300) * 4) as usize..][..3];
+    assert!(top[0] > 200 && bottom[2] > 200, "top red, bottom blue: {top:?} {bottom:?}");
+}
+
+/// A pattern page background repeats its two colours over the page.
+#[test]
+fn page_pattern_is_painted_as_its_tile() {
+    let mut d = Document::new();
+    d.settings.page_pattern =
+        Some(wordcraft_doc::PagePattern { preset: "lgCheck".into(), fore: Rgb(20, 40, 60), back: Rgb(230, 240, 250), transparency: 0.0 });
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let img = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
+    let px = |x: u32, y: u32| {
+        let i = ((y * img.width + x) * 4) as usize;
+        [img.pixels[i], img.pixels[i + 1], img.pixels[i + 2]]
+    };
+    // The 8 pt tile's first and fourth quarters are ink, the other two its paper.
+    assert_eq!(px(2, 2), [20, 40, 60]);
+    assert_eq!(px(6, 6), [20, 40, 60]);
+    assert_eq!(px(6, 2), [230, 240, 250]);
+    assert_eq!(px(10, 10), [20, 40, 60], "the tile repeats");
 }
 
 /// Read Mode's Page Color: the reading paper replaces the document's page color and page
@@ -348,7 +406,8 @@ fn read_paper_replaces_the_page_background() {
     assert_eq!(background_at(&d, page, &white, 5.0, 5.0), Rgb::WHITE);
     let inverse = RenderOptions { read_paper: Some(Rgb::WHITE), dark: true, ..Default::default() };
     assert_eq!(background_at(&d, page, &inverse, 5.0, 5.0), Rgb(DARK_PAPER, DARK_PAPER, DARK_PAPER));
-    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "bg.png".into(), fill_type: "tile".into(), title: String::new() });
+    d.settings.page_picture =
+        Some(wordcraft_doc::PagePicture { media: "bg.png".into(), fill_type: "tile".into(), title: String::new(), transparency: 0.0 });
     assert_eq!(at(&render_page(&d, page, 1.0, &RenderOptions::default()), 300, 300), [10, 200, 30], "the page picture");
     assert_eq!(at(&render_page(&d, page, 1.0, &sepia), 300, 300), [0xE2, 0xD9, 0xD0]);
     // The text is drawn in its own color on sepia paper: its darkest pixel is within 8 levels of its value on white.

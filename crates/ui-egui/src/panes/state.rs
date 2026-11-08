@@ -47,6 +47,7 @@ pub fn open(app: &WordApp) -> Vec<Pane> {
         (Pane::Accessibility, v.accessibility_pane),
         (Pane::AltText, v.alt_text_pane),
         (Pane::FormatShape, v.format_shape_pane),
+        (Pane::FormatBackground, v.format_background_pane),
         (Pane::RestrictEditing, app.restrict.open),
         (Pane::Proofing, app.spelling_review.is_some()),
         (Pane::Comments, v.comments_pane),

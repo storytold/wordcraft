@@ -2795,7 +2795,8 @@ fn page_background_picture_round_trips() {
     let mut d = Document::new();
     d.settings.page_color = Some(Rgb(0xFF, 0xFF, 0xCC));
     d.media.insert("paper.png".into(), Arc::new(png.clone()));
-    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "paper.png".into(), fill_type: "tile".into(), title: "Paper".into() });
+    d.settings.page_picture =
+        Some(wordcraft_doc::PagePicture { media: "paper.png".into(), fill_type: "tile".into(), title: "Paper".into(), transparency: 0.0 });
     let r = rt(&d);
     let pic = r.settings.page_picture.as_ref().expect("picture kept");
     assert_eq!((pic.fill_type.as_str(), pic.title.as_str()), ("tile", "Paper"));
@@ -2803,6 +2804,49 @@ fn page_background_picture_round_trips() {
     assert_eq!(r.settings.page_color, d.settings.page_color);
     // Saved again, it is still there.
     assert!(rt(&r).settings.page_picture.is_some());
+}
+
+/// A gradient page background (`v:background/v:fill type="gradient"`) survives a save with its two
+/// stops, angle and transparency.
+#[test]
+fn page_background_gradient_round_trips() {
+    use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind};
+    use wordcraft_doc::wordart::GradStop;
+    let mut d = Document::new();
+    d.settings.page_color = Some(Rgb(0x10, 0x20, 0x30));
+    d.settings.page_gradient = Some(Gradient {
+        stops: vec![
+            GradStop { pos: 0.0, color: Rgb(0x10, 0x20, 0x30), transparency: 20.0 },
+            GradStop { pos: 100.0, color: Rgb(0xFA, 0xFB, 0xFC), transparency: 20.0 },
+        ],
+        kind: GradientKind::Linear { angle: 135.0, scaled: false },
+        tile: None,
+        rot_with_shape: false,
+        flip: GradientFlip::None,
+    });
+    let r = rt(&d);
+    let g = r.settings.page_gradient.as_ref().expect("gradient kept");
+    assert_eq!(g.stops.iter().map(|s| (s.pos, s.color)).collect::<Vec<_>>(), [(0.0, Rgb(0x10, 0x20, 0x30)), (100.0, Rgb(0xFA, 0xFB, 0xFC))]);
+    assert!(g.stops.iter().all(|s| (s.transparency - 20.0).abs() < 1.0), "{:?}", g.stops);
+    assert!(matches!(g.kind, GradientKind::Linear { angle, .. } if (angle - 135.0).abs() < 0.01), "{:?}", g.kind);
+    assert!(r.settings.page_picture.is_none() && r.settings.page_pattern.is_none());
+    // Saved again, it is still there.
+    assert!(rt(&r).settings.page_gradient.is_some());
+}
+
+/// A pattern page background (`v:background/v:fill type="pattern"`) survives a save with its
+/// preset and two colours.
+#[test]
+fn page_background_pattern_round_trips() {
+    let mut d = Document::new();
+    d.settings.page_pattern =
+        Some(wordcraft_doc::PagePattern { preset: "dkUpDiag".into(), fore: Rgb(0x33, 0x66, 0x99), back: Rgb(0xEE, 0xE8, 0xD8), transparency: 0.0 });
+    d.settings.page_color = Some(Rgb(0xEE, 0xE8, 0xD8));
+    let r = rt(&d);
+    let p = r.settings.page_pattern.as_ref().expect("pattern kept");
+    assert_eq!((p.preset.as_str(), p.fore, p.back), ("dkUpDiag", Rgb(0x33, 0x66, 0x99), Rgb(0xEE, 0xE8, 0xD8)));
+    assert!(r.settings.page_gradient.is_none() && r.settings.page_picture.is_none());
+    assert!(rt(&r).settings.page_pattern.is_some());
 }
 
 /// #2601: Drop Cap Options — a dropped cap with its lines, distance from the text and font, and

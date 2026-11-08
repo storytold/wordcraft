@@ -61,6 +61,8 @@ pub(crate) enum AfterPick {
     OpenDocument { document: u64 },
     /// Insert the picked picture, or replace the pending Change Picture target.
     Picture,
+    /// The Format Background pane's picture fill (a draft until Apply).
+    BackgroundPicture,
     /// Save the document there, then carry on.
     SaveAs { after: AfterSave, document: u64 },
     /// Save a copy there in this format (`pdf`, `docx`, `png`…).
@@ -255,6 +257,15 @@ impl WordApp {
                     return Ok(json!({"cancelled": true}));
                 };
                 self.insert_or_change_picture(json!({"path": path}))
+            }
+            AfterPick::BackgroundPicture => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                let (tile, transparency) = match &self.background.fill {
+                    crate::format_background::DraftFill::Picture { tile, transparency, .. } => (*tile, *transparency),
+                    _ => (false, 0.0),
+                };
+                self.background.fill = crate::format_background::DraftFill::Picture { path: Some(path), media: None, data: None, tile, transparency };
+                Ok(json!({"pending": "formatBackground"}))
             }
             AfterPick::Font => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
@@ -456,11 +467,22 @@ impl WordApp {
     }
 
     pub(crate) fn pick_picture(&mut self) {
+        self.background_picture_pending = false;
         if let Some(f) = &self.services.open_async {
             f("picture");
             return;
         }
         let _ = self.ask_file(FileDialogRequest::Open { purpose: "picture".into() }, AfterPick::Picture);
+    }
+
+    /// Pick the page background's picture (the pane's draft takes the picked file).
+    pub(crate) fn pick_background_picture(&mut self) {
+        if let Some(f) = &self.services.open_async {
+            self.background_picture_pending = true;
+            f("picture");
+            return;
+        }
+        let _ = self.ask_file(FileDialogRequest::Open { purpose: "picture".into() }, AfterPick::BackgroundPicture);
     }
 
     /// Pick a font file to add (Add Font…; web: it arrives through the inbox).

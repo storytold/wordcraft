@@ -1,7 +1,8 @@
 use super::text::GlyphPaint;
 use super::{
-    Draw, Exporter, Fill, FillRule, LineCap, LineJoin, LineStyle, PathBuilder, Rect, Rgb, ShapeKind, Size, Stroke, StrokeDash, Surface, Transform,
-    append_path, fill, grown, krilla, norm, ok, paint_fill, pdf_line_cap, rect_path, rgb, shape_effects, shape_path, vector_picture,
+    Draw, Exporter, Fill, FillRule, LineCap, LineJoin, LineStyle, NormalizedF32, PathBuilder, Rect, Rgb, ShapeKind, Size, Stroke, StrokeDash,
+    Surface, Transform, append_path, fill, grown, krilla, norm, ok, paint_fill, pdf_line_cap, rect_path, rgb, shape_effects, shape_path,
+    vector_picture,
 };
 use wordcraft_doc::picfx::PicFx;
 
@@ -273,6 +274,134 @@ impl Exporter<'_> {
             }
         }
         s.set_stroke(None);
+    }
+
+    /// The page's linear gradient fill, its stops' transparencies carried into the shading.
+    pub(super) fn page_gradient(&mut self, s: &mut Surface, g: &wordcraft_doc::fill::Gradient, w: f32, h: f32) {
+        use wordcraft_doc::fill::GradientKind;
+        if !(ok(w) && ok(h) && w > 0.0 && h > 0.0) {
+            return;
+        }
+        let Some(p) = rect_path(&Rect::new(0.0, 0.0, w, h)) else { return };
+        let angle = match g.kind {
+            GradientKind::Linear { angle, .. } if angle.is_finite() => angle,
+            _ => 90.0,
+        };
+        let (dx, dy) = (angle.to_radians().cos(), angle.to_radians().sin());
+        let len = w * dx.abs() + h * dy.abs();
+        let (cx, cy) = (w / 2.0, h / 2.0);
+        let stops: Vec<krilla::paint::Stop> = g
+            .stops
+            .iter()
+            .filter(|s| s.pos.is_finite())
+            .map(|s| krilla::paint::Stop {
+                offset: norm(s.pos / 100.0),
+                color: rgb::Color::new(s.color.0, s.color.1, s.color.2).into(),
+                opacity: norm(1.0 - s.transparency / 100.0),
+            })
+            .collect();
+        if stops.len() < 2 {
+            return;
+        }
+        let paint: krilla::paint::Paint = krilla::paint::LinearGradient {
+            x1: cx - dx * len / 2.0,
+            y1: cy - dy * len / 2.0,
+            x2: cx + dx * len / 2.0,
+            y2: cy + dy * len / 2.0,
+            transform: Transform::default(),
+            spread_method: krilla::paint::SpreadMethod::Pad,
+            stops,
+            anti_alias: true,
+        }
+        .into();
+        s.set_fill(Some(Fill { paint, opacity: NormalizedF32::ONE, rule: FillRule::NonZero }));
+        s.draw_path(&p);
+        s.set_fill(None);
+    }
+
+    /// The page's pattern fill: the preset's unit tile at 8 points, repeated over the page (the
+    /// same geometry the raster renderer uses).
+    pub(super) fn page_pattern(&mut self, s: &mut Surface, p: &wordcraft_doc::PagePattern, w: f32, h: f32) {
+        const TILE: f32 = 8.0;
+        const MAX_TILES: f32 = 40_000.0;
+        if !(ok(w) && ok(h) && w > 0.0 && h > 0.0) {
+            return;
+        }
+        let p = p.sanitized();
+        let alpha = 1.0 - p.transparency / 100.0;
+        if alpha <= 0.0 {
+            return;
+        }
+        let Some(back) = rect_path(&Rect::new(0.0, 0.0, w, h)) else { return };
+        s.set_fill(Some(fill(p.back, alpha)));
+        s.draw_path(&back);
+        s.set_fill(None);
+        let (cols, rows) = ((w / TILE).ceil(), (h / TILE).ceil());
+        if !(cols.is_finite() && rows.is_finite()) || cols * rows > MAX_TILES {
+            return;
+        }
+        let tile = p.tile();
+        let (cols, rows) = (cols.max(1.0) as usize, rows.max(1.0) as usize);
+        if !tile.rects.is_empty() {
+            let mut pb = PathBuilder::new();
+            for ty in 0..rows {
+                for tx in 0..cols {
+                    let (ox, oy) = (tx as f32 * TILE, ty as f32 * TILE);
+                    for [x, y, rw, rh] in &tile.rects {
+                        if let Some(r) = krilla::geom::Rect::from_xywh(ox + x * TILE, oy + y * TILE, rw * TILE, rh * TILE) {
+                            pb.push_rect(r);
+                        }
+                    }
+                }
+            }
+            if let Some(path) = pb.finish() {
+                s.set_fill(Some(fill(p.fore, alpha)));
+                s.draw_path(&path);
+                s.set_fill(None);
+            }
+        }
+        if !tile.dots.is_empty() {
+            // Each dot is its own small path: krilla paths aren't merged here, and a preset has
+            // at most sixteen dots a tile.
+            s.set_fill(Some(fill(p.fore, alpha)));
+            for ty in 0..rows {
+                for tx in 0..cols {
+                    let (ox, oy) = (tx as f32 * TILE, ty as f32 * TILE);
+                    for [cx, cy, r] in &tile.dots {
+                        let rect = Rect::new(ox + cx * TILE - r * TILE, oy + cy * TILE - r * TILE, 2.0 * r * TILE, 2.0 * r * TILE);
+                        if let Some(path) = shape_path(ShapeKind::Ellipse, &rect, None) {
+                            s.draw_path(&path);
+                        }
+                    }
+                }
+            }
+            s.set_fill(None);
+        }
+        if let Some(width) = tile.strokes.first().map(|s| s[4]) {
+            let stroke = Stroke {
+                paint: rgb::Color::new(p.fore.0, p.fore.1, p.fore.2).into(),
+                width: (width * TILE).clamp(0.05, 8.0),
+                opacity: norm(alpha),
+                dash: None,
+                line_cap: LineCap::Butt,
+                ..Default::default()
+            };
+            for ty in 0..rows {
+                for tx in 0..cols {
+                    let (ox, oy) = (tx as f32 * TILE, ty as f32 * TILE);
+                    let mut pb = PathBuilder::new();
+                    for [x0, y0, x1, y1, _] in &tile.strokes {
+                        pb.move_to(ox + x0 * TILE, oy + y0 * TILE);
+                        pb.line_to(ox + x1 * TILE, oy + y1 * TILE);
+                    }
+                    if let Some(path) = pb.finish() {
+                        s.set_stroke(Some(stroke.clone()));
+                        s.draw_path(&path);
+                        s.set_stroke(None);
+                    }
+                }
+            }
+        }
     }
 
     /// The page's picture or texture fill: tiled at 96 dpi for a `tile` fill (when that is a sane

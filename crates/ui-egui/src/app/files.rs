@@ -453,6 +453,20 @@ impl WordApp {
                 self.run("font.add", json!({"name": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}))
             } else if list {
                 self.load_recipients(json!({"csv": wordcraft_engine::io::decode_text(&bytes)}))
+            } else if img && std::mem::take(&mut self.background_picture_pending) {
+                // Format Background's picker: the image becomes the pane's draft picture.
+                let (tile, transparency) = match &self.background.fill {
+                    crate::format_background::DraftFill::Picture { tile, transparency, .. } => (*tile, *transparency),
+                    _ => (false, 0.0),
+                };
+                self.background.fill = crate::format_background::DraftFill::Picture {
+                    path: None,
+                    media: None,
+                    data: Some(wordcraft_engine::cmd::insert::base64_encode(&bytes)),
+                    tile,
+                    transparency,
+                };
+                Ok(json!({"pending": "formatBackground"}))
             } else if img {
                 self.caret_after_placed_picture(placed_picture);
                 let r = self.insert_or_change_picture(json!({"data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}));

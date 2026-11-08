@@ -59,6 +59,7 @@ pub enum Pane {
     Accessibility,
     AltText,
     FormatShape,
+    FormatBackground,
     RestrictEditing,
     Proofing,
     Comments,
@@ -75,6 +76,7 @@ impl Pane {
             Self::Accessibility => "Accessibility",
             Self::AltText => "Alt Text",
             Self::FormatShape => "Format Shape",
+            Self::FormatBackground => "Format Background",
             Self::RestrictEditing => "Restrict Editing",
             Self::Proofing => "Proofing",
             Self::Comments => "Comments",
@@ -91,6 +93,7 @@ impl Pane {
             Self::Accessibility => (Edge::End, 280.0),
             Self::AltText => (Edge::End, 260.0),
             Self::FormatShape => (Edge::End, 280.0),
+            Self::FormatBackground => (Edge::End, 290.0),
             Self::RestrictEditing => (Edge::End, 270.0),
             Self::Proofing => (Edge::End, 400.0),
             Self::Comments => (Edge::End, 290.0),
@@ -109,13 +112,14 @@ impl Pane {
             Self::Accessibility => "accessibility",
             Self::AltText => "altText",
             Self::FormatShape => "formatShape",
+            Self::FormatBackground => "formatBackground",
             Self::RestrictEditing => "restrictEditing",
             Self::Proofing => "proofing",
             Self::Comments => "comments",
         }
     }
 
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 12] = [
         Self::SmartArtText,
         Self::Navigation,
         Self::Clipboard,
@@ -124,6 +128,7 @@ impl Pane {
         Self::Accessibility,
         Self::AltText,
         Self::FormatShape,
+        Self::FormatBackground,
         Self::RestrictEditing,
         Self::Proofing,
         Self::Comments,
@@ -144,6 +149,7 @@ impl Pane {
             Self::Accessibility => Some("view.accessibilityPane"),
             Self::AltText => Some("view.altTextPane"),
             Self::FormatShape => Some("view.formatShapePane"),
+            Self::FormatBackground => Some("view.formatBackgroundPane"),
             Self::Comments => Some("view.commentsPane"),
             Self::RestrictEditing | Self::Proofing => None,
         }
@@ -165,6 +171,9 @@ impl PaneContent<Pane> for Content<'_> {
             Pane::StyleInspector => inspector(app, ui),
             Pane::Accessibility => crate::a11y_pane::accessibility(app, ui),
             Pane::AltText => crate::a11y_pane::alt_text(app, ui),
+            Pane::FormatBackground => {
+                egui::ScrollArea::vertical().show(ui, |ui| crate::format_background::pane(app, ui));
+            }
             Pane::FormatShape => {
                 egui::ScrollArea::vertical().show(ui, |ui| crate::format_shape::pane(app, ui));
             }
