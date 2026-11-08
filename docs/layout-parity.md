@@ -284,7 +284,21 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 The front-of-text opt-out is retained from the earlier implementation; this patch does not establish native Word equivalence between front-of-text and behind-text pictures. Synthetic placement tests cover the two paths, while a new native comparison of those wrap modes remains open. Turned-cell layouts disable horizontal cell confinement because their frame x axis becomes page y.
 
+## Native ink rendering primitives
+
+> **Status:** 2026-11-08 · Synthetic raster and PDF controls; no new native Word qualification.
+
+`Draw::NativeInk` accepts finite positive widths below one million points without changing
+`Draw::Ink`'s legacy 0.25–200 pt clamp or nonfinite-width fallback. `Draw::MaskInk` composites
+binary-component mask pens with Multiply on light pages/PDF and complementary Screen on dark
+pages. Raster clips containing a mask use non-isolated paths so the mask sees its backdrop;
+ordinary clips retain isolated layers. Ancestor clip detection walks the display list without
+recursion or copying geometry. Header/body opacity layers remain isolated. These are rendering
+primitives only: InkML parsing, placement and model integration are separate work.
+
 ## Revision history
+
+> 2026-11-08 · Dedicated native stroke widths and binary mask rendering (#5731 split). Regression controls retain legacy freeform widths and ordinary clipping; no readiness change.
 
 > 2026-11-05 · Arabic letters join across a change of formatting and past hidden or deleted text (#4093): each run is shaped with the text shown on either side of it.
 

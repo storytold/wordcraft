@@ -1,5 +1,7 @@
 # WordCraft roadmap
 
+> **Ink renderer primitives update:** 2026-11-08 · Native stroke widths and binary mask blending have dedicated display operations; ordinary clips and authored/freeform ink retain their existing behavior. InkML import is a separate change.
+
 > **Retained XML update:** 2026-11-08 · Kept InkML/MathML markup declares its namespaces in standalone embedded XML and content controls. Separate from native ink rendering; synthetic round-trip evidence only.
 
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
@@ -150,6 +152,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
    (20–30 h).
 
 ## Progress log
+
+- 2026-11-08: Ink renderer primitives (#5731 split): separate native-width strokes from legacy clamped ink, support binary mask compositing, and use backdrop-preserving clips only where a mask needs them. Original raster/PDF controls cover legacy widths and ordinary clips. No InkML decoder in this change.
 
 - 2026-11-08: Retained InkML/MathML XML keeps namespace declarations across standalone embedding and repeated content-control saves (#5731 split). No decoder or renderer changes; readiness unchanged.
 
@@ -862,6 +866,8 @@ Section page-numbering settings preserve `w:chapStyle` values across the full un
 MATH glyphs that reference the same construction now share its immutable variants and assembly data (#3630). Glyph mappings, values and the existing partial-record fallback stay unchanged. Repeated glyph IDs keep their last valid reference without retaining superseded constructions. Distinct overlapping constructions and assembly-only sharing remain separate.
 
 ## Revision history
+
+> 2026-11-08 · Dedicated native ink rendering primitives, with unchanged legacy widths and ordinary clip behavior (#5731 split); readiness unchanged.
 
 > 2026-11-08 · Retained InkML/MathML namespace preservation (#5731 split); no readiness change.
 

@@ -614,7 +614,24 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
         Draw::Image { .. } => draw_image(ctx, &fr, it),
         Draw::Path { .. } => draw_path(ctx, &fr, it),
         Draw::Art { .. } => draw_art(ctx, &fr, it),
-        Draw::Ink { .. } => draw_ink(ctx, &fr, it),
+        Draw::Ink { .. } | Draw::NativeInk { .. } => draw_ink(ctx, &fr, it),
+        Draw::MaskInk { segs, color: c, alpha } => {
+            if *c == Rgb::WHITE {
+                return;
+            }
+            let path = wordcraft_layout::display::seg_path(segs);
+            if path.elements().is_empty() || !path_extent_ok(view, &path) {
+                return;
+            }
+            ctx.set_transform(view);
+            // Dark pages invert the mask operation: screen with the complementary binary color
+            // keeps white masks neutral while making black masks visible on dark paper.
+            let (mode, pen) = if opts.dark { (peniko::Mix::Screen, Rgb(255 - c.0, 255 - c.1, 255 - c.2)) } else { (peniko::Mix::Multiply, *c) };
+            ctx.push_blend_layer(mode.into());
+            ctx.set_paint(color(pen, *alpha));
+            ctx.fill_path(&path);
+            ctx.pop_layer();
+        }
         Draw::Shape { .. } => draw_shape(ctx, &fr, it),
         Draw::Clip { rect, items } => {
             let r = kurbo_rect(rect);
@@ -622,12 +639,23 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 return;
             }
             ctx.set_transform(view);
-            ctx.push_clip_layer(&r.to_path(0.1));
+            // Only mask ink needs the actual backdrop through its ancestor clips.
+            // Ordinary content keeps the existing isolated layer behavior.
+            let backdrop = contains_mask_ink(items);
+            if backdrop {
+                ctx.push_clip_path(&r.to_path(0.1));
+            } else {
+                ctx.push_clip_layer(&r.to_path(0.1));
+            }
             let local = r.intersect(*visible);
             for it in items {
                 draw(ctx, doc, it, view, &local, opts);
             }
-            ctx.pop_layer();
+            if backdrop {
+                ctx.pop_clip_path();
+            } else {
+                ctx.pop_layer();
+            }
         }
         Draw::Turned { x, y, turn, items } => {
             let m = Affine::new(Draw::turn_matrix(*turn, *x, *y).map(f64::from));
@@ -899,16 +927,33 @@ fn draw_art(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
     }
 }
 
+/// Inspect existing display-list wrappers without recursion or copying geometry.
+fn contains_mask_ink(items: &[Draw]) -> bool {
+    let mut pending = vec![items];
+    while let Some(items) = pending.pop() {
+        for item in items {
+            match item {
+                Draw::MaskInk { .. } => return true,
+                Draw::Figure { draws: items, .. } | Draw::Clip { items, .. } | Draw::Rotated { items, .. } | Draw::Turned { items, .. } => {
+                    pending.push(items);
+                }
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
 fn draw_ink(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
-    let Draw::Ink { pts, color: c, width, alpha } = it else { return };
+    let (Draw::Ink { pts, color: c, width: raw_width, alpha } | Draw::NativeInk { pts, color: c, width: raw_width, alpha }) = it else { return };
+    let Some(width) = it.ink_width() else { return };
     let Some(path) = ink_path(pts) else { return };
-    if !path.bounding_box().inflate(*width as f64, *width as f64).overlaps(*fr.visible) {
+    if !path.bounding_box().inflate(*raw_width as f64, *raw_width as f64).overlaps(*fr.visible) {
         return;
     }
     ctx.set_transform(fr.view);
     ctx.set_paint(color(fr.opts.ink(*c), *alpha));
-    let w = if width.is_finite() { width.clamp(0.25, 200.0) } else { 1.0 };
-    ctx.set_stroke(kurbo::Stroke::new(w as f64).with_caps(kurbo::Cap::Round).with_join(kurbo::Join::Round));
+    ctx.set_stroke(kurbo::Stroke::new(width as f64).with_caps(kurbo::Cap::Round).with_join(kurbo::Join::Round));
     ctx.stroke_path(&path);
 }
 

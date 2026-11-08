@@ -970,6 +970,36 @@ fn turned_cell_text_exports_as_text() {
 }
 
 #[test]
+fn legacy_freeform_ink_keeps_its_pdf_width_clamp() {
+    use wordcraft_doc::{
+        freeform::{Freeform, InkTool},
+        para::ShapeKind,
+        props::Rgb,
+    };
+    let mut doc = Document::new();
+    let object = InlineObject::Shape {
+        kind: ShapeKind::Freeform,
+        w: 100.0,
+        h: 100.0,
+        fill: None,
+        stroke: Some(Rgb::BLACK),
+        stroke_width: 400.0,
+        float: Default::default(),
+        story: None,
+        effects: Default::default(),
+        extra: Default::default(),
+        freeform: Some(Arc::new(Freeform::ink(InkTool::Pen, 100.0, 100.0, vec![[0.0, 0.0], [100.0, 100.0]]))),
+    };
+    doc.insert_object(&wordcraft_doc::Pos::body(0, 0), object, &Default::default()).unwrap();
+    let bytes = export(&doc, &PdfOptions { compress: false, ..Default::default() }).unwrap();
+    let raw = String::from_utf8_lossy(&bytes);
+    let widths: Vec<_> =
+        raw.split_ascii_whitespace().collect::<Vec<_>>().windows(2).filter(|p| p[1] == "w").filter_map(|p| p[0].parse::<f32>().ok()).collect();
+    assert!(widths.contains(&200.0), "{widths:?}");
+    assert!(!widths.contains(&400.0));
+}
+
+#[test]
 fn inline_chart_is_a_figure_with_its_text_inside_it() {
     use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
     use wordcraft_doc::props::Rgb;

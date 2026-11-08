@@ -108,6 +108,11 @@ pub enum Draw {
     /// An ink stroke: a line through `pts` (page points) with round ends and joins, `width`
     /// wide, in `color` at opacity `alpha`.
     Ink { pts: Vec<(f32, f32)>, color: Rgb, width: f32, alpha: f32 },
+    /// Imported ink centerlines use their finite positive width without the legacy
+    /// freeform stroke clamp; kept separate so authored strokes retain their behavior.
+    NativeInk { pts: Vec<(f32, f32)>, color: Rgb, width: f32, alpha: f32 },
+    /// Multiply-composited outlines for binary-component InkML mask pens.
+    MaskInk { segs: Vec<PathSeg>, color: Rgb, alpha: f32 },
     /// A vector path (a chart's or diagram's polygons, slices, lines): filled, then stroked.
     Path { segs: Vec<PathSeg>, fill: Option<Paint>, stroke: Option<Rgb>, stroke_width: f32, dash: Vec<f32>, cap: wordcraft_doc::connector::LineCap },
     /// An inline chart, diagram or described shape's draws, as one figure with its alt text (for
@@ -135,6 +140,16 @@ pub enum Draw {
 }
 
 impl Draw {
+    /// Effective ink width shared by screen and PDF. Imported strokes may be thin or
+    /// wide, while existing freeform strokes keep their historical clamp and fallback.
+    pub fn ink_width(&self) -> Option<f32> {
+        match self {
+            Self::Ink { width, .. } => Some(if width.is_finite() { width.clamp(0.25, 200.0) } else { 1.0 }),
+            Self::NativeInk { width, .. } if width.is_finite() && *width > 0.0 && *width < 1_000_000.0 => Some(*width),
+            _ => None,
+        }
+    }
+
     /// The affine map (a, b, c, d, e, f: x' = a·x + c·y + e, y' = b·x + d·y + f) from a frame
     /// turned `turn` with its origin at page point (`x`, `y`) to the page.
     pub fn turn_matrix(turn: TextDirection, x: f32, y: f32) -> [f32; 6] {

@@ -64,7 +64,21 @@ impl Exporter<'_> {
                 s.set_fill(None);
                 s.set_stroke(None);
             }
-            Draw::Ink { pts, color, width, alpha } => {
+            Draw::MaskInk { segs, color, alpha } => {
+                let mut pb = PathBuilder::new();
+                append_path(&mut pb, &wordcraft_layout::display::seg_path(segs));
+                let Some(path) = pb.finish() else {
+                    return;
+                };
+                s.push_blend_mode(krilla::blend::BlendMode::Multiply);
+                s.set_stroke(None);
+                s.set_fill(Some(fill(*color, *alpha)));
+                s.draw_path(&path);
+                s.set_fill(None);
+                s.pop();
+            }
+            Draw::Ink { pts, color, alpha, .. } | Draw::NativeInk { pts, color, alpha, .. } => {
+                let Some(width) = d.ink_width() else { return };
                 let mut pb = PathBuilder::new();
                 let mut used = 0usize;
                 let mut last = (0.0, 0.0);
@@ -85,7 +99,7 @@ impl Exporter<'_> {
                 s.set_fill(None);
                 s.set_stroke(Some(Stroke {
                     paint: rgb::Color::new(color.0, color.1, color.2).into(),
-                    width: if width.is_finite() { width.clamp(0.25, 200.0) } else { 1.0 },
+                    width,
                     opacity: norm(*alpha),
                     line_cap: LineCap::Round,
                     line_join: LineJoin::Round,

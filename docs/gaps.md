@@ -1,5 +1,7 @@
 # Where WordCraft falls short of Word
 
+> **Ink renderer primitives update:** 2026-11-08 · Mask blending and native-width display operations are available independently of import. Ordinary clipping and legacy ink widths are unchanged; no ranked gap closed.
+
 > **Retained XML update:** 2026-11-08 · InkML/MathML namespace declarations survive retained-markup saves. No ranked gap closed or readiness estimate changed; native ink rendering remains separate.
 
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
@@ -182,6 +184,8 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. Accepted long margin values also stay inside the field after focus leaves; their accepted range, units and parsing are unchanged.
 
 ## Revision history
+
+> 2026-11-08 · Renderer groundwork (#5731 split): native-width strokes and binary mask blending, with mask-only non-isolated clips. Import and Word-file qualification remain separate; no readiness change.
 
 > 2026-11-08 · Retained XML namespaces (#5731 split): standalone embedded markup and content-control properties retain canonical InkML/MathML declarations. Synthetic regressions only; no ranked gap closed.
 
