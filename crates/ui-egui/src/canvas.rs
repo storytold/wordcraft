@@ -64,7 +64,7 @@ use navigation::{scrollbar_page_tip, viewed_page};
 use pages::{DRAWING_GRID_MAX_LINES, DRAWING_GRID_MIN_PX};
 pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options};
 use pages::{
-    drawing_grid, drawing_grid_step, gridline_cells, page_image, page_key, page_render_options, page_shows, shown_layout, texel_aligned_rect,
+    drawing_grid, drawing_grid_step, gridline_segments, page_image, page_key, page_render_options, page_shows, shown_layout, texel_aligned_rect,
     view_key, visible_tiles,
 };
 pub(crate) use reading::turn_read_page;
@@ -1180,14 +1180,12 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
         }
         draw_page_gridlines(app, &painter, t, page, visual_sr, page_scale);
         // The current header/footer's cells have editing guides; explicit View Gridlines
-        // still outlines every table. Neither kind of guide is part of the document.
+        // still outlines every table. Both are drawn only where no border is (#5967), and
+        // neither kind of guide is part of the document.
         if app.session.view.table_gridlines || grid_story.is_some() {
-            for rect in gridline_cells(page, app.session.view.table_gridlines, grid_story) {
-                let r = Rect::from_min_size(
-                    pos2(visual_sr.min.x + rect.x * page_scale, visual_sr.min.y + rect.y * page_scale),
-                    vec2(rect.w * page_scale, rect.h * page_scale),
-                );
-                painter.rect_stroke(r, 0.0, Stroke::new(0.5, t.blue.linear_multiply(0.6)), egui::StrokeKind::Middle);
+            let at = |p: wordcraft_geom::Point| pos2(visual_sr.min.x + p.x * page_scale, visual_sr.min.y + p.y * page_scale);
+            for (a, b) in gridline_segments(page, app.session.view.table_gridlines, grid_story) {
+                painter.line_segment([at(a), at(b)], Stroke::new(0.5, t.blue.linear_multiply(0.6)));
             }
         }
     }

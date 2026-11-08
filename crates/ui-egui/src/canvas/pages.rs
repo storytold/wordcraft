@@ -171,6 +171,70 @@ pub(super) fn gridline_cells(page: &Page, all: bool, editing: Option<StoryRef>) 
     })
 }
 
+/// The table gridline segments to draw on a page, in document points: the edges of the
+/// [`gridline_cells`] minus the parts a printed border already draws. Word shows gridlines only
+/// where a cell has no border; drawn over a border, the thin blue guide tinted every bordered
+/// table blue and made its lines look uneven when zoomed out (#5967).
+pub(super) fn gridline_segments(page: &Page, all: bool, editing: Option<StoryRef>) -> Vec<(wordcraft_geom::Point, wordcraft_geom::Point)> {
+    use wordcraft_geom::Point;
+    // A rule this close to a cell edge (points) is drawn on it.
+    const ON_EDGE: f32 = 0.25;
+    // Rules by the line they run along (horizontal or not, coordinate in quarter points), so
+    // each cell edge looks only at the rules on its own line. Body rules cannot cover header or
+    // footer cells, so they are left out when only those are outlined, as in `gridline_cells`.
+    let key = |c: f32| (c * 4.0).round() as i64;
+    let body = if all { page.items.as_slice() } else { &[] };
+    let mut rules: std::collections::HashMap<(bool, i64), Vec<(f32, f32, f32)>> = std::collections::HashMap::new();
+    for it in body.iter().chain(&page.header).chain(&page.footer) {
+        let Placed::Rule { x0, y0, x1, y1, border } = it else { continue };
+        if !border.is_visible() {
+            continue;
+        }
+        let (horizontal, c0, c1, s0, s1) = if (y0 - y1).abs() <= ON_EDGE { (true, *y0, *y1, *x0, *x1) } else { (false, *x0, *x1, *y0, *y1) };
+        if (c0 - c1).abs() <= ON_EDGE && c0.is_finite() {
+            rules.entry((horizontal, key(c0))).or_default().push((c0, s0.min(s1), s0.max(s1)));
+        }
+    }
+    // The parts of [a, b] along a line at `at` that no rule on the same line covers; `horizontal`
+    // picks rules running along x at y = `at`, otherwise along y at x = `at`.
+    let uncovered = |horizontal: bool, at: f32, a: f32, b: f32| -> Vec<(f32, f32)> {
+        let k = key(at);
+        let mut covers: Vec<(f32, f32)> = (k - 1..=k + 1)
+            .filter_map(|k| rules.get(&(horizontal, k)))
+            .flatten()
+            .filter(|(c, _, _)| (c - at).abs() <= ON_EDGE)
+            .map(|&(_, s0, s1)| (s0, s1))
+            .collect();
+        covers.sort_by(|p, q| p.0.total_cmp(&q.0));
+        let mut out = Vec::new();
+        let mut from = a;
+        for (c0, c1) in covers {
+            if c0 > from + ON_EDGE {
+                out.push((from, c0.min(b)));
+            }
+            from = from.max(c1);
+            if from >= b {
+                break;
+            }
+        }
+        if from + ON_EDGE < b {
+            out.push((from, b));
+        }
+        out
+    };
+    let mut segs = Vec::new();
+    for r in gridline_cells(page, all, editing) {
+        let (l, t, rt, bt) = (r.x, r.y, r.x + r.w, r.y + r.h);
+        for y in [t, bt] {
+            segs.extend(uncovered(true, y, l, rt).into_iter().map(|(a, b)| (Point::new(a, y), Point::new(b, y))));
+        }
+        for x in [l, rt] {
+            segs.extend(uncovered(false, x, t, bt).into_iter().map(|(a, b)| (Point::new(x, a), Point::new(x, b))));
+        }
+    }
+    segs
+}
+
 /// The drawing grid's spacing in points at a screen scale: the document's spacing (`w:drawingGrid*Spacing`;
 /// ECMA-376's 1/8 inch when it doesn't say), doubled until the lines are at least
 /// [`DRAWING_GRID_MIN_PX`] apart on screen.
