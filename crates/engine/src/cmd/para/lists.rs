@@ -1,6 +1,10 @@
 use super::format::fmt;
-use super::{CmdError, CmdResult, LineSpacing, ListKind, NumRef, ParaProps, Session, Style, StyleKind, Value, json, p, sel_result};
+use super::{CmdError, CmdResult, LineSpacing, ListKind, NumRef, ParaProps, Pos, Session, Style, StyleKind, Value, json, p, sel_result};
+use std::collections::HashMap;
 use std::sync::Arc;
+use wordcraft_doc::Path;
+use wordcraft_doc::numbering::Counters;
+use wordcraft_doc::section::NumFormat;
 
 /// Toggle lists using effective paragraph numbering; an explicit off request removes numbering.
 pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
@@ -61,7 +65,100 @@ pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
         if p.style.is_none() || p.style.as_deref() == Some("Normal") {
             p.style = Some("ListParagraph".into());
         }
-    })
+    })?;
+    strip_typed_labels(s);
+    sel_result(s)
+}
+
+/// A list label typed at a paragraph's start, as [`strip_typed_labels`] reads it: how many bytes
+/// of the paragraph it takes (the label and the space or tab after it, and any leading spaces or
+/// tabs before it) and what it spells (`1.`, `a)`, `1.1.`).
+fn typed_label(text: &str) -> Option<(usize, &str)> {
+    let start = text.len().checked_sub(text.trim_start_matches([' ', '\t']).len())?;
+    let rest = text.get(start..)?;
+    let mut end = 0usize;
+    let mut separator = false;
+    for c in rest.chars() {
+        match c {
+            c if c.is_ascii_alphanumeric() => end = end.saturating_add(1),
+            ')' => {
+                end = end.saturating_add(1);
+                separator = true;
+                break;
+            }
+            '.' => {
+                end = end.saturating_add(1);
+                separator = true;
+            }
+            _ => break,
+        }
+    }
+    // A label is a letter or digit run closed by "." or ")", then a space or tab and some text
+    // (a paragraph holding only its typed label stays as it is, as in Word).
+    if end == 0 || !separator {
+        return None;
+    }
+    let after = rest.get(end..)?;
+    if !after.starts_with([' ', '\t']) || after.trim_start_matches([' ', '\t']).is_empty() {
+        return None;
+    }
+    // The whitespace after the label goes with it: Word leaves the text against the list's tab,
+    // not a stray space.
+    let spaces = after.len().saturating_sub(after.trim_start_matches([' ', '\t']).len());
+    let taken = start.saturating_add(end).saturating_add(spaces);
+    let label = rest.get(..end)?;
+    (taken <= text.len()).then_some((taken, label))
+}
+
+/// Remove a typed label in front of paragraphs the applied list numbers the same way, as Word
+/// does: `1. alpha` numbered becomes `1. alpha`, not `1. 1. alpha` (#6017).
+///
+/// A label the list does not give that paragraph — a jump of the author's, `2.` where the list
+/// says `1.` — stays as text, which is also what Word does with it. Nothing is removed from a
+/// bulleted list: Word keeps a typed `-` or `+` when Bullets is applied.
+fn strip_typed_labels(s: &mut Session) {
+    let story = s.sel.focus.story;
+    let typed: Vec<(Path, usize, String)> = crate::cmd::selected_paths(s)
+        .into_iter()
+        .filter_map(|path| {
+            let p = s.doc.para(story, &path)?;
+            let (start, label) = typed_label(&p.text)?;
+            Some((path, start, label.to_lowercase()))
+        })
+        .collect();
+    if typed.is_empty() {
+        return;
+    }
+    // What each paragraph's list label reads, counted in document order as the page does.
+    let mut counters = Counters::default();
+    let mut labels: HashMap<Path, String> = HashMap::new();
+    for path in s.doc.para_paths(story) {
+        let Some(p) = s.doc.para(story, &path) else { continue };
+        let n = p.props.numbering.or_else(|| s.doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0);
+        if let Some(n) = n
+            && let Some((label, def)) = counters.next_label(&s.doc.numbering, n.num, n.level)
+            && def.format != NumFormat::Bullet
+        {
+            labels.insert(path, label.to_lowercase());
+        }
+    }
+    let remove: Vec<(Path, usize)> =
+        typed.into_iter().filter(|(path, _, label)| labels.get(path) == Some(label)).map(|(path, start, _)| (path, start)).collect();
+    if remove.is_empty() {
+        return;
+    }
+    // The label goes through the ordinary deletion, so Track Changes marks it like any edit.
+    let saved = s.sel.clone();
+    for (path, len) in remove {
+        s.sel = crate::Selection { anchor: Pos { story, path: path.clone(), off: 0 }, focus: Pos { story, path, off: len } };
+        // Refused (a locked control, say): the paragraph keeps its text and only the list is
+        // applied, rather than the whole command failing after the numbering was written.
+        let _ = crate::cmd::delete_selection_effect(s);
+        // Each deletion leaves the caret where it ended, which the next one replaces anyway.
+    }
+    // The removed text shortened the paragraphs, so the caller's caret may no longer fit.
+    s.sel = saved;
+    s.clamp_selection();
 }
 
 pub(super) fn restart_numbering(s: &mut Session, _: &Value) -> CmdResult {
