@@ -2748,6 +2748,38 @@ fn autofit_contents_sizes_columns_to_their_text() {
     assert!(w.is_some_and(|w| (w - g[0]).abs() < 0.5), "{w:?} vs {g:?}");
 }
 
+/// AutoFit Contents fits a table indented by its style into the room right of that indent, as
+/// it does for a table's own indent: long text doesn't run the table past the right margin.
+#[test]
+fn autofit_contents_leaves_room_for_a_style_indent() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    run(&mut s, "text.insert", json!({"text": "A"}));
+    run(&mut s, "text.tab", json!({}));
+    run(
+        &mut s,
+        "text.insert",
+        json!({"text": "This cell holds a long sentence that would wrap many times in half of the page width, so it takes all the room there is."}),
+    );
+    std::sync::Arc::make_mut(&mut s.doc.styles).upsert(wordcraft_doc::styles::Style {
+        id: "Indented".into(),
+        name: "Indented".into(),
+        kind: wordcraft_doc::styles::StyleKind::Table,
+        table: Some(wordcraft_doc::styles::TableStyleParts { indent: Some(72.0), ..Default::default() }),
+        ..Default::default()
+    });
+    for b in &mut s.doc.body {
+        if let wordcraft_doc::Block::Table(t) = std::sync::Arc::make_mut(b) {
+            t.props.style = Some("Indented".into());
+            t.props.indent = None;
+        }
+    }
+    run(&mut s, "table.autofit", json!({"mode": "contents"}));
+    let total: f32 = s.doc.body.iter().find_map(|b| b.as_table()).unwrap().grid.iter().sum();
+    let tw = cmd::page::sect(&s).text_width();
+    assert!(total <= tw - 72.0 + 0.5 && total > tw - 72.0 - 1.0, "fills the room right of the indent: {total} vs {tw} - 72");
+}
+
 /// The Height and Width boxes (Table Layout › Cell Size) run `table.rowHeight` and
 /// `table.columnWidth`; each edit is one Undo.
 #[test]

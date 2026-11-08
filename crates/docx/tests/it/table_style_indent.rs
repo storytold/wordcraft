@@ -62,7 +62,9 @@ fn a_table_style_indent_of_zero_survives_a_save() {
 fn a_table_style_indent_that_is_no_length_sets_none() {
     // `pct` and `auto` are no lengths for an indent; `nil` is none.
     let style = |ty: &str| {
-        format!(r#"<w:style w:type="table" w:styleId="Indented"><w:name w:val="Indented"/><w:tblPr><w:tblInd w:w="720" w:type="{ty}"/></w:tblPr></w:style>"#)
+        format!(
+            r#"<w:style w:type="table" w:styleId="Indented"><w:name w:val="Indented"/><w:tblPr><w:tblInd w:w="720" w:type="{ty}"/></w:tblPr></w:style>"#
+        )
     };
     for (ty, want) in [("pct", None), ("auto", None), ("nil", Some(0.0)), ("dxa", Some(36.0))] {
         let d = wordcraft_docx::read(&docx(BODY, &style(ty))).unwrap();
