@@ -397,4 +397,4 @@ fn default_level(_i: usize) -> Level {
 
 /// Cap on a retained `w:format` pattern. Real sample lists are short; an oversized pattern is
 /// dropped whole (the level keeps its fallback) rather than truncated into a fake original.
-const MAX_CUSTOM_FORMAT: usize = 1024;
+const MAX_CUSTOM_FORMAT: usize = wordcraft_doc::numbering::MAX_CUSTOM_FORMAT;

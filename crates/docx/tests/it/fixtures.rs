@@ -4456,10 +4456,13 @@ fn w14_number_format_pairs_are_read_from_whichever_block_holds_them() {
            <w:lvl w:ilvl="2">\
              <mc:AlternateContent><mc:Choice Requires="w14"><w:numFmt w:val="custom" w:format="{huge}"/></mc:Choice><mc:Fallback><w:numFmt w:val="lowerLetter"/></mc:Fallback></mc:AlternateContent>\
              <w:lvlText w:val="%3."/><w:suff w:val="nothing"/></w:lvl>\
-         </w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>"#
+           <w:lvl w:ilvl="3">\
+             <w:numFmt w:val="custom" w:format="00001, 00002, 00003, ..."/>\
+             <w:lvlText w:val="[%4]"/><w:suff w:val="nothing"/></w:lvl>\
+           </w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>"#
     );
     let item = |lv: u8| format!(r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="{lv}"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>x</w:t></w:r></w:p>"#);
-    let body: String = [0u8, 1, 2].map(item).concat();
+    let body: String = [0u8, 1, 2, 3].map(item).concat();
     let bytes = docx(&body, &[("rId1", "numbering", "numbering.xml")], &[("word/numbering.xml", &numbering)]);
     let d = wordcraft_docx::read(&bytes).unwrap();
     // The second block's custom pattern was read despite the unrelated first block.
@@ -4468,8 +4471,10 @@ fn w14_number_format_pairs_are_read_from_whichever_block_holds_them() {
     assert_eq!(d.numbering.level(1, 1).map(|l| l.format), Some(NumFormat::Decimal));
     // The oversized pattern is dropped whole; the level keeps the Fallback's format.
     assert_eq!(d.numbering.level(1, 2).map(|l| (l.custom_format.clone(), l.format)), Some((None, NumFormat::LowerLetter)));
+    // A direct (non-AlternateContent) `w:numFmt w:val="custom" w:format="..."`, MS-OI29500: read like the pair.
+    assert_eq!(d.numbering.level(1, 3).map(|l| l.custom_format.as_deref()), Some(Some("00001, 00002, 00003, ...")));
     let mut c = Counters::default();
     let labels: Vec<String> =
         paras(&d).iter().filter_map(|p| p.props.numbering).filter_map(|n| c.next_label(&d.numbering, n.num, n.level)).map(|l| l.0).collect();
-    assert_eq!(labels, ["[0001]", "(1)", "a."]);
+    assert_eq!(labels, ["[0001]", "(1)", "a.", "[00001]"]);
 }

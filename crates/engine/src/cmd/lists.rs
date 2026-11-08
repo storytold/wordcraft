@@ -19,7 +19,7 @@ pub const LEVELS: usize = 9;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("list.define", "Define New Multilevel List", "Home › Paragraph › Multilevel List", define).params(
-            r#"{"levels": [{"format"?: "decimal|lowerLetter|upperLetter|lowerRoman|upperRoman|decimalZero|ordinal|bullet|none", "text"?: "%1.%2." (%n = level n's number; the bullet character for bullet), "start"?: n, "restartAfter"?: 0-8 (0 = never; omit = the level above), "style"?: paragraph style linked to the level | null, "align"?: "left|center|right", "alignedAt"?: pt, "indentAt"?: pt, "follow"?: "tab|space|nothing", "tabAt"?: pt | null, "font"?: string | null, "bold"?: bool, "italic"?: bool, "color"?: "RRGGBB" | null, "legal"?: bool}, …] (index = level, up to 9; fields left out keep the base list's), "num"?: list id to change in place (default: a new list), "apply"?: bool (default true: number the selected paragraphs), "name"?: string}"#,
+            r#"{"levels": [{"format"?: "decimal|lowerLetter|upperLetter|lowerRoman|upperRoman|decimalZero|ordinal|bullet|none", "text"?: "%1.%2." (%n = level n's number; the bullet character for bullet), "start"?: n, "restartAfter"?: 0-8 (0 = never; omit = the level above), "style"?: paragraph style linked to the level | null, "align"?: "left|center|right", "alignedAt"?: pt, "indentAt"?: pt, "follow"?: "tab|space|nothing", "tabAt"?: pt | null, "font"?: string | null, "bold"?: bool, "italic"?: bool, "color"?: "RRGGBB" | null, "legal"?: bool, "customFormat"?: Word-2010 pattern to keep or set (e.g. "0001, 0002, 0003, ...": omitted keeps the level's, null clears, an explicit "format" supersedes it; unrecognized patterns are kept but render in the fallback format) | null}, …] (index = level, up to 9; fields left out keep the base list's), "num"?: list id to change in place (default: a new list), "apply"?: bool (default true: number the selected paragraphs), "name"?: string}"#,
         ),
         CommandSpec::new("list.get", "List Definition", "Home › Paragraph › Multilevel List", get)
             .params(r#"{"num"?: list id (default: the caret's list)} → {"num", "levels": [as list.define]}"#)
@@ -65,6 +65,14 @@ pub fn level_json(l: &Level) -> Value {
 }
 
 /// `base` changed by the fields `v` gives.
+///
+/// `customFormat` (Word 2010 pattern, see [`wordcraft_doc::numbering::custom_pad_width`]):
+/// omitted keeps the level's pattern, `null` clears it, a string sets it. An explicit `format`
+/// supersedes and clears the pattern — send `customFormat` alongside `format` to keep it
+/// (`level_json` reports both, so a round-trip does). A string longer than
+/// [`wordcraft_doc::numbering::MAX_CUSTOM_FORMAT`] is dropped whole; an unrecognized-but-valid
+/// pattern is stored and renders in the level's fallback format (acceptance does not imply the
+/// pattern will pad). A non-string, non-null value is a caller error, rejected by `list.define`.
 pub fn level_from(mut l: Level, i: usize, v: &Value) -> Level {
     let pt = |k: &str| p::f32(v, k).map(|x| x.clamp(-1584.0, 1584.0));
     if let Some(f) = p::str(v, "format") {
@@ -75,8 +83,11 @@ pub fn level_from(mut l: Level, i: usize, v: &Value) -> Level {
     }
     match v.get("customFormat") {
         // Oversized patterns are dropped whole, never truncated into a modified original —
-        // the same policy the DOCX reader applies.
-        Some(Value::String(s)) if s.chars().count() <= 1024 => l.custom_format = Some(s.clone()).filter(|s: &String| !s.is_empty()),
+        // the same policy the DOCX reader applies. Wrong-type values are rejected upstream by
+        // `define`; this mutator stays infallible for its other uses.
+        Some(Value::String(s)) if s.chars().count() <= wordcraft_doc::numbering::MAX_CUSTOM_FORMAT => {
+            l.custom_format = Some(s.clone()).filter(|s: &String| !s.is_empty())
+        }
         Some(Value::String(_)) => l.custom_format = None,
         Some(Value::Null) => l.custom_format = None,
         _ => {}
@@ -178,6 +189,14 @@ fn get(s: &mut Session, v: &Value) -> CmdResult {
 
 fn define(s: &mut Session, v: &Value) -> CmdResult {
     let given = v.get("levels").and_then(Value::as_array).ok_or_else(|| CmdError::Params("`levels` (array) is required".into()))?;
+    // A wrong-typed customFormat is a caller mistake: show it at the API instead of dropping it.
+    for (i, lv) in given.iter().enumerate() {
+        if let Some(cf) = lv.get("customFormat")
+            && !matches!(cf, Value::String(_) | Value::Null)
+        {
+            return Err(CmdError::Params(format!("`customFormat` for level {} must be a string or null", i)));
+        }
+    }
     let target = p::u64(v, "num").map(|n| n.min(u32::MAX as u64) as u32);
     let base = match target {
         Some(n) => levels_of(s, n).ok_or_else(|| CmdError::Params("no such list".into()))?,
@@ -442,6 +461,20 @@ mod tests {
         s.relayout();
         // "[I]", not "[0001]": the chosen format numbers the label, the pattern is gone.
         assert_eq!(labels(&mut s), ["[I]"], "an explicitly chosen format replaces the pattern");
+    }
+
+    /// Review follow-up (PR #5317): a wrong-typed `customFormat` is a caller mistake and fails at
+    /// the API; a string (recognized or not) is accepted under the documented policy.
+    #[test]
+    fn a_wrong_typed_custom_format_is_rejected() {
+        let mut s = Session::new(Document::new());
+        let err = s.run("list.define", &json!({"levels": [{"customFormat": 42}]})).unwrap_err();
+        assert!(err.to_string().contains("customFormat"), "the error names the field: {err}");
+        assert!(s.run("list.define", &json!({"levels": [{"customFormat": "0001, 0002, 0003, ..."}]})).is_ok());
+        assert!(
+            s.run("list.define", &json!({"levels": [{"customFormat": "0001, 0008, ..."}]})).is_ok(),
+            "an unrecognized pattern is stored, not rejected"
+        );
     }
 
     /// Each body paragraph's number as laid out (`None`: no number), and its style.

@@ -118,6 +118,49 @@ fn a_custom_pattern_under_a_bullet_fallback_numbers_the_heading() {
     assert_eq!(headers(&d), [vec!["[0001]"], vec!["[0001]"]], "the recognized pattern numbers the heading on its page and the page that inherits it");
 }
 
+/// The same with a `none` file fallback: the recognized pattern still labels (next_label's rule).
+#[test]
+fn a_custom_pattern_under_a_none_fallback_numbers_the_heading() {
+    let mut d = doc(&[("Heading1", "One", false), ("Normal", "Text", true)], &[r#"STYLEREF "Heading 1" \n"#]);
+    let num = {
+        let n = Arc::make_mut(&mut d.numbering);
+        let id = n.add_list(ListKind::Numbered);
+        if let Some(a) = n.abstracts.first_mut() {
+            a.levels[0] = wordcraft_doc::numbering::Level {
+                text: "[%1]".into(),
+                format: wordcraft_doc::section::NumFormat::None,
+                custom_format: Some("0001, 0002, 0003, ...".into()),
+                ..Default::default()
+            };
+        }
+        id
+    };
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.numbering = Some(NumRef { num, level: 0 });
+    assert_eq!(headers(&d), [vec!["[0001]"], vec!["[0001]"]]);
+}
+
+/// Legal numbering (Word's `isLgl`) suppresses the custom pattern: the number field shows the
+/// legalized decimal, not the padded pattern.
+#[test]
+fn legal_numbering_suppresses_the_custom_pattern_in_the_number_field() {
+    let mut d = doc(&[("Heading1", "One", false), ("Normal", "Text", true)], &[r#"STYLEREF "Heading 1" \n"#]);
+    let num = {
+        let n = Arc::make_mut(&mut d.numbering);
+        let id = n.add_list(ListKind::Numbered);
+        if let Some(a) = n.abstracts.first_mut() {
+            a.levels[0] = wordcraft_doc::numbering::Level {
+                text: "[%1]".into(),
+                legal: true,
+                custom_format: Some("0001, 0002, 0003, ...".into()),
+                ..Default::default()
+            };
+        }
+        id
+    };
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.numbering = Some(NumRef { num, level: 0 });
+    assert_eq!(headers(&d), [vec!["[1]"], vec!["[1]"]], "legal numbering shows decimal for every level");
+}
+
 /// Editing a heading updates the headers that show it, through the paragraph cache.
 #[test]
 fn headers_follow_heading_edits() {

@@ -233,7 +233,8 @@ impl Numbering {
         self.abstracts.iter().find(|a| a.id == n.abstract_id)
     }
     /// Whether a paragraph in list `num` at `level` gets a label ([`Counters::next_label`] gives
-    /// one), without counting it.
+    /// one), without counting it. A level whose fallback is `none` still shows a label when a
+    /// recognized custom pattern is active (see [`custom_pad_width`], and the `legal` exception).
     pub fn shows_label(&self, num: u32, level: u8) -> bool {
         // A recognized custom pattern labels even under a `none` fallback (see next_label).
         self.abstract_of(num).is_some()
@@ -427,6 +428,9 @@ impl Counters {
 /// ..."). Word renders each number in the sample's style; a pattern whose samples are equal-length
 /// digit strings with leading zeros (a patent specification's `[0001]` paragraph numbers) renders
 /// as decimal zero-padded to that width. Any other pattern shows in the level's fallback format.
+/// Callers must suppress the pattern under legal numbering (`legal` levels show decimal for every
+/// level, ECMA-376's `isLgl`), and only [`custom_pad_width`]-recognized patterns pad — anything
+/// else formats through `fallback`.
 pub fn custom_format_label(custom: Option<&str>, fallback: NumFormat, n: u32) -> String {
     if let Some(p) = custom
         && let Some(w) = custom_pad_width(p)
@@ -435,6 +439,11 @@ pub fn custom_format_label(custom: Option<&str>, fallback: NumFormat, n: u32) ->
     }
     fallback.format(n)
 }
+
+/// The longest custom number format kept, in characters. Longer patterns are dropped whole
+/// (never truncated into a modified original) — one policy shared by the DOCX reader and the
+/// `list.define` API.
+pub const MAX_CUSTOM_FORMAT: usize = 1024;
 
 /// The zero-pad width of a Word custom number format. Word renders only the sample list it
 /// writes itself — three consecutive, equal-width, zero-leading numbers ending in `"..."`:
