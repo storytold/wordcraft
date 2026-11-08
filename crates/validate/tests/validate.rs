@@ -4275,3 +4275,81 @@ fn prop_dup_name_is_an_error() {
     let f = assert_finding(&report, "PROP-DUP-NAME", Some("docProps/custom.xml"));
     assert_eq!(f.severity, Severity::Error);
 }
+
+#[test]
+fn vocab_suppressed_style_end_does_not_close_the_definition() {
+    // A suppressed AlternateContent branch containing an element also
+    // named w:style: its end tag must not close the outer definition
+    // before the definition's own w:name arrives.
+    let mut d = Doc::minimal();
+    d.add_with_override(
+        "word/styles.xml",
+        CT_STYLES,
+        format!(
+            r#"<?xml version="1.0"?><w:styles xmlns:w="{W_NS}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><w:style w:type="character" w:styleId="A"><mc:AlternateContent><mc:Fallback><w:style></w:style></mc:Fallback></mc:AlternateContent><w:name w:val="heading 1"/></w:style></w:styles>"#
+        ),
+    );
+    d.set_doc_rels(
+        r#"<Relationship Id="rS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#,
+    );
+    let report = validate(&d);
+    assert_finding(&report, "STYLE-RESERVED-NAME", Some("word/styles.xml"));
+}
+
+#[test]
+fn vocab_nested_style_neither_opens_nor_steals_the_name() {
+    // Malformed nesting: the inner w:style is not a direct child of
+    // the root, so it opens nothing, and its w:name is not a direct
+    // child of the outer style either - the outer style keeps no name
+    // and no reserved-name finding may fire.
+    let d = styles_doc(
+        r#"<w:style w:type="character" w:styleId="Outer"><w:style w:type="paragraph" w:styleId="Inner"><w:name w:val="heading 1"/></w:style></w:style>"#,
+    );
+    let report = validate(&d);
+    assert!(!has(&report, "STYLE-RESERVED-NAME"), "findings: {:?}", report.findings);
+}
+
+#[test]
+fn vocab_first_name_element_owns_the_slot() {
+    // The first w:name has no value; a later sibling must not replace
+    // it, so this character style has no primary name to reserve.
+    let d = styles_doc(r#"<w:style w:type="character" w:styleId="A"><w:name/><w:name w:val="heading 1"/></w:style>"#);
+    let report = validate(&d);
+    assert!(!has(&report, "STYLE-RESERVED-NAME"), "findings: {:?}", report.findings);
+}
+
+#[test]
+fn style_reserved_id_with_omitted_type_is_not_flagged() {
+    let d = styles_doc(r#"<w:style w:styleId="TableNormal"><w:name w:val="Plain Name"/></w:style>"#);
+    let report = validate(&d);
+    assert!(!has(&report, "STYLE-RESERVED-ID"), "findings: {:?}", report.findings);
+}
+
+#[test]
+fn font_three_way_collision_reports_once() {
+    let mut d = Doc::minimal();
+    d.add_with_override(
+        "word/fontTable.xml",
+        CT_FONT_TABLE,
+        format!(
+            r#"<?xml version="1.0"?><w:fonts xmlns:w="{W_NS}"><w:font w:name="Calibri"/><w:font w:name="CALIBRI"/><w:font w:name="calibri"/></w:fonts>"#
+        ),
+    );
+    d.set_doc_rels(
+        r#"<Relationship Id="rF" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>"#,
+    );
+    let report = validate(&d);
+    assert_eq!(report.findings.iter().filter(|x| x.rule == "FONT-DUP-NAME").count(), 1, "findings: {:?}", report.findings);
+}
+
+#[test]
+fn prop_three_way_collision_reports_once() {
+    let mut d = Doc::minimal();
+    d.add_with_override(
+        "docProps/custom.xml",
+        CT_CUSTOM_PROPS,
+        r#"<?xml version="1.0"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="Reviewer"><vt:lpwstr>A</vt:lpwstr></property><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="3" name="REVIEWER"><vt:lpwstr>B</vt:lpwstr></property><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="4" name="reviewer"><vt:lpwstr>C</vt:lpwstr></property></Properties>"#.to_string(),
+    );
+    let report = validate(&d);
+    assert_eq!(report.findings.iter().filter(|x| x.rule == "PROP-DUP-NAME").count(), 1, "findings: {:?}", report.findings);
+}

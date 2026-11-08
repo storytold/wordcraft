@@ -2119,6 +2119,10 @@ pub(crate) struct StyleDef {
     pub id: Option<String>,
     /// The first `w:name/@w:val` inside the style, if present.
     pub name: Option<String>,
+    /// Whether a `w:name` child was seen at all: the FIRST name
+    /// element owns the primary-name slot even when it carries no
+    /// value, so a later sibling never replaces it.
+    pub name_seen: bool,
     /// The `w:style/@w:type` value, if present.
     pub style_type: Option<String>,
 }
@@ -2134,6 +2138,14 @@ pub(crate) fn parse_style_defs(text: &str, cap: usize, guard: &mut ParseGuard) -
     let mut defs: Vec<StyleDef> = Vec::new();
     let mut capped = false;
     let mut total = 0usize;
+    // Frame discipline: a definition opens only for a `w:style` that is
+    // a direct child of the part root (depth 2), and only its own
+    // matching end tag closes it. A nested or foreign-namespace element
+    // also named `style`, and anything inside a suppressed
+    // AlternateContent branch, can neither open nor close a definition,
+    // and a `w:name` counts only as the open style's direct child
+    // (depth 3) - so names are never transferred between styles.
+    let mut depth = 0usize;
     let mut current: Option<StyleDef> = None;
     let mut alt = AltSuppress::new();
     loop {
@@ -2142,62 +2154,78 @@ pub(crate) fn parse_style_defs(text: &str, cap: usize, guard: &mut ParseGuard) -
         }
         match reader.read_event_into(&mut buf) {
             Err(_) => return None,
-            Ok(Event::Eof) => break,
-            Ok(Event::Start(e)) => match aux_open(guard, &mut alt, reader.resolver(), &e, false) {
-                None => return None,
-                Some(AuxOpen::Stop) => break,
-                Some(AuxOpen::Skip) => {}
-                Some(AuxOpen::Process(id, attrs)) => {
-                    if id.w() && id.local == "style" {
-                        total += 1;
-                        // Styles do not nest; on a (malformed) nested
-                        // open the first definition stays current.
-                        if current.is_none() {
+            Ok(Event::Eof) => {
+                // An unclosed style, or any unbalanced frame, means the
+                // part did not parse: report failure rather than
+                // silently discarding the unfinished definition.
+                if current.is_some() || depth != 0 {
+                    return None;
+                }
+                break;
+            }
+            Ok(Event::Start(e)) => {
+                depth += 1;
+                match aux_open(guard, &mut alt, reader.resolver(), &e, false) {
+                    None => return None,
+                    Some(AuxOpen::Stop) => break,
+                    Some(AuxOpen::Skip) => {}
+                    Some(AuxOpen::Process(id, attrs)) => {
+                        if id.w() && id.local == "style" && depth == 2 {
+                            total += 1;
                             current = Some(StyleDef {
                                 id: attr_ns(&attrs, reader.resolver(), NS_W, b"styleId"),
                                 style_type: attr_ns(&attrs, reader.resolver(), NS_W, b"type"),
                                 ..StyleDef::default()
                             });
-                        }
-                    } else if id.w() && id.local == "name" {
-                        if let Some(def) = current.as_mut()
-                            && def.name.is_none()
-                        {
-                            def.name = attr_ns(&attrs, reader.resolver(), NS_W, b"val");
-                        }
-                    }
-                }
-            },
-            Ok(Event::Empty(e)) => match aux_open(guard, &mut alt, reader.resolver(), &e, true) {
-                None => return None,
-                Some(AuxOpen::Stop) => break,
-                Some(AuxOpen::Skip) => {}
-                Some(AuxOpen::Process(id, attrs)) => {
-                    if id.w() && id.local == "style" {
-                        total += 1;
-                        if defs.len() >= cap {
-                            capped = true;
-                        } else {
-                            defs.push(StyleDef {
-                                id: attr_ns(&attrs, reader.resolver(), NS_W, b"styleId"),
-                                style_type: attr_ns(&attrs, reader.resolver(), NS_W, b"type"),
-                                ..StyleDef::default()
-                            });
-                        }
-                    } else if id.w() && id.local == "name" {
-                        if let Some(def) = current.as_mut()
-                            && def.name.is_none()
-                        {
-                            def.name = attr_ns(&attrs, reader.resolver(), NS_W, b"val");
+                        } else if id.w() && id.local == "name" && depth == 3 {
+                            if let Some(def) = current.as_mut()
+                                && !def.name_seen
+                            {
+                                def.name_seen = true;
+                                def.name = attr_ns(&attrs, reader.resolver(), NS_W, b"val");
+                            }
                         }
                     }
                 }
-            },
+            }
+            Ok(Event::Empty(e)) => {
+                depth += 1;
+                let outcome = aux_open(guard, &mut alt, reader.resolver(), &e, true);
+                depth -= 1;
+                match outcome {
+                    None => return None,
+                    Some(AuxOpen::Stop) => break,
+                    Some(AuxOpen::Skip) => {}
+                    Some(AuxOpen::Process(id, attrs)) => {
+                        if id.w() && id.local == "style" && depth + 1 == 2 {
+                            total += 1;
+                            if defs.len() >= cap {
+                                capped = true;
+                            } else {
+                                defs.push(StyleDef {
+                                    id: attr_ns(&attrs, reader.resolver(), NS_W, b"styleId"),
+                                    style_type: attr_ns(&attrs, reader.resolver(), NS_W, b"type"),
+                                    ..StyleDef::default()
+                                });
+                            }
+                        } else if id.w() && id.local == "name" && depth + 1 == 3 {
+                            if let Some(def) = current.as_mut()
+                                && !def.name_seen
+                            {
+                                def.name_seen = true;
+                                def.name = attr_ns(&attrs, reader.resolver(), NS_W, b"val");
+                            }
+                        }
+                    }
+                }
+            }
             Ok(Event::End(e)) => {
-                let local = e.name().local_name();
-                alt.close(local.as_ref());
+                let id = resolve_elem(reader.resolver(), e.name());
+                alt.close(e.name().local_name().as_ref());
                 guard.leave();
-                if local.as_ref() == b"style"
+                if id.w()
+                    && id.local == "style"
+                    && depth == 2
                     && let Some(def) = current.take()
                 {
                     if defs.len() >= cap {
@@ -2206,6 +2234,7 @@ pub(crate) fn parse_style_defs(text: &str, cap: usize, guard: &mut ParseGuard) -
                         defs.push(def);
                     }
                 }
+                depth = depth.saturating_sub(1);
             }
             _ => {}
         }
@@ -2240,6 +2269,9 @@ fn parse_part_names(text: &str, cap: usize, guard: &mut ParseGuard, ns: &str, el
     let mut names: Vec<String> = Vec::new();
     let mut capped = false;
     let mut alt = AltSuppress::new();
+    // Raw frame depth, so an unbalanced (truncated) part reports a
+    // parse failure at EOF instead of a partial name list as success.
+    let mut depth = 0usize;
     loop {
         if !guard.tick() {
             break;
@@ -2258,13 +2290,21 @@ fn parse_part_names(text: &str, cap: usize, guard: &mut ParseGuard, ns: &str, el
         };
         match reader.read_event_into(&mut buf) {
             Err(_) => return None,
-            Ok(Event::Eof) => break,
-            Ok(Event::Start(e)) => match aux_open(guard, &mut alt, reader.resolver(), &e, false) {
-                None => return None,
-                Some(AuxOpen::Stop) => break,
-                Some(AuxOpen::Skip) => {}
-                Some(AuxOpen::Process(id, attrs)) => handle(&id, &attrs, reader.resolver(), &mut names, &mut capped),
-            },
+            Ok(Event::Eof) => {
+                if depth != 0 {
+                    return None;
+                }
+                break;
+            }
+            Ok(Event::Start(e)) => {
+                depth += 1;
+                match aux_open(guard, &mut alt, reader.resolver(), &e, false) {
+                    None => return None,
+                    Some(AuxOpen::Stop) => break,
+                    Some(AuxOpen::Skip) => {}
+                    Some(AuxOpen::Process(id, attrs)) => handle(&id, &attrs, reader.resolver(), &mut names, &mut capped),
+                }
+            }
             Ok(Event::Empty(e)) => match aux_open(guard, &mut alt, reader.resolver(), &e, true) {
                 None => return None,
                 Some(AuxOpen::Stop) => break,
@@ -2274,6 +2314,7 @@ fn parse_part_names(text: &str, cap: usize, guard: &mut ParseGuard, ns: &str, el
             Ok(Event::End(e)) => {
                 alt.close(e.name().local_name().as_ref());
                 guard.leave();
+                depth = depth.saturating_sub(1);
             }
             _ => {}
         }

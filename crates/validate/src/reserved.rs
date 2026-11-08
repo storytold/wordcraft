@@ -286,3 +286,32 @@ pub(crate) static RESERVED_STYLE_TYPES: &[(&str, &str)] = &[
 pub(crate) fn reserved_style_type(folded_name: &str) -> Option<&'static str> {
     RESERVED_STYLE_TYPES.binary_search_by(|(n, _)| (*n).cmp(folded_name)).ok().and_then(|i| RESERVED_STYLE_TYPES.get(i)).map(|(_, t)| *t)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{RESERVED_STYLE_TYPES, reserved_style_type};
+
+    /// The table must stay sorted by folded key with no duplicates:
+    /// the binary search depends on both.
+    #[test]
+    fn table_is_sorted_unique_and_complete() {
+        assert_eq!(RESERVED_STYLE_TYPES.len(), 267);
+        for pair in RESERVED_STYLE_TYPES.windows(2) {
+            assert!(pair[0].0 < pair[1].0, "keys out of order or duplicated at {}", pair[1].0);
+        }
+        for (_, t) in RESERVED_STYLE_TYPES {
+            assert!(["paragraph", "character", "table", "numbering"].contains(t), "unknown type {t}");
+        }
+    }
+
+    /// Spot lookups against the source table (index in parentheses).
+    #[test]
+    fn lookups_match_the_source() {
+        assert_eq!(reserved_style_type("normal"), Some("paragraph")); // 0
+        assert_eq!(reserved_style_type("heading 1"), Some("paragraph")); // 1
+        assert_eq!(reserved_style_type("no list"), Some("numbering")); // 107
+        assert_eq!(reserved_style_type("normal table"), Some("table")); // 105
+        assert_eq!(reserved_style_type("toc heading"), Some("paragraph")); // 266
+        assert_eq!(reserved_style_type("not a reserved name"), None);
+    }
+}
