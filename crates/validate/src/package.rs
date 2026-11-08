@@ -12,9 +12,21 @@ use crate::scan::ParseGuard;
 
 /// The main document part's content type (ECMA-376 Part 1 §11.3.10).
 pub(crate) const MAIN_CONTENT_TYPE: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
-/// The template main-document content type (ECMA-376 Part 1 §11.3.10), the other spelling of the
-/// package's one main document content type.
+/// The template main-document content type (ECMA-376 Part 1 §11.3.10).
 pub(crate) const TEMPLATE_MAIN_CONTENT_TYPE: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.template.main+xml";
+/// The macro-enabled main-document content type (`.docm`).
+pub(crate) const MACRO_MAIN_CONTENT_TYPE: &str = "application/vnd.ms-word.document.macroEnabled.main+xml";
+/// The macro-enabled template main-document content type (`.dotm`).
+pub(crate) const MACRO_TEMPLATE_MAIN_CONTENT_TYPE: &str = "application/vnd.ms-word.template.macroEnabled.main+xml";
+/// Every content type a package's main document part may carry: document, template, and their
+/// macro-enabled variants. They are spellings of one main type, not different kinds of part.
+pub(crate) const MAIN_CONTENT_TYPES: &[&str] =
+    &[MAIN_CONTENT_TYPE, TEMPLATE_MAIN_CONTENT_TYPE, MACRO_MAIN_CONTENT_TYPE, MACRO_TEMPLATE_MAIN_CONTENT_TYPE];
+
+/// Whether `ct` is one of the [`MAIN_CONTENT_TYPES`].
+pub(crate) fn is_main_content_type(ct: &str) -> bool {
+    MAIN_CONTENT_TYPES.contains(&ct)
+}
 /// A header part's content type.
 pub(crate) const HEADER_CONTENT_TYPE: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml";
 /// A footer part's content type.

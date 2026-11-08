@@ -181,7 +181,8 @@ pub(crate) const PKG_NO_CONTENT_TYPES: RuleSpec =
 pub(crate) const PKG_NO_MAIN: RuleSpec = RuleSpec { id: "PKG-NO-MAIN", severity: Severity::Error, evidence: Evidence::Observed };
 /// `CT-UNDECLARED`: a part has no effective content type. Observed: view-only corruption banner.
 pub(crate) const CT_UNDECLARED: RuleSpec = RuleSpec { id: "CT-UNDECLARED", severity: Severity::Error, evidence: Evidence::Observed };
-/// `CT-MAIN-TYPE`: the main part's effective content type is not the WordprocessingML main type.
+/// `CT-MAIN-TYPE`: the main part's effective content type is not one of the WordprocessingML main
+/// types (document, template, or a macro-enabled variant).
 /// Observed: Word web refuses.
 pub(crate) const CT_MAIN_TYPE: RuleSpec = RuleSpec { id: "CT-MAIN-TYPE", severity: Severity::Error, evidence: Evidence::Observed };
 /// `CT-DUP-DEFAULT`: two Default entries for one extension (case-insensitive), OPC §7.2.3.2.1.
@@ -747,10 +748,10 @@ fn check_content_types(pkg: &Package, acc: &mut Acc) {
     }
     acc.ran("CT-MAIN-TYPE");
     if let Some(main) = &pkg.main
-        && pkg.content_types.of(main) != Some(package::MAIN_CONTENT_TYPE)
+        && !is_main_typed(pkg, main)
     {
         let got = pkg.content_types.of(main).unwrap_or("(none)");
-        acc.add("CT-MAIN-TYPE", Some(main.clone()), format!("main part {main} has content type {got}, not {}", package::MAIN_CONTENT_TYPE));
+        acc.add("CT-MAIN-TYPE", Some(main.clone()), format!("main part {main} has content type {got}, not a main-document content type"));
     }
     acc.ran("CT-DUP-MAIN");
     check_dup_main(pkg, acc);
@@ -773,9 +774,9 @@ fn check_content_types(pkg: &Package, acc: &mut Acc) {
 }
 
 /// Whether `name`'s effective content type is one of the package's main-document content types
-/// (`…document.main+xml` or the template variant).
+/// ([`package::MAIN_CONTENT_TYPES`]: document, template, and their macro-enabled variants).
 fn is_main_typed(pkg: &Package, name: &str) -> bool {
-    matches!(pkg.content_types.of(name), Some(package::MAIN_CONTENT_TYPE) | Some(package::TEMPLATE_MAIN_CONTENT_TYPE))
+    pkg.content_types.of(name).is_some_and(package::is_main_content_type)
 }
 
 /// `CT-DUP-MAIN`: at most one part may carry the main-document content type (ECMA-376 Part 1

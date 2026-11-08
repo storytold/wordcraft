@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 
 use common::{
     CT_CHART, CT_COMMENTS, CT_COMMENTS_EXT, CT_COMMENTS_IDS, CT_CUSTOM_PROPS, CT_CUSTOMXML_PROPS, CT_ENDNOTES, CT_FONT_TABLE, CT_FOOTER,
-    CT_FOOTNOTES, CT_GLOSSARY, CT_HEADER, CT_MAIN, CT_NUMBERING, CT_PEOPLE, CT_SETTINGS, CT_STYLES, CT_TEMPLATE_MAIN, CT_WEB_SETTINGS, Doc,
-    add_header, claim_entry_method, content_types_xml, corrupt_entry_data, document_xml, ns, rels_xml, replace_all, rich_content_types,
-    utf16_le_with_bom,
+    CT_FOOTNOTES, CT_GLOSSARY, CT_HEADER, CT_MACRO_MAIN, CT_MACRO_TEMPLATE_MAIN, CT_MAIN, CT_NUMBERING, CT_PEOPLE, CT_SETTINGS, CT_STYLES,
+    CT_TEMPLATE_MAIN, CT_WEB_SETTINGS, Doc, add_header, claim_entry_method, content_types_xml, corrupt_entry_data, document_xml, ns, rels_xml,
+    replace_all, rich_content_types, utf16_le_with_bom,
 };
 use wordcraft_validate::{Finding, Report, Severity, Verdict, validate_bytes, validate_path};
 
@@ -277,6 +277,51 @@ fn ct_main_type() {
     let ct = String::from_utf8(content_types_xml(&[], &[])).unwrap().replace(CT_MAIN, "application/xml");
     d.set("[Content_Types].xml", ct);
     let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Fail);
+    assert_finding(&report, "CT-MAIN-TYPE", Some("word/document.xml"));
+}
+
+/// A minimal package whose main part carries `main_ct` instead of the ordinary document type.
+fn main_typed_as(main_ct: &str) -> Report {
+    let mut d = Doc::minimal();
+    let ct = String::from_utf8(content_types_xml(&[], &[])).unwrap().replace(CT_MAIN, main_ct);
+    d.set("[Content_Types].xml", ct);
+    validate(&d)
+}
+
+/// A template (`.dotx`) is a valid package: its main part's template content type is one of the
+/// main-document types, so CT-MAIN-TYPE must not fire.
+#[test]
+fn ct_main_type_accepts_template() {
+    let report = main_typed_as(CT_TEMPLATE_MAIN);
+    assert!(!has(&report, "CT-MAIN-TYPE"), "{:?}", report.findings);
+    assert_eq!(report.verdict, Verdict::Pass);
+    assert_clean(&report);
+}
+
+/// A macro-enabled document (`.docm`) is a valid package.
+#[test]
+fn ct_main_type_accepts_macro_enabled_document() {
+    let report = main_typed_as(CT_MACRO_MAIN);
+    assert!(!has(&report, "CT-MAIN-TYPE"), "{:?}", report.findings);
+    assert_eq!(report.verdict, Verdict::Pass);
+    assert_clean(&report);
+}
+
+/// A macro-enabled template (`.dotm`) is a valid package.
+#[test]
+fn ct_main_type_accepts_macro_enabled_template() {
+    let report = main_typed_as(CT_MACRO_TEMPLATE_MAIN);
+    assert!(!has(&report, "CT-MAIN-TYPE"), "{:?}", report.findings);
+    assert_eq!(report.verdict, Verdict::Pass);
+    assert_clean(&report);
+}
+
+/// A content type that only looks like a main type still fails: here the `.docm` file's MIME
+/// type, which is not a part content type.
+#[test]
+fn ct_main_type_rejects_bogus_main_type() {
+    let report = main_typed_as("application/vnd.ms-word.document.macroEnabled.12");
     assert_eq!(report.verdict, Verdict::Fail);
     assert_finding(&report, "CT-MAIN-TYPE", Some("word/document.xml"));
 }
@@ -840,8 +885,8 @@ fn ct_dup_main_template_typed_extra_part() {
 
 /// The mirror of the template branch: the reached part carries the template main type and the
 /// extra part the ordinary main type. STILL exactly one CT-DUP-MAIN, at the extra part — the
-/// template variant is one of the package's main types, not a second kind. (CT-MAIN-TYPE is a
-/// separate, expected finding at the template-typed reached part.)
+/// template variant is one of the package's main types, not a second kind, so CT-MAIN-TYPE does
+/// not fire at the template-typed reached part.
 #[test]
 fn ct_dup_main_template_typed_reached_part() {
     let mut d = Doc::minimal();
@@ -856,6 +901,27 @@ fn ct_dup_main_template_typed_reached_part() {
     let dups: Vec<&Finding> = report.findings.iter().filter(|f| f.rule == "CT-DUP-MAIN").collect();
     assert_eq!(dups.len(), 1, "exactly one duplicate-main finding, at the extra part: {:?}", report.findings);
     assert_eq!(dups[0].part.as_deref(), Some("word/extra.xml"));
+    assert!(!has(&report, "CT-MAIN-TYPE"), "a template-typed main part is not mistyped: {:?}", report.findings);
+}
+
+/// Macro-enabled document and template types also count toward the single-main-part limit.
+#[test]
+fn ct_dup_main_macro_enabled_parts() {
+    for main_ct in [CT_MACRO_MAIN, CT_MACRO_TEMPLATE_MAIN] {
+        for reached_is_macro in [false, true] {
+            let mut d = Doc::minimal();
+            let (reached_ct, extra_ct) = if reached_is_macro { (main_ct, CT_MAIN) } else { (CT_MAIN, main_ct) };
+            let ct = String::from_utf8(content_types_xml(&[], &[])).unwrap().replace(CT_MAIN, reached_ct);
+            d.set("[Content_Types].xml", ct);
+            d.add_with_override("word/extra.xml", extra_ct, document_xml("<w:p/>"));
+            let report = validate(&d);
+            assert_eq!(report.verdict, Verdict::Fail);
+            assert!(!has(&report, "CT-MAIN-TYPE"), "{:?}", report.findings);
+            let dups: Vec<&Finding> = report.findings.iter().filter(|f| f.rule == "CT-DUP-MAIN").collect();
+            assert_eq!(dups.len(), 1, "exactly one duplicate-main finding: {:?}", report.findings);
+            assert_eq!(dups[0].part.as_deref(), Some("word/extra.xml"));
+        }
+    }
 }
 
 #[test]
