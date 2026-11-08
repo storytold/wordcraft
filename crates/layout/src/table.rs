@@ -499,14 +499,16 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     } else {
         indent - first_cell_left_margin_in(t, margins_def)
     };
-    // Likewise at the end margin: Word 2013+ puts the end border's outer edge on it (measured in
-    // Word for Windows, tables of a percentage or a width in points).
+    // Likewise at the right margin: Word 2013+ puts an end-aligned table's end border's outer edge
+    // on it (measured in Word for Windows, tables of a percentage or a width in points). A
+    // right-to-left table aligned to the end (the left margin) keeps its edge on the margin
+    // whatever its borders (measured too).
     let end_offset = if new_borders { end_half } else { 0.0 };
     let x = match (t.props.align, rtl) {
         (Some(Align::Center), _) => (avail - total) / 2.0,
         // End alignment: the right margin, or the left one in a right-to-left table.
         (Some(Align::Right), false) => avail - total - end_offset,
-        (Some(Align::Right), true) => end_offset,
+        (Some(Align::Right), true) => 0.0,
         (_, true) => avail - total - start_offset,
         (_, false) => start_offset,
     };
