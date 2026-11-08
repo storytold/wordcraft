@@ -94,11 +94,14 @@ pub(super) fn restart_numbering(s: &mut Session, _: &Value) -> CmdResult {
 /// caret's list after that earlier list takes the earlier list's numbering, so its numbers carry
 /// on (3, 4… after 1, 2) instead of starting again.
 pub(super) fn continue_numbering(s: &mut Session, _: &Value) -> CmdResult {
-    let (current, earlier, after) = continuation(s).ok_or_else(|| CmdError::Failed("no earlier numbered list to continue".into()))?;
     let story = s.sel.focus.story;
-    let paths: Vec<_> = s.doc.para_paths(story).into_iter().filter(|p| *p > after).collect();
-    for path in paths {
-        let para = s.doc.para_mut(story, &path)?;
+    let paths = s.doc.para_paths(story);
+    let nums: Vec<_> = paths.iter().map(|p| s.doc.para(story, p).and_then(|x| x.props.numbering)).collect();
+    let here = paths.iter().position(|p| *p == s.sel.focus.path);
+    let (current, earlier, after) =
+        here.and_then(|i| continuation(s, &nums, i)).ok_or_else(|| CmdError::Failed("no earlier numbered list to continue".into()))?;
+    for path in paths.iter().skip(after.saturating_add(1)) {
+        let para = s.doc.para_mut(story, path)?;
         if let Some(x) = para.props.numbering.filter(|x| x.num == current) {
             para.props.numbering = Some(NumRef { num: earlier, level: x.level });
             para.touch();
@@ -107,24 +110,106 @@ pub(super) fn continue_numbering(s: &mut Session, _: &Value) -> CmdResult {
     sel_result(s)
 }
 
-/// Why Continue Numbering is unavailable at the caret, or `None` when it can run.
+/// Why Continue Numbering is unavailable at the caret, or `None` when it can run. Menus ask this
+/// every frame they are open, so it reads the story's numbering in one walk without building
+/// paragraph paths.
 pub(super) fn continue_numbering_enabled(s: &Session) -> Option<&'static str> {
-    continuation(s).is_none().then_some("no earlier numbered list to continue")
+    const WHY: &str = "no earlier numbered list to continue";
+    let f = &s.sel.focus;
+    // Most paragraphs aren't in a numbered list: answer those without walking the story.
+    if !s.doc.para_at(f).and_then(|p| p.props.numbering).is_some_and(|n| is_numbered(s, &n)) {
+        return Some(WHY);
+    }
+    let Some(blocks) = s.doc.story(f.story) else { return Some(WHY) };
+    let mut nums = Vec::new();
+    let mut here = None;
+    story_numbering(blocks, &mut Vec::new(), &f.path.0, 0, &mut nums, &mut here);
+    match here.and_then(|i| continuation(s, &nums, i)) {
+        Some(_) => None,
+        None => Some(WHY),
+    }
 }
 
-/// What Continue Numbering joins: the list at the caret (its `num`), the nearest earlier numbered
-/// list in the same story that is a different list, and the path of that list's last paragraph
-/// before the caret. `None` when the caret isn't in a numbered list (bullets don't count) or no
-/// such earlier list exists.
-fn continuation(s: &Session) -> Option<(u32, u32, wordcraft_doc::Path)> {
-    let f = &s.sel.focus;
-    let numbered =
-        |n: &NumRef| n.num != 0 && s.doc.numbering.level(n.num, n.level).is_some_and(|l| l.format != wordcraft_doc::section::NumFormat::Bullet);
-    let here = s.doc.para_at(f).and_then(|p| p.props.numbering).filter(numbered)?;
-    s.doc.para_paths(f.story).into_iter().filter(|p| *p < f.path).rev().find_map(|path| {
-        let n = s.doc.para(f.story, &path)?.props.numbering.filter(numbered)?;
-        (n.num != here.num).then_some((here.num, n.num, path))
-    })
+/// Whether list `n` is numbered at its level (a bullet, or no such list, isn't).
+fn is_numbered(s: &Session, n: &NumRef) -> bool {
+    n.num != 0 && s.doc.numbering.level(n.num, n.level).is_some_and(|l| l.format != wordcraft_doc::section::NumFormat::Bullet)
+}
+
+/// The direct numbering of every paragraph of `blocks` in document order, tables included, as
+/// [`wordcraft_doc::Document::para_paths`] lists them (to the same nesting depth), and in `here`
+/// the index of the paragraph at path `at`.
+fn story_numbering(
+    blocks: &wordcraft_doc::Blocks,
+    prefix: &mut Vec<u32>,
+    at: &[u32],
+    depth: usize,
+    out: &mut Vec<Option<NumRef>>,
+    here: &mut Option<usize>,
+) {
+    /// The paragraph walk's table nesting bound (`wordcraft_doc`'s `PARA_WALK_DEPTH`).
+    const DEPTH: usize = 16;
+    if depth > DEPTH {
+        return;
+    }
+    for (i, b) in blocks.iter().enumerate() {
+        prefix.push(u32::try_from(i).unwrap_or(u32::MAX));
+        match &**b {
+            wordcraft_doc::Block::Para(p) => {
+                if prefix.as_slice() == at {
+                    *here = Some(out.len());
+                }
+                out.push(p.props.numbering);
+            }
+            wordcraft_doc::Block::Table(t) => {
+                for (r, row) in t.rows.iter().enumerate() {
+                    for (c, cell) in row.cells.iter().enumerate() {
+                        prefix.push(u32::try_from(r).unwrap_or(u32::MAX));
+                        prefix.push(u32::try_from(c).unwrap_or(u32::MAX));
+                        story_numbering(&cell.blocks, prefix, at, depth.saturating_add(1), out, here);
+                        prefix.pop();
+                        prefix.pop();
+                    }
+                }
+            }
+        }
+        prefix.pop();
+    }
+}
+
+/// What Continue Numbering joins, given the direct numbering of a story's paragraphs in order and
+/// the caret's paragraph `here`: the caret's list (its `num`), the nearest earlier numbered list
+/// that is a different list, and the index of that list's last paragraph before the caret.
+///
+/// The paragraphs that move (the caret's list after that one) keep their levels, so the earlier
+/// list must be numbered or bulleted as the caret's list is at each of those levels: otherwise
+/// numbered items would turn into bullets. A list that differs is passed over. `None` when the
+/// caret isn't in a numbered list (bullets don't count) or no such earlier list exists.
+fn continuation(s: &Session, nums: &[Option<NumRef>], here: usize) -> Option<(u32, u32, usize)> {
+    let bullet = |num: u32, level: u8| s.doc.numbering.level(num, level).map(|l| l.format == wordcraft_doc::section::NumFormat::Bullet);
+    let current = nums.get(here).copied().flatten().filter(|n| is_numbered(s, n))?.num;
+    // The levels of the caret's list from the candidate on; they only grow as the search goes back.
+    let mut levels = [false; 256];
+    let add = |levels: &mut [bool; 256], n: &NumRef| {
+        if let Some(l) = levels.get_mut(usize::from(n.level)) {
+            *l = true;
+        }
+    };
+    nums.iter().skip(here).flatten().filter(|n| n.num == current).for_each(|n| add(&mut levels, n));
+    for (i, n) in nums.iter().enumerate().take(here).rev() {
+        let Some(n) = n else { continue };
+        if n.num == current {
+            add(&mut levels, n);
+        } else if is_numbered(s, n) {
+            let fits = (0..=u8::MAX)
+                .zip(levels.iter())
+                .filter(|(_, used)| **used)
+                .all(|(level, _)| bullet(n.num, level).is_some_and(|b| Some(b) == bullet(current, level)));
+            if fits {
+                return Some((current, n.num, i));
+            }
+        }
+    }
+    None
 }
 
 /// Manage Styles' list: paragraph, character, linked and table styles (a linked pair once, as
@@ -344,5 +429,60 @@ mod tests {
         assert!(s.why_disabled("para.continueNumbering").is_some(), "a bullet before isn't a numbered list");
         caret_in(&mut s, 0);
         assert!(s.why_disabled("para.continueNumbering").is_some(), "a bullet item isn't numbered");
+    }
+
+    /// An earlier list that is bulleted at a level the caret's list numbers isn't continued: its
+    /// numbered items would turn into bullets. A list with a bullet at level 0 and numbers at
+    /// level 1 (as multilevel lists from Word files often are) is passed over for a plain
+    /// numbered list at level 0, to a matching list further back if there is one.
+    #[test]
+    fn continue_numbering_keeps_numbered_items_numbered() {
+        use super::NumRef;
+        use wordcraft_doc::numbering::levels_for;
+        use wordcraft_doc::section::NumFormat;
+        // Bullets at level 0, numbers at level 1.
+        let mixed = |s: &mut Session| {
+            let mut levels = levels_for(wordcraft_doc::ListKind::Bullet);
+            levels[1] = levels_for(wordcraft_doc::ListKind::Numbered)[1].clone();
+            std::sync::Arc::make_mut(&mut s.doc.numbering).try_add_levels(None, levels).unwrap()
+        };
+        let set = |s: &mut Session, k: usize, num: u32, level: u8| {
+            let path = s.doc.para_paths(StoryRef::Body)[k].clone();
+            s.doc.para_mut(StoryRef::Body, &path).unwrap().props.numbering = Some(NumRef { num, level });
+        };
+        let bullet = |s: &Session, k: usize| {
+            let path = &s.doc.para_paths(StoryRef::Body)[k];
+            let n = s.doc.para(StoryRef::Body, path).unwrap().props.numbering.unwrap();
+            s.doc.numbering.level(n.num, n.level).unwrap().format == NumFormat::Bullet
+        };
+
+        // Dot (bullet) / Sub (numbered, level 1) / text / One, Two (numbered, level 0).
+        let mut s = document(&["Dot", "Sub", "Plain text.", "One", "Two"], &[false, false, false, true, true]);
+        let m = mixed(&mut s);
+        set(&mut s, 0, m, 0);
+        set(&mut s, 1, m, 1);
+        let before = labels(&mut s);
+        assert_eq!(before[3..], [label("1."), label("2.")]);
+        for k in [3, 4] {
+            caret_in(&mut s, k);
+            assert!(s.why_disabled("para.continueNumbering").is_some(), "the only earlier list bullets level 0 (item {k})");
+            assert!(s.run("para.continueNumbering", &json!({})).is_err());
+        }
+        assert_eq!(labels(&mut s), before, "nothing changed");
+        assert!(!bullet(&s, 3) && !bullet(&s, 4), "the numbered items are still numbered");
+
+        // With a plain numbered list before the mixed one, the list continues from that one.
+        let mut s = document(&["First", "Dot", "Sub", "Plain text.", "One", "Two"], &[true, false, false, false, true, true]);
+        let m = mixed(&mut s);
+        set(&mut s, 1, m, 0);
+        set(&mut s, 2, m, 1);
+        let before = labels(&mut s);
+        caret_in(&mut s, 4);
+        assert_eq!(s.why_disabled("para.continueNumbering"), None);
+        s.run("para.continueNumbering", &json!({})).unwrap();
+        let after = labels(&mut s);
+        assert_eq!(after[4..], [label("2."), label("3.")], "carried on from First");
+        assert_eq!(after[..4], before[..4], "the mixed list is untouched");
+        assert!(!bullet(&s, 4) && !bullet(&s, 5), "the moved items are still numbered");
     }
 }
