@@ -1532,7 +1532,16 @@ fn check_typed_content(
         .rels
         .iter()
         .filter(|rp| {
-            rels_owner_name(&rp.name).is_some_and(|owner| package::is_xml_part(pkg, &owner) && !content_part_scanned_owners.contains(&owner))
+            rels_owner_name(&rp.name).is_some_and(|owner| {
+                // An XML owner that was loaded but never scanned, or an
+                // owner missing from the examined entries while the
+                // archive's enumeration was truncated (so it is not
+                // proven absent): consumption is unestablished either
+                // way. A proven-absent owner (complete enumeration)
+                // cannot consume anything and is judged normally.
+                (package::is_xml_part(pkg, &owner) && !content_part_scanned_owners.contains(&owner))
+                    || (pkg.entries_truncated && !pkg.entries.iter().any(|e| e.name.eq_ignore_ascii_case(&owner)))
+            })
         })
         .map(|rp| rp.name.to_ascii_lowercase())
         .collect();
@@ -2966,6 +2975,38 @@ mod budget_tests {
             ("word/data.xml", b"<root/>".to_vec()),
         ]);
         let report = validate_bytes_limited(&bytes, Limits { part_bytes: 4096, ..Limits::default() });
+        assert!(!report.findings.iter().any(|f| f.rule == "CT-MISMATCH"), "findings: {:?}", report.findings);
+        assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
+    }
+
+    /// The byte-limit test's twin at the archive entry limit: the
+    /// owner part falls beyond the examined prefix, so it is not
+    /// proven absent and its consumption is unestablished — the
+    /// customXml pairing must not fire for its relationships.
+    #[test]
+    fn ct_mismatch_skips_an_owner_beyond_the_entry_limit() {
+        let ct = format!(
+            r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/document.xml" ContentType="{}"/><Override PartName="/data.xml" ContentType="text/xml"/></Types>"#,
+            package::MAIN_CONTENT_TYPE
+        );
+        let root_rels = rels(
+            r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="document.xml"/>"#,
+        );
+        let extra_rels =
+            rels(r#"<Relationship Id="cp" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="data.xml"/>"#);
+        let extra = format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}"><w:body><w:p><w:r><w:contentPart r:id="cp"/></w:r></w:p></w:body></w:document>"#
+        )
+        .into_bytes();
+        let bytes = tiny_zip(&[
+            ("[Content_Types].xml", ct.into_bytes()),
+            ("_rels/.rels", root_rels),
+            ("document.xml", document()),
+            ("_rels/extra.xml.rels", extra_rels),
+            ("data.xml", b"<root/>".to_vec()),
+            ("extra.xml", extra),
+        ]);
+        let report = validate_bytes_limited(&bytes, Limits { entries: 5, ..Limits::default() });
         assert!(!report.findings.iter().any(|f| f.rule == "CT-MISMATCH"), "findings: {:?}", report.findings);
         assert_eq!(report.verdict, Verdict::Incomplete, "findings: {:?}", report.findings);
     }

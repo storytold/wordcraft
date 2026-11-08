@@ -125,6 +125,10 @@ pub(crate) struct Package {
     /// Lowercased names of parts classified as XML by the single classification shared by loading,
     /// decoding and the XML pass (J4).
     pub xml_parts: HashSet<String>,
+    /// The archive declared more entries than the entry budget: the
+    /// examined entry list is a prefix, so a part absent from
+    /// `entries` is not proven absent from the archive.
+    pub entries_truncated: bool,
 }
 
 /// Load a zip into the package model. Returns `None` only when the input is not a readable zip
@@ -136,7 +140,8 @@ pub(crate) fn load(bytes: &[u8], acc: &mut Acc) -> Option<Package> {
         return None;
     };
     let limits = acc.limits;
-    if zip.len() > limits.entries {
+    let entries_truncated = zip.len() > limits.entries;
+    if entries_truncated {
         acc.note(format!("the archive declares {} entries; only the first {} were examined", zip.len(), limits.entries));
         acc.set_incomplete();
     }
@@ -277,7 +282,7 @@ pub(crate) fn load(bytes: &[u8], acc: &mut Acc) -> Option<Package> {
     let glossary = glossary_part(&entries, &content_types, &rels, main.as_deref());
 
     let reachable = reachability(&rels, main.as_deref());
-    Some(Package { entries, content_types, content_types_present, rels, main, glossary, reachable, xml_parts })
+    Some(Package { entries, content_types, content_types_present, rels, main, glossary, reachable, xml_parts, entries_truncated })
 }
 
 /// The glossary document part: the main document's `glossaryDocument` relationship target, else the
