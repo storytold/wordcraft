@@ -4617,6 +4617,118 @@ fn toc_entries_carry_heading_numbers() {
     assert!(t.contains("1.\tAlpha\t2") && t.contains("2.\tBravo\t3"), "{t}");
 }
 
+/// A TOC of numbered headings (`1.`…`10.`, `1.1`) builds and updates.
+fn numbered_toc(styles: impl FnOnce(&mut wordcraft_doc::StyleSheet)) -> Session {
+    let mut s = s();
+    styles(&mut s.doc.styles);
+    run(&mut s, "references.toc", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    for (k, name) in ["One", "Section", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"].iter().enumerate() {
+        run(&mut s, "text.insert", json!({"text": name}));
+        run(&mut s, if k == 1 { "para.heading2" } else { "para.heading1" }, json!({}));
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    let num = s.doc.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    for b in s.doc.body.iter_mut() {
+        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+            let level = match p.props.style.as_deref() {
+                Some("Heading1") => 0,
+                Some("Heading2") => 1,
+                _ => continue,
+            };
+            p.props.numbering = Some(wordcraft_doc::props::NumRef { num, level });
+        }
+    }
+    run(&mut s, "references.updateToc", json!({}));
+    s
+}
+
+/// The TOC entries (body index, paragraph) of a session.
+fn toc_entries(s: &Session) -> Vec<(usize, wordcraft_doc::Paragraph)> {
+    s.doc
+        .body
+        .iter()
+        .enumerate()
+        .filter_map(|(i, b)| Some((i, b.as_para()?)))
+        .filter(|(_, p)| p.props.style.as_deref().is_some_and(|st| st.starts_with("TOC") && st != "TOCHeading"))
+        .map(|(i, p)| (i, p.clone()))
+        .collect()
+}
+
+/// #4185: a numbered entry whose style has no stop for the tab after its number gets a left stop
+/// 11 pt past the number, so the title follows the number and the page number stays on the
+/// entry's line at the right margin, on every level and after the cached stops are reused by an
+/// update. A style with a stop of its own, or a hanging indent, gets none.
+#[test]
+fn toc_number_tab_follows_the_number() {
+    use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+    // Each entry's title starts 11 pt past its number (`exact`) or at least past it, and its page
+    // number is on the title's line at the right margin.
+    fn check(s: &mut Session, when: &str, exact: impl Fn(&str) -> bool) {
+        let margin = s.doc.sections()[0].1.margin_left;
+        let width = s.doc.sections()[0].1.text_width();
+        let entries = toc_entries(s);
+        assert_eq!(entries.len(), 11, "{}", text(s));
+        assert!(entries.iter().any(|(_, p)| p.text.starts_with("10.\t")) && entries.iter().any(|(_, p)| p.props.style.as_deref() == Some("TOC2")));
+        let l = s.layout();
+        for (i, p) in entries {
+            let tab = p.text.find('\t').unwrap();
+            let number = l.caret(&Pos::body(i, tab)).unwrap();
+            let title = l.caret(&Pos::body(i, tab + 1)).unwrap();
+            let page = l.caret(&Pos::body(i, p.text.rfind('\t').unwrap() + 1)).unwrap();
+            let gap = title.x - number.x;
+            assert!(gap > 1.0 && gap < 11.5 && (!exact(&p.text) || gap > 10.5), "{when}, {:?}: title {gap} pt past the number", p.plain_text());
+            assert!(page.top == title.top && page.x > margin + width - 30.0, "{when}, {:?}: page number at {page:?}", p.plain_text());
+        }
+    }
+    let mut s = numbered_toc(|_| {});
+    check(&mut s, "built", |_| true);
+    // An update reuses the level's first stop, which a wider number ("10.") still fits.
+    run(&mut s, "references.updateToc", json!({}));
+    check(&mut s, "updated", |t| !t.starts_with("10."));
+    // A hanging indent the number ends past, and a style stop before the number's end, don't
+    // serve the number's tab.
+    let mut s = numbered_toc(|st| {
+        let toc1 = st.get_mut("TOC1").unwrap();
+        toc1.para.indent_left = Some(4.0);
+        toc1.para.indent_first = Some(-4.0);
+        st.get_mut("TOC2").unwrap().para.tabs = Some(vec![TabStop { pos: 5.0, align: TabAlign::Left, leader: TabLeader::None }]);
+    });
+    check(&mut s, "short hanging indent, early style stop", |_| true);
+    // The number measured at its character scale and spacing, as layout draws it.
+    let mut s = numbered_toc(|st| {
+        let toc1 = st.get_mut("TOC1").unwrap();
+        toc1.chr.scale = Some(200.0);
+        toc1.chr.spacing = Some(3.0);
+    });
+    check(&mut s, "scaled and spaced number", |_| true);
+    // A style stop a cached Clear removes doesn't serve the tab either.
+    let mut s = numbered_toc(|_| {});
+    let left = |pos| TabStop { pos, align: TabAlign::Left, leader: TabLeader::None };
+    s.doc.styles.get_mut("TOC2").unwrap().para.tabs = Some(vec![left(60.0)]);
+    for b in s.doc.body.iter_mut() {
+        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b)
+            && p.props.style.as_deref() == Some("TOC2")
+        {
+            p.props.tabs = Some(vec![left(13.0), TabStop { pos: 60.0, align: TabAlign::Clear, leader: TabLeader::None }]);
+        }
+    }
+    run(&mut s, "references.updateToc", json!({}));
+    check(&mut s, "style stop cleared", |t| !t.starts_with("10."));
+    // A hanging indent past the number, and a style stop of its own, do: no stop is added.
+    let own = TabStop { pos: 60.0, align: TabAlign::Left, leader: TabLeader::None };
+    let s = numbered_toc(|st| {
+        let toc1 = st.get_mut("TOC1").unwrap();
+        toc1.para.indent_left = Some(30.0);
+        toc1.para.indent_first = Some(-30.0);
+        st.get_mut("TOC2").unwrap().para.tabs = Some(vec![own]);
+    });
+    for (_, p) in toc_entries(&s) {
+        let lefts: Vec<f32> = p.props.tabs.iter().flatten().filter(|t| t.align == TabAlign::Left).map(|t| t.pos).collect();
+        assert!(lefts.is_empty() || lefts == [own.pos], "{:?}: inferred left stops {lefts:?}", p.plain_text());
+    }
+}
+
 /// A heading above the TOC keeps its index when the entries go in below it, so its page is read
 /// where it is, not `entries` blocks further down.
 #[test]
