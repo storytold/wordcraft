@@ -94,33 +94,42 @@ pub fn date_picture(instr: &str) -> Option<String> {
 /// (measured in Word for Windows); the body's come first.
 pub fn bookmark_text(doc: &wordcraft_doc::Document, name: &str) -> Option<String> {
     let (_, start) = all_bookmarks(doc).into_iter().find(|(n, _)| n == name)?;
+    bookmark_text_at(doc, name, &start)
+}
+
+/// Does the bookmark `name` that starts at `start` end in the paragraph it starts in?
+pub(super) fn bookmark_ends_in_its_paragraph(doc: &wordcraft_doc::Document, name: &str, start: &Pos) -> bool {
+    doc.para(start.story, &start.path).is_some_and(|para| {
+        para.object_offsets()
+            .into_iter()
+            .any(|o| o > start.off && matches!(para.object_at(o), Some(InlineObject::BookmarkEnd { name: n }) if n == name))
+    })
+}
+
+/// [`bookmark_text`] for the bookmark `name` that starts at `start`, for a caller that has
+/// looked the document's bookmarks up once.
+pub(super) fn bookmark_text_at(doc: &wordcraft_doc::Document, name: &str, start: &Pos) -> Option<String> {
     let para = doc.para(start.story, &start.path)?;
     let end = para
         .object_offsets()
         .into_iter()
         .find(|o| *o > start.off && matches!(para.object_at(*o), Some(InlineObject::BookmarkEnd { name: n }) if n == name))
         .unwrap_or(para.len());
-    Some(doc.copy_range(&start, &Pos { off: end, ..start.clone() }).plain_text().trim().to_string())
+    Some(doc.copy_range(start, &Pos { off: end, ..start.clone() }).plain_text().trim().to_string())
 }
 
-/// Does bookmark `name` (the first of that name, as [`bookmark_text`] takes it) end in a later
-/// paragraph than the one it starts in? Word's F9 shows such a bookmark's paragraphs as
-/// paragraphs of a REF's result, which a field's one-paragraph result can't hold.
-pub(super) fn bookmark_spans_paragraphs(doc: &wordcraft_doc::Document, name: &str) -> bool {
-    let Some((_, start)) = all_bookmarks(doc).into_iter().find(|(n, _)| n == name) else { return false };
-    let ends = |p: &wordcraft_doc::Paragraph, after: Option<usize>| {
-        p.object_offsets()
-            .into_iter()
-            .any(|o| after.is_none_or(|a| o > a) && matches!(p.object_at(o), Some(InlineObject::BookmarkEnd { name: n }) if n == name))
-    };
-    if doc.para(start.story, &start.path).is_some_and(|p| ends(p, Some(start.off))) {
+/// Does the bookmark `name` that starts at `start` end in a later paragraph than the one it
+/// starts in? Word's F9 shows such a bookmark's paragraphs as paragraphs of a REF's result, which
+/// a field's one-paragraph result can't hold. Only a bookmark that doesn't end in its own
+/// paragraph looks at the paragraphs after it.
+pub(super) fn bookmark_spans_paragraphs_at(doc: &wordcraft_doc::Document, name: &str, start: &Pos) -> bool {
+    if bookmark_ends_in_its_paragraph(doc, name, start) {
         return false;
     }
-    doc.para_paths(start.story)
-        .into_iter()
-        .skip_while(|p| *p != start.path)
-        .skip(1)
-        .any(|path| doc.para(start.story, &path).is_some_and(|p| ends(p, None)))
+    let ends = |p: &wordcraft_doc::Paragraph| {
+        p.object_offsets().into_iter().any(|o| matches!(p.object_at(o), Some(InlineObject::BookmarkEnd { name: n }) if n == name))
+    };
+    doc.para_paths(start.story).into_iter().skip_while(|p| *p != start.path).skip(1).any(|path| doc.para(start.story, &path).is_some_and(ends))
 }
 
 /// Every bookmark start in the document: the body's, then those of each header, footer, note,
