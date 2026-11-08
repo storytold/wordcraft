@@ -308,6 +308,10 @@ position with that tag. Tag case, unknown-source caches, source records, field i
 flags, style sorting and native/DOCX save behavior remain unchanged. Multi-source discovery,
 CSL and library import are separate work.
 
+## Field arguments
+
+For field results, the engine parser treats a backslash in quoted arguments as escaping the next character, as Word does. The DOCX HYPERLINK target reader applies the same rule; escaped asterisks remain argument text instead of starting a format switch. Engine parser and DOCX import tests cover these cases.
+
 ## Revision history
 
 > 2026-11-03 · Section `w:chapStyle` values preserve the full unsigned-byte range, including 10, while values above 255 are rejected.
@@ -325,6 +329,8 @@ CSL and library import are separate work.
 | 2026-11-05 | trivial | ODT: a table row kept from breaking across pages (`fo:keep-together` on the row) is read and written; it came back from a save free to break A row whose style doesn't say follows the default style. A row free to break says so where the file's default row style, which stays, keeps rows together. |
 | 2026-11-05 | trivial | ODT: a watermark added, changed or removed, and Different Odd & Even Pages turned on or off, in a file read from ODT are saved. The file's own page definitions were written back whatever happened to these, so the change was gone from the saved file (`odt::tests_more::headers`). Such a change writes the page definitions from the model, as other changes to what a page is made of do, so what WordCraft doesn't model of the page (a header's background) doesn't survive that save. Over 79 LibreOffice-authored files with a watermark added: all 79 have it, with the same page count in LibreOffice 26.8. |
 | 2026-11-05 | trivial | ODT: a frame offering one picture in several formats (LibreOffice's `.svm` metafile, then a PNG) shows the first WordCraft can read; it took the first whatever it was, and the picture was missing on screen and gone once the paragraph was rewritten An object's replacement picture coming before it is kept too. A readable picture after an unreadable replacement is shown, wherever the object comes, and a save from the model keeps both. |
+| 2026-11-04 | trivial | Engine field parsing and DOCX HYPERLINK targets consume quoted backslash escapes consistently |
+| 2026-11-03 | trivial | Quoted field arguments honor Word backslash escapes, including literal asterisks |
 | 2026-11-02 | trivial | DOCX: a picture's or shape's hyperlink is read from its `wp:docPr/a:hlinkClick` (Word's place for it) and written there too, beside the `w:hyperlink` around the run (#5267) |
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` keeps its default and explicit values in schema-ordered repeated saves |
 | 2026-11-04 | trivial | REF context update: 2026-11-04 · #4609 retains the label and template actually rendered by an ancestor list instance; implicitly counted levels remain distinct from explicitly rendered paragraphs. Synthetic instance-override and field-update regressions; no new native Word qualification or readiness change. |
