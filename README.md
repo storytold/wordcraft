@@ -174,16 +174,21 @@ output type, checked before the input is read) and 3 (strict refusal). On exit 3
 ```sh
 wordcraft-cli convert in.docx out.pdf --strict
 # wordcraft-cli: strict: 1 character cannot be drawn: U+2D30 (×3)
+# wordcraft-cli: strict: 1 picture(s) left out: word/media/image2.bin (header2.xml): unsupported format
 # {"schema":1,"strict":"failed","missing_glyphs":[{"cp":"U+2D30","count":3}],"missing_pictures":[{"part":"word/media/image2.bin","source_part":"word/header2.xml","reason":"unsupported_format"}],"truncated":false,"total_missing_glyphs":1,"total_missing_pictures":1,"glyphs_truncated":false,"pictures_truncated":false}
 ```
 
 The JSON line (schema 1, also what `file.strictReport` returns) has `schema`, `strict`
 (`"passed"` or `"failed"`), `missing_glyphs` (entries `{"cp", "count"}`, sorted by code point),
 `missing_pictures` (entries `{"part", "source_part", "reason"}`: the picture's part or target, the
-story part it sits in such as `word/header2.xml`, and a reason code), `truncated`, the two totals
+story part it sits in such as `word/header2.xml`, and a reason code; `source_part` is also
+`background` (the page picture), `body`, `header`, `footer` or `text box` where the part name is not
+known (a document not opened from a DOCX), or a chunk path such as
+`word/afchunk1.docx > word/header1.xml` for a picture inside an embedded DOCX chunk), `truncated`, the two totals
 `total_missing_glyphs` and `total_missing_pictures`, and `glyphs_truncated` and
 `pictures_truncated` for each list. The reason codes are `missing_part`, `external_target`,
-`link_only`, `undecodable` and `unsupported_format`; the stderr lines use plain words for them.
+`link_only`, `undecodable` and `unsupported_format`; the stderr lines use plain words for them. When a list is cut, the stderr line gives the total
+(`300 characters cannot be drawn (first 256 listed)`).
 Each list stops at 256 entries separately; `truncated` is true when either was cut, and the totals
 count every distinct character and picture found, those past the cap included. Only characters the output draws count (not hidden text, or deleted text
 without `--markup`), and a character a fallback font draws is fine. A Private Use Area character

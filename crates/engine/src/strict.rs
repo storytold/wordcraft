@@ -64,7 +64,7 @@ impl StrictReport {
         let glyphs: Vec<(String, u64)> = self.glyphs.iter().map(|(c, n)| (code_point(*c), *n)).collect();
         let pictures: Vec<(String, String, String)> =
             self.pictures.iter().map(|p| (p.part.clone(), story_label(&p.story).to_string(), p.reason.label().to_string())).collect();
-        human_parts(&glyphs, &pictures, self.glyphs_truncated, self.pictures_truncated)
+        human_parts(&glyphs, &pictures, (self.glyphs_truncated, self.pictures_truncated), (self.total_glyphs as u64, self.total_pictures))
     }
 
     /// The human lines, each `strict: …`.
@@ -79,13 +79,16 @@ impl StrictReport {
 }
 
 /// The human text of a report: (code point text, count) and (part, story label, reason words).
-fn human_parts(glyphs: &[(String, u64)], pictures: &[(String, String, String)], glyphs_cut: bool, pictures_cut: bool) -> Vec<String> {
+fn human_parts(glyphs: &[(String, u64)], pictures: &[(String, String, String)], cut: (bool, bool), totals: (u64, u64)) -> Vec<String> {
+    let (glyphs_cut, pictures_cut) = cut;
     let mut out = Vec::new();
     if !glyphs.is_empty() {
         let list: Vec<String> = glyphs.iter().map(|(cp, n)| format!("{cp} (×{n})")).collect();
         let more = if glyphs_cut { ", …" } else { "" };
-        let n = glyphs.len();
-        out.push(format!("{n} character{} cannot be drawn: {}{more}", if n == 1 { "" } else { "s" }, list.join(", ")));
+        let listed = glyphs.len() as u64;
+        let n = if glyphs_cut { totals.0.max(listed) } else { listed };
+        let first = if n > listed { format!(" (first {listed} listed)") } else { String::new() };
+        out.push(format!("{n} character{} cannot be drawn{first}: {}{more}", if n == 1 { "" } else { "s" }, list.join(", ")));
     }
     if !pictures.is_empty() {
         let list: Vec<String> = pictures
@@ -93,7 +96,10 @@ fn human_parts(glyphs: &[(String, u64)], pictures: &[(String, String, String)], 
             .map(|(part, at, reason)| if at.is_empty() { format!("{part}: {reason}") } else { format!("{part} ({at}): {reason}") })
             .collect();
         let more = if pictures_cut { "; …" } else { "" };
-        out.push(format!("{} picture(s) left out: {}{more}", pictures.len(), list.join("; ")));
+        let listed = pictures.len() as u64;
+        let n = if pictures_cut { totals.1.max(listed) } else { listed };
+        let first = if n > listed { format!(" (first {listed} listed)") } else { String::new() };
+        out.push(format!("{n} picture(s) left out{first}: {}{more}", list.join("; ")));
     }
     out
 }
@@ -118,7 +124,9 @@ pub fn lines_from_json(report: &Value) -> Vec<String> {
         (None, None) => (flag("truncated"), flag("truncated")),
         _ => (flag("glyphs_truncated"), flag("pictures_truncated")),
     };
-    human_parts(&glyphs, &pictures, glyphs_cut, pictures_cut).into_iter().map(|p| format!("strict: {p}")).collect()
+    let total = |k: &str, listed: usize| report.get(k).and_then(Value::as_u64).unwrap_or(listed as u64);
+    let totals = (total("total_missing_glyphs", glyphs.len()), total("total_missing_pictures", pictures.len()));
+    human_parts(&glyphs, &pictures, (glyphs_cut, pictures_cut), totals).into_iter().map(|p| format!("strict: {p}")).collect()
 }
 
 /// The words for a JSON reason code; a code this version does not know is shown as it is.

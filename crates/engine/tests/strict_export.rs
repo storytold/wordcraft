@@ -269,6 +269,7 @@ fn each_list_says_for_itself_that_it_was_cut() {
     assert_eq!((r["truncated"].clone(), r["glyphs_truncated"].clone(), r["pictures_truncated"].clone()), (json!(true), json!(true), json!(false)));
     let lines = wordcraft_engine::strict::lines_from_json(&r);
     assert!(lines[0].ends_with(", …"), "{}", lines[0]);
+    assert!(lines[0].starts_with("strict: 300 characters cannot be drawn (first 256 listed): "), "{}", lines[0]);
     assert!(!lines[1].contains('…'), "{}", lines[1]);
     assert_eq!((r["total_missing_glyphs"].clone(), r["total_missing_pictures"].clone()), (json!(300), json!(1)));
 }

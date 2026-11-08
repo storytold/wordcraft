@@ -375,11 +375,24 @@ fn hostile_chunks_never_panic() {
 
 /// A DOCX whose only picture names a part the package lacks (`media/gone.png`), or sits outside it.
 fn inner_with_dropped_picture(external: bool) -> Vec<u8> {
-    let drawing = r#"<w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="254000" cy="254000"/><wp:docPr id="1" name="P"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="p"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdP"/></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="254000" cy="254000"/></a:xfrm><a:prstGeom prst="rect"/></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"#;
-    let doc = format!(r#"<w:document {NS}><w:body><w:p>{drawing}</w:p><w:sectPr/></w:body></w:document>"#);
-    let (target, mode) = if external { ("http://127.0.0.1:9/never-fetched.png", r#" TargetMode="External""#) } else { ("media/gone.png", "") };
+    inner_with_dropped_pictures(1, external)
+}
+
+/// As [`inner_with_dropped_picture`], with `n` pictures each naming its own missing part.
+fn inner_with_dropped_pictures(n: usize, external: bool) -> Vec<u8> {
+    let drawing = r#"<w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="254000" cy="254000"/><wp:docPr id="1" name="P"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="p"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdP{i}"/></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="254000" cy="254000"/></a:xfrm><a:prstGeom prst="rect"/></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"#;
+    let body: String = (0..n).map(|i| drawing.replace("{i}", &i.to_string())).collect();
+    let doc = format!(r#"<w:document {NS}><w:body><w:p>{body}</w:p><w:sectPr/></w:body></w:document>"#);
+    let mode = if external { r#" TargetMode="External""# } else { "" };
+    let image = |i: usize| {
+        let target = if external { format!("http://127.0.0.1:9/never-fetched{i}.png") } else { format!("media/gone{i}.png") };
+        format!(
+            r#"<Relationship Id="rIdP{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="{target}"{mode}/>"#
+        )
+    };
     let rels = format!(
-        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdP" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="{target}"{mode}/></Relationships>"#
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{}</Relationships>"#,
+        (0..n).map(image).collect::<String>()
     );
     let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#;
     let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -408,4 +421,15 @@ fn a_picture_dropped_inside_a_chunk_is_recorded_against_the_chunk() {
         assert_eq!(got[0].1, "word/afchunk.docx > word/document.xml");
         assert_eq!(got[0].2, reason);
     }
+}
+
+/// A chunk with more dropped pictures than the list holds still counts them all (#6005).
+#[test]
+fn a_chunks_total_of_dropped_pictures_counts_past_the_list() {
+    let n = wordcraft_doc::MAX_MISSING_PICTURES + 44;
+    let inner = inner_with_dropped_pictures(n, false);
+    let d = read(&package(&format!("{}{CHUNK}", p("Before")), Some(("docx", DOCX_MAIN, &inner)))).unwrap();
+    assert_eq!(d.missing_pictures.list.len(), wordcraft_doc::MAX_MISSING_PICTURES);
+    assert!(d.missing_pictures.truncated);
+    assert_eq!(d.missing_pictures.total, n as u64);
 }
