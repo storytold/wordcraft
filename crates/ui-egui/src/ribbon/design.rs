@@ -3,11 +3,12 @@ use super::{CONTENT_H, Rect, Sense, Target, Ui, WordApp, big, group, json, menu_
 
 /// The Design tab's style set gallery in a box of its own, sized from its thumbnails and clipped
 /// to it, with a gap on each side: the Colors and Fonts column can't be drawn over, or cut by,
-/// the thumbnails (#638). Returns the box and the space the thumbnails used.
+/// the thumbnails (#638). In a right-to-left interface, the thumbnails lay out from the right
+/// (#5750). Returns the box and the space the thumbnails used.
 pub(super) fn style_set_box(app: &mut WordApp, ui: &mut Ui) -> (Rect, Rect) {
     ui.add_space(4.0);
     let (gallery, _) = ui.allocate_exact_size(vec2(crate::previews::STYLE_SET_GALLERY_W, CONTENT_H), Sense::hover());
-    let mut gui = ui.new_child(egui::UiBuilder::new().max_rect(gallery).layout(egui::Layout::left_to_right(egui::Align::Min)));
+    let mut gui = ui.new_child(egui::UiBuilder::new().max_rect(gallery).layout(crate::rtl::row_layout(ui, egui::Align::Min)));
     gui.set_clip_rect(gallery.intersect(ui.clip_rect()));
     gui.spacing_mut().item_spacing = vec2(1.0, 1.0);
     crate::previews::style_set_gallery(app, &mut gui);
