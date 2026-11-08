@@ -520,9 +520,7 @@ mod bar {
                     }
                     Action::Minimize => ctx.send_viewport_cmd_to(app.active_viewport(), egui::ViewportCommand::Minimized(true)),
                     Action::Quit => {
-                        if app.close_requested() {
-                            app.quit_requested = true;
-                        }
+                        app.quit();
                     }
                     Action::Input(kind) => {
                         // Document undo uses its registry; text fields keep egui's local undo.
