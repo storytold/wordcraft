@@ -188,9 +188,13 @@ fn missing(expected: &str, got: &str) -> Vec<String> {
 /// result's `document.xml`.
 fn assert_complete(name: &str, original: &str, revised: &str, params: Value) -> String {
     let (ob, rb) = (docx(original), docx(revised));
+    // Tests run in parallel threads of one process, and two may pass the same `name`:
+    // the counter keeps each call's pair of files its own.
+    static CALL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir();
-    let o = dir.join(format!("wc-compare-probe-{name}-{}-o.docx", std::process::id()));
-    let r = dir.join(format!("wc-compare-probe-{name}-{}-r.docx", std::process::id()));
+    let o = dir.join(format!("wc-compare-probe-{name}-{}-{n}-o.docx", std::process::id()));
+    let r = dir.join(format!("wc-compare-probe-{name}-{}-{n}-r.docx", std::process::id()));
     std::fs::write(&o, &ob).unwrap();
     std::fs::write(&r, &rb).unwrap();
     let mut v = json!({"path": r.to_string_lossy(), "original": o.to_string_lossy()});
@@ -346,9 +350,6 @@ fn compare_keeps_text_boxes_equations_and_controls_of_a_diffed_paragraph() {
     assert_eq!(xml.matches("<m:oMath>").count(), 1, "the equation must be saved once, as OMML");
     assert!(!xml.contains("m149x+1"), "the word before the equation must keep its own text");
 }
-
-/// Scratch probe for #5924 round 2: prints the saved result of a smaller copy of the fixture
-/// above, to see where the word beside the equation goes. Run with `--ignored --nocapture`.
 
 #[test]
 fn compare_keeps_a_diffed_paragraph_that_opens_with_hidden_text() {
