@@ -324,16 +324,24 @@ fn paragraph_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             });
             para_check(ui, &mut opts[0], tl!("Mirror indents"), "mirrorIndents", mixed);
             ui.label(egui::RichText::new(tl!("Spacing")).font(semibold(12.5)));
-            crate::rtl::Table::new("sp").columns(4).show(ui, |t| {
-                t.row(|r| {
-                    let before_label = r.cell(|ui| ui.label(tl!("Before:")));
-                    r.cell(|ui| para_number(ui, before, ParaNumber::Points, "spaceBefore", mixed, &before_label));
-                    let line_label = r.cell(|ui| ui.label(tl!("Line spacing:")));
-                    r.cell(|ui| para_number(ui, line, ParaNumber::Lines, "lineSpacing", mixed, &line_label));
+            // Two tables side by side, not one of two rows: Tab goes down Before and After, then to
+            // Line spacing beside them, as in Word (a table's Tab order is row by row).
+            crate::rtl::horizontal_top(ui, |ui| {
+                crate::rtl::Table::new("sp").columns(2).show(ui, |t| {
+                    t.row(|r| {
+                        let before_label = r.cell(|ui| ui.label(tl!("Before:")));
+                        r.cell(|ui| para_number(ui, before, ParaNumber::Points, "spaceBefore", mixed, &before_label));
+                    });
+                    t.row(|r| {
+                        let after_label = r.cell(|ui| ui.label(tl!("After:")));
+                        r.cell(|ui| para_number(ui, after, ParaNumber::Points, "spaceAfter", mixed, &after_label));
+                    });
                 });
-                t.row(|r| {
-                    let after_label = r.cell(|ui| ui.label(tl!("After:")));
-                    r.cell(|ui| para_number(ui, after, ParaNumber::Points, "spaceAfter", mixed, &after_label));
+                crate::rtl::Table::new("sp_line").columns(2).show(ui, |t| {
+                    t.row(|r| {
+                        let line_label = r.cell(|ui| ui.label(tl!("Line spacing:")));
+                        r.cell(|ui| para_number(ui, line, ParaNumber::Lines, "lineSpacing", mixed, &line_label));
+                    });
                 });
             });
             para_check(ui, &mut opts[1], tl!("Don't add space between paragraphs of the same style"), "contextualSpacing", mixed);
