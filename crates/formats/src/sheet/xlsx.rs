@@ -102,18 +102,18 @@ pub(super) fn xlsx_sheets(pkg: &mut Package<'_>) -> Result<Vec<SheetRef>, String
 /// (`rPh`) left out.
 fn shared_strings(xml: &[u8]) -> Vec<String> {
     let mut out = Vec::new();
-    let mut cur: Option<String> = None;
+    let mut cur: Option<(String, usize)> = None;
     let (mut in_t, mut phonetic) = (false, 0usize);
     walk(xml, |ev| match ev {
         Ev::Start(e) => match e.local_name().as_ref() {
-            b"si" => cur = Some(String::new()),
+            b"si" => cur = Some((String::new(), 0)),
             b"t" => in_t = true,
             b"rPh" => phonetic += 1,
             _ => {}
         },
         Ev::End(n) => match n.as_slice() {
             b"si" => {
-                if let Some(s) = cur.take()
+                if let Some((s, _)) = cur.take()
                     && out.len() < MAX_SHARED
                 {
                     out.push(s);
@@ -126,9 +126,9 @@ fn shared_strings(xml: &[u8]) -> Vec<String> {
         Ev::Text(t) => {
             if in_t
                 && phonetic == 0
-                && let Some(s) = cur.as_mut()
+                && let Some((s, n)) = cur.as_mut()
             {
-                push_capped(s, &t);
+                push_capped(s, n, &t);
             }
         }
     });
@@ -182,6 +182,9 @@ struct XCell {
     style: usize,
     value: String,
     inline: String,
+    /// Characters in `value` and `inline` (see [`push_capped`]).
+    value_chars: usize,
+    inline_chars: usize,
 }
 
 pub(super) fn xlsx_rows(pkg: &mut Package<'_>, path: &str) -> Result<Vec<Vec<String>>, String> {
@@ -227,9 +230,9 @@ pub(super) fn xlsx_rows(pkg: &mut Package<'_>, path: &str) -> Result<Vec<Vec<Str
         Ev::Text(t) => {
             if let Some(c) = cell.as_mut() {
                 if in_v {
-                    push_capped(&mut c.value, &t);
+                    push_capped(&mut c.value, &mut c.value_chars, &t);
                 } else if in_is_t && phonetic == 0 {
-                    push_capped(&mut c.inline, &t);
+                    push_capped(&mut c.inline, &mut c.inline_chars, &t);
                 }
             }
         }

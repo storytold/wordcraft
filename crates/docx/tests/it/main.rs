@@ -40,6 +40,7 @@ mod strict_drawings;
 mod text_alignment;
 mod text_boxes;
 mod toc_ranges;
+mod twips_wrap;
 mod undefined_style;
 mod vml_shapes;
 mod word_xml;
