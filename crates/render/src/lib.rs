@@ -20,7 +20,7 @@ mod media;
 
 #[cfg(test)]
 use media::{CACHE_BYTES, MediaCache, OVERSIZED_GLYPHS_NOTED, cacheable, decode_pixmap_within, note_oversized_glyphs, shrink};
-pub use media::{decode_pixmap, image_size, metafile_size};
+pub use media::{decode_pixmap, decode_pixmap_fx, image_size, metafile_size};
 use media::{draw_page_picture, draw_vector, lock, pixmap_for, premul_pixmap, vector_for};
 
 mod color_glyph;
@@ -184,6 +184,12 @@ impl RenderOptions {
     /// else the document's page color, else [`RenderOptions::paper`].
     pub fn paper_of(&self, doc: &Document) -> Rgb {
         self.ink(self.read_paper.or(doc.settings.page_color).unwrap_or(self.paper))
+    }
+
+    /// The on-screen color of paper with no page color: [`RenderOptions::read_paper`], else
+    /// [`RenderOptions::paper`]. White Read Mode paper on a dark page is the dark paper grey.
+    pub fn blank_paper(&self) -> Rgb {
+        self.ink(self.read_paper.unwrap_or(self.paper))
     }
 
     /// The on-screen colour for a document colour (see [`RenderOptions::dark`]).
@@ -797,7 +803,7 @@ fn draw_mark_text(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
 }
 
 fn draw_image(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
-    let Draw::Image { rect, media, crop, alpha, .. } = it else { return };
+    let Draw::Image { rect, media, crop, alpha, fx, .. } = it else { return };
     let (doc, view) = (fr.doc, fr.view);
     let r = kurbo_rect(rect);
     if !r.overlaps(*fr.visible) {
@@ -807,7 +813,7 @@ fn draw_image(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
         draw_vector(ctx, &v, &r, crop, *alpha, view);
         return;
     }
-    let Some(pm) = pixmap_for(doc, media) else {
+    let Some(pm) = pixmap_for(doc, media, *fx) else {
         ctx.set_transform(view);
         ctx.set_paint(color(fr.opts.ink(Rgb(0xD0, 0xD0, 0xD0)), 1.0));
         ctx.fill_rect(&r);
