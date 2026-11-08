@@ -237,11 +237,14 @@ impl Previews {
         self.english_names.get(shown).cloned().unwrap_or_else(|| shown.to_string())
     }
 
-    /// Fonts were added or removed: list the families again. The font menus' entries see the
-    /// change themselves ([`FontAtlas`]), in every window.
+    /// Fonts were added or removed: list the families again and clear cached style preview
+    /// textures so any style rendered with a fallback face refreshes with newly available fonts.
+    /// The font menus' entries see the change themselves ([`FontAtlas`]), in every window.
     pub fn fonts_changed(&mut self) {
         self.families = None;
         self.east_asian = None;
+        // Style previews may have been rasterised with a fallback face before a font was installed.
+        self.tex.clear();
     }
 
     /// A closure drawing a font-menu entry in its own face, from the fonts' atlas.
