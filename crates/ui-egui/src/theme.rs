@@ -505,7 +505,8 @@ pub fn install_fonts_language_arabic(
     ctx.set_fonts(fonts);
 }
 
-/// Add `faces` after every other font of the interface families.
+/// Add `faces` after every other font of the interface families. A name already in a family is not
+/// added again, so calling this twice with the same faces is harmless.
 pub fn add_fallback_faces(fonts: &mut FontDefinitions, faces: &[Arc<wordcraft_fonts::FontFace>]) {
     for f in faces {
         let name = format!("fallback {} {} {}", f.family, f.style, f.id());
@@ -768,9 +769,14 @@ pub fn text_width(painter: &egui::Painter, text: &str, font: &FontId, tracking: 
     painter.layout_job(tracked_job(text, font, tracking, color)).size().x
 }
 
-/// The text as it fits in `width`: shortened with an ellipsis when it is too long, and empty
-/// when not even the ellipsis fits (#2402). The beginning of the text is kept, so the reader
-/// still sees what the message is about.
+/// The text as it fits in `width` (points), drawn on one line with `font` and `tracking`.
+///
+/// - Text that already fits is returned as it is.
+/// - Otherwise: the longest beginning that still fits with `…` after it, so the reader still sees
+///   what the message is about (#2402). It is found by halving, in about log2(n) layouts, so it is
+///   exact however uneven the letters are.
+/// - When only `…` fits the result is `…`. When not even that fits, when the text is empty, or
+///   when `width` is not a positive number, it is empty.
 pub fn fit_text(painter: &egui::Painter, text: &str, font: &FontId, tracking: f32, color: Color32, width: f32) -> String {
     if text.is_empty() || width <= 0.0 {
         return String::new();
@@ -1151,15 +1157,6 @@ mod tests {
         });
         assert!(missing.is_empty(), "symbols without a glyph: {missing:#?}");
     }
-    // Paste into `mod tests` in crates/ui-egui/src/theme.rs, after the existing `use std::collections::BTreeSet;`.
-    //
-    //     use super::{Animations, Appearance, InterfaceSize, legacy_interface_percent, migrate_legacy_interface_size};
-    //     use serde_json::json;
-    //
-    // The settings tests were run against copies of the types (serde_json, no egui) and pass. The contrast
-    // numbers come from the token values in theme.rs with the same formula as `contrast` below. The
-    // `fit_text` and `Appearance` tests need egui, so run them in the crate:
-    //     cargo test -p wordcraft-ui-egui theme::
 
     /// Saved settings read back as written, and junk reads as the default instead of failing the file.
     #[test]
@@ -1218,6 +1215,8 @@ mod tests {
         }
     }
 
+    /// A chosen size is rounded and clamped to 50–300 %, NaN and infinity are refused, and the presets
+    /// File › Options offers ascend and stay inside that range.
     #[test]
     fn interface_sizes_are_clamped_and_the_presets_are_in_range() {
         assert_eq!(InterfaceSize::from_percent(10.0).and_then(InterfaceSize::percent), Some(InterfaceSize::MIN));
@@ -1264,6 +1263,10 @@ mod tests {
     /// Text and icons on the surfaces they rest on, in both themes: text, dim text and the accent text
     /// reach 4.5:1 everywhere (the pressed shade is momentary and left out), group labels on the four
     /// surfaces a group sits on, and icons 3:1.
+    ///
+    /// The status colours (`green`, `orange`, `red`, `blue`) are not checked. In the light theme some
+    /// are below 4.5:1 on some surfaces (`green` and `orange` on all of them), so they should not be
+    /// used for small text until darker text variants exist.
     #[test]
     fn text_and_icons_read_on_their_surfaces() {
         for t in [super::Tokens::light(), super::Tokens::dark()] {
@@ -1315,6 +1318,46 @@ mod tests {
                 let kept = shown.trim_end_matches('…').chars().count();
                 let longer: String = text.chars().take(kept + 1).collect();
                 assert!(width_of(&format!("{longer}…")) > room, "{part}: one more character would fit after {shown}");
+            }
+        })
+        .drop_without_applying_deltas();
+    }
+    /// Text that fits is left alone; no text, no room or less room than the ellipsis gives nothing;
+    /// room for just the ellipsis gives the ellipsis. In several scripts, every width from nothing to the
+    /// whole text keeps a beginning of the text that fits, and never one character fewer than could fit.
+    #[test]
+    fn fit_text_handles_the_edges_and_other_scripts() {
+        let font = super::TypeRung::Control.regular();
+        let ctx = egui::Context::default();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            let black = egui::Color32::BLACK;
+            let width_of = |s: &str| super::text_width(ui.painter(), s, &font, 0.0, black);
+            let fit = |s: &str, room: f32| super::fit_text(ui.painter(), s, &font, 0.0, black, room);
+            assert_eq!(fit("", 100.0), "");
+            for room in [0.0, -5.0, f32::NAN] {
+                assert_eq!(fit("report.docx", room), "", "room {room}");
+            }
+            assert_eq!(fit("report.docx", width_of("report.docx")), "report.docx");
+            let ellipsis = width_of("…");
+            assert_eq!(fit("report.docx", ellipsis / 2.0), "");
+            assert_eq!(fit("report.docx", ellipsis), "…");
+            for text in ["Project - Gadgets and sleep of teenagers.docx", "מסמך חשוב לבדיקה", "文档文件名称很长很长", "naïve café résumé"]
+            {
+                let whole = width_of(text);
+                for step in 0..=20 {
+                    let room = whole * step as f32 / 20.0;
+                    let shown = fit(text, room);
+                    if shown.is_empty() {
+                        continue;
+                    }
+                    assert!(width_of(&shown) <= room + 1e-3, "{text}: {shown} is too wide for {room}");
+                    let kept = shown.trim_end_matches('…');
+                    assert!(text.starts_with(kept), "{text}: {shown} is not its beginning");
+                    if shown.ends_with('…') {
+                        let longer: String = text.chars().take(kept.chars().count() + 1).collect();
+                        assert!(width_of(&format!("{longer}…")) > room, "{text}: one more character would fit after {shown}");
+                    }
+                }
             }
         })
         .drop_without_applying_deltas();
