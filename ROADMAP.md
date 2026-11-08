@@ -150,7 +150,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
-- 2026-11-01: Tables: from Word 2013 (compatibility mode 15) a percentage-width table reaches its width with the outer edges of its outer borders, as in Word: a bordered 100% table no longer runs half a border past the right margin, and the lines between its columns and its cells' text stay where Word puts them. An end-aligned table, of either kind of width, puts its end border's outer edge on the margin, as Word does, rather than the border's middle.
+- 2026-11-01: Tables: from Word 2013 (compatibility mode 15) a percentage-width table takes its share of the room left after its outer borders' outer halves, as in Word: a bordered 100% table no longer runs half a border past the right margin, and the lines between its columns and its cells' text stay where Word puts them. An end-aligned table, of either kind of width, puts its end border's outer edge on the margin, as Word does, rather than the border's middle, and a centred left-to-right table centres its outer edges.
 - 2026-11-08: Layout: a turned inline picture whose file keeps no room for the turn (no or a zero `wp:effectExtent`, as other tools write) keeps its line to its frame and overhangs it, cut at the line's top and bottom, as Word does: the frame as it is in Word 2007 layout, with width and height exchanged from 45° to 135° and 225° to 315° in Word 2013+ layout. Such a file saves the same way. Pictures with the room recorded (Word's own files) still take their rotated bounds. Readiness unchanged.
 - 2026-11-08: XML text and CDATA read with their line ends normalised (XML 1.0 §2.11): CR LF and a lone CR are one line feed, `&#13;` stays a CR, so a line break inside `w:t` in a file saved with Windows line ends is one space, not two (#5897); readiness estimates unchanged.
 - 2026-11-08: Layout: contextual spacing drops the space after a table cell's last paragraph when that paragraph is in the Normal style, the end-of-cell mark counting as a Normal paragraph next to it; a last paragraph in another style keeps its space after. The rule is inferred from docxide-pdf's notes and its `cell-end-*` fixtures (`cell-end-text-context`, `cell-end-empty-context`); a Word comparison that tells it apart from the neighbouring paragraph's style is still open. Readiness unchanged.
@@ -896,7 +896,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-31 | trivial | Control/MCP #2596 review fixes; readiness estimates unchanged |
-| 2026-11-01 | trivial | Progress log: a percentage-width table from Word 2013 ends its outer borders at its width |
+| 2026-11-01 | trivial | Progress log: a percentage-width table from Word 2013 takes its share after its outer borders |
 | 2026-11-08 | trivial | Progress log: XML line ends in text normalised (#5897) |
 | 2026-11-08 | trivial | Progress log: contextual spacing drops the space after a cell's last Normal paragraph (#5450) |
 | 2026-11-06 | trivial | Progress log: the Arabic interface's Styles gallery reads from the right (#5566) |
