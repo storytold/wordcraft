@@ -318,6 +318,14 @@ fn saved_file_size(s: &Session) -> Option<u64> {
     crate::io::file_size(s.path.as_deref()?)
 }
 
+/// A FILESIZE field's result text: 0 in a document that has never been saved, else the saved
+/// file's size; `None` when that size is unavailable.
+fn file_size_result(s: &Session, instr: &str) -> Option<String> {
+    let never_saved = s.path.is_none() && s.file_name.is_none();
+    let bytes = if never_saved { Some(0) } else { saved_file_size(s) }?;
+    Some(count_text(instr, file_size_in(instr, bytes)))
+}
+
 /// A FILESIZE field's number: `bytes` rounded to the nearest megabyte (1,000,000 bytes) with
 /// `\m`, else to the nearest kilobyte (1,000 bytes) with `\k`, else the bytes.
 pub(super) fn file_size_in(instr: &str, bytes: u64) -> u64 {
@@ -516,9 +524,8 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                 // FILESIZE shows the saved file's size in bytes, `\k` in kilobytes and `\m` in
                 // megabytes, and 0 in a document that has never been saved.
                 "FILESIZE" => {
-                    let never_saved = s.path.is_none() && s.file_name.is_none();
-                    if let Some(bytes) = if never_saved { Some(0) } else { saved_file_size(s) } {
-                        updates.push((k, count_text(instr, file_size_in(instr, bytes))));
+                    if let Some(text) = file_size_result(s, instr) {
+                        updates.push((k, text));
                     }
                 }
                 // TEMPLATE shows the attached template's file name, or Normal.dotm when absent.
