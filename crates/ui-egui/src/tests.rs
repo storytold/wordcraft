@@ -3430,6 +3430,29 @@ fn the_ribbon_boxes_name_themselves_for_a_screen_reader() {
     }
 }
 
+/// The Action Pen's drop-down arrow names the options it opens, as `split`'s does (#3172): a
+/// screen reader gets "Action Pen options", not an unnamed button.
+#[test]
+fn the_action_pen_arrow_names_the_options_it_opens() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.run("file.new", json!({"template": "sample"})).unwrap();
+    a.run("ui.tab", json!({ "tab": "Draw" })).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    for name in ["Action Pen", "Action Pen options"] {
+        assert!(h.query_by_role_and_label(Role::Button, name).is_some(), "nothing on the Draw ribbon is called {name:?}");
+    }
+}
+
 /// #1015: focusing Save is not enough: its dialog must expose the question and any failed
 /// save's explanation, so assistive technology has context for the three choices.
 #[test]

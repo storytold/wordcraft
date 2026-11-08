@@ -109,7 +109,9 @@ pub fn big_split_toggle(
     }
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, label.replace('\n', " ")));
     let arrow_title = crate::i18n::fmt(tl!("{name} options"), &[("name", &label.replace('\n', " "))]);
+    let (arrow_title, _) = tooltip_lines(&arrow_title, "", "", None);
     show_hint(&aresp, &arrow_title, &[]);
+    aresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, &arrow_title));
     if on {
         crate::rtl::menu(&aresp).show(|ui| {
             ui.set_min_width(200.0);

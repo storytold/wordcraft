@@ -35,6 +35,9 @@ const MIN_GESTURE: f32 = 8.0;
 const MIN_LOOP: f32 = 16.0;
 /// Longest a stroke may be compared with the chord between its ends before it is not a line.
 const LINE_RATIO: f32 = 1.12;
+/// Points either side of a stroke's vertical extent whose lines still join its map: a stroke on
+/// a line's edge, or just above its text, meets that line.
+const BAND_MARGIN: f32 = 8.0;
 
 /// A gesture recognised in a stroke.
 #[derive(Clone, Debug, PartialEq)]
@@ -686,6 +689,17 @@ pub fn classify(points: &[[f32; 2]], text: &PageText) -> Option<Gesture> {
 /// positions, in the page's order. Turned lines are left out (a gesture there would need the
 /// stroke in that line's own frame).
 pub fn page_text(s: &Session, layout: &DocLayout, page: usize) -> PageText {
+    page_text_in(s, layout, page, None)
+}
+
+/// The text map of `page` around the vertical extent `y0..y1` (points), with [`BAND_MARGIN`]
+/// either side: the lines a stroke drawn there can reach, and no others. A stroke on a dense page
+/// therefore keeps the lines it is drawn on, and the count cap can't push them out of the map.
+pub fn page_text_near(s: &Session, layout: &DocLayout, page: usize, y0: f32, y1: f32) -> PageText {
+    page_text_in(s, layout, page, Some((y0.min(y1), y0.max(y1))))
+}
+
+fn page_text_in(s: &Session, layout: &DocLayout, page: usize, band: Option<(f32, f32)>) -> PageText {
     let pg = layout.pages.get(page);
     let mut text = PageText { page, w: pg.map_or(1.0, |p| p.w.max(1.0)), h: pg.map_or(1.0, |p| p.h.clamp(1.0, 1.0e5)), rows: Vec::new() };
     let Some(pg) = pg else { return text };
@@ -693,6 +707,11 @@ pub fn page_text(s: &Session, layout: &DocLayout, page: usize) -> PageText {
     for line in wordcraft_layout::hit::page_lines(pg, StoryRef::Body) {
         if cells >= MAX_CELLS {
             break;
+        }
+        if let Some((y0, y1)) = band
+            && (line.bottom < y0 - BAND_MARGIN || line.top > y1 + BAND_MARGIN)
+        {
+            continue;
         }
         let Some(para) = s.doc.para(line.story, line.path) else { continue };
         let carets = line.para.line_carets(line.li);
@@ -719,10 +738,40 @@ pub fn page_text(s: &Session, layout: &DocLayout, page: usize) -> PageText {
     text
 }
 
+/// The vertical extent of `points` (finite entries, clamped to height `h`), for a band-limited
+/// map. `None` when no entry is finite.
+fn band_of(points: &[[f32; 2]], h: f32) -> Option<(f32, f32)> {
+    let h = h.clamp(1.0, MAX_COORD);
+    let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+    for [_, y] in points.iter().take(MAX_GESTURE_POINTS.saturating_mul(8)) {
+        if !y.is_finite() {
+            continue;
+        }
+        let y = y.clamp(0.0, h);
+        lo = lo.min(y);
+        hi = hi.max(y);
+    }
+    (lo <= hi).then_some((lo, hi))
+}
+
+/// The text map a stroke is recognised against: only the lines its vertical extent can reach
+/// (see [`page_text_near`]), or the whole page when no point is finite (nothing can be read from
+/// it). The live preview and the command both use this, so what the stroke shows is what it does.
+fn text_for_stroke(s: &Session, layout: &DocLayout, page: usize, points: &[[f32; 2]]) -> PageText {
+    let h = layout.pages.get(page).map_or(1.0, |p| p.h);
+    match band_of(points, h) {
+        Some((y0, y1)) => page_text_near(s, layout, page, y0, y1),
+        None => page_text(s, layout, page),
+    }
+}
+
 /// Recognise the gesture a stroke being drawn makes, for live feedback. `None` while the stroke
-/// is too small or makes none: the caller draws it as ink on release.
+/// is too small or makes none: the caller draws it as ink on release. Only the lines the stroke
+/// can reach are mapped, so a dense page costs what the stroke meets, not the whole page.
 pub fn preview(s: &Session, layout: &DocLayout, page: usize, points: &[[f32; 2]]) -> Option<Gesture> {
-    let text = page_text(s, layout, page);
+    let h = layout.pages.get(page).map_or(1.0, |p| p.h);
+    band_of(points, h)?;
+    let text = text_for_stroke(s, layout, page, points);
     classify(points, &text)
 }
 
@@ -734,7 +783,7 @@ pub(super) fn perform(s: &mut Session, v: &Value) -> CmdResult {
     let pg = layout.pages.get(page).ok_or_else(|| CmdError::Params(format!("no page {page}")))?;
     let (pw, ph) = (pg.w.max(1.0), pg.h.clamp(1.0, 1.0e5));
     let pts = super::points_param(v, MAX_GESTURE_POINTS, pw, ph)?;
-    let text = page_text(s, &layout, page);
+    let text = text_for_stroke(s, &layout, page, &pts);
     let Some(gesture) = classify(&pts, &text) else {
         // Unrecognised (or too small): it stays ink. One undo step with the rest of the stroke.
         let mut out = super::stroke(s, v)?;

@@ -323,3 +323,28 @@ fn tiny_ambiguous_and_hostile_strokes_stay_ink_or_fail_cleanly() {
     assert_eq!((s.sel.anchor.off, s.sel.focus.off), (0, 0), "a pen stroke selects nothing");
     let _ = Pos::body(0, 0);
 }
+
+/// The gesture map builds only the lines a stroke's vertical band can reach: on a page of
+/// several paragraphs the map holds the one the stroke is drawn on, so the count cap can't leave
+/// the text under the stroke out of a dense page.
+#[test]
+fn the_gesture_map_keeps_only_the_lines_near_the_stroke() {
+    let mut s = session("alpha\n\nbeta\n\ngamma");
+    let layout = s.layout();
+    let full = action_pen::page_text(&s, &layout, 0);
+    assert_eq!(full.rows.len(), 3, "three paragraphs are laid out");
+    let second = full.rows.get(1).unwrap().clone();
+    let near = action_pen::page_text_near(&s, &layout, 0, second.top, second.bottom);
+    assert_eq!(near.rows.len(), 1, "only the paragraph the band holds");
+    let row = near.rows.first().unwrap();
+    let (first, last) = (second.cells.first().unwrap().pos.off, second.cells.last().unwrap().end);
+    assert!(row.cells.iter().all(|c| c.pos.off >= first && c.end <= last), "beta's characters only: {:?}", row.cells.first().map(|c| c.pos.off));
+    // The live preview maps the same band and still reads the stroke.
+    let cells = cells(&near);
+    let (a, b) = (cells.first().unwrap(), cells.get(2).unwrap());
+    let stroke = across(a.x - 1.0, b.right() + 1.0, (a.y + b.bottom()) / 2.0);
+    assert_eq!(action_pen::preview(&s, &layout, 0, &stroke).map(|g| g.name()), Some("delete"));
+    // A stroke drawn far below every line reaches none of them.
+    let below = full.rows.last().map_or(0.0, |r| r.bottom);
+    assert!(action_pen::preview(&s, &layout, 0, &across(100.0, 200.0, below + 200.0)).is_none());
+}
