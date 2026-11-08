@@ -98,9 +98,9 @@ impl Reader<'_> {
                 }
             }
             "mc:AlternateContent" => {
-                if let Some(o) = self.read_ink_alternate(sc, k, rels).or_else(|| self.read_chartex_alternate(sc, k, rels)) {
+                if let Some((o, link)) = self.read_alternate(sc, k, rels) {
                     let props = self.run_props_none(ctx);
-                    self.emit_obj(sc, pb, o, &props);
+                    self.emit_linked_obj(sc, pb, o, &props, link);
                 } else if let Some(c) = children_of_choice(k) {
                     self.read_inline_children(sc, pb, c, rels, ctx, depth + 1);
                 }
@@ -237,7 +237,7 @@ impl Reader<'_> {
             },
             "w:drawing" => {
                 if let Some(o) = self.read_drawing(sc, k, rels) {
-                    self.emit_obj(sc, pb, o, props);
+                    self.emit_linked_obj(sc, pb, o, props, Self::drawing_link(k, rels));
                 }
             }
             "w:pict" => {
@@ -298,8 +298,8 @@ impl Reader<'_> {
             ),
             "w:ruby" => self.read_ruby(sc, pb, k, props),
             "mc:AlternateContent" => {
-                if let Some(o) = self.read_ink_alternate(sc, k, rels).or_else(|| self.read_chartex_alternate(sc, k, rels)) {
-                    self.emit_obj(sc, pb, o, props);
+                if let Some((o, link)) = self.read_alternate(sc, k, rels) {
+                    self.emit_linked_obj(sc, pb, o, props, link);
                 } else if let Some(c) = children_of_choice(k) {
                     for x in c.els() {
                         self.read_run_child(sc, pb, x, (props, rels), note, depth + 1);
@@ -373,6 +373,14 @@ impl Reader<'_> {
                 }
             }
             _ => pb.push_text(s, props),
+        }
+    }
+
+    /// [`Self::emit_obj`] for a drawing that carries its own `link`: a link around the run wins.
+    fn emit_linked_obj(&mut self, sc: &mut StoryCtx, pb: &mut PB, o: InlineObject, props: &CharProps, link: Option<String>) {
+        match link.filter(|_| props.link.is_none()) {
+            Some(link) => self.emit_obj(sc, pb, o, &CharProps { link: Some(link), ..props.clone() }),
+            None => self.emit_obj(sc, pb, o, props),
         }
     }
 

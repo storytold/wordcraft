@@ -7,11 +7,14 @@ use wordcraft_doc::{Pos, Table};
 mod autospace;
 mod bidi;
 mod budget;
+mod cell_floats;
 mod complex;
+mod float_top;
 mod grid;
 mod ligature;
 pub(crate) mod linear;
 mod nbsp;
+mod nested_cant_split;
 mod numeral;
 mod pages;
 mod styleref;
@@ -293,6 +296,82 @@ fn legacy_table_contextual_spacing_flag_is_scoped_to_cells_and_legacy_mode() {
             assert!(legacy_table_gap(mode, true, location).abs() < 0.01);
         }
     }
+}
+
+/// Baseline of the paragraph after a one-row table, less that of the first cell's last
+/// paragraph, which has 12 pt after in `style`, contextual or not. `next_cell` adds a second cell
+/// whose paragraph has that style; `after_table` styles the paragraph after the table; `text` is
+/// the last paragraph's text.
+fn cell_end_gap(style: &str, contextual: bool) -> f32 {
+    cell_end_gap_in(Document::new(), style, contextual, None, None, "Beta probe")
+}
+
+fn cell_end_gap_in(mut d: Document, style: &str, contextual: bool, next_cell: Option<&str>, after_table: Option<&str>, text: &str) -> f32 {
+    use wordcraft_doc::props::LineSpacing;
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
+        id: "Other".into(),
+        name: "Other".into(),
+        based_on: Some("Normal".into()),
+        ..Default::default()
+    });
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let props = ParaProps { space_before: Some(0.0), space_after: Some(0.0), line_spacing: Some(LineSpacing::Exactly(24.0)), ..Default::default() };
+    let para = |text: &str, props: ParaProps| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props = props;
+        wordcraft_doc::para_block(p)
+    };
+    let styled = |s: Option<&str>| ParaProps { style: s.map(Into::into), ..props.clone() };
+    let mut table = Table::new(1, if next_cell.is_some() { 2 } else { 1 }, 468.0);
+    table.props.style = None;
+    table.props.cell_margins = Some([0.0; 4]);
+    let last = ParaProps { style: Some(style.into()), space_after: Some(12.0), contextual_spacing: Some(contextual), ..props.clone() };
+    table.rows[0].cells[0].blocks = vec![para("Alpha probe", props.clone()), para(text, last)];
+    if let Some(cell) = table.rows[0].cells.get_mut(1) {
+        cell.blocks = vec![para("Delta probe", styled(next_cell))];
+    }
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(table)), para("Gamma probe", styled(after_table))];
+    let l = lay(&d);
+    let baseline = |at: &[u32]| {
+        l.pages[0].items.iter().find_map(|i| match i {
+            Placed::Lines { para, y, path, .. } if path.0 == at => Some(y + para.lines[0].baseline),
+            _ => None,
+        })
+    };
+    let (Some(cell), Some(after)) = (baseline(&[0, 0, 0, 1]), baseline(&[1])) else { panic!("probe lines missing") };
+    after - cell
+}
+
+#[test]
+fn contextual_spacing_drops_the_space_after_a_cells_last_normal_paragraph() {
+    // The end-of-cell mark is a Normal paragraph: contextual spacing drops the 12 pt after a
+    // Normal last paragraph (docxide-pdf `cell-end-text-context`, `cell-end-empty-context`), not
+    // after one in another style (`cell-end-other-style`) or without contextual spacing.
+    let kept = cell_end_gap("Normal", false);
+    assert!((cell_end_gap("Other", true) - kept).abs() < 0.01);
+    let dropped = cell_end_gap("Normal", true);
+    assert!((kept - dropped - 12.0).abs() < 0.01, "kept {kept}, dropped {dropped}");
+    // An undefined style is formatted as Normal, and drops it too.
+    assert!((cell_end_gap("Missing", true) - dropped).abs() < 0.01);
+    // The mark decides, not a neighbour: another style in the next cell or after the table
+    // leaves the drop as it is.
+    for (next_cell, after_table) in [(Some("Other"), None), (None, Some("Other"))] {
+        let gap = cell_end_gap_in(Document::new(), "Normal", true, next_cell, after_table, "Beta probe");
+        assert!((gap - dropped).abs() < 0.01, "{next_cell:?} {after_table:?}: {gap}, dropped {dropped}");
+    }
+    // And the reverse: another style keeps its space beside Normal neighbours.
+    let gap = cell_end_gap_in(Document::new(), "Other", true, Some("Normal"), Some("Normal"), "Beta probe");
+    assert!((gap - kept).abs() < 0.01, "other beside Normal: {gap}, kept {kept}");
+    // An empty last paragraph drops it too (`cell-end-empty-context`).
+    let gap = cell_end_gap_in(Document::new(), "Normal", true, None, None, "");
+    assert!((gap - dropped).abs() < 0.01, "empty: {gap}, dropped {dropped}");
+    // Where `allowSpaceOfSameStyleInTable` keeps same-style space in cells (modes 11/12/14), the
+    // 12 pt stays.
+    let mut legacy = Document::new();
+    legacy.settings.compat_mode = 14;
+    legacy.settings.allow_space_of_same_style_in_table = true;
+    let gap = cell_end_gap_in(legacy, "Normal", true, None, None, "Beta probe");
+    assert!((gap - kept).abs() < 0.01, "legacy {gap}, kept {kept}");
 }
 
 fn contextual_gap(after: f32, before: f32, first: bool, second: bool, different_style: bool, header: bool) -> f32 {
@@ -1487,6 +1566,37 @@ fn right_tab_aligns_text_end() {
     assert!((end - 472.0).abs() < 1.0, "{end}");
 }
 
+/// Native Word moves every ordinary-tab group with centered or right paragraph alignment.
+#[test]
+fn ordinary_tabs_move_as_line() {
+    use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+    for stops in [
+        vec![(180.0, TabAlign::Left)],
+        vec![(234.0, TabAlign::Center)],
+        vec![(234.0, TabAlign::Center), (364.5, TabAlign::Right)],
+        vec![(234.0, TabAlign::Center), (468.0, TabAlign::Right)],
+    ] {
+        let text = if stops.len() == 1 { "Label\tfilename" } else { "Label\tfilename\ttime" };
+        let mut d = Document::from_text(text);
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+            p.tabs = Some(stops.iter().map(|(pos, align)| TabStop { pos: *pos, align: *align, leader: TabLeader::None }).collect());
+        })
+        .unwrap();
+        let left = lay(&d);
+        let end = left.caret(&Pos::body(0, text.len())).unwrap().x;
+        let slack = 540.0 - end;
+        for (align, fraction) in [(Align::Center, 0.5), (Align::Right, 1.0)] {
+            d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.align = Some(align)).unwrap();
+            let aligned = lay(&d);
+            for off in [0, 6, text.len()] {
+                let before = left.caret(&Pos::body(0, off)).unwrap().x;
+                let after = aligned.caret(&Pos::body(0, off)).unwrap().x;
+                assert!((after - before - slack * fraction).abs() < 0.1, "{align:?} {stops:?} offset {off}: {before} -> {after}, slack {slack}");
+            }
+        }
+    }
+}
+
 /// A paragraph `before` + positional tab + `after`, with left and right indents and a custom
 /// left tab stop at 50 pt that the positional tab must ignore.
 fn ptab_doc(before: &str, after: &str, ptab: InlineObject, indents: (f32, f32)) -> Document {
@@ -1786,6 +1896,30 @@ fn lists_get_labels_and_indent() {
     assert_eq!(labels, vec!["1.", "2.", "3."]);
     let x = l.caret(&Pos::body(0, 0)).unwrap().x;
     assert!((x - 108.0).abs() < 0.5, "{x}");
+}
+
+#[test]
+fn a_none_format_label_shows_its_text_and_tabs_to_the_indent() {
+    // #4985: Word draws a "none" level's literal text ("RESPONSE:"), and an empty one still tabs
+    // the text to a hanging indent, as a numbered item's. An empty label already at the left indent
+    // takes no tab (Word's Chapter 1 list: Heading 2 starts at the margin, not at 0.5").
+    use wordcraft_doc::section::NumFormat;
+    for (text, indent, hanging, want) in [("RESPONSE:", 72.0, 72.0, 144.0), ("", 72.0, 72.0, 144.0), ("", 0.0, 0.0, 72.0), ("", 50.0, 0.0, 122.0)] {
+        let mut d = Document::from_text("X");
+        let id = std::sync::Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+        for a in &mut std::sync::Arc::make_mut(&mut d.numbering).abstracts {
+            if let Some(l) = a.levels.first_mut() {
+                l.format = NumFormat::None;
+                l.text = text.into();
+                (l.indent, l.hanging) = (indent, hanging);
+            }
+        }
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 1), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
+        let l = lay(&d);
+        assert_eq!(labels(&l), [text]);
+        let x = l.caret(&Pos::body(0, 0)).unwrap().x;
+        assert!((x - want).abs() < 0.5, "{text:?} at {indent}/{hanging}: {x}, not {want}");
+    }
 }
 
 #[test]
@@ -2233,6 +2367,162 @@ fn turned_up_cell_text_reads_bottom_to_top() {
     assert!((c0.top - b.bottom()).abs() < 1.0 && c1.top < c0.top - 50.0, "{c0:?} {c1:?} {b:?}");
     let hit = l.hit(0, b.x + b.w / 2.0, b.bottom() - 2.0, StoryRef::Body).unwrap();
     assert_eq!((hit.path, hit.off), (Path(vec![1, 0, 1, 0]), 0));
+}
+
+/// #2038 with turned cell text: a click just outside a floating table, in the 2pt around turned
+/// text that still takes a click, goes to the text beside or after the table, not into a cell; a
+/// click on the table's edge still lands in one. A table that doesn't float keeps such a click.
+#[test]
+fn a_click_just_outside_a_floating_table_skips_its_turned_cell_text() {
+    use TextDirection::{Down, Horizontal, Up};
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    // (the section's direction, the cells' direction, whether the table floats)
+    let cases = [
+        (Horizontal, Down, true),
+        (Horizontal, Up, true),
+        (Down, Horizontal, true),
+        (Up, Horizontal, true),
+        (Horizontal, Down, false),
+        (Horizontal, Up, false),
+    ];
+    for (section, cells, floats) in cases {
+        let case = format!("section {section:?}, cells {cells:?}, floating {floats}");
+        let mut d = Document::from_text("before\nafter");
+        d.last_section.text_direction = section;
+        let mut t = Table::new(2, 2, 200.0);
+        for c in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+            c.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Turned", Default::default()))];
+            c.props.text_direction = cells;
+        }
+        if floats {
+            t.props.float = Some(TableFloat {
+                h_rel: Anchor::Column,
+                v_rel: Anchor::Paragraph,
+                x: 150.0,
+                dist: [9.0, 0.0, 9.0, 0.0],
+                overlap: true,
+                ..Default::default()
+            });
+        }
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let page = &l.pages[0];
+        assert_eq!(page.float_tables.len(), usize::from(floats), "{case}");
+        let area = page
+            .items
+            .iter()
+            .filter_map(|it| if let Placed::Cell { rect, .. } = it { Some(*rect) } else { None })
+            .reduce(|a, b| a.union(&b))
+            .unwrap();
+        let turned: Vec<Rect> = page
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Lines { story: StoryRef::Body, path, .. } if path.0.len() > 1 => it.turned_bounds(),
+                _ => None,
+            })
+            .collect();
+        assert!(!turned.is_empty(), "{case}: the cells' text is turned");
+        // Points on each side of the table (on its edge, and 1 and 2pt outside) across from turned
+        // cell text, which takes a click up to 2pt from its bounds.
+        let near = |p: &Point| turned.iter().any(|r| r.expand(2.0).contains(*p));
+        let side = |r: &Rect, out: f32| {
+            let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+            [Point::new(cx, area.y - out), Point::new(cx, area.bottom() + out), Point::new(area.x - out, cy), Point::new(area.right() + out, cy)]
+        };
+        let outside: Vec<Point> = turned.iter().flat_map(|r| [side(r, 1.0), side(r, 2.0)]).flatten().filter(near).collect();
+        let edge: Vec<Point> = turned.iter().flat_map(|r| side(r, 0.0)).filter(near).collect();
+        assert!(!outside.is_empty() && !edge.is_empty(), "{case}: turned text within 2pt of the edge {area:?}: {turned:?}");
+        for p in outside {
+            let hit = l.hit(0, p.x, p.y, StoryRef::Body).unwrap();
+            assert_eq!(hit.path.0.len() == 1, floats, "{case}: a click at {p:?} landed in {:?}", hit.path);
+        }
+        for p in edge {
+            let hit = l.hit(0, p.x, p.y, StoryRef::Body).unwrap();
+            assert!(hit.path.0.len() > 1, "{case}: a click on the edge at {p:?} landed in {:?}", hit.path);
+        }
+    }
+}
+
+/// The same rule when nothing upright but a floating table's cells is on the page (the page's
+/// paragraphs taken off the laid-out page): a click outside the table goes to other turned text
+/// there, and one by turned text of the table's own still lands in that cell, not in the nearest
+/// upright one.
+#[test]
+fn a_click_by_a_floating_table_with_no_upright_text_beside_it_prefers_turned_text() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let table = |dirs: [TextDirection; 2], floats: bool| {
+        let mut t = Table::new(1, 2, 200.0);
+        for (c, dir) in t.rows[0].cells.iter_mut().zip(dirs) {
+            c.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Cell text", Default::default()))];
+            c.props.text_direction = dir;
+        }
+        if floats {
+            t.props.float = Some(TableFloat {
+                h_rel: Anchor::Column,
+                v_rel: Anchor::Paragraph,
+                x: 150.0,
+                dist: [9.0, 0.0, 9.0, 0.0],
+                overlap: true,
+                ..Default::default()
+            });
+        }
+        wordcraft_doc::Block::Table(t)
+    };
+    let lay_bare = |d: &Document| {
+        let mut l = lay(d);
+        l.pages[0].items.retain(|it| !matches!(it, Placed::Lines { path, .. } if path.0.len() == 1));
+        l
+    };
+    let cell_area = |l: &DocLayout, t: u32| {
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Cell { rect, table, .. } if table.0 == [t] => Some(*rect),
+                _ => None,
+            })
+            .reduce(|a, b| a.union(&b))
+            .unwrap()
+    };
+    // A floating table with an upright cell and a turned one: a click 1pt above the turned
+    // text lands in it, as it did before the floating-table rule.
+    let mut d = Document::from_text("before\nafter");
+    d.insert_block(StoryRef::Body, &Path::top(1), table([TextDirection::Horizontal, TextDirection::Down], true)).unwrap();
+    let l = lay_bare(&d);
+    assert_eq!(l.pages[0].float_tables, [Path::top(1)]);
+    let area = cell_area(&l, 1);
+    let turned = turned_lines(&l).turned_bounds().unwrap();
+    let p = Point::new(turned.x + turned.w / 2.0, area.y - 1.0);
+    assert!(turned.expand(2.0).contains(p) && !area.contains(p), "{p:?} {turned:?} {area:?}");
+    assert_eq!(l.hit(0, p.x, p.y, StoryRef::Body).unwrap().path, Path(vec![1, 0, 1, 0]));
+    // An upright floating table and, below it, a table in the text flow with turned cells: a
+    // click below the floating one goes to that turned text, not to the floating table.
+    let mut d = Document::from_text("before\nbeside\nbeside\nbeside\nafter");
+    d.insert_block(StoryRef::Body, &Path::top(1), table([TextDirection::Horizontal; 2], true)).unwrap();
+    d.insert_block(StoryRef::Body, &Path::top(5), table([TextDirection::Down; 2], false)).unwrap();
+    let l = lay_bare(&d);
+    assert_eq!(l.pages[0].float_tables, [Path::top(1)]);
+    let (area, flow) = (cell_area(&l, 1), cell_area(&l, 5));
+    assert!(flow.y > area.bottom() + 12.0, "{area:?} {flow:?}");
+    let hit = l.hit(0, area.x + area.w / 2.0, area.bottom() + 6.0, StoryRef::Body).unwrap();
+    assert_eq!(hit.path.0.first(), Some(&5), "{hit:?}");
+    // Both: a click 1pt above the floating table's turned cell goes to the other turned text,
+    // which comes before the table's own.
+    let mut d = Document::from_text(&format!("before\n{}after", "beside\n".repeat(6)));
+    d.insert_block(StoryRef::Body, &Path::top(1), table([TextDirection::Horizontal, TextDirection::Down], true)).unwrap();
+    d.insert_block(StoryRef::Body, &Path::top(8), table([TextDirection::Down; 2], false)).unwrap();
+    let l = lay_bare(&d);
+    assert_eq!(l.pages[0].float_tables, [Path::top(1)]);
+    let (area, flow) = (cell_area(&l, 1), cell_area(&l, 8));
+    assert!(flow.y > area.bottom() + 12.0, "{area:?} {flow:?}");
+    let turned = turned_lines(&l).turned_bounds().unwrap();
+    let p = Point::new(turned.x + turned.w / 2.0, area.y - 1.0);
+    assert!(turned.expand(2.0).contains(p) && !area.contains(p), "{p:?} {turned:?} {area:?}");
+    let hit = l.hit(0, p.x, p.y, StoryRef::Body).unwrap();
+    assert_eq!(hit.path.0.first(), Some(&8), "{hit:?}");
 }
 
 #[test]
@@ -2959,6 +3249,44 @@ fn sections_land_on_the_side_their_break_and_numbering_ask_for() {
 }
 
 #[test]
+fn a_section_starting_a_page_flushes_the_page_before_with_its_own_margins() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    // Section one ends its last page with a footnote pending; section two starts a new page
+    // with a wider left margin. The footnotes on the page before keep section one's margin,
+    // whichever way the new page starts (#5289).
+    let note_x = |start: SectionStart| {
+        let mut d = Document::from_text("Section one text.\nTwo");
+        let note = wordcraft_doc::Paragraph::with_text("The note text.", Default::default());
+        let id = d.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(note)]);
+        d.insert_object(
+            &Pos::body(0, 5),
+            InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() },
+            &Default::default(),
+        )
+        .unwrap();
+        d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section = Some(Box::new(SectionProps::default()));
+        d.last_section.start = start;
+        d.last_section.margin_left = 144.0;
+        let l = lay(&d);
+        let x = l
+            .pages
+            .iter()
+            .flat_map(|p| p.items.iter())
+            .find_map(|it| match it {
+                Placed::Lines { story: StoryRef::Part(n), x, .. } if *n == id => Some(*x),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("the footnote is placed ({start:?})"));
+        (x, l.pages.len())
+    };
+    for start in [SectionStart::NextPage, SectionStart::EvenPage, SectionStart::OddPage] {
+        let (x, pages) = note_x(start);
+        assert!((x - 72.0).abs() < 0.01, "{start:?}: the footnote sits at section one's margin, not {x}");
+        assert!(pages >= 2, "{start:?}: the section starts a page");
+    }
+}
+
+#[test]
 fn paragraph_marks_sit_past_text_running_the_other_way() {
     // A left-to-right paragraph ending in Hebrew, and a right-to-left one ending in Latin: the
     // logically last letters are at the wrong edge, but the ¶ still goes past every glyph.
@@ -3597,6 +3925,40 @@ fn extreme_page_and_line_number_starts_do_not_overflow() {
     d.last_section.line_numbers = Some(wordcraft_doc::section::LineNumbering { start: u32::MAX, ..Default::default() });
     let l = lay(&d);
     assert!(l.pages.len() >= 3, "{} pages", l.pages.len());
+}
+
+/// Line numbers take the document's character formatting through the "Line Number" style, as in
+/// Word (Aptos 12 pt black in a document whose defaults are Aptos 12 pt), not a fixed small grey.
+#[test]
+fn line_numbers_follow_the_line_number_style() {
+    let number_runs = |d: &Document| {
+        let l = lay(d);
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Lines { story, para, .. } if *story == DECOR_STORY => para.styles.first().map(|s| (s.size, s.rc.color)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut d = Document::from_text("one\ntwo\nthree");
+    d.last_section.line_numbers = Some(Default::default());
+    Arc::make_mut(&mut d.styles).default_chr.size = Some(12.0);
+    let plain = number_runs(&d);
+    assert_eq!(plain.len(), 3);
+    assert!(plain.iter().all(|(size, color)| *size == 12.0 && *color == wordcraft_doc::TextColor::Auto), "{plain:?}");
+
+    let red = wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(0xC0, 0, 0));
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
+        id: "LineNumber".into(),
+        name: "line number".into(),
+        kind: wordcraft_doc::StyleKind::Character,
+        chr: CharProps { size: Some(8.0), color: Some(red), ..Default::default() },
+        ..Default::default()
+    });
+    let styled = number_runs(&d);
+    assert!(styled.iter().all(|(size, color)| *size == 8.0 && *color == red), "{styled:?}");
 }
 
 #[test]
@@ -5190,9 +5552,11 @@ fn line_spacing_does_not_scale_pictures() {
     let l = lay(&d);
     let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
     let line = &para.lines[0];
-    let desc = para.styles[0].descent;
-    // Word: the picture plus the font's descent, not (picture + descent) x 1.15.
-    assert!((line.height - (144.0 + desc)).abs() < 0.01, "line {} for a 144pt picture (descent {desc})", line.height);
+    let natural = para.styles[0].ascent + para.styles[0].descent;
+    // Word, measured (Aptos, Arial, Times; 10 and 20 pt; single, 1.15, 1.5): a line of only a
+    // picture is the picture plus the spacing's share of the text's height, with no descent below
+    // it, not (picture + descent) x 1.15.
+    assert!((line.height - (144.0 + 0.15 * natural)).abs() < 0.01, "line {} for a 144pt picture (text {natural})", line.height);
     assert!((line.baseline - line.top - 144.0).abs() < 0.01, "the picture stands on the baseline");
 }
 
@@ -5244,8 +5608,17 @@ fn list_label_does_not_inflate_an_inline_picture_floor() {
         let l = lay(&d);
         let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
         let line = &para.lines[0];
-        let desc = para.styles[para.clusters[0].style as usize].descent;
-        assert!((line.height - (144.0 + desc)).abs() < 0.01, "{spacing:?}: {}", line.height);
+        let st = &para.styles[para.clusters[0].style as usize];
+        let label = para.label.as_ref().unwrap().runs.iter().map(|r| &para.styles[r.style as usize]);
+        let (a, d) = label.fold((st.ascent, st.descent), |(a, d), s| (a.max(s.ascent), d.max(s.descent)));
+        // Multiple spacing: the picture plus its share of the font's height, the label's being a
+        // font too (Word, measured: 144 pt at 1.25 with a 24 pt label takes 144 + 0.25 * 27.6);
+        // at least: the picture and the descent.
+        let want = match spacing {
+            LineSpacing::Multiple(m) => 144.0 + (m - 1.0) * (a + d),
+            _ => 144.0 + st.descent,
+        };
+        assert!((line.height - want).abs() < 0.01, "{spacing:?}: {} (want {want})", line.height);
         assert!((line.baseline - line.top - 144.0).abs() < 0.01);
     }
 }
@@ -5253,7 +5626,7 @@ fn list_label_does_not_inflate_an_inline_picture_floor() {
 #[test]
 fn a_line_of_only_pictures_keeps_its_fonts_height_in_odt_documents() {
     // The standard has no line-height algorithm: as in Word, the line keeps the font's height, and
-    // its descent below a taller picture.
+    // takes a taller picture's.
     let height = |h: f32| {
         let mut d = Document::from_text("");
         d.settings.odf = Some(wordcraft_doc::OdfLayout::default());
@@ -5267,7 +5640,7 @@ fn a_line_of_only_pictures_keeps_its_fonts_height_in_odt_documents() {
         para.lines[0].height
     };
     assert!(height(3.5) > 10.0);
-    assert!(height(40.0) > 42.0);
+    assert!((height(40.0) - 40.0).abs() < 0.01, "{}", height(40.0));
 }
 
 #[test]
@@ -5332,7 +5705,7 @@ fn inline_picture_keeps_room_for_its_effects() {
     assert_eq!((c.adv, c.obj_h), (124.0, 89.0), "picture plus effect extents");
     // Drawn inside that room.
     let obj = picture(100.0, 50.0, shadow);
-    let r = display::inline_rect(Some(&obj), 10.0, 200.0, c.adv, (c.obj_h, c.obj_d), c.adv);
+    let r = display::inline_rect(Some(&obj), 10.0, 200.0, c.adv, (c.obj_h, c.obj_d), c.adv, true);
     assert_eq!((r.x, r.y, r.w, r.h), (16.0, 123.0, 100.0, 50.0));
 }
 
@@ -5359,15 +5732,65 @@ fn an_inline_picture_moves_with_its_runs_position() {
     let (c, line, _) = line_of(-30.0);
     assert_eq!((c.obj_h, c.obj_d), (0.0, 30.0));
     assert!(line.top + line.height - line.baseline >= 30.0 - 0.01, "{line:?}");
-    let r = display::inline_rect(Some(&picture(40.0, 30.0, Default::default())), 0.0, 100.0, c.adv, (c.obj_h, c.obj_d), c.adv);
+    let r = display::inline_rect(Some(&picture(40.0, 30.0, Default::default())), 0.0, 100.0, c.adv, (c.obj_h, c.obj_d), c.adv, true);
     assert_eq!((r.y, r.h), (100.0, 30.0));
-    // Lowered further than that: still only to its top.
-    assert_eq!(line_of(-500.0).0.obj_d, 30.0);
+    // Lowered further than that: the line reaches as far down, the picture's top staying on the
+    // baseline (Word).
+    let (c, line, _) = line_of(-500.0);
+    assert_eq!((c.obj_h, c.obj_d), (-470.0, 500.0));
+    assert!(line.top + line.height - line.baseline >= 500.0 - 0.01, "{line:?}");
+    let r = display::inline_rect(Some(&picture(40.0, 30.0, Default::default())), 0.0, 100.0, c.adv, (c.obj_h, c.obj_d), c.adv, true);
+    assert_eq!((r.y, r.h), (100.0, 30.0));
     // Raised: it stands clear of the baseline, as tall as before.
     let (c, _, _) = line_of(6.0);
     assert_eq!((c.obj_h, c.obj_d), (36.0, -6.0));
-    let r = display::inline_rect(Some(&picture(40.0, 30.0, Default::default())), 0.0, 100.0, c.adv, (c.obj_h, c.obj_d), c.adv);
+    let r = display::inline_rect(Some(&picture(40.0, 30.0, Default::default())), 0.0, 100.0, c.adv, (c.obj_h, c.obj_d), c.adv, true);
     assert_eq!((r.y, r.h), (64.0, 30.0));
+}
+
+/// A turned inline picture whose file kept no room for the turn: Word keeps its line to the frame
+/// (Word 2007 layout) or to the frame with width and height exchanged near a quarter turn (Word
+/// 2013+), and the picture overhangs it. One with room recorded takes its rotated bounds.
+#[test]
+fn bare_turned_inline_picture_keeps_its_frame() {
+    let room = |rot: f32, bare_turn: bool, compat: u32| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = compat;
+        let float = wordcraft_doc::para::Float { rot, bare_turn, ..Default::default() };
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+            p.insert_object(0, picture(120.0, 60.0, float), &Default::default()).unwrap();
+        }
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        let c = para.clusters.iter().find(|c| matches!(c.kind, para::ClKind::Object(_))).unwrap();
+        // Drawn unscaled, centred in that room.
+        let obj = picture(120.0, 60.0, wordcraft_doc::para::Float { rot, bare_turn, ..Default::default() });
+        let r = display::inline_rect(Some(&obj), 0.0, 200.0, c.adv, (c.obj_h, c.obj_d), c.adv, compat >= 15);
+        assert_eq!((r.w, r.h), (120.0, 60.0), "{rot}° bare {bare_turn} compat {compat}");
+        assert_eq!((r.x + r.w / 2.0, r.y + r.h / 2.0), (c.adv / 2.0, 200.0 - c.obj_h / 2.0));
+        // Only a bare turn that overhangs its line is cut, at the line's top and bottom.
+        let overhangs =
+            bare_turn && (c.obj_h as f64) < 120.0 * (rot as f64).to_radians().sin().abs() + 60.0 * (rot as f64).to_radians().cos().abs() - 0.1;
+        let clips: Vec<Rect> = display::page_display(&d, &l.pages[0], &Default::default())
+            .iter()
+            .filter_map(|i| if let display::Draw::Clip { rect, .. } = i { Some(*rect) } else { None })
+            .collect();
+        assert_eq!(clips.len(), usize::from(overhangs), "{rot}° bare {bare_turn} compat {compat}: {clips:?}");
+        if let Some(band) = clips.first() {
+            assert!(band.h >= c.obj_h && band.w > 4000.0, "{band:?}");
+        }
+        (c.adv.round(), c.obj_h.round())
+    };
+    assert_eq!(room(90.0, true, 12), (120.0, 60.0));
+    assert_eq!(room(45.0, true, 12), (120.0, 60.0));
+    assert_eq!(room(180.0, true, 12), (120.0, 60.0));
+    assert_eq!(room(90.0, true, 15), (60.0, 120.0));
+    assert_eq!(room(45.0, true, 15), (60.0, 120.0));
+    assert_eq!(room(135.0, true, 15), (120.0, 60.0));
+    assert_eq!(room(270.0, true, 15), (60.0, 120.0));
+    // Room recorded (Word's own files, WordCraft's turns): the rotated bounds, in any layout.
+    assert_eq!(room(90.0, false, 12), (60.0, 120.0));
+    assert_eq!(room(45.0, false, 15), (127.0, 127.0));
 }
 
 /// Tops of the body text lines drawn on page one, in order.
@@ -5545,6 +5968,56 @@ fn justified_lines_shrink_spaces_in_word_2013_mode() {
     }
 }
 
+/// Spaces before a line's first character keep their width in justified and distributed lines:
+/// Thai official letters indent their paragraphs with a run of spaces. Measured in Word (left,
+/// `both`, `distribute` and `thaiDistribute`, Thai and Latin text, spaces at the paragraph start,
+/// after a line break and after a tab): the first character sits where it does left-aligned, and
+/// only the spaces between words stretch. WordCraft stretched the leading spaces too, so the
+/// first character of a justified line moved right by up to the line's whole slack. A
+/// distributed line also counted the space it wrapped at, so its text stopped short of the margin.
+#[test]
+fn leading_spaces_keep_their_width_in_justified_lines() {
+    let spaces = " ".repeat(20);
+    let body = "We tie the spend to a pipe and to the books, so it is in an ad hoc view of all of it. ".repeat(4);
+    // `hidden` (zero-width hidden text before the spaces) and `float` (a floating shape anchored
+    // before them): Word ignores those, and a bookmark, there too; the first character is still
+    // the one after the spaces.
+    let first_x = |align: Align, hidden: &str, float: bool| {
+        let mut d = Document::from_text(&format!("{hidden}{spaces}{body}"));
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.align = Some(align)).unwrap();
+        if !hidden.is_empty() {
+            d.format_range(&Pos::body(0, 0), &Pos::body(0, hidden.len()), &|c| c.hidden = Some(true)).unwrap();
+        }
+        if float {
+            d.insert_object(&Pos::body(0, 0), rect_shape(20.0, 20.0, page_float(400.0, 600.0)), &Default::default()).unwrap();
+        }
+        let text = d.body[0].as_para().unwrap().text.clone();
+        let lead = text.len() - body.len();
+        let l = lay(&d);
+        let (para, x0) =
+            l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, x, .. } = it { Some((para.clone(), *x)) } else { None }).unwrap();
+        assert!(para.lines.len() > 1, "the paragraph wraps");
+        let line = &para.lines[0];
+        // The first line's last character (ASCII here): its index and left and right positions.
+        let end = line.start + text[line.start..line.stop].trim_end().len();
+        (para.x_of(0, lead).unwrap(), end, para.x_of(0, end - 1).unwrap() + x0, para.x_of(0, end).unwrap() + x0)
+    };
+    for (hidden, float) in [("", false), ("hidden", false), ("", true)] {
+        let (left, left_end, left_from, left_to) = first_x(Align::Left, hidden, float);
+        for align in [Align::Justify, Align::Distribute] {
+            let (x, end, from, _) = first_x(align, hidden, float);
+            let case = format!("{align:?} hidden {hidden:?} float {float}");
+            assert!((x - left).abs() < 0.01, "{case}: the first character is at {x}, left-aligned at {left}");
+            assert_eq!(end, left_end, "{case}: the line breaks where it does left-aligned");
+            assert!(from > left_from + 1.0, "{case}: the line is still stretched ({from} vs {left_from})");
+            // The line ends with the space it wrapped at; its last character, keeping its own
+            // advance, still ends at the margin: no gap is left after it.
+            let ink_end = from + (left_to - left_from);
+            assert!((ink_end - 540.0).abs() < 0.05, "{case}: the line's last character ends at {ink_end}, not the margin");
+        }
+    }
+}
+
 /// Measured in Word for Mac (compatibility mode 15, justified paragraphs of one repeated word,
 /// the right indent leaving room for N words plus one more that fits only if the spaces shrink):
 /// the spaces give up at most a quarter of their width, and a word with the space before it may
@@ -5632,6 +6105,30 @@ fn justified_line_ending_in_line_break_is_stretched() {
     let kept = ends(true);
     assert_eq!(kept.len(), 2, "{kept:?}");
     assert!(kept[0] < 400.0, "doNotExpandShiftReturn keeps the line before the break short: {}", kept[0]);
+}
+
+/// A distributed line that ends in a manual line break stretches its characters to the margin, as
+/// in Word (measured with a synthetic `distribute` paragraph): the break itself takes no gap.
+#[test]
+fn distributed_line_ending_in_line_break_reaches_the_margin() {
+    let first = "We tie the spend";
+    let text = format!("{first}\nto a pipe");
+    // The left edge of the first line's last character and the position after it, on the page.
+    let last = |align: Align| {
+        let mut d = Document::from_text("");
+        let mut p = wordcraft_doc::Paragraph::with_text(&text, Default::default());
+        p.props = ParaProps { align: Some(align), ..Default::default() };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let (para, x) =
+            l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, x, .. } = it { Some((para.clone(), *x)) } else { None }).unwrap();
+        (para.x_of(0, first.len() - 1).unwrap() + x, para.x_of(0, first.len()).unwrap() + x)
+    };
+    let (left_from, left_to) = last(Align::Left);
+    let (from, _) = last(Align::Distribute);
+    // The last character keeps its own advance and ends at the margin: no gap is left after it.
+    let ink_end = from + (left_to - left_from);
+    assert!((ink_end - 540.0).abs() < 0.05, "the line's last character ends at {ink_end}, not the margin");
 }
 
 #[test]
@@ -5725,9 +6222,8 @@ fn float_follows_its_paragraph_to_the_next_page() {
     assert!(para.lines[0].left >= 144.0, "text wraps beside it: {}", para.lines[0].left);
 }
 
-/// A floating object belongs to its paragraph, not to the line holding its anchor: Word draws
-/// it on the page the paragraph starts on. A Word cover page is one paragraph holding a page
-/// break and then the page-anchored text box with the title; the box stays on the cover.
+/// A Word cover page is one paragraph holding a page break and then the page-anchored text box
+/// with the title: with nothing after its anchor, the box stays on the cover.
 #[test]
 fn a_float_anchored_after_a_page_break_stays_on_its_paragraph_s_first_page() {
     let mut d = Document::from_text(&format!("{}\nAfter the cover", wordcraft_doc::para::PAGE_BREAK));
@@ -5738,6 +6234,347 @@ fn a_float_anchored_after_a_page_break_stays_on_its_paragraph_s_first_page() {
     assert_eq!(on_cover.len(), 1, "the shape is drawn on the cover: {on_cover:?}");
     assert!((on_cover[0].y - 300.0).abs() < 0.5, "{:?}", on_cover[0]);
     assert!(shapes(&l.pages[1].items).is_empty(), "and not again on page two");
+}
+
+/// #4262: a bookmark after the box's anchor (or a comment's end, a field's) takes no room: the box
+/// still stays on the cover. An inline picture after it does take room: it goes on to page two,
+/// and the box with it.
+#[test]
+fn a_cover_box_stays_on_the_cover_with_a_bookmark_after_it_but_not_with_a_picture() {
+    let cover = |after: InlineObject| {
+        let mut d = Document::from_text(&format!("{}\nAfter the cover", wordcraft_doc::para::PAGE_BREAK));
+        d.insert_object(&Pos::body(0, 1), after, &Default::default()).unwrap();
+        d.insert_object(&Pos::body(0, 1), rect_shape(200.0, 100.0, page_float(100.0, 300.0)), &Default::default()).unwrap();
+        let l = lay(&d);
+        // The floating box; the inline picture is 20 pt wide.
+        let boxes = |pi: usize| shapes(&l.pages[pi].items).iter().filter(|r| r.w > 100.0).count();
+        (boxes(0), boxes(1))
+    };
+    assert_eq!(cover(InlineObject::BookmarkEnd { name: "_GoBack".into() }), (1, 0), "with a bookmark: on the cover");
+    assert_eq!(cover(rect_shape(20.0, 20.0, Default::default())), (0, 1), "with an inline picture: on page two");
+}
+
+/// #4262: with text after the anchor, though, the line after the break is on the next page, and
+/// so is the float anchored at its start. Observed in Word for Mac: a shape dragged beside the
+/// first line after a page break inside a paragraph is anchored right after the break and stays
+/// on the new page, positioned from the paragraph's top there.
+#[test]
+fn a_float_anchored_before_text_after_a_page_break_is_drawn_on_the_next_page() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let text = "The quick brown fox jumps over the lazy dog. ";
+    let mut d = Document::from_text(&format!("{}{}{}", text.repeat(5), wordcraft_doc::para::PAGE_BREAK, text.repeat(5)));
+    let at = text.len() * 5 + wordcraft_doc::para::PAGE_BREAK.len_utf8();
+    let f = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 60.0, y: 1.0, ..Default::default() };
+    d.insert_object(&Pos::body(0, at), rect_shape(100.0, 50.0, f), &Default::default()).unwrap();
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 2);
+    assert!(shapes(&l.pages[0].items).is_empty(), "not on page one");
+    let (top, ..) = lines_on(&l, 1)[0];
+    assert_eq!(shapes(&l.pages[1].items).len(), 1, "drawn once");
+    let r = shapes(&l.pages[1].items)[0];
+    assert!((r.y - (top + 1.0)).abs() < 0.5, "1 pt below the paragraph's top on page two ({top}): {r:?}");
+}
+
+/// The lines of body paragraph 0 on page `pi`: each one's (top on the page, left, start).
+fn lines_on(l: &DocLayout, pi: usize) -> Vec<(f32, f32, usize)> {
+    let mut out = Vec::new();
+    for it in &l.pages[pi].items {
+        if let Placed::Lines { para, l0, l1, y, story: StoryRef::Body, path, .. } = it
+            && path.0 == [0]
+        {
+            let first = para.lines[*l0].top;
+            out.extend(para.lines[*l0..*l1].iter().map(|li| (y + li.top - first, li.left, li.start)));
+        }
+    }
+    out
+}
+
+/// #4250: a floating object anchored in a line of a long paragraph on a later page is drawn on
+/// that page, as Word does (its anchor line's page), not on the page the paragraph starts on.
+/// That page's text wraps around it; the page before is laid out as without it.
+#[test]
+fn a_float_anchored_on_a_later_page_of_its_paragraph_is_drawn_on_that_page() {
+    use wordcraft_doc::para::Wrap;
+    let mut d = Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(400));
+    let plain = lay(&d);
+    assert!(plain.pages.len() >= 3, "pages {}", plain.pages.len());
+    let anchor = lines_on(&plain, 1)[5].2;
+    let f = wordcraft_doc::para::Float { wrap: Wrap::Square, ..page_float(72.0, 300.0) };
+    d.insert_object(&Pos::body(0, anchor), rect_shape(100.0, 50.0, f), &Default::default()).unwrap();
+    let l = lay(&d);
+    assert!(shapes(&l.pages[0].items).is_empty(), "not on the page the paragraph starts on");
+    assert_eq!(l.pages.iter().map(|p| shapes(&p.items).len()).sum::<usize>(), 1, "drawn once");
+    let on_two = shapes(&l.pages[1].items);
+    assert_eq!(on_two.len(), 1, "{on_two:?}");
+    assert!((on_two[0].x - 72.0).abs() < 0.5 && (on_two[0].y - 300.0).abs() < 0.5, "{:?}", on_two[0]);
+    let beside: Vec<_> = lines_on(&l, 1).into_iter().filter(|(y, ..)| *y > 300.0 && *y < 350.0).collect();
+    assert!(!beside.is_empty() && beside.iter().all(|(_, left, _)| *left >= 100.0), "the text beside it wraps: {beside:?}");
+    let starts = |l: &DocLayout| lines_on(l, 0).iter().map(|(_, left, start)| (*left, *start)).collect::<Vec<_>>();
+    assert_eq!(starts(&l), starts(&plain), "page one is as without it");
+    // Its hit area is there too, for selecting and dragging it.
+    let hit = l.object(&Pos::body(0, anchor), 0).expect("laid out");
+    assert_eq!(hit.page, 1);
+}
+
+/// #4250: positioned from its paragraph, a float anchored on a later page of the paragraph is
+/// measured from where the paragraph continues on that page (Word saves such a picture dragged
+/// onto page two as `relativeFrom="paragraph"` with its offset from that page's top line).
+#[test]
+fn a_float_from_its_paragraph_on_a_later_page_is_measured_from_the_paragraph_s_top_there() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(400));
+    let plain = lay(&d);
+    let (top, _, _) = lines_on(&plain, 1)[0];
+    let anchor = lines_on(&plain, 1)[8].2;
+    let f = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 120.0, y: 150.0, dist: 9.0, ..Default::default() };
+    d.insert_object(&Pos::body(0, anchor), rect_shape(130.0, 100.0, f), &Default::default()).unwrap();
+    let l = lay(&d);
+    assert!(shapes(&l.pages[0].items).is_empty());
+    let r = shapes(&l.pages[1].items)[0];
+    assert!((r.y - (top + 150.0)).abs() < 0.5, "150 pt below the paragraph's top on page two ({top}): {r:?}");
+    assert!((r.x - 192.0).abs() < 0.5, "{r:?}");
+    let hit = l.object(&Pos::body(0, anchor), 1).expect("laid out");
+    assert!((hit.origin.y - top).abs() < 0.5, "dragging measures from there too: {:?}", hit.origin);
+}
+
+/// #4250: a paragraph starting with a page break has its space before on the new page; a float
+/// from its paragraph anchored there is still measured from the paragraph's top, above that
+/// space, as on its first page.
+#[test]
+fn a_float_after_a_leading_page_break_is_measured_from_above_the_space_before() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let text = format!("Page one.\n{}{}", wordcraft_doc::para::PAGE_BREAK, "The quick brown fox jumps over the lazy dog. ".repeat(20));
+    let mut d = Document::from_text(&text);
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(1).map(std::sync::Arc::make_mut) {
+        p.props.space_before = Some(24.0);
+    }
+    let f = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, y: 150.0, dist: 9.0, ..Default::default() };
+    d.insert_object(&Pos::body(1, 200), rect_shape(130.0, 100.0, f), &Default::default()).unwrap();
+    let l = lay(&d);
+    assert!(shapes(&l.pages[0].items).is_empty());
+    let r = shapes(&l.pages[1].items)[0];
+    assert!((r.y - (72.0 + 150.0)).abs() < 0.5, "150 pt below the top margin: {r:?}");
+}
+
+/// #4250, as observed in Word for Mac: lines added at the top of page one push the text down,
+/// but a picture positioned from its paragraph on page two stays where it is there.
+#[test]
+fn text_added_on_page_one_leaves_a_float_on_page_two_where_it_is() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(400));
+    let anchor = lines_on(&lay(&d), 1)[8].2;
+    let f = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, y: 150.0, ..Default::default() };
+    d.insert_object(&Pos::body(0, anchor), rect_shape(130.0, 100.0, f), &Default::default()).unwrap();
+    let before = shapes(&lay(&d).pages[1].items);
+    for _ in 0..3 {
+        d.body.insert(0, wordcraft_doc::para_block(wordcraft_doc::Paragraph::new()));
+    }
+    let l = lay(&d);
+    assert!(shapes(&l.pages[0].items).is_empty());
+    assert_eq!(shapes(&l.pages[1].items), before);
+}
+
+/// #4250: anchored on the third page of a paragraph, a float is drawn on the third page.
+#[test]
+fn a_float_anchored_two_pages_into_its_paragraph_is_drawn_on_that_page() {
+    let mut d = Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(600));
+    let plain = lay(&d);
+    assert!(plain.pages.len() >= 4, "pages {}", plain.pages.len());
+    let anchor = lines_on(&plain, 2)[3].2;
+    let f = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, ..page_float(72.0, 300.0) };
+    d.insert_object(&Pos::body(0, anchor), rect_shape(100.0, 50.0, f), &Default::default()).unwrap();
+    let l = lay(&d);
+    let per_page: Vec<usize> = l.pages.iter().map(|p| shapes(&p.items).len()).collect();
+    assert_eq!(&per_page[..3], [0, 0, 1], "{per_page:?}");
+    assert_eq!(per_page.iter().sum::<usize>(), 1);
+}
+
+/// A long paragraph with a long footnote on page one, and a page-placed square float anchored at
+/// line `k` of page two as laid out without it.
+fn footnoted_float(k: usize) -> DocLayout {
+    let mut d = Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(400));
+    let mut note = wordcraft_doc::Paragraph::with_text(&"The note text runs on for a while. ".repeat(30), Default::default()).styled("FootnoteText");
+    note.props.space_after = Some(0.0);
+    let id = d.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(note)]);
+    d.insert_object(
+        &Pos::body(0, 4),
+        InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() },
+        &Default::default(),
+    )
+    .unwrap();
+    let anchor = lines_on(&lay(&d), 1)[k].2;
+    let f = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, ..page_float(72.0, 300.0) };
+    d.insert_object(&Pos::body(0, anchor), rect_shape(100.0, 50.0, f), &Default::default()).unwrap();
+    lay(&d)
+}
+
+/// #4250: a footnote on page one leaves less room there than its lines alone suggest; a float
+/// anchored a few lines into page two is drawn on page two all the same.
+#[test]
+fn a_float_anchored_just_past_a_page_of_footnotes_is_drawn_on_the_next_page() {
+    let l = footnoted_float(3);
+    assert!(shapes(&l.pages[0].items).is_empty(), "not on page one");
+    assert_eq!(shapes(&l.pages[1].items).len(), 1);
+}
+
+/// #4250: anchored in page two's first line, which goes back to page one once the float no longer
+/// wraps the text there, a float stays on page one with the text wrapping around it, not over it.
+#[test]
+fn a_float_whose_anchor_comes_back_to_page_one_stays_there_with_the_text_around_it() {
+    let l = footnoted_float(0);
+    assert_eq!(l.pages.iter().map(|p| shapes(&p.items).len()).collect::<Vec<_>>()[..2], [1, 0]);
+    let beside: Vec<_> = lines_on(&l, 0).into_iter().filter(|(y, ..)| *y > 300.0 && *y < 350.0).collect();
+    assert!(!beside.is_empty() && beside.iter().all(|(_, left, _)| *left >= 100.0), "the text wraps around it: {beside:?}");
+}
+
+/// #4250: the text wrapping around that float again pushes a footnote reference beside its anchor
+/// back to page two; the note goes with it, once, not left on page one as well.
+#[test]
+fn a_footnote_pushed_on_by_a_float_coming_back_is_on_its_reference_s_page_only() {
+    let mut d = Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(400));
+    let note = |text: &str| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default()).styled("FootnoteText");
+        p.props.space_after = Some(0.0);
+        vec![wordcraft_doc::para_block(p)]
+    };
+    let noteref = |id| InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() };
+    let long = d.add_part(wordcraft_doc::PartKind::Footnote, note(&"The note text runs on for a while. ".repeat(30)));
+    d.insert_object(&Pos::body(0, 4), noteref(long), &Default::default()).unwrap();
+    let anchor = lines_on(&lay(&d), 1)[0].2;
+    let short = d.add_part(wordcraft_doc::PartKind::Footnote, note("A short note."));
+    d.insert_object(&Pos::body(0, anchor), noteref(short), &Default::default()).unwrap();
+    let f = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, ..page_float(72.0, 300.0) };
+    d.insert_object(&Pos::body(0, anchor), rect_shape(100.0, 50.0, f), &Default::default()).unwrap();
+    let l = lay(&d);
+    assert_eq!(shapes(&l.pages[0].items).len(), 1, "the float stays on page one");
+    let at = anchor + wordcraft_doc::para::OBJ.len_utf8();
+    let ref_page = (0..l.pages.len()).rfind(|&pi| lines_on(&l, pi).first().is_some_and(|f| f.2 <= at));
+    assert_eq!(ref_page, Some(1), "the reference is pushed on to page two");
+    let notes: Vec<usize> = l
+        .pages
+        .iter()
+        .map(|pg| pg.items.iter().filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(p), .. } if *p == short)).count())
+        .collect();
+    assert_eq!(notes[..2], [0, 1], "the note is on its reference's page, once");
+}
+
+/// #4250: of two floats held back for page two, the one whose anchor comes back to page one stays
+/// there; the other is still drawn on page two.
+#[test]
+fn of_two_floats_held_back_only_the_one_whose_anchor_comes_back_stays_on_page_one() {
+    let mut d = Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(400));
+    let mut note = wordcraft_doc::Paragraph::with_text(&"The note text runs on for a while. ".repeat(30), Default::default()).styled("FootnoteText");
+    note.props.space_after = Some(0.0);
+    let id = d.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(note)]);
+    let noteref = InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() };
+    d.insert_object(&Pos::body(0, 4), noteref, &Default::default()).unwrap();
+    let lines = lines_on(&lay(&d), 1);
+    let f = |y| wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, ..page_float(72.0, y) };
+    d.insert_object(&Pos::body(0, lines[3].2), rect_shape(100.0, 50.0, f(400.0)), &Default::default()).unwrap();
+    d.insert_object(&Pos::body(0, lines[0].2), rect_shape(100.0, 50.0, f(300.0)), &Default::default()).unwrap();
+    let l = lay(&d);
+    let ys = |pi: usize| shapes(&l.pages[pi].items).iter().map(|r| r.y).collect::<Vec<_>>();
+    assert_eq!((ys(0).len(), ys(1).len()), (1, 1), "one on each page: {:?} {:?}", ys(0), ys(1));
+}
+
+/// #4250: a footnote referenced on page two leaves less room there than its lines alone suggest;
+/// a float anchored on the first line it pushes on to page three is drawn on page three.
+#[test]
+fn a_float_anchored_on_a_line_a_footnote_pushes_on_is_drawn_on_the_next_page() {
+    let mut d = Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(600));
+    let mut note = wordcraft_doc::Paragraph::with_text(&"The note text runs on for a while. ".repeat(30), Default::default()).styled("FootnoteText");
+    note.props.space_after = Some(0.0);
+    let id = d.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(note)]);
+    let noteref = InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() };
+    let at = lines_on(&lay(&d), 1)[1].2;
+    d.insert_object(&Pos::body(0, at), noteref, &Default::default()).unwrap();
+    // A word into the line: an anchor at its very start goes with the line before.
+    let anchor = lines_on(&lay(&d), 2)[0].2 + "The ".len();
+    let f = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, ..page_float(72.0, 300.0) };
+    d.insert_object(&Pos::body(0, anchor), rect_shape(100.0, 50.0, f), &Default::default()).unwrap();
+    let l = lay(&d);
+    let anchor_page = (0..l.pages.len()).rfind(|&pi| lines_on(&l, pi).first().is_some_and(|f| f.2 <= anchor));
+    let per_page: Vec<usize> = l.pages.iter().map(|p| shapes(&p.items).len()).collect();
+    assert_eq!(anchor_page, Some(2), "the anchor is on page three");
+    assert_eq!(&per_page[..3], [0, 0, 1], "{per_page:?}");
+    let beside: Vec<_> = lines_on(&l, 1).into_iter().filter(|(y, ..)| *y > 300.0 && *y < 350.0).collect();
+    assert!(!beside.is_empty() && beside.iter().all(|(_, left, _)| *left < 1.0), "page two doesn't wrap around it: {beside:?}");
+}
+
+/// #4250: widow control takes the line before a paragraph's last on to the next page with it; a
+/// float anchored there is drawn on that page.
+#[test]
+fn a_float_anchored_on_a_line_widow_control_takes_on_is_drawn_on_the_next_page() {
+    // A paragraph of three pages whose last two lines are on the third only by widow control.
+    let (mut d, l) = (150..300)
+        .map(|k| Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(k)))
+        .map(|d| {
+            let l = lay(&d);
+            (d, l)
+        })
+        .find(|(_, l)| l.pages.len() == 3 && lines_on(l, 2).len() == 2 && lines_on(l, 1).len() < lines_on(l, 0).len())
+        .expect("a paragraph ending in a widow");
+    let anchor = lines_on(&l, 2)[0].2 + "The ".len();
+    d.insert_object(&Pos::body(0, anchor), rect_shape(100.0, 50.0, page_float(72.0, 300.0)), &Default::default()).unwrap();
+    let per_page: Vec<usize> = lay(&d).pages.iter().map(|p| shapes(&p.items).len()).collect();
+    assert_eq!(per_page, [0, 0, 1]);
+}
+
+/// #4250: a float whose own wrap pushes its anchor line on to the next page stays on the page
+/// whose lines it was placed with, as before, with the text there wrapping around it.
+#[test]
+fn a_float_whose_wrap_pushes_its_own_line_on_stays_with_the_text_around_it() {
+    let mut d = Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(600));
+    let last = *lines_on(&lay(&d), 1).last().unwrap();
+    let anchor = last.2 + "The ".len();
+    let f = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, ..page_float(72.0, 300.0) };
+    d.insert_object(&Pos::body(0, anchor), rect_shape(200.0, 100.0, f), &Default::default()).unwrap();
+    let l = lay(&d);
+    let anchor_page = (0..l.pages.len()).rfind(|&pi| lines_on(&l, pi).first().is_some_and(|f| f.2 <= anchor));
+    assert_eq!(anchor_page, Some(2), "its wrap pushes the anchor on to page three");
+    let per_page: Vec<usize> = l.pages.iter().map(|p| shapes(&p.items).len()).collect();
+    assert_eq!(&per_page[..3], [0, 1, 0], "{per_page:?}");
+    let beside: Vec<_> = lines_on(&l, 1).into_iter().filter(|(y, ..)| *y > 300.0 && *y < 400.0).collect();
+    assert!(!beside.is_empty() && beside.iter().all(|(_, left, _)| *left >= 200.0), "the text wraps around it: {beside:?}");
+}
+
+/// #4250: holding back a float for a later page lays its paragraph out again; its automatic
+/// equation numbers aren't counted twice: they read (1), (2).
+#[test]
+fn a_paragraph_with_a_float_for_a_later_page_keeps_its_equation_numbers() {
+    let eq = |s: &str| InlineObject::Equation {
+        linear: s.into(),
+        display: true,
+        math: wordcraft_doc::math::Math { nodes: wordcraft_doc::math::parse_linear(s), ..Default::default() },
+    };
+    let mut d = Document::from_text(&format!("{}\n", "The quick brown fox jumps over the lazy dog. ".repeat(400)));
+    let anchor = lines_on(&lay(&d), 1)[5].2;
+    let f = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, ..page_float(72.0, 300.0) };
+    d.insert_object(&Pos::body(0, anchor), rect_shape(100.0, 50.0, f), &Default::default()).unwrap();
+    let n = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().len();
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().insert_object(n, eq("a=b#"), &Default::default()).unwrap();
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().insert_object(0, eq("c=d#"), &Default::default()).unwrap();
+    let l = lay(&d);
+    assert_eq!(shapes(&l.pages[1].items).len(), 1, "held back for page two");
+    assert_eq!(equation_numbers(&l), ["(1)", "(2)"]);
+}
+
+/// #4250: in two columns, a float anchored where the paragraph continues in the second column of
+/// the same page is placed with its first piece, as before, so the first column wraps around it.
+#[test]
+fn a_float_anchored_in_the_next_column_of_the_page_stays_with_its_first_piece() {
+    let mut d = Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(120));
+    d.last_section.columns.count = 2;
+    let plain = lay(&d);
+    let lines = lines_on(&plain, 0);
+    let second = lines.iter().position(|w| w.0 < lines[0].0 + 0.5 && w.2 > 0).expect("a second column on page one");
+    let anchor = lines[second + 2].2;
+    let f = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, ..page_float(72.0, 200.0) };
+    d.insert_object(&Pos::body(0, anchor), rect_shape(100.0, 50.0, f), &Default::default()).unwrap();
+    let l = lay(&d);
+    assert_eq!(shapes(&l.pages[0].items).len(), 1, "on page one");
+    let beside: Vec<_> = lines_on(&l, 0).into_iter().filter(|(y, left, start)| *y > 200.0 && *y < 250.0 && *start < anchor && *left >= 0.0).collect();
+    assert!(!beside.is_empty() && beside.iter().all(|(_, left, _)| *left >= 100.0), "the first column wraps around it: {beside:?}");
 }
 
 /// Floating objects are drawn in their stacking order (`relativeHeight`), not in the order of
@@ -5803,6 +6640,110 @@ fn floats_in_headers_and_table_cells_are_drawn() {
     let c = shapes(&l.pages[0].items);
     assert_eq!(c.len(), 1, "cell float drawn");
     assert!(c[0].x > 72.0 && c[0].x < 72.0 + 234.0, "inside the first cell: {:?}", c[0]);
+}
+
+/// A float laid out in its cell (`layoutInCell`) whose offset would take it out of the cell is
+/// moved in to the cell's outer side (a letterhead logo anchored left of its header cell). One laid out on the page (`layoutInCell="0"`) keeps its offset.
+#[test]
+fn cell_floats_laid_out_in_the_cell_stay_in_it() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let cell_w = 234.0;
+    let place = |x: f32, outside_cell: bool, wrap: Wrap| {
+        let mut d = Document::from_text("Body text.");
+        let mut t = Table::new(1, 2, 468.0);
+        let mut cp = wordcraft_doc::Paragraph::with_text("cell", Default::default());
+        let f = Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x, dist: 9.0, outside_cell, ..Default::default() };
+        cp.insert_object(0, rect_shape(80.0, 48.0, f), &Default::default()).unwrap();
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(cp)];
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        let c = shapes(&lay(&d).pages[0].items);
+        assert_eq!(c.len(), 1, "cell float drawn");
+        c[0].x
+    };
+    // An offset inside the cell is kept: the cell's text starts 20 pt left of this one.
+    let text_left = place(20.0, false, Wrap::Tight) - 20.0;
+    assert!(text_left > 72.0 && text_left < 72.0 + 12.0, "the cell's text starts past its margin: {text_left}");
+    let cell_left = text_left - 5.4;
+    // Anchored 95 pt left of the column: moved in to the cell's outer left side.
+    let left = place(-95.0, false, Wrap::Tight);
+    assert!((left - cell_left).abs() < 0.5, "pulled in to the left side: {left} vs {text_left}");
+    // Past the right side: moved in to it.
+    let right = place(cell_w + 40.0, false, Wrap::Tight);
+    // (within a point: the cell's border room is not split evenly between its two sides)
+    assert!((right - (cell_left + cell_w - 80.0)).abs() < 1.0, "pulled in to the right side: {right}");
+    // Not laid out in the cell: the offset is kept, off the cell or not.
+    let out = place(-95.0, true, Wrap::Tight);
+    assert!((out - (text_left - 95.0)).abs() < 0.5, "layoutInCell=0 keeps the offset: {out}");
+    // Front-of-text shapes do not wrap and keep their offsets even with layoutInCell on.
+    for offset in [-95.0, cell_w + 40.0] {
+        let front = place(offset, false, Wrap::InFrontOfText);
+        assert!((front - (text_left + offset)).abs() < 0.5, "front-of-text offset preserved: {front}");
+    }
+}
+
+/// Cell confinement uses the finite, nonnegative width that float placement actually draws.
+#[test]
+fn cell_float_bounds_use_the_placed_width() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let place = |width, x, wrap, outside_cell| {
+        let mut d = Document::from_text("Body");
+        let mut t = Table::new(1, 2, 468.0);
+        let mut p = wordcraft_doc::Paragraph::with_text("cell", Default::default());
+        let f = Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x, dist: 9.0, outside_cell, ..Default::default() };
+        p.insert_object(0, rect_shape(width, 48.0, f), &Default::default()).unwrap();
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        let objects = shapes(&lay(&d).pages[0].items);
+        assert_eq!(objects.len(), 1);
+        objects[0]
+    };
+    // Invalid stored widths are placed as zero-width objects; offsets at either side must
+    // match an explicitly zero-width object, rather than inventing extra room in the cell.
+    for offset in [-95.0, 300.0] {
+        let zero = place(0.0, offset, Wrap::Tight, false);
+        for stored in [-100.0, f32::NEG_INFINITY, f32::NAN, f32::INFINITY] {
+            let placed = place(stored, offset, Wrap::Tight, false);
+            assert_eq!(placed.w, 0.0);
+            assert!((placed.x - zero.x).abs() < 0.01, "stored width {stored}, offset {offset}: {placed:?} vs {zero:?}");
+        }
+        // Neither opt-out path gains confinement from the width normalization.
+        for (wrap, outside_cell) in [(Wrap::InFrontOfText, false), (Wrap::Tight, true)] {
+            let zero = place(0.0, offset, wrap, outside_cell);
+            let negative = place(-100.0, offset, wrap, outside_cell);
+            assert_eq!(negative.w, zero.w);
+            assert!((negative.x - zero.x).abs() < 0.01);
+        }
+    }
+}
+
+#[test]
+fn keep_in_cell_bounds() {
+    use super::boxes::keep_in_cell;
+    assert_eq!(keep_in_cell(-95.0, 80.0, 0.0, 234.0), 0.0);
+    assert_eq!(keep_in_cell(300.0, 80.0, 0.0, 234.0), 234.0 - 80.0);
+    assert_eq!(keep_in_cell(20.0, 80.0, 0.0, 234.0), 20.0);
+    // Wider than the cell, or exactly its width: starts at the outer left side.
+    assert_eq!(keep_in_cell(50.0, 300.0, 0.0, 234.0), 0.0);
+    assert_eq!(keep_in_cell(50.0, 234.0, 0.0, 234.0), 0.0);
+    // Nearly full: no clearance is added to the object's position.
+    assert_eq!(keep_in_cell(-95.0, 230.0, 0.0, 234.0), 0.0);
+    assert_eq!(keep_in_cell(300.0, 230.0, 0.0, 234.0), 4.0);
+    // Cell edges include its margins; negative offsets can be wholly inside the cell.
+    assert_eq!(keep_in_cell(-5.0, 80.0, 0.0, 234.0), 0.0);
+    assert_eq!(keep_in_cell(-5.0, 80.0, -4.0, 234.0), -4.0);
+    assert_eq!(keep_in_cell(-5.15, 63.75, -5.4, 448.2), -5.15);
+    assert_eq!(keep_in_cell(395.95, 47.25, -5.4, 448.2), 395.95);
+    // Clamp limits stay finite and ordered even at small scales or with malformed geometry.
+    for width in [0.1_f32, 0.3, 1.0, 234.0] {
+        let object = width * 0.98;
+        for offset in [-width, 0.0, width, f32::NAN, f32::INFINITY] {
+            let x = keep_in_cell(offset, object, 0.0, width);
+            assert!(x.is_finite() && x >= 0.0 && x + object <= width + f32::EPSILON * width.max(1.0));
+        }
+    }
+    assert_eq!(keep_in_cell(10.0, 80.0, 0.0, f32::NAN), 0.0);
+    assert_eq!(keep_in_cell(10.0, f32::NAN, 0.0, 234.0), 0.0);
+    assert_eq!(keep_in_cell(10.0, 80.0, f32::NAN, 234.0), 10.0);
 }
 
 /// Paragraph anchors exclude space-before; line and frameless page/margin anchors retain it.
@@ -6182,6 +7123,48 @@ fn floating_tables_take_no_room_and_text_wraps_beside_them() {
     // The paragraph doesn't wait below them: it runs beside the narrow table, level with it.
     assert!((by - ny).abs() < 2.0, "body at {by}, narrow table text at {ny}");
     assert!(bx + bleft > nx + 200.0, "body text at {}, right of the narrow table", bx + bleft);
+}
+
+/// Before Word 2013 layout a floating table moved below another keeps its own left edge, also
+/// when its first cell has no left margin (docxide `displaced-anchor-*-compat12-overlap0-*`), in
+/// the body and in a table cell.
+#[test]
+fn a_floating_table_moved_below_another_keeps_its_edge_before_word_2013_layout() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let narrow_x = |mode: u32, in_cell: bool| {
+        let mut d = Document::from_text("Body.");
+        d.settings.compat_mode = mode;
+        let table = |w: f32, text: &str, dist: [f32; 4]| {
+            let mut t = Table::new(1, 1, w);
+            t.props.cell_margins = Some([0.0; 4]);
+            t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+            t.props.float = Some(TableFloat { h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, dist, overlap: false, ..Default::default() });
+            t
+        };
+        let floats = [table(300.0, "Wide", [0.0; 4]), table(100.0, "Narrow", [9.0, 0.0, 9.0, 0.0])];
+        if in_cell {
+            let mut outer = Table::new(1, 1, 468.0);
+            outer.rows[0].cells[0].blocks = floats.into_iter().map(|t| std::sync::Arc::new(wordcraft_doc::Block::Table(t))).collect();
+            outer.rows[0].cells[0].blocks.push(wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Cell.", Default::default())));
+            d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(outer)).unwrap();
+        } else {
+            for (i, t) in floats.into_iter().enumerate() {
+                d.insert_block(StoryRef::Body, &Path::top(i), wordcraft_doc::Block::Table(t)).unwrap();
+            }
+        }
+        let l = lay(&d);
+        let xs: Vec<(f32, f32)> =
+            l.pages[0].items.iter().filter_map(|i| if let Placed::Lines { x, y, .. } = i { Some((*x, *y)) } else { None }).collect();
+        let [(wx, wy), (nx, ny), ..] = xs.as_slice() else { panic!("{xs:?}") };
+        assert!(*ny > *wy + 10.0, "mode {mode}, in cell {in_cell}: narrow at {ny}, below the wide table at {wy}: {xs:?}");
+        nx - wx
+    };
+    for in_cell in [false, true] {
+        let (old, new) = (narrow_x(12, in_cell), narrow_x(15, in_cell));
+        assert!(old.abs() < 0.01, "mode 12, in cell {in_cell}: narrow table {old} right of the wide one");
+        assert!((new - 9.0).abs() < 0.01, "mode 15, in cell {in_cell}: narrow table {new} right of the wide one");
+    }
 }
 
 /// A margin-anchored floating table is placed from the anchor page's margin even when a body
@@ -8108,6 +9091,34 @@ fn superscript_and_subscript_lines_are_as_tall_as_full_size_text() {
 }
 
 #[test]
+fn superscript_digits_advance_at_the_half_point_size() {
+    use wordcraft_doc::props::VertAlign;
+    // Word sets an 11pt superscript at 7pt (0.65 × 11 = 7.15, rounded to the half point): its
+    // digits advance by 7pt digit widths (Word for Mac, measured from its PDF export).
+    let width = |size: f32, vert_align: VertAlign| {
+        let mut p = wordcraft_doc::Paragraph::new();
+        let props =
+            wordcraft_doc::CharProps { font: Some(WRAP_TEST_FONT.into()), size: Some(size), vert_align: Some(vert_align), ..Default::default() };
+        p.runs.push(wordcraft_doc::para::Run { len: 10, props: props.clone() });
+        p.text.push_str("1234567890");
+        p.mark = props;
+        let mut d = Document::new();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        // From the first digit's start to the last's: nine digit advances.
+        let xs = l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| if let Placed::Lines { para, .. } = it { para.lines.first().map(|x| x.xs.clone()) } else { None })
+            .unwrap();
+        xs.last().unwrap() - xs.first().unwrap()
+    };
+    let seven = width(7.0, VertAlign::Baseline);
+    assert!((width(11.0, VertAlign::Superscript) - seven).abs() < 0.01, "{} vs {seven}", width(11.0, VertAlign::Superscript));
+    assert!((width(11.0, VertAlign::Subscript) - seven).abs() < 0.01);
+}
+
+#[test]
 fn ruby_text_sits_over_its_base_and_the_line_grows_to_fit() {
     use wordcraft_doc::para::RubyAlign;
     let plain = Document::from_text("Plain words here");
@@ -9454,6 +10465,20 @@ fn empty_page_section_keeps_line() {
 /// side by side). A section break on a paragraph with text keeps its line, and so does any break
 /// before a section on a new page. The SARP form's fields drifted a line lower at each of its
 /// many continuous breaks.
+/// A continuous section starting mid-page leaves its first paragraph's page break before in
+/// force, measured in Word for Mac: "Cover", an empty mark closing a continuous section, then
+/// "Heading" with page break before puts "Heading" on page 2.
+#[test]
+fn a_page_break_before_after_a_continuous_mark_starts_a_page() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    let mut d = Document::from_text("Cover\n\nHeading");
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().section =
+        Some(Box::new(SectionProps { start: SectionStart::Continuous, ..Default::default() }));
+    d.para_mut(StoryRef::Body, &Path::top(2)).unwrap().props.page_break_before = Some(true);
+    d.last_section.start = SectionStart::Continuous;
+    assert_eq!(lay(&d).caret(&Pos::body(2, 0)).unwrap().page, 1);
+}
+
 #[test]
 fn an_empty_continuous_section_mark_takes_no_room() {
     use wordcraft_doc::section::{SectionProps, SectionStart};
@@ -9485,6 +10510,79 @@ fn an_empty_continuous_section_mark_takes_no_room() {
     assert!((two[3].1 - two[1].1 - line).abs() < 0.15, "Pd a line below them: {two:?}");
     let new_page = tops("", 1, SectionStart::NextPage);
     assert_eq!(new_page[1].0, 1, "a next-page section starts a page: {new_page:?}");
+}
+
+/// A hidden mark closing a section before a continuous one, holding only an in-line picture:
+/// the picture keeps its line, so the next section starts below it, not over it (#5288). A
+/// floating picture there still leaves the mark quiet, and so does a hidden one or one in hidden
+/// text.
+#[test]
+fn a_hidden_mark_with_an_inline_picture_keeps_its_room() {
+    use wordcraft_doc::para::{Float, ShapeKind};
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    // Where Pb starts, and the bottom of the closing mark's picture (none: no picture).
+    let tops = |float: Option<Float>, run: CharProps| {
+        let mut d = Document::from_text("Pa\n\nPb");
+        let closer = d.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+        closer.mark.hidden = Some(true);
+        closer.section = Some(Box::new(SectionProps::default()));
+        d.last_section.start = SectionStart::Continuous;
+        if let Some(float) = float {
+            let shape = InlineObject::Shape {
+                kind: ShapeKind::Rectangle,
+                w: 144.0,
+                h: 72.0,
+                fill: None,
+                stroke: None,
+                stroke_width: 1.0,
+                float,
+                story: None,
+                effects: Default::default(),
+                freeform: None,
+                extra: Default::default(),
+            };
+            d.insert_object(&Pos::body(1, 0), shape, &run).unwrap();
+        }
+        let l = lay(&d);
+        let bottom = l.object(&Pos::body(1, 0), 0).map(|o| o.rect.bottom());
+        (l.caret(&Pos::body(2, 0)).unwrap(), bottom)
+    };
+    let wrapped = |wrap| Some(Float { wrap, ..Default::default() });
+    let (empty, _) = tops(None, CharProps::default());
+    let (pb, bottom) = tops(wrapped(Wrap::Inline), CharProps::default());
+    let bottom = bottom.unwrap();
+    assert_eq!(pb.page, 0, "the continuous section stays on the page: {pb:?}");
+    assert!(pb.top >= empty.top + 72.0 - 0.01, "Pb starts below the 72 pt picture: {pb:?} vs {empty:?}");
+    assert!(pb.top >= bottom - 0.01, "Pb starts below the picture's frame: {pb:?} vs {bottom}");
+    let (floating, drawn) = tops(wrapped(Wrap::InFrontOfText), CharProps::default());
+    assert!(drawn.is_some(), "the floating picture is drawn");
+    assert!((floating.top - empty.top).abs() < 0.01, "a floating picture leaves the mark quiet: {floating:?} vs {empty:?}");
+    let (hidden, _) = tops(Some(Float { hidden: true, ..Default::default() }), CharProps::default());
+    assert!((hidden.top - empty.top).abs() < 0.01, "a hidden picture leaves the mark quiet: {hidden:?} vs {empty:?}");
+    let (in_hidden_text, _) = tops(wrapped(Wrap::Inline), CharProps { hidden: Some(true), ..Default::default() });
+    assert!((in_hidden_text.top - empty.top).abs() < 0.01, "a picture in hidden text leaves the mark quiet: {in_hidden_text:?} vs {empty:?}");
+}
+
+/// A hidden closing mark holding only a legacy check box (a FORMCHECKBOX field, empty result):
+/// the box is drawn with a line's room, so the next section starts below it (#5288).
+#[test]
+fn a_hidden_mark_with_a_check_box_keeps_its_room() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    let top = |boxed: bool| {
+        let mut d = Document::from_text("Pa\n\nPb");
+        let closer = d.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+        closer.mark.hidden = Some(true);
+        closer.section = Some(Box::new(SectionProps::default()));
+        d.last_section.start = SectionStart::Continuous;
+        if boxed {
+            let form = r#"<w:ffData><w:name w:val="Box"/><w:checkBox><w:sizeAuto/></w:checkBox></w:ffData>"#.to_string();
+            let field = InlineObject::Field { instr: "FORMCHECKBOX".into(), result: String::new(), locked: false, dirty: false, code: false, form };
+            d.insert_object(&Pos::body(1, 0), field, &Default::default()).unwrap();
+        }
+        lay(&d).caret(&Pos::body(2, 0)).unwrap()
+    };
+    let (empty, boxed) = (top(false), top(true));
+    assert!(boxed.top >= empty.top + 8.0, "Pb starts a line below the check box: {boxed:?} vs {empty:?}");
 }
 
 /// Empty marks closing continuous sections one after another each keep their line while it
@@ -11164,6 +12262,88 @@ fn a_middle_or_bottom_cell_of_a_split_row_lines_up_on_the_first_page() {
     assert_eq!(pages[1][0].len(), 25 - labels.len(), "{pages:?}");
 }
 
+/// The line tops on the first page of a row split across pages, by cell: a label aligned with
+/// `valign`, 30 lines that split, and a 160 pt spacer above `note`.
+fn split_row_beside_a_note(valign: wordcraft_doc::props::VAlign, note: &ParaProps) -> [Vec<f32>; 3] {
+    use wordcraft_doc::props::LineSpacing;
+    let plain = split_note_plain();
+    let para = |text: &str, props: ParaProps| {
+        let mut p = Paragraph::with_text(text, Default::default());
+        p.props = props;
+        wordcraft_doc::para_block(p)
+    };
+    let mut d = Document::new();
+    (d.last_section.page_w, d.last_section.page_h) = (400.0, 360.0);
+    d.last_section.margin_top = 36.0;
+    d.last_section.margin_bottom = 36.0;
+    let mut t = Table::new(1, 3, 328.0);
+    t.props.style = None;
+    t.props.cell_margins = Some([0.0; 4]);
+    t.rows[0].cells[0].props.valign = Some(valign);
+    t.rows[0].cells[0].blocks = vec![para("Label", plain.clone())];
+    t.rows[0].cells[1].blocks = (0..30).map(|i| para(&format!("Line {i}"), plain.clone())).collect();
+    let spacer = ParaProps { line_spacing: Some(LineSpacing::Exactly(160.0)), ..plain.clone() };
+    t.rows[0].cells[2].blocks = vec![para("Spacer", spacer), para("Note", note.clone())];
+    d.body = vec![para("Filler", ParaProps { line_spacing: Some(LineSpacing::Exactly(100.0)), ..plain }), Arc::new(Block::Table(t))];
+    let l = lay(&d);
+    let tops = |cell: u32| -> Vec<f32> {
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Placed::Lines { path, y, .. } if path.0.len() == 4 && path.0[0] == 1 && path.0[2] == cell => Some(*y),
+                _ => None,
+            })
+            .collect()
+    };
+    let cells = [tops(0), tops(1), tops(2)];
+    assert!(cells[1].len() > 5 && cells[1].len() < 30, "the row splits: {cells:?}");
+    assert_eq!(cells[2].len(), 2, "the note stays on the page: {cells:?}");
+    cells
+}
+
+/// Single 12 pt lines with no space around them.
+fn split_note_plain() -> ParaProps {
+    ParaProps {
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        line_spacing: Some(wordcraft_doc::props::LineSpacing::Exactly(12.0)),
+        widow_control: Some(false),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn a_bottom_cell_of_a_split_row_ignores_a_dropped_space_after_beside_it() {
+    use wordcraft_doc::props::VAlign;
+    // The note's space after (contextual 300 pt, or automatic) drops at the cell's end and would
+    // otherwise reach below the split lines: a bottom label lines up with those, a middle one is
+    // centred between their top and bottom.
+    let plain = split_note_plain();
+    let contextual = ParaProps { space_after: Some(300.0), contextual_spacing: Some(true), ..plain.clone() };
+    let automatic = ParaProps { space_after_auto: Some(true), ..plain };
+    for note in [contextual, automatic] {
+        let [labels, lines, _] = split_row_beside_a_note(VAlign::Bottom, &note);
+        assert_eq!(labels.last(), lines.last(), "{note:?}: labels {labels:?}, lines {lines:?}");
+        let [labels, lines, _] = split_row_beside_a_note(VAlign::Center, &note);
+        let (Some(&first), Some(&last), Some(&label)) = (lines.first(), lines.last(), labels.first()) else { panic!("{labels:?} {lines:?}") };
+        let want = first + (last - first) / 2.0;
+        assert!((label - want).abs() < 0.01, "{note:?}: centred label at {label}, want {want}");
+    }
+}
+
+#[test]
+fn a_bottom_cell_of_a_split_row_lines_up_with_a_kept_space_after_beside_it() {
+    use wordcraft_doc::props::VAlign;
+    // A note that keeps its 14 pt after (no contextual spacing) still ends there: the bottom
+    // label's line ends 14 pt below the note's.
+    let note = ParaProps { space_after: Some(14.0), ..split_note_plain() };
+    let [labels, lines, notes] = split_row_beside_a_note(VAlign::Bottom, &note);
+    let (Some(&label), Some(&note_top), Some(&line)) = (labels.last(), notes.last(), lines.last()) else { panic!("{labels:?} {notes:?}") };
+    assert!(note_top + 14.0 > line, "the note's space after reaches below the split lines: {notes:?} {lines:?}");
+    assert!((label - (note_top + 14.0)).abs() < 0.01, "label at {label}, note at {note_top}");
+}
+
 fn row_keep_pages(d: &Document) -> Vec<usize> {
     let l = lay(d);
     (0..d.table(StoryRef::Body, &Path::top(1)).unwrap().rows.len())
@@ -12111,6 +13291,135 @@ fn caret_height_ignores_line_spacing() {
     }
 }
 
+#[test]
+fn bottom_border_reserves_gap() {
+    use wordcraft_doc::props::{BorderStyle, Borders};
+    for part in [None, Some(wordcraft_doc::PartKind::Header), Some(wordcraft_doc::PartKind::Footer)] {
+        let mut positions = Vec::new();
+        for style in [BorderStyle::None, BorderStyle::Single] {
+            let mut d = Document::from_text("First\nNext");
+            d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.borders =
+                Some(Borders { bottom: Some(Border { style, width: 0.5, space: 2.0, color: None }), ..Default::default() });
+            if let Some(kind) = part {
+                let id = d.add_part(kind, d.body.clone());
+                d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Body", Default::default()))];
+                match kind {
+                    wordcraft_doc::PartKind::Header => d.last_section.headers.default = Some(id),
+                    _ => d.last_section.footers.default = Some(id),
+                }
+            }
+            let l = lay(&d);
+            let items = match part {
+                Some(wordcraft_doc::PartKind::Header) => &l.pages[0].header,
+                Some(_) => &l.pages[0].footer,
+                None => &l.pages[0].items,
+            };
+            let top = |block| {
+                items
+                    .iter()
+                    .find_map(|it| match it {
+                        Placed::Lines { path, y, .. } if *path == Path::top(block) => Some(*y),
+                        _ => None,
+                    })
+                    .unwrap()
+            };
+            positions.push(top(1) - top(0));
+        }
+        assert!((positions[1] - positions[0] - 2.5).abs() < 0.01, "{part:?}: {positions:?}");
+    }
+}
+
+#[test]
+fn bottom_border_keeps_chain() {
+    use wordcraft_doc::props::LineSpacing;
+    const LINE_HEIGHT: f32 = 12.0;
+    for bordered in [1, 2] {
+        for style in [BorderStyle::None, BorderStyle::Single] {
+            let mut d = Document::from_text("Filler\nHeading\nRuled\nBody");
+            // Four 12pt lines fit; the border band makes the kept chain exceed the remainder.
+            d.last_section.page_h = d.last_section.margin_top + d.last_section.margin_bottom + 4.0 * LINE_HEIGHT + 1.0;
+            for block in 0..4 {
+                let p = d.para_mut(StoryRef::Body, &Path::top(block)).unwrap();
+                p.props.space_before = Some(0.0);
+                p.props.space_after = Some(0.0);
+                p.props.line_spacing = Some(LineSpacing::Exactly(LINE_HEIGHT));
+                p.props.keep_next = Some(block == 1 || block == 2);
+                if block == bordered {
+                    p.props.borders = Some(Borders { bottom: Some(Border { style, width: 0.5, space: 2.0, color: None }), ..Default::default() });
+                }
+            }
+            let laid = lay(&d);
+            let heading_page = laid
+                .pages
+                .iter()
+                .position(|page| page.items.iter().any(|item| matches!(item, Placed::Lines { path, .. } if *path == Path::top(1))))
+                .unwrap();
+            assert_eq!(heading_page, usize::from(style == BorderStyle::Single), "bordered={bordered}, {style:?}");
+        }
+    }
+}
+
+#[test]
+fn border_break_keeps_preflight() {
+    use wordcraft_doc::para::PAGE_BREAK;
+    use wordcraft_doc::props::LineSpacing;
+    const BODY_HEIGHT: f32 = 160.0;
+    const MARGIN: f32 = 20.0;
+    const LINE_HEIGHT: f32 = 10.0;
+    const BORDER_GAP: f32 = 20.0;
+
+    let make_para = |text: &str| {
+        let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(10.0), ..Default::default() };
+        let mut p = Paragraph::with_text(text, chr);
+        p.props.space_before = Some(0.0);
+        p.props.space_after = Some(0.0);
+        p.props.line_spacing = Some(LineSpacing::Exactly(LINE_HEIGHT));
+        p.props.keep_lines = Some(true);
+        p.props.keep_next = Some(false);
+        p.props.borders =
+            Some(Borders { bottom: Some(Border { style: BorderStyle::Single, width: 1.0, space: BORDER_GAP, color: None }), ..Default::default() });
+        p
+    };
+    let fitting = format!("One{PAGE_BREAK}");
+    let tall = format!("One\nTwo{PAGE_BREAK}");
+    let mut measured = Document::new();
+    measured.body = vec![wordcraft_doc::para_block(make_para(&fitting))];
+    let l = lay(&measured);
+    let room = l.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Lines { para, .. } => Some(para.height),
+            _ => None,
+        })
+        .unwrap();
+    assert!(room > 0.0 && room + BORDER_GAP + 1.0 < BODY_HEIGHT);
+    for (text, expected) in [(fitting.as_str(), 0), (tall.as_str(), 1), ("One", 1)] {
+        let mut d = Document::new();
+        d.last_section.margin_top = MARGIN;
+        d.last_section.margin_bottom = MARGIN;
+        d.last_section.page_h = BODY_HEIGHT + 2.0 * MARGIN;
+        let mut filler = Paragraph::with_text("Filler", Default::default());
+        filler.props.space_before = Some(0.0);
+        filler.props.space_after = Some(0.0);
+        filler.props.line_spacing = Some(LineSpacing::Exactly(BODY_HEIGHT - room));
+        let mut after = Paragraph::with_text("After", Default::default());
+        after.props.space_before = Some(0.0);
+        after.props.space_after = Some(0.0);
+        after.props.line_spacing = Some(LineSpacing::Exactly(LINE_HEIGHT));
+        d.body = vec![wordcraft_doc::para_block(filler), wordcraft_doc::para_block(make_para(text)), wordcraft_doc::para_block(after)];
+        let l = lay(&d);
+        assert_eq!(l.caret(&Pos::body(1, 0)).unwrap().page, expected, "{text:?}: omit only the terminal break border extent");
+        let pieces: Vec<_> = l
+            .pages
+            .iter()
+            .enumerate()
+            .filter_map(|(page, p)| p.items.iter().any(|it| matches!(it, Placed::Lines { path, .. } if *path == Path::top(1))).then_some(page))
+            .collect();
+        assert_eq!(pieces, vec![expected], "{text:?}: keep the paragraph whole");
+    }
+}
+
 enum SpanWidth {
     Preferred,
     Automatic,
@@ -12578,6 +13887,91 @@ fn a_non_breaking_hyphen_and_a_minus_sign_stay_unbreakable() {
     }
 }
 
+/// #3408: Word breaks a compound right after a hyphen that a slash follows ("Dataprotection-" /
+/// "/Secrecyviolation"), where UAX #14 forbids a break before the slash. The first width that
+/// wraps must break after the hyphen, not move the compound whole, and the slash stays with its
+/// word. Table auto-fit reads the same break, so such a column no longer widens to the compound.
+/// Word keeps "fitness-/1589" whole: a slash before a digit gains no break.
+#[test]
+fn a_hyphen_before_a_slash_is_a_break_opportunity_like_word() {
+    let digits = "Deed fitness-/1589";
+    let mut wrapped = false;
+    for m in 100..=540 {
+        let mut d = Document::from_text(digits);
+        d.last_section.margin_right = m as f32;
+        let l = lay(&d);
+        let lines: Vec<&str> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| if let Placed::Lines { para, l0, l1, .. } = it { Some(&para.lines[*l0..*l1]) } else { None })
+            .flatten()
+            .map(|line| &digits[line.start..line.stop])
+            .collect();
+        if lines.len() >= 2 {
+            assert_eq!(lines, ["Deed ", "fitness-/1589"], "the first wrap breaks at the space, not after the hyphen");
+            wrapped = true;
+            break;
+        }
+    }
+    assert!(wrapped, "no width in the sweep wrapped the digit case");
+
+    let text = "Deed Dataprotection-/Secrecyviolation";
+    for m in 100..=540 {
+        let mut d = Document::from_text(text);
+        d.last_section.margin_right = m as f32;
+        let l = lay(&d);
+        let lines: Vec<String> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| {
+                if let Placed::Lines { para, l0, l1, .. } = it {
+                    Some(para.lines[*l0..*l1].iter().map(|line| text[line.start..line.stop].to_string()).collect::<Vec<_>>())
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect();
+        if lines.len() < 2 {
+            continue; // still fits on one line at this width
+        }
+        assert_eq!(lines[0], "Deed Dataprotection-", "the first wrap breaks after the hyphen: {lines:?}");
+        assert_eq!(lines[1], "/Secrecyviolation", "the slash starts the next line with its word: {lines:?}");
+        return;
+    }
+    panic!("no width in the sweep wrapped the paragraph");
+}
+
+/// docxide-pdf `dot-open-token*`: UAX #14 allows a break between a full stop and an opening
+/// parenthesis, Word doesn't. The first width that wraps `Deed 2023.(Example` breaks at the space.
+#[test]
+fn a_full_stop_before_a_parenthesis_is_no_break() {
+    let text = "Deed 2023.(Example";
+    for m in 100..=540 {
+        let mut d = Document::from_text(text);
+        d.last_section.margin_right = m as f32;
+        let l = lay(&d);
+        let lines: Vec<String> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| {
+                if let Placed::Lines { para, l0, l1, .. } = it {
+                    Some(para.lines[*l0..*l1].iter().map(|line| text[line.start..line.stop].to_string()).collect::<Vec<_>>())
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect();
+        if lines.len() < 2 {
+            continue; // still fits on one line at this width
+        }
+        assert_eq!(lines, ["Deed ", "2023.(Example"], "the first wrap breaks at the space");
+        return;
+    }
+    panic!("no width in the sweep wrapped the paragraph");
+}
+
 #[test]
 fn layout_cache_invalidates_on_changed_filename() {
     let mut doc = Document::new();
@@ -12790,6 +14184,130 @@ fn horizontal_rules_take_their_line() {
     };
     assert!(measured(0.0) >= 150.0, "{}", measured(0.0));
     assert!(measured(100.0) < 150.0, "{}", measured(100.0));
+}
+
+/// A line's height with pictures raised or lowered and with legacy check boxes, in Word's numbers
+/// (Arial at 10 and 20 pt, single, 1.15 and 1.5 spacing).
+#[test]
+fn lowered_pictures_and_check_boxes_take_words_line_heights() {
+    use wordcraft_doc::props::LineSpacing;
+    // A paragraph at `m` spacing from a lead, a picture and how far its run is raised: the line's
+    // height, its picture's top under the line's, and the font's height.
+    let line_of = |lead: &str, m: f32, h: f32, raise: f32| {
+        let mut d = Document::from_text(lead);
+        let props = wordcraft_doc::CharProps { position: Some(raise), ..Default::default() };
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.props.line_spacing = Some(LineSpacing::Multiple(m));
+        let at = p.len();
+        p.insert_object(at, picture(40.0, h, Default::default()), &props).unwrap();
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        let c = para.clusters.iter().find(|c| matches!(c.kind, para::ClKind::Object(_))).unwrap();
+        let (line, st) = (&para.lines[0], &para.styles[c.style as usize]);
+        (line.height, line.baseline - c.obj_h.max(0.0) - line.top, st.ascent + st.descent)
+    };
+    for m in [1.0, 1.15, 1.5] {
+        let share = |font: f32| (m - 1.0) * font;
+        // Alone, lowered or not: the picture's height and the spacing's share, its top the line's.
+        for lowered in [0.0, 10.0, 30.0] {
+            let (h, top, font) = line_of("", m, 30.0, -lowered);
+            assert!((h - 30.0 - share(font)).abs() < 0.01 && top.abs() < 0.01, "lowered {lowered} at {m}: {h}, {top}");
+        }
+        // Raised: as far as it reaches.
+        let (h, top, font) = line_of("", m, 30.0, 10.0);
+        assert!((h - 40.0 - share(font)).abs() < 0.01 && top.abs() < 0.01, "raised at {m}: {h}, {top}");
+        // Shorter than the font: the font's height, and it ends at the font's bottom.
+        for (raise, reach) in [(0.0, 6.0), (-3.0, 6.0), (3.0, 9.0)] {
+            let (h, top, font) = line_of("", m, 6.0, raise);
+            assert!((h - font * m).abs() < 0.01 && (top - (font - reach)).abs() < 0.01, "{raise} at {m}: {h}, {top}");
+        }
+        // Lowered further than its height: as far down as it's lowered, the font's height at least,
+        // its top on the baseline (Word: a 6 pt picture lowered 10 pt takes the font's 11.5 pt,
+        // lowered 30 pt 30 pt; beside text, the text's ascent and the 30 pt).
+        let (h, top, font) = line_of("", m, 6.0, -10.0);
+        assert!((h - font * m).abs() < 0.01 && (top - (font - 10.0)).abs() < 0.01, "6 lowered 10 at {m}: {h}, {top}");
+        let (h, top, font) = line_of("", m, 6.0, -30.0);
+        assert!((h - 30.0 - share(font)).abs() < 0.01 && top.abs() < 0.01, "6 lowered 30 at {m}: {h}, {top}");
+        let (h, top, font) = line_of("x", m, 6.0, -30.0);
+        let asc = h - 30.0 - share(font);
+        assert!(asc > 0.0 && asc < font && (top - asc).abs() < 0.01, "6 lowered 30 beside text at {m}: {h}, {top}");
+        // Beside text, lowered: the text's ascent is no matter, the picture reaching further.
+        let (h, top, font) = line_of("x", m, 30.0, -10.0);
+        assert!((h - 30.0 - share(font)).abs() < 0.01 && top.abs() < 0.01, "beside text at {m}: {h}, {top}");
+    }
+    // Exact spacing keeps the line's box and its baseline: a picture lowered past its height sits
+    // where one lowered by its height does.
+    let exact = |raise: f32| {
+        let mut d = Document::from_text("x");
+        let props = wordcraft_doc::CharProps { position: Some(raise), ..Default::default() };
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.props.line_spacing = Some(LineSpacing::Exactly(20.0));
+        let at = p.len();
+        p.insert_object(at, picture(40.0, 6.0, Default::default()), &props).unwrap();
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        (para.lines[0].height, para.lines[0].baseline - para.lines[0].top)
+    };
+    let (h, base) = exact(-6.0);
+    assert!((h - 20.0).abs() < 0.01, "{h}");
+    assert_eq!(exact(-30.0), (h, base));
+    // A check box sizes its line as text of its size, alone or beside text.
+    let box_line = |lead: &str, m: f32, size: u32| {
+        let mut d = Document::from_text(lead);
+        let form = format!(r#"<w:ffData><w:name w:val="Box"/><w:checkBox><w:size w:val="{size}"/></w:checkBox></w:ffData>"#);
+        let field = InlineObject::Field { instr: "FORMCHECKBOX".into(), result: String::new(), locked: false, dirty: false, code: false, form };
+        let props = wordcraft_doc::CharProps { size: Some(10.0), ..Default::default() };
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.props.line_spacing = Some(LineSpacing::Multiple(m));
+        let at = p.len();
+        p.insert_object(at, field, &props).unwrap();
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        let c = para.clusters.iter().find(|c| matches!(c.kind, para::ClKind::Object(_))).unwrap();
+        let st = &para.styles[c.style as usize];
+        (para.lines[0].height, st.ascent + st.descent)
+    };
+    for m in [1.0, 1.5] {
+        let (h, font) = box_line("", m, 40);
+        assert!((h - font * 2.0 * m).abs() < 0.01, "a 20 pt box in 10 pt text at {m}: {h}, font {font}");
+    }
+}
+
+/// A line of only a picture (and spaces) ends at the picture's bottom; with text beside the
+/// picture the text's descent goes below it too (Word, measured with Aptos, Arial and Times New
+/// Roman at 10 and 20 pt: a 30 pt picture alone or after spaces takes 30 pt at single spacing,
+/// after a word 30 pt plus the descent).
+#[test]
+fn a_line_of_only_pictures_takes_no_descent() {
+    use wordcraft_doc::props::LineSpacing;
+    let line_of = |lead: &str| {
+        let mut d = Document::from_text(lead);
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+            p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+            let at = p.len();
+            p.insert_object(at, picture(60.0, 30.0, Default::default()), &Default::default()).unwrap();
+        }
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        (para.lines[0].height, para.lines[0].baseline - para.lines[0].top, para.styles[0].descent)
+    };
+    for lead in ["", "    "] {
+        let (h, base, _) = line_of(lead);
+        assert!((h - 30.0).abs() < 0.01 && (base - 30.0).abs() < 0.01, "{lead:?}: line {h}, baseline {base}");
+    }
+    let (h, base, desc) = line_of("Text ");
+    assert!((h - (30.0 + desc)).abs() < 0.01 && (base - 30.0).abs() < 0.01, "with text: line {h}, baseline {base}");
+    // A line break ending the picture's line is no text.
+    let mut d = Document::from_text("");
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+        p.insert_object(0, picture(60.0, 30.0, Default::default()), &Default::default()).unwrap();
+        let at = p.len();
+        p.insert_text(at, &format!("{}Next", wordcraft_doc::para::LINE_BREAK), &Default::default()).unwrap();
+    }
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    assert!(para.lines.len() == 2 && (para.lines[0].height - 30.0).abs() < 0.01, "picture, then a line break: {}", para.lines[0].height);
 }
 
 /// A kept-together paragraph starting a continuous section low on a page, with room there for
@@ -13396,4 +14914,30 @@ fn a_table_moved_by_a_page_break_shows_its_new_page_number() {
         })
         .collect();
     assert_eq!(shown, ["2"]);
+}
+
+/// Cell confinement must not change page-vertical placement through the rotated text axis.
+#[test]
+fn turned_cell_float_keeps_its_along_text_offset() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let place = |direction, outside_cell| {
+        let mut doc = Document::from_text("Synthetic body");
+        let mut table = Table::new(1, 2, 468.0);
+        table.rows[0].props.height = Some(100.0);
+        table.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::Exact;
+        table.rows[0].cells[0].props.text_direction = direction;
+        let mut para = Paragraph::with_text("Synthetic cell", Default::default());
+        let float = Float { wrap: Wrap::Tight, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 150.0, outside_cell, ..Default::default() };
+        para.insert_object(0, rect_shape(20.0, 10.0, float), &Default::default()).unwrap();
+        table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(para)];
+        doc.insert_block(StoryRef::Body, &Path::top(1), Block::Table(table)).unwrap();
+        let objects = shapes(&lay(&doc).pages[0].items);
+        assert_eq!(objects.len(), 1);
+        objects[0]
+    };
+    for direction in [TextDirection::Down, TextDirection::Up] {
+        let confined = place(direction, false);
+        let reference = place(direction, true);
+        assert!((confined.y - reference.y).abs() < 0.01, "{direction:?}: {confined:?} vs {reference:?}");
+    }
 }

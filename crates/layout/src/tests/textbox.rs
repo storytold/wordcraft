@@ -324,6 +324,20 @@ fn floating_box_that_resizes_to_fit_takes_its_texts_height() {
     assert!((shrunk.h - grown.h).abs() < 0.5, "{shrunk:?} {grown:?}");
 }
 
+/// #4250: on a later page of its paragraph, a floating box that resizes to fit its text takes its
+/// text's height too.
+#[test]
+fn a_floating_box_on_a_later_page_of_its_paragraph_fits_its_text() {
+    let mut d = Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(400));
+    let float = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, ..Default::default() };
+    let id = text_box_with(&mut d, 0, "Inside", 144.0, 1.0, TextBody { auto_fit: true, ..Default::default() }, float);
+    let l = lay(&d);
+    assert!(l.pages.len() >= 3, "pages {}", l.pages.len());
+    let hit = l.find_object(0, |o| o.text_box == Some(id)).unwrap();
+    assert!(hit.page > 0, "drawn on the page of its anchor");
+    assert!(hit.rect.h > 15.0 && hit.rect.h < 30.0, "one line and the margins: {:?}", hit.rect);
+}
+
 #[test]
 fn a_turned_linked_box_turns_only_its_own_lines() {
     // Linked boxes show the first box's story; turning the second box turns the lines it shows,
