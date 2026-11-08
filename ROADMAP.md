@@ -894,7 +894,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-06 | trivial | Progress log: Change Picture keeps the width and takes the new picture's aspect ratio (#5761) |
 | 2026-11-06 | trivial | Progress log: superscript and subscript text at 0.65 of its size rounded to the half point (Word for Mac) |
 | 2026-11-06 | trivial | Progress log: line numbers take the document's "Line Number" style |
-| 2026-11-07 | trivial | Charts: from six automatic colours on (slices of a pie, or series without their own colour), Word's shaded and tinted groups of the six accents, not the accents again (#5961) |
+| 2026-11-07 | trivial | Charts: from six automatic colours on (slices of a pie, or series without their own colour), Word's shaded and tinted groups of the six accents, not the accents again; for series the count is the highest `c:idx` + 1 (#5961) |
 | 2026-11-07 | trivial | Charts: a series without its own colour takes the accent its `c:idx` picks, as Word does, not the one its place in the file picks (#5963) |
 | 2026-11-07 | trivial | A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Estimates unchanged. |
 | 2026-11-06 | trivial | Print helpers remove loaded PDF/settings files before driver work, tolerate prior removal and report cleanup errors; a held-driver regression checks the files are already absent (#5710) |

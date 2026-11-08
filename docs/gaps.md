@@ -209,7 +209,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-11-02 | trivial | #26 narrowed: MHT opens and `w:altChunk` content is brought in on open; saving MHT remains |
 | 2026-11-01 | trivial | Preserve table rows and cells inside selected alternate-content branches (#5219); readiness estimates unchanged. |
 | 2026-11-07 | trivial | Empty paragraph deletion preserves following paragraph/mark formatting (Leaf #152); synthetic regressions only, no ranked gap closed or estimate changed. |
-| 2026-11-07 | trivial | Charts: from six automatic colours on (slices of a pie, or series without their own colour), Word's shaded and tinted groups of the six accents, not the accents again (#5961) |
+| 2026-11-07 | trivial | Charts: from six automatic colours on (slices of a pie, or series without their own colour), Word's shaded and tinted groups of the six accents, not the accents again; for series the count is the highest `c:idx` + 1 (#5961) |
 | 2026-11-07 | trivial | Charts: a series without its own colour takes the accent its `c:idx` picks, as Word does, not the one its place in the file picks (#5963) |
 | 2026-11-07 | trivial | A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Estimates unchanged. |
 | 2026-11-06 | trivial | Print helpers remove loaded PDF/settings files before driver work, tolerate prior removal and report cleanup errors; a held-driver regression checks the files are already absent (#5710) |
