@@ -408,3 +408,17 @@ fn named_instances_and_collection_members_are_capped() {
     // (under 0.1 s on a loaded machine) only backs up "read once", with room for a busy CI.
     assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
 }
+
+#[test]
+fn missing_calibri_without_carlito_reports_the_drawn_fallback() {
+    let db = FontDb::with_font_dirs(Vec::new());
+    db.set_system_fallback(false);
+    db.faces.write().unwrap().retain(|face| !face.family.eq_ignore_ascii_case("Carlito"));
+    assert!(!db.has_family("Carlito"));
+
+    let missing = crate::word::missing_metric_fonts_in(&db);
+    let used = missing.iter().find(|(family, _)| *family == "Calibri").map_or("", |(_, used)| used.as_str());
+    assert!(!used.is_empty(), "Calibri should be reported without Carlito");
+    assert_ne!(used, "Carlito");
+    assert!(db.has_family(used), "the notice names the face actually drawn");
+}
