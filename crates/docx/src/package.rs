@@ -81,7 +81,8 @@ pub fn glossary_fingerprint(glossary: &[wordcraft_doc::BuildingBlock]) -> String
     format!("{:016x}", h.0)
 }
 
-/// `Document::passthrough` key for a macro project, kept as opaque bytes (never parsed or run).
+/// `Document::passthrough` key for a macro project, kept as opaque bytes: parsed read-only
+/// for the macro audit (`vba::project`), never run.
 pub const VBA_PROJECT_PART: &str = "word/vbaProject.bin";
 /// `Document::passthrough` key listing the parts the project relates to (VBA data, signatures…),
 /// one `relationship type \t part name \t content type` line each; each part's bytes are kept

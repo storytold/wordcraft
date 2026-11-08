@@ -7,14 +7,19 @@
 //! module's stream holds a performance cache, then the source at [`Module::text_offset`],
 //! compressed with the MS-OVBA container format ([`decompress`]). The reader is lenient
 //! (unknown dir records are skipped; a module whose stream can't be read is listed without
-//! source) and bounded (stream and source sizes are capped), so hostile input yields an error
-//! or a best-effort report, never a panic.
+//! source) and bounded (stream, source and total-source sizes are capped), so hostile input
+//! yields an error or a best-effort report, never a panic.
 //!
 //! Names and source are MBCS in the project's code page ([`Project::code_page`]); they are
 //! decoded as UTF-8 with replacement, which is exact for the ASCII that macro source almost
-//! always is. A code page other than 1252 is recorded, not translated.
+//! always is. A code page other than 1252 is recorded, not translated. The Unicode name
+//! records (MODULENAMEUNICODE, MODULESTREAMNAMEUNICODE) are used when the project has them:
+//! stream names are UTF-16 there, so a cp1252 name such as `Módulo1` opens its stream.
 
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::io::{Cursor, Read, Seek};
+use std::sync::Arc;
 
 use crate::DocxError;
 
@@ -28,6 +33,14 @@ pub const MAX_DIR: u64 = 1 << 20;
 pub const MAX_MODULES: usize = 256;
 /// How large one module's source may be before the module says `truncated`.
 pub const MAX_SOURCE: u64 = 1 << 20;
+/// How much source all modules together may carry before the rest are listed without it
+/// ([`MAX_TOTAL_SOURCE`] bytes of decoded text): a project of many modules naming one large
+/// stream stays bounded instead of holding the source once per module.
+pub const MAX_TOTAL_SOURCE: u64 = 4 << 20;
+/// How large a module stream read may be: the compressed container for [`MAX_SOURCE`] of
+/// source plus slack — all-literal chunks expand the data by 9/8 and raw chunks 1:1, so a
+/// source of [`MAX_SOURCE`] never needs more than twice as many container bytes.
+const MAX_MODULE_STREAM: u64 = 2 * MAX_SOURCE;
 
 /// What [MS-OVBA] §2.4.1.1.5 names a compressed chunk's signature: bits 12..15 of the header.
 const CHUNK_SIGNATURE: u16 = 0xB000;
@@ -42,6 +55,9 @@ const REC_PROJECT_VERSION: u16 = 0x0009;
 const REC_MODULES_COUNT: u16 = 0x000F;
 const REC_MODULE_NAME: u16 = 0x0019;
 const REC_MODULE_STREAM_NAME: u16 = 0x001A;
+/// MODULESTREAMNAMEUNICODE: the stream name in UTF-16, which is how the compound file stores
+/// stream names — the MBCS record decoded as lossy UTF-8 can't open a cp1252 name.
+const REC_MODULE_STREAM_NAME_UNICODE: u16 = 0x0032;
 const REC_MODULE_PROCEDURAL: u16 = 0x0021;
 const REC_MODULE_DOCUMENT: u16 = 0x0022;
 const REC_MODULE_READ_ONLY: u16 = 0x0025;
@@ -91,6 +107,11 @@ pub fn project(bytes: &[u8]) -> Result<Project, DocxError> {
     let dir = stream(&mut comp, "/VBA/dir", MAX_DIR)?;
     let dir = decompress(&dir, MAX_DIR as usize)?;
     let mut project = walk_dir(&dir)?;
+    // Each distinct stream is read once, and the decoded source all modules carry counts
+    // against [`MAX_TOTAL_SOURCE`]: 256 modules naming one large stream used to read and hold
+    // it once per module — about 768 MiB decoded with lossy replacement from a small file.
+    let mut streams: HashMap<String, Option<Arc<(Vec<u8>, bool)>>> = HashMap::new();
+    let mut budget = MAX_TOTAL_SOURCE;
     for module in &mut project.modules {
         // A stream name is a single path segment; anything else can't name a module stream.
         if module.stream_name.is_empty() || module.stream_name.contains(['/', '\\', '\0']) {
@@ -98,43 +119,76 @@ pub fn project(bytes: &[u8]) -> Result<Project, DocxError> {
             continue;
         }
         let path = format!("/VBA/{}", module.stream_name);
-        let bytes = match stream(&mut comp, &path, MAX_SOURCE) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                log::warn!("docx: can't read the VBA module {path:?} ({e})");
-                module.source = None;
-                continue;
+        let cached = match streams.entry(module.stream_name.clone()) {
+            Entry::Occupied(e) => e.get().clone(),
+            Entry::Vacant(e) => {
+                let read = match module_stream(&mut comp, &path) {
+                    Ok(v) => Some(Arc::new(v)),
+                    Err(err) => {
+                        log::warn!("docx: can't read the VBA module {path:?} ({err})");
+                        None
+                    }
+                };
+                e.insert(read.clone());
+                read
             }
         };
-        read_source(module, &bytes);
+        let Some(bytes) = cached else {
+            module.source = None;
+            continue;
+        };
+        read_source(module, &bytes.0, bytes.1, &mut budget);
     }
     Ok(project)
 }
 
-/// A module's stream: a performance cache, then the source at [`Module::text_offset`] —
-/// compressed when it starts with the container signature ([MS-OVBA] §2.4.1.1.4), raw
-/// otherwise. Lenient: an offset past the stream lists the module without source.
-fn read_source(module: &mut Module, stream: &[u8]) {
+/// A module's source from its stream bytes: a performance cache, then the source at
+/// [`Module::text_offset`] — compressed when it starts with the container signature
+/// ([MS-OVBA] §2.4.1.1.4), raw otherwise. The output stops at [`MAX_SOURCE`] or what is left
+/// of `budget` — the decoded source all modules share, which lossy decoding can only expand,
+/// so a take of a third of it can't overshoot — and the module says `truncated` when anything
+/// was cut, instead of the source vanishing.
+fn read_source(module: &mut Module, stream: &[u8], stream_cut: bool, budget: &mut u64) {
     let at = module.text_offset.min(stream.len() as u64) as usize;
     let rest = &stream[at..];
-    let source = if rest.first() == Some(&CONTAINER_SIGNATURE) {
-        match decompress(rest, MAX_SOURCE as usize) {
-            Ok(raw) => raw,
+    let (raw, truncated) = if rest.first() == Some(&CONTAINER_SIGNATURE) {
+        match decompress_to_cap(rest, MAX_SOURCE as usize) {
+            Ok((raw, overflow)) => (raw, overflow),
             Err(e) => {
                 log::warn!("docx: can't decompress the VBA module {:?} ({e})", module.stream_name);
                 module.source = None;
                 return;
             }
         }
-    } else if rest.len() as u64 > MAX_SOURCE {
-        module.source = Some(decode(&rest[..MAX_SOURCE as usize]));
-        module.truncated = true;
-        return;
     } else {
-        rest.to_vec()
+        // A raw source: the stream read stops at [`MAX_MODULE_STREAM`], so a source longer
+        // than [`MAX_SOURCE`] is cut at the cap and says so below.
+        (rest.to_vec(), stream_cut)
     };
-    module.truncated = source.len() as u64 > MAX_SOURCE;
-    module.source = Some(decode(&source[..source.len().min(MAX_SOURCE as usize)]));
+    let take = raw.len().min((MAX_SOURCE as usize).min((*budget / 3) as usize));
+    if take == 0 && !raw.is_empty() {
+        // Only the last scraps of the budget (fewer than 3 bytes) are left: the module is
+        // listed without source rather than with a cut one.
+        log::warn!("docx: the VBA project's total source budget is spent; {:?} is listed without source", module.stream_name);
+        module.source = None;
+        return;
+    }
+    let source = decode(&raw[..take]);
+    *budget = budget.saturating_sub(source.len() as u64);
+    module.truncated = truncated || raw.len() > take;
+    module.source = Some(source);
+}
+
+/// A module stream: at most [`MAX_MODULE_STREAM`] bytes, with whether the stream was longer.
+/// A large module is cut instead of refused, so its code still shows in the audit.
+fn module_stream<F: Read + Seek>(comp: &mut cfb::CompoundFile<F>, path: &str) -> Result<(Vec<u8>, bool), DocxError> {
+    let name = path.trim_start_matches('/');
+    let s = comp.open_stream(path).map_err(|e| bad(format!("can't read {name} ({e})")))?;
+    let mut v = Vec::new();
+    s.take(MAX_MODULE_STREAM + 1).read_to_end(&mut v).map_err(|e| bad(format!("can't read {name} ({e})")))?;
+    let cut = v.len() as u64 > MAX_MODULE_STREAM;
+    v.truncate(MAX_MODULE_STREAM as usize);
+    Ok((v, cut))
 }
 
 /// The `dir` stream: a flat list of `id + size + payload` records ([MS-OVBA] §2.3.4.2).
@@ -165,7 +219,7 @@ fn walk_dir(dir: &[u8]) -> Result<Project, DocxError> {
         // kept one.
         match (id, in_module && !skipping) {
             (REC_CODE_PAGE, _) => project.code_page = u16_at(payload, 0).unwrap_or(0),
-            (REC_MODULES_COUNT, false) => count = u32_at(payload, 0),
+            (REC_MODULES_COUNT, false) => count = u16_at(payload, 0).map(u32::from),
             (REC_MODULE_NAME, _) => {
                 in_module = true;
                 if modules.len() < MAX_MODULES {
@@ -184,6 +238,13 @@ fn walk_dir(dir: &[u8]) -> Result<Project, DocxError> {
             (REC_MODULE_STREAM_NAME, true) => {
                 if let Some(module) = modules.last_mut() {
                     module.stream_name = decode(payload);
+                }
+            }
+            // The Unicode stream name is how the compound file stores it: the MBCS record
+            // decoded as lossy UTF-8 can't open a cp1252 name such as `Módulo1`.
+            (REC_MODULE_STREAM_NAME_UNICODE, true) => {
+                if let Some(module) = modules.last_mut() {
+                    module.stream_name = decode_utf16(payload).unwrap_or_else(|| module.stream_name.clone());
                 }
             }
             (REC_MODULE_OFFSET, true) => {
@@ -230,12 +291,24 @@ fn walk_dir(dir: &[u8]) -> Result<Project, DocxError> {
 /// with literals and copy tokens. `cap` bounds the total decompressed size; a container that
 /// decompresses past it says [`DocxError::Limit`].
 pub fn decompress(bytes: &[u8], cap: usize) -> Result<Vec<u8>, DocxError> {
+    let (out, overflow) = decompress_to_cap(bytes, cap)?;
+    if overflow {
+        return Err(DocxError::Limit("the decompressed source exceeds the cap".into()));
+    }
+    Ok(out)
+}
+
+/// [`decompress`] that stops at `cap` instead of failing: the output is cut at the cap and the
+/// bool says anything was left out (a chunk stopped early, or the cap reached with input
+/// still to come), so a module with more source than the cap still reports what it holds.
+pub fn decompress_to_cap(bytes: &[u8], cap: usize) -> Result<(Vec<u8>, bool), DocxError> {
     if bytes.first() != Some(&CONTAINER_SIGNATURE) {
         return Err(bad("the compressed container doesn't start with the signature byte"));
     }
     let mut out = Vec::new();
     let mut at = 1;
-    while at < bytes.len() {
+    let mut overflow = false;
+    while at < bytes.len() && !overflow {
         let Some(header) = u16_at(bytes, at) else { return Err(bad("the chunk header is cut")) };
         at += 2;
         if header & 0xF000 == CHUNK_SIGNATURE {
@@ -244,39 +317,43 @@ pub fn decompress(bytes: &[u8], cap: usize) -> Result<Vec<u8>, DocxError> {
             let end = at.checked_add(size.saturating_sub(2)).ok_or_else(|| bad("the chunk is too large"))?;
             let chunk = bytes.get(at..end).ok_or_else(|| bad("the compressed chunk is cut"))?;
             at = end;
-            decompress_chunk(chunk, &mut out, cap)?;
+            overflow = decompress_chunk(chunk, &mut out, cap)?;
         } else {
             // An uncompressed chunk carries RAW_CHUNK literal bytes.
             let chunk =
                 bytes.get(at..at.checked_add(RAW_CHUNK).ok_or_else(|| bad("the chunk is too large"))?).ok_or_else(|| bad("the raw chunk is cut"))?;
-            out.extend_from_slice(chunk);
+            let take = RAW_CHUNK.min(cap - out.len());
+            out.extend_from_slice(&chunk[..take]);
             at += RAW_CHUNK;
-            if out.len() > cap {
-                return Err(DocxError::Limit("the decompressed source exceeds the cap".into()));
-            }
+            overflow = take < RAW_CHUNK;
         }
     }
-    Ok(out)
+    Ok((out, overflow))
 }
 
 /// One compressed chunk: flag bytes whose bits name literals (bit clear) and copy tokens
-/// (bit set) ([MS-OVBA] §2.4.1.3.7). Copy tokens reach back into the chunk only.
-fn decompress_chunk(chunk: &[u8], out: &mut Vec<u8>, cap: usize) -> Result<(), DocxError> {
+/// (bit set) ([MS-OVBA] §2.4.1.3.7). Copy tokens reach back into the chunk only. Emits until
+/// `out` reaches `cap`, then stops (`Ok(true)`, the cut told of); a caller that must not lose
+/// bytes treats the bool as overflow ([`decompress_to_cap`], [`decompress`]).
+fn decompress_chunk(chunk: &[u8], out: &mut Vec<u8>, cap: usize) -> Result<bool, DocxError> {
     let base = out.len();
     let mut at = 0;
     while at < chunk.len() {
+        if out.len() >= cap {
+            return Ok(true);
+        }
         let flags = chunk[at];
         at += 1;
         for bit in 0..8u8 {
             if at >= chunk.len() {
                 break;
             }
+            if out.len() >= cap {
+                return Ok(true);
+            }
             if flags & (1 << bit) == 0 {
                 out.push(chunk[at]);
                 at += 1;
-                if out.len() > cap {
-                    return Err(DocxError::Limit("the decompressed source exceeds the cap".into()));
-                }
             } else {
                 let Some(token) = u16_at(chunk, at) else { return Err(bad("the copy token is cut")) };
                 at += 2;
@@ -292,14 +369,14 @@ fn decompress_chunk(chunk: &[u8], out: &mut Vec<u8>, cap: usize) -> Result<(), D
                     // The source advances with the copy: overlapping tokens copy runs.
                     let byte = out.get(from + i).copied().ok_or_else(|| bad("the copy token reaches past the chunk"))?;
                     out.push(byte);
-                    if out.len() > cap {
-                        return Err(DocxError::Limit("the decompressed source exceeds the cap".into()));
+                    if out.len() >= cap {
+                        return Ok(true);
                     }
                 }
             }
         }
     }
-    Ok(())
+    Ok(false)
 }
 
 /// How a copy token splits into length and offset bits, per how much the chunk has already

@@ -43,36 +43,56 @@ fn project_version(out: &mut Vec<u8>) {
 
 /// The dir stream for one procedural module: its names, offset, and type.
 fn dir_module() -> Vec<u8> {
+    dir_for(&[("Module1", "Module1")])
+}
+
+/// A dir stream for modules: each entry is (module name, stream name) — stream names may
+/// repeat, as a hostile project's do.
+fn dir_for(modules: &[(&str, &str)]) -> Vec<u8> {
     let mut dir = Vec::new();
     record(&mut dir, 0x0001, &0x00000001u32.to_le_bytes()); // SysKind: Windows
     record(&mut dir, 0x0003, &CODE_PAGE_1252.to_le_bytes()); // CodePage
     project_version(&mut dir); // PROJECTVERSION, before PROJECTMODULES as real projects have
-    record(&mut dir, 0x000F, &1u32.to_le_bytes()); // PROJECTMODULES: one module
+    // PROJECTMODULES: Count is a u16 ([MS-OVBA] §2.3.4.2.2.1).
+    record(&mut dir, 0x000F, &(modules.len() as u16).to_le_bytes());
     record(&mut dir, 0x0013, &0xFFFFu16.to_le_bytes()); // ProjectCookie
-    record(&mut dir, 0x0019, b"Module1"); // MODULENAME
-    // MODULENAMEUNICODE: "Module1" as UTF-16LE.
-    let mut name_utf16 = Vec::new();
-    for unit in "Module1".encode_utf16() {
-        name_utf16.extend(unit.to_le_bytes());
+    for (name, stream) in modules {
+        record(&mut dir, 0x0019, name.as_bytes()); // MODULENAME
+        record(&mut dir, 0x0047, &utf16(name)); // MODULENAMEUNICODE
+        record(&mut dir, 0x001A, stream.as_bytes()); // MODULESTREAMNAME
+        record(&mut dir, 0x0032, &utf16(stream)); // MODULESTREAMNAMEUNICODE
+        record(&mut dir, 0x0031, &4u32.to_le_bytes()); // MODULEOFFSET: 4 cache bytes first
+        record(&mut dir, 0x002C, &0u32.to_le_bytes()); // MODULECOOKIE
+        record(&mut dir, 0x0021, &0u32.to_le_bytes()); // MODULETYPE: procedural
+        record(&mut dir, 0x002B, &0u32.to_le_bytes()); // terminator
     }
-    record(&mut dir, 0x0047, &name_utf16);
-    record(&mut dir, 0x001A, b"Module1"); // MODULESTREAMNAME
-    record(&mut dir, 0x0032, b"Module1"); // Reserved (repeats the stream name)
-    record(&mut dir, 0x0031, &4u32.to_le_bytes()); // MODULEOFFSET: 4 cache bytes first
-    record(&mut dir, 0x002C, &0u32.to_le_bytes()); // MODULECOOKIE
-    record(&mut dir, 0x0021, &0u32.to_le_bytes()); // MODULETYPE: procedural
-    record(&mut dir, 0x002B, &0u32.to_le_bytes()); // terminator
     dir
+}
+
+/// UTF-16LE bytes, as the Unicode name records carry them.
+fn utf16(s: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    for unit in s.encode_utf16() {
+        out.extend(unit.to_le_bytes());
+    }
+    out
+}
+
+/// A compound file with `/VBA/dir` and the named module streams.
+fn cfb_project_streams(dir: &[u8], streams: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut comp = cfb::CompoundFile::create(Cursor::new(Vec::new())).unwrap();
+    comp.create_storage("/VBA").unwrap();
+    comp.create_stream("/VBA/dir").unwrap().write_all(dir).unwrap();
+    for (name, bytes) in streams {
+        comp.create_stream(format!("/VBA/{name}")).unwrap().write_all(bytes).unwrap();
+    }
+    comp.flush().unwrap();
+    comp.into_inner().into_inner()
 }
 
 /// A compound file with `/VBA/dir` and one module stream: a 4-byte cache, then the source.
 fn cfb_project(dir: &[u8], module: &[u8]) -> Vec<u8> {
-    let mut comp = cfb::CompoundFile::create(Cursor::new(Vec::new())).unwrap();
-    comp.create_storage("/VBA").unwrap();
-    comp.create_stream("/VBA/dir").unwrap().write_all(dir).unwrap();
-    comp.create_stream("/VBA/Module1").unwrap().write_all(module).unwrap();
-    comp.flush().unwrap();
-    comp.into_inner().into_inner()
+    cfb_project_streams(dir, &[("Module1", module)])
 }
 
 fn module_stream(source: &[u8]) -> Vec<u8> {
@@ -185,7 +205,7 @@ fn a_module_whose_stream_is_missing_is_listed_without_source() {
     let mut dir = Vec::new();
     record(&mut dir, 0x0001, &0x00000001u32.to_le_bytes());
     record(&mut dir, 0x0003, &CODE_PAGE_1252.to_le_bytes());
-    record(&mut dir, 0x000F, &1u32.to_le_bytes());
+    record(&mut dir, 0x000F, &1u16.to_le_bytes());
     record(&mut dir, 0x0019, b"Nowhere");
     record(&mut dir, 0x001A, b"Nowhere");
     record(&mut dir, 0x0031, &0u32.to_le_bytes());
@@ -203,7 +223,7 @@ fn a_stream_name_that_cannot_name_a_stream_is_skipped() {
     // source rather than reading some other path.
     let mut dir = Vec::new();
     record(&mut dir, 0x0003, &CODE_PAGE_1252.to_le_bytes());
-    record(&mut dir, 0x000F, &1u32.to_le_bytes());
+    record(&mut dir, 0x000F, &1u16.to_le_bytes());
     record(&mut dir, 0x0019, b"../escape");
     record(&mut dir, 0x001A, b"../escape");
     record(&mut dir, 0x0031, &0u32.to_le_bytes());
@@ -295,7 +315,7 @@ fn a_project_version_record_cut_inside_its_twelve_bytes_ends_the_walk() {
 fn more_than_the_module_cap_is_truncated() {
     let mut dir = Vec::new();
     record(&mut dir, 0x0003, &CODE_PAGE_1252.to_le_bytes());
-    record(&mut dir, 0x000F, &1000u32.to_le_bytes()); // the project claims 1000 modules
+    record(&mut dir, 0x000F, &1000u16.to_le_bytes()); // the project claims 1000 modules
     for i in 0..300u32 {
         let name = format!("Module{i}");
         record(&mut dir, 0x0019, name.as_bytes());
@@ -309,4 +329,62 @@ fn more_than_the_module_cap_is_truncated() {
     // A module beyond the cap is skipped whole: the last kept one keeps its own records.
     assert_eq!(project.modules[255].stream_name, "Module255");
     assert_eq!(project.modules[255].name, "Module255");
+}
+
+#[test]
+fn a_source_past_the_cap_is_cut_and_says_so() {
+    // #5483 review: past the cap decompress used to fail, so a module with about a mebibyte
+    // of comments said source: None, sourceLen: 0 and truncated: false — its code was hidden
+    // from the audit. The output stops at the cap with an overflow instead.
+    let mut source = b"Sub Hidden()\nEnd Sub\n".to_vec();
+    source.extend(std::iter::repeat_n(b'x', wordcraft_docx::vba::MAX_SOURCE as usize));
+    let project = wordcraft_docx::vba::project(&cfb_project(&compress(&dir_module()), &module_stream(&source))).unwrap();
+    let module = &project.modules[0];
+    assert!(module.truncated, "the source past the cap is told of, not hidden");
+    let src = module.source.as_deref().unwrap_or_default();
+    assert_eq!(src.len() as u64, wordcraft_docx::vba::MAX_SOURCE);
+    assert!(src.starts_with("Sub Hidden()"), "the code before the padding still shows");
+}
+
+#[test]
+fn a_project_of_many_modules_naming_one_stream_is_bounded() {
+    // #5483 review: 256 modules all naming one small stream that decompresses to the cap,
+    // full of bytes 0x80-0xFF that lossy decoding turns into 3 chars each, used to hold about
+    // 768 MiB. Each distinct stream is read once and the source all modules carry counts
+    // against one budget ([`vba::MAX_TOTAL_SOURCE`]).
+    let names: Vec<String> = (0..wordcraft_docx::vba::MAX_MODULES).map(|i| format!("Module{i}")).collect();
+    let pairs: Vec<(&str, &str)> = names.iter().map(|n| (n.as_str(), "Big")).collect();
+    let dir = compress(&dir_for(&pairs));
+    // 0xFF bytes: lossy decoding turns each into one replacement character, 3 chars — the
+    // reviewer's 0x80-0xFF stream at its most expansive. Past the cap, like the review's
+    // comments, so the first copy is cut too.
+    let big: Vec<u8> = vec![0xFF; wordcraft_docx::vba::MAX_SOURCE as usize + 500];
+    let project = wordcraft_docx::vba::project(&cfb_project_streams(&dir, &[("Big", &module_stream(&big))])).unwrap();
+    assert_eq!(project.modules.len(), wordcraft_docx::vba::MAX_MODULES);
+    let total: u64 = project.modules.iter().filter_map(|m| m.source.as_ref().map(|s| s.len() as u64)).sum();
+    assert!(total <= wordcraft_docx::vba::MAX_TOTAL_SOURCE, "the source all modules carry is bounded, got {total}");
+    // The budget spends across the copies: the first modules carry what is left of it, the
+    // rest are listed without source.
+    assert_eq!(project.modules.iter().filter(|m| m.source.is_none()).count(), wordcraft_docx::vba::MAX_MODULES - 2);
+    assert!(project.modules[0].truncated && project.modules[1].truncated, "a cut copy says so");
+}
+
+#[test]
+fn a_cp1252_stream_name_opens_through_its_unicode_record() {
+    // #5483 review: MODULESTREAMNAME is MBCS in the project's code page; decoded as lossy
+    // UTF-8, a cp1252 name such as Módulo1 (0xF3 is ó there, invalid UTF-8 alone) can't open
+    // its stream. MODULESTREAMNAMEUNICODE (0x0032) names it as the compound file stores it.
+    let mut dir = Vec::new();
+    record(&mut dir, 0x0003, &CODE_PAGE_1252.to_le_bytes());
+    record(&mut dir, 0x000F, &1u16.to_le_bytes());
+    record(&mut dir, 0x0019, b"M\xf3dulo1"); // MODULENAME, cp1252
+    record(&mut dir, 0x001A, b"M\xf3dulo1"); // MODULESTREAMNAME, cp1252
+    record(&mut dir, 0x0032, &utf16("M\u{00f3}dulo1")); // MODULESTREAMNAMEUNICODE
+    record(&mut dir, 0x0031, &4u32.to_le_bytes());
+    record(&mut dir, 0x0021, &0u32.to_le_bytes());
+    record(&mut dir, 0x002B, &0u32.to_le_bytes());
+    let project =
+        wordcraft_docx::vba::project(&cfb_project_streams(&compress(&dir), &[("M\u{00f3}dulo1", &module_stream(b"Sub Hi()\nEnd Sub\n"))])).unwrap();
+    assert_eq!(project.modules[0].stream_name, "M\u{00f3}dulo1");
+    assert_eq!(project.modules[0].source.as_deref(), Some("Sub Hi()\nEnd Sub\n"));
 }
