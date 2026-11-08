@@ -49,6 +49,21 @@ impl Session {
         doc.same_content(&self.doc) && *sel == self.sel && *column == self.column && *pending == self.pending
     }
 
+    /// Run a command that arrived from another replica: it is applied to this
+    /// document but does not become a step in *this* user's undo history. The
+    /// command starts a fresh group, so it cannot merge into the user's typing
+    /// step. The caller applies the authoritative result; a command that fails
+    /// leaves the document as `run` does.
+    pub fn run_remote(&mut self, id: &str, params: &Value) -> Result<Value, CmdError> {
+        self.typing_open = false;
+        self.join_next = false;
+        self.equation_join_next = false;
+        let depth = self.history.len();
+        let result = self.run(id, params);
+        self.history.truncate(depth);
+        result
+    }
+
     /// Run a command by id with JSON params (the single entry point for the UI, CLI, MCP and
     /// control channel). Mutating commands are undoable; a failed command leaves the document as
     /// it was; a panic inside a command becomes an error.

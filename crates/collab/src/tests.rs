@@ -32,6 +32,7 @@ impl TextModel {
             inverse: vec![inverse],
             forward: vec![op.clone()],
             label: "Typing".into(),
+            nodes_changed: false,
         })
     }
 
@@ -58,6 +59,7 @@ impl TextModel {
             inverse: vec![inverse],
             forward: vec![op.clone()],
             label: "Delete".into(),
+            nodes_changed: false,
         })
     }
 }
@@ -69,9 +71,11 @@ impl Model for TextModel {
             OpKind::Primitive => self.apply_insert(op),
             OpKind::Structural => {
                 self.text.push('#');
-                Ok(Effect { delta: None, inverse: Vec::new(), forward: vec![op.clone()], label: "Structural".into() })
+                Ok(Effect { delta: None, inverse: Vec::new(), forward: vec![op.clone()], label: "Structural".into(), nodes_changed: true })
             }
-            OpKind::Command | OpKind::Merge => Ok(Effect { delta: None, inverse: Vec::new(), forward: Vec::new(), label: "Merge".into() }),
+            OpKind::Command | OpKind::Merge => {
+                Ok(Effect { delta: None, inverse: Vec::new(), forward: Vec::new(), label: "Merge".into(), nodes_changed: false })
+            }
         }
     }
 
@@ -299,4 +303,15 @@ fn roles_parse_and_gate_commits() {
     assert!(!Role::Editor.can_commit());
     assert!(!Role::Viewer.can_write());
     assert!(Role::Commenter.can_write());
+}
+
+#[test]
+fn a_commenter_may_only_annotate() {
+    let mut room = Room::new(TextModel::default());
+    let err = room.submit("carol", Role::Commenter, insert("c", 1, 0, 0, "text")).expect_err("a commenter cannot type");
+    assert_eq!(err.code, RejectCode::Forbidden);
+
+    let mut comment = insert("c", 1, 0, 0, "");
+    comment.payload = json!({"op": "add_comment", "text": "please check"});
+    room.submit("carol", Role::Commenter, comment).expect("a comment is allowed");
 }

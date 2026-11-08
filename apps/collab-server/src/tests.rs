@@ -77,8 +77,18 @@ async fn connect(
     role: &str,
     client: &str,
 ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+    connect_from(url, cfg, role, client, None).await
+}
+
+async fn connect_from(
+    url: &str,
+    cfg: &Config,
+    role: &str,
+    client: &str,
+    last_version: Option<u64>,
+) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
     let (mut ws, _) = tokio_tungstenite::connect_async(url).await.expect("connect");
-    let auth = ClientMsg::Auth { token: token(cfg, client, role, "wordcraft", 600), client_id: client.into(), last_version: None };
+    let auth = ClientMsg::Auth { token: token(cfg, client, role, "wordcraft", 600), client_id: client.into(), last_version };
     ws.send(Message::Text(serde_json::to_string(&auth).expect("auth json").into())).await.expect("send auth");
     ws
 }
@@ -149,6 +159,132 @@ async fn two_clients_edit_through_the_server() {
         ServerMsg::Applied { applied } => assert_eq!(applied.version, 2),
         other => panic!("expected applied, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn presence_reaches_the_other_client_and_moves_no_version() {
+    let (url, cfg) = spawn_server().await;
+    let mut alice = connect(&url, &cfg, "editor", "alice").await;
+    let mut bob = connect(&url, &cfg, "editor", "bob").await;
+    let _ = next_msg(&mut alice).await;
+    let node = node_of(&mut alice).await;
+    let _ = next_msg(&mut bob).await;
+    let _ = node_of(&mut bob).await;
+
+    alice
+        .send(Message::Text(
+            serde_json::to_string(&ClientMsg::Presence { state: json!({"cursor": {"story": "body", "nodeId": node, "off": 3}}) })
+                .expect("json")
+                .into(),
+        ))
+        .await
+        .expect("presence");
+    match next_msg(&mut bob).await {
+        ServerMsg::Presence { client_id, state } => {
+            assert_eq!(client_id, "alice");
+            assert_eq!(state["cursor"]["off"], 3);
+        }
+        other => panic!("expected presence, got {other:?}"),
+    }
+
+    // Presence is ephemeral: the next accepted operation is version 1.
+    alice
+        .send(Message::Text(serde_json::to_string(&ClientMsg::Op { op: insert("alice", 1, 0, node, 0, "x") }).expect("json").into()))
+        .await
+        .expect("op");
+    match next_msg(&mut alice).await {
+        ServerMsg::Applied { applied } => assert_eq!(applied.version, 1),
+        other => panic!("expected applied, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_reconnecting_client_catches_up_from_the_journal() {
+    let (url, cfg) = spawn_server().await;
+    let mut alice = connect(&url, &cfg, "editor", "alice").await;
+    let mut bob = connect(&url, &cfg, "editor", "bob").await;
+    let _ = next_msg(&mut alice).await;
+    let node = node_of(&mut alice).await;
+    let _ = next_msg(&mut bob).await;
+    let _ = node_of(&mut bob).await;
+
+    bob.send(Message::Text(serde_json::to_string(&ClientMsg::Op { op: insert("bob", 1, 0, node, 0, "B") }).expect("json").into()))
+        .await
+        .expect("bob");
+    match next_msg(&mut bob).await {
+        ServerMsg::Applied { applied } => assert_eq!(applied.version, 1),
+        other => panic!("expected applied, got {other:?}"),
+    }
+    drop(bob);
+    // Alice's edit lands while Bob is away; her queue may also carry `left`.
+    alice
+        .send(Message::Text(serde_json::to_string(&ClientMsg::Op { op: insert("alice", 1, 1, node, 1, "A") }).expect("json").into()))
+        .await
+        .expect("alice");
+    loop {
+        match next_msg(&mut alice).await {
+            ServerMsg::Applied { applied } if applied.version == 2 => break,
+            ServerMsg::Applied { .. } => continue,
+            ServerMsg::Left { .. } | ServerMsg::Presence { .. } | ServerMsg::Nodes { .. } => continue,
+            other => panic!("expected applied, got {other:?}"),
+        }
+    }
+
+    let mut bob = connect_from(&url, &cfg, "editor", "bob", Some(1)).await;
+    match next_msg(&mut bob).await {
+        ServerMsg::Welcome { version, resync, .. } => {
+            assert_eq!(version, 2);
+            assert!(!resync, "the journal still has the tail");
+        }
+        other => panic!("expected welcome, got {other:?}"),
+    }
+    let mut replayed = false;
+    loop {
+        match next_msg(&mut bob).await {
+            ServerMsg::Tail { entries } => {
+                assert!(entries.iter().any(|entry| entry.version == 2), "{entries:?}");
+                replayed = true;
+            }
+            ServerMsg::Nodes { .. } => break,
+            other => panic!("unexpected catch-up frame {other:?}"),
+        }
+    }
+    assert!(replayed, "the missing version was replayed");
+}
+
+#[tokio::test]
+async fn a_client_can_ask_for_a_snapshot_without_losing_the_journal() {
+    let (url, cfg) = spawn_server().await;
+    let mut alice = connect(&url, &cfg, "editor", "alice").await;
+    let _ = next_msg(&mut alice).await;
+    let node = node_of(&mut alice).await;
+    alice
+        .send(Message::Text(serde_json::to_string(&ClientMsg::Op { op: insert("alice", 1, 0, node, 0, "Hello") }).expect("json").into()))
+        .await
+        .expect("insert");
+    let _ = next_msg(&mut alice).await;
+
+    alice.send(Message::Text(serde_json::to_string(&ClientMsg::Resync { last_version: 0 }).expect("json").into())).await.expect("resync");
+    match next_msg(&mut alice).await {
+        ServerMsg::Welcome { version, resync, .. } => {
+            assert_eq!(version, 1);
+            assert!(resync, "the client asked for the snapshot, not the tail");
+        }
+        other => panic!("expected welcome, got {other:?}"),
+    }
+    let mut last = false;
+    loop {
+        match next_msg(&mut alice).await {
+            ServerMsg::Snapshot { last: done, .. } => {
+                if done {
+                    last = true;
+                }
+            }
+            ServerMsg::Nodes { .. } => break,
+            other => panic!("unexpected resync frame {other:?}"),
+        }
+    }
+    assert!(last, "the snapshot ended");
 }
 
 #[tokio::test]
@@ -285,9 +421,16 @@ async fn a_command_operation_runs_on_the_server() {
         history: None,
     };
     alice.send(Message::Text(serde_json::to_string(&ClientMsg::Op { op: command }).expect("json").into())).await.expect("send");
-    match next_msg(&mut alice).await {
-        ServerMsg::Applied { applied } => assert_eq!(applied.version, 1),
-        other => panic!("expected applied, got {other:?}"),
+    loop {
+        match next_msg(&mut alice).await {
+            ServerMsg::Applied { applied } => {
+                assert_eq!(applied.version, 1);
+                break;
+            }
+            // A command that grows the document also refreshes the node map.
+            ServerMsg::Nodes { .. } => continue,
+            other => panic!("expected applied, got {other:?}"),
+        }
     }
 
     // Commands that reach beyond the document never run on a server.

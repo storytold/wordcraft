@@ -79,6 +79,11 @@ impl NodeIds {
     }
 
     /// The id for a node, issuing one on first sight.
+    /// The id a key already has, without assigning one.
+    pub fn get(&self, key: &NodeKey) -> Option<NodeId> {
+        self.forward.get(key).copied()
+    }
+
     pub fn id_for(&mut self, key: &NodeKey) -> NodeId {
         if let Some(id) = self.forward.get(key) {
             return *id;

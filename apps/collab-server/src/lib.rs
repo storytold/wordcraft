@@ -373,8 +373,29 @@ async fn process_frame(
         ClientMsg::Op { op } => handle_op(state, room, sink, claims, role, client_id, op).await,
         ClientMsg::Presence { state: presence } => {
             Metrics::inc(&state.metrics.presence);
-            broadcast(room, client_id, ServerMsg::Presence { client_id: client_id.to_string(), state: presence }, sink).await;
+            // Ephemeral state goes to the other participants; the author already
+            // knows its own caret and the cabinet's UI keeps it locally.
+            let targets: Vec<mpsc::UnboundedSender<ServerMsg>> = {
+                let guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
+                guard.peers.iter().filter(|(id, _)| id.as_str() != client_id).map(|(_, peer)| peer.out.clone()).collect()
+            };
+            let msg = ServerMsg::Presence { client_id: client_id.to_string(), state: presence };
+            for tx in targets {
+                let _ = tx.send(msg.clone());
+            }
             true
+        }
+        ClientMsg::Resync { last_version } => {
+            let (plan, peers) = {
+                let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
+                let peers = guard
+                    .peers
+                    .iter()
+                    .map(|(id, peer)| Participant { client_id: id.clone(), role: peer.role.as_str().to_string(), color: None, presence: None })
+                    .collect();
+                (guard.room.join(Some(last_version), true), peers)
+            };
+            send_join(sink, claims, role, &plan, peers).await
         }
         ClientMsg::Commit { op_id, expected_version, .. } => handle_commit(state, room, sink, claims, role, op_id, expected_version).await,
         ClientMsg::Ping { ts } => send(sink, &ServerMsg::Pong { ts }).await.is_ok(),
@@ -403,8 +424,12 @@ async fn handle_op(
         Ok(applied) => {
             Metrics::inc(&state.metrics.ops);
             broadcast(room, client_id, ServerMsg::Applied { applied }, sink).await;
-            if structural {
-                let nodes = room.lock().unwrap_or_else(|poison| poison.into_inner()).room.nodes();
+            let nodes = {
+                let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
+                let moved = guard.room.take_nodes_changed();
+                if structural || moved { Some(guard.room.nodes()) } else { None }
+            };
+            if let Some(nodes) = nodes {
                 broadcast(room, "", ServerMsg::Nodes { nodes }, sink).await;
             }
             let due = room.lock().unwrap_or_else(|poison| poison.into_inner()).room.should_snapshot();

@@ -204,6 +204,12 @@ pub enum ClientMsg {
     Presence {
         state: serde_json::Value,
     },
+    /// Ask for a fresh snapshot even when the journal tail is available (a
+    /// command allocated ids the replica cannot derive locally).
+    Resync {
+        #[serde(default)]
+        last_version: Version,
+    },
     Commit {
         op_id: OpId,
         expected_version: Version,

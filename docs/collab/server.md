@@ -99,6 +99,21 @@ accepted: `file.`, `tools.`, `ui.`, `view.`, `caret.`, `select.`, `collab.`,
 `forbidden`. The server session keeps no undo history: per-user undo is the
 protocol's (ADR-0010), and a command has no inverse there.
 
+## Presence
+
+`presence` is ephemeral: it is not journaled, does not move `version`, and is
+sent to the **other** participants — the author's own caret is already in its
+window. Cursors and selections are addresses (`story`, `nodeId`, `off`), never
+text. A viewer sends presence but no operations.
+
+## Roles
+
+The server checks the role on every operation. `viewer` is refused before the
+model; `commenter` may only send `add_comment`/`resolve_comment` primitives (and
+merge-class annotations), never document text; `owner` is the only role that
+commits. The client refuses document commands for a viewer too, but that is UX:
+the server is the authority.
+
 ## Undo and redo
 
 The client moves its own history by sending an ordinary operation with a

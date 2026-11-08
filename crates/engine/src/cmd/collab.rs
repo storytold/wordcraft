@@ -87,4 +87,15 @@ mod tests {
         assert_eq!(result["enabled"], false);
         assert_eq!(s.prefs.collab.server, "ws://127.0.0.1:9999/ws");
     }
+
+    #[test]
+    fn a_remote_command_does_not_enter_the_local_undo_stack() {
+        let mut s = session();
+        s.run("text.insert", &json!({"text": "a"})).expect("local typing");
+        let local_steps = s.undo_depth();
+        s.run_remote("text.insert", &json!({"text": "b"})).expect("a command from another replica");
+        assert_eq!(s.undo_depth(), local_steps, "the remote edit is not a step of this user's undo");
+        let text = s.doc.body.first().and_then(|block| block.as_para()).map(|para| para.text.clone()).unwrap_or_default();
+        assert_eq!(text, "ab");
+    }
 }

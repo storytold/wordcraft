@@ -25,6 +25,9 @@ pub struct Effect {
     pub forward: Vec<Op>,
     /// Label for the undo menu.
     pub label: String,
+    /// Whether the operation moved block paths or added a block, so the
+    /// server must send a fresh node map (ADR-0002). Text edits leave it false.
+    pub nodes_changed: bool,
 }
 
 /// The application half of a room: applies an operation to the document.
@@ -106,6 +109,8 @@ pub struct Room<M: Model> {
     last_touch: HashMap<u32, Version>,
     /// Version of the last structural operation.
     last_structural: Version,
+    /// Set by the last accepted operation when clients need a fresh node map.
+    nodes_changed: bool,
 }
 
 impl<M: Model> Room<M> {
@@ -117,6 +122,7 @@ impl<M: Model> Room<M> {
             undo: UndoStacks::new(200),
             last_touch: HashMap::new(),
             last_structural: 0,
+            nodes_changed: false,
         }
     }
 
@@ -124,7 +130,7 @@ impl<M: Model> Room<M> {
     pub fn restore(model: M, version: Version, epoch: u64) -> Room<M> {
         let mut journal = Journal::new(10_000, 10_000);
         journal.restore(version, epoch);
-        Room { model, journal, ids: NodeIds::new(), undo: UndoStacks::new(200), last_touch: HashMap::new(), last_structural: 0 }
+        Room { model, journal, ids: NodeIds::new(), undo: UndoStacks::new(200), last_touch: HashMap::new(), last_structural: 0, nodes_changed: false }
     }
 
     pub fn version(&self) -> Version {
@@ -177,6 +183,22 @@ impl<M: Model> Room<M> {
         if !role.can_write() {
             return Err(Reject::new(op.op_id.clone(), RejectCode::Forbidden, "the role may not edit this document"));
         }
+        if role == Role::Commenter {
+            // A commenter annotates; the document itself is not theirs (ADR-0008).
+            let comment_command = op.kind == crate::wire::OpKind::Command
+                && matches!(
+                    op.payload.get("command").and_then(Value::as_str),
+                    Some("review.newComment" | "review.reply" | "review.editComment" | "review.resolveComment" | "review.deleteComment")
+                );
+            let annotation = op.kind == crate::wire::OpKind::Merge
+                || comment_command
+                || (op.kind == crate::wire::OpKind::Primitive
+                    && matches!(op.payload.get("op").and_then(Value::as_str), Some("add_comment" | "resolve_comment")));
+            if !annotation {
+                return Err(Reject::new(op.op_id.clone(), RejectCode::Forbidden, "a commenter may only add or resolve comments"));
+            }
+        }
+        self.nodes_changed = false;
         if let Some(cached) = self.journal.cached(&op.op_id) {
             return Ok(cached.clone());
         }
@@ -186,6 +208,7 @@ impl<M: Model> Room<M> {
         }
         let effect = self.model.apply(actor, &op, &mut self.ids)?;
         let has_delta = effect.delta.is_some();
+        self.nodes_changed = effect.nodes_changed;
         let applied = self.journal.accept(&op, actor, effect.delta, effect.inverse.clone());
         self.note_touch(&op, applied.version);
         if !effect.inverse.is_empty() || !effect.forward.is_empty() || has_delta {
@@ -202,6 +225,7 @@ impl<M: Model> Room<M> {
     /// the unit that gets a version; the step's operations run behind it and
     /// are never journaled separately, so the document moves once.
     fn submit_history(&mut self, actor: &str, op: &Op, history: HistoryAction) -> Result<Applied, Reject> {
+        self.nodes_changed = false;
         let (step, step_op_id, undo) = match &history {
             HistoryAction::Undo { op_id } => (self.undo.peek_undo(actor), op_id, true),
             HistoryAction::Redo { op_id } => (self.undo.peek_redo(actor), op_id, false),
@@ -237,6 +261,9 @@ impl<M: Model> Room<M> {
             replayed.epoch = None;
             replayed.history = None;
             let effect = self.model.apply(actor, &replayed, &mut self.ids)?;
+            if effect.nodes_changed {
+                self.nodes_changed = true;
+            }
             delta = match (delta.take(), effect.delta) {
                 (None, next) => next,
                 (Some(previous), Some(next)) => Some(serde_json::json!({"ops": [previous, next]})),
@@ -276,6 +303,12 @@ impl<M: Model> Room<M> {
         if op.kind.is_structural() {
             self.last_structural = version;
         }
+    }
+
+    /// Whether the last accepted operation moved block paths or added ids, so
+    /// the server must broadcast a fresh node map. Reading it clears the flag.
+    pub fn take_nodes_changed(&mut self) -> bool {
+        std::mem::replace(&mut self.nodes_changed, false)
     }
 
     /// The newest undo step of `actor`, to be sent as a new operation.

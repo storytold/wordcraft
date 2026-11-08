@@ -7423,6 +7423,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "wordcraft-collab-app"
+version = "0.15.1"
+dependencies = [
+ "serde_json",
+ "tokio",
+ "wordcraft-collab",
+ "wordcraft-collab-doc",
+ "wordcraft-collab-engine",
+ "wordcraft-collab-ws",
+ "wordcraft-doc",
+ "wordcraft-engine",
+]
+
+[[package]]
 name = "wordcraft-collab-client"
 version = "0.15.1"
 dependencies = [
@@ -7724,6 +7738,7 @@ dependencies = [
  "sys-locale",
  "toml",
  "web-time",
+ "wordcraft-collab-app",
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-fonts",

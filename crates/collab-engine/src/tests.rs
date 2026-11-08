@@ -3,9 +3,13 @@
 
 use serde_json::json;
 
-use wordcraft_collab::room::{Role, Room};
+use std::sync::Arc;
+use wordcraft_collab::ids::NodeIds;
+use wordcraft_collab::room::{Model, Role, Room};
 use wordcraft_collab::wire::{Op, OpId, OpKind, RejectCode, Target};
-use wordcraft_doc::Document;
+
+use wordcraft_doc::{Block, CharProps, Document, Paragraph};
+use wordcraft_engine::Session;
 
 use crate::SessionModel;
 
@@ -135,4 +139,65 @@ fn a_command_is_an_undo_barrier() {
     let err = room.submit("alice", Role::Editor, undo).expect_err("a command has no inverse");
     assert_eq!(err.code, RejectCode::Unsupported);
     assert_eq!(body_text(&room), "Hi", "the refused undo changed nothing");
+}
+
+fn replica_session() -> (Session, NodeIds) {
+    let session = Session::new(Document::new());
+    let mut ids = NodeIds::new();
+    SessionModel::from_document(session.doc.clone()).index_nodes(&mut ids);
+    (session, ids)
+}
+
+#[test]
+fn a_command_delta_replays_on_a_replica_session() {
+    let mut room = room();
+    let node = node(&mut room);
+    let payload = json!({"command": "text.insert", "params": {"text": "Hello"}, "pending": {"bold": true}});
+    let applied = room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Command, node, 0, payload)).expect("command applies");
+
+    let (mut replica, mut ids) = replica_session();
+    crate::apply_delta(&mut replica, &mut ids, applied.delta.as_ref().expect("a delta")).expect("the replica replays the command");
+    let text = replica.doc.body.first().and_then(|block| block.as_para()).map(|para| para.text.clone()).unwrap_or_default();
+    assert_eq!(text, "Hello");
+}
+
+#[test]
+fn a_primitive_delta_replays_on_a_replica_session() {
+    let mut room = room();
+    let node = node(&mut room);
+    let applied =
+        room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Primitive, node, 0, json!({"op": "insert_text", "text": "Hi"}))).expect("primitive");
+
+    let (mut replica, mut ids) = replica_session();
+    crate::apply_delta(&mut replica, &mut ids, applied.delta.as_ref().expect("a delta")).expect("the replica applies the delta");
+    let text = replica.doc.body.first().and_then(|block| block.as_para()).map(|para| para.text.clone()).unwrap_or_default();
+    assert_eq!(text, "Hi");
+}
+
+#[test]
+fn a_hundred_page_document_keeps_up_with_edits() {
+    let mut doc = Document::new();
+    doc.body.clear();
+    for index in 0..3000 {
+        doc.body.push(Arc::new(Block::Para(Paragraph::with_text(&format!("Paragraph {index} of a long document."), CharProps::default()))));
+    }
+    let mut room = Room::new(SessionModel::from_document(doc));
+    let plan = room.join(None, false);
+    let nodes: Vec<u32> = (0..3000).filter_map(|index| plan.nodes.iter().find(|node| node.path == vec![index]).map(|node| node.id)).collect();
+    assert_eq!(nodes.len(), 3000, "every paragraph got a session id");
+
+    let mut version = 0;
+    for (index, node) in nodes.iter().take(100).enumerate() {
+        let client = if index % 2 == 0 { "alice" } else { "bob" };
+        let applied = room
+            .submit(
+                client,
+                Role::Editor,
+                op(client, index as u64 + 1, version, OpKind::Primitive, *node, 0, json!({"op": "insert_text", "text": "X"})),
+            )
+            .expect("an edit on a long document");
+        version = applied.version;
+    }
+    assert_eq!(room.version(), 100);
+    assert!(!room.model().snapshot().is_empty());
 }

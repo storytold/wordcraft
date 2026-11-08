@@ -175,7 +175,7 @@ OT/CRDT не используются: сервер применяет опер�
 Эфемерный тип в том же WS: `{cursor:{story,nodeId,off}, selection?, viewport:{page,scroll},
 active:{tab,pane}}`. 5–10 Гц, ≤ 2 KiB, коалесцирование в последнее состояние,
 `drop-stale` при перегрузке, TTL 30 с, `leave`/разрыв чистит сразу. Не журналируется,
-не влияет на `version`; viewer шлёт presence.
+не влияет на `version`; автору своё состояние не эхо-броадкастится. viewer шлёт presence.
 
 ## 6. Undo/redo на пользователя (ADR-0010)
 
@@ -238,6 +238,8 @@ Lease — одна комната на файл, TTL + heartbeat; отзыв з�
   `Session::run`, что и в UI, с автором из JWT и без серверной истории undo.
 - `crates/collab-client` — состояние клиента (opId, очередь, reconnect) без транспорта;
   `crates/collab-ws` — WebSocket-транспорт, который ведёт это состояние.
+- `crates/collab-app` — сессия приложения: карта узлов, применение дельт, план локальной
+  команды (дифф → примитивы), presence и участники; транспорт сокета остаётся в `collab-ws`.
 - `apps/wordcraft-collab-server` — бинарь: `tokio` + `axum` WS, JWT, комнаты, снапшоты,
   commit; конфиг из env (`COLLAB_BIND`, `COLLAB_JWT_PUB`, `COLLAB_DATA_DIR`).
 - Healthcheck `GET /healthz`; метрики `GET /metrics` (Prometheus-текст): комнаты,
@@ -250,12 +252,24 @@ Lease — одна комната на файл, TTL + heartbeat; отзыв з�
 
 - **Feature flag:** `collab` в `Prefs` (default off) + env `WORDCRAFT_COLLAB=1` для
   headless; в web — `?collab=1`. Без флага ни одного сетевого вызова.
-- Интеграция: `CollabClient` получает операции из `Session::run` (дифф по `Arc::ptr_eq`),
-  применяет чужие через отдельный путь (`apply_remote`), мимо undo и без `dirty`.
-- Presence — из `view`/`sel`/`layout` (страница каретки); рендер чужих кареток — в canvas
-  `ui-egui`.
-- Viewer: команды, меняющие документ, отключены в UI, сервер отвечает `forbidden`.
-- Track changes/комментарии: `author` = `sub` из JWT; `Session::author` выставляется сервером.
+- Токен — из окружения (`WORDCRAFT_COLLAB_TOKEN`) или host-сообщения кабинета; в
+  `Prefs` и URL он не попадает.
+- Интеграция: перед командой `WordApp` запоминает `Document` (клонирование делит
+  блоки через `Arc`), после — `collab-doc::diff` даёт примитивы (`replace_range`,
+  `split_para`, `merge_para`, `insert_block`, `remove_block`). Форматирование, таблицы
+  и несколько перемещений дифф не выражает — уходит `kind:"command"` с явным
+  `selection`; такой шаг сервер исполняет тем же `Session::run`.
+- Чужие дельты применяются `collab-engine::apply_delta`: примитивы — напрямую в
+  `Document` с пересчётом layout, команды — `Session::run_remote`, который не пишет шаг
+  в локальный undo. Свои `applied` не применяются повторно (UI уже показал правку).
+- Presence — из `sel`/`view`; 5–10 Гц, панель участников и чужие каретки рисуются в
+  `ui-egui` (`collab.rs`).
+- Viewer: команды, меняющие документ, отключены в UI до вызова движка, сервер
+  дополнительно отвечает `forbidden`.
+- `edit.undo`/`edit.redo` в совместной сессии уходят в комнату, а не в локальный
+  snapshot-undo; одиночный режим не меняется.
+- Track changes/комментарии: `author` = `sub` из JWT; `Session::author` выставляется
+  сервером.
 
 ## 11. Тесты
 
@@ -263,11 +277,14 @@ Lease — одна комната на файл, TTL + heartbeat; отзыв з�
 |---|---|---|
 | журнал/дедуп/порядок | unit (`crates/collab`) | `opId`-повтор не исполняется, `version` монотонен |
 | сходимость текста | integration, 2–3 `Session` | двое печатают в одном абзаце → одинаковый `Document` |
+| дельта → реплика | integration (`collab-doc`) | `apply_delta` после каждой операции даёт тот же JSON документа |
+| диff → операция | integration (`collab-doc`) | `Enter`/`Backspace`/вставка абзаца превращаются в `split_para`/`merge_para`/`insert_block` |
 | structural-конфликт | integration | вставка строки/абзаца параллельно → один `rejected`, состояния равны |
-| reconnect | integration | обрыв, догон по `lastVersion`, повтор `opId` |
+| reconnect | integration (socket) | обрыв до ответа, повтор `opId`, догон по `lastVersion` |
+| presence | integration (socket) | состояние доходит до второго клиента, `version` не растёт |
 | роли | unit+integration | viewer получает `forbidden`, presence проходит |
-| undo per-user | unit | отмена не откатывает чужое |
-| большой документ | integration | 100+ страниц, 3 клиента, время apply |
+| undo per-user | unit+integration | одна версия на undo, `undo-conflict` при чужой правке, команда — барьер |
+| большой документ | integration (`collab-engine`) | 3000 абзацев, 100 правок, id на каждый абзац |
 | commit | integration | файл открывается LibreOffice без repair; `warnings[]` |
 | track changes | integration | автор из токена, ревизии не разъезжаются |
 
