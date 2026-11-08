@@ -8,8 +8,13 @@ fn overflowing_numeric_entities_use_replacement_character() {
     }
     // Leading zeroes still decode; malformed references remain literal.
     assert_eq!(unescape("&#00000000000000000000000000065;"), "A");
-    for reference in ["&#;", "&#x;", "&#+4294967296;", "&#x+100000000;", "&#4294967296x;"] {
+    for reference in ["&#;", "&#x;", "&#+4294967296;", "&#x+100000000;"] {
         assert_eq!(unescape(reference), reference);
+    }
+    // The upstream semicolonless parser ends a numeric reference at the first non-digit.
+    for (reference, expected) in [("&#4294967296x;", "\u{FFFD}x;"), ("&#x100000000g;", "\u{FFFD}g;")] {
+        let flow = parse(&format!("<p>before{reference}after</p>"));
+        assert_eq!(paras(&flow)[0].text(), format!("before{expected}after"), "{reference}");
     }
 }
 
