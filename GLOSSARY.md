@@ -52,8 +52,9 @@ _Avoid_: Custom dictionaries
 ## Export
 
 **Strict export**:
-An export that writes nothing, and reports why, when the output would leave out a character or a
-picture the document contains.
+An export that writes nothing, and reports why, when a character or picture the output is meant
+to show would be missing from it. Text the output doesn't show (hidden text, deletions without
+markup) isn't checked.
 _Avoid_: Safe mode, validated export
 
 **Missing glyph**:

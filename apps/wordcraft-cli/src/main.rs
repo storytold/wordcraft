@@ -637,7 +637,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                     return Err(format!("{out}: is a folder, not a file").into());
                 }
                 if !out.to_ascii_lowercase().ends_with(".png") {
-                    wordcraft_engine::io::save_bytes(out, &s.doc)?;
+                    wordcraft_engine::io::save_bytes(out, &s.doc).map_err(engine_error)?;
                 }
             }
             for out in outputs {
