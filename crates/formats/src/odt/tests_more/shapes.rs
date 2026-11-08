@@ -56,7 +56,7 @@ fn open() -> Document {
 #[test]
 fn shapes_open_with_their_kind_size_look_and_text() {
     let d = open();
-    // A line width no style states is the profile's (the standard gives none): WordCraft's 0.25 pt.
+    // A line width no style states (the standard gives none): WordCraft's 0.25 pt.
     let blue = Some((Rgb(0x34, 0x65, 0xa4), 0.25));
     assert_eq!(
         shapes(&d),

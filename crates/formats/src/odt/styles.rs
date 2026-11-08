@@ -252,6 +252,8 @@ struct StyleInfo {
     /// A table-row style's `style:table-row-properties`: its height (`style:row-height`, exact)
     /// or least height (`style:min-row-height`), points.
     row_height: Option<(f32, bool)>,
+    /// `fo:keep-together` of a table-row style: the row doesn't break across pages.
+    row_keep: Option<bool>,
     /// `style:master-page-name` of a paragraph or table style: its paragraphs (tables) start a
     /// page of that master page. Empty: explicitly none, which stops the lookup up the chain.
     master_page: Option<String>,
@@ -262,8 +264,6 @@ struct StyleInfo {
     columns: Option<Columns>,
     /// The section style's `style:column`s, as [`with_widths`] gives them widths.
     column_specs: Vec<ColumnSpec>,
-    /// Its `style:columns` states its gap (else the profile's, see [`Styles::columns`]).
-    column_gap_stated: bool,
     /// `text:dont-balance-text-columns` of `style:section-properties`, as stated.
     dont_balance: Option<bool>,
     /// Margins, first-line indent and line spacing of `style:paragraph-properties`.
@@ -625,6 +625,9 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
             } else if let Some(h) = get(a, "style:min-row-height").and_then(length).filter(|h| h.is_finite() && *h > 0.0) {
                 s.row_height = Some((h.min(MAX_LEN), false));
             }
+            if let Some(k) = get(a, "fo:keep-together") {
+                s.row_keep = Some(k.trim() == "always");
+            }
         }
         "table-column-properties" => {
             if let Some(w) = get(a, "style:column-width").and_then(length) {
@@ -636,8 +639,7 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
             s.dont_balance = get(a, "text:dont-balance-text-columns").map(|v| v.trim() == "true");
         }
         "columns" if q.starts_with("style:") => {
-            s.columns = Some(columns_of(a, 0.0));
-            s.column_gap_stated = get(a, "fo:column-gap").is_some();
+            s.columns = Some(columns_of(a));
         }
         "column" if q.starts_with("style:") && s.columns.is_some() => {
             if let Some(spec) = column_spec(a).filter(|_| s.column_specs.len() < MAX_COLUMN_SPECS) {
@@ -714,9 +716,9 @@ fn cell_borders_and_padding(a: &Attrs, s: &mut StyleInfo) {
 /// Columns of a `style:columns` element (ODF 1.3 §17.12): count and gap, clamped as the RTF and
 /// DOCX readers do (each column's own width comes from its `style:column`, see [`with_widths`]).
 /// Without `fo:column-gap`, whose default the standard doesn't give (§19.233), the gap is
-/// `default_gap` (the profile's).
-pub(super) fn columns_of(a: &Attrs, default_gap: f32) -> Columns {
-    let mut c = Columns { space: if default_gap.is_finite() { default_gap.clamp(0.0, 1584.0) } else { 0.0 }, ..Columns::default() };
+/// [`Columns::default`]'s half inch, Word's.
+pub(super) fn columns_of(a: &Attrs) -> Columns {
+    let mut c = Columns::default();
     if let Some(n) = get(a, "fo:column-count").and_then(|v| v.trim().parse::<u64>().ok()) {
         c.count = n.clamp(1, 45) as u32;
     }
@@ -1046,6 +1048,8 @@ pub(super) struct Styles {
     default_color: Option<wordcraft_doc::props::Rgb>,
     /// `style:default-style` for graphics: what every drawing shape's style falls back on.
     default_graphic: super::frames::Graphic,
+    /// `style:default-style` for table rows: `fo:keep-together`, for a row whose style doesn't say.
+    default_row_keep: Option<bool>,
     /// The named dashes and gradients graphic styles use.
     pub(super) defs: super::strokes::Defs,
     /// Date and time styles (`number:date-style`, `number:time-style`) as Word pictures.
@@ -1058,6 +1062,7 @@ impl Styles {
         let mut cur: Option<(String, StyleInfo)> = None;
         let mut in_default = false;
         let mut in_graphic_default = false;
+        let mut in_row_default = false;
         let mut dates = DateStyles::default();
         let mut list: Option<(String, Vec<ListLevel>)> = None;
         // The list or outline level being read.
@@ -1086,8 +1091,12 @@ impl Styles {
                 "default-style" if q.starts_with("style:") => {
                     in_default = get(&a, "style:family") == Some("paragraph");
                     in_graphic_default = get(&a, "style:family") == Some("graphic");
+                    in_row_default = get(&a, "style:family") == Some("table-row");
                 }
                 "graphic-properties" if in_graphic_default && cur.is_none() => self.default_graphic = super::frames::Graphic::read(&a),
+                "table-row-properties" if in_row_default && cur.is_none() => {
+                    self.default_row_keep = get(&a, "fo:keep-together").map(|k| k.trim() == "always")
+                }
                 "text-properties" if in_default && cur.is_none() => {
                     self.default_font = default_font(&a, &self.faces);
                     if let Some(sz) = get(&a, "fo:font-size").and_then(length).filter(|v| v.is_finite() && *v >= 1.0) {
@@ -1154,7 +1163,7 @@ impl Styles {
             },
             Ev::End(q) => match local(&q) {
                 "automatic-styles" => in_auto = false,
-                "default-style" if q.starts_with("style:") => (in_default, in_graphic_default) = (false, false),
+                "default-style" if q.starts_with("style:") => (in_default, in_graphic_default, in_row_default) = (false, false, false),
                 "style" if q.starts_with("style:") => {
                     if let Some((n, s)) = cur.take()
                         && self.map.len() < 100_000
@@ -1266,6 +1275,24 @@ impl Styles {
     /// The formatting of a span in text style `name` over `base`: the automatic styles' over the
     /// nearest custom character style, which the span then names ([`Fmt::extra`]'s style, by ODF
     /// name until import makes it a document style id); without one, the whole chain's.
+    /// The size of text in paragraph style `name` by its named styles, not its automatic ones,
+    /// which are the paragraph's own: what they say on what the document says.
+    pub(super) fn named_size(&self, name: &str) -> Option<f32> {
+        // The default style's: Standard's counts only for a style based on it, in the chain.
+        let size = self.default_size.filter(|v| v.is_finite() && *v >= 1.0).map(|v| v.min(1638.0));
+        let mut f = Fmt { size, ..Fmt::default() };
+        for (_, s) in self.chain(name).iter().rev().filter(|(_, s)| !s.auto) {
+            s.fmt.apply(&mut f);
+        }
+        f.size
+    }
+
+    /// Whether paragraph style `name`'s named styles state a size. Those that don't leave the size
+    /// to WordCraft's style for its kind, so text of any size isn't known to be the style's.
+    pub(super) fn states_size(&self, name: &str) -> bool {
+        self.chain(name).iter().any(|(_, s)| !s.auto && (s.fmt.size.is_some() || s.fmt.size_pct.is_some()))
+    }
+
     pub(super) fn span_fmt(&self, name: &str, base: &Fmt) -> Fmt {
         let chain = self.chain(name);
         let Some(at) = chain.iter().position(|(n, _)| self.is_named_text(n)) else { return self.text_fmt(name, base) };
@@ -1298,10 +1325,7 @@ impl Styles {
     /// Columns of a section style (whole chain).
     /// A section style's columns in a text `tw` points wide (whole chain).
     pub(super) fn columns(&self, name: &str, tw: f32) -> Option<Columns> {
-        self.chain(name).iter().find_map(|(_, s)| {
-            let gap = if s.column_gap_stated { None } else { Some(self.defs.profile.column_gap) };
-            s.columns.clone().map(|c| with_widths(Columns { space: gap.unwrap_or(c.space), ..c }, &s.column_specs, tw))
-        })
+        self.chain(name).iter().find_map(|(_, s)| s.columns.clone().map(|c| with_widths(c, &s.column_specs, tw)))
     }
 
     /// Whether a section style's columns are balanced at its end, when it says (the attribute's
@@ -1309,13 +1333,6 @@ impl Styles {
     /// say the opposite).
     pub(super) fn section_balance(&self, name: &str) -> Option<bool> {
         self.chain(name).iter().find_map(|(_, s)| s.dont_balance).map(|d| !d)
-    }
-
-    /// Styles to be read, filling in what the standard leaves open as `profile` says.
-    pub(super) fn with_profile(profile: &wordcraft_doc::odf_profile::OdfProfile) -> Styles {
-        let mut s = Styles::default();
-        s.defs.profile = profile.clone();
-        s
     }
 
     /// Width in points of a table-column style (whole chain).
@@ -1348,6 +1365,12 @@ impl Styles {
     /// A table-row style's height (points) and whether it is exact, whole chain.
     pub(super) fn row_height(&self, name: &str) -> Option<(f32, bool)> {
         self.chain(name).iter().find_map(|(_, s)| s.row_height)
+    }
+
+    /// Whether a table row doesn't break across pages: its style says (whole chain), else the
+    /// default style.
+    pub(super) fn row_keep(&self, name: Option<&str>) -> bool {
+        name.and_then(|n| self.chain(n).iter().find_map(|(_, s)| s.row_keep)).or(self.default_row_keep).unwrap_or(false)
     }
 
     /// Background colour of a table-cell style (whole chain).
@@ -1475,6 +1498,10 @@ impl Styles {
         };
         let mut fmt = Fmt::default();
         s.fmt.apply(&mut fmt);
+        // A percent is of what's under it: the parent's size, or with none the default style's.
+        if s.fmt.size_pct.is_some() {
+            fmt.size = self.named_size(odt);
+        }
         // A style with no parent inherits the default style, not Standard (the document's
         // defaults here): its size, when Standard's differs.
         if s.parent.is_none() && fmt.size.is_none() && self.doc_size() != self.default_size {

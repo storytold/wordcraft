@@ -711,6 +711,7 @@ pub fn suppressed(app: &WordApp, ctx: &egui::Context) -> bool {
         || (app.ui.backstage && app.ui.keytips != Phase::Backstage)
         || (!app.ui.backstage && app.ui.keytips == Phase::Backstage)
         || app.dialog.is_some()
+        || app.modal_open()
         || (ctx.egui_wants_keyboard_input() && !app.canvas.focused)
 }
 
