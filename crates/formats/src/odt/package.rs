@@ -1369,7 +1369,12 @@ fn page_background(doc: &Document, w: &mut Writer, mut styles: String) -> String
     let Some(pic) = doc.settings.page_picture.as_ref() else { return styles };
     let Some(data) = doc.media.get(&pic.media) else { return styles };
     let Some(ext) = model::sniff_image(data) else { return styles };
-    let name = format!("Pictures/page-background.{ext}");
+    let mut name = format!("Pictures/page-background.{ext}");
+    let mut pic_n = 1;
+    while w.reserved.contains(&name) || w.pictures.iter().any(|(n, d, _)| n == &name && d.as_slice() != data.as_slice()) {
+        name = format!("Pictures/page-background-{pic_n}.{ext}");
+        pic_n += 1;
+    }
     if !w.pictures.iter().any(|(n, _, _)| *n == name) {
         w.pictures.push((name.clone(), data.clone(), model::mime_of(ext).to_string()));
     }
@@ -1378,7 +1383,39 @@ fn page_background(doc: &Document, w: &mut Writer, mut styles: String) -> String
         "center" => "no-repeat",
         _ => "stretch",
     };
-    let fill_name = if !pic.title.is_empty() { pic.title.clone() } else { "PageBackground".to_string() };
+    let mut fill_name = if !pic.title.is_empty() { pic.title.clone() } else { "PageBackground".to_string() };
+    let base_fill_name = fill_name.clone();
+    let existing_fill_href = |styles: &str, w: &Writer, name: &str| -> Option<String> {
+        styles
+            .match_indices("<draw:fill-image ")
+            .find_map(|(i, _)| {
+                let tag = styles.get(i..)?.split('>').next()?;
+                if super::kept::raw_attr(tag, "draw:name").is_some_and(|nm| super::kept::attr_text(nm) == name) {
+                    super::kept::raw_attr(tag, "xlink:href").map(|h| super::kept::attr_text(h).into_owned())
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                w.kept_defs.values().find_map(|d| {
+                    let tag = d.split('>').next()?;
+                    let el = tag.trim_start_matches('<').split([' ', '/', '\t', '\n', '\r']).next()?;
+                    if el == "draw:fill-image" && super::kept::raw_attr(tag, "draw:name").is_some_and(|nm| super::kept::attr_text(nm) == name) {
+                        super::kept::raw_attr(tag, "xlink:href").map(|h| super::kept::attr_text(h).into_owned())
+                    } else {
+                        None
+                    }
+                })
+            })
+    };
+    let mut n = 1;
+    while let Some(href) = existing_fill_href(&styles, w, &fill_name) {
+        if href == name {
+            break;
+        }
+        fill_name = format!("{base_fill_name}-{n}");
+        n += 1;
+    }
     let fill_image_def =
         format!("<draw:fill-image draw:name=\"{}\" xlink:href=\"{}\" xlink:type=\"simple\" xlink:actuate=\"onLoad\"/>", x(&fill_name), x(&name));
     if !super::kept::defined(&styles, &fill_image_def) {

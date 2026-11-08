@@ -631,3 +631,45 @@ fn trailing_empty_last_section_header_picture_does_not_suppress_page_background(
     assert!(s.contains("style:background-image"), "page background must not be suppressed by an unexported trailing last_section header: {s}");
     assert!(s.contains("Pictures/page-background.png"));
 }
+
+/// When a page background picture is replaced with a new image while retaining an existing
+/// fill-image name that belongs to a graphic style, export allocates a distinct fill name,
+/// references it in page layouts, and preserves the retained definition and image (#5803).
+#[test]
+fn replaced_page_picture_allocates_distinct_fill_name_and_keeps_retained_def() {
+    let orig_png = {
+        let img = image::RgbImage::from_pixel(8, 4, image::Rgb([100, 200, 100]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let new_png = {
+        let img = image::RgbImage::from_pixel(4, 8, image::Rgb([200, 100, 200]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let ns = crate::odt::tests::NS_T;
+    let nsd = "xmlns:draw=\"urn:oasis:names:tc:opendocument:xmlns:drawing:1.0\"";
+    let styles = format!(
+        r#"<office:document-styles {ns} {nsd}><office:styles><draw:fill-image draw:name="SharedBg" xlink:href="Pictures/original.png" xlink:type="simple"/><style:style style:name="Graphic1" style:family="graphic"><style:graphic-properties draw:fill="bitmap" draw:fill-image-name="SharedBg"/></style:style></office:styles><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in" draw:fill="bitmap" draw:fill-image-name="SharedBg"><style:background-image xlink:href="Pictures/original.png" xlink:type="simple" xlink:actuate="onLoad" style:repeat="stretch"/></style:page-layout-properties></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns} {nsd}><office:body><office:text><text:p>Body text</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg =
+        crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/original.png", &orig_png)]);
+    let mut d = import(&pkg).unwrap();
+    let new_media = d.add_media(new_png.clone(), "png");
+    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: new_media, fill_type: "stretch".into(), title: "SharedBg".into() });
+
+    let saved = export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(s.contains(r#"<draw:fill-image draw:name="SharedBg" xlink:href="Pictures/original.png""#), "original fill-image must be preserved: {s}");
+    assert!(s.contains(r#"<draw:fill-image draw:name="SharedBg-1""#), "distinct fill-image definition must be allocated: {s}");
+    assert!(s.contains(r#"draw:fill-image-name="SharedBg-1""#), "page layout must reference distinct fill-image name: {s}");
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
+    assert!(archive.by_name("Pictures/original.png").is_ok(), "Pictures/original.png must be in package");
+    assert!(archive.by_name("Pictures/page-background.png").is_ok(), "Pictures/page-background.png must be in package");
+}
