@@ -726,7 +726,13 @@ pub(crate) fn layout_pass(
     // boxes of the separators and footer laid out here: their counts stay as it left them.
     if spliced && let Some((_, s)) = sections.get(pb.sect_idx) {
         let (counters, eq_count, boxes, line_no) = (ctx.counters.clone(), ctx.eq_count, ctx.boxes.total(), pb.line_no);
-        let sec = Sec { si: pb.sect_idx, sect: s, start: SectionStart::NextPage, tops: Tops { body: 0.0, first: 0.0, foot: 0.0, first_foot: 0.0 } };
+        let sec = Sec {
+            si: pb.sect_idx,
+            sect: s,
+            page_format: s.page_num_format,
+            start: SectionStart::NextPage,
+            tops: Tops { body: 0.0, first: 0.0, foot: 0.0, first_foot: 0.0 },
+        };
         begin_section_state(&mut ctx, &mut pb, &sec, totals, mode.web);
         // Measured without the grid, as in the section loop.
         ctx.grid = para::Grid::default();

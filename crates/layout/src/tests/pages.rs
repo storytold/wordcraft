@@ -640,7 +640,7 @@ fn endnotes_after_a_splice_number_on_from_where_a_full_layout_does() {
     // #1284: the last section's footer, numbered and holding a text box, is laid out again for
     // its room after a splice; that must not count its list items and text box twice.
     endnotes_after_a_splice("a numbered footer with a text box", |d, footer, note| {
-        let list = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+        let list = std::sync::Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
         let num = Some(wordcraft_doc::props::NumRef { num: list, level: 0 });
         for story in [StoryRef::Part(footer), StoryRef::Part(note)] {
             let (start, end) = (d.start_of(story), d.end_of(story));
