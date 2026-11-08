@@ -534,7 +534,12 @@ impl BordersForm {
         }
         if self.fill != b.fill || self.fill_to_text != b.fill_to_text {
             let color = Rgb::parse(&self.fill).map(|c| json!(c.hex())).unwrap_or(Value::Null);
-            out.push((if self.fill_to_text { "format.shading" } else { "para.shading" }, json!({"color": color})));
+            // Apply to: Paragraph shades the paragraphs even for text selected inside one.
+            out.push(if self.fill_to_text {
+                ("format.shading", json!({"color": color}))
+            } else {
+                ("para.shading", json!({"color": color, "paragraph": true}))
+            });
         }
         out
     }
