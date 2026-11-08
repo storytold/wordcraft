@@ -142,6 +142,8 @@ fn strict_report_has_the_schema_1_shape() {
             "missing_glyphs": [{"cp": format!("U+{:04X}", c as u32), "count": 2}],
             "missing_pictures": [],
             "truncated": false,
+            "total_missing_glyphs": 1,
+            "total_missing_pictures": 0,
             "glyphs_truncated": false,
             "pictures_truncated": false,
         })
@@ -154,7 +156,7 @@ fn strict_report_has_the_schema_1_shape() {
     let r = ok.run("file.strictReport", &json!({})).unwrap();
     assert_eq!(
         r,
-        json!({"schema": 1, "strict": "passed", "missing_glyphs": [], "missing_pictures": [], "truncated": false, "glyphs_truncated": false, "pictures_truncated": false})
+        json!({"schema": 1, "strict": "passed", "missing_glyphs": [], "missing_pictures": [], "truncated": false, "total_missing_glyphs": 0, "total_missing_pictures": 0, "glyphs_truncated": false, "pictures_truncated": false})
     );
 }
 
@@ -181,7 +183,7 @@ fn an_undecodable_page_background_picture_is_refused_for_pdf_and_png() {
     let mut s = Session::new(doc);
     let r = s.run("file.strictReport", &json!({})).unwrap();
     assert_eq!(r["strict"], "failed");
-    assert_eq!(r["missing_pictures"][0], json!({"part": "bg.bin", "in": "background", "reason": "unsupported format"}));
+    assert_eq!(r["missing_pictures"][0], json!({"part": "bg.bin", "source_part": "background", "reason": "unsupported_format"}));
     let msg = refused(s.run("file.exportPdf", &json!({"path": d.join("a.pdf"), "strict": true})));
     assert!(msg.contains("bg.bin (background)"), "{msg}");
     refused(s.run("file.exportPng", &json!({"path": d.join("a.png"), "strict": true})));
@@ -268,6 +270,35 @@ fn each_list_says_for_itself_that_it_was_cut() {
     let lines = wordcraft_engine::strict::lines_from_json(&r);
     assert!(lines[0].ends_with(", …"), "{}", lines[0]);
     assert!(!lines[1].contains('…'), "{}", lines[1]);
+    assert_eq!((r["total_missing_glyphs"].clone(), r["total_missing_pictures"].clone()), (json!(300), json!(1)));
+}
+
+#[test]
+fn a_truncated_report_carries_totals_past_the_cap() {
+    let many = uncovered_many(300);
+    let mut doc = Document::from_text(&many.iter().collect::<String>());
+    for n in 0..300 {
+        doc.missing_pictures.push(wordcraft_doc::MissingPicture {
+            part: format!("word/media/gone{n}.png"),
+            story: "word/document.xml".into(),
+            reason: wordcraft_doc::MissingPictureReason::MissingPart,
+        });
+        // The same record again is one picture.
+        doc.missing_pictures.push(wordcraft_doc::MissingPicture {
+            part: format!("word/media/gone{n}.png"),
+            story: "word/document.xml".into(),
+            reason: wordcraft_doc::MissingPictureReason::MissingPart,
+        });
+    }
+    let mut s = Session::new(doc);
+    let r = s.run("file.strictReport", &json!({})).unwrap();
+    assert_eq!(r["missing_glyphs"].as_array().unwrap().len(), 256);
+    assert_eq!(r["missing_pictures"].as_array().unwrap().len(), 256);
+    assert_eq!(r["truncated"], true);
+    assert_eq!(r["total_missing_glyphs"], 300);
+    assert_eq!(r["total_missing_pictures"], 300);
+    assert_eq!(r["missing_pictures"][0]["reason"], "missing_part");
+    assert_eq!(r["missing_pictures"][0]["source_part"], "word/document.xml");
 }
 
 #[test]

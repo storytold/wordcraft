@@ -37,6 +37,23 @@ impl MissingPictureReason {
             Self::UnsupportedFormat => "unsupported format",
         }
     }
+
+    /// The reason a [`code`](Self::code) names.
+    pub fn from_code(code: &str) -> Option<Self> {
+        [Self::MissingPart, Self::ExternalTarget, Self::LinkOnly, Self::Undecodable, Self::UnsupportedFormat].into_iter().find(|r| r.code() == code)
+    }
+
+    /// The stable snake_case code the JSON report carries (`"missing_part"`, `"external_target"`,
+    /// `"link_only"`, `"undecodable"`, `"unsupported_format"`); never reworded.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::MissingPart => "missing_part",
+            Self::ExternalTarget => "external_target",
+            Self::LinkOnly => "link_only",
+            Self::Undecodable => "undecodable",
+            Self::UnsupportedFormat => "unsupported_format",
+        }
+    }
 }
 
 /// One picture that is missing.
@@ -57,6 +74,8 @@ pub struct MissingPictures {
     pub list: Vec<MissingPicture>,
     /// More than [`MAX_MISSING_PICTURES`] were found; the rest are not listed.
     pub truncated: bool,
+    /// Pictures found, those past the cap included (saturating). Each distinct one counts once.
+    pub total: u64,
     /// The main story's part name in the source file (`word/document.xml`).
     pub main: String,
     /// A header, footer, note or comment story's part id ([`crate::Document::parts`]) to the
@@ -68,6 +87,8 @@ pub struct MissingPictures {
     pub media_parts: std::collections::BTreeMap<String, String>,
     /// What `list` holds, for an O(1) test of "already there" (a hostile file has many).
     seen: std::collections::HashSet<MissingPicture>,
+    /// Hashes of the distinct pictures past the cap (8 bytes each), so the total counts them once.
+    unlisted: std::collections::HashSet<u64>,
 }
 
 impl MissingPictures {
@@ -83,11 +104,23 @@ impl MissingPictures {
         }
         if self.list.len() >= MAX_MISSING_PICTURES {
             self.truncated = true;
+            if self.unlisted.insert(picture_hash(&item)) {
+                self.total = self.total.saturating_add(1);
+            }
             return;
         }
+        self.total = self.total.saturating_add(1);
         self.seen.insert(item.clone());
         self.list.push(item);
     }
+}
+
+/// A 64-bit hash of a record, to tell the ones past a cap apart without keeping them.
+pub fn picture_hash(item: &MissingPicture) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    item.hash(&mut h);
+    h.finish()
 }
 
 impl PartialEq for MissingPictures {

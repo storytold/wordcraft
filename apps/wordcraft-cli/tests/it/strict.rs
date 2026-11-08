@@ -195,7 +195,7 @@ fn a_corrupt_header_picture_fails_strict_naming_the_part_and_the_header() {
         assert_eq!(json["strict"], "failed");
         assert_eq!(
             json["missing_pictures"][0],
-            serde_json::json!({"part": "word/media/image2.bin", "in": "header2.xml", "reason": "unsupported format"})
+            serde_json::json!({"part": "word/media/image2.bin", "source_part": "word/header2.xml", "reason": "unsupported_format"})
         );
         assert!(!out.exists());
         eprintln!("{text}");
@@ -222,7 +222,7 @@ fn an_external_picture_target_is_never_fetched_and_is_reported_under_strict() {
     let strict = convert(&input, &out, true);
     assert_eq!(strict.status.code(), Some(3), "{}", stderr(&strict));
     let json = report_json(&strict);
-    assert_eq!(json["missing_pictures"][0]["reason"], "external target");
+    assert_eq!(json["missing_pictures"][0]["reason"], "external_target");
     assert!(stderr(&strict).contains("external target"));
     assert!(!out.exists());
 

@@ -174,19 +174,25 @@ output type, checked before the input is read) and 3 (strict refusal). On exit 3
 ```sh
 wordcraft-cli convert in.docx out.pdf --strict
 # wordcraft-cli: strict: 1 character cannot be drawn: U+2D30 (×3)
-# {"schema":1,"strict":"failed","missing_glyphs":[{"cp":"U+2D30","count":3}],"missing_pictures":[],"truncated":false}
+# {"schema":1,"strict":"failed","missing_glyphs":[{"cp":"U+2D30","count":3}],"missing_pictures":[{"part":"word/media/image2.bin","source_part":"word/header2.xml","reason":"unsupported_format"}],"truncated":false,"total_missing_glyphs":1,"total_missing_pictures":1,"glyphs_truncated":false,"pictures_truncated":false}
 ```
 
-`missing_pictures` entries are `{"part", "in", "reason"}`; the reasons are `missing part`,
-`external target`, `link only`, `undecodable` and `unsupported format`. Lists stop at 256 entries
-and `truncated` says so. Only characters the output draws count (not hidden text, or deleted text
+The JSON line (schema 1, also what `file.strictReport` returns) has `schema`, `strict`
+(`"passed"` or `"failed"`), `missing_glyphs` (entries `{"cp", "count"}`, sorted by code point),
+`missing_pictures` (entries `{"part", "source_part", "reason"}`: the picture's part or target, the
+story part it sits in such as `word/header2.xml`, and a reason code), `truncated`, the two totals
+`total_missing_glyphs` and `total_missing_pictures`, and `glyphs_truncated` and
+`pictures_truncated` for each list. The reason codes are `missing_part`, `external_target`,
+`link_only`, `undecodable` and `unsupported_format`; the stderr lines use plain words for them.
+Each list stops at 256 entries separately; `truncated` is true when either was cut, and the totals
+count every distinct character and picture found, those past the cap included. Only characters the output draws count (not hidden text, or deleted text
 without `--markup`), and a character a fallback font draws is fine. A Private Use Area character
 fails only if no installed font maps it. The result depends on the fonts installed on the host
 (see #5624 for a fixed font set). An external picture target is never fetched: it is reported, not
 loaded. Pictures dropped when a DOCX is opened (a missing part, an external target, or a `link only` picture with no embedded copy) are reported for DOCX input only. They have no page, so a PNG of any page is also refused for a missing or external picture anywhere in the document, unused headers included. `render --strict` checks only the page it
 writes (`--page`; `--scale` doesn't matter), prints nothing on stdout when it refuses, and reports the
-same way. The engine takes `strict: true` on `file.save`, `file.exportPdf` and `file.exportPng`,
-and `file.strictReport` returns the report without writing.
+same way. The engine takes `strict: true` on `file.save`, `file.saveAs`, `file.exportPdf` and
+`file.exportPng`, and `file.strictReport {markup?, page?}` returns the report without writing.
 
 Web: `cd apps/wordcraft-web && trunk serve`, then open <http://127.0.0.1:8771/?sample>.
 

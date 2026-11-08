@@ -24,12 +24,86 @@ pub struct MissingGlyphs {
     pub chars: Vec<(char, u64)>,
     /// More than [`MAX_MISSING_GLYPHS`] distinct code points were missing: the rest aren't listed.
     pub truncated: bool,
+    /// How many distinct code points were missing, those past the cap included.
+    pub total: usize,
+    /// Every distinct code point found, kept only once the cap was passed (136 KiB), so merging
+    /// the watermark's can still count the distinct ones.
+    pub(crate) seen: Option<Box<CodePointSet>>,
 }
 
 impl MissingGlyphs {
     /// Nothing is missing.
     pub fn is_empty(&self) -> bool {
         self.chars.is_empty() && !self.truncated
+    }
+
+    /// A list of `chars` that fits under the cap: its total is its length.
+    pub fn from_listed(chars: Vec<(char, u64)>) -> Self {
+        let total = chars.len();
+        Self { chars, truncated: false, total, seen: None }
+    }
+
+    /// Add `other` (the watermark's characters): counts of a shared code point are summed, new
+    /// ones are listed while the cap allows, and the total counts each distinct one once.
+    pub fn merge(&mut self, other: MissingGlyphs) {
+        let mut all: BTreeMap<char, u64> = std::mem::take(&mut self.chars).into_iter().collect();
+        let mut seen = self.seen.take();
+        for (c, n) in other.chars {
+            if let Some(count) = all.get_mut(&c) {
+                *count = count.saturating_add(n);
+            } else if let Some(set) = seen.as_mut() {
+                set.insert(c);
+            } else if all.len() < MAX_MISSING_GLYPHS {
+                all.insert(c, n);
+            } else {
+                let mut set = CodePointSet::of(all.keys().copied());
+                set.insert(c);
+                seen = Some(Box::new(set));
+            }
+        }
+        if let Some(theirs) = other.seen {
+            seen.get_or_insert_with(|| Box::new(CodePointSet::of(all.keys().copied()))).union(&theirs);
+        }
+        self.truncated |= other.truncated || seen.is_some();
+        self.total = seen.as_ref().map_or(all.len(), |s| s.len());
+        self.chars = all.into_iter().collect();
+        self.seen = seen;
+    }
+}
+
+/// A set of code points as a bitset over the whole code point space: bounded at 136 KiB however
+/// many distinct characters a hostile file holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CodePointSet(Vec<u64>);
+
+impl CodePointSet {
+    fn empty() -> Self {
+        Self(vec![0; 0x11_0000 / 64])
+    }
+
+    fn of(chars: impl Iterator<Item = char>) -> Self {
+        let mut set = Self::empty();
+        for c in chars {
+            set.insert(c);
+        }
+        set
+    }
+
+    fn insert(&mut self, c: char) {
+        let n = c as usize;
+        if let Some(word) = self.0.get_mut(n / 64) {
+            *word |= 1 << (n % 64);
+        }
+    }
+
+    fn union(&mut self, other: &Self) {
+        for (a, b) in self.0.iter_mut().zip(&other.0) {
+            *a |= b;
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.0.iter().map(|w| w.count_ones() as usize).sum()
     }
 }
 
@@ -50,7 +124,7 @@ impl DocLayout {
                 found.walk(&d);
             }
         }
-        MissingGlyphs { chars: found.counts.into_iter().collect(), truncated: found.truncated }
+        found.finish()
     }
 }
 
@@ -78,16 +152,23 @@ pub fn missing_watermark_glyphs(wm: &wordcraft_doc::Watermark, max_chars: usize)
         let ranges = cluster_ranges(&text, &shaped);
         found.run(&face, shaped.iter().map(|g| g.gid), &text, &ranges);
     }
-    MissingGlyphs { chars: found.counts.into_iter().collect(), truncated: found.truncated }
+    found.finish()
 }
 
 #[derive(Default)]
 struct Found {
     counts: BTreeMap<char, u64>,
     truncated: bool,
+    /// Every distinct code point, started when the list passes its cap.
+    over: Option<Box<CodePointSet>>,
 }
 
 impl Found {
+    fn finish(self) -> MissingGlyphs {
+        let total = self.over.as_ref().map_or(self.counts.len(), |s| s.len());
+        MissingGlyphs { chars: self.counts.into_iter().collect(), truncated: self.truncated, total, seen: self.over }
+    }
+
     fn walk(&mut self, d: &Draw) {
         match d {
             Draw::Glyphs { face, glyphs, text, ranges, .. } => self.run(face, glyphs.iter().map(|g| g.0), text, ranges),
@@ -130,10 +211,15 @@ impl Found {
     fn count(&mut self, c: char) {
         if let Some(n) = self.counts.get_mut(&c) {
             *n = n.saturating_add(1);
+        } else if let Some(set) = self.over.as_mut() {
+            set.insert(c);
         } else if self.counts.len() < MAX_MISSING_GLYPHS {
             self.counts.insert(c, 1);
         } else {
             self.truncated = true;
+            let mut set = CodePointSet::of(self.counts.keys().copied());
+            set.insert(c);
+            self.over = Some(Box::new(set));
         }
     }
 }

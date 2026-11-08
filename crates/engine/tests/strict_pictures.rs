@@ -59,8 +59,9 @@ fn docx(header_media: &[u8], body_media: &[u8]) -> Vec<u8> {
 
 fn report(d: &Document, pages: Option<std::ops::RangeInclusive<usize>>) -> Vec<(String, String, MissingPictureReason)> {
     let l = layout(d, &mut LayoutCache::new(), &LayoutOptions::default());
-    let (list, truncated) = undecodable_pictures(d, &l, pages, &DisplayOptions::default(), StrictOutput::Pdf);
+    let (list, truncated, total) = undecodable_pictures(d, &l, pages, &DisplayOptions::default(), StrictOutput::Pdf);
     assert!(!truncated);
+    assert_eq!(total, list.len() as u64);
     list.into_iter().map(|m| (m.part, m.story, m.reason)).collect()
 }
 

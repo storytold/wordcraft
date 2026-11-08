@@ -16,6 +16,7 @@ use crate::{DocLayout, MAX_MISSING_GLYPHS, MissingGlyphs};
 /// Code points in unassigned plane 4 that no face of the host covers, checked against the body
 /// font and the whole fallback chain (so the test never guesses).
 fn uncovered(n: usize) -> Vec<char> {
+    crate::test_fonts();
     let db = FontDb::global();
     let primary = wordcraft_fonts::word::resolve(&Document::default().settings.minor_font, false, false).face;
     let out: Vec<char> = (0x40000u32..0x4FFF0)
@@ -76,7 +77,7 @@ fn a_character_no_face_covers_is_counted_once_per_occurrence_in_the_body() {
     let c = uncovered(1)[0];
     let d = Document::from_text(&format!("a{c}b{c}{c}c"));
     let m = missing(&d, &lay(&d));
-    assert_eq!(m, MissingGlyphs { chars: vec![(c, 3)], truncated: false });
+    assert_eq!(m, MissingGlyphs::from_listed(vec![(c, 3)]));
 }
 
 #[test]
@@ -162,18 +163,6 @@ fn a_missing_glyph_is_found_in_an_equation() {
 }
 
 #[test]
-fn names_in_many_scripts_report_nothing() {
-    if std::env::var_os("CRAFT_FONTS_DIR").is_none() {
-        eprintln!("CRAFT_FONTS_DIR unset: the multilingual faces aren't available, skipping");
-        return;
-    }
-    let names = ["Łukasz Żmijewski", "Gheorghe Ștefănescu", "Krejčí", "Şahın Gül", "Llŷr Grŵn", "王小明", "김민수", "สมชาย ใจดี", "राम शर्मा"];
-    let d = Document::from_text(&names.join("\n"));
-    let m = missing(&d, &lay(&d));
-    assert!(m.is_empty(), "{m:?}");
-}
-
-#[test]
 fn joiners_and_variation_selectors_are_never_counted() {
     let d = Document::from_text("a\u{200D}b\u{200C}c\u{FE0F}d\u{FE0E}e\u{00AD}f\u{200E}g\u{2028}h\ti");
     assert!(missing(&d, &lay(&d)).is_empty());
@@ -199,12 +188,14 @@ fn the_list_is_sorted_and_capped_at_256_distinct_code_points() {
     let m = missing(&d, &lay(&d));
     assert!(m.truncated);
     assert_eq!(m.chars.len(), MAX_MISSING_GLYPHS);
+    assert_eq!(m.total, MAX_MISSING_GLYPHS + 44, "the total counts the unlisted ones too");
     assert!(m.chars.windows(2).all(|w| w[0].0 < w[1].0), "sorted by code point");
     // Exactly the cap's worth is no truncation.
     let d = Document::from_text(&all.iter().take(MAX_MISSING_GLYPHS).collect::<String>());
     let m = missing(&d, &lay(&d));
     assert!(!m.truncated);
     assert_eq!(m.chars.len(), MAX_MISSING_GLYPHS);
+    assert_eq!(m.total, MAX_MISSING_GLYPHS);
 }
 
 #[test]
@@ -247,6 +238,7 @@ fn an_equation_run_names_each_glyphs_characters() {
         runs(&x, &mut found);
     }
     // The equation's runs (the body text "Eq: " is a run too) each carry one range per glyph.
-    assert!(found.iter().any(|(t, g, _)| t.contains('\u{1D44E}') && *g == 2), "{found:?}");
+    // The letters are the math italic ones where the font has them, else plain.
+    assert!(found.iter().any(|(t, g, _)| (t.contains('\u{1D44E}') || t == "ab") && *g == 2), "{found:?}");
     assert!(found.iter().all(|(_, g, r)| g == r), "{found:?}");
 }

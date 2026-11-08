@@ -4,10 +4,10 @@
 //! way (`wordcraft_geom::picture::decode_for_drawing`, and the metafile parser): what fails here
 //! is what shows as a grey box there.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::RangeInclusive;
 
-use wordcraft_doc::{Document, MAX_MISSING_PICTURES, MissingPicture, MissingPictureReason, StoryRef};
+use wordcraft_doc::{Document, MAX_MISSING_PICTURES, MissingPicture, MissingPictureReason, StoryRef, picture_hash};
 use wordcraft_geom::picture::DrawFailure;
 
 use crate::display::{DisplayOptions, Draw, ItemDisplay};
@@ -48,7 +48,8 @@ pub fn media_check(bytes: &[u8], output: StrictOutput) -> Result<(), DrawFailure
 
 /// The pictures drawn on `pages` (0-based, `None` for every page) that fail [`media_check`] for
 /// `output`, the page's background picture included (named `background`), one
-/// per picture and story, at most [`MAX_MISSING_PICTURES`]; the flag says more were found.
+/// per picture and story, at most [`MAX_MISSING_PICTURES`]; the flag says more were found, and the
+/// count is how many distinct ones there were in all (saturating).
 ///
 /// `part` is the part the bytes were read from when the document knows it (a DOCX opened by the
 /// reader), else the media key. `story` is the source part of the header, footer, note or comment
@@ -62,9 +63,12 @@ pub fn undecodable_pictures(
     pages: Option<RangeInclusive<usize>>,
     opts: &DisplayOptions,
     output: StrictOutput,
-) -> (Vec<MissingPicture>, bool) {
+) -> (Vec<MissingPicture>, bool, u64) {
     let mut out: Vec<MissingPicture> = Vec::new();
     let mut truncated = false;
+    let mut total: u64 = 0;
+    // Hashes of the distinct ones past the cap, so the total counts each once.
+    let mut unlisted: HashSet<u64> = HashSet::new();
     let mut verdicts: HashMap<String, Option<DrawFailure>> = HashMap::new();
     let range = pages.unwrap_or(0..=usize::MAX);
     for (n, page) in layout.pages.iter().enumerate() {
@@ -96,8 +100,12 @@ pub fn undecodable_pictures(
                     }
                     if out.len() >= MAX_MISSING_PICTURES {
                         truncated = true;
-                        return (out, truncated);
+                        if unlisted.insert(picture_hash(&item)) {
+                            total = total.saturating_add(1);
+                        }
+                        continue;
                     }
+                    total = total.saturating_add(1);
                     out.push(item);
                 }
             }
@@ -118,14 +126,20 @@ pub fn undecodable_pictures(
             };
             let part = doc.missing_pictures.media_parts.get(&pic.media).cloned().unwrap_or_else(|| pic.media.clone());
             let item = MissingPicture { part, story: "background".into(), reason };
-            if out.len() >= MAX_MISSING_PICTURES {
-                truncated = true;
-            } else if !out.contains(&item) {
-                out.push(item);
+            if !out.contains(&item) {
+                if out.len() >= MAX_MISSING_PICTURES {
+                    truncated = true;
+                    if unlisted.insert(picture_hash(&item)) {
+                        total = total.saturating_add(1);
+                    }
+                } else {
+                    total = total.saturating_add(1);
+                    out.push(item);
+                }
             }
         }
     }
-    (out, truncated)
+    (out, truncated, total)
 }
 
 #[derive(Clone, Copy)]
