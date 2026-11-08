@@ -202,6 +202,7 @@ Draw|Tools|Eraser|draw.eraser
 Draw|Pens|Pen|draw.pen
 Draw|Pens|Pencil|draw.pencil
 Draw|Pens|Highlighter|draw.highlighter
+Draw|Pens|Action Pen|draw.actionPen
 Draw|Pens|Add Pen|draw.addPen
 Draw|Convert|Ink to Shape|draw.inkToShape
 Draw|Convert|Ink to Math|draw.inkToMath

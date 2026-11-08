@@ -70,6 +70,55 @@ pub fn big_toggle(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &
     big_button(ui, app, icon, label, id, Value::Object(Default::default()), BigState { menu: false, checked })
 }
 
+/// A large toggle with a drop-down arrow (Word's Action Pen): the tile toggles `id` on and off,
+/// the arrow beside it opens `menu` with the mode's options.
+pub fn big_split_toggle(
+    ui: &mut Ui,
+    app: &mut WordApp,
+    icon: &str,
+    label: &str,
+    id: &str,
+    checked: bool,
+    menu: impl FnOnce(&mut Ui, &mut WordApp),
+) -> Response {
+    let label = tl!(label);
+    let t = Tokens::get(ui.ctx());
+    let galley_w =
+        label.split('\n').map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x)).fold(0.0, f32::max);
+    let w = (galley_w + 12.0).max(44.0);
+    let (r, resp) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::click());
+    let (ar, aresp) = ui.allocate_exact_size(vec2(11.0, CONTENT_H), Sense::click());
+    keytip_badge(ui, r, id, &label.replace('\n', " "));
+    let on = enabled(app, id);
+    bg(ui, r, &resp, checked, &t);
+    bg(ui, ar, &aresp, false, &t);
+    let ic = Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0));
+    let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
+    icons::paint(ui.painter(), ic, icon, c, a);
+    let mut y = r.min.y + BIG_LABEL_Y;
+    let lines: Vec<&str> = label.split('\n').collect();
+    for l in &lines {
+        label_line(ui, r.center().x, y, l, regular(11.5), if on { t.text } else { t.text_disabled }, false);
+        y += LABEL_PITCH;
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(ar.center().x, r.max.y - 5.0), vec2(DROPDOWN, DROPDOWN)), c, a);
+    let resp = tooltip(app, resp, &label.replace('\n', " "), id);
+    command_menu(&resp, app, id);
+    if resp.clicked() && on {
+        run_from_ribbon(app, id, Value::Object(Default::default()));
+    }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, label.replace('\n', " ")));
+    let arrow_title = crate::i18n::fmt(tl!("{name} options"), &[("name", &label.replace('\n', " "))]);
+    show_hint(&aresp, &arrow_title, &[]);
+    if on {
+        crate::rtl::menu(&aresp).show(|ui| {
+            ui.set_min_width(200.0);
+            menu(ui, app);
+        });
+    }
+    resp
+}
+
 /// Size of the drop-down marker drawn after a label or beside a split button (#659: one marker,
 /// the `dropdown` icon, everywhere; no text glyph).
 pub const DROPDOWN: f32 = 10.0;
