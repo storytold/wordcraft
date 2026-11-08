@@ -245,6 +245,8 @@ fn messages_never_show_the_session_credential() {
     let doc = Resource::new("https://user:pw@dms.example:8443/dav/session-secret/Contract.docx").unwrap();
     let shown = doc.display_url();
     assert_eq!(shown, "https://dms.example:8443/…");
+    let debug = format!("{doc:?}");
+    assert!(!debug.contains("session-secret") && !debug.contains("pw@"), "{debug}");
     let Err(Error::InvalidUrl(shown)) = Resource::new("ftp://dms.example/session-secret/x") else { panic!("not refused") };
     assert!(!shown.contains("session-secret"), "{shown}");
 }

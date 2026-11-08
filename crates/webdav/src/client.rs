@@ -17,11 +17,18 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// session's credential in the path, and refuses everything but GET, LOCK, PUT and UNLOCK on it.
 /// So the client never creates, moves or deletes anything, and never follows a redirect: a lock
 /// and the save it guards must go to exactly this URL.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Resource {
     url: String,
     agent: ureq::Agent,
     max_bytes: u64,
+}
+
+/// By hand, so `{:?}` shows the URL redacted, like [`Resource::display_url`].
+impl std::fmt::Debug for Resource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Resource").field("url", &redact(&self.url)).field("max_bytes", &self.max_bytes).finish_non_exhaustive()
+    }
 }
 
 impl Resource {
