@@ -13721,6 +13721,36 @@ fn a_hyphen_before_a_slash_is_a_break_opportunity_like_word() {
     panic!("no width in the sweep wrapped the paragraph");
 }
 
+/// docxide-pdf `dot-open-token*`: UAX #14 allows a break between a full stop and an opening
+/// parenthesis, Word doesn't. The first width that wraps `Deed 2023.(Example` breaks at the space.
+#[test]
+fn a_full_stop_before_a_parenthesis_is_no_break() {
+    let text = "Deed 2023.(Example";
+    for m in 100..=540 {
+        let mut d = Document::from_text(text);
+        d.last_section.margin_right = m as f32;
+        let l = lay(&d);
+        let lines: Vec<String> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| {
+                if let Placed::Lines { para, l0, l1, .. } = it {
+                    Some(para.lines[*l0..*l1].iter().map(|line| text[line.start..line.stop].to_string()).collect::<Vec<_>>())
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect();
+        if lines.len() < 2 {
+            continue; // still fits on one line at this width
+        }
+        assert_eq!(lines, ["Deed ", "2023.(Example"], "the first wrap breaks at the space");
+        return;
+    }
+    panic!("no width in the sweep wrapped the paragraph");
+}
+
 #[test]
 fn layout_cache_invalidates_on_changed_filename() {
     let mut doc = Document::new();
