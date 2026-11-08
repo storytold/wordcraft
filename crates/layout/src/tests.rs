@@ -5593,7 +5593,7 @@ fn inline_picture_keeps_room_for_its_effects() {
     assert_eq!((c.adv, c.obj_h), (124.0, 89.0), "picture plus effect extents");
     // Drawn inside that room.
     let obj = picture(100.0, 50.0, shadow);
-    let r = display::inline_rect(Some(&obj), 10.0, 200.0, c.adv, (c.obj_h, c.obj_d), c.adv);
+    let r = display::inline_rect(Some(&obj), 10.0, 200.0, c.adv, (c.obj_h, c.obj_d), c.adv, true);
     assert_eq!((r.x, r.y, r.w, r.h), (16.0, 123.0, 100.0, 50.0));
 }
 
@@ -5620,20 +5620,65 @@ fn an_inline_picture_moves_with_its_runs_position() {
     let (c, line, _) = line_of(-30.0);
     assert_eq!((c.obj_h, c.obj_d), (0.0, 30.0));
     assert!(line.top + line.height - line.baseline >= 30.0 - 0.01, "{line:?}");
-    let r = display::inline_rect(Some(&picture(40.0, 30.0, Default::default())), 0.0, 100.0, c.adv, (c.obj_h, c.obj_d), c.adv);
+    let r = display::inline_rect(Some(&picture(40.0, 30.0, Default::default())), 0.0, 100.0, c.adv, (c.obj_h, c.obj_d), c.adv, true);
     assert_eq!((r.y, r.h), (100.0, 30.0));
     // Lowered further than that: the line reaches as far down, the picture's top staying on the
     // baseline (Word).
     let (c, line, _) = line_of(-500.0);
     assert_eq!((c.obj_h, c.obj_d), (-470.0, 500.0));
     assert!(line.top + line.height - line.baseline >= 500.0 - 0.01, "{line:?}");
-    let r = display::inline_rect(Some(&picture(40.0, 30.0, Default::default())), 0.0, 100.0, c.adv, (c.obj_h, c.obj_d), c.adv);
+    let r = display::inline_rect(Some(&picture(40.0, 30.0, Default::default())), 0.0, 100.0, c.adv, (c.obj_h, c.obj_d), c.adv, true);
     assert_eq!((r.y, r.h), (100.0, 30.0));
     // Raised: it stands clear of the baseline, as tall as before.
     let (c, _, _) = line_of(6.0);
     assert_eq!((c.obj_h, c.obj_d), (36.0, -6.0));
-    let r = display::inline_rect(Some(&picture(40.0, 30.0, Default::default())), 0.0, 100.0, c.adv, (c.obj_h, c.obj_d), c.adv);
+    let r = display::inline_rect(Some(&picture(40.0, 30.0, Default::default())), 0.0, 100.0, c.adv, (c.obj_h, c.obj_d), c.adv, true);
     assert_eq!((r.y, r.h), (64.0, 30.0));
+}
+
+/// A turned inline picture whose file kept no room for the turn: Word keeps its line to the frame
+/// (Word 2007 layout) or to the frame with width and height exchanged near a quarter turn (Word
+/// 2013+), and the picture overhangs it. One with room recorded takes its rotated bounds.
+#[test]
+fn bare_turned_inline_picture_keeps_its_frame() {
+    let room = |rot: f32, bare_turn: bool, compat: u32| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = compat;
+        let float = wordcraft_doc::para::Float { rot, bare_turn, ..Default::default() };
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+            p.insert_object(0, picture(120.0, 60.0, float), &Default::default()).unwrap();
+        }
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        let c = para.clusters.iter().find(|c| matches!(c.kind, para::ClKind::Object(_))).unwrap();
+        // Drawn unscaled, centred in that room.
+        let obj = picture(120.0, 60.0, wordcraft_doc::para::Float { rot, bare_turn, ..Default::default() });
+        let r = display::inline_rect(Some(&obj), 0.0, 200.0, c.adv, (c.obj_h, c.obj_d), c.adv, compat >= 15);
+        assert_eq!((r.w, r.h), (120.0, 60.0), "{rot}° bare {bare_turn} compat {compat}");
+        assert_eq!((r.x + r.w / 2.0, r.y + r.h / 2.0), (c.adv / 2.0, 200.0 - c.obj_h / 2.0));
+        // Only a bare turn that overhangs its line is cut, at the line's top and bottom.
+        let overhangs =
+            bare_turn && (c.obj_h as f64) < 120.0 * (rot as f64).to_radians().sin().abs() + 60.0 * (rot as f64).to_radians().cos().abs() - 0.1;
+        let clips: Vec<Rect> = display::page_display(&d, &l.pages[0], &Default::default())
+            .iter()
+            .filter_map(|i| if let display::Draw::Clip { rect, .. } = i { Some(*rect) } else { None })
+            .collect();
+        assert_eq!(clips.len(), usize::from(overhangs), "{rot}° bare {bare_turn} compat {compat}: {clips:?}");
+        if let Some(band) = clips.first() {
+            assert!(band.h >= c.obj_h && band.w > 4000.0, "{band:?}");
+        }
+        (c.adv.round(), c.obj_h.round())
+    };
+    assert_eq!(room(90.0, true, 12), (120.0, 60.0));
+    assert_eq!(room(45.0, true, 12), (120.0, 60.0));
+    assert_eq!(room(180.0, true, 12), (120.0, 60.0));
+    assert_eq!(room(90.0, true, 15), (60.0, 120.0));
+    assert_eq!(room(45.0, true, 15), (60.0, 120.0));
+    assert_eq!(room(135.0, true, 15), (120.0, 60.0));
+    assert_eq!(room(270.0, true, 15), (60.0, 120.0));
+    // Room recorded (Word's own files, WordCraft's turns): the rotated bounds, in any layout.
+    assert_eq!(room(90.0, false, 12), (60.0, 120.0));
+    assert_eq!(room(45.0, false, 15), (127.0, 127.0));
 }
 
 /// Tops of the body text lines drawn on page one, in order.
@@ -13503,6 +13548,61 @@ fn a_non_breaking_hyphen_and_a_minus_sign_stay_unbreakable() {
             break;
         }
     }
+}
+
+/// #3408: Word breaks a compound right after a hyphen that a slash follows ("Dataprotection-" /
+/// "/Secrecyviolation"), where UAX #14 forbids a break before the slash. The first width that
+/// wraps must break after the hyphen, not move the compound whole, and the slash stays with its
+/// word. Table auto-fit reads the same break, so such a column no longer widens to the compound.
+/// Word keeps "fitness-/1589" whole: a slash before a digit gains no break.
+#[test]
+fn a_hyphen_before_a_slash_is_a_break_opportunity_like_word() {
+    let digits = "Deed fitness-/1589";
+    let mut wrapped = false;
+    for m in 100..=540 {
+        let mut d = Document::from_text(digits);
+        d.last_section.margin_right = m as f32;
+        let l = lay(&d);
+        let lines: Vec<&str> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| if let Placed::Lines { para, l0, l1, .. } = it { Some(&para.lines[*l0..*l1]) } else { None })
+            .flatten()
+            .map(|line| &digits[line.start..line.stop])
+            .collect();
+        if lines.len() >= 2 {
+            assert_eq!(lines, ["Deed ", "fitness-/1589"], "the first wrap breaks at the space, not after the hyphen");
+            wrapped = true;
+            break;
+        }
+    }
+    assert!(wrapped, "no width in the sweep wrapped the digit case");
+
+    let text = "Deed Dataprotection-/Secrecyviolation";
+    for m in 100..=540 {
+        let mut d = Document::from_text(text);
+        d.last_section.margin_right = m as f32;
+        let l = lay(&d);
+        let lines: Vec<String> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| {
+                if let Placed::Lines { para, l0, l1, .. } = it {
+                    Some(para.lines[*l0..*l1].iter().map(|line| text[line.start..line.stop].to_string()).collect::<Vec<_>>())
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect();
+        if lines.len() < 2 {
+            continue; // still fits on one line at this width
+        }
+        assert_eq!(lines[0], "Deed Dataprotection-", "the first wrap breaks after the hyphen: {lines:?}");
+        assert_eq!(lines[1], "/Secrecyviolation", "the slash starts the next line with its word: {lines:?}");
+        return;
+    }
+    panic!("no width in the sweep wrapped the paragraph");
 }
 
 /// docxide-pdf `dot-open-token*`: UAX #14 allows a break between a full stop and an opening
