@@ -608,10 +608,13 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
     // A compact ribbon group (#662, #1285) trims the gallery to fewer tiles before it folds.
     let visible = if crate::ribbon_fit::compact(ui.ctx()) { STYLE_TILES_COMPACT } else { STYLE_TILES };
     crate::ribbon_fit::add_saving(ui.ctx(), (STYLE_TILES - STYLE_TILES_COMPACT) as f32 * 76.0);
+    // A mirrored interface (#5566) starts the tiles at the right and puts the arrows at the left.
+    let rtl = crate::rtl::flows(ui);
     let (area, _) = ui.allocate_exact_size(vec2(visible as f32 * 76.0 + 18.0, crate::widgets::CONTENT_H), Sense::hover());
     ui.painter().rect(area.shrink(1.0), 4.0, t.input, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
     for (k, (id, name)) in styles.iter().skip(start).take(visible).enumerate() {
-        let r = Rect::from_min_size(pos2(area.min.x + 3.0 + k as f32 * 76.0, area.min.y + 3.0), vec2(74.0, area.height() - 6.0));
+        let x = crate::rtl::lead_left(rtl, area, 3.0 + k as f32 * 76.0, 74.0);
+        let r = Rect::from_min_size(pos2(x, area.min.y + 3.0), vec2(74.0, area.height() - 6.0));
         let resp = ui.interact(r, ui.scope_id().with(("style_tile", id)), Sense::click());
         let active = *id == current;
         resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, name));
@@ -663,11 +666,16 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
         }
     }
     // Scroll arrows and "more".
-    let ar = Rect::from_min_max(pos2(area.max.x - 16.0, area.min.y + 2.0), pos2(area.max.x - 2.0, area.max.y - 2.0));
+    let ax = crate::rtl::lead_left(!rtl, area, 2.0, 14.0);
+    let ar = Rect::from_min_max(pos2(ax, area.min.y + 2.0), pos2(ax + 14.0, area.max.y - 2.0));
     let thirds = ar.height() / 3.0;
     for (i, (icon, delta)) in [("chevronUp", -1i32), ("chevronDown", 1), ("more", 0)].iter().enumerate() {
         let br = Rect::from_min_size(pos2(ar.min.x, ar.min.y + thirds * i as f32), vec2(ar.width(), thirds));
         let resp = ui.interact(br, ui.scope_id().with(("gal_arrow", i)), Sense::click());
+        if *delta == 0 {
+            // "More" opens the Styles pane: named for it, for screen readers.
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Styles Pane")));
+        }
         if resp.hovered() {
             ui.painter().rect_filled(br, 2.0, t.hover);
         }
