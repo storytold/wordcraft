@@ -35,6 +35,6 @@ use export::{escape_line_start, inlines_md, table_md, write_blocks};
 pub use inlines::parse_inlines;
 
 #[cfg(test)]
-use blocks::split_row;
+use blocks::{remap_original_lines, split_row};
 #[cfg(test)]
 mod tests;

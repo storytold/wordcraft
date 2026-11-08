@@ -145,16 +145,22 @@ fn take_definitions(lines: &mut Vec<String>) -> (Refs, Vec<usize>) {
     (refs, removed)
 }
 
-/// Maps a line index in lines filtered of link definitions back to its original source line.
-fn original_line(removed: &[usize], mut l: usize) -> usize {
-    for &r in removed {
-        if r <= l {
-            l += 1;
-        } else {
-            break;
+/// Maps monotonically non-decreasing line indexes in lines filtered of link definitions back to
+/// their original source lines in a single linear pass.
+pub(super) fn remap_original_lines(block_lines: &mut [usize], removed: &[usize]) {
+    let mut rem_iter = removed.iter().copied().peekable();
+    let mut shift = 0;
+    for l in block_lines.iter_mut() {
+        while let Some(&r) = rem_iter.peek() {
+            if r <= *l + shift {
+                shift += 1;
+                rem_iter.next();
+            } else {
+                break;
+            }
         }
+        *l += shift;
     }
-    l
 }
 
 /// Context for block parsing: depth, nesting, reference definitions, cell budget, and line recording.
@@ -207,7 +213,7 @@ pub fn parse_with_lines(text: &str) -> (model::Flow, Vec<usize>) {
         blocks.push(FBlock::Para(Para::default()));
         block_lines.push(0);
     }
-    let block_lines = block_lines.into_iter().map(|l| original_line(&removed, l)).collect();
+    remap_original_lines(&mut block_lines, &removed);
     (model::Flow { blocks, meta: Default::default() }, block_lines)
 }
 

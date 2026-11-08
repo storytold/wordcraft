@@ -817,3 +817,30 @@ fn block_line_mapping() {
     assert_eq!(lines[0], 1, "heading on line 1 after definition on line 0");
     assert_eq!(lines[1], 4, "paragraph on line 4 after definition on line 3");
 }
+
+#[test]
+fn remap_original_lines_cases() {
+    let mut lines = vec![0, 1, 2, 3, 4];
+    remap_original_lines(&mut lines, &[2, 5]);
+    assert_eq!(lines, vec![0, 1, 3, 4, 6]);
+
+    let mut lines = vec![0, 1];
+    remap_original_lines(&mut lines, &[1, 2, 3]);
+    assert_eq!(lines, vec![0, 4]);
+
+    let mut lines = vec![0];
+    remap_original_lines(&mut lines, &[0]);
+    assert_eq!(lines, vec![1]);
+
+    let mut lines = vec![1, 1, 2];
+    remap_original_lines(&mut lines, &[1]);
+    assert_eq!(lines, vec![2, 2, 3]);
+
+    let mut lines = vec![0, 2];
+    remap_original_lines(&mut lines, &[]);
+    assert_eq!(lines, vec![0, 2]);
+
+    let mut empty: Vec<usize> = Vec::new();
+    remap_original_lines(&mut empty, &[1, 2]);
+    assert!(empty.is_empty());
+}
