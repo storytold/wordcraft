@@ -35,7 +35,7 @@ Floating tables count exact contact with a line's bottom edge (#3977); shapes ke
 
 An otherwise empty section at page start retains its line before continuous content. Shared-section page totals and wrapping earlier text around later floating tables remain open.
 
-Consistent cell widths override stale table grid proportions when their totals agree. A percentage-width table before Word 2013 adds its outer cell margins to the text width it takes its share of, as in Word. Conflicting widths, spans and percentages still need the shared-grid algorithm.
+Consistent cell widths override stale table grid proportions when their totals agree. A percentage-width table before Word 2013 adds its first row's outer cell margins to the text width it takes its share of, as in Word; in a cell it takes its share of the cell's room alone. Conflicting widths, spans and percentages still need the shared-grid algorithm.
 
 Protected typing boundary discovery (#3614) counts earlier objects once and uses an editable-ID set when moving through consecutive permission markers. Permission matching, protection enforcement and saved formats are unchanged. This narrows gap #3; broader stability and mutation costs remain.
 
@@ -197,7 +197,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-08 | trivial | Before Word 2013 (compatibility mode 14 and earlier, and files that name no mode) a percentage-width table takes that share of the text width with its first cell's left and last cell's right margins added to it, as measured in Word; from mode 15 it is a share of the text width alone; no ranked gap changed; readiness estimates unchanged |
+| 2026-11-08 | trivial | Before Word 2013 (compatibility mode 14 and earlier, and files that name no mode) a percentage-width table takes that share of the text width with its first row's first cell's left and last cell's right margins added to it, as measured in Word; from mode 15 it is a share of the text width alone; no ranked gap changed; readiness estimates unchanged |
 | 2026-11-08 | trivial | #10 narrowed: a turned inline picture with no recorded effect extent keeps its line to its frame (exchanged near a quarter turn in Word 2013+ layout), cut at the line; gap stays open |
 | 2026-11-08 | trivial | #4 narrowed: a cell's last Normal paragraph drops its contextual space after, the end-of-cell mark counting as a Normal paragraph (#5450) |
 | 2026-11-07 | trivial | Page Setup also bounds the unfocused margin display after a long numeric paste; the accepted value is retained (#5650). |

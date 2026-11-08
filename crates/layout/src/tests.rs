@@ -8733,6 +8733,32 @@ fn a_percentage_table_before_word_2013_adds_its_outer_cell_margins() {
     close(g, (tw + 30.0) / 2.0 - 15.0 + 3.75, "mode 14, 15pt outer cell margins");
     let (g, tw) = gap(15, (3.75, 3.75), Some(15.0));
     close(g, tw / 2.0 - 15.0 + 3.75, "mode 15");
+    // Only the first row's outer cells count: measured in Word with own margins in each row.
+    let rows = |first: Option<f32>, second: Option<f32>| {
+        let mut t = Table::new(2, 2, 225.0);
+        t.props.width_pct = Some(100.0);
+        t.props.cell_margins = Some([0.0, 3.75, 0.0, 3.75]);
+        for (r, right) in [first, second].into_iter().enumerate() {
+            for c in &mut t.rows[r].cells {
+                c.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("x", Default::default()))];
+            }
+            t.rows[r].cells[1].props.margins = right.map(|m| [0.0, 3.75, 0.0, m]);
+        }
+        let mut d = Document::from_text("After");
+        d.settings.compat_mode = 14;
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let tw = d.sections().first().map_or(0.0, |(_, s)| s.text_width());
+        let l = lay(&d);
+        let [(x0, _, _)] = para_at(&l, &[0, 0, 0, 0])[..] else { panic!("first cell missing") };
+        let [(x1, _, _)] = para_at(&l, &[0, 0, 1, 0])[..] else { panic!("second cell missing") };
+        (x1 - x0, tw)
+    };
+    let (g, tw) = rows(None, Some(15.0));
+    close(g, (tw + 7.5) / 2.0, "the second row's right margin");
+    let (g, tw) = rows(Some(15.0), None);
+    close(g, (tw + 3.75 + 15.0) / 2.0, "the first row's right margin");
+    let (g, tw) = rows(Some(15.0), Some(30.0));
+    close(g, (tw + 3.75 + 15.0) / 2.0, "both rows' right margins");
     // A table in a cell: a share of the cell's room alone in every mode, measured in Word on a 100%
     // table of two columns in a 200pt cell with 3.75pt margins.
     for mode in [14, 15] {
