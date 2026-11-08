@@ -98,6 +98,16 @@ pub(crate) fn convert(bytes: &[u8]) -> Result<Package, DocxError> {
     c.put("word/styles.xml", &styles);
     c.rels[DOC].add(rt::STYLES, "styles.xml", false);
     overrides.push(("/word/styles.xml".into(), "styles"));
+    // Document settings and the font table, as Word itself carries them over when it saves a Word
+    // 2003 XML Document as .docx (in compatibility mode 11).
+    c.put("word/settings.xml", &settings(root.child("w:docPr")));
+    c.rels[DOC].add(rt::SETTINGS, "settings.xml", false);
+    overrides.push(("/word/settings.xml".into(), "settings"));
+    if let Some(fonts) = root.child("w:fonts").and_then(font_table) {
+        c.put("word/fontTable.xml", &fonts);
+        c.rels[DOC].add(rt::FONT_TABLE, "fontTable.xml", false);
+        overrides.push(("/word/fontTable.xml".into(), "fontTable"));
+    }
     if let Some(n) = root.child("w:lists").map(|l| c.numbering(l)) {
         c.put("word/numbering.xml", &n);
         c.rels[DOC].add(rt::NUMBERING, "numbering.xml", false);
@@ -544,6 +554,213 @@ fn media_type(ext: &str) -> &'static str {
     }
 }
 
+/// Settings and compatibility switches past this many are dropped.
+const MAX_SETTINGS: usize = 256;
+
+/// Fonts past this many are dropped from the font table.
+const MAX_FONTS: usize = 4096;
+
+/// `w:compat`'s switches in the order ECMA-376 lists them (ISO/IEC 29500-4, `CT_Compat`), the
+/// order a settings part has them in.
+const COMPAT: [&str; 65] = [
+    "useSingleBorderforContiguousCells",
+    "wpJustification",
+    "noTabHangInd",
+    "noLeading",
+    "spaceForUL",
+    "noColumnBalance",
+    "balanceSingleByteDoubleByteWidth",
+    "noExtraLineSpacing",
+    "doNotLeaveBackslashAlone",
+    "ulTrailSpace",
+    "doNotExpandShiftReturn",
+    "spacingInWholePoints",
+    "lineWrapLikeWord6",
+    "printBodyTextBeforeHeader",
+    "printColBlack",
+    "wpSpaceWidth",
+    "showBreaksInFrames",
+    "subFontBySize",
+    "suppressBottomSpacing",
+    "suppressTopSpacing",
+    "suppressSpacingAtTopOfPage",
+    "suppressTopSpacingWP",
+    "suppressSpBfAfterPgBrk",
+    "swapBordersFacingPages",
+    "convMailMergeEsc",
+    "truncateFontHeightsLikeWP6",
+    "mwSmallCaps",
+    "usePrinterMetrics",
+    "doNotSuppressParagraphBorders",
+    "wrapTrailSpaces",
+    "footnoteLayoutLikeWW8",
+    "shapeLayoutLikeWW8",
+    "alignTablesRowByRow",
+    "forgetLastTabAlignment",
+    "adjustLineHeightInTable",
+    "autoSpaceLikeWord95",
+    "noSpaceRaiseLower",
+    "doNotUseHTMLParagraphAutoSpacing",
+    "layoutRawTableWidth",
+    "layoutTableRowsApart",
+    "useWord97LineBreakRules",
+    "doNotBreakWrappedTables",
+    "doNotSnapToGridInCell",
+    "selectFldWithFirstOrLastChar",
+    "applyBreakingRules",
+    "doNotWrapTextWithPunct",
+    "doNotUseEastAsianBreakRules",
+    "useWord2002TableStyleRules",
+    "growAutofit",
+    "useFELayout",
+    "useNormalStyleForList",
+    "doNotUseIndentAsNumberingTabStop",
+    "useAltKinsokuLineBreakRules",
+    "allowSpaceOfSameStyleInTable",
+    "doNotSuppressIndentation",
+    "doNotAutofitConstrainedTables",
+    "autofitToFirstFixedWidthCell",
+    "underlineTabInNumList",
+    "displayHangulFixedWidth",
+    "splitPgBreakAndParaMark",
+    "doNotVertAlignCellWithSp",
+    "doNotBreakConstrainedForcedTable",
+    "doNotVertAlignInTxbx",
+    "useAnsiKerningPairs",
+    "cachedColBalance",
+];
+
+/// Word 2003 switches with another name in ECMA-376, the same when on.
+const COMPAT_RENAMED: [(&str, &str); 3] = [
+    ("ww6BorderRules", "doNotSuppressParagraphBorders"),
+    ("useWord97LineBreakingRules", "useWord97LineBreakRules"),
+    ("dontAllowFieldEndSelect", "selectFldWithFirstOrLastChar"),
+];
+
+/// Word 2003 switches ECMA-376 turns round: the second is on when the first is off.
+const COMPAT_INVERTED: [(&str, &str); 4] = [
+    ("snapToGridInCell", "doNotSnapToGridInCell"),
+    ("wrapTextWithPunct", "doNotWrapTextWithPunct"),
+    ("useAsianBreakRules", "doNotUseEastAsianBreakRules"),
+    ("dontGrowAutofit", "growAutofit"),
+];
+
+/// ECMA-376 names Word doesn't take from a Word 2003 XML Document, as 2003 spells those switches
+/// otherwise: four as in [`COMPAT_RENAMED`] and `breakWrappedTables`, three by 2003 names not known
+/// here. Word drops them when it finds them in such a file.
+const COMPAT_NOT_2003: [&str; 7] = [
+    "useSingleBorderforContiguousCells",
+    "suppressSpacingAtTopOfPage",
+    "truncateFontHeightsLikeWP6",
+    "doNotSuppressParagraphBorders",
+    "useWord97LineBreakRules",
+    "doNotBreakWrappedTables",
+    "selectFldWithFirstOrLastChar",
+];
+
+/// Switches Word turns on in every Word 2003 XML Document it saves as .docx, whether the file has
+/// them or not: `useFELayout`, and the ones Word 2003 has no name for.
+const COMPAT_ADDED: [&str; 16] = [
+    "useFELayout",
+    "useNormalStyleForList",
+    "doNotUseIndentAsNumberingTabStop",
+    "useAltKinsokuLineBreakRules",
+    "allowSpaceOfSameStyleInTable",
+    "doNotSuppressIndentation",
+    "doNotAutofitConstrainedTables",
+    "autofitToFirstFixedWidthCell",
+    "underlineTabInNumList",
+    "displayHangulFixedWidth",
+    "splitPgBreakAndParaMark",
+    "doNotVertAlignCellWithSp",
+    "doNotBreakConstrainedForcedTable",
+    "doNotVertAlignInTxbx",
+    "useAnsiKerningPairs",
+    "cachedColBalance",
+];
+
+/// `w:compat`'s switches in ECMA-376's names, as Word for Windows converts them when it saves a
+/// Word 2003 XML Document as .docx: the names both have kept, three renamed ([`COMPAT_RENAMED`]),
+/// four turned round ([`COMPAT_INVERTED`]), some always on ([`COMPAT_ADDED`]), in ECMA-376's
+/// order. Others (`breakWrappedTables`, which Word drops whether it is on or not, and
+/// [`COMPAT_NOT_2003`]) are left out.
+fn compat_switches(compat: Option<&El>) -> Vec<&'static str> {
+    let on: Vec<&str> = compat
+        .into_iter()
+        .flat_map(|c| c.els())
+        .take(MAX_SETTINGS)
+        .filter(|k| !matches!(k.attr("w:val"), Some("off" | "false" | "0")))
+        .filter_map(|k| k.name.strip_prefix("w:"))
+        .collect();
+    let set = |name: &str| {
+        (on.contains(&name) && !COMPAT_NOT_2003.contains(&name))
+            || COMPAT_RENAMED.iter().any(|&(old, new)| new == name && on.contains(&old))
+            || COMPAT_INVERTED.iter().any(|&(old, new)| new == name && !on.contains(&old))
+            || COMPAT_ADDED.contains(&name)
+    };
+    COMPAT.into_iter().filter(|&name| set(name)).collect()
+}
+
+/// `w:docPr` → `settings.xml`: the settings `settings.xml` names and means the same way. Word's own
+/// .docx save of a Word 2003 XML Document keeps `w:defaultTabStop`, converts the `w:compat`
+/// switches ([`compat_switches`]), writes `w:characterSpacingControl`'s capitalised values with a
+/// lower-case first letter (`CompressPunctuation` → `compressPunctuation`) and states compatibility
+/// mode 11.
+fn settings(doc_pr: Option<&El>) -> El {
+    let el = |name: &str, attrs: Vec<(String, String)>, kids: Vec<Node>| Node::El(El { name: name.into(), attrs, kids });
+    let val = |v: &str| vec![("w:val".to_string(), v.to_string())];
+    let mut kids = Vec::new();
+    if let Some(v) = doc_pr.and_then(|d| d.child("w:defaultTabStop")).and_then(|k| k.attr("w:val")) {
+        kids.push(el("w:defaultTabStop", val(v), Vec::new()));
+    }
+    // `doNotCompress` is the default; its 2003 spelling isn't needed.
+    let spacing = doc_pr.and_then(|d| d.child("w:characterSpacingControl")).and_then(|k| k.attr("w:val"));
+    if let Some(v) = spacing.and_then(|v| match v {
+        "CompressPunctuation" => Some("compressPunctuation"),
+        "CompressPunctuationAndJapaneseKana" => Some("compressPunctuationAndJapaneseKana"),
+        _ => None,
+    }) {
+        kids.push(el("w:characterSpacingControl", val(v), Vec::new()));
+    }
+    let mut compat: Vec<Node> =
+        compat_switches(doc_pr.and_then(|d| d.child("w:compat"))).into_iter().map(|n| el(&format!("w:{n}"), Vec::new(), Vec::new())).collect();
+    let mode = [("w:name", "compatibilityMode"), ("w:uri", "http://schemas.microsoft.com/office/word"), ("w:val", "11")];
+    compat.push(el("w:compatSetting", mode.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), Vec::new()));
+    kids.push(el("w:compat", Vec::new(), compat));
+    El { name: "w:settings".into(), attrs: xml::body_ns(), kids }
+}
+
+/// `w:fonts` → `fontTable.xml`: each `w:font` with the parts ECMA-376 keeps under the same meaning
+/// (§17.8.3), as Word's own .docx save of a Word 2003 XML Document writes them: `w:altName`,
+/// `w:panose-1` as `w:panose1`, `w:charset`, `w:family` in lower case (2003 capitalises it:
+/// `Roman`), `w:notTrueType` and `w:pitch`. The font signature (`w:sig`) is left out. `None`
+/// without fonts.
+fn font_table(fonts: &El) -> Option<El> {
+    let kids: Vec<Node> = fonts
+        .children("w:font")
+        .filter_map(|f| {
+            let name = f.attr("w:name").filter(|n| !n.is_empty())?;
+            let kids = f
+                .els()
+                .filter_map(|k| {
+                    let v = k.attr("w:val");
+                    let (name, v) = match k.name.as_str() {
+                        "w:altName" | "w:charset" | "w:pitch" | "w:notTrueType" => (k.name.as_str(), v.map(str::to_string)),
+                        "w:panose-1" => ("w:panose1", v.map(str::to_string)),
+                        "w:family" => ("w:family", v.map(str::to_ascii_lowercase)),
+                        _ => return None,
+                    };
+                    let attrs = v.map(|v| vec![("w:val".to_string(), v)]).unwrap_or_default();
+                    Some(Node::El(El { name: name.into(), attrs, kids: Vec::new() }))
+                })
+                .collect();
+            Some(Node::El(El { name: "w:font".into(), attrs: vec![("w:name".into(), name.to_string())], kids }))
+        })
+        .take(MAX_FONTS)
+        .collect();
+    (!kids.is_empty()).then(|| El { name: "w:fonts".into(), attrs: xml::body_ns(), kids })
+}
+
 /// `o:DocumentProperties` → `docProps/core.xml`.
 fn core_xml(props: &El) -> Vec<u8> {
     let mut w = W::new();
@@ -573,4 +790,66 @@ fn core_xml(props: &El) -> Vec<u8> {
     }
     w.close("cp:coreProperties");
     w.into_bytes()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `w:characterSpacingControl` is carried over with Word's .docx spelling of its value, though
+    /// the reader doesn't use it yet.
+    #[test]
+    fn character_spacing_control_takes_the_docx_spelling() {
+        let doc = |v: &str| {
+            format!(
+                r#"<w:wordDocument xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml"><w:docPr><w:characterSpacingControl w:val="{v}"/></w:docPr><w:body><w:p/></w:body></w:wordDocument>"#
+            )
+        };
+        let settings = |v: &str| String::from_utf8(convert(doc(v).as_bytes()).unwrap().get("word/settings.xml").unwrap().to_vec()).unwrap();
+        assert!(settings("CompressPunctuation").contains(r#"<w:characterSpacingControl w:val="compressPunctuation"/>"#));
+        assert!(settings("CompressPunctuationAndJapaneseKana").contains(r#"w:val="compressPunctuationAndJapaneseKana""#));
+        assert!(!settings("DontCompress").contains("characterSpacingControl"));
+    }
+
+    /// `w:compat` takes ECMA-376's names and order, as in Word's .docx save of a Word 2003 XML
+    /// Document. Each case is a file Word for Windows (16.0.17932) opened and saved as .docx: the
+    /// switches it holds, and the ones Word wrote before those it always adds.
+    #[test]
+    fn compat_switches_take_the_docx_names() {
+        let switches = |kids: Option<String>| {
+            let xml = kids.map(|k| format!(r#"<w:compat xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml">{k}</w:compat>"#));
+            let el = xml.map(|x| xml::parse_ns(x.as_bytes(), &[("w", W2003_NS)]).unwrap());
+            compat_switches(el.as_ref()).join(" ")
+        };
+        let tags = |names: &str| Some(names.split_whitespace().map(|n| format!("<w:{n}/>")).collect::<String>());
+        let inverted = "doNotSnapToGridInCell doNotWrapTextWithPunct doNotUseEastAsianBreakRules growAutofit";
+        let ecma: Vec<&str> = COMPAT[..49].iter().copied().filter(|n| !COMPAT_NOT_2003.contains(n)).collect();
+        let cases = [
+            // A form saved by Word 2003.
+            (
+                tags("spaceForUL balanceSingleByteDoubleByteWidth doNotLeaveBackslashAlone ulTrailSpace doNotExpandShiftReturn usePrinterMetrics ww6BorderRules footnoteLayoutLikeWW8 shapeLayoutLikeWW8 alignTablesRowByRow forgetLastTabAlignment doNotUseHTMLParagraphAutoSpacing layoutRawTableWidth layoutTableRowsApart useWord97LineBreakingRules breakWrappedTables dontAllowFieldEndSelect useWord2002TableStyleRules useFELayout"),
+                "spaceForUL balanceSingleByteDoubleByteWidth doNotLeaveBackslashAlone ulTrailSpace doNotExpandShiftReturn usePrinterMetrics doNotSuppressParagraphBorders footnoteLayoutLikeWW8 shapeLayoutLikeWW8 alignTablesRowByRow forgetLastTabAlignment doNotUseHTMLParagraphAutoSpacing layoutRawTableWidth layoutTableRowsApart useWord97LineBreakRules doNotSnapToGridInCell selectFldWithFirstOrLastChar doNotWrapTextWithPunct doNotUseEastAsianBreakRules useWord2002TableStyleRules growAutofit".to_string(),
+            ),
+            (tags("balanceSingleByteDoubleByteWidth useFELayout"), format!("balanceSingleByteDoubleByteWidth {inverted}")),
+            // Word 2003's own defaults: the inverted ones on.
+            (tags("breakWrappedTables snapToGridInCell wrapTextWithPunct useAsianBreakRules dontGrowAutofit useFELayout"), String::new()),
+            // No `useFELayout`: Word adds it.
+            (tags("spaceForUL"), format!("spaceForUL {inverted}")),
+            (
+                Some(r#"<w:spaceForUL w:val="off"/><w:snapToGridInCell w:val="off"/><w:wrapTextWithPunct w:val="on"/><w:useFELayout/>"#.into()),
+                "doNotSnapToGridInCell doNotUseEastAsianBreakRules growAutofit".to_string(),
+            ),
+            // No `w:compat`.
+            (None, inverted.to_string()),
+            // ECMA-376's names: Word keeps the ones 2003 spells the same.
+            (tags(&COMPAT.join(" ")), ecma.join(" ")),
+        ];
+        let added = COMPAT_ADDED.join(" ");
+        for (kids, word) in cases {
+            let want = if word.is_empty() { added.clone() } else { format!("{word} {added}") };
+            assert_eq!(switches(kids.clone()), want, "{kids:?}");
+        }
+        // Names ECMA-376 doesn't have are left out.
+        assert_eq!(switches(Some("<w:a:b/><w:compatSetting/>".into())), format!("{inverted} {added}"));
+    }
 }
