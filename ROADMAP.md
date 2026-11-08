@@ -9,6 +9,8 @@
 > **Recipient CSV update:** 2026-10-27 · Complete quoted header records choose the delimiter (#4249); detection and regressions follow the current mailings module split. Recipient limits and readiness estimates are unchanged.
 >
 > **Headered CSV prefix update:** 2026-10-31 · Unquoted whitespace-only prefix lines are skipped before choosing recipient headers (#4249); quoted whitespace headers, headerless records, the shared CSV reader and recipient limits remain unchanged.
+
+> **Page Setup update:** 2026-11-07 · Page Setup number boxes keep long input inside the field, including accepted margin values after focus leaves (#5650); accepted ranges and readiness estimates are unchanged.
 > **Printing update:** 2026-10-12 · direct desktop printing through craft-print; details below.
 > **Legacy form update:** 2026-10-22 · trivial: numeric XML references decode in field names and labels; readiness estimates unchanged.
 
@@ -155,6 +157,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-11-04: MHT import keeps semicolons and escaped quotes inside quoted MIME parameters, so an unrelated parameter cannot supply a false multipart boundary and hide the document text. Readiness estimates unchanged.
 - 2026-10-30: Equations: `\int`, `\sum` and the other n-ary operators typed with AutoCorrect wait for their limits. `\int` + Space, then `_0^1` and Space, gives ∫ with its limits and the caret in its operand, and `\int_0^1` typed in one go does the same, since any character that can't continue `\name` corrects it; this is observed in Word for Windows on #4938. Enter or an arrow key builds it without going into the operand, and `∫∫` puts the operand in the inner operator; those two are not observed in Word (#4917). Readiness unchanged.
 
+- 2026-11-04: RTF import skips the declared Unicode fallback count even when it exceeds eight fallback units, so longer ANSI alternatives do not leak into the document text. Skipping stays bounded by the available input and ends at a group boundary. Readiness estimates unchanged.
 - 2026-10-28: Ink replay, eraser picking, lasso selection and arrow-candidate discovery reuse the paragraph prefixes they have already scanned (#3614). Page item order, stroke geometry and saved data retain their behavior. This narrows the stability work; ink import fidelity, native pen input and broader corpus qualification remain open.
 - 2026-10-29: Page drawing finds text-box warps without rescanning the paragraph for every box (#3614). Only requested offsets are indexed, and each paragraph walk stops after its last requested character. Original Linux discovery, complete display-output and CLI/MCP save/reopen controls; native Word comparison untested. Readiness estimates unchanged.
 - 2026-10-28: Protected typing boundary lookup counts preceding objects once and indexes editable permission IDs (#3614); caret movement and enforcement policy are unchanged. Existing mutation and protection checks retain their costs; this does not close the broader performance gap.
@@ -469,6 +472,8 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-17 | Non-overlapping body floating tables clear header tables. Original native controls distinguish never-overlap from allowed overlap. |
 | 2026-10-14 | Comment text being typed is no longer lost or misplaced (#1348): an edit or reply the document refuses (for example read-only protection) keeps the typed text in its field and says why on the status line; drafts belong to their document, so after New or Open a comment with the same number shows its own text; Save, Export, Print, Close, New and Open write pending comment text first; if the document refuses it, Save, Export and Print carry on with the stored comments and show why on the status line (a refused draft is dropped when Save is the only change), while Close, New and Open show the Save Changes prompt (Don't Save drops text the document refuses); Escape discards what was typed; in a document protected as read only or for forms the comment fields can't be typed in |
 |---|---|
+| 2026-11-07 | Page Setup also bounds the unfocused margin display after a long numeric paste; the accepted value is retained (#5650). |
+| 2026-11-05 | Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. |
 | 2026-10-29 | Print Markup discovers comment balloon anchors in one forward paragraph-object walk; anchor positions, filtering and the existing cap stay unchanged (#3614) |
 | 2026-10-26 | Spelling & Grammar opens a right-side Proofing task pane observed in Word for Windows: sentence context, directly clickable suggestion cards and ignore/dictionary actions. Current-story traversal and stale-target checks are retained. Right-click keeps its compact menu. |
 | 2026-10-22 | Documents that keep content in another format (`w:altChunk`: a web page, RTF, text or another Word document, as generators and mail-merge tools write them) show it where it stands, as Word does, instead of leaving it out; one such file in the docxide-pdf corpus opened as an empty page and now matches Word's 8 pages. `.mht` web archives open, and web pages open the way Word opens them (style sheets, paragraph margins, Times New Roman, single lines, automatic spacing). Insert › Text from File keeps the inserted file's pictures |
@@ -800,6 +805,8 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 
 Footer page-table height and body wrapping are corrected. Other pagination gaps remain open.
 
+Quoted field escapes are interpreted like Word, and body `PAGE` fields use their active section number format in paragraphs and tables. Synthetic regressions cover fields and section layout.
+
 Section page-numbering settings preserve `w:chapStyle` values across the full unsigned-byte range.
 MATH glyphs that reference the same construction now share its immutable variants and assembly data (#3630). Glyph mappings, values and the existing partial-record fallback stay unchanged. Repeated glyph IDs keep their last valid reference without retaining superseded constructions. Distinct overlapping constructions and assembly-only sharing remain separate.
 
@@ -822,6 +829,8 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | trivial | Page Setup also bounds the unfocused margin display after a long numeric paste; the accepted value is retained (#5650). |
+| 2026-11-05 | trivial | Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. |
 | 2026-11-06 | trivial | Print helpers remove loaded PDF/settings files before driver work, tolerate prior removal and report cleanup errors; a held-driver regression checks the files are already absent (#5710) |
 | 2026-11-06 | trivial | Windows print submissions isolated per helper process; cancelled driver work cannot block a retry (#5710) |
 | 2026-11-06 | trivial | Progress log: print cancellation before sending, including without a document, and the Windows repeated-conversion limitation (#5710) |
@@ -838,6 +847,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-04 | trivial | KM20: merge updated Language settings and the missing-pack bar; report compiled Khmer proofing as built in and preserve the explicit-data notice. Readiness unchanged. |
 | 2026-11-04 | trivial | KM19: synchronize main’s unified language list, retain Khmer and its tag aliases, and preserve both sides of the documentation history. Readiness unchanged. |
 | 2026-11-04 | trivial | KM18: remove duplicate status metadata and preserve separate paragraphs in continuous metadata/revision blockquotes; synchronize the region-name catalog update. Readiness unchanged. |
+| 2026-11-04 | trivial | Progress log: RTF Unicode fallback counts; readiness estimates unchanged |
 | 2026-10-28 | trivial | Per-page ink object lookups, #3614. Drawing order, geometry and saved data retain their behavior; no readiness estimate change |
 | 2026-11-05 | trivial | Progress log: ODT heading text of another size (gap 19) |
 | 2026-11-05 | trivial | Progress log: ODT table rows that don't break (gap 19) |

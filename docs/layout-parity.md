@@ -271,6 +271,7 @@ new mixed-style emoji and mixed bundled-font combining-mark controls cover LTR/b
 hit stops, full selection, and narrow/overwide line wrapping. Independent review and the full
 layout suite are pending; this is not a new Word/native-IME acceptance claim.
 
+Body `PAGE` fields in paragraphs and tables use the active section's number format; section headers and footers are measured with that format before body placement. Regression coverage includes Web, Draft, Read and Outline views.
 MATH glyphs that reference the same construction now share its immutable variants and assembly data (#3630). Glyph mappings, values and the existing partial-record fallback stay unchanged. Repeated glyph IDs keep their last valid reference without retaining superseded constructions. Distinct overlapping constructions and assembly-only sharing remain separate.
 
 The front-of-text opt-out is retained from the earlier implementation; this patch does not establish native Word equivalence between front-of-text and behind-text pictures. Synthetic placement tests cover the two paths, while a new native comparison of those wrap modes remains open. Turned-cell layouts disable horizontal cell confinement because their frame x axis becomes page y.
@@ -300,6 +301,8 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | trivial | Header table measurements and fitted text-box heights use the page section’s PAGE format; cache reuse follows the field context |
+| 2026-11-03 | trivial | Body PAGE fields in tables use the active section number format; reflow views measure headers and footers with it before body placement |
 | 2026-11-05 | trivial | PR #4545: eligible cell floats retain in-bounds offsets and touch the outer cell edge only on overflow, ignoring wrap distances for object placement. Front-of-text, turned-cell and outside-cell opt-outs remain. Synthetic geometry controls; native front/behind-text parity remains unqualified. |
 | 2026-11-05 | trivial | With multiple spacing a line of only in-line pictures is as tall as they reach, raised or lowered, and never less than its font's height (a list label's font counting too): a picture shorter than the font keeps the font's ascent and descent, as noted for ODT documents below; a taller one ends at the line's bottom with no descent under it. The spacing adds its share of the font's height, not of a lowered picture's. A legacy check box sizes its line as text of its size. Measured in Word with Arial at 10 and 20 pt, single, 1.15, 1.25 and 1.5 spacing, 156 synthetic lines (`tests::lowered_pictures_and_check_boxes_take_words_line_heights`). Known gap: a picture lowered further than its own height is limited to that height where Word's line keeps growing. |
 | 2026-11-04 | trivial | PR #4609: relative REF keeps context already displayed by the own or a needed ancestor label; six synthetic legal-template cases and separate-list context follow the Word for Windows measurements reported by @pakiat in PR discussion. Existing unknown-switch/cache boundaries and readiness estimates unchanged; no new native Word run. |
