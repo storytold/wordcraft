@@ -9009,6 +9009,114 @@ fn superscript_digits_advance_at_the_half_point_size() {
 }
 
 #[test]
+fn a_position_shift_moves_the_line_box_instead_of_growing_it() {
+    use wordcraft_doc::props::VertAlign;
+    // docxide-pdf `shifted-text-position-7-mixed0` and `raised-empty-size12-position7`: Word moves
+    // both edges of a raised or lowered run's box (ascent + raise, descent - raise, neither below
+    // zero), so a line of only lowered text keeps the plain line's height, a line of only raised
+    // text loses its descent, and a raised paragraph mark moves an empty line's box the same way.
+    let props = |position: f32, vert_align: VertAlign| wordcraft_doc::CharProps {
+        font: Some("Source Sans 3".into()),
+        size: Some(12.0),
+        position: Some(position),
+        vert_align: Some(vert_align),
+        ..Default::default()
+    };
+    // Each line's (height, baseline below its top) for `text` at `text_pos` and a mark at
+    // `mark_pos` aligned `mark_va`.
+    let lines_va = |text: &str, (text_pos, mark_pos): (f32, f32), mark_va: VertAlign| {
+        let mut p = wordcraft_doc::Paragraph::new();
+        p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+        if !text.is_empty() {
+            p.runs.push(wordcraft_doc::para::Run { len: text.len(), props: props(text_pos, VertAlign::Baseline) });
+            p.text.push_str(text);
+        }
+        p.mark = props(mark_pos, mark_va);
+        let mut d = Document::new();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let para = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.clone()) } else { None }).unwrap();
+        para.lines.iter().map(|x| (x.height, x.baseline - x.top)).collect::<Vec<_>>()
+    };
+    let lines = |text: &str, pos: (f32, f32)| lines_va(text, pos, VertAlign::Baseline);
+    let close = |a: (f32, f32), b: (f32, f32), what: &str| assert!((a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01, "{what}: {a:?} vs {b:?}");
+    // The (height, baseline) of a line whose box is (`a`, `d`) moved by `r`.
+    let moved = |(a, d): (f32, f32), r: f32| {
+        let (a, d) = ((a + r).max(0.0), (d - r).max(0.0));
+        (a + d, a)
+    };
+    let (h, asc) = lines("Hxg", (0.0, 0.0))[0];
+    let desc = h - asc;
+    // 7pt is more than the descent: a line of only raised text loses all of it.
+    assert!(desc < 7.0 && asc > 7.0, "{asc} {desc}");
+    let raised = (asc + 7.0, asc + 7.0);
+    close(moved((asc, desc), 7.0), raised, "the helper");
+    close(lines("Hxg", (-7.0, -7.0))[0], (h, asc - 7.0), "lowered text");
+    close(lines("Hxg", (7.0, 7.0))[0], raised, "raised text");
+    // Lowered further than its ascent: the ascent stops at nothing and the line grows by the rest.
+    assert!(asc < 20.0);
+    close(lines("Hxg", (-20.0, -20.0))[0], (desc + 20.0, 0.0), "text lowered past its ascent");
+    close(lines("", (0.0, 0.0))[0], (h, asc), "empty paragraph");
+    close(lines("", (0.0, 7.0))[0], raised, "raised empty mark");
+    close(lines("", (0.0, -7.0))[0], (h, asc - 7.0), "lowered empty mark");
+    // The empty line after a line break holds the mark.
+    let br = |pos: (f32, f32), va: VertAlign| lines_va(&format!("Hxg{}", wordcraft_doc::para::LINE_BREAK), pos, va);
+    let broken = br((0.0, 7.0), VertAlign::Baseline);
+    close(broken[0], (h, asc), "text before the break");
+    close(*broken.last().unwrap(), raised, "raised mark after a line break");
+    close(*br((0.0, -7.0), VertAlign::Baseline).last().unwrap(), (h, asc - 7.0), "lowered mark after a line break");
+    // A superscript or subscript mark keeps its small box (drawn at 0.65 × 12 = 7.8pt, rounded to
+    // the half point: 8pt), moved by its position.
+    let small = (asc * 8.0 / 12.0, desc * 8.0 / 12.0);
+    for va in [VertAlign::Superscript, VertAlign::Subscript] {
+        for r in [7.0, -7.0] {
+            close(lines_va("", (0.0, r), va)[0], moved(small, r), &format!("{va:?} empty mark at {r}"));
+            close(*br((0.0, r), va).last().unwrap(), moved(small, r), &format!("{va:?} mark at {r} after a line break"));
+        }
+    }
+    // A lowered legacy check box alone on a line is drawn on the unshifted baseline: the line
+    // still holds its top.
+    let mut d = Document::new();
+    let mut p = wordcraft_doc::Paragraph::new();
+    p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let form = r#"<w:ffData><w:name w:val="Box"/><w:checkBox><w:sizeAuto/></w:checkBox></w:ffData>"#.to_string();
+    let field = InlineObject::Field { instr: "FORMCHECKBOX".into(), result: String::new(), locked: false, dirty: false, code: false, form };
+    let box_props = wordcraft_doc::CharProps { size: Some(12.0), position: Some(-7.0), ..Default::default() };
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().insert_object(0, field, &box_props).unwrap();
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    let c = para.clusters.iter().find(|c| matches!(c.kind, para::ClKind::Object(_))).unwrap();
+    let line = &para.lines[0];
+    assert!(line.baseline - c.obj_h - line.top >= -0.01, "the box's top is inside its line: {line:?} {c:?}");
+    // Unshifted text beside raised text keeps its descent: each run's box counts on its own.
+    let mut p = wordcraft_doc::Paragraph::new();
+    p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+    for (text, position) in [("Hxg ", 0.0), ("max", 7.0)] {
+        let props = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), position: Some(position), ..Default::default() };
+        p.runs.push(wordcraft_doc::para::Run { len: text.len(), props });
+        p.text.push_str(text);
+    }
+    let mut d = Document::new();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = lay(&d);
+    let mixed = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.lines[0].clone()) } else { None }).unwrap();
+    close((mixed.height, mixed.baseline - mixed.top), (asc + 7.0 + desc, asc + 7.0), "unshifted text beside raised text");
+    // Unshifted text beside lowered text keeps its ascent, the lowered run its deeper descent.
+    let mut p = wordcraft_doc::Paragraph::new();
+    p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+    for (text, position) in [("Hxg ", 0.0), ("max", -7.0)] {
+        p.runs.push(wordcraft_doc::para::Run { len: text.len(), props: props(position, VertAlign::Baseline) });
+        p.text.push_str(text);
+    }
+    let mut d = Document::new();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = lay(&d);
+    let mixed = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.lines[0].clone()) } else { None }).unwrap();
+    close((mixed.height, mixed.baseline - mixed.top), (asc + desc + 7.0, asc), "unshifted text beside lowered text");
+}
+
+#[test]
 fn ruby_text_sits_over_its_base_and_the_line_grows_to_fit() {
     use wordcraft_doc::para::RubyAlign;
     let plain = Document::from_text("Plain words here");

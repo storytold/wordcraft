@@ -432,9 +432,10 @@ impl<'e> Breaker<'e> {
             let (a, d) = if check_box {
                 // Word sizes a line by a legacy check box as by text of the box's size (measured
                 // with Arial at 10 and 20 pt: a 20 pt box's line is 23 pt, times the spacing).
+                // The box is drawn on the unshifted baseline, so the line still holds all of it.
                 let (a, d) = st.line_extent();
                 let k = if st.ascent > 0.0 { c.obj_h / st.ascent } else { 1.0 };
-                (a * k, d * k)
+                ((a * k).max(c.obj_h), (d * k).max(c.obj_d))
             } else if object.is_some() && c.obj_h + c.obj_d > 0.0 {
                 if math {
                     // Exact spacing keeps the run's baseline; tall math may overflow the
@@ -463,8 +464,8 @@ impl<'e> Breaker<'e> {
         if (!any || (ex.asc == 0.0 && ex.desc == 0.0))
             && let Some(st) = pl.styles.get(self.mark_style as usize)
         {
-            ex.asc = st.ascent;
-            ex.desc = st.descent;
+            // A raised or lowered mark moves its line's box like raised text.
+            (ex.asc, ex.desc) = st.shifted(st.ascent, st.descent);
         }
         ex
     }
@@ -607,7 +608,7 @@ impl<'e> Breaker<'e> {
     fn empty_last_line(&mut self, pl: &ParaLayout) {
         let rp = &self.rp;
         let grid = self.grid.as_ref();
-        let (asc, desc) = pl.styles.get(self.mark_style as usize).map(|s| (s.ascent, s.descent)).unwrap_or((10.0, 3.0));
+        let (asc, desc) = pl.styles.get(self.mark_style as usize).map(|s| s.shifted(s.ascent, s.descent)).unwrap_or((10.0, 3.0));
         let natural = asc + desc;
         let h = match (rp.line_spacing, grid) {
             (LineSpacing::Multiple(m), Some(g)) => g.snap_height(natural) * m,
