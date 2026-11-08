@@ -111,6 +111,13 @@ fn get_refuses_a_document_over_the_size_cap() {
 }
 
 #[test]
+fn get_loads_a_document_exactly_at_the_size_cap() {
+    let server = Server::start(vec![("200 OK", Vec::new(), vec![b'x'; 16])]);
+    assert_eq!(Resource::new(&server.url).unwrap().with_max_bytes(16).get().unwrap(), vec![b'x'; 16]);
+    server.finish();
+}
+
+#[test]
 fn get_caps_the_unpacked_size_of_a_compressed_document() {
     // 1 MiB of zeros gzips to about a kilobyte: under the cap on the wire, far over it unpacked.
     let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());

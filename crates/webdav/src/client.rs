@@ -74,10 +74,13 @@ impl Resource {
         let mut response = self.agent.run(request).map_err(transport)?;
         expect(response.status(), "GET", &[StatusCode::OK])?;
         // `limit` counts the bytes on the wire, and a gzip body unpacks behind it, so the unpacked
-        // document is capped too: one byte past the cap is enough to know it is too large.
-        let reader = response.body_mut().with_config().limit(self.max_bytes).reader();
+        // document is capped too: one byte past the cap is enough to know it is too large. The wire
+        // limit gets that byte as well, because ureq fails the read that would find the end of a
+        // body exactly `max_bytes` long.
+        let past_cap = self.max_bytes.saturating_add(1);
+        let reader = response.body_mut().with_config().limit(past_cap).reader();
         let mut bytes = Vec::new();
-        reader.take(self.max_bytes.saturating_add(1)).read_to_end(&mut bytes).map_err(|e| match ureq::Error::from(e) {
+        reader.take(past_cap).read_to_end(&mut bytes).map_err(|e| match ureq::Error::from(e) {
             ureq::Error::BodyExceedsLimit(_) => Error::TooLarge { limit: self.max_bytes },
             e => transport(e),
         })?;
