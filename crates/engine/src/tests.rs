@@ -5749,6 +5749,39 @@ fn opening_a_named_pipe_or_device_is_refused_without_blocking() {
 
 #[cfg(unix)]
 #[test]
+fn reading_a_template_title_from_a_named_pipe_is_refused_without_blocking() {
+    let dir = scratch_dir("template-title-fifo");
+    let fifo = dir.join("pipe.dotx");
+
+    let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+    if !made.is_ok_and(|s| s.success()) {
+        let _ = std::fs::remove_dir_all(&dir);
+        eprintln!("mkfifo unavailable; skipping");
+        return;
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let path = fifo.clone();
+
+    std::thread::spawn(move || {
+        let title = crate::io::package_title(&path, 64 << 20, 64 << 10);
+        let _ = tx.send(title);
+    });
+
+    let result = rx.recv_timeout(std::time::Duration::from_secs(10));
+
+    if result.is_err() {
+        // Unblock a stuck reader so the test thread can finish.
+        let _ = std::os::unix::fs::OpenOptionsExt::custom_flags(std::fs::OpenOptions::new().write(true), libc::O_NONBLOCK).open(&fifo);
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(result.expect("reading a template title blocked on a named pipe"), None);
+}
+
+#[cfg(unix)]
+#[test]
 fn html_picture_that_is_a_named_pipe_is_skipped_without_blocking() {
     // #98 review: opening a FIFO blocks until a writer appears; it must never be opened.
     let dir = scratch_dir("html-img-fifo");
