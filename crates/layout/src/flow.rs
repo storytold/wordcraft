@@ -890,8 +890,8 @@ fn only_markers(p: &Paragraph, range: std::ops::Range<usize>) -> bool {
 /// start: all that follows the break in its section is the empty mark closing it before a
 /// continuous section (a quiet mark), with nothing in it to draw. Word keeps that mark on the
 /// break's page, so the next section starts at the top of the new page, which is its first page
-/// and takes its first-page header (#2109). A hidden mark's paragraph holding only a picture is
-/// quiet too (it has no text), but it goes on the new page. One column only: a section with
+/// and takes its first-page header (#2109). A mark holding anything but markers, such as a hidden
+/// mark's paragraph holding a picture, goes on the new page. One column only: a section with
 /// columns lays its last page out again to balance them.
 fn next_section_takes_break_page(ctx: &Ctx, pb: &PageBuilder, block: usize) -> bool {
     let Some(next) = block.checked_add(1) else { return false };

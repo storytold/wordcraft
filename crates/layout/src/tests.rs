@@ -1524,9 +1524,9 @@ fn footnotes_on_the_page_a_break_leaves_to_a_continuous_section_keep_its_margins
 #[test]
 fn a_picture_closing_a_section_after_a_page_break_goes_on_the_new_page() {
     use wordcraft_doc::section::{SectionProps, SectionStart};
-    // #2109 review: the paragraph closing section 1 has a hidden mark and only a picture, so it
-    // has no text and takes no room, like an empty closing mark. Left on the break's page below
-    // twenty lines, the picture would run past the bottom margin; it goes on the new page.
+    // #2109 review: the paragraph closing section 1 has a hidden mark and only a picture. Left on
+    // the break's page below twenty lines, the picture would run past the bottom margin; it goes
+    // on the new page.
     let mut d = pagination_fixture_document(&format!("{}\u{000C}\n\n{}", "Line\n".repeat(20), "After\n".repeat(40)));
     if let Some(Block::Para(p)) = d.body.get_mut(21).map(Arc::make_mut) {
         p.insert_object(0, picture(100.0, 400.0, Default::default()), &Default::default()).unwrap();
