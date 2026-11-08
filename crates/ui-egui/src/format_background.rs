@@ -124,9 +124,11 @@ fn fill_fingerprint(doc: &wordcraft_doc::Document) -> u64 {
     h.finish()
 }
 
-/// The pane was closed: read the document's fill afresh next time it opens.
+/// The pane was closed: read the document's fill afresh next time it opens, and forget a picture
+/// picker it asked for (its result goes nowhere now).
 pub fn forget(app: &mut WordApp) {
     app.background.loaded = false;
+    app.background_picture_pending = false;
 }
 
 /// The pane, while open.
@@ -328,6 +330,34 @@ fn color_button(ui: &mut Ui, theme: &[Rgb], id: Id, label: &str, c: Rgb) -> Opti
     picked
 }
 
+/// A pattern preset's marks, repeated over `rect` at `size` points and clipped to it: some presets
+/// draw strokes past their tile (`dkDnDiag` to y = 2, `dkUpDiag` to y = -1), and the last tile
+/// column and row run past its edge, so without the clip a mark lands over the page's margin or
+/// the gallery beside its swatch.
+fn paint_pattern_marks(p: &egui::Painter, rect: Rect, tile: &wordcraft_doc::PatternTile, size: f32, ink: Color32) {
+    let p = &p.with_clip_rect(rect.intersect(p.clip_rect()));
+    let mut x = rect.min.x;
+    while x < rect.max.x {
+        let mut y = rect.min.y;
+        while y < rect.max.y {
+            for [rx, ry, rw, rh] in &tile.rects {
+                p.rect_filled(Rect::from_min_size(pos2(x + rx * size, y + ry * size), vec2(rw * size, rh * size)).intersect(rect), 0.0, ink);
+            }
+            for [cx, cy, rad] in &tile.dots {
+                let c = pos2(x + cx * size, y + cy * size);
+                if rect.contains(c) {
+                    p.circle_filled(c, (rad * size).max(0.6), ink);
+                }
+            }
+            for [x0, y0, x1, y1, w] in &tile.strokes {
+                p.line_segment([pos2(x + x0 * size, y + y0 * size), pos2(x + x1 * size, y + y1 * size)], Stroke::new((w * size).max(0.5), ink));
+            }
+            y += size;
+        }
+        x += size;
+    }
+}
+
 /// A preset's own marks in a small square (the same pattern geometry the page draws), a click
 /// selecting it.
 fn pattern_swatch(ui: &mut Ui, preset: &str, fore: Rgb, back: Rgb, on: bool) -> egui::Response {
@@ -336,34 +366,7 @@ fn pattern_swatch(ui: &mut Ui, preset: &str, fore: Rgb, back: Rgb, on: bool) -> 
     let tile = PagePattern { preset: preset.into(), fore, back, transparency: 0.0 };
     ui.painter().rect_filled(r.shrink(2.0), 2.0, crate::theme::c32(back));
     let inner = r.shrink(3.0);
-    let size = 10.0_f32;
-    let src = tile.tile();
-    let mut x = inner.min.x;
-    while x < inner.max.x {
-        let mut y = inner.min.y;
-        while y < inner.max.y {
-            for [rx, ry, rw, rh] in &src.rects {
-                ui.painter().rect_filled(
-                    Rect::from_min_size(pos2(x + rx * size, y + ry * size), vec2(rw * size, rh * size)).intersect(inner),
-                    0.0,
-                    crate::theme::c32(fore),
-                );
-            }
-            for [cx, cy, rad] in &src.dots {
-                let c = pos2(x + cx * size, y + cy * size);
-                if inner.contains(c) {
-                    ui.painter().circle_filled(c, (rad * size).max(0.6), crate::theme::c32(fore));
-                }
-            }
-            for [x0, y0, x1, y1, w] in &src.strokes {
-                let a = pos2(x + x0 * size, y + y0 * size);
-                let b = pos2(x + x1 * size, y + y1 * size);
-                ui.painter().line_segment([a, b], Stroke::new((w * size).max(0.5), crate::theme::c32(fore)));
-            }
-            y += size;
-        }
-        x += size;
-    }
+    paint_pattern_marks(ui.painter(), inner, &tile.tile(), 10.0, crate::theme::c32(fore));
     ui.painter().rect_stroke(
         r.shrink(2.0),
         2.0,
@@ -409,8 +412,10 @@ fn preview(app: &WordApp, ui: &mut Ui) {
 }
 
 /// Paint the draft fill over `rect`, exactly as the page draws it (solid, gradient, pattern,
-/// picture).
+/// picture). The pattern's presets draw strokes past their own tile (`dkDnDiag` to y = 2), so the
+/// painter is clipped to `rect` as the page's tile is clipped by the page.
 fn paint_draft_fill(app: &WordApp, ui: &Ui, p: &egui::Painter, rect: Rect) {
+    let p = &p.with_clip_rect(rect.intersect(p.clip_rect()));
     match &app.background.fill {
         DraftFill::None => {}
         DraftFill::Solid { color } => {
@@ -433,32 +438,8 @@ fn paint_draft_fill(app: &WordApp, ui: &Ui, p: &egui::Painter, rect: Rect) {
             let alpha = 1.0 - transparency.clamp(0.0, 100.0) / 100.0;
             p.rect_filled(rect, 0.0, crate::theme::c32(*back).gamma_multiply(alpha));
             let src = PagePattern { preset: preset.clone(), fore: *fore, back: *back, transparency: 0.0 }.tile();
-            let size = 10.0_f32;
             let ink = crate::theme::c32(*fore).gamma_multiply(alpha);
-            let mut x = rect.min.x;
-            while x < rect.max.x {
-                let mut y = rect.min.y;
-                while y < rect.max.y {
-                    for [rx, ry, rw, rh] in &src.rects {
-                        let r = Rect::from_min_size(pos2(x + rx * size, y + ry * size), vec2(rw * size, rh * size)).intersect(rect);
-                        p.rect_filled(r, 0.0, ink);
-                    }
-                    for [cx, cy, rad] in &src.dots {
-                        let c = pos2(x + cx * size, y + cy * size);
-                        if rect.contains(c) {
-                            p.circle_filled(c, (rad * size).max(0.6), ink);
-                        }
-                    }
-                    for [x0, y0, x1, y1, wid] in &src.strokes {
-                        p.line_segment(
-                            [pos2(x + x0 * size, y + y0 * size), pos2(x + x1 * size, y + y1 * size)],
-                            Stroke::new((wid * size).max(0.5), ink),
-                        );
-                    }
-                    y += size;
-                }
-                x += size;
-            }
+            paint_pattern_marks(p, rect, &src, 10.0, ink);
         }
         DraftFill::Picture { .. } => paint_picture_preview(app, ui, p, rect),
     }
@@ -479,19 +460,37 @@ fn paint_picture_preview(app: &WordApp, ui: &Ui, p: &egui::Painter, rect: Rect) 
         return;
     };
     let tex_id = Id::unique(("formatBackground.picture", &key));
-    let tex = ui.ctx().data(|d| d.get_temp::<egui::TextureHandle>(tex_id)).or_else(|| {
-        let bytes = if let Some(path) = path {
-            wordcraft_engine::io::read_file(path).ok()
-        } else if let Some(media) = media {
-            app.session.doc.media.get(media).map(|b| b.to_vec())
-        } else {
-            data.as_deref().and_then(wordcraft_engine::cmd::insert::base64_decode)
-        }?;
-        let img = thumbnail(&bytes)?;
-        let handle = ui.ctx().load_texture(format!("formatBackground.picture::{key}"), img, egui::TextureOptions::LINEAR);
-        ui.ctx().data_mut(|d| d.insert_temp(tex_id, handle.clone()));
-        Some(handle)
-    });
+    // Only the picture now chosen keeps a texture: a user trying several in the pane would
+    // otherwise leave each one's texture, and its pixels, in the context.
+    let shown_id = Id::unique("formatBackground.picture.shown");
+    if ui.ctx().data(|d| d.get_temp::<String>(shown_id)).as_deref() != Some(key.as_str()) {
+        ui.ctx().data_mut(|d| {
+            if let Some(previous) = d.get_temp::<String>(shown_id) {
+                let _ = d.remove_temp::<Option<egui::TextureHandle>>(Id::unique(("formatBackground.picture", &previous)));
+            }
+            d.insert_temp(shown_id, key.clone());
+        });
+    }
+    // A load that fails (an unreadable file, a metafile, a picture past the size limit) is cached
+    // too: the pane reads and decodes the file once, not on every frame it is open.
+    let tex = match ui.ctx().data(|d| d.get_temp::<Option<egui::TextureHandle>>(tex_id)) {
+        Some(cached) => cached,
+        None => {
+            let loaded = (|| {
+                let bytes = if let Some(path) = path {
+                    wordcraft_engine::io::read_file(path).ok()
+                } else if let Some(media) = media {
+                    app.session.doc.media.get(media).map(|b| b.to_vec())
+                } else {
+                    data.as_deref().and_then(wordcraft_engine::cmd::insert::base64_decode)
+                }?;
+                let img = thumbnail(&bytes)?;
+                Some(ui.ctx().load_texture(format!("formatBackground.picture::{key}"), img, egui::TextureOptions::LINEAR))
+            })();
+            ui.ctx().data_mut(|d| d.insert_temp(tex_id, loaded.clone()));
+            loaded
+        }
+    };
     let Some(tex) = tex else {
         dashed_frame(p, rect, Tokens::get(ui.ctx()).border_strong);
         return;
@@ -559,5 +558,66 @@ fn is_dark(f: &DraftFill) -> bool {
         DraftFill::Gradient { start, end, .. } => (lum(*start) + lum(*end)) / 2.0 < 128.0,
         DraftFill::Pattern { .. } => false,
         DraftFill::Picture { .. } => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A pattern's marks stop at the rectangle they are painted in: `dkDnDiag`'s strokes run to
+    /// y = 2 and `dkUpDiag`'s to y = -1, so without the clip they land over the page's margin in
+    /// the preview and over the gallery beside a swatch.
+    #[test]
+    fn pattern_marks_are_clipped_to_their_rectangle() {
+        let rect = Rect::from_min_size(pos2(100.0, 100.0), vec2(34.0, 30.0));
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            let p = ctx.layer_painter(egui::LayerId::background());
+            for preset in ["dkDnDiag", "dkUpDiag", "smCheck", "pct90"] {
+                let tile = PagePattern { preset: preset.into(), fore: Rgb::BLACK, back: Rgb::WHITE, transparency: 0.0 }.tile();
+                paint_pattern_marks(&p, rect, &tile, 10.0, Color32::BLACK);
+            }
+        });
+        let shapes = std::mem::take(&mut out.shapes);
+        out.drop_without_applying_deltas();
+        assert!(shapes.iter().any(|s| !rect.contains_rect(s.shape.visual_bounding_rect())), "a preset's marks do leave the rectangle");
+        for s in &shapes {
+            assert!(rect.expand(0.1).contains_rect(s.clip_rect), "a mark was not clipped to {rect:?}: {:?}", s.clip_rect);
+        }
+    }
+
+    /// A picture that can't be decoded is tried once: its failure is cached under the picture's
+    /// key, so a repaint doesn't read and decode the file again. Choosing another picture
+    /// releases the one before it, so trying several doesn't collect them all.
+    #[test]
+    fn picture_textures_are_cached_once_and_released() {
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([10, 200, 30, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("x")), Default::default());
+        a.session.doc.media.insert("good.png".into(), Arc::new(png));
+        a.session.doc.media.insert("junk.png".into(), Arc::new(b"not a picture".to_vec()));
+        let entry =
+            |ctx: &egui::Context, key: &str| ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(Id::unique(("formatBackground.picture", key))));
+        let frame = |ctx: &egui::Context, a: &WordApp| {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                paint_picture_preview(a, ui, ui.painter(), Rect::from_min_size(pos2(10.0, 10.0), vec2(40.0, 30.0)));
+            })
+            .drop_without_applying_deltas();
+        };
+        let ctx = egui::Context::default();
+        a.background.fill = DraftFill::Picture { path: None, media: Some("good.png".into()), data: None, tile: false, transparency: 0.0 };
+        frame(&ctx, &a);
+        assert!(matches!(entry(&ctx, "media:good.png"), Some(Some(_))), "the decoded picture is cached");
+        // An unreadable one caches its failure, so it isn't decoded every frame.
+        a.background.fill = DraftFill::Picture { path: None, media: Some("junk.png".into()), data: None, tile: false, transparency: 0.0 };
+        frame(&ctx, &a);
+        assert!(matches!(entry(&ctx, "media:junk.png"), Some(None)), "the failed load is cached");
+        frame(&ctx, &a);
+        assert!(matches!(entry(&ctx, "media:junk.png"), Some(None)), "and still is");
+        // The picture before it is released.
+        assert!(entry(&ctx, "media:good.png").is_none(), "the previous picture's texture is gone");
     }
 }

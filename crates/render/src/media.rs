@@ -331,10 +331,11 @@ const MAX_BACKGROUND_PIXELS: u64 = 64 * 1024 * 1024;
 
 /// Draw the page's background fill (Design › Page Color › Fill Effects) behind the content:
 /// gradient, then pattern, then a picture or texture (Word keeps one fill; a file that states
-/// more draws them in that order).
-pub(crate) fn draw_page_background(ctx: &mut RenderContext, doc: &Document, page: &Page, view: Affine) {
-    draw_page_gradient(ctx, doc, page, view);
-    draw_page_pattern(ctx, doc, page, view);
+/// more draws them in that order). A dark page inks the gradient and pattern colours; a picture
+/// keeps its own, as [`RenderOptions::dark`] says.
+pub(crate) fn draw_page_background(ctx: &mut RenderContext, doc: &Document, page: &Page, view: Affine, opts: &crate::RenderOptions) {
+    draw_page_gradient(ctx, doc, page, view, opts);
+    draw_page_pattern(ctx, doc, page, view, opts);
     let alpha = doc.settings.page_picture.as_ref().map_or(1.0, |p| 1.0 - p.transparency.clamp(0.0, 100.0) / 100.0);
     if alpha <= 0.0 {
         return;
@@ -350,7 +351,7 @@ pub(crate) fn draw_page_background(ctx: &mut RenderContext, doc: &Document, page
 
 /// A linear gradient page background, at its angle (0° = left to right, 90° = top to bottom) and
 /// each stop's transparency.
-fn draw_page_gradient(ctx: &mut RenderContext, doc: &Document, page: &Page, view: Affine) {
+fn draw_page_gradient(ctx: &mut RenderContext, doc: &Document, page: &Page, view: Affine, opts: &crate::RenderOptions) {
     use wordcraft_doc::fill::GradientKind;
     let Some(g) = &doc.settings.page_gradient else { return };
     let (w, h) = (f64::from(page.w), f64::from(page.h));
@@ -372,7 +373,7 @@ fn draw_page_gradient(ctx: &mut RenderContext, doc: &Document, page: &Page, view
         .map(|s| {
             peniko::ColorStop::from((
                 (f64::from(s.pos) / 100.0).clamp(0.0, 1.0) as f32,
-                crate::color(s.color, 1.0 - s.transparency.clamp(0.0, 100.0) / 100.0),
+                crate::color(opts.ink(s.color), 1.0 - s.transparency.clamp(0.0, 100.0) / 100.0),
             ))
         })
         .collect();
@@ -388,13 +389,13 @@ fn draw_page_gradient(ctx: &mut RenderContext, doc: &Document, page: &Page, view
 }
 
 /// A pattern page background: the preset's tile, repeated over the page at 8 points.
-fn draw_page_pattern(ctx: &mut RenderContext, doc: &Document, page: &Page, view: Affine) {
+fn draw_page_pattern(ctx: &mut RenderContext, doc: &Document, page: &Page, view: Affine, opts: &crate::RenderOptions) {
     let Some(p) = &doc.settings.page_pattern else { return };
     let (w, h) = (f64::from(page.w), f64::from(page.h));
     if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
         return;
     }
-    let p = p.sanitized();
+    let p = wordcraft_doc::PagePattern { fore: opts.ink(p.fore), back: opts.ink(p.back), ..p.sanitized() };
     let Some(pm) = pattern_pixmap(&p) else { return };
     const TILE: f32 = 8.0;
     let alpha = 1.0 - p.transparency / 100.0;

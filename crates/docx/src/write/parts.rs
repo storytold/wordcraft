@@ -333,7 +333,9 @@ fn write_document_body(doc: &Document, wr: &mut Writer<'_>, rels: &mut PartRels,
                         wordcraft_doc::fill::GradientKind::Path { .. } => 90.0,
                     };
                     let (c1, c2) = (start.color.hex(), end.color.hex());
-                    let a = format!("{:.2}", angle.rem_euclid(360.0));
+                    // The model's angle is clockwise from left to right; VML's runs
+                    // counter-clockwise from a top-to-bottom blend, so 90° is VML's 0.
+                    let a = format!("{:.2}", (90.0 - angle).rem_euclid(360.0));
                     let op = opacity((start.transparency + end.transparency) / 2.0);
                     let mut fa: Vec<(&str, &str)> = vec![("type", "gradient"), ("color", &c1), ("color2", &c2), ("angle", &a)];
                     if start.transparency > 0.0 || end.transparency > 0.0 {

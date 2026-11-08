@@ -297,7 +297,7 @@ fn render_region_capped(doc: &Document, page: &Page, w: u32, h: u32, view: Affin
     ctx.set_paint(color(opts.paper_of(doc), 1.0));
     ctx.fill_rect(&kurbo::Rect::new(0.0, 0.0, w16 as f64, h16 as f64));
     if opts.read_paper.is_none() {
-        draw_page_background(&mut ctx, doc, page, view);
+        draw_page_background(&mut ctx, doc, page, view, opts);
     }
     let visible = view.inverse().transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, w16 as f64, h16 as f64)).inflate(40.0, 40.0);
     if let Some(wm) = &doc.settings.watermark {

@@ -441,7 +441,10 @@ fn read_page_background(r: &mut Reader<'_>, root: &El, rels: &Rels) {
     if kind.eq_ignore_ascii_case("gradient") {
         let start = fill.attr("color").and_then(Rgb::parse).or(bg_color).unwrap_or(Rgb::WHITE);
         let end = fill.attr("color2").and_then(Rgb::parse).unwrap_or(start);
-        let angle = fill.attr("angle").and_then(|a| a.trim().parse::<f32>().ok()).filter(|a| a.is_finite()).unwrap_or(90.0);
+        // VML's angle runs counter-clockwise from a top-to-bottom blend: an omitted or explicit 0
+        // is a vertical blend (the model's 90°), and the writer gives the inverse (0 for 90°).
+        let vml = fill.attr("angle").and_then(|a| a.trim().parse::<f32>().ok()).filter(|a| a.is_finite()).unwrap_or(0.0);
+        let angle = (90.0 - vml).rem_euclid(360.0);
         let stops = vec![GradStop { pos: 0.0, color: start, transparency }, GradStop { pos: 100.0, color: end, transparency }];
         let gradient =
             Gradient { stops, kind: GradientKind::Linear { angle, scaled: false }, tile: None, rot_with_shape: false, flip: GradientFlip::None };
@@ -471,16 +474,13 @@ fn read_page_background(r: &mut Reader<'_>, root: &El, rels: &Rels) {
     }
 }
 
-/// VML `opacity` as percent *transparent*: `"0.75"` and `"75%"` are a quarter opaque, `"0"`
-/// (or nothing) opaque and `"1"` fully transparent, as Word's Fill Effects transparency slider.
+/// VML `opacity` as percent *transparent*: `"0.75"`, `"75%"` and its 1/65536ths form
+/// (`"49152f"`) are three quarters opaque (a quarter transparent, as on Word's Fill Effects
+/// transparency slider), `"1"` (or nothing) fully opaque and `"0"` fully transparent.
 fn opacity_percent(v: &str) -> f32 {
-    let v = v.trim();
-    let (n, percent) = match v.strip_suffix('%') {
-        Some(p) => (p.trim().parse::<f32>().ok(), true),
-        None => (v.parse::<f32>().ok(), false),
-    };
-    let Some(n) = n.filter(|n| n.is_finite()) else { return 0.0 };
-    let transparent = if percent || n > 1.0 { 100.0 - n } else { 100.0 * (1.0 - n) };
+    let Some(n) = shape_style::vml_fraction(v).filter(|n| n.is_finite()) else { return 0.0 };
+    // A bare number above 1 is a percentage, as some writers give it.
+    let transparent = if n > 1.0 { 100.0 - n } else { 100.0 * (1.0 - n) };
     transparent.clamp(0.0, 100.0)
 }
 

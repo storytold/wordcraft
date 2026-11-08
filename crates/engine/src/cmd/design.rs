@@ -83,7 +83,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"color": "RRGGBB" | null}"#),
         CommandSpec::new("design.pageFill", "Format Background", "Design › Page Background", page_fill).params(
-            r#"{"fill": "none|solid|gradient|picture|pattern", "color"?: "RRGGBB" (solid), "start"?: "RRGGBB", "end"?: "RRGGBB", "stops"?: [{"pos": 0-100, "color": "RRGGBB", "transparency"?: 0-100}], "angle"?: degrees, "preset"?: pattern name (see design.pageFills), "fore"?: "RRGGBB", "back"?: "RRGGBB", "media"?: picture media key, "tile"?: bool, "transparency"?: 0-100}"#,
+            r#"{"fill": "none|solid|gradient|picture|pattern", "color"?: "RRGGBB" (solid), "start"?: "RRGGBB", "end"?: "RRGGBB", "stops"?: [{"pos": 0-100, "color": "RRGGBB", "transparency"?: 0-100}], "angle"?: degrees, "preset"?: pattern name (see design.pageFills), "fore"?: "RRGGBB", "back"?: "RRGGBB", "media"?: picture media key | "path"?: image file path | "data"?: base64 image (picture fill: exactly one of media, path, data), "tile"?: bool, "transparency"?: 0-100}"#,
         ),
         CommandSpec::new("design.pageFills", "Background Fills", "Design › Page Background", |_, _| {
             Ok(json!({

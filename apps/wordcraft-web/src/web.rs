@@ -274,8 +274,16 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Asyn
             let many = purpose == "font";
             wasm_bindgen_futures::spawn_local(async move {
                 // Add Font takes every selected file (#1789); the others one.
-                let files = if many { dialog.pick_files().await.unwrap_or_default() } else { dialog.pick_file().await.into_iter().collect() };
-                for file in files.into_iter().take(MAX_PICKED_FILES) {
+                let picked =
+                    if many { dialog.pick_files().await.unwrap_or_default() } else { dialog.pick_file().await.into_iter().collect::<Vec<_>>() };
+                if picked.is_empty() {
+                    // A cancelled dialog: the app hears so, so a request waiting on it (Format
+                    // Background's picture) doesn't take the next dropped file instead.
+                    inbox.lock().unwrap_or_else(|e| e.into_inner()).push((String::new(), Vec::new()));
+                    ctx.request_repaint();
+                    return;
+                }
+                for file in picked.into_iter().take(MAX_PICKED_FILES) {
                     let mut bytes = file.read().await;
                     let mut pending = inbox.lock().unwrap_or_else(|e| e.into_inner());
                     // Fonts waiting for the app to drain them stay under a byte cap. A file

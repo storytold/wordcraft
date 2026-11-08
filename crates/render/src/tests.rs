@@ -380,6 +380,51 @@ fn page_pattern_is_painted_as_its_tile() {
     assert_eq!(px(10, 10), [20, 40, 60], "the tile repeats");
 }
 
+/// A dark page inks a pattern's and a gradient's colours as it does every other colour, so a light
+/// fill doesn't stay light under the page's white text (#1252).
+#[test]
+fn page_gradient_and_pattern_follow_a_dark_page() {
+    use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind};
+    use wordcraft_doc::wordart::GradStop;
+    let dark = RenderOptions { dark: true, ..Default::default() };
+    let at = |img: &Rendered, x: u32, y: u32| {
+        let i = ((y * img.width + x) * 4) as usize;
+        [img.pixels[i], img.pixels[i + 1], img.pixels[i + 2]]
+    };
+    let ink = |c: Rgb| {
+        let c = dark.ink(c);
+        [c.0, c.1, c.2]
+    };
+    let mut d = Document::new();
+    d.settings.page_pattern =
+        Some(wordcraft_doc::PagePattern { preset: "lgCheck".into(), fore: Rgb(20, 40, 60), back: Rgb(230, 240, 250), transparency: 0.0 });
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let img = render_page(&d, &l.pages[0], 1.0, &dark);
+    assert_eq!(at(&img, 2, 2), ink(Rgb(20, 40, 60)), "the ink is the dark page's");
+    assert_eq!(at(&img, 6, 2), ink(Rgb(230, 240, 250)), "so is the paper behind it");
+    // The same page in light mode keeps the file's colours.
+    let light = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
+    assert_eq!(at(&light, 2, 2), [20, 40, 60]);
+    // A gradient's stops are inked too: a light end doesn't stay light.
+    d.settings.page_pattern = None;
+    d.settings.page_gradient = Some(Gradient {
+        stops: vec![
+            GradStop { pos: 0.0, color: Rgb(255, 0, 0), transparency: 0.0 },
+            GradStop { pos: 100.0, color: Rgb(255, 255, 255), transparency: 0.0 },
+        ],
+        kind: GradientKind::Linear { angle: 0.0, scaled: false },
+        tile: None,
+        rot_with_shape: false,
+        flip: GradientFlip::None,
+    });
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let img = render_page(&d, &l.pages[0], 1.0, &dark);
+    let left = at(&img, 2, 300);
+    let want = ink(Rgb(255, 0, 0));
+    assert!(left.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 12), "the left end is the dark page's red {want:?}: {left:?}");
+    assert_ne!(want, [255, 0, 0], "the dark page does change it");
+}
+
 /// Read Mode's Page Color: the reading paper replaces the document's page color and page
 /// picture on screen, in the raster and under the caret; the text keeps its color on Sepia.
 #[test]

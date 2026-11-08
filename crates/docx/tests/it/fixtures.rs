@@ -49,6 +49,17 @@ fn read_body(body: &str) -> Document {
     wordcraft_docx::read(&docx(body, &[], &[])).unwrap()
 }
 
+/// A document read from markup that lives before the body (`w:background`), followed by one empty
+/// paragraph.
+pub fn read_markup(before_body: &str) -> Document {
+    let document =
+        format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {W_NS}>{before_body}<w:body><w:p/></w:body></w:document>"#);
+    let r = rels(&[]);
+    let package =
+        zip(&[("_rels/.rels", ROOT_RELS.as_bytes()), ("word/document.xml", document.as_bytes()), ("word/_rels/document.xml.rels", r.as_bytes())]);
+    wordcraft_docx::read(&package).unwrap()
+}
+
 /// Markup compatibility replaces an AlternateContent wrapper with one selected branch,
 /// including where a table expects rows or cells (ECMA-376 Part 3).
 #[test]
@@ -1661,7 +1672,7 @@ fn chart_docx() -> Vec<u8> {
 }
 
 /// The entries of a zip, by name.
-fn unzip(bytes: &[u8]) -> std::collections::BTreeMap<String, Vec<u8>> {
+pub fn unzip(bytes: &[u8]) -> std::collections::BTreeMap<String, Vec<u8>> {
     use std::io::Read;
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
     let mut out = std::collections::BTreeMap::new();

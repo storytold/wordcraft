@@ -440,6 +440,14 @@ impl WordApp {
         let files = std::mem::take(&mut *inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         let mut placed_picture = false;
         for (name, bytes) in files {
+            // The web picker says a cancelled dialog with an empty entry: nothing arrived, and a
+            // request waiting on the picker (Format Background's picture, a recipient list) ends,
+            // so the next dropped file is treated as the drop it is.
+            if name.is_empty() && bytes.is_empty() {
+                self.background_picture_pending = false;
+                self.recipient_list_pending = false;
+                continue;
+            }
             let lower = name.to_ascii_lowercase();
             let img = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".wmf", ".emf"].iter().any(|e| lower.ends_with(e));
             // Any recipient file ends the pending picker request, so a later .txt drop opens normally.

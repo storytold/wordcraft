@@ -2849,6 +2849,49 @@ fn page_background_pattern_round_trips() {
     assert!(rt(&r).settings.page_pattern.is_some());
 }
 
+/// VML's `angle` runs counter-clockwise from a top-to-bottom blend, so an explicit 0 is a vertical
+/// blend (the model's 90°) and the first stop is `color`, not `color2`. Saving gives VML's angle
+/// back, so a file's own direction and colour order survive.
+#[test]
+fn page_background_gradient_reads_vml_angle_and_writes_its_inverse() {
+    use wordcraft_doc::fill::GradientKind;
+    let markup = r#"<w:background w:color="102030"><v:background id="_x0000_s1025"><v:fill type="gradient" color="FF0000" color2="0000FF" angle="0"/></v:background></w:background>"#;
+    let d = crate::fixtures::read_markup(markup);
+    let g = d.settings.page_gradient.as_ref().expect("gradient read");
+    assert_eq!(g.stops.iter().map(|s| (s.pos, s.color)).collect::<Vec<_>>(), [(0.0, Rgb(255, 0, 0)), (100.0, Rgb(0, 0, 255))]);
+    assert!(matches!(g.kind, GradientKind::Linear { angle, .. } if (angle - 90.0).abs() < 0.01), "{:?}", g.kind);
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let parts = crate::fixtures::unzip(&bytes);
+    let xml = String::from_utf8_lossy(&parts["word/document.xml"]).to_string();
+    let fill = xml.split("<v:fill ").nth(1).unwrap_or("").split("/>").next().unwrap_or("");
+    assert!(fill.contains(r#"angle="0.00""#), "the blend is still top to bottom: {fill}");
+    assert!(fill.contains(r#"color="FF0000""#) && fill.contains(r#"color2="0000FF""#), "{fill}");
+    // A quarter turn the other way, as VML states it, comes back as the model's 45°.
+    let right = crate::fixtures::read_markup(&markup.replace(r#"angle="0""#, r#"angle="315""#));
+    assert!(
+        matches!(right.settings.page_gradient.as_ref().map(|g| g.kind), Some(GradientKind::Linear { angle, .. }) if (angle - 135.0).abs() < 0.01)
+    );
+}
+
+/// VML `opacity` in each form Word and other writers give it: a fraction (`0.75`), a percentage
+/// (`75%`) and 1/65536ths (`49152f`) are all a quarter transparent; `0` is fully transparent and
+/// `1` fully opaque.
+#[test]
+fn page_background_reads_vml_opacity_forms() {
+    let transparency = |opacity: &str| {
+        let markup = format!(
+            r#"<w:background w:color="FFFFFF"><v:background id="_x0000_s1025"><v:fill type="pattern" pattern="pct20" color="000000" color2="FFFFFF" opacity="{opacity}"/></v:background></w:background>"#
+        );
+        crate::fixtures::read_markup(&markup).settings.page_pattern.expect("pattern read").transparency
+    };
+    for form in ["0.75", "75%", "49152f"] {
+        assert!((transparency(form) - 25.0).abs() < 0.01, "{form} is three quarters opaque");
+    }
+    assert_eq!(transparency("0"), 100.0);
+    assert_eq!(transparency("1"), 0.0);
+    assert_eq!(transparency("not a number"), 0.0);
+}
+
 /// #2601: Drop Cap Options — a dropped cap with its lines, distance from the text and font, and
 /// one in the margin, survive a save: `w:framePr w:dropCap="drop|margin" w:lines w:hSpace` on the
 /// letter's own paragraph, the font on the letter's run (ECMA-376 §17.3.1.11). The text after the

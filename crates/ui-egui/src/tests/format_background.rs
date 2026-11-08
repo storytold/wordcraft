@@ -68,3 +68,30 @@ fn close_hides_the_pane_and_reset_reads_the_document_again() {
     h.run_steps(2);
     assert!(!h.state().session.view.format_background_pane);
 }
+
+/// A cancelled web picker arrives as an empty inbox entry: Format Background's request ends with
+/// it, so the picture dropped next inserts into the page instead of becoming the pane's draft.
+#[test]
+fn a_cancelled_background_picker_ends_its_request() {
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(8, 8, image::Rgba([10, 200, 30, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let inbox: crate::services::Inbox = Default::default();
+    inbox.lock().unwrap().push((String::new(), Vec::new()));
+    inbox.lock().unwrap().push(("dropped.png".into(), png));
+    let mut a = WordApp::new(
+        wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Background")),
+        crate::Services { inbox: Some(inbox), ..Default::default() },
+    );
+    a.background_picture_pending = true;
+    a.run("view.formatBackgroundPane", json!({"value": true})).unwrap();
+    a.drain_inbox();
+    assert!(!a.background_picture_pending, "the cancelled picker ended the request");
+    assert!(!matches!(a.background.fill, crate::format_background::DraftFill::Picture { .. }), "the dropped picture isn't the pane's draft");
+    assert!(!a.session.doc.media.is_empty(), "it went into the document");
+    // A pane closed while its picker is in flight drops the request too.
+    a.background_picture_pending = true;
+    crate::format_background::forget(&mut a);
+    assert!(!a.background_picture_pending);
+}
