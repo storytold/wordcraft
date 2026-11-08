@@ -366,8 +366,12 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     items.splice(at..at, back);
                     items.extend(front);
                 }
-                // Automatic space after: none after the last paragraph of a cell or box.
-                let after = if pl.rp.after_auto && i + 1 == blocks.len() { 0.0 } else { pl.rp.space_after };
+                // Automatic space after: none after the last paragraph of a cell or box. Nor
+                // contextual spacing after a cell's last paragraph in the default style (or an
+                // undefined one, formatted as Normal): the end-of-cell mark is a Normal paragraph.
+                let last = i + 1 == blocks.len();
+                let normal = || pl.rp.style == "Normal" || ctx.doc.styles.get(&pl.rp.style).is_none();
+                let after = if last && (pl.rp.after_auto || (in_cell && ctxl && normal())) { 0.0 } else { pl.rp.space_after };
                 y += edges.top + pl.height + edges.bottom + after;
                 prev_after = after;
                 prev_after_auto = pl.rp.after_auto;
