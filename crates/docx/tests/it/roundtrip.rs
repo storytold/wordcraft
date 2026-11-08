@@ -2844,6 +2844,8 @@ fn drop_cap_options_round_trip() {
     );
 }
 
+/// Deeply nested `wpg:wgp` groups up to `MAX_DML_GROUP_DEPTH` survive import and round-trip, while
+/// deeper groups drop their leaf cleanly without panicking.
 #[test]
 fn deep_drawing_groups_round_trip_beyond_depth_8() {
     let build_doc = |depth: usize| {

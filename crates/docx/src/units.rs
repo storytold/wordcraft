@@ -191,6 +191,7 @@ mod tests {
         assert_eq!(u("-20"), Some(-1.0));
     }
 
+    /// Standard unit conversions and `w:line` auto-multiple parsing.
     #[test]
     fn measures() {
         assert_eq!(measure("1440", 20.0), Some(72.0));
@@ -209,6 +210,13 @@ mod tests {
         assert!((strict - 278.0 / 240.0).abs() < 1e-5, "{strict}");
         let inches = line_multiple("1.2in").expect("inches");
         assert!((inches - 7.2).abs() < 1e-5, "{inches}");
+        assert_eq!(line_multiple("junk"), None);
+        assert_eq!(line_multiple(""), None);
+    }
+
+    /// Fractional unitless file-unit values round to the nearest whole file unit when `per_pt > 1`.
+    #[test]
+    fn measures_round_fractional_file_units() {
         assert_eq!(measure("398.4", 240.0), measure("398", 240.0));
         assert_eq!(measure("398.5", 240.0), measure("399", 240.0));
         assert_eq!(measure("-398.4", 20.0), measure("-398", 20.0));
@@ -217,8 +225,6 @@ mod tests {
         assert_eq!(measure("398.4", 20.0), measure("398", 20.0));
         assert_eq!(measure("17.9955", 2.0), measure("18", 2.0));
         assert_eq!(line_multiple("398.4"), line_multiple("398"));
-        assert_eq!(line_multiple("junk"), None);
-        assert_eq!(line_multiple(""), None);
         assert_eq!(measure("12700emu", 20.0), Some(1.0));
         assert_eq!(measure("25400EMU", 20.0), Some(2.0));
         assert_eq!(measure("1IN", 20.0), Some(72.0));
