@@ -20,6 +20,9 @@ pub(crate) struct PartRole {
     pub is_comments: bool,
     pub is_footnotes: bool,
     pub is_endnotes: bool,
+    /// A glossary document part: comment ranges are honoured there, as in
+    /// the main story (COMMENT-RANGE-UNPAIRED's scope).
+    pub is_glossary: bool,
     /// A settings part (by effective content type or a `settings` relationship).
     pub is_settings: bool,
 }
@@ -294,6 +297,9 @@ struct Frame {
     is_footnote_pr: bool,
     /// A `w:mailMerge` frame: a `w:headerSource` child is HEADERSOURCE-PRESENT.
     is_mail_merge: bool,
+    /// A `w:txbxContent` frame: Word ignores comment ranges inside a text
+    /// box, so COMMENT-RANGE-UNPAIRED does not collect them there.
+    is_txbx_content: bool,
     /// A `w:endnotePr` frame: its `w:endnote` children are listing entries.
     is_endnote_pr: bool,
     /// Any Office Math element: an `m:oMathPara` must not descend from one.
@@ -359,6 +365,10 @@ struct State {
     move_start_ids: Vec<String>,
     bookmark_starts: BTreeSet<String>,
     bookmark_ends: BTreeSet<String>,
+    /// Comment range ids in the parts where Word honours ranges (main and
+    /// glossary stories, outside text boxes); paired at scan completion.
+    comment_range_start_ids: BTreeSet<String>,
+    comment_range_end_ids: BTreeSet<String>,
     /// Nonzero while inside an `mc:AlternateContent` subtree.
     alt_depth: usize,
     /// One coverage note per part that contains `mc:AlternateContent`.
@@ -719,6 +729,7 @@ fn frame_for(id: &ElemId) -> Frame {
         is_p: w && local == "p",
         is_footnote_pr: w && local == "footnotePr",
         is_mail_merge: w && local == "mailMerge",
+        is_txbx_content: w && local == "txbxContent",
         is_endnote_pr: w && local == "endnotePr",
         is_math: id.m(),
         is_omath: id.m() && local == "oMath",
@@ -1059,6 +1070,26 @@ fn record_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &Namespa
 }
 
 /// Record comment definitions, references, and paragraph IDs within comments parts.
+/// Whether a comment range at this position is one Word honours: the main
+/// or glossary story, outside any text box. MS-OI29500 Part 1 §17.13.4.4
+/// note (c) and §17.13.4.3 note (b): Word ignores commentRangeStart and
+/// commentRangeEnd under a header, footer, text box, footnote, or endnote.
+fn range_scope(state: &State, role: PartRole) -> bool {
+    (role.is_main || role.is_glossary) && !state.frames.iter().any(|f| f.is_txbx_content)
+}
+
+/// Collect one comment range id under the fact budget (the bookmark
+/// pairing sets' discipline: at the cap, record the cap and stop).
+fn collect_range_id(set: &mut BTreeSet<String>, cap: usize, capped: &mut bool, id: Option<String>) {
+    if let Some(x) = id {
+        if set.len() >= cap {
+            *capped = true;
+        } else {
+            set.insert(x);
+        }
+    }
+}
+
 fn record_comment_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole, part: &str) {
     let cap = state.fact_cap;
     match id.local.as_str() {
@@ -1070,6 +1101,14 @@ fn record_comment_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: 
         }
         "commentRangeStart" if id.w() => {
             state.facts.comment_range_starts += 1;
+            if range_scope(state, role) {
+                collect_range_id(&mut state.comment_range_start_ids, state.fact_cap, &mut state.fact_capped, attr_ns(attrs, res, NS_W, b"id"));
+            }
+        }
+        "commentRangeEnd" if id.w() => {
+            if range_scope(state, role) {
+                collect_range_id(&mut state.comment_range_end_ids, state.fact_cap, &mut state.fact_capped, attr_ns(attrs, res, NS_W, b"id"));
+            }
         }
         "p" if id.w() && role.is_comments => {
             push_capped(&mut state.facts.comment_para_ids, cap, &mut state.fact_capped, attr_ns(attrs, res, NS_W14, b"paraId").map(hex_ident), part);
@@ -1325,6 +1364,26 @@ fn report_duplicate_move_ids(acc: &mut Acc, part: &str, ids: &[String]) {
     }
 }
 
+/// Report `COMMENT-RANGE-UNPAIRED` findings for comment ranges that have a
+/// start without an end or vice versa (collected only where Word honours
+/// ranges — see `range_scope`).
+fn report_comment_ranges(acc: &mut Acc, part: &str, starts: &BTreeSet<String>, ends: &BTreeSet<String>) {
+    for id in starts.difference(ends) {
+        acc.add(
+            "COMMENT-RANGE-UNPAIRED",
+            Some(part.to_string()),
+            format!("w:commentRangeStart with w:id {id} in {part} has no matching w:commentRangeEnd; Word anchors the comment at its commentReference instead of the range"),
+        );
+    }
+    for id in ends.difference(starts) {
+        acc.add(
+            "COMMENT-RANGE-UNPAIRED",
+            Some(part.to_string()),
+            format!("w:commentRangeEnd with w:id {id} in {part} has no matching w:commentRangeStart; Word anchors the comment at its commentReference instead of the range"),
+        );
+    }
+}
+
 /// Report `BOOKMARK-UNPAIRED` findings for bookmarks that have a start tag without an end or vice versa.
 fn report_bookmarks(acc: &mut Acc, part: &str, starts: &BTreeSet<String>, ends: &BTreeSet<String>) {
     for id in starts.difference(ends) {
@@ -1361,6 +1420,7 @@ fn finish_completion(state: &State, part: &str, acc: &mut Acc) {
     report_name_pairs(acc, part, "w:moveFromRangeStart", &state.move_from_names, "w:moveToRangeStart", &state.move_to_names);
     report_name_pairs(acc, part, "w:moveToRangeStart", &state.move_to_names, "w:moveFromRangeStart", &state.move_from_names);
     report_bookmarks(acc, part, &state.bookmark_starts, &state.bookmark_ends);
+    report_comment_ranges(acc, part, &state.comment_range_start_ids, &state.comment_range_end_ids);
     if state.fld_depth > 0 {
         acc.add("FLD-UNBALANCED", Some(part.to_string()), format!("{part} has {} unclosed w:fldChar begin(s)", state.fld_depth));
     }
@@ -1375,6 +1435,7 @@ fn completion_dependent_pending(state: &State) -> bool {
         || state.move_to_start != state.move_to_end
         || state.move_from_names != state.move_to_names
         || state.bookmark_starts != state.bookmark_ends
+        || state.comment_range_start_ids != state.comment_range_end_ids
 }
 
 /// Detect attribute prefixes that are undeclared or referenced in `mc:Ignorable` without a namespace declaration.

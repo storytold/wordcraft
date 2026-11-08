@@ -56,6 +56,7 @@ const ALL_CHECKS: &[&str] = &[
     "ID-DOCPR-DUP",
     "ID-BOOKMARK-DUP",
     "BOOKMARK-UNPAIRED",
+    "COMMENT-RANGE-UNPAIRED",
     "ID-REVISION-DUP",
     "NOTE-DUP",
     "REF-NOTE",
@@ -1704,6 +1705,164 @@ fn comment_range_count_sums_across_stories() {
     let report = validate(&d);
     assert_finding(&report, "COMMENT-RANGE-COUNT", None);
     assert_eq!(range_count_findings(&report), 1, "{:?}", report.findings);
+}
+
+/// COMMENT-RANGE-UNPAIRED: a lone commentRangeStart in the main story.
+/// MS-OI29500 §17.13.4.4 (b): Word re-anchors the comment at its
+/// commentReference, collapsing the highlighted range to a point.
+#[test]
+fn comment_range_unpaired_start_in_main() {
+    let mut d = Doc::minimal();
+    d.set_document(r#"<w:p><w:commentRangeStart w:id="4"/><w:r><w:t>text</w:t></w:r><w:r><w:commentReference w:id="4"/></w:r></w:p>"#);
+    let report = validate(&d);
+    let f = assert_finding(&report, "COMMENT-RANGE-UNPAIRED", Some("word/document.xml"));
+    assert_eq!(f.severity, Severity::Warning, "{:?}", report.findings);
+    assert_eq!(f.evidence, wordcraft_validate::Evidence::MsDocumented);
+    assert_eq!(report.findings.iter().filter(|f| f.rule == "COMMENT-RANGE-UNPAIRED").count(), 1, "{:?}", report.findings);
+}
+
+/// The reverse: a lone commentRangeEnd.
+#[test]
+fn comment_range_unpaired_end_in_main() {
+    let mut d = Doc::minimal();
+    d.set_document(r#"<w:p><w:r><w:t>text</w:t></w:r><w:commentRangeEnd w:id="4"/><w:r><w:commentReference w:id="4"/></w:r></w:p>"#);
+    let report = validate(&d);
+    assert_finding(&report, "COMMENT-RANGE-UNPAIRED", Some("word/document.xml"));
+}
+
+/// A matched pair is clean, and pairing is per id: one paired id does
+/// not cover another id's lone start.
+#[test]
+fn comment_range_paired_is_clean() {
+    let mut d = Doc::minimal();
+    d.set_document(
+        r#"<w:p><w:commentRangeStart w:id="4"/><w:r><w:t>text</w:t></w:r><w:commentRangeEnd w:id="4"/><w:r><w:commentReference w:id="4"/></w:r></w:p>"#,
+    );
+    let report = validate(&d);
+    assert!(!has(&report, "COMMENT-RANGE-UNPAIRED"), "{:?}", report.findings);
+    let mut d = Doc::minimal();
+    d.set_document(
+        r#"<w:p><w:commentRangeStart w:id="4"/><w:commentRangeEnd w:id="4"/><w:commentRangeStart w:id="5"/><w:r><w:commentReference w:id="5"/></w:r></w:p>"#,
+    );
+    let report = validate(&d);
+    assert_eq!(report.findings.iter().filter(|f| f.rule == "COMMENT-RANGE-UNPAIRED").count(), 1, "{:?}", report.findings);
+}
+
+/// Word ignores ranges in headers, footers, footnotes and endnotes
+/// (§17.13.4.4 (c)): lone starts there must not fire — although
+/// COMMENT-RANGE-COUNT still counts them (see the cross-story test
+/// above, whose header starts are all unpaired yet out of scope here).
+#[test]
+fn comment_range_unpaired_in_header_is_ignored() {
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/header1.xml", CT_HEADER)]));
+    d.set(
+        "word/header1.xml",
+        r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:commentRangeStart w:id="4"/></w:p></w:hdr>"#
+            .as_bytes()
+            .to_vec(),
+    );
+    let report = validate(&d);
+    assert!(!has(&report, "COMMENT-RANGE-UNPAIRED"), "{:?}", report.findings);
+}
+
+/// Ranges inside a text box are ignored even in the main story.
+#[test]
+fn comment_range_unpaired_in_textbox_is_ignored() {
+    let mut d = Doc::minimal();
+    d.set_document(
+        r#"<w:p><w:r><w:pict><v:textbox xmlns:v="urn:schemas-microsoft-com:vml"><w:txbxContent><w:p><w:commentRangeStart w:id="4"/></w:p></w:txbxContent></v:textbox></w:pict></w:r></w:p>"#,
+    );
+    let report = validate(&d);
+    assert!(!has(&report, "COMMENT-RANGE-UNPAIRED"), "{:?}", report.findings);
+}
+
+/// The glossary story honours ranges, as the main story does.
+#[test]
+fn comment_range_unpaired_in_glossary_fires() {
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/glossary.xml", CT_GLOSSARY)]));
+    d.set(
+        "word/glossary.xml",
+        r#"<w:glossaryDocument xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docPartObj><w:docPartPr><w:name w:val="Entry"/></w:docPartPr><w:docPartBody><w:p><w:commentRangeStart w:id="4"/></w:p></w:docPartBody></w:docPartObj></w:glossaryDocument>"#
+            .as_bytes()
+            .to_vec(),
+    );
+    let report = validate(&d);
+    assert_finding(&report, "COMMENT-RANGE-UNPAIRED", Some("word/glossary.xml"));
+}
+
+/// The glossary role also comes from the standard glossaryDocument
+/// relationship when the part carries no glossary content-type override.
+#[test]
+fn comment_range_glossary_role_from_relationship() {
+    let mut d = Doc::minimal();
+    d.set_doc_rels(
+        r#"<Relationship Id="rIdG" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/glossaryDocument" Target="glossary.xml"/>"#,
+    );
+    d.set(
+        "word/glossary.xml",
+        r#"<w:glossaryDocument xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docPartObj><w:docPartBody><w:p><w:commentRangeStart w:id="4"/></w:p></w:docPartBody></w:docPartObj></w:glossaryDocument>"#
+            .as_bytes()
+            .to_vec(),
+    );
+    let report = validate(&d);
+    assert_finding(&report, "COMMENT-RANGE-UNPAIRED", Some("word/glossary.xml"));
+}
+
+/// A custom relationship type that merely ends in "/glossaryDocument"
+/// does not make its target a glossary (the settings role's exact-URI
+/// discipline, applied to scope-adding roles generally).
+#[test]
+fn comment_range_custom_glossary_relationship_is_not_a_glossary() {
+    let mut d = Doc::minimal();
+    d.set_doc_rels(r#"<Relationship Id="rIdG" Type="https://example.test/glossaryDocument" Target="glossary.xml"/>"#);
+    d.set(
+        "word/glossary.xml",
+        r#"<w:glossaryDocument xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docPartObj><w:docPartBody><w:p><w:commentRangeStart w:id="4"/></w:p></w:docPartBody></w:docPartObj></w:glossaryDocument>"#
+            .as_bytes()
+            .to_vec(),
+    );
+    let report = validate(&d);
+    assert!(!has(&report, "COMMENT-RANGE-UNPAIRED"), "{:?}", report.findings);
+}
+
+/// A range crossing a text-box boundary pairs only its outside half:
+/// the inside endpoint is ignored, so the outside endpoint is lone —
+/// in both directions.
+#[test]
+fn comment_range_crossing_textbox_boundary() {
+    let mut d = Doc::minimal();
+    d.set_document(
+        r#"<w:p><w:r><w:pict><v:textbox xmlns:v="urn:schemas-microsoft-com:vml"><w:txbxContent><w:p><w:commentRangeStart w:id="4"/></w:p></w:txbxContent></v:textbox></w:pict></w:r><w:commentRangeEnd w:id="4"/></w:p>"#,
+    );
+    let report = validate(&d);
+    assert_eq!(report.findings.iter().filter(|f| f.rule == "COMMENT-RANGE-UNPAIRED").count(), 1, "{:?}", report.findings);
+    let mut d = Doc::minimal();
+    d.set_document(
+        r#"<w:p><w:commentRangeStart w:id="4"/><w:r><w:pict><v:textbox xmlns:v="urn:schemas-microsoft-com:vml"><w:txbxContent><w:p><w:commentRangeEnd w:id="4"/></w:p></w:txbxContent></v:textbox></w:pict></w:r></w:p>"#,
+    );
+    let report = validate(&d);
+    assert_eq!(report.findings.iter().filter(|f| f.rule == "COMMENT-RANGE-UNPAIRED").count(), 1, "{:?}", report.findings);
+}
+
+/// Pairing is per part: an end in the glossary does not pair a start in
+/// the main story — each part reports its own lone endpoint.
+#[test]
+fn comment_range_pairing_is_per_part() {
+    let mut d = Doc::minimal();
+    d.set("[Content_Types].xml", content_types_xml(&[], &[("/word/glossary.xml", CT_GLOSSARY)]));
+    d.set_document(r#"<w:p><w:commentRangeStart w:id="4"/></w:p>"#);
+    d.set(
+        "word/glossary.xml",
+        r#"<w:glossaryDocument xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docPartObj><w:docPartBody><w:p><w:commentRangeEnd w:id="4"/></w:p></w:docPartBody></w:docPartObj></w:glossaryDocument>"#
+            .as_bytes()
+            .to_vec(),
+    );
+    let report = validate(&d);
+    assert_eq!(report.findings.iter().filter(|f| f.rule == "COMMENT-RANGE-UNPAIRED").count(), 2, "{:?}", report.findings);
+    assert_finding(&report, "COMMENT-RANGE-UNPAIRED", Some("word/document.xml"));
+    assert_finding(&report, "COMMENT-RANGE-UNPAIRED", Some("word/glossary.xml"));
 }
 
 /// A footnotes part holding a separator (id 0), a continuation separator

@@ -238,6 +238,16 @@ pub(crate) const ID_BOOKMARK_DUP: RuleSpec = RuleSpec { id: "ID-BOOKMARK-DUP", s
 /// or vice versa, in any story part including comments. Observed: field reports of bookmark markup
 /// inside comments.xml silently emptying/hiding the comments.
 pub(crate) const BOOKMARK_UNPAIRED: RuleSpec = RuleSpec { id: "BOOKMARK-UNPAIRED", severity: Severity::Warning, evidence: Evidence::Observed };
+/// `COMMENT-RANGE-UNPAIRED`: a `w:commentRangeStart` with no matching
+/// `w:commentRangeEnd` (same id, same part) or vice versa, in the parts
+/// where Word honours ranges — the main and glossary stories, outside
+/// text boxes. MS-OI29500 Part 1 §17.13.4.4 notes (b)–(c) and §17.13.4.3
+/// notes (a)–(b): a lone start or end is re-anchored at the
+/// commentReference, so the comment survives but its highlighted range
+/// collapses to a point; and Word ignores both elements under a header,
+/// footer, text box, footnote, or endnote.
+pub(crate) const COMMENT_RANGE_UNPAIRED: RuleSpec =
+    RuleSpec { id: "COMMENT-RANGE-UNPAIRED", severity: Severity::Warning, evidence: Evidence::MsDocumented };
 /// `ID-REVISION-DUP`: duplicate revision ids. Observed (web): tolerated, Warning.
 pub(crate) const ID_REVISION_DUP: RuleSpec = RuleSpec { id: "ID-REVISION-DUP", severity: Severity::Warning, evidence: Evidence::Observed };
 /// `NOTE-DUP`: duplicate footnote or endnote ids within one note part. ECMA-376 §17.11.10.
@@ -395,6 +405,7 @@ pub(crate) const RULES: &[RuleSpec] = &[
     ID_DOCPR_DUP,
     ID_BOOKMARK_DUP,
     BOOKMARK_UNPAIRED,
+    COMMENT_RANGE_UNPAIRED,
     ID_REVISION_DUP,
     NOTE_DUP,
     REF_NOTE,
@@ -1086,9 +1097,8 @@ fn content_type_role(ct: Option<&str>) -> Option<scan::PartRole> {
         package::COMMENTS_CONTENT_TYPE => scan::PartRole { is_story: true, is_comments: true, ..scan::PartRole::default() },
         package::FOOTNOTES_CONTENT_TYPE => scan::PartRole { is_story: true, is_footnotes: true, ..scan::PartRole::default() },
         package::ENDNOTES_CONTENT_TYPE => scan::PartRole { is_story: true, is_endnotes: true, ..scan::PartRole::default() },
-        package::HEADER_CONTENT_TYPE | package::FOOTER_CONTENT_TYPE | package::GLOSSARY_CONTENT_TYPE => {
-            scan::PartRole { is_story: true, ..scan::PartRole::default() }
-        }
+        package::HEADER_CONTENT_TYPE | package::FOOTER_CONTENT_TYPE => scan::PartRole { is_story: true, ..scan::PartRole::default() },
+        package::GLOSSARY_CONTENT_TYPE => scan::PartRole { is_story: true, is_glossary: true, ..scan::PartRole::default() },
         package::SETTINGS_CONTENT_TYPE => scan::PartRole { is_settings: true, ..scan::PartRole::default() },
         _ => return None,
     };
@@ -1104,11 +1114,18 @@ fn relationship_role(kind: &str) -> Option<scan::PartRole> {
     if kind == "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" {
         return Some(scan::PartRole { is_settings: true, ..scan::PartRole::default() });
     }
+    // The glossary role is matched on the complete relationship type for the
+    // same reason: COMMENT-RANGE-UNPAIRED adds a part to its scope from it,
+    // and a custom relationship type that merely ends in "/glossaryDocument"
+    // must not turn an application-owned part into a Word glossary.
+    if kind == "http://schemas.openxmlformats.org/officeDocument/2006/relationships/glossaryDocument" {
+        return Some(scan::PartRole { is_story: true, is_glossary: true, ..scan::PartRole::default() });
+    }
     Some(match tail(kind) {
         "comments" => scan::PartRole { is_story: true, is_comments: true, ..scan::PartRole::default() },
         "footnotes" => scan::PartRole { is_story: true, is_footnotes: true, ..scan::PartRole::default() },
         "endnotes" => scan::PartRole { is_story: true, is_endnotes: true, ..scan::PartRole::default() },
-        "header" | "footer" | "glossaryDocument" => scan::PartRole { is_story: true, ..scan::PartRole::default() },
+        "header" | "footer" => scan::PartRole { is_story: true, ..scan::PartRole::default() },
         _ => return None,
     })
 }
@@ -1445,6 +1462,8 @@ fn check_story(pkg: &Package, facts: &scan::StoryFacts, compat: Compat, acc: &mu
     report_dups(acc, "ID-BOOKMARK-DUP", &facts.bookmarks, "w:bookmarkStart id");
     // BOOKMARK-UNPAIRED findings are produced by the streaming scan; the rule is registered here.
     acc.ran("BOOKMARK-UNPAIRED");
+    // COMMENT-RANGE-UNPAIRED likewise.
+    acc.ran("COMMENT-RANGE-UNPAIRED");
     acc.ran("ID-REVISION-DUP");
     report_dups(acc, "ID-REVISION-DUP", &facts.revisions, "revision id");
     acc.ran("NOTE-DUP");
@@ -2700,6 +2719,40 @@ mod budget_tests {
         // Regression control: fully scanned, the unpaired bookmark is reported.
         let full = validate_bytes(&zip);
         assert!(full.findings.iter().any(|f| f.rule == "BOOKMARK-UNPAIRED"), "findings: {:?}", full.findings);
+    }
+
+    #[test]
+    /// The comment-range mirror of the split-bookmark canary: a range pair
+    /// split by the fact budget must not be reported as unpaired on the
+    /// partial scan; the same document under normal limits still reports
+    /// `COMMENT-RANGE-UNPAIRED`.
+    fn fact_capped_scan_does_not_report_a_split_comment_range() {
+        let body = concat!(
+            r#"<w:p><w:commentRangeEnd w:id="5"/></w:p>"#,
+            r#"<w:p><w:commentRangeStart w:id="1"/></w:p>"#,
+            r#"<w:p><w:commentRangeStart w:id="2"/></w:p>"#,
+            r#"<w:p><w:commentRangeStart w:id="3"/></w:p>"#,
+            r#"<w:p><w:commentRangeStart w:id="4"/></w:p>"#,
+            r#"<w:p><w:commentRangeEnd w:id="1"/></w:p>"#,
+            r#"<w:p><w:commentRangeEnd w:id="2"/></w:p>"#,
+        );
+        let doc = format!(r#"<?xml version="1.0"?><w:document xmlns:w="{}"><w:body>{body}</w:body></w:document>"#, NS_W).into_bytes();
+        let zip = tiny_zip(&[
+            ("[Content_Types].xml", content_types()),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", doc),
+            ("word/_rels/document.xml.rels", doc_rels()),
+        ]);
+        let capped = validate_bytes_limited(&zip, Limits { facts: 3, ..Limits::default() });
+        assert_eq!(capped.verdict, Verdict::Incomplete, "findings: {:?}", capped.findings);
+        assert!(
+            !capped.findings.iter().any(|f| f.rule == "COMMENT-RANGE-UNPAIRED"),
+            "a fact-capped scan must not report a split comment range: {:?}",
+            capped.findings
+        );
+        // Regression control: fully scanned, the unpaired ranges are reported.
+        let full = validate_bytes(&zip);
+        assert!(full.findings.iter().any(|f| f.rule == "COMMENT-RANGE-UNPAIRED"), "findings: {:?}", full.findings);
     }
 
     #[test]
