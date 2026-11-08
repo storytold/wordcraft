@@ -55,6 +55,17 @@ fn back_chevron_c(band_min_x: f32, center_y: f32, fullscreen: bool, content_left
     pos2(band_min_x + x, center_y)
 }
 
+/// The bottom of the backstage menu: About, and the community link unless the user turned the
+/// community button off — the title bar pill honors the same setting, so the menu hides the
+/// link with it.
+fn bottom_links(app: &WordApp) -> Vec<(&'static str, &'static str)> {
+    let mut links = vec![("About", "about")];
+    if app.ui.show_discord {
+        links.push(("Discord community", "discord"));
+    }
+    links
+}
+
 /// Draws the Backstage side menu and the active page. Without a document only the Home, New, Open
 /// and Options pages work, and it handles Back, Escape, Save, Save As and Close routing.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
@@ -155,7 +166,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
             }
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                for (label, id) in [("About", "about"), ("Discord community", "discord")] {
+                for (label, id) in bottom_links(app) {
                     let (r, resp) = ui.allocate_exact_size(vec2(200.0, 32.0), Sense::click());
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!(label)));
                     if resp.hovered() {
@@ -366,7 +377,7 @@ fn matching_templates(query: &str) -> Vec<(&'static str, &'static str)> {
 /// Home: a greeting, Blank plus a short row of templates with a link to New, then Recent.
 fn home_page(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    let hour = wordcraft_engine::cmd::now_iso().get(11..13).and_then(|h| h.parse::<u32>().ok()).unwrap_or(9);
+    let hour = wordcraft_engine::cmd::local_now().3.0;
     heading(
         ui,
         if hour < 12 {

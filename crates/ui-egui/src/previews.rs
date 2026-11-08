@@ -441,6 +441,32 @@ fn center_rows_on_ink(img: &egui::ColorImage, rows: usize) -> egui::ColorImage {
     egui::ColorImage::new([w, rows], pixels)
 }
 
+/// The Font dialog's sample: `text` with `props`, then `mark` (a "2" raised or
+/// lowered) when `vert` is set, drawn as the document draws text on `paper`.
+pub fn font_sample(
+    text: &str,
+    props: &CharProps,
+    mark: Option<wordcraft_doc::props::VertAlign>,
+    (w, h, ppp): (f32, f32, f32),
+    paper: wordcraft_doc::Rgb,
+    dark: bool,
+) -> Option<egui::ColorImage> {
+    let mut p = Paragraph::with_text(text, props.clone());
+    if let Some(v) = mark {
+        let tail = CharProps { vert_align: Some(v), ..props.clone() };
+        p.text.push('2');
+        p.runs.push(wordcraft_doc::Run { len: 1, props: tail });
+    }
+    p.props.space_before = Some(0.0);
+    p.props.space_after = Some(0.0);
+    p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+    snippet_blocks(
+        &Document::new(),
+        vec![Block::Para(p)],
+        SnippetOptions { width: w, height: h, pixels_per_point: ppp, margin: 2.0, paper: Some(paper), dark },
+    )
+}
+
 /// Lay out `para` (with `base`'s styles) in a `w`×`h` pt box and rasterise it.
 pub fn snippet(base: &Document, para: Paragraph, w: f32, h: f32, ppp: f32, margin: f32) -> Option<egui::ColorImage> {
     snippet_blocks(base, vec![Block::Para(para)], SnippetOptions { width: w, height: h, pixels_per_point: ppp, margin, paper: None, dark: false })
@@ -556,10 +582,13 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
     // A compact ribbon group (#662, #1285) trims the gallery to fewer tiles before it folds.
     let visible = if crate::ribbon_fit::compact(ui.ctx()) { STYLE_TILES_COMPACT } else { STYLE_TILES };
     crate::ribbon_fit::add_saving(ui.ctx(), (STYLE_TILES - STYLE_TILES_COMPACT) as f32 * 76.0);
+    // A mirrored interface (#5566) starts the tiles at the right and puts the arrows at the left.
+    let rtl = crate::rtl::flows(ui);
     let (area, _) = ui.allocate_exact_size(vec2(visible as f32 * 76.0 + 18.0, crate::widgets::CONTENT_H), Sense::hover());
     ui.painter().rect(area.shrink(1.0), 4.0, t.input, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
     for (k, (id, name)) in styles.iter().skip(start).take(visible).enumerate() {
-        let r = Rect::from_min_size(pos2(area.min.x + 3.0 + k as f32 * 76.0, area.min.y + 3.0), vec2(74.0, area.height() - 6.0));
+        let x = crate::rtl::lead_left(rtl, area, 3.0 + k as f32 * 76.0, 74.0);
+        let r = Rect::from_min_size(pos2(x, area.min.y + 3.0), vec2(74.0, area.height() - 6.0));
         let resp = ui.interact(r, ui.scope_id().with(("style_tile", id)), Sense::click());
         let active = *id == current;
         resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, name));
@@ -611,11 +640,16 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
         }
     }
     // Scroll arrows and "more".
-    let ar = Rect::from_min_max(pos2(area.max.x - 16.0, area.min.y + 2.0), pos2(area.max.x - 2.0, area.max.y - 2.0));
+    let ax = crate::rtl::lead_left(!rtl, area, 2.0, 14.0);
+    let ar = Rect::from_min_max(pos2(ax, area.min.y + 2.0), pos2(ax + 14.0, area.max.y - 2.0));
     let thirds = ar.height() / 3.0;
     for (i, (icon, delta)) in [("chevronUp", -1i32), ("chevronDown", 1), ("more", 0)].iter().enumerate() {
         let br = Rect::from_min_size(pos2(ar.min.x, ar.min.y + thirds * i as f32), vec2(ar.width(), thirds));
         let resp = ui.interact(br, ui.scope_id().with(("gal_arrow", i)), Sense::click());
+        if *delta == 0 {
+            // "More" opens the Styles pane: named for it, for screen readers.
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Styles Pane")));
+        }
         if resp.hovered() {
             ui.painter().rect_filled(br, 2.0, t.hover);
         }

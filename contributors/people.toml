@@ -35,7 +35,9 @@ sync_github_name = false
 real_name = "Saeed Azarehgar"
 
 [people.vangel76]
-sync_github_name = true
+real_name = "Valentin Klein"
+display_name = "vangel76"
+sync_github_name = false
 
 [people.dkhlapov]
 real_name = "Dmitrii Khlapov"
@@ -160,6 +162,8 @@ sync_github_name = true
 
 [people.maxm11]
 real_name = "Max Murphy"
+display_name = "Max Murphy"
+sync_github_name = false
 
 [people.SlavenDj]
 sync_github_name = true
@@ -187,3 +191,9 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
+
+[people.entropybeater]
+display_name = "entropybeater"
+
+[people.helenkwok]
+real_name = "Helen Kwok"
