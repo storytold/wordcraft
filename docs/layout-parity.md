@@ -315,6 +315,7 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 | 2026-11-01 | trivial | SEQ fields in text boxes are numbered where their boxes are anchored, in output and after F9, and a REF finds a bookmark in a text box |
 | 2026-11-01 | trivial | SEQ, STYLEREF and REF fields show fresh results in output; readiness estimates unchanged |
 | 2026-10-29 | trivial | Print Markup balloon anchor discovery walks paragraph objects once (#3614); readiness estimates unchanged |
+| 2026-11-03 | trivial | A decimal tab scans the text after it once, not once per cluster. Separate from the #3412 word-measurement fix |
 | 2026-10-30 | trivial | Layout work bounds for hostile documents (#3867): header-row repeats budgeted per layout and counting canvas members; picture-outline decode budget charged for cached outlines too, so cold and warm layouts wrap alike; linked-box chains keep exact widths up to a work cap, not 16 widths; `gridAfter` bounded |
 | 2026-10-29 | trivial | A missing font is drawn in an installed metric twin before any other substitute (`fonts::word::METRIC_TWINS`, also what the missing-font warning calls metric-compatible): Arial for Helvetica on Windows, Arial for Liberation Sans on a Mac, Tinos before macOS Times for Times New Roman, Cousine before Menlo for Courier New. Documents in fonts with no installed twin lay out as before |
 | 2026-11-02 | trivial | Honor page break before at a continuous section's mid-page top (#5287); its later-column case remains unmeasured in Word. Readiness unchanged. |
