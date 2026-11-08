@@ -4,11 +4,15 @@
 //! Quote, Code), list tables (`\listtable` / `\listoverridetable` with `\listtext` labels for
 //! older readers), document info, page setup, paragraph formatting (`\pard`, alignment, page
 //! break before), character formatting (`\b \i \ul \strike \super \sub \f \fs \cf \chcbpat`),
-//! hyperlinks as `HYPERLINK` fields, bookmarks, pictures (`\pngblip` / `\jpegblip`) and tables
-//! (`\trowd … \cellx … \cell … \row`, header rows, vertical merges, shading).
+//! hyperlinks as `HYPERLINK` fields, bookmarks, pictures (`\pngblip` / `\jpegblip`), tables
+//! (`\trowd … \cellx … \cell … \row`, header rows, vertical merges, shading), footnotes and
+//! endnotes (`{\super\chftn}{\footnote[\ftnalt] …}`) and comments (`{\*\atrfstart n}` …
+//! `{\*\atrfend n}` around the commented text, then `{\*\atnid initials}{\*\atnauthor name}`
+//! `\chatn{\*\annotation{\*\atnref n}{\*\atndate …}` text `}`).
 //!
-//! Import: a tolerant reader for groups and destinations (unknown `\*` destinations, headers,
-//! footers, notes and objects are skipped), `\par \line \tab \page`, `\uN` with `\ucN`
+//! Import: a tolerant reader for groups and destinations (unknown `\*` destinations and objects
+//! are skipped; headers, footers, notes and comments are read into stories of their own),
+//! `\par \line \tab \page`, `\uN` with `\ucN`
 //! fallback skipping, `\'hh` and 8-bit text in the document's code page (`\ansicpg`, `\mac`, `\pc`, `\pca`) or
 //! the current font's (`\fcharset`, `\cpg`: Cyrillic, Central European, Greek, Mac OS Roman, the
 //! East Asian multibyte pages 932/936/949/950…; Windows-1252 when none is named). A multibyte
@@ -16,13 +20,16 @@
 //! together and a run that looks like a UTF-8 BOM is not mistaken for one; the formatting words
 //! above, stylesheet-based
 //! headings and `\outlinelevel`, lists through `\ls`/`\ilvl`, fields, bookmarks, pictures and
-//! tables. Group nesting and picture sizes are capped.
+//! tables, footnotes, endnotes (`\footnote` with `\ftnalt`) and comments (author, initials, date,
+//! text, the commented range). Group nesting, picture sizes and the number of notes and comments
+//! are capped. Not kept: custom note marks, comment replies (`\atnparent`), notes inside
+//! headers, footers and other notes, tables inside note and comment texts (flattened).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use wordcraft_doc::props::VAlign;
-use wordcraft_doc::{Align, Document, Rgb};
+use wordcraft_doc::{Align, Block, Blocks, Document, InlineObject, Paragraph, Rgb};
 
 use crate::model::{self, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, Meta, Para, RevMark, make_img};
 
