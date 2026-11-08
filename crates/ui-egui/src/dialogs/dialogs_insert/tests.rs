@@ -167,95 +167,94 @@ fn field_dialog_lists_the_document_information_fields() {
     assert_eq!(f.instruction(), "SUBJECT");
 }
 
-    #[test]
-    fn date_time_dialog_uses_saved_pt_br_language() {
-        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
-        a.ui.date_time_language = "pt-BR".into();
-        let InsertDialog::DateTime(mut f) = open("dateTime", &a).expect("dialog") else { panic!("not DateTime") };
-        assert_eq!(f.format, "dd/MM/yyyy");
-        assert_eq!(f.params()["language"], "pt-BR");
-        f.update = false;
-        assert_eq!(f.params()["update"], false);
+#[test]
+fn date_time_dialog_uses_saved_pt_br_language() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.ui.date_time_language = "pt-BR".into();
+    let InsertDialog::DateTime(mut f) = open("dateTime", &a).expect("dialog") else { panic!("not DateTime") };
+    assert_eq!(f.format, "dd/MM/yyyy");
+    assert_eq!(f.params()["language"], "pt-BR");
+    f.update = false;
+    assert_eq!(f.params()["update"], false);
+}
+
+/// Click the real egui language menu, date picture, checkbox and OK; ensure the resulting
+/// document contains pt-BR fixed text with the language on its run, not just JSON params.
+#[test]
+fn date_time_dialog_controls_insert_portuguese_fixed_text() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.ui.language = "en".into();
+    app.ui.date_time_language = "en-US".into();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.state_mut().run("ui.dialog", json!({"name": "dateTime"})).unwrap();
+    h.run_steps(4);
+
+    // Go through the actual language combo box and then select a long Portuguese date.
+    // Scope the click to this dialog: the ribbon has another English-language button.
+    // The popup choice has a plain accessible label; the main ribbon uses a different control.
+    h.get_by_role_and_label(Role::Window, "Date and Time").get_by_role(Role::ComboBox).click();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Button, "Portuguese (Brazil)").click();
+    h.run_steps(3);
+    let sample = wordcraft_engine::cmd::insert::format_date_in("d 'de' MMMM 'de' yyyy", Some("pt-BR"));
+    h.get_by_label(&sample).click();
+    h.run_steps(2);
+    h.get_by_label("Update automatically").click();
+    h.run_steps(2);
+    assert!(matches!(
+        h.state().dialog.as_ref(),
+        Some(crate::dialogs::Dialog::Insert(d)) if matches!(&**d, InsertDialog::DateTime(f) if f.language == "pt-BR" && f.format == "d 'de' MMMM 'de' yyyy" && !f.update)
+    ));
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "successful insertion closes the dialog");
+    let doc = &h.state().session.doc;
+    assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body), sample);
+    let para = doc.para_at(&doc.start_of(wordcraft_doc::StoryRef::Body)).expect("inserted paragraph");
+    assert_eq!(para.props_of_char(0).lang.as_deref(), Some("pt-BR"));
+    assert!(para.objects.iter().all(|o| !matches!(o, wordcraft_doc::para::InlineObject::Field { .. })));
+}
+
+/// An invalid saved picture is reported in the modal, not silently dismissed when OK is clicked.
+#[test]
+fn date_time_dialog_keeps_open_and_displays_invalid_picture_error() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.ui.language = "en".into();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.state_mut().run("ui.dialog", json!({"name": "dateTime"})).unwrap();
+    if let Some(crate::dialogs::Dialog::Insert(d)) = h.state_mut().dialog.as_mut()
+        && let InsertDialog::DateTime(f) = &mut **d
+    {
+        f.format = "invalid\\picture".into();
+    } else {
+        panic!("date/time dialog expected");
     }
-
-    /// Click the real egui language menu, date picture, checkbox and OK; ensure the resulting
-    /// document contains pt-BR fixed text with the language on its run, not just JSON params.
-    #[test]
-    fn date_time_dialog_controls_insert_portuguese_fixed_text() {
-        use egui::accesskit::Role;
-        use egui_kittest::kittest::Queryable;
-
-        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
-        app.ui.language = "en".into();
-        app.ui.date_time_language = "en-US".into();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
-        h.state_mut().run("ui.dialog", json!({"name": "dateTime"})).unwrap();
-        h.run_steps(4);
-
-        // Go through the actual language combo box and then select a long Portuguese date.
-        // Scope the click to this dialog: the ribbon has another English-language button.
-        // The popup choice has a plain accessible label; the main ribbon uses a different control.
-        h.get_by_role_and_label(Role::Window, "Date and Time").get_by_role(Role::ComboBox).click();
-        h.run_steps(3);
-        h.get_by_role_and_label(Role::Button, "Portuguese (Brazil)").click();
-        h.run_steps(3);
-        let sample = wordcraft_engine::cmd::insert::format_date_in("d 'de' MMMM 'de' yyyy", Some("pt-BR"));
-        h.get_by_label(&sample).click();
-        h.run_steps(2);
-        h.get_by_label("Update automatically").click();
-        h.run_steps(2);
-        assert!(matches!(
-            h.state().dialog.as_ref(),
-            Some(crate::dialogs::Dialog::Insert(d)) if matches!(&**d, InsertDialog::DateTime(f) if f.language == "pt-BR" && f.format == "d 'de' MMMM 'de' yyyy" && !f.update)
-        ));
-        h.get_by_role_and_label(Role::Button, "OK").click();
-        h.run_steps(3);
-        assert!(h.state().dialog.is_none(), "successful insertion closes the dialog");
-        let doc = &h.state().session.doc;
-        assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body), sample);
-        let para = doc.para_at(&doc.start_of(wordcraft_doc::StoryRef::Body)).expect("inserted paragraph");
-        assert_eq!(para.props_of_char(0).lang.as_deref(), Some("pt-BR"));
-        assert!(para.objects.iter().all(|o| !matches!(o, wordcraft_doc::para::InlineObject::Field { .. })));
-    }
-
-    /// An invalid saved picture is reported in the modal, not silently dismissed when OK is clicked.
-    #[test]
-    fn date_time_dialog_keeps_open_and_displays_invalid_picture_error() {
-        use egui::accesskit::Role;
-        use egui_kittest::kittest::Queryable;
-
-        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
-        app.ui.language = "en".into();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
-        h.state_mut().run("ui.dialog", json!({"name": "dateTime"})).unwrap();
-        if let Some(crate::dialogs::Dialog::Insert(d)) = h.state_mut().dialog.as_mut()
-            && let InsertDialog::DateTime(f) = &mut **d
-        {
-            f.format = "invalid\\picture".into();
-        } else {
-            panic!("date/time dialog expected");
-        }
-        h.run_steps(3);
-        h.get_by_role_and_label(Role::Button, "OK").click();
-        h.run_steps(3);
-        assert!(matches!(
-            h.state().dialog.as_ref(),
-            Some(crate::dialogs::Dialog::Insert(d)) if matches!(&**d, InsertDialog::DateTime(f) if f.error.as_deref().is_some_and(|e| e.contains("invalid date picture")))
-        ));
-        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "");
-    }
-
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    h.run_steps(3);
+    assert!(matches!(
+        h.state().dialog.as_ref(),
+        Some(crate::dialogs::Dialog::Insert(d)) if matches!(&**d, InsertDialog::DateTime(f) if f.error.as_deref().is_some_and(|e| e.contains("invalid date picture")))
+    ));
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "");
+}

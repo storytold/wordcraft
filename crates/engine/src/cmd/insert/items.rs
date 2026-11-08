@@ -1,7 +1,7 @@
 use super::header_footer::hf_part;
 use super::{
     Align, Block, CharProps, CmdError, CmdResult, InlineObject, Paragraph, Rgb, Selection, Session, StoryRef, TabAlign, TabStop, TextColor, Value,
-    delete_selection, json, p, para_block, sel_result, type_text,
+    delete_selection, json, p, para_block, sel_result, type_text, type_text_with_lang,
 };
 
 pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
@@ -82,14 +82,21 @@ pub fn format_date(fmt: &str) -> String {
 /// Format today's date with a Word picture, month and weekday names in the language `lang` (a
 /// tag such as `pt-BR`; English when `None` or a language without names here).
 pub fn format_date_in(fmt: &str, lang: Option<&str>) -> String {
-    let iso = crate::cmd::now_iso();
-    let y: i64 = iso.get(0..4).and_then(|x| x.parse().ok()).unwrap_or(2026);
-    let m: usize = iso.get(5..7).and_then(|x| x.parse().ok()).unwrap_or(1);
-    let d: u32 = iso.get(8..10).and_then(|x| x.parse().ok()).unwrap_or(1);
-    let hh: u32 = iso.get(11..13).and_then(|x| x.parse().ok()).unwrap_or(0);
-    let mm: u32 = iso.get(14..16).and_then(|x| x.parse().ok()).unwrap_or(0);
-    let ss: u32 = iso.get(17..19).and_then(|x| x.parse().ok()).unwrap_or(0);
-    format_date_parts_in(fmt, lang, y, m, d, (hh, mm, ss), (crate::cmd::now_unix() / 86_400) as i64)
+    let now = crate::cmd::now_unix();
+    format_date_at_in(fmt, lang, now, crate::cmd::local_offset_secs(now))
+}
+
+/// Format the instant `unix` (seconds since the epoch, UTC) with a Word picture, in the zone
+/// `offset_secs` east of UTC.
+pub fn format_date_at(fmt: &str, unix: u64, offset_secs: i64) -> String {
+    format_date_at_in(fmt, None, unix, offset_secs)
+}
+
+/// Format the instant `unix` (seconds since the epoch, UTC) with a Word picture, in the zone
+/// `offset_secs` east of UTC, with language `lang`.
+pub fn format_date_at_in(fmt: &str, lang: Option<&str>, unix: u64, offset_secs: i64) -> String {
+    let (y, m, d, hms, days) = crate::cmd::local_civil(unix, offset_secs);
+    format_date_parts_in(fmt, lang, y, m as usize, d, hms, days)
 }
 
 /// Month and weekday names of a language, as Word writes them in date fields: full names, the
@@ -145,27 +152,25 @@ pub fn format_date_parts_in(fmt: &str, lang: Option<&str>, y: i64, m: usize, d: 
     let mut i = 0;
     while i < chars.len() {
         let c = chars.get(i).copied().unwrap_or(' ');
-        // Two apostrophes emit one literal apostrophe inside or outside a quoted region.
+        // Text in single quotes is shown as it is; two quotes in a row are one, inside quoted
+        // text or out of it.
+        if c == '\'' && chars.get(i + 1) == Some(&'\'') {
+            out.push('\'');
+            i += 2;
+            continue;
+        }
         if c == '\'' {
-            if chars.get(i + 1) == Some(&'\'') {
-                out.push('\'');
-                i += 2;
-                continue;
-            }
-            // Copy quoted text until the closing quote (or end).
             i += 1;
             while let Some(&q) = chars.get(i) {
-                if q == '\'' {
-                    if chars.get(i + 1) == Some(&'\'') {
-                        out.push('\'');
-                        i += 2;
-                        continue;
-                    }
+                i += 1;
+                if q != '\'' {
+                    out.push(q);
+                } else if chars.get(i) == Some(&'\'') {
+                    out.push('\'');
                     i += 1;
+                } else {
                     break;
                 }
-                out.push(q);
-                i += 1;
             }
             continue;
         }
@@ -303,17 +308,36 @@ pub(super) fn cover_page(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 /// Why Insert › Drop Cap is off at the caret, as in Word: in a table cell, in an empty paragraph
-/// and in one that starts with a space.
+/// and in one that starts with a space. A selection must be fit throughout (what Dropped and In
+/// margin need), unless a paragraph in it has a drop cap for None to take away.
 pub(super) fn drop_cap_off(s: &Session) -> Option<&'static str> {
-    if s.sel.focus.path.cell().is_some() {
-        return Some("drop caps can't go in a table");
-    }
-    let first = s.doc.para_at(&s.sel.focus).and_then(|p| p.text.chars().next());
+    let why = drop_cap_selection_off(s)?;
+    let story = s.sel.focus.story;
+    let has_cap = crate::cmd::selected_paths(s).iter().any(|path| s.doc.para(story, path).is_some_and(|p| p.props.drop_cap.is_some()));
+    (!has_cap).then_some(why)
+}
+
+fn drop_cap_first_letter(first: Option<char>) -> Option<&'static str> {
     match first {
         None => Some("the paragraph is empty"),
         Some(c) if c.is_whitespace() => Some("the paragraph starts with a space"),
         Some(_) => None,
     }
+}
+
+/// The same check for every selected paragraph, as the command formats them all.
+fn drop_cap_selection_off(s: &Session) -> Option<&'static str> {
+    let story = s.sel.focus.story;
+    for path in crate::cmd::selected_paths(s) {
+        if path.cell().is_some() {
+            return Some("drop caps can't go in a table");
+        }
+        let first = s.doc.para(story, &path).and_then(|p| p.text.chars().next());
+        if let Some(why) = drop_cap_first_letter(first) {
+            return Some(why);
+        }
+    }
+    None
 }
 
 /// Insert › Drop Cap and Drop Cap Options: none, or the letter dropped into the text or hung in
@@ -323,15 +347,27 @@ pub(super) fn drop_cap(s: &mut Session, v: &Value) -> CmdResult {
     let lines = v.get("lines").and_then(Value::as_f64).filter(|l| l.is_finite());
     let none = p::str(v, "position") == Some("none") || lines == Some(0.0);
     let margin = p::str(v, "position") == Some("margin");
+    let lines_given = lines.is_some();
     let lines = lines.map_or(3.0, |l| l.round().clamp(1.0, 10.0)) as u8;
     let distance = p::f32(v, "distance").map_or(0.0, |d| d.clamp(0.0, wordcraft_doc::resolve::MAX_DROP_CAP_DISTANCE));
     // A family name, not a paragraph of text.
     let font = p::str(v, "font").map(str::trim).filter(|f| !f.is_empty()).map(|f| f.chars().take(64).collect::<String>());
+    if !none && let Some(why) = drop_cap_selection_off(s) {
+        return Err(CmdError::Failed(why.into()));
+    }
+    // `keep` (the menu's Dropped / In margin): a paragraph that has a drop cap keeps its own
+    // lines, distance and font unless given here.
+    let keep = !none && v.get("keep").and_then(Value::as_bool) == Some(true);
+    let (distance_given, font_given) = (p::f32(v, "distance").is_some(), v.get("font").is_some());
     crate::cmd::para::fmt(s, &|p| {
-        p.drop_cap = (!none).then_some(lines);
+        let own = keep && p.drop_cap.is_some();
+        p.drop_cap = (!none).then(|| if own && !lines_given { p.drop_cap.unwrap_or(lines) } else { lines });
         p.drop_cap_margin = (!none && margin).then_some(true);
-        p.drop_cap_distance = (!none && distance > 0.0).then_some(distance);
-        p.drop_cap_font = font.clone().filter(|_| !none);
+        let d = if own && !distance_given { p.drop_cap_distance.unwrap_or(0.0) } else { distance };
+        p.drop_cap_distance = (!none && d > 0.0).then_some(d);
+        if !(own && !font_given) {
+            p.drop_cap_font = font.clone().filter(|_| !none);
+        }
     })
 }
 
@@ -377,7 +413,7 @@ mod date_time_locale_tests {
     #[test]
     fn date_field_inherits_document_default_locale_on_first_render() {
         let mut s = Session::new(wordcraft_doc::Document::new());
-        s.doc.styles.default_chr.lang = Some("pt-BR".into());
+        std::sync::Arc::make_mut(&mut s.doc.styles).default_chr.lang = Some("pt-BR".into());
         s.run(
             "insert.dateTime",
             &json!({
@@ -443,6 +479,4 @@ mod date_time_locale_tests {
         let InlineObject::Field { result, .. } = &p.objects[0] else { panic!("expected field") };
         assert_eq!(result, &format_date_in("d 'de' MMMM 'de' yyyy", Some("pt-BR")));
     }
-
-
 }

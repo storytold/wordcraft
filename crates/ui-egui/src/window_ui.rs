@@ -22,6 +22,7 @@ pub(crate) struct WindowUi {
     pub(crate) dialog: Option<dialogs::Dialog>,
     pub(crate) colors: Option<colors::ColorsDialog>,
     pub(crate) restrict: dialogs_review::RestrictPane,
+    pub(crate) spelling_review: Option<crate::proofing_pane::SpellingForm>,
     pub(crate) status_msg: Option<(String, f64)>,
     pub(crate) previews: previews::Previews,
     pub(crate) change_picture_target: Option<String>,
@@ -37,7 +38,10 @@ pub(crate) struct WindowUi {
     pub(crate) sent_full_screen: bool,
     pub(crate) seen_full_screen: Option<bool>,
     pub(crate) escape_free: bool,
-    pub(crate) word_count: (u64, usize),
+    pub(crate) status_counts: (u64, crate::StatusCounts),
+    /// Per window, as each window shows its own layout: one shared list would be read again
+    /// on every frame of every window.
+    pub(crate) missing_fonts: crate::chrome::MissingFontsMemo,
     pub(crate) last_autosave: f64,
     pub(crate) equation_prev_tab: Option<String>,
     pub(crate) smart_art_item: Option<usize>,
@@ -65,8 +69,8 @@ pub(crate) struct WindowUi {
     pub(crate) alt_modifier_seen: bool,
 }
 
-/// A word count that matches no document revision, so the next frame counts.
-pub(crate) const NOT_COUNTED: (u64, usize) = (u64::MAX, 0);
+/// Status-bar counts that match no document revision, so the next frame counts.
+pub(crate) const NOT_COUNTED: (u64, crate::StatusCounts) = (u64::MAX, crate::StatusCounts { words: 0, chars: 0, chars_no_spaces: 0 });
 
 impl WindowUi {
     /// A new window showing open document `document`: nothing open over the page, Home tab.
@@ -91,6 +95,7 @@ impl WindowUi {
             dialog: None,
             colors: None,
             restrict: Default::default(),
+            spelling_review: None,
             status_msg: None,
             previews: Default::default(),
             change_picture_target: None,
@@ -106,7 +111,8 @@ impl WindowUi {
             sent_full_screen: false,
             seen_full_screen: None,
             escape_free: false,
-            word_count: NOT_COUNTED,
+            status_counts: NOT_COUNTED,
+            missing_fonts: Default::default(),
             last_autosave: 0.0,
             equation_prev_tab: None,
             smart_art_item: None,
@@ -163,6 +169,7 @@ impl WordApp {
             mac_titlebar: _,
             control_rx: _,
             updates_rt: _,
+            packs_rt: _,
             // The control channel's screenshots and input go to the active window, whichever it is.
             shots: _,
             capture_epoch: _,
@@ -176,8 +183,11 @@ impl WordApp {
             styled: _,
             fonts_hans: _,
             fonts_korean: _,
+            fonts_hant: _,
             fonts_system_cjk: _,
+            fonts_system_arabic: _,
             want_system_cjk: _,
+            want_system_arabic: _,
             recent_fonts_for: _,
             // File › Recover lists the copies of every window's documents.
             recover_fonts_for: _,
@@ -212,6 +222,7 @@ impl WordApp {
             dialog,
             colors,
             restrict,
+            spelling_review,
             status_msg,
             previews,
             change_picture_target,
@@ -227,7 +238,8 @@ impl WordApp {
             sent_full_screen,
             seen_full_screen,
             escape_free,
-            word_count,
+            status_counts,
+            missing_fonts,
             last_autosave,
             equation_prev_tab,
             smart_art_item,
@@ -249,6 +261,9 @@ impl WordApp {
             quick_access_toolbar: _,
             recent: _,
             recent_symbols: _,
+            date_time_format: _,
+            date_time_language: _,
+            date_time_update: _,
             recent_colors: _,
             recent_fonts: _,
             theme: _,
@@ -257,6 +272,8 @@ impl WordApp {
             animations: _,
             legacy_dark: _,
             nav_tab: _,
+            display_server: _,
+            status_count: _,
             nav_pane: _,
             show_discord: _,
             author: _,
@@ -308,6 +325,7 @@ impl WordApp {
             dialog,
             colors,
             restrict,
+            spelling_review,
             status_msg,
             previews,
             change_picture_target,
@@ -323,7 +341,8 @@ impl WordApp {
             sent_full_screen,
             seen_full_screen,
             escape_free,
-            word_count,
+            status_counts,
+            missing_fonts,
             last_autosave,
             equation_prev_tab,
             smart_art_item,

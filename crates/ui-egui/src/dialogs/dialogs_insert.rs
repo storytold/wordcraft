@@ -18,11 +18,11 @@ mod symbol;
 
 pub use columns::{ColumnsForm, DropCapForm};
 use columns::{columns_ui, drop_cap_ui};
-use field::field_ui;
-use date_time::date_time_ui;
 pub use date_time::DateTimeForm;
 #[cfg(test)]
 pub(crate) use date_time::date_time_preview_matches;
+use date_time::date_time_ui;
+use field::field_ui;
 pub use field::{DATE_FORMATS, FIELD_CATEGORIES, FIELDS, FieldForm, FieldKind, NUMBER_FORMATS, STYLEREF_SWITCHES, field_kind};
 use symbol::symbol_ui;
 pub use symbol::{RECENT_SYMBOLS, RecentSymbol, SPECIAL, SUBSETS, SymbolForm, remember_symbol, subset_of};
@@ -109,7 +109,7 @@ pub(crate) fn buttons(ui: &mut Ui, ok: &str, cancel: &str, ok_enabled: bool) -> 
     let mut r = (false, false);
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             let (okb, cancelb) =
                 crate::dialogs::ok_cancel_responses(ui, |ui| ui.add_enabled(ok_enabled, crate::widgets::primary_button(ui, tl!(ok))), tl!(cancel));
             if cancelb.clicked() || crate::dialogs::cancel_key_pressed(ui) {

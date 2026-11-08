@@ -1,5 +1,12 @@
 //! Date & Time insertion dialog (Word-style format and language selection).
-use super::*;
+use egui::{Stroke, Ui};
+use serde::Serialize;
+use serde_json::{Value, json};
+
+use super::buttons;
+use super::field::DATE_FORMATS;
+use crate::WordApp;
+use crate::theme::Tokens;
 
 /// Word-style Insert > Date & Time dialog.
 const PT_DATE_FORMATS: &[&str] = &[
@@ -87,7 +94,7 @@ pub(super) fn date_time_ui(app: &mut WordApp, ui: &mut Ui, f: &mut DateTimeForm)
         ui.add_space(12.0);
         ui.vertical(|ui| {
             ui.label(tl!("Language"));
-            egui::ComboBox::from_id_salt("date_time_lang")
+            craft_ui::ComboBox::from_id_salt("date_time_lang")
                 .selected_text(if f.language == "pt-BR" { tl!("Portuguese (Brazil)") } else { tl!("English (United States)") })
                 .show_ui(ui, |ui| {
                     if ui.selectable_label(f.language == "pt-BR", tl!("Portuguese (Brazil)")).clicked() {
@@ -124,4 +131,3 @@ pub(super) fn date_time_ui(app: &mut WordApp, ui: &mut Ui, f: &mut DateTimeForm)
     }
     cancel
 }
-
