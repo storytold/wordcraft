@@ -181,14 +181,37 @@ impl WindowGeometry {
         Some(monitor.min + (free / 2.0).max(egui::Vec2::ZERO))
     }
 
+    /// Once the monitor size is known, on a Mac: the saved size of a restored window that opened
+    /// smaller. AppKit trims a new window that nearly fills its screen (a window filled with
+    /// Option and the green button, saved at 1920 × 976 on a 1920 × 1080 screen, opened at
+    /// 1900 × 956), but lets the open window grow back. Only on the monitor it was saved on, where
+    /// that size fits; on another one the rescue moves it instead.
+    pub fn resize_after_open(&self, window: &RawWindowState) -> Option<egui::Vec2> {
+        if !cfg!(target_os = "macos") || self.maximized || self.position.is_none() {
+            return None;
+        }
+        if window.maximized == Some(true) || window.fullscreen == Some(true) || window.minimized == Some(true) {
+            return None;
+        }
+        let monitor = window.monitor_size.filter(|s| s.is_finite() && s.x > 0.0 && s.y > 0.0)?;
+        let same_monitor = self.monitor.is_some_and(|saved| (monitor - egui::Vec2::from(saved)).length() <= 1.0);
+        let now = window.inner_rect.filter(|r| r.is_finite())?.size();
+        let saved = egui::vec2(self.width, self.height);
+        let trimmed = saved.x - now.x > 1.0 || saved.y - now.y > 1.0;
+        (same_monitor && trimmed && saved.x <= monitor.x && saved.y <= monitor.y).then_some(saved)
+    }
+
     /// Once the monitor size is known: a smaller size and a centred position for a window that
     /// doesn't fit on its monitor, frame included (#1215). eframe shrinks the start size to the
     /// monitor's, but not by the frame, the title bar or the taskbar, so on a laptop screen the
     /// default window reached past the screen's edge, and the end of the scroll bar with it: a
     /// drag of the scroll bar stopped where the pointer met the edge. A window the system placed
     /// (no position here) is on the primary monitor, whose top-left corner is the origin, so its
-    /// position counts too; a restored one may be on another monitor, so only its size does. A
-    /// maximized window fills its monitor already.
+    /// position counts too; a restored one may be on another monitor, so only its size does, and
+    /// it only shrinks when it is larger than the monitor itself: the system once gave it that
+    /// size, so it fits beside the taskbar or the Dock. On a Mac that is the zoomed window (the
+    /// green button), saved at its zoomed size because egui can't tell it is zoomed. A maximized
+    /// window fills its monitor already.
     pub fn fit_on_monitor(&self, window: &RawWindowState) -> Option<(egui::Pos2, egui::Vec2)> {
         if self.maximized || window.maximized == Some(true) || window.fullscreen == Some(true) || window.minimized == Some(true) {
             return None;
@@ -198,7 +221,8 @@ impl WindowGeometry {
         let outer = window.outer_rect.filter(|r| r.is_finite()).unwrap_or(inner);
         let frame = (outer.size() - inner.size()).max(egui::Vec2::ZERO);
         let room = monitor - 2.0 * SYSTEM_BAR;
-        let too_big = outer.width() > room.x || outer.height() > room.y;
+        let limit = if self.position.is_some() { monitor } else { room };
+        let too_big = outer.width() > limit.x || outer.height() > limit.y;
         let edge = monitor - SYSTEM_BAR;
         let past_edge = self.position.is_none() && (outer.max.x > edge.x || outer.max.y > edge.y);
         if !too_big && !past_edge {
@@ -566,6 +590,28 @@ mod tests {
         // A restored window keeps its place: it may be on another monitor (its origin isn't known).
         assert_eq!(saved().fit_on_monitor(&opened(at, start, full_hd)), None);
         assert_eq!(saved().fit_on_monitor(&opened(egui::pos2(2000.0, 78.0), start, full_hd)), None);
+        // A window restored at the size the system gave it keeps it: here a Mac's zoomed window
+        // (no frame around the content), as wide as the screen and as tall as the room between the
+        // menu bar and the Dock. It used to shrink by the taskbar margin and move to the centre.
+        let mac = egui::vec2(1470.0, 956.0);
+        let zoomed = egui::Rect::from_min_size(egui::pos2(0.0, 37.0), egui::vec2(1470.0, 844.0));
+        let saved_zoomed =
+            WindowGeometry { position: Some([0.0, 37.0]), width: 1470.0, height: 844.0, monitor: Some([1470.0, 956.0]), maximized: false };
+        assert_eq!(saved_zoomed.fit_on_monitor(&raw(zoomed, mac)), None);
+        // AppKit opened a filled window 20 points short of it: on a Mac it grows back once open,
+        // never past its monitor, and not on another monitor (the rescue's job) or once it is right.
+        let screen = egui::vec2(1920.0, 1080.0);
+        let filled = WindowGeometry { position: Some([0.0, 30.0]), width: 1920.0, height: 976.0, monitor: Some([1920.0, 1080.0]), maximized: false };
+        let trimmed = egui::Rect::from_min_size(egui::pos2(0.0, 30.0), egui::vec2(1900.0, 956.0));
+        let grows = cfg!(target_os = "macos").then_some(egui::vec2(1920.0, 976.0));
+        assert_eq!(filled.resize_after_open(&raw(trimmed, screen)), grows);
+        assert_eq!(filled.resize_after_open(&raw(trimmed, mac)), None);
+        let right = egui::Rect::from_min_size(egui::pos2(0.0, 30.0), egui::vec2(1920.0, 976.0));
+        assert_eq!(filled.resize_after_open(&raw(right, screen)), None);
+        let too_big = WindowGeometry { width: 2000.0, ..filled };
+        assert_eq!(too_big.resize_after_open(&raw(trimmed, screen)), None);
+        assert_eq!(WindowGeometry { maximized: true, ..filled }.resize_after_open(&raw(trimmed, screen)), None);
+        assert_eq!(WindowGeometry::default().resize_after_open(&raw(trimmed, screen)), None);
         // Room to spare: nothing moves.
         assert_eq!(system.fit_on_monitor(&opened(at, start, egui::vec2(2560.0, 1440.0))), None);
         // Once fitted, the window saved and restored on the next launch stays as it is.
