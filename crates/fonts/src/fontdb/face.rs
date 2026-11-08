@@ -58,6 +58,8 @@ pub struct FontFace {
     pub italic: bool,
     pub(super) bytes: FontBytes,
     pub(super) index: u32,
+    /// The character map is a symbol one ([`FontFace::symbol_encoded`]).
+    pub(super) symbol_cmap: bool,
     pub upem: f64,
     /// Ascender in font units (positive = up).
     pub ascent: f64,
@@ -313,6 +315,12 @@ impl FontFace {
             return bits[(cp / 64) as usize] & (1 << (cp % 64)) != 0;
         }
         self.skrifa().is_some_and(|f| f.charmap().map(c).is_some())
+    }
+    /// Is the face's character map a symbol one (Windows platform, symbol encoding), as Word's
+    /// symbol fonts and other dingbat fonts have? Its glyphs sit at U+F020–U+F0FF, and a document
+    /// stores their 8-bit codes, U+0020–U+00FF (#5965).
+    pub fn symbol_encoded(&self) -> bool {
+        self.symbol_cmap
     }
     /// Does the face carry OpenType glyph substitution (GSUB)? Complex scripts (Myanmar, Khmer,
     /// Indic…) need it to reorder and stack; fonts with only Apple's AAT tables draw them unshaped.

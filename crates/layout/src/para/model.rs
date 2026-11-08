@@ -4,7 +4,9 @@ use super::{Arc, CharProps, Document, FaceRef, FieldCtx, Level, NumFormat, Numer
 /// How a run set in one of Word's symbol fonts (Symbol, Wingdings, Wingdings 2/3, Webdings)
 /// shows its characters. Those fonts are proprietary and usually missing: a substitute has other
 /// glyphs, or none, at their codes, so each character is drawn as its Unicode equivalent
-/// ([`wordcraft_doc::symbol_fonts`]) from a face that has it. The text itself is unchanged.
+/// ([`wordcraft_doc::symbol_fonts`]) from a face that has it. An installed font whose character
+/// map is a symbol one, named or not, draws a plain 8-bit code from its glyph at the private-use
+/// code (#5965). The text itself is unchanged.
 #[derive(Clone, Copy)]
 pub(super) struct SymbolRun<'a> {
     family: &'a str,
@@ -15,7 +17,8 @@ pub(super) struct SymbolRun<'a> {
 
 impl<'a> SymbolRun<'a> {
     pub(super) fn of(family: &'a str, r: &wordcraft_fonts::word::Resolved) -> Option<Self> {
-        wordcraft_doc::symbol_fonts::is_symbol_font(family).then_some(SymbolRun { family, installed: !r.substituted, face: r.face })
+        let named = wordcraft_doc::symbol_fonts::is_symbol_font(family);
+        (named || (!r.substituted && r.face.symbol_encoded())).then_some(SymbolRun { family, installed: !r.substituted, face: r.face })
     }
 
     /// The character drawn for `c`.

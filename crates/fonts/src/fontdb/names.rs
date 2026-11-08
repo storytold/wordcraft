@@ -390,6 +390,7 @@ pub(super) fn make_face(
         coords,
         location,
         instance,
+        symbol_cmap: f.charmap().is_symbol(),
         bytes,
         index,
         bmp: std::sync::OnceLock::new(),
