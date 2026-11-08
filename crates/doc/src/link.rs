@@ -125,6 +125,7 @@ mod tests {
             ("HYPERLINK\t\"http://example.com\"", Some("http://example.com")),
             (r#"HYPERLINK"http://example.com""#, Some("http://example.com")),
             (r#"HYPERLINK "http://example.com/path\latest""#, Some("http://example.com/pathlatest")),
+            (r#"HYPERLINK "x \* Upper""#, Some("x * Upper")),
             (r#"HYPERLINK "C:\\Docs\\My file.docx""#, Some(r"C:\Docs\My file.docx")),
             (r#"HYPERLINK "say \"hi\"""#, Some(r#"say "hi""#)),
             (r#"HYPERLINK " http://example.com ""#, Some("http://example.com")),

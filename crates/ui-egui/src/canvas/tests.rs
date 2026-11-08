@@ -755,6 +755,86 @@ fn dragging_the_scrollbar_names_the_page_at_the_top() {
     }
 }
 
+/// #5746: the document's scroll bars are drawn wherever the pointer is: before it has moved and
+/// with it over the page, not only at the window's edge, with a thumb that stands out from its
+/// track in the light and the dark theme. The vertical one fills the room the pages leave for it,
+/// so it covers none of them; zoomed in, the horizontal one shows the same way.
+#[test]
+fn the_document_scroll_bars_show_with_the_pointer_away() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let bar = |h: &H, vertical: bool| {
+        h.query_all_by_role(Role::ScrollBar)
+            .map(|n| n.rect())
+            .filter(|r| (r.height() > r.width()) == vertical)
+            .max_by(|a, b| a.area().total_cmp(&b.area()))
+    };
+    // The opaque fills across the bar's whole width, longest first: its track, then its thumb.
+    let drawn = |h: &H, bar: Rect, vertical: bool| {
+        let across = |r: &Rect| if vertical { r.width() } else { r.height() };
+        let along = |r: &Rect| if vertical { r.height() } else { r.width() };
+        let mut fills: Vec<(f32, egui::Color32)> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Rect(r) if r.fill.a() > 0 && bar.expand(0.5).contains_rect(r.rect) && across(&r.rect) >= across(&bar) - 0.5 => {
+                    Some((along(&r.rect), r.fill))
+                }
+                _ => None,
+            })
+            .collect();
+        fills.sort_by(|a, b| b.0.total_cmp(&a.0));
+        fills
+    };
+    // The thumb shows on its track: a clear step in grey, not the same fill.
+    let thumb_shows = |fills: &[(f32, egui::Color32)], what: &str| {
+        let [(track_len, track), (thumb_len, thumb), ..] = fills else { panic!("{what}: a track and a thumb are drawn: {fills:?}") };
+        assert!(thumb_len < track_len, "{what}: the thumb is shorter than its track: {fills:?}");
+        let step = (0..3).map(|i| (i32::from(track[i]) - i32::from(thumb[i])).abs()).max().unwrap_or(0);
+        assert!(step >= 40, "{what}: the thumb {thumb:?} stands out from its track {track:?}");
+    };
+    for theme in ["light", "dark"] {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        for _ in 0..3 {
+            a.run("text.insert", json!({"text": "Page text"})).unwrap();
+            a.run("layout.break", json!({"kind": "page"})).unwrap();
+        }
+        a.run("view.commentsPane", json!({"value": false})).unwrap();
+        a.run("ui.theme", json!({"value": theme})).unwrap();
+        let mut h: H = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        assert_eq!(Tokens::get(&h.ctx).dark, theme == "dark", "the {theme} theme is on");
+        let v = bar(&h, true).expect("the document's vertical scroll bar");
+        thumb_shows(&drawn(&h, v, true), &format!("{theme}, before the pointer has moved"));
+        let viewport = h.state().canvas.viewport.expect("the canvas is shown");
+        assert!((v.right() - viewport.right() - SCROLLBAR).abs() < 0.5, "the bar fills the room left for it: {v:?} beside {viewport:?}");
+        assert!(h.state().canvas.page_rects.iter().all(|p| p.right() <= v.left()), "the bar covers no page");
+        let page = h.state().canvas.page_rects.first().copied().expect("a page on screen");
+        h.event(egui::Event::PointerMoved(page.center()));
+        for _ in 0..30 {
+            h.step();
+        }
+        let v = bar(&h, true).expect("the document's vertical scroll bar");
+        thumb_shows(&drawn(&h, v, true), &format!("{theme}, the pointer over the page"));
+        h.state_mut().run("view.zoom", json!({"value": 400.0})).unwrap();
+        for _ in 0..30 {
+            h.step();
+        }
+        let across = bar(&h, false).expect("zoomed in, a horizontal scroll bar");
+        thumb_shows(&drawn(&h, across, false), &format!("{theme}, the horizontal bar"));
+    }
+}
+
 /// #3880: the status bar names the page being looked at. With the caret scrolled out of view, that
 /// is the page at the top of the window; while the caret is on screen, its page.
 #[test]
@@ -2121,6 +2201,11 @@ fn an_agent_cannot_close_the_document_over_a_pending_comment_draft() {
     assert!(crate::control::close_refused(h.state(), "file.close", &json!({})).is_some());
     assert!(crate::control::close_refused(h.state(), "file.close", &json!({"force": true})).is_none());
     assert!(crate::control::close_refused(h.state(), "text.insert", &json!({"text": "x"})).is_none());
+    // The same for the command that names the document it closes (#3274).
+    let doc = h.state().session.document_id();
+    assert!(crate::control::close_refused(h.state(), "file.closeDocument", &json!({})).is_some());
+    assert!(crate::control::close_refused(h.state(), "file.closeDocument", &json!({"id": doc})).is_some());
+    assert!(crate::control::close_refused(h.state(), "file.closeDocument", &json!({"force": true})).is_none());
 }
 
 /// #1348: a comment edit typed, then refused (the document became read-only).
