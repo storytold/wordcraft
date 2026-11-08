@@ -12989,6 +12989,22 @@ fn click_and_type_after_an_empty_list_item_uses_the_click_and_type_style() {
     assert!(added.props.shading.is_none(), "no inherited shading");
 }
 
+/// A tall last line does not leave the caret above the click.
+#[test]
+fn click_and_type_below_a_title_reaches_the_click() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Tall"}));
+    run(&mut s, "para.style", json!({"style": "Title"}));
+    let l = s.layout();
+    let page = l.pages.len() - 1;
+    let body = l.pages[page].body;
+    let before = s.doc.body.len();
+    run(&mut s, "caret.clickAndType", json!({"page": page, "x": body.x + 10.0, "y": body.bottom() - 10.0}));
+    assert!(s.doc.body.len() > before, "paragraphs are added to reach the click");
+    let l = s.layout();
+    assert!(l.caret(&s.sel.focus).is_some(), "the caret has a place on the page");
+}
+
 /// #4246: empty space inside a table cell is still cell space, not the page below the table.
 #[test]
 fn click_and_type_inside_a_table_cell_adds_nothing() {
