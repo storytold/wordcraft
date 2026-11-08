@@ -287,12 +287,12 @@ pub fn define_list(app: &mut WordApp, ui: &mut Ui, f: &mut ListForm) -> bool {
             });
         });
         t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Aligned at:")));
-            r.cell(|ui| ui.add(len(&mut l.aligned_at, unit)));
+            let label = r.cell(|ui| ui.label(tl!("Aligned at:")));
+            r.cell(|ui| ui.add(len(&mut l.aligned_at, unit)).labelled_by(label.id));
         });
         t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Text indent at:")));
-            r.cell(|ui| ui.add(len(&mut l.indent_at, unit)));
+            let label = r.cell(|ui| ui.label(tl!("Text indent at:")));
+            r.cell(|ui| ui.add(len(&mut l.indent_at, unit)).labelled_by(label.id));
         });
         t.row(|r| {
             r.cell(|ui| ui.label(tl!("Follow number with:")));
@@ -310,8 +310,8 @@ pub fn define_list(app: &mut WordApp, ui: &mut Ui, f: &mut ListForm) -> bool {
             });
         });
         t.row(|r| {
-            r.cell(|ui| ui.add_enabled_ui(l.follow == "tab", |ui| ui.checkbox(&mut l.tab_on, tl!("Add tab stop at:"))));
-            r.cell(|ui| ui.add_enabled(l.follow == "tab" && l.tab_on, len(&mut l.tab_at, unit)));
+            let label = r.cell(|ui| ui.add_enabled(l.follow == "tab", egui::Checkbox::new(&mut l.tab_on, tl!("Add tab stop at:"))));
+            r.cell(|ui| ui.add_enabled(l.follow == "tab" && l.tab_on, len(&mut l.tab_at, unit)).labelled_by(label.id));
         });
     });
     let (ok, cancel) = buttons(ui, tl!("OK"));

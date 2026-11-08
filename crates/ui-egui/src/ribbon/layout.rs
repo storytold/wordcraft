@@ -133,8 +133,9 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
         let spaced = |ui: &mut Ui, text: egui::RichText| {
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
-                ui.label(text);
-            });
+                ui.label(text)
+            })
+            .inner
         };
         crate::rtl::Table::new("layout_para").columns(0).spacing(vec2(4.0, 1.5)).min_row_height(FIELD.y).show(ui, |t| {
             t.row(|r| {
@@ -148,18 +149,16 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
             let mut l = rp.indent_left / k;
             let mut b = rp.space_before;
             t.row(|r| {
-                r.cell(|ui| ui.label(egui::RichText::new(tl!("Left:")).small()));
+                let label = r.cell(|ui| ui.label(egui::RichText::new(tl!("Left:")).small()));
                 r.cell(|ui| {
-                    if ui
-                        .add_sized(FIELD, egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2))
-                        .changed()
-                    {
+                    let field = egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2);
+                    if ui.add_sized(FIELD, field).labelled_by(label.id).changed() {
                         let _ = app.run("para.indents", json!({"left": l * k}));
                     }
                 });
-                r.cell(|ui| spaced(ui, egui::RichText::new(tl!("Before:")).small()));
+                let label = r.cell(|ui| spaced(ui, egui::RichText::new(tl!("Before:")).small()));
                 r.cell(|ui| {
-                    if ui.add_sized(FIELD, egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
+                    if ui.add_sized(FIELD, egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).points()).labelled_by(label.id).changed() {
                         let _ = app.run("para.spacing", json!({"before": b}));
                     }
                 });
@@ -167,18 +166,16 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
             let mut right = rp.indent_right / k;
             let mut a = rp.space_after;
             t.row(|r| {
-                r.cell(|ui| ui.label(egui::RichText::new(tl!("Right:")).small()));
+                let label = r.cell(|ui| ui.label(egui::RichText::new(tl!("Right:")).small()));
                 r.cell(|ui| {
-                    if ui
-                        .add_sized(FIELD, egui::DragValue::new(&mut right).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2))
-                        .changed()
-                    {
+                    let field = egui::DragValue::new(&mut right).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2);
+                    if ui.add_sized(FIELD, field).labelled_by(label.id).changed() {
                         let _ = app.run("para.indents", json!({"right": right * k}));
                     }
                 });
-                r.cell(|ui| spaced(ui, egui::RichText::new(tl!("After:")).small()));
+                let label = r.cell(|ui| spaced(ui, egui::RichText::new(tl!("After:")).small()));
                 r.cell(|ui| {
-                    if ui.add_sized(FIELD, egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
+                    if ui.add_sized(FIELD, egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).points()).labelled_by(label.id).changed() {
                         let _ = app.run("para.spacing", json!({"after": a}));
                     }
                 });

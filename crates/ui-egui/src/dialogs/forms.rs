@@ -392,8 +392,8 @@ pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
     heading(ui, "Table");
     crate::rtl::Table::new("tp_table").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
         t.row(|r| {
-            r.cell(|ui| ui.checkbox(&mut f.width_on, tl!("Preferred width:")));
-            r.cell(|ui| ui.add_enabled(f.width_on, len(&mut f.width, 0.1, unit)));
+            let label = r.cell(|ui| ui.checkbox(&mut f.width_on, tl!("Preferred width:")));
+            r.cell(|ui| ui.add_enabled(f.width_on, len(&mut f.width, 0.1, unit)).labelled_by(label.id));
         });
         t.row(|r| {
             r.cell(|ui| ui.label(tl!("Alignment:")));
@@ -406,9 +406,10 @@ pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
             });
         });
         t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Indent from left:")));
+            let label = r.cell(|ui| ui.label(tl!("Indent from left:")));
             r.cell(|ui| {
                 ui.add_enabled(f.align == "left", egui::DragValue::new(&mut f.indent).speed(0.01).range(-11.0..=22.0).measure(unit).max_decimals(2))
+                    .labelled_by(label.id)
             });
         });
         t.row(|r| {
@@ -427,7 +428,7 @@ pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
             let specify = r.cell(|ui| ui.checkbox(&mut f.row_height_on, tl!("Specify height:")));
             r.cell(|ui| {
                 ui.horizontal(|ui| {
-                    ui.add_enabled(f.row_height_on, len(&mut f.row_height, 0.02, unit));
+                    ui.add_enabled(f.row_height_on, len(&mut f.row_height, 0.02, unit)).labelled_by(specify.id);
                     ui.add_enabled_ui(f.row_height_on, |ui| {
                         let rule = craft_ui::ComboBox::from_id_salt("tp_rule")
                             .selected_text(tl!(if f.row_exact { "Exactly" } else { "At least" }))
@@ -447,15 +448,15 @@ pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
     heading(ui, "Column");
     crate::rtl::Table::new("tp_col").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
         t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Preferred width:")));
-            r.cell(|ui| ui.add(len(&mut f.column_width, 0.1, unit)));
+            let label = r.cell(|ui| ui.label(tl!("Preferred width:")));
+            r.cell(|ui| ui.add(len(&mut f.column_width, 0.1, unit)).labelled_by(label.id));
         });
     });
     heading(ui, "Cell");
     crate::rtl::Table::new("tp_cell").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
         t.row(|r| {
-            r.cell(|ui| ui.checkbox(&mut f.cell_width_on, tl!("Preferred width:")));
-            r.cell(|ui| ui.add_enabled(f.cell_width_on, len(&mut f.cell_width, 0.1, unit)));
+            let label = r.cell(|ui| ui.checkbox(&mut f.cell_width_on, tl!("Preferred width:")));
+            r.cell(|ui| ui.add_enabled(f.cell_width_on, len(&mut f.cell_width, 0.1, unit)).labelled_by(label.id));
         });
         t.row(|r| {
             r.cell(|ui| ui.label(tl!("Vertical alignment:")));
@@ -476,8 +477,8 @@ pub(super) fn cell_margins_dialog(ui: &mut Ui, f: &mut CellMarginsForm) {
     crate::rtl::Table::new("cell_margins").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
         for (label, value) in [("Top:", &mut f.top), ("Left:", &mut f.left), ("Bottom:", &mut f.bottom), ("Right:", &mut f.right)] {
             t.row(|r| {
-                r.cell(|ui| ui.label(tl!(label)));
-                r.cell(|ui| ui.add(egui::DragValue::new(value).speed(0.01).range(0.0..=max).measure(unit).max_decimals(2)));
+                let label = r.cell(|ui| ui.label(tl!(label)));
+                r.cell(|ui| ui.add(egui::DragValue::new(value).speed(0.01).range(0.0..=max).measure(unit).max_decimals(2)).labelled_by(label.id));
             });
         }
     });

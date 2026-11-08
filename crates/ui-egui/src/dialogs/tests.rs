@@ -573,6 +573,29 @@ fn paragraph_dialog_sets_a_mixed_check_box_for_all() {
     assert_eq!(p[0].line_spacing, Some(wordcraft_doc::props::LineSpacing::Multiple(6.0)), "line spacing untouched");
 }
 
+/// #3172: a blank box (the selected paragraphs differ in it) reads what is typed as the box it
+/// stands for does: "1,5" in the line spacing, with the region's decimal comma, where the blank box
+/// had egui's plain parser and refused it.
+#[test]
+fn a_blank_paragraph_box_reads_a_typed_number_as_the_box_does() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut app = mixed_selection();
+    app.run("file.options", json!({"region": "it-IT"})).unwrap();
+    app.dialog = Dialog::open("paragraph", &mut app);
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    const SPACING: &str = "Line spacing:";
+    assert_eq!(h.get_by_role_and_label(Role::SpinButton, SPACING).value().as_deref(), Some(""), "blank: the paragraphs differ");
+    h.get_by_role_and_label(Role::SpinButton, SPACING).click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::SpinButton, SPACING).type_text("1,5");
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(h.get_by_role_and_label(Role::SpinButton, SPACING).value().as_deref(), Some("1,5"), "taken, for every paragraph");
+}
+
 #[test]
 fn paragraph_dialog_sets_only_the_options_that_changed() {
     // #512: mirror indents, same-style spacing, suppress line numbers, don't hyphenate.
@@ -1831,6 +1854,123 @@ fn the_custom_properties_dialog_leaves_imported_non_text_properties_alone() {
     h.run_steps(4);
     let kinds: Vec<(&str, &str)> = h.state().session.doc.custom_props.iter().map(|p| (p.name.as_str(), p.kind.as_str())).collect();
     assert_eq!(kinds, [("Status", "lpwstr"), ("Count", "i4")], "Cancel leaves the imported property as it was");
+}
+
+/// #3172: a number box writes its unit in its text, as Word's do ("0 cm", "8 pt"), with the
+/// region's decimal separator ("1,15", not "1.15"), so a screen reader hears it while the box is
+/// edited too: a box that has the keyboard is being edited, and egui's suffix, shown only before,
+/// left NVDA saying "0,0" on Tab. The boxes are named by their labels, where the suffix was their
+/// name ("cm"), as in Table Properties.
+#[test]
+fn number_boxes_say_their_unit_while_edited() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = app_with("Some text");
+    app.run("file.options", json!({"region": "it-IT", "units": "centimeters"})).unwrap();
+    app.dialog = Dialog::open("paragraph", &mut app);
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    let value = |h: &egui_kittest::Harness<'static, WordApp>, label: &str| h.get_by_role_and_label(Role::SpinButton, label).value();
+    assert_eq!(value(&h, "Left:").as_deref(), Some("0 cm"));
+    assert_eq!(value(&h, "Before:").as_deref(), Some("0 pt"));
+    assert_eq!(value(&h, "After:").as_deref(), Some("8 pt"));
+    assert_eq!(value(&h, "Line spacing:").as_deref(), Some("1,15"), "the region's decimal comma");
+    h.get_by_role_and_label(Role::SpinButton, "After:").click();
+    h.run_steps(2);
+    let after = h.get_by_role_and_label(Role::SpinButton, "After:");
+    assert!(after.is_focused(), "a click edits the box");
+    assert_eq!(after.value().as_deref(), Some("8 pt"), "and its text keeps the unit");
+    after.type_text("12");
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(value(&h, "After:").as_deref(), Some("12 pt"), "a number typed alone is in the box's unit");
+
+    let mut app = app_with("");
+    app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    app.run("table.properties", json!({})).unwrap();
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    let names: Vec<String> = h.query_all_by_role(Role::SpinButton).filter_map(|n| n.accesskit_node().label()).collect();
+    assert!(names.iter().any(|n| n == "Indent from left:"), "named by their labels: {names:?}");
+    assert!(names.iter().all(|n| !n.ends_with("cm") && !n.ends_with('"')), "not by their unit: {names:?}");
+}
+
+/// #3172: a length box shows the unit picked in File › Options (centimetres, inches, points,
+/// millimetres), while it is edited too, and reads what is typed as Word does: a number alone in
+/// that unit, a number with the unit ("1,5 cm"), or another unit, converted ("1 in" in centimetres
+/// is 2,54 cm), with the region's decimal comma.
+#[test]
+fn length_boxes_show_the_chosen_unit_and_convert_a_typed_one() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let left = |h: &egui_kittest::Harness<'static, WordApp>| h.get_by_role_and_label(Role::SpinButton, "Left:").value().unwrap_or_default();
+    for (units, shown, typed, read) in [
+        ("centimeters", "0 cm", "1,5 cm", "1,5 cm"),
+        ("centimeters", "0 cm", "2", "2 cm"),
+        ("centimeters", "0 cm", "1 in", "2,54 cm"),
+        ("inches", "0\"", "1,5", "1,5\""),
+        ("inches", "0\"", "2,54 cm", "1\""),
+        ("points", "0 pt", "1 in", "72 pt"),
+        ("millimeters", "0 mm", "1 cm", "10 mm"),
+    ] {
+        let mut app = app_with("Some text");
+        app.run("file.options", json!({"region": "it-IT", "units": units})).unwrap();
+        let mut h = app_harness(app);
+        h.run_steps(2);
+        h.state_mut().run("ui.dialog", json!({"name": "paragraph"})).unwrap();
+        h.run_steps(4);
+        assert_eq!(left(&h), shown, "{units}: the box shows the unit");
+        h.get_by_role_and_label(Role::SpinButton, "Left:").click();
+        h.run_steps(2);
+        assert!(h.get_by_role_and_label(Role::SpinButton, "Left:").is_focused(), "{units}: a click edits the box");
+        assert_eq!(left(&h), shown, "{units}: and the unit stays while it is edited");
+        h.get_by_role_and_label(Role::SpinButton, "Left:").type_text(typed);
+        h.run_steps(2);
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+        assert_eq!(left(&h), read, "{units}: {typed:?} reads as {read:?}");
+    }
+}
+
+/// #3172: in each dialog this change touched, the number boxes are named by the labels shown
+/// beside them, as Word's are, and none by its unit: egui named a box by its suffix ("cm", "pt",
+/// `"`), and a box never linked to its label had only that name.
+#[test]
+fn number_boxes_are_named_by_their_labels_in_each_dialog() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let units = ["cm", "mm", "pt", "pi", "\"", "%", "°", "px"];
+    let dialogs: [(&str, &[&str]); 8] = [
+        ("paragraph", &["Left:", "Right:", "First line:", "Before:", "After:", "Line spacing:"]),
+        ("tableProperties", &["Preferred width:", "Indent from left:", "Specify height:"]),
+        ("tableCellMargins", &["Top:", "Left:", "Bottom:", "Right:"]),
+        ("columns", &["Width: 1", "Spacing: 1", "Width: 2"]),
+        ("dropCap", &["Lines to drop:", "Distance from text:"]),
+        ("lineNumbers", &["Start at:", "From text:", "Count by:"]),
+        ("hyphenation", &["Hyphenation zone:"]),
+        ("defineList", &["Aligned at:", "Text indent at:", "Add tab stop at:"]),
+    ];
+    for (dialog, want) in dialogs {
+        let mut app = app_with("Some text");
+        if dialog.starts_with("table") {
+            app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+        }
+        if dialog == "columns" {
+            app.run("layout.columns", json!({"count": 2})).unwrap();
+        }
+        let mut h = app_harness(app);
+        h.run_steps(2);
+        let opened = Dialog::open(dialog, h.state_mut());
+        assert!(opened.is_some(), "{dialog} opens");
+        h.state_mut().dialog = opened;
+        h.run_steps(4);
+        let names: Vec<String> = h.query_all_by_role(Role::SpinButton).filter_map(|n| n.accesskit_node().label()).collect();
+        for name in want {
+            assert!(names.iter().any(|n| n == name), "{dialog}: a box is named {name:?}: {names:?}");
+        }
+        assert!(names.iter().all(|n| !units.contains(&n.trim())), "{dialog}: no box is named by its unit: {names:?}");
+    }
 }
 
 /// #3859: a dialog is modal, as in Word. While Font is open, typing (from the frame it opens),
