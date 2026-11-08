@@ -182,14 +182,17 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .pure(),
         CommandSpec::new("document.paragraph", "Paragraph Details", "Agents", paragraph).params(r#"{"path": [n], "story"?: Story}"#).pure(),
-        CommandSpec::new("document.selection", "Selection", "Agents", |s, _| {
+        CommandSpec::new("document.selection", "Selection", "Agents", |s, v| {
+            let raw = p::bool(v, "raw").unwrap_or(false);
             let mut r = sel_result(s)?;
             if let Some(o) = r.as_object_mut() {
-                o.insert("text".into(), json!(s.selected_text()));
+                let text = if raw { s.selected_text() } else { s.selected_final_text() };
+                o.insert("text".into(), json!(text));
                 o.insert("format".into(), super::format::state(s));
             }
             Ok(r)
         })
+        .params(r#"{"raw"?: bool (the stored text, tracked deletions included)} — text is the final text otherwise (deletions dropped)"#)
         .pure(),
         CommandSpec::new("document.layout", "Layout Summary", "Agents", layout_summary).pure(),
         CommandSpec::new("document.setText", "Replace Document Text", "Agents", |s, v| {
@@ -578,8 +581,10 @@ fn inspect(s: &mut Session, v: &Value) -> CmdResult {
                     o["runs"] = json!(runs);
                 }
                 // The two coordinate systems, named: text is the final text; len, runs and
-                // deleted are stored-text offsets — what select.range takes. final = stored
-                // minus the deleted ranges.
+                // deleted are stored-text offsets — what select.range takes. With fields the
+                // final text is not an offset-for-offset image of the stored text minus the
+                // deleted ranges: a field's anchor character stands for its result text, of a
+                // different length.
                 let del = p.deleted_ranges();
                 if !del.is_empty() {
                     o["deleted"] = json!(del.iter().map(|r| json!({"start": r.start, "end": r.end})).collect::<Vec<_>>());
@@ -613,7 +618,7 @@ fn inspect(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({
         "blocks": blocks,
         "parts": parts,
-        "selection": {"anchor": pos_json(&s.sel.anchor), "focus": pos_json(&s.sel.focus), "text": s.selected_text()},
+        "selection": {"anchor": pos_json(&s.sel.anchor), "focus": pos_json(&s.sel.focus), "text": if raw { s.selected_text() } else { s.selected_final_text() }},
         "pages": l.pages.len(),
         "words": s.doc.word_count(),
         "sections": s.doc.sections().iter().map(|(end, sp)| json!({"endBlock": end, "props": sp})).collect::<Vec<_>>(),

@@ -3267,6 +3267,27 @@ fn document_text_drops_tracked_deletions() {
     assert_eq!(run(&mut s, "document.text", json!({}))["text"], "Signed by Bob Jones, Director.");
 }
 
+#[test]
+fn selection_and_inspect_drop_tracked_deletions() {
+    // #5918 review: with a tracked deletion under the selection, document.selection and the
+    // default document.inspect report the final text; raw still reports the stored text. The
+    // older tests pass only because the caret collapses after text.delete — here select.all
+    // keeps the deletion inside the selection.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Signed by Alice Smith, Partner."}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "Alice Smith, Partner"}));
+    run(&mut s, "text.insert", json!({"text": "Bob Jones, Director"}));
+    run(&mut s, "select.all", json!({}));
+    let stored = "Signed by Bob Jones, DirectorAlice Smith, Partner.";
+    assert_eq!(run(&mut s, "document.selection", json!({}))["text"], "Signed by Bob Jones, Director.");
+    assert_eq!(run(&mut s, "document.selection", json!({"raw": true}))["text"], stored);
+    assert_eq!(run(&mut s, "document.inspect", json!({}))["selection"]["text"], "Signed by Bob Jones, Director.");
+    assert_eq!(run(&mut s, "document.inspect", json!({"raw": true}))["selection"]["text"], stored);
+    let r = run(&mut s, "document.inspect", json!({}));
+    assert_eq!(r["blocks"][0]["text"], "Signed by Bob Jones, Director.", "the paragraph reads final too");
+}
+
 /// The author of the revision `rid` points to.
 fn author_of(s: &Session, rid: Option<u32>) -> Option<String> {
     rid.and_then(|r| s.doc.revisions.get(r as usize)).map(|r| r.author.clone())
