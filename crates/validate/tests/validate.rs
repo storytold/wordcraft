@@ -4402,3 +4402,26 @@ fn ct_mismatch_customxml_not_consumed_still_fires() {
     let report = validate(&d);
     assert_finding(&report, "CT-MISMATCH", Some("word/customXml/item1.xml"));
 }
+
+#[test]
+fn ct_mismatch_duplicate_id_exemption_follows_the_resolved_relationship() {
+    // The id is duplicated: the first relationship (the one
+    // CONTENTPART-TYPE resolves for the contentPart) reaches a
+    // text/xml part and is exempt; the duplicate reaches an image
+    // part and is NOT the consumed relationship, so the pairing
+    // applies to it. REL-DUP-ID fires on the duplication itself.
+    let mut d = Doc::minimal();
+    d.set_document(&one_content_part("rIdCP"));
+    d.set(
+        "word/_rels/document.xml.rels",
+        rels_xml(
+            r#"<Relationship Id="rIdCP" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="customXml/item1.xml"/><Relationship Id="rIdCP" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="media/pic.png"/>"#,
+        ),
+    );
+    d.add_with_override("word/customXml/item1.xml", "text/xml", b"<root/>".to_vec());
+    d.add_with_override("word/media/pic.png", "image/png", b"PNG".to_vec());
+    let report = validate(&d);
+    assert_finding(&report, "REL-DUP-ID", Some("word/_rels/document.xml.rels"));
+    assert_finding(&report, "CT-MISMATCH", Some("word/media/pic.png"));
+    assert!(!has(&report, "CONTENTPART-TYPE"), "findings: {:?}", report.findings);
+}

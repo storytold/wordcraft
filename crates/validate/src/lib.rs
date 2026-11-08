@@ -684,7 +684,7 @@ pub(crate) fn validate_bytes_limited(bytes: &[u8], limits: Limits) -> Report {
     };
     check_content_types(&pkg, &mut acc);
     let xml = check_xml(&pkg, &mut acc);
-    check_rels(&pkg, &xml.refs, &xml.content_parts, xml.content_part_capped_any, &mut acc);
+    check_rels(&pkg, &xml.refs, &xml.content_parts, &xml.content_part_incomplete_owners, &mut acc);
     check_content_part_types(&pkg, &xml.content_parts, xml.content_part_capped_any, &mut acc);
     check_story(&pkg, &xml.facts, xml.compat, &mut acc);
     check_note_pr(&xml.facts, &xml, &mut acc);
@@ -813,6 +813,11 @@ struct XmlScan {
     content_parts: Vec<(String, Vec<String>)>,
     /// A contentPart collection (per part or pooled) hit the fact budget.
     content_part_capped_any: bool,
+    /// Owning parts whose contentPart consumption is NOT fully
+    /// established: their collection hit the fact budget, or the part
+    /// itself did not parse. CT-MISMATCH's customXml scoping must not
+    /// conclude non-consumption for these owners.
+    content_part_incomplete_owners: HashSet<String>,
     compat: Compat,
     /// Ids listed by `w:footnotePr` / `w:endnotePr` in settings parts.
     note_listings: (Vec<String>, Vec<String>),
@@ -844,6 +849,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     let mut content_parts: Vec<(String, Vec<String>)> = Vec::new();
     let mut content_part_total = 0usize;
     let mut content_part_capped_any = false;
+    let mut content_part_incomplete_owners: HashSet<String> = HashSet::new();
     let mut compat_on = false;
     let mut compat_unknown = false;
     let mut note_listings: (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
@@ -926,11 +932,16 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
         }
         if scanned.content_part_capped {
             content_part_capped_any = true;
+            content_part_incomplete_owners.insert(e.name.clone());
         }
         if !scanned.content_parts.is_empty()
             && append_content_parts(&mut content_parts, &mut content_part_total, &e.name, scanned.content_parts, acc.limits.facts)
         {
             content_part_capped_any = true;
+            content_part_incomplete_owners.insert(e.name.clone());
+        }
+        if scanned.malformed.is_some() && role.is_story {
+            content_part_incomplete_owners.insert(e.name.clone());
         }
         if !scanned.refs.is_empty() && !refs_pooled_capped {
             if pooled_refs.saturating_add(scanned.refs.len()) > acc.limits.facts {
@@ -974,6 +985,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
         refs,
         content_parts,
         content_part_capped_any,
+        content_part_incomplete_owners,
         compat,
         note_listings,
         special_notes,
@@ -1114,7 +1126,7 @@ fn check_content_part_types(pkg: &Package, content_parts: &[(String, Vec<String>
     acc.ran("CONTENTPART-TYPE");
     if capped {
         acc.note(
-            "the fact budget stopped collection of some w:contentPart references, so CONTENTPART-TYPE did not check every reference".to_string(),
+            "the fact budget stopped collection of some w:contentPart references, so CONTENTPART-TYPE did not check every reference, and CT-MISMATCH's customXml pairing was not applied to owners whose collection stopped".to_string(),
         );
         acc.set_incomplete();
     }
@@ -1229,7 +1241,13 @@ fn relationship_role(kind: &str) -> Option<scan::PartRole> {
 }
 
 /// Verify relationships: duplicate IDs, dangling targets, typed targets, and content type matches.
-fn check_rels(pkg: &Package, refs: &[(String, Vec<RefFact>)], content_parts: &[(String, Vec<String>)], content_part_capped: bool, acc: &mut Acc) {
+fn check_rels(
+    pkg: &Package,
+    refs: &[(String, Vec<RefFact>)],
+    content_parts: &[(String, Vec<String>)],
+    content_part_incomplete_owners: &HashSet<String>,
+    acc: &mut Acc,
+) {
     acc.ran("REL-DUP-ID");
     for rp in &pkg.rels {
         report_duplicate_rel_ids(rp, acc);
@@ -1254,7 +1272,7 @@ fn check_rels(pkg: &Package, refs: &[(String, Vec<RefFact>)], content_parts: &[(
     check_typed_targets(pkg, acc);
     check_typed_image_refs(pkg, refs, acc);
     check_part_refs(pkg, refs, acc);
-    check_typed_content(pkg, content_parts, content_part_capped, acc);
+    check_typed_content(pkg, content_parts, content_part_incomplete_owners, acc);
 }
 
 /// Find duplicate relationship IDs within a single `.rels` part and report `REL-DUP-ID` findings.
@@ -1451,16 +1469,25 @@ fn fixed_rel_content_type(kind: &str) -> Option<&'static str> {
 /// `w:contentPart` element is governed by CONTENTPART-TYPE instead —
 /// ECMA-376 §17.3.3.2's own contentPart example reaches a `text/xml` part
 /// through exactly this relationship type, and Word for the web opens
-/// such a file cleanly. When the contentPart collection was capped, the
-/// consumed set is not established, so the customXml row is skipped
-/// rather than risk the false positive (the run is already INCOMPLETE
-/// from the capped collection).
-fn check_typed_content(pkg: &Package, content_parts: &[(String, Vec<String>)], content_part_capped: bool, acc: &mut Acc) {
+/// such a file cleanly. The exemption tracks consumption per owner: it
+/// applies to the relationship CONTENTPART-TYPE itself resolves for the
+/// id (the first with that id in the owner's `.rels`, matching its
+/// first-wins index), and for owners whose consumption collection is
+/// incomplete (budget-capped or unparseable) the row is not applied at
+/// all — non-consumption is not established there, and the run is
+/// already INCOMPLETE. Owners with complete collections are checked
+/// normally.
+fn check_typed_content(pkg: &Package, content_parts: &[(String, Vec<String>)], content_part_incomplete_owners: &HashSet<String>, acc: &mut Acc) {
     acc.ran("CT-MISMATCH");
     // Relationship ids consumed by a `w:contentPart`, keyed by the
     // owning part's relationships-part name (compared case-insensitively).
     let consumed: HashMap<String, HashSet<&str>> =
         content_parts.iter().map(|(owner, ids)| (rels_part_name(owner).to_ascii_lowercase(), ids.iter().map(String::as_str).collect())).collect();
+    // Relationships-part names whose owner's consumption collection is
+    // incomplete (budget-capped or unparseable): non-consumption is not
+    // established for those owners, so the customXml row is not applied
+    // to their relationships at all.
+    let incomplete_rels: HashSet<String> = content_part_incomplete_owners.iter().map(|owner| rels_part_name(owner).to_ascii_lowercase()).collect();
     // `header` and `footer` pairings are checked for a non-main owner's relationships part only
     // (the glossary document today, but computed from the owner scopes rather than hardcoded). The
     // main part's header/footer relationships belong to `REL-TYPED`, which already checks them from
@@ -1475,7 +1502,12 @@ fn check_typed_content(pkg: &Package, content_parts: &[(String, Vec<String>)], c
         .collect();
     for rp in &pkg.rels {
         let is_non_main_owner = non_main_owner_rels.contains(&rp.name.to_ascii_lowercase());
+        let rp_key = rp.name.to_ascii_lowercase();
+        // First occurrence of each relationship id in this part, in
+        // document order: the occurrence CONTENTPART-TYPE resolves.
+        let mut seen_ids: HashSet<&str> = HashSet::new();
         for r in &rp.rels {
+            let first_with_id = seen_ids.insert(r.id.as_str());
             let Some(target) = &r.target_abs else { continue };
             let kind = tail(&r.kind);
             let Some(want) = fixed_rel_content_type(kind) else { continue };
@@ -1483,7 +1515,7 @@ fn check_typed_content(pkg: &Package, content_parts: &[(String, Vec<String>)], c
                 continue;
             }
             if kind == "customXml"
-                && (content_part_capped || consumed.get(&rp.name.to_ascii_lowercase()).is_some_and(|ids| ids.contains(r.id.as_str())))
+                && (incomplete_rels.contains(&rp_key) || (first_with_id && consumed.get(&rp_key).is_some_and(|ids| ids.contains(r.id.as_str()))))
             {
                 continue;
             }
@@ -2819,6 +2851,57 @@ mod budget_tests {
     /// since not every reference was checked, and not FAIL, since no
     /// defect was established.
     #[test]
+    /// The #5982 exemption is per-owner: when the MAIN part's
+    /// contentPart collection caps out, a different owner whose
+    /// collection completed (here a header with no contentParts at
+    /// all) still gets its customXml pairing judged.
+    #[test]
+    fn ct_mismatch_survives_another_owners_capped_contentpart_collection() {
+        let ct = format!(
+            r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="{}"/><Override PartName="/word/header1.xml" ContentType="{}"/><Override PartName="/word/data/bad.xml" ContentType="text/xml"/></Types>"#,
+            package::MAIN_CONTENT_TYPE,
+            package::HEADER_CONTENT_TYPE
+        );
+        let elems: String = (0..6).map(|i| format!(r#"<w:p><w:r><w:contentPart r:id="cp{i}"/></w:r></w:p>"#)).collect();
+        let doc = format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}"><w:body>{elems}<w:sectPr><w:headerReference w:type="default" r:id="rIdH"/></w:sectPr></w:body></w:document>"#
+        )
+        .into_bytes();
+        let mut rel_body: String = (0..6)
+            .map(|i| format!(r#"<Relationship Id="cp{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="data.xml"/>"#))
+            .collect();
+        rel_body.push_str(
+            r#"<Relationship Id="rIdH" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>"#,
+        );
+        let doc_rels = rels(&rel_body);
+        let header = format!(r#"<?xml version="1.0"?><w:hdr xmlns:w="{NS_W}"><w:p/></w:hdr>"#).into_bytes();
+        let header_rels = rels(
+            r#"<Relationship Id="rIdX" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="data/bad.xml"/>"#,
+        );
+        let bytes = tiny_zip(&[
+            ("[Content_Types].xml", ct.into_bytes()),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", doc),
+            ("word/_rels/document.xml.rels", doc_rels),
+            ("word/header1.xml", header),
+            ("word/_rels/header1.xml.rels", header_rels),
+            ("word/data/bad.xml", b"<root/>".to_vec()),
+            ("word/data.xml", b"<root/>".to_vec()),
+        ]);
+        let report = validate_bytes_limited(&bytes, Limits { facts: 4, ..Limits::default() });
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.rule == "CT-MISMATCH")
+            .unwrap_or_else(|| panic!("CT-MISMATCH was suppressed by another owner's cap; findings: {:?}", report.findings));
+        assert_eq!(f.part.as_deref(), Some("word/data/bad.xml"));
+        assert!(
+            report.coverage_notes.iter().any(|n| n.contains("contentPart")),
+            "the capped collection must still be disclosed; notes: {:?}",
+            report.coverage_notes
+        );
+    }
+
     fn content_part_capped_with_valid_references_is_incomplete() {
         let ct = format!(
             r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="{}"/><Override PartName="/word/data.xml" ContentType="text/xml"/></Types>"#,
