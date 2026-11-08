@@ -1,6 +1,6 @@
 # Running a collaborative WordCraft session
 
-> Implementation status, verification results and the remaining craft-libs pin:
+> Implementation status, verification results and the craft-libs fork pin:
 > [`STATUS.md`](STATUS.md).
 
 The sync server is `wordcraft-collab-server` (this workspace); the desktop app
@@ -81,8 +81,8 @@ The same session can be driven headlessly through the control channel or MCP:
 - `kept`/`passthrough` are not in the protocol: the authoritative server keeps
   the source `.docx` next to the model, and commit says what it could not keep.
 - Web: `wordcraft:session` opens the session; `session-state`/`presence`/`commit`
-  go back through the host bridge. The craft-libs pin still lacks those
-  messages (`host-bridge.md`, `STATUS.md` §4).
+  go back through the host bridge; `craft-web-host` comes from the fork pin
+  `copoka/craft-libs@7666e2b1` (`host-bridge.md` §"Build note", `STATUS.md` §4).
 
 ## 6. Tests
 

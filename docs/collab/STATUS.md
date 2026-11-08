@@ -1,10 +1,11 @@
 # Real-time collaboration: implementation status
 
-- Date: 2026-11-08
+- Date: 2026-11-09
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
-- HEAD at this writing: the web host-bridge slice on top of `fec9a9a8`
-- Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host blocker:
+- HEAD at this writing: the craft-libs pin commit on top of the web
+  host-bridge slice (`60f30f0a`)
+- Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
   `host-bridge.md`.
 
 This page records what is implemented, how it was verified, what is known to be
@@ -144,7 +145,7 @@ missing, and where the next session should start.
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
 | RFC, protocol, tests, documentation | done | `rfc.md`, `server.md`, `README.md`, this page |
 | PR to upstream | open (draft) | PR #5834; GitHub CI waits for maintainer approval |
-| Web host bridge | done in the app; needs the craft-libs bump | `host.rs`, `collab-web`, `host-bridge.md` |
+| Web host bridge | done; `craft-web-host` pinned to the fork revision `7666e2b1` | `host.rs`, `collab-web`, `host-bridge.md` |
 
 ## 3. Verification
 
@@ -176,8 +177,15 @@ Results at this writing:
   `ui-egui` and `wordcraft-web`, `cargo fmt --all --check`, `cargo xtask layers`
   (27 crates) and `cargo xtask wasm` (22 crates) are green.
 - These runs used `craft-web-host` from a path to the `craft-libs`
-  `feat/collab-session-messages` checkout; the committed manifest keeps the
-  upstream pin (see §4).
+  `feat/collab-session-messages` checkout; the manifest now pins that branch as
+  a git dependency of the `copoka` fork (see §4).
+- With the git pin in place, `cargo check -p wordcraft-web --target
+  wasm32-unknown-unknown`, `cargo xtask wasm` (22 crates), `cargo fmt --all
+  --check`, `cargo clippy -p wordcraft-collab-web -p wordcraft-web --all-targets
+  -- -D warnings` and `cargo test -p wordcraft-collab-web -p wordcraft-web`
+  (14 tests) run from the committed manifest, green.
+- `trunk build` in `apps/wordcraft-web` (trunk 0.22.1) finished on the pin and
+  wrote `dist/web` (`index.html`, the JS glue, a 76.9 MB dev `_bg.wasm`).
 - The workspace test step excludes three proofing tests that fail on `main` in
   this environment too (French fallback marks text without a French dictionary);
   with `CRAFT_I18N_DIR` pointing at the pinned `craft-i18n` checkout the Swiss
@@ -185,15 +193,18 @@ Results at this writing:
 
 ## 4. Known limitations
 
-- **The craft-libs bump is still external.** `crates/web-host` in
-  `storytold/craft-libs` has the six collaboration messages on the
-  `feat/collab-session-messages` branch (commit `7666e2b`, pushed to
-  `copoka/craft-libs`), not in the pinned upstream revision. The branch was
-  built and tested against a path dependency on that checkout
-  (`/tmp/opencode/craft-libs`); the committed `apps/wordcraft-web/Cargo.toml`
-  keeps the upstream `craft-web-host` pin until the craft-libs change lands.
-  Until then the pinned crate has no `Message::Session`, so a clean wasm build of
-  this branch needs the path/feature pin (see `host-bridge.md` §"Build note").
+- **The craft-libs pin is a fork revision.** `crates/web-host` in
+  `storytold/craft-libs` has the six collaboration messages on
+  `feat/collab-session-messages`, commit
+  `7666e2b100d8cf12998f9b57d3b036964cc3189c` (pushed to `copoka/craft-libs`),
+  not in upstream `main` yet. Per ADR-0016 §3 `apps/wordcraft-web/Cargo.toml`
+  pins `craft-web-host` to that fork revision
+  (`git = "https://github.com/copoka/craft-libs"`), and `Cargo.lock` records the
+  same source/rev; it is the only fork dependency — every other craft-libs crate
+  stays on its `storytold/craft-libs` revision. The wasm app builds and tests on
+  that pin (see §3 and `host-bridge.md` §"Build note"). After the craft-libs PR
+  merges, point the URL back at `storytold/craft-libs` and pin the merge commit;
+  nothing else in the app changes.
 - Web collab has no manual browser test yet; the state machine, the host
   routing, the status words and the participant mapping are covered headlessly
   (`wordcraft-collab-web`, `wordcraft-web`).
@@ -213,13 +224,14 @@ Results at this writing:
 
 ## 5. Next session
 
-1. Land the `craft-libs` `web-host` change (or a git pin to
-   `feat/collab-session-messages`) and restore a single pinned revision for all
-   five apps. Then build the web app with trunk and run a manual two-client test
-   through a cabinet-like host page (`wordcraft:session` → edit → `presence` →
-   `commit` → `wordcraft:committed`).
-2. Mark PR #5834 ready once the host-bridge pin is resolved and CI has run
-   (GitHub reports `action_required` for fork PRs until a maintainer approves).
+1. The `craft-libs` git pin is in place (ADR-0016 §3, `7666e2b1`) and the web
+   app builds with trunk on it; the same revision still has to be used by the
+   other four apps. Remaining: run a manual two-client test through a
+   cabinet-like host page (`wordcraft:session` → edit → `presence` → `commit` →
+   `wordcraft:committed`).
+2. Mark PR #5834 ready once CI has run and the pin is acceptable to the
+   maintainers (GitHub reports `action_required` for fork PRs until a maintainer
+   approves).
 3. Optional hardening: command inverses for the common engine commands, persisting
    the `opId` dedup window across a snapshot restore, table-cell node ids and
    property primitives, offline queue. (The multi-operation undo transaction is

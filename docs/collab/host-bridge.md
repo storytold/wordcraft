@@ -1,9 +1,10 @@
 # Host bridge: collaboration messages
 
-The web build talks to the cabinet through `craft-web-host` (storytold/craft-libs),
+The web build talks to the cabinet through `craft-web-host` (craft-libs),
 which owns the message contract and both transports (same-origin `postMessage` for
 an iframe, DOM `CustomEvent`s on the canvas). The collaboration messages live on
-the crate's `feat/collab-session-messages` branch; the upstream pin does not have
+the crate's `feat/collab-session-messages` branch (`copoka/craft-libs`
+`7666e2b1`, pinned by ADR-0016 §3); `storytold/craft-libs` `main` does not have
 them yet. Collaboration needs six more messages (`INTEGRATION.md` §6).
 
 ## What the crate change adds
@@ -54,16 +55,47 @@ single-user mode (the rule from `INTEGRATION.md` §6).
 
 ## Build note
 
-The six messages are on the `feat/collab-session-messages` branch of
-`storytold/craft-libs` (commit `7666e2b`, pushed to `copoka/craft-libs`), not in
-the upstream pin. For a local build point `craft-web-host` at that checkout (or a
-git pin to the branch); the committed manifest keeps the upstream pin until the
-craft-libs change lands.
+The six messages live on `feat/collab-session-messages` in `copoka/craft-libs`,
+commit **`7666e2b100d8cf12998f9b57d3b036964cc3189c`** ("craft-web-host: carry a
+collaboration session over the host bridge"), which is not in
+`storytold/craft-libs` `main` yet. Per ADR-0016 §3 the app pins that fork
+revision instead of a path dependency, so `apps/wordcraft-web/Cargo.toml` reads:
+
+```toml
+craft-web-host = { git = "https://github.com/copoka/craft-libs", rev = "7666e2b100d8cf12998f9b57d3b036964cc3189c", version = "0.1.0" }
+```
+
+`Cargo.lock` records the same source and revision
+(`git+https://github.com/copoka/craft-libs?rev=7666e2b100d8…`). It is the only
+fork dependency in the workspace: `craft-ui`, `craft-i18n`, `craft-window`,
+`craft-print`, `craft-proof`, `craft-font-*`, `craft-pdf` and `craft-update`
+still point at `storytold/craft-libs` revisions.
+
+Checked on the pin (2026-11-08, HEAD `60f30f0a` + this change):
+
+| Step | Result |
+|---|---|
+| `cargo check -p wordcraft-web --target wasm32-unknown-unknown` | ok |
+| `cargo xtask wasm` | ok, 22 crates |
+| `trunk build` in `apps/wordcraft-web` (trunk 0.22.1) | ok — `dist/web` with `index.html`, the JS glue and a 76.9 MB `_bg.wasm` (dev profile) |
+| `cargo test -p wordcraft-collab-web -p wordcraft-web` | 14 tests (5 + 9) green |
+| `cargo fmt --all --check` | ok |
+| `cargo clippy -p wordcraft-collab-web -p wordcraft-web --all-targets -- -D warnings` | ok (native) |
+
+Around the pinned crate the build only prints two pre-existing
+`wordcraft-ui-egui` wasm warnings (`unused imports: block_behind/forget_nudge`,
+`unused variable: system_arabic`) and no errors; `cargo xtask wasm` stays green
+with them.
+
+After the craft-libs PR merges, change the URL back to
+`storytold/craft-libs` and pin the merge commit; nothing else in the app moves.
 
 ## Until then
 
 The desktop build connects directly to the sync server: `collab.enable` stores the
 address, `WORDCRAFT_COLLAB_TOKEN` supplies the JWT, and `crates/collab-app` +
 `ui-egui/collab.rs` provide the session, participants panel, remote carets, viewer
-gate and commit button (`README.md`). The web build stays single-user; this is a
-missing external contract, not an untested code path.
+gate and commit button (`README.md`). The web build opens a session only when the
+host page sends `wordcraft:session`; the pinned crate supplies the messages, and
+without that message the app stays single-user — the contract rule from
+`INTEGRATION.md` §6, not an untested code path.
