@@ -441,7 +441,12 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
         if props.align.is_none() {
             props.align = info.align;
         }
-        props.bidi_visual |= info.bidi;
+        // Direction from this table's own (depth-1) row-end marks only: a nested table's
+        // row-end mark carries the nested table's sprmTFBiDi, and its `ttp` is false
+        // (sprmPFInnerTtp isn't read), so it must not mirror the outer table.
+        if info.ttp {
+            props.bidi_visual |= info.bidi;
+        }
         if props.indent.is_none() {
             props.indent = info.indent;
         }

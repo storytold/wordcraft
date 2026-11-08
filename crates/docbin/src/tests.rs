@@ -2713,6 +2713,36 @@ fn direction_split_keeps_the_earlier_table_when_the_new_row_nests_a_table() {
 }
 
 #[test]
+fn nested_right_to_left_table_does_not_turn_its_outer_table() {
+    // A left-to-right table whose second row nests a right-to-left table. The nested row's
+    // end (a depth-2 paragraph mark with sprmPFInnerTtp) carries that table's sprmTFBiDi; the
+    // outer table's direction comes from its own (depth-1) row-end marks only, so the outer
+    // rows are never split apart by direction nor mirrored.
+    let text = "a\u{7}\u{7}x\r\r\u{7}\u{7}tail\r";
+    let inner_row_end = grpprl(&[(0x2416, &[0x01]), (0x6649, &[2, 0, 0, 0]), (0x244B, &[0x01]), (0x244C, &[0x01]), (0x560B, &1u16.to_le_bytes())]);
+    let doc = read(&direction_split_doc(
+        text,
+        vec![
+            (0, 0, in_table_at(1)),
+            (2, 0, row_end_mark(false, true)),
+            (3, 0, in_table_at(2)),
+            (5, 0, inner_row_end),
+            (6, 0, in_table_at(1)),
+            (7, 0, row_end_mark(false, true)),
+            (8, 0, Vec::new()),
+        ],
+    ))
+    .expect("opens");
+    let bidi: Vec<_> = doc.body.iter().filter_map(|b| b.as_table()).map(|t| t.props.bidi_visual).collect();
+    assert!(bidi.iter().all(|b| !b), "no outer table reads right to left: {bidi:?}");
+    // The nesting is deeper than the reader models: the whole outer table degrades to its
+    // paragraphs, as it did before the direction split, and no text is lost (the nested
+    // row's end mark is an empty paragraph of its own).
+    let paras: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect();
+    assert_eq!(paras, ["a", "x", "", "tail"]);
+}
+
+#[test]
 fn direction_split_with_content_on_the_row_end_mark() {
     // The right-to-left row's row-end mark carries text of its own: that text is a cell of the
     // new table, and the left-to-right table above keeps only its own cell.
