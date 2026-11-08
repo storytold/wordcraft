@@ -982,59 +982,158 @@ fn new_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ok || cancel
 }
 
+/// Body of the Modify Style dialog. Edits style properties (name, Font tab, and for paragraph
+/// styles, Paragraph tab with alignment, indents, and line spacing), dispatching updates via `styles.modify`.
 fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
-    let Dialog::ModifyStyle { back, resume, id, name, font, size, bold, italic, color, before, after } = d else {
+    let Dialog::ModifyStyle {
+        back,
+        resume,
+        id,
+        name,
+        font,
+        size,
+        bold,
+        italic,
+        color,
+        before,
+        after,
+        align,
+        left,
+        right,
+        first,
+        line,
+        initial_line: _,
+        non_multiple_line: _,
+        is_char,
+        bidi,
+        tab,
+        start,
+    } = d
+    else {
         return false;
     };
-    crate::rtl::Table::new("ms").columns(2).show(ui, |t| {
+    if start.is_empty() {
+        *start = super::modify_style_start(
+            name,
+            font,
+            *size,
+            *bold,
+            *italic,
+            color,
+            (!*is_char).then_some((align.as_str(), *left, *right, *first, *before, *after, *line)),
+        );
+    }
+    crate::rtl::Table::new("ms_name").columns(2).show(ui, |t| {
         t.row(|r| {
             let name_label = r.cell(|ui| ui.label(tl!("Name:")));
             r.cell(|ui| ui.text_edit_singleline(name).labelled_by(name_label.id));
         });
-        t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Font:")));
-            r.cell(|ui| {
-                let shown = app.previews.font_shown(font);
-                let fams = app.previews.families();
-                let prev = app.previews.font_preview_fn();
-                if let Some(f) = crate::widgets::font_combo(ui, "ms_font", 220.0, &shown, &fams, Some(&*prev)) {
-                    if f == crate::widgets::ADD_FONT {
-                        let _ = app.run("font.add", json!({}));
-                    } else {
-                        *font = app.previews.font_stored(&f);
-                    }
-                }
-            });
-        });
-        t.row(|r| {
-            let size_label = r.cell(|ui| ui.label(tl!("Size:")));
-            r.cell(|ui| ui.add(egui::DragValue::new(size).range(1.0..=1638.0).speed(0.5)).labelled_by(size_label.id));
-        });
-        t.row(|r| {
-            let color_label = r.cell(|ui| ui.label(tl!("Color:")));
-            r.cell(|ui| ui.text_edit_singleline(color).labelled_by(color_label.id));
-        });
-        t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Space before/after:")));
-            r.cell(|ui| {
-                ui.horizontal(|ui| {
-                    ui.add(egui::DragValue::new(before).range(0.0..=1584.0)).accessible_name(tl!("Space before"));
-                    ui.add(egui::DragValue::new(after).range(0.0..=1584.0)).accessible_name(tl!("Space after"));
+    });
+    if !*is_char {
+        let names = ["Font", "Paragraph"].map(|n| tl!(n).to_string());
+        if let Some(k) = crate::widgets::dialog_tabs(ui, &names, *tab as usize) {
+            *tab = k as u8;
+        }
+        ui.add_space(6.0);
+    }
+    match if *is_char { 0 } else { *tab } {
+        0 => {
+            crate::rtl::Table::new("ms_font").columns(2).show(ui, |t| {
+                t.row(|r| {
+                    r.cell(|ui| ui.label(tl!("Font:")));
+                    r.cell(|ui| {
+                        let shown = app.previews.font_shown(font);
+                        let fams = app.previews.families();
+                        let prev = app.previews.font_preview_fn();
+                        if let Some(f) = crate::widgets::font_combo(ui, "ms_font", 220.0, &shown, &fams, Some(&*prev)) {
+                            if f == crate::widgets::ADD_FONT {
+                                let _ = app.run("font.add", json!({}));
+                            } else {
+                                *font = app.previews.font_stored(&f);
+                            }
+                        }
+                    });
+                });
+                t.row(|r| {
+                    let size_label = r.cell(|ui| ui.label(tl!("Size:")));
+                    r.cell(|ui| ui.add(egui::DragValue::new(size).range(1.0..=1638.0).speed(0.5)).labelled_by(size_label.id));
+                });
+                t.row(|r| {
+                    let color_label = r.cell(|ui| ui.label(tl!("Color:")));
+                    r.cell(|ui| ui.text_edit_singleline(color).labelled_by(color_label.id));
                 });
             });
-        });
-    });
-    ui.horizontal(|ui| {
-        ui.checkbox(bold, tl!("Bold"));
-        ui.checkbox(italic, tl!("Italic"));
-    });
+            ui.horizontal(|ui| {
+                ui.checkbox(bold, tl!("Bold"));
+                ui.checkbox(italic, tl!("Italic"));
+            });
+        }
+        1 => {
+            const ALIGNS: [(&str, &str); 4] = [("left", "Left"), ("center", "Center"), ("right", "Right"), ("justify", "Justify")];
+            ui.horizontal(|ui| {
+                let align_label = ui.label(tl!("Alignment:"));
+                let shown = ALIGNS.iter().find(|(v, _)| v == align).map_or(align.as_str(), |(_, l)| tl!(l));
+                let combo = craft_ui::ComboBox::from_id_salt("ms_para_align").selected_text(shown).show_ui(ui, |ui| {
+                    for (v, l) in ALIGNS {
+                        ui.selectable_value(align, v.to_string(), tl!(l));
+                    }
+                });
+                combo.response.labelled_by(align_label.id);
+            });
+            ui.label(egui::RichText::new(tl!("Indentation")).font(semibold(12.5)));
+            let mut m = std::collections::BTreeSet::new();
+            crate::rtl::Table::new("ms_ind").columns(4).show(ui, |t| {
+                t.row(|r| {
+                    let left_label = r.cell(|ui| ui.label(tl!("Left:")));
+                    r.cell(|ui| para_number(ui, left, ParaNumber::Length, "left", &mut m, &left_label));
+                    let right_label = r.cell(|ui| ui.label(tl!("Right:")));
+                    r.cell(|ui| para_number(ui, right, ParaNumber::Length, "right", &mut m, &right_label));
+                });
+                t.row(|r| {
+                    let first_label = r.cell(|ui| ui.label(tl!("First line:")));
+                    r.cell(|ui| para_number(ui, first, ParaNumber::Length, "indentFirst", &mut m, &first_label));
+                });
+            });
+            ui.label(egui::RichText::new(tl!("Spacing")).font(semibold(12.5)));
+            crate::rtl::Table::new("ms_sp").columns(4).show(ui, |t| {
+                t.row(|r| {
+                    let before_label = r.cell(|ui| ui.label(tl!("Before:")));
+                    r.cell(|ui| para_number(ui, before, ParaNumber::Points, "spaceBefore", &mut m, &before_label));
+                    let line_label = r.cell(|ui| ui.label(tl!("Line spacing:")));
+                    r.cell(|ui| para_number(ui, line, ParaNumber::Lines, "lineSpacing", &mut m, &line_label));
+                });
+                t.row(|r| {
+                    let after_label = r.cell(|ui| ui.label(tl!("After:")));
+                    r.cell(|ui| para_number(ui, after, ParaNumber::Points, "spaceAfter", &mut m, &after_label));
+                });
+            });
+        }
+        _ => {}
+    }
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
-        let mut chr = json!({"font": font, "size": *size, "bold": *bold, "italic": *italic});
-        if let Some(c) = wordcraft_doc::Rgb::parse(color) {
-            chr["color"] = json!({"Rgb": [c.0, c.1, c.2]});
-        }
-        let _ = app.run("styles.modify", json!({"style": id, "name": name, "chr": chr, "para": {"spaceBefore": *before, "spaceAfter": *after}}));
+        apply_modify_style(
+            app,
+            &ModifyStyleApply {
+                id,
+                name,
+                font,
+                size: *size,
+                bold: *bold,
+                italic: *italic,
+                color,
+                before: *before,
+                after: *after,
+                align,
+                left: *left,
+                right: *right,
+                first: *first,
+                line: *line,
+                is_char: *is_char,
+                bidi: *bidi,
+                start,
+            },
+        );
     }
     if (ok || cancel) && *back {
         app.dialog = Some(Dialog::ManageStyles { alphabetical: false, selected: id.clone() });
@@ -1045,6 +1144,123 @@ fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         app.dialog = Some(*r);
     }
     ok || cancel
+}
+
+/// Values read from the Modify Style dialog controls to apply to the style on OK.
+struct ModifyStyleApply<'a> {
+    id: &'a str,
+    name: &'a str,
+    font: &'a str,
+    size: f32,
+    bold: bool,
+    italic: bool,
+    color: &'a str,
+    before: f32,
+    after: f32,
+    align: &'a str,
+    left: f32,
+    right: f32,
+    first: f32,
+    line: f32,
+    is_char: bool,
+    bidi: bool,
+    start: &'a serde_json::Map<String, Value>,
+}
+
+/// Applies changes made in the Modify Style dialog to style `id`, saving only edited properties
+/// and converting visual right-to-left coordinates back to logical values (#5833).
+fn apply_modify_style(app: &mut WordApp, m: &ModifyStyleApply<'_>) {
+    let mut params = json!({"style": m.id});
+    if m.start.get("name").and_then(Value::as_str) != Some(m.name) {
+        params["name"] = json!(m.name);
+    }
+    let mut chr = serde_json::Map::new();
+    if m.start.get("font").and_then(Value::as_str) != Some(m.font) {
+        chr.insert("font".into(), json!(m.font));
+    }
+    if m.start.get("size").and_then(Value::as_f64).is_some_and(|s| (m.size - s as f32).abs() > 0.001) {
+        chr.insert("size".into(), json!(m.size));
+    }
+    if m.start.get("bold").and_then(Value::as_bool) != Some(m.bold) {
+        chr.insert("bold".into(), json!(m.bold));
+    }
+    if m.start.get("italic").and_then(Value::as_bool) != Some(m.italic) {
+        chr.insert("italic".into(), json!(m.italic));
+    }
+    if m.start.get("color").and_then(Value::as_str) != Some(m.color) {
+        if let Some(c) = wordcraft_doc::Rgb::parse(m.color) {
+            chr.insert("color".into(), json!({"Rgb": [c.0, c.1, c.2]}));
+        } else if m.color.eq_ignore_ascii_case("auto") {
+            chr.insert("color".into(), json!("Auto"));
+        }
+    }
+    if !chr.is_empty() {
+        params["chr"] = Value::Object(chr);
+    }
+    if !m.is_char {
+        let unit = crate::options::unit().pt_per_unit();
+        let mut para = serde_json::Map::new();
+
+        let align_changed = m.start.get("align").and_then(Value::as_str) != Some(m.align);
+        if align_changed {
+            let logical_align = if m.bidi {
+                match m.align {
+                    "left" => "right",
+                    "right" => "left",
+                    other => other,
+                }
+            } else {
+                m.align
+            };
+            para.insert("align".into(), json!(logical_align));
+        }
+
+        let left_changed = m.start.get("left").and_then(Value::as_f64).is_some_and(|s| (m.left - s as f32).abs() > 0.001);
+        let right_changed = m.start.get("right").and_then(Value::as_f64).is_some_and(|s| (m.right - s as f32).abs() > 0.001);
+        let first_changed = m.start.get("first").and_then(Value::as_f64).is_some_and(|s| (m.first - s as f32).abs() > 0.001);
+
+        if m.bidi {
+            if left_changed {
+                para.insert("indentRight".into(), json!(m.left * unit));
+            }
+            if right_changed {
+                para.insert("indentLeft".into(), json!(m.right * unit));
+            }
+        } else {
+            if left_changed {
+                para.insert("indentLeft".into(), json!(m.left * unit));
+            }
+            if right_changed {
+                para.insert("indentRight".into(), json!(m.right * unit));
+            }
+        }
+
+        if first_changed {
+            para.insert("indentFirst".into(), json!(m.first * unit));
+        }
+
+        let before_changed = m.start.get("before").and_then(Value::as_f64).is_some_and(|s| (m.before - s as f32).abs() > 0.001);
+        if before_changed {
+            para.insert("spaceBefore".into(), json!(m.before));
+        }
+
+        let after_changed = m.start.get("after").and_then(Value::as_f64).is_some_and(|s| (m.after - s as f32).abs() > 0.001);
+        if after_changed {
+            para.insert("spaceAfter".into(), json!(m.after));
+        }
+
+        let line_changed = m.start.get("line").and_then(Value::as_f64).is_some_and(|s| (m.line - s as f32).abs() > 0.001);
+        if line_changed {
+            para.insert("lineSpacing".into(), json!({"rule": "multiple", "value": m.line}));
+        }
+
+        if !para.is_empty() {
+            params["para"] = Value::Object(para);
+        }
+    }
+    if params.as_object().is_some_and(|m| m.len() > 1) {
+        let _ = app.run("styles.modify", params);
+    }
 }
 
 fn table_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
