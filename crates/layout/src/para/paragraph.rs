@@ -6,6 +6,8 @@ use super::justify::hyphenation_points;
 use super::lines::break_lines;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, ParaEnv, RubyLayout, undrawable_bullet};
 use super::proof::{ProofRun, is_list_item, proof_issues};
+use wordcraft_fonts::ShapeContext;
+
 use super::{
     Arc, COLUMN_BREAK, CharProps, Document, FIELD_SHADING, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, PTabAlign, PTabBase, ParaLayout,
     Paragraph, ResolvedChar, ResolvedPara, TabLeader, field_code_text, field_text_on, reference_link,
@@ -33,6 +35,8 @@ struct Cx<'a> {
     math_props: wordcraft_doc::math::MathProps,
     /// The first character, if it is to be a drop cap.
     drop_first: Option<char>,
+    /// The text on the page, when its letters can join across runs (see [`shown_text`]).
+    shown: Option<String>,
 }
 
 /// Where a cluster for an object or a break goes in the paragraph: its text, style and first glyph.
@@ -71,6 +75,7 @@ struct Shaped<'a> {
     drop_cap: Option<(usize, u8, f32)>,
     drop_cap_w: f32,
     maths: Vec<(usize, Arc<crate::math::MathLayout>)>,
+    check_boxes: Vec<usize>,
     enclosures: Vec<(usize, Enclosed)>,
     rubies: Vec<RubyLayout>,
     displays: Vec<(usize, wordcraft_doc::math::MathJc)>,
@@ -82,6 +87,10 @@ struct Shaped<'a> {
     bare: Vec<std::ops::Range<usize>>,
     /// Each run's proofing language and whether it is checked (spelling, grammar, hyphenation).
     runs: Vec<ProofRun>,
+    /// How far into the shown text ([`Cx::shown`]) the runs so far have come.
+    shown_at: usize,
+    /// Where in the shown text a letter's context may begin: past the drop cap, once one is drawn.
+    shown_floor: usize,
 }
 
 fn is_special(c: char) -> bool {
@@ -100,7 +109,24 @@ fn paragraph_props(p: &Paragraph, env: &ParaEnv) -> ResolvedPara {
         rp.set_char_unit(doc.styles.resolve_char_in(p.props.style.as_deref(), env.table.map(|t| &t.chr), &p.mark).size);
     }
     list_indents(&mut rp, p, env);
+    // ODF (XSL's box model): padding takes room whether or not a side has a border.
+    if doc.settings.odf.is_some() {
+        odf_padding(&mut rp);
+    }
     rp
+}
+
+/// ODF keeps a paragraph's padding on a side without a border (XSL's box model; Word drops it): the room
+/// it takes is added to the spacing above or below, or to the indent beside.
+fn odf_padding(rp: &mut ResolvedPara) {
+    let [top, left, bottom, right] = rp.padding;
+    rp.space_before += top;
+    rp.space_after += bottom;
+    // Padding is on a physical side, the indents on a logical one: in a right-to-left paragraph
+    // the left padding is at its end.
+    let (start, end) = if rp.bidi { (right, left) } else { (left, right) };
+    rp.indent_left += start;
+    rp.indent_right += end;
 }
 
 /// List level indents apply unless the paragraph sets its own, or, for a list from the style,
@@ -159,6 +185,7 @@ impl<'a> Shaped<'a> {
             drop_cap: None,
             drop_cap_w: 0.0,
             maths: Vec::new(),
+            check_boxes: Vec::new(),
             enclosures: Vec::new(),
             rubies: Vec::new(),
             displays: Vec::new(),
@@ -167,6 +194,8 @@ impl<'a> Shaped<'a> {
             left: Vec::new(),
             bare: Vec::new(),
             runs: Vec::new(),
+            shown_at: 0,
+            shown_floor: 0,
         }
     }
 
@@ -217,22 +246,42 @@ impl<'a> Shaped<'a> {
 
     /// A run shown: its text, with the breaks and objects in it as clusters of their own.
     fn visible_run(&mut self, cx: &Cx, (rc, props): (&Arc<ResolvedChar>, &CharProps), range: &std::ops::Range<usize>, text: &str) {
+        let shown_start = self.shown_at;
+        let around = self.next_shown(cx, text.len());
         let mut seg = self.drop_cap_letter(cx, rc, text, range.start);
+        if seg > 0 {
+            // A drop cap is drawn apart from its word: nothing after it joins it, in this run or
+            // in the runs after it (the letter can be formatted on its own).
+            self.shown_floor = shown_start.saturating_add(seg);
+        }
+        // The first piece continues what came before the run. After a drop cap or a break nothing
+        // joins: that letter is drawn apart, and a break is no letter. The same goes for the end.
+        let mut before = if seg == 0 { around.before } else { "" };
         for (i, c) in text.char_indices() {
             if i < seg || !is_special(c) {
                 continue;
             }
             if let Some(s) = text.get(seg..i) {
-                self.b.shape(s, range.start + seg, rc, None);
+                self.b.shape_around(s, range.start + seg, rc, None, Dir::Para, ShapeContext { before, after: "" });
             }
+            before = "";
             seg = i + c.len_utf8();
             let style = self.b.style(rc, None, false);
             let slot = Slot { start: range.start + i, end: range.start + i + c.len_utf8(), style, g: self.b.glyphs.len() as u32 };
             self.special(cx, c, slot, (rc, props));
         }
         if let Some(s) = text.get(seg..) {
-            self.b.shape(s, range.start + seg, rc, None);
+            self.b.shape_around(s, range.start + seg, rc, None, Dir::Para, ShapeContext { before, after: around.after });
         }
+    }
+
+    /// The text shown on either side of the next `len` bytes shown, and moves past them. What
+    /// comes before starts after a drop cap ([`Shaped::shown_floor`]).
+    fn next_shown<'c>(&mut self, cx: &'c Cx, len: usize) -> ShapeContext<'c> {
+        let Some(shown) = &cx.shown else { return ShapeContext::default() };
+        let start = self.shown_at;
+        self.shown_at = start.saturating_add(len);
+        ShapeContext { before: shown.get(self.shown_floor.min(start)..start).unwrap_or(""), after: shown.get(self.shown_at..).unwrap_or("") }
     }
 
     /// Drop cap: the first character, sized so its capital spans `lines` lines. Returns how much
@@ -249,6 +298,8 @@ impl<'a> Shaped<'a> {
         big.size = (((lines - 1.0) * line_h + rc.size * 0.7) / 0.7).min(1000.0).max(rc.size);
         if let Some(f) = &rp.drop_cap_font {
             big.font = f.clone();
+            big.font_cs = f.clone();
+            big.font_ea = Some(f.clone());
         }
         let before = self.b.clusters.len();
         self.b.shape(first, 0, &Arc::new(big), None);
@@ -289,7 +340,7 @@ impl<'a> Shaped<'a> {
             return;
         };
         match o {
-            _ if o.is_drawing() => self.drawing(cx, (k, o), slot),
+            _ if o.is_drawing() => self.drawing(cx, (k, o), slot, rc.position),
             InlineObject::Field { .. } => self.field(cx, (k, o), slot, rc),
             InlineObject::NoteRef { kind, id, custom } => self.note_ref(cx, (*kind, *id, custom), slot, rc),
             InlineObject::Equation { linear, display, math } => self.equation(cx, k, slot, rc, (linear, *display, math)),
@@ -315,7 +366,11 @@ impl<'a> Shaped<'a> {
     }
 
     /// A picture, shape or text box: inline, as wide and high as it is; a floating one takes no room.
-    fn drawing(&mut self, cx: &Cx, (k, o): (usize, &InlineObject), slot: Slot) {
+    /// An inline drawing: it stands on the baseline, raised or lowered by its run's position
+    /// (`raise`, points, as Word moves an inline picture with `w:position`). Its cluster reaches
+    /// `obj_h` above the baseline and `obj_d` below it (negative when raised clear of it; `obj_h`
+    /// negative when lowered further than its height, drawn with its top on the baseline).
+    fn drawing(&mut self, cx: &Cx, (k, o): (usize, &InlineObject), slot: Slot, raise: f32) {
         let env = cx.env;
         // A hidden one takes no room, and with no height its line doesn't draw it.
         if let Some((w, saved_h, float)) = o.frame()
@@ -343,7 +398,12 @@ impl<'a> Shaped<'a> {
             // for a rotated one's bounds, as Word does.
             let [el, et, er, eb] = float.effect_extent();
             let (px, py) = float.spin_pad(w * s, h * s);
-            self.push(slot, ClKind::Object(k), w * s + el + er + 2.0 * px, h * s + et + eb + 2.0 * py);
+            let tall = h * s + et + eb + 2.0 * py;
+            // Lowered further than its height, its top stays on the baseline while the line
+            // reaches as far down as the lowering (Word, measured: a 6 pt picture lowered 30 pt
+            // makes a 30 pt line); `obj_h` is then negative. Word's positions run to 1584 pt.
+            let raise = if raise.is_finite() { raise.clamp(-1584.0, 1584.0) } else { 0.0 };
+            self.b.clusters.push(slot.cluster(ClKind::Object(k), w * s + el + er + 2.0 * px, (tall + raise, -raise)));
         } else {
             self.push(slot, ClKind::Object(k), 0.0, 0.0);
         }
@@ -379,6 +439,7 @@ impl<'a> Shaped<'a> {
         let scale = size.map_or(1.0, |sz| sz / rc.size.max(0.5));
         let (a, d) = (a * scale, d * scale);
         self.b.clusters.push(slot.cluster(ClKind::Object(k), a + d, (a.max(0.01), d)));
+        self.check_boxes.push(k);
     }
 
     fn field_result(&mut self, cx: &Cx, (instr, result): (&str, &str), slot: Slot, rc: &Arc<ResolvedChar>) {
@@ -562,14 +623,45 @@ fn joined_cluster_starts(p: &Paragraph, clusters: &[Cluster]) -> Vec<usize> {
     joined
 }
 
+/// The paragraph's text without the runs left out of the layout, if it has letters that join their
+/// neighbours: a letter joins the next one on the page, across a change of formatting and past
+/// text that isn't shown (#4093). `None` for every other paragraph, which don't need it.
+fn shown_text(cx: &Cx) -> Option<String> {
+    let text = &cx.p.text;
+    if text.is_ascii() || !text.chars().any(wordcraft_fonts::joins_cursively) {
+        return None;
+    }
+    let mut shown = String::with_capacity(text.len());
+    for (range, props) in cx.p.run_ranges() {
+        let rc = cx.res.char(props);
+        if !left_out(cx.env.doc, &rc, cx.env.show_hidden, cx.env.hide_deleted)
+            && let Some(run) = text.get(range)
+        {
+            shown.push_str(run);
+        }
+    }
+    Some(shown)
+}
+
 /// Lay out one paragraph.
 pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let doc = env.doc;
     let rp = paragraph_props(p, env);
     let res = Resolver { doc, style: p.props.style.as_deref(), table: env.table.map(|t| &t.chr) };
     let levels = bidi_levels(&p.text, rp.bidi);
-    let b = Builder { env, styles: Vec::new(), style_index: Default::default(), glyphs: Vec::new(), clusters: Vec::new(), levels, shown: Vec::new() };
-    let cx = Cx { p, env, rp: &rp, res, math_props: doc.settings.math.clone().unwrap_or_default(), drop_first: drop_cap_char(p, &rp) };
+    let b = Builder {
+        env,
+        styles: Vec::new(),
+        style_index: Default::default(),
+        glyphs: Vec::new(),
+        clusters: Vec::new(),
+        levels,
+        shown: Vec::new(),
+        substituted: Vec::new(),
+    };
+    let mut cx =
+        Cx { p, env, rp: &rp, res, math_props: doc.settings.math.clone().unwrap_or_default(), drop_first: drop_cap_char(p, &rp), shown: None };
+    cx.shown = shown_text(&cx);
     let mut sh = Shaped::new(b, env.eq_number);
     let mark_rc = cx.res.char(&p.mark);
     let mark_style = sh.b.style(&mark_rc, None, false);
@@ -588,9 +680,10 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     mark_break_opportunities(&mut sh.b.clusters, &bt, &rp);
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
-    let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
+    let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, check_boxes, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
     let mut pl = ParaLayout {
         rp,
+        substituted: b.substituted,
         styles: b.styles,
         glyphs: b.glyphs,
         clusters: b.clusters,
@@ -608,6 +701,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         bidi_levels: b.levels,
         drop_cap_w,
         maths,
+        check_boxes,
         rubies,
         displays,
         ptabs,
@@ -689,6 +783,8 @@ fn collapse(pl: &mut ParaLayout) {
     pl.rp.space_before = 0.0;
     pl.rp.space_after = 0.0;
     pl.label = None;
+    // It draws nothing, so no font it asks for is shown in another (its label was shaped).
+    pl.substituted.clear();
     // Its shading and borders would be drawn across the page at no height.
     pl.rp.shading = None;
     pl.rp.borders = None;
@@ -771,4 +867,26 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
     // Asian typography: kinsoku and breaking Latin words anywhere.
     crate::kinsoku::apply(text, &mut found, rp.kinsoku, rp.word_wrap);
     found
+}
+
+#[cfg(test)]
+mod padding_tests {
+    /// ODF padding is physical: a right-to-left paragraph's left padding widens its end indent
+    /// (the indents being logical), a left-to-right one's its start indent.
+    #[test]
+    fn a_right_to_left_paragraphs_left_padding_is_at_its_end() {
+        let doc = wordcraft_doc::Document::new();
+        let mut rp = doc.styles.resolve_para(&wordcraft_doc::props::ParaProps::default());
+        rp.padding = [1.0, 10.0, 2.0, 3.0];
+        let (left, right) = (rp.indent_left, rp.indent_right);
+        let mut ltr = rp.clone();
+        super::odf_padding(&mut ltr);
+        assert_eq!((ltr.indent_left - left, ltr.indent_right - right), (10.0, 3.0));
+        rp.bidi = true;
+        super::odf_padding(&mut rp);
+        assert_eq!((rp.indent_left - left, rp.indent_right - right), (3.0, 10.0));
+        // Shown on the page: the left padding still on the left.
+        assert_eq!(rp.visual_indents(), (right + 10.0, left + 3.0));
+        assert_eq!((rp.space_before, rp.space_after), (ltr.space_before, ltr.space_after));
+    }
 }
