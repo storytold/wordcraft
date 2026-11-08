@@ -157,6 +157,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-11-07: An in-line picture lowered past its own height (`w:position`) lowers its line as far, as in Word; all 156 synthetic lines measured for #3984 match Word (#5796). Exact spacing keeps the line's baseline.
 - 2026-11-03: Search types in place: a click on the title bar's Search box, or Alt+Q, takes the typing in that box, with the results under it, as in Word, instead of a second box in a dialog (#5398).
 - 2026-10-31: List labels: a numbering level with format `none` and literal text, such as `RESPONSE:` with a one-inch hanging indent, shows that text as its label, as Word does; it used to show nothing. As in Word, a `none` level still counts and restarts the levels below it, its own number is empty (in legal numbering too), and an empty label still tabs the text to the indent (#4985). Readiness unchanged.
+- 2026-10-31: Font menus draw their entries from a few shared textures written in place, as the Equation tab's pictures are (#1002), instead of a texture per font: on Windows (DirectX 12) browsing the list showed the names on black strips in light mode and white or red ones in dark mode (#5105). Readiness unchanged.
 - 2026-11-01: DOCX tables keep rows and cells wrapped in `mc:AlternateContent`, selecting one supported Choice or Fallback with the existing reader policy (#5219). Original synthetic checks cover namespace aliases, unsupported requirements, nested row/cell content controls and two save/reopen cycles; broader corpus and native Word qualification remain open.
 
 - 2026-11-01: Shapes: a line's arrowheads are as long and as wide as Word draws them: 2, 3 or 5 times the line's width for small, medium and large (a line under 2 points as a 2-point one). Their kind, width and length are read from DOCX (DrawingML and VML) and saved back; before, every arrowhead was one size and saved as a medium triangle.
@@ -841,6 +842,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-07 | trivial | Progress log: An in-line picture lowered past its own height (`w:position`) lowers its line as far, as in Word; all 156 synthetic lines measured for #3984 match Word (#5796). |
 | 2026-11-03 | trivial | Progress log: the title bar's Search box takes the typing in place (#5398) |
 | 2026-10-31 | trivial | Progress log: a numFmt none list level shows its literal text (#4985); readiness unchanged |
+| 2026-10-31 | trivial | Progress log: font menu entries are drawn from shared textures (#5105) |
 | 2026-11-02 | trivial | Progress log: alternative format chunks and MHT open |
 | 2026-11-06 | trivial | Print helpers remove loaded PDF/settings files before driver work, tolerate prior removal and report cleanup errors; a held-driver regression checks the files are already absent (#5710) |
 | 2026-11-06 | trivial | Windows print submissions isolated per helper process; cancelled driver work cannot block a retry (#5710) |
