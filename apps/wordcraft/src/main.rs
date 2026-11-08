@@ -69,6 +69,8 @@ impl eframe::App for App {
         if let Some((pos, size)) = self.1.and_then(|g| g.fit_on_monitor(&window)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+            let b = self.0.window_builder().clone().with_inner_size(size);
+            self.0.set_window_builder(b);
         }
         // The geometry saved for the next start is the active window's.
         let prev = self.0.ui.window;
