@@ -18,8 +18,8 @@ wordcraft-engine = { workspace = true }
 wordcraft-ui-egui = { workspace = true }
 # The host messages (storytold/craft-libs): one contract and one bridge for the web builds.
 # The page command API (storytold/craft-libs#413): window.wordcraft over the control channel.
-craft-web-api = { git = "https://github.com/dooreelko/craft-libs", rev = "f35fed182b98486145c74e8a9f6f1f12fddd889a", version = "0.1.0" }
-craft-web-host = { git = "https://github.com/dooreelko/craft-libs", rev = "f35fed182b98486145c74e8a9f6f1f12fddd889a", version = "0.1.0" }
+craft-web-api = { git = "https://github.com/dooreelko/craft-libs", rev = "90a5e7060ea7760955b43f5a93ebe63d85c91c21", version = "0.1.0" }
+craft-web-host = { git = "https://github.com/dooreelko/craft-libs", rev = "90a5e7060ea7760955b43f5a93ebe63d85c91c21", version = "0.1.0" }
 egui = { workspace = true }
 log = { workspace = true }
 serde_json = { workspace = true }
