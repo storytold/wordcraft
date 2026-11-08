@@ -258,7 +258,10 @@ impl FontDb {
         if chars.is_empty() {
             return None;
         }
-        let (found, _) = self.search_diagram(chars, exclude, prefer_serif);
+        let mut set: Vec<char> = chars.to_vec();
+        set.sort_unstable();
+        set.dedup();
+        let (found, _) = self.search_diagram(&set, exclude, prefer_serif);
         found
     }
 
@@ -303,7 +306,7 @@ impl FontDb {
         };
         let serif_mismatch = |f: &FontFace| f.is_serif() != prefer_serif;
         candidates.sort_by_cached_key(|f| {
-            (serif_mismatch(f), rank(f), shaping(f), !f.family.eq_ignore_ascii_case(FALLBACK_FAMILY), f.italic, (f.weight - 400.0).abs() as i32)
+            (rank(f), shaping(f), serif_mismatch(f), !f.family.eq_ignore_ascii_case(FALLBACK_FAMILY), f.italic, (f.weight - 400.0).abs() as i32)
         });
         (candidates.first().map(|f| (*f).clone()), faces.len())
     }

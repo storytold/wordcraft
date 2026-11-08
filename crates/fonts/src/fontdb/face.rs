@@ -374,12 +374,14 @@ impl FontFace {
                 return false;
             }
             let panose = os2.panose_10();
-            let serif_style = panose[1];
-            if (2..=10).contains(&serif_style) {
-                return true;
-            }
-            if (11..=15).contains(&serif_style) {
-                return false;
+            if panose[0] == 2 {
+                let serif_style = panose[1];
+                if (2..=10).contains(&serif_style) {
+                    return true;
+                }
+                if (11..=15).contains(&serif_style) {
+                    return false;
+                }
             }
         }
         false
