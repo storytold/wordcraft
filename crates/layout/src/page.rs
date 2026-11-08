@@ -35,6 +35,10 @@ pub(crate) struct PageBuilder<'a> {
     /// The previous paragraph ended with a page break (its mark stayed with the break): the next
     /// paragraph, first on the new page, gets no space before (Word).
     pub(crate) after_break_mark: bool,
+    /// A page break left its page for the next section to start: only the empty mark closing the
+    /// section before a continuous one followed it, and that mark stays on the break's page
+    /// (Word), so the new page is the next section's first (#2109).
+    pub(crate) break_pending: bool,
     /// The next section starts on a new page: this section's closing mark, when empty, needs no
     /// room (Word leaves it on a full page rather than starting a page for it).
     pub(crate) next_starts_page: bool,
@@ -309,6 +313,7 @@ impl PageBuilder<'_> {
         self.flush_notes();
     }
     pub(crate) fn new_page(&mut self, first_block: usize, body_top: f32) {
+        self.break_pending = false;
         self.finish_page();
         self.beneath = self.sect_beneath;
         self.excl.clear();

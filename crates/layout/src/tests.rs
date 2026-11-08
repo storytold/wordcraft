@@ -1479,6 +1479,106 @@ fn a_page_break_then_a_new_page_makes_one_page() {
 }
 
 #[test]
+fn a_continuous_section_after_a_page_break_starts_the_new_page() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    // #2109: "Before", a paragraph of only a page break, the empty paragraph closing section 1,
+    // then a continuous section 2 with a different first page. Word 365 keeps the empty mark on
+    // page 1 with the break, so section 2 starts page 2: its first-page header is on page 2 and
+    // its default header from page 3. The page used to be section 1's, its first page a page late.
+    let mut d = Document::from_text(&format!("Before\n\u{000C}\n\n{}", "After\n".repeat(80)));
+    d.para_mut(StoryRef::Body, &Path::top(2)).unwrap().section = Some(Box::new(SectionProps::default()));
+    d.last_section.start = SectionStart::Continuous;
+    d.last_section.title_page = true;
+    let l = lay(&d);
+    let pages: Vec<(usize, HfSlot)> = l.pages.iter().map(|p| (p.section, p.hf_slot)).collect();
+    assert!(pages.len() >= 3, "{pages:?}");
+    assert_eq!(pages[..3], [(0, HfSlot::Default), (1, HfSlot::First), (1, HfSlot::Default)], "{pages:?}");
+    assert_eq!(l.caret(&Pos::body(2, 0)).unwrap().page, 0, "the empty mark stays with the break");
+    assert_eq!(l.caret(&Pos::body(3, 0)).unwrap().page, 1, "section 2 starts page 2");
+}
+
+#[test]
+fn footnotes_on_the_page_a_break_leaves_to_a_continuous_section_keep_its_margins() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    // #2109 review: page 1 is section 1's (left margin 1in) even though section 2 (2in) starts
+    // page 2, so the footnote at its bottom and the separator above it start at 1in.
+    let mut d = Document::from_text(&format!("Before\n\u{000C}\n\n{}", "After\n".repeat(80)));
+    let id = footnote(&mut d, &Pos::body(0, 6), "A footnote.");
+    d.para_mut(StoryRef::Body, &Path::top(2)).unwrap().section = Some(Box::new(SectionProps::default()));
+    d.last_section.start = SectionStart::Continuous;
+    d.last_section.margin_left = 144.0;
+    let l = lay(&d);
+    assert_eq!(l.pages.iter().map(|p| p.section).take(2).collect::<Vec<_>>(), [0, 1]);
+    let note_xs: Vec<f32> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { story: StoryRef::Part(s), x, .. } if *s == id => Some(*x),
+            _ => None,
+        })
+        .collect();
+    let rule_xs: Vec<f32> = l.pages[0].items.iter().filter_map(|it| if let Placed::Rule { x0, .. } = it { Some(*x0) } else { None }).collect();
+    assert_eq!((note_xs.as_slice(), rule_xs.as_slice()), (&[72.0][..], &[72.0][..]));
+}
+
+#[test]
+fn a_picture_closing_a_section_after_a_page_break_goes_on_the_new_page() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    // #2109 review: the paragraph closing section 1 has a hidden mark and only a picture. Left on
+    // the break's page below twenty lines, the picture would run past the bottom margin; it goes
+    // on the new page.
+    let mut d = pagination_fixture_document(&format!("{}\u{000C}\n\n{}", "Line\n".repeat(20), "After\n".repeat(40)));
+    if let Some(Block::Para(p)) = d.body.get_mut(21).map(Arc::make_mut) {
+        p.insert_object(0, picture(100.0, 400.0, Default::default()), &Default::default()).unwrap();
+        p.props.line_spacing = None;
+        p.mark.hidden = Some(true);
+        p.section = Some(Box::new(SectionProps::default()));
+    }
+    d.last_section.start = SectionStart::Continuous;
+    let l = lay(&d);
+    let placed: Vec<(usize, f32, f32)> = l
+        .pages
+        .iter()
+        .enumerate()
+        .flat_map(|(i, pg)| {
+            pg.items.iter().filter_map(move |it| match it {
+                Placed::Lines { story: StoryRef::Body, path, para, l0, l1, y, .. } if path.0 == [21] => {
+                    let (first, last) = (para.lines.get(*l0)?, para.lines.get(l1.checked_sub(1)?)?);
+                    Some((i, y + (last.top + last.height - first.top), pg.body.bottom()))
+                }
+                _ => None,
+            })
+        })
+        .collect();
+    assert_eq!(placed.iter().map(|&(page, ..)| page).collect::<Vec<_>>(), [1], "{placed:?}");
+    assert!(placed.iter().all(|&(_, bottom, body_bottom)| bottom <= body_bottom + 0.01), "{placed:?}");
+}
+
+#[test]
+fn section_end_endnotes_after_a_page_break_start_the_new_page() {
+    use wordcraft_doc::section::{NotePos, NoteProps, SectionProps, SectionStart};
+    // #2109 review: endnotes at the end of each section. The page break left for section 2 is
+    // taken before section 1's endnotes: they start page 2 and section 2 follows them, whether
+    // they fit on that page or run on. Where Word puts them after such a break is not measured.
+    for n in [1usize, 60] {
+        let mut d = Document::from_text(&format!("Before\n\u{000C}\n\n{}", "After\n".repeat(80)));
+        let note = (0..n).map(|i| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Endnote {i}."), Default::default())));
+        let eid = d.add_part(wordcraft_doc::PartKind::Endnote, note.collect());
+        let r = InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Endnote, id: eid, custom: String::new() };
+        d.insert_object(&Pos::body(0, 6), r, &Default::default()).unwrap();
+        d.para_mut(StoryRef::Body, &Path::top(2)).unwrap().section = Some(Box::new(SectionProps::default()));
+        d.last_section.start = SectionStart::Continuous;
+        d.settings.endnote_pr = NoteProps { pos: Some(NotePos::SectEnd), ..Default::default() };
+        let l = lay(&d);
+        let first = l.caret(&d.start_of(StoryRef::Part(eid))).unwrap();
+        let last = l.caret(&Pos { story: StoryRef::Part(eid), path: Path::top(n - 1), off: 0 }).unwrap();
+        let after = l.caret(&Pos::body(3, 0)).unwrap();
+        assert_eq!(first.page, 1, "{n} paragraphs: {first:?}");
+        assert!(after.page == last.page && after.top > last.top, "{n} paragraphs: {last:?} {after:?}");
+    }
+}
+
+#[test]
 fn page_numbers_can_restart_at_zero() {
     // `w:pgNumType w:start="0"`: a cover page numbered 0, so the page after it reads 1.
     let mut d = Document::from_text("Cover\u{000C}Contents");
