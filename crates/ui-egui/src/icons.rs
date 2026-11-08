@@ -2042,6 +2042,12 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.panel(4.0, 4.0, 12.0, 7.0, 0.5);
             pen.panel(4.0, 9.0, 12.0, 12.0, 0.5);
         }
+        // A warning triangle: a document font that isn't installed (shown in another font).
+        "fontMissing" => {
+            pen.fill(&[(10.0, 2.5), (18.5, 17.5), (1.5, 17.5)], Color32::from_rgb(0xE0, 0x7B, 0x1F));
+            pen.line_c(&[(10.0, 7.5), (10.0, 12.5)], Color32::WHITE);
+            pen.fcircle(10.0, 15.0, 1.0, Color32::WHITE);
+        }
         "designMode" => {
             pen.poly(&[(2.0, 2.0), (2.0, 14.0), (14.0, 14.0)], c);
             pen.poly(&[(4.5, 8.5), (4.5, 11.5), (7.5, 11.5)], a);

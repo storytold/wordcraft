@@ -190,7 +190,7 @@ pub fn split(
     action: ButtonAction<'_>,
     swatch: Option<Color32>,
     menu: impl FnOnce(&mut Ui, &mut WordApp),
-) {
+) -> Response {
     let ButtonAction { id, params, checked } = action;
     let tip = tl!(tip);
     let t = Tokens::get(ui.ctx());
@@ -219,12 +219,13 @@ pub fn split(
     aresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, &arrow_title));
     // A disabled split's arrow doesn't open its menu either.
     if !on {
-        return;
+        return resp;
     }
     crate::rtl::menu(&aresp).show(|ui| {
         ui.set_min_width(180.0);
         menu(ui, app);
     });
+    resp
 }
 
 /// Whether a menu button whose menu is about command `id` is on ("" = always).
