@@ -1,4 +1,5 @@
 use super::*;
+use wordcraft_doc::picfx::PicFx;
 
 fn png(w: u32, h: u32) -> Vec<u8> {
     let img = image::RgbaImage::from_fn(w, h, |x, y| {
@@ -11,6 +12,69 @@ fn png(w: u32, h: u32) -> Vec<u8> {
 /// The laid-out area of the only picture or shape (not a text box).
 fn object_area(s: &mut Session) -> wordcraft_layout::hit::ObjectHit {
     s.layout().find_object(0, |o| o.text_box.is_none()).unwrap()
+}
+
+/// #4250: a shape dragged into the middle of a page that only continues a long paragraph
+/// stays there, as in Word: anchored at the line beside it, it's drawn on that page, not
+/// thrown back to the page the paragraph starts on. One undo step puts it back.
+#[test]
+fn a_shape_dropped_on_a_page_a_paragraph_continues_onto_stays_there() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "The quick brown fox jumps over the lazy dog. ".repeat(400)})).unwrap();
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 0, "x": 100, "y": 250, "width": 100, "height": 50})).unwrap();
+    assert!(s.layout().pages.len() > 2);
+    let before = (object_area(&mut s), s.undo_depth());
+    s.run("arrange.bounds", &json!({"page": 1, "x": 100, "y": 275})).unwrap();
+    let o = object_area(&mut s);
+    assert_eq!(o.page, 1, "on the page it was dropped on: {o:?}");
+    assert!((o.rect.x - 100.0).abs() < 0.5 && (o.rect.y - 275.0).abs() < 0.5, "where it was dropped: {:?}", o.rect);
+    assert_eq!(s.undo_depth(), before.1 + 1);
+    s.run("edit.undo", &json!({})).unwrap();
+    let back = object_area(&mut s);
+    assert_eq!((back.page, back.rect), (before.0.page, before.0.rect));
+}
+
+/// #4250: and dragged back onto the page the paragraph starts on, it stays there: its anchor
+/// goes back to the paragraph's start rather than staying on the later page's line.
+#[test]
+fn a_shape_dragged_back_to_the_page_its_paragraph_starts_on_stays_there() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "The quick brown fox jumps over the lazy dog. ".repeat(400)})).unwrap();
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 1, "x": 100, "y": 275, "width": 100, "height": 50})).unwrap();
+    let before = (object_area(&mut s), s.undo_depth());
+    assert!(before.0.page == 1 && before.0.off > 0, "anchored on page 2's line: {:?}", before.0);
+    s.run("arrange.bounds", &json!({"page": 0, "x": 120, "y": 300})).unwrap();
+    let o = object_area(&mut s);
+    assert_eq!((o.page, o.off), (0, 0), "on the page it was dropped on, anchored at the paragraph's start: {o:?}");
+    assert!((o.rect.x - 120.0).abs() < 0.5 && (o.rect.y - 300.0).abs() < 0.5, "where it was dropped: {:?}", o.rect);
+    assert_eq!(s.undo_depth(), before.1 + 1);
+}
+
+/// #4262: dropped beside the first line after a page break inside a paragraph, a shape stays
+/// on the page it was dropped on, anchored in that line.
+#[test]
+fn a_shape_dropped_just_after_a_page_break_in_a_paragraph_stays_there() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let text = "The quick brown fox jumps over the lazy dog. ";
+    s.run("text.insert", &json!({"text": text.repeat(20)})).unwrap();
+    s.run("insert.pageBreak", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": text.repeat(40)})).unwrap();
+    assert_eq!(s.doc.body.len(), 1, "one paragraph");
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 0, "x": 100, "y": 250, "width": 100, "height": 50})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 1, "x": 100, "y": 80})).unwrap();
+    let o = object_area(&mut s);
+    let after_break = text.len() * 20 + wordcraft_doc::para::PAGE_BREAK.len_utf8();
+    assert_eq!((o.page, o.off), (1, after_break), "on the page it was dropped on, anchored right after the break: {o:?}");
+    assert!((o.rect.x - 100.0).abs() < 0.5 && (o.rect.y - 80.0).abs() < 0.5, "where it was dropped: {:?}", o.rect);
 }
 
 /// What a click and a handle or body drag do in the editor (#142, #82): hit-test the object,
@@ -452,6 +516,108 @@ fn transparency_is_absolute_from_the_original() {
     );
     s.run("picture.reset", &json!({})).unwrap();
     assert_eq!(rgba(&s), orig, "reset still finds the original");
+}
+
+/// A picture opened with brightness, contrast and transparency from its file (`fx`, #1711,
+/// #1766): Transparency and Corrections are absolute and replace the file's values instead of
+/// stacking on them; Color leaves the file's brightness and contrast alone except Washout
+/// (itself stored as brightness and contrast); Reset Picture discards every correction, the
+/// file's included, as in Word.
+#[test]
+fn picture_edits_replace_the_file_corrections() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data})).unwrap();
+    let imported = PicFx::new(80_000, -80_000, 50_000);
+    let set_fx = |s: &mut Session, v: PicFx| {
+        with_obj(s, |o| {
+            if let InlineObject::Image { fx, .. } = o {
+                *fx = v;
+            }
+        })
+        .unwrap()
+    };
+    set_fx(&mut s, imported);
+    let state = |s: &Session| {
+        let (_, o) = selected(s).unwrap();
+        let InlineObject::Image { media, fx, .. } = o else { panic!("a picture") };
+        let bytes = s.doc.media.get(&media).cloned().unwrap();
+        (media, fx, image::load_from_memory(&bytes).unwrap().to_rgba8().pixels().map(|p| p.0).collect::<Vec<_>>())
+    };
+    let (orig_media, _, orig) = state(&s);
+    // Transparency 50%: 50% (not 75%), the file's transparency dropped, its lum kept.
+    s.run("picture.transparency", &json!({"percent": 50})).unwrap();
+    let (_, fx, px) = state(&s);
+    assert_eq!(fx, PicFx::new(80_000, -80_000, 0));
+    assert!(px.iter().all(|p| p[3] == 127));
+    // 0%: opaque, no `a:alphaModFix` left to write.
+    s.run("picture.transparency", &json!({"percent": 0})).unwrap();
+    let (_, fx, px) = state(&s);
+    assert_eq!((fx.transparency, px), (0, orig.clone()));
+    // Color other than Washout keeps the file's lum; Washout replaces it.
+    s.run("picture.color", &json!({"mode": "grayscale"})).unwrap();
+    assert_eq!(state(&s).1, PicFx::new(80_000, -80_000, 0));
+    s.run("picture.color", &json!({"mode": "saturation", "saturation": 100})).unwrap();
+    assert_eq!(state(&s).1, PicFx::new(80_000, -80_000, 0));
+    s.run("picture.color", &json!({"mode": "washout"})).unwrap();
+    assert_eq!(state(&s).1, PicFx::default());
+    // Corrections bake from the original and replace the file's lum.
+    set_fx(&mut s, imported);
+    s.run("picture.corrections", &json!({"brightness": 0})).unwrap();
+    let (_, fx, px) = state(&s);
+    assert_eq!((fx, px), (PicFx::new(0, 0, 50_000), orig.clone()));
+    // Reset: the imported bitmap, no corrections at all.
+    set_fx(&mut s, imported);
+    s.run("picture.reset", &json!({})).unwrap();
+    let (media, fx, px) = state(&s);
+    assert_eq!((media, fx, px), (orig_media, PicFx::default(), orig));
+}
+
+/// Two pictures showing the same media, one with Washout from its file and one without:
+/// edits on both bake to the same bytes, and resetting the plain one leaves it without
+/// corrections (it used to be able to pick up the other's).
+#[test]
+fn reset_never_borrows_another_pictures_corrections() {
+    let mut d = wordcraft_doc::Document::new();
+    let media = d.add_media(png(20, 10), "png");
+    let washout = PicFx::new(70_000, -70_000, 0);
+    let mut p = wordcraft_doc::Paragraph::new();
+    for fx in [PicFx::default(), washout] {
+        let pic = InlineObject::Image {
+            media: media.clone(),
+            w: 40.0,
+            h: 20.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx,
+            ole: None,
+        };
+        p.insert_object(0, pic, &Default::default()).unwrap();
+    }
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let mut s = Session::new(d);
+    let pick = |s: &mut Session, at: usize| {
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": at}, "focus": {"block": 0, "off": at + 3}})).unwrap();
+    };
+    let fx_at = |s: &mut Session, at: usize| {
+        pick(s, at);
+        match selected(s).unwrap().1 {
+            InlineObject::Image { fx, media, .. } => (fx, media),
+            o => panic!("{o:?}"),
+        }
+    };
+    assert_eq!(fx_at(&mut s, 0).0, washout, "A");
+    assert_eq!(fx_at(&mut s, 3).0, PicFx::default(), "B");
+    for at in [0, 3] {
+        pick(&mut s, at);
+        s.run("picture.transparency", &json!({"percent": 30})).unwrap();
+    }
+    assert_eq!(fx_at(&mut s, 0).1, fx_at(&mut s, 3).1, "the same baked bytes");
+    pick(&mut s, 3);
+    s.run("picture.reset", &json!({})).unwrap();
+    assert_eq!(fx_at(&mut s, 3), (PicFx::default(), media.clone()));
+    assert_eq!(fx_at(&mut s, 0).0, washout, "A keeps its own until reset");
 }
 
 /// #2052: a picture style picked after another replaces it (Thick Frame then Simple Frame is
