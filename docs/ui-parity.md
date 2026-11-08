@@ -80,6 +80,21 @@ The Language dialog reads effective character formatting, including document def
 
 The `table.sort` command requires an explicit `column` to be a non-negative JSON integer naming a column in the table, indexed from 0 (#5531). Omitting it still sorts by column 0. Invalid selectors return an error before changing rows or history; the Sort dialog and collation rules are unchanged.
 
+## Screen paper colors (#3398)
+
+File › Options › General › Screen paper color selects Document background (the default),
+Soft green, Warm cream or Soft gray. The selection persists in user preferences, not in a document.
+It changes blank paper in editing views and in Read Mode's None color; a document's explicit
+page color or background picture remains visible while editing. Read Mode's explicit Sepia and
+Inverse colors override the preference. Choosing a tint turns off Dark page; enabling Dark page
+later takes precedence in editing views until it is turned off again (Read Mode ignores it). Printing, PDF/image exports and saved
+DOCX background styling are unaffected. This is a WordCraft extension (`view.paperColor`), not
+an increase in the Microsoft Word parity score.
+
+Evidence: engine `screen_paper_color_is_a_persistent_preference_not_document_formatting`,
+canvas `screen_paper_color_changes_raster_and_cache_without_changing_export_paper`, and
+options `screen_paper_color_options_round_trip_and_work_without_a_document` tests.
+
 ## Find and Replace: regular expressions (#4177)
 
 With **Regular expressions** on (Search Options), Replace with expands capture groups: `$1`…`$n`, `${n}`, `${name}` and `$name` (the longest run of letters, digits and `_`), `$0` / `${0}` (the whole match), and `\1`…`\9` as in wildcard Replace; `$$` is a dollar sign, `\t` a tab, `\\` a backslash, `\$` and `\^` a `$` or `^` as typed, and `\n` a paragraph mark, which splits the paragraph as `^p` does (Replace All stays one undo step). Word's `^&`, `^p`, `^t`, `^c` and the other `^` codes work there too (with Special characters off, only the `^` codes are taken literally). A group that doesn't exist, didn't take part in the match or is out of range expands to nothing; a `$` that starts no group, an unclosed `${`, and other `\` escapes stay as written. Plain and wildcard Replace are unchanged. Word has no regular-expression mode; this follows the Rust `regex` crate's Replace syntax.
@@ -127,6 +142,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-11-03 | trivial | Over a turned picture, shape or text box, the pointer on a resize handle shows the arrow along which that handle resizes: turned 90°, the handle now at the top shows an up-down arrow (it showed left-right), turned 45° the middle handles show diagonal ones; also while the handle is dragged (#3932) |
 | 2026-11-03 | trivial | Shape Format › Size: the width and height show the interface unit and take a size typed in any unit (`3 cm`, `300 px`), applied once typed (Enter, Tab or a click elsewhere; Esc cancels), each side on its own, as Picture Format › Size does; in both, a field clicked and left without typing no longer resizes the object by the rounding of the size it shows (#4196) |
 | 2026-11-03 | minor | Arabic mirrored interface: title bar, ribbon, panes, File page, dialogs and menus run from the right; document canvas stays independent (#1195); Hebrew UI still open |
+| 2026-10-31 | minor | #3398: persistent screen-only green, cream and gray paper presets, with document backgrounds and export colors retained. Read Mode None follows the screen preset; Sepia/Inverse retain priority. |
 | 2026-11-03 | minor | File › Options › Language: Your languages (English variants in use, installed Language packs, the document's languages) with each one's proofing status, Install, Remove and Set as default; Add a language… opens a searchable picker (dutch, nederlands, nl) sorted by name; the Dictionaries folder and the Dictionary files list moved here from Proofing, which has no Dictionaries section any more (CP4.3) |
 | 2026-10-28 | trivial | Fonts that aren't installed are flagged: the font box (ribbon, mini toolbar, both Font dialog boxes) shows a warning mark whose hover note names the font drawn instead; the status bar says "N fonts not installed" and lists them with the faces drawn instead (the first 20, then how many more), with Add Font…. The list comes from layout (`ParaLayout::substituted`), so it covers exactly the text shown, in every story, list labels and East Asian and complex-script text included, and a missing roman font drawn in Cambria counts. Metric-compatible substitutes (Carlito for Calibri, Caladea for Cambria, Liberation for Arial, Times New Roman and Courier New, the Palatino look-alikes) aren't flagged, since line breaks don't move, nor symbol fonts drawn as their Unicode equivalents (Word's bullets); headers and footers count only in views that show them, chart and SmartArt labels not yet; the font box reads the same list, so for text already shown the two agree, and it also warns for a missing font no text shows yet when the box shows a font to come: at a collapsed caret, the font the next letter will be typed in, and in the Font dialog, the fonts OK applies (the Asian text font too, over Latin text); Missing Fonts (`font.missing`, from command search or agents; it says what it found in the status line) and `format.state.fontShownAs` for agents |
 | 2026-10-31 | trivial | Keytips: Alt, F badges the Backstage pages with Word's letters and the letter opens the page; Alt, F, P and Alt, F, V open Print; the badges end with the Backstage (#4960) |

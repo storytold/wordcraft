@@ -339,6 +339,7 @@ mod tests {
         zw.finish().unwrap().into_inner()
     }
 
+    /// Standalone retained XML declares its namespaces and keeps qualified attributes.
     #[test]
     fn standalone_embedded_ink_and_mathml_keep_their_namespaces() {
         let xml = br#"<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><pen:trace xmlns:pen="http://www.w3.org/2003/InkML" xmlns:math="http://www.w3.org/1998/Math/MathML" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="math"><math:math math:id="formula" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.w3.org/1998/Math/MathML mathml.xsd"/></pen:trace></a:graphic>"#;
@@ -348,6 +349,7 @@ mod tests {
         assert!(kept.contains(r#"xmlns:mml="http://www.w3.org/1998/Math/MathML""#), "{kept}");
         assert!(kept.contains(r#"xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance""#), "{kept}");
         assert!(kept.contains(r#"mc:Ignorable="mml""#) && kept.contains("xsi:schemaLocation="), "{kept}");
+        assert!(kept.contains(r#"<mml:math mml:id="formula" "#), "{kept}");
         let back = crate::xml::parse(kept.as_bytes()).unwrap();
         let ink = back.child("ink:trace").unwrap();
         assert_eq!(ink.child("mml:math").and_then(|e| e.attr("mml:id")), Some("formula"));

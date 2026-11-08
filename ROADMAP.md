@@ -2,6 +2,7 @@
 
 > **Retained XML update:** 2026-11-08 · Kept InkML/MathML markup declares its namespaces in standalone embedded XML and content controls. Separate from native ink rendering; synthetic round-trip evidence only.
 
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
 
@@ -284,6 +285,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-10-31: Table of contents: with Word's table over entries in columns, where the title sits in a one-column section above a continuous break, Insert Table of Contents with new settings keeps the title above the break and the entries in their columns (the new title went under the break, into the columns), and Remove Table of Contents takes the title, the blank paragraph and its break with the entries, as Word does (observed in Word for Mac); a paragraph of another style above the break stays (#4041).
 - 2026-10-31: A table of contents writes its page numbers as `PAGEREF` fields to the headings' bookmarks, as Word does, so updating the fields in Word moves the numbers with the headings; they were plain text (#5097).
 - 2026-10-31: Keytips reach the Backstage: Alt, F badges its pages with Word's letters, and Alt, F, P (or V) opens Print (#4960).
+- **2026-10-31 (#3398):** General Options offers persistent Document background / Soft green / Warm cream / Soft gray screen paper. The view.paperColor command reaches the same setting headlessly. Document page colors and pictures, saves, printing and exports retain their own styling; the screen raster/tile cache and page backing share the selected color. Read Mode None uses the preset; explicit Sepia/Inverse keep priority. Parity counts and readiness estimates unchanged.
+- **2026-10-31 (#3693, editing extension):** Delete Previous Sentence is a headless registry command and Mod+Shift+Backspace shortcut, using existing sentence boundaries and deletion/undo/protection paths. Paragraph and cell boundaries are preserved. Additional WordCraft behavior; Word-parity counts and estimates unchanged.
 - 2026-10-29: Documents with hyperlinks or a table of contents print again on the desktop (#4734). The print job scales each page to the paper, and the spooler refused a page with link annotations ("flatten page annotations before using shrink-to-fit"); the PDF sent to the printer now omits link annotations, which print nothing; the link and table-of-contents text stays on the page. Exported PDFs and Save these pages as PDF (`file.printPdf`) keep the annotations.
 - 2026-10-28: Word count counts each Chinese and Japanese character as a word, as Word does, in the status bar, the Word Count dialog and NUMWORDS fields. Unspaced Chinese text used to count as one word per run of text; Korean, which is written with spaces, still counts by words. (#4547)
 - 2026-10-28: Aligned-copy review fixes keep the document axis locked through middle-button scrolling and let Ctrl/Command+Shift start on a secondary selected object. Plain Ctrl and Shift clicks keep their existing behavior (#4764).
@@ -942,6 +945,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-03 | trivial | Progress log: Language pack languages in every language list (CP4.3) |
 | 2026-11-03 | trivial | Progress log: the missing-pack bar on a fresh install, the caret's typing language, and the spelling menu heading in the interface language (CP4.3) |
 | 2026-11-03 | trivial | Progress log: Options › Language and Proofing redesign (CP4.3) |
+| 2026-11-03 | minor | Home › Paragraph Tools (#5043): nine selection- or document-scoped conversion and cleanup commands; one undo step per command, with tracked deletions preserved; readiness estimates unchanged |
 | 2026-10-30 | trivial | Progress log: layout resource caps — repeated table headers are bounded by item counts, the wrap cache by decoded pixels and linked text box layout by its lines and items; PDF export, hit testing, tracked changes, clipped tables and long endnote selections cost linear time (#3867, #3866) |
 | 2026-10-17 | trivial | Progress log: RTF on the system clipboard |
 | 2026-11-03 | trivial | Progress log: craft-proof pin, French elision suggestions and Valencian (CP4.3) |
@@ -970,8 +974,10 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-01 | trivial | #3915: preserve guarded whole-line ordinary-tab alignment with current main. Existing controls retained; source checks only, primary qualification pending. |
 | 2026-11-01 | trivial | #2437: Preserve finite paragraph-border flow extents and terminal-break keep preflight with current-main changes. Recursive terminal-successor lookahead remains outside scope. Source checks only; primary qualification pending. |
 | 2026-10-31 | trivial | Progress log: a paragraph naming an undefined DOCX style is formatted as Normal (#5077) |
+| 2026-10-31 | minor | #3398: persistent screen-only green, cream and gray paper presets, with document backgrounds and export colors retained. Read Mode None follows the screen preset; Sepia/Inverse retain priority. |
 | 2026-10-31 | trivial | Progress log: TOC page numbers are PAGEREF fields (#5097) |
 | 2026-10-31 | trivial | Progress log: Backstage keytips, Alt, F, P prints (#4960) |
+| 2026-10-31 | minor | #3693: Delete Previous Sentence command and keyboard dispatch, with sentence/paragraph/cell, selection, undo and tracking regressions. Additional WordCraft behavior; Word-parity estimates unchanged. |
 | 2026-10-30 | trivial | Progress log: only the PDF sent to the printer leaves out link annotations; Save these pages as PDF keeps them (#4734) |
 | 2026-10-29 | trivial | Progress log: documents with links print (#4734) |
 | 2026-10-31 | trivial | Synchronize the existing Proofing pane with main `eecbb8f`; preserve explicit-position lookup, implicit selection, navigation, undo and per-window state; fresh exact-SHA hosted validation pending, readiness unchanged |
