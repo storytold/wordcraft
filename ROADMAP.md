@@ -156,6 +156,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-11-05: ODT pictures offered in several formats show and survive a save (gap 19): LibreOffice's letter templates lost theirs.
 - 2026-11-07: An in-line picture lowered past its own height (`w:position`) lowers its line as far, as in Word; all 156 synthetic lines measured for #3984 match Word (#5796). Exact spacing keeps the line's baseline.
 - 2026-11-03: Search types in place: a click on the title bar's Search box, or Alt+Q, takes the typing in that box, with the results under it, as in Word, instead of a second box in a dialog (#5398).
+- 2026-10-31: List labels: a numbering level with format `none` and literal text, such as `RESPONSE:` with a one-inch hanging indent, shows that text as its label, as Word does; it used to show nothing. As in Word, a `none` level still counts and restarts the levels below it, its own number is empty (in legal numbering too), and an empty label still tabs the text to the indent (#4985). Readiness unchanged.
 - 2026-10-31: Font menus draw their entries from a few shared textures written in place, as the Equation tab's pictures are (#1002), instead of a texture per font: on Windows (DirectX 12) browsing the list showed the names on black strips in light mode and white or red ones in dark mode (#5105). Readiness unchanged.
 - 2026-11-01: DOCX tables keep rows and cells wrapped in `mc:AlternateContent`, selecting one supported Choice or Fallback with the existing reader policy (#5219). Original synthetic checks cover namespace aliases, unsupported requirements, nested row/cell content controls and two save/reopen cycles; broader corpus and native Word qualification remain open.
 
@@ -168,6 +169,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-10-30: Equations: `\int`, `\sum` and the other n-ary operators typed with AutoCorrect wait for their limits. `\int` + Space, then `_0^1` and Space, gives ∫ with its limits and the caret in its operand, and `\int_0^1` typed in one go does the same, since any character that can't continue `\name` corrects it; this is observed in Word for Windows on #4938. Enter or an arrow key builds it without going into the operand, and `∫∫` puts the operand in the inner operator; those two are not observed in Word (#4917). Readiness unchanged.
 
 - 2026-11-04: RTF import skips the declared Unicode fallback count even when it exceeds eight fallback units, so longer ANSI alternatives do not leak into the document text. Skipping stays bounded by the available input and ends at a group boundary. Readiness estimates unchanged.
+- 2026-11-05: Linux: a WordCraft started by an AppImage app no longer takes that app's file for its own (#5653). The AppImage runtime's `APPIMAGE`, `APPDIR`, `ARGV0` and `OWD` pass to whatever the app starts, so an installed WordCraft opened through `xdg-open` saw another program's `APPIMAGE`, and its self-update replaced that program's file. The app now starts over without those variables unless its executable is under `APPDIR`, so the update goes through the package or plain file it really is. Should starting over fail, the self-update is off in that window and Help › Check for Updates says why. Readiness estimates unchanged.
 - 2026-10-28: Ink replay, eraser picking, lasso selection and arrow-candidate discovery reuse the paragraph prefixes they have already scanned (#3614). Page item order, stroke geometry and saved data retain their behavior. This narrows the stability work; ink import fidelity, native pen input and broader corpus qualification remain open.
 - 2026-10-29: Page drawing finds text-box warps without rescanning the paragraph for every box (#3614). Only requested offsets are indexed, and each paragraph walk stops after its last requested character. Original Linux discovery, complete display-output and CLI/MCP save/reopen controls; native Word comparison untested. Readiness estimates unchanged.
 - 2026-10-28: Protected typing boundary lookup counts preceding objects once and indexes editable permission IDs (#3614); caret movement and enforcement policy are unchanged. Existing mutation and protection checks retain their costs; this does not close the broader performance gap.
@@ -818,6 +820,8 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 ## Revision history
 
+> 2026-11-05 · Linux self-update ignores another program's AppImage variables (#5653); recorded in the progress log, readiness unchanged.
+>
 > 2026-11-03 · Arabic dialogs read right to left (rtl::Table); recorded in the progress log, readiness unchanged.
 >
 > 2026-10-30 · Technical synchronization: retain the Proofing pane and command/selection/undo contracts on main `3b7f7ed`; new-SHA validation pending, readiness unchanged.
@@ -835,6 +839,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-05 | trivial | Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. |
 | 2026-11-07 | trivial | Progress log: An in-line picture lowered past its own height (`w:position`) lowers its line as far, as in Word; all 156 synthetic lines measured for #3984 match Word (#5796). |
 | 2026-11-03 | trivial | Progress log: the title bar's Search box takes the typing in place (#5398) |
+| 2026-10-31 | trivial | Progress log: a numFmt none list level shows its literal text (#4985); readiness unchanged |
 | 2026-10-31 | trivial | Progress log: font menu entries are drawn from shared textures (#5105) |
 | 2026-11-02 | trivial | Progress log: alternative format chunks and MHT open |
 | 2026-11-06 | trivial | Print helpers remove loaded PDF/settings files before driver work, tolerate prior removal and report cleanup errors; a held-driver regression checks the files are already absent (#5710) |
