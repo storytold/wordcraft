@@ -88,23 +88,26 @@ fn read_part(bytes: &[u8], work: &mut usize) -> Option<Graphic> {
     brush::drawing(reader.strokes, reader.work)
 }
 
-/// Fit local geometry to an object frame; widths of legacy circular centerlines use mean scale.
+/// Fit local geometry to a frame; circular widths use the mean of the composed axis scales.
 pub(super) fn fit_frame(graphic: &mut Graphic, w: f32, h: f32) {
     if graphic.w <= 0.0 || graphic.h <= 0.0 {
         return;
     }
     let (sx, sy) = (w / graphic.w, h / graphic.h);
+    let width_scale = graphic.ink_width_scale(sx, sy);
+    let [x, y] = graphic.ink_scale.unwrap_or([1.0, 1.0]);
+    graphic.ink_scale = Some([x * f64::from(sx), y * f64::from(sy)]);
     for item in &mut graphic.items {
         match item {
             GraphicItem::Path { segs, stroke_width, .. } => {
                 scale_segments(segs, sx, sy);
-                *stroke_width = (*stroke_width * ((sx + sy) / 2.0)).min(crate::units::MAX_LEN_PT);
+                *stroke_width = (*stroke_width * width_scale).min(crate::units::MAX_LEN_PT);
             }
             GraphicItem::InkOutline { segs, .. } => scale_segments(segs, sx, sy),
             GraphicItem::Shape { rect, kind, fill, stroke, .. } => {
                 let [x, y, width, height] = *rect;
                 if *kind == wordcraft_doc::para::ShapeKind::Ellipse && fill.is_some() && stroke.is_none() && width == height {
-                    let size = (width * ((sx + sy) / 2.0)).min(crate::units::MAX_LEN_PT);
+                    let size = (width * width_scale).min(crate::units::MAX_LEN_PT);
                     *rect = [(x + width / 2.0) * sx - size / 2.0, (y + height / 2.0) * sy - size / 2.0, size, size];
                 } else {
                     for (v, scale) in rect.iter_mut().zip([sx, sy, sx, sy]) {

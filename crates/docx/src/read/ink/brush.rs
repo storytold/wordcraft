@@ -302,6 +302,14 @@ pub(super) fn drawing(strokes: Vec<Stroke>, work: &mut usize) -> Option<Graphic>
     let point = |[x, y]: [f64; 2]| (((x - left) * scale) as f32, ((y - top) * scale) as f32);
     let mut items = Vec::new();
     for g in geometries {
+        // Zero pressure can leave points/lines but no filled area. Keep the bounds
+        // above for placement, while marking the preview nonpainting so exporters
+        // do not resurrect its picture. Each convex polygon has at most 50 vertices;
+        // this scan is covered by the per-nib work reservation, not an unbounded path.
+        if g.width.is_none() && !g.polygons.iter().any(|p| polygon_has_area(p)) {
+            items.push(GraphicItem::InkOutline { segs: Vec::new(), color: g.color, alpha: 0.0, mask_pen: g.mask_pen });
+            continue;
+        }
         let mut segs = Vec::new();
         for polygon in &g.polygons {
             spend(work, polygon.len() + 1)?;
@@ -331,6 +339,16 @@ pub(super) fn drawing(strokes: Vec<Stroke>, work: &mut usize) -> Option<Graphic>
         }
     }
     (!items.is_empty()).then_some(Graphic { kind: GraphicKind::Ink, items, w: (w * scale) as f32, h: (h * scale) as f32, ..Default::default() })
+}
+
+/// A convex swept nib paints area iff some consecutive pair is noncollinear with its first point.
+/// Subtract the origin before multiplying to avoid cancellation for large source coordinates.
+fn polygon_has_area(points: &[[f64; 2]]) -> bool {
+    let Some(origin) = points.first() else { return false };
+    points.windows(2).any(|pair| {
+        let [a, b] = pair else { return false };
+        (a[0] - origin[0]) * (b[1] - origin[1]) != (a[1] - origin[1]) * (b[0] - origin[0])
+    })
 }
 
 /// Sample a convex nib with a fixed vertex bound; rotation follows InkML's counter-clockwise OR.

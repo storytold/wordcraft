@@ -190,6 +190,62 @@ fn costly_native_ink_does_not_hide_later_charts_or_smart_art() {
     }
 }
 
+/// Initial nonuniform fitting and later canvas-member resizing compose before averaging widths.
+#[test]
+fn native_ink_canvas_member_widths_survive_nonuniform_resize_and_saves() {
+    let ink = r#"<ink xmlns="http://www.w3.org/2003/InkML"><brush><brushProperty name="width" value="2" units="pt"/></brush><trace>0 0,8 8</trace><trace>4 4</trace></ink>"#;
+    let mut files = unpack(&document_with_ink("canvas", ink));
+    replace(&mut files, "word/document.xml", r#"cx="1371600" cy="736600""#, r#"cx="1270000" cy="635000""#);
+    let mut session = Session::new(crate::io::open_bytes("resize.docx", &pack(files)).unwrap());
+    run(&mut session, "select.objects", json!({"index":0}));
+    run(&mut session, "canvas.member", json!({"index":0,"width":200,"height":50}));
+    for _ in 0..3 {
+        let layout = session.layout();
+        let mut sizes = Vec::new();
+        super::review::tap_and_line(&wordcraft_layout::display::page_display(&session.doc, &layout.pages[0], &Default::default()), &mut sizes);
+        assert_eq!(sizes.len(), 2, "line and tap must survive: {sizes:?}");
+        for (w, h) in sizes {
+            assert!((w - 25.0).abs() < 1e-4 && (h - 25.0).abs() < 1e-4, "expected 2 * mean(20, 5), got {w} x {h}");
+        }
+        let saved = crate::io::save_bytes("resize.docx", &session.doc).unwrap();
+        session = Session::new(crate::io::open_bytes("resize.docx", &saved).unwrap());
+        assert!(session.doc.passthrough.values().any(|bytes| bytes.as_slice() == ink.as_bytes()));
+    }
+}
+
+/// Zero-pressure vectors paint nothing and must not resurrect their retained picture on export.
+#[test]
+fn zero_pressure_native_ink_stays_nonpainting_on_odt_and_ott_export() {
+    for placement in ["inline", "floating", "group", "canvas"] {
+        for pressure in ["0", "0.5"] {
+            let ink = format!(
+                r#"<ink xmlns="http://www.w3.org/2003/InkML"><traceFormat><channel name="X" units="pt"/><channel name="Y" units="pt"/><channel name="F"/></traceFormat><trace>0 0 {pressure},10 10 {pressure}</trace></ink>"#
+            );
+            let mut session = Session::new(crate::io::open_bytes("pressure.docx", &with_fallback(placement, &ink)).unwrap());
+            let layout = session.layout();
+            let page = &layout.pages[0];
+            let painted = wordcraft_render::render_page(&session.doc, page, 1.0, &Default::default());
+            let hidden = wordcraft_render::render_page(
+                &session.doc,
+                page,
+                1.0,
+                &wordcraft_render::RenderOptions {
+                    display: wordcraft_layout::display::DisplayOptions { hide_ink: true, ..Default::default() },
+                    ..Default::default()
+                },
+            );
+            let visible = pressure != "0";
+            assert_eq!(painted.pixels != hidden.pixels, visible, "{placement}: pressure={pressure}");
+            for name in ["pressure.odt", "pressure.ott"] {
+                let saved = crate::io::save_bytes(name, &session.doc).unwrap();
+                let reopened = crate::io::open_bytes(name, &saved).unwrap();
+                let has_picture = reopened.body.iter().any(|b| matches!(&**b, Block::Para(p) if has_preview(&reopened, &p.objects)));
+                assert_eq!(has_picture, visible, "{placement}, {name}: pressure={pressure}");
+            }
+        }
+    }
+}
+
 #[test]
 fn hidden_native_ink_members_stay_hidden_on_export() {
     fn has_shape(objects: &[InlineObject]) -> bool {

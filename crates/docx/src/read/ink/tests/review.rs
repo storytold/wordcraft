@@ -85,7 +85,23 @@ fn pressure_must_be_known_and_normalizable_unless_explicitly_ignored() {
     assert!(ink(&missing.replace("5 5 ?", "5 5 .25")).is_some());
 }
 
-/// Repeated nonuniform fitting scales taps and centerline widths together, including capped extremes.
+/// Collapsed swept nibs are nonpainting, without discarding the live ends of a pressure-varying run.
+#[test]
+fn zero_pressure_outlines_use_the_nonpainting_sentinel() {
+    let format = r#"<traceFormat><channel name="X" units="pt"/><channel name="Y" units="pt"/><channel name="F"/></traceFormat>"#;
+    for samples in ["0 0 0,10 10 0", "5 5 0"] {
+        let graphic = ink(&format!("{format}<trace>{samples}</trace>")).unwrap();
+        assert!(matches!(graphic.items.as_slice(), [GraphicItem::InkOutline { segs, alpha: 0.0, .. }] if segs.is_empty()));
+    }
+    let graphic = ink(&format!("{format}<trace>0 0 0.5,10 10 0,20 0 0.5</trace>")).unwrap();
+    assert!(matches!(graphic.items.as_slice(), [GraphicItem::InkOutline { segs, alpha: 1.0, .. }] if !segs.is_empty()));
+    // A zero-height nib can still sweep a filled area: classify the swept polygon,
+    // not the area of each individual nib or the presence of a zero dimension.
+    let swept = ink(r#"<traceFormat><channel name="X" units="pt"/><channel name="Y" units="pt"/><channel name="BW" units="pt"/><channel name="BH" units="pt"/></traceFormat><trace>0 0 4 0,0 10 4 0</trace>"#).unwrap();
+    assert!(matches!(swept.items.as_slice(), [GraphicItem::InkOutline { segs, alpha: 1.0, .. }] if !segs.is_empty()));
+}
+
+/// Repeated nonuniform fits compose before averaging circular widths, including extreme aspect ratios.
 #[test]
 fn taps_and_centerlines_keep_the_same_width_during_frame_fitting() {
     let mut graphic = ink("<trace>0 0,10 0</trace><trace>5 5</trace>").unwrap();
@@ -99,15 +115,17 @@ fn taps_and_centerlines_keep_the_same_width_during_frame_fitting() {
     let prior = (graphic.w, graphic.h);
     fit_frame(&mut graphic, prior.0 / 2.0, prior.1 * 3.0);
     let [GraphicItem::Path { stroke_width, .. }, GraphicItem::Shape { rect, .. }] = graphic.items.as_slice() else { panic!() };
-    assert!((*stroke_width - 4.375).abs() < 1e-6);
+    assert!((*stroke_width - 2.5).abs() < 1e-6, "mean(4 * 0.5, 1 * 3), not mean(4, 1) * mean(0.5, 3)");
     assert_eq!((rect[2], rect[3]), (*stroke_width, *stroke_width));
     assert_eq!((rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0), (11.0, 16.5));
 
     let mut extreme = ink("<trace>0 0,10 0</trace><trace>5 5</trace>").unwrap();
+    let initial = (extreme.w, extreme.h);
     fit_frame(&mut extreme, crate::units::MAX_LEN_PT, 0.001);
     fit_frame(&mut extreme, crate::units::MAX_LEN_PT, crate::units::MAX_LEN_PT);
     let [GraphicItem::Path { stroke_width, .. }, GraphicItem::Shape { rect, .. }] = extreme.items.as_slice() else { panic!() };
-    assert_eq!(*stroke_width, crate::units::MAX_LEN_PT);
+    let expected = (crate::units::MAX_LEN_PT / initial.0 + crate::units::MAX_LEN_PT / initial.1) / 2.0;
+    assert!((*stroke_width - expected).abs() < 0.001, "{stroke_width} != {expected}");
     assert_eq!((rect[2], rect[3]), (*stroke_width, *stroke_width));
 }
 

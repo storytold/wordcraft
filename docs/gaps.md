@@ -1,6 +1,6 @@
 # Where WordCraft falls short of Word
 
-> **Native ink update:** 2026-11-08 · Bounded InkML previews cover inline/floating/direct/group/canvas placements. Ink work has separate part/file caps; later charts/SmartArt remain drawable. Gaps #2/#12 and Word qualification remain open.
+> **Native ink update:** 2026-11-08 · Nonuniform framed resizing retains circular widths through saves; zero-pressure ODT/OTT export stays nonpainting. Bounded InkML previews cover inline/floating/direct/group/canvas placements. Ink work has separate part/file caps; later charts/SmartArt remain drawable. Gaps #2/#12 and Word qualification remain open.
 
 > **Ink renderer primitives update:** 2026-11-08 · Mask blending and native-width display operations are available independently of import. Ordinary clipping and legacy ink widths are unchanged; no ranked gap closed.
 
@@ -186,6 +186,8 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. Accepted long margin values also stay inside the field after focus leaves; their accepted range, units and parsing are unchanged.
 
 ## Revision history
+
+> 2026-11-08 · InkML review repairs (#5731 split): compose circular-width axis scales through framed resizing/save and prevent all-zero-pressure outlines from resurrecting export pictures. Direct run-level markup has no persisted outer resize frame. Synthetic regressions only; ranked gaps and readiness unchanged.
 
 > 2026-11-08 · Native InkML decoder/placement (#5731 split): partial vectors with source/picture preservation, independent bounded ink work through nested chunks, and heavy-ink-before-chart/SmartArt regressions. Gap #2 estimates ink qualification/OLE work separately from chart/SmartArt editing (#13, unchanged); readiness unchanged.
 

@@ -1,6 +1,6 @@
 # File-format parity with Microsoft Word
 
-> **Native ink update:** 2026-11-08 · Bounded InkML vector decoding and all five placements; per-part/file-wide ink work cannot starve charts/SmartArt. Original parts and available pictures remain preserved. Synthetic evidence only; Word qualification remains deferred.
+> **Native ink update:** 2026-11-08 · Composed circular-width fitting keeps framed resize/save thickness stable; zero-pressure ODT/OTT export stays nonpainting. Bounded InkML vector decoding and all five placements; per-part/file-wide ink work cannot starve charts/SmartArt. Original parts and available pictures remain preserved. Synthetic evidence only; Word qualification remains deferred.
 > **2026-11-05:** A Word template opened from the file manager starts a new document based on it, and is never saved over (#3433).
 > **2026-11-05:** Strict Open XML documents open with their shapes, text boxes, groups and canvases (#3548).
 
@@ -345,6 +345,8 @@ namespace and renderer changes provide retained XML and rendering primitives; th
 decoding, placement and preservation. Evidence is synthetic, not native Word qualification.
 
 ## Revision history
+
+> 2026-11-08 · Native ink review repairs: compose circular pen/tap fitting scales instead of multiplying successive means, and mark fully zero-area outlines nonpainting before fallback export. Synthetic framed-resize/save, JSON, raster and ODT/OTT controls; direct unframed markup cannot retain arbitrary frame resizing. Word qualification remains deferred.
 
 > 2026-11-08 · Decoder/placement split of #5731: bounded InkML vectors, separate per-part/file-wide ink work through nested DOCX chunks, retained ODT/OTT picture fallbacks, and synthetic heavy-ink-before-chart/SmartArt controls. Detailed profile in native-ink.md; full conformance and Word qualification remain open.
 

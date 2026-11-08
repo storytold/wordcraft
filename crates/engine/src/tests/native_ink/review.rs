@@ -30,7 +30,7 @@ fn mask_bounds(draws: &[Draw]) -> Option<[f32; 4]> {
     })
 }
 
-fn tap_and_line(draws: &[Draw], out: &mut Vec<(f32, f32)>) {
+pub(super) fn tap_and_line(draws: &[Draw], out: &mut Vec<(f32, f32)>) {
     use wordcraft_doc::para::ShapeKind;
     use wordcraft_layout::display::Paint;
     for draw in draws {
@@ -48,28 +48,41 @@ fn tap_and_line(draws: &[Draw], out: &mut Vec<(f32, f32)>) {
 fn resized_taps_match_their_pen_strokes_in_all_placements_and_after_saves() {
     use std::sync::Arc;
     use wordcraft_doc::{Block, para::InlineObject};
-    let ink = r#"<ink xmlns="http://www.w3.org/2003/InkML"><brush><brushProperty name="width" value="4" units="pt"/></brush><trace>0 0,50 0</trace><trace>25 25</trace></ink>"#;
+    // Deliberately differ from the fixture's frame aspect ratio, so the first fit
+    // is already nonuniform before the second nonuniform resize.
+    let ink = r#"<ink xmlns="http://www.w3.org/2003/InkML"><brush><brushProperty name="width" value="4" units="pt"/></brush><trace>0 0,50 0</trace><trace>25 12.5</trace></ink>"#;
     for placement in ["inline", "floating", "group", "canvas", "direct"] {
         let mut doc = crate::io::open_bytes("tap.docx", &document_with_ink(placement, ink)).unwrap();
         for block in &mut doc.body {
             let Block::Para(para) = Arc::make_mut(block) else { continue };
             for object in &mut para.objects {
-                match object {
-                    InlineObject::Graphic { w, h, .. } | InlineObject::Group { w, h, .. } => {
-                        *w *= 1.5;
-                        *h *= 0.75;
-                    }
-                    _ => {}
+                // Direct run-level ink has no persisted outer resize frame. Keep it as
+                // an intrinsic-size control; exercise resizing on every framed placement.
+                if placement != "direct"
+                    && matches!(object, InlineObject::Graphic { .. } | InlineObject::Group { .. })
+                    && let Some((w, h, _)) = object.frame()
+                {
+                    object.set_size(w * 1.5, h * 0.75);
                 }
             }
         }
+        let mut expected: Option<Vec<(f32, f32)>> = None;
         for _ in 0..3 {
+            // Recovery must retain any fitting metadata, not just the object frame.
+            doc = serde_json::from_slice(&serde_json::to_vec(&doc).unwrap()).unwrap();
             let mut session = Session::new(doc);
             let layout = session.layout();
             let mut sizes = Vec::new();
             tap_and_line(&page_display(&session.doc, &layout.pages[0], &Default::default()), &mut sizes);
             let [(line, _), (tap_w, tap_h)] = sizes.as_slice() else { panic!("{placement}: {sizes:?}") };
             assert!((line - tap_w).abs() < 1e-4 && (line - tap_h).abs() < 1e-4, "{placement}: {sizes:?}");
+            if let Some(before_save) = &expected {
+                for ((w, h), (before_w, before_h)) in sizes.iter().zip(before_save) {
+                    assert!((w - before_w).abs() < 1e-4 && (h - before_h).abs() < 1e-4, "{placement}: {before_save:?} -> {sizes:?}");
+                }
+            } else {
+                expected = Some(sizes.clone());
+            }
             let pdf = wordcraft_pdf::export_layout(&session.doc, &layout, &Default::default()).unwrap();
             assert!(!pdf.is_empty());
             let saved = crate::io::save_bytes("tap.docx", &session.doc).unwrap();

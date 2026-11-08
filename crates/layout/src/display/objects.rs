@@ -6,14 +6,16 @@ use wordcraft_doc::connector::ArrowStyle;
 /// Build page-coordinate draws for a chart, diagram, or native InkML graphic inside `rect`.
 ///
 /// The items were built for `g.w` × `g.h` (zero means the frame's own size) and are scaled to the
-/// target rectangle. Stroke widths and text sizes use the mean of its X and Y scales. Native ink
-/// paths enter the round-cap-and-join ink pipeline shared by screen and PDF rendering.
+/// target rectangle. Text sizes and ordinary strokes use the mean X/Y scale; circular native
+/// pens compose previously baked fitting axes before averaging. Native paths use the shared
+/// screen/PDF round-cap-and-join pipeline.
 pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32) -> Vec<Draw> {
     let (sx, sy) = (scale_of(rect.w, g.w), scale_of(rect.h, g.h));
     let k = (sx + sy) / 2.0;
+    let width_scale = g.ink_width_scale(sx, sy);
     let mut out = Vec::with_capacity(g.items.len());
     for it in &g.items {
-        if let Some(draw) = graphic_geometry(it, rect, sx, sy, alpha, g.kind == GraphicKind::Ink) {
+        if let Some(draw) = graphic_geometry(it, rect, sx, sy, alpha, g.kind == GraphicKind::Ink, width_scale) {
             out.push(draw);
         } else if let GraphicItem::Text { rect: r, .. } = it {
             let inside = Rect::new(rect.x + r[0] * sx, rect.y + r[1] * sy, r[2] * sx, r[3] * sy);
@@ -39,10 +41,10 @@ pub(super) fn graphic_rotation_frame(g: &Graphic, rect: Rect) -> Rect {
 /// Map a non-text graphic item from its local coordinates into its page-coordinate draw.
 ///
 /// When `ink` is true, circular-pen paths with valid move/line segments become ink draws so both
-/// renderers apply native ink caps and joins. Text is returned as `None` for shaped separately.
-fn graphic_geometry(it: &GraphicItem, rect: Rect, sx: f32, sy: f32, alpha: f32, ink: bool) -> Option<Draw> {
+/// renderers apply native ink caps and joins. `k` is the composed width multiplier, separate from
+/// coordinate scales. Text is returned as `None` for shaping separately.
+fn graphic_geometry(it: &GraphicItem, rect: Rect, sx: f32, sy: f32, alpha: f32, ink: bool, k: f32) -> Option<Draw> {
     let inside = |r: &[f32; 4]| Rect::new(rect.x + r[0] * sx, rect.y + r[1] * sy, r[2] * sx, r[3] * sy);
-    let k = (sx + sy) / 2.0;
     Some(match it {
         GraphicItem::Shape { rect: r, kind, fill, stroke, stroke_width } => {
             let [x, y, width, height] = *r;
@@ -523,7 +525,8 @@ pub(super) fn object_draws(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32
         }
         InlineObject::Graphic { graphic, .. } if graphic.kind == GraphicKind::Ink && !opts.hide_ink => {
             let (sx, sy) = (scale_of(rect.w, graphic.w), scale_of(rect.h, graphic.h));
-            let items = graphic.items.iter().filter_map(|it| graphic_geometry(it, rect, sx, sy, alpha, true)).collect();
+            let width_scale = graphic.ink_width_scale(sx, sy);
+            let items = graphic.items.iter().filter_map(|it| graphic_geometry(it, rect, sx, sy, alpha, true, width_scale)).collect();
             spun(own, graphic_rotation_frame(graphic, rect), items, out)
         }
         _ => {}

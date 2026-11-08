@@ -1,6 +1,6 @@
 # Native InkML rendering profile
 
-> **Status:** 2026-11-08 · Bounded, partial vector previews. Synthetic evidence only;
+> **Status:** 2026-11-08 · Composed circular-width fitting and zero-area export guards; bounded, partial previews. Synthetic evidence only;
 > Word-written file validation and native Word visual comparison remain deferred.
 
 The decoder follows the public [W3C InkML Recommendation](https://www.w3.org/TR/2011/REC-InkML-20110920/).
@@ -48,7 +48,11 @@ pressure refuses decoding unless explicitly ignored. Time does not change the pe
 uses bounded Catmull–Rom samples; changing its policy within a connected run refuses the preview.
 Curved nibs use 24 vertices. Color and opacity changes are sample-stepped; compound outlines paint
 once per continuous paint run within a stroke. Separate strokes retain separate opacity.
-Centerlines and circular taps use the same mean-scale fitting; outlined nibs scale in both axes.
+Centerlines and circular taps use the mean of the composed X/Y fitting scales, applied once.
+Preview metadata retains the axes through JSON recovery so a further nonuniform resize does not
+multiply arithmetic means or change thickness after DOCX save/reopen. Outlined nibs scale in both
+axes. Direct run-level ink has no persisted outer frame; its intrinsic-size rendering remains
+supported, but arbitrary frame resizing cannot be retained in that direct markup.
 
 The separate renderer primitives retain native widths without changing authored/freeform ink's
 legacy clamp. Binary mask colors have RGB components of 0 or 255: Multiply equals bitwise AND
@@ -81,7 +85,10 @@ and optional pictures. Retained namespaces are handled by the separate retained-
 
 Readable picture fallbacks are retained independently of decoded geometry through JSON and
 document adoption. ODT/OTT uses the whole picture where native vectors cannot be represented,
-including group/canvas members; hidden/nonpainting ink does not resurrect a picture. Without a
+including group/canvas members; hidden/nonpainting ink does not resurrect a picture. Fully
+zero-area swept nibs, including all-zero-pressure strokes, use the nonpainting sentinel while
+retaining their bounds for placement; a zero-pressure endpoint of a painted run is not discarded.
+Without a
 picture, native path export to ODT/OTT remains unsupported. Screen and PDF still use vectors.
 
 Remaining gaps include nonbinary masks, other application-defined raster/visual semantics,
@@ -111,6 +118,10 @@ before later ink, charts and SmartArt retains later items/models, including thro
 chunks and save/reopen. No Word-written files or native Word comparison are claimed.
 
 ## Revision history
+
+- 2026-11-08: Fix nonuniform circular-width resize/save consistency and zero-pressure ODT/OTT
+  picture resurrection. Synthetic canvas-member, framed-placement, JSON, raster and export
+  regressions; native Word qualification remains deferred.
 
 - 2026-11-08: Extract the bounded decoder/placement profile for the third #5731 split; retain
   per-part/file-wide ink accounting, export fallbacks and hostile-input regressions.
