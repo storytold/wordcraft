@@ -534,7 +534,12 @@ impl BordersForm {
         }
         if self.fill != b.fill || self.fill_to_text != b.fill_to_text {
             let color = Rgb::parse(&self.fill).map(|c| json!(c.hex())).unwrap_or(Value::Null);
-            out.push((if self.fill_to_text { "format.shading" } else { "para.shading" }, json!({"color": color})));
+            // Apply to: Paragraph shades the paragraphs even for text selected inside one.
+            out.push(if self.fill_to_text {
+                ("format.shading", json!({"color": color}))
+            } else {
+                ("para.shading", json!({"color": color, "paragraph": true}))
+            });
         }
         out
     }
@@ -764,8 +769,21 @@ fn draw_line(p: &egui::Painter, [a, b]: [egui::Pos2; 2], style: BorderStyle, wid
                 (0..=n.min(400)).map(|i| a + dir * (len * i as f32 / n as f32) + normal * if i % 2 == 0 { -1.5 } else { 1.5 }).collect();
             p.add(egui::Shape::line(pts, Stroke::new(1.0, color)));
         }
-        BorderStyle::Single | BorderStyle::Thick => {
-            p.line_segment([a, b], if style == BorderStyle::Thick { Stroke::new((px * 1.5).min(6.0), color) } else { stroke });
+        BorderStyle::Thick => {
+            p.line_segment([a, b], Stroke::new((px * 1.5).min(6.0), color));
+        }
+        // A compound thin and thick line shows as one line of its width, as on the page.
+        BorderStyle::Single
+        | BorderStyle::ThinThickSmallGap
+        | BorderStyle::ThickThinSmallGap
+        | BorderStyle::ThinThickThinSmallGap
+        | BorderStyle::ThinThickMediumGap
+        | BorderStyle::ThickThinMediumGap
+        | BorderStyle::ThinThickThinMediumGap
+        | BorderStyle::ThinThickLargeGap
+        | BorderStyle::ThickThinLargeGap
+        | BorderStyle::ThinThickThinLargeGap => {
+            p.line_segment([a, b], stroke);
         }
     }
 }
