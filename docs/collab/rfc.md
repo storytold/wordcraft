@@ -114,7 +114,8 @@ WebSocket, JSON text frames (UTF-8), один фрейм ≤ 1 MiB; TLS снар
 | `op` | C→S | `opId`, `baseVersion`, `epoch?`, `kind`, `target`, `payload` | операция |
 | `applied` | S→C | `opId`, `version`, `epoch`, `delta`\|`state` | авторитетный результат |
 | `rejected` | S→C | `opId`, `code`, `retryable`, `details?` | отказ |
-| `presence` | C↔S | `cursor`, `selection`, `viewport`, `active` | не журналируется |
+| `presence` | C→S | `cursor`, `selection`, `viewport`, `active` | не журналируется |
+| `presence` | S→C | `client_id`, `role`, `state` | `role` ставит сервер из JWT, не клиент |
 | `snapshot` | S→C | `version`, `chunk`, `last` | догон/ресинк |
 | `commit` | C→S | `opId`, `expectedVersion`, `etag?` | сборка файла |
 | `committed` | S→C | `version`, `sha256`, `bytes?`, `warnings[]` | результат |
@@ -176,6 +177,8 @@ OT/CRDT не используются: сервер применяет опер�
 active:{tab,pane}}`. 5–10 Гц, ≤ 2 KiB, коалесцирование в последнее состояние,
 `drop-stale` при перегрузке, TTL 30 с, `leave`/разрыв чистит сразу. Не журналируется,
 не влияет на `version`; автору своё состояние не эхо-броадкастится. viewer шлёт presence.
+Сервер добавляет в броадкаст `role` из JWT (ADR-0008), чтобы пир, подключённый
+раньше, видел роль нового участника с первого же кадра.
 
 ## 6. Undo/redo на пользователя (ADR-0010)
 

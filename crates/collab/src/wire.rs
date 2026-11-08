@@ -251,6 +251,12 @@ pub enum ServerMsg {
     },
     Presence {
         client_id: String,
+        /// The sender's role, taken by the server from the JWT claim (ADR-0008)
+        /// and never from the presence payload. It lets a peer that joined
+        /// before the sender show the right role on the sender's first frame.
+        /// Defaulted so a peer on the older wire still parses.
+        #[serde(default)]
+        role: String,
         state: serde_json::Value,
     },
     Left {
@@ -304,6 +310,13 @@ mod tests {
         let text = serde_json::to_string(&op).expect("serialize");
         let back: Op = serde_json::from_str(&text).expect("deserialize");
         assert_eq!(op, back);
+    }
+
+    #[test]
+    fn presence_without_a_role_still_parses() {
+        let text = r#"{"type":"presence","client_id":"c1","state":{"active":true}}"#;
+        let msg: ServerMsg = serde_json::from_str(text).expect("an older peer's frame parses");
+        assert!(matches!(msg, ServerMsg::Presence { role, .. } if role.is_empty()));
     }
 
     #[test]

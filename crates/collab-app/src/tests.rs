@@ -164,3 +164,32 @@ fn an_empty_diff_sends_nothing() {
     let plans = state.plan(&before, &session, "none", &json!({})).expect("no plan");
     assert!(plans.is_empty());
 }
+
+#[test]
+fn presence_gives_a_new_peer_its_role() {
+    let mut people = Vec::new();
+    crate::apply_presence(&mut people, "c1", "owner", &json!({"cursor": {"story": "body", "nodeId": 2, "off": 4}}));
+    crate::apply_presence(&mut people, "c2", "editor", &json!({}));
+    crate::apply_presence(&mut people, "c3", "viewer", &json!({}));
+    let roles: Vec<_> = people.iter().map(|participant| (participant.client_id.as_str(), participant.role.as_str())).collect();
+    assert_eq!(roles, [("c1", "owner"), ("c2", "editor"), ("c3", "viewer")]);
+    assert_eq!(people[0].cursor.as_ref().map(|cursor| cursor.off), Some(4));
+}
+
+#[test]
+fn a_role_from_presence_replaces_the_placeholder() {
+    let mut people =
+        vec![crate::ParticipantView { client_id: "c1".into(), role: "participant".into(), color: None, cursor: None, selection: None, active: true }];
+    crate::apply_presence(&mut people, "c1", "viewer", &json!({"active": true}));
+    assert_eq!(people[0].role, "viewer");
+    assert_eq!(people.len(), 1, "the peer is updated, not duplicated");
+}
+
+#[test]
+fn a_presence_without_a_role_keeps_the_known_role() {
+    let mut people = Vec::new();
+    crate::apply_presence(&mut people, "c1", "owner", &json!({}));
+    crate::apply_presence(&mut people, "c1", "", &json!({"active": false}));
+    assert_eq!(people[0].role, "owner", "an older server sends no role");
+    assert!(!people[0].active);
+}

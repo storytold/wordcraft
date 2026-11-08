@@ -73,6 +73,24 @@ fn welcome_with_resync_asks_for_a_snapshot_then_joins() {
 }
 
 #[test]
+fn presence_carries_the_sender_role() {
+    let mut client = Client::new("alice");
+    let event = client.on(ServerMsg::Presence {
+        client_id: "bob".into(),
+        role: "viewer".into(),
+        state: json!({"cursor": {"story": "body", "nodeId": 1, "off": 2}}),
+    });
+    match event {
+        Event::Presence { client_id, role, state } => {
+            assert_eq!(client_id, "bob");
+            assert_eq!(role, "viewer");
+            assert_eq!(state["cursor"]["off"], 2);
+        }
+        other => panic!("expected presence, got {other:?}"),
+    }
+}
+
+#[test]
 fn a_version_gap_asks_for_a_snapshot() {
     let mut client = Client::new("alice");
     let _ = client.on(ServerMsg::Welcome {

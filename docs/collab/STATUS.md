@@ -27,6 +27,10 @@ missing, and where the next session should start.
   ones already applied), and commands act as an undo barrier (ADR-0010).
 - Role gates: viewer cannot write; commenter may only add/resolve comments
   (including the `review.*Comment` commands); owner alone commits (ADR-0008).
+- Presence (ephemeral, never journaled) carries the sender's `role`, stamped by
+  the server from the JWT claim, so a peer that was already connected shows a
+  newcomer's role on its first frame; the welcome list still gives every role
+  to the client that joins.
 - Snapshot = model JSON + source `.docx`; `Document::kept` is taken back from the
   source on restore (ADR-0011). Server snapshots every 500 operations, on commit
   and when the last peer leaves; a final snapshot is written on SIGTERM.
@@ -224,11 +228,6 @@ Results at this writing:
 - Web collab has been run with two clients only inside one headless browser
   (two iframes through a cabinet-like host page, §5.1). Two real machines, the
   real cabinet page and its storage, and the visible commit status stay manual.
-- A peer that was already connected learns about a newcomer only through
-  `presence`, which carries the caret and not the role, so its participant list
-  shows `participant` until a role-bearing update arrives (the newcomer itself
-  sees every role from the welcome). A join broadcast or a role in presence is
-  the follow-up.
 - A step of several operations is now one transaction (every inverse or none);
   commands still have no inverse and act as an undo barrier. The `opId` dedup
   window is in memory and is cleared when a room is restored from a snapshot, so
@@ -301,7 +300,9 @@ and `apps/wordcraft-web/src/web.rs` (web); test
    wider window or with the panel collapsed.
 4. The human acceptance run: a 100+ page document, then commit and reopen the
    file in Word/LibreOffice.
-5. The role shown for a new peer on the side that was already connected (§4).
+5. The role shown for a new peer on the side that was already connected: the
+   bug is fixed and covered by tests (§5.3); the human run still has to see it
+   in the panel.
 
 ### 5.2 What is left
 
@@ -314,11 +315,45 @@ and `apps/wordcraft-web/src/web.rs` (web); test
    approves).
 3. Optional hardening: command inverses for the common engine commands, persisting
    the `opId` dedup window across a snapshot restore, table-cell node ids and
-   property primitives, offline queue, the role in presence or a join broadcast.
+   property primitives, offline queue, or a join broadcast that carries the role
+   before the first presence frame (presence already carries it, §5.3).
    (The multi-operation undo transaction is done:
    `a_step_of_several_operations_lands_as_one_transaction`.)
 4. Manual acceptance (desktop): two desktops over the real server, a 100+ page
    document, commit and reopen in Word/LibreOffice.
+
+### 5.3 Role in presence (run 2026-11-09)
+
+§5.1 left one visible gap: a peer that was already connected learned about a
+newcomer only from `presence`, which carried the caret and not the role, so its
+participant list showed `participant` until the next welcome. `TASK.md` §3 asks
+for "a participant list with roles", so the role now travels with presence.
+
+- **Wire.** `ServerMsg::Presence` gains `role` (`#[serde(default)]`, so a frame
+  from an older server still parses). The client's `Presence` message is
+  unchanged: a client cannot name a role, the server stamps it from the JWT
+  claim (ADR-0008), the same authority that gates write and commit.
+- **Server.** `process_frame` copies the authenticated role into every presence
+  broadcast. The room already keeps it per peer (`Peer.role`) for the welcome
+  list and the lease checks; nothing new is trusted from the wire.
+- **Client.** `Event::Presence` carries the role. `collab-app` folds a frame
+  into the participant list through `apply_presence` (shared by the web session
+  in `collab-web`): a known peer gets the role updated in place, a new peer is
+  added with it, and an empty role (older server) keeps the role already known
+  instead of overwriting it with `participant`.
+- **UI.** Nothing else was needed: the desktop Collaboration panel already
+  renders `id · role` from `ParticipantView`, and the host bridge already sends
+  `hostParticipants` with `role` to the cabinet page.
+
+**Test.** `presence_carries_the_sender_role_to_peers_that_joined_earlier`
+(`apps/collab-server/src/tests.rs`) connects three real WebSocket clients —
+`owner`, `editor`, `viewer` — checks that each welcome lists the roles already
+present, then has each client publish presence and asserts that both peers that
+joined earlier receive the sender's raw role (`viewer`, `editor`, `owner`).
+`presence_carries_the_sender_role` (client) and the `apply_presence` tests
+(collab-app: new peer, placeholder replacement, role-less frame) cover the two
+halves without a socket; `presence_without_a_role_still_parses` (wire) pins the
+backward-compatible frame.
 
 ## 6. Where things live
 

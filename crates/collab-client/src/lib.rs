@@ -79,6 +79,9 @@ pub enum Event {
     },
     Presence {
         client_id: String,
+        /// The sender's role from the server (its JWT claim), empty on an older
+        /// server that does not send one.
+        role: String,
         state: Value,
     },
     Left {
@@ -271,7 +274,7 @@ impl Client {
                 Event::Rejected { reject }
             }
             ServerMsg::Nodes { nodes } => Event::Nodes { nodes },
-            ServerMsg::Presence { client_id, state } => Event::Presence { client_id, state },
+            ServerMsg::Presence { client_id, role, state } => Event::Presence { client_id, role, state },
             ServerMsg::Left { client_id } => Event::Left { client_id },
             ServerMsg::Snapshot { version, bytes, last } => {
                 if last {

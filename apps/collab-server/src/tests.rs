@@ -223,8 +223,9 @@ async fn presence_reaches_the_other_client_and_moves_no_version() {
         .await
         .expect("presence");
     match next_msg(&mut bob).await {
-        ServerMsg::Presence { client_id, state } => {
+        ServerMsg::Presence { client_id, role, state } => {
             assert_eq!(client_id, "alice");
+            assert_eq!(role, "editor", "the server stamps the sender's role from the token");
             assert_eq!(state["cursor"]["off"], 3);
         }
         other => panic!("expected presence, got {other:?}"),
@@ -238,6 +239,80 @@ async fn presence_reaches_the_other_client_and_moves_no_version() {
     match next_msg(&mut alice).await {
         ServerMsg::Applied { applied } => assert_eq!(applied.version, 1),
         other => panic!("expected applied, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn presence_carries_the_sender_role_to_peers_that_joined_earlier() {
+    let (url, cfg) = spawn_server().await;
+    let mut owner = connect(&url, &cfg, "owner", "alice").await;
+    let mut editor = connect(&url, &cfg, "editor", "bob").await;
+
+    // The first client sees only itself; the second sees both roles.
+    match next_msg(&mut owner).await {
+        ServerMsg::Welcome { participants, .. } => {
+            assert_eq!(participants.len(), 1);
+            assert_eq!(participants[0].role, "owner");
+        }
+        other => panic!("expected welcome, got {other:?}"),
+    }
+    let node = node_of(&mut owner).await;
+    match next_msg(&mut editor).await {
+        ServerMsg::Welcome { participants, .. } => {
+            let mut roles: Vec<_> = participants.iter().map(|p| (p.client_id.clone(), p.role.clone())).collect();
+            roles.sort();
+            assert_eq!(roles, [("alice".to_string(), "owner".to_string()), ("bob".to_string(), "editor".to_string())], "{participants:?}");
+        }
+        other => panic!("expected welcome, got {other:?}"),
+    }
+    let _ = node_of(&mut editor).await;
+
+    // A third participant joins with another role: the two peers that were
+    // already connected learn it from the newcomer's first presence frame.
+    let mut viewer = connect(&url, &cfg, "viewer", "carol").await;
+    match next_msg(&mut viewer).await {
+        ServerMsg::Welcome { participants, .. } => {
+            let mut roles: Vec<_> = participants.iter().map(|p| (p.client_id.clone(), p.role.clone())).collect();
+            roles.sort();
+            assert_eq!(
+                roles,
+                [("alice".to_string(), "owner".to_string()), ("bob".to_string(), "editor".to_string()), ("carol".to_string(), "viewer".to_string())],
+                "{participants:?}"
+            );
+        }
+        other => panic!("expected welcome, got {other:?}"),
+    }
+    let _ = node_of(&mut viewer).await;
+
+    let presence = || ClientMsg::Presence { state: json!({"cursor": {"story": "body", "nodeId": node, "off": 1}}) };
+    viewer.send(Message::Text(serde_json::to_string(&presence()).expect("json").into())).await.expect("presence");
+    expect_presence(&mut owner, "carol", "viewer").await;
+    expect_presence(&mut editor, "carol", "viewer").await;
+
+    editor.send(Message::Text(serde_json::to_string(&presence()).expect("json").into())).await.expect("presence");
+    expect_presence(&mut owner, "bob", "editor").await;
+    expect_presence(&mut viewer, "bob", "editor").await;
+
+    owner.send(Message::Text(serde_json::to_string(&presence()).expect("json").into())).await.expect("presence");
+    expect_presence(&mut editor, "alice", "owner").await;
+    expect_presence(&mut viewer, "alice", "owner").await;
+}
+
+async fn expect_presence(
+    ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    client: &str,
+    role: &str,
+) {
+    loop {
+        match next_msg(ws).await {
+            ServerMsg::Presence { client_id, role: sender_role, .. } => {
+                assert_eq!(client_id, client);
+                assert_eq!(sender_role, role, "presence {client_id} must carry the token role");
+                return;
+            }
+            ServerMsg::Nodes { .. } | ServerMsg::Left { .. } => continue,
+            other => panic!("expected presence for {client}, got {other:?}"),
+        }
     }
 }
 

@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use wordcraft_collab::room::Role;
 use wordcraft_collab::wire::{ClientMsg, OpKind, ServerMsg, Target, Version};
 pub use wordcraft_collab_app::{Cursor, ParticipantView, Status};
-use wordcraft_collab_app::{Outcome, SyncState};
+use wordcraft_collab_app::{Outcome, SyncState, apply_presence};
 /// An id for one editing session: two apps on the same document must not share
 /// an operation id space (`wordcraft_collab_client::session_client_id`).
 pub use wordcraft_collab_client::session_client_id;
@@ -335,7 +335,7 @@ impl Collab {
                     self.request_snapshot();
                 }
             }
-            Event::Presence { client_id, state } => self.presence_of(&client_id, &state),
+            Event::Presence { client_id, role, state } => self.presence_of(&client_id, &role, &state),
             Event::Left { client_id } => self.participants.retain(|participant| participant.client_id != client_id),
             Event::Snapshot { version, bytes, last } => {
                 if last && let Ok(version) = self.take_snapshot(version, &bytes, session) {
@@ -368,23 +368,8 @@ impl Collab {
         Ok(version)
     }
 
-    fn presence_of(&mut self, client_id: &str, state: &Value) {
-        let cursor = state.get("cursor").and_then(parse_cursor);
-        let selection = state.get("selection").and_then(parse_selection);
-        if let Some(participant) = self.participants.iter_mut().find(|participant| participant.client_id == client_id) {
-            participant.cursor = cursor.or(participant.cursor.take());
-            participant.selection = selection.or(participant.selection.take());
-            participant.active = state.get("active").and_then(Value::as_bool).unwrap_or(true);
-            return;
-        }
-        self.participants.push(ParticipantView {
-            client_id: client_id.to_string(),
-            role: "participant".into(),
-            color: None,
-            cursor,
-            selection,
-            active: true,
-        });
+    fn presence_of(&mut self, client_id: &str, role: &str, state: &Value) {
+        apply_presence(&mut self.participants, client_id, role, state);
     }
 
     /// Apply a local command: the caller hands the document from before the

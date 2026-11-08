@@ -448,7 +448,7 @@ async fn process_frame(
                 let guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
                 guard.peers.iter().filter(|(id, _)| id.as_str() != client_id).map(|(_, peer)| peer.out.clone()).collect()
             };
-            let msg = ServerMsg::Presence { client_id: client_id.to_string(), state: presence };
+            let msg = ServerMsg::Presence { client_id: client_id.to_string(), role: role.as_str().to_string(), state: presence };
             for tx in targets {
                 // Presence is droppable; a full queue must not stall the room.
                 let _ = tx.try_send(msg.clone());

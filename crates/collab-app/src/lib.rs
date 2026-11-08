@@ -308,7 +308,7 @@ impl Collab {
             Event::Rejected { reject } => {
                 self.status = if reject.retryable { Status::Resyncing } else { Status::Failed(reject.message) };
             }
-            Event::Presence { client_id, state } => self.presence_of(&client_id, &state),
+            Event::Presence { client_id, role, state } => self.presence_of(&client_id, &role, &state),
             Event::Left { client_id } => self.participants.retain(|participant| participant.client_id != client_id),
             Event::Snapshot { version, bytes, last } => {
                 if last && let Ok(version) = self.take_snapshot(version, &bytes, session) {
@@ -342,23 +342,8 @@ impl Collab {
         Ok(version)
     }
 
-    fn presence_of(&mut self, client_id: &str, state: &Value) {
-        let cursor = state.get("cursor").and_then(parse_cursor);
-        let selection = state.get("selection").and_then(parse_selection);
-        if let Some(participant) = self.participants.iter_mut().find(|participant| participant.client_id == client_id) {
-            participant.cursor = cursor.or(participant.cursor.take());
-            participant.selection = selection.or(participant.selection.take());
-            participant.active = state.get("active").and_then(Value::as_bool).unwrap_or(true);
-            return;
-        }
-        self.participants.push(ParticipantView {
-            client_id: client_id.to_string(),
-            role: "participant".into(),
-            color: None,
-            cursor,
-            selection,
-            active: true,
-        });
+    fn presence_of(&mut self, client_id: &str, role: &str, state: &Value) {
+        apply_presence(&mut self.participants, client_id, role, state);
     }
 
     /// Apply a local command: the caller hands the document from before the
@@ -441,13 +426,42 @@ impl Collab {
     }
 }
 
+/// Fold one presence frame into the participant list.
+///
+/// The role comes from the server, which takes it from the JWT claim
+/// (ADR-0008) — never from the presence payload — so a peer that joined the
+/// room earlier learns a newcomer's role with the newcomer's first frame
+/// instead of showing a placeholder. An empty role means an older server: an
+/// existing participant keeps the role it already had, a new one stays
+/// `participant`.
+pub fn apply_presence(participants: &mut Vec<ParticipantView>, client_id: &str, role: &str, state: &Value) {
+    let cursor = state.get("cursor").and_then(parse_cursor);
+    let selection = state.get("selection").and_then(parse_selection);
+    if let Some(participant) = participants.iter_mut().find(|participant| participant.client_id == client_id) {
+        participant.cursor = cursor.or(participant.cursor.take());
+        participant.selection = selection.or(participant.selection.take());
+        participant.active = state.get("active").and_then(Value::as_bool).unwrap_or(true);
+        if !role.is_empty() {
+            participant.role = role.to_string();
+        }
+        return;
+    }
+    participants.push(ParticipantView {
+        client_id: client_id.to_string(),
+        role: if role.is_empty() { "participant".into() } else { role.to_string() },
+        color: None,
+        cursor,
+        selection,
+        active: true,
+    });
+}
+
 /// Commands whose result includes ids the protocol does not carry (comment
 /// parts, footnotes, shapes, tables). A replica takes a snapshot after them.
 fn allocates_ids(command: &str) -> bool {
     ["review.", "insert.", "table.", "shape.", "chart.", "equation.", "references.", "mailings."].iter().any(|prefix| command.starts_with(prefix))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn parse_cursor(value: &Value) -> Option<Cursor> {
     Some(Cursor {
         story: value.get("story")?.as_str()?.to_string(),
@@ -456,7 +470,6 @@ fn parse_cursor(value: &Value) -> Option<Cursor> {
     })
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn parse_selection(value: &Value) -> Option<(Cursor, Cursor)> {
     Some((parse_cursor(value.get("anchor")?)?, parse_cursor(value.get("focus")?)?))
 }
