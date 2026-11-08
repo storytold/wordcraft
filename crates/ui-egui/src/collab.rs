@@ -52,7 +52,7 @@ pub(crate) fn viewer_refusal(app: &WordApp, id: &str) -> Option<String> {
     if !is_editing(app, id) {
         return None;
     }
-    if *collab.status() != wordcraft_collab_app::Status::InSync {
+    if *collab.status() != crate::collab_session::Status::InSync {
         return Some("Collaboration is reconnecting; editing resumes when it is synchronized".into());
     }
     if collab.role().can_write() {
@@ -63,6 +63,7 @@ pub(crate) fn viewer_refusal(app: &WordApp, id: &str) -> Option<String> {
 
 /// Connect using the address the `collab.enable` command stored. The token is
 /// read from the environment, never from preferences or the document.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn connect(app: &mut WordApp) {
     let server = app.session.prefs.collab.server.clone();
     let Ok(token) = std::env::var("WORDCRAFT_COLLAB_TOKEN") else {
@@ -70,10 +71,18 @@ pub(crate) fn connect(app: &mut WordApp) {
         return;
     };
     let client_id = format!("ui-{}", app.session.document_id());
-    match wordcraft_collab_app::Collab::connect(&server, &token, &app.session.author, &client_id) {
+    match crate::collab_session::Collab::connect(&server, &token, &app.session.author, &client_id) {
         Ok(collab) => app.collab = Some(collab),
         Err(message) => app.status(message),
     }
+}
+
+/// On the web the host page (the cabinet) opens the session: there is no
+/// server address or token to read locally, and no network call without
+/// `wordcraft:session`.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn connect(app: &mut WordApp) {
+    app.status("Collaboration is opened by the page that hosts WordCraft");
 }
 
 pub(crate) fn disconnect(app: &mut WordApp) {
@@ -93,7 +102,10 @@ pub(crate) fn tick(app: &mut WordApp, ctx: &egui::Context) {
     if changed {
         app.session.relayout();
     }
+    #[cfg(not(target_arch = "wasm32"))]
     collab.publish_presence(&app.session, std::time::Instant::now());
+    #[cfg(target_arch = "wasm32")]
+    collab.publish_presence_now(&app.session);
     if changed {
         ctx.request_repaint();
     } else {
@@ -107,26 +119,29 @@ pub(crate) fn tick(app: &mut WordApp, ctx: &egui::Context) {
 pub(crate) fn panel(app: &mut WordApp, ctx: &egui::Context) {
     let Some(collab) = app.collab.as_ref() else { return };
     let status = match collab.status() {
-        wordcraft_collab_app::Status::Connecting => "connecting…",
-        wordcraft_collab_app::Status::InSync => "synchronized",
-        wordcraft_collab_app::Status::Resyncing => "synchronizing…",
-        wordcraft_collab_app::Status::Offline => "offline, reconnecting",
-        wordcraft_collab_app::Status::Failed(_) => "error",
+        crate::collab_session::Status::Connecting => "connecting…",
+        crate::collab_session::Status::InSync => "synchronized",
+        crate::collab_session::Status::Resyncing => "synchronizing…",
+        crate::collab_session::Status::Offline => "offline, reconnecting",
+        crate::collab_session::Status::Failed(_) => "error",
     };
     let role = collab.role();
+    let can_commit = collab.can_commit();
     let participants: Vec<_> = collab
         .participants()
         .iter()
         .map(|participant| (participant.client_id.clone(), participant.role.clone(), participant.color.clone()))
         .collect();
     let error = collab.last_error().map(str::to_string);
+    let last_commit = collab.last_commit().cloned();
+    let mut commit_clicked = false;
     egui::Window::new("Collaboration").anchor(Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -12.0)).resizable(false).collapsible(true).show(ctx, |ui| {
         ui.horizontal(|ui| {
             ui.label(status);
             ui.separator();
             ui.label(role.as_str());
-            if collab.can_commit() && ui.button("Commit").clicked() {
-                collab.commit();
+            if can_commit && ui.button("Commit").clicked() {
+                commit_clicked = true;
             }
         });
         ui.separator();
@@ -141,7 +156,7 @@ pub(crate) fn panel(app: &mut WordApp, ctx: &egui::Context) {
             ui.separator();
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
-        if let Some((sha256, warnings, version)) = collab.last_commit() {
+        if let Some((sha256, warnings, version)) = &last_commit {
             ui.separator();
             ui.label(format!("committed v{version} · {}", &sha256[..sha256.len().min(12)]));
             if !warnings.is_empty() {
@@ -151,6 +166,31 @@ pub(crate) fn panel(app: &mut WordApp, ctx: &egui::Context) {
             }
         }
     });
+    if commit_clicked {
+        request_commit(app);
+    }
+}
+
+/// Commit: the cabinet owns the stored file when the host bridge opened the
+/// session (`wordcraft:commit`); without a host the sync server writes it and
+/// the answer shows in the panel.
+pub(crate) fn request_commit(app: &mut WordApp) {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(session) = app.host_session.clone()
+        && let Some(commit) = &app.host_commit
+    {
+        // The cabinet assembles/fetches the file itself, so `bytes` is omitted
+        // (the contract's `bytes?` is for a host that does not hold it).
+        let result = commit(session.session_id(), None);
+        match result {
+            Ok(()) => app.status("Committing…"),
+            Err(message) => app.status(format!("Commit failed: {message}")),
+        }
+        return;
+    }
+    if let Some(collab) = app.collab.as_mut() {
+        collab.commit();
+    }
 }
 
 /// Remote carets, drawn over the pages next to the local caret.

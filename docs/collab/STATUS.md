@@ -2,8 +2,8 @@
 
 - Date: 2026-11-08
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
-- PR: <https://github.com/storytold/wordcraft/pull/5834> (draft, 27 commits on the branch)
-- HEAD at this writing: `0a505109` (this page's commit follows)
+- PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
+- HEAD at this writing: the web host-bridge slice on top of `fec9a9a8`
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host blocker:
   `host-bridge.md`.
 
@@ -86,6 +86,32 @@ missing, and where the next session should start.
 - `collab.disable` drops the session; with the flag off nothing opens a socket.
 - Saved preferences plus a token in the environment resume the session on start.
 
+### Web session (`crates/collab-web`, `apps/wordcraft-web`)
+
+- The transport-free half of `wordcraft-collab-app` (`SyncState`, `Status`,
+  cursors, the participant view) now builds for wasm too; only the native
+  `Collab` is desktop-only.
+- `wordcraft-collab-web::Collab` drives the same `wordcraft-collab-client`
+  state machine over the browser's `WebSocket` (no threads; callbacks fill a
+  queue that `poll` drains each frame). Reconnect backs off 250 ms → 10 s and
+  resends unconfirmed operations with their ids, exactly as the desktop
+  transport.
+- `apps/wordcraft-web/src/host.rs` handles the extended contract
+  (`host-bridge.md`): on `wordcraft:session` it stores `session_id`, `ws_url`,
+  the JWT and the role in `WordApp` **first**, then connects; the token is never
+  put in the URL, a log, `localStorage` or preferences. On
+  `wordcraft:committed` it records the cabinet's version and etag and shows the
+  result.
+- `session-state` is posted when the sync status or the participant list
+  changes (join, leave, reconnect); `presence` is coalesced to 10 Hz (ADR-0006).
+  Without `wordcraft:session` the app makes no network call and the `collab`
+  flag stays off: the web build is single-user until the cabinet opens a session.
+- When the host owns the file (a session came through the bridge), the Commit
+  button sends `wordcraft:commit` (no `bytes`: the cabinet fetches the assembled
+  file itself, as the contract's `bytes?` allows) and the panel shows the
+  `wordcraft:committed` answer; otherwise the sync server commits and its
+  sha256/warnings show in the panel.
+
 ### Server (`apps/collab-server`)
 
 - `tokio`/`axum` WebSocket, JWT first message (HS256 dev / ES256 public key),
@@ -118,7 +144,7 @@ missing, and where the next session should start.
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
 | RFC, protocol, tests, documentation | done | `rfc.md`, `server.md`, `README.md`, this page |
 | PR to upstream | open (draft) | PR #5834; GitHub CI waits for maintainer approval |
-| Web host bridge | **blocked outside this repo** | see `host-bridge.md` |
+| Web host bridge | done in the app; needs the craft-libs bump | `host.rs`, `collab-web`, `host-bridge.md` |
 
 ## 3. Verification
 
@@ -127,6 +153,7 @@ Run from `upstream/`:
 ```bash
 cargo test -p wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine \
   -p wordcraft-collab-client -p wordcraft-collab-ws -p wordcraft-collab-app \
+  -p wordcraft-collab-web -p wordcraft-web \
   -p wordcraft-collab-server          # 113 unit + 1 socket test, 1 ignored (LibreOffice gate)
 cargo test -p wordcraft-collab-server -- --ignored   # commit → LibreOffice
 cargo test -p wordcraft-engine collab::              # 5 flag/remote tests
@@ -141,8 +168,16 @@ Results at this writing:
   `transaction` delta.
 - 5 engine collaboration tests, all green.
 - 1137 UI tests, green.
-- Workspace `cargo clippy --all-targets -- -D warnings`, fmt, doctest, assets
-  (48 files), layers (26 crates) and the wasm32 check (21 crates) are green.
+- 5 web-session tests (`wordcraft-collab-web`: session/token redaction, commit
+  result, single-user default, status words, participant mapping) and 9
+  `wordcraft-web` tests (3 new host-routing tests plus the existing prefs/save
+  ones), all green.
+- `cargo clippy --all-targets -- -D warnings` on `collab-app`, `collab-web`,
+  `ui-egui` and `wordcraft-web`, `cargo fmt --all --check`, `cargo xtask layers`
+  (27 crates) and `cargo xtask wasm` (22 crates) are green.
+- These runs used `craft-web-host` from a path to the `craft-libs`
+  `feat/collab-session-messages` checkout; the committed manifest keeps the
+  upstream pin (see §4).
 - The workspace test step excludes three proofing tests that fail on `main` in
   this environment too (French fallback marks text without a French dictionary);
   with `CRAFT_I18N_DIR` pointing at the pinned `craft-i18n` checkout the Swiss
@@ -150,11 +185,18 @@ Results at this writing:
 
 ## 4. Known limitations
 
-- **Web host bridge** (the only production blocker for the cabinet): `craft-web-host`
-  in `storytold/craft-libs` owns a closed message enum without
-  `session/session-state/presence/commit`. The exact patch and the app-side plan
-  are in `host-bridge.md`. The web build therefore stays single-user; the desktop
-  build connects directly.
+- **The craft-libs bump is still external.** `crates/web-host` in
+  `storytold/craft-libs` has the six collaboration messages on the
+  `feat/collab-session-messages` branch (commit `7666e2b`, pushed to
+  `copoka/craft-libs`), not in the pinned upstream revision. The branch was
+  built and tested against a path dependency on that checkout
+  (`/tmp/opencode/craft-libs`); the committed `apps/wordcraft-web/Cargo.toml`
+  keeps the upstream `craft-web-host` pin until the craft-libs change lands.
+  Until then the pinned crate has no `Message::Session`, so a clean wasm build of
+  this branch needs the path/feature pin (see `host-bridge.md` §"Build note").
+- Web collab has no manual browser test yet; the state machine, the host
+  routing, the status words and the participant mapping are covered headlessly
+  (`wordcraft-collab-web`, `wordcraft-web`).
 - A step of several operations is now one transaction (every inverse or none);
   commands still have no inverse and act as an undo barrier. The `opId` dedup
   window is in memory and is cleared when a room is restored from a snapshot, so
@@ -171,10 +213,12 @@ Results at this writing:
 
 ## 5. Next session
 
-1. **Unblock the web path** (requires a change in `storytold/craft-libs`):
-   add the five messages from `host-bridge.md`, bump/ship the crate, then add the
-   wasm transport and the `Message::Session` → `Collab` wiring in `apps/wordcraft-web`.
-2. Mark PR #5834 ready once the host-bridge item is resolved and CI has run
+1. Land the `craft-libs` `web-host` change (or a git pin to
+   `feat/collab-session-messages`) and restore a single pinned revision for all
+   five apps. Then build the web app with trunk and run a manual two-client test
+   through a cabinet-like host page (`wordcraft:session` → edit → `presence` →
+   `commit` → `wordcraft:committed`).
+2. Mark PR #5834 ready once the host-bridge pin is resolved and CI has run
    (GitHub reports `action_required` for fork PRs until a maintainer approves).
 3. Optional hardening: command inverses for the common engine commands, persisting
    the `opId` dedup window across a snapshot restore, table-cell node ids and
@@ -192,6 +236,8 @@ Results at this writing:
 | Session commands, remote replay | `crates/collab-engine/src/lib.rs` |
 | Client state machine | `crates/collab-client/src/lib.rs` |
 | Socket transport | `crates/collab-ws/src/lib.rs` |
+| Web session + socket | `crates/collab-web/src/{lib,socket}.rs` |
+| Host bridge | `apps/wordcraft-web/src/{host,host_session}.rs` |
 | Desktop session | `crates/collab-app/src/lib.rs` |
 | UI wiring, panel, carets | `crates/ui-egui/src/collab.rs`, `app/commands.rs` |
 | Server | `apps/collab-server/src/{lib,main,store}.rs` |

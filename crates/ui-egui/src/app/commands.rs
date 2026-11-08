@@ -109,11 +109,9 @@ impl WordApp {
     /// UI-level commands (`ui.*`) are handled here, the rest by the engine. A live collaboration
     /// session gates read-only roles, sends the document difference and routes undo to the room.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(refusal) = crate::collab::viewer_refusal(self, id) {
             return Err(refusal);
         }
-        #[cfg(not(target_arch = "wasm32"))]
         if crate::collab::is_settings(id) {
             let result = self.execute_inner(id, params)?;
             if self.session.prefs.collab.enabled {
@@ -123,11 +121,10 @@ impl WordApp {
             }
             return Ok(result);
         }
-        #[cfg(not(target_arch = "wasm32"))]
         if matches!(id, "edit.undo" | "edit.redo")
-            && let Some(collab) = self.collab.as_ref()
+            && let Some(collab) = self.collab.as_mut()
         {
-            if *collab.status() != wordcraft_collab_app::Status::InSync {
+            if *collab.status() != crate::collab_session::Status::InSync {
                 return Err("Collaboration is reconnecting; undo resumes when it is synchronized".into());
             }
             if id == "edit.undo" {
@@ -137,10 +134,8 @@ impl WordApp {
             }
             return Ok(json!({"collaboration": true}));
         }
-        #[cfg(not(target_arch = "wasm32"))]
         let before = crate::collab::before_command(self, id);
         let result = self.execute_inner(id, params.clone());
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(before) = before
             && result.is_ok()
         {

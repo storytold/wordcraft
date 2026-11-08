@@ -85,8 +85,13 @@ impl WordApp {
         } = window_ui::WindowUi::new(session.document_id());
         WordApp {
             session,
-            #[cfg(not(target_arch = "wasm32"))]
             collab: None,
+            #[cfg(target_arch = "wasm32")]
+            host_session: None,
+            #[cfg(target_arch = "wasm32")]
+            host_commit: None,
+            #[cfg(target_arch = "wasm32")]
+            host_committed: None,
             ui: UiState {
                 tab,
                 backstage,
@@ -426,14 +431,12 @@ impl WordApp {
     /// ([`windows`]), on the web the one window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         // Remote answers land before layout, so this frame draws the new state.
-        #[cfg(not(target_arch = "wasm32"))]
         crate::collab::tick(self, ui.ctx());
         if self.windows.native() {
             self.windows_ui(ui);
         } else {
             self.window_ui(ui);
         }
-        #[cfg(not(target_arch = "wasm32"))]
         crate::collab::panel(self, ui.ctx());
     }
 

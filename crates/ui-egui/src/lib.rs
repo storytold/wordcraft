@@ -30,8 +30,13 @@ pub mod backstage;
 pub mod canvas;
 pub mod caret_glide;
 pub mod chrome;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod collab;
+/// The live collaboration session: the desktop socket on native, the browser's
+/// `WebSocket` on wasm (the host bridge supplies `session_id`/`ws_url`/token/role).
+#[cfg(not(target_arch = "wasm32"))]
+pub use wordcraft_collab_app as collab_session;
+#[cfg(target_arch = "wasm32")]
+pub use wordcraft_collab_web as collab_session;
 pub mod colors;
 pub mod content_controls;
 pub mod control;
@@ -614,9 +619,20 @@ fn migrate_units(v: &mut Value) {
 /// The application.
 pub struct WordApp {
     pub session: Session,
-    /// The live real-time session, when Review › Collaborate connected one.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub collab: Option<wordcraft_collab_app::Collab>,
+    /// The live real-time session, when Review › Collaborate connected one (desktop) or the
+    /// cabinet's host bridge sent `wordcraft:session` (web).
+    pub collab: Option<collab_session::Collab>,
+    /// Web: the session the host opened. The token inside is a credential and never reaches
+    /// preferences, a URL or a log.
+    #[cfg(target_arch = "wasm32")]
+    pub host_session: Option<wordcraft_collab_web::HostSession>,
+    /// Web: `wordcraft:commit` to the cabinet, when the host owns the commit; `None` leaves
+    /// commits to the sync server.
+    #[cfg(target_arch = "wasm32")]
+    pub host_commit: Option<Box<dyn Fn(&str, Option<&[u8]>) -> Result<(), String>>>,
+    /// Web: the version and etag the cabinet confirmed for the last host-owned commit.
+    #[cfg(target_arch = "wasm32")]
+    pub host_committed: Option<(u64, String)>,
     pub ui: UiState,
     pub services: Services,
     pub printing: printing::State,

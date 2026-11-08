@@ -9,6 +9,10 @@ use wordcraft_engine::Session;
 use wordcraft_ui_egui::async_saves::{AsyncSaves, SaveOutcome};
 use wordcraft_ui_egui::{Inbox, Services, WordApp};
 
+use crate::host::Bridge;
+use crate::host_session::{HostAction, HostInbox, HostState};
+use wordcraft_collab_web::HostParticipant;
+
 const DOC_EXTS: &[&str] =
     &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "ott", "fodt", "rtf", "txt", "md", "html", "htm", "mht", "mhtml", "tex", "json", "xml"];
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
@@ -35,6 +39,7 @@ pub fn start() {
         // on the canvas (`host`). The host guards leaving the page, so this one doesn't.
         let bridge = crate::host::Bridge::detect(&canvas);
         let app_bridge = bridge.clone();
+        let host_events: HostInbox = HostInbox::default();
         let dirty = Rc::new(Cell::new(false));
         let saves = AsyncSaves::default();
         if bridge.is_none()
@@ -74,10 +79,16 @@ pub fn start() {
                     let messages = Rc::new(RefCell::new(Vec::new()));
                     let mut services = services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone(), messages.clone());
                     if let Some(bridge) = &app_bridge {
-                        bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
+                        bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone(), host_events.clone());
                     }
                     let control = crate::api::install(cc.egui_ctx.clone());
                     let mut app = WordApp::new(session, services).with_control(control);
+                    // The host owns the stored file: the Commit button asks the
+                    // cabinet (`wordcraft:commit`) instead of the sync server.
+                    if let Some(bridge) = &app_bridge {
+                        let commit_bridge = bridge.clone();
+                        app.host_commit = Some(Box::new(move |session_id: &str, bytes: Option<&[u8]>| commit_bridge.post_commit(session_id, bytes)));
+                    }
                     // Pasted pictures wait apart from dropped files: the app inserts one only when the page is the edit target (#1349).
                     app.services.pasted = Some(pasted);
                     app.autosave = false;
@@ -104,7 +115,17 @@ pub fn start() {
                         crate::host::Bridge::set_author(&mut app, &author);
                         prefs.keep_own_author(&app.session.author, &own);
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages, prefs }))
+                    Ok(Box::new(WebShell {
+                        app,
+                        inbox,
+                        messages,
+                        prefs,
+                        bridge: app_bridge.clone(),
+                        host_events: host_events.clone(),
+                        host_state: HostState::default(),
+                        last_host_state: None,
+                        last_presence_ms: 0.0,
+                    }))
                 }),
             )
             .await;
@@ -139,6 +160,16 @@ struct WebShell {
     inbox: Inbox,
     messages: Rc<RefCell<Vec<String>>>,
     prefs: crate::prefs::PrefsSync,
+    /// The host bridge, when the page hosts WordCraft: session state, presence and
+    /// the cabinet's commit go through it.
+    bridge: Option<Bridge>,
+    /// `wordcraft:session` / `wordcraft:committed` queued by the bridge callback.
+    host_events: HostInbox,
+    host_state: HostState,
+    /// The last `session-state` sent: status and participants, to send only changes.
+    last_host_state: Option<(String, Vec<HostParticipant>)>,
+    /// Browser clock of the last presence post (5–10 Hz, ADR-0006).
+    last_presence_ms: f64,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -155,6 +186,7 @@ impl eframe::App for WebShell {
     /// then writes changed preferences to browser storage immediately, because a reload or closed
     /// tab never runs the exit path.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.apply_host_events();
         let msgs = std::mem::take(&mut *self.messages.borrow_mut());
         for msg in msgs {
             self.app.status(msg);
@@ -202,6 +234,67 @@ impl eframe::App for WebShell {
             }
         }
         self.app.ui(ui);
+        // Polling happens in `WordApp::ui`, so the session state posted here is
+        // the one this frame drew.
+        self.publish_host_state();
+    }
+}
+
+impl WebShell {
+    /// `wordcraft:session` opens the session; `wordcraft:committed` is the
+    /// cabinet's commit result. Nothing here runs without a session message.
+    fn apply_host_events(&mut self) {
+        let events = std::mem::take(&mut *self.host_events.borrow_mut());
+        for event in events {
+            match self.host_state.on_event(event) {
+                HostAction::Connect(session) => {
+                    let client_id = format!("web-{}", self.app.session.document_id());
+                    let actor = self.app.session.author.clone();
+                    let name = session.session_id().to_string();
+                    // Store the session first, then dial: an app without it makes
+                    // no network call.
+                    self.app.host_session = Some(session.clone());
+                    match wordcraft_collab_web::Collab::connect(&session, &actor, &client_id) {
+                        Ok(collab) => {
+                            self.app.collab = Some(collab);
+                            self.app.status(format!("Joined collaboration session {name}"));
+                        }
+                        Err(message) => {
+                            self.app.host_session = None;
+                            self.app.status(format!("Collaboration is unavailable: {message}"));
+                        }
+                    }
+                }
+                HostAction::Committed { version, etag } => {
+                    self.app.host_committed = Some((version, etag.clone()));
+                    self.app.status(format!("Committed as version {version} · etag {etag}"));
+                }
+            }
+        }
+    }
+
+    /// `session-state` on a status or participant change (join, leave,
+    /// reconnect), `presence` at the sync server's 5–10 Hz.
+    fn publish_host_state(&mut self) {
+        let Some(bridge) = self.bridge.clone() else { return };
+        let Some(collab) = self.app.collab.as_ref() else { return };
+        let status = wordcraft_collab_web::host_status(collab.status());
+        let participants = wordcraft_collab_web::host_participants(collab.participants());
+        let signature = (status.to_string(), participants.clone());
+        if self.last_host_state.as_ref() != Some(&signature) {
+            if let Err(message) = bridge.post_session_state(status, &participants) {
+                log::warn!("session-state: {message}");
+            }
+            self.last_host_state = Some(signature);
+            self.host_state.mark_connected();
+        }
+        let now = js_sys::Date::now();
+        if now - self.last_presence_ms >= 100.0 {
+            self.last_presence_ms = now;
+            if let Err(message) = bridge.post_presence(&participants) {
+                log::warn!("presence: {message}");
+            }
+        }
     }
 }
 

@@ -1,11 +1,12 @@
 # Running a collaborative WordCraft session
 
-> Implementation status, verification results and the remaining web blocker:
+> Implementation status, verification results and the remaining craft-libs pin:
 > [`STATUS.md`](STATUS.md).
 
 The sync server is `wordcraft-collab-server` (this workspace); the desktop app
-connects to it when the `collab` preference is on. The web app needs the cabinet's
-host bridge first (`host-bridge.md`). Nothing opens a socket while the flag is off.
+connects to it when the `collab` preference is on. The web app opens a session
+only when the cabinet's host bridge sends `wordcraft:session`
+(`host-bridge.md`); nothing opens a socket while the flag is off.
 
 ## 1. Start the server
 
@@ -79,14 +80,16 @@ The same session can be driven headlessly through the control channel or MCP:
   none); commands have no inverse and act as an undo barrier.
 - `kept`/`passthrough` are not in the protocol: the authoritative server keeps
   the source `.docx` next to the model, and commit says what it could not keep.
-- Web: blocked on `craft-web-host` messages (`host-bridge.md`).
+- Web: `wordcraft:session` opens the session; `session-state`/`presence`/`commit`
+  go back through the host bridge. The craft-libs pin still lacks those
+  messages (`host-bridge.md`, `STATUS.md` §4).
 
 ## 6. Tests
 
 ```bash
 cargo test -p wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine \
   -p wordcraft-collab-client -p wordcraft-collab-ws -p wordcraft-collab-app \
-  -p wordcraft-collab-server
+  -p wordcraft-collab-web -p wordcraft-web -p wordcraft-collab-server
 cargo test -p wordcraft-collab-server -- --ignored   # LibreOffice commit gate
 ```
 

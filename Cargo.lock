@@ -7429,6 +7429,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "wordcraft-collab",
+ "wordcraft-collab-client",
  "wordcraft-collab-doc",
  "wordcraft-collab-engine",
  "wordcraft-collab-ws",
@@ -7485,6 +7486,21 @@ dependencies = [
  "wordcraft-collab-ws",
  "wordcraft-doc",
  "wordcraft-docx",
+]
+
+[[package]]
+name = "wordcraft-collab-web"
+version = "0.15.1"
+dependencies = [
+ "js-sys",
+ "serde_json",
+ "wasm-bindgen",
+ "web-sys",
+ "wordcraft-collab",
+ "wordcraft-collab-app",
+ "wordcraft-collab-client",
+ "wordcraft-doc",
+ "wordcraft-engine",
 ]
 
 [[package]]
@@ -7739,6 +7755,7 @@ dependencies = [
  "toml",
  "web-time",
  "wordcraft-collab-app",
+ "wordcraft-collab-web",
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-fonts",
@@ -7765,6 +7782,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "wordcraft-collab-web",
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-fonts",

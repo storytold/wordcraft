@@ -7,15 +7,20 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
-# Native only, like the transport it wraps.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The transport-free half (SyncState, Status, cursors) is shared with the web
+# session in `collab-web`, so these dependencies are not target-gated.
+[dependencies]
 wordcraft-collab = { path = "../collab" }
 wordcraft-collab-doc = { path = "../collab-doc" }
 wordcraft-collab-engine = { path = "../collab-engine" }
-wordcraft-collab-ws = { path = "../collab-ws" }
 wordcraft-doc = { workspace = true }
 wordcraft-engine = { workspace = true }
 serde_json = { workspace = true }
+
+# The native socket session.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wordcraft-collab-client = { path = "../collab-client" }
+wordcraft-collab-ws = { path = "../collab-ws" }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "sync"] }
 
 [lints]

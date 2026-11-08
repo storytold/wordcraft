@@ -5,19 +5,26 @@
 //! turns a local command into the operations the server expects, publishes
 //! presence and exposes participants to the UI.
 //!
-//! Native only: the web build reaches the same protocol through the cabinet's
-//! host bridge (`docs/collab/host-bridge.md`).
-#![cfg(not(target_arch = "wasm32"))]
+//! The transport-free half ([`SyncState`], [`Status`], cursors and the
+//! participant view) builds for both targets, so the web session in
+//! `wordcraft-collab-web` reuses it. Only [`Collab`] — the native socket
+//! session — is desktop-only (`docs/collab/host-bridge.md`).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
 use wordcraft_collab::ids::{NodeId, NodeIds, NodeKey};
 use wordcraft_collab::room::Role;
-use wordcraft_collab::wire::{Applied, NodeRef, OpKind, Participant, Target, Version};
-use wordcraft_collab_ws::{Event, Handle, TransportEvent};
+#[cfg(not(target_arch = "wasm32"))]
+use wordcraft_collab::wire::Participant;
+use wordcraft_collab::wire::{Applied, NodeRef, OpKind, Target, Version};
+#[cfg(not(target_arch = "wasm32"))]
+use wordcraft_collab_client::Event;
+#[cfg(not(target_arch = "wasm32"))]
+use wordcraft_collab_ws::{Handle, TransportEvent};
 use wordcraft_doc::Pos as DocPos;
 use wordcraft_doc::{Document, Path, StoryRef};
 use wordcraft_engine::Session;
@@ -166,6 +173,7 @@ impl SyncState {
 }
 
 /// A live collaboration session: transport plus the state above.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Collab {
     _runtime: tokio::runtime::Runtime,
     handle: Handle,
@@ -180,6 +188,7 @@ pub struct Collab {
     last_error: Option<String>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Collab {
     /// Connect to `server` with a cabinet JWT. The token is kept by the
     /// transport and never logged, stored in preferences or put in the URL.
@@ -433,6 +442,7 @@ fn allocates_ids(command: &str) -> bool {
     ["review.", "insert.", "table.", "shape.", "chart.", "equation.", "references.", "mailings."].iter().any(|prefix| command.starts_with(prefix))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_cursor(value: &Value) -> Option<Cursor> {
     Some(Cursor {
         story: value.get("story")?.as_str()?.to_string(),
@@ -441,6 +451,7 @@ fn parse_cursor(value: &Value) -> Option<Cursor> {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_selection(value: &Value) -> Option<(Cursor, Cursor)> {
     Some((parse_cursor(value.get("anchor")?)?, parse_cursor(value.get("focus")?)?))
 }
@@ -459,5 +470,5 @@ fn parse_story(name: &str) -> Option<StoryRef> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
