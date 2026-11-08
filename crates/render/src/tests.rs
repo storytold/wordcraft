@@ -1411,3 +1411,18 @@ fn a_line_runs_from_top_left_to_bottom_right() {
     let p = shape_path(ShapeKind::Line, kurbo::Rect::new(10.0, 20.0, 30.0, 60.0), None);
     assert_eq!(p.elements(), &[kurbo::PathEl::MoveTo((10.0, 20.0).into()), kurbo::PathEl::LineTo((30.0, 60.0).into())]);
 }
+
+#[test]
+fn paths_far_past_every_canvas_are_not_flattened() {
+    let line = |x: f64| {
+        let mut p = kurbo::BezPath::new();
+        p.move_to((0.0, 0.0));
+        p.curve_to((x, 0.0), (x, x), (0.0, x));
+        p
+    };
+    assert!(path_extent_ok(Affine::IDENTITY, &line(500.0)));
+    assert!(path_extent_ok(Affine::scale(4.0), &line(200_000.0)), "a large page at a high zoom");
+    assert!(!path_extent_ok(Affine::IDENTITY, &line(1e15)));
+    assert!(!path_extent_ok(Affine::scale(1e12), &line(10.0)));
+    assert!(!path_extent_ok(Affine::IDENTITY, &line(f64::NAN)));
+}
