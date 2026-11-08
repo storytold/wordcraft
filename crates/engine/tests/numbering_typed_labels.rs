@@ -36,6 +36,28 @@ fn labels(s: &Session) -> Vec<String> {
         .collect()
 }
 
+/// The caret stays on the text it was on when the typed label in front of it is removed, and a
+/// caret inside the removed label moves to the paragraph's start.
+#[test]
+fn the_caret_stays_on_its_text_after_the_typed_label_is_removed() {
+    use wordcraft_doc::Pos;
+    // The caret alone in the paragraph: Numbering applies to it, as the button does.
+    let mut s = doc("1. alphabet");
+    // The caret is after the "a" of "alphabet" (offset 5: "1. a|").
+    s.sel = wordcraft_engine::Selection::caret(Pos::body(0, 5));
+    run(&mut s, "para.numbering", json!({}));
+    assert_eq!(body(&s), ["alphabet"]);
+    assert_eq!(s.sel.focus.off, 2, "after the same 'a': the caret moved with the text");
+
+    // Track Changes marks the label instead, so the text (and the caret) stay as they were.
+    let mut s = doc("1. alphabet");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.sel = wordcraft_engine::Selection::caret(Pos::body(0, 5));
+    run(&mut s, "para.numbering", json!({}));
+    assert_eq!(body(&s), ["1. alphabet"]);
+    assert_eq!(s.sel.focus.off, 5);
+}
+
 /// #6017: Numbering over paragraphs with typed numbers in front of them removes the typed ones,
 /// as Word does, so the list reads `1. alpha` rather than `1. 1. alpha`.
 #[test]
