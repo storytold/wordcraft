@@ -4,6 +4,10 @@ use super::{
     TextWarp, Wrap, WrapText, cap_alt, children_of_choice, int, measure, on_off_attr, own_fill, preset_kind, rt, shape_paint, u32_of,
 };
 
+/// Maximum nesting depth of DrawingML `wpg:wgp` / `wpg:grpSp` groups: bounded well below the XML
+/// parser's 256-element recursion cap while supporting deep diagram/CAD group hierarchies.
+const MAX_DML_GROUP_DEPTH: usize = 64;
+
 impl Reader<'_> {
     // ---- drawings ----
 
@@ -386,7 +390,7 @@ impl Reader<'_> {
             let x = group_xfrm(sppr);
             let ((ox, oy), (ew, eh)) = (x.off, x.ext);
             if e.name == "wpg:grpSp" || e.name == "wpg:wgp" {
-                if depth >= 64 {
+                if depth >= MAX_DML_GROUP_DEPTH {
                     continue;
                 }
                 // Its members' space maps onto its own box.

@@ -2846,26 +2846,36 @@ fn drop_cap_options_round_trip() {
 
 #[test]
 fn deep_drawing_groups_round_trip_beyond_depth_8() {
-    let mut group_xml = r#"<wps:wsp><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="127000" cy="127000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:bodyPr/></wps:wsp>"#.to_string();
-    for _ in 0..12 {
-        group_xml = format!(
-            r#"<wpg:wgp><wpg:cNvGrpSpPr/><wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="127000" cy="127000"/><a:chOff x="0" y="0"/><a:chExt cx="127000" cy="127000"/></a:xfrm></wpg:grpSpPr>{group_xml}</wpg:wgp>"#
+    let build_doc = |depth: usize| {
+        let mut group_xml = r#"<wps:wsp><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="127000" cy="127000"/></a:xfrm><a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom></wps:spPr><wps:bodyPr/></wps:wsp>"#.to_string();
+        for _ in 0..depth {
+            group_xml = format!(
+                r#"<wpg:wgp><wpg:cNvGrpSpPr/><wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="127000" cy="127000"/><a:chOff x="0" y="0"/><a:chExt cx="127000" cy="127000"/></a:xfrm></wpg:grpSpPr>{group_xml}</wpg:wgp>"#
+            );
+        }
+        let doc_xml = format!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><w:body><w:p><w:r><w:drawing><wp:inline><wp:extent cx="127000" cy="127000"/><wp:docPr id="1" name="Group"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup">{group_xml}</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:body></w:document>"#
         );
-    }
-    let doc_xml = format!(
-        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><w:body><w:p><w:r><w:drawing><wp:inline><wp:extent cx="127000" cy="127000"/><wp:docPr id="1" name="Group"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup">{group_xml}</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:body></w:document>"#
-    );
-    let root_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="main" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    for (name, val) in [("word/document.xml", doc_xml.as_str()), ("_rels/.rels", root_rels)] {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zip, val.as_bytes()).unwrap();
-    }
-    let bytes = zip.finish().unwrap().into_inner();
-    let d = wordcraft_docx::read(&bytes).unwrap();
+        let root_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="main" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, val) in [("word/document.xml", doc_xml.as_str()), ("_rels/.rels", root_rels)] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            std::io::Write::write_all(&mut zip, val.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    };
+
+    let d = wordcraft_docx::read(&build_doc(12)).unwrap();
     let r = rt(&d);
     match &paras(&r)[0].objects[0] {
-        InlineObject::Group { children, .. } => assert_eq!(children.len(), 1),
+        InlineObject::Group { children, .. } => {
+            assert_eq!(children.len(), 1);
+            assert!(matches!(children[0].obj, InlineObject::Shape { kind: ShapeKind::Ellipse, .. }));
+        }
         other => panic!("expected Group, got {other:?}"),
     }
+
+    // Groups nested beyond MAX_DML_GROUP_DEPTH (64 inner wpg:wgp inside the outer group) drop the leaf cleanly without panicking.
+    let over = wordcraft_docx::read(&build_doc(66)).unwrap();
+    assert!(paras(&over)[0].objects.is_empty(), "groups deeper than 64 inner levels drop their leaf");
 }
