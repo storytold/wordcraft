@@ -338,7 +338,8 @@ impl<'a> Shaped<'a> {
     /// A picture, shape or text box: inline, as wide and high as it is; a floating one takes no room.
     /// An inline drawing: it stands on the baseline, raised or lowered by its run's position
     /// (`raise`, points, as Word moves an inline picture with `w:position`). Its cluster reaches
-    /// `obj_h` above the baseline and `obj_d` below it (negative when raised clear of it).
+    /// `obj_h` above the baseline and `obj_d` below it (negative when raised clear of it; `obj_h`
+    /// negative when lowered further than its height, drawn with its top on the baseline).
     fn drawing(&mut self, cx: &Cx, (k, o): (usize, &InlineObject), slot: Slot, raise: f32) {
         let env = cx.env;
         // A hidden one takes no room, and with no height its line doesn't draw it.
@@ -368,10 +369,10 @@ impl<'a> Shaped<'a> {
             let [el, et, er, eb] = float.effect_extent();
             let (px, py) = float.spin_pad(w * s, h * s);
             let tall = h * s + et + eb + 2.0 * py;
-            // Lowered at most until its top is on the baseline. The bound is made finite and
-            // not above `clamp`'s top whatever the extents give (`clamp` panics otherwise).
-            let floor = if tall.is_finite() { -tall.max(0.0) } else { 0.0 };
-            let raise = if raise.is_finite() { raise.clamp(floor, 1584.0) } else { 0.0 };
+            // Lowered further than its height, its top stays on the baseline while the line
+            // reaches as far down as the lowering (Word, measured: a 6 pt picture lowered 30 pt
+            // makes a 30 pt line); `obj_h` is then negative. Word's positions run to 1584 pt.
+            let raise = if raise.is_finite() { raise.clamp(-1584.0, 1584.0) } else { 0.0 };
             self.b.clusters.push(slot.cluster(ClKind::Object(k), w * s + el + er + 2.0 * px, (tall + raise, -raise)));
         } else {
             self.push(slot, ClKind::Object(k), 0.0, 0.0);
