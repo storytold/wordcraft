@@ -266,25 +266,43 @@ impl FontDb {
     }
 
     /// The face covering a diagram's missing character set, and the face count chosen from.
+    /// Prefers faces matching `prefer_serif`; when the best loaded face has a mismatched serif
+    /// classification, checks system font candidates and retains the loaded face only when no
+    /// matching candidate covers the full set (#5672).
     fn search_diagram(&self, chars: &[char], exclude: u32, prefer_serif: bool) -> (Option<Arc<FontFace>>, usize) {
         #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let (mut base, mut checked) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
         #[cfg(not(target_arch = "wasm32"))]
-        if base.is_none() {
+        if base.is_none() || base.as_ref().is_some_and(|f| f.is_serif() != prefer_serif) {
+            let initial = base.clone();
             for c in chars {
-                if self.read_faces().iter().any(|f| f.id != exclude && f.covers(*c)) {
+                if self.read_faces().iter().any(|f| f.id != exclude && f.covers(*c) && f.is_serif() == prefer_serif) {
                     continue;
                 }
                 if self.system_fallback(*c) {
-                    (base, checked) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
-                    if base.is_some() {
-                        break;
+                    let (cand, n) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
+                    checked = n;
+                    if let Some(f) = cand {
+                        let matching = f.is_serif() == prefer_serif;
+                        base = Some(f);
+                        if matching {
+                            break;
+                        }
                     }
                 }
             }
-            if base.is_none() {
+            if base.as_ref().is_none_or(|f| f.is_serif() != prefer_serif) {
                 self.indexed_run_fallback(chars);
-                (base, checked) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
+                let (cand, n) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
+                checked = n;
+                if let Some(f) = cand
+                    && (f.is_serif() == prefer_serif || base.is_none())
+                {
+                    base = Some(f);
+                }
+            }
+            if base.is_none() {
+                base = initial;
             }
         }
         (base, checked)
