@@ -7846,6 +7846,7 @@ fn graphic_text_in_a_degenerate_rectangle_is_not_drawn() {
 
 #[test]
 fn chart_text_the_font_lacks_is_drawn_in_a_fallback_face() {
+    crate::test_fonts();
     // #4720: a Chinese legend in a chart drawn in the body font (which has no Chinese) showed boxes.
     use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
     use wordcraft_doc::props::Rgb;
