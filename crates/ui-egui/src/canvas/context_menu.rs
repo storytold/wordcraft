@@ -114,7 +114,8 @@ fn rule(ui: &mut Ui) {
     let _ = Divider::horizontal().show(ui);
 }
 
-/// The text menu's rows.
+/// The text menu's rows: a proofing issue's suggestions, Accept and Reject Change on a tracked
+/// change, then Cut, Copy, Paste and the rest (an equation has rows of its own).
 fn rows(app: &mut WordApp, ui: &mut Ui) {
     if let Some(issue) = app.canvas.context_issue.clone() {
         let sugg: Vec<String> = issue
