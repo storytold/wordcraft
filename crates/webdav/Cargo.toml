@@ -15,6 +15,9 @@ thiserror = { workspace = true }
 # code to the desktop build. Native only: on wasm the crate builds empty.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring", "gzip", "platform-verifier"] }
+# For credentials in the URL; both are already in the tree.
+base64 = { workspace = true }
+percent-encoding = "2.3"
 
 # Already in the tree through ureq's gzip feature; the tests use it to send a compressed body.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

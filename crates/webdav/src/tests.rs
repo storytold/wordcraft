@@ -118,6 +118,19 @@ fn get_loads_a_document_exactly_at_the_size_cap() {
 }
 
 #[test]
+fn get_loads_a_compressed_document_at_the_cap_that_is_larger_on_the_wire() {
+    // Stored without compression, the gzip body is a few bytes longer than the document it holds.
+    let document = vec![b'x'; 4096];
+    let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::none());
+    gzip.write_all(&document).unwrap();
+    let packed = gzip.finish().unwrap();
+    assert!(packed.len() > document.len());
+    let server = Server::start(vec![("200 OK", vec![("Content-Encoding", "gzip".to_owned())], packed)]);
+    assert_eq!(Resource::new(&server.url).unwrap().with_max_bytes(4096).get().unwrap(), document);
+    server.finish();
+}
+
+#[test]
 fn get_caps_the_unpacked_size_of_a_compressed_document() {
     // 1 MiB of zeros gzips to about a kilobyte: under the cap on the wire, far over it unpacked.
     let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
@@ -148,6 +161,23 @@ fn lock_asks_for_an_exclusive_write_lock_and_keeps_the_token() {
     let body = String::from_utf8_lossy(&request.body);
     assert!(body.contains("<D:exclusive/>") && body.contains("<D:write/>"), "{body}");
     assert!(body.contains("<D:owner>Ana &amp; Bo</D:owner>"), "{body}");
+}
+
+#[test]
+fn the_granted_timeout_comes_from_the_lockdiscovery_before_a_header() {
+    let answer = |seconds: u32| {
+        format!("<?xml version=\"1.0\"?><D:prop xmlns:D=\"DAV:\"><D:lockdiscovery><D:activelock><D:timeout>Second-{seconds}</D:timeout></D:activelock></D:lockdiscovery></D:prop>").into_bytes()
+    };
+    let server = Server::start(vec![
+        ("200 OK", vec![("Lock-Token", "<urn:uuid:1>".to_owned())], answer(120)),
+        ("200 OK", vec![("Timeout", "Second-300".to_owned())], answer(30)),
+    ]);
+    let doc = Resource::new(&server.url).unwrap();
+    let lock = doc.lock("me", Duration::from_secs(600)).unwrap();
+    assert_eq!(lock.timeout(), Some(Duration::from_secs(120)));
+    let lock = doc.refresh(&lock, Duration::from_secs(600)).unwrap();
+    assert_eq!(lock.timeout(), Some(Duration::from_secs(30)));
+    server.finish();
 }
 
 #[test]
@@ -257,6 +287,16 @@ fn only_http_urls_with_a_host_are_accepted() {
     }
     assert!(Resource::new("https://dms.example/dav/abc/Contract.docx").is_ok());
     assert!(Resource::new("HTTP://dms.example:8080/x.docx").is_ok());
+}
+
+#[test]
+fn credentials_in_the_url_are_sent_decoded() {
+    let server = Server::start(vec![("200 OK", Vec::new(), b"doc".to_vec())]);
+    let url = server.url.replacen("http://", "http://ana:pa%40ss:w@", 1);
+    Resource::new(&url).unwrap().get().unwrap();
+    let seen = server.finish();
+    // "ana:pa@ss:w": the user ends at the first colon, the password keeps the rest.
+    assert_eq!(seen[0].header("Authorization"), Some("Basic YW5hOnBhQHNzOnc="));
 }
 
 #[test]

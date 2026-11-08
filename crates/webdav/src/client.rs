@@ -11,6 +11,8 @@ use crate::{Error, Result};
 pub const DEFAULT_MAX_BYTES: u64 = 512 * 1024 * 1024;
 /// How long one request may take, from connecting to the last byte.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+/// The most of a LOCK answer's body read for its granted timeout; a real one is a few hundred bytes.
+const LOCK_ANSWER_MAX_BYTES: u64 = 64 * 1024;
 
 /// One document on a WebDAV server.
 ///
@@ -23,6 +25,9 @@ pub struct Resource {
     url: String,
     agent: ureq::Agent,
     max_bytes: u64,
+    /// `Basic …` for credentials in the URL (`https://user:pass@…`), percent-decoded. ureq would
+    /// send them still encoded, so `pa%40ss` would reach the server instead of `pa@ss`.
+    basic_auth: Option<String>,
 }
 
 /// By hand, so `{:?}` shows the URL redacted, like [`Resource::display_url`].
@@ -54,7 +59,8 @@ impl Resource {
             .user_agent(concat!("WordCraft/", env!("CARGO_PKG_VERSION")))
             .build()
             .new_agent();
-        Ok(Self { url: url.to_owned(), agent, max_bytes: DEFAULT_MAX_BYTES })
+        let basic_auth = uri.authority().and_then(|a| a.as_str().rsplit_once('@')).map(|(userinfo, _)| basic_auth(userinfo));
+        Ok(Self { url: url.to_owned(), agent, max_bytes: DEFAULT_MAX_BYTES, basic_auth })
     }
 
     /// The same document with a different size cap for [`Resource::get`].
@@ -73,17 +79,11 @@ impl Resource {
         let request = self.request(Method::GET).body(()).map_err(transport)?;
         let mut response = self.agent.run(request).map_err(transport)?;
         expect(response.status(), "GET", &[StatusCode::OK])?;
-        // `limit` counts the bytes on the wire, and a gzip body unpacks behind it, so the unpacked
-        // document is capped too: one byte past the cap is enough to know it is too large. The wire
-        // limit gets that byte as well, because ureq fails the read that would find the end of a
-        // body exactly `max_bytes` long.
-        let past_cap = self.max_bytes.saturating_add(1);
-        let reader = response.body_mut().with_config().limit(past_cap).reader();
+        // The cap goes on the unpacked document, not on the bytes on the wire, which a gzip body
+        // can exceed either way: one byte past the cap is enough to know it is too large. The
+        // request timeout bounds a body that never ends.
         let mut bytes = Vec::new();
-        reader.take(past_cap).read_to_end(&mut bytes).map_err(|e| match ureq::Error::from(e) {
-            ureq::Error::BodyExceedsLimit(_) => Error::TooLarge { limit: self.max_bytes },
-            e => transport(e),
-        })?;
+        response.body_mut().as_reader().take(self.max_bytes.saturating_add(1)).read_to_end(&mut bytes).map_err(transport)?;
         if bytes.len() as u64 > self.max_bytes {
             return Err(Error::TooLarge { limit: self.max_bytes });
         }
@@ -101,11 +101,10 @@ impl Resource {
             .header("Content-Type", "application/xml; charset=utf-8")
             .body(lock::lockinfo(owner))
             .map_err(transport)?;
-        let response = self.agent.run(request).map_err(transport)?;
+        let mut response = self.agent.run(request).map_err(transport)?;
         expect(response.status(), "LOCK", &[StatusCode::OK, StatusCode::CREATED])?;
         let token = header(&response, "Lock-Token").and_then(lock::parse_lock_token).ok_or(Error::NoLockToken)?;
-        let granted = header(&response, "Timeout").and_then(lock::parse_timeout).unwrap_or(Some(timeout));
-        Ok(Lock::new(token, granted))
+        Ok(Lock::new(token, granted(&mut response, timeout)))
     }
 
     /// Keeps `held` alive for another `timeout` (a LOCK with only an `If` header, RFC 4918
@@ -117,10 +116,9 @@ impl Resource {
             .header("Timeout", lock::timeout_header(timeout))
             .body(())
             .map_err(transport)?;
-        let response = self.agent.run(request).map_err(transport)?;
+        let mut response = self.agent.run(request).map_err(transport)?;
         expect(response.status(), "LOCK", &[StatusCode::OK])?;
-        let granted = header(&response, "Timeout").and_then(lock::parse_timeout).unwrap_or(Some(timeout));
-        Ok(Lock::new(held.token(), granted))
+        Ok(Lock::new(held.token(), granted(&mut response, timeout)))
     }
 
     /// Saves `bytes` as the document (PUT). With `held`, the save only goes through while the
@@ -143,8 +141,23 @@ impl Resource {
     }
 
     fn request(&self, method: Method) -> ureq::http::request::Builder {
-        Request::builder().method(method).uri(&self.url)
+        let builder = Request::builder().method(method).uri(&self.url);
+        match &self.basic_auth {
+            Some(auth) => builder.header("Authorization", auth),
+            None => builder,
+        }
     }
+}
+
+/// The `Authorization` value for a URL's `user:password` (RFC 7617), each part percent-decoded.
+/// The user name ends at the first colon; the password may hold more.
+fn basic_auth(userinfo: &str) -> String {
+    use base64::Engine as _;
+    let (user, password) = userinfo.split_once(':').unwrap_or((userinfo, ""));
+    let mut credentials: Vec<u8> = percent_encoding::percent_decode_str(user).collect();
+    credentials.push(b':');
+    credentials.extend(percent_encoding::percent_decode_str(password));
+    format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(credentials))
 }
 
 fn lock_method() -> Method {
@@ -153,6 +166,14 @@ fn lock_method() -> Method {
 
 fn unlock_method() -> Method {
     Method::from_bytes(b"UNLOCK").unwrap_or(Method::POST)
+}
+
+/// The lock lifetime a LOCK answer grants: from the `DAV:lockdiscovery` in its body, where RFC 4918
+/// puts it, else from a `Timeout` header some servers add, else the `requested` one.
+fn granted(response: &mut ureq::http::Response<ureq::Body>, requested: Duration) -> Option<Duration> {
+    let from_header = header(response, "Timeout").and_then(lock::parse_timeout);
+    let body = response.body_mut().with_config().limit(LOCK_ANSWER_MAX_BYTES).read_to_string().ok();
+    body.as_deref().and_then(lock::timeout_in_lockdiscovery).or(from_header).unwrap_or(Some(requested))
 }
 
 /// The value of response header `name`, if it is text.

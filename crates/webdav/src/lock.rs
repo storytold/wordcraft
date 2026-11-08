@@ -77,6 +77,25 @@ pub(crate) fn parse_timeout(value: &str) -> Option<Option<Duration>> {
     })
 }
 
+/// The lock lifetime in a LOCK answer's `DAV:lockdiscovery` (`<D:timeout>Second-600</D:timeout>`),
+/// whatever prefix the server gives the `DAV:` namespace. `None` if no `timeout` element parses.
+pub(crate) fn timeout_in_lockdiscovery(xml: &str) -> Option<Option<Duration>> {
+    let mut rest = xml;
+    while let Some(open) = rest.find('<') {
+        rest = rest.get(open + 1..)?;
+        let close = rest.find('>')?;
+        let tag = rest.get(..close)?;
+        rest = rest.get(close + 1..)?;
+        let name = tag.split_whitespace().next().unwrap_or_default();
+        let local = name.rsplit(':').next().unwrap_or(name);
+        // Only an opening `timeout` tag with text: not `</D:timeout>`, `<D:timeout/>` or `<?…?>`.
+        if local == "timeout" && !name.starts_with('/') && !tag.ends_with('/') {
+            return parse_timeout(rest.get(..rest.find('<')?)?);
+        }
+    }
+    None
+}
+
 /// The `Timeout` a LOCK request asks for.
 pub(crate) fn timeout_header(timeout: Duration) -> String {
     format!("Second-{}", timeout.as_secs().max(1))
@@ -134,6 +153,27 @@ mod tests {
         assert_eq!(parse_timeout("Sec"), None);
         assert_eq!(parse_timeout("Sécond-1"), None);
         assert_eq!(parse_timeout(""), None);
+    }
+
+    #[test]
+    fn the_granted_timeout_is_read_from_lockdiscovery_whatever_the_prefix() {
+        let answer = |timeout: &str| {
+            format!(
+                "<?xml version=\"1.0\"?><D:prop xmlns:D=\"DAV:\"><D:lockdiscovery><D:activelock><D:depth>0</D:depth>{timeout}<D:locktoken><D:href>urn:uuid:1</D:href></D:locktoken></D:activelock></D:lockdiscovery></D:prop>"
+            )
+        };
+        assert_eq!(timeout_in_lockdiscovery(&answer("<D:timeout>Second-120</D:timeout>")), Some(Some(Duration::from_secs(120))));
+        assert_eq!(timeout_in_lockdiscovery(&answer("<D:timeout> Infinite </D:timeout>")), Some(None));
+        assert_eq!(
+            timeout_in_lockdiscovery("<d:prop xmlns:d=\"DAV:\"><d:timeout>Second-30</d:timeout></d:prop>"),
+            Some(Some(Duration::from_secs(30)))
+        );
+        assert_eq!(timeout_in_lockdiscovery("<prop xmlns=\"DAV:\"><timeout>Second-45</timeout></prop>"), Some(Some(Duration::from_secs(45))));
+        assert_eq!(timeout_in_lockdiscovery(&answer("")), None);
+        assert_eq!(timeout_in_lockdiscovery(&answer("<D:timeout/>")), None);
+        assert_eq!(timeout_in_lockdiscovery("<D:timeout>Second-30"), None);
+        assert_eq!(timeout_in_lockdiscovery("<D:timeout"), None);
+        assert_eq!(timeout_in_lockdiscovery(""), None);
     }
 
     #[test]
