@@ -21,10 +21,11 @@ pub(crate) enum ContextAsk {
 }
 
 /// The spelling suggestions and synonyms the context menu offers for the selection or the word
-/// at the caret.
+/// at the caret, and whether it offers Accept and Reject Change: worked out once, as it opens.
 pub(super) fn context_suggestions(app: &mut WordApp) {
     app.canvas.context_issue = app.session.run("review.suggestions", &json!({})).ok().filter(|v| !v.is_null());
     app.canvas.context_synonyms = app.session.run("review.thesaurus", &json!({})).ok().and_then(|v| v.get("synonyms").cloned());
+    app.canvas.context_change = wordcraft_engine::cmd::review::change_at_selection(&app.session);
 }
 
 /// The heading of a proofing issue's context menu, in the interface language like the rest of
@@ -59,6 +60,7 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, opener: &Response, ask: Optio
                 if wordcraft_engine::cmd::objects::selected(&app.session).is_some() {
                     app.canvas.context_issue = None;
                     app.canvas.context_synonyms = None;
+                    app.canvas.context_change = false;
                 } else {
                     context_suggestions(app);
                 }
@@ -139,7 +141,7 @@ fn rows(app: &mut WordApp, ui: &mut Ui) {
         rule(ui);
     }
     // A tracked change at the caret or in the selection: resolve it from here, as in Word.
-    if wordcraft_engine::cmd::review::change_at_selection(&app.session) {
+    if app.canvas.context_change {
         item(ui, "Accept Change", "review.accept", json!({}));
         item(ui, "Reject Change", "review.reject", json!({}));
         rule(ui);
