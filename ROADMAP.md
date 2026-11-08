@@ -810,7 +810,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-07 | trivial | Charts: a one-series chart varies colours by point (`c:varyColors`, also when absent) for bar, line, scatter and radar charts as Word does, unless the series has its own colour; the legend lists the categories (#5955) |
+| 2026-11-07 | trivial | Charts: a one-series bar, line, scatter or radar chart (not a filled radar) varies colours by point as Word does, when `c:varyColors` is on or absent (not `val="0"`), unless the series has its own colour; the legend lists the categories whenever the chart varies, also when a series colour keeps the points one colour (#5955) |
 | 2026-11-06 | trivial | Print helpers remove loaded PDF/settings files before driver work, tolerate prior removal and report cleanup errors; a held-driver regression checks the files are already absent (#5710) |
 | 2026-11-06 | trivial | Windows print submissions isolated per helper process; cancelled driver work cannot block a retry (#5710) |
 | 2026-11-06 | trivial | Progress log: print cancellation before sending, including without a document, and the Windows repeated-conversion limitation (#5710) |
