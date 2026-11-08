@@ -4353,3 +4353,52 @@ fn prop_three_way_collision_reports_once() {
     let report = validate(&d);
     assert_eq!(report.findings.iter().filter(|x| x.rule == "PROP-DUP-NAME").count(), 1, "findings: {:?}", report.findings);
 }
+
+// ---------------------------------------------------------------------------
+// #5982: the customXml row of CT-MISMATCH is consumption-sensitive. A
+// customXml-typed relationship consumed by a w:contentPart is governed
+// by CONTENTPART-TYPE (text/xml), not by the application/xml pairing.
+
+#[test]
+fn ct_mismatch_customxml_consumed_by_contentpart_is_scoped_out() {
+    // The ECMA-376 section 17.3.3.2 shape: a contentPart reaching a
+    // text/xml part through a customXml relationship. Batch b6: Word
+    // for the web opens this cleanly.
+    let d = content_part_doc(
+        &one_content_part("rIdCP"),
+        r#"<Relationship Id="rIdCP" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="customXml/item1.xml"/>"#,
+        "word/customXml/item1.xml",
+        "text/xml",
+    );
+    let report = validate(&d);
+    assert!(!has(&report, "CT-MISMATCH"), "findings: {:?}", report.findings);
+    assert!(!has(&report, "CONTENTPART-TYPE"), "findings: {:?}", report.findings);
+}
+
+#[test]
+fn ct_mismatch_contentpart_image_target_reports_contentpart_only() {
+    // The same relationship reaching an image part: CONTENTPART-TYPE
+    // fires (the batch-b6 banner case); CT-MISMATCH stays out of it.
+    let d = content_part_doc(
+        &one_content_part("rIdCP"),
+        r#"<Relationship Id="rIdCP" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="data/blob.bin"/>"#,
+        "word/data/blob.bin",
+        "image/png",
+    );
+    let report = validate(&d);
+    assert_finding(&report, "CONTENTPART-TYPE", Some("word/document.xml"));
+    assert!(!has(&report, "CT-MISMATCH"), "findings: {:?}", report.findings);
+}
+
+#[test]
+fn ct_mismatch_customxml_not_consumed_still_fires() {
+    // No contentPart anywhere: a customXml relationship reaching a
+    // text/xml part keeps the application/xml expectation.
+    let mut d = Doc::minimal();
+    d.add_with_override("word/customXml/item1.xml", "text/xml", b"<root/>".to_vec());
+    d.set_doc_rels(
+        r#"<Relationship Id="rIdX" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="customXml/item1.xml"/>"#,
+    );
+    let report = validate(&d);
+    assert_finding(&report, "CT-MISMATCH", Some("word/customXml/item1.xml"));
+}

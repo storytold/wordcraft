@@ -684,7 +684,7 @@ pub(crate) fn validate_bytes_limited(bytes: &[u8], limits: Limits) -> Report {
     };
     check_content_types(&pkg, &mut acc);
     let xml = check_xml(&pkg, &mut acc);
-    check_rels(&pkg, &xml.refs, &mut acc);
+    check_rels(&pkg, &xml.refs, &xml.content_parts, xml.content_part_capped_any, &mut acc);
     check_content_part_types(&pkg, &xml.content_parts, xml.content_part_capped_any, &mut acc);
     check_story(&pkg, &xml.facts, xml.compat, &mut acc);
     check_note_pr(&xml.facts, &xml, &mut acc);
@@ -1229,7 +1229,7 @@ fn relationship_role(kind: &str) -> Option<scan::PartRole> {
 }
 
 /// Verify relationships: duplicate IDs, dangling targets, typed targets, and content type matches.
-fn check_rels(pkg: &Package, refs: &[(String, Vec<RefFact>)], acc: &mut Acc) {
+fn check_rels(pkg: &Package, refs: &[(String, Vec<RefFact>)], content_parts: &[(String, Vec<String>)], content_part_capped: bool, acc: &mut Acc) {
     acc.ran("REL-DUP-ID");
     for rp in &pkg.rels {
         report_duplicate_rel_ids(rp, acc);
@@ -1254,7 +1254,7 @@ fn check_rels(pkg: &Package, refs: &[(String, Vec<RefFact>)], acc: &mut Acc) {
     check_typed_targets(pkg, acc);
     check_typed_image_refs(pkg, refs, acc);
     check_part_refs(pkg, refs, acc);
-    check_typed_content(pkg, acc);
+    check_typed_content(pkg, content_parts, content_part_capped, acc);
 }
 
 /// Find duplicate relationship IDs within a single `.rels` part and report `REL-DUP-ID` findings.
@@ -1415,7 +1415,8 @@ fn header_footer_message(kind: &str, id: &str, target: &str, ct: Option<&str>) -
 /// stay `REL-TYPED`'s alone, so the same part is never reported twice. Kinds the catalogue leaves
 /// type-free or extension-dependent — image / media, embedded package, OLE, altChunk, content
 /// parts, recipient data — prescribe no type and are deliberately absent; no pairing is invented
-/// for them.
+/// for them. The `customXml` row is applied only when the relationship is not consumed by a
+/// `w:contentPart` element (see [`check_typed_content`]).
 pub(crate) const FIXED_REL_CONTENT_TYPES: &[(&str, &str)] = &[
     ("glossaryDocument", package::GLOSSARY_CONTENT_TYPE),
     ("styles", package::STYLES_CONTENT_TYPE),
@@ -1444,8 +1445,22 @@ fn fixed_rel_content_type(kind: &str) -> Option<&'static str> {
 }
 
 /// Verify that fixed-type relationships in the package match their prescribed part content types.
-fn check_typed_content(pkg: &Package, acc: &mut Acc) {
+///
+/// One row is consumption-sensitive (#5982): the `customXml` row prescribes
+/// `application/xml`, but a relationship of that type consumed by a
+/// `w:contentPart` element is governed by CONTENTPART-TYPE instead —
+/// ECMA-376 §17.3.3.2's own contentPart example reaches a `text/xml` part
+/// through exactly this relationship type, and Word for the web opens
+/// such a file cleanly. When the contentPart collection was capped, the
+/// consumed set is not established, so the customXml row is skipped
+/// rather than risk the false positive (the run is already INCOMPLETE
+/// from the capped collection).
+fn check_typed_content(pkg: &Package, content_parts: &[(String, Vec<String>)], content_part_capped: bool, acc: &mut Acc) {
     acc.ran("CT-MISMATCH");
+    // Relationship ids consumed by a `w:contentPart`, keyed by the
+    // owning part's relationships-part name (compared case-insensitively).
+    let consumed: HashMap<String, HashSet<&str>> =
+        content_parts.iter().map(|(owner, ids)| (rels_part_name(owner).to_ascii_lowercase(), ids.iter().map(String::as_str).collect())).collect();
     // `header` and `footer` pairings are checked for a non-main owner's relationships part only
     // (the glossary document today, but computed from the owner scopes rather than hardcoded). The
     // main part's header/footer relationships belong to `REL-TYPED`, which already checks them from
@@ -1465,6 +1480,11 @@ fn check_typed_content(pkg: &Package, acc: &mut Acc) {
             let kind = tail(&r.kind);
             let Some(want) = fixed_rel_content_type(kind) else { continue };
             if matches!(kind, "header" | "footer") && !is_non_main_owner {
+                continue;
+            }
+            if kind == "customXml"
+                && (content_part_capped || consumed.get(&rp.name.to_ascii_lowercase()).is_some_and(|ids| ids.contains(r.id.as_str())))
+            {
                 continue;
             }
             let Some(ct) = pkg.content_types.of(target) else { continue };
