@@ -288,6 +288,24 @@ async fn a_client_can_ask_for_a_snapshot_without_losing_the_journal() {
 }
 
 #[tokio::test]
+async fn a_ninth_participant_is_refused() {
+    let (url, cfg) = spawn_server().await;
+    let mut clients = Vec::new();
+    for index in 0..8 {
+        clients.push(connect(&url, &cfg, "editor", &format!("client-{index}")).await);
+    }
+    // Let registration finish before the ninth connects.
+    for client in &mut clients {
+        let _ = next_msg(client).await;
+    }
+    let mut ninth = connect(&url, &cfg, "editor", "client-8").await;
+    match next_msg(&mut ninth).await {
+        ServerMsg::Rejected { reject } => assert_eq!(reject.code, wordcraft_collab::wire::RejectCode::TooLarge),
+        other => panic!("expected a full room, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn a_viewer_cannot_write() {
     let (url, cfg) = spawn_server().await;
     let mut viewer = connect(&url, &cfg, "viewer", "carol").await;
@@ -328,6 +346,25 @@ fn a_room_is_restored_from_disk() {
     assert_eq!(guard.room.version(), 1, "the snapshot restores the version");
     let text = guard.room.model().session().doc.body.first().and_then(|b| b.as_para()).map(|p| p.text.clone()).unwrap_or_default();
     assert_eq!(text, "Hi");
+}
+
+#[test]
+fn a_restored_room_takes_kept_markup_from_the_source_docx() {
+    let cfg = dev_config();
+    let doc = "doc-kept";
+    let state = AppState::new(cfg.clone());
+    let room = state.room_for(doc);
+    let source = wordcraft_docx::write(&wordcraft_doc::Document::new()).expect("a source docx");
+    let from_file = wordcraft_docx::read_with_password(&source, None).expect("read the source");
+    let expected = from_file.kept.get().is_some();
+    state.persist(doc, &room, Some(source)).expect("persist model + source");
+    drop(room);
+    drop(state);
+
+    let restored = AppState::new(cfg);
+    let room = restored.room_for(doc);
+    let guard = room.lock().expect("room lock");
+    assert_eq!(guard.room.model().session().doc.kept.get().is_some(), expected, "kept comes back from the source, not the JSON");
 }
 
 #[test]

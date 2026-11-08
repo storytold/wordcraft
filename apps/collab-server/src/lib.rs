@@ -96,6 +96,9 @@ struct RoomState {
     /// Cabinet session that holds the lease; a different session may join only
     /// as `owner` (ADR-0008).
     session: String,
+    /// Fixed-window operation counter, so one client cannot flood a room.
+    window: std::time::Instant,
+    ops_in_window: u32,
 }
 
 /// Counters for `/metrics`.
@@ -160,17 +163,30 @@ impl AppState {
             .entry(doc.to_string())
             .or_insert_with(|| {
                 let restored = self.store.load(doc).and_then(|snapshot| {
-                    let document = serde_json::from_slice::<wordcraft_doc::Document>(&snapshot.model).ok()?;
+                    let mut document = serde_json::from_slice::<wordcraft_doc::Document>(&snapshot.model).ok()?;
+                    // `Document::kept` is not serialized (ADR-0011): take it from
+                    // the source `.docx` so unchanged paragraphs still write their
+                    // original markup. Fingerprints only match paragraphs that
+                    // were not edited since the file was read.
+                    if let Some(source) = &snapshot.source
+                        && let Ok(from_file) = wordcraft_docx::read_with_password(source, None)
+                    {
+                        document.kept = from_file.kept;
+                    }
                     Some(RoomState {
                         room: Room::restore(SessionModel::from_document(document), snapshot.version, snapshot.epoch),
                         peers: HashMap::new(),
                         session: String::new(),
+                        window: std::time::Instant::now(),
+                        ops_in_window: 0,
                     })
                 });
                 Arc::new(Mutex::new(restored.unwrap_or_else(|| RoomState {
                     room: Room::new(SessionModel::from_document(wordcraft_doc::Document::new())),
                     peers: HashMap::new(),
                     session: String::new(),
+                    window: std::time::Instant::now(),
+                    ops_in_window: 0,
                 })))
             })
             .clone()
@@ -306,6 +322,11 @@ fn register(
     wants_version: Option<Version>,
 ) -> Result<(wordcraft_collab::room::JoinPlan, Vec<Participant>), Reject> {
     let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
+    const MAX_PARTICIPANTS: usize = 8;
+    if guard.peers.len() >= MAX_PARTICIPANTS && !guard.peers.contains_key(client_id) {
+        let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::TooLarge, "the room is full");
+        return Err(reject);
+    }
     if guard.session.is_empty() {
         guard.session = sid.to_string();
     } else if guard.session != sid && role != Role::Owner {
@@ -418,7 +439,16 @@ async fn handle_op(
     let structural = op.kind.is_structural();
     let result = {
         let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
-        guard.room.submit(&claims.sub, role, op)
+        if guard.window.elapsed() >= std::time::Duration::from_secs(1) {
+            guard.window = std::time::Instant::now();
+            guard.ops_in_window = 0;
+        }
+        if guard.ops_in_window >= 200 {
+            Err(Reject::new(op.op_id.clone(), RejectCode::TooLarge, "too many operations; retry in a moment"))
+        } else {
+            guard.ops_in_window += 1;
+            guard.room.submit(&claims.sub, role, op)
+        }
     };
     match result {
         Ok(applied) => {

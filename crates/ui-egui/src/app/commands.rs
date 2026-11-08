@@ -127,6 +127,9 @@ impl WordApp {
         if matches!(id, "edit.undo" | "edit.redo")
             && let Some(collab) = self.collab.as_ref()
         {
+            if *collab.status() != wordcraft_collab_app::Status::InSync {
+                return Err("Collaboration is reconnecting; undo resumes when it is synchronized".into());
+            }
             if id == "edit.undo" {
                 collab.undo();
             } else {

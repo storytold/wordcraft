@@ -427,7 +427,7 @@ impl WordApp {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         // Remote answers land before layout, so this frame draws the new state.
         #[cfg(not(target_arch = "wasm32"))]
-        crate::collab::tick(self);
+        crate::collab::tick(self, ui.ctx());
         if self.windows.native() {
             self.windows_ui(ui);
         } else {

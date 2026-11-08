@@ -49,7 +49,13 @@ pub(crate) fn after_command(app: &mut WordApp, before: &Document, id: &str, para
 /// Refuse a document edit on a read-only session before the engine runs it.
 pub(crate) fn viewer_refusal(app: &WordApp, id: &str) -> Option<String> {
     let collab = app.collab.as_ref()?;
-    if collab.role().can_write() || !is_editing(app, id) {
+    if !is_editing(app, id) {
+        return None;
+    }
+    if *collab.status() != wordcraft_collab_app::Status::InSync {
+        return Some("Collaboration is reconnecting; editing resumes when it is synchronized".into());
+    }
+    if collab.role().can_write() {
         return None;
     }
     Some("This session is read-only".into())
@@ -81,12 +87,20 @@ pub(crate) fn is_settings(id: &str) -> bool {
 
 /// Poll the transport, apply answers and publish this window's caret. Called
 /// once per frame before layout, so a remote edit is laid out in this frame.
-pub(crate) fn tick(app: &mut WordApp) {
+pub(crate) fn tick(app: &mut WordApp, ctx: &egui::Context) {
     let Some(collab) = app.collab.as_mut() else { return };
-    if collab.poll(&mut app.session) {
+    let changed = collab.poll(&mut app.session);
+    if changed {
         app.session.relayout();
     }
     collab.publish_presence(&app.session, std::time::Instant::now());
+    if changed {
+        ctx.request_repaint();
+    } else {
+        // Answers arrive on the transport thread; keep the window listening
+        // without redrawing at full speed.
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
 }
 
 /// The participants panel: status, role and who is here.
@@ -111,10 +125,8 @@ pub(crate) fn panel(app: &mut WordApp, ctx: &egui::Context) {
             ui.label(status);
             ui.separator();
             ui.label(role.as_str());
-            if collab.can_commit() {
-                if ui.button("Commit").clicked() {
-                    collab.commit();
-                }
+            if collab.can_commit() && ui.button("Commit").clicked() {
+                collab.commit();
             }
         });
         ui.separator();

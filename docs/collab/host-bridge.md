@@ -51,7 +51,8 @@ single-user mode (the rule from `INTEGRATION.md` §6).
 
 ## Until then
 
-The desktпop build can connect directly to the sync server (the flag and the
-address are in `Prefs.collab`, `collab.enable`/`collab.disable`/`collab.status`
-exist in the engine). The web build stays single-user; this is a missing external
-contract, not an untested code path.
+The desktop build connects directly to the sync server: `collab.enable` stores the
+address, `WORDCRAFT_COLLAB_TOKEN` supplies the JWT, and `crates/collab-app` +
+`ui-egui/collab.rs` provide the session, participants panel, remote carets, viewer
+gate and commit button (`README.md`). The web build stays single-user; this is a
+missing external contract, not an untested code path.
