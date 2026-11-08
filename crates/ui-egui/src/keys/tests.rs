@@ -217,6 +217,23 @@ fn mod_v_release_pastes_clipboard_copy_when_no_clipboard_text_or_picture() {
     assert_eq!(count, 2, "Mod+V release pasted the copied text box");
 }
 
+/// Mod+Alt+V key release opens Paste Special when system clipboard text and picture are absent
+/// but WordCraft's internal clipboard copy is present (#5785, #5859).
+#[test]
+fn mod_alt_v_release_opens_paste_special_when_clipboard_copy_present() {
+    let ctx = egui::Context::default();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.session.run("insert.textBox", &json!({"text": "Hello"})).unwrap();
+    a.session.run("select.range", &json!({"anchor": wordcraft_doc::Pos::body(0, 0), "focus": wordcraft_doc::Pos::body(0, 3)})).unwrap();
+    a.session.run("edit.copy", &json!({})).unwrap();
+    assert!(a.session.clipboard.is_some());
+
+    let cmd_alt = Modifiers { command: true, alt: true, ..Default::default() };
+    mods_frame(&ctx, &mut a, cmd_alt, vec![]);
+    mods_frame(&ctx, &mut a, cmd_alt, vec![key_event(Key::V, false, cmd_alt)]);
+    assert_eq!(a.dialog.as_ref().map(crate::dialogs::Dialog::name), Some("pasteSpecial"));
+}
+
 /// Ctrl down, the kept Mod+V press, Ctrl up and V up can all arrive in one frame: the frame's
 /// modifiers no longer have Mod, but the ModifiersChanged events in between did.
 #[test]

@@ -5141,9 +5141,9 @@ fn copy_and_paste_selected_custom_text_box_duplicates_dimensions_styling_and_tex
     assert!(fill.is_some());
     assert!(stroke.is_some());
 
-    // Copy with collapsed selection at object anchor (a == b, #5785).
-    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
-    assert_eq!(s.sel.anchor, s.sel.focus);
+    // Copy selected custom text box (non-collapsed, object_selection, #5785, #5859).
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    assert!(crate::cmd::objects::object_selection(&s).is_some());
     let copy_res = run(&mut s, "edit.copy", json!({}));
     assert_eq!(copy_res["text"], "Custom content");
     assert_eq!(s.clipboard_text, "Custom content");
@@ -5169,9 +5169,9 @@ fn copy_and_paste_selected_custom_text_box_duplicates_dimensions_styling_and_tex
     assert_ne!(pstory.unwrap(), id, "independent story ID");
     assert_eq!(s.doc.plain_text(StoryRef::Part(pstory.unwrap())), "Custom content", "inner text duplicated");
 
-    // Cut the pasted text box with collapsed selection at its position (caret right after it).
-    let pasted_pos = Pos::body(0, 6);
-    run(&mut s, "caret.set", json!({"pos": pasted_pos}));
+    // Cut the pasted text box by selecting it (non-collapsed, object_selection).
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 3), "focus": Pos::body(0, 6)}));
+    assert!(crate::cmd::objects::object_selection(&s).is_some());
     let cut_res = run(&mut s, "edit.cut", json!({}));
     assert_eq!(cut_res["text"], "Custom content");
 
@@ -5205,6 +5205,45 @@ fn copy_and_paste_selected_custom_text_box_duplicates_dimensions_styling_and_tex
     assert!(fill.is_some());
 }
 
+/// Cut and Copy with a bare caret beside an object (collapsed selection) change nothing (#5859).
+#[test]
+fn cut_and_copy_with_bare_caret_beside_object_change_nothing() {
+    let mut s = s();
+    let id = run(&mut s, "insert.textBox", json!({"text": "Box content"}))["story"].as_u64().unwrap() as u32;
+
+    // 1. Bare caret immediately before the object (Pos::body(0, 0)).
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    assert!(s.sel.is_collapsed());
+    assert!(crate::cmd::objects::object_selection(&s).is_none());
+
+    let copy_res = run(&mut s, "edit.copy", json!({}));
+    assert_eq!(copy_res["text"], "", "copy on bare caret returns empty text");
+    assert!(s.clipboard.is_none(), "clipboard remains unset");
+
+    let cut_res = s.run("edit.cut", &json!({}));
+    assert!(matches!(cut_res, Err(crate::CmdError::Disabled(_))), "cut on bare caret is disabled");
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 1, "object was not deleted");
+    assert_eq!(para.objects[0].text_box(), Some(id));
+
+    // 2. Bare caret immediately after the object (Pos::body(0, 3)).
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 3)}));
+    assert!(s.sel.is_collapsed());
+    assert!(crate::cmd::objects::object_selection(&s).is_none());
+
+    let copy_res = run(&mut s, "edit.copy", json!({}));
+    assert_eq!(copy_res["text"], "", "copy on bare caret returns empty text");
+    assert!(s.clipboard.is_none(), "clipboard remains unset");
+
+    let cut_res = s.run("edit.cut", &json!({}));
+    assert!(matches!(cut_res, Err(crate::CmdError::Disabled(_))), "cut on bare caret is disabled");
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 1, "object was not deleted");
+    assert_eq!(para.objects[0].text_box(), Some(id));
+}
+
 /// Fallback plain text / clipboard text when paragraphs contain text boxes (#5785).
 #[test]
 fn fallback_plain_text_extracts_text_box_story_when_body_contains_paragraph_marks() {
@@ -5229,7 +5268,7 @@ fn fallback_plain_text_extracts_text_box_story_when_body_contains_paragraph_mark
 fn paste_content_prefers_external_html_when_rtf_matches_session_clipboard() {
     let mut s = s();
     run(&mut s, "insert.textBox", json!({"text": "Internal text"}));
-    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
     run(&mut s, "edit.copy", json!({}));
     let my_rtf = s.clipboard_rtf.clone();
     let external_html = "<p>External rich text</p>";
@@ -5237,6 +5276,28 @@ fn paste_content_prefers_external_html_when_rtf_matches_session_clipboard() {
     assert!(matches!(pasted_res, Ok(crate::cmd::paste::Pasted::Fragment(_))));
     if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_res {
         assert_eq!(frag.plain_text(), "External rich text");
+    }
+}
+
+/// Pasting with no text payload but matching HTML and RTF uses WordCraft's session clipboard
+/// fragment, preserving custom text box parts (#5785, #5859).
+#[test]
+fn paste_content_uses_session_clipboard_when_html_and_rtf_match_without_text() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text box"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_html = s.clipboard_html.clone();
+    let my_rtf = s.clipboard_rtf.clone();
+    assert!(!my_html.is_empty());
+    assert!(!my_rtf.is_empty());
+    assert!(s.clipboard.as_ref().is_some_and(|f| !f.parts.is_empty()));
+
+    let pasted_res = crate::cmd::paste::paste_content(&mut s, &json!({"html": my_html, "rtf": my_rtf}));
+    assert!(matches!(pasted_res, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_res {
+        assert_eq!(frag.parts.len(), 1, "session text box parts preserved");
+        assert_eq!(frag.plain_text(), "Internal text box");
     }
 }
 
