@@ -1187,3 +1187,140 @@ fn accept_or_reject_at_the_caret_resolves_a_section_break_change() {
         assert_eq!(s.run("review.changes", &json!({})).unwrap(), json!([]), "{cmd}: nothing left");
     }
 }
+
+/// Every kind of change `change_at_selection` looks for: tracked deletion and formatting runs, a
+/// paragraph's formatting and numbering, a paragraph mark's formatting, and a table's, row's and
+/// cell's formatting. Each gives the session and the selections to try, the first one on the change.
+type ChangeFixture = (&'static str, fn() -> (Session, Vec<crate::Selection>));
+
+fn changes_of_each_kind() -> Vec<ChangeFixture> {
+    use crate::Selection;
+    use wordcraft_doc::props::{NumChange, PropChange};
+    use wordcraft_doc::{Path, Pos, RevisionKind, StoryRef};
+    fn tracked(text: &str) -> Session {
+        let mut s = Session::new(Document::from_text(text));
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        s
+    }
+    /// A caret on the change at `on`, then every caret and every range inside one paragraph, in
+    /// body paragraphs `0..blocks`, and a range across the first paragraph's mark.
+    fn selections(s: &Session, blocks: usize, on: (usize, usize)) -> Vec<Selection> {
+        let mut out = vec![Selection::caret(Pos::body(on.0, on.1)), Selection { anchor: Pos::body(0, 1), focus: Pos::body(1, 1) }];
+        for b in 0..blocks {
+            let len = s.doc.para(StoryRef::Body, &Path::top(b)).unwrap().len();
+            for from in 0..=len {
+                for to in from..=len {
+                    out.push(Selection { anchor: Pos::body(b, from), focus: Pos::body(b, to) });
+                }
+            }
+        }
+        out
+    }
+    fn body_para_mut(s: &mut Session, block: usize) -> &mut wordcraft_doc::Paragraph {
+        s.doc.para_mut(StoryRef::Body, &Path::top(block)).unwrap()
+    }
+    /// A 2×2 table with "ab" in its first cell and a formatting change on the table (0), its first
+    /// row (1) or its first cell (2): a caret in each cell, a range in the first one, and a caret
+    /// in the paragraph after the table.
+    fn table(level: u8) -> (Session, Vec<Selection>) {
+        let mut s = Session::new(Document::new());
+        s.run("insert.table", &json!({"rows": 2, "cols": 2})).unwrap();
+        s.run("text.insert", &json!({"text": "ab"})).unwrap();
+        let first = s.sel.focus.path.clone();
+        let (tp, _, _) = first.cell().unwrap();
+        let rev = crate::cmd::new_revision(&mut s, RevisionKind::Format);
+        let t = s.doc.table_mut(StoryRef::Body, &tp).unwrap();
+        match level {
+            0 => t.props.fmt_change = PropChange::boxed(rev, Default::default()),
+            1 => t.rows[0].props.fmt_change = PropChange::boxed(rev, Default::default()),
+            _ => t.rows[0].cells[0].props.fmt_change = PropChange::boxed(rev, Default::default()),
+        }
+        let n = first.0.len();
+        let carets = [(0, 0), (0, 1), (1, 0), (1, 1)].map(|(r, c)| {
+            let mut v = first.0.clone();
+            (v[n - 3], v[n - 2], v[n - 1]) = (r, c, 0);
+            Selection::caret(Pos::new(StoryRef::Body, Path(v), 0))
+        });
+        let after = Path::top(tp.last() + 1);
+        assert!(s.doc.para(StoryRef::Body, &after).is_some(), "a paragraph follows the table");
+        let mut sel = carets.to_vec();
+        let in_first = carets[0].focus.clone();
+        sel.push(Selection { anchor: in_first.clone(), focus: Pos { off: 2, ..in_first } });
+        sel.push(Selection::caret(Pos::new(StoryRef::Body, after, 0)));
+        (s, sel)
+    }
+    vec![
+        ("a tracked deletion", || {
+            let mut s = tracked("keep gone here\nafter");
+            s.run("select.range", &json!({"anchor": {"block": 0, "off": 5}, "focus": {"block": 0, "off": 9}})).unwrap();
+            s.run("text.delete", &json!({})).unwrap();
+            let sel = selections(&s, 2, (0, 7));
+            (s, sel)
+        }),
+        ("a tracked formatting run", || {
+            let mut s = tracked("plain words here\nafter");
+            s.run("select.range", &json!({"anchor": {"block": 0, "off": 6}, "focus": {"block": 0, "off": 11}})).unwrap();
+            s.run("format.bold", &json!({})).unwrap();
+            let sel = selections(&s, 2, (0, 8));
+            (s, sel)
+        }),
+        ("a paragraph's formatting", || {
+            let mut s = tracked("one\ntwo");
+            s.run("caret.set", &json!({"pos": {"block": 1, "off": 1}})).unwrap();
+            s.run("para.alignCenter", &json!({})).unwrap();
+            let sel = selections(&s, 2, (1, 1));
+            (s, sel)
+        }),
+        ("a paragraph's numbering", || {
+            let mut s = Session::new(Document::from_text("one\ntwo"));
+            let rev = crate::cmd::new_revision(&mut s, RevisionKind::Format);
+            body_para_mut(&mut s, 1).props.num_change = Some(Box::new(NumChange { rev, original: "1.".into() }));
+            let sel = selections(&s, 2, (1, 1));
+            (s, sel)
+        }),
+        ("a paragraph mark's formatting", || {
+            let mut s = Session::new(Document::from_text("one\ntwo"));
+            let rev = crate::cmd::new_revision(&mut s, RevisionKind::Format);
+            body_para_mut(&mut s, 0).mark.fmt_change = PropChange::boxed(rev, Default::default());
+            let sel = selections(&s, 2, (0, 3));
+            (s, sel)
+        }),
+        ("a table's formatting", || table(0)),
+        ("a row's formatting", || table(1)),
+        ("a cell's formatting", || table(2)),
+    ]
+}
+
+/// The context menu offers Accept and Reject exactly where they resolve a change, never where
+/// they would move on to the next one: for each kind of change, at every caret (the start, middle
+/// and end of a run, a mark, each table cell) and in every range, `change_at_selection` says what
+/// Accept and Reject then do.
+#[test]
+fn change_at_selection_agrees_with_accept_and_reject_for_each_kind_of_change() {
+    use super::change_at_selection;
+    for (kind, make) in changes_of_each_kind() {
+        let (mut s, selections) = make();
+        s.sel = selections[0].clone();
+        assert!(change_at_selection(&s), "{kind}: the menu offers Accept and Reject on the change");
+        let offered = selections
+            .iter()
+            .filter(|sel| {
+                s.sel = (*sel).clone();
+                change_at_selection(&s)
+            })
+            .count();
+        assert!(offered > 0 && offered < selections.len(), "{kind}: offered at {offered} of {} selections", selections.len());
+        for sel in selections {
+            for cmd in ["review.accept", "review.reject"] {
+                let (mut s, _) = make();
+                s.sel = sel.clone();
+                let offers = change_at_selection(&s);
+                let before = s.doc.clone();
+                // Where there's nothing to resolve, the command only moves to the next change.
+                let _ = s.run(cmd, &json!({}));
+                let resolved = s.doc != before;
+                assert_eq!(resolved, offers, "{kind}: {cmd} at {:?}..{:?} (the menu offers it: {offers})", sel.anchor, sel.focus);
+            }
+        }
+    }
+}
