@@ -150,10 +150,22 @@ fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>) -> 
             "<style:style style:name=\"{}\" style:display-name=\"{}\" style:family=\"paragraph\" style:parent-style-name=\"{parent}\"><style:paragraph-properties{attrs}>{tabs}</style:paragraph-properties><style:text-properties{}/></style:style>",
             super::writer::odf_name(&id),
             x(&super::writer::generated_style(&id).map_or_else(|| st.name.clone(), |(_, d)| d)),
-            props_text(&st.chr)
+            props_text(&with_complex_size(doc, &id, &st.chr))
         ));
     }
     s
+}
+
+/// Paragraph style `id`'s own text formatting `chr`, with the complex-script size it takes when it
+/// states only a size: a parent's complex size where one sets it (the model takes it from there,
+/// and the writer would otherwise give it this style's size), else its own size.
+fn with_complex_size(doc: &Document, id: &str, chr: &wordcraft_doc::props::CharProps) -> wordcraft_doc::props::CharProps {
+    let mut chr = chr.clone();
+    if chr.size.is_some() && chr.size_cs.is_none() {
+        let cs = doc.styles.resolve_char(Some(id), &wordcraft_doc::props::CharProps::default()).size_cs;
+        chr.size_cs = (chr.size != Some(cs)).then_some(cs);
+    }
+    chr
 }
 
 /// The custom character styles in `named` and those they are based on, as common text styles.
