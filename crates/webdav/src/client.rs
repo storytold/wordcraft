@@ -39,6 +39,12 @@ impl std::fmt::Debug for Resource {
 
 impl Resource {
     /// The document at `url`, which must be an `http://` or `https://` URL with a host.
+    ///
+    /// A user name and password in the URL (`https://user:pass@…`) are sent as Basic
+    /// authentication. Over `http://` that is refused unless the server is this computer
+    /// (`localhost`, `127.0.0.1`, `::1`), because they would cross the network unencrypted. A
+    /// credential in the path, as a document management system's session URL may carry, is part
+    /// of the address and not checked here.
     pub fn new(url: &str) -> Result<Self> {
         let url = url.trim();
         let uri: Uri = url.parse().map_err(|_| Error::InvalidUrl(redact(url)))?;
@@ -60,6 +66,10 @@ impl Resource {
             .build()
             .new_agent();
         let basic_auth = uri.authority().and_then(|a| a.as_str().rsplit_once('@')).map(|(userinfo, _)| basic_auth(userinfo));
+        let https = uri.scheme_str().is_some_and(|s| s.eq_ignore_ascii_case("https"));
+        if basic_auth.is_some() && !https && !uri.host().is_some_and(is_loopback) {
+            return Err(Error::CleartextCredentials);
+        }
         Ok(Self { url: url.to_owned(), agent, max_bytes: DEFAULT_MAX_BYTES, basic_auth })
     }
 
@@ -198,6 +208,12 @@ fn expect(status: StatusCode, method: &'static str, ok: &[StatusCode]) -> Result
 
 fn transport(e: impl std::fmt::Display) -> Error {
     Error::Transport(e.to_string())
+}
+
+/// Whether `host` (as a URL gives it, an IPv6 address in brackets) is this computer.
+fn is_loopback(host: &str) -> bool {
+    let host = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
+    host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 /// `url` for messages and logs: user info and the path are dropped, because a document management

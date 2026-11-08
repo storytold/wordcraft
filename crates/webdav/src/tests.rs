@@ -290,6 +290,28 @@ fn only_http_urls_with_a_host_are_accepted() {
 }
 
 #[test]
+fn credentials_in_an_http_url_to_another_computer_are_refused() {
+    for bad in ["http://u:p@dms.example/x.docx", "HTTP://u@dms.example:8080/x.docx", "http://u:p@10.0.0.5/x.docx", "http://u:p@[2001:db8::1]/x.docx"]
+    {
+        assert_eq!(Resource::new(bad).unwrap_err(), Error::CleartextCredentials, "{bad:?}");
+    }
+    // The message names neither the user nor the password.
+    let shown = Resource::new("http://ana:geheim@dms.example/x.docx").unwrap_err().to_string();
+    assert!(!shown.contains("ana") && !shown.contains("geheim"), "{shown}");
+    for good in [
+        "https://u:p@dms.example/x.docx",
+        "http://dms.example/x.docx",
+        "http://u:p@localhost:8080/x.docx",
+        "http://u:p@LOCALHOST/x.docx",
+        "http://u:p@127.0.0.1/x.docx",
+        "http://u:p@127.8.9.10/x.docx",
+        "http://u:p@[::1]:8080/x.docx",
+    ] {
+        assert!(Resource::new(good).is_ok(), "{good:?}");
+    }
+}
+
+#[test]
 fn credentials_in_the_url_are_sent_decoded() {
     let server = Server::start(vec![("200 OK", Vec::new(), b"doc".to_vec())]);
     let url = server.url.replacen("http://", "http://ana:pa%40ss:w@", 1);

@@ -38,6 +38,10 @@ pub enum Error {
     /// The address isn't an `http://` or `https://` URL with a host.
     #[error("not a WebDAV address: {0}")]
     InvalidUrl(String),
+    /// The address carries a user name and password (`http://user:pass@…`) for a server that is
+    /// not this computer, over `http://`, which would send them unencrypted.
+    #[error("the address would send its user name and password unencrypted; use https://")]
+    CleartextCredentials,
     /// The server wants credentials (401) or refuses this request (403).
     #[error("the server refused {method} ({status}): no permission for this document")]
     Forbidden { method: &'static str, status: u16 },
