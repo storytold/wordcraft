@@ -276,6 +276,7 @@ WordCraft keeps 2,54 cm).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | trivial | Layout proofing: German coordinated compound components with ellipsis hyphens are accepted, e.g. Handlungs- und Zustandssatz or Wasserverbrauch und -qualität (#5903) |
 | 2026-10-29 | minor | Bosnian interface (`bs`, Latin script): listed in `LANGUAGES`, `bs-BA` system locales, saved preference and bundled-font tests; catalog in storytold/craft-i18n (`locales/bs/wordcraft.tsv`); no Bosnian proofing |
 | 2026-11-06 | trivial | Arabic: the Home tab's Styles gallery reads from the right: Normal is the rightmost tile and the scroll arrows and More sit at the gallery's left end, as the rest of the mirrored ribbon (#5566); left to right is unchanged; regression test `the_styles_gallery_reads_from_the_right_in_a_right_to_left_interface` |
 | 2026-11-05 | trivial | Arabic letters join across a change of formatting and past hidden or deleted text (#4093) |
