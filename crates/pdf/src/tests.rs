@@ -1309,6 +1309,61 @@ fn tagged_picture_pdf(float: wordcraft_doc::para::Float) -> String {
     String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap()).into_owned()
 }
 
+/// #5544: in tagged PDF a picture's outline is an artifact, not part of the picture's
+/// Figure: a screen reader meets the picture, not its frame.
+#[test]
+fn a_picture_outline_is_an_artifact_in_tagged_pdf() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    use wordcraft_doc::props::Rgb;
+    let mut d = Document::new();
+    let media = d.add_media(png(), "png");
+    let float = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, ..Default::default() };
+    let mut p = Paragraph::new();
+    let obj = InlineObject::Image {
+        media,
+        w: 100.0,
+        h: 40.0,
+        alt: "A red square".into(),
+        float,
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+        stroke: Some(Rgb(0x00, 0xB0, 0x50)),
+        stroke_width: 6.0,
+        dash: Default::default(),
+        compound: Default::default(),
+    };
+    p.insert_object(0, obj, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let raw = String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap()).into_owned();
+    assert!(raw.contains("/Alt(A red square)"), "the picture is a Figure with its alt text");
+    // The outline's stroke (00B050 as a stroking colour) is drawn inside an /Artifact
+    // marked-content block, and not inside the picture's MCID block.
+    let stroke = raw.find("0.6901961 0.3137255 RG").expect("the outline is stroked in the page stream");
+    let mut stack: Vec<(&str, bool)> = Vec::new();
+    let mut events: Vec<(usize, &str)> = ["BDC", "BMC", "EMC"].iter().flat_map(|t| raw.match_indices(t).map(move |(i, _)| (i, *t))).collect();
+    events.sort_unstable();
+    for (i, kind) in events {
+        if i >= stroke {
+            break;
+        }
+        match kind {
+            "EMC" => {
+                stack.pop();
+            }
+            _ => {
+                let before = &raw[..i];
+                let tag = before.rsplit('/').next().unwrap_or("");
+                let tag = tag.split_whitespace().next().unwrap_or("");
+                let dict = &raw[i.saturating_sub(24)..i];
+                stack.push((tag, dict.contains("MCID")));
+            }
+        }
+    }
+    assert!(stack.iter().any(|(tag, _)| *tag == "Artifact"), "the outline is stroked inside an artifact block: {stack:?}");
+    assert!(!stack.iter().any(|(_, mcid)| *mcid), "the outline is not part of the figure's marked content: {stack:?}");
+}
+
 /// A picture marked decorative is an artifact in tagged PDF, inline, rotated or floating, so
 /// screen readers skip it; the same picture not marked decorative stays a Figure with its alt text.
 #[test]
