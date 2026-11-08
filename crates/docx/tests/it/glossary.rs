@@ -310,10 +310,11 @@ fn a_private_save_keeps_the_glossary_entries_the_model_passed_over() {
 }
 
 #[test]
-fn a_kept_glossary_that_cant_be_rewritten_privately_is_written_from_the_model() {
-    // UTF-16 markup isn't rewritten in place: the model, which applies the settings, is written.
-    let tracked = r#"<w:docPart><w:docPartPr><w:name w:val="Clause"/><w:category><w:name w:val="General"/><w:gallery w:val="docParts"/></w:category></w:docPartPr><w:docPartBody><w:p><w:ins w:id="1" w:author="Quill Ramsey" w:date="2026-03-04T05:06:07Z"><w:r><w:t>Added clause</w:t></w:r></w:ins></w:p></w:docPartBody></w:docPart>"#;
-    let utf16: Vec<u8> = [0xFF, 0xFE].into_iter().chain(glossary_xml(tracked).encode_utf16().flat_map(u16::to_le_bytes)).collect();
+fn a_utf16_kept_glossary_is_scrubbed_without_losing_extensions() {
+    // UTF-16 markup is transcoded for privacy scrubbing, preserving content the model skips.
+    let tracked = r#"<w:docPart><w:docPartPr><w:name w:val="Clause"/><w:category><w:name w:val="General"/><w:gallery w:val="docParts"/></w:category></w:docPartPr><w:docPartBody><w:p><w:ins w:id="1" w:author="Quill Ramsey" w:date="2026-03-04T05:06:07Z"><w:r><w:t>Added clause</w:t><w15:presenceInfo xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" w15:userId="Quill Ramsey"/></w:r></w:ins></w:p></w:docPartBody></w:docPart>"#;
+    let glossary = glossary_xml(&format!(r#"{tracked}<x:custom xmlns:x="urn:test">Opaque extension</x:custom>"#));
+    let utf16: Vec<u8> = [0xFF, 0xFE].into_iter().chain(glossary.encode_utf16().flat_map(u16::to_le_bytes)).collect();
     let bytes = zip(&[
         ("_rels/.rels", rels(&[("rIdMain", &format!("{REL}/officeDocument"), "word/document.xml")]).into_bytes()),
         (
@@ -330,8 +331,36 @@ fn a_kept_glossary_that_cant_be_rewritten_privately_is_written_from_the_model() 
     let (files, warned) = warnings(|| save(&doc));
     let g = text(&files, &glossary_target(&files).expect("a glossary"));
     assert!(g.contains("Added clause") && !g.contains("Quill Ramsey"), "{g}");
-    // What the model doesn't hold is lost: the save says so (review of #3872).
-    assert_eq!(warned.iter().filter(|w| w.contains("written from its entries")).count(), 1, "{warned:?}");
+    assert!(g.contains("Opaque extension"), "unmodelled glossary content survives: {g}");
+    assert!(!g.contains("presenceInfo"), "presence data is removed: {g}");
+    assert_eq!(warned.iter().filter(|w| w.contains("written from its entries")).count(), 0, "{warned:?}");
+}
+
+#[test]
+fn a_windows_1252_kept_glossary_is_scrubbed_without_losing_extensions() {
+    let glossary = format!(
+        r#"<?xml version="1.0" encoding="windows-1252"?><w:glossaryDocument xmlns:w="{W}" xmlns:r="{R_NS}"><w:docParts><w:docPart><w:docPartPr><w:category><w:name w:val="General"/><w:gallery w:val="docParts"/></w:category></w:docPartPr><w:docPartBody><w:p><w:r><w:ins w:id="1" w:author="Private Name"><w:t>Kept clause</w:t></w:ins></w:r></w:p></w:docPartBody></w:docPart><x:custom xmlns:x="urn:test">Café</x:custom></w:docParts></w:glossaryDocument>"#
+    );
+    let (glossary, _, had_errors) = encoding_rs::WINDOWS_1252.encode(&glossary);
+    assert!(!had_errors);
+    let bytes = zip(&[
+        ("_rels/.rels", rels(&[("rIdMain", &format!("{REL}/officeDocument"), "word/document.xml")]).into_bytes()),
+        (
+            "word/document.xml",
+            format!(r#"<w:document xmlns:w="{W}"><w:body><w:p><w:r><w:t>Body</w:t></w:r></w:p></w:body></w:document>"#).into_bytes(),
+        ),
+        ("word/_rels/document.xml.rels", rels(&[("rId7", GLOSSARY_REL, "glossary/document.xml")]).into_bytes()),
+        ("[Content_Types].xml", content_types(&[("/word/glossary/document.xml", GLOSSARY_CT)]).into_bytes()),
+        ("word/glossary/document.xml", glossary.into_owned()),
+    ]);
+    let mut doc = wordcraft_docx::read(&bytes).unwrap();
+    assert!(doc.glossary.is_empty());
+    doc.settings.remove_personal_info = true;
+    let (files, warned) = warnings(|| save(&doc));
+    let g = text(&files, &glossary_target(&files).expect("a glossary"));
+    assert!(g.contains("Kept clause") && !g.contains("Private Name"), "{g}");
+    assert!(g.contains("Café"), "unmodelled content survives: {g}");
+    assert_eq!(warned.iter().filter(|w| w.contains("written from its entries")).count(), 0, "{warned:?}");
 }
 
 /// `f`'s result and the warnings logged on this thread while it ran.

@@ -31,10 +31,10 @@ pub(super) fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, 
         Ev::Start(e) => {
             let n = e.local_name();
             let n = n.as_ref();
-            if n == b"table" {
+            if n == "table" {
                 if tables == 0 && names.len() < MAX_SHEETS {
                     collecting = want == Some(names.len());
-                    names.push(attr(e, b"name").unwrap_or_else(|| format!("Sheet{}", names.len() + 1)));
+                    names.push(attr(e, "name").unwrap_or_else(|| format!("Sheet{}", names.len() + 1)));
                 }
                 tables += 1;
                 return;
@@ -43,24 +43,24 @@ pub(super) fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, 
                 return;
             }
             match n {
-                b"table-row" => {
-                    let repeat = attr(e, b"number-rows-repeated").and_then(|v| v.trim().parse().ok()).unwrap_or(1u64).max(1);
+                "table-row" => {
+                    let repeat = attr(e, "number-rows-repeated").and_then(|v| v.trim().parse().ok()).unwrap_or(1u64).max(1);
                     row = Some((Vec::new(), 0, repeat, Some(0)));
                 }
-                b"table-cell" | b"covered-table-cell" if row.is_some() => {
-                    let repeat = attr(e, b"number-columns-repeated").and_then(|v| v.trim().parse().ok()).unwrap_or(1u64).max(1);
-                    let kind = attr(e, b"value-type").unwrap_or_default();
+                "table-cell" | "covered-table-cell" if row.is_some() => {
+                    let repeat = attr(e, "number-columns-repeated").and_then(|v| v.trim().parse().ok()).unwrap_or(1u64).max(1);
+                    let kind = attr(e, "value-type").unwrap_or_default();
                     let kind_lower = kind.trim().to_ascii_lowercase();
                     let value = match kind_lower.as_str() {
-                        "float" | "percentage" | "currency" => attr(e, b"value"),
-                        "date" => attr(e, b"date-value"),
-                        "time" => attr(e, b"time-value"),
-                        "boolean" => attr(e, b"boolean-value"),
-                        "string" => attr(e, b"string-value"),
+                        "float" | "percentage" | "currency" => attr(e, "value"),
+                        "date" => attr(e, "date-value"),
+                        "time" => attr(e, "time-value"),
+                        "boolean" => attr(e, "boolean-value"),
+                        "string" => attr(e, "string-value"),
                         _ => None,
                     };
                     // A covered cell's own content is hidden by the merge.
-                    let covered = n == b"covered-table-cell";
+                    let covered = n == "covered-table-cell";
                     cell = Some(OCell {
                         repeat,
                         kind: if covered { String::new() } else { kind },
@@ -71,8 +71,8 @@ pub(super) fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, 
                         skip += 1;
                     }
                 }
-                b"annotation" if cell.is_some() => skip += 1,
-                b"p" | b"h" if cell.is_some() => {
+                "annotation" if cell.is_some() => skip += 1,
+                "p" | "h" if cell.is_some() => {
                     if let Some(c) = cell.as_mut()
                         && skip == 0
                     {
@@ -83,18 +83,18 @@ pub(super) fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, 
                     }
                     in_p += 1;
                 }
-                b"s" if in_p > 0 && skip == 0 => {
-                    let k = attr(e, b"c").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 1_000);
+                "s" if in_p > 0 && skip == 0 => {
+                    let k = attr(e, "c").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 1_000);
                     if let Some(c) = cell.as_mut() {
                         push_capped(&mut c.text, &" ".repeat(k));
                     }
                 }
-                b"tab" if in_p > 0 && skip == 0 => {
+                "tab" if in_p > 0 && skip == 0 => {
                     if let Some(c) = cell.as_mut() {
                         push_capped(&mut c.text, "\t");
                     }
                 }
-                b"line-break" if in_p > 0 && skip == 0 => {
+                "line-break" if in_p > 0 && skip == 0 => {
                     if let Some(c) = cell.as_mut() {
                         push_capped(&mut c.text, "\n");
                     }
@@ -111,8 +111,8 @@ pub(super) fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, 
             }
         }
         Ev::End(n) => {
-            let n = n.as_slice();
-            if n == b"table" {
+            let n = n.as_str();
+            if n == "table" {
                 tables = tables.saturating_sub(1);
                 if tables == 0 {
                     collecting = false;
@@ -123,10 +123,10 @@ pub(super) fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, 
                 return;
             }
             match n {
-                b"p" | b"h" => in_p = in_p.saturating_sub(1),
-                b"annotation" => skip = skip.saturating_sub(1),
-                b"table-cell" | b"covered-table-cell" => {
-                    if n == b"covered-table-cell" {
+                "p" | "h" => in_p = in_p.saturating_sub(1),
+                "annotation" => skip = skip.saturating_sub(1),
+                "table-cell" | "covered-table-cell" => {
+                    if n == "covered-table-cell" {
                         skip = skip.saturating_sub(1);
                     }
                     let (Some(c), Some((cells, pending, _, budget))) = (cell.take(), row.as_mut()) else { return };
@@ -154,7 +154,7 @@ pub(super) fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, 
                     *pending = 0;
                     cells.extend(std::iter::repeat_n(text, times));
                 }
-                b"table-row" => {
+                "table-row" => {
                     if let Some((cells, _, repeat, Some(_))) = row.take() {
                         grid.push(cells, repeat);
                     }
@@ -162,7 +162,7 @@ pub(super) fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, 
                 _ => {}
             }
         }
-    });
+    })?;
     if names.is_empty() {
         return Err("the spreadsheet has no sheets".into());
     }

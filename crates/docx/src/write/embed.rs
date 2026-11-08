@@ -705,16 +705,22 @@ fn scrub_private(bytes: &[u8], names: bool, dates: bool) -> Option<Vec<u8>> {
     use quick_xml::reader::NsReader;
     use quick_xml::writer::Writer;
 
-    const WML: &[u8] = b"http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-    const WML_STRICT: &[u8] = b"http://purl.oclc.org/ooxml/wordprocessingml/main";
-    const W15: &[u8] = b"http://schemas.microsoft.com/office/word/2012/wordml";
-    // UTF-16 (or other wide encodings) would pass through unread.
-    if bytes.contains(&0) || bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
+    const WML: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const WML_STRICT: &str = "http://purl.oclc.org/ooxml/wordprocessingml/main";
+    const W15: &str = "http://schemas.microsoft.com/office/word/2012/wordml";
+    // BOM-less UTF-16 and other wide encodings can look like UTF-8 with NULs. Keep
+    // them on the safe model-reconstruction path instead of relying on parser failure.
+    if !bytes.starts_with(&[0xFF, 0xFE]) && !bytes.starts_with(&[0xFE, 0xFF]) && bytes.contains(&0) {
         return None;
     }
-    let ns_is = |r: &ResolveResult, ns: &[u8]| matches!(r, ResolveResult::Bound(n) if n.as_ref() == ns);
+    let decoded = decode_xml(bytes)?;
+    let rewritten = utf8_declaration(&decoded)?;
+    let bytes = rewritten.as_bytes();
+    let ns_is =
+        |r: &ResolveResult, ns: &str| matches!(r, ResolveResult::Bound(n) if quick_xml::escape::unescape(n.as_ref()).is_ok_and(|value| value == ns));
     let wml = |r: &ResolveResult| ns_is(r, WML) || ns_is(r, WML_STRICT);
     let mut r = NsReader::from_reader(bytes);
+    r.resolver_mut().set_max_namespace_bindings(256);
     r.config_mut().check_end_names = false;
     let mut out = Writer::new(Vec::with_capacity(bytes.len()));
     let mut buf = Vec::new();
@@ -725,9 +731,9 @@ fn scrub_private(bytes: &[u8], names: bool, dates: bool) -> Option<Vec<u8>> {
         let (in_wml, in_w15) = (wml(&res), ns_is(&res, W15));
         let ev = match ev {
             Event::Eof => break,
-            Event::Start(ref e) | Event::Empty(ref e) if names && in_w15 && e.local_name().as_ref() == b"presenceInfo" => {
+            Event::Start(ref e) | Event::Empty(ref e) if names && in_w15 && e.local_name().as_ref() == "presenceInfo" => {
                 if matches!(ev, Event::Start(_)) {
-                    let end = e.name().as_ref().to_vec();
+                    let end = e.name().as_ref().to_owned();
                     r.read_to_end_into(QName(&end), &mut skip).ok()?;
                     skip.clear();
                 }
@@ -741,30 +747,18 @@ fn scrub_private(bytes: &[u8], names: bool, dates: bool) -> Option<Vec<u8>> {
                     let (ares, local) = r.resolver_mut().resolve_attribute(a.key);
                     // An unprefixed attribute of a WordprocessingML element is read as its own.
                     let wml_attr = wml(&ares) || (matches!(ares, ResolveResult::Unbound) && in_wml);
-                    let value: Option<&[u8]> = match local.as_ref() {
-                        b"author" if names && (wml_attr || ns_is(&ares, W15)) => Some(super::ANONYMOUS_AUTHOR.as_bytes()),
-                        b"initials" if names && wml_attr => Some(super::ANONYMOUS_INITIALS.as_bytes()),
-                        b"date" if dates && wml_attr => None,
-                        b"dateUtc" if dates => None,
+                    let value: Option<&str> = match local.as_ref() {
+                        "author" if names && (wml_attr || ns_is(&ares, W15)) => Some(super::ANONYMOUS_AUTHOR),
+                        "initials" if names && wml_attr => Some(super::ANONYMOUS_INITIALS),
+                        "date" if dates && wml_attr => None,
+                        "dateUtc" if dates => None,
                         _ => {
                             // `push_attribute` writes the value as given, inside `"`. In well-formed
                             // markup the raw value holds no `<` and every `&` starts a valid
                             // reference, so only a `"` from a single-quoted value needs escaping;
                             // references such as `&#10;` stay as written (#3872).
                             let raw = a.value.as_ref();
-                            let value = if raw.contains(&b'"') {
-                                let mut v = Vec::with_capacity(raw.len() + 8);
-                                for &c in raw {
-                                    if c == b'"' {
-                                        v.extend_from_slice(b"&quot;");
-                                    } else {
-                                        v.push(c);
-                                    }
-                                }
-                                Cow::Owned(v)
-                            } else {
-                                Cow::Borrowed(raw)
-                            };
+                            let value = if raw.contains('"') { Cow::Owned(raw.replace('"', "&quot;")) } else { Cow::Borrowed(raw) };
                             el.push_attribute(Attribute { key: a.key, value });
                             continue;
                         }
@@ -780,6 +774,62 @@ fn scrub_private(bytes: &[u8], names: bool, dates: bool) -> Option<Vec<u8>> {
         out.write_event(ev).ok()?;
     }
     Some(out.into_inner())
+}
+
+/// Decode the XML encodings this reader accepts before quick-xml validates UTF-8 input.
+fn decode_xml(bytes: &[u8]) -> Option<String> {
+    if let Some(text) = crate::xml::utf16_to_utf8(bytes) {
+        return Some(text);
+    }
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(bytes);
+    let prefix = bytes.get(..bytes.len().min(256))?;
+    if let Some(declaration_end) = prefix.windows(2).position(|pair| pair == b"?>").map(|end| end + 2)
+        && let Some(declaration) = prefix.get(..declaration_end).and_then(|value| std::str::from_utf8(value).ok())
+        && let Some(tail) = declaration.strip_prefix("<?xml")
+        && tail.starts_with(char::is_whitespace)
+        && let Some(end) = declaration.find("?>")
+    {
+        let declaration = &declaration[..end];
+        if let Some(start) = declaration.find("encoding") {
+            let after_equals = declaration[start + "encoding".len()..].trim_start().strip_prefix('=')?.trim_start();
+            let quote = after_equals.chars().next()?;
+            if !matches!(quote, '\'' | '"') {
+                return None;
+            }
+            let label_end = after_equals[quote.len_utf8()..].find(quote)? + quote.len_utf8();
+            let label = &after_equals[quote.len_utf8()..label_end];
+            let encoding = encoding_rs::Encoding::for_label(label.as_bytes())?;
+            let (decoded, had_errors) = encoding.decode_without_bom_handling(bytes);
+            return (!had_errors).then(|| decoded.into_owned());
+        }
+    }
+    std::str::from_utf8(bytes).ok().map(str::to_owned)
+}
+
+/// Rewrites an XML declaration's encoding after a part has been transcoded to UTF-8.
+/// XML declarations are optional; malformed ones fail closed with the enclosing privacy scrub.
+fn utf8_declaration(text: &str) -> Option<String> {
+    let Some(tail) = text.strip_prefix("<?xml") else { return Some(text.to_string()) };
+    if !tail.starts_with(char::is_whitespace) {
+        return Some(text.to_string());
+    }
+    let end = text.find("?>")?;
+    let declaration = &text[..end];
+    let Some(start) = declaration.find("encoding") else { return Some(text.to_string()) };
+    let after_name = &declaration[start + "encoding".len()..];
+    let after_space = after_name.trim_start();
+    let after_equals = after_space.strip_prefix('=')?.trim_start();
+    let quote = after_equals.chars().next()?;
+    if !matches!(quote, '\'' | '"') {
+        return None;
+    }
+    let value_start = declaration.len() - after_equals.len() + quote.len_utf8();
+    let value_end = declaration[value_start..].find(quote)? + value_start;
+    let mut rewritten = String::with_capacity(text.len());
+    rewritten.push_str(&text[..value_start]);
+    rewritten.push_str("UTF-8");
+    rewritten.push_str(&text[value_end..]);
+    Some(rewritten)
 }
 
 /// A VML `style` with the object's size, rotation and flips, and its offset when it floats
@@ -850,6 +900,55 @@ fn valid_part_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utf16_privacy_scrub_normalizes_namespaces_and_encoding() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-16"?><root xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordm&#108;"><w15:presenceInfo w15:userId="private"/><keep>opaque</keep></root>"#;
+        let utf16: Vec<u8> = [0xFF, 0xFE].into_iter().chain(xml.encode_utf16().flat_map(u16::to_le_bytes)).collect();
+        let scrubbed = scrub_private(&utf16, true, false).expect("UTF-16 XML can be scrubbed");
+        let scrubbed = String::from_utf8(scrubbed).expect("rewritten output is UTF-8");
+        assert!(scrubbed.contains("encoding=\"UTF-8\""), "{scrubbed}");
+        assert!(!scrubbed.contains("presenceInfo") && !scrubbed.contains("private"), "{scrubbed}");
+        assert!(scrubbed.contains("opaque"), "{scrubbed}");
+    }
+
+    #[test]
+    fn windows_1252_glossary_is_decoded_before_privacy_scrubbing() {
+        let xml = b"<?xml version=\"1.0\" encoding=\"windows-1252\"?><root><w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:author=\"Private Name\"/><keep>caf\xe9</keep></root>";
+        let decoded = decode_xml(xml).expect("declared Windows-1252 XML decodes");
+        assert!(decoded.contains("café"), "{decoded}");
+        let scrubbed = scrub_private(xml, true, false).expect("declared Windows-1252 XML can be scrubbed");
+        let scrubbed = String::from_utf8(scrubbed).expect("rewritten output is UTF-8");
+        assert!(scrubbed.contains("encoding=\"UTF-8\""), "{scrubbed}");
+        assert!(!scrubbed.contains("Private Name"), "{scrubbed}");
+        assert!(scrubbed.contains("café"), "{scrubbed}");
+    }
+
+    #[test]
+    fn declared_windows_1252_is_used_when_bytes_are_also_valid_utf8() {
+        let xml = b"<?xml version=\"1.0\" encoding=\"windows-1252\"?><root><keep>\xc3\xa9</keep></root>";
+        let decoded = decode_xml(xml).expect("declared Windows-1252 XML decodes");
+        assert!(decoded.contains("Ã©"), "{decoded}");
+        assert!(!decoded.contains("é</keep>"), "{decoded}");
+    }
+
+    #[test]
+    fn bomless_utf16_glossary_uses_model_fallback() {
+        let xml: Vec<u8> = "<root><keep>opaque</keep></root>".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert!(scrub_private(&xml, true, false).is_none());
+    }
+
+    #[test]
+    fn glossary_privacy_scrub_allows_129_namespace_bindings() {
+        let declarations: String = (0..129).map(|i| format!(" xmlns:p{i}=\"urn:p{i}\"")).collect();
+        let xml = format!(
+            "<root xmlns:w15=\"http://schemas.microsoft.com/office/word/2012/wordml\"{declarations}><keep>opaque</keep><w15:presenceInfo/></root>"
+        );
+        let scrubbed = scrub_private(xml.as_bytes(), true, false).expect("129 namespace bindings can be scrubbed");
+        let scrubbed = String::from_utf8(scrubbed).expect("rewritten output is UTF-8");
+        assert!(scrubbed.contains("opaque"), "{scrubbed}");
+        assert!(!scrubbed.contains("presenceInfo"), "{scrubbed}");
+    }
 
     #[test]
     fn charts_cut_to_the_limits_on_save_say_so_once() {
