@@ -169,6 +169,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 - 2026-11-04: RTF import skips the declared Unicode fallback count even when it exceeds eight fallback units, so longer ANSI alternatives do not leak into the document text. Skipping stays bounded by the available input and ends at a group boundary. Readiness estimates unchanged.
 - 2026-11-05: Linux: a WordCraft started by an AppImage app no longer takes that app's file for its own (#5653). The AppImage runtime's `APPIMAGE`, `APPDIR`, `ARGV0` and `OWD` pass to whatever the app starts, so an installed WordCraft opened through `xdg-open` saw another program's `APPIMAGE`, and its self-update replaced that program's file. The app now starts over without those variables unless its executable is under `APPDIR`, so the update goes through the package or plain file it really is. Should starting over fail, the self-update is off in that window and Help › Check for Updates says why. Readiness estimates unchanged.
+- 2026-11-05: A Word template (`.dotx`, `.dotm`, `.dot`) opened from the file manager, the command line or the Finder starts a new, untitled document based on it, as Word's default verb for a template does (#3433). It opened the template itself, so Save (and AutoSave) wrote over it. The new document is attached to the template and Save asks where to write; a protected template asks for its password and still starts a new document. File › Open and a file dropped on the window still open a template itself, to edit it.
 - 2026-10-28: Ink replay, eraser picking, lasso selection and arrow-candidate discovery reuse the paragraph prefixes they have already scanned (#3614). Page item order, stroke geometry and saved data retain their behavior. This narrows the stability work; ink import fidelity, native pen input and broader corpus qualification remain open.
 - 2026-10-29: Page drawing finds text-box warps without rescanning the paragraph for every box (#3614). Only requested offsets are indexed, and each paragraph walk stops after its last requested character. Original Linux discovery, complete display-output and CLI/MCP save/reopen controls; native Word comparison untested. Readiness estimates unchanged.
 - 2026-10-28: Protected typing boundary lookup counts preceding objects once and indexes editable permission IDs (#3614); caret movement and enforcement policy are unchanged. Existing mutation and protection checks retain their costs; this does not close the broader performance gap.
@@ -820,6 +821,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 ## Revision history
 
 > 2026-11-05 · Linux self-update ignores another program's AppImage variables (#5653); recorded in the progress log, readiness unchanged.
+> 2026-11-05 · A template opened from the file manager starts a new document instead of being edited and saved over (#3433); recorded in the progress log, readiness unchanged.
 >
 > 2026-11-03 · Arabic dialogs read right to left (rtl::Table); recorded in the progress log, readiness unchanged.
 >
