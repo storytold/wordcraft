@@ -7,7 +7,10 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
-[dependencies]
+# The socket transport is native only; the web build uses the cabinet's host
+# bridge. Keeping the dependencies off wasm lets the crate stay a workspace
+# member without pulling tokio/getrandom into the web check.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 wordcraft-collab = { path = "../collab" }
 wordcraft-collab-client = { path = "../collab-client" }
 serde_json = { workspace = true }

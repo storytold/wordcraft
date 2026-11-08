@@ -8,6 +8,8 @@
 //!
 //! The task never logs the token and never puts it in the URL (ADR-0008).
 
+#![cfg(not(target_arch = "wasm32"))]
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
