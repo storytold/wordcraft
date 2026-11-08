@@ -1,3 +1,4 @@
+use super::properties::{new_property_value, text_result};
 use super::*;
 
 fn fields(s: &Session) -> Vec<(String, String)> {
@@ -446,7 +447,7 @@ fn update_fields_apply_the_capitalization_switches() {
             "seventh",
             "Seventh",
             "BUDGET",
-            "new \\* Upper"
+            "new * Upper"
         ]
     );
 }
@@ -548,6 +549,18 @@ fn caption_for_an_object_in_a_cell_stays_in_the_cell() {
     assert_eq!(texts.get(1).map(String::as_str), Some("Figure 1"), "{texts:?}");
 }
 
+/// A backslash in a quoted field argument makes the next character literal, so `\*` there is an
+/// asterisk and not the `\* Upper` switch (Word shows `x * Upper` for `TITLE "x \* Upper"`).
+#[test]
+fn quoted_field_argument_backslash_escapes() {
+    for (instr, shown) in [(r#"TITLE "x \* Upper""#, "x * Upper"), (r#"TITLE "x \\* Upper""#, r"x \* Upper"), (r#"TITLE "a \"b\" c""#, r#"a "b" c"#)]
+    {
+        let value = new_property_value(instr).unwrap();
+        assert_eq!(value, shown, "{instr}");
+        assert_eq!(text_result(instr, value), shown, "{instr}");
+    }
+    assert_eq!(text_result(r#"TITLE "ab" \* Upper"#, new_property_value(r#"TITLE "ab" \* Upper"#).unwrap()), "AB");
+}
 /// Output (PDF, print, page images) shows the body's unlocked SEQ, STYLEREF and REF fields with
 /// their fresh results, as Word fills them in when it prints or exports even with "Update fields
 /// before printing" off; NUMWORDS and a locked field keep their stored results there, and the
