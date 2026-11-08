@@ -77,6 +77,43 @@ fn a_shape_dropped_just_after_a_page_break_in_a_paragraph_stays_there() {
     assert!((o.rect.x - 100.0).abs() < 0.5 && (o.rect.y - 80.0).abs() < 0.5, "where it was dropped: {:?}", o.rect);
 }
 
+/// Leaf #107: wrapping can leave the anchor alone to the left and put the text on the right
+/// of the same physical row. A drop after the break must still stay on the destination page.
+#[test]
+fn a_picture_with_wrap_spacing_dropped_after_a_leading_break_stays_there() {
+    for gap in [0.0, 6.0, 12.0] {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Source\nDestination"));
+        s.run("caret.set", &json!({"pos": Pos::body(1, 0)})).unwrap();
+        s.run("layout.break", &json!({"kind": "page"})).unwrap();
+        s.run("caret.set", &json!({"pos": Pos::body(0, 0)})).unwrap();
+        let data = super::super::insert::base64_encode(&png(20, 10));
+        s.run("insert.picture", &json!({"data": data, "width": 120})).unwrap();
+        s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+        super::select::with_float(&mut s, |f| {
+            f.dist = gap;
+            f.dist_top = gap;
+            f.dist_bottom = gap;
+        })
+        .unwrap();
+        let before = serde_json::to_value(&s.doc.body).unwrap();
+        let depth = s.undo_depth();
+        s.run("arrange.bounds", &json!({"page": 1, "x": 100, "y": 110})).unwrap();
+        let hit = object_area(&mut s);
+        assert_eq!(hit.page, 1, "gap={gap}: {hit:?}");
+        assert!((hit.rect.x - 100.0).abs() < 0.5 && (hit.rect.y - 110.0).abs() < 0.5, "gap={gap}: {:?}", hit.rect);
+        assert_eq!(s.undo_depth(), depth + 1);
+        let after = serde_json::to_value(&s.doc.body).unwrap();
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(serde_json::to_value(&s.doc.body).unwrap(), before);
+        s.run("edit.redo", &json!({})).unwrap();
+        assert_eq!(serde_json::to_value(&s.doc.body).unwrap(), after);
+        let mut copy = Session::new(wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap());
+        let saved = object_area(&mut copy);
+        assert_eq!(saved.page, 1, "DOCX gap={gap}: {saved:?}");
+        assert!((saved.rect.x - hit.rect.x).abs() < 0.5 && (saved.rect.y - hit.rect.y).abs() < 0.5, "saved at the drop position");
+    }
+}
+
 /// What a click and a handle or body drag do in the editor (#142, #82): hit-test the object,
 /// select it, then resize and move it with `arrange.bounds`.
 fn click_resize_and_drag(insert: &str, params: Value) {
