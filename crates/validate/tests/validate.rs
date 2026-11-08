@@ -2229,34 +2229,36 @@ fn note_pr_listing_in_sectpr_does_not_satisfy() {
 /// document content", and batch b6 tested exactly this shape — a
 /// referenced ordinary footnote with unlisted separators: Word for the
 /// web opened it clean and rendered the footnote with its separator.
-/// So even the required case is a Warning now; necessity no longer
-/// grades severity.
+/// Batch Mac-2 then ran the same shape in Word for Mac: the file
+/// rendered a screenful and wedged Word unresponsive. Verdicts combine
+/// by union across consumers, so every case is an Error now; necessity
+/// never graded severity.
 #[test]
-fn note_pr_listing_warning_even_when_required() {
+fn note_pr_listing_error_even_when_required() {
     let mut d = special_footnotes_doc();
     d.set_document(r#"<w:p><w:r><w:footnoteReference w:id="2"/></w:r></w:p>"#);
     let report = validate(&d);
     let sep = report.findings.iter().find(|f| f.rule == "NOTE-PR-LISTING" && f.message.contains("type separator")).expect("separator finding");
-    assert_eq!(sep.severity, Severity::Warning, "{:?}", report.findings);
+    assert_eq!(sep.severity, Severity::Error, "{:?}", report.findings);
     let cont =
         report.findings.iter().find(|f| f.rule == "NOTE-PR-LISTING" && f.message.contains("continuationSeparator")).expect("continuation finding");
-    assert_eq!(cont.severity, Severity::Warning, "{:?}", report.findings);
+    assert_eq!(cont.severity, Severity::Error, "{:?}", report.findings);
 }
 
 /// An ordinary definition nobody references does not make the
 /// separator required either: unreferenced content renders nothing.
 #[test]
-fn note_pr_listing_warning_when_ordinary_unreferenced() {
+fn note_pr_listing_error_when_ordinary_unreferenced() {
     let d = special_footnotes_doc();
     let report = validate(&d);
     let f = assert_finding(&report, "NOTE-PR-LISTING", Some("word/footnotes.xml"));
-    assert_eq!(f.severity, Severity::Warning, "{:?}", report.findings);
+    assert_eq!(f.severity, Severity::Error, "{:?}", report.findings);
 }
 
 /// The same unlisted special note with NO ordinary note of its kind —
-/// nothing requires it — is a Warning.
+/// nothing requires it — is an Error under the same union verdict.
 #[test]
-fn note_pr_listing_warning_when_unused() {
+fn note_pr_listing_error_when_unused() {
     let mut d = Doc::minimal();
     d.add_with_override(
         "word/footnotes.xml",
@@ -2267,7 +2269,7 @@ fn note_pr_listing_warning_when_unused() {
     );
     let report = validate(&d);
     let f = assert_finding(&report, "NOTE-PR-LISTING", Some("word/footnotes.xml"));
-    assert_eq!(f.severity, Severity::Warning);
+    assert_eq!(f.severity, Severity::Error);
 }
 
 /// A malformed notes part leaves the definition side unknown: the
@@ -2474,7 +2476,8 @@ fn move_range_count_compat_boundary() {
     let report = validate(&counted_doc(&move_body(32_751, 0), true));
     assert!(!has(&report, "MOVE-RANGE-COUNT"), "{:?}", report.findings);
     let report = validate(&counted_doc(&move_body(16_376, 16_376), true));
-    assert_finding(&report, "MOVE-RANGE-COUNT", None);
+    let f = assert_finding(&report, "MOVE-RANGE-COUNT", None);
+    assert_eq!(f.severity, Severity::Error, "{:?}", report.findings);
 }
 
 /// The flag is an on/off setting: an explicit w:val of false or 0 leaves

@@ -419,8 +419,11 @@ pub(crate) const PERM_COUNT: RuleSpec = RuleSpec { id: "PERM-COUNT", severity: S
 /// settings carries `w:uiCompat97to2003`. MS-OI29500 Part 1 §17.13.5.24
 /// note (a). Batch b6 (Word for the web, 2026-11-07): 32,752 move ranges
 /// (65,504 start markers) with the flag opened clean, so neither counting
-/// unit is enforced there — Warning, as for BOOKMARK-COUNT.
-pub(crate) const MOVE_RANGE_COUNT: RuleSpec = RuleSpec { id: "MOVE-RANGE-COUNT", severity: Severity::Warning, evidence: Evidence::MsDocumented };
+/// unit is enforced there. Batch Mac-2 (Word for Mac, 2026-11-08): the
+/// same fixture wedged Word — no window, sustained full CPU, killed at
+/// the 3-minute observation limit. Verdicts combine by union across
+/// consumers, so the rule reports at Error.
+pub(crate) const MOVE_RANGE_COUNT: RuleSpec = RuleSpec { id: "MOVE-RANGE-COUNT", severity: Severity::Error, evidence: Evidence::Observed };
 /// `NOTE-PR-LISTING`: a special footnote/endnote (separator,
 /// continuationSeparator, continuationNotice) whose id no `footnotePr` /
 /// `endnotePr` lists. ECMA-376 Part 1 §17.11.9: it "shall not be loaded",
@@ -429,8 +432,12 @@ pub(crate) const MOVE_RANGE_COUNT: RuleSpec = RuleSpec { id: "MOVE-RANGE-COUNT",
 /// Batch b6 (Word for the web, 2026-11-07): an unlisted separator set
 /// opened clean and the footnote rendered with its separator, so the
 /// load failure the standard describes is not observed there and every
-/// case reports at Warning. Desktop behaviour unrecorded.
-pub(crate) const NOTE_PR_LISTING: RuleSpec = RuleSpec { id: "NOTE-PR-LISTING", severity: Severity::Warning, evidence: Evidence::ByConstruction };
+/// case reports at Warning there. Batch Mac-2 (Word for Mac,
+/// 2026-11-08): the same fixture rendered its first screenful and then
+/// left Word unresponsive — killed at the 3-minute observation limit,
+/// the footnote check uncompletable. Verdicts combine by union across
+/// consumers, so the rule reports at Error.
+pub(crate) const NOTE_PR_LISTING: RuleSpec = RuleSpec { id: "NOTE-PR-LISTING", severity: Severity::Error, evidence: Evidence::Observed };
 /// `NOTE-PR-DANGLING`: a `footnotePr` / `endnotePr` listing names a note
 /// id that no footnote/endnote defines. Nothing documents Word loading or
 /// rejecting such a listing; it is dead configuration, reported at the
@@ -1069,9 +1076,10 @@ fn append_content_parts(content_parts: &mut Vec<(String, Vec<String>)>, total: &
 /// Severity: the cited text makes the finding a conformance claim
 /// ("shall not be loaded"; non-conformant when the note "is required
 /// by the document content"). Batch b6 found Word for the web loading
-/// and rendering an unlisted separator set normally, so no case is
-/// graded above Warning on this evidence; necessity is not graded
-/// per note.
+/// and rendering an unlisted separator set normally, but batch Mac-2
+/// found Word for Mac wedging on the same shape; verdicts combine by
+/// union across consumers, so every case is graded Error, and
+/// necessity is not graded per note.
 fn check_note_pr(facts: &scan::StoryFacts, xml: &XmlScan, acc: &mut Acc) {
     acc.ran("NOTE-PR-LISTING");
     acc.ran("NOTE-PR-DANGLING");
@@ -1101,8 +1109,8 @@ fn check_note_pr(facts: &scan::StoryFacts, xml: &XmlScan, acc: &mut Acc) {
                 let (note, pr) = if *is_end { ("endnote", "endnotePr") } else { ("footnote", "footnotePr") };
                 acc.add_graded(
                     "NOTE-PR-LISTING",
-                    Severity::Warning,
-                    Evidence::ByConstruction,
+                    Severity::Error,
+                    Evidence::Observed,
                     Some(part.clone()),
                     format!(
                         "the {note} with id {id} in {part} has type {t} but is not listed in any {pr}; ECMA-376 says such a note shall not be loaded"
