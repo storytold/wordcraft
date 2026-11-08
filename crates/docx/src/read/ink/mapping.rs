@@ -205,6 +205,7 @@ impl Mapping {
     }
 }
 
+/// Associates a MathML variable with one channel, rejecting conflicting bindings.
 fn bind_variable<'a>(vars: &mut HashMap<&'a str, usize>, name: &'a str, channel: usize) -> Option<()> {
     if name.is_empty() || name.len() > 128 || vars.insert(name, channel).is_some_and(|prior| prior != channel) {
         return None;
@@ -444,6 +445,7 @@ impl Expr {
     }
 }
 
+/// Parses a bounded numeric MathML constant and charges work for its text content.
 fn constant(el: &El, work: &mut usize) -> Option<f64> {
     use crate::xml::Node;
     let mut text = String::new();

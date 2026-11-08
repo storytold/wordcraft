@@ -1,6 +1,7 @@
 use super::super::{json, run};
 use super::{DisplayOptions, INK, Session, blue_pixels, document_with_ink, document_with_ink_bytes};
 
+/// XML versions, encodings, and namespace aliases render like canonical InkML in screen and PDF.
 #[test]
 fn native_ink_xml_versions_encodings_and_namespace_aliases_match_screen_and_pdf_controls() {
     let mut alias = INK.replace("xmlns=", "xmlns:筆=").replace("/InkML", "/Ink&#77;L");

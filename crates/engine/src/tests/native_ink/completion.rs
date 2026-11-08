@@ -1,5 +1,6 @@
 use super::{ADVANCED_INK, DisplayOptions, Draw, Rgb, Session, document_with_ink, outline_bounds, page_display};
 
+/// Collects mask-ink draws recursively through display-list wrappers.
 fn masks(draws: &[Draw]) -> Vec<&Draw> {
     draws
         .iter()
@@ -12,6 +13,7 @@ fn masks(draws: &[Draw]) -> Vec<&Draw> {
         .collect()
 }
 
+/// Finds the rotation center enclosing a native outline in the display list.
 fn rotation(draws: &[Draw]) -> Option<(f32, f32)> {
     draws.iter().find_map(|draw| match draw {
         Draw::Rotated { cx, cy, items, .. } if outline_bounds(items).is_some() => Some((*cx, *cy)),
@@ -21,6 +23,7 @@ fn rotation(draws: &[Draw]) -> Option<(f32, f32)> {
     })
 }
 
+/// Mask pens blend with prior strokes and preserve the expected PDF composite in every placement.
 #[test]
 fn mask_pen_blends_over_existing_ink_in_every_placement_and_pdf() {
     for placement in ["inline", "floating", "group", "canvas", "direct"] {
@@ -64,6 +67,7 @@ fn mask_pen_blends_over_existing_ink_in_every_placement_and_pdf() {
     }
 }
 
+/// Displaced inner ink retains its own rotation center after resize and repeated save/reopen.
 #[test]
 fn displaced_inner_ink_rotates_about_its_own_center_after_resize_and_roundtrip() {
     let ink = ADVANCED_INK.replace("#2563EB", "#FF0000");

@@ -1,6 +1,7 @@
 use super::super::{json, run};
 use super::{DisplayOptions, INK, Session, blue_pixels, document_with_ink};
 
+/// Builds projected and explicit-coordinate controls for discrete InkML mappings.
 fn examples() -> Vec<(String, String)> {
     let xy = r#"<channel name="X" units="pt"/><channel name="Y" units="pt"/>"#;
     let control = format!(r#"<traceFormat>{xy}<channel name="S" type="boolean"/></traceFormat><trace>0 0 T,50 0 T,100 100 F,50 25 T,0 25 T</trace>"#);
@@ -22,6 +23,7 @@ fn examples() -> Vec<(String, String)> {
     vec![(forward, control.clone()), (reverse, control), (integer_reverse, integer_control.clone()), (table_reverse, integer_control)]
 }
 
+/// Discrete mappings match explicit controls without inventing geometry or losing source data.
 #[test]
 fn native_ink_discrete_maps_match_controls_and_preserve_contact_and_originals() {
     for (body, control) in examples() {

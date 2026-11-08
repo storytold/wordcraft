@@ -6,6 +6,7 @@ use std::{
 };
 use wordcraft_doc::{Block, Document, InlineObject, graphic::GraphicKind};
 
+/// Reads every named entry from a synthetic DOCX zip into a map.
 fn unpack(bytes: &[u8]) -> BTreeMap<String, Vec<u8>> {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
     (0..zip.len())
@@ -18,6 +19,7 @@ fn unpack(bytes: &[u8]) -> BTreeMap<String, Vec<u8>> {
         .collect()
 }
 
+/// Writes the named entries back into a synthetic DOCX zip.
 fn pack(files: BTreeMap<String, Vec<u8>>) -> Vec<u8> {
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for (name, bytes) in files {
@@ -27,6 +29,7 @@ fn pack(files: BTreeMap<String, Vec<u8>>) -> Vec<u8> {
     zip.finish().unwrap().into_inner()
 }
 
+/// Replaces a required string in one UTF-8 package part.
 fn replace(files: &mut BTreeMap<String, Vec<u8>>, part: &str, from: &str, to: &str) {
     let text = String::from_utf8(files[part].clone()).unwrap();
     assert!(text.contains(from), "{part}: missing {from}");
@@ -42,6 +45,7 @@ fn preview() -> Vec<u8> {
     bytes.into_inner()
 }
 
+/// Adds an independent image fallback to an InkML fixture at the requested placement.
 fn with_fallback(placement: &str, ink: &str) -> Vec<u8> {
     let mut files = unpack(&document_with_ink(placement, ink));
     let choice = r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk" Requires="wpi">"#;
@@ -73,7 +77,9 @@ fn with_fallback(placement: &str, ink: &str) -> Vec<u8> {
     pack(files)
 }
 
+/// Collects document graphics recursively through grouped objects.
 fn graphics(doc: &Document) -> Vec<&wordcraft_doc::graphic::Graphic> {
+    /// Visits a graphic or its grouped children and appends each graphic found.
     fn collect<'a>(o: &'a InlineObject, out: &mut Vec<&'a wordcraft_doc::graphic::Graphic>) {
         match o {
             InlineObject::Graphic { graphic, .. } => out.push(graphic),
@@ -246,8 +252,10 @@ fn zero_pressure_native_ink_stays_nonpainting_on_odt_and_ott_export() {
     }
 }
 
+/// Hidden grouped and canvas ink remains hidden while visible sibling shapes export normally.
 #[test]
 fn hidden_native_ink_members_stay_hidden_on_export() {
+    /// Finds any retained shape, including shapes nested in groups.
     fn has_shape(objects: &[InlineObject]) -> bool {
         objects.iter().any(|o| match o {
             InlineObject::Shape { .. } => true,
@@ -278,6 +286,7 @@ fn hidden_native_ink_members_stay_hidden_on_export() {
     }
 }
 
+/// Ink with no visible strokes does not restore its fallback picture in ODT/OTT exports.
 #[test]
 fn invisible_native_ink_does_not_resurrect_its_picture_on_export() {
     let ink = r#"<ink xmlns="http://www.w3.org/2003/InkML"><trace type="penUp">0 0,10 10</trace></ink>"#;
@@ -288,6 +297,7 @@ fn invisible_native_ink_does_not_resurrect_its_picture_on_export() {
     }
 }
 
+/// Finds a retained preview image recursively and verifies its stored pixels.
 fn has_preview(doc: &Document, objects: &[InlineObject]) -> bool {
     objects.iter().any(|o| match o {
         InlineObject::Image { media, w, h, .. } => *w > 0.0 && *h > 0.0 && doc.media.get(media).is_some_and(|data| data.as_slice() == preview()),
@@ -296,6 +306,7 @@ fn has_preview(doc: &Document, objects: &[InlineObject]) -> bool {
     })
 }
 
+/// Independent preview images survive JSON adoption and ODT/OTT export with vector ink.
 #[test]
 fn native_ink_picture_fallback_survives_odt_and_ott_export() {
     for placement in ["inline", "floating", "group", "canvas"] {

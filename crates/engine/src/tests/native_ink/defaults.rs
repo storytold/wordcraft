@@ -1,6 +1,7 @@
 use super::super::{json, run};
 use super::{DisplayOptions, INK, Session, blue_pixels, document_with_ink};
 
+/// Omitted channel units behave like their defaults through edits, JSON recovery, and DOCX saves.
 #[test]
 fn native_ink_omitted_channel_units_match_explicit_defaults_after_edits_and_saves() {
     let channels = r#"<traceFormat><channel name="X"/><channel name="Y"/><channel name="F"/></traceFormat>"#;

@@ -154,6 +154,7 @@ fn indices(value: Option<&str>, work: &mut usize) -> Option<Vec<usize>> {
 mod tests {
     use super::indices;
 
+    /// Selector input is charged before parsing; refused reservations spend no work.
     #[test]
     fn selector_bytes_are_reserved_before_scanning() {
         let selector = format!("{}1", "0".repeat(64));

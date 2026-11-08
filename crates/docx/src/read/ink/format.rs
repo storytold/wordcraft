@@ -180,6 +180,7 @@ fn add(format: &mut Format, el: &El) -> Option<()> {
     Some(())
 }
 
+/// Returns explicit channel units or the InkML default for its channel name.
 fn channel_units(el: &El) -> Option<&str> {
     el.attr("units").or_else(|| match el.attr("name")? {
         "X" | "Y" | "Z" | "W" | "BW" | "BH" => Some("mm"),
@@ -190,6 +191,7 @@ fn channel_units(el: &El) -> Option<&str> {
     })
 }
 
+/// Computes a supported channel's unit conversion and offset, or rejects unsupported scaling.
 fn visual_scale(el: &El, name: &str, min: Option<f64>, max: Option<f64>, sign: f64) -> Option<(Option<f64>, f64)> {
     let length = matches!(name, "X" | "Y" | "W" | "BW" | "BH");
     if !length && name != "OR" {

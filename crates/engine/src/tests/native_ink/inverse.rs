@@ -1,6 +1,7 @@
 use super::super::{json, run};
 use super::{DisplayOptions, INK, Session, blue_pixels, document_with_ink, page_display, strokes};
 
+/// Supported inverse mappings match explicit coordinates across edits and repeated saves.
 #[test]
 fn inverse_native_ink_matches_explicit_coordinates_and_survives_edits_and_saves() {
     let maps = [

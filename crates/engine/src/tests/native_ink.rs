@@ -30,6 +30,7 @@ fn document_with_ink(placement: &str, ink: &str) -> Vec<u8> {
     document_with_ink_bytes(placement, ink.as_bytes())
 }
 
+/// Packages arbitrary InkML bytes into a synthetic DOCX drawing at the requested placement.
 fn document_with_ink_bytes(placement: &str, ink: &[u8]) -> Vec<u8> {
     let inner = placement.ends_with("-inner");
     let placement = placement.strip_suffix("-inner").unwrap_or(placement);
@@ -132,10 +133,12 @@ fn native_ink_opens_renders_hides_and_exports_as_pdf_vectors() {
     }
 }
 
+/// Unreadable direct InkML keeps a visible placeholder with stable dimensions after saving.
 #[test]
 fn unreadable_direct_native_ink_has_a_visible_sized_placeholder() {
     let doc = crate::io::open_bytes("ink.docx", &document_with_ink("direct", "malformed")).unwrap();
     let mut session = Session::new(doc);
+    /// Finds an empty-media image placeholder through nested display-list wrappers.
     fn placeholder(draws: &[Draw]) -> Option<(f32, f32, f32, f32)> {
         draws.iter().find_map(|draw| match draw {
             Draw::Image { rect, media, .. } if media.is_empty() => Some((rect.x, rect.y, rect.w, rect.h)),

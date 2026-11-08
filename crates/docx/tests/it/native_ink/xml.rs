@@ -1,5 +1,6 @@
 use super::*;
 
+/// Replaces the package's InkML part while preserving all other DOCX entries.
 fn replace_xml(bytes: &[u8], ink: &[u8]) -> Vec<u8> {
     let mut files = unzip(bytes);
     files.insert("word/ink/ink1.xml".into(), ink.to_vec());
@@ -7,6 +8,7 @@ fn replace_xml(bytes: &[u8], ink: &[u8]) -> Vec<u8> {
     zip(&entries)
 }
 
+/// Encodes XML as BOM-marked UTF-16 in the requested byte order.
 fn utf16(text: &str, little: bool) -> Vec<u8> {
     let mut bytes = if little { vec![0xff, 0xfe] } else { vec![0xfe, 0xff] };
     for unit in text.encode_utf16() {
@@ -15,6 +17,7 @@ fn utf16(text: &str, little: bool) -> Vec<u8> {
     bytes
 }
 
+/// Supported XML versions and UTF encodings preserve InkML vectors and exact source bytes.
 #[test]
 fn native_ink_xml_versions_and_encodings_preserve_vectors_and_original_bytes() {
     let text = format!("<?xml version=\"1.1\" encoding=\"UTF-8\"?>{}", INK_XML.replace("/InkML", "/Ink&#77;L").replace("<trace ", "<trace\u{85}"));
@@ -44,6 +47,7 @@ fn native_ink_xml_versions_and_encodings_preserve_vectors_and_original_bytes() {
     }
 }
 
+/// Malformed or unsupported XML qualification retains fallback images and the original payload.
 #[test]
 fn native_ink_xml_qualification_failures_keep_fallbacks_and_source_bytes() {
     let variants = [

@@ -28,6 +28,7 @@ pub(super) fn groups<'a>(mapping: &'a Mapping, work: &mut usize) -> Option<Vec<V
     Some(groups.into_iter().map(|(_, maps)| maps).collect())
 }
 
+/// Flattens nested products into ordered components within depth, size, and work limits.
 fn flatten<'a>(mapping: &'a Mapping, out: &mut Vec<&'a Mapping>, work: &mut usize, depth: usize) -> Option<()> {
     spend(work, 1)?;
     if depth > MAX_DEPTH {

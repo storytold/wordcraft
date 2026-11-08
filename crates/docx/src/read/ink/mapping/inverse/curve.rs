@@ -50,6 +50,7 @@ impl Curve {
         Some(if (a - value).abs() < (b - value).abs() { left } else { right })
     }
 
+    /// Evaluates the spline at `x`, applying relative output and finite-value checks.
     fn value(&self, x: f64, work: &mut usize) -> Option<f64> {
         let y = self.spline.at(x, work)?.first().copied()? + if self.relative { x } else { 0.0 };
         bounded(y).then_some(y)

@@ -1,6 +1,7 @@
 use super::{DisplayOptions, Draw, Rgb, Session, document_with_ink, page_display};
 use wordcraft_doc::graphic::PathSeg;
 
+/// Repeated stationary samples paint identically to a single tap across placements and resizes.
 #[test]
 fn stationary_native_samples_paint_like_one_tap_in_all_placements() {
     use std::sync::Arc;
@@ -59,6 +60,7 @@ fn stationary_native_samples_paint_like_one_tap_in_all_placements() {
     }
 }
 
+/// Finds the first native-ink stroke width recursively in a display list.
 fn ink_width(draws: &[Draw]) -> Option<f32> {
     draws.iter().find_map(|draw| match draw {
         Draw::NativeInk { width, .. } => Some(*width),
@@ -68,6 +70,7 @@ fn ink_width(draws: &[Draw]) -> Option<f32> {
     })
 }
 
+/// Finds the bounds of the first mask-ink path recursively in a display list.
 fn mask_bounds(draws: &[Draw]) -> Option<[f32; 4]> {
     draws.iter().find_map(|draw| match draw {
         Draw::MaskInk { segs, .. } => {
@@ -102,6 +105,7 @@ pub(super) fn tap_and_line(draws: &[Draw], out: &mut Vec<(f32, f32)>) {
     }
 }
 
+/// Circular taps and pen strokes keep matching dimensions through fitting and repeated saves.
 #[test]
 fn resized_taps_match_their_pen_strokes_in_all_placements_and_after_saves() {
     use std::sync::Arc;
@@ -150,6 +154,7 @@ fn resized_taps_match_their_pen_strokes_in_all_placements_and_after_saves() {
     }
 }
 
+/// Thin and wide imported pen widths reach screen and PDF output without legacy clamping.
 #[test]
 fn native_pen_widths_reach_screen_and_pdf_without_legacy_clamping() {
     for width in [0.01f32, 400.0] {
@@ -170,6 +175,7 @@ fn native_pen_widths_reach_screen_and_pdf_without_legacy_clamping() {
     }
 }
 
+/// Black and binary-mask pens keep the expected contrast on dark pages in every placement.
 #[test]
 fn black_and_binary_mask_pens_remain_visible_or_neutral_on_dark_pages() {
     for placement in ["inline", "floating", "group", "canvas", "direct"] {

@@ -239,6 +239,7 @@ fn native_ink_decoding_and_copying_share_the_document_ink_budget() {
 }
 
 #[test]
+/// Repeated direct placements share the file budget and retain sized placeholders when exhausted.
 fn direct_native_ink_copy_budget_keeps_sized_placeholders() {
     let ink = format!(r#"<ink xmlns="http://www.w3.org/2003/InkML"><trace>{}</trace></ink>"#, "0 0,1 1,".repeat(30_000));
     let body = r#"<w:p><w:r><w:contentPart r:id="rInk"/></w:r></w:p>"#.repeat(65);
