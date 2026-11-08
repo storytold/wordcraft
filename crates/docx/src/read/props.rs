@@ -5,16 +5,17 @@ use std::collections::HashMap;
 use wordcraft_doc::para::cap_alt;
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, HeightRule, Highlight, LineSpacing, NumRef,
-    ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign, VMerge,
-    VertAlign,
+    ParaProps, ParagraphTextDirection, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextAlignment, TextColor,
+    TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{
     Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, NotePos, NoteProps, NoteRestart, NumFormat,
     PageVAlign, SectionProps, SectionStart,
 };
 
+use super::MAX_FONT_NAME;
 use super::drawing_color::adjust_lum;
-use crate::units::{int, line_multiple, measure, on_off, tw, u32_of};
+use crate::units::{int, line_multiple, measure, on_off, tw, tw_i16, tw_u16, u32_of};
 
 /// A text frame (`w:framePr` without a drop cap, ECMA-376 §17.3.1.11), sizes and offsets in
 /// points (clamped), names kept as OOXML writes them.
@@ -33,6 +34,7 @@ fn text_frame(k: &El) -> wordcraft_doc::props::TextFrame {
         h_anchor: word("w:hAnchor", &["text", "margin", "page"], "page"),
         v_anchor: word("w:vAnchor", &["text", "margin", "page"], "page"),
         wrap: word("w:wrap", &["around", "auto", "notBeside", "none", "tight", "through"], "auto"),
+        anchor_lock: k.attr("w:anchorLock").map(|v| !matches!(v.trim(), "0" | "false" | "off" | "False" | "FALSE")),
         h_space: len("w:hSpace").unwrap_or(0.0).max(0.0),
         v_space: len("w:vSpace").unwrap_or(0.0).max(0.0),
     }
@@ -144,6 +146,29 @@ pub(crate) fn resolve_level_only(sheet: &wordcraft_doc::styles::StyleSheet, p: &
     }
 }
 
+/// A `w:rFonts` value as the document keeps it: `None` when it names no family, else its leading
+/// families up to [`MAX_FONT_NAME`] bytes, cut at a `;` so no name is split. A LibreOffice file
+/// names its Latin font as a semicolon-separated fallback list, and a real list names a few
+/// families; a longer value is corrupt or hostile, and every piece of text drawn in it would pay
+/// for its whole length as the list is classified and resolved. Keeping the leading families keeps
+/// the family such a list picks, and the rest of the value is dropped like `w:cs`/`w:eastAsia`
+/// drop an over-long name.
+fn bounded_font_list(v: &str) -> Option<String> {
+    if v.len() <= MAX_FONT_NAME {
+        return (!v.is_empty()).then(|| v.to_string());
+    }
+    let mut end = 0usize;
+    for part in v.split_inclusive(';') {
+        let next = end + part.len();
+        if next > MAX_FONT_NAME {
+            break;
+        }
+        end = next;
+    }
+    let kept = v.get(..end)?.trim_end_matches(';');
+    (!kept.is_empty()).then(|| kept.to_string())
+}
+
 impl PropCtx {
     pub fn style_id(&self, id: &str) -> String {
         self.alias.get(id).cloned().unwrap_or_else(|| id.to_string())
@@ -172,8 +197,9 @@ impl PropCtx {
     }
 
     /// The theme colour `e` names in `attr` (`w:themeColor`, `w:themeFill`), through the colour
-    /// scheme mapping, with its `tint` and `shade` (hex bytes) applied to the HSL luminance as
-    /// Word does. When given it supersedes the fixed colour; `None` leaves the fixed one.
+    /// scheme mapping, with its `tint` or else its `shade` (hex bytes) applied to the HSL
+    /// luminance as Word does: given both, Word applies the tint alone (MS-OI29500 17.3.2.6 b,
+    /// 17.4.32 a). When given it supersedes the fixed colour; `None` leaves the fixed one.
     fn theme_color(&self, e: &El, attr: &str, tint: &str, shade: &str) -> Option<Rgb> {
         let logical = |i: usize| self.color_map.and_then(|m| m.get(i).copied()).unwrap_or(i);
         let slot = match e.attr(attr)? {
@@ -199,8 +225,7 @@ impl PropCtx {
         let byte = |a: &str| e.attr(a).and_then(|v| u8::from_str_radix(v.trim(), 16).ok()).map(|v| f64::from(v) / 255.0);
         if let Some(t) = byte(tint) {
             c = adjust_lum(c, |l| l * t + (1.0 - t));
-        }
-        if let Some(s) = byte(shade) {
+        } else if let Some(s) = byte(shade) {
             c = adjust_lum(c, |l| l * s);
         }
         Some(c)
@@ -208,6 +233,10 @@ impl PropCtx {
 
     /// `w:shd`: its fill colour (a theme fill first), or a solid pattern's colour.
     pub fn shd_fill(&self, e: &El) -> Option<Rgb> {
+        // `nil` counts as no shading, whatever fill it carries (MS-OI29500 17.18.78).
+        if e.attr("w:val") == Some("nil") {
+            return None;
+        }
         if let Some(c) = self.theme_color(e, "w:themeFill", "w:themeFillTint", "w:themeFillShade") {
             return Some(c);
         }
@@ -221,6 +250,8 @@ impl PropCtx {
         shd_fill(e)
     }
 
+    /// The character properties `e` (a `w:rPr`) sets: direct formatting, plus the fonts, size,
+    /// weight and posture of the complex-script and East Asian text beside them.
     pub fn rpr(&self, e: &El) -> CharProps {
         let mut c = CharProps::default();
         for k in e.els() {
@@ -229,7 +260,11 @@ impl PropCtx {
                 "w:rFonts" => {
                     // A theme font supersedes the fixed font beside it (`w:asciiTheme` over
                     // `w:ascii`, `w:hAnsiTheme` over `w:hAnsi`).
-                    let named = |a: &str| k.attr(a).filter(|f| !f.is_empty()).map(str::to_string);
+                    // A LibreOffice file names the Latin font as a semicolon-separated fallback
+                    // list. Names are bounded like `w:cs`/`w:eastAsia` below: a longer one is
+                    // corrupt or hostile, and every piece of text drawn in it would pay for its
+                    // whole length as the list is classified (see `bounded_font_list`).
+                    let named = |a: &str| k.attr(a).and_then(bounded_font_list);
                     let themed = |a: &str| k.attr(a).and_then(|t| self.theme_font(t));
                     // `w:eastAsia` and `w:cs` name fonts for other scripts and stay in `font_ea` /
                     // `font_cs`: `w:hint` only picks between them for ambiguous characters, never for
@@ -250,6 +285,7 @@ impl PropCtx {
                 "w:cs" => c.cs = Some(on_off(k)),
                 "w:caps" => c.caps = Some(on_off(k)),
                 "w:smallCaps" => c.small_caps = Some(on_off(k)),
+                "w:em" => c.emphasis = Some(k.attr("w:val").map(wordcraft_doc::props::EmphasisMark::from_ooxml).unwrap_or_default()),
                 "w:strike" => c.strike = Some(on_off(k)),
                 "w:dstrike" => c.double_strike = Some(on_off(k)),
                 "w:outline" => c.outline = Some(on_off(k)),
@@ -282,7 +318,7 @@ impl PropCtx {
                     c.underline_color =
                         self.theme_color(k, "w:themeColor", "w:themeTint", "w:themeShade").or_else(|| k.attr("w:color").and_then(Rgb::parse));
                 }
-                "w:bdr" => c.border = Some(border(k)),
+                "w:bdr" => c.border = Some(self.border(k)),
                 "w:shd" => c.shading = self.shd_fill(k),
                 "w:vertAlign" => {
                     c.vert_align = k.attr("w:val").map(|v| match v {
@@ -328,9 +364,11 @@ impl PropCtx {
                 "w:widowControl" => p.widow_control = Some(on_off(k)),
                 "w:contextualSpacing" => p.contextual_spacing = Some(on_off(k)),
                 "w:mirrorIndents" => p.mirror_indents = Some(on_off(k)),
+                "w:adjustRightInd" => p.adjust_right_indent = Some(on_off(k)),
                 "w:suppressAutoHyphens" => p.suppress_hyphens = Some(on_off(k)),
                 "w:suppressLineNumbers" => p.suppress_line_numbers = Some(on_off(k)),
                 "w:bidi" => p.bidi = Some(on_off(k)),
+                "w:textDirection" => p.text_direction = k.attr("w:val").and_then(ParagraphTextDirection::from_ooxml),
                 "w:kinsoku" => p.kinsoku = Some(on_off(k)),
                 "w:wordWrap" => p.word_wrap = Some(on_off(k)),
                 "w:overflowPunct" => p.overflow_punct = Some(on_off(k)),
@@ -338,6 +376,7 @@ impl PropCtx {
                 "w:autoSpaceDE" => p.auto_space_de = Some(on_off(k)),
                 "w:autoSpaceDN" => p.auto_space_dn = Some(on_off(k)),
                 "w:snapToGrid" => p.snap_to_grid = Some(on_off(k)),
+                "w:textAlignment" => p.text_alignment = k.attr("w:val").and_then(TextAlignment::from_ooxml),
                 "w:framePr" => {
                     if let Some(kind @ ("drop" | "margin")) = k.attr("w:dropCap") {
                         p.drop_cap = Some(k.attr("w:lines").and_then(u32_of).unwrap_or(3).clamp(1, 10) as u8);
@@ -361,17 +400,17 @@ impl PropCtx {
                         (None, None) => {}
                     }
                 }
-                "w:pBdr" => p.borders = Some(borders(k)),
+                "w:pBdr" => p.borders = Some(self.borders(k)),
                 "w:shd" => p.shading = self.shd_fill(k),
                 "w:tabs" => {
                     let tabs: Vec<TabStop> = k.children("w:tab").take(64).filter_map(tab_stop).collect();
                     p.tabs = Some(tabs);
                 }
                 "w:spacing" => {
-                    if let Some(v) = tw(k, "w:before") {
+                    if let Some(v) = tw_u16(k, "w:before") {
                         p.space_before = Some(v.max(0.0));
                     }
-                    if let Some(v) = tw(k, "w:after") {
+                    if let Some(v) = tw_u16(k, "w:after") {
                         p.space_after = Some(v.max(0.0));
                     }
                     // HTML-style automatic spacing; "0" switches an inherited one off.
@@ -394,15 +433,15 @@ impl PropCtx {
                     }
                 }
                 "w:ind" => {
-                    if let Some(v) = tw(k, "w:left").or_else(|| tw(k, "w:start")) {
+                    if let Some(v) = tw_i16(k, "w:left").or_else(|| tw_i16(k, "w:start")) {
                         p.indent_left = Some(v);
                     }
-                    if let Some(v) = tw(k, "w:right").or_else(|| tw(k, "w:end")) {
+                    if let Some(v) = tw_i16(k, "w:right").or_else(|| tw_i16(k, "w:end")) {
                         p.indent_right = Some(v);
                     }
-                    if let Some(v) = tw(k, "w:hanging") {
+                    if let Some(v) = tw_i16(k, "w:hanging") {
                         p.indent_first = Some(-v);
-                    } else if let Some(v) = tw(k, "w:firstLine") {
+                    } else if let Some(v) = tw_i16(k, "w:firstLine") {
                         p.indent_first = Some(v);
                     }
                     // Character units (hundredths of a character), which win when non-zero.
@@ -476,29 +515,32 @@ fn shd_fill(e: &El) -> Option<Rgb> {
     None
 }
 
-pub fn border(e: &El) -> Border {
-    let style = BorderStyle::from_ooxml(e.attr("w:val").unwrap_or("single"));
-    let width = e.attr("w:sz").and_then(|v| measure(v, 8.0)).unwrap_or(0.5).clamp(0.0, 12.0);
-    let color = e.attr("w:color").and_then(Rgb::parse);
-    let space = e.attr("w:space").and_then(|v| measure(v, 1.0)).unwrap_or(0.0).clamp(0.0, 31.0);
-    Border { style, width, color, space }
-}
-
-/// `w:pBdr`, `w:tblBorders`, `w:tcBorders`, `w:pgBorders`.
-pub fn borders(e: &El) -> Borders {
-    let mut b = Borders::default();
-    for k in e.els() {
-        match k.local() {
-            "top" => b.top = Some(border(k)),
-            "left" | "start" => b.left = Some(border(k)),
-            "bottom" => b.bottom = Some(border(k)),
-            "right" | "end" => b.right = Some(border(k)),
-            "between" | "insideH" => b.between = Some(border(k)),
-            "insideV" => b.inside_v = Some(border(k)),
-            _ => {}
-        }
+impl PropCtx {
+    /// One border (`CT_Border`); its theme colour supersedes `w:color`, as for text.
+    pub fn border(&self, e: &El) -> Border {
+        let style = BorderStyle::from_ooxml(e.attr("w:val").unwrap_or("single"));
+        let width = e.attr("w:sz").and_then(|v| measure(v, 8.0)).unwrap_or(0.5).clamp(0.0, 12.0);
+        let color = self.theme_color(e, "w:themeColor", "w:themeTint", "w:themeShade").or_else(|| e.attr("w:color").and_then(Rgb::parse));
+        let space = e.attr("w:space").and_then(|v| measure(v, 1.0)).unwrap_or(0.0).clamp(0.0, 31.0);
+        Border { style, width, color, space }
     }
-    b
+
+    /// `w:pBdr`, `w:tblBorders`, `w:tcBorders`, `w:pgBorders`.
+    pub fn borders(&self, e: &El) -> Borders {
+        let mut b = Borders::default();
+        for k in e.els() {
+            match k.local() {
+                "top" => b.top = Some(self.border(k)),
+                "left" | "start" => b.left = Some(self.border(k)),
+                "bottom" => b.bottom = Some(self.border(k)),
+                "right" | "end" => b.right = Some(self.border(k)),
+                "between" | "insideH" => b.between = Some(self.border(k)),
+                "insideV" => b.inside_v = Some(self.border(k)),
+                _ => {}
+            }
+        }
+        b
+    }
 }
 
 /// Margins element (`w:tblCellMar`, `w:tcMar`) → [top, left, bottom, right].
@@ -532,7 +574,7 @@ impl PropCtx {
                 }
                 "w:jc" => t.align = k.attr("w:val").map(align),
                 "w:tblInd" => t.indent = tw(k, "w:w"),
-                "w:tblBorders" => t.borders = Some(borders(k)),
+                "w:tblBorders" => t.borders = Some(self.borders(k)),
                 "w:shd" => t.shading = self.shd_fill(k),
                 "w:tblLayout" => t.fixed = k.attr("w:type") == Some("fixed"),
                 "w:bidiVisual" => t.bidi_visual = on_off(k),
@@ -638,7 +680,7 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
             "w:gridSpan" => c.span = k.attr("w:val").and_then(u32_of).unwrap_or(1).clamp(1, 63),
             "w:hMerge" => hcont = k.attr("w:val") != Some("restart"),
             "w:vMerge" => c.vmerge = if k.attr("w:val") == Some("restart") { VMerge::Restart } else { VMerge::Continue },
-            "w:tcBorders" => c.borders = Some(borders(k)),
+            "w:tcBorders" => c.borders = Some(pc.borders(k)),
             "w:shd" => c.shading = pc.shd_fill(k),
             "w:noWrap" => c.no_wrap = on_off(k),
             "w:hideMark" => c.hide_mark = on_off(k),
@@ -675,7 +717,7 @@ pub struct HfRef {
 }
 
 /// `w:sectPr` (header/footer references are returned for the caller to resolve).
-pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
+pub fn sectpr(pc: &PropCtx, e: &El) -> (SectionProps, Vec<HfRef>) {
     let mut s = SectionProps::default();
     let mut refs = Vec::new();
     for k in e.els() {
@@ -754,7 +796,25 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
                 if let Some(f) = k.attr("w:fmt") {
                     s.page_num_format = NumFormat::from_ooxml(f);
                 }
+                s.chapter_style = k.attr("w:chapStyle").and_then(u32_of).filter(|v| *v <= u8::MAX as u32).map(|v| v as u8);
+                s.chapter_sep = k.attr("w:chapSep").and_then(wordcraft_doc::section::ChapterSep::from_ooxml);
                 s.page_num_set = s.page_num_start.is_none() && s.page_num_format == NumFormat::Decimal;
+            }
+            "w:paperSrc" => {
+                let tray = |name| {
+                    let value = k.attr(name)?.trim();
+                    let digits = value.strip_prefix('+').unwrap_or(value);
+                    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+                        return None;
+                    }
+                    u32_of(digits).filter(|v| *v <= u16::MAX as u32).map(|v| v as u16)
+                };
+                s.paper_src_first = tray("w:first");
+                s.paper_src_other = tray("w:other");
+            }
+            "w:noEndnote" => s.no_endnote = Some(on_off(k)),
+            "w15:footnoteColumns" => {
+                s.footnote_columns = k.attr("w:val").and_then(u32_of).filter(|v| (1..=45).contains(v));
             }
             "w:lnNumType" => {
                 let mut l = LineNumbering::default();
@@ -780,7 +840,7 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
                     _ => PageVAlign::Top,
                 }
             }
-            "w:pgBorders" => s.page_borders = Some(borders(k)),
+            "w:pgBorders" => s.page_borders = Some(pc.borders(k)),
             "w:docGrid" => {
                 let mut g = DocGrid::default();
                 if let Some(t) = k.attr("w:type").and_then(DocGridType::from_ooxml) {
