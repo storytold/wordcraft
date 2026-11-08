@@ -911,3 +911,66 @@ fn an_adopted_notes_text_box_gets_a_story_of_its_own() {
     assert_eq!(part.kind, PartKind::TextBox);
     assert!(matches!(part.blocks.first().map(|b| &**b), Some(Block::Para(p)) if p.text == "their box"));
 }
+
+#[test]
+fn adopted_style_tracked_revisions_remap_offset_and_author() {
+    use crate::props::{CharProps, ParaProps, PropChange};
+    use crate::styles::{Style, StyleKind};
+    use crate::{Revision, RevisionKind};
+
+    for keep in [false, true] {
+        let mut ours = doc(&["ours"]);
+        ours.revisions.push(Revision { author: "Alice".into(), kind: RevisionKind::Format, date: "2026-01-01T00:00:00Z".into(), move_name: None });
+
+        let mut theirs = doc(&["theirs"]);
+        theirs.revisions.push(Revision { author: "Bob".into(), kind: RevisionKind::Format, date: "2026-02-02T00:00:00Z".into(), move_name: None });
+
+        Arc::make_mut(&mut theirs.styles).upsert(Style {
+            id: "CustomCallout".into(),
+            name: "Custom Callout".into(),
+            kind: StyleKind::Paragraph,
+            para: ParaProps { fmt_change: PropChange::boxed(0, ParaProps { space_after: Some(12.0), ..Default::default() }), ..Default::default() },
+            chr: CharProps { fmt_change: PropChange::boxed(0, CharProps { bold: Some(true), ..Default::default() }), ..Default::default() },
+            ..Default::default()
+        });
+
+        ours.adopt_with(theirs, keep);
+
+        let adopted_style = ours.styles.get("CustomCallout").expect("adopted style must exist");
+        let para_chg = adopted_style.para.fmt_change.as_ref().expect("para fmt_change preserved");
+        let chr_chg = adopted_style.chr.fmt_change.as_ref().expect("chr fmt_change preserved");
+
+        // Offset 0 in theirs must now point to rev 1 in ours ("Bob"), not rev 0 ("Alice").
+        assert_eq!(para_chg.rev, 1);
+        assert_eq!(chr_chg.rev, 1);
+        assert_eq!(ours.revisions[para_chg.rev as usize].author, "Bob");
+        assert_eq!(ours.revisions[chr_chg.rev as usize].author, "Bob");
+    }
+}
+
+#[test]
+fn adopted_style_out_of_range_revisions_are_dropped() {
+    use crate::props::{CharProps, ParaProps, PropChange};
+    use crate::styles::{Style, StyleKind};
+    use crate::{Revision, RevisionKind};
+
+    let mut ours = doc(&["ours"]);
+    ours.revisions.push(Revision { author: "Alice".into(), kind: RevisionKind::Format, date: "2026-01-01T00:00:00Z".into(), move_name: None });
+
+    let mut theirs = doc(&["theirs"]);
+    // Theirs has NO revisions, so rev 0 or 99 is out of range.
+    Arc::make_mut(&mut theirs.styles).upsert(Style {
+        id: "InvalidRevStyle".into(),
+        name: "Invalid Rev Style".into(),
+        kind: StyleKind::Paragraph,
+        para: ParaProps { fmt_change: PropChange::boxed(99, ParaProps::default()), ..Default::default() },
+        chr: CharProps { fmt_change: PropChange::boxed(0, CharProps::default()), ..Default::default() },
+        ..Default::default()
+    });
+
+    ours.adopt(theirs);
+
+    let adopted = ours.styles.get("InvalidRevStyle").expect("adopted style exists");
+    assert!(adopted.para.fmt_change.is_none(), "out-of-range para revision must be dropped");
+    assert!(adopted.chr.fmt_change.is_none(), "out-of-range chr revision must be dropped");
+}

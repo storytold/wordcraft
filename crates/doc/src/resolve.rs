@@ -339,10 +339,13 @@ impl StyleSheet {
                     sp.tabs = Some(merged);
                 }
                 pp.overlay(&sp);
-                cp.overlay(&s.chr);
+                let mut sc = s.chr.clone();
+                sc.fmt_change = None;
+                cp.overlay(&sc);
             }
         }
         pp.style = None;
+        cp.fmt_change = None;
         (pp, cp)
     }
 
@@ -367,14 +370,17 @@ impl StyleSheet {
             if let Some(cs) = run_style {
                 for s in self.chain(cs) {
                     if s.kind == StyleKind::Character || s.kind == StyleKind::Paragraph {
-                        cp.overlay(&s.chr);
+                        let mut sc = s.chr.clone();
+                        sc.fmt_change = None;
+                        cp.overlay(&sc);
                     }
                 }
             }
+            cp.fmt_change = None;
             cp
         };
         let mut with = self.default_chr.clone();
-        with.overlay(&CharProps { style: None, ..table.clone() });
+        with.overlay(&CharProps { style: None, fmt_change: None, ..table.clone() });
         diff_patch(&chain(with), &chain(self.default_chr.clone()))
     }
 
@@ -423,18 +429,21 @@ impl StyleSheet {
     pub fn resolve_char_in(&self, para_style: Option<&str>, table: Option<&CharProps>, c: &CharProps) -> ResolvedChar {
         let mut defaults = self.default_chr.clone();
         if let Some(t) = table {
-            defaults.overlay(&CharProps { style: None, ..t.clone() });
+            defaults.overlay(&CharProps { style: None, fmt_change: None, ..t.clone() });
         }
         let (_, mut cp) = self.para_style_props_over(para_style.unwrap_or("Normal"), ParaProps::default(), defaults);
         if let Some(cs) = c.style.as_deref() {
             for s in self.chain(cs) {
                 if s.kind == StyleKind::Character || s.kind == StyleKind::Paragraph {
-                    cp.overlay(&s.chr);
+                    let mut sc = s.chr.clone();
+                    sc.fmt_change = None;
+                    cp.overlay(&sc);
                 }
             }
         }
         // Only a character itself has a symbol font of its own (`w:sym`); a style never gives one.
         cp.sym_font = None;
+        cp.fmt_change = None;
         let mut direct = c.clone();
         direct.style = None;
         cp.overlay(&direct);
@@ -625,5 +634,30 @@ mod tests {
         let back: ResolvedPara = serde_json::from_value(v).unwrap();
         assert_eq!(back.padding, [0.0; 4]);
         assert_eq!(back, ResolvedPara { padding: [0.0; 4], ..p });
+    }
+
+    #[test]
+    fn style_formatting_change_does_not_mark_resolved_runs_as_revised() {
+        let mut s = StyleSheet::builtin();
+        if let Some(h) = s.get_mut("Heading1") {
+            h.chr.fmt_change = crate::props::PropChange::boxed(3, CharProps { bold: Some(true), ..Default::default() });
+        }
+        if let Some(st) = s.get_mut("Strong") {
+            st.chr.fmt_change = crate::props::PropChange::boxed(4, CharProps { italic: Some(true), ..Default::default() });
+        }
+
+        // Paragraph style Heading 1 run with no direct change:
+        let run_heading = s.resolve_char(Some("Heading1"), &CharProps::default());
+        assert_eq!(run_heading.fmt, None, "style definition fmt_change must not propagate to run rc.fmt");
+
+        // Character style Strong run with no direct change:
+        let run_strong = s.resolve_char(None, &CharProps { style: Some("Strong".into()), ..Default::default() });
+        assert_eq!(run_strong.fmt, None, "character style definition fmt_change must not propagate to run rc.fmt");
+
+        // Run that has its OWN direct formatting change:
+        let direct =
+            CharProps { style: Some("Strong".into()), fmt_change: crate::props::PropChange::boxed(7, CharProps::default()), ..Default::default() };
+        let run_direct = s.resolve_char(Some("Heading1"), &direct);
+        assert_eq!(run_direct.fmt, Some(7), "direct formatting fmt_change on run must be preserved");
     }
 }

@@ -2969,6 +2969,30 @@ fn a_tracked_paragraph_mark_shows_in_its_authors_colour() {
 }
 
 #[test]
+fn a_style_definition_format_change_does_not_draw_change_bars_on_every_line() {
+    let mut d = Document::from_text("Title Heading\nBody text");
+    d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.style = Some("Heading1".into());
+    d.revisions.push(wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Format,
+        author: "Editor".into(),
+        date: String::new(),
+        move_name: None,
+    });
+    // Style definition has a tracked change, but neither paragraph nor runs have direct changes.
+    if let Some(h) = std::sync::Arc::make_mut(&mut d.styles).get_mut("Heading1") {
+        h.chr.fmt_change = wordcraft_doc::props::PropChange::boxed(0, wordcraft_doc::props::CharProps { bold: Some(false), ..Default::default() });
+    }
+    let l = lay(&d);
+    let opts = display::DisplayOptions { markup: true, ..Default::default() };
+    let items = display::page_display(&d, &l.pages[0], &opts);
+    let change_bars: Vec<_> = items
+        .iter()
+        .filter(|i| matches!(i, display::Draw::Line { color, width, .. } if *color == display::CHANGE_BAR && (*width - 0.75).abs() < 1e-4))
+        .collect();
+    assert!(change_bars.is_empty(), "a style definition revision must not draw change bars on every line using that style");
+}
+
+#[test]
 fn section_breaks_show_with_formatting_marks() {
     use wordcraft_doc::section::{SectionProps, SectionStart};
     // Two sections: "One" ends the first; the second starts as `start`.

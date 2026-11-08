@@ -813,13 +813,16 @@ impl StyleSheet {
         let mut out = TableStyleProps::default();
         for s in chain {
             out.para.overlay(&s.para);
-            out.chr.overlay(&s.chr);
+            let mut sc = s.chr.clone();
+            sc.fmt_change = None;
+            out.chr.overlay(&sc);
             if let Some(t) = &s.table {
                 out.parts.overlay(t);
             }
         }
         out.para.style = None;
         out.chr.style = None;
+        out.chr.fmt_change = None;
         Some(out)
     }
     /// Add or replace a style.

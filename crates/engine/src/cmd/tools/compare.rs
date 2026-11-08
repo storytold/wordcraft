@@ -180,8 +180,10 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                     let mut updated = new_st.clone();
                     updated.para.fmt_change = None;
                     updated.chr.fmt_change = None;
-                    let needs_remapping =
-                        updated.para.numbering.is_some_and(|n| n.num != 0 && (old_st.para.numbering != Some(n) || s.doc.numbering.num(n.num).is_none()));
+                    let needs_remapping = updated
+                        .para
+                        .numbering
+                        .is_some_and(|n| n.num != 0 && (old_st.para.numbering != Some(n) || s.doc.numbering.num(n.num).is_none()));
                     if needs_remapping {
                         remap_style_numbering(&mut s.doc, &revised, &mut updated.para.numbering, &mut num_map, &mut abs_map);
                     }
