@@ -430,9 +430,9 @@ fn refusal(s: &mut Session, e: wordcraft_engine::CmdError, markup: bool, page: O
         Ok(json) => {
             let mut text = String::new();
             for line in report_lines(&json) {
-                text += &format!("wordcraft-cli: {line}\n");
+                text += &format!("wordcraft-cli: {}\n", escape_peer(&line));
             }
-            text + &json.to_string()
+            text + &json_line_safe(&json.to_string())
         }
         Err(e) => format!("wordcraft-cli: strict: refused, and the report could not be made: {e}"),
     })
@@ -803,6 +803,21 @@ fn escape_peer(s: &str) -> String {
                 out.extend(c.escape_unicode())
             }
             c => out.push(c),
+        }
+    }
+    out
+}
+
+/// A JSON line safe to print: serde escapes control characters below U+0020 but not C1 controls,
+/// line separators or bidi overrides, which a crafted file could put in a report. They become
+/// `\uXXXX` escapes, so the line parses to the same value and can't drive or spoof a terminal.
+fn json_line_safe(json: &str) -> String {
+    let mut out = String::with_capacity(json.len());
+    for c in json.chars() {
+        if c.is_control() || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}') {
+            out.push_str(&format!("\\u{:04x}", c as u32));
+        } else {
+            out.push(c);
         }
     }
     out

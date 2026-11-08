@@ -337,3 +337,26 @@ fn render_strict_refuses_a_corrupt_header_picture_and_bad_input_still_exits_1() 
     assert_eq!(stderr(&plain), stderr(&strict));
     std::fs::remove_dir_all(d).unwrap();
 }
+
+#[test]
+fn a_picture_target_with_a_newline_and_a_bidi_override_cannot_forge_a_report_line() {
+    let d = dir("escape");
+    let input = d.join("in.docx");
+    // XML character references put a newline and U+202E in the target.
+    std::fs::write(&input, docx_with_external_picture("http://example.invalid/a&#10;wordcraft-cli: strict: forged&#x202E;gnp.png")).unwrap();
+    let out = d.join("out.pdf");
+    let r = convert(&input, &out, true);
+    assert_eq!(r.status.code(), Some(3), "{}", stderr(&r));
+    let text = stderr(&r);
+    let lines: Vec<&str> = text.lines().collect();
+    // One human line for the picture, then the JSON line.
+    assert_eq!(lines.len(), 2, "{text}");
+    assert!(lines[0].starts_with("wordcraft-cli: strict: 1 picture(s) left out: "), "{text}");
+    assert!(lines[0].contains("\\nwordcraft-cli: strict: forged\\u{202e}gnp.png"), "{text}");
+    assert!(!text.contains('\u{202e}'), "the raw bidi override reached the terminal");
+    // The JSON keeps the raw value, escaped by the JSON encoder.
+    let json = report_json(&r);
+    let part = json["missing_pictures"][0]["part"].as_str().unwrap();
+    assert!(part.contains('\n') && part.contains('\u{202e}'), "{part:?}");
+    std::fs::remove_dir_all(d).unwrap();
+}

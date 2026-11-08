@@ -372,3 +372,40 @@ fn hostile_chunks_never_panic() {
     let bytes = package(&format!(r#"<w:altChunk r:id="nope"/><w:altChunk/>{}"#, p("y")), None);
     assert_eq!(body_lines(&read(&bytes).unwrap()), ["y"]);
 }
+
+/// A DOCX whose only picture names a part the package lacks (`media/gone.png`), or sits outside it.
+fn inner_with_dropped_picture(external: bool) -> Vec<u8> {
+    let drawing = r#"<w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="254000" cy="254000"/><wp:docPr id="1" name="P"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="p"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdP"/></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="254000" cy="254000"/></a:xfrm><a:prstGeom prst="rect"/></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"#;
+    let doc = format!(r#"<w:document {NS}><w:body><w:p>{drawing}</w:p><w:sectPr/></w:body></w:document>"#);
+    let (target, mode) = if external { ("http://127.0.0.1:9/never-fetched.png", r#" TargetMode="External""#) } else { ("media/gone.png", "") };
+    let rels = format!(
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdP" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="{target}"{mode}/></Relationships>"#
+    );
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#;
+    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, bytes) in [
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", doc.as_bytes()),
+        ("word/_rels/document.xml.rels", rels.as_bytes()),
+    ] {
+        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        zw.write_all(bytes).unwrap();
+    }
+    zw.finish().unwrap().into_inner()
+}
+
+/// A picture the chunk's own reader dropped is the file's too (#6005), named by the chunk part.
+#[test]
+fn a_picture_dropped_inside_a_chunk_is_recorded_against_the_chunk() {
+    for (external, reason) in [(false, wordcraft_doc::MissingPictureReason::MissingPart), (true, wordcraft_doc::MissingPictureReason::ExternalTarget)]
+    {
+        let inner = inner_with_dropped_picture(external);
+        let bytes = package(&format!("{}{CHUNK}", p("Before")), Some(("docx", DOCX_MAIN, &inner)));
+        let d = read(&bytes).unwrap();
+        let got: Vec<(&str, &str, _)> = d.missing_pictures.list.iter().map(|m| (m.part.as_str(), m.story.as_str(), m.reason)).collect();
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].1, "word/afchunk.docx > word/document.xml");
+        assert_eq!(got[0].2, reason);
+    }
+}
