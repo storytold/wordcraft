@@ -2912,3 +2912,40 @@ fn the_author_is_left_out_when_personal_information_is_removed() {
     d.settings.remove_personal_info = true;
     assert!(!raw(&d).contains("Ada Writer"), "the creator stays out of the PDF");
 }
+
+/// A page with text and three pictures that don't draw: garbage, a PNG cut off in its data and a
+/// metafile that is only its header. The export is the same bytes as before strict export
+/// existed (#6005): each is a grey box, and the rest of the page is untouched.
+#[test]
+fn undecodable_pictures_keep_their_grey_box_bytes() {
+    let mut whole = png();
+    let cut = whole.len() - 24;
+    whole.truncate(cut);
+    let mut d = Document::new();
+    d.core.created = "2024-01-02T03:04:05Z".into();
+    let mut p = Paragraph::new();
+    for (bytes, ext) in [(b"this is not a picture at all".to_vec(), "bin"), (whole, "png"), (vec![1, 0, 0, 0, 88, 0, 0, 0], "emf")] {
+        let media = d.add_media(bytes, ext);
+        let n = p.len();
+        let obj = InlineObject::Image {
+            media,
+            w: 60.0,
+            h: 40.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        };
+        p.insert_object(n, obj, &CharProps::default()).unwrap();
+    }
+    d.body = vec![para_block(p)];
+    let opts = PdfOptions { compress: false, ..Default::default() };
+    let a = export(&d, &opts).unwrap();
+    assert_eq!(a, export(&d, &opts).unwrap(), "the export must be deterministic for the golden hash to mean anything");
+    let text = String::from_utf8_lossy(&a);
+    assert!(text.contains("0.8157 0.8157 0.8157") || text.contains(".81"), "the grey box is drawn: {}", text.len());
+    // FNV-1a of the file, recorded from the export before the shared decode check existed.
+    let h = a.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x100000001b3));
+    assert_eq!(h, 0x1edbbffab353d744, "{h:#x}");
+}

@@ -82,30 +82,14 @@ pub fn decode_pixmap_fx(bytes: &[u8], fx: wordcraft_doc::picfx::PicFx) -> Option
 
 /// [`decode_pixmap_fx`] with an explicit RGBA byte budget (a small one in tests).
 pub(crate) fn decode_pixmap_within(bytes: &[u8], fx: wordcraft_doc::picfx::PicFx, budget: u64) -> Option<Pixmap> {
-    use image::ImageDecoder;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_DECODE_SIDE);
-    limits.max_image_height = Some(MAX_DECODE_SIDE);
-    let reader = || {
-        let mut r = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
-        r.limits(limits.clone());
-        Some(r)
-    };
-    // The header gives the size and the decoder's pixel format (16-bit RGBA takes 8 bytes a pixel
-    // before its RGBA8 copy); refuse before the decoder (and the RGBA copy) allocate anything.
-    let (hw, hh, native) = {
-        let d = reader()?.into_decoder().ok()?;
-        let (w, h) = d.dimensions();
-        (w, h, u64::from(d.color_type().bytes_per_pixel()))
-    };
-    if !wordcraft_geom::decode_peak_fits(hw, hh, native, budget) {
+    // The decision to draw or not is the shared one (`wordcraft_geom::picture`), the one strict
+    // export checks with.
+    let decoded = wordcraft_geom::picture::decode_for_drawing(bytes, budget, MAX_DECODE_SIDE);
+    if let Err(wordcraft_geom::picture::Refusal::TooLarge { width, height }) = &decoded {
         // Logged once a picture: its refusal is cached with it (`pixmap_for`).
-        log::warn!(
-            "a {hw}×{hh} picture of {native} bytes a pixel needs more than {budget} bytes to decode: it is not drawn (in the text, a grey box takes its place)"
-        );
-        return None;
+        log::warn!("a {width}×{height} picture needs more than {budget} bytes to decode: it is not drawn (in the text, a grey box takes its place)");
     }
-    let mut img = reader()?.decode().ok()?.into_rgba8();
+    let mut img = decoded.ok()?.into_rgba8();
     let (w, h) = img.dimensions();
     fx.apply_rgba(&mut img);
     premul_pixmap(w, h, img.as_raw())
