@@ -1,6 +1,6 @@
 use super::arrange::{MAX_OFFSET, bounds, copy_to, move_with_text, unalign};
 use super::group::{add_object, group, ungroup};
-use super::picture::{adjust, adjust_media, clear_lum, crop, original_media, recolor, relook, remove_background, reset, size};
+use super::picture::{adjust, adjust_media, clear_lum, clear_outline, crop, original_media, recolor, relook, remove_background, reset, size};
 use super::select::{
     all_objects, alt_text, can_group, edit_obj, has_floating, has_group, has_movable, has_object, has_picture, has_shape, has_shape_or_canvas,
     has_sizable, obj_size, objects_list, selected, with_float, with_obj,
@@ -146,20 +146,24 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"path"?: string, "data"?: base64}"#)
         .when(has_picture),
         CommandSpec::new("picture.style", "Picture Styles", "Picture Format › Picture Styles", |s, v| {
-            // A style replaces the picture's style and border, as Word's gallery does (#2052).
+            // A style replaces the picture's style and border, as Word's gallery does (#2052),
+            // and an outline read from the file (#5564).
             let style = p::str(v, "style").unwrap_or("simpleFrame").to_string();
             relook(s, move |l| {
                 l.style = Some(style);
                 l.border = None;
-            })
+            })?;
+            clear_outline(s)
         })
         .params(r#"{"style": "simpleFrame|thickFrame|rounded|softEdge|shadow"} (replaces the picture's style and border)"#)
         .when(has_picture),
         CommandSpec::new("picture.border", "Picture Border", "Picture Format › Picture Styles", |s, v| {
             let c = p::str(v, "color").and_then(Rgb::parse).unwrap_or(Rgb::BLACK);
             let w = p::u64(v, "width").unwrap_or(4).clamp(1, 200) as u32;
-            // Replaces the picture's border, keeping its style (#2052).
-            relook(s, move |l| l.border = Some((c, w)))
+            // Replaces the picture's border, keeping its style (#2052), and an outline read from
+            // the file (#5564).
+            relook(s, move |l| l.border = Some((c, w)))?;
+            clear_outline(s)
         })
         .params(r#"{"color"?: "RRGGBB", "width"?: px} (replaces the picture's border)"#)
         .when(has_picture),

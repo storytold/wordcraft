@@ -614,6 +614,71 @@ fn picture_styles_borders_and_effects_replace_the_last_one() {
     assert_eq!((w, h), (84, 44), "the effect and a 2 px border, no thick frame from before the undo");
 }
 
+/// #5564: Picture Border and Picture Styles replace the vector outline a file gave the picture
+/// (`a:ln`) instead of drawing their frame under it; effects and corrections keep it.
+#[test]
+fn picture_border_and_style_replace_an_imported_outline() {
+    use wordcraft_doc::line_dash::{CompoundLine, LineDash};
+    let green = Rgb::parse("00A000").unwrap();
+    let outlined = || {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.picture", &json!({"data": super::super::insert::base64_encode(&png(80, 40))})).unwrap();
+        with_obj(&mut s, |o| {
+            if let InlineObject::Image { stroke, stroke_width, dash, compound, .. } = o {
+                *stroke = Some(green);
+                *stroke_width = 3.0;
+                *dash = LineDash::Dash;
+                *compound = CompoundLine::Double;
+            }
+        })
+        .unwrap();
+        s
+    };
+    let outline = |s: &Session| {
+        let (_, o) = selected(s).unwrap();
+        let InlineObject::Image { stroke, stroke_width, dash, compound, .. } = o else { panic!("a picture") };
+        (stroke, stroke_width, dash, compound)
+    };
+    let bitmap = |s: &Session| {
+        let (_, o) = selected(s).unwrap();
+        let InlineObject::Image { media, .. } = o else { panic!("a picture") };
+        image::load_from_memory(&s.doc.media.get(&media).cloned().unwrap()).unwrap().to_rgba8()
+    };
+    let none = (None, 0.0, LineDash::Solid, CompoundLine::Single);
+
+    // benandez's case: a red border on a picture with a green outline is the only frame.
+    let mut s = outlined();
+    assert_eq!(outline(&s), (Some(green), 3.0, LineDash::Dash, CompoundLine::Double));
+    s.run("picture.border", &json!({"color": "FF0000", "width": 2})).unwrap();
+    assert_eq!(outline(&s), none, "the border replaces the outline");
+    let img = bitmap(&s);
+    assert_eq!(img.dimensions(), (84, 44), "the 2 px border is drawn in");
+    assert_eq!(img.get_pixel(0, 0).0, [255, 0, 0, 255], "in red");
+    // One undo brings the outline back with the bitmap.
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(outline(&s), (Some(green), 3.0, LineDash::Dash, CompoundLine::Double));
+    assert_eq!(bitmap(&s).dimensions(), (80, 40));
+
+    // A style replaces it too.
+    let mut s = outlined();
+    s.run("picture.style", &json!({"style": "thickFrame"})).unwrap();
+    assert_eq!(outline(&s), none, "the style replaces the outline");
+    assert_ne!(bitmap(&s).dimensions(), (80, 40), "the frame is drawn in");
+
+    // Effects and corrections leave it alone.
+    for (id, v) in [("picture.effects", json!({"effect": "invert"})), ("picture.corrections", json!({"brightness": 10}))] {
+        let mut s = outlined();
+        s.run(id, &v).unwrap();
+        assert_eq!(outline(&s), (Some(green), 3.0, LineDash::Dash, CompoundLine::Double), "{id} keeps the outline");
+    }
+
+    // A picture with no outline is unaffected beyond its border.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.picture", &json!({"data": super::super::insert::base64_encode(&png(80, 40))})).unwrap();
+    s.run("picture.border", &json!({"color": "FF0000", "width": 2})).unwrap();
+    assert_eq!(outline(&s), none);
+}
+
 /// #513: Wrap Text › Fix Position on Page / Move with Text re-anchor a floating picture
 /// vertically without moving it; one undo step each; an inline picture can't.
 #[test]

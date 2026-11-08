@@ -293,6 +293,21 @@ pub(super) fn relook(s: &mut Session, change: impl FnOnce(&mut PictureLook)) -> 
     Ok(out)
 }
 
+/// Picture Styles and Picture Border frame the picture in its bitmap, so they replace the
+/// vector outline a file gave it (`a:ln`): without this an imported green outline stays drawn
+/// over the red border just picked, and no command could take it off (#5564). Effects,
+/// corrections and crops keep the outline. Returns the picture afterwards.
+pub(super) fn clear_outline(s: &mut Session) -> CmdResult {
+    with_obj(s, |o| {
+        if let InlineObject::Image { stroke, stroke_width, dash, compound, .. } = o {
+            *stroke = None;
+            *stroke_width = 0.0;
+            *dash = wordcraft_doc::line_dash::LineDash::Solid;
+            *compound = wordcraft_doc::line_dash::CompoundLine::Single;
+        }
+    })
+}
+
 fn artistic_effect(img: image::DynamicImage, effect: &str) -> image::DynamicImage {
     match effect {
         "blur" => img.blur(3.0),
