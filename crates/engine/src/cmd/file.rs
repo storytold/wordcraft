@@ -175,7 +175,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("file.privacy", "Privacy Settings", "File › Options › Save", |s, _| Ok(privacy(s)))
             .params(r#"{} → {"removePersonalInfo": bool, "removeDateTime": bool} (file.privacyOptions changes them)"#)
             .pure(),
-        CommandSpec::new("document.inspect", "Inspect Document", "Agents", inspect).params(r#"{"text"?: bool, "raw"?: bool (the stored text, tracked deletions included)} — text is the final text (deletions dropped); len, runs and deleted are stored-text offsets, what select.range takes; objects are the kept ones unless raw"#).pure(),
+        CommandSpec::new("document.inspect", "Inspect Document", "Agents", inspect).params(r#"{"text"?: bool, "raw"?: bool (the stored text, tracked deletions included)} — text is the final text (deletions dropped); len, runs and deleted are stored-text offsets, what select.range takes; in a paragraph with fields, text offsets don't map to stored ones; objects are the kept ones unless raw"#).pure(),
         CommandSpec::new("document.text", "Document Text", "Agents", |s, v| {
             let story = super::story_param(s, v);
             Ok(json!({"text": s.doc.final_text(story)}))
