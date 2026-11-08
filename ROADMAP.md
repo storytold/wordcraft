@@ -236,6 +236,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-11-03: Size keeps the side it isn't asked to change (#5469): typing only the width of a straight line keeps its height of 0 instead of making it 1 pt; the 1–4000 pt limits apply only to the sides a `picture.size` call changes. Readiness unchanged.
 - 2026-11-03: Find and Replace: a keyboard apostrophe also finds typographic single quotes, so smart-quoted typing stays searchable (#5388). Regex, wildcards, literal searches and numeric character codes remain exact. Original UTF-8 match ranges and replacement spelling are preserved; readiness unchanged.
 - 2026-11-03: Security: XLSX import finds each sheet's worksheet part through an index of the workbook's relationships, built once, instead of searching every relationship for every sheet. Readiness unchanged.
+- 2026-11-03: Layout: a row of a nested table marked Can't Split isn't split with its outer row any more. The outer row moves to the next page whole when that row comes first in it, as Word does (docxide-pdf `nested-first-row-*-cant1`), and otherwise splits above it (inferred, not yet checked in Word); on a fresh page a nested row taller than the room still splits rather than running into the margin. Readiness unchanged.
 - 2026-11-03: Layout: no line break between a full stop and an opening parenthesis. UAX #14 allows one there, Word doesn't: `29.05.2023г.(оформление ЗУ)` and `2023.(Example detail)` now wrap whole at the space before, as in the docxide-pdf `dot-open-token*` Word references. Readiness unchanged.
 - 2026-11-03: Security: pasting text boxes charges each copied story for its formatting too (run, mark, paragraph and section properties), not only its text and objects, so a story with huge style or font names can't copy past the paste's 32 MiB text box budget. Readiness unchanged.
 - 2026-11-03: Security: `.doc` import keeps one width, shading, alignment and merge override per table cell, the last one winning as before, instead of a copy every time a paragraph's properties repeat the sprm, so a shared PAPX can't pile up copies on every paragraph mark. Readiness unchanged.
@@ -913,6 +914,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-03 | trivial | Progress log: Shape Format › Size in the interface unit (#4196) |
 | 2026-11-03 | trivial | Find smart-quoted text with a keyboard apostrophe (#5388); exact search modes and replacement spelling preserved. |
 | 2026-11-03 | trivial | Progress log: a picture in a paragraph whose hidden mark closes a section keeps its room (#5288) |
+| 2026-11-03 | trivial | Progress log: a nested table's Can't Split row moves on with its outer row |
 | 2026-11-03 | trivial | Progress log: no line break between a full stop and an opening parenthesis |
 | 2026-11-03 | trivial | Progress log: Replace and Remove Table of Contents with Word's title above a section break (#4041) |
 | 2026-11-03 | trivial | Progress log: language-packs-2 published and pinned, 75 Language packs |
