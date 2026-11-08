@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn whitespace_character_references_are_the_characters_they_name() {
+    // A tab stop and a run of spaces a source writes with references are the author's spacing,
+    // as in a browser and in Word; the source's own indentation is still collapsed.
+    let text = |html: &str| match paras(&parse(html)).first() {
+        Some(p) => p.text(),
+        None => String::new(),
+    };
+    assert_eq!(text("<p>a&#9;b</p>"), "a\tb");
+    assert_eq!(text("<p>a&#32;&#32;b</p>"), "a  b");
+    assert_eq!(text("<p>a&#x20;&#x20;b</p>"), "a  b");
+    assert_eq!(text("<p>&#9;&#9;lead</p>"), "\t\tlead");
+    assert_eq!(text("<p>a\tb</p>"), "a b", "a raw tab in the source is indentation");
+    assert_eq!(text("<p>a&#9; b</p>"), "a\t b", "references and source spaces mix");
+    assert_eq!(text("<p>a&#10;b</p>"), "a b", "a referenced newline collapses as HTML does");
+}
+
+#[test]
 fn numeric_entity_rejects_sign() {
     assert_eq!(unescape("a&#+65;b"), "a&#+65;b");
     assert_eq!(unescape("a&#x+41;b"), "a&#x+41;b");

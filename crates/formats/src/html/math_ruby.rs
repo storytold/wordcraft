@@ -23,7 +23,7 @@ pub(super) fn read_math(lx: &mut Lexer, name: String, attrs: Vec<(String, String
             break;
         }
         match t {
-            Tok::Text(t) => {
+            Tok::Text(t) | Tok::Spaced(t) => {
                 if let Some(top) = stack.last_mut()
                     && !t.is_empty()
                 {
@@ -104,7 +104,7 @@ enum RubyPart {
 fn ends_ruby(t: &Tok) -> bool {
     match t {
         Tok::Start { name, .. } | Tok::End(name) => block_kind(name).is_some(),
-        Tok::Text(_) => false,
+        Tok::Text(_) | Tok::Spaced(_) => false,
     }
 }
 
@@ -130,7 +130,7 @@ pub(super) fn read_ruby(lx: &mut Lexer) -> RubyText {
             break;
         }
         match t {
-            Tok::Text(t) => match part {
+            Tok::Text(t) | Tok::Spaced(t) => match part {
                 RubyPart::Base => out.base.push_str(&t),
                 RubyPart::Ruby => out.ruby.push_str(&t),
                 RubyPart::Fallback => {}

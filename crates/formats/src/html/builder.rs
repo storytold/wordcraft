@@ -707,6 +707,30 @@ impl<'r> Builder<'r> {
         c.push(FBlock::Para(p));
     }
 
+    /// Text whose white space is the author's, not the source's indentation (see
+    /// [`super::lexer::Tok::Spaced`]): each space and tab is written as it is, so a pasted tab
+    /// stop keeps its tabs and a run of spaces keeps its spaces.
+    pub(super) fn spaced_text(&mut self, t: &str) {
+        if self.title.is_some() {
+            return self.text(t);
+        }
+        if self.in_head() || t.is_empty() {
+            return;
+        }
+        let code = self.stack.iter().any(|e| e.kind == ElKind::Pre);
+        let f = self.fmt();
+        if code {
+            let line = t.trim_end_matches('\r');
+            if !line.is_empty() {
+                self.start_para().push_text(line, &Fmt { code: false, ..f.clone() });
+                self.mark_pre_used();
+            }
+            return;
+        }
+        self.note_edge(true);
+        self.start_para().push_text(t, &f);
+    }
+
     pub(super) fn text(&mut self, t: &str) {
         if let Some(title) = &mut self.title {
             title.push_str(t);

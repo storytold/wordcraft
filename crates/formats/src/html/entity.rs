@@ -270,6 +270,19 @@ fn bare_reference(after: &str, attr: bool) -> Option<(char, usize)> {
     decode_char(after.get(..len)?).map(|c| (c, len))
 }
 
+/// The character reference starting at `after` (the text after its `&`): the character it writes and
+/// how many bytes of `after` it takes. `attr` is [`unescape_attr`]'s rule for a legacy name that
+/// runs into the value.
+pub(super) fn reference(after: &str, attr: bool) -> Option<(char, usize)> {
+    // An entity name is short; looking further would rescan the whole text for every stray `&`.
+    let mut cut = after.len().min(33);
+    while !after.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let end = after.get(..cut).and_then(|w| w.find(';'));
+    end.and_then(|e| decode_char(after.get(..e)?).map(|c| (c, e + 1))).or_else(|| bare_reference(after, attr))
+}
+
 /// Replace entity references in text `s`.
 pub fn unescape(s: &str) -> String {
     unescape_in(s, false)
@@ -289,13 +302,7 @@ fn unescape_in(s: &str, attr: bool) -> String {
     while let Some(k) = rest.find('&') {
         out.push_str(&rest[..k]);
         let after = &rest[k + 1..];
-        // An entity name is short; looking further would rescan the whole text for every stray `&`.
-        let mut cut = after.len().min(33);
-        while !after.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        let end = after.get(..cut).and_then(|w| w.find(';'));
-        match end.and_then(|e| decode_char(&after[..e]).map(|c| (c, e + 1))).or_else(|| bare_reference(after, attr)) {
+        match reference(after, attr) {
             Some((c, e)) => {
                 out.push(c);
                 rest = &after[e..];

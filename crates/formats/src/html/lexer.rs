@@ -1,4 +1,4 @@
-use super::entity::{unescape, unescape_attr};
+use super::entity::{reference, unescape_attr};
 
 // ---------------------------------------------------------------------------------------------
 // Tokenizer
@@ -6,13 +6,29 @@ use super::entity::{unescape, unescape_attr};
 #[derive(Debug)]
 pub(super) enum Tok {
     Text(String),
-    Start { name: String, attrs: Vec<(String, String)>, self_close: bool },
+    /// A run of the author's own white space: character references that write a space or a tab
+    /// (`&#32;`, `&#9;`, `&#x20;`). Unlike the source's indentation, which is collapsed as a
+    /// browser collapses it, these keep every character — Word pastes them that way.
+    Spaced(String),
+    Start {
+        name: String,
+        attrs: Vec<(String, String)>,
+        self_close: bool,
+    },
     End(String),
 }
 
 pub(super) struct Lexer<'a> {
     pub(super) s: &'a str,
     pub(super) pos: usize,
+    /// Tokens split out of one text node, handed back before the next node is read.
+    pub(super) pending: Vec<Tok>,
+}
+
+impl<'a> Lexer<'a> {
+    pub(super) fn new(s: &'a str) -> Self {
+        Lexer { s, pos: 0, pending: Vec::new() }
+    }
 }
 
 impl Lexer<'_> {
@@ -59,16 +75,59 @@ impl Lexer<'_> {
         self.s.len()
     }
 
+    /// The tokens one text node makes: runs of the author's own white space (`&#9;`, `&#32;`,
+    /// `&#x20;`) come out as [`Tok::Spaced`], the rest as one [`Tok::Text`] with every other
+    /// reference decoded. A reference that writes something else stays in the ordinary run and is
+    /// collapsed or kept as the builder decides for that character.
+    fn text_tokens(raw: &str) -> Vec<Tok> {
+        let mut out = Vec::new();
+        let mut plain = String::with_capacity(raw.len());
+        let mut rest = raw;
+        while let Some(k) = rest.find('&') {
+            plain.push_str(rest.get(..k).unwrap_or(""));
+            let after = rest.get(k + 1..).unwrap_or("");
+            match reference(after, false) {
+                Some((c @ (' ' | '\t'), e)) => {
+                    if !plain.is_empty() {
+                        out.push(Tok::Text(std::mem::take(&mut plain)));
+                    }
+                    out.push(Tok::Spaced(c.to_string()));
+                    rest = after.get(e..).unwrap_or("");
+                }
+                Some((c, e)) => {
+                    plain.push(c);
+                    rest = after.get(e..).unwrap_or("");
+                }
+                None => {
+                    plain.push('&');
+                    rest = after;
+                }
+            }
+        }
+        plain.push_str(rest);
+        if !plain.is_empty() {
+            out.push(Tok::Text(plain));
+        }
+        out
+    }
+
     pub(super) fn next(&mut self) -> Option<Tok> {
+        // Tokens of the text node just read, in reading order.
+        if let Some(t) = self.pending.pop() {
+            return Some(t);
+        }
         let rest = self.rest();
         if rest.is_empty() {
             return None;
         }
         if !rest.starts_with('<') {
             let end = rest.find('<').unwrap_or(rest.len());
-            let t = unescape(&rest[..end]);
+            let raw = rest.get(..end).unwrap_or("").to_string();
             self.pos += end;
-            return Some(Tok::Text(t));
+            // `pending` is read from its end, so the node's tokens go in reversed.
+            self.pending = Vec::new();
+            self.pending.extend(Self::text_tokens(&raw).into_iter().rev());
+            return self.next();
         }
         let b = rest.as_bytes();
         if rest.starts_with("<!--") {
