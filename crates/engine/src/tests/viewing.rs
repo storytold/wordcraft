@@ -225,3 +225,32 @@ fn viewing_does_not_restore_equation_editing_from_a_window_snapshot() {
     assert!(s.doc.same_content(&before));
     assert_eq!(s.undo_depth(), depth);
 }
+
+/// A stale window cannot restore drawing tools or a lasso in Viewing; Editing retains both.
+#[test]
+fn viewing_does_not_restore_drawing_state_from_a_window_snapshot() {
+    use crate::cmd::draw::{DrawMode, LassoSelection};
+    use wordcraft_doc::freeform::InkTool;
+    for viewing in [true, false] {
+        for mode in [DrawMode::Select, DrawMode::Lasso, DrawMode::Eraser, DrawMode::Pen(InkTool::Pen)] {
+            let mut s = Session::new(wordcraft_doc::Document::from_text("Hello"));
+            s.view.draw.mode = mode;
+            s.view.draw.lasso = Some(LassoSelection::default());
+            let older = s.copy_view();
+            s.view.draw.mode = DrawMode::Select;
+            s.view.draw.lasso = None;
+            s.run("view.viewing", &json!({"value": viewing})).unwrap();
+            let before = s.doc.clone();
+            let revision = s.rev();
+            let depth = s.undo_depth();
+            s.put_view(older);
+            assert_eq!(s.view.viewing, viewing);
+            assert_eq!(s.view.draw.mode, if viewing { DrawMode::Select } else { mode });
+            assert_eq!(s.view.draw.lasso, if viewing { None } else { Some(LassoSelection::default()) });
+            s.run("caret.docEnd", &json!({})).unwrap();
+            assert!(s.doc.same_content(&before));
+            assert_eq!(s.rev(), revision);
+            assert_eq!(s.undo_depth(), depth);
+        }
+    }
+}

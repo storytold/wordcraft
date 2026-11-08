@@ -771,8 +771,8 @@ pub fn list_dir(path: &std::path::Path, max: usize) -> Result<(Vec<DirEntry>, bo
 #[cfg(not(target_arch = "wasm32"))]
 pub fn package_title(path: &std::path::Path, max_file: u64, max_part: u64) -> Option<String> {
     crate::file_access::check_read(&path.to_string_lossy()).ok()?;
-    let file = std::fs::File::open(path).ok()?;
-    if file.metadata().ok()?.len() > max_file {
+    let (file, meta) = open_regular_file(path).ok()?;
+    if meta.len() > max_file {
         return None;
     }
     wordcraft_docx::package_title(std::io::BufReader::new(file), max_part)

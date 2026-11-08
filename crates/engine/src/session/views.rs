@@ -143,7 +143,12 @@ impl Session {
         let viewing = self.view.viewing;
         self.view = view;
         self.view.viewing = viewing;
-        self.view.read_page_color = self.prefs.read_page_color;
+        // A stale window must not restore drawing tools or lasso selection while Viewing.
+        if viewing {
+            self.view.draw.mode = crate::cmd::draw::DrawMode::Select;
+            self.view.draw.lasso = None;
+        }
+        self.view.follow_prefs(&self.prefs);
         self.pending = pending;
         self.goal_x = goal_x;
         self.page_hint = page_hint;
