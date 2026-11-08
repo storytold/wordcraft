@@ -573,6 +573,15 @@ pub(super) fn parse_border(v: &str) -> Option<Border> {
     any.then_some(b)
 }
 
+/// The properties element a table column's or row's `style:default-style` (of `family`) holds.
+fn table_default_props(family: Option<&str>) -> Option<&'static str> {
+    match family {
+        Some("table-column") => Some("table-column-properties"),
+        Some("table-row") => Some("table-row-properties"),
+        _ => None,
+    }
+}
+
 /// A table column's share of its table (`style:rel-column-width`, `1*`).
 fn column_share_of(a: &Attrs) -> Option<f32> {
     get(a, "style:rel-column-width").and_then(|v| v.trim().strip_suffix('*')?.trim().parse::<f32>().ok()).filter(|r| r.is_finite() && *r > 0.0)
@@ -1069,13 +1078,23 @@ pub(super) struct Styles {
 }
 
 impl Styles {
+    /// A table column's or row's `style:default-style` properties (`props` names which): what a
+    /// column or row whose own style doesn't say falls back on.
+    fn read_table_default(&mut self, props: &str, a: &Attrs) {
+        if props == "table-row-properties" {
+            self.default_row_keep = get(a, "fo:keep-together").map(|k| k.trim() == "always");
+        } else {
+            self.default_column_share = column_share_of(a);
+        }
+    }
+
     pub(super) fn read(&mut self, xml: &[u8], auto_section_is_auto: bool) {
         let mut in_auto = false;
         let mut cur: Option<(String, StyleInfo)> = None;
         let mut in_default = false;
         let mut in_graphic_default = false;
-        let mut in_column_default = false;
-        let mut in_row_default = false;
+        // In a table column's or row's `style:default-style`: the properties element it reads.
+        let mut in_table_default: Option<&str> = None;
         let mut dates = DateStyles::default();
         let mut list: Option<(String, Vec<ListLevel>)> = None;
         // The list or outline level being read.
@@ -1104,14 +1123,10 @@ impl Styles {
                 "default-style" if q.starts_with("style:") => {
                     in_default = get(&a, "style:family") == Some("paragraph");
                     in_graphic_default = get(&a, "style:family") == Some("graphic");
-                    in_column_default = get(&a, "style:family") == Some("table-column");
-                    in_row_default = get(&a, "style:family") == Some("table-row");
+                    in_table_default = table_default_props(get(&a, "style:family"));
                 }
                 "graphic-properties" if in_graphic_default && cur.is_none() => self.default_graphic = super::frames::Graphic::read(&a),
-                "table-column-properties" if in_column_default && cur.is_none() => self.default_column_share = column_share_of(&a),
-                "table-row-properties" if in_row_default && cur.is_none() => {
-                    self.default_row_keep = get(&a, "fo:keep-together").map(|k| k.trim() == "always")
-                }
+                props if in_table_default == Some(props) && cur.is_none() => self.read_table_default(props, &a),
                 "text-properties" if in_default && cur.is_none() => {
                     self.default_font = default_font(&a, &self.faces);
                     if let Some(sz) = get(&a, "fo:font-size").and_then(length).filter(|v| v.is_finite() && *v >= 1.0) {
@@ -1178,7 +1193,7 @@ impl Styles {
             },
             Ev::End(q) => match local(&q) {
                 "automatic-styles" => in_auto = false,
-                "default-style" if q.starts_with("style:") => (in_default, in_graphic_default, in_column_default, in_row_default) = (false, false, false, false),
+                "default-style" if q.starts_with("style:") => (in_default, in_graphic_default, in_table_default) = (false, false, None),
                 "style" if q.starts_with("style:") => {
                     if let Some((n, s)) = cur.take()
                         && self.map.len() < 100_000
