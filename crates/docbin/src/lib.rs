@@ -260,6 +260,9 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     };
 
     let mut doc = Document::new();
+    // Word opens Word 97-2003 files in compatibility mode 11 (Word 2003); the model's default
+    // 15 would apply Word 2013+ justification and line-breaking rules to them.
+    doc.settings.compat_mode = 11;
     if let Some(core) = metadata::read(&mut comp) {
         doc.core = core;
     }
@@ -502,26 +505,34 @@ struct ParaBuild {
     runs: Vec<Run>,
     props: wordcraft_doc::props::ParaProps,
     mark: CharProps,
-    /// The current run's properties, so runs only break when formatting changes.
-    cur: Option<CharProps>,
+    /// Which resolved formatting ([`FmtState::generation`]) the last character came from, while
+    /// the last run is still the one it extended: the same generation means equal properties.
+    run_gen: Option<u64>,
     /// Inline objects, each anchored at a U+FFFC pushed into `text`.
     objects: Vec<InlineObject>,
 }
 
 impl ParaBuild {
     fn push(&mut self, c: char, props: CharProps) {
+        self.run_gen = None;
         let len = c.len_utf8();
-        match &self.cur {
-            Some(p) if *p == props => {
-                if let Some(r) = self.runs.last_mut() {
-                    r.len += len;
-                }
-            }
-            _ => {
-                self.runs.push(Run { len, props: props.clone() });
-                self.cur = Some(props);
-            }
+        match self.runs.last_mut() {
+            Some(r) if r.props == props => r.len += len,
+            _ => self.runs.push(Run { len, props }),
         }
+        self.text.push(c);
+    }
+
+    /// [`ParaBuild::push`] for properties that are resolved once and shared by many characters:
+    /// they are cloned only when a run starts, and not even compared while `generation` stays
+    /// the same.
+    fn push_shared(&mut self, c: char, props: &CharProps, generation: u64) {
+        let len = c.len_utf8();
+        match self.runs.last_mut() {
+            Some(r) if self.run_gen == Some(generation) || r.props == *props => r.len += len,
+            _ => self.runs.push(Run { len, props: props.clone() }),
+        }
+        self.run_gen = Some(generation);
         self.text.push(c);
     }
 
@@ -552,7 +563,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
     // Field assembly state: instruction characters are swallowed, the result is kept until
     // the end character, then emitted as one object (hyperlinks keep their result text).
     let mut field: Option<FieldBuild> = None;
-    let mut memo: Option<FmtMemo<'a>> = None;
+    let mut fmt = FmtState::default();
     while cp < cp_end {
         // Bookmark boundaries at this CP (main-document walks only; subdocument walks get
         // an empty table and `cp` never matches the main-document CPs).
@@ -715,16 +726,16 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                     pb.objects.push(InlineObject::NoteRef { kind: *kind, id: *id, custom: String::new() });
                 }
             }
-            '\t' => push_formatted(&mut pb, cp, '\t', ctx, field.as_mut(), &mut memo),
-            '\u{B}' => push_formatted(&mut pb, cp, '\n', ctx, field.as_mut(), &mut memo),
-            '\u{C}' => push_formatted(&mut pb, cp, '\u{C}', ctx, field.as_mut(), &mut memo),
-            '\u{E}' => push_formatted(&mut pb, cp, '\u{E}', ctx, field.as_mut(), &mut memo),
-            '\u{1E}' => push_formatted(&mut pb, cp, '\u{2011}', ctx, field.as_mut(), &mut memo),
-            '\u{1F}' => push_formatted(&mut pb, cp, '\u{AD}', ctx, field.as_mut(), &mut memo),
+            '\t' => push_formatted(&mut pb, cp, '\t', ctx, field.as_mut(), &mut fmt),
+            '\u{B}' => push_formatted(&mut pb, cp, '\n', ctx, field.as_mut(), &mut fmt),
+            '\u{C}' => push_formatted(&mut pb, cp, '\u{C}', ctx, field.as_mut(), &mut fmt),
+            '\u{E}' => push_formatted(&mut pb, cp, '\u{E}', ctx, field.as_mut(), &mut fmt),
+            '\u{1E}' => push_formatted(&mut pb, cp, '\u{2011}', ctx, field.as_mut(), &mut fmt),
+            '\u{1F}' => push_formatted(&mut pb, cp, '\u{AD}', ctx, field.as_mut(), &mut fmt),
             // Object anchors, comment references and other special characters are dropped
             // (or handled by later passes).
             c if (c as u32) < 0x20 => {}
-            c => push_formatted(&mut pb, cp, c, ctx, field.as_mut(), &mut memo),
+            c => push_formatted(&mut pb, cp, c, ctx, field.as_mut(), &mut fmt),
         }
         cp = cp.saturating_add(units);
     }
@@ -854,34 +865,53 @@ fn num_of(ilfo: i32) -> Option<u32> {
 /// plus the piece's Prm, over the paragraph style's base character props. Inside a field,
 /// the character is recorded into the instruction or the cached result instead of (or as
 /// well as) the visible text.
-fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, field: Option<&mut FieldBuild>, memo: &mut Option<FmtMemo<'a>>) {
-    let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
-    let grpprl = ctx.chpx_bins.chpx(ctx.word, fc);
-    let prm = ctx.pieces.prm_of(cp);
-    let style = pb.props.style.as_deref();
-    let mut props = match memo.as_ref().filter(|m| std::ptr::eq(m.chpx, grpprl) && m.prm == prm && m.style.as_deref() == style) {
-        Some(m) => m.props.clone(),
+fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, field: Option<&mut FieldBuild>, st: &mut FmtState<'a>) {
+    // The piece and the CHPX run of the previous character usually cover this one too.
+    let span = match st.span.filter(|s| s.contains(cp)) {
+        Some(s) => Some(s),
         None => {
-            let default;
-            let base = match style.and_then(|id| ctx.sheet.get(id)) {
-                Some(st) => &st.chr,
-                None => {
-                    default = CharProps::default();
-                    &default
-                }
-            };
-            let mut props = char_props(grpprl, ctx.fonts, base);
-            apply_prm(&mut props, ctx.pieces.piece_prm(cp), ctx.fonts, base, ctx.work);
-            *memo = Some(FmtMemo { chpx: grpprl, prm, style: style.map(str::to_owned), props: props.clone() });
-            props
+            st.span = ctx.pieces.span(cp);
+            st.span
         }
     };
+    let fc = span.and_then(|s| s.fc_at(cp)).unwrap_or(0);
+    let run = match st.chpx.filter(|r| r.contains(fc)) {
+        Some(r) => r,
+        None => {
+            let r = ctx.chpx_bins.chpx_run(ctx.word, fc);
+            st.chpx = Some(r);
+            r
+        }
+    };
+    let grpprl = run.grpprl;
+    let prm = span.map_or(0, |s| s.prm());
+    let style = pb.props.style.as_deref();
+    let hit = st.memo.as_ref().is_some_and(|m| std::ptr::eq(m.chpx, grpprl) && m.prm == prm && m.style.as_deref() == style);
+    if !hit {
+        let default;
+        let base = match style.and_then(|id| ctx.sheet.get(id)) {
+            Some(sty) => &sty.chr,
+            None => {
+                default = CharProps::default();
+                &default
+            }
+        };
+        let mut props = char_props(grpprl, ctx.fonts, base);
+        apply_prm(&mut props, ctx.pieces.piece_prm(cp), ctx.fonts, base, ctx.work);
+        st.memo = Some(FmtMemo { chpx: grpprl, prm, style: style.map(str::to_owned), props });
+        st.generation += 1;
+    }
+    let Some(m) = st.memo.as_ref() else { return };
     // A symbol character (Insert › Symbol) is stored as the placeholder U+0028 with
     // sprmCSymbol carrying the font and the character code ([MS-DOC] §2.6.1).
+    let symbol = if c == '(' { symbol_operand(grpprl) } else { None };
+    if field.is_none() && symbol.is_none() {
+        pb.push_shared(c, &m.props, st.generation);
+        return;
+    }
+    let mut props = m.props.clone();
     let mut c = c;
-    if c == '('
-        && let Some((ftc, xchar)) = symbol_operand(grpprl)
-    {
+    if let Some((ftc, xchar)) = symbol {
         if let Some(font) = ctx.fonts.get(usize::from(ftc)) {
             props.font = Some(font.clone());
         }
@@ -898,6 +928,18 @@ fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, f
         },
         None => pb.push(c, props),
     }
+}
+
+/// What the walk carries from one character to the next while it resolves formatting: the piece
+/// and the CHPX run the last character was in (so most characters need no search), and the last
+/// formatting resolved.
+#[derive(Default)]
+struct FmtState<'a> {
+    span: Option<piece::PieceSpan<'a>>,
+    chpx: Option<fkp::ChpxRun<'a>>,
+    memo: Option<FmtMemo<'a>>,
+    /// Counts the memo's replacements, so equal values mean the same properties.
+    generation: u64,
 }
 
 /// The last character formatting resolved, reused while the CHPX, the piece's Prm and the
