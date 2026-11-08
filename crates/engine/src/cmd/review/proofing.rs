@@ -4,20 +4,16 @@ pub(super) fn word_count(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(b) = p::bool(v, "includeTextBoxes") {
         s.prefs.count_notes = b;
     }
-    let stories = if s.prefs.count_notes { s.doc.counted_stories() } else { vec![StoryRef::Body] };
+    let stories = s.counted_stories();
     // A selected picture, shape or text box isn't a text selection: count the document.
-    let text = if s.sel.is_collapsed() || crate::cmd::objects::object_selection(s).is_some() {
-        stories.iter().map(|st| s.doc.plain_text(*st)).collect::<Vec<_>>().join("\n")
-    } else {
-        s.selected_text()
-    };
+    let text = if s.sel.is_collapsed() || crate::cmd::objects::object_selection(s).is_some() { s.counted_text() } else { s.selected_text() };
     let words = if s.sel.is_collapsed() || crate::cmd::objects::object_selection(s).is_some() {
         stories.iter().map(|st| s.doc.story_word_count(*st)).sum()
     } else {
         wordcraft_doc::count_words(&text)
     };
-    let chars = text.chars().filter(|c| *c != '\n' && *c != '\r').count();
-    let chars_no_spaces = text.chars().filter(|c| !c.is_whitespace()).count();
+    let chars = wordcraft_doc::count_chars(&text);
+    let chars_no_spaces = wordcraft_doc::count_chars_no_spaces(&text);
     let paragraphs = text.split('\n').filter(|l| !l.trim().is_empty()).count();
     let lines: usize = {
         let l = s.layout();

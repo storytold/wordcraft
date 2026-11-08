@@ -5,7 +5,6 @@
 use serde_json::{Value, json};
 
 use crate::{CmdError, CmdResult, CommandSpec, Prefs, Session, p};
-use wordcraft_doc::odf_profile::{OdfPreset, OdfProfile};
 
 /// Options panes, in the order the page lists them (the `pane` param of `file.options`).
 pub const PANES: [&str; 8] = ["general", "display", "proofing", "save", "language", "accessibility", "advanced", "agents"];
@@ -23,7 +22,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("file.options", "Options", "File", options)
             .params(
-                r#"{"pane"?: "general|display|proofing|save|language|accessibility|advanced|agents", "author"?: string, "initials"?: string, "units"?: "inches|centimeters|millimeters|points|picas|auto" (auto: the region's), "region"?: string (a locale tag like pl-PL, saved: the paper File › New starts on, the default units and the decimal separator; auto: the system's), "typingReplacesSelection"?: bool, "insertKeyOvertype"?: bool, "overtype"?: bool, "marks"?: {"tabs"?: bool, "spaces"?: bool, "paragraphs"?: bool, "hidden"?: bool}, "checkSpelling"?: bool, "markGrammar"?: bool, "ignoreUppercase"?: bool, "ignoreNumbers"?: bool, "ignoreInternet"?: bool, "dictionariesFolder"?: string (a folder of Hunspell .aff/.dic files searched first, saved; auto: the system locations only), "userTemplatesFolder"?: string (the folder File › New lists personal templates from, saved; auto: the app's own Templates folder; not a network folder), "addWords"?: [string], "removeWords"?: [string], "odf"?: {"preset"?: "word|libreoffice|custom" (word: Microsoft Word style, the default; libreoffice: LibreOffice style), "pageMargin"?: pt, "headerMinHeight"?: pt, "headerHeightIncludesSpacing"?: bool, "dynamicSpacing"?: bool, "tabsFromIndent"?: bool, "columnGap"?: pt, "shapeFill"?: "RRGGBB", "shapeLine"?: "RRGGBB", "hairline"?: pt, "pageFrameParagraphIsPage"?: bool, "inlineInvalidRelationIsBaseline"?: bool, "pictureLinesFitPictures"?: bool, "balanceSectionColumns"?: bool, "sumParagraphSpacing"?: bool, "widowControl"?: bool} (how OpenDocument files opened from now on fill in what their standard leaves open, docs/odf-interpretation.md; a value without a preset makes it custom)} — with any setting it changes them and opens nothing; without, it opens File › Options (at `pane`). Returns the settings."#,
+                r#"{"pane"?: "general|display|proofing|save|language|accessibility|advanced|agents", "author"?: string, "initials"?: string, "units"?: "inches|centimeters|millimeters|points|picas|auto" (auto: the region's), "region"?: string (a locale tag like pl-PL, saved: the paper File › New starts on, the default units and the decimal separator; auto: the system's), "typingReplacesSelection"?: bool, "insertKeyOvertype"?: bool, "overtype"?: bool, "marks"?: {"tabs"?: bool, "spaces"?: bool, "paragraphs"?: bool, "hidden"?: bool}, "checkSpelling"?: bool, "markGrammar"?: bool, "ignoreUppercase"?: bool, "ignoreNumbers"?: bool, "ignoreInternet"?: bool, "dictionariesFolder"?: string (a folder of Hunspell .aff/.dic files searched first, saved; auto: the system locations only), "userTemplatesFolder"?: string (the folder File › New lists personal templates from, saved; auto: the app's own Templates folder; not a network folder), "addWords"?: [string], "removeWords"?: [string]} — with any setting it changes them and opens nothing; without, it opens File › Options (at `pane`). Returns the settings."#,
             )
             .pure(),
         CommandSpec::new("text.overtype", "Overtype", "File › Options › Advanced", |s, v| {
@@ -146,7 +145,6 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
         Some(_) => return Err(CmdError::Params("`marks` must be an object of true/false".into())),
     }
     let check_spelling = bool_param(v, "checkSpelling")?;
-    let odf = odf_param(v, &s.prefs.odf)?;
     let add = words_param(v, "addWords")?;
     let remove = words_param(v, "removeWords")?;
 
@@ -159,7 +157,6 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
         || !flag_values.is_empty()
         || !mark_values.is_empty()
         || check_spelling.is_some()
-        || odf.is_some()
         || !add.is_empty()
         || !remove.is_empty();
     if let Some(name) = author {
@@ -190,10 +187,6 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(b) = check_spelling {
         s.view.proofing = b;
         s.prefs.check_spelling = b;
-    }
-    // ODF files opened from now on fill in what their standard leaves open this way.
-    if let Some(o) = odf {
-        s.prefs.odf = o;
     }
     for w in &add {
         wordcraft_proof::add_word(w);
@@ -240,53 +233,11 @@ pub fn current(s: &Session) -> Value {
         "dictionary": wordcraft_proof::user_dictionary(),
         "dictionariesFolder": pr.dictionaries_folder,
         "userTemplatesFolder": pr.user_templates_folder,
-        // How ODF files fill in what the standard leaves open: the chosen preset, the values
-        // that apply, and the custom values kept for when the preset is custom.
-        "odf": {"preset": pr.odf.preset, "effective": pr.odf.effective(), "custom": pr.odf},
         "dictionaries": wordcraft_proof::installed_dictionaries()
             .into_iter()
             .map(|(lang, dic)| json!({"language": lang.tag(), "file": dic.map(|d| d.to_string_lossy().into_owned())}))
             .collect::<Vec<_>>(),
     })
-}
-
-/// The `odf` setting: `{"preset"?: "word|libreoffice|custom" (word: Microsoft Word style, the default; libreoffice: LibreOffice style), …case values}` over `current`.
-/// A case value given without a preset makes the profile custom; the values are kept whatever
-/// the preset, so choosing custom again brings them back. Lengths are points, at most 22 inches;
-/// colours `RRGGBB`.
-fn odf_param(v: &Value, current: &OdfProfile) -> Result<Option<OdfProfile>, CmdError> {
-    let Some(o) = v.get("odf").filter(|o| !o.is_null()) else { return Ok(None) };
-    let obj = o.as_object().ok_or_else(|| CmdError::Params("`odf` must be an object".into()))?;
-    let mut merged = serde_json::to_value(current).map_err(|e| CmdError::Failed(e.to_string()))?;
-    let known: Vec<String> = merged.as_object().map(|m| m.keys().cloned().collect()).unwrap_or_default();
-    let mut values = false;
-    for (k, x) in obj {
-        if !known.contains(k) {
-            return Err(CmdError::Params(format!("`odf.{k}`: not a setting; one of {}", known.join(", "))));
-        }
-        if let Some(n) = x.as_f64().filter(|_| k != "preset")
-            && !(n.is_finite() && (0.0..=f64::from(wordcraft_doc::odf_profile::MAX_LENGTH)).contains(&n))
-        {
-            return Err(CmdError::Params(format!("`odf.{k}`: a length from 0 to {} points", wordcraft_doc::odf_profile::MAX_LENGTH)));
-        }
-        let x = if k == "preset" {
-            let p = x.as_str().and_then(OdfPreset::from_id).ok_or_else(|| CmdError::Params("`odf.preset`: word, libreoffice or custom".into()))?;
-            json!(p)
-        } else {
-            values = true;
-            x.clone()
-        };
-        if let Some(m) = merged.as_object_mut() {
-            m.insert(k.clone(), x);
-        }
-    }
-    if values
-        && !obj.contains_key("preset")
-        && let Some(m) = merged.as_object_mut()
-    {
-        m.insert("preset".into(), json!(OdfPreset::Custom));
-    }
-    serde_json::from_value(merged).map(Some).map_err(|e| CmdError::Params(format!("`odf`: {e}")))
 }
 
 /// A folder setting (`dictionariesFolder`, `userTemplatesFolder`): `auto` (or nothing) forgets

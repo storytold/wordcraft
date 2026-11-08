@@ -259,9 +259,6 @@ const MAX_DEFS: usize = 10_000;
 pub(super) struct Defs {
     dashes: std::collections::HashMap<String, Dash>,
     gradients: std::collections::HashMap<String, Fill>,
-    /// How what the standard leaves open is filled in (shapes' default colours and lines among
-    /// it), with the effective values.
-    pub(super) profile: wordcraft_doc::odf_profile::OdfProfile,
     /// The part read is older than ODF 1.3: unitless angles are tenths of a degree (see
     /// [`legacy_angles`]).
     pub(super) legacy_angles: bool,
