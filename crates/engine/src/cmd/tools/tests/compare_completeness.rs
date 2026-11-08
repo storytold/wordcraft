@@ -356,6 +356,40 @@ fn compare_keeps_text_boxes_equations_and_controls_of_a_diffed_paragraph() {
 }
 
 #[test]
+fn compare_matches_an_equation_whose_runs_are_segmented_differently() {
+    // The same equation, its OMML runs split differently in the two files: the structure
+    // (and the linear text) is identical, only the retained source XML differs.
+    let single = r#"<m:oMath><m:r><m:t>x+1</m:t></m:r></m:oMath>"#;
+    let segmented = r#"<m:oMath><m:r><m:t>x</m:t></m:r><m:r><m:t>+1</m:t></m:r></m:oMath>"#;
+    // The words before the equation change; the words after it are the same in both
+    // files, so the equation sits between matching text and must itself match.
+    let with_eq = |eq: &str, before: &str| format!("{}{eq}{}", run(&format!("{before} ")), run(&format!(" {}", words("m", 75, 150))));
+    let original = format!("{}{}{}", keep(1), para(&with_eq(single, &words("m", 0, 75))), keep(2));
+    let revised = format!("{}{}{}", keep(1), para(&with_eq(segmented, &format!("{} {}", words("x", 0, 60), words("m", 60, 75)))), keep(2));
+    let xml = assert_complete("equation-segmentation", &original, &revised, json!({}));
+    assert_eq!(xml.matches("<m:oMath>").count(), 1, "an unchanged equation must be saved once, not as a deleted and an inserted copy");
+    let omath = xml.split("<m:oMath>").nth(1).and_then(|t| t.split("</m:oMath>").next()).unwrap_or("");
+    let mt: String = omath.split("<m:t>").skip(1).map(|t| t.split("</m:t>").next().unwrap_or("")).collect();
+    assert_eq!(mt, "x+1", "the saved equation lost its content");
+}
+
+#[test]
+fn compare_keeps_an_equations_own_colour_in_a_diffed_paragraph() {
+    // The equation's runs share a blue colour, lifted onto its marker run at read; the
+    // paragraph's first run is red. The copied equation must keep blue, not take red.
+    let blue = r#"<m:oMath><m:r><w:rPr><w:color w:val="0000FF"/></w:rPr><m:t>x+1</m:t></m:r></m:oMath>"#;
+    let red_run = |t: &str| format!(r#"<w:r><w:rPr><w:color w:val="C00000"/></w:rPr><w:t xml:space="preserve">{t}</w:t></w:r>"#);
+    let with_eq = |before: &str| format!("{}{blue}{}", red_run(&format!("{before} ")), run(&format!(" {}", words("m", 75, 150))));
+    let original = format!("{}{}{}", keep(1), para(&with_eq(&words("m", 0, 75))), keep(2));
+    let revised = format!("{}{}{}", keep(1), para(&with_eq(&format!("{} {}", words("x", 0, 60), words("m", 60, 75)))), keep(2));
+    let xml = assert_complete("equation-colour", &original, &revised, json!({}));
+    assert_eq!(xml.matches("<m:oMath>").count(), 1, "the equation must be saved once");
+    let omath = xml.split("<m:oMath>").nth(1).and_then(|t| t.split("</m:oMath>").next()).unwrap_or("");
+    assert!(omath.contains("0000FF"), "the saved equation must keep its own colour: {omath}");
+    assert!(!omath.contains("C00000"), "the saved equation took the paragraph's first run colour: {omath}");
+}
+
+#[test]
 fn compare_keeps_a_diffed_paragraph_that_opens_with_hidden_text() {
     let hidden = r#"<w:r><w:rPr><w:vanish/></w:rPr><w:t xml:space="preserve">hidden lead </w:t></w:r>"#;
     let original = format!("{}{}{}", keep(1), para(&format!("{hidden}{}", runs(&words("h", 0, 150), 8))), keep(2));
