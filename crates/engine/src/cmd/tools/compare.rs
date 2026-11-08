@@ -83,8 +83,9 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         // Tables match as a whole, by their text.
         Block::Table(_) => format!("\u{0}table\u{0}{}", opts.key(&block_text(b, 0))),
     };
-    let mut budget = MAX_COMPARE_CELLS;
-    let ops = lcs_ops(&old.iter().map(key).collect::<Vec<_>>(), &new.iter().map(key).collect::<Vec<_>>(), &mut budget);
+    let mut diff_budget = MAX_COMPARE_CELLS;
+    let mut align_budget = MAX_COMPARE_CELLS;
+    let ops = lcs_ops(&old.iter().map(key).collect::<Vec<_>>(), &new.iter().map(key).collect::<Vec<_>>(), &mut diff_budget);
     let mut out: Vec<Arc<Block>> = Vec::new();
     let (mut i, mut j) = (0usize, 0usize);
     let mut changes = 0usize;
@@ -98,7 +99,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                     if !same_objects(&s.doc, pa, pb) {
                         // Same text, but objects (text boxes, pictures…) differ: diffed, so the
                         // original's objects aren't lost.
-                        out.push(para_block(word_diff(&s.doc, pa, pb, ins, del, &opts, &mut budget)));
+                        out.push(para_block(word_diff(&s.doc, pa, pb, ins, del, &opts, &mut diff_budget)));
                         changes += 1;
                         i += 1;
                         j += 1;
@@ -130,12 +131,12 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                 let inss = run - dels;
                 let old_slice = old.get(i..i + dels).unwrap_or_default();
                 let new_slice = new.get(j..j + inss).unwrap_or_default();
-                let pairs = align_block_run(old_slice, new_slice, &opts, &mut budget);
+                let pairs = align_block_run(old_slice, new_slice, &opts, &mut align_budget);
                 for pair in pairs {
                     match pair {
                         RunPair::Diff(u, v) => {
                             if let (Some(Block::Para(pa)), Some(Block::Para(pb))) = (old_slice.get(u).map(|x| &**x), new_slice.get(v).map(|x| &**x)) {
-                                out.push(para_block(word_diff(&s.doc, pa, pb, ins, del, &opts, &mut budget)));
+                                out.push(para_block(word_diff(&s.doc, pa, pb, ins, del, &opts, &mut diff_budget)));
                                 changes += 1;
                             }
                         }
