@@ -467,6 +467,18 @@ fn clicking_the_font_name_or_box_shows_other_fonts_and_selects_all_to_type() {
     assert!(h.get(By::new().role(Role::TextInput)).is_focused(), "field takes focus on Tab/focus");
     assert!(h.query_by_label("All Fonts").is_none(), "focusing without click does not open the 420px dropdown");
 
+    // Typing while focused without click replaces the selected text (verifying selection on focus alone)
+    h.event(egui::Event::Text("g".into()));
+    h.run_steps(2);
+    assert_eq!(h.get(By::new().role(Role::TextInput)).value().as_deref(), Some("g"), "typing replaces font name selected on focus alone");
+    assert!(h.query_by_label("Georgia").is_some(), "typing while focused opens list and filters to matches");
+
+    // Cancel out with Escape to restore the initial state
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.get(By::new().role(Role::TextInput)).value().as_deref(), Some("Arial"));
+    assert!(h.query_by_label("All Fonts").is_none(), "dropdown closes on Escape");
+
     // Click on the font name field
     h.get(By::new().role(Role::TextInput)).click();
     h.run_steps(2);

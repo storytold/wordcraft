@@ -982,6 +982,7 @@ fn new_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ok || cancel
 }
 
+/// Renders the Modify Style dialog for configuring style properties and font formatting.
 fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     let Dialog::ModifyStyle { back, resume, id, name, font, size, bold, italic, color, before, after } = d else {
         return false;
@@ -1000,6 +1001,8 @@ fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 if let Some(f) = crate::widgets::font_combo(ui, "ms_font", 220.0, &shown, &fams, Some(&*prev)) {
                     if f == crate::widgets::ADD_FONT {
                         let _ = app.run("font.add", json!({}));
+                    } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
+                        let _ = app.run("font.loadSystem", json!({}));
                     } else {
                         *font = app.previews.font_stored(&f);
                     }

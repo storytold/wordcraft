@@ -455,7 +455,7 @@ pub struct Form<'a> {
     pub pen: &'a mut BorderPen,
 }
 
-/// The dialog body. Returns true to close.
+/// The dialog body for creating or editing table styles. Returns true to close.
 pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
     let Form { id, name, based_on, region, regions, basis, pen } = f;
     let styles: Vec<(String, String)> = app
@@ -516,10 +516,14 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
         ui.label(egui::RichText::new(tl!("Formatting")).font(crate::theme::semibold(12.5)));
         // Font, size, bold, italic, underline and text colour.
         ui.horizontal(|ui| {
-            if let Some(f) = crate::widgets::font_combo(ui, "tstyle_font", 170.0, &r.font, &fams, Some(&*preview_fn))
-                && f != crate::widgets::ADD_FONT
-            {
-                r.font = f;
+            if let Some(f) = crate::widgets::font_combo(ui, "tstyle_font", 170.0, &r.font, &fams, Some(&*preview_fn)) {
+                if f == crate::widgets::ADD_FONT {
+                    let _ = app.run("font.add", json!({}));
+                } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
+                    let _ = app.run("font.loadSystem", json!({}));
+                } else {
+                    r.font = f;
+                }
             }
             let size = ui.add(egui::TextEdit::singleline(&mut r.size).desired_width(36.0));
             size.on_hover_text(tl!("Size:")).accessible_name(tl!("Size:"));

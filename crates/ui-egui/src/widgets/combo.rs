@@ -462,6 +462,7 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
     let mut text = ui.data_mut(|d| d.get_temp::<String>(edit_id)).unwrap_or_else(|| current.to_string());
     let mut s: ComboSearch = if search { ui.data_mut(|d| d.get_temp(search_id)).unwrap_or_default() } else { ComboSearch::default() };
     let mut focused = false;
+    let mut cancelled = false;
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
@@ -507,13 +508,17 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
         // The recent section shows while nothing is typed; a query lists its matches only.
         let recent_shown: &[String] = if !s.typed || text.trim().is_empty() { &menu_recent } else { &[] };
         let mut regain_focus = false;
+        let list_id = search_id.with("list");
         if s.open {
+            egui::Popup::open_id(ui.ctx(), list_id);
             update_search_matches(&mut s, &text, items, recent_shown, current, step);
             if enter {
                 out = Some(pick_highlighted_font(&s, &text, items, recent_shown));
                 s.open = false;
             } else if ui.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Tab)) {
                 s.open = false;
+                cancelled = true;
+                ui.memory_mut(|m| m.surrender_focus(te_id));
             } else if !focused && !aresp.clicked() {
                 let over = ui.input(|i| i.pointer.latest_pos()).is_some_and(|p| s.popup.is_some_and(|r| r.contains(p)));
                 if over {
@@ -524,6 +529,9 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
             }
         } else if enter {
             out = Some(text.clone());
+        }
+        if !s.open {
+            egui::Popup::close_id(ui.ctx(), list_id);
         }
         if !tip.is_empty() {
             let arrow_name = crate::i18n::fmt(tl!("{name} options"), &[("name", tip)]);
@@ -627,7 +635,7 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
             ui.memory_mut(|m| m.request_focus(te_id));
         }
     });
-    let keep = (focused || s.open) && out.is_none();
+    let keep = (focused || s.open) && out.is_none() && !cancelled;
     ui.data_mut(|d| {
         if keep {
             d.insert_temp(edit_id, text);

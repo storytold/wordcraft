@@ -49,6 +49,7 @@ impl DropCapForm {
     }
 }
 
+/// Renders the Drop Cap dialog controls for position, font, lines, and margin distance.
 pub(super) fn drop_cap_ui(app: &mut WordApp, ui: &mut Ui, f: &mut DropCapForm) -> bool {
     ui.label(egui::RichText::new(tl!("Position")).font(semibold(12.5)));
     ui.horizontal(|ui| {
@@ -66,10 +67,14 @@ pub(super) fn drop_cap_ui(app: &mut WordApp, ui: &mut Ui, f: &mut DropCapForm) -
             t.row(|r| {
                 r.cell(|ui| ui.label(tl!("Font:")));
                 r.cell(|ui| {
-                    if let Some(v) = crate::widgets::font_combo(ui, "dropcap_font", 190.0, &f.font, &fams, Some(&*preview))
-                        && v != crate::widgets::ADD_FONT
-                    {
-                        f.font = v;
+                    if let Some(v) = crate::widgets::font_combo(ui, "dropcap_font", 190.0, &f.font, &fams, Some(&*preview)) {
+                        if v == crate::widgets::ADD_FONT {
+                            let _ = app.run("font.add", json!({}));
+                        } else if v == crate::widgets::LOAD_SYSTEM_FONTS {
+                            let _ = app.run("font.loadSystem", json!({}));
+                        } else {
+                            f.font = v;
+                        }
                     }
                 });
             });
