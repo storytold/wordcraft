@@ -272,9 +272,13 @@ fn a_menu_bar_paste_after_an_unpaired_mod_shift_v_pastes() {
     };
     frame(&mut a, 10.0, vec![egui::Event::ModifiersChanged(chord), key_event(Key::V, true, chord)]);
     assert!(a.canvas.ignore_next_paste, "the key waits for its paired paste");
-    frame(&mut a, 10.5, vec![egui::Event::ModifiersChanged(Modifiers::NONE)]);
+    // No Mod release reaches the canvas (the menu bar takes it).
+    frame(&mut a, 10.5, vec![]);
     assert!(a.canvas.ignore_next_paste, "still within the wait");
-    frame(&mut a, 12.0, vec![egui::Event::Paste("menu".into())]);
+    frame(&mut a, 12.0, vec![]);
+    assert!(!a.canvas.ignore_next_paste, "the wait is over");
+    assert!(a.canvas.paste_event_mods.is_none(), "the chord's Mod+Shift is used up");
+    frame(&mut a, 12.1, vec![egui::Event::Paste("menu".into())]);
     assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "source menu", "the menu-bar paste pasted");
 }
 

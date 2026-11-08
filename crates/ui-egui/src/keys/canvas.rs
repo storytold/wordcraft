@@ -89,6 +89,9 @@ fn expire_paste_wait(app: &mut WordApp, now: f64) {
     } else if app.canvas.paste_wait_since.is_some_and(|t| now - t > PASTE_WAIT) {
         app.canvas.ignore_next_paste = false;
         app.canvas.paste_wait_since = None;
+        // No key came since the chord (any key ends the wait), so noted modifiers are the
+        // chord's: a later paste reads the modifiers held then.
+        app.canvas.paste_event_mods = None;
     }
 }
 
