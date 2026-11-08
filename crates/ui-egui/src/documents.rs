@@ -130,6 +130,28 @@ impl WordApp {
         self.run("file.open", json!({"path": path}))
     }
 
+    /// Open a file the platform hands the app: one named on the command line (a double-click in
+    /// the file manager, the shell's Open verb) or sent by the Finder. A Word template (`.dotx`,
+    /// `.dotm`, `.dot`) starts a new, untitled document based on it, as Word's default verb for a
+    /// template does (#3433): saving it asks where to write, and the template is never written
+    /// over. File › Open still opens a template itself, to edit it, as in Word. Anything else
+    /// opens as [`WordApp::open_file`] opens it. `data` holds the file's bytes (base64) when its
+    /// name can't be passed as text (#1440); `path` then only names it.
+    pub fn open_from_platform(&mut self, path: &str, data: Option<&str>) -> Result<Value, String> {
+        let mut params = json!({"path": path});
+        if let Some(data) = data {
+            params["data"] = json!(data);
+        }
+        if is_word_template(path) {
+            params["replaceBlank"] = json!(true);
+            return self.run("file.newFromTemplate", params);
+        }
+        match data {
+            Some(_) => self.run("file.open", params),
+            None => self.open_file(path, None),
+        }
+    }
+
     /// Show open document `id` in the window (View › Window › Switch Windows, quitting).
     pub(crate) fn show_document(&mut self, id: u64) -> Result<(), String> {
         self.session.activate(id).map_err(|e| e.to_string())?;
@@ -195,6 +217,15 @@ impl WordApp {
         self.ui.backstage = false;
         self.run("file.close", json!({"quit": true})).unwrap_or_else(|e| json!({"quit": false, "error": e}))
     }
+}
+
+/// Is `path` a Word template by its extension (`.dotx`, `.dotm`, `.dot`, in any case)? These are
+/// the template types WordCraft registers with the platform.
+pub fn is_word_template(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|e| ["dotx", "dotm", "dot"].iter().any(|t| e.eq_ignore_ascii_case(t)))
 }
 
 /// The name an open document goes by in the window: the engine's title, with an untitled
