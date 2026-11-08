@@ -221,7 +221,12 @@ impl Exporter<'_> {
     }
 
     pub(crate) fn page(&mut self, s: &mut Surface, page: &Page, w: f32, h: f32) {
-        if let Some(c) = self.doc.settings.page_color
+        // `page_color` is only the fallback older readers use for a gradient (its first stop) or
+        // a pattern (its back colour). Painting it under the fill composites a translucent fill
+        // over itself, so the screen renderer ignores it the same way.
+        if self.doc.settings.page_gradient.is_none()
+            && self.doc.settings.page_pattern.is_none()
+            && let Some(c) = self.doc.settings.page_color
             && let Some(p) = rect_path(&Rect::new(0.0, 0.0, w, h))
         {
             self.tagged(s, Role::Artifact(ArtifactType::Other), None, |_, s| {

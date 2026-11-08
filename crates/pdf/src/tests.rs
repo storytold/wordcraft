@@ -2912,3 +2912,54 @@ fn the_author_is_left_out_when_personal_information_is_removed() {
     d.settings.remove_personal_info = true;
     assert!(!raw(&d).contains("Ada Writer"), "the creator stays out of the PDF");
 }
+
+/// A gradient or pattern page fill replaces `page_color` in the PDF, as it does on screen: the
+/// colour is the fallback older readers use, not a base to paint under a translucent fill.
+#[test]
+fn page_fills_do_not_paint_the_fallback_color_beneath_them() {
+    use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind};
+    use wordcraft_doc::wordart::GradStop;
+    let opts = PdfOptions { tagged: false, compress: false, ..Default::default() };
+    let raw = |d: &Document| String::from_utf8_lossy(&export(d, &opts).unwrap()).into_owned();
+    // A plain page colour is still painted (the fixture's control).
+    let mut solid = Document::new();
+    solid.settings.page_color = Some(Rgb(255, 0, 0));
+    assert!(raw(&solid).contains("1 0 0 rg"), "a solid page colour is painted");
+    // A pattern's back and ink replace it: nothing red remains.
+    let mut pattern = Document::new();
+    pattern.settings.page_color = Some(Rgb(255, 0, 0));
+    pattern.settings.page_pattern =
+        Some(wordcraft_doc::PagePattern { preset: "lgCheck".into(), fore: Rgb(0, 0, 255), back: Rgb(255, 255, 255), transparency: 50.0 });
+    assert!(!raw(&pattern).contains("1 0 0 rg"), "the pattern is not painted over the fallback colour");
+    // So does a gradient's stops.
+    let mut gradient = Document::new();
+    gradient.settings.page_color = Some(Rgb(255, 0, 0));
+    gradient.settings.page_gradient = Some(Gradient {
+        stops: vec![
+            GradStop { pos: 0.0, color: Rgb(0, 0, 255), transparency: 0.0 },
+            GradStop { pos: 100.0, color: Rgb(0, 255, 0), transparency: 0.0 },
+        ],
+        kind: GradientKind::Linear { angle: 0.0, scaled: false },
+        tile: None,
+        rot_with_shape: false,
+        flip: GradientFlip::None,
+    });
+    assert!(!raw(&gradient).contains("1 0 0 rg"), "the gradient is not painted over the fallback colour");
+}
+
+#[test]
+fn a_translucent_pattern_fades_its_completed_group() {
+    let mut d = Document::new();
+    d.settings.page_pattern =
+        Some(wordcraft_doc::PagePattern { preset: "lgCheck".into(), fore: Rgb(0, 0, 255), back: Rgb(255, 255, 255), transparency: 50.0 });
+    let opts = PdfOptions { tagged: false, compress: false, ..Default::default() };
+    let raw = String::from_utf8_lossy(&export(&d, &opts).unwrap()).into_owned();
+    // The back and the marks are one transparency group, faded once by the caller.
+    let group = raw.find("/Group<</Type/Group/S/Transparency").expect("the pattern is drawn in a transparency group");
+    assert!(raw[..group].contains("/ca 0.5"), "the group carries the pattern's opacity");
+    let stream = raw[group..].find("stream").expect("the group has a content stream") + group + "stream".len();
+    let end = raw[stream..].find("endstream").expect("the group's stream ends") + stream;
+    let form = &raw[stream..end];
+    assert!(form.contains("1 1 1 rg") && form.contains("0 0 1 rg"), "the pattern's back and ink are drawn in the group");
+    assert!(!form.contains(" gs"), "they are drawn opaque: the group carries the opacity, not each fill");
+}

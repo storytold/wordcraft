@@ -332,14 +332,20 @@ impl Exporter<'_> {
         if alpha <= 0.0 {
             return;
         }
-        let Some(back) = rect_path(&Rect::new(0.0, 0.0, w, h)) else { return };
-        s.set_fill(Some(fill(p.back, alpha)));
-        s.draw_path(&back);
-        s.set_fill(None);
         let (cols, rows) = ((w / TILE).ceil(), (h / TILE).ceil());
         if !(cols.is_finite() && rows.is_finite()) || cols * rows > MAX_TILES {
             return;
         }
+        let Some(back) = rect_path(&Rect::new(0.0, 0.0, w, h)) else { return };
+        // The back and the marks are one pattern: draw both opaque in a group and fade the group
+        // once, so a partly transparent pattern doesn't show its back through its own marks.
+        let grouped = alpha < 1.0;
+        if grouped {
+            s.push_opacity(norm(alpha));
+        }
+        s.set_fill(Some(fill(p.back, 1.0)));
+        s.draw_path(&back);
+        s.set_fill(None);
         let tile = p.tile();
         let (cols, rows) = (cols.max(1.0) as usize, rows.max(1.0) as usize);
         if !tile.rects.is_empty() {
@@ -355,7 +361,7 @@ impl Exporter<'_> {
                 }
             }
             if let Some(path) = pb.finish() {
-                s.set_fill(Some(fill(p.fore, alpha)));
+                s.set_fill(Some(fill(p.fore, 1.0)));
                 s.draw_path(&path);
                 s.set_fill(None);
             }
@@ -363,7 +369,7 @@ impl Exporter<'_> {
         if !tile.dots.is_empty() {
             // Each dot is its own small path: krilla paths aren't merged here, and a preset has
             // at most sixteen dots a tile.
-            s.set_fill(Some(fill(p.fore, alpha)));
+            s.set_fill(Some(fill(p.fore, 1.0)));
             for ty in 0..rows {
                 for tx in 0..cols {
                     let (ox, oy) = (tx as f32 * TILE, ty as f32 * TILE);
@@ -381,7 +387,7 @@ impl Exporter<'_> {
             let stroke = Stroke {
                 paint: rgb::Color::new(p.fore.0, p.fore.1, p.fore.2).into(),
                 width: (width * TILE).clamp(0.05, 8.0),
-                opacity: norm(alpha),
+                opacity: norm(1.0),
                 dash: None,
                 line_cap: LineCap::Butt,
                 ..Default::default()
@@ -401,6 +407,9 @@ impl Exporter<'_> {
                     }
                 }
             }
+        }
+        if grouped {
+            s.pop();
         }
     }
 
