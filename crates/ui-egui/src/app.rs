@@ -13,13 +13,15 @@ use super::{
 mod commands;
 mod control;
 mod files;
+#[cfg(test)]
+pub(crate) use files::suggested_stem;
 mod fonts;
 mod frame;
 mod input;
 mod pictures;
 mod prefs;
 
-pub(crate) use commands::{discards_document, works_without_document};
+pub(crate) use commands::works_without_document;
 pub(crate) use input::control_click_as_secondary;
 
 impl WordApp {

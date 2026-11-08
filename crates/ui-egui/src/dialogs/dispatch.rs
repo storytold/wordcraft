@@ -1,7 +1,7 @@
 use super::bookmarks::{bookmark, enclose_preview, icons_body, macros};
 use super::chrome::{buttons, color_field};
 use super::find::{FindTab, SEARCH_SUGGESTIONS, command_matches, find_in_navigation_pane, goto_body, special_menu, swallow_shortcut_text};
-use super::font::{apply_font, font_box, preview_size};
+use super::font::{apply_font, font_box, font_sample_box, font_sample_props, sample_paper};
 use super::forms::{cell_margins_dialog, custom_properties, table_properties};
 use super::mailings::{ADDRESS_PARTS, recipient_list, rule_params};
 use super::page_setup::{page_layout_commands, page_paper_group, page_valign_combo, page_valign_value, run_as_one_step};
@@ -120,23 +120,8 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     else {
         return false;
     };
-    // Build the sample text format for the preview pane below.
-    let preview_size = preview_size(size);
-    let preview_color = wordcraft_doc::Rgb::parse(color).map(crate::theme::c32).unwrap_or_else(|| ui.visuals().text_color());
-    let mut fmt =
-        egui::TextFormat { font_id: egui::FontId::new(preview_size, egui::FontFamily::Proportional), color: preview_color, ..Default::default() };
-    if *bold {
-        fmt.font_id = crate::theme::semibold(preview_size);
-    }
-    if *italic {
-        fmt.italics = true;
-    }
-    if *underline {
-        fmt.underline = egui::Stroke::new(1.0, preview_color);
-    }
-    if *strike {
-        fmt.strikethrough = egui::Stroke::new(1.0, preview_color);
-    }
+    let sample_props =
+        font_sample_props(app, sample_paper(app), font, size, color, (*bold, *italic, *underline, *strike), (*small_caps, *caps, *hidden), *spacing);
     crate::rtl::Table::new("fontdlg").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
         // Word's two font boxes when East Asian text is in use: the Latin text font and
         // the Asian text font, each with its own list (type to find a font).
@@ -235,8 +220,17 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             r.cell(|ui| ui.checkbox(strike, tl!("Strikethrough")));
         });
         t.row(|r| {
+            // Superscript and Subscript exclude each other: the one just ticked wins.
+            let was_sup = *sup;
             r.cell(|ui| ui.checkbox(sup, tl!("Superscript")));
             r.cell(|ui| ui.checkbox(sub, tl!("Subscript")));
+            if *sup && *sub {
+                if was_sup {
+                    *sup = false;
+                } else {
+                    *sub = false;
+                }
+            }
         });
         t.row(|r| {
             r.cell(|ui| ui.checkbox(small_caps, tl!("Small caps")));
@@ -249,10 +243,7 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     // Live preview of the chosen font/size/colour/effects.
     ui.separator();
     ui.label(egui::RichText::new(tl!("Preview")).small().weak());
-    let sample = if *caps { tl!("AaBbYyZz").to_uppercase() } else { tl!("AaBbYyZz").to_string() };
-    let mut job = egui::text::LayoutJob::single_section(sample, fmt);
-    job.wrap.max_width = ui.available_width().min(400.0);
-    ui.label(job);
+    font_sample_box(app, ui, sample_paper(app), &sample_props, (*sup, *sub), *hidden);
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
         apply_font(app, d);
@@ -590,8 +581,20 @@ fn insert_table_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
 }
 
 /// A margin's number box, in the unit the interface measures in.
-fn margin(value: &mut f32) -> egui::DragValue<'_> {
-    egui::DragValue::new(value).speed(3.6 / crate::options::unit().pt_per_unit()).measure(crate::options::unit()).max_decimals(2)
+fn margin(value: &mut f32) -> impl egui::Widget + '_ {
+    move |ui: &mut Ui| {
+        // DragValue's unfocused button extends to fit its value; keep it inside the field too.
+        let (_, rect) = ui.allocate_space(egui::vec2(80.0, ui.spacing().interact_size.y));
+        let mut field = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(crate::rtl::row_layout(ui, egui::Align::Center)));
+        field.shrink_clip_rect(rect);
+        field.add(
+            egui::DragValue::new(value)
+                .speed(3.6 / crate::options::unit().pt_per_unit())
+                .measure(crate::options::unit())
+                .max_decimals(2)
+                .clip_text(true),
+        )
+    }
 }
 
 fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
@@ -649,9 +652,9 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     crate::rtl::Table::new("ps_grid").columns(4).show(ui, |t| {
         t.row(|r| {
             let chars_label = r.cell(|ui| ui.add_enabled(grid.0 >= 2, egui::Label::new(tl!("Characters per line:"))));
-            r.cell(|ui| ui.add_enabled(grid.0 >= 2, egui::DragValue::new(&mut grid.2).range(1..=1000)).labelled_by(chars_label.id));
+            r.cell(|ui| ui.add_enabled(grid.0 >= 2, egui::DragValue::new(&mut grid.2).range(1..=1000).clip_text(true)).labelled_by(chars_label.id));
             let lines_label = r.cell(|ui| ui.add_enabled(grid.0 >= 1, egui::Label::new(tl!("Lines per page:"))));
-            r.cell(|ui| ui.add_enabled(grid.0 >= 1, egui::DragValue::new(&mut grid.1).range(1..=1000)).labelled_by(lines_label.id));
+            r.cell(|ui| ui.add_enabled(grid.0 >= 1, egui::DragValue::new(&mut grid.1).range(1..=1000).clip_text(true)).labelled_by(lines_label.id));
         });
     });
     ui.horizontal(|ui| {
