@@ -1,5 +1,7 @@
 # WordCraft roadmap
 
+> **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
+
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -150,6 +152,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-11-05: ODT table rows kept from breaking across pages stay so (gap 19): they came back from a save free to break.
 - 2026-11-05: ODT: a watermark added, changed or removed, and Different Odd & Even Pages turned on or off, in a file read from ODT are saved.
 - 2026-11-05: ODT pictures offered in several formats show and survive a save (gap 19): LibreOffice's letter templates lost theirs.
+- 2026-11-07: An in-line picture lowered past its own height (`w:position`) lowers its line as far, as in Word; all 156 synthetic lines measured for #3984 match Word (#5796). Exact spacing keeps the line's baseline.
 - 2026-10-31: List labels: a numbering level with format `none` and literal text, such as `RESPONSE:` with a one-inch hanging indent, shows that text as its label, as Word does; it used to show nothing. As in Word, a `none` level still counts and restarts the levels below it, its own number is empty (in legal numbering too), and an empty label still tabs the text to the indent (#4985). Readiness unchanged.
 - 2026-11-01: DOCX tables keep rows and cells wrapped in `mc:AlternateContent`, selecting one supported Choice or Fallback with the existing reader policy (#5219). Original synthetic checks cover namespace aliases, unsupported requirements, nested row/cell content controls and two save/reopen cycles; broader corpus and native Word qualification remain open.
 
@@ -161,6 +164,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-11-04: MHT import keeps semicolons and escaped quotes inside quoted MIME parameters, so an unrelated parameter cannot supply a false multipart boundary and hide the document text. Readiness estimates unchanged.
 - 2026-10-30: Equations: `\int`, `\sum` and the other n-ary operators typed with AutoCorrect wait for their limits. `\int` + Space, then `_0^1` and Space, gives ∫ with its limits and the caret in its operand, and `\int_0^1` typed in one go does the same, since any character that can't continue `\name` corrects it; this is observed in Word for Windows on #4938. Enter or an arrow key builds it without going into the operand, and `∫∫` puts the operand in the inner operator; those two are not observed in Word (#4917). Readiness unchanged.
 
+- 2026-11-04: RTF import skips the declared Unicode fallback count even when it exceeds eight fallback units, so longer ANSI alternatives do not leak into the document text. Skipping stays bounded by the available input and ends at a group boundary. Readiness estimates unchanged.
 - 2026-10-28: Ink replay, eraser picking, lasso selection and arrow-candidate discovery reuse the paragraph prefixes they have already scanned (#3614). Page item order, stroke geometry and saved data retain their behavior. This narrows the stability work; ink import fidelity, native pen input and broader corpus qualification remain open.
 - 2026-10-29: Page drawing finds text-box warps without rescanning the paragraph for every box (#3614). Only requested offsets are indexed, and each paragraph walk stops after its last requested character. Original Linux discovery, complete display-output and CLI/MCP save/reopen controls; native Word comparison untested. Readiness estimates unchanged.
 - 2026-10-28: Protected typing boundary lookup counts preceding objects once and indexes editable permission IDs (#3614); caret movement and enforcement policy are unchanged. Existing mutation and protection checks retain their costs; this does not close the broader performance gap.
@@ -326,6 +330,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
+| 2026-11-04 | The CLI opens a non-Unicode input filename even after options such as `--page 2` or `--format flatopc`; text option values still require Unicode; `run --file` and `run --script` retain native paths. |
 | 2026-11-04 | Pictures keep the brightness, contrast and transparency their file gives them (#1711, #1766): a "Washout" picture watermark (VML `gain`/`blacklevel`) and a washed-out letterhead picture behind the text (`a:lum`) are drawn faded on screen and in PDF instead of at full colour, with the pixel curve measured on Word's own PDF export; `a:alphaModFix` transparency too. Saved back as DrawingML (and as VML `gain`/`blacklevel` in Word 2003 XML, without the transparency). Picture Format › Corrections, Transparency and Color › Washout replace the file's values (other Color modes leave them alone), and Reset Picture discards them all, as in Word; the PDF embeds the corrected pixels once per picture |
 |---|---|
 | 2026-10-17 | Copies keep their formatting in programs that read RTF rather than HTML: Copy and Cut put RTF beside the text and HTML on the system clipboard on Windows, macOS and Wayland (an X11 copy stays text and HTML, since arboard owns the selection there; a copy of only pictures or shapes carries no HTML or RTF, so pasting it back keeps every detail), and Paste reads another program's RTF on macOS and X11 too, not only on Windows and Wayland |
@@ -824,6 +829,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 |---|---|---|
 | 2026-11-07 | trivial | Page Setup also bounds the unfocused margin display after a long numeric paste; the accepted value is retained (#5650). |
 | 2026-11-05 | trivial | Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. |
+| 2026-11-07 | trivial | Progress log: An in-line picture lowered past its own height (`w:position`) lowers its line as far, as in Word; all 156 synthetic lines measured for #3984 match Word (#5796). |
 | 2026-10-31 | trivial | Progress log: a numFmt none list level shows its literal text (#4985); readiness unchanged |
 | 2026-11-02 | trivial | Progress log: alternative format chunks and MHT open |
 | 2026-11-06 | trivial | Print helpers remove loaded PDF/settings files before driver work, tolerate prior removal and report cleanup errors; a held-driver regression checks the files are already absent (#5710) |
@@ -834,7 +840,9 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-04 | trivial | Progress log: CLI convert format options; readiness estimates unchanged |
 | 2026-11-04 | trivial | Progress log: MHT quoted MIME parameters; readiness estimates unchanged |
 | 2026-10-30 | trivial | Progress log: typed n-ary operators such as ∫ and ∑ wait for their limits, and any character that cannot continue a math name corrects it, as observed in Word for Windows on #4938; Enter, arrow keys and nested operators are WordCraft's own choices (#4917); readiness unchanged |
+| 2026-11-04 | trivial | CLI input paths keep their native filename when a value-taking option comes first; regression coverage includes conversion to Flat OPC and rejection of non-Unicode option values. |
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` is preserved with true, false and absent values; OOXML properties follow schema order. Grid layout remains open. |
+| 2026-11-04 | trivial | Progress log: RTF Unicode fallback counts; readiness estimates unchanged |
 | 2026-10-28 | trivial | Per-page ink object lookups, #3614. Drawing order, geometry and saved data retain their behavior; no readiness estimate change |
 | 2026-11-05 | trivial | Progress log: ODT heading text of another size (gap 19) |
 | 2026-11-05 | trivial | Progress log: ODT table rows that don't break (gap 19) |
@@ -872,7 +880,6 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
 | 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
-| 2026-11-02 | trivial | Progress log: alternative format chunks and MHT open |
 | 2026-11-01 | trivial | Progress log: columns for selected text draw their line between (#5178) |
 | 2026-10-31 | trivial | Progress log: a Word 365 .doc in Aptos opens in Aptos (#5066); readiness unchanged |
 | 2026-10-31 | trivial | Progress log: a table row doesn't split off a picture that doesn't fit (#4272) |
