@@ -7032,6 +7032,7 @@ dependencies = [
 name = "wordcraft-law-ui"
 version = "0.15.1"
 dependencies = [
+ "craft-ui",
  "egui",
  "egui_kittest",
  "serde_json",

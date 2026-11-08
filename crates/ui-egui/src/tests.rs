@@ -6427,7 +6427,6 @@ fn the_full_screen_button_reports_the_commands_own_enabled_state() {
                     mutates: s.mutates,
                     replaces_document: s.replaces_document,
                     enabled: unavailable,
-                    replaces_document: s.replaces_document,
                     run: s.run,
                 }
             } else {

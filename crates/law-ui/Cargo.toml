@@ -12,6 +12,7 @@ workspace = true
 wordcraft-engine = { workspace = true }
 wordcraft-law = { workspace = true }
 wordcraft-ui-egui = { workspace = true }
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
 egui = { workspace = true }
 serde_json = { workspace = true }
 

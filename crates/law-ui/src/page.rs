@@ -637,7 +637,7 @@ fn checks_editor(app: &mut Ctx<'_>, ui: &mut Ui, profile_id: &str, doc_key: &str
             ui.horizontal(|ui| {
                 let kind_label = ui.label("Kind:");
                 let mut selected_kind = kind.to_string();
-                let combo = egui::ComboBox::from_id_salt(("law_check_kind", profile_id, doc_key, i))
+                let combo = craft_ui::ComboBox::from_id_salt(("law_check_kind", profile_id, doc_key, i))
                     .selected_text(&selected_kind)
                     .width(200.0)
                     .show_ui(ui, |ui| {
@@ -804,6 +804,7 @@ fn patch_check(app: &mut Ctx<'_>, profile_id: &str, doc_key: &str, profile: &mut
 }
 
 /// A list of checkboxes that picks which section ids or style names a check's `field` lists.
+#[allow(clippy::too_many_arguments)]
 fn check_id_list_editor(
     app: &mut Ctx<'_>,
     ui: &mut Ui,
