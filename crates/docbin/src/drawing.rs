@@ -185,7 +185,7 @@ fn leaf(sp: &Sp, w: f32, h: f32, float: Float, b: &Build, pics: &mut Pictures) -
     let p = &sp.props;
     if let Some(pib) = p.pib {
         let media = pics.bse(pib, b.bstore, b.delay)?;
-        return Some(InlineObject::Image { media, w, h, alt: p.alt.clone(), float, crop: p.crop, ole: None });
+        return Some(InlineObject::Image { media, w, h, alt: p.alt.clone(), float, crop: p.crop, fx: Default::default(), ole: None });
     }
     let story = b.stories.get(&sp.spid).copied().filter(|_| sp.textbox || sp.spt == 202);
     let mut kind = match sp.spt {
@@ -211,7 +211,11 @@ fn leaf(sp: &Sp, w: f32, h: f32, float: Float, b: &Build, pics: &mut Pictures) -
         kind = ShapeKind::TextBox;
     }
     let line = kind == ShapeKind::Line;
-    let fill = if line || p.filled == Some(false) { None } else { Some(Fill::solid(p.fill_color.unwrap_or(Rgb::WHITE))) };
+    // Brackets and braces (85 to 88, bracket and brace pairs 185, 186) are unfilled unless
+    // `fFilled` says otherwise, as Word's VML shapetypes for them say (`filled="f"`). They are
+    // drawn as their box here, which a default fill would make an opaque block over the text.
+    let unfilled = p.filled == Some(false) || (matches!(sp.spt, 85..=88 | 185 | 186) && p.filled != Some(true));
+    let fill = if line || unfilled { None } else { Some(Fill::solid(p.fill_color.unwrap_or(Rgb::WHITE))) };
     let stroke = if p.line == Some(false) { None } else { Some(p.line_color.unwrap_or(Rgb::BLACK)) };
     // Line widths are EMUs; Word's default is 0.75 pt.
     let stroke_width = p.line_width.map_or(0.75, |e| (e as f32 / 12_700.0).clamp(0.0, 100.0));
