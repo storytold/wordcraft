@@ -83,14 +83,13 @@ fn workbook(pkg: &mut Package<'_>) -> Result<Workbook, String> {
             }
         }
     });
-    let sheets = listed
-        .into_iter()
-        .filter_map(|(name, id)| {
-            // Worksheets only: chart and dialog sheets hold no cells.
-            let r = rels.iter().find(|r| r.id == id && r.kind.ends_with("/worksheet"))?;
-            Some(SheetRef { name, path: r.target.clone() })
-        })
-        .collect();
+    // Worksheets only: chart and dialog sheets hold no cells. Indexed by id once (the first
+    // relationship with an id wins), not searched for every sheet.
+    let mut worksheets: HashMap<&str, &str> = HashMap::new();
+    for r in rels.iter().filter(|r| r.kind.ends_with("/worksheet")) {
+        worksheets.entry(r.id.as_str()).or_insert(r.target.as_str());
+    }
+    let sheets = listed.into_iter().filter_map(|(name, id)| Some(SheetRef { name, path: worksheets.get(id.as_str())?.to_string() })).collect();
     let part = |suffix: &str| rels.iter().find(|r| r.kind.ends_with(suffix)).map(|r| r.target.clone());
     Ok(Workbook { sheets, date1904, shared: part("/sharedStrings"), styles: part("/styles") })
 }

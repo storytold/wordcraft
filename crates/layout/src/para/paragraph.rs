@@ -397,7 +397,7 @@ impl<'a> Shaped<'a> {
             // The line makes room for effects (shadows) around the picture too, and
             // for a rotated one's bounds, as Word does.
             let [el, et, er, eb] = float.effect_extent();
-            let (px, py) = float.spin_pad(w * s, h * s);
+            let (px, py) = float.line_pad(w * s, h * s, env.doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT);
             let tall = h * s + et + eb + 2.0 * py;
             // Lowered further than its height, its top stays on the baseline while the line
             // reaches as far down as the lowering (Word, measured: a 6 pt picture lowered 30 pt
@@ -839,21 +839,27 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
     }
 
     // Word breaks after a hyphen even when a digit follows ("2016-" / "2022"), where UAX #14
-    // keeps a hyphen and a number together (LB25): add those positions back. Only U+002D before
-    // ASCII digits is added here; a non-breaking hyphen (U+2011) and a minus sign (U+2212) stay
-    // unbreakable, and the other dashes keep their ordinary UAX #14 breaks.
+    // keeps a hyphen and a number together (LB25), and when a slash and a letter follow
+    // ("Dataprotection-" / "/Secrecyviolation", #3408), where LB13 forbids a break before the
+    // slash: add those positions back. Word keeps "fitness-/1589" whole, so a slash before a digit
+    // gains no break. Only U+002D is added here; a non-breaking hyphen (U+2011) and a minus sign
+    // (U+2212) stay unbreakable, and the other dashes keep their ordinary UAX #14 breaks.
     let hyphen_breaks: Vec<usize> = text
         .match_indices('-')
         .filter_map(|(pos, _)| {
             let i = pos + 1;
-            text.get(i..).and_then(|t| t.chars().next()).is_some_and(|n| n.is_ascii_digit()).then_some(i)
+            let mut next = text.get(i..).unwrap_or_default().chars();
+            match next.next() {
+                Some(n) if n.is_ascii_digit() => Some(i),
+                Some('/') => next.next().is_some_and(char::is_alphabetic).then_some(i),
+                _ => None,
+            }
         })
         .collect();
-    if !hyphen_breaks.is_empty() {
-        found.extend(hyphen_breaks);
-        found.sort_unstable();
-        found.dedup();
-    }
+    found.extend(hyphen_breaks);
+    // The breaks added above come after UAX #14's: put them back in order.
+    found.sort_unstable();
+    found.dedup();
     // Myanmar has no spaces between words: it wraps between syllables.
     if text.chars().any(|c| matches!(u32::from(c), 0x1000..=0x109F | 0xA9E0..=0xA9FF | 0xAA60..=0xAA7F)) {
         found.extend(wordcraft_doc::cluster::myanmar_breaks(text));
