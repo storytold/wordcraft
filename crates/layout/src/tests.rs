@@ -9,6 +9,7 @@ mod bidi;
 mod budget;
 mod cell_floats;
 mod complex;
+mod float_top;
 mod grid;
 mod ligature;
 pub(crate) mod linear;
@@ -295,6 +296,82 @@ fn legacy_table_contextual_spacing_flag_is_scoped_to_cells_and_legacy_mode() {
             assert!(legacy_table_gap(mode, true, location).abs() < 0.01);
         }
     }
+}
+
+/// Baseline of the paragraph after a one-row table, less that of the first cell's last
+/// paragraph, which has 12 pt after in `style`, contextual or not. `next_cell` adds a second cell
+/// whose paragraph has that style; `after_table` styles the paragraph after the table; `text` is
+/// the last paragraph's text.
+fn cell_end_gap(style: &str, contextual: bool) -> f32 {
+    cell_end_gap_in(Document::new(), style, contextual, None, None, "Beta probe")
+}
+
+fn cell_end_gap_in(mut d: Document, style: &str, contextual: bool, next_cell: Option<&str>, after_table: Option<&str>, text: &str) -> f32 {
+    use wordcraft_doc::props::LineSpacing;
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
+        id: "Other".into(),
+        name: "Other".into(),
+        based_on: Some("Normal".into()),
+        ..Default::default()
+    });
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let props = ParaProps { space_before: Some(0.0), space_after: Some(0.0), line_spacing: Some(LineSpacing::Exactly(24.0)), ..Default::default() };
+    let para = |text: &str, props: ParaProps| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props = props;
+        wordcraft_doc::para_block(p)
+    };
+    let styled = |s: Option<&str>| ParaProps { style: s.map(Into::into), ..props.clone() };
+    let mut table = Table::new(1, if next_cell.is_some() { 2 } else { 1 }, 468.0);
+    table.props.style = None;
+    table.props.cell_margins = Some([0.0; 4]);
+    let last = ParaProps { style: Some(style.into()), space_after: Some(12.0), contextual_spacing: Some(contextual), ..props.clone() };
+    table.rows[0].cells[0].blocks = vec![para("Alpha probe", props.clone()), para(text, last)];
+    if let Some(cell) = table.rows[0].cells.get_mut(1) {
+        cell.blocks = vec![para("Delta probe", styled(next_cell))];
+    }
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(table)), para("Gamma probe", styled(after_table))];
+    let l = lay(&d);
+    let baseline = |at: &[u32]| {
+        l.pages[0].items.iter().find_map(|i| match i {
+            Placed::Lines { para, y, path, .. } if path.0 == at => Some(y + para.lines[0].baseline),
+            _ => None,
+        })
+    };
+    let (Some(cell), Some(after)) = (baseline(&[0, 0, 0, 1]), baseline(&[1])) else { panic!("probe lines missing") };
+    after - cell
+}
+
+#[test]
+fn contextual_spacing_drops_the_space_after_a_cells_last_normal_paragraph() {
+    // The end-of-cell mark is a Normal paragraph: contextual spacing drops the 12 pt after a
+    // Normal last paragraph (docxide-pdf `cell-end-text-context`, `cell-end-empty-context`), not
+    // after one in another style (`cell-end-other-style`) or without contextual spacing.
+    let kept = cell_end_gap("Normal", false);
+    assert!((cell_end_gap("Other", true) - kept).abs() < 0.01);
+    let dropped = cell_end_gap("Normal", true);
+    assert!((kept - dropped - 12.0).abs() < 0.01, "kept {kept}, dropped {dropped}");
+    // An undefined style is formatted as Normal, and drops it too.
+    assert!((cell_end_gap("Missing", true) - dropped).abs() < 0.01);
+    // The mark decides, not a neighbour: another style in the next cell or after the table
+    // leaves the drop as it is.
+    for (next_cell, after_table) in [(Some("Other"), None), (None, Some("Other"))] {
+        let gap = cell_end_gap_in(Document::new(), "Normal", true, next_cell, after_table, "Beta probe");
+        assert!((gap - dropped).abs() < 0.01, "{next_cell:?} {after_table:?}: {gap}, dropped {dropped}");
+    }
+    // And the reverse: another style keeps its space beside Normal neighbours.
+    let gap = cell_end_gap_in(Document::new(), "Other", true, Some("Normal"), Some("Normal"), "Beta probe");
+    assert!((gap - kept).abs() < 0.01, "other beside Normal: {gap}, kept {kept}");
+    // An empty last paragraph drops it too (`cell-end-empty-context`).
+    let gap = cell_end_gap_in(Document::new(), "Normal", true, None, None, "");
+    assert!((gap - dropped).abs() < 0.01, "empty: {gap}, dropped {dropped}");
+    // Where `allowSpaceOfSameStyleInTable` keeps same-style space in cells (modes 11/12/14), the
+    // 12 pt stays.
+    let mut legacy = Document::new();
+    legacy.settings.compat_mode = 14;
+    legacy.settings.allow_space_of_same_style_in_table = true;
+    let gap = cell_end_gap_in(legacy, "Normal", true, None, None, "Beta probe");
+    assert!((gap - kept).abs() < 0.01, "legacy {gap}, kept {kept}");
 }
 
 fn contextual_gap(after: f32, before: f32, first: bool, second: bool, different_style: bool, header: bool) -> f32 {
@@ -3850,6 +3927,40 @@ fn extreme_page_and_line_number_starts_do_not_overflow() {
     assert!(l.pages.len() >= 3, "{} pages", l.pages.len());
 }
 
+/// Line numbers take the document's character formatting through the "Line Number" style, as in
+/// Word (Aptos 12 pt black in a document whose defaults are Aptos 12 pt), not a fixed small grey.
+#[test]
+fn line_numbers_follow_the_line_number_style() {
+    let number_runs = |d: &Document| {
+        let l = lay(d);
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Lines { story, para, .. } if *story == DECOR_STORY => para.styles.first().map(|s| (s.size, s.rc.color)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut d = Document::from_text("one\ntwo\nthree");
+    d.last_section.line_numbers = Some(Default::default());
+    Arc::make_mut(&mut d.styles).default_chr.size = Some(12.0);
+    let plain = number_runs(&d);
+    assert_eq!(plain.len(), 3);
+    assert!(plain.iter().all(|(size, color)| *size == 12.0 && *color == wordcraft_doc::TextColor::Auto), "{plain:?}");
+
+    let red = wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(0xC0, 0, 0));
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
+        id: "LineNumber".into(),
+        name: "line number".into(),
+        kind: wordcraft_doc::StyleKind::Character,
+        chr: CharProps { size: Some(8.0), color: Some(red), ..Default::default() },
+        ..Default::default()
+    });
+    let styled = number_runs(&d);
+    assert!(styled.iter().all(|(size, color)| *size == 8.0 && *color == red), "{styled:?}");
+}
+
 #[test]
 fn line_numbers_borders_text_boxes() {
     let mut d = Document::from_text("one\ntwo\nthree");
@@ -7014,6 +7125,48 @@ fn floating_tables_take_no_room_and_text_wraps_beside_them() {
     assert!(bx + bleft > nx + 200.0, "body text at {}, right of the narrow table", bx + bleft);
 }
 
+/// Before Word 2013 layout a floating table moved below another keeps its own left edge, also
+/// when its first cell has no left margin (docxide `displaced-anchor-*-compat12-overlap0-*`), in
+/// the body and in a table cell.
+#[test]
+fn a_floating_table_moved_below_another_keeps_its_edge_before_word_2013_layout() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let narrow_x = |mode: u32, in_cell: bool| {
+        let mut d = Document::from_text("Body.");
+        d.settings.compat_mode = mode;
+        let table = |w: f32, text: &str, dist: [f32; 4]| {
+            let mut t = Table::new(1, 1, w);
+            t.props.cell_margins = Some([0.0; 4]);
+            t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+            t.props.float = Some(TableFloat { h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, dist, overlap: false, ..Default::default() });
+            t
+        };
+        let floats = [table(300.0, "Wide", [0.0; 4]), table(100.0, "Narrow", [9.0, 0.0, 9.0, 0.0])];
+        if in_cell {
+            let mut outer = Table::new(1, 1, 468.0);
+            outer.rows[0].cells[0].blocks = floats.into_iter().map(|t| std::sync::Arc::new(wordcraft_doc::Block::Table(t))).collect();
+            outer.rows[0].cells[0].blocks.push(wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Cell.", Default::default())));
+            d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(outer)).unwrap();
+        } else {
+            for (i, t) in floats.into_iter().enumerate() {
+                d.insert_block(StoryRef::Body, &Path::top(i), wordcraft_doc::Block::Table(t)).unwrap();
+            }
+        }
+        let l = lay(&d);
+        let xs: Vec<(f32, f32)> =
+            l.pages[0].items.iter().filter_map(|i| if let Placed::Lines { x, y, .. } = i { Some((*x, *y)) } else { None }).collect();
+        let [(wx, wy), (nx, ny), ..] = xs.as_slice() else { panic!("{xs:?}") };
+        assert!(*ny > *wy + 10.0, "mode {mode}, in cell {in_cell}: narrow at {ny}, below the wide table at {wy}: {xs:?}");
+        nx - wx
+    };
+    for in_cell in [false, true] {
+        let (old, new) = (narrow_x(12, in_cell), narrow_x(15, in_cell));
+        assert!(old.abs() < 0.01, "mode 12, in cell {in_cell}: narrow table {old} right of the wide one");
+        assert!((new - 9.0).abs() < 0.01, "mode 15, in cell {in_cell}: narrow table {new} right of the wide one");
+    }
+}
+
 /// A margin-anchored floating table is placed from the anchor page's margin even when a body
 /// paragraph keeps trailing empty lines: all 24 preceding paragraphs stay on page one and every
 /// table row is drawn exactly once there.
@@ -8975,6 +9128,34 @@ fn superscript_and_subscript_lines_are_as_tall_as_full_size_text() {
     }
     let lowered = height(&[("Hxg ", 11.0, VertAlign::Baseline, 0.0), ("max", 11.0, VertAlign::Subscript, -6.0)]);
     assert!((lowered - plain - 6.0).abs() < 0.01, "lowered {lowered} vs plain {plain}");
+}
+
+#[test]
+fn superscript_digits_advance_at_the_half_point_size() {
+    use wordcraft_doc::props::VertAlign;
+    // Word sets an 11pt superscript at 7pt (0.65 × 11 = 7.15, rounded to the half point): its
+    // digits advance by 7pt digit widths (Word for Mac, measured from its PDF export).
+    let width = |size: f32, vert_align: VertAlign| {
+        let mut p = wordcraft_doc::Paragraph::new();
+        let props =
+            wordcraft_doc::CharProps { font: Some(WRAP_TEST_FONT.into()), size: Some(size), vert_align: Some(vert_align), ..Default::default() };
+        p.runs.push(wordcraft_doc::para::Run { len: 10, props: props.clone() });
+        p.text.push_str("1234567890");
+        p.mark = props;
+        let mut d = Document::new();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        // From the first digit's start to the last's: nine digit advances.
+        let xs = l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| if let Placed::Lines { para, .. } = it { para.lines.first().map(|x| x.xs.clone()) } else { None })
+            .unwrap();
+        xs.last().unwrap() - xs.first().unwrap()
+    };
+    let seven = width(7.0, VertAlign::Baseline);
+    assert!((width(11.0, VertAlign::Superscript) - seven).abs() < 0.01, "{} vs {seven}", width(11.0, VertAlign::Superscript));
+    assert!((width(11.0, VertAlign::Subscript) - seven).abs() < 0.01);
 }
 
 #[test]
@@ -12121,6 +12302,88 @@ fn a_middle_or_bottom_cell_of_a_split_row_lines_up_on_the_first_page() {
     assert_eq!(pages[1][0].len(), 25 - labels.len(), "{pages:?}");
 }
 
+/// The line tops on the first page of a row split across pages, by cell: a label aligned with
+/// `valign`, 30 lines that split, and a 160 pt spacer above `note`.
+fn split_row_beside_a_note(valign: wordcraft_doc::props::VAlign, note: &ParaProps) -> [Vec<f32>; 3] {
+    use wordcraft_doc::props::LineSpacing;
+    let plain = split_note_plain();
+    let para = |text: &str, props: ParaProps| {
+        let mut p = Paragraph::with_text(text, Default::default());
+        p.props = props;
+        wordcraft_doc::para_block(p)
+    };
+    let mut d = Document::new();
+    (d.last_section.page_w, d.last_section.page_h) = (400.0, 360.0);
+    d.last_section.margin_top = 36.0;
+    d.last_section.margin_bottom = 36.0;
+    let mut t = Table::new(1, 3, 328.0);
+    t.props.style = None;
+    t.props.cell_margins = Some([0.0; 4]);
+    t.rows[0].cells[0].props.valign = Some(valign);
+    t.rows[0].cells[0].blocks = vec![para("Label", plain.clone())];
+    t.rows[0].cells[1].blocks = (0..30).map(|i| para(&format!("Line {i}"), plain.clone())).collect();
+    let spacer = ParaProps { line_spacing: Some(LineSpacing::Exactly(160.0)), ..plain.clone() };
+    t.rows[0].cells[2].blocks = vec![para("Spacer", spacer), para("Note", note.clone())];
+    d.body = vec![para("Filler", ParaProps { line_spacing: Some(LineSpacing::Exactly(100.0)), ..plain }), Arc::new(Block::Table(t))];
+    let l = lay(&d);
+    let tops = |cell: u32| -> Vec<f32> {
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Placed::Lines { path, y, .. } if path.0.len() == 4 && path.0[0] == 1 && path.0[2] == cell => Some(*y),
+                _ => None,
+            })
+            .collect()
+    };
+    let cells = [tops(0), tops(1), tops(2)];
+    assert!(cells[1].len() > 5 && cells[1].len() < 30, "the row splits: {cells:?}");
+    assert_eq!(cells[2].len(), 2, "the note stays on the page: {cells:?}");
+    cells
+}
+
+/// Single 12 pt lines with no space around them.
+fn split_note_plain() -> ParaProps {
+    ParaProps {
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        line_spacing: Some(wordcraft_doc::props::LineSpacing::Exactly(12.0)),
+        widow_control: Some(false),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn a_bottom_cell_of_a_split_row_ignores_a_dropped_space_after_beside_it() {
+    use wordcraft_doc::props::VAlign;
+    // The note's space after (contextual 300 pt, or automatic) drops at the cell's end and would
+    // otherwise reach below the split lines: a bottom label lines up with those, a middle one is
+    // centred between their top and bottom.
+    let plain = split_note_plain();
+    let contextual = ParaProps { space_after: Some(300.0), contextual_spacing: Some(true), ..plain.clone() };
+    let automatic = ParaProps { space_after_auto: Some(true), ..plain };
+    for note in [contextual, automatic] {
+        let [labels, lines, _] = split_row_beside_a_note(VAlign::Bottom, &note);
+        assert_eq!(labels.last(), lines.last(), "{note:?}: labels {labels:?}, lines {lines:?}");
+        let [labels, lines, _] = split_row_beside_a_note(VAlign::Center, &note);
+        let (Some(&first), Some(&last), Some(&label)) = (lines.first(), lines.last(), labels.first()) else { panic!("{labels:?} {lines:?}") };
+        let want = first + (last - first) / 2.0;
+        assert!((label - want).abs() < 0.01, "{note:?}: centred label at {label}, want {want}");
+    }
+}
+
+#[test]
+fn a_bottom_cell_of_a_split_row_lines_up_with_a_kept_space_after_beside_it() {
+    use wordcraft_doc::props::VAlign;
+    // A note that keeps its 14 pt after (no contextual spacing) still ends there: the bottom
+    // label's line ends 14 pt below the note's.
+    let note = ParaProps { space_after: Some(14.0), ..split_note_plain() };
+    let [labels, lines, notes] = split_row_beside_a_note(VAlign::Bottom, &note);
+    let (Some(&label), Some(&note_top), Some(&line)) = (labels.last(), notes.last(), lines.last()) else { panic!("{labels:?} {notes:?}") };
+    assert!(note_top + 14.0 > line, "the note's space after reaches below the split lines: {notes:?} {lines:?}");
+    assert!((label - (note_top + 14.0)).abs() < 0.01, "label at {label}, note at {note_top}");
+}
+
 fn row_keep_pages(d: &Document) -> Vec<usize> {
     let l = lay(d);
     (0..d.table(StoryRef::Body, &Path::top(1)).unwrap().rows.len())
@@ -13714,6 +13977,36 @@ fn a_hyphen_before_a_slash_is_a_break_opportunity_like_word() {
         }
         assert_eq!(lines[0], "Deed Dataprotection-", "the first wrap breaks after the hyphen: {lines:?}");
         assert_eq!(lines[1], "/Secrecyviolation", "the slash starts the next line with its word: {lines:?}");
+        return;
+    }
+    panic!("no width in the sweep wrapped the paragraph");
+}
+
+/// docxide-pdf `dot-open-token*`: UAX #14 allows a break between a full stop and an opening
+/// parenthesis, Word doesn't. The first width that wraps `Deed 2023.(Example` breaks at the space.
+#[test]
+fn a_full_stop_before_a_parenthesis_is_no_break() {
+    let text = "Deed 2023.(Example";
+    for m in 100..=540 {
+        let mut d = Document::from_text(text);
+        d.last_section.margin_right = m as f32;
+        let l = lay(&d);
+        let lines: Vec<String> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| {
+                if let Placed::Lines { para, l0, l1, .. } = it {
+                    Some(para.lines[*l0..*l1].iter().map(|line| text[line.start..line.stop].to_string()).collect::<Vec<_>>())
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect();
+        if lines.len() < 2 {
+            continue; // still fits on one line at this width
+        }
+        assert_eq!(lines, ["Deed ", "2023.(Example"], "the first wrap breaks at the space");
         return;
     }
     panic!("no width in the sweep wrapped the paragraph");
