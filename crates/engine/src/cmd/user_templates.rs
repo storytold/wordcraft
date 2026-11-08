@@ -337,6 +337,73 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// #3433: a template the platform hands the app takes an untouched blank document's place
+    /// (`replaceBlank`), as a file `file.open` opens does; otherwise, and without the flag, the
+    /// new document opens beside the others, as File › New's does. Either way the template on
+    /// disk is only read: the new document has no path, so a save can't write over it.
+    #[test]
+    fn new_from_template_replaces_an_untouched_blank_document_only_when_asked() {
+        let d = scratch("replace-blank");
+        let path = d.join("Letterhead.dotx");
+        template(&path, "Letterhead text", "");
+        let bytes = std::fs::read(&path).unwrap();
+        let from = json!({"path": path.to_string_lossy(), "replaceBlank": true});
+
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("file.newFromTemplate", &from).unwrap();
+        assert_eq!(s.documents().len(), 1, "the untouched blank document gave way");
+        assert_eq!(s.path, None);
+        assert!(s.dirty);
+        assert_eq!(s.doc.settings.attached_template.as_deref(), Some(path.to_string_lossy().as_ref()));
+        assert!(s.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Letterhead text"));
+        let saved = s.run("file.save", &json!({})).unwrap();
+        assert_eq!(saved["saved"], json!(false), "no file to save to: Save As asks where");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "the template is never written over");
+
+        // The new document has unsaved changes, so a second one opens beside it.
+        s.run("file.newFromTemplate", &from).unwrap();
+        assert_eq!(s.documents().len(), 2);
+        // Without the flag, even an untouched blank document stays (File › New).
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("file.newFromTemplate", &json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(s.documents().len(), 2);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// #3433: a protected template asks for its password like `file.open`, and the document made
+    /// from it isn't protected; a template's bytes can come in `data` (a file name that isn't
+    /// valid Unicode, #1440), its path then only naming it.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn new_from_template_reads_a_protected_template_and_bytes_like_file_open() {
+        let d = scratch("protected");
+        let path = d.join("Locked.dotx");
+        let mut t = Session::new(wordcraft_doc::Document::from_text("Locked template"));
+        t.run("file.save", &json!({"path": path.to_string_lossy(), "password": "sesame"})).unwrap();
+        let name = path.to_string_lossy();
+
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let e = s.run("file.newFromTemplate", &json!({"path": name})).unwrap_err().to_string();
+        assert!(crate::io::needs_password(&e), "{e}");
+        let e = s.run("file.newFromTemplate", &json!({"path": name, "password": "wrong"})).unwrap_err().to_string();
+        assert!(crate::io::wrong_password(&e), "{e}");
+        assert_eq!(s.documents().len(), 1, "nothing opened yet");
+        s.run("file.newFromTemplate", &json!({"path": name, "password": "sesame", "replaceBlank": true})).unwrap();
+        assert!(s.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Locked template"));
+        assert_eq!((s.path.as_ref(), s.password.is_some()), (None, false));
+
+        let plain = d.join("Plain.dotx");
+        template(&plain, "From bytes", "");
+        let data = crate::cmd::insert::base64_encode(&std::fs::read(&plain).unwrap());
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("file.newFromTemplate", &json!({"path": "Pl\u{FFFD}in.dotx", "data": data, "replaceBlank": true})).unwrap();
+        assert!(s.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("From bytes"));
+        assert_eq!(s.doc.settings.attached_template.as_deref(), Some("Pl\u{FFFD}in.dotx"));
+        assert_eq!(s.path, None);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn the_templates_folder_option_is_saved_and_checked() {
         let d = scratch("option");

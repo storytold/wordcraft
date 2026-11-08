@@ -164,8 +164,7 @@ pub fn is_custom_style(doc: &Document, id: &str) -> bool {
 }
 
 /// Whether `doc`'s tab stops are measured from each paragraph's indent (an ODF document whose
-/// file says so, or that was opened with a profile saying so): [`Para::extra`]'s tab stops then
-/// are too.
+/// file says so): [`Para::extra`]'s tab stops then are too.
 pub fn tabs_from_indent(doc: &Document) -> bool {
     doc.settings.odf.is_some_and(|o| o.tabs_from_indent)
 }
@@ -494,6 +493,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
         let hidden = props.hidden.unwrap_or(false) || props.del.is_some();
         // Formats that keep hidden text get it, marked hidden.
         let hidden_text = (props.hidden.unwrap_or(false) && !opts.chars) || (props.del.is_some() && !tracked);
+        let hidden_obj = (props.hidden.unwrap_or(false) && !opts.chars) || props.del.is_some();
         let mut f = run_fmt(doc, props, in_code, opts);
         if tracked {
             (f.ins, f.del) = rev_marks(doc, props);
@@ -541,8 +541,9 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
             let obj = p.objects.get(k);
             k += 1;
             control.interrupt(obj, &mut out, &f);
-            // Hidden text, or a hidden drawing: not in the copy.
-            if hidden || obj.and_then(InlineObject::frame).is_some_and(|(_, _, f)| f.hidden) {
+            // Hidden text a format leaves out, a deleted object, or a hidden drawing: not in the
+            // copy (a format keeping hidden text keeps its objects too, as it keeps the text).
+            if hidden_obj || obj.and_then(InlineObject::frame).is_some_and(|(_, _, f)| f.hidden) {
                 continue;
             }
             let from = out.inlines.len();
@@ -1121,6 +1122,7 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
             width: t.props.width,
             width_pct: t.props.width_pct,
             heights,
+            keep_rows: t.rows.iter().map(|r| r.props.cant_split).collect(),
             fixed: t.props.fixed,
             space: [t.props.space_before, t.props.space_after],
             header_rows: t.rows.iter().take_while(|r| r.props.header).count(),
@@ -1146,7 +1148,9 @@ pub fn from_doc_tracked(doc: &Document) -> Flow {
 
 /// [`from_doc`] keeping what `opts` asks for.
 pub fn from_doc_with(doc: &Document, opts: FlowOpts) -> Flow {
-    flow_of(doc, opts)
+    // Paragraphs kept as read are checked against the document's comments and page setup:
+    // worked out once for the whole document, not once per paragraph.
+    wordcraft_doc::kept::while_writing(doc, || flow_of(doc, opts))
 }
 
 /// `blocks` of `doc` (a header, footer or note) as flow blocks, keeping what `opts` asks for.

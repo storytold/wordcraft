@@ -13,13 +13,15 @@ use super::{
 mod commands;
 mod control;
 mod files;
+#[cfg(test)]
+pub(crate) use files::suggested_stem;
 mod fonts;
 mod frame;
 mod input;
 mod pictures;
 mod prefs;
 
-pub(crate) use commands::{discards_document, works_without_document};
+pub(crate) use commands::works_without_document;
 pub(crate) use input::control_click_as_secondary;
 
 impl WordApp {
@@ -54,7 +56,7 @@ impl WordApp {
             sent_full_screen,
             seen_full_screen,
             escape_free,
-            word_count,
+            status_counts,
             missing_fonts,
             last_autosave,
             equation_prev_tab,
@@ -169,7 +171,7 @@ impl WordApp {
             sent_full_screen,
             seen_full_screen,
             escape_free,
-            word_count,
+            status_counts,
             missing_fonts,
             last_autosave,
             equation_prev_tab,
@@ -213,6 +215,12 @@ impl WordApp {
     /// opens one (#1129).
     pub fn has_document(&self) -> bool {
         self.no_document != Some(self.session.document_id())
+    }
+
+    /// Whether a modal dialog is open: the rest of the window takes no clicks, keys or
+    /// shortcuts until it closes (#3859).
+    pub(crate) fn modal_open(&self) -> bool {
+        self.file_browser_open() || self.dialog.as_ref().is_some_and(crate::dialogs::Dialog::is_modal) || self.colors.is_some()
     }
 
     /// Terminal feedback also reaches the normal window when printing starts through control.
@@ -369,6 +377,7 @@ impl WordApp {
     /// Read Aloud, its file dialog, AutoSave of its document. Runs in [`WordApp::logic`] for the
     /// active window and, with native windows, as each window draws.
     pub(crate) fn window_work(&mut self, ctx: &egui::Context) {
+        crate::windows::arrange::poll(self, ctx);
         if self.windows.native() {
             let doc = self.session.document_id();
             if self.print_document.is_none_or(|d| d == doc || !self.session.is_open(d)) {
@@ -433,10 +442,16 @@ impl WordApp {
             return;
         }
         let t = theme::Tokens::get(&ctx);
-        self.escape_free = self.dialog.is_none() && !self.ui.backstage && self.ui.keytips == keytips::Phase::Off && !egui::Popup::is_any_open(&ctx);
+        self.escape_free = self.dialog.is_none()
+            && !self.ui.backstage
+            && self.ui.keytips == keytips::Phase::Off
+            && !egui::Popup::is_any_open(&ctx)
+            && !crate::chrome::title_search_open(self, &ctx);
         // Keytips are read before layout so the frame paints the new state; badges paint after
         // the ribbon so they sit on top of it.
         crate::keytips::logic(self, &ctx);
+        // Alt codes in a text box are read before the box is drawn, so it types the character.
+        crate::keys::field_alt_codes(self, &ctx);
         // A failed Recent open, or a failed Save As, is news only until File closes (#2938).
         if !self.ui.backstage {
             backstage::forget_open_error(&ctx);
