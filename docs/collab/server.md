@@ -42,17 +42,24 @@ The claims are `{sub, aud:"collab", doc, app:"wordcraft", role, sid, iat, exp}`
 ## Session flow
 
 ```text
-C→S  {"type":"auth","token":"…","clientId":"alice","lastVersion":41}
-S→C  {"type":"welcome","sessionId":"…","role":"editor","version":42,"epoch":3,…}
+C→S  {"type":"auth","token":"…","client_id":"alice","last_version":41}
+S→C  {"type":"welcome","session_id":"…","role":"editor","version":42,"epoch":3,…}
 S→C  {"type":"tail","entries":[…]}      // or snapshot frames, then:
 S→C  {"type":"nodes","nodes":[{"id":1,"story":"body","path":[0]}]}
 C→S  {"type":"op","op":{"opId":…,"baseVersion":42,"kind":"primitive",
       "target":{"story":"body","nodeId":1,"off":0},"payload":{"op":"insert_text","text":"Hi"}}}
 S→C  {"type":"applied","applied":{"opId":…,"version":43,"epoch":3,"delta":{…}}}
-C↔S  {"type":"presence","state":{…}}    // ephemeral, never journaled
-C→S  {"type":"commit","opId":…,"expectedVersion":43}
+C↔S  {"type":"presence","client_id":"alice","role":"editor","state":{…}}
+C→S  {"type":"commit","op_id":…,"expected_version":43}
 S→C  {"type":"committed","version":43,"sha256":"…","warnings":[…]}
 ```
+
+The envelope structs (`op`, `applied`, `reject`, `target`) keep camelCase
+(ADR-0001); the fields of a `clientMsg`/`serverMsg` variant itself are
+snake_case, because serde's `rename_all` on an enum renames variants, not their
+fields. `presence` is the exception that proves the rule: the server adds the
+sender's `role` (from the JWT, never from the client) and the author's frame is
+not echoed back.
 
 `nodes` tells the client which session ids it may address; the server sends it
 again after a structural edit moves paths (ADR-0002). Operations are addressed
@@ -70,7 +77,7 @@ by `(nodeId, off)`; index paths never travel as identity.
 
 Only `owner` may commit. The server writes `.docx` from the authoritative model
 (`wordcraft_docx::write`) and answers with the SHA-256 and round-trip warnings.
-`expectedVersion` must match the head, otherwise the client gets
+`expected_version` must match the head, otherwise the client gets
 `rejected{code:"conflict"}` (the cabinet stores the new version and keeps the
 previous one, ADR-0009).
 

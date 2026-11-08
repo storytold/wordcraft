@@ -109,15 +109,15 @@ WebSocket, JSON text frames (UTF-8), один фрейм ≤ 1 MiB; TLS снар
 
 | Тип | Направление | Поля | Семантика |
 |---|---|---|---|
-| `auth` | C→S | `token`, `clientId`, `lastVersion?` | первое сообщение; токен не в URL |
-| `welcome` | S→C | `sessionId`, `role`, `participants`, `version`, `epoch`, `snapshot?` | вход в комнату |
+| `auth` | C→S | `token`, `client_id`, `last_version?` | первое сообщение; токен не в URL |
+| `welcome` | S→C | `session_id`, `role`, `participants`, `version`, `epoch`, `snapshot?` | вход в комнату |
 | `op` | C→S | `opId`, `baseVersion`, `epoch?`, `kind`, `target`, `payload` | операция |
 | `applied` | S→C | `opId`, `version`, `epoch`, `delta`\|`state` | авторитетный результат |
 | `rejected` | S→C | `opId`, `code`, `retryable`, `details?` | отказ |
 | `presence` | C→S | `cursor`, `selection`, `viewport`, `active` | не журналируется |
 | `presence` | S→C | `client_id`, `role`, `state` | `role` ставит сервер из JWT, не клиент |
 | `snapshot` | S→C | `version`, `chunk`, `last` | догон/ресинк |
-| `commit` | C→S | `opId`, `expectedVersion`, `etag?` | сборка файла |
+| `commit` | C→S | `op_id`, `expected_version`, `etag?` | сборка файла |
 | `committed` | S→C | `version`, `sha256`, `bytes?`, `warnings[]` | результат |
 | `error` | S→C | `code`, `message`, `retryable` | вне операций |
 | `ping`/`pong` | C↔S | `ts` | heartbeat |
@@ -149,7 +149,7 @@ OT/CRDT не используются: сервер применяет опер�
 
 ### 4.5. Reconnect и догон
 
-1. `auth{lastVersion}` → если версия в журнале: `welcome` + хвост `applied` по порядку.
+1. `auth{last_version}` → если версия в журнале: `welcome` + хвост `applied` по порядку.
 2. Если версия вытеснена: `welcome` + `snapshot` (чанки) + `version`; клиент заменяет
    модель и сбрасывает непринятую очередь.
 3. Непринятые операции клиент хранит с `opId` и переигрывает после `welcome`; повторный
@@ -225,9 +225,9 @@ Lease — одна комната на файл, TTL + heartbeat; отзыв з�
 
 ## 8. Commit и версии (ADR-0009)
 
-- `commit{opId, expectedVersion, etag}` → сервер собирает `.docx` из авторитетной модели
+- `commit{op_id, expected_version, etag}` → сервер собирает `.docx` из авторитетной модели
   `io::save_bytes` (`engine/src/io.rs:441`) и отдаёт кабинету байты + `sha256` + `version`.
-- `expectedVersion`/`etag` не совпал с текущим файлом → `409`; предложение «сохранить
+- `expected_version`/`etag` не совпал с текущим файлом → `409`; предложение «сохранить
   копию».
 - Ответ несёт `warnings[]`: что именно не сохранится (правленые абзацы, чей `kept`
   выброшен; неизвестные части, если `passthrough` не было). Пустой `warnings[]` —

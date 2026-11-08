@@ -345,6 +345,12 @@ for "a participant list with roles", so the role now travels with presence.
   renders `id · role` from `ParticipantView`, and the host bridge already sends
   `hostParticipants` with `role` to the cabinet page.
 
+- **Docs.** `server.md` and `rfc.md` now spell the control-message fields as the
+  wire does (`client_id`, `session_id`, `expected_version`, …): serde's
+  `rename_all` on an enum renames variants, not their fields, so the envelope
+  structs stay camelCase while the message fields are snake_case. The presence
+  row carries `client_id` and the server-added `role`.
+
 **Test.** `presence_carries_the_sender_role_to_peers_that_joined_earlier`
 (`apps/collab-server/src/tests.rs`) connects three real WebSocket clients —
 `owner`, `editor`, `viewer` — checks that each welcome lists the roles already
@@ -352,8 +358,8 @@ present, then has each client publish presence and asserts that both peers that
 joined earlier receive the sender's raw role (`viewer`, `editor`, `owner`).
 `presence_carries_the_sender_role` (client) and the `apply_presence` tests
 (collab-app: new peer, placeholder replacement, role-less frame) cover the two
-halves without a socket; `presence_without_a_role_still_parses` (wire) pins the
-backward-compatible frame.
+halves without a socket; `an_older_presence_without_a_role_still_parses` (wire)
+pins the frame of a server built before the field.
 
 ## 6. Where things live
 

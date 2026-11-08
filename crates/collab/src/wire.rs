@@ -313,7 +313,9 @@ mod tests {
     }
 
     #[test]
-    fn presence_without_a_role_still_parses() {
+    fn an_older_presence_without_a_role_still_parses() {
+        // A server built before the role field sent exactly this frame: the
+        // control-message fields are snake_case, and there is no `role`.
         let text = r#"{"type":"presence","client_id":"c1","state":{"active":true}}"#;
         let msg: ServerMsg = serde_json::from_str(text).expect("an older peer's frame parses");
         assert!(matches!(msg, ServerMsg::Presence { role, .. } if role.is_empty()));
