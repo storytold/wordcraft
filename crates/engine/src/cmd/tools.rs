@@ -21,7 +21,7 @@ mod typing;
 
 pub use autocorrect::{AUTOCORRECT, AutoCap, AutoCorrectPrefs, lenient_autocorrect};
 #[cfg(test)]
-use compare::{CompareOptions, Op, RunPair, align_block_run, collapse_noise_matches, lcs_ops};
+use compare::{CompareOptions, Op, RunPair, align_block_run, collapse_noise_matches, lcs_len, lcs_ops, sample_chars, sample_words};
 pub use specs::specs;
 pub use typing::{INITIAL_CAPS_EXCEPTIONS, autocorrect, autocorrect_word, emphasis_autoformat, has_emphasis};
 pub(crate) use typing::{is_turkic, lower_char, upper_char};

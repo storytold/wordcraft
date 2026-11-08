@@ -228,10 +228,10 @@ pub(super) enum RunPair {
 /// Pairs scoring below this threshold are treated as independent deletions and insertions,
 /// preventing accidental pairing of unrelated paragraphs across edit runs.
 ///
-/// As an exception, when no pair in an edit run meets this threshold and both sides have the
+/// Exception: when no pair in an edit run reaches this threshold and both sides have the
 /// same number of blocks (`n == m`), paragraph blocks fall back to 1-to-1 positional pairing
-/// so that whole-run replacements preserve paragraph slots and reject or accept cleanly. This
-/// fallback does not apply when block counts differ.
+/// to preserve paragraph slots. See the fallback in [`align_block_run`]. This exception
+/// does not apply when block counts differ.
 const SIMILARITY_THRESHOLD: u32 = 400;
 
 /// Maximum number of DP cells (`old_len * new_len`) computed when aligning an edit run.
@@ -264,20 +264,60 @@ enum PrecomputedBlock<'a> {
     },
 }
 
+/// Extracts a bounded sample of word tokens from a normalized text key.
+///
+/// When the text contains more than `limit` words, samples evenly from both the start
+/// and the end of the text (`limit / 2` from each end). This ensures paragraphs sharing
+/// only an opening prefix cannot receive an artificially high similarity score, while
+/// bounding memory and compute time to `O(limit)`.
+pub(super) fn sample_words<'a>(key: &'a str, limit: usize) -> Vec<&'a str> {
+    let mut words: Vec<&'a str> = key.split_whitespace().take(limit.saturating_add(1)).collect();
+    if words.len() <= limit {
+        return words;
+    }
+    let half = limit / 2;
+    words.truncate(half);
+    let tail_count = limit.saturating_sub(half);
+    let mut tail: Vec<&'a str> = key.split_whitespace().rev().take(tail_count).collect();
+    tail.reverse();
+    words.extend(tail);
+    words
+}
+
+/// Extracts a bounded sample of non-whitespace character tokens from a normalized text key.
+///
+/// When the text contains more than `limit` non-whitespace characters, samples evenly
+/// from both the start and the end of the text (`limit / 2` from each end). This prevents
+/// long CJK paragraphs sharing only a prefix from receiving an artificially high similarity score.
+pub(super) fn sample_chars(key: &str, limit: usize) -> Vec<char> {
+    let mut chars: Vec<char> = key.chars().filter(|c| !c.is_whitespace()).take(limit.saturating_add(1)).collect();
+    if chars.len() <= limit {
+        return chars;
+    }
+    let half = limit / 2;
+    chars.truncate(half);
+    let tail_count = limit.saturating_sub(half);
+    let mut tail: Vec<char> = key.chars().filter(|c| !c.is_whitespace()).rev().take(tail_count).collect();
+    tail.reverse();
+    chars.extend(tail);
+    chars
+}
+
 /// Extracts precomputed token representations for a sequence of blocks.
 ///
 /// Normalizes paragraph plain text via `opts.key`, pre-scans for CJK ideographs,
-/// and extracts word and character tokens bounded by `MAX_SIM_WORDS` and `MAX_SIM_CHARS`.
-/// Non-paragraph blocks are marked as `NonPara`.
+/// and extracts word and character tokens bounded by `MAX_SIM_WORDS` and `MAX_SIM_CHARS`
+/// (sampling from both head and tail for oversized paragraphs). Non-paragraph blocks
+/// are marked as `NonPara`.
 fn precompute_blocks<'a>(blocks: &'a [Arc<Block>], keys: &'a [Option<String>]) -> Vec<PrecomputedBlock<'a>> {
     blocks
         .iter()
         .zip(keys)
         .map(|(b, k)| match (&**b, k) {
             (Block::Para(_), Some(key)) => {
-                let chars: Vec<char> = key.chars().filter(|c| !c.is_whitespace()).take(MAX_SIM_CHARS).collect();
+                let chars = sample_chars(key, MAX_SIM_CHARS);
                 let has_cjk = chars.iter().copied().any(wordcraft_fonts::is_cjk);
-                let words: Vec<&'a str> = key.split_whitespace().take(MAX_SIM_WORDS).collect();
+                let words = sample_words(key.as_str(), MAX_SIM_WORDS);
                 PrecomputedBlock::Para { key: key.as_str(), has_cjk, words, chars }
             }
             _ => PrecomputedBlock::NonPara,
@@ -493,7 +533,9 @@ fn para_similarity(
         return Some(1000);
     }
     let use_chars = opts.characters || *cjk_a || *cjk_b;
-    if use_chars { score_tokens(ch_a, ch_b, dp_buf, budget) } else { score_tokens(w_a, w_b, dp_buf, budget) }
+    let score = if use_chars { score_tokens(ch_a, ch_b, dp_buf, budget) } else { score_tokens(w_a, w_b, dp_buf, budget) }?;
+    // Paragraphs whose full keys differ cannot receive a perfect score even if their bounded samples match.
+    Some(score.min(999))
 }
 
 /// Computes similarity on a slice of tokens (words or characters).
@@ -523,21 +565,46 @@ fn score_tokens<T: PartialEq>(tokens_a: &[T], tokens_b: &[T], dp_buf: &mut Vec<u
 
 /// Computes the length of the longest common subsequence between two token slices.
 ///
-/// Strips common prefix and suffix tokens before building the DP table. When interior tokens
-/// remain, charges the core DP cell count (`a_core.len() * b_core.len()`) to `budget`,
-/// returning `None` if the budget is exceeded.
+/// Strips common prefix and suffix tokens before building the DP table, charging each
+/// inspected pair of tokens to `budget` and returning `None` if the budget is exhausted.
+/// When interior tokens remain, charges the core DP cell count (`a_core.len() * b_core.len()`)
+/// to `budget`, returning `None` if the budget is exceeded.
 ///
 /// Uses `dp_buf` to compute LCS length in `O(short.len() * long.len())` time and
 /// `O(short.len())` space without per-call allocations. Returns `Some(pre + suf)` when either
 /// core sequence is empty.
-fn lcs_len<T: PartialEq>(a: &[T], b: &[T], dp_buf: &mut Vec<u32>, budget: &mut u64) -> Option<usize> {
+pub(super) fn lcs_len<T: PartialEq>(a: &[T], b: &[T], dp_buf: &mut Vec<u32>, budget: &mut u64) -> Option<usize> {
     if a.is_empty() || b.is_empty() {
         return Some(0);
     }
-    let pre = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    let mut pre = 0usize;
+    while pre < a.len() && pre < b.len() {
+        if *budget == 0 {
+            return None;
+        }
+        *budget -= 1;
+        if a.get(pre) == b.get(pre) {
+            pre = pre.saturating_add(1);
+        } else {
+            break;
+        }
+    }
     let a_mid = a.get(pre..).unwrap_or_default();
     let b_mid = b.get(pre..).unwrap_or_default();
-    let suf = a_mid.iter().rev().zip(b_mid.iter().rev()).take_while(|(x, y)| x == y).count();
+    let mut suf = 0usize;
+    while suf < a_mid.len() && suf < b_mid.len() {
+        if *budget == 0 {
+            return None;
+        }
+        *budget -= 1;
+        let idx_a = a_mid.len().saturating_sub(1).saturating_sub(suf);
+        let idx_b = b_mid.len().saturating_sub(1).saturating_sub(suf);
+        if a_mid.get(idx_a) == b_mid.get(idx_b) {
+            suf = suf.saturating_add(1);
+        } else {
+            break;
+        }
+    }
     let a_core = a_mid.get(..a_mid.len().saturating_sub(suf)).unwrap_or_default();
     let b_core = b_mid.get(..b_mid.len().saturating_sub(suf)).unwrap_or_default();
 

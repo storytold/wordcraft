@@ -502,3 +502,64 @@ fn align_block_run_oversize_and_budget_fallbacks() {
     let pairs_budget = align_block_run(&old_small, &new_small, &opts, &mut exhausted_budget);
     assert_eq!(pairs_budget, vec![RunPair::Diff(0, 0), RunPair::Diff(1, 1)]);
 }
+
+/// #5861: Verifies that lcs_len charges prefix and suffix comparisons to budget,
+/// returning None if the budget is exhausted during scan.
+#[test]
+fn lcs_len_charges_prefix_and_suffix_budget() {
+    let mut dp_buf = Vec::new();
+
+    // 1. Prefix scan stops and returns None when budget is exhausted during prefix scan:
+    let a = vec![1, 2, 3, 4, 5];
+    let b = vec![1, 2, 3, 4, 5];
+    let mut small_budget = 3u64;
+    assert_eq!(super::lcs_len(&a, &b, &mut dp_buf, &mut small_budget), None);
+    assert_eq!(small_budget, 0);
+
+    // 2. Sufficient budget correctly debits prefix/suffix comparisons:
+    let mut budget = 100u64;
+    let a2 = vec![1, 2, 3, 9, 8, 7];
+    let b2 = vec![1, 2, 3, 0, 8, 7];
+    // Prefix scan: 1==1, 2==2, 3==3, 9!=0 (4 comparisons).
+    // Suffix scan on remaining [9,8,7] and [0,8,7]: 7==7, 8==8, 9!=0 (3 comparisons).
+    // Core: [9] and [0] (len 1 each). cells = 1.
+    // Total charged: 4 + 3 + 1 = 8.
+    let res = super::lcs_len(&a2, &b2, &mut dp_buf, &mut budget);
+    assert_eq!(res, Some(5)); // 3 (prefix) + 2 (suffix) + 0 (core) = 5
+    assert_eq!(budget, 92);
+}
+
+/// #5861: Verifies head + tail sampling for word and character tokens on long inputs.
+#[test]
+fn sample_words_and_chars_head_tail_sampling() {
+    // Exactly at limit: keeps all
+    let short_text = "one two three four five";
+    assert_eq!(super::sample_words(short_text, 5), vec!["one", "two", "three", "four", "five"]);
+
+    // Exceeding limit: samples head and tail
+    let long_text = "w1 w2 w3 w4 w5 w6 w7 w8 w9 w10";
+    let sampled = super::sample_words(long_text, 4);
+    // half = 2 from start, 2 from end
+    assert_eq!(sampled, vec!["w1", "w2", "w9", "w10"]);
+
+    // Character sampling
+    let long_chars = "abcdefghij";
+    let sampled_ch = super::sample_chars(long_chars, 4);
+    assert_eq!(sampled_ch, vec!['a', 'b', 'i', 'j']);
+}
+
+/// #5861: Verifies that long paragraphs sharing only a prefix do not score 1000 similarity.
+#[test]
+fn compare_long_paragraphs_sharing_prefix_diff_cleanly() {
+    let common_prefix = "word ".repeat(500);
+    let original = format!("{}unique_original_ending", common_prefix);
+    let revised = format!("{}unique_revised_ending", common_prefix);
+
+    let mut s = Session::new(Document::from_text(&original));
+    s.run("review.compare", &json!({"text": revised})).unwrap();
+
+    assert_eq!(s.doc.body.len(), 1);
+    let p = s.doc.body[0].as_para().unwrap();
+    assert!(p.run_ranges().any(|(r, c)| c.del.is_some() && p.text[r].contains("unique_original_ending")));
+    assert!(p.run_ranges().any(|(r, c)| c.ins.is_some() && p.text[r].contains("unique_revised_ending")));
+}
