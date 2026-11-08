@@ -55,6 +55,19 @@ fn page_number_paragraph(style: &str, align: Align, x_of_y: bool) -> Result<Para
     Ok(para)
 }
 
+// Only cached display text is transferable; instructions, flags and formatting remain part of ownership.
+fn copy_page_number_results(to: &mut Paragraph, from: &Paragraph) {
+    for object in &mut to.objects {
+        let InlineObject::Field { instr, result, .. } = object else { continue };
+        if let Some(cached) = from.objects.iter().find_map(|object| match object {
+            InlineObject::Field { instr: source, result, .. } if source.as_str() == instr.as_str() => Some(result),
+            _ => None,
+        }) {
+            result.clone_from(cached);
+        }
+    }
+}
+
 pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
     let position = p::str(v, "position").unwrap_or("bottom");
     let align = match p::str(v, "align").unwrap_or("center") {
@@ -76,9 +89,9 @@ pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
     let story = StoryRef::Part(id);
     let style = if header { "Header" } else { "Footer" };
     let mut para = page_number_paragraph(style, align, x_of_y)?;
-    // Replace only a top-level paragraph exactly matching our generated output. User text,
+    // Replace only a top-level paragraph matching our generated structure. User text,
     // field switches/metadata and paragraph/run formatting must not be mistaken for a gallery number.
-    // Paragraph-mark formatting is retained through a gallery format change.
+    // Cached field results and paragraph-mark formatting survive gallery changes and identical requests.
     if story_has_page_field(&s.doc, story, None) {
         let generated = s.doc.story(story).and_then(|blocks| {
             blocks.iter().enumerate().find_map(|(i, block)| {
@@ -88,19 +101,24 @@ pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
                     .into_iter()
                     .any(|x_of_y| {
                         page_number_paragraph(style, align, x_of_y).is_ok_and(|mut p| {
+                            if p.objects.len() != existing.objects.len() {
+                                return false;
+                            }
                             p.mark = existing.mark.clone();
+                            copy_page_number_results(&mut p, existing);
                             *existing == p
                         })
                     })
-                    .then_some((i, existing.mark.clone()))
+                    .then_some((i, existing))
             })
         });
         // More than one PAGE makes ownership ambiguous, including in tables or anchored text
         // boxes. The traversal visits each story once so cycles cannot hang insertion.
-        if let Some((i, mark)) = generated
+        if let Some((i, existing)) = generated
             && !story_has_page_field(&s.doc, story, Some(i))
         {
-            para.mark = mark;
+            para.mark = existing.mark.clone();
+            copy_page_number_results(&mut para, existing);
             let replacement = para_block(para);
             if s.doc.story(story).and_then(|blocks| blocks.get(i)) != Some(&replacement) {
                 let block = s.doc.story_mut(story)?.get_mut(i).ok_or_else(|| CmdError::Failed("page-number paragraph is missing".into()))?;
