@@ -68,9 +68,11 @@ pub fn chinese_fonts() -> impl Iterator<Item = &'static CraftFont> {
     CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Hans"))
 }
 
-/// The craft-fonts faces for Korean (`"Kore"`), in manifest order. Empty without craft-fonts.
+/// The craft-fonts faces for Korean (`"Kore"`, `"Hang"`), in manifest order — the same script set
+/// the wasm embed filter includes, so every embedded Korean face is also one the database loads
+/// for Hangul fallback. Empty without craft-fonts.
 pub fn korean_fonts() -> impl Iterator<Item = &'static CraftFont> {
-    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Kore"))
+    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Kore") || f.scripts.contains(&"Hang"))
 }
 
 /// The craft-fonts Georgian (`"Geor"`) Regular face for the interface. Empty without craft-fonts.
@@ -639,6 +641,31 @@ mod tests {
         for c in "مرحبا پچژگ۱۲۳".chars().filter(|c| !c.is_whitespace()) {
             let fb = db.fallback_for(c, latin.id()).unwrap_or_else(|| panic!("no fallback for {c}"));
             assert_eq!(fb.family, arabic.family, "{c}");
+        }
+    }
+
+    #[test]
+    fn hangul_falls_back_to_the_craft_fonts_korean_face() {
+        // The web build has no system fonts to fall back to, so without an embedded Korean face
+        // every Hangul character drew as a box. The database must find the craft-fonts face for
+        // each character and for a whole run, the way wasm asks for it: no system fallback.
+        let Some(korean) = CRAFT_FONTS.iter().find(|f| f.scripts.contains(&"Kore") || f.scripts.contains(&"Hang")) else {
+            eprintln!("skipped: no Korean face in the optional craft-fonts input");
+            return;
+        };
+        let db = FontDb::with_font_dirs(Vec::new());
+        db.set_system_fallback(false);
+        let latin = db.face(DEFAULT_FAMILY, "Regular");
+        for c in "한글워드프로세서검은색".chars() {
+            let fb = db.fallback_for(c, latin.id()).unwrap_or_else(|| panic!("no fallback for {c}"));
+            assert_eq!(fb.family, korean.family, "{c}");
+        }
+        // A whole Hangul run draws in one face, not one face per character.
+        let run: Vec<char> = "안녕하세요워드크래프트".chars().collect();
+        let f = db.fallback_for_run(&run, latin.id(), false, false).expect("a Korean face covers the run");
+        assert_eq!(f.family, korean.family);
+        for c in &run {
+            assert!(f.covers(*c), "{f:?} covers {c}");
         }
     }
 

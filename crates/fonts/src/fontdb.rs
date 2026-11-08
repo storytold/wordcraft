@@ -86,13 +86,16 @@ pub struct FontDb {
 impl FontDb {
     /// A database holding the bundled fonts, then the craft-fonts Japanese faces (Mincho first,
     /// so they are the fallback for Japanese text after the requested and bundled fonts), then the
-    /// other craft-fonts faces: Simplified Chinese, for the ideographs the Japanese fonts lack, and
-    /// Arabic, so Arabic and Persian text draws without system fonts (#1652) (all empty without
-    /// `CRAFT_FONTS_DIR`), whose system font scan reads `font_dirs`.
+    /// Korean faces (before the Chinese one, which also covers Hangul: Korean text takes the
+    /// Korean-designed face, as Japanese takes the Mincho), then the other craft-fonts faces:
+    /// Simplified Chinese, for the ideographs the Japanese fonts lack, and Arabic, so Arabic and
+    /// Persian text draws without system fonts (#1652) (all empty without `CRAFT_FONTS_DIR`),
+    /// whose system font scan reads `font_dirs`.
     pub fn with_font_dirs(font_dirs: Vec<std::path::PathBuf>) -> Self {
         let mut faces = Vec::new();
-        let others = crate::CRAFT_FONTS.iter().filter(|f| !f.scripts.contains(&"Jpan"));
-        let craft = crate::japanese_document_fonts().into_iter().chain(others).map(|f| f.bytes);
+        let others =
+            crate::CRAFT_FONTS.iter().filter(|f| !f.scripts.contains(&"Jpan") && !f.scripts.contains(&"Hang") && !f.scripts.contains(&"Kore"));
+        let craft = crate::japanese_document_fonts().into_iter().chain(crate::korean_fonts()).chain(others).map(|f| f.bytes);
         for data in BUNDLED.iter().copied().chain(craft) {
             for f in enumerate_faces(data, MAX_FILE_FACES) {
                 if let Some(mut face) = make_face(FontBytes::Static(data), f.index, f.family, f.style, f.legacy, f.coords) {
