@@ -2,8 +2,8 @@ use super::arrange::{MAX_OFFSET, bounds, copy_to, move_with_text, unalign};
 use super::group::{add_object, group, ungroup};
 use super::picture::{adjust, adjust_media, clear_lum, crop, original_media, recolor, relook, remove_background, reset, size};
 use super::select::{
-    all_objects, alt_text, can_group, edit_obj, has_floating, has_group, has_movable, has_object, has_picture, has_shape, has_shape_or_canvas,
-    has_sizable, obj_size, objects_list, selected, with_float, with_obj,
+    all_objects, alt_text, can_group, edit_obj, has_floating, has_group, has_movable, has_object, has_picture, has_placeable, has_shape,
+    has_shape_or_canvas, has_sizable, obj_size, objects_list, selected, with_float, with_obj,
 };
 use super::shape::{NO_TEXT_BOX, can_link, has_text_box, link_text_box, set_text_body, shape_effects, text_box_target};
 use super::{CmdError, CommandSpec, InlineObject, Pos, Rgb, Selection, Spin, TextVert, VAlign, Wrap, WrapText, json, p, sel_result};
@@ -13,7 +13,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("picture.size", "Size", "Picture Format › Size", size)
             .params(
-                r#"{"width"?: pt, "height"?: pt, "lockAspect"?: bool, "scale"?: percent, "original"?: bool} (scale: of the current size, or with original of the picture's original size, its pixels at 96 ppi less what is cropped; original alone restores that size; one side alone keeps the proportions unless lockAspect is false; 1–4000 pt: when the proportions are kept, a side past 4000 pt shrinks the other with it)"#,
+                r#"{"width"?: pt, "height"?: pt, "lockAspect"?: bool, "scale"?: percent, "original"?: bool} (scale: of the current size, or with original of the picture's original size, its pixels at 96 ppi less what is cropped; original alone restores that size; one side alone keeps the proportions unless lockAspect is false; 1–4000 pt: when the proportions are kept (from the original, or with both sides having a length), a side past 4000 pt shrinks the other with it; a side the call leaves as it was keeps its size, a straight line's 0 too)"#,
             )
             .when(has_sizable),
         CommandSpec::new("picture.crop", "Crop", "Picture Format › Size", crop)
@@ -132,14 +132,26 @@ pub fn specs() -> Vec<CommandSpec> {
             } else {
                 return Err(CmdError::Params("`path` or `data` required".into()));
             };
-            wordcraft_geom::picture::probe(&bytes).map_err(|e| match e {
-                wordcraft_geom::picture::Refusal::Unsupported(why) => CmdError::Failed(why.into()),
-                _ => CmdError::Failed("not a supported image".into()),
-            })?;
+            let (px_w, px_h) = wordcraft_geom::picture::probe(&bytes)
+                .map(|p| (p.width, p.height))
+                .map_err(|e| match e {
+                    wordcraft_geom::picture::Refusal::Unsupported(why) => CmdError::Failed(why.into()),
+                    _ => CmdError::Failed("not a supported image".into()),
+                })?;
             let key = s.doc.add_media(bytes.clone(), crate::cmd::insert::image_ext(&bytes));
             with_obj(s, |o| {
-                if let InlineObject::Image { media, .. } = o {
+                if let InlineObject::Image { media, w, h, crop, .. } = o {
                     *media = key.clone();
+                    // The replacement keeps the picture's width and takes its own aspect ratio, so a
+                    // picture of another shape isn't stretched into the old frame. The old crop
+                    // described the old picture, so it is dropped.
+                    if px_w > 0 && px_h > 0 && w.is_finite() && *w > 0.0 {
+                        let nh = *w * px_h as f32 / px_w as f32;
+                        if nh.is_finite() && nh > 0.0 {
+                            *h = nh;
+                        }
+                    }
+                    *crop = [0.0; 4];
                 }
             })
         })
@@ -193,17 +205,17 @@ pub fn specs() -> Vec<CommandSpec> {
             with_float(s, |f| f.wrap = wrap)
         })
         .params(r#"{"wrap": "inline|square|tight|through|topAndBottom|behindText|inFrontOfText"}"#)
-        .when(has_movable),
+        .when(has_placeable),
         CommandSpec::new("arrange.wrapText", "Wrap Text Sides", "Layout › Arrange", |s, v| {
             let side = p::str(v, "side").unwrap_or("bothSides");
             let side = WrapText::from_ooxml(side).ok_or_else(|| CmdError::Params(format!("unknown side {side:?}")))?;
             with_float(s, |f| f.wrap_text = side)
         })
         .params(r#"{"side": "bothSides|left|right|largest"}  (the sides of the selected Square, Tight or Through object text flows on; largest: the wider side, line by line)"#)
-        .when(has_movable),
+        .when(has_placeable),
         CommandSpec::new("arrange.moveWithText", "Move with Text", "Layout › Arrange › Wrap Text", |s, v| move_with_text(s, p::bool(v, "value").unwrap_or(true)))
             .params(r#"{"value": bool}  (true: Move with Text, the floating object's vertical position follows its paragraph; false: Fix Position on Page. It stays where it is)"#)
-            .when(has_floating),
+            .when(|s| has_placeable(s).or_else(|| has_floating(s))),
         CommandSpec::new("arrange.position", "Position", "Layout › Arrange", |s, v| {
             let preset = p::str(v, "preset").unwrap_or("middleCenter").to_string();
             let (x, y) = (p::f32(v, "x"), p::f32(v, "y"));
@@ -224,9 +236,9 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"preset"?: "topLeft|topCenter|topRight|middleLeft|middleCenter|middleRight|bottomLeft|bottomCenter|bottomRight", "x"?: pt, "y"?: pt}"#)
-        .when(has_movable),
-        CommandSpec::new("arrange.bringForward", "Bring Forward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::InFrontOfText)).when(has_movable),
-        CommandSpec::new("arrange.sendBackward", "Send Backward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::BehindText)).when(has_movable),
+        .when(has_placeable),
+        CommandSpec::new("arrange.bringForward", "Bring Forward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::InFrontOfText)).when(has_placeable),
+        CommandSpec::new("arrange.sendBackward", "Send Backward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::BehindText)).when(has_placeable),
         CommandSpec::new("arrange.align", "Align", "Layout › Arrange", |s, v| {
             let h = p::str(v, "value").unwrap_or("center").to_string();
             let tw = crate::cmd::page::sect(s).text_width();
@@ -245,17 +257,20 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"value": "left|center|right"}"#)
-        .when(has_movable),
+        .when(has_placeable),
         CommandSpec::new("arrange.selectionPane", "Selection Pane", "Layout › Arrange", objects_list).pure(),
         CommandSpec::new("arrange.bounds", "Move or Resize", "Layout › Arrange", bounds)
             .params(r#"{"width"?: pt, "height"?: pt, "x"?: pt, "y"?: pt, "page"?: n, "to"?: Pos}  (x/y: the top-left on page `page` (0-based, default its page); moving an inline object by x/y floats it. to: an In Line with Text object moves to that text position and stays inline, as a drag does)"#)
             .when(has_movable),
         CommandSpec::new("arrange.copyTo", "Copy to", "Layout › Arrange", copy_to)
             .params(r#"{"x": pt, "y": pt, "page"?: n} | {"to": Pos}  (Ctrl+drag: a copy of the selected object lands with its top-left there, or an In Line with Text one at the text position `to`, and is selected; the original and the clipboard stay as they were)"#)
-            .when(has_movable),
+            .when(has_placeable),
         CommandSpec::new("arrange.nudge", "Nudge", "Layout › Arrange", |s, v| {
             let d = |k| p::f32(v, k).unwrap_or(0.0).clamp(-MAX_OFFSET, MAX_OFFSET);
             let (dx, dy) = (d("dx"), d("dy"));
+            if let Some(r) = crate::cmd::canvas::member_nudge(s, dx, dy) {
+                return r;
+            }
             unalign(s)?;
             with_float(s, |f| {
                 f.x = (f.x + dx).clamp(-MAX_OFFSET, MAX_OFFSET);
