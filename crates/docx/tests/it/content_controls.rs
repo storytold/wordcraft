@@ -15,6 +15,7 @@ fn package(body: &str) -> Vec<u8> {
     package_ns(body, "")
 }
 
+/// Builds a minimal DOCX package with extra namespace declarations on the document root.
 fn package_ns(body: &str, extra_ns: &str) -> Vec<u8> {
     let doc = format!(r#"<w:document {NS} {extra_ns}><w:body>{body}</w:body></w:document>"#);
     let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -261,6 +262,7 @@ fn a_controls_run_properties_are_read_and_kept() {
     assert!(out.contains(r#"<w:rPr><w:rStyle w:val="Eingabe"/><w:sz w:val="20"/></w:rPr>"#), "{out}");
 }
 
+/// Retained InkML and MathML properties preserve namespace declarations across saves.
 #[test]
 fn retained_ink_and_mathml_properties_keep_declared_namespaces() {
     let pr = r#"<w:id w:val="42"/><pen:annotation mc:Ignorable="math"><math:math math:id="formula" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.w3.org/1998/Math/MathML mathml.xsd"><math:cn>2</math:cn></math:math><d:creator xmlns:d="http://purl.org/dc/elements/1.1/">Study</d:creator></pen:annotation>"#;
