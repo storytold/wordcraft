@@ -159,6 +159,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-11-04: MHT import keeps semicolons and escaped quotes inside quoted MIME parameters, so an unrelated parameter cannot supply a false multipart boundary and hide the document text. Readiness estimates unchanged.
 - 2026-10-30: Equations: `\int`, `\sum` and the other n-ary operators typed with AutoCorrect wait for their limits. `\int` + Space, then `_0^1` and Space, gives ∫ with its limits and the caret in its operand, and `\int_0^1` typed in one go does the same, since any character that can't continue `\name` corrects it; this is observed in Word for Windows on #4938. Enter or an arrow key builds it without going into the operand, and `∫∫` puts the operand in the inner operator; those two are not observed in Word (#4917). Readiness unchanged.
 
+- 2026-11-04: RTF import skips the declared Unicode fallback count even when it exceeds eight fallback units, so longer ANSI alternatives do not leak into the document text. Skipping stays bounded by the available input and ends at a group boundary. Readiness estimates unchanged.
 - 2026-10-28: Ink replay, eraser picking, lasso selection and arrow-candidate discovery reuse the paragraph prefixes they have already scanned (#3614). Page item order, stroke geometry and saved data retain their behavior. This narrows the stability work; ink import fidelity, native pen input and broader corpus qualification remain open.
 - 2026-10-29: Page drawing finds text-box warps without rescanning the paragraph for every box (#3614). Only requested offsets are indexed, and each paragraph walk stops after its last requested character. Original Linux discovery, complete display-output and CLI/MCP save/reopen controls; native Word comparison untested. Readiness estimates unchanged.
 - 2026-10-28: Protected typing boundary lookup counts preceding objects once and indexes editable permission IDs (#3614); caret movement and enforcement policy are unchanged. Existing mutation and protection checks retain their costs; this does not close the broader performance gap.
@@ -802,6 +803,8 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 
 Footer page-table height and body wrapping are corrected. Other pagination gaps remain open.
 
+Quoted field escapes are interpreted like Word, and body `PAGE` fields use their active section number format in paragraphs and tables. Synthetic regressions cover fields and section layout.
+
 Section page-numbering settings preserve `w:chapStyle` values across the full unsigned-byte range.
 MATH glyphs that reference the same construction now share its immutable variants and assembly data (#3630). Glyph mappings, values and the existing partial-record fallback stay unchanged. Repeated glyph IDs keep their last valid reference without retaining superseded constructions. Distinct overlapping constructions and assembly-only sharing remain separate.
 
@@ -831,6 +834,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-30 | trivial | Progress log: typed n-ary operators such as ∫ and ∑ wait for their limits, and any character that cannot continue a math name corrects it, as observed in Word for Windows on #4938; Enter, arrow keys and nested operators are WordCraft's own choices (#4917); readiness unchanged |
 | 2026-11-04 | trivial | CLI input paths keep their native filename when a value-taking option comes first; regression coverage includes conversion to Flat OPC and rejection of non-Unicode option values. |
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` is preserved with true, false and absent values; OOXML properties follow schema order. Grid layout remains open. |
+| 2026-11-04 | trivial | Progress log: RTF Unicode fallback counts; readiness estimates unchanged |
 | 2026-10-28 | trivial | Per-page ink object lookups, #3614. Drawing order, geometry and saved data retain their behavior; no readiness estimate change |
 | 2026-11-05 | trivial | Progress log: ODT heading text of another size (gap 19) |
 | 2026-11-05 | trivial | Progress log: ODT table rows that don't break (gap 19) |
