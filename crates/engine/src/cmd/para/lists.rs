@@ -149,15 +149,27 @@ fn strip_typed_labels(s: &mut Session) {
     }
     // The label goes through the ordinary deletion, so Track Changes marks it like any edit.
     let saved = s.sel.clone();
+    let mut shift: Vec<(Path, usize)> = Vec::new();
     for (path, len) in remove {
-        s.sel = crate::Selection { anchor: Pos { story, path: path.clone(), off: 0 }, focus: Pos { story, path, off: len } };
+        let before = s.doc.para(story, &path).map(|p| p.len()).unwrap_or(0);
+        s.sel = crate::Selection { anchor: Pos { story, path: path.clone(), off: 0 }, focus: Pos { story, path: path.clone(), off: len } };
         // Refused (a locked control, say): the paragraph keeps its text and only the list is
         // applied, rather than the whole command failing after the numbering was written.
         let _ = crate::cmd::delete_selection_effect(s);
-        // Each deletion leaves the caret where it ended, which the next one replaces anyway.
+        // With Track Changes the label is marked, not removed, and nothing moves. Otherwise the
+        // paragraph really did lose its first bytes, so a caret after them moves with the text.
+        let removed = before.saturating_sub(s.doc.para(story, &path).map(|p| p.len()).unwrap_or(0));
+        if removed > 0 {
+            shift.push((path, removed));
+        }
     }
     // The removed text shortened the paragraphs, so the caller's caret may no longer fit.
     s.sel = saved;
+    for pos in [&mut s.sel.anchor, &mut s.sel.focus] {
+        if let Some((_, removed)) = shift.iter().find(|(path, _)| *path == pos.path) {
+            pos.off = pos.off.saturating_sub(*removed);
+        }
+    }
     s.clamp_selection();
 }
 
