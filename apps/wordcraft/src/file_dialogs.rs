@@ -209,6 +209,8 @@ fn save_exts(name: &str) -> Vec<String> {
         .extension()
         .and_then(std::ffi::OsStr::to_str)
         .map(str::to_ascii_lowercase)
+        // A .markdown file is under Markdown's one entry in the list.
+        .map(|e| if e == "markdown" { "md".to_string() } else { e })
         .filter(|e| wordcraft_engine::io::SAVE_EXTS.contains(&e.as_str()))
         .unwrap_or_else(|| "docx".to_string());
     let mut exts: Vec<String> = Vec::with_capacity(wordcraft_engine::io::SAVE_EXTS.len());
@@ -301,6 +303,8 @@ mod tests {
         assert_eq!(save_exts("novel.docx")[0], "docx");
         assert_eq!(save_exts("report.odt")[0], "odt");
         assert_eq!(save_exts("annual report.pdf")[0], "pdf");
+        assert_eq!(save_exts("notes.md")[0], "md");
+        assert_eq!(save_exts("notes.markdown")[0], "md");
         // A suggested name always has an extension; anything unreadable falls back to Word's.
         assert_eq!(save_exts("no extension")[0], "docx");
         assert_eq!(save_exts("mystery.rtf2")[0], "docx");

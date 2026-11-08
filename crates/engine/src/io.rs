@@ -852,6 +852,18 @@ pub fn save_path_with(path: &std::path::Path, _doc: &Document, _password: Option
     Err(format!("{}: files are saved through the browser on the web", path.display()))
 }
 
+/// Write `text` to `path` as it is (a Markdown file's own text), as safely as [`save_path_with`].
+#[cfg(not(target_arch = "wasm32"))]
+pub fn save_text_path(path: &std::path::Path, text: &str) -> Result<(), String> {
+    crate::file_access::check_write(&path.to_string_lossy())?;
+    safe_save::write(path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn save_text_path(path: &std::path::Path, _text: &str) -> Result<(), String> {
+    Err(format!("{}: files are saved through the browser on the web", path.display()))
+}
+
 /// Decode text bytes: UTF-8 (with or without BOM), UTF-16 LE/BE (BOM or sniffed), else the
 /// legacy encoding they look like — GBK, Big5, Shift_JIS, Windows-1252… (see
 /// [`wordcraft_formats::txt::decode`]).

@@ -22,6 +22,7 @@ mod pictures;
 mod prefs;
 
 pub(crate) use commands::works_without_document;
+pub(crate) use frame::STATUS_MS;
 pub(crate) use input::control_click_as_secondary;
 
 impl WordApp {

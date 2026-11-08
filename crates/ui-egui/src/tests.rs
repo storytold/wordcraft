@@ -3134,6 +3134,20 @@ fn window_close_save_writes_the_file_and_quits() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Save As suggests a Markdown file's own format, as it does a Word file's; anything else is .docx.
+#[test]
+fn save_as_suggests_a_markdown_files_own_format() {
+    let dir = scratch("save-name");
+    for (name, suggested) in [("notes.md", "notes.md"), ("notes.markdown", "notes.markdown"), ("notes.MD", "notes.MD"), ("notes.txt", "notes.docx")] {
+        let path = dir.join(name);
+        std::fs::write(&path, b"Hello\n").unwrap();
+        let mut a = app();
+        a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(a.default_save_name(), suggested, "{name}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// #2376: a text file opened, edited and saved still asked to save on close, and Save in that
 /// prompt wrote the file but left the window open; only Don't Save closed it.
 #[test]

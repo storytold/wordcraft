@@ -297,16 +297,19 @@ impl WordApp {
         self.default_save_name()
     }
 
-    /// The name Save suggests: the open file's own Word format (so a .docm keeps its macros),
-    /// otherwise .docx. A document never saved and without a title of its own is named after its
-    /// first words, as Word suggests them (#5793), instead of `Document1`.
+    /// The name Save suggests: the open file's own Word format (so a .docm keeps its macros) or,
+    /// in a dialog, its own Markdown format (a browser's download keeps the whole document as
+    /// .docx), otherwise .docx. A document never saved and without a title of its own is named after
+    /// its first words, as Word suggests them (#5793), instead of `Document1`.
     pub(crate) fn default_save_name(&self) -> String {
         let ext = self.session.path.as_ref().and_then(|p| p.extension()).map(|e| e.to_string_lossy().to_string());
         let unnamed = self.session.path.is_none() && self.session.file_name.is_none() && self.session.doc.core.title.trim().is_empty();
         let first = || self.session.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).find_map(|t| suggested_stem(&t));
         let stem = unnamed.then(first).flatten().unwrap_or_else(|| self.title_stem());
+        let markdown =
+            self.services.download.is_none() && self.session.path.as_deref().is_some_and(wordcraft_engine::cmd::md_source::is_markdown_file);
         match ext {
-            Some(e) if wordcraft_engine::io::is_word_package(&e) => format!("{stem}.{e}"),
+            Some(e) if markdown || wordcraft_engine::io::is_word_package(&e) => format!("{stem}.{e}"),
             _ => format!("{stem}.docx"),
         }
     }

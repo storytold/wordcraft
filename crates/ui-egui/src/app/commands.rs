@@ -28,6 +28,10 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // While Markdown Source is open, Undo and Redo work on its typing, as Ctrl+Z does there.
+        if matches!(id, "edit.undo" | "edit.redo") && self.session.md_source.is_some() {
+            return crate::md_source::undo(self, id == "edit.redo");
+        }
         // Comment text still being typed is written first, so a save or export has it and a
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
@@ -255,6 +259,13 @@ impl WordApp {
             && v.get("path").and_then(Value::as_str).map(std::path::Path::new) == self.session.path.as_deref()
         {
             self.autosave_path = self.session.path.clone();
+        }
+        // A Markdown file edited in the formatted view was written out again, not kept as it was.
+        if let Ok(v) = &r
+            && matches!(id, "file.save" | "file.saveAs")
+            && v.get("rewritten").and_then(Value::as_bool) == Some(true)
+        {
+            self.status_long(tl!("Saved. Edits in the formatted view meant writing the Markdown out again, so its own layout wasn't kept."));
         }
         // A renamed file is the same file: AutoSave keeps covering it, and Recent drops the old name.
         if r.is_ok()

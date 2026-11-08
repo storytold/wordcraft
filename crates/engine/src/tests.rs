@@ -5580,13 +5580,63 @@ fn saving_a_text_file_over_itself_saves_the_document() {
         assert!(!s.dirty, "{name}: saved by its own path");
 
         // Plain text somewhere else is still a copy: the document keeps its file and its changes.
+        // (Markdown saved as Markdown moves there: see the test below.)
         run(&mut s, "text.insert", json!({"text": "!"}));
         let copy = dir.join(format!("copy-{name}"));
         run(&mut s, "file.saveAs", json!({"path": copy.to_string_lossy()}));
         assert!(copy.exists());
-        assert!(s.dirty, "{name}: a copy elsewhere leaves it unsaved");
-        assert_eq!(s.path.as_deref(), Some(path.as_path()));
+        if name == "note.txt" {
+            assert!(s.dirty, "{name}: a copy elsewhere leaves it unsaved");
+            assert_eq!(s.path.as_deref(), Some(path.as_path()));
+        }
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A Markdown file saved as another Markdown file is that file from now on: the next save goes
+/// there and the first file stays as it was. Other formats keep the #2376 rule.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn markdown_saved_as_markdown_moves_to_the_new_file() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-md-save-as-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let first = dir.join("a.md");
+    std::fs::write(&first, b"First\n").unwrap();
+    for name in ["b.md", "c.markdown", "D.MD"] {
+        let mut s = s();
+        std::fs::write(&first, b"First\n").unwrap();
+        let second = dir.join(name);
+        run(&mut s, "file.open", json!({"path": first.to_string_lossy()}));
+        run(&mut s, "text.insert", json!({"text": "Hello "}));
+        run(&mut s, "file.saveAs", json!({"path": second.to_string_lossy()}));
+        assert!(!s.dirty, "{name}: saved");
+        assert_eq!(s.path.as_deref(), Some(second.as_path()), "{name}");
+
+        run(&mut s, "text.insert", json!({"text": "Later "}));
+        run(&mut s, "file.save", json!({}));
+        assert!(!s.dirty, "{name}: saved again");
+        assert!(std::fs::read_to_string(&second).unwrap().contains("Later"), "{name}: the next save goes to the new file");
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "First\n", "{name}: the first file is left alone");
+    }
+
+    // Markdown to plain text is still a copy.
+    let mut s = s();
+    run(&mut s, "file.open", json!({"path": first.to_string_lossy()}));
+    run(&mut s, "text.insert", json!({"text": "Hello "}));
+    run(&mut s, "file.saveAs", json!({"path": dir.join("copy.txt").to_string_lossy()}));
+    assert!(s.dirty, "a text copy leaves it unsaved");
+    assert_eq!(s.path.as_deref(), Some(first.as_path()));
+
+    // So is plain text to Markdown.
+    let note = dir.join("note.txt");
+    std::fs::write(&note, b"Note\n").unwrap();
+    let mut text = self::s();
+    run(&mut text, "file.open", json!({"path": note.to_string_lossy()}));
+    run(&mut text, "text.insert", json!({"text": "Hello "}));
+    run(&mut text, "file.saveAs", json!({"path": dir.join("copy.md").to_string_lossy()}));
+    assert!(text.dirty, "a Markdown copy of a text file leaves it unsaved");
+    assert_eq!(text.path.as_deref(), Some(note.as_path()));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
