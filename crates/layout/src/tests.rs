@@ -5728,8 +5728,13 @@ fn an_inline_picture_moves_with_its_runs_position() {
     assert!(line.top + line.height - line.baseline >= 30.0 - 0.01, "{line:?}");
     let r = display::inline_rect(Some(&picture(40.0, 30.0, Default::default())), 0.0, 100.0, c.adv, (c.obj_h, c.obj_d), c.adv);
     assert_eq!((r.y, r.h), (100.0, 30.0));
-    // Lowered further than that: still only to its top.
-    assert_eq!(line_of(-500.0).0.obj_d, 30.0);
+    // Lowered further than that: the line reaches as far down, the picture's top staying on the
+    // baseline (Word).
+    let (c, line, _) = line_of(-500.0);
+    assert_eq!((c.obj_h, c.obj_d), (-470.0, 500.0));
+    assert!(line.top + line.height - line.baseline >= 500.0 - 0.01, "{line:?}");
+    let r = display::inline_rect(Some(&picture(40.0, 30.0, Default::default())), 0.0, 100.0, c.adv, (c.obj_h, c.obj_d), c.adv);
+    assert_eq!((r.y, r.h), (100.0, 30.0));
     // Raised: it stands clear of the baseline, as tall as before.
     let (c, _, _) = line_of(6.0);
     assert_eq!((c.obj_h, c.obj_d), (36.0, -6.0));
@@ -14002,7 +14007,7 @@ fn lowered_pictures_and_check_boxes_take_words_line_heights() {
         let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
         let c = para.clusters.iter().find(|c| matches!(c.kind, para::ClKind::Object(_))).unwrap();
         let (line, st) = (&para.lines[0], &para.styles[c.style as usize]);
-        (line.height, line.baseline - c.obj_h - line.top, st.ascent + st.descent)
+        (line.height, line.baseline - c.obj_h.max(0.0) - line.top, st.ascent + st.descent)
     };
     for m in [1.0, 1.15, 1.5] {
         let share = |font: f32| (m - 1.0) * font;
@@ -14019,10 +14024,36 @@ fn lowered_pictures_and_check_boxes_take_words_line_heights() {
             let (h, top, font) = line_of("", m, 6.0, raise);
             assert!((h - font * m).abs() < 0.01 && (top - (font - reach)).abs() < 0.01, "{raise} at {m}: {h}, {top}");
         }
+        // Lowered further than its height: as far down as it's lowered, the font's height at least,
+        // its top on the baseline (Word: a 6 pt picture lowered 10 pt takes the font's 11.5 pt,
+        // lowered 30 pt 30 pt; beside text, the text's ascent and the 30 pt).
+        let (h, top, font) = line_of("", m, 6.0, -10.0);
+        assert!((h - font * m).abs() < 0.01 && (top - (font - 10.0)).abs() < 0.01, "6 lowered 10 at {m}: {h}, {top}");
+        let (h, top, font) = line_of("", m, 6.0, -30.0);
+        assert!((h - 30.0 - share(font)).abs() < 0.01 && top.abs() < 0.01, "6 lowered 30 at {m}: {h}, {top}");
+        let (h, top, font) = line_of("x", m, 6.0, -30.0);
+        let asc = h - 30.0 - share(font);
+        assert!(asc > 0.0 && asc < font && (top - asc).abs() < 0.01, "6 lowered 30 beside text at {m}: {h}, {top}");
         // Beside text, lowered: the text's ascent is no matter, the picture reaching further.
         let (h, top, font) = line_of("x", m, 30.0, -10.0);
         assert!((h - 30.0 - share(font)).abs() < 0.01 && top.abs() < 0.01, "beside text at {m}: {h}, {top}");
     }
+    // Exact spacing keeps the line's box and its baseline: a picture lowered past its height sits
+    // where one lowered by its height does.
+    let exact = |raise: f32| {
+        let mut d = Document::from_text("x");
+        let props = wordcraft_doc::CharProps { position: Some(raise), ..Default::default() };
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.props.line_spacing = Some(LineSpacing::Exactly(20.0));
+        let at = p.len();
+        p.insert_object(at, picture(40.0, 6.0, Default::default()), &props).unwrap();
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        (para.lines[0].height, para.lines[0].baseline - para.lines[0].top)
+    };
+    let (h, base) = exact(-6.0);
+    assert!((h - 20.0).abs() < 0.01, "{h}");
+    assert_eq!(exact(-30.0), (h, base));
     // A check box sizes its line as text of its size, alone or beside text.
     let box_line = |lead: &str, m: f32, size: u32| {
         let mut d = Document::from_text(lead);
