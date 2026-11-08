@@ -1,4 +1,5 @@
 //! The HTTP side: one document at one URL, through `ureq`.
+use std::io::Read;
 use std::time::Duration;
 
 use ureq::http::{Method, Request, StatusCode, Uri};
@@ -72,10 +73,18 @@ impl Resource {
         let request = self.request(Method::GET).body(()).map_err(transport)?;
         let mut response = self.agent.run(request).map_err(transport)?;
         expect(response.status(), "GET", &[StatusCode::OK])?;
-        response.body_mut().with_config().limit(self.max_bytes).read_to_vec().map_err(|e| match e {
+        // `limit` counts the bytes on the wire, and a gzip body unpacks behind it, so the unpacked
+        // document is capped too: one byte past the cap is enough to know it is too large.
+        let reader = response.body_mut().with_config().limit(self.max_bytes).reader();
+        let mut bytes = Vec::new();
+        reader.take(self.max_bytes.saturating_add(1)).read_to_end(&mut bytes).map_err(|e| match ureq::Error::from(e) {
             ureq::Error::BodyExceedsLimit(_) => Error::TooLarge { limit: self.max_bytes },
             e => transport(e),
-        })
+        })?;
+        if bytes.len() as u64 > self.max_bytes {
+            return Err(Error::TooLarge { limit: self.max_bytes });
+        }
+        Ok(bytes)
     }
 
     /// Takes an exclusive write lock for `owner` (a name the server may show to others), asking

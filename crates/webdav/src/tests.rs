@@ -111,6 +111,17 @@ fn get_refuses_a_document_over_the_size_cap() {
 }
 
 #[test]
+fn get_caps_the_unpacked_size_of_a_compressed_document() {
+    // 1 MiB of zeros gzips to about a kilobyte: under the cap on the wire, far over it unpacked.
+    let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+    gzip.write_all(&vec![0; 1 << 20]).unwrap();
+    let server = Server::start(vec![("200 OK", vec![("Content-Encoding", "gzip".to_owned())], gzip.finish().unwrap())]);
+    let err = Resource::new(&server.url).unwrap().with_max_bytes(64 * 1024).get().unwrap_err();
+    assert_eq!(err, Error::TooLarge { limit: 64 * 1024 });
+    server.finish();
+}
+
+#[test]
 fn lock_asks_for_an_exclusive_write_lock_and_keeps_the_token() {
     let server = Server::start(vec![(
         "200 OK",
@@ -202,21 +213,22 @@ fn unlock_names_the_lock_token() {
 
 #[test]
 fn a_whole_editing_session_runs_in_order() {
+    // Lock first, then load: what the save replaces is then the version that was loaded.
     let server = Server::start(vec![
-        ("200 OK", Vec::new(), b"v1".to_vec()),
         ("200 OK", vec![("Lock-Token", "<opaquelocktoken:s>".to_owned()), ("Timeout", "Second-60".to_owned())], Vec::new()),
+        ("200 OK", Vec::new(), b"v1".to_vec()),
         ok("204 No Content"),
         ("200 OK", vec![("Timeout", "Second-60".to_owned())], Vec::new()),
         ok("204 No Content"),
     ]);
     let doc = Resource::new(&server.url).unwrap();
-    assert_eq!(doc.get().unwrap(), b"v1");
     let lock = doc.lock("me", Duration::from_secs(60)).unwrap();
+    assert_eq!(doc.get().unwrap(), b"v1");
     doc.put(b"v2", "application/octet-stream", Some(&lock)).unwrap();
     let lock = doc.refresh(&lock, Duration::from_secs(60)).unwrap();
     doc.unlock(lock).unwrap();
     let methods: Vec<String> = server.finish().into_iter().map(|s| s.method).collect();
-    assert_eq!(methods, ["GET", "LOCK", "PUT", "LOCK", "UNLOCK"]);
+    assert_eq!(methods, ["LOCK", "GET", "PUT", "LOCK", "UNLOCK"]);
 }
 
 #[test]

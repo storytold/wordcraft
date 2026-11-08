@@ -3,9 +3,11 @@
 //! This is the desktop side of editing documents that live in a document management system or on
 //! a WebDAV share, as Word and LibreOffice do it:
 //!
-//! 1. [`Resource::get`] loads the document (with a size cap).
-//! 2. [`Resource::lock`] takes an exclusive write lock (RFC 4918 §9.10) and [`Resource::refresh`]
+//! 1. [`Resource::lock`] takes an exclusive write lock (RFC 4918 §9.10) and [`Resource::refresh`]
 //!    keeps it alive, every [`Lock::refresh_interval`].
+//! 2. [`Resource::get`] loads the document (with a size cap). Loading only after locking means no
+//!    one can save a newer version in between that the later save would overwrite. If loading
+//!    fails, unlock again.
 //! 3. [`Resource::put`] saves with the lock token in an `If` header, so a server that gave the lock
 //!    to someone else refuses the save instead of losing their work.
 //! 4. [`Resource::unlock`] releases the lock when the document closes.

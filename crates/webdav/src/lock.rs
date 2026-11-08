@@ -5,7 +5,8 @@ use std::time::Duration;
 /// 2³²−1 seconds; anything past a day is treated as a day, so a refresh still happens.
 const MAX_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 /// The shortest refresh interval, so a server answering `Second-0` can't make the client spin.
-const MIN_REFRESH: Duration = Duration::from_secs(5);
+/// Timeouts come in whole seconds, so half a second still refreshes a 1-second lock in time.
+const MIN_REFRESH: Duration = Duration::from_millis(500);
 /// The longest refresh interval, also used for a lock with no timeout (`Infinite`).
 const MAX_REFRESH: Duration = Duration::from_secs(5 * 60);
 
@@ -32,8 +33,8 @@ impl Lock {
         self.timeout
     }
 
-    /// How often to refresh: half the timeout, so a slow network still makes it, between 5 seconds
-    /// and 5 minutes.
+    /// How often to refresh: half the timeout, so a slow network still makes it, between half a
+    /// second and 5 minutes. A lock that expires never gets a refresh interval at or past its expiry.
     pub fn refresh_interval(&self) -> Duration {
         match self.timeout {
             Some(timeout) => (timeout / 2).clamp(MIN_REFRESH, MAX_REFRESH),
@@ -139,6 +140,9 @@ mod tests {
     fn refresh_comes_at_half_the_timeout_within_bounds() {
         assert_eq!(Lock::new("t", Some(Duration::from_secs(600))).refresh_interval(), Duration::from_secs(300));
         assert_eq!(Lock::new("t", Some(Duration::from_secs(120))).refresh_interval(), Duration::from_secs(60));
+        // Short locks still refresh before they expire.
+        assert_eq!(Lock::new("t", Some(Duration::from_secs(4))).refresh_interval(), Duration::from_secs(2));
+        assert_eq!(Lock::new("t", Some(Duration::from_secs(1))).refresh_interval(), Duration::from_millis(500));
         assert_eq!(Lock::new("t", Some(Duration::from_secs(0))).refresh_interval(), MIN_REFRESH);
         assert_eq!(Lock::new("t", Some(MAX_TIMEOUT)).refresh_interval(), MAX_REFRESH);
         assert_eq!(Lock::new("t", None).refresh_interval(), MAX_REFRESH);
