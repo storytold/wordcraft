@@ -377,3 +377,20 @@ fn run_with_strict_cannot_forge_an_error_line_either() {
     assert!(!out.exists());
     std::fs::remove_dir_all(d).unwrap();
 }
+
+#[test]
+fn usage_errors_keep_their_line_breaks() {
+    // Errors go to stderr with the usage after a blank line (`missing argument`, `unknown command`).
+    for args in [&["frobnicate"][..], &["convert"][..]] {
+        let r = Command::new(env!("CARGO_BIN_EXE_wordcraft-cli")).args(args).output().unwrap();
+        let text = stderr(&r);
+        assert_eq!(r.status.code(), Some(1), "{args:?}: {text}");
+        assert!(text.lines().count() > 3, "{args:?}: {text}");
+        assert!(text.lines().any(|l| l == "USAGE:"), "{args:?}: {text}");
+        assert!(!text.contains("\\n"), "{args:?}: {text}");
+    }
+    // No arguments at all prints the usage as help, on stdout.
+    let r = Command::new(env!("CARGO_BIN_EXE_wordcraft-cli")).output().unwrap();
+    let all = format!("{}{}", String::from_utf8_lossy(&r.stdout), stderr(&r));
+    assert!(all.lines().count() > 3 && all.lines().any(|l| l == "USAGE:"), "{all}");
+}
