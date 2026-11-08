@@ -12,6 +12,7 @@ use crate::{Session, cmd};
 
 mod bidi;
 mod documents;
+mod find_apostrophes;
 mod font_sizes;
 mod fonts;
 mod ime_noop;
@@ -5748,6 +5749,39 @@ fn opening_a_named_pipe_or_device_is_refused_without_blocking() {
 
 #[cfg(unix)]
 #[test]
+fn reading_a_template_title_from_a_named_pipe_is_refused_without_blocking() {
+    let dir = scratch_dir("template-title-fifo");
+    let fifo = dir.join("pipe.dotx");
+
+    let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+    if !made.is_ok_and(|s| s.success()) {
+        let _ = std::fs::remove_dir_all(&dir);
+        eprintln!("mkfifo unavailable; skipping");
+        return;
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let path = fifo.clone();
+
+    std::thread::spawn(move || {
+        let title = crate::io::package_title(&path, 64 << 20, 64 << 10);
+        let _ = tx.send(title);
+    });
+
+    let result = rx.recv_timeout(std::time::Duration::from_secs(10));
+
+    if result.is_err() {
+        // Unblock a stuck reader so the test thread can finish.
+        let _ = std::os::unix::fs::OpenOptionsExt::custom_flags(std::fs::OpenOptions::new().write(true), libc::O_NONBLOCK).open(&fifo);
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(result.expect("reading a template title blocked on a named pipe"), None);
+}
+
+#[cfg(unix)]
+#[test]
 fn html_picture_that_is_a_named_pipe_is_skipped_without_blocking() {
     // #98 review: opening a FIFO blocks until a writer appears; it must never be opened.
     let dir = scratch_dir("html-img-fifo");
@@ -10389,6 +10423,73 @@ fn column_texts(s: &Session) -> Vec<String> {
     t.rows.iter().map(|r| r.cells[0].blocks.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect::<String>()).collect()
 }
 
+#[test]
+fn table_sort_rejects_invalid_columns_without_changing_rows_or_history() {
+    for column in [
+        json!(-1),
+        json!(0.5),
+        json!(0.0),
+        json!("0"),
+        json!(null),
+        json!(true),
+        json!([]),
+        json!({}),
+        json!(1),
+        json!(u32::MAX as u64 + 1),
+        json!(u64::MAX),
+    ] {
+        let mut s = column_table("en-US", &["Charlie", "Alpha", "Bravo"]);
+        s.close_typing();
+        run(&mut s, "text.insert", json!({"text": "!"}));
+        let before = s.doc.clone();
+        let selection = s.sel.clone();
+        let dirty = s.dirty;
+        assert!(s.run("table.sort", &json!({"column": column, "header": false})).is_err(), "column {column}");
+        assert_eq!(s.doc, before, "column {column}");
+        assert_eq!(s.sel, selection, "column {column}");
+        assert_eq!(s.dirty, dirty, "column {column}");
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(column_texts(&s), ["Charlie", "Alpha", "Bravo"], "column {column}: refusal must not consume Undo");
+        run(&mut s, "edit.redo", json!({}));
+        assert_eq!(s.doc, before, "column {column}: Redo must restore the preceding edit");
+    }
+}
+
+#[test]
+fn table_sort_keeps_default_and_valid_columns() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 2}));
+    for (k, value) in ["Charlie", "1", "Alpha", "3", "Bravo", "2"].into_iter().enumerate() {
+        if k > 0 {
+            run(&mut s, "text.tab", json!({}));
+        }
+        run(&mut s, "text.insert", json!({"text": value}));
+    }
+    let original = s.doc.clone();
+    for params in [json!({"header": false}), json!({"column": 0, "header": false})] {
+        run(&mut s, "table.sort", params);
+        assert_eq!(column_texts(&s), ["Alpha", "Bravo", "Charlie"]);
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(s.doc, original);
+    }
+    run(&mut s, "table.sort", json!({"column": 1, "header": false}));
+    assert_eq!(column_texts(&s), ["Charlie", "Bravo", "Alpha"]);
+    run(&mut s, "table.sort", json!({"column": 1, "header": false, "descending": true}));
+    assert_eq!(column_texts(&s), ["Alpha", "Bravo", "Charlie"]);
+    // A column may be missing in some rows. Its present cells still sort normally.
+    let at = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap() as u32;
+    let table = s.doc.table_mut(StoryRef::Body, &wordcraft_doc::Path(vec![at])).unwrap();
+    table.rows[0].cells.remove(1);
+    run(&mut s, "table.sort", json!({"column": 1, "header": false}));
+    assert_eq!(column_texts(&s), ["Charlie", "Bravo", "Alpha"]);
+
+    let mut s = column_table("en-US", &["Title", "3", "1", "2"]);
+    let at = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap() as u32;
+    s.doc.table_mut(StoryRef::Body, &wordcraft_doc::Path(vec![at])).unwrap().rows[0].props.header = true;
+    run(&mut s, "table.sort", json!({"column": 0}));
+    assert_eq!(column_texts(&s), ["Title", "1", "2", "3"]);
+}
+
 /// #836: table sort reads numbers in the text's language: `1,5` is one and a half in Polish.
 #[test]
 fn table_sort_reads_decimal_comma_in_polish() {
@@ -10713,6 +10814,44 @@ fn picture_change_keeps_the_replacement_format() {
     assert!(media.ends_with(".jpeg") || media.ends_with(".jpg"), "the JPEG keeps its format: {media}");
     let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
     assert_eq!(back.media.get(&media).map(|b| b.as_slice()), Some(jpeg.as_slice()), "the saved part is the JPEG");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Change Picture keeps the width and takes the replacement's aspect ratio: swapping a figure for
+/// a revised one of a different shape must not stretch it into the old frame.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn picture_change_keeps_width_and_takes_new_aspect() {
+    let dir = scratch_dir("picture-change-aspect");
+    let mut wide = Vec::new();
+    image::RgbImage::from_pixel(40, 20, image::Rgb([200, 30, 30])).write_to(&mut std::io::Cursor::new(&mut wide), image::ImageFormat::Png).unwrap();
+    let mut tall = Vec::new();
+    image::RgbImage::from_pixel(30, 60, image::Rgb([30, 30, 200])).write_to(&mut std::io::Cursor::new(&mut tall), image::ImageFormat::Png).unwrap();
+    let (first, second) = (dir.join("wide.png"), dir.join("tall.png"));
+    std::fs::write(&first, &wide).unwrap();
+    std::fs::write(&second, &tall).unwrap();
+
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "insert.picture", json!({"path": first.to_string_lossy()}));
+    let size = |s: &Session| {
+        let mut out = (0.0f32, 0.0f32, [1.0f32; 4]);
+        s.doc.objects_in_reading_order(&mut |o| {
+            if let wordcraft_doc::para::InlineObject::Image { w, h, crop, .. } = o {
+                out = (*w, *h, *crop);
+            }
+        });
+        out
+    };
+    let (w0, h0, _) = size(&s);
+    assert!((w0 / h0 - 2.0).abs() < 1e-3, "inserted at its own 2:1 shape: {w0} x {h0}");
+    run(&mut s, "picture.crop", json!({"left": 0.1}));
+    let (w_cropped, _, crop) = size(&s);
+    assert!(crop[0] > 0.0, "cropped before the change");
+    run(&mut s, "picture.change", json!({"path": second.to_string_lossy()}));
+    let (w1, h1, crop) = size(&s);
+    assert!((w1 - w_cropped).abs() < 1e-3, "the width is kept: {w_cropped} -> {w1}");
+    assert!((h1 / w1 - 2.0).abs() < 1e-3, "the height follows the new 1:2 picture: {w1} x {h1}");
+    assert_eq!(crop, [0.0; 4], "the old picture's crop is dropped");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -12718,4 +12857,49 @@ fn page_down_extends_a_selection_that_ends_in_collapsed_outline_text() {
     assert_eq!(s.sel.anchor, anchor, "the anchor stays");
     assert!(s.sel.focus.path.0[0] > 6, "Page Down extends the selection a page on: {:?}", s.sel.focus);
     assert!(s.layout().caret(&s.sel.focus).is_some(), "to a place the outline shows");
+}
+
+/// Issue #5667's document: `Intro`, then an inserted `Appendix` paragraph whose mark carries a
+/// section break (Normal, indented), then `Body` in Heading 1. The whole of `Appendix` is
+/// tracked as an insertion by `rev`, or as a deletion when `delete`.
+fn sectioned_revision(delete: bool) -> Session {
+    use wordcraft_doc::{Revision, RevisionKind};
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Intro\nAppendix\nBody"));
+    run(&mut s, "caret.set", json!({"pos": {"block": 2, "off": 0}}));
+    run(&mut s, "para.style", json!({"style": "Heading1"}));
+    let kind = if delete { RevisionKind::Delete } else { RevisionKind::Insert };
+    s.doc.revisions.push(Revision { kind, author: "Ada".into(), date: String::new(), move_name: None });
+    s.doc.last_section.margin_left = 72.0;
+    let mut sect = s.doc.last_section.clone();
+    sect.margin_left = 144.0;
+    let p = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path(vec![1])).unwrap();
+    let len = p.len();
+    p.format(0, len, &|c| if delete { c.del = Some(0) } else { c.ins = Some(0) }).unwrap();
+    if delete {
+        p.mark.del = Some(0)
+    } else {
+        p.mark.ins = Some(0)
+    }
+    p.props.indent_left = Some(36.0);
+    p.section = Some(Box::new(sect));
+    s
+}
+
+#[test]
+fn resolving_away_an_empty_paragraph_with_a_section_break_keeps_the_next_paragraphs_properties() {
+    // #5667: the resolved paragraph was left empty but kept for its section break, so the next
+    // paragraph joined it and took its properties (Normal, its indent). It goes whole instead,
+    // as an empty paragraph without a break does, and its section joins the following one.
+    for (delete, cmd) in [(false, "review.rejectAll"), (true, "review.acceptAll")] {
+        let mut s = sectioned_revision(delete);
+        assert_eq!(s.doc.sections().len(), 2);
+        run(&mut s, cmd, json!({}));
+        assert_eq!(body_texts(&s), ["Intro", "Body"], "{cmd}");
+        let body = s.doc.para(StoryRef::Body, &wordcraft_doc::Path(vec![1])).unwrap();
+        assert_eq!(body.props.style.as_deref(), Some("Heading1"), "{cmd}: Body keeps its style");
+        assert_eq!(body.props.indent_left, None, "{cmd}: and not the removed paragraph's indent");
+        assert!(s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.section.is_none()), "{cmd}: the break went with it");
+        assert_eq!(s.doc.sections().len(), 1, "{cmd}");
+        assert_eq!(s.doc.last_section.margin_left, 72.0, "{cmd}: the following section's setup stays");
+    }
 }
