@@ -98,7 +98,7 @@ pub(super) fn table(toks: &[Tok], spec: &str, depth: usize) -> FTable {
     if !row.is_empty() {
         rows.push(row);
     }
-    let mut out = FTable { rows: Vec::new(), widths: Vec::new(), borderless: !has_rules };
+    let mut out = FTable { rows: Vec::new(), widths: Vec::new(), borderless: !has_rules, extra: None, kept: None, wrap: None };
     // Rows still covered by a `\multirow` above, per grid column.
     let mut covering: Vec<u32> = Vec::new();
     for r in rows {
