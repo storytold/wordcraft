@@ -124,21 +124,71 @@ impl Axes {
     /// The value scale of `c` and, for scatter and bubble charts, its x scale, with their ticks and
     /// tick texts.
     pub(super) fn of(c: &Chart) -> Axes {
+        Axes::fitting(c, &[], 0.0, 0.0)
+    }
+
+    /// [`Axes::of`], with automatic axis ends widened so that each of `bubbles` fits whole in a
+    /// plot `w` x `h` points, as Word widens them (measured: x 1..3 with sizes 1, 4 and 16 at
+    /// 432 x 252 gets 0..3.5, and data 1..10 with the largest bubble at the top gets y -2..12).
+    fn fitting(c: &Chart, bubbles: &[Bubble], w: f32, h: f32) -> Axes {
         let (dlo, dhi) = extent(c);
         let (vmin, vmax) = if c.grouping == Grouping::Percent { (Some(0.0), Some(1.0)) } else { (c.val.min, c.val.max) };
-        // Lines, scatters and bubbles don't need zero for a narrow range (1000..1050 stays on its own scale).
-        let zero = !(c.kind == Kind::Line || c.kind.xy()) || !narrow(dlo, dhi);
-        let vs = nice_scale(dlo, dhi, zero, vmin, vmax);
+        // Lines, scatters and bubbles don't need zero for a narrow range (1000..1050 stays on its
+        // own scale). Word's bubble charts take zero on both axes, and for a single value too
+        // (x = 3 gets 0..3.5).
+        let bubble = c.kind == Kind::Bubble;
+        let zero_for = |lo: f64, hi: f64| (bubble && lo == hi) || !narrow(lo, hi);
+        let zero = !(c.kind == Kind::Line || c.kind.xy()) || zero_for(dlo, dhi);
+        let radius = |b: &Bubble| f64::from(b.d) / 2.0;
+        let ys: Vec<(f64, f64)> = bubbles.iter().map(|b| (b.y, radius(b))).collect();
+        let vs = fit_scale((dlo, dhi), zero, (vmin, vmax), &ys, f64::from(h));
         let vticks = vs.ticks().into_iter().map(|t| (t, format_value(t, &c.val_fmt, vs.step))).collect();
         let xs = c.kind.xy().then(|| {
             let (xl, xh) = x_extent(c);
-            nice_scale(xl, xh, false, c.cat.min, c.cat.max)
+            let xs: Vec<(f64, f64)> = bubbles.iter().map(|b| (b.x, radius(b))).collect();
+            fit_scale((xl, xh), bubble && zero_for(xl, xh), (c.cat.min, c.cat.max), &xs, f64::from(w))
         });
         // Scatter x values show in the axis's own format, else their cache's (dates included).
         let xfmt = c.cat.fmt.clone().or_else(|| c.series.iter().find_map(|s| s.x_fmt.clone())).unwrap_or_else(|| "General".to_string());
         let xticks = xs.map(|s| s.ticks().into_iter().map(|t| (t, category_text(t, &xfmt, s.step, c.date1904))).collect()).unwrap_or_default();
         Axes { vs, vticks, xs, xticks }
     }
+}
+
+/// [`nice_scale`] for data `dlo..dhi`, widened until every disc (centre in axis units, radius in
+/// points) fits whole on an axis `len` points long: first the least room that fits them at the
+/// data's own span, then, while one still sticks out of the rounded scale, room at that scale's
+/// span. An end the file fixes (`min`, `max`) stays put; the drawing cuts what crosses it.
+fn fit_scale((dlo, dhi): (f64, f64), zero: bool, (min, max): (Option<f64>, Option<f64>), discs: &[(f64, f64)], len: f64) -> Scale {
+    const ROUNDS: usize = 8;
+    let plain = nice_scale(dlo, dhi, zero, min, max);
+    if discs.is_empty() || !(len.is_finite() && len > 0.0) {
+        return plain;
+    }
+    // The ends every disc needs when the axis spans `span` units.
+    let room = |span: f64| {
+        let k = span / len;
+        discs.iter().fold((dlo, dhi), |(lo, hi), (v, r)| (lo.min(v - r * k), hi.max(v + r * k)))
+    };
+    let finite = |(l, h): (f64, f64)| l.is_finite() && h.is_finite();
+    let (mut lo, mut hi) = (dlo, dhi);
+    for _ in 0..ROUNDS {
+        let next = room(hi - lo);
+        if !finite(next) {
+            return plain;
+        }
+        (lo, hi) = next;
+    }
+    let mut s = nice_scale(lo, hi, zero, min, max);
+    for _ in 0..ROUNDS {
+        let (l, h) = room(s.hi - s.lo);
+        if !finite((l, h)) || ((min.is_some() || l >= s.lo) && (max.is_some() || h <= s.hi)) {
+            break;
+        }
+        (lo, hi) = (lo.min(l), hi.max(h));
+        s = nice_scale(lo, hi, zero, min, max);
+    }
+    s
 }
 
 /// The room around the plot for axis labels, and the category labels as they'll be drawn.
@@ -192,9 +242,23 @@ pub(super) fn cartesian(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
     if c.n == 0 {
         return;
     }
-    let ax = Axes::of(c);
-    let m = axis_margins(c, &ax, area);
-    let plot = Rect { x: area.x + m.left, y: area.y + m.top, w: area.w - m.left, h: area.h - m.top - m.bottom };
+    let inner = |m: &Margins| Rect { x: area.x + m.left, y: area.y + m.top, w: area.w - m.left, h: area.h - m.top - m.bottom };
+    let bubbles = if c.kind == Kind::Bubble { bubble_list(c, area) } else { Vec::new() };
+    let mut ax = Axes::of(c);
+    let mut m = axis_margins(c, &ax, area);
+    // Room for the bubbles at this plot's size, then the margins the new tick labels need, until
+    // the plot keeps its size (a few rounds; what still crosses the plot's edge is cut).
+    let mut fitted = (0.0, 0.0);
+    for _ in 0..if bubbles.is_empty() { 0 } else { 4 } {
+        let p = inner(&m);
+        if (p.w, p.h) == fitted {
+            break;
+        }
+        fitted = (p.w, p.h);
+        ax = Axes::fitting(c, &bubbles, p.w, p.h);
+        m = axis_margins(c, &ax, area);
+    }
+    let plot = inner(&m);
     if plot.w < 1.0 || plot.h < 1.0 {
         return;
     }
@@ -208,7 +272,7 @@ pub(super) fn cartesian(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
         Kind::Line => lines(out, c, &g, &mut labels),
         Kind::Area => areas(out, c, &g, &mut labels),
         Kind::Scatter => draw_scatter(out, c, &g, &mut labels),
-        Kind::Bubble => draw_bubbles(out, c, &g, area, &mut labels),
+        Kind::Bubble => draw_bubbles(out, c, &g, &bubbles, &mut labels),
         Kind::Pie | Kind::Doughnut | Kind::Radar => {}
     }
     draw_axes(out, c, &g);
@@ -467,53 +531,198 @@ fn draw_scatter(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut V
 
 /// How far inside the chart's edge Word measures a bubble chart's size from, points.
 const BUBBLE_INSET: f32 = 5.0;
+/// How many plot areas a chart's bubbles may cover, all told.
+pub(super) const BUBBLE_COVER: f32 = 256.0;
+/// How many corners a chart's cut bubbles may have, all told.
+const MAX_CUT_CORNERS: usize = 200_000;
 /// Width of a bubble's outline, points: Word draws it this thin whatever the line's `w` (measured
 /// in its PDF export with 1.5 and 3 pt lines).
 const BUBBLE_OUTLINE: f32 = 0.25;
 
-/// Bubble series: a circle per point at its x and y, sized as Word sizes bubbles (measured in
-/// Word for Microsoft 365). The largest size of the chart gets a diameter of `L * 3s / (3s + 1000)`,
-/// where `L` is the short side of the room the title and legend leave (the chart less 5 pt a side
-/// when it has neither) and `s` is the `c:bubbleScale`. Other bubbles scale from the largest by
-/// area, or by width with `c:sizeRepresents="w"`. A size of 0 isn't drawn, nor a negative one
-/// unless `c:showNegBubbles` is on (then at its magnitude). Points without a size are skipped. A
-/// series with no `c:bubbleSize` at all sizes every point 1 (not checked against Word).
+/// A bubble to draw: point `i` of series `j`, centred on (`x`, `y`) in axis units, of size `v`
+/// and `d` points across.
+pub(super) struct Bubble {
+    j: usize,
+    i: usize,
+    x: f64,
+    y: f64,
+    v: f64,
+    d: f32,
+}
+
+/// The bubbles of `c` in drawing order, sized as Word sizes bubbles (measured in Word for
+/// Microsoft 365). The largest size of the chart gets a diameter of `L * 3s / (3s + 1000)`, where
+/// `L` is the short side of the room the title and legend leave (the chart less 5 pt a side when
+/// it has neither, `area` being [`PAD`] inside its edge) and `s` is the `c:bubbleScale`. Other
+/// bubbles scale from the largest by area, or by width with `c:sizeRepresents="w"`. A size of 0
+/// isn't drawn, nor a negative one unless `c:showNegBubbles` is on (then at its magnitude). Points
+/// without a size, an x or a y are skipped, and don't count towards the largest (Word, measured
+/// with a size-64 point missing its x or its y). A series with no `c:bubbleSize` at all sizes every
+/// point 1 (not checked against Word).
+fn bubble_list(c: &Chart, area: Rect) -> Vec<Bubble> {
+    let Some(opts) = c.bubble else { return Vec::new() };
+    let size = |s: &Series, i: usize| if s.sizes.is_empty() { Some(1.0) } else { s.sizes.get(i).copied().flatten() };
+    let shown = |v: f64| v > 0.0 || (opts.negative && v < 0.0);
+    let mut out = Vec::new();
+    for (j, s) in c.series.iter().enumerate() {
+        for (i, (x, y)) in s.xs.iter().zip(&s.values).enumerate() {
+            if let (Some(x), Some(y), Some(v)) = (*x, *y, size(s, i))
+                && x.is_finite()
+                && y.is_finite()
+                && v.is_finite()
+                && shown(v)
+            {
+                out.push(Bubble { j, i, x, y, v, d: 0.0 });
+            }
+        }
+    }
+    let largest = out.iter().map(|b| b.v.abs()).fold(0.0, f64::max);
+    let side = f64::from((area.w.min(area.h) + 2.0 * (PAD - BUBBLE_INSET)).max(0.0));
+    let d_max = side * 3.0 * opts.scale / (3.0 * opts.scale + 1000.0);
+    if !(largest > 0.0 && largest.is_finite() && d_max > 0.0 && d_max.is_finite()) {
+        return Vec::new();
+    }
+    for b in &mut out {
+        let share = b.v.abs() / largest;
+        b.d = (d_max * if opts.by_width { share } else { share.sqrt() }) as f32;
+    }
+    out.retain(|b| b.d.is_finite() && b.d > 0.0);
+    out
+}
+
+/// Bubble series: a circle per point in [`bubble_list`], centred on its x and y.
+///
+/// Word keeps bubbles inside the plot area: automatic axes leave room for them (see
+/// [`Axes::fitting`]), a bubble crossing an end the file fixes is cut at the plot's edge, and a
+/// point outside a fixed range isn't drawn (all measured in Word's PDF export). A cut bubble is a
+/// path, not an ellipse. Drawing stops once the bubbles cover [`BUBBLE_COVER`] plot areas, which
+/// bounds the overdraw of a hostile file (100,000 points, each up to half the chart's short side),
+/// and bubbles stop being cut after [`MAX_CUT_CORNERS`].
 ///
 /// A bubble is outlined when its point or series has a visible line. A negative bubble is drawn
 /// inverted, as Office always does (MS-OI29500 §21.2.2.86, whatever `c:invertIfNegative` says):
 /// white, outlined in its line colour or else black.
-fn draw_bubbles(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, area: Rect, labels: &mut Vec<DataLabel>) {
-    let Some(opts) = c.bubble else { return };
-    let size = |s: &Series, i: usize| if s.sizes.is_empty() { Some(1.0) } else { s.sizes.get(i).copied().flatten() };
-    let shown = |v: f64| v > 0.0 || (opts.negative && v < 0.0);
-    let largest =
-        c.series.iter().flat_map(|s| (0..s.values.len()).filter_map(move |i| size(s, i))).filter(|v| shown(*v)).map(f64::abs).fold(0.0, f64::max);
-    // `area` is PAD inside the chart's edge (and below a title, beside a legend).
-    let side = f64::from((area.w.min(area.h) + 2.0 * (PAD - BUBBLE_INSET)).max(0.0));
-    let d_max = side * 3.0 * opts.scale / (3.0 * opts.scale + 1000.0);
-    if !(largest > 0.0 && largest.is_finite() && d_max > 0.0 && d_max.is_finite()) {
-        return;
-    }
-    for (j, s) in c.series.iter().enumerate() {
-        for (i, (x, y)) in s.xs.iter().zip(&s.values).enumerate() {
-            let (Some(x), Some(y), Some(v)) = (x, y, size(s, i)) else { continue };
-            if !shown(v) {
-                continue;
-            }
-            let share = v.abs() / largest;
-            let d = (d_max * if opts.by_width { share } else { share.sqrt() }) as f32;
-            let (cx, cy) = (g.scat_x(*x), g.val(*y));
-            if !(d.is_finite() && d > 0.0) {
-                continue;
-            }
-            let rect = [cx - d / 2.0, cy - d / 2.0, d, d];
-            let line = s.outlines.get(i).copied().flatten();
-            let (fill, stroke) = if v < 0.0 { (Rgb::WHITE, Some(line.unwrap_or(Rgb::BLACK))) } else { (c.point_colour(j, i), line) };
+fn draw_bubbles(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, bubbles: &[Bubble], labels: &mut Vec<DataLabel>) {
+    let Some(xs) = g.xs else { return };
+    let plot = g.plot;
+    let budget = f64::from(BUBBLE_COVER) * f64::from(plot.w) * f64::from(plot.h);
+    let (mut covered, mut corners) = (0.0, 0);
+    for b in bubbles {
+        if b.x < xs.lo || b.x > xs.hi || b.y < g.vs.lo || b.y > g.vs.hi {
+            continue;
+        }
+        covered += std::f64::consts::FRAC_PI_4 * f64::from(b.d) * f64::from(b.d);
+        if covered > budget {
+            break;
+        }
+        let Some(s) = c.series.get(b.j) else { continue };
+        let (cx, cy, d) = (g.scat_x(b.x), g.val(b.y), b.d);
+        let line = s.outlines.get(b.i).copied().flatten();
+        let (fill, stroke) = if b.v < 0.0 { (Rgb::WHITE, Some(line.unwrap_or(Rgb::BLACK))) } else { (c.point_colour(b.j, b.i), line) };
+        let r = d / 2.0;
+        if cx - r >= plot.x && cy - r >= plot.y && cx + r <= plot.right() && cy + r <= plot.bottom() {
             let stroke_width = if stroke.is_some() { BUBBLE_OUTLINE } else { 0.0 };
-            out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(fill), stroke, stroke_width });
-            if let Some(text) = label_of(s, i) {
-                labels.push(DataLabel { x: cx, y: cy - d / 2.0, text, inside: false });
+            out.push(GraphicItem::Shape { rect: [cx - r, cy - r, d, d], kind: ShapeKind::Ellipse, fill: Some(fill), stroke, stroke_width });
+        } else {
+            let ring = circle(cx, cy, r);
+            corners += ring.len();
+            if corners > MAX_CUT_CORNERS {
+                continue;
+            }
+            let cut = clip_polygon(&ring, plot);
+            if cut.len() < 3 {
+                continue;
+            }
+            fill_poly(out, &cut, fill);
+            if let Some(col) = stroke {
+                super::canvas::stroke(out, clip_ring(&ring, plot), col, BUBBLE_OUTLINE);
             }
         }
+        if let Some(text) = label_of(s, b.i) {
+            labels.push(DataLabel { x: cx, y: (cy - r).max(plot.y), text, inside: false });
+        }
     }
+}
+
+/// A circle as a closed polygon, with enough corners that it strays under 0.1 pt from the circle.
+fn circle(cx: f32, cy: f32, r: f32) -> Vec<(f32, f32)> {
+    let n = ((r.max(0.0).sqrt() * 8.0).ceil() as usize).clamp(8, 256);
+    (0..n)
+        .map(|k| {
+            let t = k as f32 / n as f32 * std::f32::consts::TAU;
+            (cx + r * t.cos(), cy + r * t.sin())
+        })
+        .collect()
+}
+
+/// The part of the convex polygon `poly` inside `rect` (Sutherland-Hodgman).
+fn clip_polygon(poly: &[(f32, f32)], rect: Rect) -> Vec<(f32, f32)> {
+    // How far a point is inside each edge (negative: outside).
+    let edges: [fn((f32, f32), Rect) -> f32; 4] = [|p, r| p.0 - r.x, |p, r| r.right() - p.0, |p, r| p.1 - r.y, |p, r| r.bottom() - p.1];
+    let mut pts = poly.to_vec();
+    for inside in edges {
+        let Some(&last) = pts.last() else { break };
+        let mut next = Vec::with_capacity(pts.len() + 4);
+        let mut prev = last;
+        for &p in &pts {
+            let (a, b) = (inside(prev, rect), inside(p, rect));
+            if (a >= 0.0) != (b >= 0.0) {
+                let t = a / (a - b);
+                next.push((prev.0 + t * (p.0 - prev.0), prev.1 + t * (p.1 - prev.1)));
+            }
+            if b >= 0.0 {
+                next.push(p);
+            }
+            prev = p;
+        }
+        pts = next;
+    }
+    pts
+}
+
+/// The parts of the closed polygon `ring`'s outline inside `rect`, as open paths.
+fn clip_ring(ring: &[(f32, f32)], rect: Rect) -> Vec<PathSeg> {
+    let mut segs = Vec::new();
+    let mut pen: Option<(f32, f32)> = None;
+    for (k, &p) in ring.iter().enumerate() {
+        let q = ring.get(k + 1).or(ring.first()).copied().unwrap_or(p);
+        let Some((a, b)) = clip_segment(p, q, rect) else {
+            pen = None;
+            continue;
+        };
+        if pen != Some(a) {
+            segs.push(PathSeg::Move(a.0, a.1));
+        }
+        segs.push(PathSeg::Line(b.0, b.1));
+        pen = Some(b);
+    }
+    segs
+}
+
+/// The part of the segment `p`..`q` inside `rect` (Liang-Barsky), if any.
+fn clip_segment(p: (f32, f32), q: (f32, f32), rect: Rect) -> Option<((f32, f32), (f32, f32))> {
+    let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for (den, num) in [(-dx, p.0 - rect.x), (dx, rect.right() - p.0), (-dy, p.1 - rect.y), (dy, rect.bottom() - p.1)] {
+        if den == 0.0 {
+            if num < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let t = num / den;
+        if den < 0.0 {
+            t0 = t0.max(t);
+        } else {
+            t1 = t1.min(t);
+        }
+    }
+    (t0 <= t1).then_some(((p.0 + t0 * dx, p.1 + t0 * dy), (p.0 + t1 * dx, p.1 + t1 * dy)))
+}
+
+/// A filled polygon.
+fn fill_poly(out: &mut Vec<GraphicItem>, pts: &[(f32, f32)], color: Rgb) {
+    let mut segs: Vec<PathSeg> = pts.iter().enumerate().map(|(k, &(x, y))| if k == 0 { PathSeg::Move(x, y) } else { PathSeg::Line(x, y) }).collect();
+    segs.push(PathSeg::Close);
+    fill(out, segs, color);
 }

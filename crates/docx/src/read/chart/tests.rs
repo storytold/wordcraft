@@ -783,6 +783,8 @@ fn hostile_bubble_sizes_never_panic() {
                 for it in bubble_chart(std::slice::from_ref(&s), extra, w, h) {
                     if let GraphicItem::Shape { rect, .. } = it {
                         assert!(rect.iter().all(|v| v.is_finite()), "{sizes:?} {extra}: {rect:?}");
+                        let inside = rect[0] >= -0.01 && rect[1] >= -0.01 && rect[0] + rect[2] <= w + 0.01 && rect[1] + rect[3] <= h + 0.01;
+                        assert!(inside, "{sizes:?} {extra}: {rect:?} outside the {w} x {h} chart");
                     }
                 }
             }
@@ -791,6 +793,186 @@ fn hostile_bubble_sizes_never_panic() {
     // No `c:bubbleSize` at all, and a series with no points.
     let bare = bser(0, "FF0000", &["1", "2"], &["2", "3"], None);
     let _ = bubble_chart(&[bare, bser(1, "0000FF", &[], &[], Some(&[]))], "", 432.0, 252.0);
+}
+
+// Bubbles stay in the plot area (#5948 review). Measured in Word: automatic axes are widened so
+// every bubble fits (x 1..3 with sizes 1, 4, 16 at 432 x 252 gets x 0..3.5, y 2..4 gets 0..5;
+// the largest bubble at y = 10 gets y -2..12), and a bubble that crosses a fixed axis end is
+// clipped to the plot area. A point outside a fixed axis range isn't drawn.
+
+/// A bubble chart of `w` x `h` points with automatic axes (no `c:min` / `c:max`).
+fn auto_bubble_chart(sers: &[String], extra: &str, w: f32, h: f32) -> Vec<GraphicItem> {
+    let ax = |id: u32, pos: &str| {
+        format!(
+            r#"<c:valAx><c:axId val="{id}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="{pos}"/></c:valAx>"#
+        )
+    };
+    let plot = format!(
+        r#"<c:bubbleChart><c:varyColors val="0"/>{}{extra}<c:axId val="1"/><c:axId val="2"/></c:bubbleChart>{}{}"#,
+        sers.concat(),
+        ax(1, "b"),
+        ax(2, "l")
+    );
+    chart_items(&space(&plot), &theme(), w, h)
+}
+
+/// The plot area's box [left, top, right, bottom], from the axis lines (x axis along the bottom,
+/// y axis down the left).
+fn plot_box(items: &[GraphicItem]) -> [f32; 4] {
+    let lines: Vec<(f32, f32, f32, f32)> = items
+        .iter()
+        .filter_map(|it| match it {
+            GraphicItem::Path { segs, stroke: Some(c), .. } if *c == AXIS => match segs.as_slice() {
+                [PathSeg::Move(x0, y0), PathSeg::Line(x1, y1)] => Some((*x0, *y0, *x1, *y1)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    let x_axis = lines.iter().find(|l| l.1 == l.3).expect("an x axis line");
+    let y_axis = lines.iter().find(|l| l.0 == l.2).expect("a y axis line");
+    [x_axis.0, y_axis.1.min(y_axis.3), x_axis.2, x_axis.1]
+}
+
+/// The box [left, top, right, bottom] of each thing painted in `col`: whole bubbles (ellipses)
+/// and clipped ones (paths).
+fn painted(items: &[GraphicItem], col: Rgb) -> Vec<[f32; 4]> {
+    items
+        .iter()
+        .filter_map(|it| match it {
+            GraphicItem::Shape { rect: [x, y, w, h], kind: ShapeKind::Ellipse, fill: Some(c), .. } if *c == col => Some([*x, *y, x + w, y + h]),
+            GraphicItem::Path { segs, fill: Some(c), .. } if *c == col => {
+                let mut b = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+                for s in segs {
+                    let pts = match *s {
+                        PathSeg::Move(x, y) | PathSeg::Line(x, y) => vec![(x, y)],
+                        PathSeg::Cubic(a, b, c, d, e, f) => vec![(a, b), (c, d), (e, f)],
+                        PathSeg::Close => vec![],
+                    };
+                    for (x, y) in pts {
+                        b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+                    }
+                }
+                Some(b)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Asserts every red and blue bubble lies inside the plot area and the `w` x `h` chart; returns
+/// how many there are.
+fn assert_bubbles_inside(items: &[GraphicItem], w: f32, h: f32, what: &str) -> usize {
+    const EPS: f32 = 0.01;
+    let p = plot_box(items);
+    let all: Vec<[f32; 4]> = painted(items, RED).into_iter().chain(painted(items, BLUE)).collect();
+    for b in &all {
+        assert!(b[0] >= -EPS && b[1] >= -EPS && b[2] <= w + EPS && b[3] <= h + EPS, "{what}: bubble {b:?} outside the {w} x {h} chart");
+        assert!(
+            b[0] >= p[0] - EPS && b[1] >= p[1] - EPS && b[2] <= p[2] + EPS && b[3] <= p[3] + EPS,
+            "{what}: bubble {b:?} outside the plot area {p:?}"
+        );
+    }
+    all.len()
+}
+
+/// `ser` without its `c:xVal`: x is then 1, 2, 3...
+fn without_x(ser: &str) -> String {
+    let start = ser.find("<c:xVal>").expect("bser writes c:xVal");
+    let end = ser.find("</c:xVal>").expect("bser writes c:xVal") + "</c:xVal>".len();
+    format!("{}{}", &ser[..start], &ser[end..])
+}
+
+#[test]
+fn bubbles_stay_inside_the_plot_area_on_automatic_axes() {
+    let red = |xs: &[&str], ys: &[&str], sizes: &[&str]| bser(0, "FF0000", xs, ys, Some(sizes));
+    let cases: [(&str, Vec<String>, usize); 7] = [
+        ("default x", vec![without_x(&red(&[], &["2", "3", "4"], &["1", "4", "16"]))], 3),
+        ("big at min x", vec![red(&["1", "2", "3"], &["2", "3", "4"], &["16", "4", "1"])], 3),
+        ("big at max y", vec![red(&["1", "2", "3"], &["1", "2", "10"], &["1", "4", "16"])], 3),
+        ("flat", vec![red(&["1", "2", "3"], &["2", "2", "2"], &["1", "4", "16"])], 3),
+        ("negative", vec![red(&["-5", "0", "7"], &["-3", "2", "8"], &["2", "9", "4"])], 3),
+        ("single", vec![red(&["3"], &["7"], &["5"])], 1),
+        (
+            "two series",
+            vec![red(&["1", "2", "3"], &["2", "3", "4"], &["1", "4", "16"]), bser(1, "0000FF", &["1.5", "2.5"], &["5", "1"], Some(&["64", "2"]))],
+            5,
+        ),
+    ];
+    for (w, h) in [(432.0, 252.0), (600.0, 200.0), (250.0, 450.0), (150.0, 120.0)] {
+        for extra in ["", r#"<c:bubbleScale val="200"/>"#, r#"<c:bubbleScale val="300"/>"#] {
+            for (name, sers, n) in &cases {
+                let what = format!("{name} {extra} {w} x {h}");
+                let items = auto_bubble_chart(sers, extra, w, h);
+                assert_eq!(assert_bubbles_inside(&items, w, h, &what), *n, "{what}: every bubble drawn");
+                // Automatic axes leave room, so the bubbles are whole, not cut.
+                assert_eq!(bubbles(&items, RED).len() + bubbles(&items, BLUE).len(), *n, "{what}: cut");
+            }
+        }
+    }
+}
+
+#[test]
+fn bubbles_are_clipped_to_the_plot_area_on_fixed_axes() {
+    // Axes fixed at 0..4: bubbles centred on the corners are cut at the plot's edges, as Word cuts
+    // them.
+    for (extra, scale) in [("", 100.0), (r#"<c:bubbleScale val="300"/>"#, 300.0)] {
+        let s = bser(0, "FF0000", &["0", "4", "2"], &["0", "4", "2"], Some(&["16", "16", "1"]));
+        let items = bubble_chart(&[s], extra, 432.0, 252.0);
+        assert_eq!(assert_bubbles_inside(&items, 432.0, 252.0, extra), 3, "{extra}");
+        let p = plot_box(&items);
+        let r = word_d_max(432.0, 252.0, scale) / 2.0;
+        let cut = painted(&items, RED);
+        // The bottom-left bubble keeps its upper-right quarter, the top-right its lower-left.
+        let near = |a: f32, b: f32| (a - b).abs() < 0.1;
+        assert!(
+            cut.iter().any(|b| near(b[0], p[0]) && near(b[3], p[3]) && near(b[2], p[0] + r) && near(b[1], p[3] - r)),
+            "{extra}: {cut:?} in {p:?}"
+        );
+        assert!(
+            cut.iter().any(|b| near(b[2], p[2]) && near(b[1], p[1]) && near(b[0], p[2] - r) && near(b[3], p[1] + r)),
+            "{extra}: {cut:?} in {p:?}"
+        );
+        // The middle one is whole.
+        assert_eq!(bubbles(&items, RED).len(), 1, "{extra}");
+    }
+    // A point outside the fixed range isn't drawn, even when its bubble would reach in.
+    let out = bser(0, "FF0000", &["5", "2"], &["2", "2"], Some(&["16", "1"]));
+    let items = bubble_chart(&[out], "", 432.0, 252.0);
+    assert_eq!(painted(&items, RED).len(), 1, "{items:?}");
+}
+
+#[test]
+fn points_with_no_x_or_y_dont_size_the_others() {
+    // Word: a size-64 point with no y (or no x) isn't drawn, and the other bubbles keep the sizes
+    // they have without it (13.96, 27.92 and 55.84 pt at 432 x 252).
+    let base = bser(0, "FF0000", &["1", "2", "3", "3.5"], &["2", "2", "2", "3"], Some(&["1", "4", "16", "64"]));
+    let no_y = base.replacen(r#"<c:pt idx="3"><c:v>3</c:v></c:pt>"#, "", 1);
+    let no_x = base.replacen(r#"<c:pt idx="3"><c:v>3.5</c:v></c:pt>"#, "", 1);
+    let d_max = word_d_max(432.0, 252.0, 100.0);
+    for (what, s) in [("no y", no_y), ("no x", no_x)] {
+        assert_ne!(s, base, "{what}: the point was removed");
+        let b = by_x(bubbles(&bubble_chart(&[s], "", 432.0, 252.0), RED));
+        assert_eq!(b.len(), 3, "{what}: {b:?}");
+        assert!((b[2].2 - d_max).abs() < 0.1 && (b[0].2 - d_max / 4.0).abs() < 0.1, "{what}: {b:?}");
+    }
+}
+
+#[test]
+fn bubble_overdraw_is_capped() {
+    // 10,000 full-size bubbles at scale 300: what's drawn covers at most BUBBLE_COVER plot areas.
+    let n = 10_000;
+    let xs: Vec<String> = (0..n).map(|i| (i % 100).to_string()).collect();
+    let ys: Vec<String> = (0..n).map(|i| (i / 100).to_string()).collect();
+    let (xs, ys): (Vec<&str>, Vec<&str>) = (xs.iter().map(String::as_str).collect(), ys.iter().map(String::as_str).collect());
+    let s = bser(0, "FF0000", &xs, &ys, Some(&vec!["1"; n]));
+    let items = auto_bubble_chart(&[s], r#"<c:bubbleScale val="300"/>"#, 432.0, 252.0);
+    let p = plot_box(&items);
+    let drawn = assert_bubbles_inside(&items, 432.0, 252.0, "dense");
+    let d = word_d_max(432.0, 252.0, 300.0);
+    let cover = drawn as f32 * std::f32::consts::FRAC_PI_4 * d * d / ((p[2] - p[0]) * (p[3] - p[1]));
+    assert!(drawn > 0 && drawn < n, "{drawn} of {n} drawn");
+    assert!(cover <= BUBBLE_COVER + 1.0, "covers {cover} plot areas");
 }
 
 // An automatic series colour follows the series' `c:idx`, not its place in the file (#5963), as

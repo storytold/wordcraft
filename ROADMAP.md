@@ -880,7 +880,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-07 | trivial | Charts: bubble charts are drawn instead of a placeholder, sized as Word sizes them (#5941) |
+| 2026-11-08 | trivial | Charts: bubble charts are drawn instead of a placeholder, sized as Word sizes them and kept inside the plot area: automatic axes leave room for them, a fixed axis end cuts them (#5941) |
 | 2026-11-08 | trivial | Progress log: XML line ends in text normalised (#5897) |
 | 2026-11-08 | trivial | Progress log: contextual spacing drops the space after a cell's last Normal paragraph (#5450) |
 | 2026-11-06 | trivial | Progress log: the Arabic interface's Styles gallery reads from the right (#5566) |

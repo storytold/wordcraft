@@ -34,7 +34,7 @@ use model::{Axis, BubbleOpts, Grouping, Kind, Pos, Series};
 use parse::{axis, category_text, labels, numbers};
 use parse::{read_series, text_size, title_of};
 #[cfg(test)]
-use plot::{Scale, narrow, nice_scale};
+use plot::{BUBBLE_COVER, Scale, narrow, nice_scale};
 use plot::{backdrop, cartesian};
 use polar::{pie, radar};
 

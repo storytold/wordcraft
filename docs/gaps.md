@@ -197,7 +197,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-07 | trivial | Charts: bubble charts are drawn instead of a placeholder, sized as Word sizes them (#5941) |
+| 2026-11-08 | trivial | Charts: bubble charts are drawn instead of a placeholder, sized as Word sizes them and kept inside the plot area: automatic axes leave room for them, a fixed axis end cuts them (#5941) |
 | 2026-11-08 | trivial | #10 narrowed: a turned inline picture with no recorded effect extent keeps its line to its frame (exchanged near a quarter turn in Word 2013+ layout), cut at the line; gap stays open |
 | 2026-11-08 | trivial | #4 narrowed: a cell's last Normal paragraph drops its contextual space after, the end-of-cell mark counting as a Normal paragraph (#5450) |
 | 2026-11-07 | trivial | Page Setup also bounds the unfocused margin display after a long numeric paste; the accepted value is retained (#5650). |
