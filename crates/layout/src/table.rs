@@ -413,14 +413,13 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     // The first row's outer start (left) or end (right) border as cell `ci` draws it in
     // `layout_table`: its own, else the row's exceptions (`w:tblPrEx`), the table style's
     // conditional parts, the table's.
-    let ncols_all = grid_cols(t);
     let edge_border = |row: &wordcraft_doc::Row, ci: usize, end: bool| -> Option<Border> {
         let cell = row.cells.get(ci)?;
         let g = row.first_grid() + row.cells.iter().take(ci).map(|c| c.span()).sum::<usize>();
         let span = cell.span();
-        let edges = (g == row.first_grid(), g + span >= ncols_all.saturating_sub(row.grid_after()));
+        let edges = (g == row.first_grid(), g + span >= ncols.saturating_sub(row.grid_after()));
         let rb = style
-            .map(|st| region_borders(&region_look(st, region_of(t, Some(st), 0, g, span, ncols_all)).borders, (0, t.rows.len()), edges))
+            .map(|st| region_borders(&region_look(st, region_of(t, Some(st), 0, g, span, ncols)).borders, (0, t.rows.len()), edges))
             .unwrap_or_default();
         let row_b = row.props.exceptions.as_ref().and_then(|e| e.borders).unwrap_or_default();
         let cb = cell.props.borders.unwrap_or_default();

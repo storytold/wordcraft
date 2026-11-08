@@ -29,6 +29,15 @@ fn lay(doc: &Document) -> DocLayout {
     layout(doc, &mut c, &LayoutOptions::default())
 }
 
+/// The first page's cell rectangles as (left, right) edges, ordered left to right.
+fn cell_edges(doc: &Document) -> Vec<(f32, f32)> {
+    let l = lay(doc);
+    let mut out: Vec<(f32, f32)> =
+        l.pages[0].items.iter().filter_map(|i| if let Placed::Cell { rect, .. } = i { Some((rect.x, rect.x + rect.w)) } else { None }).collect();
+    out.sort_by(|a, b| a.0.total_cmp(&b.0));
+    out
+}
+
 /// These pagination fixtures test physical boundaries, not the host's Aptos substitution.
 /// Keep their explicit spacing local; ordinary document/layout defaults remain unchanged.
 pub(super) fn pagination_fixture_document(text: &str) -> Document {
@@ -7114,11 +7123,7 @@ fn a_percentage_table_from_word_2013_ends_its_outer_borders_at_its_width() {
         t.props.fixed = true;
         t.props.borders = Some(Borders { top: line, left: line, bottom: line, right: line, between: line, inside_v: line });
         d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
-        let l = lay(&d);
-        let mut out: Vec<(f32, f32)> =
-            l.pages[0].items.iter().filter_map(|i| if let Placed::Cell { rect, .. } = i { Some((rect.x, rect.x + rect.w)) } else { None }).collect();
-        out.sort_by(|a, b| a.0.total_cmp(&b.0));
-        out
+        cell_edges(&d)
     };
     let near = |a: f32, b: f32| (a - b).abs() < 0.01;
     let plain = cells(0.0, true);
@@ -7163,11 +7168,7 @@ fn a_table_from_word_2013_ends_at_the_borders_its_cells_draw() {
                 Some(Box::new(TableProps { borders: Some(Borders { left: none, right: none, ..Default::default() }), ..Default::default() }));
         }
         d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
-        let l = lay(&d);
-        let mut out: Vec<(f32, f32)> =
-            l.pages[0].items.iter().filter_map(|i| if let Placed::Cell { rect, .. } = i { Some((rect.x, rect.x + rect.w)) } else { None }).collect();
-        out.sort_by(|a, b| a.0.total_cmp(&b.0));
-        out
+        cell_edges(&d)
     };
     let near = |a: f32, b: f32| (a - b).abs() < 0.01;
     let plain = cells(all(none), true, false, false);
@@ -7226,11 +7227,7 @@ fn a_table_from_word_2013_ends_its_borders_by_mode_cell_side_and_direction() {
             }
         }
         d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
-        let l = lay(&d);
-        let mut out: Vec<(f32, f32)> =
-            l.pages[0].items.iter().filter_map(|i| if let Placed::Cell { rect, .. } = i { Some((rect.x, rect.x + rect.w)) } else { None }).collect();
-        out.sort_by(|a, b| a.0.total_cmp(&b.0));
-        out
+        cell_edges(&d)
     };
     let near = |a: f32, b: f32| (a - b).abs() < 0.01;
     let plain = cells(&Case { start: 0.0, end: 0.0, ..base });
@@ -7295,11 +7292,7 @@ fn a_table_from_word_2013_takes_its_outer_borders_from_its_style_s_parts() {
         }
         t.props.look.header_row = header_row;
         d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
-        let l = lay(&d);
-        let mut out: Vec<(f32, f32)> =
-            l.pages[0].items.iter().filter_map(|i| if let Placed::Cell { rect, .. } = i { Some((rect.x, rect.x + rect.w)) } else { None }).collect();
-        out.sort_by(|a, b| a.0.total_cmp(&b.0));
-        out
+        cell_edges(&d)
     };
     let near = |a: f32, b: f32| (a - b).abs() < 0.01;
     let plain = cells(false, true);
