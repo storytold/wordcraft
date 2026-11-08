@@ -1088,15 +1088,28 @@ mod tests {
         let mut xml = String::from(
             r#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
         );
-        for i in 0..40_000 {
+        // Up to the most ids an object keeps, none is missed; past it the count stops there.
+        let n = MAX_EMBEDDED_RELS;
+        for i in 0..n.saturating_mul(40) {
             xml.push_str(&format!(r#"<w:r r:id="rId{i}"/><w:r r:id="rId{i}"/>"#));
         }
         xml.push_str("</w:p>");
         let root = xml::parse(xml.as_bytes()).unwrap();
         let mut used = HashSet::new();
-        rel_attr_values(&root, &mut used, 0);
-        assert_eq!(used.len(), 40_000);
-        assert!(used.contains("rId39999"));
+        assert!(!rel_attr_values(&root, &mut used, 0), "more ids than the limit are reported");
+        assert_eq!(used.len(), n);
+        assert!(used.contains(&format!("rId{}", n - 1)));
+        let mut xml = String::from(
+            r#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+        );
+        for i in 0..n {
+            xml.push_str(&format!(r#"<w:r r:id="rId{i}"/><w:r r:id="rId{i}"/>"#));
+        }
+        xml.push_str("</w:p>");
+        let root = xml::parse(xml.as_bytes()).unwrap();
+        let mut used = HashSet::new();
+        assert!(rel_attr_values(&root, &mut used, 0));
+        assert_eq!(used.len(), n);
     }
 
     #[test]
