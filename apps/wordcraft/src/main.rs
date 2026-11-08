@@ -423,14 +423,15 @@ fn without_launch_args(args: Vec<String>) -> Vec<String> {
 
 /// Open a file whose name isn't valid Unicode (#1440). `file.open` takes its path as text, so it
 /// gets the file's bytes under the lossy name, and the document then keeps the real path to save to.
-/// The bytes are read as `file.open` reads a path: only a regular file, and at most 2 GB.
+/// The bytes are read as `file.open` reads a path: only a regular file, and at most 2 GB. A Word
+/// template starts a new document instead ([`WordApp::open_from_platform`]), which has no path.
 fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
     let name = path.to_string_lossy();
     let opened = wordcraft_engine::io::read_document(path)
-        .and_then(|bytes| app.run("file.open", serde_json::json!({"path": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)})));
+        .and_then(|bytes| app.open_from_platform(&name, Some(&wordcraft_engine::cmd::insert::base64_encode(&bytes))));
     match opened {
         // Not when it waits for a password: that open names the document itself.
-        Ok(r) if r.get("pending").is_none() => app.session.path = Some(path.into()),
+        Ok(r) if r.get("pending").is_none() && !wordcraft_ui_egui::documents::is_word_template(&name) => app.session.path = Some(path.into()),
         Ok(_) => {}
         Err(e) => {
             app.report_open_failure(&name, &e);
@@ -624,8 +625,9 @@ fn main() -> eframe::Result {
             if files.is_empty() && other_files.is_empty() && !sample && control_port.is_none() {
                 app.start_screen();
             }
+            // A Word template named here starts a new document based on it (#3433).
             for f in files {
-                if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
+                if let Err(e) = app.open_from_platform(&f, None) {
                     app.report_open_failure(&f, &e);
                 }
             }
