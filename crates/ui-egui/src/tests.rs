@@ -8221,8 +8221,8 @@ fn ribbon_font_and_size_return_focus_and_preserve_typing_font() {
         .unwrap()
         .get("size")
         .and_then(Value::as_f64)
-        .map(|s| format!("{s:.0}"))
-        .unwrap_or_else(|| "11".into());
+        .map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { format!("{s}") })
+        .expect("format.state reports a size");
     h.get(By::new().role(Role::TextInput).value(&size)).focus();
     h.step();
     assert!(!h.state().canvas.focused, "the font size box took keyboard focus");
