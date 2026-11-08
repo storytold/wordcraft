@@ -2917,6 +2917,88 @@ fn a_command_line_file_still_asks_for_its_password_after_the_startup_document_is
     assert!(body_text(&a).contains("Locked away"), "{}", body_text(&a));
 }
 
+/// A template WordCraft can be handed, saved by the engine with `text` (and `password`).
+fn template_file(path: &std::path::Path, text: &str, password: Option<&str>) -> Vec<u8> {
+    let mut s = Session::new(wordcraft_doc::Document::from_text(text));
+    s.run("file.save", &json!({"path": path.to_string_lossy(), "password": password})).unwrap();
+    std::fs::read(path).unwrap()
+}
+
+/// #3433: a Word template the platform hands the app (the command line, a double-click in the
+/// file manager, the Finder) starts a new, untitled document based on it, in place of the
+/// untouched blank document, as Word does; saving can't write over the template. A document is
+/// still opened as itself, and File › Open still opens a template itself, to edit it.
+#[test]
+fn a_template_the_platform_hands_the_app_starts_a_new_document() {
+    let dir = scratch("platform-template");
+    let path = dir.join("Letterhead.DOTX");
+    let bytes = template_file(&path, "Letterhead text", None);
+    let name = path.to_string_lossy().to_string();
+
+    let mut a = app();
+    let r = a.open_from_platform(&name, None).unwrap();
+    assert_eq!(r.get("pending"), None, "{r}");
+    assert_eq!(a.session.documents().len(), 1, "the blank startup document gave way");
+    assert_eq!(a.session.path, None);
+    assert_eq!(a.session.doc.settings.attached_template.as_deref(), Some(name.as_str()));
+    assert!(body_text(&a).contains("Letterhead text"));
+    assert_eq!(a.title_stem(), "Document1");
+    a.run("text.insert", json!({"text": "Dear reader, "})).unwrap();
+    let _ = a.run("file.save", json!({}));
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "Save never writes over the template");
+    assert_eq!(a.session.path, None);
+
+    // A document opens as itself, beside the new one.
+    let doc = dir.join("Report.docx");
+    template_file(&doc, "Report text", None);
+    a.open_from_platform(&doc.to_string_lossy(), None).unwrap();
+    assert_eq!(a.session.path.as_deref(), Some(doc.as_path()));
+    // File › Open edits the template itself.
+    let mut b = app();
+    b.open_file(&name, None).unwrap();
+    assert_eq!(b.session.path.as_deref(), Some(path.as_path()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #3433: a protected template from the platform asks for its password, and the password box
+/// retries the command that asked, so the template still starts a new document instead of
+/// opening itself.
+#[test]
+fn a_protected_template_from_the_platform_asks_for_its_password_and_stays_a_new_document() {
+    let dir = scratch("platform-template-password");
+    let path = dir.join("Locked.dotm");
+    let bytes = template_file(&path, "Locked template", Some("sesame"));
+    let name = path.to_string_lossy().to_string();
+
+    let mut a = app();
+    a.open_from_platform(&name, None).unwrap();
+    assert_eq!(prompt(&a), Some("password"));
+    let (then, params) = match &a.dialog {
+        Some(crate::dialogs::Dialog::Password { then, params, .. }) => (then.clone(), params.clone()),
+        other => panic!("{:?}", other.as_ref().map(|d| d.name())),
+    };
+    assert_eq!(then, "file.newFromTemplate");
+    let mut with = params;
+    with["password"] = json!("sesame");
+    a.execute(&then, with).unwrap();
+    assert!(body_text(&a).contains("Locked template"), "{}", body_text(&a));
+    assert_eq!((a.session.path.as_ref(), a.session.password.is_some()), (None, false));
+    assert_eq!(a.session.documents().len(), 1);
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn word_templates_are_told_by_their_extension() {
+    use crate::documents::is_word_template;
+    for t in ["a.dotx", "a.dotm", "a.dot", "A.DOTX", "/x/y.Dotm", "C:\\x\\y.DOT"] {
+        assert!(is_word_template(t), "{t}");
+    }
+    for t in ["a.docx", "a.doc", "dotx", "a.dotx.docx", "a.ott", "", "a."] {
+        assert!(!is_word_template(t), "{t}");
+    }
+}
+
 /// #55: a password-protected document asks for its password (after Save Changes) instead of
 /// opening blank; scripts get the error instead of a dialog; Encrypt with Password asks for one.
 #[test]
@@ -5753,6 +5835,51 @@ fn check_spelling_survives_restart() {
     let conflicting = serde_json::from_value(json!({"checkSpelling": true, "editing": {"checkSpelling": false}})).unwrap();
     second.apply_prefs(conflicting);
     assert!(second.session.prefs.check_spelling, "the live spelling setting and its saved copy agree");
+}
+
+/// With several documents open, turning Check spelling as you type off in one keeps it off in the
+/// others, and the next run starts with it off whichever document was active when the settings
+/// were saved (#5740: it came back on every time the file was opened again).
+#[test]
+fn check_spelling_off_survives_a_switch_and_a_restart() {
+    let mut first = app();
+    let a = first.session.document_id();
+    first.run("file.new", json!({})).unwrap();
+    first.run("file.options", json!({"checkSpelling": false})).unwrap();
+    first.session.activate(a).unwrap();
+    assert!(!first.session.view.proofing, "off in the other document too");
+    let saved = serde_json::to_vec(&first.prefs()).unwrap();
+
+    let mut second = app();
+    second.apply_prefs(serde_json::from_slice(&saved).unwrap());
+    assert!(!second.session.view.proofing && !second.session.prefs.check_spelling);
+}
+
+/// The same across windows: Check spelling as you type turned off in a second window on a document
+/// stays off when the first window's own view of it comes back, in a window on another document,
+/// back in the second window, and in the saved settings (#5740).
+#[test]
+fn check_spelling_off_in_a_second_window_stays_off_in_every_window() {
+    let mut a = app();
+    let first = a.windows.shown();
+    a.new_window();
+    let second = a.windows.shown();
+    assert_ne!(first, second, "View › New Window opened a window with its own view");
+    a.run("file.options", json!({"checkSpelling": false})).unwrap();
+
+    assert!(a.enter_window(first));
+    assert!(!a.session.view.proofing, "the first window's own view, put back, follows the setting");
+    a.run("file.new", json!({})).unwrap();
+    assert!(!a.session.view.proofing, "a new document's window");
+    assert!(a.enter_window(second));
+    assert!(!a.session.view.proofing, "back in the second window");
+    assert!(a.enter_window(first));
+    assert!(!a.session.view.proofing);
+
+    let saved = serde_json::to_vec(&a.prefs()).unwrap();
+    let mut b = app();
+    b.apply_prefs(serde_json::from_slice(&saved).unwrap());
+    assert!(!b.session.view.proofing && !b.session.prefs.check_spelling, "saved off, whichever window was drawn");
 }
 
 #[test]
