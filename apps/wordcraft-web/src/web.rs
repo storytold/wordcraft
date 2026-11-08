@@ -9,7 +9,8 @@ use wordcraft_engine::Session;
 use wordcraft_ui_egui::async_saves::{AsyncSaves, SaveOutcome};
 use wordcraft_ui_egui::{Inbox, Services, WordApp};
 
-const DOC_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "rtf", "txt", "md", "html", "htm", "tex", "json", "xml"];
+const DOC_EXTS: &[&str] =
+    &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "ott", "fodt", "rtf", "txt", "md", "html", "htm", "mht", "mhtml", "tex", "json", "xml"];
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
 const RECIPIENT_EXTS: &[&str] = wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS;
 mod font_store;
@@ -27,9 +28,12 @@ pub fn start() {
             log::error!("missing <canvas id=\"{CANVAS_ID}\">");
             return;
         };
-        // `?host=parent`: a same-origin page framing WordCraft opens documents in it and stores
-        // what it saves (`host`). That page guards leaving it, so this one doesn't.
-        let bridge = if query_param("host").as_deref() == Some("parent") { crate::host::Bridge::new() } else { None };
+        // Host modes (`craft-web-host`): `?host=parent`, a same-origin page framing WordCraft, opens documents in
+        // it and stores what it saves (`host`); unframed there is no parent, so that URL on its
+        // own stays the normal app with downloads. `data-host="page"` on the canvas opts a page
+        // in instead: it runs WordCraft in its own document and talks over DOM `CustomEvent`s
+        // on the canvas (`host`). The host guards leaving the page, so this one doesn't.
+        let bridge = crate::host::Bridge::detect(&canvas);
         let app_bridge = bridge.clone();
         let dirty = Rc::new(Cell::new(false));
         let saves = AsyncSaves::default();
@@ -654,6 +658,8 @@ fn mime_for(name: &str) -> &'static str {
         Some("pdf") => "application/pdf",
         Some("docx") => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         Some("odt") => "application/vnd.oasis.opendocument.text",
+        Some("ott") => "application/vnd.oasis.opendocument.text-template",
+        Some("fodt") => "application/vnd.oasis.opendocument.text-flat-xml",
         Some("rtf") => "application/rtf",
         Some("html") => "text/html",
         Some("md" | "txt") => "text/plain",
