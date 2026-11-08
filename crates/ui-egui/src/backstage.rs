@@ -281,10 +281,14 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
             if r.is_ok_and(|v| v.get("saved").and_then(serde_json::Value::as_bool) == Some(true) || v.get("downloaded").is_some()) {
                 app.ui.backstage = false;
                 app.canvas.want_focus = true;
-            } else if app.embed.is_none() {
+            } else if app.embed.is_some() {
+                // The Backstage covers the status bar, so a failed save closes it and the
+                // fresh error shows in the document view.
+                app.ui.backstage = false;
+                app.canvas.want_focus = true;
+            } else {
                 app.ui.backstage_page = "saveAs".into();
             }
-            // Embedded: a failed save leaves its error on the status line and the Save page up.
         }
         "saveAs" => {
             app.ui.backstage_page = "saveAs".into();

@@ -130,8 +130,9 @@ fn deliver_open(inbox: &Inbox, ctx: &egui::Context, name: &str, data: &FileData)
     // A burst of opens between two frames would queue many large copies at once; the inbox
     // holds a bounded number of delivered files, of bounded total bytes (it drains every
     // frame).
+    let incoming = data.size() as u64;
     let pending = inbox.lock().unwrap_or_else(|e| e.into_inner());
-    let queued_bytes: u64 = pending.iter().map(|(_, bytes)| bytes.len() as u64).sum();
+    let queued_bytes: u64 = pending.iter().map(|(_, bytes)| bytes.len() as u64).sum::<u64>().saturating_add(incoming);
     if crate::command::file_queue_full(pending.len(), queued_bytes) {
         drop(pending);
         log::warn!("host file {name} not taken: the delivered-file queue is full");
@@ -186,6 +187,14 @@ impl Bridge {
                 None => {
                     let kind = js_sys::Reflect::get(&event.data(), &"type".into()).ok().and_then(|v| v.as_string());
                     if kind.as_deref() != Some("wordcraft:command") {
+                        return;
+                    }
+                    // A huge `params` would explode into a giant string when serialized:
+                    // refuse it from the field's own length, before any stringify.
+                    let params_len = js_sys::Reflect::get(&event.data(), &"params".into()).ok().and_then(|v| v.as_string()).map(|s| s.len());
+                    if params_len.is_some_and(|len| len > crate::command::MAX_COMMAND_BYTES) {
+                        let req_id = js_sys::Reflect::get(&event.data(), &"reqId".into()).ok().and_then(|v| v.as_string()).unwrap_or_default();
+                        let _ = bridge.post_result(&req_id, &Err("command message is over the size cap".to_owned()));
                         return;
                     }
                     match js_sys::JSON::stringify(&event.data()) {

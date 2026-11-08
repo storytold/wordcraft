@@ -468,7 +468,12 @@ pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
                     app.ui.backstage = false;
                     app.canvas.want_focus = true;
                 }
-                Err(e) => app.status(e),
+                // The Backstage covers the status bar: closing it lets the fresh error show.
+                Err(e) => {
+                    app.status(e);
+                    app.ui.backstage = false;
+                    app.canvas.want_focus = true;
+                }
             }
         }
         ui.add_space(4.0);

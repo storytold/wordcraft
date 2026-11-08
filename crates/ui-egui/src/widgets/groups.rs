@@ -72,6 +72,13 @@ fn title_row(ui: &mut Ui, r: Rect, id_title: &str, title: &str, launcher: Option
     let rtl = crate::rtl::flows(ui);
     ui.painter().text(pos2(r.center().x, title_y), Align2::CENTER_CENTER, title, regular(11.0), t.group_label);
     if let Some(cmd) = launcher {
+        // The embedded editor refuses some group settings (e.g. Tracking): their launchers
+        // dim instead of inviting a click that only reports the refusal.
+        if app.embed_refused(cmd, &serde_json::json!({})) {
+            let lr = Rect::from_center_size(pos2(crate::rtl::trail_x(rtl, r, 6.0), title_y), vec2(11.0, 11.0));
+            icons::paint(ui.painter(), lr, "launcher", t.text_dim, t.group_label);
+            return;
+        }
         let lr = Rect::from_center_size(pos2(crate::rtl::trail_x(rtl, r, 6.0), title_y), vec2(11.0, 11.0));
         let resp = ui.interact(lr, ui.scope_id().with(("launch", id_title)), Sense::click());
         if resp.hovered() {
