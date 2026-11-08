@@ -21,6 +21,8 @@ thread_local! {
     static UPLOADS: RefCell<usize> = const { RefCell::new(0) };
     /// Each viewport's last input-method output.
     static IME: RefCell<HashMap<ViewportId, Option<egui::output::IMEOutput>>> = RefCell::new(HashMap::new());
+    /// Viewport builders passed to immediate viewports, by viewport id.
+    static BUILDERS: RefCell<HashMap<ViewportId, egui::ViewportBuilder>> = RefCell::new(HashMap::new());
 }
 
 fn input(id: ViewportId) -> RawInput {
@@ -49,10 +51,12 @@ fn backend() -> egui::Context {
     EVENTS.with(|e| e.borrow_mut().clear());
     COMMANDS.with(|c| c.borrow_mut().clear());
     UPLOADS.with(|u| *u.borrow_mut() = 0);
+    BUILDERS.with(|b| b.borrow_mut().clear());
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
     egui::Context::set_immediate_viewport_renderer(|ctx, viewport| {
         let id = viewport.ids.this;
+        BUILDERS.with(|b| b.borrow_mut().insert(id, viewport.builder.clone()));
         let mut raw = input(id);
         raw.viewports.entry(id).or_default().parent = Some(viewport.ids.parent);
         let mut cb = viewport.viewport_ui_cb;
@@ -402,6 +406,54 @@ fn route_input_reaches_the_active_window() {
     assert_eq!(text(&a), "First", "the root window was untouched");
 }
 
+/// Undrained events must not follow focus into another document window.
+#[test]
+fn route_input_drops_old_target_and_appends_for_the_same_target() {
+    let ctx = backend();
+    let mut a = app("First");
+    frames(&ctx, &mut a, 2);
+    a.run("file.new", json!({})).unwrap();
+    let first_child = a.active_viewport();
+    assert_ne!(first_child, ViewportId::ROOT);
+    let mut raw = input(ViewportId::ROOT);
+    a.route_input(&ctx, &mut raw, vec![egui::Event::Paste("Stale".into())]);
+    a.run("file.new", json!({})).unwrap();
+    let second_child = a.active_viewport();
+    assert_ne!(second_child, first_child);
+    a.route_input(&ctx, &mut raw, vec![egui::Event::Paste("Fresh".into())]);
+    a.route_input(&ctx, &mut raw, vec![egui::Event::Paste(" appended".into())]);
+    assert!(raw.events.is_empty());
+    let mut delivered = input(second_child);
+    ctx.with_plugin(|p: &mut super::ViewportInput| egui::Plugin::input_hook(p, &ctx, &mut delivered));
+    assert_eq!(delivered.events, [egui::Event::Paste("Fresh".into()), egui::Event::Paste(" appended".into())]);
+    let mut old = input(first_child);
+    ctx.with_plugin(|p: &mut super::ViewportInput| egui::Plugin::input_hook(p, &ctx, &mut old));
+    assert!(old.events.is_empty(), "discarded input cannot arrive later");
+}
+
+/// Closing a window with pending input discards it, including when focus returns to root.
+#[test]
+fn route_input_drops_closed_window_input_before_routing_to_root() {
+    let ctx = backend();
+    let mut a = app("First");
+    frames(&ctx, &mut a, 2);
+    a.run("file.new", json!({})).unwrap();
+    let child = a.active_viewport();
+    let mut raw = input(ViewportId::ROOT);
+    a.route_input(&ctx, &mut raw, vec![egui::Event::Paste("Stale".into())]);
+    a.run("file.close", json!({})).unwrap();
+    assert_eq!(a.active_viewport(), ViewportId::ROOT);
+    a.route_input(&ctx, &mut raw, vec![egui::Event::Paste("Root".into())]);
+    assert_eq!(raw.events, [egui::Event::Paste("Root".into())]);
+    ctx.with_plugin(|p: &mut super::ViewportInput| {
+        assert!(p.target.is_none());
+        assert!(p.events.is_empty());
+    });
+    let mut closed = input(child);
+    ctx.with_plugin(|p: &mut super::ViewportInput| egui::Plugin::input_hook(p, &ctx, &mut closed));
+    assert!(closed.events.is_empty());
+}
+
 /// `ui.screenshot` captures the active window: the capture is sized from its viewport and the
 /// command goes to that viewport. A capture still pending when another window comes forward
 /// fails with an error instead of capturing that window.
@@ -649,4 +701,68 @@ fn every_open_replaces_an_untouched_blank_document_in_its_window() {
         assert_eq!(text(&a), "Second", "{how}: it shows the opened file");
     }
     std::fs::remove_dir_all(second.parent().unwrap()).ok();
+}
+
+/// Opening a second document when another is already open constrains the new window's requested
+/// dimensions so that it fits within the active monitor's bounds, even on displays with high
+/// DPI scaling (such as 2560x1440 at 200% scale = 1280x720 pt) where the unconstrained default
+/// size (1440x920 pt) would extend past the right edge (#5871).
+#[test]
+fn newly_opened_window_does_not_exceed_screen_width() {
+    let doc1 = docx_on_disk("doc1", "Doc One");
+    let doc2 = docx_on_disk("doc2", "Doc Two");
+    let ctx = backend();
+
+    // Simulate 2560x1440 at 200% scale (1280x720 pt).
+    let screen = egui::vec2(1280.0, 720.0);
+    let frame_decorations = egui::vec2(16.0, 39.0);
+    INFOS.with(|i| {
+        let mut infos = i.borrow_mut();
+        let root = infos.entry(ViewportId::ROOT).or_default();
+        root.monitor_size = Some(screen);
+        root.inner_rect = Some(egui::Rect::from_min_size(egui::pos2(48.0, 48.0), egui::vec2(1168.0, 585.0)));
+        root.outer_rect = Some(egui::Rect::from_min_size(egui::pos2(40.0, 17.0), egui::vec2(1184.0, 624.0)));
+    });
+
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    frames(&ctx, &mut a, 2);
+
+    // Open first document in the primary window.
+    a.run("file.open", json!({"path": doc1.to_string_lossy()})).unwrap();
+    frames(&ctx, &mut a, 2);
+    assert_eq!(a.window_count(), 1);
+
+    // Open second document, creating a second window while the first is active.
+    a.run("file.open", json!({"path": doc2.to_string_lossy()})).unwrap();
+    frames(&ctx, &mut a, 3);
+    assert_eq!(a.window_count(), 2);
+
+    // Find the immediate viewport created for the new window.
+    let child_builder = BUILDERS.with(|b| {
+        b.borrow()
+            .iter()
+            .find(|(id, _)| **id != ViewportId::ROOT)
+            .map(|(_, builder)| builder.clone())
+            .expect("child window viewport builder was recorded")
+    });
+
+    let inner_size = child_builder.inner_size.expect("child window has an inner size requested");
+    assert!(inner_size.x <= 1168.0, "new window width ({}) must not exceed available width on 1280pt monitor (1168pt)", inner_size.x);
+    assert!(
+        inner_size.x + frame_decorations.x <= screen.x,
+        "new window outer width ({} + {}) must fit within screen width ({})",
+        inner_size.x,
+        frame_decorations.x,
+        screen.x
+    );
+    assert!(
+        inner_size.y + frame_decorations.y <= screen.y,
+        "new window outer height ({} + {}) must fit within screen height ({})",
+        inner_size.y,
+        frame_decorations.y,
+        screen.y
+    );
+
+    std::fs::remove_dir_all(doc1.parent().unwrap()).ok();
+    std::fs::remove_dir_all(doc2.parent().unwrap()).ok();
 }

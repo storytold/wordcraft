@@ -9,6 +9,7 @@
 mod native_menu;
 
 #[cfg(target_os = "macos")]
+/// Inspect and exercise the real AppKit menus on the process's main thread.
 fn main() {
     use objc2::MainThreadMarker;
     use objc2_app_kit::NSApplication;
@@ -31,9 +32,11 @@ fn main() {
     // Read the actual AppKit key equivalents, not just our menu description.
     use objc2::rc::Retained;
     use objc2_app_kit::{NSEventModifierFlags, NSMenu, NSMenuItem};
+    /// Find an AppKit submenu by its displayed title.
     fn submenu(bar: &NSMenu, name: &str) -> Retained<NSMenu> {
         (0..bar.numberOfItems()).filter_map(|i| bar.itemAtIndex(i)?.submenu()).find(|m| m.title().to_string() == name).unwrap()
     }
+    /// Find an item and its native action index by title.
     fn item(menu: &NSMenu, name: &str) -> (isize, Retained<NSMenuItem>) {
         (0..menu.numberOfItems()).filter_map(|i| Some((i, menu.itemAtIndex(i)?))).find(|(_, m)| m.title().to_string() == name).unwrap()
     }
@@ -106,8 +109,50 @@ fn main() {
     assert!(field.is_empty(), "Cut changes the focused field");
     assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), original);
 
-    println!("mac_menu_appkit: menus, shortcuts, input routing, and guarded Quit passed");
+    /// Check queued actions, disabled items, and document formatting after leaving a field.
+    fn check_field_formatting(
+        ctx: &egui::Context,
+        app: &mut wordcraft_ui_egui::WordApp,
+        menu: &mut Option<native_menu::NativeMenu>,
+        format: &NSMenu,
+        field_id: egui::Id,
+        field: &mut String,
+    ) {
+        // A native action queued before a field takes focus must be checked again on dispatch.
+        // Once focus returns to the document, the same actions must still format the selection.
+        app.run("select.text", serde_json::json!({"text":"Keep this writing"})).unwrap();
+        for title in ["Bold", "Italic", "Underline"] {
+            ctx.memory_mut(|m| m.surrender_focus(field_id));
+            native_menu::NativeMenu::frame(menu, app, ctx);
+            let (index, entry) = item(format, title);
+            assert!(entry.isEnabled(), "{title} available for the document");
+            let before = serde_json::to_value(&app.session.doc).unwrap();
+            format.performActionForItemAtIndex(index);
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.add(egui::TextEdit::singleline(field).id(field_id)).request_focus();
+            })
+            .drop_without_applying_deltas();
+            assert!(ctx.text_edit_focused());
+            native_menu::NativeMenu::frame(menu, app, ctx);
+            assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before, "queued {title} must respect field focus");
+            assert!(!entry.isEnabled(), "{title} disabled while a field owns the keyboard");
+            format.performActionForItemAtIndex(index);
+            native_menu::NativeMenu::frame(menu, app, ctx);
+            assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+            ctx.memory_mut(|m| m.surrender_focus(field_id));
+            native_menu::NativeMenu::frame(menu, app, ctx);
+            assert!(entry.isEnabled());
+            format.performActionForItemAtIndex(index);
+            native_menu::NativeMenu::frame(menu, app, ctx);
+            assert_ne!(serde_json::to_value(&app.session.doc).unwrap(), before, "{title} still formats the document");
+            app.run("edit.undo", serde_json::json!({})).unwrap();
+        }
+    }
+    check_field_formatting(&ctx, &mut app, &mut menu, &submenu(&bar, "Format"), field_id, &mut field);
+
+    println!("mac_menu_appkit: menus, shortcuts, focused-field formatting, input routing, and guarded Quit passed");
 }
 
 #[cfg(not(target_os = "macos"))]
+/// Keep the custom harness portable; AppKit assertions run only on macOS.
 fn main() {}

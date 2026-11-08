@@ -31,6 +31,10 @@ Clipboard actions and Undo/Redo target the focused text field or document.
 Document actions are disabled while a modal dialog is open, so Settings or Open
 cannot replace a Save Changes prompt. Quit checks all unsaved documents through
 the existing close cascade. Native menu actions target the active document window.
+Bold, Italic, and Underline are disabled while a text field owns the keyboard,
+including fields in other document windows. Before routing new input, pending
+events for a different or closed window are discarded so they cannot reach
+another document.
 
 The editor and dialogs still use egui. Some menu-only strings fall back to English.
 The Services submenu is registered, but full document Services support is outside
@@ -42,7 +46,10 @@ this change. Checkmarks for view/format toggles are not added here.
 main-thread `mac_menu_appkit` integration test. The latter reads actual AppKit
 menus and key equivalents, exercises Quit and Cancel on a dirty document, checks
 modal enablement, and invokes native Select All, Cut, Undo, and Redo against a
-focused egui field while checking that the document behind it is unchanged.
+focused egui field while checking that the document behind it is unchanged. It
+also checks that queued Bold, Italic, and Underline respect field focus and that
+formatting works again after focus leaves the field.
 
 `cargo test -p wordcraft-ui-egui --lib windows::tests` includes a regression that
-routes menu input to a separate document window without changing the first one.
+routes menu input to a separate document window without changing the first one,
+plus regressions for undrained input across window switches and closing a window.

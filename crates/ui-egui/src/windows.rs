@@ -310,6 +310,11 @@ impl WordApp {
         self.windows.builder = builder;
     }
 
+    /// The viewport builder that new windows start from.
+    pub fn window_builder(&self) -> &egui::ViewportBuilder {
+        &self.windows.builder
+    }
+
     /// Whether a close request for the root viewport closes only the window drawn there: true
     /// while other windows are open. [`WordApp::ui`] closes it (a [`WindowEvent::CloseRequested`]),
     /// and the host keeps the app running.
@@ -600,7 +605,38 @@ impl WordApp {
         let mut list = std::mem::take(&mut self.windows.list);
         self.windows.recent = list.recent().filter_map(|id| list.get(id).copied()).collect();
         let titles: HashMap<u64, String> = self.windows.open.iter().map(|w| (w.key, w.title.clone())).collect();
-        let base = self.windows.builder.clone();
+        let target_monitor = list
+            .recent()
+            .find_map(|id| {
+                ctx.input_for(viewports.viewport_id(id), |i| {
+                    let m = i.viewport().monitor_size?;
+                    (m.is_finite() && m.x > 0.0 && m.y > 0.0).then_some(m)
+                })
+            })
+            .or_else(|| {
+                ctx.input(|i| {
+                    let m = i.viewport().monitor_size?;
+                    (m.is_finite() && m.x > 0.0 && m.y > 0.0).then_some(m)
+                })
+            });
+        let frame = list
+            .recent()
+            .find_map(|id| {
+                ctx.input_for(viewports.viewport_id(id), |i| {
+                    let v = i.viewport();
+                    let (outer, inner) = (v.outer_rect?, v.inner_rect?);
+                    if !outer.is_finite() || !inner.is_finite() {
+                        return None;
+                    }
+                    Some((outer.size() - inner.size()).max(egui::Vec2::ZERO))
+                })
+            })
+            .filter(|f| f.is_finite())
+            .unwrap_or_else(|| egui::vec2(16.0, 39.0));
+        let base = match target_monitor {
+            Some(mon) => crate::window_geometry::fit_builder_to_monitor(self.windows.builder.clone(), mon, frame),
+            None => self.windows.builder.clone(),
+        };
         self.windows.showing = true;
         let events = viewports.show(
             ui,
@@ -748,6 +784,16 @@ impl WordApp {
             return;
         }
         let target = self.active_viewport();
+        if self.windows.input_plugin {
+            ctx.with_plugin(|p: &mut ViewportInput| {
+                // Never retarget input left over from a different (possibly closed) window.
+                // Drop it when focus changes; only events for the same window can be appended.
+                if p.target != Some(target) {
+                    p.target = None;
+                    p.events.clear();
+                }
+            });
+        }
         if self.control_input_is_roots(ctx) {
             raw.events.extend(events);
         } else {

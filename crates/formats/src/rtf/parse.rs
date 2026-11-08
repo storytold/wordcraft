@@ -105,20 +105,25 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                         i = end;
                         continue;
                     }
-                    if word == "info" {
-                        r.info_depth = Some(r.depth());
-                    }
                     if r.skip_chars > 0
-                        && matches!(r.st.dest, Dest::Body | Dest::Info(_) | Dest::FldInst | Dest::Bookmark | Dest::FontTbl)
-                        && !matches!(word, "par" | "pard" | "cell" | "row")
+                        && matches!(r.st.dest, Dest::Body | Dest::Info(_) | Dest::FldInst | Dest::Bookmark | Dest::FontTbl | Dest::RevTbl)
                     {
                         r.skip_chars -= 1;
                         first_in_group = false;
                         continue;
                     }
+                    if word == "info" {
+                        r.info_depth = Some(r.depth());
+                    }
                     r.word(word, param, starred, first_in_group);
                     first_in_group = false;
                     starred = false;
+                    continue;
+                }
+                if r.skip_chars > 0 && n != b'\'' {
+                    r.skip_chars -= 1;
+                    i += 2;
+                    first_in_group = false;
                     continue;
                 }
                 match n {

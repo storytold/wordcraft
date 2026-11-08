@@ -363,31 +363,36 @@ mod bar {
         i18n::t(s)
     }
 
+    /// Append an item, reporting backend failures without closing the editor.
     fn append(menu: &Submenu, item: &dyn IsMenuItem) {
         if let Err(e) = menu.append(item) {
             log::warn!("native menu: {e}");
         }
     }
 
+    /// Resolve a command's translated label, retaining its id as a fallback.
     fn label(id: &str, app: &WordApp) -> String {
         app.session.registry.get(id).map_or_else(|| id.to_owned(), |s| t(s.label).to_owned())
     }
 
     impl NativeMenu {
+        /// Allocate a stable event identifier within this menu installation.
         fn next_id(&mut self) -> String {
             self.seq = self.seq.saturating_add(1);
             format!("wordcraft.{}", self.seq)
         }
 
+        /// Add an action and track its enablement and configurable shortcut.
         fn add(&mut self, menu: &Submenu, text: &str, action: Action, app: &WordApp) {
             let accelerator = accelerator(&action, app);
-            let enabled = action_enabled(&action, app);
+            let enabled = action_enabled(&action, app, false);
             let item = MenuItem::with_id(self.next_id(), text, enabled, accelerator);
             self.actions.push((item.id().clone(), action.clone()));
             self.tracked.push(Tracked { item: item.clone(), action, enabled, accelerator });
             append(menu, &item);
         }
 
+        /// Materialize a declarative menu entry using the current command registry.
         fn entry(&mut self, menu: &Submenu, e: Entry, app: &WordApp) {
             match e {
                 Entry::Cmd(id) => {
@@ -484,6 +489,9 @@ mod bar {
         /// Each frame: build (or, after a language change, rebuild) the bar, run what was chosen,
         /// and bring enablement and Open Recent up to date.
         pub(crate) fn frame(slot: &mut Option<Self>, app: &mut WordApp, ctx: &egui::Context) {
+            if ctx.with_plugin(|_: &mut TextFieldFocus| ()).is_none() {
+                ctx.add_plugin(TextFieldFocus::default());
+            }
             if slot.as_ref().is_none_or(|m| m.lang != i18n::current().code()) {
                 let events = slot.take().map(|m| m.events);
                 *slot = Self::install(app, ctx, events);
@@ -491,7 +499,7 @@ mod bar {
             let Some(me) = slot.as_mut() else { return };
             while let Ok(e) = me.events.try_recv() {
                 let Some(action) = me.actions.iter().find(|(id, _)| id == e.id()).map(|(_, a)| a.clone()) else { continue };
-                if !action_enabled(&action, app) {
+                if !action_enabled(&action, app, text_field_focused(ctx, app.active_viewport())) {
                     continue;
                 }
                 match action {
@@ -542,8 +550,9 @@ mod bar {
                 }
                 ctx.request_repaint();
             }
+            let field_focused = text_field_focused(ctx, app.active_viewport());
             for t in &mut me.tracked {
-                let enabled = action_enabled(&t.action, app);
+                let enabled = action_enabled(&t.action, app, field_focused);
                 if enabled != t.enabled {
                     t.item.set_enabled(enabled);
                     t.enabled = enabled;
@@ -564,6 +573,7 @@ mod bar {
             }
         }
 
+        /// Replace recent-file actions when the editor's recent paths change.
         fn rebuild_recent(&mut self, app: &WordApp) {
             let Some(sub) = self.recent.clone() else { return };
             // Bounded: each pass removes one item of a finite submenu.
@@ -580,7 +590,7 @@ mod bar {
         }
     }
 
-    // Mac system shortcuts are reserved even if an old Word-style keymap uses them.
+    /// Map supported Command bindings to AppKit, reserving standard Mac shortcuts.
     fn accelerator(action: &Action, app: &WordApp) -> Option<Accelerator> {
         let fixed = match action {
             Action::Hide => Some("CMD+H"),
@@ -630,7 +640,59 @@ mod bar {
             .find_map(|key| Accelerator::from_str(&key.replace("Mod+", "CMD+")).ok())
     }
 
-    fn action_enabled(action: &Action, app: &WordApp) -> bool {
+    /// Retain text-field focus for each window: the menu runs in the root viewport,
+    /// while a focused comment or Backstage field may belong to another window.
+    #[derive(Default)]
+    struct TextFieldFocus(std::collections::HashMap<egui::ViewportId, bool>);
+
+    impl egui::Plugin for TextFieldFocus {
+        /// Identify this focus tracker in egui's plugin inspection.
+        fn debug_name(&self) -> &'static str {
+            "native_menu_text_focus"
+        }
+
+        /// Snapshot focus after drawing each viewport and forget closed viewports.
+        fn on_end_pass(&mut self, ui: &mut egui::Ui) {
+            let ctx = ui.ctx();
+            ctx.input(|i| self.0.retain(|id, _| i.raw.viewports.contains_key(id)));
+            self.0.insert(ctx.viewport_id(), ctx.text_edit_focused());
+        }
+    }
+
+    /// Read focus in the target viewport without substituting the root window's field.
+    fn text_field_focused(ctx: &egui::Context, target: egui::ViewportId) -> bool {
+        if target == ctx.viewport_id() {
+            ctx.text_edit_focused()
+        } else {
+            ctx.with_plugin(|p: &mut TextFieldFocus| p.0.get(&target).copied().unwrap_or(false)).unwrap_or(false)
+        }
+    }
+
+    /// A field in one window must neither enable nor disable formatting in another.
+    #[test]
+    fn text_field_focus_is_tracked_per_viewport() {
+        let ctx = egui::Context::default();
+        ctx.add_plugin(TextFieldFocus::default());
+        let child = egui::ViewportId::from_hash_of("menu-focus-child");
+        let field = egui::Id::unique("child-field");
+        let mut text = String::from("Comment");
+        let mut raw = egui::RawInput { viewport_id: child, ..Default::default() };
+        raw.viewports.entry(child).or_default();
+        ctx.run_ui(raw, |ui| {
+            ui.add(egui::TextEdit::singleline(&mut text).id(field)).request_focus();
+        })
+        .drop_without_applying_deltas();
+        let mut root = egui::RawInput::default();
+        root.viewports.entry(child).or_default();
+        ctx.run_ui(root, |ui| {
+            assert!(!text_field_focused(ui.ctx(), egui::ViewportId::ROOT));
+            assert!(text_field_focused(ui.ctx(), child));
+        })
+        .drop_without_applying_deltas();
+    }
+
+    /// Apply document/modal guards both to displayed items and queued native actions.
+    fn action_enabled(action: &Action, app: &WordApp, field_focused: bool) -> bool {
         match action {
             Action::Hide | Action::Minimize => true,
             // Input must remain available inside modal dialogs' text fields.
@@ -639,6 +701,11 @@ mod bar {
             Action::Open(_) => !app.modal_open(),
             Action::Run(id, params) => {
                 if app.modal_open() {
+                    return false;
+                }
+                // Plain-text fields own these shortcuts; formatting the document behind
+                // a comment editor or Backstage field would change unrelated content.
+                if field_focused && matches!(*id, "format.bold" | "format.italic" | "format.underline") {
                     return false;
                 }
                 if matches!(*id, "ui.dialog" | "ui.backstage") {
@@ -652,6 +719,7 @@ mod bar {
         }
     }
 
+    /// Synthesize a complete Command-key press/release for the focused editor.
     fn key_events(key: egui::Key, shift: bool) -> Vec<egui::Event> {
         [true, false]
             .map(|pressed| egui::Event::Key {
@@ -694,6 +762,7 @@ mod tests {
     use super::*;
 
     /// Every command the menus name is registered (a renamed command would silently vanish).
+    /// Reject menu entries that refer to neither an engine nor a UI command.
     #[test]
     fn every_menu_command_is_registered() {
         let reg = wordcraft_engine::cmd::registry();
@@ -711,6 +780,7 @@ mod tests {
         assert!(missing.is_empty(), "unregistered menu commands: {missing:?}");
     }
 
+    /// Flatten the menu definitions for registry and parameter validation.
     fn all_entries() -> Vec<Entry> {
         let mut v = vec![ABOUT, SETTINGS];
         for (_, entries) in MENUS {
@@ -719,6 +789,7 @@ mod tests {
         v
     }
 
+    /// Keep every declarative parameter payload valid JSON.
     #[test]
     fn json_params_parse() {
         for e in all_entries() {
@@ -729,7 +800,7 @@ mod tests {
     }
 
     /// Every item does something on a sample document, as its ribbon button would: no command
-    /// fails for want of parameters, and every dialog and Backstage page it names exists.
+    /// fails for want of parameters, and every dialog it names exists.
     #[test]
     fn every_item_runs_on_a_sample_document() {
         use wordcraft_ui_egui::{Services, WordApp};
