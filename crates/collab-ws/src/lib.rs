@@ -9,6 +9,7 @@
 //! The task never logs the token and never puts it in the URL (ADR-0008).
 
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -20,12 +21,35 @@ use wordcraft_collab::wire::{ClientMsg, OpKind, ServerMsg, Target};
 pub use wordcraft_collab_client::Event;
 use wordcraft_collab_client::{Client, State};
 
+type Sink = futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Message>;
+
+/// What the frame loop does after one app intent.
+enum Flow {
+    Continue,
+    Reconnect,
+}
+
 /// What the app asks the task to send.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Intent {
-    pub kind: OpKind,
-    pub target: Target,
-    pub payload: serde_json::Value,
+pub enum Intent {
+    Op {
+        kind: OpKind,
+        target: Target,
+        payload: serde_json::Value,
+    },
+    /// Undo or redo this client's newest step; the client owns the stacks.
+    Undo,
+    Redo,
+    /// Ephemeral state; dropped rather than queued when the session is not in sync.
+    Presence {
+        state: serde_json::Value,
+    },
+    /// Build the file on the server at the version the client knows.
+    Commit,
+    /// Ask for a snapshot even when the journal tail is available.
+    Resync,
+    /// Drop the socket; the task reconnects with the token in [`Handle`].
+    Reconnect,
 }
 
 /// What the app hears back.
@@ -40,6 +64,7 @@ pub enum TransportEvent {
 /// The app's handle to a session.
 pub struct Handle {
     intents: mpsc::UnboundedSender<Intent>,
+    token: Arc<Mutex<String>>,
     pub events: mpsc::UnboundedReceiver<TransportEvent>,
 }
 
@@ -47,7 +72,39 @@ impl Handle {
     /// Ask for an operation to be sent. The task assigns its id and base
     /// version, so the caller cannot reuse stale ids.
     pub fn submit(&self, kind: OpKind, target: Target, payload: serde_json::Value) -> Result<(), String> {
-        self.intents.send(Intent { kind, target, payload }).map_err(|_| "the session task is gone".to_string())
+        self.intents.send(Intent::Op { kind, target, payload }).map_err(|_| "the session task is gone".to_string())
+    }
+
+    /// Undo this client's newest step (AdR-0010).
+    pub fn undo(&self) -> Result<(), String> {
+        self.intents.send(Intent::Undo).map_err(|_| "the session task is gone".to_string())
+    }
+
+    /// Redo the newest undone step.
+    pub fn redo(&self) -> Result<(), String> {
+        self.intents.send(Intent::Redo).map_err(|_| "the session task is gone".to_string())
+    }
+
+    /// Publish this user's cursor and selection; never journaled, never queued.
+    pub fn presence(&self, state: serde_json::Value) -> Result<(), String> {
+        self.intents.send(Intent::Presence { state }).map_err(|_| "the session task is gone".to_string())
+    }
+
+    /// Ask the server to write the file.
+    pub fn commit(&self) -> Result<(), String> {
+        self.intents.send(Intent::Commit).map_err(|_| "the session task is gone".to_string())
+    }
+
+    /// Fetch a fresh snapshot (a command allocated ids this replica cannot derive).
+    pub fn resync(&self) -> Result<(), String> {
+        self.intents.send(Intent::Resync).map_err(|_| "the session task is gone".to_string())
+    }
+
+    /// Replace the JWT and reconnect. The cabinet pushes a fresh token before
+    /// the old one expires; the message waits for the next socket.
+    pub fn renew_token(&self, token: impl Into<String>) -> Result<(), String> {
+        *self.token.lock().map_err(|_| "the token lock is poisoned".to_string())? = token.into();
+        self.intents.send(Intent::Reconnect).map_err(|_| "the session task is gone".to_string())
     }
 }
 
@@ -57,13 +114,14 @@ pub fn spawn(url: impl Into<String>, token: impl Into<String>, client_id: impl I
     let (intents_tx, intents_rx) = mpsc::unbounded_channel();
     let (events_tx, events_rx) = mpsc::unbounded_channel();
     let (url, token, client_id) = (url.into(), token.into(), client_id.into());
-    tokio::spawn(run(url, token, client_id, intents_rx, events_tx));
-    Handle { intents: intents_tx, events: events_rx }
+    let token = Arc::new(Mutex::new(token));
+    tokio::spawn(run(url, token.clone(), client_id, intents_rx, events_tx));
+    Handle { intents: intents_tx, token, events: events_rx }
 }
 
 async fn run(
     url: String,
-    token: String,
+    token: Arc<Mutex<String>>,
     client_id: String,
     mut intents: mpsc::UnboundedReceiver<Intent>,
     events: mpsc::UnboundedSender<TransportEvent>,
@@ -74,6 +132,7 @@ async fn run(
         if events.is_closed() {
             return;
         }
+        let token = token.lock().map(|token| token.clone()).unwrap_or_default();
         match tokio_tungstenite::connect_async(&url).await {
             Ok((socket, _)) => {
                 backoff = Duration::from_millis(250);
@@ -111,7 +170,7 @@ async fn session(
     let mut heartbeat = interval_at(Instant::now() + Duration::from_secs(15), Duration::from_secs(15));
     heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut resend_after_welcome = false;
-    let mut waiting: VecDeque<Intent> = VecDeque::new();
+    let mut waiting: VecDeque<(OpKind, Target, serde_json::Value)> = VecDeque::new();
 
     loop {
         tokio::select! {
@@ -138,8 +197,8 @@ async fn session(
                     }
                 }
                 if welcome {
-                    while let Some(intent) = waiting.pop_front() {
-                        let op = client.op(intent.kind, intent.target, intent.payload);
+                    while let Some((kind, target, payload)) = waiting.pop_front() {
+                        let op = client.op(kind, target, payload);
                         if send(&mut sink, &ClientMsg::Op { op }).await.is_err() {
                             let _ = events.send(TransportEvent::Disconnected { reason: "send failed".into() });
                             return true;
@@ -152,15 +211,12 @@ async fn session(
             }
             intent = intents.recv() => {
                 let Some(intent) = intent else { return false };
-                if client.state() != State::Joined {
-                    // Not in sync yet: the intent waits for the welcome.
-                    waiting.push_back(intent);
-                    continue;
-                }
-                let op = client.op(intent.kind, intent.target, intent.payload);
-                if send(&mut sink, &ClientMsg::Op { op }).await.is_err() {
-                    let _ = events.send(TransportEvent::Disconnected { reason: "send failed".into() });
-                    return true;
+                match handle_intent(&mut *client, &mut sink, intent, &mut waiting).await {
+                    Flow::Continue => {}
+                    Flow::Reconnect => {
+                        let _ = events.send(TransportEvent::Disconnected { reason: "send failed".into() });
+                        return true;
+                    }
                 }
             }
             _ = heartbeat.tick() => {
@@ -173,10 +229,64 @@ async fn session(
     }
 }
 
-async fn send(
-    sink: &mut futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Message>,
-    msg: &ClientMsg,
-) -> Result<(), ()> {
+/// One intent from the app: queue it before the handshake, send it after, or
+/// ask the frame loop to reconnect. Kept out of `session` so the select loop
+/// stays readable.
+async fn handle_intent(client: &mut Client, sink: &mut Sink, intent: Intent, waiting: &mut VecDeque<(OpKind, Target, serde_json::Value)>) -> Flow {
+    let joined = client.state() == State::Joined;
+    match intent {
+        Intent::Op { kind, target, payload } => {
+            if !joined {
+                // Not in sync yet: the operation waits for the welcome.
+                waiting.push_back((kind, target, payload));
+                return Flow::Continue;
+            }
+            let op = client.op(kind, target, payload);
+            if send(sink, &ClientMsg::Op { op }).await.is_err() {
+                return Flow::Reconnect;
+            }
+        }
+        Intent::Undo => {
+            if joined
+                && let Some(op) = client.undo()
+                && send(sink, &ClientMsg::Op { op }).await.is_err()
+            {
+                return Flow::Reconnect;
+            }
+        }
+        Intent::Redo => {
+            if joined
+                && let Some(op) = client.redo()
+                && send(sink, &ClientMsg::Op { op }).await.is_err()
+            {
+                return Flow::Reconnect;
+            }
+        }
+        Intent::Presence { state } => {
+            if joined && send(sink, &ClientMsg::Presence { state }).await.is_err() {
+                return Flow::Reconnect;
+            }
+        }
+        Intent::Commit => {
+            if joined {
+                let op_id = client.next_op_id();
+                let commit = ClientMsg::Commit { op_id, expected_version: client.version(), etag: None };
+                if send(sink, &commit).await.is_err() {
+                    return Flow::Reconnect;
+                }
+            }
+        }
+        Intent::Resync => {
+            if joined && send(sink, &ClientMsg::Resync { last_version: client.version() }).await.is_err() {
+                return Flow::Reconnect;
+            }
+        }
+        Intent::Reconnect => return Flow::Reconnect,
+    }
+    Flow::Continue
+}
+
+async fn send(sink: &mut Sink, msg: &ClientMsg) -> Result<(), ()> {
     let text = serde_json::to_string(msg).map_err(|_| ())?;
     sink.send(Message::Text(text.into())).await.map_err(|_| ())
 }

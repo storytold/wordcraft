@@ -1826,6 +1826,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         crate::table_pen::paint(app, &painter, &t, &layout, &rects, geo.scale);
         crate::table_resize::paint(app, &painter, &t, &layout, &rects, geo.scale);
         crate::table_mouse::paint(app, &painter, &t, &layout, &rects, geo.scale);
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::collab::draw_carets(app, &painter, &layout, &geo);
         (resp, rects)
     });
     finish_canvas_frame(

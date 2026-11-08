@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use wordcraft_collab::wire::{Applied, ClientMsg, HistoryAction, Op, OpId, OpKind, Reject, RejectCode, ServerMsg, Target, Version};
+use wordcraft_collab::wire::{Applied, ClientMsg, HistoryAction, Op, OpId, OpKind, Participant, Reject, RejectCode, ServerMsg, Target, Version};
 
 /// Where the client is in the session handshake.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +34,8 @@ pub enum Event {
         version: Version,
         epoch: u64,
         resync: bool,
+        role: String,
+        participants: Vec<Participant>,
     },
     Applied {
         applied: Applied,
@@ -190,6 +192,12 @@ impl Client {
         (self.steps.len(), self.undone.len())
     }
 
+    /// A fresh operation id for a message that is not an operation (a commit).
+    pub fn next_op_id(&mut self) -> OpId {
+        self.seq = self.seq.saturating_add(1);
+        OpId::new(self.client_id.clone(), self.seq)
+    }
+
     /// Operations the server has not confirmed yet, oldest first.
     pub fn pending(&self) -> &[Pending] {
         &self.pending
@@ -204,11 +212,11 @@ impl Client {
     /// Handle one server message.
     pub fn on(&mut self, msg: ServerMsg) -> Event {
         match msg {
-            ServerMsg::Welcome { version, epoch, resync, .. } => {
+            ServerMsg::Welcome { version, epoch, resync, role, participants, .. } => {
                 self.version = self.version.max(version);
                 self.epoch = epoch;
                 self.state = if resync { State::Resyncing } else { State::Joined };
-                Event::Welcome { version, epoch, resync }
+                Event::Welcome { version, epoch, resync, role, participants }
             }
             ServerMsg::Tail { entries } => {
                 for applied in entries {

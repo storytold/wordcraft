@@ -85,6 +85,8 @@ impl WordApp {
         } = window_ui::WindowUi::new(session.document_id());
         WordApp {
             session,
+            #[cfg(not(target_arch = "wasm32"))]
+            collab: None,
             ui: UiState {
                 tab,
                 backstage,
@@ -235,6 +237,16 @@ impl WordApp {
         // that drops it panics in `accesskit_consumer` and closes the window (see `a11y::FocusGuard`).
         ctx.add_plugin(super::a11y::FocusGuard);
         updates_ui::tick(self, ctx);
+        // A saved preference plus a token in the environment resumes the session
+        // without a command; without either, no socket is opened.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.collab.is_none()
+            && self.session.prefs.collab.enabled
+            && !self.session.prefs.collab.server.is_empty()
+            && std::env::var_os("WORDCRAFT_COLLAB_TOKEN").is_some()
+        {
+            crate::collab::connect(self);
+        }
         crate::language_packs::tick(self);
         let lang = i18n::Lang::from_pref(&self.ui.language);
         i18n::set_current(lang);
@@ -413,11 +425,16 @@ impl WordApp {
     /// Lay out the windows: on the desktop each open document's in its own native window
     /// ([`windows`]), on the web the one window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        // Remote answers land before layout, so this frame draws the new state.
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::collab::tick(self);
         if self.windows.native() {
             self.windows_ui(ui);
         } else {
             self.window_ui(ui);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::collab::panel(self, ui.ctx());
     }
 
     /// Lay out the drawn window. A command that brings another window's state in (New, Open,

@@ -161,6 +161,8 @@ impl WordApp {
         let WordApp {
             // App-wide.
             session: _,
+            #[cfg(not(target_arch = "wasm32"))]
+                collab: _,
             services: _,
             printing: _,
             print_feedback_seen: _,

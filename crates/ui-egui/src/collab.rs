@@ -1,0 +1,187 @@
+//! Collaboration UI and app wiring (Review › Collaborate).
+//!
+//! The heavy lifting is in `wordcraft-collab-app`; this module only connects a
+//! session to it, turns user commands into operations, polls answers, draws the
+//! participants panel and remote carets, and keeps the single-user path intact
+//! when the feature is off.
+
+use egui::{Align2, Color32, FontId, Painter, Pos2, Stroke};
+
+use wordcraft_doc::{Document, Pos};
+use wordcraft_engine::CommandSpec;
+use wordcraft_layout::DocLayout;
+
+use crate::WordApp;
+use crate::canvas::Geometry;
+
+/// Commands that are local to this window or the cabinet, never sent to a
+/// room, even when the engine marks them as mutating.
+const LOCAL_PREFIXES: &[&str] =
+    &["file.", "ui.", "view.", "tools.", "collab.", "edit.undo", "edit.redo", "edit.repeat", "review.readAloud", "help.", "app."];
+
+fn is_editing(app: &WordApp, id: &str) -> bool {
+    if LOCAL_PREFIXES.iter().any(|prefix| id.starts_with(prefix)) {
+        return false;
+    }
+    app.session.registry.get(id).is_some_and(|spec: &CommandSpec| spec.mutates)
+}
+
+/// The document before a user command, when a room is live and the command is
+/// one we replicate. `None` keeps the call cheap in single-user mode.
+pub(crate) fn before_command(app: &WordApp, id: &str) -> Option<Document> {
+    if app.collab.is_none() || !is_editing(app, id) {
+        return None;
+    }
+    Some(app.session.doc.clone())
+}
+
+/// Send the difference a local command made.
+pub(crate) fn after_command(app: &mut WordApp, before: &Document, id: &str, params: &serde_json::Value) {
+    let result = {
+        let Some(collab) = app.collab.as_mut() else { return };
+        collab.after_command(before, &app.session, id, params)
+    };
+    if let Err(message) = result {
+        app.status(message);
+    }
+}
+
+/// Refuse a document edit on a read-only session before the engine runs it.
+pub(crate) fn viewer_refusal(app: &WordApp, id: &str) -> Option<String> {
+    let collab = app.collab.as_ref()?;
+    if collab.role().can_write() || !is_editing(app, id) {
+        return None;
+    }
+    Some("This session is read-only".into())
+}
+
+/// Connect using the address the `collab.enable` command stored. The token is
+/// read from the environment, never from preferences or the document.
+pub(crate) fn connect(app: &mut WordApp) {
+    let server = app.session.prefs.collab.server.clone();
+    let Ok(token) = std::env::var("WORDCRAFT_COLLAB_TOKEN") else {
+        app.status("Collaboration needs WORDCRAFT_COLLAB_TOKEN");
+        return;
+    };
+    let client_id = format!("ui-{}", app.session.document_id());
+    match wordcraft_collab_app::Collab::connect(&server, &token, &app.session.author, &client_id) {
+        Ok(collab) => app.collab = Some(collab),
+        Err(message) => app.status(message),
+    }
+}
+
+pub(crate) fn disconnect(app: &mut WordApp) {
+    app.collab = None;
+}
+
+/// Drop a collab command prefix from the wire (the session settings are local).
+pub(crate) fn is_settings(id: &str) -> bool {
+    id.starts_with("collab.")
+}
+
+/// Poll the transport, apply answers and publish this window's caret. Called
+/// once per frame before layout, so a remote edit is laid out in this frame.
+pub(crate) fn tick(app: &mut WordApp) {
+    let Some(collab) = app.collab.as_mut() else { return };
+    if collab.poll(&mut app.session) {
+        app.session.relayout();
+    }
+    collab.publish_presence(&app.session, std::time::Instant::now());
+}
+
+/// The participants panel: status, role and who is here.
+pub(crate) fn panel(app: &mut WordApp, ctx: &egui::Context) {
+    let Some(collab) = app.collab.as_ref() else { return };
+    let status = match collab.status() {
+        wordcraft_collab_app::Status::Connecting => "connecting…",
+        wordcraft_collab_app::Status::InSync => "synchronized",
+        wordcraft_collab_app::Status::Resyncing => "synchronizing…",
+        wordcraft_collab_app::Status::Offline => "offline, reconnecting",
+        wordcraft_collab_app::Status::Failed(_) => "error",
+    };
+    let role = collab.role();
+    let participants: Vec<_> = collab
+        .participants()
+        .iter()
+        .map(|participant| (participant.client_id.clone(), participant.role.clone(), participant.color.clone()))
+        .collect();
+    let error = collab.last_error().map(str::to_string);
+    egui::Window::new("Collaboration").anchor(Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -12.0)).resizable(false).collapsible(true).show(ctx, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(status);
+            ui.separator();
+            ui.label(role.as_str());
+            if collab.can_commit() {
+                if ui.button("Commit").clicked() {
+                    collab.commit();
+                }
+            }
+        });
+        ui.separator();
+        for (index, (client, participant_role, color)) in participants.iter().enumerate() {
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                ui.painter().rect_filled(rect, egui::CornerRadius::same(2), participant_color(color.as_deref(), index));
+                ui.label(format!("{client} · {participant_role}"));
+            });
+        }
+        if let Some(error) = error {
+            ui.separator();
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
+        if let Some((sha256, warnings, version)) = collab.last_commit() {
+            ui.separator();
+            ui.label(format!("committed v{version} · {}", &sha256[..sha256.len().min(12)]));
+            if !warnings.is_empty() {
+                for warning in warnings {
+                    ui.colored_label(ui.visuals().warn_fg_color, warning);
+                }
+            }
+        }
+    });
+}
+
+/// Remote carets, drawn over the pages next to the local caret.
+pub(crate) fn draw_carets(app: &WordApp, painter: &Painter, layout: &DocLayout, geo: &Geometry) {
+    let Some(collab) = app.collab.as_ref() else { return };
+    let own = collab.client_id();
+    for (index, participant) in collab.participants().iter().enumerate() {
+        if participant.client_id == own {
+            continue;
+        }
+        let Some(cursor) = &participant.cursor else { continue };
+        let Some(pos) = collab.cursor_position(cursor) else { continue };
+        if let Some(at) = caret_at(layout, geo, &pos) {
+            let color = participant_color(participant.color.as_deref(), index);
+            painter.line_segment([at.0, at.1], Stroke::new(1.5, color));
+            painter.text(Pos2::new(at.0.x + 2.0, at.0.y - 2.0), Align2::LEFT_BOTTOM, &participant.client_id, FontId::proportional(10.0), color);
+        }
+    }
+}
+
+fn caret_at(layout: &DocLayout, geo: &Geometry, pos: &Pos) -> Option<(Pos2, Pos2)> {
+    let caret = layout.caret_on(pos, 0)?;
+    let rect = geo.rects.get(caret.page)?;
+    let page = layout.pages.get(caret.page)?;
+    let scale = crate::canvas::page_screen_scale(*rect, page, geo.scale);
+    let x = rect.min.x + caret.x * scale;
+    let y0 = rect.min.y + caret.top * scale;
+    Some((Pos2::new(x, y0), Pos2::new(x, y0 + caret.height * scale)))
+}
+
+fn participant_color(color: Option<&str>, index: usize) -> Color32 {
+    if let Some(hex) = color
+        && let Ok(value) = u32::from_str_radix(hex.trim_start_matches('#'), 6)
+    {
+        return Color32::from_rgb((value >> 16) as u8, (value >> 8) as u8, value as u8);
+    }
+    const PALETTE: [Color32; 6] = [
+        Color32::from_rgb(0x1f, 0x77, 0xb4),
+        Color32::from_rgb(0xd6, 0x27, 0x28),
+        Color32::from_rgb(0x2c, 0xa0, 0x2c),
+        Color32::from_rgb(0xff, 0x7f, 0x0e),
+        Color32::from_rgb(0x94, 0x67, 0xbd),
+        Color32::from_rgb(0x17, 0xbe, 0xcf),
+    ];
+    PALETTE[index % PALETTE.len()]
+}

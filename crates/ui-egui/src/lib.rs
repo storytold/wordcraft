@@ -30,6 +30,8 @@ pub mod backstage;
 pub mod canvas;
 pub mod caret_glide;
 pub mod chrome;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod collab;
 pub mod colors;
 pub mod content_controls;
 pub mod control;
@@ -612,6 +614,9 @@ fn migrate_units(v: &mut Value) {
 /// The application.
 pub struct WordApp {
     pub session: Session,
+    /// The live real-time session, when Review › Collaborate connected one.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub collab: Option<wordcraft_collab_app::Collab>,
     pub ui: UiState,
     pub services: Services,
     pub printing: printing::State,
