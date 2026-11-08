@@ -1,7 +1,7 @@
 use super::format::fmt;
 use super::{CmdError, CmdResult, LineSpacing, ListKind, NumRef, ParaProps, Session, Style, StyleKind, Value, json, p, sel_result};
 use std::sync::Arc;
-use wordcraft_doc::{Path, StoryRef};
+use wordcraft_doc::{Path, Pos, StoryRef};
 
 /// Toggle lists using effective paragraph numbering; an explicit off request removes numbering.
 pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
@@ -163,9 +163,13 @@ fn strip_typed_labels(s: &mut Session, story: StoryRef, paths: &[Path], typed: &
                 || previous.is_some_and(|previous| next_label_count(previous, typed))
         };
         if strip {
-            let para = s.doc.para_mut(story, path)?;
             let mut end = typed.len();
-            end += para.text[end..].chars().take_while(|c| c.is_whitespace()).map(char::len_utf8).sum::<usize>();
+            let text = s.doc.para(story, path).ok_or_else(|| CmdError::Failed("paragraph vanished".into()))?;
+            end += text.text[end..].chars().take_while(|c| c.is_whitespace()).map(char::len_utf8).sum::<usize>();
+            let start = Pos { story, path: path.clone(), off: 0 };
+            let stop = Pos { story, path: path.clone(), off: end };
+            crate::cmd::controls::check_delete(s, &start, &stop)?;
+            let para = s.doc.para_mut(story, path)?;
             para.delete(0, end)?;
             para.touch();
             shift_selection(s, story, path, end);
