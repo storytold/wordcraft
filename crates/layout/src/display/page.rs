@@ -485,7 +485,11 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
             );
             spun(*spin, *rect, items, out)
         }
-        Placed::Graphic { rect, graphic, spin, .. } => spun(*spin, *rect, graphic_draws(doc, graphic, *rect, alpha), out),
+        Placed::Graphic { rect, graphic, spin, .. } => {
+            if !opts.hide_ink || graphic.kind != wordcraft_doc::graphic::GraphicKind::Ink {
+                spun(*spin, super::objects::graphic_rotation_frame(graphic, *rect), graphic_draws(doc, graphic, *rect, alpha), out);
+            }
+        }
         Placed::Clip { rect, spin, items } => {
             let mut inner = Vec::new();
             for it in items {

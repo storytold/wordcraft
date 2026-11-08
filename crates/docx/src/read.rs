@@ -7,6 +7,7 @@ mod drawing_color;
 mod embed;
 mod freeform;
 mod glossary;
+mod ink;
 pub(crate) mod math;
 mod props;
 mod sdt;
@@ -147,8 +148,8 @@ pub(crate) fn read_opened(pkg: &Package, chunks: Option<ChunkImporter>) -> Resul
 }
 
 /// [`read_opened`] with what chunks may still bring in; also gives the chunks, chunk bytes and
-/// graphic work left of that.
-fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize, u64, usize), DocxError> {
+/// chart/diagram and ink work left of that.
+fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize, u64, usize, usize), DocxError> {
     let root_rels = pkg.rels("");
     let main = root_rels.by_type(rt::OFFICE_DOC).filter(|r| !r.external).map(|r| r.target.clone()).unwrap_or_else(|| "word/document.xml".to_string());
     let Some(root) = pkg.xml_strict(&main)? else {
@@ -335,10 +336,10 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     if r.shape_ids {
         keep_glued_ids(&mut r.doc, &r.glued);
     }
-    let (left, bytes, graphic) = (r.chunks.left, r.chunks.bytes, r.chunks.graphic);
+    let (left, bytes, graphic, ink) = (r.chunks.left, r.chunks.bytes, r.chunks.graphic, r.chunks.ink);
     let mut doc = r.doc;
     doc.ensure_nonempty();
-    Ok((doc, left, bytes, graphic))
+    Ok((doc, left, bytes, graphic, ink))
 }
 
 /// Most move ranges open at once, and most move names tracked, per file.

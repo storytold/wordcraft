@@ -383,6 +383,9 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
                 crop: if opts.paras { *crop } else { [0.0; 4] },
             }))
         }
+        InlineObject::Graphic { w, h, alt, float, graphic } if !float.hidden && graphic.kind == wordcraft_doc::graphic::GraphicKind::Ink => {
+            graphic_inline(doc, (alt, w * sx, h * sy), float, graphic, opts)
+        }
         InlineObject::Group { w, h, float, ch_w, ch_h, children, .. } if depth < MAX_GROUP_DEPTH => {
             let ratio = |outer: f32, inner: f32| {
                 let r = outer / inner;
@@ -670,6 +673,26 @@ fn graphic_inline(
     graphic: &wordcraft_doc::graphic::Graphic,
     opts: FlowOpts,
 ) -> Option<Inline> {
+    // Native paths (including translucent nib outlines) cannot be expressed by
+    // graphic_group. Export the whole retained picture, not a partial set of taps.
+    if opts.boxes && graphic.kind == wordcraft_doc::graphic::GraphicKind::Ink
+        // Pen-up/no-operation previews deliberately contain no painted geometry;
+        // their retained picture must not resurrect invisible ink during export.
+        && !graphic.items.iter().all(|item| matches!(item, wordcraft_doc::graphic::GraphicItem::InkOutline { segs, alpha, .. } if segs.is_empty() || *alpha == 0.0))
+        && let Some(media) = &graphic.ink_fallback
+        && let Some(data) = doc.media.get(media)
+    {
+        return Some(Inline::Image(Img {
+            data: data.clone(),
+            ext: media_ext(media, data),
+            w,
+            h,
+            alt: alt.to_string(),
+            float: kept_float(float).filter(|_| opts.paras),
+            object: None,
+            crop: [0.0; 4],
+        }));
+    }
     if let Some(spec) = graphic.chart.as_ref().filter(|_| opts.boxes) {
         return Some(Inline::Chart(crate::model::Chart {
             spec: spec.clone(),

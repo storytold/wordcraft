@@ -22,6 +22,13 @@ pub struct Graphic {
     pub w: f32,
     #[serde(default)]
     pub h: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ink_frame: Option<[f32; 4]>,
+    /// Native ink's picture fallback (a `Document::media` key), stretched to the outer
+    /// object frame by exporters that cannot represent the decoded vectors. Not drawn
+    /// alongside `items`; kept independently so successful decoding does not lose it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ink_fallback: Option<String>,
     /// Where the graphic was read from, so saving writes the original drawing itself back (not
     /// only these items). `None` for graphics made some other way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -80,7 +87,8 @@ pub enum GraphicKind {
     #[default]
     Chart,
     Diagram,
-    /// Word's native InkML, kept opaque; displayed as its fallback picture when available.
+    /// Word's native InkML: supported strokes are drawn as vectors, otherwise as its fallback
+    /// picture. The original part is kept unchanged for saving.
     Ink,
 }
 
@@ -114,6 +122,18 @@ pub enum GraphicItem {
         stroke: Option<Rgb>,
         #[serde(default)]
         stroke_width: f32,
+    },
+    /// A native ink nib swept into a compound, nonzero-filled outline. Painting the entire
+    /// outline once avoids dark joins and self-overlaps in a translucent pen stroke.
+    InkOutline {
+        /// Closed local-coordinate polygons, already bounded by the InkML decoder.
+        segs: Vec<PathSeg>,
+        /// Resolved brush or sample-channel color.
+        color: Rgb,
+        /// Opacity in 0..1; original InkML transparency remains preserved separately.
+        alpha: f32,
+        #[serde(default)]
+        mask_pen: bool,
     },
     /// One line of text in `rect`, aligned horizontally by `align`, centred vertically.
     Text {

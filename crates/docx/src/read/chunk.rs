@@ -97,11 +97,12 @@ impl Reader<'_> {
             Package::open_limited(bytes, MAX_PART, self.chunks.bytes).map_err(|e| log::warn!("docx: unreadable nested document chunk: {e}")).ok()?;
         self.chunks.bytes = self.chunks.bytes.saturating_sub(pkg.size());
         let state = ChunkState { nesting: self.chunks.nesting + 1, depth: depth + 1, ..self.chunks };
-        let (doc, left, bytes, graphic) =
+        let (doc, left, bytes, graphic, ink) =
             super::read_opened_in(&pkg, state).map_err(|e| log::warn!("docx: unreadable nested document chunk: {e}")).ok()?;
         self.chunks.left = left;
         self.chunks.bytes = bytes;
         self.chunks.graphic = graphic;
+        self.chunks.ink = ink;
         Some(doc)
     }
 }
@@ -116,6 +117,9 @@ pub(crate) struct ChunkState<'a> {
     /// Graphic work left in the file's budget ([`super::MAX_GRAPHIC_WORK`]): nested documents'
     /// charts and diagrams count against it too.
     pub graphic: usize,
+    /// Ink parsing and geometry work left in the file, also shared by nested documents.
+    /// Failed attempts remain charged without starving unrelated chart/diagram previews.
+    pub ink: usize,
     /// How deep in nested WordprocessingML chunks this reader is.
     pub nesting: u8,
     /// The XML depth its stories start at (a nested document's: that of the chunk naming it).
@@ -125,7 +129,7 @@ pub(crate) struct ChunkState<'a> {
 
 impl<'a> ChunkState<'a> {
     pub fn new(import: Option<ChunkImporter<'a>>) -> Self {
-        ChunkState { left: MAX_CHUNKS, bytes: MAX_TOTAL, graphic: super::MAX_GRAPHIC_WORK, nesting: 0, depth: 0, import }
+        ChunkState { left: MAX_CHUNKS, bytes: MAX_TOTAL, graphic: super::MAX_GRAPHIC_WORK, ink: super::ink::MAX_WORK, nesting: 0, depth: 0, import }
     }
 }
 
@@ -168,6 +172,41 @@ mod tests {
     }
 
     #[test]
+    fn nested_ink_spends_one_file_wide_ink_allowance_without_spending_chart_work() {
+        use wordcraft_doc::graphic::GraphicItem;
+        let ink = br#"<ink xmlns="http://www.w3.org/2003/InkML"><trace>0 0,1 1</trace></ink>"#;
+        let inner = package(r#"<w:p><w:r><w:contentPart r:id="rInk"/></w:r></w:p>"#, ("rInk", "customXml", "ink.xml"), ("word/ink.xml", ink));
+        let mut zip = zip::ZipWriter::new_append(std::io::Cursor::new(inner)).unwrap();
+        zip.start_file("[Content_Types].xml", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/ink.xml" ContentType="application/inkml+xml"/></Types>"#).unwrap();
+        let inner = zip.finish().unwrap().into_inner();
+        let read = |copies: usize, ink| {
+            let outer = package(&r#"<w:altChunk r:id="rIdC"/>"#.repeat(copies), ("rIdC", "aFChunk", "chunk.docx"), ("word/chunk.docx", &inner));
+            let pkg = Package::open(&outer).unwrap();
+            let (d, _, _, graphic, left) = super::super::read_opened_in(&pkg, ChunkState { ink, ..ChunkState::new(None) }).unwrap();
+            assert_eq!(graphic, super::super::MAX_GRAPHIC_WORK);
+            let vectors = d
+                .body
+                .iter()
+                .filter_map(|b| match &**b {
+                    Block::Para(p) => Some(p),
+                    _ => None,
+                })
+                .flat_map(|p| &p.objects)
+                .filter(|o| matches!(o, InlineObject::Graphic { graphic, .. } if matches!(graphic.items.first(), Some(GraphicItem::Path { .. }))))
+                .count();
+            (vectors, left)
+        };
+        let limit = super::super::ink::MAX_WORK;
+        let (vectors, left) = read(1, limit);
+        assert_eq!(vectors, 1);
+        assert!(left < limit);
+        assert_eq!(read(2, limit), (2, limit - 2 * (limit - left)));
+        assert_eq!(read(2, limit - left), (1, 0), "the second nested document must not reset the ink budget");
+        assert_eq!(read(1, 0), (0, 0));
+    }
+
+    #[test]
     fn a_nested_documents_charts_count_against_the_files_graphic_budget() {
         let chart = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:barChart><c:ser><c:val><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#;
         let drawing = r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="2743200" cy="1828800"/><wp:docPr id="5" name="G"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rIdChart"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#;
@@ -175,7 +214,7 @@ mod tests {
         let outer = package(r#"<w:altChunk r:id="rIdC"/>"#, ("rIdC", "aFChunk", "afchunk.docx"), ("word/afchunk.docx", &inner));
         let pkg = Package::open(&outer).unwrap();
         let read = |graphic| {
-            let (d, .., left) = super::super::read_opened_in(&pkg, ChunkState { graphic, ..ChunkState::new(None) }).unwrap();
+            let (d, _, _, left, _) = super::super::read_opened_in(&pkg, ChunkState { graphic, ..ChunkState::new(None) }).unwrap();
             (drawn(&d), left)
         };
         let (shown, left) = read(super::super::MAX_GRAPHIC_WORK);
