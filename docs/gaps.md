@@ -21,6 +21,8 @@ Group connectors (gap 10): re-routing preserves displayed rotated and flipped fr
 
 Table Sort rejects invalid explicit column selectors instead of silently sorting another column (#5531). This command-boundary correction leaves the ranked gaps and readiness estimates unchanged.
 
+Caret formatting: clicking where the collapsed caret already rests or navigating without moving preserves pending font and size waiting for typing (#5580); ribbon font and size combo boxes return focus to the document. This typing-parity correction leaves ranked gaps and readiness estimates unchanged.
+
 The work list. One entry per shortfall, ranked by how much it stops a Word user from switching
 (**B** = blocks beta). Each says what's missing, the evidence, who it hurts, an Opus 5.5 agent
 wall-clock estimate, and which parity document tracks it. Agents: pick from the top, check open PRs
@@ -200,6 +202,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 |---|---|---|
 | 2026-11-12 | trivial | Clipboard: a copied picture is published to the system clipboard as PNG, with HTML where the host writes it, and WordCraft's own paste keeps the original fragment; a copy of only shapes stays in WordCraft (#6205). Native external-app paste remains untested. |
 | 2026-11-04 | trivial | #4501 refactor regressions restored: per-section header/footer grid, ODT default font, link tooltip (#4683); no ranked gap changed; readiness estimates unchanged |
+| 2026-11-08 | trivial | Caret: pending font and size kept when caret is unchanged, ribbon font and size return focus (#5580); ranked gaps unchanged |
 | 2026-11-08 | trivial | #10 narrowed: a turned inline picture with no recorded effect extent keeps its line to its frame (exchanged near a quarter turn in Word 2013+ layout), cut at the line; gap stays open |
 | 2026-11-08 | trivial | #4 narrowed: a cell's last Normal paragraph drops its contextual space after, the end-of-cell mark counting as a Normal paragraph (#5450) |
 | 2026-11-07 | trivial | Page Setup also bounds the unfocused margin display after a long numeric paste; the accepted value is retained (#5650). |
