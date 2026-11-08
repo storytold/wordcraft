@@ -599,6 +599,23 @@ fn a_navigation_pane_heading_can_be_deleted_from_its_menu() {
     assert_eq!(texts(&h), ["One", "a", "Two", "b", "Three", "c"], "one undo step brings them back");
 }
 
+/// #3573 review: collapsed headings are kept by body index, so a Delete forgets the ones it took
+/// out and moves the ones after it up with their headings.
+#[test]
+fn deleting_a_heading_moves_the_collapsed_headings_after_it() {
+    use wordcraft_doc::Path;
+    let paths = |v: &[&[u32]]| v.iter().map(|p| Path(p.to_vec())).collect::<std::collections::HashSet<_>>();
+    // Blocks 2..5 went: 0 stays, 2 and 4 were in what went, 5 and 9 move up 3, a heading in a
+    // table at block 7 moves with its table.
+    let mut collapsed = paths(&[&[0], &[2], &[4], &[5], &[9], &[7, 0, 1, 0]]);
+    super::nav::shift_collapsed(&mut collapsed, 2, 3);
+    assert_eq!(collapsed, paths(&[&[0], &[2], &[6], &[4, 0, 1, 0]]));
+    // Nothing removed (a tracked deletion keeps its paragraphs): nothing moves.
+    let mut collapsed = paths(&[&[3]]);
+    super::nav::shift_collapsed(&mut collapsed, 2, 0);
+    assert_eq!(collapsed, paths(&[&[3]]));
+}
+
 /// #4753: the Styles pane's scroll bar has a column of its own, so with the pointer over it the
 /// "a" and "¶" markers at the right of each row stay clear of it; its handle still shows, light
 /// or dark.

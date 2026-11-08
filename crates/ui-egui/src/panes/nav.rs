@@ -118,7 +118,11 @@ fn heading_menu(app: &mut WordApp, ui: &mut Ui, path: &Path, parents: &[Path]) {
     let deletable = block.is_some() && crate::widgets::enabled(app, "outline.deleteSubtree");
     if ui.add_enabled(deletable, crate::rtl::menu_item(ui, tl!("Delete"), "", 0.0)).clicked() {
         if let Some(b) = block {
-            let _ = app.run("outline.deleteSubtree", json!({"block": b}));
+            let len = app.session.doc.body.len();
+            if app.run("outline.deleteSubtree", json!({"block": b})).is_ok() {
+                let removed = len.saturating_sub(app.session.doc.body.len());
+                shift_collapsed(&mut app.ui.nav_collapsed, b, removed);
+            }
         }
         ui.close();
     }
@@ -131,6 +135,31 @@ fn heading_menu(app: &mut WordApp, ui: &mut Ui, path: &Path, parents: &[Path]) {
         app.ui.nav_collapsed.extend(parents.iter().cloned());
         ui.close();
     }
+}
+
+/// Collapsed headings are kept by where they are, so after a deletion took out `removed` body
+/// blocks from block `start` on, the ones taken out are forgotten and the ones after move up.
+pub(super) fn shift_collapsed(collapsed: &mut std::collections::HashSet<Path>, start: u32, removed: usize) {
+    let Ok(removed) = u32::try_from(removed) else {
+        collapsed.clear();
+        return;
+    };
+    if removed == 0 {
+        return;
+    }
+    let end = start.saturating_add(removed);
+    *collapsed = std::mem::take(collapsed)
+        .into_iter()
+        .filter_map(|mut p| {
+            let first = p.0.first_mut()?;
+            if *first >= end {
+                *first -= removed;
+            } else if *first >= start {
+                return None;
+            }
+            Some(p)
+        })
+        .collect();
 }
 
 /// Which headings the pane shows: those under a collapsed heading (every following heading
