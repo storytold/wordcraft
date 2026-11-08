@@ -152,6 +152,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-11-05: ODT heading text of another size keeps it (gap 19): a smaller word in a heading came back at the heading's size in LibreOffice after a save.
 - 2026-11-05: ODT table rows kept from breaking across pages stay so (gap 19): they came back from a save free to break.
 - 2026-11-05: ODT: a watermark added, changed or removed, and Different Odd & Even Pages turned on or off, in a file read from ODT are saved.
+- 2026-11-05: ODT font declarations are kept (gap 19): replacing them made LibreOffice pick other substitutes for fonts not installed, reflowing a document from 83 pages to 70 on a save with no edits.
 - 2026-11-05: ODT pictures offered in several formats show and survive a save (gap 19): LibreOffice's letter templates lost theirs.
 - 2026-11-07: An in-line picture lowered past its own height (`w:position`) lowers its line as far, as in Word; all 156 synthetic lines measured for #3984 match Word (#5796). Exact spacing keeps the line's baseline.
 - 2026-11-06: Windows print submissions run in separate helper processes (#5710). A helper acknowledges cancellation before it stops, so a driver stalled in a cancelled job cannot hold another job’s provider lock. A private temporary PDF and bounded settings messages cross the process boundary; normal shutdown reaps helpers and removes their inputs. The helper erases its plaintext inputs before driver work; a hard app crash during startup can still leave private temporary files. Jobs already sending still complete. Readiness estimates unchanged.
@@ -843,6 +844,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-05 | trivial | Progress log: ODT heading text of another size (gap 19) |
 | 2026-11-05 | trivial | Progress log: ODT table rows that don't break (gap 19) |
 | 2026-11-05 | trivial | Progress log: a watermark or odd and even headers change to a file is saved |
+| 2026-11-05 | trivial | Progress log: ODT font declarations kept (gap 19) |
 | 2026-11-05 | trivial | Progress log: ODT pictures offered in several formats (gap 19) |
 | 2026-10-28 | trivial | Shared MATH construction records reuse variants and assembly data without changing glyph mappings or existing limits (#3630); readiness estimates unchanged |
 | 2026-10-29 | trivial | Page drawing indexes text-box warp lookups per paragraph (#3614); requested offsets only, bounded prefix traversal, original Linux display and persistence controls; readiness estimates unchanged |
