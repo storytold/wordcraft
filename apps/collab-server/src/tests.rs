@@ -105,6 +105,28 @@ async fn next_msg(ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite:
     }
 }
 
+async fn next_applied(
+    ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+) -> wordcraft_collab::wire::Applied {
+    loop {
+        match next_msg(ws).await {
+            ServerMsg::Applied { applied } => return applied,
+            ServerMsg::Nodes { .. } | ServerMsg::Presence { .. } | ServerMsg::Left { .. } | ServerMsg::Tail { .. } => continue,
+            other => panic!("expected applied, got {other:?}"),
+        }
+    }
+}
+
+async fn next_committed(ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>) -> (u64, String) {
+    loop {
+        match next_msg(ws).await {
+            ServerMsg::Committed { version, sha256, .. } => return (version, sha256),
+            ServerMsg::Applied { .. } | ServerMsg::Nodes { .. } | ServerMsg::Presence { .. } | ServerMsg::Left { .. } => continue,
+            other => panic!("expected committed, got {other:?}"),
+        }
+    }
+}
+
 async fn node_of(ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>) -> u32 {
     loop {
         match next_msg(ws).await {
@@ -127,6 +149,10 @@ fn insert(client: &str, seq: u64, base: u64, node: u32, off: usize, text: &str) 
         payload: json!({"op": "insert_text", "text": text}),
         history: None,
     }
+}
+
+async fn send_op(ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, op: Op) -> bool {
+    ws.send(Message::Text(serde_json::to_string(&ClientMsg::Op { op }).expect("json").into())).await.is_ok()
 }
 
 #[tokio::test]
@@ -596,5 +622,70 @@ async fn undo_and_redo_over_the_socket_change_the_committed_text() {
         other => panic!("expected committed, got {other:?}"),
     }
     assert_eq!(committed_text(&cfg), "Hello", "the redo brought the text back");
+    let _ = std::fs::remove_dir_all(&cfg.data_dir);
+}
+
+#[tokio::test]
+async fn comments_and_tracked_changes_keep_the_jwt_actor() {
+    let (url, cfg) = spawn_server().await;
+    let mut owner = connect(&url, &cfg, "owner", "owner").await;
+    let _ = next_msg(&mut owner).await;
+    let node = node_of(&mut owner).await;
+
+    let insert = Op {
+        op_id: OpId::new("owner", 1),
+        base_version: 0,
+        epoch: None,
+        kind: OpKind::Primitive,
+        target: Target::new("body", node, 0),
+        payload: json!({"op": "insert_text", "text": "Hello"}),
+        history: None,
+    };
+    assert!(send_op(&mut owner, insert).await);
+    assert_eq!(next_applied(&mut owner).await.version, 1);
+
+    let selection = json!({"anchor": {"nodeId": node, "off": 0}, "focus": {"nodeId": node, "off": 5}});
+    let command = |seq: u64, base: u64, command: &str, params: serde_json::Value| Op {
+        op_id: OpId::new("owner", seq),
+        base_version: base,
+        epoch: None,
+        kind: OpKind::Command,
+        target: Target::new("body", node, 0),
+        payload: json!({"command": command, "params": params, "selection": selection}),
+        history: None,
+    };
+    assert!(send_op(&mut owner, command(2, 1, "review.trackChanges", json!({"value": true}))).await);
+    assert_eq!(next_applied(&mut owner).await.version, 2);
+    assert!(send_op(&mut owner, command(3, 2, "review.newComment", json!({"text": "please check"}))).await);
+    assert_eq!(next_applied(&mut owner).await.version, 3);
+
+    let typed = Op {
+        op_id: OpId::new("owner", 4),
+        base_version: 3,
+        epoch: None,
+        kind: OpKind::Command,
+        target: Target::new("body", node, 0),
+        payload: json!({"command": "text.insert", "params": {"text": "X"}, "selection": {"anchor": {"nodeId": node, "off": 0}, "focus": {"nodeId": node, "off": 0}}}),
+        history: None,
+    };
+    assert!(send_op(&mut owner, typed).await);
+    assert_eq!(next_applied(&mut owner).await.version, 4);
+
+    owner
+        .send(Message::Text(
+            serde_json::to_string(&ClientMsg::Commit { op_id: OpId::new("owner", 5), expected_version: 4, etag: None }).expect("json").into(),
+        ))
+        .await
+        .expect("commit");
+    assert_eq!(next_committed(&mut owner).await.0, 4);
+
+    let bytes = std::fs::read(cfg.data_dir.join("doc-1").join("source.docx")).expect("the committed file");
+    let doc = wordcraft_docx::read_with_password(&bytes, None).expect("read the committed docx");
+    assert!(doc.comments.values().any(|comment| comment.author == "owner"), "the comment carries the JWT sub: {:?}", doc.comments);
+    assert!(
+        doc.revisions.iter().any(|revision| revision.author == "owner" && matches!(revision.kind, wordcraft_doc::RevisionKind::Insert)),
+        "the tracked insertion carries the JWT sub: {:?}",
+        doc.revisions
+    );
     let _ = std::fs::remove_dir_all(&cfg.data_dir);
 }
