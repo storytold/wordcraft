@@ -705,6 +705,137 @@ fn a_dashed_picture_outline_has_gaps() {
     assert!(row.iter().any(|g| !*g), "with gaps between them");
 }
 
+/// #5544: a `thickThin` outline is a thick line outside the frame and a thin one
+/// inside, sharing the 6 pt band with a gap between them.
+#[test]
+fn a_thick_thin_picture_outline_has_its_two_lines() {
+    use wordcraft_doc::line_dash::{CompoundLine, LineDash};
+    let green = Rgb(0x00, 0xB0, 0x50);
+    let d = outlined_picture_styled(200.0, 70.0, Default::default(), Some(green), LineDash::Solid, CompoundLine::ThickThin);
+    let (rect, img) = picture_and_render(&d);
+    let is_green = |p: [u8; 4]| p[0] < 60 && p[1] > 140;
+    let y = (rect.y + rect.h / 2.0) as u32;
+    // The band is 6 pt centred on the frame's edge: the thick line covers [-3, 0], the
+    // thin line [1.5, 3], the gap (0, 1.5) between them. Whole-pixel samples inside each.
+    assert!(is_green(img.pixel((rect.x - 2.0) as u32, y)), "the thick line outside the frame");
+    assert!(is_green(img.pixel((rect.x + 2.0) as u32, y)), "the thin line inside the frame");
+    let gap = img.pixel(rect.x as u32, y);
+    assert!(!is_green(gap) && gap[0] > 150, "the gap between the lines shows the picture: {gap:?}");
+    assert!(!is_green(img.pixel((rect.x - 4.0) as u32, y)), "nothing past the band outside");
+    assert!(!is_green(img.pixel((rect.x + 4.0) as u32, y)), "nothing past the band inside");
+}
+
+/// #5544: a dash on a compound outline is scaled by each line's own width (Dash is 4 on,
+/// 3 off, times the line width): on a 6 pt `thickThin` outline the thick line (3 pt)
+/// dashes 12 pt on and the thin line (1.5 pt) 6 pt on.
+#[test]
+fn a_dashed_thick_thin_outline_scales_its_dashes_per_line() {
+    use wordcraft_doc::line_dash::{CompoundLine, LineDash};
+    let green = Rgb(0x00, 0xB0, 0x50);
+    let d = outlined_picture_styled(200.0, 70.0, Default::default(), Some(green), LineDash::Dash, CompoundLine::ThickThin);
+    let (rect, img) = picture_and_render(&d);
+    let is_green = |p: [u8; 4]| p[0] < 60 && p[1] > 140;
+    // The longest green run along the top edge, inside each line's band: the thick
+    // line's band is the 3 pt above the frame's top edge, the thin line's the 3 pt below.
+    let longest = |row: u32| -> u32 {
+        let mut best = 0;
+        let mut run = 0;
+        for x in (rect.x + 8.0) as u32..(rect.x + rect.w - 8.0) as u32 {
+            if is_green(img.pixel(x, row)) {
+                run += 1;
+                best = best.max(run);
+            } else {
+                run = 0;
+            }
+        }
+        best
+    };
+    let thick = longest((rect.y - 2.0) as u32);
+    let thin = longest((rect.y + 2.0) as u32);
+    assert!(thick >= 8, "the thick line's dashes are long: {thick}");
+    assert!((3..=7).contains(&thin), "the thin line's dashes are about half as long: {thin}");
+    assert!(thick > thin, "each line dashes at its own width: {thick} against {thin}");
+}
+
+/// #5544: a flipped picture's outline stays on its frame: the picture is mirrored and
+/// the outline is drawn around the mirrored picture, on all four edges.
+#[test]
+fn a_flipped_pictures_outline_stays_on_its_frame() {
+    use wordcraft_doc::para::Float;
+    let green = Rgb(0x00, 0xB0, 0x50);
+    // A picture whose left half is bright red and right half dark red, under `float`.
+    let halves = |float: Float| {
+        let mut d = Document::new();
+        let mut pic = image::RgbaImage::new(4, 4);
+        for (x, _y, p) in pic.enumerate_pixels_mut() {
+            *p = if x < 2 { image::Rgba([220, 0, 0, 255]) } else { image::Rgba([90, 0, 0, 255]) };
+        }
+        let mut png = Vec::new();
+        pic.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let media = d.add_media(png, "png");
+        let float = Float {
+            wrap: wordcraft_doc::para::Wrap::InFrontOfText,
+            h_rel: wordcraft_doc::para::Anchor::Page,
+            v_rel: wordcraft_doc::para::Anchor::Page,
+            x: 100.0,
+            y: 100.0,
+            ..float
+        };
+        let mut p = wordcraft_doc::Paragraph::new();
+        let obj = wordcraft_doc::para::InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float,
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+            stroke: Some(green),
+            stroke_width: 6.0,
+            dash: Default::default(),
+            compound: Default::default(),
+        };
+        p.insert_object(0, obj, &Default::default()).unwrap();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let rect = l.pages[0]
+            .items
+            .iter()
+            .find_map(|i| match i {
+                wordcraft_layout::Placed::Image { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .expect("a picture on the page");
+        (rect, render_page(&d, &l.pages[0], 1.0, &RenderOptions::default()))
+    };
+    let is_green = |p: [u8; 4]| p[0] < 60 && p[1] > 140;
+    for (name, float) in [
+        ("flipH", Float { flip_h: true, ..Default::default() }),
+        ("flipV", Float { flip_v: true, ..Default::default() }),
+        ("flipH and flipV", Float { flip_h: true, flip_v: true, ..Default::default() }),
+        ("no flip", Float::default()),
+    ] {
+        let flip_h = float.flip_h;
+        let (rect, img) = halves(float);
+        let cx = (rect.x + rect.w / 2.0) as u32;
+        let cy = (rect.y + rect.h / 2.0) as u32;
+        // The outline is on the frame: green just outside the middle of each edge.
+        assert!(is_green(img.pixel(cx, (rect.y - 2.0) as u32)), "{name}: the top edge");
+        assert!(is_green(img.pixel(cx, (rect.y + rect.h + 1.0) as u32)), "{name}: the bottom edge");
+        assert!(is_green(img.pixel((rect.x - 2.0) as u32, cy)), "{name}: the left edge");
+        assert!(is_green(img.pixel((rect.x + rect.w + 1.0) as u32, cy)), "{name}: the right edge");
+        // The picture inside is the mirrored one exactly when flipped horizontally.
+        let left = img.pixel((rect.x + 10.0) as u32, cy);
+        let right = img.pixel((rect.x + rect.w - 11.0) as u32, cy);
+        if flip_h {
+            assert!(left[0] < right[0], "{name}: the dark half moved to the left: {left:?} {right:?}");
+        } else {
+            assert!(left[0] > right[0], "{name}: the bright half stays on the left: {left:?} {right:?}");
+        }
+    }
+}
+
 /// #5544: a picture's outline (Picture Border) is stroked on its frame, half outside it and half
 /// over the picture; a picture with no outline has none.
 #[test]

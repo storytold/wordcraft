@@ -435,3 +435,23 @@ impl InlineObject {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::InlineObject;
+    use crate::line_dash::{CompoundLine, LineDash};
+
+    /// An image saved before the outline fields existed (#5544) has none of the
+    /// `stroke`/`stroke_width`/`dash`/`compound` keys: it loads with no outline, solid
+    /// and single, so older documents open unchanged.
+    #[test]
+    fn an_image_saved_without_outline_fields_loads_with_no_outline() {
+        let old = r#"{"type":"image","media":"m.png","w":60.0,"h":40.0}"#;
+        let obj: InlineObject = serde_json::from_str(old).unwrap();
+        let InlineObject::Image { stroke, stroke_width, dash, compound, .. } = obj else { panic!("an image: {obj:?}") };
+        assert_eq!(stroke, None);
+        assert_eq!(stroke_width, 0.0);
+        assert_eq!(dash, LineDash::Solid);
+        assert_eq!(compound, CompoundLine::Single);
+    }
+}
