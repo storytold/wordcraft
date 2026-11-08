@@ -365,6 +365,7 @@ pub fn parse_strict(bytes: &[u8]) -> Result<El, DocxError> {
     parse_with(bytes, &[], true)
 }
 
+/// Parses XML with optional namespace aliases and strict end-tag validation.
 fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Result<El, DocxError> {
     // UTF-16 (with a BOM) is transcoded to UTF-8; a UTF-8 BOM is stripped.
     let transcoded = utf16_to_utf8(bytes);

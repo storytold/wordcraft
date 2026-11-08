@@ -22,6 +22,7 @@ fn document_xml(bytes: &[u8]) -> String {
     s
 }
 
+/// Section metadata and ignorable namespaces survive native JSON and repeated DOCX round trips.
 #[test]
 fn section_metadata_survives_native_json_and_two_docx_save_reopen_cycles() {
     let input = docx(
