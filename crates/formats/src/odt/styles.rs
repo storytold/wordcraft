@@ -252,6 +252,8 @@ struct StyleInfo {
     /// A table-row style's `style:table-row-properties`: its height (`style:row-height`, exact)
     /// or least height (`style:min-row-height`), points.
     row_height: Option<(f32, bool)>,
+    /// `fo:keep-together` of a table-row style: the row doesn't break across pages.
+    row_keep: Option<bool>,
     /// `style:master-page-name` of a paragraph or table style: its paragraphs (tables) start a
     /// page of that master page. Empty: explicitly none, which stops the lookup up the chain.
     master_page: Option<String>,
@@ -622,6 +624,9 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
                 s.row_height = Some((h.min(MAX_LEN), true));
             } else if let Some(h) = get(a, "style:min-row-height").and_then(length).filter(|h| h.is_finite() && *h > 0.0) {
                 s.row_height = Some((h.min(MAX_LEN), false));
+            }
+            if let Some(k) = get(a, "fo:keep-together") {
+                s.row_keep = Some(k.trim() == "always");
             }
         }
         "table-column-properties" => {
@@ -1043,6 +1048,8 @@ pub(super) struct Styles {
     default_color: Option<wordcraft_doc::props::Rgb>,
     /// `style:default-style` for graphics: what every drawing shape's style falls back on.
     default_graphic: super::frames::Graphic,
+    /// `style:default-style` for table rows: `fo:keep-together`, for a row whose style doesn't say.
+    default_row_keep: Option<bool>,
     /// The named dashes and gradients graphic styles use.
     pub(super) defs: super::strokes::Defs,
     /// Date and time styles (`number:date-style`, `number:time-style`) as Word pictures.
@@ -1055,6 +1062,7 @@ impl Styles {
         let mut cur: Option<(String, StyleInfo)> = None;
         let mut in_default = false;
         let mut in_graphic_default = false;
+        let mut in_row_default = false;
         let mut dates = DateStyles::default();
         let mut list: Option<(String, Vec<ListLevel>)> = None;
         // The list or outline level being read.
@@ -1083,8 +1091,12 @@ impl Styles {
                 "default-style" if q.starts_with("style:") => {
                     in_default = get(&a, "style:family") == Some("paragraph");
                     in_graphic_default = get(&a, "style:family") == Some("graphic");
+                    in_row_default = get(&a, "style:family") == Some("table-row");
                 }
                 "graphic-properties" if in_graphic_default && cur.is_none() => self.default_graphic = super::frames::Graphic::read(&a),
+                "table-row-properties" if in_row_default && cur.is_none() => {
+                    self.default_row_keep = get(&a, "fo:keep-together").map(|k| k.trim() == "always")
+                }
                 "text-properties" if in_default && cur.is_none() => {
                     self.default_font = default_font(&a, &self.faces);
                     if let Some(sz) = get(&a, "fo:font-size").and_then(length).filter(|v| v.is_finite() && *v >= 1.0) {
@@ -1151,7 +1163,7 @@ impl Styles {
             },
             Ev::End(q) => match local(&q) {
                 "automatic-styles" => in_auto = false,
-                "default-style" if q.starts_with("style:") => (in_default, in_graphic_default) = (false, false),
+                "default-style" if q.starts_with("style:") => (in_default, in_graphic_default, in_row_default) = (false, false, false),
                 "style" if q.starts_with("style:") => {
                     if let Some((n, s)) = cur.take()
                         && self.map.len() < 100_000
@@ -1263,6 +1275,24 @@ impl Styles {
     /// The formatting of a span in text style `name` over `base`: the automatic styles' over the
     /// nearest custom character style, which the span then names ([`Fmt::extra`]'s style, by ODF
     /// name until import makes it a document style id); without one, the whole chain's.
+    /// The size of text in paragraph style `name` by its named styles, not its automatic ones,
+    /// which are the paragraph's own: what they say on what the document says.
+    pub(super) fn named_size(&self, name: &str) -> Option<f32> {
+        // The default style's: Standard's counts only for a style based on it, in the chain.
+        let size = self.default_size.filter(|v| v.is_finite() && *v >= 1.0).map(|v| v.min(1638.0));
+        let mut f = Fmt { size, ..Fmt::default() };
+        for (_, s) in self.chain(name).iter().rev().filter(|(_, s)| !s.auto) {
+            s.fmt.apply(&mut f);
+        }
+        f.size
+    }
+
+    /// Whether paragraph style `name`'s named styles state a size. Those that don't leave the size
+    /// to WordCraft's style for its kind, so text of any size isn't known to be the style's.
+    pub(super) fn states_size(&self, name: &str) -> bool {
+        self.chain(name).iter().any(|(_, s)| !s.auto && (s.fmt.size.is_some() || s.fmt.size_pct.is_some()))
+    }
+
     pub(super) fn span_fmt(&self, name: &str, base: &Fmt) -> Fmt {
         let chain = self.chain(name);
         let Some(at) = chain.iter().position(|(n, _)| self.is_named_text(n)) else { return self.text_fmt(name, base) };
@@ -1335,6 +1365,12 @@ impl Styles {
     /// A table-row style's height (points) and whether it is exact, whole chain.
     pub(super) fn row_height(&self, name: &str) -> Option<(f32, bool)> {
         self.chain(name).iter().find_map(|(_, s)| s.row_height)
+    }
+
+    /// Whether a table row doesn't break across pages: its style says (whole chain), else the
+    /// default style.
+    pub(super) fn row_keep(&self, name: Option<&str>) -> bool {
+        name.and_then(|n| self.chain(n).iter().find_map(|(_, s)| s.row_keep)).or(self.default_row_keep).unwrap_or(false)
     }
 
     /// Background colour of a table-cell style (whole chain).
@@ -1462,6 +1498,10 @@ impl Styles {
         };
         let mut fmt = Fmt::default();
         s.fmt.apply(&mut fmt);
+        // A percent is of what's under it: the parent's size, or with none the default style's.
+        if s.fmt.size_pct.is_some() {
+            fmt.size = self.named_size(odt);
+        }
         // A style with no parent inherits the default style, not Standard (the document's
         // defaults here): its size, when Standard's differs.
         if s.parent.is_none() && fmt.size.is_none() && self.doc_size() != self.default_size {
