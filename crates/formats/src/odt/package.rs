@@ -1381,7 +1381,7 @@ fn page_background(doc: &Document, w: &mut Writer, mut styles: String) -> String
     let fill_name = if !pic.title.is_empty() { pic.title.clone() } else { "PageBackground".to_string() };
     let fill_image_def =
         format!("<draw:fill-image draw:name=\"{}\" xlink:href=\"{}\" xlink:type=\"simple\" xlink:actuate=\"onLoad\"/>", x(&fill_name), x(&name));
-    if !styles.contains(&format!("draw:name=\"{}\"", x(&fill_name))) {
+    if !super::kept::defined(&styles, &fill_image_def) {
         styles = styles.replacen("</office:styles>", &format!("{fill_image_def}</office:styles>"), 1);
     }
     let bg_el = format!(

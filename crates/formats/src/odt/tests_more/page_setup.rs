@@ -305,9 +305,9 @@ fn full_page_header_picture_with_background_round_trips() {
         out.into_inner()
     };
     let mut d = Document::new();
-    let bg_media = d.add_media(bg_png, "png");
+    let bg_media = d.add_media(bg_png.clone(), "png");
     d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: bg_media, fill_type: "frame".into(), title: "PageBackground".into() });
-    let header_media = d.add_media(header_png, "png");
+    let header_media = d.add_media(header_png.clone(), "png");
     let mut hp = wordcraft_doc::Paragraph::new();
     hp.text = format!("{}", wordcraft_doc::para::OBJ);
     hp.objects.push(wordcraft_doc::para::InlineObject::Image {
@@ -333,10 +333,35 @@ fn full_page_header_picture_with_background_round_trips() {
     assert!(s.contains("style:background-image"), "legacy background-image fallback must be present: {s}");
     assert!(s.contains("<draw:fill-image"), "draw:fill-image must be declared in office:styles: {s}");
 
+    let fill_name =
+        s.split("draw:fill-image-name=\"").nth(1).and_then(|x| x.split('"').next()).expect("styles.xml must contain draw:fill-image-name");
+    let draw_fill_pattern = format!("<draw:fill-image draw:name=\"{fill_name}\" xlink:href=\"");
+    let draw_href = s.split(&draw_fill_pattern).nth(1).and_then(|x| x.split('"').next()).expect("draw:fill-image must define xlink:href");
+    let legacy_href = s
+        .split("<style:background-image xlink:href=\"")
+        .nth(1)
+        .and_then(|x| x.split('"').next())
+        .expect("legacy background-image must define xlink:href");
+    assert_eq!(draw_href, legacy_href, "modern and legacy background image references must match");
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
+    let mut bg_entry = archive.by_name(draw_href).expect("packaged background picture must exist");
+    let mut bg_bytes = Vec::new();
+    std::io::Read::read_to_end(&mut bg_entry, &mut bg_bytes).unwrap();
+    assert_eq!(bg_bytes, bg_png, "packaged background image bytes must match");
+
     let back = import(&saved).unwrap();
-    assert!(back.settings.page_picture.is_some(), "page background picture must survive round trip");
-    let header_part = back.last_section.headers.default.and_then(|id| back.parts.get(&id));
-    assert!(header_part.is_some(), "header part must survive round trip");
+    let bg = back.settings.page_picture.as_ref().expect("page background picture must survive round trip");
+    assert_eq!(back.media.get(&bg.media).map(|m| m.as_slice()), Some(bg_png.as_slice()), "imported background bytes must match");
+    let header_part = back.last_section.headers.default.and_then(|id| back.parts.get(&id)).expect("header part must survive round trip");
+    let header_img_media = header_part.blocks.iter().find_map(|b| {
+        b.as_para().and_then(|p| {
+            p.objects.iter().find_map(|o| if let wordcraft_doc::para::InlineObject::Image { media, .. } = o { Some(media.as_str()) } else { None })
+        })
+    });
+    assert!(header_img_media.is_some(), "header part must contain image object");
+    let header_img_media = header_img_media.unwrap();
+    assert_eq!(back.media.get(header_img_media).map(|m| m.as_slice()), Some(header_png.as_slice()), "imported header image bytes must match");
 }
 
 /// A table cell style with a background image survives the kept styles path (#5803).
