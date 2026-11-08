@@ -47,9 +47,86 @@ fn finishing_a_merge_to_a_file_is_not_an_edit() {
 }
 
 #[test]
+fn csv_delimiter_reads_complete_header_record() {
+    for sep in [',', ';', '\t'] {
+        for newline in ["\n", "\r\n", "\r"] {
+            // All candidate separators and doubled quotes occur on both sides of the newline.
+            // The real separators follow the closing quote, beyond the first physical line.
+            let header = format!("Name,;\t \"given\"{newline}family,;\t \"last\"");
+            let quoted = header.replace('"', "\"\"");
+            let text = format!("\"{quoted}\"{sep}City{sep}{sep}\r\nAda{sep}Paris{sep}{sep}\nBo{sep}Oslo{sep}{sep}");
+            assert_eq!(
+                parse_csv(&text),
+                vec![vec![header.as_str(), "City", "", ""], vec!["Ada", "Paris", "", ""], vec!["Bo", "Oslo", "", ""]],
+                "separator {sep:?}, embedded newline {newline:?}"
+            );
+            // A multiline field after an ordinary column must not end detection either.
+            let text = format!("ID{sep}\"{quoted}\"{sep}City\n1{sep}Ada{sep}Paris\n2{sep}Bo{sep}Oslo");
+            assert_eq!(parse_csv(&text), vec![vec!["ID", header.as_str(), "City"], vec!["1", "Ada", "Paris"], vec!["2", "Bo", "Oslo"]]);
+        }
+    }
+}
+
+#[test]
+fn csv_delimiter_reads_multiline_headers_after_blank_lines() {
+    for sep in [',', ';', '\t'] {
+        for newline in ["\n", "\r\n", "\r"] {
+            let header = format!("Given{newline}Family");
+            for prefix in ["\n\r\n", "\r", "\r\r"] {
+                let text = format!("{prefix}\"{header}\"{sep}City\rAda{sep}Paris");
+                assert_eq!(parse_csv(&text), vec![vec![header.as_str(), "City"], vec!["Ada", "Paris"]]);
+            }
+        }
+    }
+}
+
+#[test]
+fn recipient_csv_blank_prefix_keeps_columns_without_dropping_literal_records() {
+    let mut s = Session::new(Document::new());
+    for sep in [',', ';', '\t'] {
+        for newline in ["\n", "\r\n", "\r"] {
+            let header = format!("First{newline}Name");
+            let csv = format!(" \t{newline}\"{header}\"{sep}Email{newline}Ada{sep}ada@example.com");
+            let result = s.run("mailings.recipients", &json!({"csv": csv})).unwrap();
+            assert_eq!(result, json!({"fields": [header, "Email"], "records": 1}));
+            assert_eq!(s.run("mailings.editRecipients", &json!({})).unwrap()["rows"], json!([["Ada", "ada@example.com"]]));
+        }
+    }
+    s.run("mailings.recipients", &json!({"csv": " \nName,Email\nAda,ada@example.com", "headers": false})).unwrap();
+    assert_eq!(s.run("mailings.editRecipients", &json!({})).unwrap()["rows"], json!([[" ", ""], ["Name", "Email"], ["Ada", "ada@example.com"]]));
+    s.run("mailings.recipients", &json!({"csv": "\" \",Email\nAda,ada@example.com"})).unwrap();
+    assert_eq!(s.run("mailings.editRecipients", &json!({})).unwrap()["rows"], json!([["Ada", "ada@example.com"]]));
+    let rows = s.merge.rows.clone();
+    assert!(s.run("mailings.recipients", &json!({"csv": " \t\r\n \r"})).is_err());
+    assert_eq!(s.merge.rows, rows, "an empty headered list must not replace existing recipients");
+    assert_eq!(parse_csv(" \nName,Email\nAda,ada@example.com")[0], vec![" "], "the shared CSV reader keeps literal whitespace rows");
+}
+
+#[test]
+fn csv_delimiter_keeps_record_boundaries_and_ties() {
+    // Later records cannot choose the header's delimiter.
+    assert_eq!(parse_csv("Name;City\rAda;Paris,,,,\rBo;Oslo"), vec![vec!["Name", "City"], vec!["Ada", "Paris,,,,"], vec!["Bo", "Oslo"]]);
+    // Existing ties prefer tab, then semicolon, then comma.
+    assert_eq!(parse_csv("A,B;C\n1,2;3"), vec![vec!["A,B", "C"], vec!["1,2", "3"]]);
+    assert_eq!(parse_csv("A;B\tC\n1;2\t3"), vec![vec!["A;B", "C"], vec!["1;2", "3"]]);
+    assert_eq!(parse_csv("Name\nAda,Paris;Oslo"), vec![vec!["Name"], vec!["Ada,Paris;Oslo"]]);
+    assert!(parse_csv("").is_empty());
+    assert_eq!(parse_csv("\nName\nAda"), vec![vec!["Name"], vec!["Ada"]]);
+    // The reader remains permissive about an unterminated quoted cell.
+    assert_eq!(parse_csv("Name,City\nAda,\"Paris\nOslo"), vec![vec!["Name", "City"], vec!["Ada", "Paris\nOslo"]]);
+}
+
+#[test]
 fn csv_delimiter_ignores_quoted_text() {
     let r = parse_csv("\"Name, first, last\";City\nAnn;Paris\n");
     assert_eq!(r, vec![vec!["Name, first, last", "City"], vec!["Ann", "Paris"]]);
+}
+
+#[test]
+fn csv_delimiter_skips_leading_blank_lines() {
+    let want = vec![vec!["Name", "Email"], vec!["Ann", "ann@x.org"]];
+    assert_eq!(parse_csv("\nName,Email\nAnn,ann@x.org\n"), want);
+    assert_eq!(parse_csv("\r\n\r\nName;Email\r\nAnn;ann@x.org"), want);
 }
 
 /// Field types ignore case (ECMA-376 Part 1, 17.16.1), and `MERGEFIELDX` is another field.
@@ -300,6 +377,29 @@ fn if_rule_previews_its_result() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), "Selected\nOther");
 }
 
+/// #3681: quotes and backslashes in a rule's texts and field name stay in them.
+#[test]
+fn rule_texts_keep_their_quotes() {
+    let mut s = Session::new(Document::new());
+    let rows = json!([{"Say \"hi\"": "a\\b", "Name": "O\"Neil"}, {"Say \"hi\"": "no", "Name": "Plain"}]);
+    s.run("mailings.recipients", &json!({"rows": rows})).unwrap();
+    s.run("mailings.start", &json!({"kind": "directory"})).unwrap();
+    let rule = json!({"rule": "IF", "field": "Say \"hi\"", "value": "a\\b", "then": "Dear \"friend\"", "else": "C:\\dir\\"});
+    s.run("mailings.rules", &rule).unwrap();
+    s.run("mailings.preview", &json!({"value": true})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Dear \"friend\"");
+    s.run("mailings.next", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "C:\\dir\\");
+    // SKIPIF compares with the value as typed.
+    let mut s = Session::new(Document::new());
+    s.run("mailings.recipients", &json!({"rows": rows})).unwrap();
+    s.run("mailings.start", &json!({"kind": "directory"})).unwrap();
+    s.run("mailings.rules", &json!({"rule": "SKIPIF", "field": "Name", "value": "O\"Neil"})).unwrap();
+    s.run("mailings.insertField", &json!({"field": "Name"})).unwrap();
+    s.run("mailings.finish", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Plain");
+}
+
 /// #430: merge fields in headers and footers are previewed and merged; each letter gets its
 /// own header.
 #[test]
@@ -373,6 +473,75 @@ fn envelope_sizes_add_to_document_and_label_products() {
     let cell = t.rows.get(1).and_then(|r| r.cells.get(4)).and_then(|c| c.blocks.first());
     assert!(matches!(cell.map(|b| &**b), Some(Block::Para(p)) if p.text == "Bo"));
     assert!(s.run("mailings.labels", &json!({"product": "nope"})).is_err());
+}
+
+/// #4880: every selected recipient gets a label, including those beyond the first sheet.
+#[test]
+fn recipient_labels_continue_on_product_sheets() {
+    for product in LABEL_PRODUCTS {
+        let per_sheet = product.rows * product.cols;
+        for count in [1, per_sheet, per_sheet + 1, per_sheet * 2, per_sheet * 2 + 5] {
+            let mut s = Session::new(Document::from_text("Original letter"));
+            let rows: Vec<Value> = (0..count).map(|i| json!({"FirstName": format!("Recipient{i:03}"), "Address": "Original Street"})).collect();
+            s.run("mailings.recipients", &json!({"rows": rows})).unwrap();
+            let r = s.run("mailings.labels", &json!({"product": product.id, "fromRecipients": true})).unwrap();
+            let sheets = count.div_ceil(per_sheet);
+            assert_eq!(r["filled"], count, "{}: {count} recipients", product.id);
+            assert_eq!(r["labels"], sheets * per_sheet);
+            assert_eq!(s.doc.sections().len(), sheets);
+            let tables: Vec<_> = s
+                .doc
+                .body
+                .iter()
+                .filter_map(|b| match &**b {
+                    Block::Table(t) => Some(t),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(tables.len(), sheets);
+            let label_text: Vec<_> = tables
+                .iter()
+                .flat_map(|t| t.rows.iter())
+                .flat_map(|r| &r.cells)
+                .flat_map(|c| &c.blocks)
+                .filter_map(|b| match &**b {
+                    Block::Para(p) if !p.text.is_empty() => Some(p.text.clone()),
+                    _ => None,
+                })
+                .collect();
+            let expected: Vec<_> = (0..count).flat_map(|i| [format!("Recipient{i:03}"), "Original Street".to_string()]).collect();
+            assert_eq!(label_text, expected);
+            assert!(tables.windows(2).all(|t| t[0].grid == t[1].grid && t[0].props == t[1].props));
+        }
+    }
+}
+
+#[test]
+fn recipient_label_sheets_keep_the_source_and_selected_order() {
+    let mut s = Session::new(Document::from_text("Original letter"));
+    s.run("text.insert", &json!({"text": "Draft "})).unwrap();
+    let original = s.doc.clone();
+    let id = s.document_id();
+    let rows: Vec<Value> = (0..65).map(|i| json!({"FirstName": format!("Recipient{i:03}")})).collect();
+    s.run("mailings.recipients", &json!({"rows": rows})).unwrap();
+    s.run(
+        "mailings.filterRecipients",
+        &json!({"rules": [{"field": "FirstName", "op": "notEqual", "value": "Recipient003"}],
+        "sort": [{"field": "FirstName", "descending": true}]}),
+    )
+    .unwrap();
+    let selected = s.run("mailings.editRecipients", &json!({})).unwrap();
+    let r = s.run("mailings.labels", &json!({"fromRecipients": true})).unwrap();
+    assert_eq!(r["filled"], 64);
+    assert_eq!(r["labels"], 90);
+    assert_eq!(s.undo_depth(), 0, "labels are a new document");
+    let text = s.doc.plain_text(StoryRef::Body);
+    let names: Vec<_> = text.split_whitespace().filter(|l| l.starts_with("Recipient")).collect();
+    assert_eq!(names, (0..65).rev().filter(|i| *i != 3).map(|i| format!("Recipient{i:03}")).collect::<Vec<_>>());
+    s.run("view.switchWindows", &json!({"id": id})).unwrap();
+    assert_eq!(s.doc, original, "the original letter stays open and unchanged");
+    assert_eq!(s.run("mailings.editRecipients", &json!({})).unwrap(), selected);
+    assert_eq!(s.undo_depth(), 1, "the source keeps its edit history");
 }
 
 fn b64(b: &[u8]) -> String {

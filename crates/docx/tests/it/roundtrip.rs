@@ -7,7 +7,7 @@ use wordcraft_doc::numbering::ListKind;
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign, TabLeader,
-    TabStop, TableLook, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
+    TabStop, TableLook, TextAlignment, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, NumFormat, PageVAlign, SectionProps, SectionStart};
 use wordcraft_doc::styles::{Style, StyleKind};
@@ -89,10 +89,13 @@ fn every_char_prop_round_trips() {
         caps: Some(true),
         small_caps: Some(false),
         hidden: Some(true),
+        web_hidden: Some(true),
+        snap_to_grid: Some(false),
         spacing: Some(1.5),
         scale: Some(150.0),
         position: Some(3.0),
         kern: Some(8.0),
+        emphasis: Some(wordcraft_doc::props::EmphasisMark::Comma),
         ligatures: Some(wordcraft_doc::props::Ligatures { standard: true, historical: true, ..Default::default() }),
         outline: Some(true),
         shadow: Some(true),
@@ -173,6 +176,7 @@ fn every_para_prop_round_trips() {
         line_spacing: Some(LineSpacing::Multiple(1.5)),
         contextual_spacing: Some(true),
         mirror_indents: Some(true),
+        adjust_right_indent: Some(false),
         keep_next: Some(true),
         keep_lines: Some(false),
         page_break_before: Some(true),
@@ -206,6 +210,7 @@ fn every_para_prop_round_trips() {
             h_anchor: "margin".into(),
             v_anchor: "text".into(),
             wrap: "around".into(),
+            anchor_lock: Some(true),
             h_space: 9.0,
             v_space: 0.0,
         }),
@@ -218,6 +223,7 @@ fn every_para_prop_round_trips() {
         num_change: None,
         fmt_change: None,
         snap_to_grid: Some(false),
+        text_alignment: Some(TextAlignment::Top),
     };
     let variants = [
         ParaProps { line_spacing: Some(LineSpacing::AtLeast(14.0)), indent_first: Some(24.0), align: Some(Align::Center), ..Default::default() },
@@ -246,7 +252,7 @@ fn every_para_prop_round_trips() {
 #[test]
 fn styles_and_lists_round_trip() {
     let mut d = Document::new();
-    d.styles.upsert(Style {
+    Arc::make_mut(&mut d.styles).upsert(Style {
         id: "MyStyle".into(),
         name: "My Style".into(),
         kind: StyleKind::Paragraph,
@@ -263,7 +269,7 @@ fn styles_and_lists_round_trip() {
         default: false,
         table: None,
     });
-    d.styles.upsert(Style {
+    Arc::make_mut(&mut d.styles).upsert(Style {
         id: "MyStyleChar".into(),
         name: "My Style Char".into(),
         kind: StyleKind::Character,
@@ -272,10 +278,10 @@ fn styles_and_lists_round_trip() {
         hidden: true,
         ..Default::default()
     });
-    let bullets = d.numbering.add_list(ListKind::Bullet);
-    let nums = d.numbering.add_list(ListKind::Legal);
-    let outline = d.numbering.add_list(ListKind::Outline);
-    if let Some(n) = d.numbering.nums.iter_mut().find(|n| n.id == outline) {
+    let bullets = Arc::make_mut(&mut d.numbering).add_list(ListKind::Bullet);
+    let nums = Arc::make_mut(&mut d.numbering).add_list(ListKind::Legal);
+    let outline = Arc::make_mut(&mut d.numbering).add_list(ListKind::Outline);
+    if let Some(n) = Arc::make_mut(&mut d.numbering).nums.iter_mut().find(|n| n.id == outline) {
         n.start_overrides.push((0, 4));
     }
     let mut ps = Vec::new();
@@ -425,6 +431,7 @@ fn images_round_trip() {
         // Room for a shadow: kept through save and load.
         float: Float { effect: [12.0, 12.0, 27.0, 27.0], ..Default::default() },
         crop: [0.1, 0.0, 0.25, 0.05],
+        fx: Default::default(),
         ole: None,
     };
     let floating = InlineObject::Image {
@@ -434,6 +441,7 @@ fn images_round_trip() {
         alt: String::new(),
         float: Float { wrap: Wrap::Square, h_rel: Anchor::Page, v_rel: Anchor::Margin, x: 36.0, y: 12.5, dist: 9.0, ..Default::default() },
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     let aligned = InlineObject::Image {
@@ -453,6 +461,7 @@ fn images_round_trip() {
             ..Default::default()
         },
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     let mut floats = vec![floating.clone(), aligned];
@@ -464,6 +473,7 @@ fn images_round_trip() {
             alt: String::new(),
             float: Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, dist: 0.0, ..Default::default() },
             crop: [0.0; 4],
+            fx: Default::default(),
             ole: None,
         });
     }
@@ -565,7 +575,7 @@ fn table_style_formatting_round_trips() {
         band_size: Some(3),
         ..Default::default()
     };
-    d.styles.upsert(Style {
+    Arc::make_mut(&mut d.styles).upsert(Style {
         id: "Whole".into(),
         name: "Whole".into(),
         kind: StyleKind::Table,
@@ -618,7 +628,7 @@ fn every_table_style_part_round_trips() {
         };
         st.set_table_part(part, f);
     }
-    d.styles.upsert(st.clone());
+    Arc::make_mut(&mut d.styles).upsert(st.clone());
     let r = rt(&d);
     let got = r.styles.get("Parts").unwrap();
     for part in TablePart::ALL {
@@ -1186,7 +1196,16 @@ fn groups_round_trip() {
     let mut d = Document::new();
     let key = d.add_media(tiny_png(), "png");
     let story = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("In the group", CharProps::default()))]);
-    let pic = InlineObject::Image { media: key, w: 60.0, h: 40.0, alt: "A picture".into(), float: Float::default(), crop: [0.0; 4], ole: None };
+    let pic = InlineObject::Image {
+        media: key,
+        w: 60.0,
+        h: 40.0,
+        alt: "A picture".into(),
+        float: Float::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
     let oval = InlineObject::Shape {
         kind: ShapeKind::Ellipse,
         w: 50.0,
@@ -1273,7 +1292,16 @@ fn drawing_canvas_round_trips() {
     use wordcraft_doc::para::{CanvasStyle, GroupChild};
     let mut d = Document::new();
     let key = d.add_media(tiny_png(), "png");
-    let pic = InlineObject::Image { media: key, w: 60.0, h: 40.0, alt: "In the canvas".into(), float: Float::default(), crop: [0.0; 4], ole: None };
+    let pic = InlineObject::Image {
+        media: key,
+        w: 60.0,
+        h: 40.0,
+        alt: "In the canvas".into(),
+        float: Float::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
     let star = InlineObject::Shape {
         kind: ShapeKind::Star,
         w: 72.0,
@@ -1706,7 +1734,7 @@ fn kitchen_sink() -> Document {
     let mut d = Document::new();
     let png = tiny_png();
     let key = d.add_media(png, "png");
-    let num = d.numbering.add_list(ListKind::Numbered);
+    let num = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
     let h = d.add_part(PartKind::Header, vec![para_block(Paragraph::with_text("Head", CharProps::default()))]);
     let f = d.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text("Note", CharProps::default()))]);
     let c = d.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text("Comment", CharProps::default()))]);
@@ -1731,7 +1759,16 @@ fn kitchen_sink() -> Document {
     let mut img = Paragraph::new();
     img.insert_object(
         0,
-        InlineObject::Image { media: key, w: 30.0, h: 20.0, alt: "pic".into(), float: Float::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media: key,
+            w: 30.0,
+            h: 20.0,
+            alt: "pic".into(),
+            float: Float::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -1826,6 +1863,7 @@ fn hostile_model_values_still_write() {
             alt: String::new(),
             float: Float::default(),
             crop: [f32::NAN; 4],
+            fx: Default::default(),
             ole: None,
         },
         &CharProps::default(),
@@ -1938,10 +1976,10 @@ fn list_level_overrides_round_trip() {
     use wordcraft_doc::numbering::{Counters, Level};
     use wordcraft_doc::section::NumFormat;
     let mut d = Document::new();
-    let num = d.numbering.add_list(ListKind::Numbered);
-    let restart = d.numbering.restart(num).unwrap();
+    let num = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
+    let restart = Arc::make_mut(&mut d.numbering).restart(num).unwrap();
     let own = Level { format: NumFormat::DecimalZero, text: "%1.%2".into(), indent: 26.5, hanging: 26.5, ..Level::default() };
-    if let Some(n) = d.numbering.nums.iter_mut().find(|n| n.id == restart) {
+    if let Some(n) = Arc::make_mut(&mut d.numbering).nums.iter_mut().find(|n| n.id == restart) {
         n.level_overrides = vec![(1, own.clone())];
     }
     let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
@@ -2096,6 +2134,7 @@ fn rotation_and_flips_round_trip() {
         alt: String::new(),
         float: Float { rot: 30.0, effect: [6.0; 4], ..Default::default() },
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     let shape = |kind, float| InlineObject::Shape {
@@ -2265,6 +2304,39 @@ fn bibliography_sources_round_trip() {
 
     assert_bibliography_parts(&bytes);
     assert_bibliography_sources_round_trip(&bytes);
+}
+
+/// #4848: a corporate author saves as Word's `b:Corporate`, in place of a name list (a role holds
+/// one or the other), and reads back whole.
+#[test]
+fn a_corporate_author_round_trips() {
+    let mut d = Document::new();
+    d.sources.push(Source {
+        tag: "Wor20".into(),
+        kind: "report".into(),
+        corporate: "World Health Organization".into(),
+        title: "World report on hearing".into(),
+        year: "2020".into(),
+        editor: "Chadha, Shelly".into(),
+        ..Default::default()
+    });
+    d.sources.push(Source {
+        tag: "Both".into(),
+        author: "Rivera, Alex".into(),
+        corporate: "Harbor Guild, Inc.".into(),
+        title: "Shared Spaces".into(),
+        ..Default::default()
+    });
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
+    let mut item_xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("customXml/item1.xml").unwrap(), &mut item_xml).unwrap();
+    assert!(item_xml.contains("<b:Author><b:Author><b:Corporate>World Health Organization</b:Corporate></b:Author><b:Editor>"), "{item_xml}");
+    assert!(item_xml.contains("<b:Corporate>Harbor Guild, Inc.</b:Corporate>"), "{item_xml}");
+    assert!(!item_xml.contains("<b:Last>Rivera</b:Last>"), "the corporate author takes the person authors' place: {item_xml}");
+    let back = wordcraft_docx::read(&bytes).expect("read");
+    let got: Vec<(&str, &str, &str)> = back.sources.iter().map(|s| (s.corporate.as_str(), s.author.as_str(), s.editor.as_str())).collect();
+    assert_eq!(got, [("World Health Organization", "", "Chadha, Shelly"), ("Harbor Guild, Inc.", "", "")]);
 }
 
 fn assert_bibliography_parts(bytes: &[u8]) {
@@ -2563,6 +2635,7 @@ fn alt_text_title_and_decorative_round_trip_for_every_object() {
         alt: "A kiln at dusk".into(),
         float: Float { alt: AltText { title: "Kiln".into(), ..Default::default() }, ..Default::default() },
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     let shape = |alt: AltText| InlineObject::Shape {
