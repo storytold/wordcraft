@@ -864,6 +864,9 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
         found.sort_unstable();
         found.dedup();
     }
+    // UAX #14 breaks between a full stop and an opening parenthesis; Word keeps
+    // "2023.(Example" whole and wraps it at the space before.
+    found.retain(|&i| !(text.get(..i).is_some_and(|t| t.ends_with('.')) && text.get(i..).is_some_and(|t| t.starts_with('('))));
     // Asian typography: kinsoku and breaking Latin words anywhere.
     crate::kinsoku::apply(text, &mut found, rp.kinsoku, rp.word_wrap);
     found
