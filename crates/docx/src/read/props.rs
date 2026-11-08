@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use wordcraft_doc::para::cap_alt;
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, HeightRule, Highlight, LineSpacing, NumRef,
-    ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextAlignment, TextColor, TextDirection, Underline,
-    VAlign, VMerge, VertAlign,
+    ParaProps, ParagraphTextDirection, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextAlignment, TextColor,
+    TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{
     Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, NotePos, NoteProps, NoteRestart, NumFormat,
@@ -33,6 +33,7 @@ fn text_frame(k: &El) -> wordcraft_doc::props::TextFrame {
         h_anchor: word("w:hAnchor", &["text", "margin", "page"], "page"),
         v_anchor: word("w:vAnchor", &["text", "margin", "page"], "page"),
         wrap: word("w:wrap", &["around", "auto", "notBeside", "none", "tight", "through"], "auto"),
+        anchor_lock: k.attr("w:anchorLock").map(|v| !matches!(v.trim(), "0" | "false" | "off" | "False" | "FALSE")),
         h_space: len("w:hSpace").unwrap_or(0.0).max(0.0),
         v_space: len("w:vSpace").unwrap_or(0.0).max(0.0),
     }
@@ -333,9 +334,11 @@ impl PropCtx {
                 "w:widowControl" => p.widow_control = Some(on_off(k)),
                 "w:contextualSpacing" => p.contextual_spacing = Some(on_off(k)),
                 "w:mirrorIndents" => p.mirror_indents = Some(on_off(k)),
+                "w:adjustRightInd" => p.adjust_right_indent = Some(on_off(k)),
                 "w:suppressAutoHyphens" => p.suppress_hyphens = Some(on_off(k)),
                 "w:suppressLineNumbers" => p.suppress_line_numbers = Some(on_off(k)),
                 "w:bidi" => p.bidi = Some(on_off(k)),
+                "w:textDirection" => p.text_direction = k.attr("w:val").and_then(ParagraphTextDirection::from_ooxml),
                 "w:kinsoku" => p.kinsoku = Some(on_off(k)),
                 "w:wordWrap" => p.word_wrap = Some(on_off(k)),
                 "w:overflowPunct" => p.overflow_punct = Some(on_off(k)),
