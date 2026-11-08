@@ -31,11 +31,22 @@ fn lay(doc: &Document) -> DocLayout {
 
 /// The first page's cell rectangles as (left, right) edges, ordered left to right.
 fn cell_edges(doc: &Document) -> Vec<(f32, f32)> {
-    let l = lay(doc);
-    let mut out: Vec<(f32, f32)> =
-        l.pages[0].items.iter().filter_map(|i| if let Placed::Cell { rect, .. } = i { Some((rect.x, rect.x + rect.w)) } else { None }).collect();
+    let mut out = cell_edges_in_order(doc);
     out.sort_by(|a, b| a.0.total_cmp(&b.0));
     out
+}
+
+/// The first page's cell rectangles as (left, right) edges, by row and then cell (a right-to-left
+/// table's first cell is at the right).
+fn cell_edges_in_order(doc: &Document) -> Vec<(f32, f32)> {
+    let l = lay(doc);
+    let mut out: Vec<((usize, usize), (f32, f32))> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|i| if let Placed::Cell { rect, row, cell, .. } = i { Some(((*row, *cell), (rect.x, rect.x + rect.w))) } else { None })
+        .collect();
+    out.sort_by_key(|e| e.0);
+    out.into_iter().map(|e| e.1).collect()
 }
 
 /// These pagination fixtures test physical boundaries, not the host's Aptos substitution.
@@ -7336,7 +7347,8 @@ fn a_table_from_word_2013_ends_at_the_borders_its_cells_draw() {
 }
 
 /// Measured in Word for Windows (two columns, 100% wide unless said):
-/// - compatibility mode 14 keeps the whole width for the columns, whatever the borders;
+/// - compatibility mode 14 gives none of the width up to the borders (its first cell's start
+///   margin stands outside the margin);
 /// - in mode 15, cells turning the table's 6pt outer borders off (`w:tcBorders` nil) leave the
 ///   whole width too;
 /// - unequal outer borders (6pt start, 0.75pt end, and the other way round) take each one's
@@ -7386,7 +7398,10 @@ fn a_table_from_word_2013_ends_its_borders_by_mode_cell_side_and_direction() {
     let plain = cells(&Case { start: 0.0, end: 0.0, ..base });
     let (left, right) = (plain[0].0, plain[1].1);
     let c14 = cells(&Case { mode: 14, ..base });
-    assert!(near(c14[0].1 - c14[0].0 + c14[1].1 - c14[1].0, right - left), "mode 14 keeps the whole width {c14:?}, plain {plain:?}");
+    assert!(
+        c14[1].1 - c14[0].0 >= right - left - 0.01 && c14[0].0 < left,
+        "mode 14 gives no border up, its first cell's margin outside {c14:?}, plain {plain:?}"
+    );
     let off = cells(&Case { cells_off: true, ..base });
     assert!(near(off[0].0, left) && near(off[1].1, right), "cells turn the outer borders off {off:?}, plain {plain:?}");
     for (start, end) in [(6.0, 0.75), (0.75, 6.0)] {
@@ -7403,6 +7418,152 @@ fn a_table_from_word_2013_ends_its_borders_by_mode_cell_side_and_direction() {
             let c = cells(&Case { start, end, pct, align: Some(Align::Right), rtl: true, ..base });
             assert!(near(c[0].0, left), "right-to-left, end-aligned, {start}/{end}, 100% {pct}: {c:?}, margin {left}");
         }
+    }
+}
+
+/// Measured in Word for Windows (1.5pt outer borders, 238 synthetic tables, border lines read off
+/// PDF exports):
+/// - compatibility mode 15: a right-to-left table aligned to the start (the right margin) stands
+///   further left by half the start border of its first row's last cell, the line between the
+///   last two columns (0, 0.75, 3 or 6pt; two or three columns), or the table's start border when
+///   it has one column (0.75 or 6pt); 400pt and 100% tables alike;
+/// - mode 14, where the cells' text lines up with the margins: an end-aligned table puts its last
+///   cell's text on the end margin, left-to-right or right-to-left, fixed or AutoFit (cell
+///   margins 3.75pt and 10pt). (A percentage's width in mode 14 is not checked here.)
+#[test]
+fn table_edges_by_direction_and_compatibility_mode() {
+    use wordcraft_doc::props::{Align, Border, BorderStyle, Borders};
+    let line = |w: f32| Some(Border { style: if w > 0.0 { BorderStyle::Single } else { BorderStyle::None }, width: w, color: None, space: 0.0 });
+    struct Case {
+        mode: u32,
+        cols: usize,
+        pct: bool,
+        fixed: bool,
+        align: Option<Align>,
+        rtl: bool,
+        start: f32,
+        inside: f32,
+        margin: f32,
+    }
+    let base = Case { mode: 15, cols: 2, pct: true, fixed: true, align: None, rtl: true, start: 1.5, inside: 1.5, margin: 3.75 };
+    // The cells' left and right edges, first cell first.
+    let cells = |c: &Case| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = c.mode;
+        let mut t = Table::new(1, c.cols, 400.0 / c.cols as f32);
+        if c.pct {
+            t.props.width_pct = Some(100.0);
+        } else {
+            t.props.width = Some(400.0);
+        }
+        t.props.fixed = c.fixed;
+        t.props.align = c.align;
+        t.props.bidi_visual = c.rtl;
+        t.props.cell_margins = Some([0.0, c.margin, 0.0, c.margin]);
+        let b = line(1.5);
+        // The end border as wide as the start one (it plays no part at the start).
+        t.props.borders = Some(Borders { top: b, left: line(c.start), bottom: b, right: line(c.start), between: b, inside_v: line(c.inside) });
+        d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+        cell_edges_in_order(&d)
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    // The margins, from a borderless 100% table of Word 2013.
+    let plain = cells(&Case { rtl: false, start: 0.0, inside: 0.0, ..base });
+    let (left, right) = (plain[0].0, plain[1].1);
+    for pct in [false, true] {
+        for (cols, start, inside) in [(2, 1.5, 0.0), (2, 1.5, 0.75), (2, 1.5, 6.0), (3, 1.5, 3.0), (1, 6.0, 0.0), (1, 0.75, 0.0)] {
+            let c = cells(&Case { cols, pct, start, inside, ..base });
+            assert!(c.windows(2).all(|w| w[0].0 > w[1].0), "right-to-left, {cols} columns: the first cell at the right {c:?}");
+            let shift = if cols == 1 { start / 2.0 } else { inside / 2.0 };
+            assert!(
+                near(c[0].1, right - start / 2.0 - shift),
+                "right-to-left, {cols} columns, start {start}, inside {inside}, 100% {pct}: {c:?}, margin {right}"
+            );
+        }
+    }
+    for margin in [3.75, 10.0] {
+        for rtl in [false, true] {
+            for fixed in [true, false] {
+                let c = cells(&Case { mode: 14, pct: false, fixed, align: Some(Align::Right), rtl, margin, ..base });
+                let (l, r) = (c.iter().map(|e| e.0).fold(f32::MAX, f32::min), c.iter().map(|e| e.1).fold(f32::MIN, f32::max));
+                let (want_l, want_r) = if rtl { (left - margin, left - margin + 400.0) } else { (right + margin - 400.0, right + margin) };
+                assert!(near(l, want_l) && near(r, want_r), "mode 14 end-aligned 400pt, right-to-left {rtl}, fixed {fixed}, margin {margin}: {c:?}");
+                let last = if rtl { c[1].0 } else { c[1].1 };
+                assert!(near(last, if rtl { want_l } else { want_r }), "mode 14, right-to-left {rtl}: the last cell at the end {c:?}");
+            }
+        }
+    }
+}
+
+/// Measured in Word for Windows (compatibility mode 15, fixed 400pt tables with three columns,
+/// their only borders a table style's 1.5pt ones): a header-row part with a 6pt inside line draws
+/// both lines between the columns 6pt wide, and a last-column part with a 6pt left border the
+/// line before the last column; a right-to-left table aligned to the start stands 3pt further
+/// left for either, as for its own 6pt inside line.
+#[test]
+fn a_table_style_s_parts_draw_the_lines_between_columns() {
+    use wordcraft_doc::styles::{PartFormat, Style, StyleKind, TablePart, TableStyleParts};
+    let line = Some(Border { style: BorderStyle::Single, width: 1.5, color: None, space: 0.0 });
+    let six = Some(Border { style: BorderStyle::Single, width: 6.0, color: None, space: 0.0 });
+    // The vertical lines left to right: where each is and the widest drawn there.
+    let lines = |part: Option<(TablePart, Borders)>, rtl: bool| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = 15;
+        let mut st = Style {
+            id: "Parts".into(),
+            name: "Parts".into(),
+            kind: StyleKind::Table,
+            table: Some(TableStyleParts {
+                borders: Some(Borders { top: line, left: line, bottom: line, right: line, between: line, inside_v: line }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        if let Some((p, borders)) = part {
+            st.set_table_part(p, PartFormat { borders: Some(borders), ..Default::default() });
+        }
+        Arc::make_mut(&mut d.styles).upsert(st);
+        let mut t = Table::new(1, 3, 400.0 / 3.0);
+        t.props.width = Some(400.0);
+        t.props.fixed = true;
+        t.props.bidi_visual = rtl;
+        t.props.style = Some("Parts".into());
+        t.props.borders = None;
+        t.props.look.header_row = true;
+        t.props.look.first_column = false;
+        t.props.look.last_column = true;
+        d.body = vec![Arc::new(wordcraft_doc::Block::Table(t))];
+        let l = lay(&d);
+        let mut out: Vec<(f32, f32)> = Vec::new();
+        for item in &l.pages[0].items {
+            if let Placed::Rule { x0, y0, x1, y1, border } = item
+                && (x0 - x1).abs() < 0.01
+                && (y0 - y1).abs() > 0.01
+            {
+                match out.iter_mut().find(|(x, _)| (x - x0).abs() < 0.01) {
+                    Some(seen) => seen.1 = seen.1.max(border.width),
+                    None => out.push((*x0, border.width)),
+                }
+            }
+        }
+        out.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out
+    };
+    let widths = |l: &[(f32, f32)]| l.iter().map(|e| e.1).collect::<Vec<_>>();
+    let header = (TablePart::FirstRow, Borders { inside_v: six, ..Default::default() });
+    let last_col = (TablePart::LastCol, Borders { left: six, ..Default::default() });
+    assert_eq!(widths(&lines(None, false)), [1.5, 1.5, 1.5, 1.5]);
+    assert_eq!(widths(&lines(Some(header), false)), [1.5, 6.0, 6.0, 1.5], "header row's inside line");
+    assert_eq!(widths(&lines(Some(last_col), false)), [1.5, 1.5, 6.0, 1.5], "last column's left border");
+    assert_eq!(widths(&lines(Some(last_col), true)), [1.5, 6.0, 1.5, 1.5], "last column's left border, right to left");
+    let plain = lines(None, true);
+    for part in [header, last_col] {
+        let l = lines(Some(part), true);
+        assert!(
+            (l[3].0 - (plain[3].0 - 2.25)).abs() < 0.01,
+            "{:?}: right to left, 3pt further left than with 0.75pt halves {l:?}, plain {plain:?}",
+            part.0
+        );
     }
 }
 
