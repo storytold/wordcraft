@@ -77,6 +77,8 @@ pub(crate) fn current_pick(ctx: &egui::Context) -> Option<String> {
     ctx.data(|d| d.get_temp::<String>(current_key()))
 }
 
+/// A colour grid's square of colour `c`, outlined in the accent colour while hovered and named
+/// by its hex code ("#C00000") for screen readers and its tooltip. True when it is clicked.
 pub(crate) fn swatch(ui: &mut Ui, c: wordcraft_doc::Rgb) -> bool {
     let (r, resp) = ui.allocate_exact_size(vec2(15.0, 15.0), Sense::click());
     ui.painter().rect_filled(r, 0.0, Color32::from_rgb(c.0, c.1, c.2));
@@ -93,7 +95,10 @@ pub(crate) fn swatch(ui: &mut Ui, c: wordcraft_doc::Rgb) -> bool {
     if current_pick(ui.ctx()).is_some_and(|cur| cur.eq_ignore_ascii_case(&c.hex())) {
         ui.painter().rect_stroke(r.expand(1.0), 0.0, Stroke::new(2.0, t.accent), egui::StrokeKind::Outside);
     }
-    resp.on_hover_text(format!("#{}", c.hex())).clicked()
+    // Named by its colour for screen readers, as its tooltip shows it: a swatch is a drawn square.
+    let name = format!("#{}", c.hex());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
+    resp.on_hover_text(name).clicked()
 }
 
 /// A ribbon-style text field with a dropdown list. Returns a chosen/typed value; Enter commits
