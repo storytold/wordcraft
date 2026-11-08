@@ -1054,3 +1054,55 @@ fn backstage_save_as_sidebar_opens_save_as_page() {
     h.run_steps(4);
     assert_eq!(h.state().ui.backstage_page, "saveAs");
 }
+
+/// Scrolls the File page with the wheel at `x` and returns doc0.docx's top before and after,
+/// plus the rectangle of the page's vertical scrollbar.
+fn file_page_wheel_at(x: f32) -> (f32, f32, egui::Rect) {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.recent = (0..12).map(|i| format!("/docs/doc{i}.docx")).collect();
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 500.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+
+    let bar = h
+        .query_all_by_role(egui::accesskit::Role::ScrollBar)
+        .map(|n| n.rect())
+        .filter(|r| r.height() > r.width())
+        .max_by(|a, b| a.height().total_cmp(&b.height()))
+        .expect("the File page's vertical scrollbar");
+    let before = h.get_by_label("doc0.docx").rect();
+    h.event(egui::Event::PointerMoved(egui::pos2(x, 300.0)));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -200.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    h.run_steps(4);
+    (before.min.y, h.get_by_label("doc0.docx").rect().min.y, bar)
+}
+
+/// #5282: the File page scrolls with the wheel over its right side.
+#[test]
+fn the_file_page_scrolls_with_the_wheel_over_its_right_side() {
+    let (before, after, _) = file_page_wheel_at(1300.0);
+    assert!(after < before - 1.0, "expected doc0.docx to scroll up: before={before}, after={after}");
+}
+
+/// #5282: the scroll area reaches the window's right edge, so its bar sits there and the wheel
+/// works there too.
+#[test]
+fn the_file_page_scrolls_with_the_wheel_at_the_window_edge() {
+    // The harness keeps an 8 point margin, so the window edge is at x=1432.
+    let (before, after, bar) = file_page_wheel_at(1428.0);
+    assert!(after < before - 1.0, "expected doc0.docx to scroll up at the edge: before={before}, after={after}");
+    assert!((bar.right() - 1432.0).abs() < 1.0, "expected the scrollbar at the window edge: {bar:?}");
+}
