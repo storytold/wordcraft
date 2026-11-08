@@ -3947,6 +3947,33 @@ fn bidi_theme_slots_follow_the_theme_font_language() {
     }
 }
 
+/// A `w:rFonts` fallback list longer than the reader keeps is cut at the last complete family
+/// within the bound, so the family a real list would pick survives while a hostile list cannot
+/// cost its whole length in every piece of text drawn in it.
+#[test]
+fn a_hostile_fallback_list_keeps_its_leading_families() {
+    let candidates: Vec<String> = (0..500).map(|i| format!("MissingCandidateFont{i}")).collect();
+    let list = format!("{};Source Serif 4", candidates.join(";"));
+    let body = format!(r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="{list}" w:hAnsi="{list}"/></w:rPr><w:t>x</w:t></w:r></w:p>"#);
+    let d = read_body(&body);
+    let c = &d.body[0].as_para().unwrap().runs[0].props;
+    let kept = c.font.as_deref().expect("the leading families are kept");
+    assert!(kept.len() <= 256, "{} bytes kept", kept.len());
+    assert!(kept.starts_with("MissingCandidateFont0"), "{kept}");
+    // Every kept entry is a whole family name: the cut lands on a `;`, never inside a name.
+    assert!(kept.split(';').all(|f| f.starts_with("MissingCandidateFont") || f.contains("Source Serif")), "{kept}");
+    assert!(!kept.ends_with(';'), "no dangling separator: {kept}");
+}
+
+/// A real LibreOffice fallback list is read whole: a few families, well under any bound.
+#[test]
+fn a_real_fallback_list_is_read_whole() {
+    let body = r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="Liberation Sans;Arial" w:hAnsi="Liberation Sans;Arial"/></w:rPr><w:t>x</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let c = &d.body[0].as_para().unwrap().runs[0].props;
+    assert_eq!(c.font.as_deref(), Some("Liberation Sans;Arial"));
+}
+
 /// The font table's family classes: Word draws a missing roman font in a serif face.
 #[test]
 fn roman_fonts_are_read_from_the_font_table() {
@@ -3954,6 +3981,15 @@ fn roman_fonts_are_read_from_the_font_table() {
     let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable", "fontTable.xml")];
     let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/fontTable.xml", fonts)])).unwrap();
     assert_eq!(d.settings.roman_fonts, ["Brand Serif"]);
+}
+
+/// Semicolon-separated roman font fallback lists in `fontTable.xml` register each candidate family.
+#[test]
+fn roman_fonts_split_fallback_lists() {
+    let fonts = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:font w:name="Liberation Serif;Times New Roman"><w:family w:val="roman"/></w:font></w:fonts>"#;
+    let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable", "fontTable.xml")];
+    let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/fontTable.xml", fonts)])).unwrap();
+    assert_eq!(d.settings.roman_fonts, ["Liberation Serif", "Times New Roman"]);
 }
 
 /// `w:doNotUseHTMLParagraphAutoSpacing` in the settings' `w:compat`: paragraph spacing adds up.
