@@ -285,9 +285,7 @@ pub fn large_document(pages: usize) -> Document {
         &CharProps::default(),
     );
     b.push(Block::Para(toc));
-    let mut num = d.numbering.clone();
-    let steps = num.add_list(ListKind::Numbered);
-    d.numbering = num;
+    let steps = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
     // About 3.5 paragraphs of ~110 words fill a page; pictures every 2.5 pages, tables every 5.
     let paras = pages.saturating_mul(3);
     let (pictures, tables) = (pages * 2 / 5, pages / 5);
@@ -359,7 +357,7 @@ pub fn large_document(pages: usize) -> Document {
             let mut fig = if floating { para(&prose(&mut seed, 60)) } else { Paragraph::new() };
             let _ = fig.insert_object(
                 0,
-                InlineObject::Image { media, w, h, alt: format!("Figure {}", pic + 1), float, crop: [0.0; 4], ole: None },
+                InlineObject::Image { media, w, h, alt: format!("Figure {}", pic + 1), float, crop: [0.0; 4], ole: None, fx: Default::default() },
                 &CharProps::default(),
             );
             b.push(Block::Para(fig));
