@@ -481,7 +481,9 @@ impl FontDb {
     /// instances made from them) leave the font list, so another document asking for the family
     /// falls back as if they had never been loaded (#3687). A file only loaded, never claimed (a
     /// document read for its styles or text), stays as before. Returns whether the list changed.
-    /// The faces' memory isn't released ([`crate::FaceRef`] keeps them).
+    /// Faces are never freed ([`crate::FaceRef`] keeps them), so a released file's faces are kept
+    /// aside with its record: a document that claims the file again gets the same faces back
+    /// instead of another copy, and opening and closing it again and again doesn't grow memory.
     pub fn set_document_fonts(&self, owner: u64, files: Vec<(Vec<u8>, String)>) -> bool {
         let wanted: std::collections::HashSet<u64> = files.iter().map(|(data, name)| document_font_key(data, name)).collect();
         // One lock for the whole change: documents opened or closed at the same time on other
@@ -494,15 +496,22 @@ impl FontDb {
                 file.owners.remove(&owner);
             }
         }
-        let stale: Vec<u64> = document.iter().filter(|(_, f)| f.claimed && f.owners.is_empty()).map(|(k, _)| *k).collect();
-        let gone: Vec<u32> = stale.iter().filter_map(|k| document.remove(k)).flat_map(|f| f.ids).collect();
+        // Files no open document claims any more: their faces (and the variable instances made from
+        // them, which share their bytes) leave the list and are parked with the record.
+        let stale: Vec<u64> = document.iter().filter(|(_, f)| f.claimed && f.owners.is_empty() && !f.ids.is_empty()).map(|(k, _)| *k).collect();
         let mut removed = 0;
-        if !gone.is_empty() {
+        if !stale.is_empty() {
             let mut faces = self.faces.write().unwrap_or_else(|e| e.into_inner());
-            let files: Vec<*const Vec<u8>> = faces.iter().filter(|f| gone.contains(&f.id)).filter_map(|f| f.bytes.owned_ptr()).collect();
-            let before = faces.len();
-            faces.retain(|f| !gone.contains(&f.id) && f.bytes.owned_ptr().is_none_or(|p| !files.contains(&p)));
-            removed = before - faces.len();
+            for key in &stale {
+                let Some(file) = document.get_mut(key) else { continue };
+                let ids = std::mem::take(&mut file.ids);
+                let bytes: Vec<*const Vec<u8>> = faces.iter().filter(|f| ids.contains(&f.id)).filter_map(|f| f.bytes.owned_ptr()).collect();
+                let leaving = |f: &Arc<super::FontFace>| ids.contains(&f.id) || f.bytes.owned_ptr().is_some_and(|p| bytes.contains(&p));
+                let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut *faces).into_iter().partition(|f| leaving(f));
+                *faces = kept;
+                removed += gone.len();
+                file.parked.extend(gone);
+            }
         }
         // Files this document claims that were recorded before: loaded unclaimed (a document read
         // before it was opened), or claimed by another open document.
@@ -512,6 +521,22 @@ impl FontDb {
             if let Some(file) = document.get_mut(key) {
                 file.owners.insert(owner);
                 file.claimed = true;
+            }
+        }
+        // A file claimed again gets its parked faces back (those whose family and style aren't
+        // present by now; the others wait, as skipped ones do).
+        let parked: Vec<u64> = document.iter().filter(|(_, f)| !f.owners.is_empty() && !f.parked.is_empty()).map(|(k, _)| *k).collect();
+        if !parked.is_empty() {
+            let mut faces = self.faces.write().unwrap_or_else(|e| e.into_inner());
+            let key = |f: &super::FontFace| (f.family.to_ascii_lowercase(), f.style.to_ascii_lowercase());
+            let mut present: std::collections::HashSet<_> = faces.iter().map(|g| key(g)).collect();
+            for k in &parked {
+                let Some(file) = document.get_mut(k) else { continue };
+                let (back, wait): (Vec<_>, Vec<_>) = std::mem::take(&mut file.parked).into_iter().partition(|f| present.insert(key(f)));
+                added += back.len();
+                file.ids.extend(back.iter().map(|f| f.id));
+                faces.extend(back);
+                file.parked = wait;
             }
         }
         // A claimed file keeps its faces in the list. One with faces skipped as already present may
@@ -545,7 +570,7 @@ impl FontDb {
             let (ids, skipped) = self.add_faces_counted(vec![(data.clone(), Some(name.clone()))]);
             added += ids.len();
             let skipped = (skipped > 0).then_some((data, name));
-            document.insert(key, DocumentFont { ids, owners: std::collections::HashSet::new(), claimed: false, skipped });
+            document.insert(key, DocumentFont { ids, owners: std::collections::HashSet::new(), claimed: false, skipped, parked: Vec::new() });
         }
         added
     }
@@ -754,11 +779,13 @@ fn document_font_key(data: &[u8], name: &str) -> u64 {
 /// A font file documents embed: the faces it added, the documents that claim it
 /// ([`FontDb::set_document_fonts`]), and whether any ever did. A file with faces skipped as already
 /// present (all of them, or some of a collection) keeps a copy of itself, to add them once the
-/// faces they stood on are removed.
+/// faces they stood on are removed. A file no open document claims keeps its faces parked, for the
+/// next document that claims it.
 #[derive(Debug)]
 pub(super) struct DocumentFont {
     ids: Vec<u32>,
     owners: std::collections::HashSet<u64>,
     claimed: bool,
     skipped: Option<(Vec<u8>, String)>,
+    parked: Vec<Arc<super::FontFace>>,
 }

@@ -697,6 +697,25 @@ fn document_fonts_leave_with_the_last_document_that_embeds_them() {
     assert!(!db.face("Corporate Sans", "Regular").named("Corporate Sans"));
 }
 
+/// A document closed and opened again gets the faces it had back, not another copy of them: faces
+/// are never freed (`FaceRef`), so loading the file again on every open would grow memory each time
+/// the same document is opened and closed.
+#[test]
+fn a_document_opened_again_gets_its_own_faces_back() {
+    let (db, a, _) = corporate_sans();
+    assert!(db.set_document_fonts(1, vec![a.clone()]));
+    let first = db.face("Corporate Sans", "Regular").id;
+    for round in 0..3 {
+        assert!(db.set_document_fonts(1, Vec::new()), "round {round}: closed");
+        assert!(!db.has_family("Corporate Sans"), "round {round}: gone while closed");
+        assert!(db.set_document_fonts(2 + round, vec![a.clone()]), "round {round}: opened again");
+        assert_eq!(db.face("Corporate Sans", "Regular").id, first, "round {round}: the same face, not a new copy");
+        assert!(db.set_document_fonts(2 + round, Vec::new()));
+        assert!(db.set_document_fonts(1, vec![a.clone()]));
+        assert_eq!(db.face("Corporate Sans", "Regular").id, first);
+    }
+}
+
 /// Two documents embed different files of one font: the second one's face matches the first's and
 /// is skipped, then added once the first document closes.
 #[test]
