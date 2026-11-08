@@ -900,6 +900,11 @@ fn with_kept_defs(
     };
     add(&mut content, "</office:automatic-styles>", auto);
     add(&mut styles, "</office:styles>", common);
+    // A font the file declares is declared as the file does: a reader without the font picks its
+    // substitute by this, and a different one would reflow every page.
+    let faces: Vec<&str> = defs.iter().filter(|(k, _)| k.starts_with("font:")).map(|(_, d)| &**d).collect();
+    with_file_faces(&mut content, &faces);
+    with_file_faces(&mut styles, &faces);
     for (xml, before) in [(&mut content, "<office:automatic-styles"), (&mut styles, "<office:styles")] {
         // No declarations yet: the element they go in, where it belongs (before the styles).
         if !fonts.is_empty()
@@ -911,6 +916,54 @@ fn with_kept_defs(
         add(xml, "</office:font-face-decls>", fonts);
     }
     (content, styles)
+}
+
+/// `xml` (a part WordCraft wrote) with each font it declares that `faces` declare too (the file's
+/// own `style:font-face` elements) as `faces` has it: under that name, or else of that family (a
+/// face named `F1` of the family `Mystery`, which WordCraft names by its family), then keeping
+/// WordCraft's name for it.
+fn with_file_faces(xml: &mut String, faces: &[&str]) {
+    use super::kept::{attr_text, raw_attr};
+    let mut named = std::collections::HashMap::new();
+    let mut of_family = std::collections::HashMap::new();
+    for face in faces {
+        let Some(head) = face.split('>').next() else { continue };
+        if let Some(name) = raw_attr(head, "style:name") {
+            named.entry(attr_text(name).into_owned()).or_insert(*face);
+        }
+        if let Some(family) = raw_attr(head, "svg:font-family") {
+            let family = attr_text(family);
+            let first = family.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']);
+            if let Some(font) = model::kept_font(first) {
+                of_family.entry(font).or_insert(*face);
+            }
+        }
+    }
+    // WordCraft's own declarations are empty elements.
+    let (kids, _) = super::kept::children(xml, "office:font-face-decls", "font");
+    let mut out = String::with_capacity(xml.len());
+    let mut done = 0;
+    for (_, (from, to)) in kids {
+        let (Some(before), Some(tag)) = (xml.get(done..from), xml.get(from..to)) else { continue };
+        out.push_str(before);
+        let name = raw_attr(tag, "style:name").map(attr_text);
+        let same = name.as_deref().and_then(|n| named.get(n)).map(|face| face.to_string());
+        let family = || name.as_deref().and_then(|n| of_family.get(n).and_then(|face| face_named(face, n)));
+        let empty = tag.find('>').is_some_and(|end| end + 1 == tag.len());
+        out.push_str(same.or_else(family).filter(|_| empty).as_deref().unwrap_or(tag));
+        done = to;
+    }
+    out.push_str(xml.get(done..).unwrap_or(""));
+    *xml = out;
+}
+
+/// `face` (a `style:font-face` element) with the name `name`.
+fn face_named(face: &str, name: &str) -> Option<String> {
+    let head = face.split('>').next()?;
+    let was = super::kept::raw_attr(head, "style:name")?;
+    // `was` is a piece of `head`, which starts `face`.
+    let at = (was.as_ptr() as usize).checked_sub(head.as_ptr() as usize)?;
+    Some(format!("{}{}{}", face.get(..at)?, x(name), face.get(at + was.len()..)?))
 }
 
 /// An OpenDocument text document's media type, and a template's (ODF 1.3 Part 2 §3.3, Appendix C).

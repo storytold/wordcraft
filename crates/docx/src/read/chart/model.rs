@@ -71,6 +71,9 @@ pub(crate) struct Axis {
 
 pub(super) struct Series {
     pub(super) name: String,
+    /// The series' `c:idx` (an `xsd:unsignedInt`), which picks its automatic colour; `None`
+    /// when missing or not a valid number.
+    pub(super) idx: Option<usize>,
     pub(super) color: Option<Rgb>,
     /// Fixed line width in points, `None`: the chart's default.
     pub(super) line_w: Option<f32>,
