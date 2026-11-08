@@ -794,3 +794,102 @@ fn size_dialog_typed_height_then_ok_without_enter_applies_it() {
     assert!(h.state().dialog.is_none(), "Esc cancels the dialog");
     assert_eq!(selected_size(h.state()), (30.0, 15.0), "nothing applied");
 }
+
+/// #5855: in Page Number Format, clicking "Start at:" focuses the spin box so typing immediately
+/// replaces the starting page number, and clicking the spin box while "Continue from previous
+/// section" is selected switches the radio button to "Start at:" and accepts decimal or Roman
+/// numbers, updating the footer on the current section's page.
+#[test]
+fn page_numbers_dialog_edits_start_at_and_updates_footer() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let harness = |a: WordApp| {
+        egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        )
+    };
+    let footer_shown = |app: &mut WordApp, page: usize| -> String {
+        app.session.layout().pages[page]
+            .footer
+            .iter()
+            .flat_map(|it| match it {
+                wordcraft_layout::Placed::Lines { para, .. } => para.shown.iter().map(|s| s.1.clone()).collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect()
+    };
+
+    let mut a = app();
+    a.run("text.insert", json!({"text": "Front"})).unwrap();
+    a.run("layout.break", json!({"kind": "nextPage"})).unwrap();
+    a.run("text.insert", json!({"text": "Body"})).unwrap();
+    a.run("insert.editFooter", json!({"page": 1})).unwrap();
+    a.run("insert.pageNumber", json!({"position": "bottom"})).unwrap();
+    assert_eq!(footer_shown(&mut a, 1), "2");
+
+    // Clicking the "Start at:" radio button focuses the number field for immediate typing.
+    a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+    let mut h = harness(a);
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::RadioButton, "Start at:").click();
+    h.run_steps(2);
+    h.event(egui::Event::Text("5".into()));
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().session.doc.last_section.page_num_start, Some(5));
+    assert_eq!(footer_shown(h.state_mut(), 1), "5");
+
+    // Clicking the "Start at:" spin box directly while "Continue from previous section" is
+    // chosen selects "Start at:" and accepts Roman numerals too.
+    h.state_mut().run("layout.pageNumberFormat", json!({"format": "lowerRoman", "start": null})).unwrap();
+    assert_eq!(footer_shown(h.state_mut(), 1), "ii");
+    h.state_mut().run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::SpinButton, "Start at:").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::SpinButton, "Start at:").type_text("iv");
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.doc.last_section.page_num_start, Some(4));
+    assert_eq!(footer_shown(h.state_mut(), 1), "iv");
+
+    // Navigating / focusing the "Start at:" field without editing must not change the radio
+    // button: with "Continue" selected, focus alone leaves numbering continuous.
+    h.state_mut().run("layout.pageNumberFormat", json!({"format": "decimal", "start": null})).unwrap();
+    assert_eq!(footer_shown(h.state_mut(), 1), "2");
+    h.state_mut().run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::SpinButton, "Start at:").focus();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.doc.last_section.page_num_start, None, "focus alone preserves continue");
+    assert_eq!(footer_shown(h.state_mut(), 1), "2");
+
+    // Dragging the "Start at:" spin box adjusts the value and selects "Start at:".
+    h.state_mut().run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+    h.run_steps(4);
+    let center = h.get_by_role_and_label(Role::SpinButton, "Start at:").rect().center();
+    h.event(egui::Event::PointerMoved(center));
+    h.event(egui::Event::PointerButton { pos: center, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerMoved(center + egui::vec2(60.0, 0.0)));
+    h.run_steps(2);
+    h.event(egui::Event::PointerButton {
+        pos: center + egui::vec2(60.0, 0.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    h.run_steps(2);
+    assert!(h.state().session.doc.last_section.page_num_start.is_some_and(|s| s > 1), "dragging adjusted value and selected radio");
+}
