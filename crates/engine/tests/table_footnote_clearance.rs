@@ -203,3 +203,75 @@ fn notes_in_different_cells_keep_a_fitting_prefix_on_the_page() {
     assert_eq!(s.layout().caret(&left_reference).unwrap().page, 0, "a smaller prefix fits before the tall cell starts");
     assert_clear(&mut s);
 }
+
+/// The outer row's note fitting must preserve a nested row's Can't Split policy (#5456).
+fn nested_fixture(push: f32, prefix: usize, nested: usize, note_in_nested: Option<bool>) -> Session {
+    let paragraphs = |what: &str, count| {
+        (0..count)
+            .map(|i| {
+                let mut p = Paragraph::with_text(&format!("{what} {i}"), Default::default());
+                p.props.space_before = Some(0.0);
+                p.props.space_after = Some(0.0);
+                para_block(p)
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut d = Document::from_text("Filler");
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.space_before = Some(push);
+    let mut inner = Table::new(1, 1, 200.0);
+    inner.rows[0].props.cant_split = true;
+    inner.rows[0].cells[0].blocks = paragraphs("Nested", nested);
+    let mut outer = Table::new(1, 1, 440.0);
+    outer.rows[0].cells[0].blocks = paragraphs("Prefix", prefix);
+    outer.rows[0].cells[0].blocks.extend([Arc::new(Block::Table(inner)), para_block(Paragraph::new())]);
+    d.insert_block(StoryRef::Body, &Path::top(1), Block::Table(outer)).unwrap();
+    let mut s = Session::new(d);
+    if let Some(in_nested) = note_in_nested {
+        let path = if in_nested { Path(vec![1, 0, 0, prefix as u32, 0, 0, 0]) } else { Path(vec![1, 0, 0, 0]) };
+        s.run("caret.set", &json!({"pos": Pos { story: StoryRef::Body, path, off: 1 }})).unwrap();
+        s.run("references.footnote", &json!({"text": "The nested table control note."})).unwrap();
+    }
+    s
+}
+
+/// The number of nested-table lines on each page, excluding the outer row's prefix.
+fn nested_lines(s: &mut Session, prefix: usize) -> Vec<usize> {
+    s.layout()
+        .pages
+        .iter()
+        .map(|page| {
+            page.items
+                .iter()
+                .filter_map(|it| match it {
+                    Placed::Lines { story: StoryRef::Body, path, l0, l1, .. } if path.0.len() == 7 && path.0[..4] == [1, 0, 0, prefix as u32] => {
+                        Some(l1 - l0)
+                    }
+                    _ => None,
+                })
+                .sum()
+        })
+        .collect()
+}
+
+#[test]
+fn table_note_trials_do_not_split_a_nested_cant_split_row() {
+    for note in [None, Some(false), Some(true)] {
+        let mut s = nested_fixture(340.0, 10, 30, note);
+        let pages = nested_lines(&mut s, 10);
+        assert_eq!(pages[..2], [0, 30], "the nested row stays whole, note={note:?}: {pages:?}");
+        assert_eq!(pages.iter().sum::<usize>(), 30, "every nested line is placed once");
+        if note.is_some() {
+            assert_clear(&mut s);
+        }
+    }
+}
+
+#[test]
+fn an_oversized_nested_cant_split_row_with_a_note_still_advances() {
+    let mut s = nested_fixture(520.0, 0, 60, Some(true));
+    let pages = nested_lines(&mut s, 0);
+    assert_eq!(pages[0], 0, "the nested row leaves the partly filled page: {pages:?}");
+    assert_eq!(pages.iter().sum::<usize>(), 60, "every nested line is placed once: {pages:?}");
+    assert!(pages.iter().filter(|&&lines| lines > 0).count() >= 2, "the oversized row continues: {pages:?}");
+    assert_clear(&mut s);
+}
