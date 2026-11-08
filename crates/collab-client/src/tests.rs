@@ -60,6 +60,25 @@ fn welcome_with_resync_asks_for_a_snapshot_then_joins() {
 }
 
 #[test]
+fn a_version_gap_asks_for_a_snapshot() {
+    let mut client = Client::new("alice");
+    let _ = client.on(ServerMsg::Welcome {
+        session_id: "s".into(),
+        role: "editor".into(),
+        version: 5,
+        epoch: 0,
+        participants: Vec::new(),
+        resync: false,
+    });
+    let event = client.on(applied(OpId::new("bob", 1), 7, 0));
+    match event {
+        Event::Resync { reason } => assert!(reason.contains("gap"), "{reason}"),
+        other => panic!("expected a resync, got {other:?}"),
+    }
+    assert_eq!(client.state(), State::Resyncing);
+}
+
+#[test]
 fn a_stale_rejection_asks_for_a_resync() {
     let mut client = Client::new("alice");
     let _ = client.on(ServerMsg::Welcome {

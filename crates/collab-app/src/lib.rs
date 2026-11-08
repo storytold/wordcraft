@@ -309,6 +309,7 @@ impl Collab {
             Event::Resync { reason } => {
                 self.status = Status::Resyncing;
                 self.last_error = Some(reason);
+                let _ = self.handle.resync();
             }
             Event::None => {}
         }

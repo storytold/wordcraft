@@ -93,7 +93,7 @@ pub struct Claims {
 struct Peer {
     role: Role,
     sid: String,
-    out: mpsc::UnboundedSender<ServerMsg>,
+    out: mpsc::Sender<ServerMsg>,
 }
 
 /// A document room and its connected peers.
@@ -277,7 +277,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         return;
     };
     let room = state.room_for(&claims.doc);
-    let (tx, mut rx) = mpsc::unbounded_channel::<ServerMsg>();
+    let (tx, mut rx) = mpsc::channel::<ServerMsg>(512);
     let (plan, peers) = match register(&room, &client_id, &claims.sid, role, &tx, wants_version) {
         Ok(parts) => parts,
         Err(reject) => {
@@ -350,7 +350,7 @@ fn register(
     client_id: &str,
     sid: &str,
     role: Role,
-    tx: &mpsc::UnboundedSender<ServerMsg>,
+    tx: &mpsc::Sender<ServerMsg>,
     wants_version: Option<Version>,
 ) -> Result<(wordcraft_collab::room::JoinPlan, Vec<Participant>), Reject> {
     let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -444,13 +444,14 @@ async fn process_frame(
             Metrics::inc(&state.metrics.presence);
             // Ephemeral state goes to the other participants; the author already
             // knows its own caret and the cabinet's UI keeps it locally.
-            let targets: Vec<mpsc::UnboundedSender<ServerMsg>> = {
+            let targets: Vec<mpsc::Sender<ServerMsg>> = {
                 let guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
                 guard.peers.iter().filter(|(id, _)| id.as_str() != client_id).map(|(_, peer)| peer.out.clone()).collect()
             };
             let msg = ServerMsg::Presence { client_id: client_id.to_string(), state: presence };
             for tx in targets {
-                let _ = tx.send(msg.clone());
+                // Presence is droppable; a full queue must not stall the room.
+                let _ = tx.try_send(msg.clone());
             }
             true
         }
@@ -590,12 +591,14 @@ async fn send(sink: &mut futures_util::stream::SplitSink<WebSocket, Message>, ms
 /// Send to every peer of the room (`broadcast` includes the sender, so the
 /// author sees the authoritative version too).
 async fn broadcast(room: &Arc<Mutex<RoomState>>, sender: &str, msg: ServerMsg, sink: &mut futures_util::stream::SplitSink<WebSocket, Message>) {
-    let targets: Vec<mpsc::UnboundedSender<ServerMsg>> = {
+    let targets: Vec<mpsc::Sender<ServerMsg>> = {
         let guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
         guard.peers.iter().filter(|(id, _)| id.as_str() != sender).map(|(_, peer)| peer.out.clone()).collect()
     };
     for tx in targets {
-        let _ = tx.send(msg.clone());
+        // Bounded: a client that stops reading drops messages instead of
+        // growing the server; its next answer has a version gap and it resyncs.
+        let _ = tx.try_send(msg.clone());
     }
     let _ = send(sink, &msg).await;
 }
@@ -606,12 +609,12 @@ fn leave(state: &AppState, doc: &str, room: &Arc<Mutex<RoomState>>, client_id: &
         guard.peers.remove(client_id)
     };
     if gone.is_some() {
-        let targets: Vec<mpsc::UnboundedSender<ServerMsg>> = {
+        let targets: Vec<mpsc::Sender<ServerMsg>> = {
             let guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
             guard.peers.values().map(|peer| peer.out.clone()).collect()
         };
         for tx in targets {
-            let _ = tx.send(ServerMsg::Left { client_id: client_id.to_string() });
+            let _ = tx.try_send(ServerMsg::Left { client_id: client_id.to_string() });
         }
     }
     let empty = {

@@ -226,6 +226,12 @@ impl Client {
                 Event::None
             }
             ServerMsg::Applied { applied } => {
+                if applied.version > self.version + 1 {
+                    // A message went missing (a dropped queue on the server, a
+                    // half-closed socket): a snapshot is cheaper than guessing.
+                    self.state = State::Resyncing;
+                    return Event::Resync { reason: format!("version gap: {} after {}", applied.version, self.version) };
+                }
                 self.confirm(&applied);
                 Event::Applied { applied }
             }

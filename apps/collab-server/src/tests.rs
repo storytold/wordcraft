@@ -434,7 +434,7 @@ fn a_shutdown_snapshot_keeps_every_open_room() {
 fn a_second_session_needs_the_owner_role() {
     let state = AppState::new(dev_config());
     let room = state.room_for("doc-lease");
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, _rx) = tokio::sync::mpsc::channel(16);
     assert!(super::register(&room, "alice", "sid-1", wordcraft_collab::room::Role::Editor, &tx, None).is_ok());
 
     let denied = super::register(&room, "bob", "sid-2", wordcraft_collab::room::Role::Editor, &tx, None);
@@ -750,7 +750,7 @@ fn a_silent_session_loses_the_lease_after_its_ttl() {
     cfg.lease_ttl_secs = 0;
     let state = AppState::new(cfg);
     let room = state.room_for("doc-lease-ttl");
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, _rx) = tokio::sync::mpsc::channel(16);
     assert!(super::register(&room, "alice", "sid-1", wordcraft_collab::room::Role::Editor, &tx, None).is_ok());
     // The only peer of sid-1 disconnected, and the TTL is zero.
     room.lock().expect("room lock").peers.remove("alice");
