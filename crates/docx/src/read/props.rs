@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use wordcraft_doc::para::cap_alt;
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, HeightRule, Highlight, LineSpacing, NumRef,
-    ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextAlignment, TextColor, TextDirection, Underline,
-    VAlign, VMerge, VertAlign,
+    ParaProps, ParagraphTextDirection, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextAlignment, TextColor,
+    TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{
     Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, NotePos, NoteProps, NoteRestart, NumFormat,
@@ -338,6 +338,7 @@ impl PropCtx {
                 "w:suppressAutoHyphens" => p.suppress_hyphens = Some(on_off(k)),
                 "w:suppressLineNumbers" => p.suppress_line_numbers = Some(on_off(k)),
                 "w:bidi" => p.bidi = Some(on_off(k)),
+                "w:textDirection" => p.text_direction = k.attr("w:val").and_then(ParagraphTextDirection::from_ooxml),
                 "w:kinsoku" => p.kinsoku = Some(on_off(k)),
                 "w:wordWrap" => p.word_wrap = Some(on_off(k)),
                 "w:overflowPunct" => p.overflow_punct = Some(on_off(k)),

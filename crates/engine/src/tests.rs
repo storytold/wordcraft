@@ -6093,6 +6093,39 @@ fn opening_a_named_pipe_or_device_is_refused_without_blocking() {
 
 #[cfg(unix)]
 #[test]
+fn reading_a_template_title_from_a_named_pipe_is_refused_without_blocking() {
+    let dir = scratch_dir("template-title-fifo");
+    let fifo = dir.join("pipe.dotx");
+
+    let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+    if !made.is_ok_and(|s| s.success()) {
+        let _ = std::fs::remove_dir_all(&dir);
+        eprintln!("mkfifo unavailable; skipping");
+        return;
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let path = fifo.clone();
+
+    std::thread::spawn(move || {
+        let title = crate::io::package_title(&path, 64 << 20, 64 << 10);
+        let _ = tx.send(title);
+    });
+
+    let result = rx.recv_timeout(std::time::Duration::from_secs(10));
+
+    if result.is_err() {
+        // Unblock a stuck reader so the test thread can finish.
+        let _ = std::os::unix::fs::OpenOptionsExt::custom_flags(std::fs::OpenOptions::new().write(true), libc::O_NONBLOCK).open(&fifo);
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(result.expect("reading a template title blocked on a named pipe"), None);
+}
+
+#[cfg(unix)]
+#[test]
 fn html_picture_that_is_a_named_pipe_is_skipped_without_blocking() {
     // #98 review: opening a FIFO blocks until a writer appears; it must never be opened.
     let dir = scratch_dir("html-img-fifo");
@@ -13130,4 +13163,49 @@ fn page_down_extends_a_selection_that_ends_in_collapsed_outline_text() {
     assert_eq!(s.sel.anchor, anchor, "the anchor stays");
     assert!(s.sel.focus.path.0[0] > 6, "Page Down extends the selection a page on: {:?}", s.sel.focus);
     assert!(s.layout().caret(&s.sel.focus).is_some(), "to a place the outline shows");
+}
+
+/// Issue #5667's document: `Intro`, then an inserted `Appendix` paragraph whose mark carries a
+/// section break (Normal, indented), then `Body` in Heading 1. The whole of `Appendix` is
+/// tracked as an insertion by `rev`, or as a deletion when `delete`.
+fn sectioned_revision(delete: bool) -> Session {
+    use wordcraft_doc::{Revision, RevisionKind};
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Intro\nAppendix\nBody"));
+    run(&mut s, "caret.set", json!({"pos": {"block": 2, "off": 0}}));
+    run(&mut s, "para.style", json!({"style": "Heading1"}));
+    let kind = if delete { RevisionKind::Delete } else { RevisionKind::Insert };
+    s.doc.revisions.push(Revision { kind, author: "Ada".into(), date: String::new(), move_name: None });
+    s.doc.last_section.margin_left = 72.0;
+    let mut sect = s.doc.last_section.clone();
+    sect.margin_left = 144.0;
+    let p = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path(vec![1])).unwrap();
+    let len = p.len();
+    p.format(0, len, &|c| if delete { c.del = Some(0) } else { c.ins = Some(0) }).unwrap();
+    if delete {
+        p.mark.del = Some(0)
+    } else {
+        p.mark.ins = Some(0)
+    }
+    p.props.indent_left = Some(36.0);
+    p.section = Some(Box::new(sect));
+    s
+}
+
+#[test]
+fn resolving_away_an_empty_paragraph_with_a_section_break_keeps_the_next_paragraphs_properties() {
+    // #5667: the resolved paragraph was left empty but kept for its section break, so the next
+    // paragraph joined it and took its properties (Normal, its indent). It goes whole instead,
+    // as an empty paragraph without a break does, and its section joins the following one.
+    for (delete, cmd) in [(false, "review.rejectAll"), (true, "review.acceptAll")] {
+        let mut s = sectioned_revision(delete);
+        assert_eq!(s.doc.sections().len(), 2);
+        run(&mut s, cmd, json!({}));
+        assert_eq!(body_texts(&s), ["Intro", "Body"], "{cmd}");
+        let body = s.doc.para(StoryRef::Body, &wordcraft_doc::Path(vec![1])).unwrap();
+        assert_eq!(body.props.style.as_deref(), Some("Heading1"), "{cmd}: Body keeps its style");
+        assert_eq!(body.props.indent_left, None, "{cmd}: and not the removed paragraph's indent");
+        assert!(s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.section.is_none()), "{cmd}: the break went with it");
+        assert_eq!(s.doc.sections().len(), 1, "{cmd}");
+        assert_eq!(s.doc.last_section.margin_left, 72.0, "{cmd}: the following section's setup stays");
+    }
 }

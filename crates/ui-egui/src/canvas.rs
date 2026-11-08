@@ -15,6 +15,7 @@ use crate::WordApp;
 use crate::theme::{Tokens, regular, semibold};
 
 mod balloons;
+mod column_ruler;
 mod context_menu;
 #[cfg(test)]
 pub(crate) use context_menu::issue_heading;
