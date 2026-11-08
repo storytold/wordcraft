@@ -353,6 +353,21 @@ fn code_pages_from_ansicpg_and_font_charsets() {
     assert_eq!(texts(&f), ["Normal:café"]);
 }
 
+/// A symbol font (`\fcharset2`) reads its bytes as its own codes, from 0x80 as U+F000 + the byte, the
+/// form a Word symbol character takes, whatever the document's code page. Read in Windows-1252,
+/// Wingdings' 0x93 became a quotation mark; read in Windows-1251, its arrow and check mark became
+/// Cyrillic letters.
+#[test]
+fn a_symbol_font_reads_its_bytes_as_its_own_codes() {
+    let f = parse(br"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0 Arial;}{\f1\fnil\fcharset2 Wingdings;}}\f0 A{\f1 \'4a\'93\'d8\'fc}B\par}").unwrap();
+    assert_eq!(texts(&f), ["Normal:AJ\u{F093}\u{F0D8}\u{F0FC}B"]);
+    let f = parse(
+        br"{\rtf1\ansi\ansicpg1251\deff0{\fonttbl{\f0\fcharset204 Arial;}{\f1\fnil\fcharset2 Wingdings;}}\f0 \'cc\'e8\'f0{\f1 \'d8\'e8\'fc}\par}",
+    )
+    .unwrap();
+    assert_eq!(texts(&f), ["Normal:Мир\u{F0D8}\u{F0E8}\u{F0FC}"]);
+}
+
 /// #1653: the East Asian code pages (932 Shift-JIS, 936 GBK, 949 UHC, 950 Big5) decode their
 /// bytes as a run, so a lead byte and its trail byte decode together, escaped or raw.
 #[test]
