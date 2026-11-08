@@ -20,6 +20,17 @@ list (author, source, license) is in ATTRIBUTION.md.
   https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md (BIZ UDPGothic, BIZ UDMincho,
   Shippori Mincho), under the SIL Open Font License 1.1. Their licence texts ship with the
   packages as OFL-<family>.txt. Builds without CRAFT_FONTS_DIR do not include them.
+- Office substitute fonts (craft-fonts Latin manifest): native builds made with a craft-fonts
+  checkout that has fonts/latin-manifest.txt embed Carlito, Caladea, Liberation Sans, Liberation
+  Serif and Liberation Mono, under the SIL Open Font License 1.1. Their licence texts ship with
+  the packages as OFL-carlito.txt, OFL-caladea.txt, OFL-liberation-sans.txt,
+  OFL-liberation-serif.txt and OFL-liberation-mono.txt. The web build and builds without
+  CRAFT_FONTS_DIR do not include them.
+    Copyright 2013 The Carlito Project Authors (https://github.com/googlefonts/carlito), with
+    Reserved Font Name "Carlito".
+    Copyright 2012 The Caladea Project Authors (https://github.com/huertatipografica/Caladea).
+    Liberation Sans, Serif and Mono: Digitized data copyright (c) 2010 Google Corporation;
+    Copyright (c) 2012 Red Hat, Inc.
 - Language data (craft-i18n): the word lists, dictionaries and hyphenation patterns below are embedded at build
   time from https://github.com/storytold/craft-i18n (language-data/, CRAFT_I18N_DIR at the commit
   in craft-i18n.rev; all official releases) by craft-proof (storytold/craft-libs). Builds without
