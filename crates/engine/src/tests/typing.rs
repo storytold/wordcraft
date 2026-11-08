@@ -574,9 +574,45 @@ fn smart_quotes_follow_the_texts_language() {
     // A German interface writes German: untagged text follows the editing language.
     let mut s = self::s();
     s.editing_lang = Some("de-DE".into());
-    s.doc.styles.default_chr.lang = None;
+    std::sync::Arc::make_mut(&mut s.doc.styles).default_chr.lang = None;
     typ(&mut s, "\"Ja\" ");
     assert_eq!(s.doc.plain_text(StoryRef::Body), "„Ja“ ");
+}
+
+/// #735: the swap of a provisional ‘ for the apostrophe isn't tracked, so with Track Changes on
+/// it only happens inside the author's own tracked insertion.
+#[test]
+fn a_provisional_apostrophe_respects_track_changes() {
+    let in_german = || in_lang("de-DE");
+    // Typed before Track Changes was on: it stays, and Reject All brings back the original.
+    let mut s = in_german();
+    typ(&mut s, "'Wie geht'");
+    let original = s.doc.plain_text(StoryRef::Body);
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "s");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), format!("{original}s"));
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), original);
+    // Another author's tracked ‘ stays and stays theirs.
+    let mut s = in_german();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "file.setAuthor", json!({"name": "Ana"}));
+    typ(&mut s, "'Wie geht'");
+    let original = s.doc.plain_text(StoryRef::Body);
+    run(&mut s, "file.setAuthor", json!({"name": "Ben"}));
+    typ(&mut s, "s");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), format!("{original}s"));
+    // The author's own tracked ‘ does become the apostrophe.
+    let mut s = in_german();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "'Wie geht's");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "‚Wie geht’s");
+    // The input method hears that the text before the caret was rewritten.
+    let mut s = in_german();
+    typ(&mut s, "'Wie geht's");
+    assert!(s.ime_edit_outcome().transformed, "{:?}", s.ime_edit_outcome());
+    typ(&mut s, "t");
+    assert!(!s.ime_edit_outcome().transformed, "{:?}", s.ime_edit_outcome());
 }
 
 /// #735: German abbreviations and ordinal numbers don't end a sentence, so the next word keeps

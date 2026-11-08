@@ -66,28 +66,37 @@ fn autoformat(s: &mut Session, text: &str) -> Option<String> {
 /// A German closing ‘ (Swiss ›) typed right after a letter was only provisional: a letter typed
 /// after it makes it the apostrophe ’, so ‚Wie geht's?‘ gives ‚Wie geht’s?‘ and the next ' closes
 /// the ‚ that is still open. The two marks are the same length, so the caret stays put.
-fn provisional_apostrophe(s: &mut Session, text: &str) -> Result<(), CmdError> {
+fn provisional_apostrophe(s: &mut Session, text: &str) -> Result<bool, CmdError> {
     let mut chars = text.chars();
-    let (Some(c), None) = (chars.next(), chars.next()) else { return Ok(()) };
+    let (Some(c), None) = (chars.next(), chars.next()) else { return Ok(false) };
     if !c.is_alphanumeric() || !s.sel.is_collapsed() || !s.prefs.autocorrect.enabled || !s.prefs.autocorrect.smart_quotes {
-        return Ok(());
+        return Ok(false);
     }
     let f = s.sel.focus.clone();
-    let Some(before) = s.doc.para_at(&f).and_then(|p| p.text.get(..f.off)) else { return Ok(()) };
+    let Some(para) = s.doc.para_at(&f) else { return Ok(false) };
+    let Some(before) = para.text.get(..f.off) else { return Ok(false) };
     let mut prev = before.chars().rev();
-    let (Some(q), Some(letter)) = (prev.next(), prev.next()) else { return Ok(()) };
+    let (Some(q), Some(letter)) = (prev.next(), prev.next()) else { return Ok(false) };
     let at = f.off - q.len_utf8();
     let lang = crate::cmd::tools::text_lang(s, &f, at);
     let (_, single) = quote_pairs(lang.as_deref());
     // In English the closing quote already is the apostrophe.
     if !letter.is_alphanumeric() || !single.1.starts_with(q) || single.1 == "\u{2019}" {
-        return Ok(());
+        return Ok(false);
+    }
+    // The swap isn't tracked, so with Track Changes on only the author's own tracked insertion
+    // may change, as for the marks of bold and italic AutoFormat; other text keeps its ‘.
+    let own = |mark: &wordcraft_doc::props::CharProps| {
+        mark.del.is_none() && mark.ins.and_then(|i| s.doc.revisions.get(i as usize)).is_some_and(|rv| rv.author == s.author)
+    };
+    if s.doc.settings.track_changes && !own(para.props_of_char(at)) {
+        return Ok(false);
     }
     let p = s.doc.para_mut(f.story, &f.path)?;
     let props = p.props_of_char(at).clone();
     p.delete(at, f.off)?;
     p.insert_text(at, "\u{2019}", &props)?;
-    Ok(())
+    Ok(true)
 }
 
 /// File › Options › Advanced before typed text goes in: with "Typing replaces selected text"
@@ -126,9 +135,7 @@ pub(super) fn insert(s: &mut Session, v: &Value) -> CmdResult {
         return insert_paragraphs(s, text);
     }
     // Before typing_options: in overtype it selects the characters after the caret.
-    if !raw {
-        provisional_apostrophe(s, text)?;
-    }
+    let apostrophe = !raw && provisional_apostrophe(s, text)?;
     typing_options(s, text);
     let smart_quote = if raw { None } else { autoformat(s, text) };
     let was_collapsed = s.sel.is_collapsed();
@@ -137,7 +144,7 @@ pub(super) fn insert(s: &mut Session, v: &Value) -> CmdResult {
         classified: true,
         content_changed: effect.content_changed,
         state_changed: effect.state_changed,
-        transformed: smart_quote.is_some(),
+        transformed: smart_quote.is_some() || apostrophe,
         selection_changed: false,
     };
     let trigger = text.chars().count() == 1 && text.chars().all(|c| c == ' ' || ",.;:!?".contains(c));
