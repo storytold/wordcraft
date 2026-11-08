@@ -40,7 +40,12 @@ pub const MAX_TOTAL_SOURCE: u64 = 4 << 20;
 /// How large a module stream read may be: the compressed container for [`MAX_SOURCE`] of
 /// source plus slack — all-literal chunks expand the data by 9/8 and raw chunks 1:1, so a
 /// source of [`MAX_SOURCE`] never needs more than twice as many container bytes.
-const MAX_MODULE_STREAM: u64 = 2 * MAX_SOURCE;
+pub const MAX_MODULE_STREAM: u64 = 2 * MAX_SOURCE;
+/// How many bytes of module streams the cache may hold: a project naming more distinct
+/// streams than fit reads the extra ones again (each read is bounded by
+/// [`MAX_MODULE_STREAM`]), so a re-read costs time, not memory — a project of 256 streams
+/// sharing one sector chain can't make the cache retain 512 MiB of bytes no module decodes.
+pub const MAX_CACHED_STREAMS: u64 = 2 * MAX_TOTAL_SOURCE;
 
 /// What [MS-OVBA] §2.4.1.1.5 names a compressed chunk's signature: bits 12..15 of the header.
 const CHUNK_SIGNATURE: u16 = 0xB000;
@@ -110,7 +115,10 @@ pub fn project(bytes: &[u8]) -> Result<Project, DocxError> {
     // Each distinct stream is read once, and the decoded source all modules carry counts
     // against [`MAX_TOTAL_SOURCE`]: 256 modules naming one large stream used to read and hold
     // it once per module — about 768 MiB decoded with lossy replacement from a small file.
+    // The stream cache is bounded by [`MAX_CACHED_STREAMS`]: a project naming more distinct
+    // streams than fit reads the extra ones again, so a re-read costs time, not memory.
     let mut streams: HashMap<String, Option<Arc<(Vec<u8>, bool)>>> = HashMap::new();
+    let mut cached = 0u64;
     let mut budget = MAX_TOTAL_SOURCE;
     for module in &mut project.modules {
         // A stream name is a single path segment; anything else can't name a module stream.
@@ -119,7 +127,7 @@ pub fn project(bytes: &[u8]) -> Result<Project, DocxError> {
             continue;
         }
         let path = format!("/VBA/{}", module.stream_name);
-        let cached = match streams.entry(module.stream_name.clone()) {
+        let shared = match streams.entry(module.stream_name.clone()) {
             Entry::Occupied(e) => e.get().clone(),
             Entry::Vacant(e) => {
                 let read = match module_stream(&mut comp, &path) {
@@ -129,11 +137,26 @@ pub fn project(bytes: &[u8]) -> Result<Project, DocxError> {
                         None
                     }
                 };
-                e.insert(read.clone());
+                // A stream the cache can't hold isn't kept: the next module naming it reads
+                // it again. A failed read is remembered, so a stream no module can read
+                // isn't re-read once per module.
+                let fits = match &read {
+                    Some(v) => {
+                        let fits = cached + v.0.len() as u64 <= MAX_CACHED_STREAMS;
+                        if fits {
+                            cached += v.0.len() as u64;
+                        }
+                        fits
+                    }
+                    None => true,
+                };
+                if fits {
+                    e.insert(read.clone());
+                }
                 read
             }
         };
-        let Some(bytes) = cached else {
+        let Some(bytes) = shared else {
             module.source = None;
             continue;
         };

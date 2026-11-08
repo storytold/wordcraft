@@ -388,3 +388,55 @@ fn a_cp1252_stream_name_opens_through_its_unicode_record() {
     assert_eq!(project.modules[0].stream_name, "M\u{00f3}dulo1");
     assert_eq!(project.modules[0].source.as_deref(), Some("Sub Hi()\nEnd Sub\n"));
 }
+
+#[test]
+fn a_project_of_more_streams_than_the_cache_holds_still_reports_every_module() {
+    // The stream cache is bounded by [`MAX_CACHED_STREAMS`]: streams past it are read again
+    // instead of being retained, so a project of distinct streams sharing one chain can't
+    // make the cache hold every stream's bytes. Every module still reports its source — the
+    // last one re-reads a stream the cache didn't keep.
+    // Five streams of ~1.7 MiB each: four fit the cache's bound, the fifth is read again.
+    // Each one is under the stream read's cap, and the sources all fit the source budget.
+    let filler = vec![b'Z'; 1_700_000];
+    let source = |i: usize| format!("Sub M{i}()\nEnd Sub\n");
+    let names = ["M1", "M2", "M3", "M4", "M5"];
+    let streams: Vec<(&str, Vec<u8>)> = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let mut bytes = filler.clone();
+            bytes.extend(module_stream(source(i + 1).as_bytes()));
+            (*name, bytes)
+        })
+        .collect();
+    // A dir stream with MODULEOFFSET naming each stream's cache: the filler comes first.
+    let offset = (filler.len() + 4) as u32;
+    let modules: [(&str, &str); 6] = [("M1", "M1"), ("M2", "M2"), ("M3", "M3"), ("M4", "M4"), ("M5", "M5"), ("Again", "M5")];
+    let mut dir = Vec::new();
+    record(&mut dir, 0x0001, &0x00000001u32.to_le_bytes());
+    record(&mut dir, 0x0003, &CODE_PAGE_1252.to_le_bytes());
+    project_version(&mut dir);
+    record(&mut dir, 0x000F, &(modules.len() as u16).to_le_bytes());
+    record(&mut dir, 0x0013, &0xFFFFu16.to_le_bytes());
+    for (name, stream) in modules {
+        record(&mut dir, 0x0019, name.as_bytes());
+        record(&mut dir, 0x0047, &utf16(name));
+        record(&mut dir, 0x001A, stream.as_bytes());
+        record(&mut dir, 0x0032, &utf16(stream));
+        record(&mut dir, 0x0031, &offset.to_le_bytes());
+        record(&mut dir, 0x002C, &0u32.to_le_bytes());
+        record(&mut dir, 0x0021, &0u32.to_le_bytes());
+        record(&mut dir, 0x002B, &0u32.to_le_bytes());
+    }
+    let refs: Vec<(&str, &[u8])> = streams.iter().map(|(n, b)| (*n, b.as_slice())).collect();
+    let project = wordcraft_docx::vba::project(&cfb_project_streams(&compress(&dir), &refs)).unwrap();
+    assert_eq!(project.modules.len(), 6);
+    for (i, module) in project.modules.iter().enumerate() {
+        let want = if i == 5 { source(5) } else { source(i + 1) };
+        assert_eq!(module.source.as_deref(), Some(want.as_str()), "{} didn't report its source", module.name);
+    }
+    // The streams sum past the cache's bound, and each one read is under the stream cap.
+    let total: u64 = streams.iter().map(|(_, b)| b.len() as u64).sum();
+    assert!(total > wordcraft_docx::vba::MAX_CACHED_STREAMS, "the fixture should outgrow the cache: {total}");
+    assert!(streams[0].1.len() as u64 <= wordcraft_docx::vba::MAX_MODULE_STREAM, "a fixture stream is over the read cap");
+}
