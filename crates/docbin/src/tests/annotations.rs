@@ -173,6 +173,47 @@ fn ten_thousand_comments_are_all_read() {
 }
 
 #[test]
+fn more_than_ten_thousand_comments_keep_the_first_ten_thousand() {
+    // Past the cap the tables are cut, not refused: the first 10,000 comments are read.
+    const N: u32 = 10_002;
+    let text: &'static str = Box::leak((0..N).map(|_| '\u{5}').chain(['\r']).collect::<String>().into_boxed_str());
+    let ccp = N + 1;
+    let story: String = (0..N).map(|_| "\u{5}c\r").chain(["\r"]).collect();
+    let refs: Vec<u32> = (0..N).chain([ccp]).collect();
+    let txts: Vec<u32> = (0..=N).map(|i| i * 3).chain([N * 3 + 1]).collect();
+    let pairs = vec![(AND_REF, plc(&refs, &atrd("A", 0, -1).repeat(N as usize))), (AND_TXT, plc(&txts, &[]))];
+    let doc = open(text, &[&story], pairs);
+    assert_eq!(doc.comments.len(), 10_000);
+}
+
+#[test]
+fn more_than_ten_thousand_annotation_bookmarks_keep_the_first_ones_ranges() {
+    // 10,002 bookmarks, the first one the comment's: its range is still found.
+    let ccp = TEXT.chars().count() as u32;
+    let tags: Vec<u32> = [7].into_iter().chain(100..10_101).collect();
+    let mut pairs = ranged_pairs(7, 7);
+    for (i, b) in pairs.iter_mut() {
+        if *i == ATN_BKMK {
+            *b = atn_bkmk(&tags);
+        } else if *i == ATN_BKF {
+            *b = bkf(&vec![4; tags.len()], &vec![0; tags.len()], ccp);
+        }
+    }
+    let p = body_para(&open(TEXT, &STORIES, pairs));
+    assert_eq!(p.text, "See \u{FFFC}this\u{FFFC} word");
+    assert_eq!(p.objects, vec![InlineObject::CommentStart { id: 0 }, InlineObject::CommentEnd { id: 0 }]);
+}
+
+#[test]
+fn a_comment_whose_reference_is_past_the_text_is_skipped() {
+    // No mark at or past ccpText is ever walked, so the comment would have no anchor.
+    let ccp = TEXT.chars().count() as u32;
+    let pairs = vec![(AND_REF, plc(&[ccp, ccp], &atrd("AR", 0, -1))), (AND_TXT, plc(&[0, 6, 7], &[])), (ATN_OWNERS, owners(&["Ada Reviewer"]))];
+    let doc = open(TEXT, &STORIES, pairs);
+    assert!(doc.comments.is_empty());
+}
+
+#[test]
 fn two_comments_each_get_their_author_and_text() {
     let text = "One\u{5} two\u{5}\r";
     let ccp = text.chars().count() as u32;

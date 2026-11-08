@@ -71,19 +71,24 @@ pub(crate) fn parse(table: &[u8], fib: &Fib) -> Vec<Annotation> {
 }
 
 /// A PLC's CPs (`n + 1` of them, the last a limit) and its data elements (`size` bytes each).
+///
+/// A longer table is cut rather than refused, so a file with more than `MAX` comments keeps the
+/// first ones. At most `MAX + 2` CPs are returned, enough for `MAX` comments: a `PlcfandTxt` has
+/// one CP more than there are comments (the guard's), plus its limit. When the table is cut, the
+/// last CP returned is a real one, not the limit. Callers drop it as the limit, which costs
+/// nothing because they use at most `MAX` elements.
 fn plc(table: &[u8], (fc, lcb): (u32, u32), size: usize) -> Option<(Vec<u32>, &[u8])> {
     if lcb == 0 {
         return None;
     }
     let b = table.get(fc as usize..(fc as usize).checked_add(lcb as usize)?)?;
-    // 4·(n + 1) bytes of CPs, then n data elements. A `PlcfandTxt` has one CP more than there
-    // are comments (the guard's), so it may hold one element more than `MAX`.
+    // 4·(n + 1) bytes of CPs, then n data elements.
     let n = b.len().checked_sub(4)? / (4 + size);
-    if n == 0 || n > MAX + 1 {
+    if n == 0 {
         return None;
     }
     let (cps, data) = b.split_at_checked((n + 1) * 4)?;
-    Some((cps.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect(), data))
+    Some((cps.as_chunks::<4>().0.iter().take(MAX + 2).map(|c| u32::from_le_bytes(*c)).collect(), data))
 }
 
 /// UTF-16LE text, unpaired surrogates replaced.
