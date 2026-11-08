@@ -491,7 +491,8 @@ pub(crate) fn effects_in(effects: wordcraft_doc::effects::ShapeEffects, spin: Sp
 pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, (obj_h, obj_d): (f32, f32), line: f32) -> Rect {
     let frame = obj.and_then(InlineObject::frame);
     let [l, t, r, b] = frame.map_or([0.0; 4], |(_, _, float)| float.effect_extent());
-    let room = Rect::new(cx + l, base - obj_h + t, (adv - l - r).max(0.0), (obj_h + obj_d - t - b).max(0.0));
+    // Lowered further than its height, it is drawn with its top on the baseline (Word).
+    let room = Rect::new(cx + l, base - obj_h.max(0.0) + t, (adv - l - r).max(0.0), (obj_h + obj_d - t - b).max(0.0));
     // A horizontal rule is as wide as its share of the paragraph's width, whatever narrows its
     // line, and is placed by its alignment in what the line has left: it runs past the margin
     // beside a float or a first-line indent, as in Word (see `ParaLayout::rule_room`).
