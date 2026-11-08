@@ -323,11 +323,13 @@ fn attr(e: &BytesStart<'_>, name: &[u8]) -> Option<String> {
     })
 }
 
-/// `s` + `t`, keeping `s` at most [`MAX_CELL_CHARS`] characters.
-fn push_capped(s: &mut String, t: &str) {
-    let have = s.chars().count();
-    if have < MAX_CELL_CHARS {
-        s.extend(t.chars().take(MAX_CELL_CHARS - have));
+/// `s` + `t`, keeping `s` at most [`MAX_CELL_CHARS`] characters. `have` is `s`'s character
+/// count, kept up to date here: counting `s` again for every piece of text made a full cell
+/// cost its length per further text event.
+fn push_capped(s: &mut String, have: &mut usize, t: &str) {
+    for c in t.chars().take(MAX_CELL_CHARS.saturating_sub(*have)) {
+        s.push(c);
+        *have += 1;
     }
 }
 
@@ -463,6 +465,22 @@ mod tests {
             ("xl/worksheets/sheet1.xml", sheet1),
             ("xl/worksheets/sheet2.xml", sheet2),
         ])
+    }
+
+    #[test]
+    fn a_full_cell_takes_further_text_without_recounting() {
+        let (mut s, mut n) = (String::new(), 0usize);
+        push_capped(&mut s, &mut n, "é");
+        push_capped(&mut s, &mut n, &"x".repeat(MAX_CELL_CHARS));
+        assert_eq!((s.chars().count(), n), (MAX_CELL_CHARS, MAX_CELL_CHARS));
+        // A million more text events on the full cell each cost nothing (they used to count it).
+        let t = std::time::Instant::now();
+        for _ in 0..1_000_000 {
+            push_capped(&mut s, &mut n, "y");
+        }
+        assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+        assert_eq!(s.chars().count(), MAX_CELL_CHARS);
+        assert!(!s.contains('y'));
     }
 
     /// #1287: one long shared string in thousands of cells stays under the text budget.

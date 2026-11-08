@@ -438,13 +438,23 @@ pub(crate) fn place_late(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, oi:
 /// the one holding its anchor, or for anchors on a line after a page or column break that holds
 /// nothing taking room ([`para::takes_room`]: only anchors and markers such as bookmarks), the
 /// break's: Word keeps them on the page before (a cover page's title box, #1632). With text after
-/// them they are on the new page with it (#4262).
+/// them they are on the new page with it (#4262). The text may be in the same row's
+/// continuation on the far side of a wrapping object, not in the anchor's segment (Leaf #107).
 pub(crate) fn anchor_lines(p: &Paragraph, pl: &ParaLayout) -> Vec<Option<usize>> {
     let mut out = vec![None; p.objects.len()];
     for (li, l) in pl.lines.iter().enumerate() {
         let clusters = pl.clusters.get(l.c0..l.c1).unwrap_or_default();
-        let lead = li.checked_sub(1).and_then(|k| pl.lines.get(k)).is_some_and(|l| matches!(l.end, LineEnd::PageBreak | LineEnd::ColumnBreak))
-            && !clusters.iter().any(para::takes_room);
+        let after_break = li.checked_sub(1).and_then(|k| pl.lines.get(k)).is_some_and(|l| matches!(l.end, LineEnd::PageBreak | LineEnd::ColumnBreak));
+        // A wrap can leave only the zero-width anchor in the row's left segment, with its
+        // text on the right. That is still visible content after the break, not a cover box.
+        let lead = after_break
+            && !clusters.iter().any(para::takes_room)
+            && !pl
+                .lines
+                .iter()
+                .skip(li + 1)
+                .take_while(|next| next.beside)
+                .any(|next| pl.clusters.get(next.c0..next.c1).unwrap_or_default().iter().any(para::takes_room));
         for c in clusters {
             let para::ClKind::Object(oi) = c.kind else { continue };
             if let Some(slot) = out.get_mut(oi).filter(|s| s.is_none()) {
