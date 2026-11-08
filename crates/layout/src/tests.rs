@@ -20,6 +20,7 @@ mod pages;
 mod styleref;
 mod table_contact;
 mod textbox;
+mod tracked_effects;
 mod vertical;
 
 const WRAP_TEST_FONT: &str = "Source Sans 3";

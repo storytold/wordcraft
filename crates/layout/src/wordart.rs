@@ -131,10 +131,12 @@ pub fn art_layers(path: &BezPath, fx: &TextEffects, color: Rgb, alpha: f32) -> V
 /// The effects a run is drawn with: its WordArt effects on top of the legacy font effects
 /// (`w:outline`, `w:shadow`, `w:emboss`, `w:imprint`, ECMA-376 §17.3.2), as Word's PDFs draw
 /// them: hollow letters outlined in `color`; a sharp grey copy behind, down-right (shadow,
-/// emboss) or up-left (imprint). `None`: plain text.
-pub fn run_effects(rc: &ResolvedChar, color: Rgb) -> Option<TextEffects> {
+/// emboss) or up-left (imprint). `None`: plain text. Without `wordart` (tracked text shown in
+/// revision colours) only the legacy effects apply.
+pub fn run_effects(rc: &ResolvedChar, color: Rgb, wordart: bool) -> Option<TextEffects> {
+    let w14 = rc.text_effects.as_deref().filter(|_| wordart);
     if !(rc.outline || rc.shadow || rc.emboss || rc.engrave) {
-        return rc.text_effects.as_deref().cloned();
+        return w14.cloned();
     }
     let mut fx = TextEffects::default();
     if rc.outline {
@@ -146,7 +148,7 @@ pub fn run_effects(rc: &ResolvedChar, color: Rgb) -> Option<TextEffects> {
         let angle = if rc.engrave { 225.0 } else { 45.0 };
         fx.shadow = Some(Shadow { color: Rgb(128, 128, 128), transparency: 0.0, blur: 0.0, distance, angle, rot_with_shape: false });
     }
-    if let Some(w) = &rc.text_effects {
+    if let Some(w) = w14 {
         fx.overlay(w);
     }
     Some(fx)
@@ -366,12 +368,12 @@ mod tests {
         use wordcraft_doc::CharProps;
         let rc = |c: CharProps| wordcraft_doc::styles::StyleSheet::default().resolve_char(None, &CharProps { size: Some(20.0), ..c });
         let red = Rgb(200, 0, 0);
-        assert_eq!(run_effects(&rc(CharProps::default()), red), None);
-        let o = run_effects(&rc(CharProps { outline: Some(true), ..Default::default() }), red).unwrap();
+        assert_eq!(run_effects(&rc(CharProps::default()), red, true), None);
+        let o = run_effects(&rc(CharProps { outline: Some(true), ..Default::default() }), red, true).unwrap();
         assert_eq!(o.fill, Some(TextFill::None));
         assert_eq!(o.outline.and_then(|l| l.color), Some(red));
         assert!(o.shadow.is_none());
-        let off = |c: CharProps| run_effects(&rc(c), red).and_then(|f| f.shadow).map(|s| s.offset()).unwrap();
+        let off = |c: CharProps| run_effects(&rc(c), red, true).and_then(|f| f.shadow).map(|s| s.offset()).unwrap();
         let (sx, sy) = off(CharProps { shadow: Some(true), ..Default::default() });
         assert!(sx > 0.5 && sy > 0.5, "down-right {sx} {sy}");
         assert_eq!(off(CharProps { emboss: Some(true), ..Default::default() }), (sx, sy));
@@ -380,8 +382,15 @@ mod tests {
         // WordArt effects win over the legacy ones.
         let fill = TextFill::Solid { color: red, transparency: 0.0 };
         let fx = TextEffects { fill: Some(fill.clone()), ..Default::default() };
-        let both = run_effects(&rc(CharProps { outline: Some(true), text_effects: Some(Box::new(fx)), ..Default::default() }), red).unwrap();
-        assert_eq!(both.fill, Some(fill));
+        let both = run_effects(&rc(CharProps { outline: Some(true), text_effects: Some(Box::new(fx)), ..Default::default() }), red, true).unwrap();
+        assert_eq!(both.fill, Some(fill.clone()));
+        // Tracked text in revision colours drops the WordArt effects but keeps the legacy ones.
+        let wa = TextEffects { fill: Some(fill.clone()), ..Default::default() };
+        let tracked =
+            run_effects(&rc(CharProps { outline: Some(true), text_effects: Some(Box::new(wa.clone())), ..Default::default() }), red, false).unwrap();
+        assert_eq!(tracked.fill, Some(TextFill::None));
+        assert_eq!(tracked.outline.and_then(|l| l.color), Some(red));
+        assert_eq!(run_effects(&rc(CharProps { text_effects: Some(Box::new(wa)), ..Default::default() }), red, false), None);
         // Every layer is a plain fill or stroke of the letters.
         let mut p = BezPath::new();
         p.move_to((0.0, 0.0));
