@@ -403,7 +403,7 @@ fn preferred_grid(t: &Table, avail: f32) -> Vec<f32> {
     grid
 }
 
-fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option<&TableStyleProps>) -> TableFrame {
+fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, in_cell: bool, style: Option<&TableStyleProps>) -> TableFrame {
     let ncols = grid_cols(t).max(1);
     let mut grid = preferred_grid(t, avail);
     let mut total: f32 = grid.iter().sum();
@@ -414,8 +414,9 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     // Before Word 2013 (compatibility mode 14 and earlier) a table's edges stand outside the text
     // by its outer cells' margins, and a percentage is a share of the text width with those
     // margins added: 100% with 3.75pt margins is the text width plus 7.5pt (measured in Word for
-    // Windows). From mode 15 it is a share of the text width alone.
-    let pct_base = if ctx.doc.settings.compat_mode >= 15 {
+    // Windows). From mode 15 it is a share of the text width alone, as it is in a cell in every
+    // mode, where the table's edges don't stand out.
+    let pct_base = if ctx.doc.settings.compat_mode >= 15 || in_cell {
         pct_base
     } else {
         pct_base + (first_cell_left_margin_in(t, margins_def) + last_cell_right_margin_in(t, margins_def)).max(0.0)
@@ -498,12 +499,12 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     TableFrame { ncols, colx, acc, total, margins_def, tborders, rtl, x }
 }
 
-pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], avail: f32, depth: usize) -> TableLayout {
+pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], avail: f32, depth: usize, in_cell: bool) -> TableLayout {
     let style = table_style(ctx, t);
     // Cell text formatting and looks per set of style parts, built once per table.
     let mut cell_text: Vec<(Region, CellText)> = Vec::new();
     let mut looks: Vec<(Region, RegionLook)> = Vec::new();
-    let TableFrame { ncols, colx, acc, total, margins_def, tborders, rtl, x } = table_frame(ctx, t, avail, depth, style.as_ref());
+    let TableFrame { ncols, colx, acc, total, margins_def, tborders, rtl, x } = table_frame(ctx, t, avail, depth, in_cell, style.as_ref());
     let nrows = t.rows.len();
     // First pass: lay out every cell's content.
 

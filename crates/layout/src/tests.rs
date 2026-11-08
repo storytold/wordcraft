@@ -8544,6 +8544,29 @@ fn a_percentage_table_before_word_2013_adds_its_outer_cell_margins() {
     close(g, (tw + 30.0) / 2.0 - 15.0 + 3.75, "mode 14, 15pt outer cell margins");
     let (g, tw) = gap(15, (3.75, 3.75), Some(15.0));
     close(g, tw / 2.0 - 15.0 + 3.75, "mode 15");
+    // A table in a cell: a share of the cell's room alone in every mode, measured in Word on a 100%
+    // table of two columns in a 200pt cell with 3.75pt margins.
+    for mode in [14, 15] {
+        let mut inner = Table::new(1, 2, 96.0);
+        inner.props.width_pct = Some(100.0);
+        inner.props.cell_margins = Some([0.0, 3.75, 0.0, 3.75]);
+        for c in &mut inner.rows[0].cells {
+            c.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("x", Default::default()))];
+        }
+        let mut outer = Table::new(1, 2, 400.0);
+        outer.props.width = Some(400.0);
+        outer.props.fixed = true;
+        outer.props.cell_margins = Some([0.0, 3.75, 0.0, 3.75]);
+        outer.rows[0].cells[0].blocks =
+            vec![Arc::new(wordcraft_doc::Block::Table(inner)), wordcraft_doc::para_block(wordcraft_doc::Paragraph::new())];
+        let mut d = Document::from_text("After");
+        d.settings.compat_mode = mode;
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(outer)).unwrap();
+        let l = lay(&d);
+        let [(x0, _, _)] = para_at(&l, &[0, 0, 0, 0, 0, 0, 0])[..] else { panic!("the nested first cell is missing") };
+        let [(x1, _, _)] = para_at(&l, &[0, 0, 0, 0, 0, 1, 0])[..] else { panic!("the nested second cell is missing") };
+        close(x1 - x0, 192.5 / 2.0, &format!("in a cell, mode {mode}"));
+    }
 }
 
 #[test]
