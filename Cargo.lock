@@ -6832,6 +6832,7 @@ dependencies = [
  "windows",
  "winit",
  "winresource",
+ "winsafe",
  "wl-clipboard-rs",
  "wordcraft-control-key",
  "wordcraft-doc",
