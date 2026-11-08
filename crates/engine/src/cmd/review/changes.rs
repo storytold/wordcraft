@@ -179,6 +179,7 @@ fn resolve_loose_blocks(blocks: &mut wordcraft_doc::Blocks, accept: bool) -> Res
     Ok(())
 }
 
+/// Accept or reject every tracked revision across stories, containers, styles, and separators.
 fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
     let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect();
     for st in stories {
@@ -193,6 +194,7 @@ fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
         fmt_revisions::resolve_containers(&mut part.blocks, accept, 0);
     }
     fmt_revisions::resolve_section(&mut s.doc.last_section, accept);
+    fmt_revisions::resolve_styles(std::sync::Arc::make_mut(&mut s.doc.styles), accept);
     // The note separators are block lists of their own, not stories; they must not keep ids of
     // revisions that are about to be dropped.
     for sep in [&mut s.doc.footnote_separators, &mut s.doc.endnote_separators] {

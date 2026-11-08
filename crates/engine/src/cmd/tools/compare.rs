@@ -36,6 +36,7 @@ const MAX_CHAR_DIFF: usize = 2000;
 /// with `author`. Options Word offers that the comparison can't honour yet (moves, comments,
 /// headers and footers, footnotes, text boxes, fields) are accepted and listed in the result.
 pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
+    let is_text = p::str(v, "text").is_some();
     let revised = if let Some(t) = p::str(v, "text") {
         Document::from_text(t)
     } else if let Some(path) = p::str(v, "path") {
@@ -154,6 +155,66 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     s.doc.ensure_nonempty();
     s.note_body_replaced();
     s.math = None;
+    // Synchronize style definitions between original and revised documents when comparing files:
+    // When the revised input comes from plain `text`, revised style definitions are omitted to keep
+    // the original document's customized styles intact.
+    // - Unpartnered original styles: Existing styles in `s.doc` without a match in `revised`
+    //   are preserved untouched in `result_styles`.
+    // - Formatting tracked changes (`opts.formatting == true`): For matching styles, pre-existing
+    //   `fmt_change` revisions on the revised style are cleared before calling `compare_style` so
+    //   that only the formatting delta between original and revised definitions is tracked.
+    //   If numbering references changed or are missing in `s.doc`, `remap_style_numbering` imports
+    //   and remaps them to prevent dangling IDs or collision. Styles appearing only in `revised`
+    //   are imported with pre-existing tracked changes stripped and numbering remapped.
+    // - Formatting ignored (`opts.formatting == false`): Original style definitions remain
+    //   untouched (no formatting changes are tracked), and only brand-new styles from `revised`
+    //   are appended to `result_styles` with remapped numbering.
+    if !is_text {
+        let mut num_map = std::collections::BTreeMap::new();
+        let mut abs_map = std::collections::BTreeMap::new();
+        if opts.formatting {
+            let mut result_styles = (*s.doc.styles).clone();
+            for new_st in &revised.styles.styles {
+                if let Some(target) = result_styles.styles.iter_mut().find(|st| st.id == new_st.id) {
+                    let old_st = target.clone();
+                    let mut updated = new_st.clone();
+                    updated.para.fmt_change = None;
+                    updated.chr.fmt_change = None;
+                    let needs_remapping =
+                        updated.para.numbering.is_some_and(|n| n.num != 0 && (old_st.para.numbering != Some(n) || s.doc.numbering.num(n.num).is_none()));
+                    if needs_remapping {
+                        remap_style_numbering(&mut s.doc, &revised, &mut updated.para.numbering, &mut num_map, &mut abs_map);
+                    }
+                    let fmt_differs = (updated.kind != wordcraft_doc::StyleKind::Character && old_st.para.formatting() != updated.para.formatting())
+                        || (updated.kind != wordcraft_doc::StyleKind::Numbering && old_st.chr.formatting() != updated.chr.formatting());
+                    let _ = crate::cmd::fmt_revisions::compare_style(&old_st, &mut updated, &mut s.doc.revisions, &author, &date);
+                    if fmt_differs {
+                        changes += 1;
+                    }
+                    *target = updated;
+                } else {
+                    let mut added = new_st.clone();
+                    added.para.fmt_change = None;
+                    added.chr.fmt_change = None;
+                    remap_style_numbering(&mut s.doc, &revised, &mut added.para.numbering, &mut num_map, &mut abs_map);
+                    result_styles.styles.push(added);
+                }
+            }
+            s.doc.styles = Arc::new(result_styles);
+        } else {
+            let mut result_styles = (*s.doc.styles).clone();
+            for new_st in &revised.styles.styles {
+                if !result_styles.styles.iter().any(|st| st.id == new_st.id) {
+                    let mut added = new_st.clone();
+                    added.para.fmt_change = None;
+                    added.chr.fmt_change = None;
+                    remap_style_numbering(&mut s.doc, &revised, &mut added.para.numbering, &mut num_map, &mut abs_map);
+                    result_styles.styles.push(added);
+                }
+            }
+            s.doc.styles = Arc::new(result_styles);
+        }
+    }
     if show_in != "original" || p::str(v, "original").is_some() {
         // The result is a new, untitled document: saving it never overwrites either file.
         s.path = None;
@@ -164,6 +225,48 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     }
     s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
     Ok(json!({"changes": changes, "author": author, "notHonoured": not_honoured}))
+}
+
+/// Import any numbering definition referenced by `num_ref` from `revised` into `doc` and remap
+/// `num_ref` to the imported definition's ID, avoiding references to missing IDs or collisions.
+fn remap_style_numbering(
+    doc: &mut Document,
+    revised: &Document,
+    num_ref: &mut Option<wordcraft_doc::props::NumRef>,
+    num_map: &mut std::collections::BTreeMap<u32, u32>,
+    abs_map: &mut std::collections::BTreeMap<u32, u32>,
+) {
+    let Some(nr) = num_ref.as_mut() else { return };
+    if nr.num == 0 {
+        return;
+    }
+    if let Some(&mapped) = num_map.get(&nr.num) {
+        nr.num = mapped;
+        return;
+    }
+    let Some(src_num) = revised.numbering.num(nr.num) else { return };
+    let target_numbering = Arc::make_mut(&mut doc.numbering);
+    let aid = if let Some(src_abs) = revised.numbering.abstract_of(nr.num) {
+        if let Some(&mapped_aid) = abs_map.get(&src_abs.id) {
+            mapped_aid
+        } else {
+            let new_aid = target_numbering.abstracts.iter().map(|a| a.id.saturating_add(1)).max().unwrap_or(0);
+            let mut new_abs = src_abs.clone();
+            new_abs.id = new_aid;
+            target_numbering.abstracts.push(new_abs);
+            abs_map.insert(src_abs.id, new_aid);
+            new_aid
+        }
+    } else {
+        src_num.abstract_id
+    };
+    let new_nid = target_numbering.nums.iter().map(|n| n.id.saturating_add(1)).max().unwrap_or(1).max(1);
+    let mut new_n = src_num.clone();
+    new_n.id = new_nid;
+    new_n.abstract_id = aid;
+    target_numbering.nums.push(new_n);
+    num_map.insert(nr.num, new_nid);
+    nr.num = new_nid;
 }
 
 /// A block's text (a table's cells in order), for matching blocks.
