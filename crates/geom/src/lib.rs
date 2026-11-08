@@ -48,14 +48,6 @@ pub fn half_points(v: i64) -> f32 {
 pub fn to_half_points(pt: f32) -> i64 {
     (finite(pt) * 2.0).round() as i64
 }
-/// Eighths of a point (OOXML border widths) → points.
-pub fn eighth_points(v: i64) -> f32 {
-    v as f32 / 8.0
-}
-/// Points → eighths of a point (rounded).
-pub fn to_eighth_points(pt: f32) -> i64 {
-    (finite(pt) as f64 * 8.0).round() as i64
-}
 
 /// Replace NaN/inf with 0 so casts and arithmetic stay defined.
 pub fn finite(v: f32) -> f32 {
@@ -440,10 +432,6 @@ mod tests {
         assert_eq!(to_emu(72.0), 914_400);
         assert_eq!(half_points(24), 12.0);
         assert_eq!(to_half_points(10.5), 21);
-        assert_eq!(eighth_points(8), 1.0);
-        assert_eq!(eighth_points(12), 1.5);
-        assert_eq!(to_eighth_points(0.5), 4);
-        assert_eq!(to_eighth_points(f32::NAN), 0);
         assert_eq!(to_twips(f32::NAN), 0);
     }
 
@@ -572,7 +560,14 @@ mod tests {
         let ok = Rect::from(RectRaw { x: 1.0, y: 2.0, w: 3.0, h: 4.0 });
         assert_eq!(ok, Rect::new(1.0, 2.0, 3.0, 4.0));
     }
-
+    #[test]
+    fn rects_are_cleaned_when_deserialized() {
+        use serde::de::value::{Error, MapDeserializer};
+        let fields = [("x", f32::NAN), ("y", 1.0), ("w", -5.0), ("h", 2.0)];
+        let parsed: Result<Rect, Error> = Rect::deserialize(MapDeserializer::new(fields.into_iter()));
+        assert!(parsed.is_ok());
+        assert_eq!(parsed.unwrap_or_default(), Rect::new(0.0, 1.0, 0.0, 2.0));
+    }
     #[test]
     fn spin_apply_and_unapply_are_inverse() {
         for spin in [
