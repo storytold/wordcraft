@@ -1067,6 +1067,15 @@ fn commands_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     if !r.has_focus() {
         r.request_focus();
     }
+    let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+    search_results(app, ui, query, enter, 380.0) || ui.input(|i| i.key_pressed(egui::Key::Escape))
+}
+
+/// Search's results under its box (the Search Commands dialog, or the title bar's drop-down,
+/// #5398): suggestions for an empty box, else the matching commands and "Find … in the
+/// document". A click, or `enter` (the first command, else the find), does it: `true` when one
+/// was done, so the search closes.
+pub(crate) fn search_results(app: &mut WordApp, ui: &mut Ui, query: &str, enter: bool, width: f32) -> bool {
     let reg = app.session.registry.clone();
     // An empty box suggests a few common commands, as Word's Search does.
     let mut hits: Vec<&wordcraft_engine::CommandSpec> = if query.trim().is_empty() {
@@ -1076,12 +1085,11 @@ fn commands_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         reg.all().iter().filter(|c| !NOT_IN_SEARCH.contains(&c.id) && command_matches(c, query)).collect()
     };
     hits.truncate(14);
-    let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
     let mut run: Option<&str> = enter.then(|| hits.first().map(|c| c.id)).flatten();
     for c in &hits {
         let sc = crate::widgets::shortcut_text(app, c.id);
         let label = format!("{}   —   {}", tl!(c.label), crate::i18n::location(c.location));
-        if ui.add(egui::Button::new(label).shortcut_text(sc).min_size(vec2(380.0, 0.0))).clicked() {
+        if ui.add(egui::Button::new(label).shortcut_text(sc).min_size(vec2(width, 0.0))).clicked() {
             run = Some(c.id);
         }
     }
@@ -1091,14 +1099,21 @@ fn commands_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     if !text.is_empty() {
         ui.separator();
         let label = crate::i18n::fmt(tl!("Find “{text}” in the document"), &[("text", &text)]);
-        find = ui.add(egui::Button::new(label).min_size(vec2(380.0, 0.0))).clicked() || (enter && hits.is_empty());
+        find = ui.add(egui::Button::new(label).min_size(vec2(width, 0.0))).clicked() || (enter && hits.is_empty());
     }
     if let Some(id) = run {
-        let _ = app.run(id, json!({}));
+        if id == "view.paperColor" {
+            // Command Search is an interactive UI entry point: open the selector instead of
+            // sending the engine command an empty value. Programmatic callers still get the
+            // command's normal parameter validation.
+            let _ = app.run("file.options", json!({"pane": "general"}));
+        } else {
+            let _ = app.run(id, json!({}));
+        }
     } else if find {
         find_in_navigation_pane(app, ui.ctx(), &text);
     }
-    run.is_some() || find || ui.input(|i| i.key_pressed(egui::Key::Escape))
+    run.is_some() || find
 }
 
 fn paste_special_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
@@ -1282,7 +1297,7 @@ fn insert_merge_field_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> 
 }
 
 fn password_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
-    let Dialog::Password { name, params, password, message } = d else {
+    let Dialog::Password { name, then, params, password, message } = d else {
         return false;
     };
     ui.label(crate::i18n::fmt(tl!("{name} is protected with a password."), &[("name", name)]));
@@ -1303,8 +1318,9 @@ fn password_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         if let Some(o) = p.as_object_mut() {
             o.insert("password".into(), json!(password.as_str()));
         }
-        // `execute`, not `run`: Save Changes was asked when the open began.
-        match app.execute("file.open", p) {
+        // `execute`, not `run`: Save Changes was asked when the open began. The command that
+        // asked runs again, so a protected template still starts a new document (#3433).
+        match app.execute(then, p) {
             Ok(_) => {
                 app.ui.backstage = false;
                 return true;
