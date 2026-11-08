@@ -46,6 +46,8 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
         interrupted_preedit: std::mem::take(&mut app.canvas.ime_interrupted_preedit),
         interrupted_replacement: EquationReplacementDrop::None,
     };
+    let now = ctx.input(|i| i.time);
+    expire_paste_wait(app, now);
     let held = ctx.input(|i| i.modifiers);
     if held.command {
         app.canvas.paste_mods = Some(held);
@@ -69,6 +71,24 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
             continue;
         }
         handle_event(app, ctx, e);
+    }
+    if app.canvas.ignore_next_paste && app.canvas.paste_wait_since.is_none() {
+        app.canvas.paste_wait_since = Some(now);
+    }
+}
+
+/// How long the paste event paired with Mod+Shift+V is waited for. A browser sends it with the
+/// key, in the same frame; with no text on the clipboard it sends none at all.
+const PASTE_WAIT: f64 = 1.0;
+
+/// Ends a wait for the paired paste event that never came, so a later paste (a browser menu's,
+/// say) isn't dropped (#5616).
+fn expire_paste_wait(app: &mut WordApp, now: f64) {
+    if !app.canvas.ignore_next_paste {
+        app.canvas.paste_wait_since = None;
+    } else if app.canvas.paste_wait_since.is_some_and(|t| now - t > PASTE_WAIT) {
+        app.canvas.ignore_next_paste = false;
+        app.canvas.paste_wait_since = None;
     }
 }
 
@@ -192,8 +212,8 @@ fn note_key_state(app: &mut WordApp, e: &egui::Event) {
 
 /// The browser's paste event that follows a Mod+Shift+V that pasted formatting is the same
 /// keystroke: ignored before an equation or a picture-file paste can take it (#5616).
-/// With no text on the clipboard eframe sends no paste event, so the flag waits for the next key,
-/// pointer press or focus change; a menu-bar paste before any of those is dropped.
+/// With no text on the clipboard eframe sends no paste event, so the wait ends at the next key,
+/// pointer press or focus change, or after `PASTE_WAIT`.
 fn ignored_paste(app: &mut WordApp, e: &egui::Event) -> bool {
     if matches!(e, egui::Event::Paste(_)) && std::mem::take(&mut app.canvas.ignore_next_paste) {
         // Not a Mod+V with no text either: the release mustn't paste a picture.
