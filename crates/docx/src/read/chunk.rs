@@ -93,15 +93,22 @@ impl Reader<'_> {
             log::warn!("docx: alternative format chunks nest deeper than {MAX_CHUNK_NESTING}; the inner ones are left out");
             return None;
         }
-        let pkg =
-            Package::open_limited(bytes, MAX_PART, self.chunks.bytes).map_err(|e| log::warn!("docx: unreadable nested document chunk: {e}")).ok()?;
+        // The nested document shares the file's element budget: open_limited_within, not a
+        // fresh cap — nesting goes deep, so 5 packages each getting 16M is the OOM class the
+        // budget exists for. The container's own parse spent part of the chain, so the cap is
+        // the lesser of the chain and what the container has left.
+        let elements = self.chunks.elements.min(self.pkg.elements_left());
+        let pkg = Package::open_limited_within(bytes, MAX_PART, self.chunks.bytes, elements)
+            .map_err(|e| log::warn!("docx: unreadable nested document chunk: {e}"))
+            .ok()?;
         self.chunks.bytes = self.chunks.bytes.saturating_sub(pkg.size());
         let state = ChunkState { nesting: self.chunks.nesting + 1, depth: depth + 1, ..self.chunks };
-        let (doc, left, bytes, graphic) =
+        let (doc, left, bytes, graphic, elements) =
             super::read_opened_in(&pkg, state).map_err(|e| log::warn!("docx: unreadable nested document chunk: {e}")).ok()?;
         self.chunks.left = left;
         self.chunks.bytes = bytes;
         self.chunks.graphic = graphic;
+        self.chunks.elements = elements;
         Some(doc)
     }
 }
@@ -116,6 +123,9 @@ pub(crate) struct ChunkState<'a> {
     /// Graphic work left in the file's budget ([`super::MAX_GRAPHIC_WORK`]): nested documents'
     /// charts and diagrams count against it too.
     pub graphic: usize,
+    /// XML elements left in the file's budget: nested packages share their container's
+    /// ([`crate::xml::MAX_ELEMENTS_TOTAL`]), not one of their own.
+    pub elements: usize,
     /// How deep in nested WordprocessingML chunks this reader is.
     pub nesting: u8,
     /// The XML depth its stories start at (a nested document's: that of the chunk naming it).
@@ -125,7 +135,15 @@ pub(crate) struct ChunkState<'a> {
 
 impl<'a> ChunkState<'a> {
     pub fn new(import: Option<ChunkImporter<'a>>) -> Self {
-        ChunkState { left: MAX_CHUNKS, bytes: MAX_TOTAL, graphic: super::MAX_GRAPHIC_WORK, nesting: 0, depth: 0, import }
+        ChunkState {
+            left: MAX_CHUNKS,
+            bytes: MAX_TOTAL,
+            graphic: super::MAX_GRAPHIC_WORK,
+            elements: crate::xml::MAX_ELEMENTS_TOTAL,
+            nesting: 0,
+            depth: 0,
+            import,
+        }
     }
 }
 
@@ -175,13 +193,43 @@ mod tests {
         let outer = package(r#"<w:altChunk r:id="rIdC"/>"#, ("rIdC", "aFChunk", "afchunk.docx"), ("word/afchunk.docx", &inner));
         let pkg = Package::open(&outer).unwrap();
         let read = |graphic| {
-            let (d, .., left) = super::super::read_opened_in(&pkg, ChunkState { graphic, ..ChunkState::new(None) }).unwrap();
-            (drawn(&d), left)
+            let (d, .., work, _) = super::super::read_opened_in(&pkg, ChunkState { graphic, ..ChunkState::new(None) }).unwrap();
+            (drawn(&d), work)
         };
         let (shown, left) = read(super::super::MAX_GRAPHIC_WORK);
         assert!(shown);
         assert!(left < super::super::MAX_GRAPHIC_WORK, "the nested chart's work is the file's");
         // With the file's budget spent, the nested document doesn't get one of its own.
-        assert_eq!(read(0), (false, 0));
+        assert!(!read(0).0);
+    }
+
+    /// Whether the body holds a paragraph with `s`.
+    fn has(d: &Document, s: &str) -> bool {
+        d.body.iter().any(|b| b.as_para().map(|p| p.text.contains(s)).unwrap_or(false))
+    }
+
+    #[test]
+    fn a_nested_documents_elements_come_out_of_the_files_budget() {
+        // Three levels: the outer's altChunk names the inner, whose altChunk names the
+        // innermost. The chain spends down: the inner's own parse charges the file's budget,
+        // so the innermost opens with what the inner has left, not a fresh cap.
+        let innermost = package(r#"<w:p><w:r><w:t>innermost</w:t></w:r></w:p>"#, ("rIdZ", "chart", "charts/z.xml"), ("word/charts/z.xml", b"<a/>"));
+        let inner = package(
+            r#"<w:p><w:r><w:t>inner</w:t></w:r></w:p><w:altChunk r:id="rIdD"/>"#,
+            ("rIdD", "aFChunk", "afchunk.docx"),
+            ("word/afchunk.docx", &innermost),
+        );
+        let outer = package(r#"<w:altChunk r:id="rIdC"/>"#, ("rIdC", "aFChunk", "afchunk.docx"), ("word/afchunk.docx", &inner));
+        let pkg = Package::open(&outer).unwrap();
+        let read = |elements| {
+            let (d, .., elements) = super::super::read_opened_in(&pkg, ChunkState { elements, ..ChunkState::new(None) }).unwrap();
+            (has(&d, "inner"), has(&d, "innermost"))
+        };
+        // With room, both levels flow in.
+        assert_eq!(read(crate::xml::MAX_ELEMENTS_TOTAL), (true, true));
+        // The inner's own parse (its rels, then its main part) charged the file's budget: the
+        // innermost is left out instead of getting one of its own (before this, each nested
+        // package started with the full 16M).
+        assert_eq!(read(10), (true, false));
     }
 }

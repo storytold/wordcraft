@@ -293,11 +293,16 @@ impl Package {
         self.budget.set(self.budget_cap);
     }
 
+    /// The XML elements left of the package's budget: nested documents open within it.
+    pub(crate) fn elements_left(&self) -> usize {
+        self.budget.get()
+    }
+
     /// Charge `count` elements a parsed part built against the budget.
     fn charge(&self, count: usize) -> Result<(), DocxError> {
         let left = self.budget.get();
         if count > left {
-            return Err(DocxError::Limit(format!("{count} XML elements, {left} left of the package's {} budget", xml::MAX_ELEMENTS_TOTAL)));
+            return Err(DocxError::Limit(format!("{count} XML elements, {left} left of the package's {} budget", self.budget_cap)));
         }
         self.budget.set(left - count);
         Ok(())

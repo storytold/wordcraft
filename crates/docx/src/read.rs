@@ -146,9 +146,9 @@ pub(crate) fn read_opened(pkg: &Package, chunks: Option<ChunkImporter>) -> Resul
     read_opened_in(pkg, ChunkState::new(chunks)).map(|(doc, ..)| doc)
 }
 
-/// [`read_opened`] with what chunks may still bring in; also gives the chunks, chunk bytes and
-/// graphic work left of that.
-fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize, u64, usize), DocxError> {
+/// [`read_opened`] with what chunks may still bring in; also gives the chunks, chunk bytes,
+/// graphic work and XML elements left of that.
+fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize, u64, usize, usize), DocxError> {
     // The budget is per read, so a package read twice (tests, a Flat OPC conversion) starts over.
     pkg.reset_budget();
     let root_rels = pkg.rels("");
@@ -337,10 +337,10 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     if r.shape_ids {
         keep_glued_ids(&mut r.doc, &r.glued);
     }
-    let (left, bytes, graphic) = (r.chunks.left, r.chunks.bytes, r.chunks.graphic);
+    let (left, bytes, graphic, elements) = (r.chunks.left, r.chunks.bytes, r.chunks.graphic, pkg.elements_left());
     let mut doc = r.doc;
     doc.ensure_nonempty();
-    Ok((doc, left, bytes, graphic))
+    Ok((doc, left, bytes, graphic, elements))
 }
 
 /// Most move ranges open at once, and most move names tracked, per file.
