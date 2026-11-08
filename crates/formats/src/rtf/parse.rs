@@ -1,6 +1,7 @@
 use super::reader::Reader;
 use super::state::{Dest, HeaderFooter, HfPages, MAX_PICT, PageGeom};
 use super::{Cell, Document, FBlock, Flow, Para, model};
+use std::sync::Arc;
 
 /// Parse RTF bytes into the flow model.
 pub fn parse(bytes: &[u8]) -> Result<Flow, String> {
@@ -104,20 +105,25 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                         i = end;
                         continue;
                     }
-                    if word == "info" {
-                        r.info_depth = Some(r.depth());
-                    }
                     if r.skip_chars > 0
-                        && matches!(r.st.dest, Dest::Body | Dest::Info(_) | Dest::FldInst | Dest::Bookmark | Dest::FontTbl)
-                        && !matches!(word, "par" | "pard" | "cell" | "row")
+                        && matches!(r.st.dest, Dest::Body | Dest::Info(_) | Dest::FldInst | Dest::Bookmark | Dest::FontTbl | Dest::RevTbl)
                     {
                         r.skip_chars -= 1;
                         first_in_group = false;
                         continue;
                     }
+                    if word == "info" {
+                        r.info_depth = Some(r.depth());
+                    }
                     r.word(word, param, starred, first_in_group);
                     first_in_group = false;
                     starred = false;
+                    continue;
+                }
+                if r.skip_chars > 0 && n != b'\'' {
+                    r.skip_chars -= 1;
+                    i += 2;
+                    first_in_group = false;
                     continue;
                 }
                 match n {
@@ -305,12 +311,12 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     }
     // RTF's paragraph defaults are single spacing and no space around paragraphs; what a file
     // wants beyond that it states on each paragraph.
-    let dp = &mut doc.styles.default_para;
+    let dp = &mut Arc::make_mut(&mut doc.styles).default_para;
     dp.space_before = Some(0.0);
     dp.space_after = Some(0.0);
     dp.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
     if default_font.is_some() {
-        doc.styles.default_chr.font = default_font;
+        Arc::make_mut(&mut doc.styles).default_chr.font = default_font;
     }
     Ok(doc)
 }
