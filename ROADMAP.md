@@ -9,6 +9,8 @@
 > **Recipient CSV update:** 2026-10-27 · Complete quoted header records choose the delimiter (#4249); detection and regressions follow the current mailings module split. Recipient limits and readiness estimates are unchanged.
 >
 > **Headered CSV prefix update:** 2026-10-31 · Unquoted whitespace-only prefix lines are skipped before choosing recipient headers (#4249); quoted whitespace headers, headerless records, the shared CSV reader and recipient limits remain unchanged.
+
+> **Page Setup update:** 2026-11-07 · Page Setup number boxes keep long input inside the field, including accepted margin values after focus leaves (#5650); accepted ranges and readiness estimates are unchanged.
 > **Printing update:** 2026-10-12 · direct desktop printing through craft-print; details below.
 > **Legacy form update:** 2026-10-22 · trivial: numeric XML references decode in field names and labels; readiness estimates unchanged.
 
@@ -464,6 +466,8 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-17 | Non-overlapping body floating tables clear header tables. Original native controls distinguish never-overlap from allowed overlap. |
 | 2026-10-14 | Comment text being typed is no longer lost or misplaced (#1348): an edit or reply the document refuses (for example read-only protection) keeps the typed text in its field and says why on the status line; drafts belong to their document, so after New or Open a comment with the same number shows its own text; Save, Export, Print, Close, New and Open write pending comment text first; if the document refuses it, Save, Export and Print carry on with the stored comments and show why on the status line (a refused draft is dropped when Save is the only change), while Close, New and Open show the Save Changes prompt (Don't Save drops text the document refuses); Escape discards what was typed; in a document protected as read only or for forms the comment fields can't be typed in |
 |---|---|
+| 2026-11-07 | Page Setup also bounds the unfocused margin display after a long numeric paste; the accepted value is retained (#5650). |
+| 2026-11-05 | Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. |
 | 2026-10-29 | Print Markup discovers comment balloon anchors in one forward paragraph-object walk; anchor positions, filtering and the existing cap stay unchanged (#3614) |
 | 2026-10-26 | Spelling & Grammar opens a right-side Proofing task pane observed in Word for Windows: sentence context, directly clickable suggestion cards and ignore/dictionary actions. Current-story traversal and stale-target checks are retained. Right-click keeps its compact menu. |
 | 2026-10-22 | Documents that keep content in another format (`w:altChunk`: a web page, RTF, text or another Word document, as generators and mail-merge tools write them) show it where it stands, as Word does, instead of leaving it out; one such file in the docxide-pdf corpus opened as an empty page and now matches Word's 8 pages. `.mht` web archives open, and web pages open the way Word opens them (style sheets, paragraph margins, Times New Roman, single lines, automatic spacing). Insert › Text from File keeps the inserted file's pictures |
@@ -812,6 +816,8 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | trivial | Page Setup also bounds the unfocused margin display after a long numeric paste; the accepted value is retained (#5650). |
+| 2026-11-05 | trivial | Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. |
 | 2026-11-06 | trivial | Print helpers remove loaded PDF/settings files before driver work, tolerate prior removal and report cleanup errors; a held-driver regression checks the files are already absent (#5710) |
 | 2026-11-06 | trivial | Windows print submissions isolated per helper process; cancelled driver work cannot block a retry (#5710) |
 | 2026-11-06 | trivial | Progress log: print cancellation before sending, including without a document, and the Windows repeated-conversion limitation (#5710) |
