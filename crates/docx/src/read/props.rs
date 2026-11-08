@@ -13,6 +13,7 @@ use wordcraft_doc::section::{
     PageVAlign, SectionProps, SectionStart,
 };
 
+use super::MAX_FONT_NAME;
 use super::drawing_color::adjust_lum;
 use crate::units::{int, line_multiple, measure, on_off, tw, u32_of};
 
@@ -145,6 +146,29 @@ pub(crate) fn resolve_level_only(sheet: &wordcraft_doc::styles::StyleSheet, p: &
     }
 }
 
+/// A `w:rFonts` value as the document keeps it: `None` when it names no family, else its leading
+/// families up to [`MAX_FONT_NAME`] bytes, cut at a `;` so no name is split. A LibreOffice file
+/// names its Latin font as a semicolon-separated fallback list, and a real list names a few
+/// families; a longer value is corrupt or hostile, and every piece of text drawn in it would pay
+/// for its whole length as the list is classified and resolved. Keeping the leading families keeps
+/// the family such a list picks, and the rest of the value is dropped like `w:cs`/`w:eastAsia`
+/// drop an over-long name.
+fn bounded_font_list(v: &str) -> Option<String> {
+    if v.len() <= MAX_FONT_NAME {
+        return (!v.is_empty()).then(|| v.to_string());
+    }
+    let mut end = 0usize;
+    for part in v.split_inclusive(';') {
+        let next = end + part.len();
+        if next > MAX_FONT_NAME {
+            break;
+        }
+        end = next;
+    }
+    let kept = v.get(..end)?.trim_end_matches(';');
+    (!kept.is_empty()).then(|| kept.to_string())
+}
+
 impl PropCtx {
     pub fn style_id(&self, id: &str) -> String {
         self.alias.get(id).cloned().unwrap_or_else(|| id.to_string())
@@ -226,6 +250,8 @@ impl PropCtx {
         shd_fill(e)
     }
 
+    /// The character properties `e` (a `w:rPr`) sets: direct formatting, plus the fonts, size,
+    /// weight and posture of the complex-script and East Asian text beside them.
     pub fn rpr(&self, e: &El) -> CharProps {
         let mut c = CharProps::default();
         for k in e.els() {
@@ -234,7 +260,11 @@ impl PropCtx {
                 "w:rFonts" => {
                     // A theme font supersedes the fixed font beside it (`w:asciiTheme` over
                     // `w:ascii`, `w:hAnsiTheme` over `w:hAnsi`).
-                    let named = |a: &str| k.attr(a).filter(|f| !f.is_empty()).map(str::to_string);
+                    // A LibreOffice file names the Latin font as a semicolon-separated fallback
+                    // list. Names are bounded like `w:cs`/`w:eastAsia` below: a longer one is
+                    // corrupt or hostile, and every piece of text drawn in it would pay for its
+                    // whole length as the list is classified (see `bounded_font_list`).
+                    let named = |a: &str| k.attr(a).and_then(bounded_font_list);
                     let themed = |a: &str| k.attr(a).and_then(|t| self.theme_font(t));
                     // `w:eastAsia` and `w:cs` name fonts for other scripts and stay in `font_ea` /
                     // `font_cs`: `w:hint` only picks between them for ambiguous characters, never for
