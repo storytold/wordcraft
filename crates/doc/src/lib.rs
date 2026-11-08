@@ -2,9 +2,9 @@
 //!
 //! A [`Document`] holds the main story (`body`) and secondary stories (`parts`: headers,
 //! footers, notes, comments, text boxes). A story is a list of [`Block`]s: paragraphs and tables;
-//! table cells hold block lists of their own. Blocks are `Arc`-shared, so cloning a document is
-//! cheap (undo snapshots, handing a frozen copy to the renderer) and edits copy only what they
-//! touch (`Arc::make_mut`).
+//! table cells hold block lists of their own. Blocks, the style sheet and the list definitions
+//! are `Arc`-shared, so cloning a document is cheap (undo snapshots, handing a frozen copy to the
+//! renderer) and edits copy only what they touch (`Arc::make_mut`).
 //!
 //! Positions ([`Pos`]) name a story, a [`Path`] to a paragraph and a byte offset in it. Paths
 //! compare in document order.
@@ -28,6 +28,7 @@ pub mod fill;
 pub mod freeform;
 pub mod graphic;
 pub mod ime_text;
+pub mod kept;
 pub mod legacy_form;
 pub mod line_dash;
 pub mod link;
@@ -39,6 +40,7 @@ pub mod math_linear;
 pub mod math_symbols;
 pub mod numbering;
 pub mod para;
+pub mod picfx;
 pub mod props;
 pub mod resolve;
 pub mod section;
@@ -47,6 +49,7 @@ pub mod styles;
 pub mod symbol_fonts;
 pub mod table;
 pub mod wordart;
+pub mod work;
 pub mod wrap;
 pub mod zip_guard;
 
@@ -84,11 +87,11 @@ pub use error::{DocError, Result};
 pub use parts::{MAX_LINKED_BOXES, MAX_TEXT_BOX_INSET, NoteSeparators, Part, PartKind, PermRange, TEXT_BOX_INSET, TextBody, free_id};
 pub use position::{Path, Pos, StoryRef};
 pub use settings::{
-    COMPAT_MODE_CURRENT, CoreProps, CustomProp, DEFAULT_GRID, DEFAULT_HYPHENATION_ZONE, LEGACY_COMPAT_MODE, PagePicture, Settings, Source,
+    COMPAT_MODE_CURRENT, CoreProps, CustomProp, DEFAULT_GRID, DEFAULT_HYPHENATION_ZONE, LEGACY_COMPAT_MODE, OdfLayout, PagePicture, Settings, Source,
     THEME_COLORS, Watermark, Zoom, ZoomFit,
 };
-pub use text_walk::count_words;
 pub(crate) use text_walk::{PARA_WALK_DEPTH, walk_between};
+pub use text_walk::{count_chars, count_chars_no_spaces, count_words};
 
 /// A document.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -98,8 +101,12 @@ pub struct Document {
     /// Properties of the last section (OOXML's body-level `w:sectPr`).
     pub last_section: SectionProps,
     pub parts: BTreeMap<u32, Part>,
-    pub styles: StyleSheet,
-    pub numbering: Numbering,
+    /// Shared, like the blocks: an undo step copies it only when a command changes it (a full
+    /// copy is kilobytes a style, so typing into a document with hundreds of styles cost megabytes
+    /// a step).
+    pub styles: Arc<StyleSheet>,
+    /// Shared like [`Document::styles`].
+    pub numbering: Arc<Numbering>,
     pub comments: BTreeMap<u32, Comment>,
     pub revisions: Vec<Revision>,
     pub settings: Settings,
@@ -127,6 +134,10 @@ pub struct Document {
     /// by `==`).
     #[serde(skip)]
     media_index: MediaIndex,
+    /// Markup kept from the file it was opened from, for writing back what isn't edited (see
+    /// [`kept`]); never saved, ignored by `==`.
+    #[serde(skip)]
+    pub kept: kept::Kept,
 }
 
 #[cfg(test)]
