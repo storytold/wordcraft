@@ -1821,6 +1821,30 @@ fn lists_get_labels_and_indent() {
 }
 
 #[test]
+fn a_none_format_label_shows_its_text_and_tabs_to_the_indent() {
+    // #4985: Word draws a "none" level's literal text ("RESPONSE:"), and an empty one still tabs
+    // the text to a hanging indent, as a numbered item's. An empty label already at the left indent
+    // takes no tab (Word's Chapter 1 list: Heading 2 starts at the margin, not at 0.5").
+    use wordcraft_doc::section::NumFormat;
+    for (text, indent, hanging, want) in [("RESPONSE:", 72.0, 72.0, 144.0), ("", 72.0, 72.0, 144.0), ("", 0.0, 0.0, 72.0), ("", 50.0, 0.0, 122.0)] {
+        let mut d = Document::from_text("X");
+        let id = std::sync::Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+        for a in &mut std::sync::Arc::make_mut(&mut d.numbering).abstracts {
+            if let Some(l) = a.levels.first_mut() {
+                l.format = NumFormat::None;
+                l.text = text.into();
+                (l.indent, l.hanging) = (indent, hanging);
+            }
+        }
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 1), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
+        let l = lay(&d);
+        assert_eq!(labels(&l), [text]);
+        let x = l.caret(&Pos::body(0, 0)).unwrap().x;
+        assert!((x - want).abs() < 0.5, "{text:?} at {indent}/{hanging}: {x}, not {want}");
+    }
+}
+
+#[test]
 fn break_only_list_has_no_label() {
     use wordcraft_doc::ListKind;
     for kind in [ListKind::Numbered, ListKind::Bullet] {
@@ -10214,6 +10238,20 @@ fn empty_page_section_keeps_line() {
 /// side by side). A section break on a paragraph with text keeps its line, and so does any break
 /// before a section on a new page. The SARP form's fields drifted a line lower at each of its
 /// many continuous breaks.
+/// A continuous section starting mid-page leaves its first paragraph's page break before in
+/// force, measured in Word for Mac: "Cover", an empty mark closing a continuous section, then
+/// "Heading" with page break before puts "Heading" on page 2.
+#[test]
+fn a_page_break_before_after_a_continuous_mark_starts_a_page() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    let mut d = Document::from_text("Cover\n\nHeading");
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().section =
+        Some(Box::new(SectionProps { start: SectionStart::Continuous, ..Default::default() }));
+    d.para_mut(StoryRef::Body, &Path::top(2)).unwrap().props.page_break_before = Some(true);
+    d.last_section.start = SectionStart::Continuous;
+    assert_eq!(lay(&d).caret(&Pos::body(2, 0)).unwrap().page, 1);
+}
+
 #[test]
 fn an_empty_continuous_section_mark_takes_no_room() {
     use wordcraft_doc::section::{SectionProps, SectionStart};
