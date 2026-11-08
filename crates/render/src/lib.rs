@@ -842,10 +842,22 @@ fn draw_image(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
     }
 }
 
+/// Widest path drawn, in device pixels a side: 64 times the largest canvas. The rasteriser
+/// flattens a curve into as many points as its size asks for, before clipping, so a path with
+/// coordinates of 1e15 (file data in a native document) would take it forever or run out of
+/// memory; one this far past every canvas shows nothing a real drawing would.
+const MAX_PATH_PIXELS: f64 = 1_048_576.0;
+
+/// Whether `path` under `view` is small enough to draw ([`MAX_PATH_PIXELS`]) and finite.
+fn path_extent_ok(view: Affine, path: &kurbo::BezPath) -> bool {
+    let b = view.transform_rect_bbox(path.bounding_box());
+    path.is_finite() && [b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite() && v.abs() <= MAX_PATH_PIXELS)
+}
+
 fn draw_path(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
     let Draw::Path { segs, fill, stroke, stroke_width, dash, cap } = it else { return };
     let path = wordcraft_layout::display::seg_path(segs);
-    if path.elements().is_empty() {
+    if path.elements().is_empty() || !path_extent_ok(fr.view, &path) {
         return;
     }
     ctx.set_transform(fr.view);
