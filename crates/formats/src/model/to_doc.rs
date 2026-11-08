@@ -903,6 +903,16 @@ impl<'a> Builder<'a> {
             }
             tb.rows.push(row);
         }
+        let starts: Vec<(usize, usize)> = (0..tb.rows.first().map_or(0, |row| row.cells.len()))
+            .filter(|&ci| tb.rows.first().and_then(|row| row.cells.get(ci)).is_some_and(|c| c.props.vmerge == VMerge::Continue))
+            .map(|ci| (ci, tb.grid_col(0, ci)))
+            .collect();
+        for (ci, g) in starts {
+            let more = tb.cell_at_grid(1, g).and_then(|i| tb.rows.get(1)?.cells.get(i)).is_some_and(|c| c.props.vmerge == VMerge::Continue);
+            if let Some(cell) = tb.rows.first_mut().and_then(|r| r.cells.get_mut(ci)) {
+                cell.props.vmerge = if more { VMerge::Restart } else { VMerge::None };
+            }
+        }
         for r in 1..tb.rows.len() {
             for ci in 0..tb.rows[r].cells.len() {
                 if tb.rows[r].cells[ci].props.vmerge == VMerge::Continue {
@@ -915,6 +925,8 @@ impl<'a> Builder<'a> {
                         if up_cell.props.vmerge == VMerge::None {
                             up_cell.props.vmerge = VMerge::Restart;
                         }
+                    } else {
+                        tb.rows[r].cells[ci].props.vmerge = VMerge::None;
                     }
                 }
             }

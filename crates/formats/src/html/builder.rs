@@ -57,21 +57,16 @@ struct TableB {
 }
 
 impl TableB {
-    /// Commit pending colgroup widths: if childless, push span columns with group width;
-    /// if child cols lacked explicit widths, backfill with group width.
+    /// Commit pending colgroup widths: if childless, push span columns with group width.
+    /// When child `<col>` elements are present, they have already received the group width
+    /// during `<col>` handling; columns from earlier groups are never backfilled.
     fn commit_pending_colgroup(&mut self) {
-        if let Some((span, group_w, has_child_cols)) = self.pending_colgroup.take() {
-            if !has_child_cols {
-                for _ in 0..span {
-                    if self.col_widths.len() < MAX_TABLE_COLS {
-                        self.col_widths.push(group_w);
-                    }
-                }
-            } else if let Some(gw) = group_w {
-                for w in &mut self.col_widths {
-                    if w.is_none() {
-                        *w = Some(gw);
-                    }
+        if let Some((span, group_w, has_child_cols)) = self.pending_colgroup.take()
+            && !has_child_cols
+        {
+            for _ in 0..span {
+                if self.col_widths.len() < MAX_TABLE_COLS {
+                    self.col_widths.push(group_w);
                 }
             }
         }
@@ -844,7 +839,15 @@ impl<'r> Builder<'r> {
         }
     }
 
-    /// Finalize an open HTML element, attaching its generated content to the current container.
+    /// Finalize an open HTML element popped from the stack.
+    ///
+    /// Side effects:
+    /// - Flushes any buffered inline text into the current block container.
+    /// - Sets `pending_page_break` if the element requests page break before or after.
+    /// - For `Cell`: pops the cell container, attaches generated blocks to the cell, and pushes into the active row.
+    /// - For `Tr`: commits any pending `<colgroup>` definitions and pushes the completed row into the active table.
+    /// - For `Table`: commits pending colgroup widths, finalizes table rows with `insert_covered` (bounded to `MAX_ROWS`),
+    ///   resolves explicit column widths from colgroups/cells, and appends the resulting table to the enclosing container.
     fn close(&mut self, e: &El) {
         if e.page_break_after || e.page_break {
             self.pending_page_break = true;
@@ -1004,7 +1007,14 @@ impl<'r> Builder<'r> {
         }
     }
 
-    /// Handle void or special elements such as `br`, `hr`, `col`, `colgroup`, or `img`.
+    /// Process void or special HTML elements (`br`, `hr`, `wbr`, `col`, `colgroup`, `img`).
+    ///
+    /// Side effects:
+    /// - `br` / `wbr`: inserts line break or zero-width break into the active paragraph.
+    /// - `hr`: inserts a thematic horizontal rule block with borders and spacing into the container.
+    /// - `col`: extracts span and explicit CSS width, resolves against active `<colgroup>`, and appends up to `MAX_TABLE_COLS` column widths to the table.
+    /// - `colgroup`: commits any previous pending colgroup and buffers new span and width styles until child cols or closing tag arrive.
+    /// - `img`: parses dimensions, styles, and data/remote sources, creating an image block or inline image run.
     fn start_special(&mut self, name: &str, attrs: &[(String, String)]) -> bool {
         match name {
             "br" => {
@@ -1138,7 +1148,16 @@ impl<'r> Builder<'r> {
         ElementStyle { fmt, align, preserve, page_break, page_break_after }
     }
 
-    /// Begin an HTML element, setting up formatting styles, container blocks, or pushing onto the element stack.
+    /// Begin an HTML element, pushing it onto the element stack.
+    ///
+    /// Side effects:
+    /// - Processes head metadata (`title`, `meta`, `style`) if within `<head>`.
+    /// - Flushes inline runs for non-inline elements and computes cascading CSS properties.
+    /// - For `Table`: pushes a new `TableB` state tracker with border and column width buffers.
+    /// - For `Tr`: commits any pending colgroup widths and initializes a new row buffer.
+    /// - For `Cell`: ensures an active row exists, records colspan, rowspan, background shading, borders,
+    ///   vertical alignment, and Word vertical merge continuation flags, and opens a new block container.
+    /// - For other block elements: creates paragraphs, headings, or list item containers.
     pub(super) fn start(&mut self, name: &str, attrs: &[(String, String)], self_close: bool) {
         if self.start_head_metadata(name, attrs) {
             return;

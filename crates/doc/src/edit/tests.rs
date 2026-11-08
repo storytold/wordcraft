@@ -1211,3 +1211,122 @@ fn copy_range_multi_block_cell_endpoint_trims_siblings() {
     };
     assert_eq!(end_p, "End", "end para trimmed");
 }
+
+/// #5906: Copy range between non-corner cells in a 3x3 table copies only the bounded column slice.
+#[test]
+fn copy_range_non_corner_endpoints_inner_cells() {
+    let mut d = Document::new();
+    let mut t = Table::new(3, 3, 300.0);
+    for r in 0..3 {
+        for c in 0..3 {
+            t.rows[r].cells[c].blocks = vec![para_block(Paragraph::with_text(&format!("R{r}C{c}"), CharProps::default()))];
+        }
+    }
+    d.body = vec![Arc::new(Block::Table(t))];
+    // Start at (0, 1) offset 1 ("0C1"), end at (1, 1) offset 3 ("R1C")
+    let a = Pos { story: StoryRef::Body, path: Path(vec![0, 0, 1, 0]), off: 1 };
+    let b = Pos { story: StoryRef::Body, path: Path(vec![0, 1, 1, 0]), off: 3 };
+    let frag = d.copy_range(&a, &b);
+    let Block::Table(sliced) = &frag.blocks[0] else { panic!("expected Table") };
+    assert_eq!(sliced.rows.len(), 2, "rows 0 and 1 copied");
+    assert_eq!(sliced.cols(), 1, "only column 1 copied, corners excluded");
+    let p0 = sliced.rows[0].cells[0].blocks.first().and_then(|b| match &**b {
+        Block::Para(p) => Some(p.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(p0, Some("0C1"), "cell (0,1) start trimmed");
+    let p1 = sliced.rows[1].cells[0].blocks.first().and_then(|b| match &**b {
+        Block::Para(p) => Some(p.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(p1, Some("R1C"), "cell (1,1) end trimmed");
+}
+
+/// #5906: Copy range from paragraph before table into non-corner cell slices all columns for rows 0..=rb.
+#[test]
+fn copy_range_from_para_before_table_to_non_corner_cell() {
+    let mut d = Document::new();
+    let mut t = Table::new(3, 3, 300.0);
+    for r in 0..3 {
+        for c in 0..3 {
+            t.rows[r].cells[c].blocks = vec![para_block(Paragraph::with_text(&format!("R{r}C{c}"), CharProps::default()))];
+        }
+    }
+    d.body = vec![Arc::new(Block::Para(Paragraph::with_text("LeadingText", CharProps::default()))), Arc::new(Block::Table(t))];
+    let a = Pos { story: StoryRef::Body, path: Path(vec![0]), off: 7 };
+    let b = Pos { story: StoryRef::Body, path: Path(vec![1, 1, 1, 0]), off: 3 };
+    let frag = d.copy_range(&a, &b);
+    assert_eq!(frag.blocks.len(), 2);
+    let Block::Para(p) = &frag.blocks[0] else { panic!("expected Para") };
+    assert_eq!(p.text.as_str(), "Text");
+    let Block::Table(sliced) = &frag.blocks[1] else { panic!("expected Table") };
+    assert_eq!(sliced.rows.len(), 2);
+    assert_eq!(sliced.cols(), 3);
+    assert_eq!(sliced.rows[0].cells.len(), 3, "row 0 retains all 3 cells");
+    assert_eq!(sliced.rows[1].cells.len(), 3, "row 1 retains all 3 cells");
+    let p_mid = sliced.rows[1].cells[1].blocks.first().and_then(|b| match &**b {
+        Block::Para(p) => Some(p.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(p_mid, Some("R1C"), "target cell (1,1) trimmed to offset 3");
+}
+
+/// #5906: Copy range with multi-column spans slices exact grid columns and cell texts.
+#[test]
+fn copy_range_spanned_cells_grid_column_slicing() {
+    let mut d = Document::new();
+    let mut t = Table::new(3, 3, 300.0);
+    // Row 0: Cell 0 (span 1, "A0"), Cell 1 (span 2, "A1_span")
+    t.rows[0].cells = vec![
+        Cell { blocks: vec![para_block(Paragraph::with_text("A0", CharProps::default()))], ..Cell::empty() },
+        Cell {
+            props: crate::props::CellProps { span: 2, ..Default::default() },
+            blocks: vec![para_block(Paragraph::with_text("A1_span", CharProps::default()))],
+            ..Cell::empty()
+        },
+    ];
+    // Row 1: 3 single-span cells
+    t.rows[1].cells = vec![
+        Cell { blocks: vec![para_block(Paragraph::with_text("B0", CharProps::default()))], ..Cell::empty() },
+        Cell { blocks: vec![para_block(Paragraph::with_text("B1", CharProps::default()))], ..Cell::empty() },
+        Cell { blocks: vec![para_block(Paragraph::with_text("B2", CharProps::default()))], ..Cell::empty() },
+    ];
+    // Row 2: 3 single-span cells
+    t.rows[2].cells = vec![
+        Cell { blocks: vec![para_block(Paragraph::with_text("C0", CharProps::default()))], ..Cell::empty() },
+        Cell { blocks: vec![para_block(Paragraph::with_text("C1", CharProps::default()))], ..Cell::empty() },
+        Cell { blocks: vec![para_block(Paragraph::with_text("C2", CharProps::default()))], ..Cell::empty() },
+    ];
+    d.body = vec![Arc::new(Block::Table(t))];
+
+    // Select from cell (0, 1) (the 2-column spanned cell covering grid cols 1..=2) to cell (1, 1) (grid col 1)
+    let a = Pos { story: StoryRef::Body, path: Path(vec![0, 0, 1, 0]), off: 0 };
+    let b = Pos { story: StoryRef::Body, path: Path(vec![0, 1, 1, 0]), off: 2 };
+    let frag = d.copy_range(&a, &b);
+    let Block::Table(sliced) = &frag.blocks[0] else { panic!("expected Table") };
+
+    // Sliced table should cover rows 0..=1 and grid columns 1..=2 (width 2 grid columns)
+    assert_eq!(sliced.rows.len(), 2);
+    assert_eq!(sliced.cols(), 2, "grid columns 1..=2 sliced");
+    // Row 0 has the spanned cell (span 2)
+    assert_eq!(sliced.rows[0].cells.len(), 1);
+    assert_eq!(sliced.rows[0].cells[0].span(), 2);
+    let text_0 = match &*sliced.rows[0].cells[0].blocks[0] {
+        Block::Para(p) => p.text.as_str(),
+        _ => "",
+    };
+    assert_eq!(text_0, "A1_span");
+
+    // Row 1 has cells B1 and B2
+    assert_eq!(sliced.rows[1].cells.len(), 2);
+    let text_1_0 = match &*sliced.rows[1].cells[0].blocks[0] {
+        Block::Para(p) => p.text.as_str(),
+        _ => "",
+    };
+    assert_eq!(text_1_0, "B1");
+    let text_1_1 = match &*sliced.rows[1].cells[1].blocks[0] {
+        Block::Para(p) => p.text.as_str(),
+        _ => "",
+    };
+    assert_eq!(text_1_1, "B2");
+}

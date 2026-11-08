@@ -614,7 +614,16 @@ fn trim_para(para: &Paragraph, from: usize, to: usize, clear_section: bool) -> P
     p
 }
 
-/// The grid column span `(g0, g1)` of cell `(r, c)` in `table`.
+/// Return the inclusive grid column bounds `(g0, g1)` covered by cell `(r, c)` in `table`.
+///
+/// Coordinate systems:
+/// - `r` is a 0-based row index into `table.rows`.
+/// - `c` is a 0-based cell index within `table.rows[r].cells`.
+/// - `g0` and `g1` are 0-based grid column indices into `table.grid`.
+///
+/// If `(r, c)` falls outside the table (e.g. missing row or out-of-range cell), `grid_col`
+/// clamps to the available cells, and `span` falls back to 1 via `map_or(1, Cell::span)`
+/// with saturating arithmetic so bounds never underflow or panic.
 fn cell_grid_span(table: &Table, r: usize, c: usize) -> (usize, usize) {
     let g0 = table.grid_col(r, c);
     let span = table.rows.get(r).and_then(|row| row.cells.get(c)).map_or(1, Cell::span);
@@ -622,7 +631,16 @@ fn cell_grid_span(table: &Table, r: usize, c: usize) -> (usize, usize) {
     (g0, g1)
 }
 
-/// Slicing bounds for a table selection between `(ra, ca)` and `(rb, cb)`.
+/// Calculate row and grid column slicing bounds for a selection between cells `(ra, ca)` and `(rb, cb)`.
+///
+/// Coordinate systems:
+/// - Input coordinates `(ra, ca)` and `(rb, cb)` are `(row_index, cell_index)` in `table`.
+/// - Output `rows` is an inclusive range of row indices `(r_min, r_max)`.
+/// - Output `cols` is an inclusive range of grid column indices `(g_min, g_max)`, computed from
+///   the union of grid column spans of the two endpoint cells via [`cell_grid_span`].
+///
+/// This forms the minimal bounding rectangle covering both endpoints, ensuring merged or
+/// multi-column spanning cells within the selection endpoints are fully enclosed.
 fn table_slice_bounds(table: &Table, ra: usize, ca: usize, rb: usize, cb: usize) -> ((usize, usize), (usize, usize)) {
     let g_a = cell_grid_span(table, ra, ca);
     let g_b = cell_grid_span(table, rb, cb);
@@ -631,8 +649,20 @@ fn table_slice_bounds(table: &Table, ra: usize, ca: usize, rb: usize, cb: usize)
     (rows, cols)
 }
 
-/// Trim a table endpoint paragraph at `path` within `c_depth` in `table` before slicing,
-/// removing unselected sibling blocks before start or after end in the endpoint cell.
+/// Trim a table selection endpoint within `table` before slicing.
+///
+/// Expected path shape:
+/// `path` must identify a block directly inside a table cell at depth `c_depth + 4`:
+/// `[container_prefix..., table_idx, row_idx, cell_idx, block_idx]`.
+/// If `path.0.len() != c_depth + 4`, the path points elsewhere (e.g. an ancestor container
+/// or deeply nested child) and the function returns early without modifying `table`.
+///
+/// Modes and side effects:
+/// - **Start trim** (`end_off == None`): Trims the start paragraph at `b_idx` to `off..len`,
+///   and drains any preceding sibling blocks in `0..b_idx` that lie before the selection start.
+/// - **End trim** (`end_off == Some(end)`): Trims the end paragraph at `b_idx` to `0..end`,
+///   and truncates any trailing sibling blocks after `b_idx` that lie after the selection end.
+/// - Non-paragraph blocks (e.g. nested tables or drawings) are left intact without text trimming.
 fn trim_table_endpoint(table: &mut Table, path: &Path, c_depth: usize, off: usize, end_off: Option<usize>) {
     if path.0.len() != c_depth + 4 {
         return;
@@ -1410,6 +1440,14 @@ impl Document {
         }
 
         // Find the lowest common ancestor container.
+        // Document paths encode container hierarchy in triplets:
+        // - Top-level story block: `[block_idx]` (depth 0).
+        // - Inside a table cell: `[table_idx, row_idx, cell_idx, block_idx]` (depth 3).
+        // - Nested table levels add 3 segments per level: `[..., table, row, cell, block]`.
+        // Rounding down `common_len` to a multiple of 3 aligns to the nearest enclosing container boundary
+        // (`c_depth`). At this depth, `c_depth + 1` is row index, `c_depth + 2` is cell index, and
+        // `c_depth + 3` is block index within the cell. A direct paragraph in a cell therefore has
+        // length `c_depth + 4`.
         let common_len = a.path.0.iter().zip(&b.path.0).take_while(|(x, y)| x == y).count();
         let c_depth = (common_len / 3) * 3;
         let c_path = Path(a.path.0.get(..c_depth + 1).map(<[u32]>::to_vec).unwrap_or_default());
