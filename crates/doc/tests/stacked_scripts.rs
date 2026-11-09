@@ -47,3 +47,34 @@ fn stacked_scripts_on_a_function_name_nest_to_the_right() {
     let subsup = MNode::Script { kind: ScriptKind::SubSup, base: name("log"), sub: a("2"), sup: a("3") };
     assert_eq!(parse_linear("log_2^3 x"), func(vec![subsup]));
 }
+
+/// The whole chain stays within the parsers' depth cap (#1456), also when every operand is itself a
+/// deep chain: the tree survives `serde_json` (its 128-level limit) and the rest is text.
+#[test]
+fn a_chain_of_deep_operands_stays_shallow() {
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(|| {
+            let group = format!("({}c)", "b^".repeat(30));
+            for s in [format!("a{}", format!("^{group}").repeat(40)), format!("sin{} x", format!("^{group}").repeat(40))] {
+                let n = parse_linear(&s);
+                let json = serde_json::to_string(&n).unwrap();
+                let back: Vec<MNode> = serde_json::from_str(&json).unwrap_or_else(|e| panic!("{e}"));
+                assert_eq!(back, n);
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// A script operator the chain leaves at its cap stays text: it isn't taken as a function's operand.
+#[test]
+fn an_operator_left_at_the_cap_is_not_a_function_operand() {
+    let n = parse_linear(&format!("sin{} x", "^1".repeat(40)));
+    let operand_starts_with_a_script = |n: &MNode| match n {
+        MNode::Func { e, .. } => matches!(e.first(), Some(MNode::Run(r)) if r.text.starts_with(['^', '_'])),
+        _ => false,
+    };
+    assert!(!n.iter().any(operand_starts_with_a_script), "{n:?}");
+}
