@@ -4,7 +4,7 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `722b7ada` plus its status commit — 35 commits over
+- HEAD at this writing: `722b7ada` plus its status commits — 37 commits over
   `4b0d3995`; the fork copy still carries the pre-rebase head
   `a6d6ae90` until it is force-pushed
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
@@ -522,10 +522,10 @@ gate, needs `soffice`); `cargo clippy -p wordcraft-collab -p wordcraft-collab-se
 
 ### 5.6 Table cell ids (run 2026-11-09)
 
-`TASK.md` §8 asks that a structural conflict in a table neither loses data nor
-edits the wrong cell; §4 recorded that a table cell had no id, so every edit in
-a cell travelled as a command and could make the room resync. The node map now
-addresses the whole document tree.
+`TASK.md` §8 lists a structural conflict in a table (insert or delete of a row)
+as a test that must not lose data; §4 recorded that a table cell had no id, so
+every edit in a cell travelled as a command and could make the room resync. The
+node map now addresses the whole document tree.
 
 - **Ids.** `NodeIds` keys are the full `doc::Path`, and `DocModel::index_nodes`
   walks every container: a table `[block]`, each row `[block, row]`, each cell
@@ -535,13 +535,13 @@ addresses the whole document tree.
   tombstones a removed block, row or cell with everything under it, so a late
   operation is `gone` instead of landing on a neighbour. `shift_top_blocks` is
   now the empty-container case of `shift_children`.
-- **Primitives.** `split_para`/`merge_para` shift their own container (`path
-  .parent()`), not the top-level block index — before, splitting a paragraph in a
-  cell shifted the story's blocks. `insert_block`/`remove_block` take an optional
-  `path` (the container) next to `index`; with no index they use the target
-  node's own container and position. Two structural operations are new:
-  `insert_row {index, row}` and `remove_row {index}`, addressed at the table (or
-  at any node inside it); the row body travels in the operation and in its
+- **Primitives.** `split_para`/`merge_para` shift their own container
+  (`path.parent()`), not the top-level block index — before, splitting a
+  paragraph in a cell shifted the story's blocks. `insert_block`/`remove_block`
+  take an optional `path` (the container) next to `index`; with no index they use
+  the target node's own container and position. Two structural operations are
+  new: `insert_row {index, row}` and `remove_row {index}`, addressed at the table
+  or at any node inside it; the row body travels in the operation and in its
   inverse, so undo and replicas never have to guess which neighbour a row was
   copied from.
 - **Diff.** `collab-doc::diff` descends into cells: a paragraph inside a cell
