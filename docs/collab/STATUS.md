@@ -4,7 +4,7 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `79ecdc34` plus this status commit — 64 commits over
+- HEAD at this writing: `82931d86` plus this status commit — 66 commits over
   `4b0d3995`; the fork copy still carries the pre-rebase head
   `a6d6ae90` until it is force-pushed
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
@@ -208,8 +208,10 @@ missing, and where the next session should start.
   once (§5.9).
 - Participants window: status, role, participants, commit button (owner), the
   commit result/warnings and — when the room published the file — the cabinet's
-  version and etag (§5.18). Remote carets **and selection shading** are drawn on
-  the canvas in the participant's colour.
+  version and etag (§5.18); after a `409` it shows the conflict and the owner's
+  "Save a copy…" action, which writes the room's `.docx` as a copy (§5.19).
+  Remote carets **and selection shading** are drawn on the canvas in the
+  participant's colour.
 - The Commit button commits through the room when a session is live (the room
   publishes the file, §5.18); the host-owned `wordcraft:commit` path is the
   fallback for an app without a session to commit through.
@@ -257,8 +259,9 @@ missing, and where the next session should start.
 - With `COLLAB_CABINET_URL`, the commit is also published to the cabinet
   (`cabinet.rs`, §5.18): `{fileId, bytes, sha256, version, expectedVersion?}` →
   `{version, etag}`; the etag is stored with the snapshot, every peer receives
-  `committed{cabinet:{version, etag}}`, `409` resyncs the room, `401`/`413` are
-  one refusal, a transient failure is retried with the same body.
+  `committed{cabinet:{version, etag}}`, `409` resyncs the room and keeps the
+  built file for the owner's `saveCopy` (§5.19), `401`/`413` are one refusal, a
+  transient failure is retried with the same body.
 - Limits: 8 participants, 200 operations/s per room, 1 MiB frame, 64 MiB document;
   bounded per-peer queues (512).
 - `GET /healthz`, `GET /metrics`; logs contain no document content, payloads or
@@ -276,7 +279,7 @@ missing, and where the next session should start.
 | Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot |
 | Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move, a paragraph sort, an outline level step, a bulleted/numbered list step, a multilevel list step, a restarted list step and a blank-paragraph removal are addressable structural operations that undo and redo §5.12, §5.13, §5.14, §5.15, §5.16, §5.17 |
 | Viewer cannot edit | done | `a_viewer_cannot_write` + client gate |
-| Commit creates a new version, original kept | done | commit/409/`warnings[]`; §5.18 publishes the built file to the cabinet (M87), stores its etag with the snapshot and shows `cabinet.version`/`etag` to every peer; cabinet owns versions |
+| Commit creates a new version, original kept | done | commit/409/`warnings[]`; §5.18 publishes the built file to the cabinet (M87), stores its etag with the snapshot and shows `cabinet.version`/`etag` to every peer; a `409` offers the room's file as a copy without overwriting the cabinet (§5.19); cabinet owns versions |
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
 | RFC, protocol, tests, documentation | done | `rfc.md`, `server.md`, `README.md`, this page |
 | PR to upstream | open (draft) | PR #5834; GitHub CI waits for maintainer approval |
@@ -519,9 +522,10 @@ and `apps/wordcraft-web/src/web.rs` (web); test
 1. The `craft-libs` git pin is in place (ADR-0016 §3, `7666e2b1`) and the web
    app builds with trunk on it; the same revision still has to be used by the
    other four apps. The two-client host run is done (§5.1); the manual parts are
-   listed there. The room-side cabinet callback is done (§5.18); what remains for
-   it is operational: the cabinet's ticket must carry the numeric `fileId` in
-   `doc`, and the shared service token must be in both `.env`s.
+   listed there. The room-side cabinet callback is done (§5.18) and a `409`
+   offers the room's file as a copy (§5.19); what remains for it is operational:
+   the cabinet's ticket must carry the numeric `fileId` in `doc`, and the shared
+   service token must be in both `.env`s.
 2. Force-push the rebased branch (§5.4), then mark PR #5834 ready once CI has run
    and the pin is acceptable to the maintainers (GitHub reports
    `action_required` for fork PRs until a maintainer approves, and the PR shows
@@ -2020,6 +2024,64 @@ tree passed all 9 steps (5969 workspace tests, 0 failed, 11 ignored).
 token must be in the cabinet's `CRAFT_CALLBACK_TOKEN` and the room's
 `COLLAB_CABINET_TOKEN`, and the value of a lost `200` is a `409` until the
 cabinet implements callback idempotency. No push was made and CI is unchanged.
+
+### 5.19 Save a copy when the cabinet refuses the commit (run 2026-11-09)
+
+TASK.md §6 says a commit must not lose work when the file changed outside the
+session: the user is offered "save a copy" or a merge. §5.18 delivered the
+`409` → `cabinetConflict` resync, which left the owner with nothing to keep;
+this slice adds the copy. The cabinet is still never overwritten.
+
+**Server.** The `.docx` built for a refused commit is kept in `RoomState`
+(`Refused {version, sha256, warnings, bytes}`; the bytes are an `Arc` so a
+request does not copy the file). A new owner-only request
+`ClientMsg::SaveCopy {op_id}` answers `ServerMsg::SaveCopy {version, sha256,
+warnings, bytes, last}`, chunked at `SNAPSHOT_CHUNK` (512 KiB) and sent to the
+asking socket only — never broadcast. No HTTP request is made: the cabinet sees
+exactly the one `409` attempt. Editors get `forbidden`; with no refused commit
+the answer is `rejected{conflict}`. A later accepted commit drops the copy;
+a restart drops it too (it is not part of the document or the snapshot), and
+the next Commit shows the conflict again. The metric
+`wordcraft_collab_save_copies_total` counts the requests.
+
+**Client.** `wordcraft_collab_client` maps the `cabinetConflict` error to a new
+`Event::Conflict` (every replica still resyncs, as before), and the chunked
+frame to `Event::SaveCopy`. The shared `CopyBuffer` in `collab-app` joins the
+chunks and restarts when the version changes, so a late chunk of an older
+answer cannot slip into a newer copy. `Collab` (desktop transport and the web
+socket) keeps `conflict`, exposes `request_copy()`/`take_copy()`, and clears the
+conflict when a commit is accepted. The participants panel shows the conflict
+and, for the owner, a "Save a copy…" button; `WordApp::save_room_copy` writes
+the room's bytes (not the local replica) under `<name> (copy).docx`: the native
+build asks for a path through the same asynchronous file dialog and writes
+with `std::fs::write`; the web build hands the bytes to `Services::download`
+(the host page's save hook when there is one). The document is not marked
+saved and the cabinet is untouched.
+
+**Tests.** `apps/collab-server/src/tests.rs` (two real WebSocket clients and a
+fake cabinet): `a_refused_commit_can_be_saved_as_a_copy_without_overwriting_the_cabinet`
+(both peers get the conflict, the rooms' bytes arrive chunked, their SHA-256
+matches, `PK\x03\x04`, the cabinet gets no second request, an editor is
+refused) and `a_copy_without_a_refused_commit_is_refused`.
+`crates/collab-client/src/tests.rs`: `a_cabinet_conflict_is_a_separate_event_and_resyncs`,
+`any_other_error_still_resyncs`, `a_save_copy_chunk_parses_and_the_request_names_an_operation`.
+`crates/collab-app/src/tests.rs`:
+`refused_copy_chunks_join_until_last_and_restart_on_a_new_version`.
+`crates/ui-egui/src/file_dialogs/tests.rs`:
+`a_refused_commit_is_saved_as_a_copy_without_marking_the_document_saved`
+(the suggested name, the picked path and the exact bytes, document stays
+unsaved) and `cancelling_a_room_copy_writes_nothing`.
+
+**Gates** (build host `agents`, `scripts/remote-build.sh`): the crate test
+suites above are green, including the two-client server tests; `cargo clippy
+--workspace --all-targets -- -D warnings` clean; `cargo fmt --all -- --check`
+clean; the full `cargo xtask ci` passed all 9 steps (fmt, clippy, test,
+i18n-report, language, doctest, assets, layers, wasm). On the build
+host the full gate needs `CRAFT_FONTS_DIR` (the embedded CJK faces),
+`CRAFT_I18N_DIR` (the `craft-i18n` checkout, which holds `language-data/`) and
+`CRAFT_PROOF_EMBED=de,pl,pt,it,ru` (German/Portuguese hyphenation and grammar);
+without them unrelated font/hyphenation tests fail. No push was made and CI is
+unchanged.
 
 ## 6. Where things live
 
