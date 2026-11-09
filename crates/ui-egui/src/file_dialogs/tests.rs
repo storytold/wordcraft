@@ -315,7 +315,8 @@ fn save_as_answer_arriving_later_is_saved() {
     typed(&mut a);
     a.save_as_dialog();
     assert!(a.file_dialog_open());
-    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "Document1.docx".into(), dir: None });
+    // A new document is offered its first words as its name, as in Word (#5793).
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: format!("{UNSAVED}.docx"), dir: None });
     let ctx = egui::Context::default();
     let frame = |a: &mut WordApp| ctx.run_ui(egui::RawInput::default(), |ui| a.logic(ui.ctx())).drop_without_applying_deltas();
     frame(&mut a);

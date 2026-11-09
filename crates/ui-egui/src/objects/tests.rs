@@ -500,7 +500,7 @@ fn alt_pressed_during_a_drag_unsnaps_and_keeps_keytips_off() {
     assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Off, "Alt during a drag isn't a keytip tap");
 }
 
-/// #2233, #2234: dragging an In Line with Text picture into another paragraph shows a dashed
+/// #2233, #2234: dragging an In Line with Text picture into another paragraph shows a bold
 /// insertion cursor at the text under the pointer (no alignment guides), and the drop puts the
 /// picture there, still inline and selected. Dropped back where it was, nothing changes.
 #[test]
@@ -551,6 +551,13 @@ fn an_inline_picture_drags_to_the_insertion_cursor_and_stays_inline() {
     let d = h.state().canvas.obj_drag.as_ref().expect("dragging");
     assert_eq!(d.drop_at.as_ref().map(|(p, _)| p.clone()), Some(target.clone()), "the insertion cursor is at the text under the pointer");
     assert!(d.guides.is_empty(), "an inline object doesn't snap to guides");
+    // #4195: solid and twice the caret's width, so it can be seen, as in Word.
+    let (top, bottom) = (at(&mut h, c.x, c.top), at(&mut h, c.x, c.top + c.height));
+    let bold = h.output().shapes.iter().any(|s| {
+        matches!(&s.shape, egui::Shape::LineSegment { points: [a, b], stroke }
+            if a.distance(top) < 0.5 && b.distance(bottom) < 0.5 && stroke.width == 3.0)
+    });
+    assert!(bold, "a bold insertion cursor from the line's top to its bottom");
     button(&h, end, false);
     steps(&mut h, 3);
     assert!(h.state().canvas.obj_drag.is_none());
