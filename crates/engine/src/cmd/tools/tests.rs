@@ -628,16 +628,24 @@ fn compare_pairs_many_notes_when_budget_exhausted() {
     let mut orig = Session::new(Document::from_text(&orig_text));
     let mut rev = Session::new(Document::from_text(&rev_text));
 
+    let padding = "extra reference background context terminology narrative citations archive analysis documentation ";
+
     for i in 0..note_count {
         let orig_para_len = orig.doc.body[i].as_para().unwrap().text.len();
         orig.run("caret.set", &json!({"pos": Pos::body(i, orig_para_len)})).unwrap();
-        orig.run("references.footnote", &json!({"text": format!("Footnote entry {i} citing detailed historical observations and background data.")}))
-            .unwrap();
+        orig.run(
+            "references.footnote",
+            &json!({"text": format!("Footnote entry {i} citing detailed historical observations and background data. {padding}{padding}{padding}{padding}")}),
+        )
+        .unwrap();
 
         let rev_para_len = rev.doc.body[i].as_para().unwrap().text.len();
         rev.run("caret.set", &json!({"pos": Pos::body(i, rev_para_len)})).unwrap();
-        rev.run("references.footnote", &json!({"text": format!("Footnote entry {i} citing detailed historical commentary and background data.")}))
-            .unwrap();
+        rev.run(
+            "references.footnote",
+            &json!({"text": format!("Footnote entry {i} citing detailed historical commentary and background data. {padding}{padding}{padding}{padding}")}),
+        )
+        .unwrap();
     }
 
     let rev_path = std::env::temp_dir().join(format!("wc-rev-manyfn-{}.docx", std::process::id()));

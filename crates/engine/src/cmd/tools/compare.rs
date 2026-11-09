@@ -300,6 +300,9 @@ const MAX_NOTE_ALIGN_RUN: usize = 200;
 /// Maximum number of DP matrix cells allowed for note run alignment.
 const MAX_NOTE_ALIGN_CELLS: usize = 40_000;
 
+/// Maximum look-ahead, in tokens, for the greedy fallback match.
+const GREEDY_WINDOW: usize = 16;
+
 /// Metadata and content summary for aligning footnote and endnote parts.
 struct NoteInfo {
     /// Note ID.
@@ -370,11 +373,12 @@ pub(super) fn lcs_len<T: PartialEq>(a: &[T], b: &[T], budget: &mut u64) -> usize
     let cells = (n as u64).saturating_mul(m as u64);
     if cells > *budget {
         // Budget exhausted: use bounded forward and backward greedy subsequence matching
-        // to find a genuine in-order common subsequence in O(n + m) time without allocating DP tables.
+        // (look-ahead of GREEDY_WINDOW tokens) to find a genuine in-order common subsequence
+        // in O(GREEDY_WINDOW * n) time without allocating DP tables.
         let mut fwd = 0usize;
         let mut b_idx = 0usize;
         for x in a_core {
-            if let Some(pos) = b_core.get(b_idx..).and_then(|s| s.iter().position(|y| x == y)) {
+            if let Some(pos) = b_core.get(b_idx..).and_then(|s| s.iter().take(GREEDY_WINDOW).position(|y| x == y)) {
                 fwd = fwd.saturating_add(1);
                 b_idx = b_idx.saturating_add(pos).saturating_add(1);
                 if b_idx >= b_core.len() {
@@ -385,7 +389,10 @@ pub(super) fn lcs_len<T: PartialEq>(a: &[T], b: &[T], budget: &mut u64) -> usize
         let mut bwd = 0usize;
         let mut b_rev_idx = 0usize;
         for x in a_core.iter().rev() {
-            if let Some(pos) = b_core.get(..b_core.len().saturating_sub(b_rev_idx)).and_then(|s| s.iter().rposition(|y| x == y)) {
+            if let Some(pos) = b_core
+                .get(..b_core.len().saturating_sub(b_rev_idx))
+                .and_then(|s| s.iter().rev().take(GREEDY_WINDOW).position(|y| x == y).map(|off| s.len().saturating_sub(1).saturating_sub(off)))
+            {
                 bwd = bwd.saturating_add(1);
                 b_rev_idx = b_core.len().saturating_sub(pos);
                 if b_rev_idx >= b_core.len() {
