@@ -7926,6 +7926,107 @@ fn insert_icon_places_a_picture_of_the_requested_size_that_saves_and_recolours()
     assert!(s.run("picture.iconColor", &json!({})).is_err());
 }
 
+/// #5232: a PDF with markup (file.exportPdf, file.printPdf) marks tracked changes in the Track
+/// Changes Options colours, not always by author.
+#[test]
+fn markup_pdf_takes_the_track_changes_option_colours() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Governed by Kansas law."));
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("select.text", &json!({"text": "Kansas"})).unwrap();
+    s.run("text.insert", &json!({"text": "Missouri"})).unwrap();
+    let markup = json!({"markup": true});
+    let uncompressed_markup = json!({"markup": true, "compress": false});
+    let pdf = |s: &Session| crate::io::save_bytes_opts("x.pdf", &s.doc, &cmd::file::export_options(s, &markup)).unwrap();
+    let print = |s: &Session| s.print_pdf(&markup).unwrap().0;
+    let (by_author, printed_by_author) = (pdf(&s), print(&s));
+    // Exports are deterministic, so differences are solely due to the colours.
+    assert_eq!(pdf(&s), by_author, "pdf export must be deterministic");
+    assert_eq!(print(&s), printed_by_author, "print_pdf must be deterministic");
+
+    let has = |t: &[&str], op: &str| {
+        let want: Vec<_> = op.split_ascii_whitespace().collect();
+        t.windows(want.len()).any(|w| w == want.as_slice())
+    };
+    let by_author_print_uncompressed = s.print_pdf(&uncompressed_markup).unwrap().0;
+    let by_author_print_raw = String::from_utf8_lossy(&by_author_print_uncompressed);
+    let by_author_print_tokens: Vec<_> = by_author_print_raw.split_ascii_whitespace().collect();
+    assert!(!has(&by_author_print_tokens, "0 0 1 rg") && !has(&by_author_print_tokens, "1 0 0 rg"), "by-author print has no pure blue or red");
+
+    s.run("review.trackingOptions", &json!({"insertColor": "0000FF", "deleteColor": "FF0000"})).unwrap();
+    let opts = cmd::file::export_options(&s, &markup);
+    assert_eq!(opts.revisions.insert_color, Some(wordcraft_doc::props::Rgb(0, 0, 255)));
+    assert_eq!(opts.revisions.delete_color, Some(wordcraft_doc::props::Rgb(255, 0, 0)));
+
+    let coloured_pdf = pdf(&s);
+    let coloured_print = print(&s);
+    assert_ne!(coloured_pdf, by_author, "file.exportPdf ignores the tracking colours");
+    assert_ne!(coloured_print, printed_by_author, "file.printPdf ignores the tracking colours");
+
+    let coloured_print_uncompressed = s.print_pdf(&uncompressed_markup).unwrap().0;
+    let print_raw = String::from_utf8_lossy(&coloured_print_uncompressed);
+    let print_tokens: Vec<_> = print_raw.split_ascii_whitespace().collect();
+    assert!(has(&print_tokens, "0 0 1 rg"), "coloured print_pdf has blue operator for insertion");
+    assert!(has(&print_tokens, "1 0 0 rg"), "coloured print_pdf has red operator for deletion");
+}
+
+/// #5232 review: File › Print without Print Markup leaves out tracked deletions in layout,
+/// so the page count matches the PDF export and deletions take no blank space.
+#[test]
+fn print_jobs_without_markup_lay_out_the_final_text() {
+    let text: Vec<String> = (0..200).map(|i| format!("Line {i} of the original agreement")).collect();
+    let mut s = Session::new(wordcraft_doc::Document::from_text(&text.join("\n")));
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("select.all", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": "Replaced"})).unwrap();
+    // With markup: 200 deleted lines take space in print.
+    let (marked_pdf, marked_plan) = s.print_pdf(&json!({"markup": true})).unwrap();
+    assert!(marked_plan.chosen > 1);
+    assert!(marked_pdf.starts_with(b"%PDF-"));
+    // Without markup: final text only, 1 page.
+    let (plain_pdf, plain_plan) = s.print_pdf(&json!({"markup": false})).unwrap();
+    assert_eq!(plain_plan.chosen, 1);
+    assert!(plain_pdf.starts_with(b"%PDF-"));
+}
+
+/// #5232 review: page images (render_png and file.exportPng) respect Track Changes Options
+/// colours and hidden deletions.
+#[test]
+fn markup_png_takes_the_track_changes_option_colours() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Governed by Kansas law."));
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("select.text", &json!({"text": "Kansas"})).unwrap();
+    s.run("text.insert", &json!({"text": "Missouri"})).unwrap();
+
+    let markup_opts = json!({"markup": true});
+    let by_author_opts = cmd::file::export_options(&s, &markup_opts);
+    let by_author_png = crate::io_ext::render_png(&s.doc, 0, 1.0, &by_author_opts).unwrap();
+
+    // Change tracking options to blue insertions / red deletions.
+    s.run("review.trackingOptions", &json!({"insertColor": "0000FF", "deleteColor": "FF0000"})).unwrap();
+    let coloured_opts = cmd::file::export_options(&s, &markup_opts);
+    let coloured_png = crate::io_ext::render_png(&s.doc, 0, 1.0, &coloured_opts).unwrap();
+    assert_ne!(by_author_png, coloured_png, "PNG export must reflect tracking colours");
+
+    // Also verify via file.exportPng command.
+    let dir = std::env::temp_dir().join(format!("wordcraft-tracking-png-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p1 = dir.join("by_author.png");
+    let p2 = dir.join("coloured.png");
+    s.run("review.trackingOptions", &json!({"insertColor": "byAuthor", "deleteColor": "byAuthor"})).unwrap();
+    s.run("file.exportPng", &json!({"path": p1.to_string_lossy(), "markup": true, "scale": 1.0})).unwrap();
+    s.run("review.trackingOptions", &json!({"insertColor": "0000FF", "deleteColor": "FF0000"})).unwrap();
+    s.run("file.exportPng", &json!({"path": p2.to_string_lossy(), "markup": true, "scale": 1.0})).unwrap();
+    assert_ne!(std::fs::read(&p1).unwrap(), std::fs::read(&p2).unwrap());
+
+    // Verify hidden deletions take no space in PNG export.
+    s.run("review.trackingOptions", &json!({"deleteMark": "hidden"})).unwrap();
+    let hidden_opts = cmd::file::export_options(&s, &markup_opts);
+    let hidden_png = crate::io_ext::render_png(&s.doc, 0, 1.0, &hidden_opts).unwrap();
+    assert_ne!(hidden_png, coloured_png, "hidden deletions must affect PNG pixels/layout");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Print Markup (#589): `file.printMarkup` or a command's `markup` puts the comments into PDFs
 /// (balloons beside the scaled page) and at the end of HTML, Markdown and text copies.
 #[test]

@@ -76,15 +76,24 @@ pub fn save(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Optio
 pub fn render_png(doc: &Document, page: usize, scale: f32, opts: &crate::io::ExportOptions) -> Result<Vec<u8>, String> {
     let out = crate::cmd::references::output_fields(doc);
     let doc = out.as_ref().unwrap_or(doc);
-    let lo = wordcraft_layout::LayoutOptions { comment_balloons: opts.markup && opts.comments, numeral: opts.numeral, ..Default::default() };
+    let lo = wordcraft_layout::LayoutOptions {
+        comment_balloons: opts.markup && opts.comments,
+        hide_marked: opts.revisions.hidden_deletions(),
+        numeral: opts.numeral,
+        ..Default::default()
+    };
     let l = wordcraft_layout::layout(doc, &mut wordcraft_layout::LayoutCache::new(), &lo);
     let p = l.pages.get(page).ok_or_else(|| format!("no page {}", page + 1))?;
     if opts.strict {
-        let report = crate::strict::strict_report(doc, &l, &crate::strict::png_display(), Some(page..=page), wordcraft_layout::StrictOutput::Png);
+        let mut display = crate::strict::png_display();
+        display.revisions = opts.revisions.clone();
+        let report = crate::strict::strict_report(doc, &l, &display, Some(page..=page), wordcraft_layout::StrictOutput::Png);
         if !report.passed() {
             return Err(report.refusal());
         }
     }
-    let img = wordcraft_render::render_page(doc, p, scale, &Default::default());
+    let mut ro = wordcraft_render::RenderOptions::default();
+    ro.display.revisions = opts.revisions.clone();
+    let img = wordcraft_render::render_page(doc, p, scale, &ro);
     Ok(img.to_png())
 }

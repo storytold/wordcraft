@@ -53,7 +53,7 @@ pub fn is_word_package(ext: &str) -> bool {
 }
 
 /// How a copy in another format is written.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ExportOptions {
     /// Print Markup: PDFs show tracked changes marked up and, with `comments`, each page scaled
     /// down beside a markup area with the comments in balloons (page images get the area too);
@@ -66,6 +66,9 @@ pub struct ExportOptions {
     pub word2003: bool,
     /// How digits look in PDFs and page images (the Numeral setting, `System` resolved).
     pub numeral: wordcraft_layout::NumeralMode,
+    /// How tracked changes are marked in PDFs and page images (Track Changes Options): the
+    /// insertion and deletion marks and colours the screen shows (#5232).
+    pub revisions: wordcraft_layout::display::MarkupOptions,
     /// A PDF or page image is written only if nothing in it is silently missing (a character no
     /// face can draw, a picture that is missing or can't be decoded); else the save fails with
     /// `strict: …` (#6005). Ignored for other formats.

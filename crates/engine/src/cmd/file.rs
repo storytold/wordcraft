@@ -445,8 +445,8 @@ fn save_as(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 /// How a copy is written: Print Markup from the command's `markup`, else the File › Print
-/// setting (`file.printMarkup`); comments as Track Changes Options show them; digits as the
-/// Numeral setting shows them on screen.
+/// setting (`file.printMarkup`); comments and revision marks/colours as Track Changes Options show them;
+/// digits as the Numeral setting shows them on screen.
 pub fn export_options(s: &Session, v: &Value) -> crate::io::ExportOptions {
     let markup = p::bool(v, "markup").unwrap_or(s.prefs.print_markup);
     crate::io::ExportOptions {
@@ -454,6 +454,7 @@ pub fn export_options(s: &Session, v: &Value) -> crate::io::ExportOptions {
         comments: markup && s.prefs.markup.comments,
         word2003: p::str(v, "format") == Some(FORMAT_WORD_2003),
         numeral: s.view.numeral.resolve(crate::session::system_locale()),
+        revisions: s.prefs.markup.clone(),
         strict: p::bool(v, "strict").unwrap_or(false),
     }
 }
@@ -487,6 +488,7 @@ fn strict_report(s: &mut Session, v: &Value) -> CmdResult {
     Ok(report.to_json())
 }
 
+/// Exports a page of the current document as a PNG image at the requested scale.
 fn export_png(s: &mut Session, v: &Value) -> CmdResult {
     // No path: the app asks where to save, as file.exportPdf does (#2313).
     let Some(path) = p::str(v, "path") else {
@@ -499,8 +501,10 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
     let l = s.export_layout_with(export_options(s, v).markup);
     let pg = l.pages.get(page).ok_or_else(|| CmdError::Params(format!("no page {}", page + 1)))?;
     // A page image is the printed page: headers and footers at full strength. Dimming them is
-    // the on-screen cue while editing the body, not part of the page.
-    let opts = wordcraft_render::RenderOptions { display: crate::strict::png_display(), ..Default::default() };
+    // the on-screen cue while editing the body, not part of the page. Tracked changes are marked
+    // as Track Changes Options mark them on screen.
+    let mut opts = wordcraft_render::RenderOptions { display: crate::strict::png_display(), ..Default::default() };
+    opts.display.revisions = s.prefs.markup.clone();
     if !path.to_ascii_lowercase().ends_with(".png") {
         return Err(CmdError::Params("path must end in .png".into()));
     }
