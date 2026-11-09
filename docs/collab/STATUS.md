@@ -4,7 +4,7 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `2ce54064` plus this status commit — 44 commits over
+- HEAD at this writing: `0ad0d2ef` plus this status commit — 47 commits over
   `4b0d3995`; the fork copy still carries the pre-rebase head
   `a6d6ae90` until it is force-pushed
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
@@ -864,7 +864,8 @@ wordcraft-collab-web` — 13, 1 (the socket test), 29 + 1 ignored and 5 passed;
 hardening, and §4 recorded the cost: every `kind:"command"` step was an undo
 barrier, because the room replays a command at every replica but has no way to
 replay it backwards — a toggle would flip again and a relative step (grow font)
-would move twice. **Head `2ce54064`** on `feature/realtime-collaboration`, with
+would move twice. **Head `2ce54064`** (`0ad0d2ef` adds the addressability guard) on
+`feature/realtime-collaboration`, with
 this entry's docs commit on top (no push, CI unchanged).
 
 **The forward effect is unchanged.** A formatting command still travels as
