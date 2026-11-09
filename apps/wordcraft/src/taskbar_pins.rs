@@ -16,6 +16,7 @@
 //!
 //! [MS-SHLLINK]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-shllink/
 
+use std::io::Write;
 use std::path::Path;
 
 /// The installer's shortcut description (`Description` in `wordcraft.wxs`), which the shortcut keeps
@@ -142,6 +143,23 @@ fn link_info(exe: &str) -> Vec<u8> {
     out
 }
 
+/// Where the new shortcut for `pin` is written before it replaces it: beside it, under a name
+/// of this process's own (`WordCraft.lnk.1234.new`).
+fn temp_path(pin: &Path) -> std::ffi::OsString {
+    let mut temp = pin.as_os_str().to_owned();
+    temp.push(format!(".{}.new", std::process::id()));
+    temp
+}
+
+/// Whether `exe` is where the installer puts WordCraft (`…\ArtCraft\WordCraft\wordcraft.exe`,
+/// under Program Files or the per-user Programs folder). The repair at startup runs only then,
+/// so a build run from elsewhere (a developer's `target` folder) never takes over the pin.
+pub(crate) fn is_installed_exe(exe: &Path) -> bool {
+    let folder = exe.parent();
+    let name = |p: Option<&Path>| p.and_then(Path::file_name).and_then(|n| n.to_str()).map(str::to_ascii_lowercase);
+    name(folder).as_deref() == Some("wordcraft") && name(folder.and_then(Path::parent)).as_deref() == Some("artcraft")
+}
+
 /// Replace each pinned copy of the old advertised shortcut in `folder` with a plain one to `exe`,
 /// under the same name. The number replaced; a pin that can't be replaced doesn't stop the
 /// others, and the first such error is returned once all have been tried.
@@ -165,12 +183,14 @@ pub(crate) fn repair_folder(folder: &Path, exe: &str) -> std::io::Result<usize> 
         if !is_old_wordcraft_pin(&data) {
             continue;
         }
-        // Written beside it, then moved over it: a pin is never left half written.
-        let mut temp = path.clone().into_os_string();
-        temp.push(".new");
-        let replaced = std::fs::write(&temp, plain_link(exe)).and_then(|()| {
-            // Only the file just written is cleaned up, never something else of that name.
-            std::fs::rename(&temp, &path).inspect_err(|_| {
+        // Written beside it, then moved over it: a pin is never left half written. The new file
+        // is created afresh under a name of this run's own, so nothing already there is touched.
+        let temp = temp_path(&path);
+        let replaced = std::fs::OpenOptions::new().write(true).create_new(true).open(&temp).and_then(|mut f| {
+            // Only the file just created is cleaned up, never something else of that name.
+            let written = f.write_all(&plain_link(exe)).and_then(|()| f.sync_all());
+            drop(f);
+            written.and_then(|()| std::fs::rename(&temp, &path)).inspect_err(|_| {
                 let _ = std::fs::remove_file(&temp);
             })
         });
@@ -280,9 +300,34 @@ mod tests {
         assert_eq!(std::fs::read(dir.join("Acrobat.lnk")).unwrap(), advertised("Adobe Acrobat"));
         assert_eq!(std::fs::read(dir.join("notes.txt")).unwrap(), advertised(DESCRIPTION), "not a shortcut file");
         assert_eq!(repair_folder(&dir, EXE).unwrap(), 0, "nothing left to mend");
-        assert!(!dir.join("WordCraft.lnk.new").exists());
+        assert!(!std::path::PathBuf::from(temp_path(&dir.join("WordCraft.lnk"))).exists());
         assert_eq!(repair_folder(&dir.join("missing"), EXE).unwrap(), 0);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file already at the temporary name is left as it was, and the pin with it.
+    #[test]
+    fn a_file_in_the_way_is_not_overwritten() {
+        let dir = std::env::temp_dir().join(format!("wordcraft-pins-taken-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("A.lnk"), advertised(DESCRIPTION)).unwrap();
+        let taken = std::path::PathBuf::from(temp_path(&dir.join("A.lnk")));
+        std::fs::write(&taken, b"someone else's").unwrap();
+        assert!(repair_folder(&dir, EXE).is_err());
+        assert_eq!(std::fs::read(&taken).unwrap(), b"someone else's");
+        assert_eq!(std::fs::read(dir.join("A.lnk")).unwrap(), advertised(DESCRIPTION));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_the_installed_exe_mends_pins_at_startup() {
+        let installed = Path::new("Programs").join("ArtCraft").join("WordCraft").join("wordcraft.exe");
+        assert!(is_installed_exe(&installed));
+        assert!(is_installed_exe(&Path::new("Program Files").join("artcraft").join("WORDCRAFT").join("wordcraft.exe")));
+        assert!(!is_installed_exe(&Path::new("wordcraft").join("target").join("release").join("wordcraft.exe")));
+        assert!(!is_installed_exe(&Path::new("Downloads").join("WordCraft").join("wordcraft.exe")));
+        assert!(!is_installed_exe(Path::new("wordcraft.exe")));
     }
 
     /// One pin that can't be replaced doesn't stop the next, and what stood in its way stays.
@@ -295,11 +340,12 @@ mod tests {
             std::fs::write(dir.join(name), advertised(DESCRIPTION)).unwrap();
         }
         // A folder where A's new shortcut would be written: that write fails.
-        std::fs::create_dir(dir.join("A.lnk.new")).unwrap();
+        let blocked = std::path::PathBuf::from(temp_path(&dir.join("A.lnk")));
+        std::fs::create_dir(&blocked).unwrap();
         assert!(repair_folder(&dir, EXE).is_err(), "the failure is reported");
         assert_eq!(std::fs::read(dir.join("A.lnk")).unwrap(), advertised(DESCRIPTION), "A is left as it was");
         assert_eq!(std::fs::read(dir.join("B.lnk")).unwrap(), plain_link(EXE), "B is still mended");
-        assert!(dir.join("A.lnk.new").is_dir(), "a folder it didn't write isn't removed");
+        assert!(blocked.is_dir(), "a folder it didn't write isn't removed");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

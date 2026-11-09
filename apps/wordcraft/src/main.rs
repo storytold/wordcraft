@@ -534,8 +534,9 @@ fn main() -> eframe::Result {
     }
     // Also at every start, in case the installer's run was skipped: one folder listing when there
     // is nothing to mend.
+    // Only from the installed exe: a build run from elsewhere would take the pin over.
     #[cfg(windows)]
-    match taskbar_pins::repair() {
+    match std::env::current_exe().is_ok_and(|e| taskbar_pins::is_installed_exe(&e)).then(taskbar_pins::repair).unwrap_or(Ok(0)) {
         Ok(0) => {}
         Ok(n) => log::info!("mended {n} taskbar or Start pin(s) of the old WordCraft shortcut"),
         Err(e) => log::warn!("couldn't mend the taskbar pins of the old WordCraft shortcut: {e}"),
