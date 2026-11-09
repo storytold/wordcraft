@@ -144,7 +144,7 @@ impl<'a> Builder<'a> {
         let k = size as f64 / face.upem.max(1.0);
         // A missing TH Sarabun font drawn in Sarabun: smaller glyphs and TH Sarabun New's line, so
         // lines wrap and pages break about where they do in the original.
-        let (size, ascent, descent) = match wordcraft_fonts::word::size_match(lookup_family(self.env.doc, &rc.font), face.get().family) {
+        let (size, ascent, descent) = match wordcraft_fonts::word::size_match(lookup_family(self.env.doc, &rc.font), &face.get().family) {
             Some(m) => (size * m.scale, (m.ascent * f64::from(size)) as f32, (m.descent * f64::from(size)) as f32),
             None => (size, (a * k) as f32, (d * k) as f32),
         };
