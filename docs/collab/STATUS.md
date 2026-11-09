@@ -4,7 +4,7 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `675b3f1a` plus this status commit — 61 commits over
+- HEAD at this writing: `9e48ab02` plus this status commit — 63 commits over
   `4b0d3995`; the fork copy still carries the pre-rebase head
   `a6d6ae90` until it is force-pushed
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
@@ -411,6 +411,14 @@ Results at this writing:
   can be undone only newest first (§4, ADR-0010).
 - Offline editing is not supported: while a session reconnects, document commands
   pause instead of diverging.
+- A replica that skips its own structural delta — the author of a command, whose
+  change is already in its document — keeps the ids that step retired in its
+  map: `SyncState::set_nodes` leaves disappeared ids alone on purpose (the delta
+  path tombstones them) and the author never applies its own delta. The document
+  and the version are unaffected; the server refuses an operation on a stale id
+  `gone` and the client resyncs, and a snapshot rebuilds the map from scratch.
+  The author's map stays correct for live nodes (§5.17 fixed one way it did
+  not).
 - The token is read from the environment on desktop; the cabinet must push a fresh
   token through the host bridge when it arrives.
 - No two-machine manual GUI test; the UI tests are headless.
