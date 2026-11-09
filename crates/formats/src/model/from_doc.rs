@@ -182,6 +182,9 @@ fn para_extra(doc: &Document, p: &wordcraft_doc::props::ParaProps) -> Option<Box
         tabs
     });
     let style = p.style.clone().filter(|id| is_custom_style(doc, id));
+    // Its own, else its custom style's: the kind doesn't say (it stops at Heading 6, and is the
+    // heading style's where the style is based on one).
+    let outline_level = p.outline_level.or_else(|| style.as_ref().and_then(|_| doc.styles.resolve_para(p).outline_level));
     let x = wordcraft_doc::props::ParaProps {
         tabs,
         shading: p.shading,
@@ -191,7 +194,7 @@ fn para_extra(doc: &Document, p: &wordcraft_doc::props::ParaProps) -> Option<Box
         drop_cap: p.drop_cap.filter(|l| *l > 1),
         drop_cap_distance: p.drop_cap_distance.filter(|_| p.drop_cap.is_some_and(|l| l > 1)),
         keep_lines: p.keep_lines.filter(|k| *k),
-        outline_level: p.outline_level,
+        outline_level,
         widow_control: p.widow_control.filter(|w| !*w),
         // Hyphenated (the document hyphenates and the paragraph doesn't opt out): `Some(false)`.
         suppress_hyphens: (doc.settings.auto_hyphenation && p.suppress_hyphens != Some(true)).then_some(false),
@@ -413,14 +416,25 @@ fn flow_comment(doc: &Document, c: &wordcraft_doc::Comment, parent: Option<u32>,
     FComment { author: c.author.clone(), initials: c.initials.clone(), date: c.date.clone(), resolved: c.resolved, parent, blocks }
 }
 
+/// Whether `li`, the list of heading `p`, is the number its outline level has from its heading
+/// style's list, not a list of its own: it states that level, and the heading style of that level
+/// numbers with that list there. Past Heading 6 no such style gives the written outline a number.
+fn numbered_by_outline(doc: &Document, p: &Paragraph, li: &ListInfo) -> bool {
+    use wordcraft_doc::props::NumRef;
+    p.props.outline_level == Some(li.level)
+        && li.level < 6
+        && doc.styles.para_style_props(&format!("Heading{}", li.level + 1)).0.numbering == Some(NumRef { num: li.list, level: li.level })
+}
+
 /// A paragraph's list membership as the flow keeps it: without the list's identity and label
-/// unless `opts` asks for them, and none for a heading numbered only through its style, which a
-/// format with heading numbering of its own (ODT's outline style) numbers instead.
-fn flow_list(kind: Kind, list: Option<ListInfo>, p: &Paragraph, opts: FlowOpts) -> Option<ListInfo> {
+/// unless `opts` asks for them, and none for a heading numbered only through its style or
+/// [`numbered_by_outline`], which a format with heading numbering of its own (ODT's outline style)
+/// numbers instead, in its first six levels.
+fn flow_list(doc: &Document, kind: Kind, list: Option<ListInfo>, p: &Paragraph, opts: FlowOpts) -> Option<ListInfo> {
     let mut li = list?;
     if !opts.lists {
         (li.list, li.label) = (0, None);
-    } else if matches!(kind, Kind::Heading(_)) && p.props.numbering.is_none() {
+    } else if matches!(kind, Kind::Heading(_)) && li.level < 6 && (p.props.numbering.is_none() || numbered_by_outline(doc, p, &li)) {
         return None;
     }
     Some(li)
@@ -458,7 +472,7 @@ pub fn flow_paras(doc: &Document, p: &Paragraph) -> Vec<Para> {
 fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
     let tracked = opts.tracked;
     let (kind, list) = para_kind(doc, p);
-    let list = flow_list(kind, list, p, opts);
+    let list = flow_list(doc, kind, list, p, opts);
     let mut done: Vec<Para> = Vec::new();
     let borders = if kind == Kind::Rule { None } else { p.props.borders.filter(|b| b.takes_room()) };
     let mut out = Para {

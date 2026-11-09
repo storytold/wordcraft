@@ -161,6 +161,96 @@ fn a_table_starting_a_page_starts_it() {
 }
 
 #[test]
+fn a_tables_and_rows_background_show_behind_their_cells() {
+    // Table Properties › Background: it was dropped, on screen and in LibreOffice after a save.
+    let styles = r##"<style:style style:name="T" style:family="table"><style:table-properties fo:background-color="#ddffdd"/></style:style><style:style style:name="R" style:family="table-row"><style:table-row-properties fo:background-color="#ffdddd"/></style:style><style:style style:name="C" style:family="table-cell"><style:table-cell-properties fo:background-color="#ddddff"/></style:style>"##;
+    let table = r#"<table:table table:style-name="T"><table:table-row><table:table-cell><text:p>table</text:p></table:table-cell><table:table-cell table:style-name="C"><text:p>cell</text:p></table:table-cell></table:table-row><table:table-row table:style-name="R"><table:table-cell><text:p>row</text:p></table:table-cell><table:table-cell table:style-name="C"><text:p>cell</text:p></table:table-cell></table:table-row></table:table>"#;
+    let colours = |d: &wordcraft_doc::Document| {
+        d.body
+            .iter()
+            .find_map(|b| b.as_table())
+            .map(|t| t.rows.iter().flat_map(|r| r.cells.iter().map(|c| c.props.shading.map(|s| s.hex().to_ascii_lowercase()))).collect::<Vec<_>>())
+            .unwrap_or_default()
+    };
+    let want = |t: &str, r: &str, c: &str| vec![Some(t.to_string()), Some(c.to_string()), Some(r.to_string()), Some(c.to_string())];
+    let d = doc(styles, table);
+    assert_eq!(colours(&d), want("ddffdd", "ffdddd", "ddddff"));
+    assert_eq!(colours(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()), want("ddffdd", "ffdddd", "ddddff"));
+}
+
+/// As LibreOffice shows them: a cell's own style, else its column's default cell style (a row's
+/// isn't applied), else the row's background, else the table's. A row or table clearing its
+/// background (`transparent`) doesn't take its parent's; the table's shows behind that row.
+#[test]
+fn a_cells_background_comes_from_its_column_then_row_then_table() {
+    let cell = |n: &str, c: &str| {
+        format!(
+            r##"<style:style style:name="{n}" style:family="table-cell"><style:table-cell-properties fo:background-color="#{c}"/></style:style>"##
+        )
+    };
+    let styles = format!(
+        r##"{}{}<style:style style:name="T" style:family="table"><style:table-properties fo:background-color="#ffff00"/></style:style><style:style style:name="R" style:family="table-row"><style:table-row-properties fo:background-color="#0000ff"/></style:style><style:style style:name="Clear" style:family="table-row" style:parent-style-name="R"><style:table-row-properties fo:background-color="transparent"/></style:style>"##,
+        cell("InRow", "ff0000"),
+        cell("InColumn", "00ff00"),
+    );
+    let c = "<table:table-cell><text:p>x</text:p></table:table-cell>";
+    let table = format!(
+        r#"<table:table table:style-name="T"><table:table-column table:default-cell-style-name="InColumn"/><table:table-column/><table:table-row table:style-name="R" table:default-cell-style-name="InRow">{c}{c}</table:table-row><table:table-row>{c}{c}</table:table-row><table:table-row table:style-name="Clear">{c}{c}</table:table-row></table:table>"#
+    );
+    let colours = |d: &wordcraft_doc::Document| {
+        d.body
+            .iter()
+            .find_map(|b| b.as_table())
+            .map(|t| t.rows.iter().flat_map(|r| r.cells.iter().map(|c| c.props.shading.map(|s| s.hex().to_ascii_lowercase()))).collect::<Vec<_>>())
+            .unwrap_or_default()
+    };
+    let s = |v: &str| Some(v.to_string());
+    let want = vec![s("00ff00"), s("0000ff"), s("00ff00"), s("ffff00"), s("00ff00"), s("ffff00")];
+    let d = doc(&styles, &table);
+    assert_eq!(colours(&d), want);
+    assert_eq!(colours(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()), want);
+}
+
+/// A column default after a spanning cell belongs to the column the cell is in.
+#[test]
+fn a_column_default_counts_spanned_columns() {
+    let styles =
+        r##"<style:style style:name="C" style:family="table-cell"><style:table-cell-properties fo:background-color="#00ff00"/></style:style>"##;
+    let table = r#"<table:table><table:table-column/><table:table-column/><table:table-column table:default-cell-style-name="C"/><table:table-row><table:table-cell table:number-columns-spanned="2"><text:p>a</text:p></table:table-cell><table:covered-table-cell/><table:table-cell><text:p>b</text:p></table:table-cell></table:table-row></table:table>"#;
+    let d = doc(styles, table);
+    let t = d.body.iter().find_map(|b| b.as_table()).unwrap();
+    let last = t.rows[0].cells.iter().rev().find(|c| !c.blocks.is_empty()).unwrap();
+    assert_eq!(last.props.shading.map(|s| s.hex().to_ascii_lowercase()).as_deref(), Some("00ff00"));
+}
+
+/// A column's default cell style that names nothing there is no background, however long its name.
+#[test]
+fn a_column_default_naming_no_style_is_no_background() {
+    let long = "x".repeat(100_000);
+    let table = format!(
+        r#"<table:table><table:table-column table:number-columns-repeated="63" table:default-cell-style-name="{long}"/><table:table-row><table:table-cell><text:p>a</text:p></table:table-cell></table:table-row></table:table>"#
+    );
+    let d = doc("", &table);
+    let t = d.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.rows[0].cells[0].props.shading, None);
+}
+
+/// A cell style saying `transparent` over a coloured parent has no background of its own: what's
+/// behind it shows, in LibreOffice too, from a column's default cell style or the cell's own.
+#[test]
+fn a_transparent_cell_style_stops_its_parents_colour() {
+    let styles = r##"<style:style style:name="PC" style:family="table-cell"><style:table-cell-properties fo:background-color="#ff0000"/></style:style><style:style style:name="KC" style:family="table-cell" style:parent-style-name="PC"><style:table-cell-properties fo:background-color="transparent"/></style:style><style:style style:name="R" style:family="table-row"><style:table-row-properties fo:background-color="#0000ff"/></style:style>"##;
+    for (column, cell) in [(r#" table:default-cell-style-name="KC""#, ""), ("", r#" table:style-name="KC""#)] {
+        let table = format!(
+            r#"<table:table><table:table-column{column}/><table:table-row table:style-name="R"><table:table-cell{cell}><text:p>a</text:p></table:table-cell></table:table-row></table:table>"#
+        );
+        let d = doc(styles, &table);
+        let t = d.body.iter().find_map(|b| b.as_table()).unwrap();
+        assert_eq!(t.rows[0].cells[0].props.shading, crate::model::parse_color("#0000ff"), "{column}{cell}");
+    }
+}
+
+#[test]
 fn a_row_that_keeps_together_says_so() {
     // Table › Text Flow: a row not to break across pages. It came back from a save free to break.
     let styles = r#"<style:style style:name="R" style:family="table-row"><style:table-row-properties fo:keep-together="always"/></style:style><style:style style:name="H" style:family="table-row"><style:table-row-properties style:min-row-height="1in" fo:keep-together="always"/></style:style>"#;
