@@ -513,10 +513,23 @@ impl Paragraph {
     /// Start of the word at or before `off` (Ctrl+Left).
     pub fn word_start(&self, off: usize) -> usize {
         let off = self.clamp(off);
+        // Thai: use dictionary-based word boundaries.
+        if self.text.get(..off).and_then(|t| t.chars().next_back()).is_some_and(crate::cluster::is_thai_lao) {
+            return crate::cluster::thai_word_start(&self.text, off);
+        }
         let Some(before) = self.text.get(..off) else { return 0 };
         let mut idx = off;
         let mut seen_word = false;
         for (i, c) in before.char_indices().rev() {
+            if crate::cluster::is_thai_lao(c) {
+                // Crossed into Thai territory while scanning left.  If we haven't found a
+                // Latin word yet, delegate to Thai word navigation from the right edge of
+                // that Thai run; otherwise the Latin word we found is the target.
+                if !seen_word {
+                    return crate::cluster::thai_word_start(&self.text, i + c.len_utf8());
+                }
+                break;
+            }
             let w = crate::bidi::is_word_char(c);
             if w {
                 seen_word = true;
@@ -532,13 +545,17 @@ impl Paragraph {
     /// End of the word after `off`, including trailing spaces (Ctrl+Right, like Word).
     pub fn word_end(&self, off: usize) -> usize {
         let off = self.clamp(off);
+        // Thai: use dictionary-based word boundaries.
+        if self.text.get(off..).and_then(|t| t.chars().next()).is_some_and(crate::cluster::is_thai_lao) {
+            return crate::cluster::thai_word_end(&self.text, off);
+        }
         let Some(after) = self.text.get(off..) else { return self.text.len() };
         let it = after.char_indices().peekable();
         let mut end = self.text.len();
-        let first_word = after.chars().next().is_some_and(|c| crate::bidi::is_word_char(c) && c != '\'');
+        let first_word = after.chars().next().is_some_and(|c| crate::bidi::is_word_char(c) && !crate::cluster::is_thai_lao(c) && c != '\'');
         let mut in_space = false;
         for (i, c) in it {
-            let w = crate::bidi::is_word_char(c);
+            let w = crate::bidi::is_word_char(c) && !crate::cluster::is_thai_lao(c);
             if c == ' ' || c == NBSP {
                 in_space = true;
                 continue;
@@ -553,7 +570,13 @@ impl Paragraph {
     /// The word around `off` (double-click): (start, end) without trailing space.
     pub fn word_at(&self, off: usize) -> (usize, usize) {
         let off = self.clamp(off);
-        let is_w = |c: char| crate::bidi::is_word_char(c);
+        // Thai: use dictionary-based word boundaries.
+        let at_thai = self.text.get(off..).and_then(|t| t.chars().next()).is_some_and(crate::cluster::is_thai_lao);
+        let before_thai = off > 0 && self.text.get(..off).and_then(|t| t.chars().next_back()).is_some_and(crate::cluster::is_thai_lao);
+        if at_thai || before_thai {
+            return crate::cluster::thai_word_at(&self.text, off);
+        }
+        let is_w = |c: char| crate::bidi::is_word_char(c) && !crate::cluster::is_thai_lao(c);
         let mut a = off;
         for (i, c) in self.text.get(..off).unwrap_or("").char_indices().rev() {
             if !is_w(c) {
@@ -784,6 +807,45 @@ mod tests {
         assert_eq!(p.sentence_at(3), (0, 21));
         assert_eq!(p.next_boundary(0), 1);
         assert_eq!(p.prev_boundary(0), 0);
+    }
+
+    #[test]
+    fn thai_word_movement_routes_through_libthai() {
+        // "สวัสดีครับ": สวัสดี (0..18) | ครับ (18..30). Each Thai char = 3 UTF-8 bytes.
+        let thai = "\u{0E2A}\u{0E27}\u{0E31}\u{0E2A}\u{0E14}\u{0E35}\u{0E04}\u{0E23}\u{0E31}\u{0E1A}";
+        let p = Paragraph::with_text(thai, CharProps::default());
+        // Ctrl+Right from 0 → end of "สวัสดี".
+        assert_eq!(p.word_end(0), 18);
+        // Ctrl+Right from 18 → end of "ครับ".
+        assert_eq!(p.word_end(18), p.len());
+        // Ctrl+Left from end → start of "ครับ".
+        assert_eq!(p.word_start(p.len()), 18);
+        // Ctrl+Left from 18 → start of "สวัสดี".
+        assert_eq!(p.word_start(18), 0);
+        // Double-click in "สวัสดี" selects it (no trailing space).
+        let (a, b) = p.word_at(6);
+        assert!(a <= 6 && b >= 6, "word_at(6) = ({a}, {b}) should straddle offset 6");
+        assert!(p.text.is_char_boundary(a) && p.text.is_char_boundary(b));
+    }
+
+    #[test]
+    fn word_start_mixed_thai_latin_does_not_skip_to_string_start() {
+        // "เริ่มต้นความสนุกด้วย Paradise Bangkok "
+        // Pressing opt+left with caret just before "P" must NOT jump to position 0.
+        // It should land at the last Thai word boundary inside the Thai prefix.
+        let s = "เริ่มต้นความสนุกด้วย Paradise Bangkok ";
+        let p = Paragraph::with_text(s, CharProps::default());
+        // Find the byte offset just before 'P' in "Paradise".
+        let before_p = s.find('P').expect("P must be in string");
+        let result = p.word_start(before_p);
+        assert_ne!(result, 0, "word_start from before 'Paradise' must not jump to position 0");
+        // The result must be a char boundary.
+        assert!(s.is_char_boundary(result), "result {result} is not a char boundary");
+        // The result must be within the Thai prefix (before the space before "Paradise").
+        assert!(result < before_p, "result {result} must be to the left of 'Paradise'");
+        // Pressing again from result should not still return 0 on the second press.
+        let second = p.word_start(result);
+        assert!(s.is_char_boundary(second));
     }
 
     proptest::proptest! {

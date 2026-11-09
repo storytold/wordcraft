@@ -506,6 +506,10 @@ pub struct ParaProps {
     /// file (not laid out yet); Word sizes a line by it, so dropping it changes Word's pages.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_alignment: Option<TextAlignment>,
+    /// Force a break opportunity between every character (stacked/vertical text, synthetic).
+    /// Not serialised to docx; set programmatically by the layout layer.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force_char_break: bool,
 }
 
 impl ParaProps {

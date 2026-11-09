@@ -222,6 +222,8 @@ pub struct ResolvedPara {
     pub auto_space_dn: bool,
     /// Lines snap to the document grid, when the section has one.
     pub snap_to_grid: bool,
+    /// Force a break opportunity between every character (stacked/vertical text, synthetic).
+    pub force_char_break: bool,
     /// Indents in characters (left, right, first line; 0 = in points), which win over the
     /// point values; see [`ResolvedPara::set_char_unit`].
     #[serde(default)]
@@ -308,6 +310,7 @@ impl ResolvedPara {
             auto_space_de: p.auto_space_de.unwrap_or(true),
             auto_space_dn: p.auto_space_dn.unwrap_or(true),
             snap_to_grid: p.snap_to_grid.unwrap_or(true),
+            force_char_break: p.force_char_break,
             indent_chars: [p.indent_left_chars, p.indent_right_chars, p.indent_first_chars]
                 .map(|c| c.filter(|c| c.is_finite()).unwrap_or(0.0).clamp(-MAX_CHARS, MAX_CHARS)),
         }
