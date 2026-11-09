@@ -4,7 +4,7 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `79019d58` plus this status commit — 40 commits over
+- HEAD at this writing: `eda7924f` plus this status commit — 43 commits over
   `4b0d3995`; the fork copy still carries the pre-rebase head
   `a6d6ae90` until it is force-pushed
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
@@ -33,6 +33,9 @@ missing, and where the next session should start.
   operation also reports the nodes beside its target whose content its inverse
   would overwrite (`Effect::touched`): a text edit another user made there after
   the step makes the undo `undo-conflict` instead of dropping that edit (§5.8).
+  The accepted answer to an undo/redo carries that `history` action on the wire,
+  so the replica that asked applies the inverse instead of discarding its own
+  delta (§5.9).
 - Role gates: viewer cannot write; commenter may only add/resolve comments
   (including the `review.*Comment` commands); owner alone commits (ADR-0008).
 - Presence (ephemeral, never journaled) carries the sender's `role`, stamped by
@@ -114,7 +117,8 @@ missing, and where the next session should start.
 - `WordApp::execute` is wrapped: read-only roles and a resynchronizing session
   refuse document commands before the engine runs; a local command is diffed and
   sent; `edit.undo`/`edit.redo` go to the room instead of the local snapshot
-  history.
+  history, and the accepted answer's inverse is applied at the author exactly
+  once (§5.9).
 - Participants window: status, role, participants, commit button (owner) and the
   commit result/warnings. Remote carets **and selection shading** are drawn on the
   canvas in the participant's colour.
@@ -173,7 +177,7 @@ missing, and where the next session should start.
 | Cursors, selections, participants visible | done | participants panel, remote carets + selection shading |
 | Changes converge without loss or duplicates | done | `a_replica_applies_the_deltas_and_converges`, socket tests |
 | Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot |
-| Per-user undo/redo | protocol done; the author's own replica does not apply the answer yet (§4) | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8 |
+| Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9 |
 | Viewer cannot edit | done | `a_viewer_cannot_write` + client gate |
 | Commit creates a new version, original kept | server side done | commit/409/`warnings[]`; cabinet owns versions |
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
@@ -301,17 +305,6 @@ Results at this writing:
   can be undone only newest first (§4, ADR-0010).
 - Offline editing is not supported: while a session reconnects, document commands
   pause instead of diverging.
-- **An undo reaches every peer but not the replica that asked for it.** The
-  server applies the step's inverse and journals the answer under the caller's
-  own `opId`, and `SyncState::apply` skips the caller's own deltas (right for an
-  optimistic edit, which the UI already applied: `our_own_answer_is_not_applied_twice`).
-  A `history` operation is never applied optimistically — `WordApp::execute`
-  returns before the engine runs — so the client that undoes keeps the old
-  document until a snapshot or a resync. This is in the client path
-  (`crates/collab-app/src/lib.rs`, `crates/collab-web/src/lib.rs`), not in the
-  adapter's inverses, and it affects text undo as much as a table undo; the fix
-  is to carry `history` on `Applied` (or keep it with the pending operation) and
-  apply the answer of a history operation. Not fixed here.
 - The token is read from the environment on desktop; the cabinet must push a fresh
   token through the host bridge when it arrives.
 - No two-machine manual GUI test; the UI tests are headless.
@@ -394,7 +387,8 @@ and `apps/wordcraft-web/src/web.rs` (web); test
    multi-operation undo transaction is done:
    `a_step_of_several_operations_lands_as_one_transaction`; the `opId` window
    survives a snapshot restore: §5.5; table-cell ids are done: §5.6; columns,
-   merges and splits are primitives: §5.7; their inverses are done: §5.8.)
+   merges and splits are primitives: §5.7; their inverses are done and an undo
+   answer lands at its author: §5.8, §5.9.)
 4. Manual acceptance (desktop): two desktops over the real server, a 100+ page
    document, commit and reopen in Word/LibreOffice.
 
@@ -792,6 +786,57 @@ wordcraft-collab-server -p wordcraft-collab-web` — 29 passed + 1 ignored (the
 LibreOffice commit gate) and 5 passed; `cargo clippy` on the three crates with
 `--all-targets -- -D warnings` clean; `cargo fmt --all -- --check` clean. No push
 was made and CI is unchanged.
+
+### 5.9 The author of an undo applies its own inverse (run 2026-11-09)
+
+§4 recorded that an undo reached every peer but not the replica that asked for
+it: the room applied the inverse, but `SyncState::apply` skipped every answer
+carrying the caller's own `opId`, and a `history` operation is never applied
+optimistically. **Head `eda7924f`** on `feature/realtime-collaboration`, with
+this entry's docs commit on top (no push, CI unchanged).
+
+**What the answer now says.** `Applied` gains `history` (serde-default, so the
+stored dedup window and older snapshots still load); `Journal::accept` fills it
+from `op.history`, so a deduplicated retry carries it too. `SyncState::apply`
+skips an own delta only when that field is absent. An own history answer is
+replayed like a remote delta — it is the only copy of the inverse, because the
+engine never ran for it — and lands exactly once; the ordinary optimistic edit
+keeps its skip (`our_own_answer_is_not_applied_twice`). The delta is replayed by
+the same `apply_delta` for text and for the table inverses: a merge, a split and
+a column removal undo through this path unchanged, and a `transaction` answer
+lands all-or-nothing on a scratch copy.
+
+**A refusal is shown, not swallowed.** `refusal_status` (shared by the desktop
+and web sessions) keeps `undo-conflict` and `unsupported` in `InSync` with the
+step still on the stack — the room refused before changing anything — and shows
+the reason in `last_error`; `stale`, `gone`, an expired lease or token move to
+`Resyncing` and ask for a snapshot (the desktop now requests one for a retryable
+refusal as well, as the web session already did). The error clears when the
+snapshot lands.
+
+**Tests.**
+
+- `crates/collab-app/src/tests.rs`:
+  `the_author_and_a_peer_apply_an_undo_answer_once` (two edits, then undo →
+  redo → undo → redo: the author sees each state without a snapshot, the peer
+  converges, and a later edit on the same node still refuses the older step),
+  `a_table_undo_reaches_its_author_and_the_peer_like_a_text_undo` (merge, split
+  and remove_column each apply the forward delta at the author, then undo back
+  to the original table JSON on both replicas),
+  `an_undo_in_a_table_is_refused_at_the_author_without_losing_the_peers_edit`
+  (the room answers `UndoConflict`, the author's document is byte-identical
+  before and after the refusal, the peer's text and the room version survive),
+  `a_refused_undo_is_an_error_and_a_stale_answer_resyncs` (status mapping).
+- The `Applied` literals in `crates/collab-client`, `crates/collab-ws` and
+  `apps/collab-server` gained the default field; their tests are unchanged.
+
+**Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo test -p
+wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine -p
+wordcraft-collab-app` — 49, 50, 17 and 14 passed; the wider run `-p
+wordcraft-collab-client -p wordcraft-collab-ws -p wordcraft-collab-server -p
+wordcraft-collab-web` — 13, 1 (the socket test), 29 + 1 ignored and 5 passed;
+`cargo clippy` on those six crates with `--all-targets -- -D warnings` clean;
+`cargo fmt --all -- --check` clean. No push was made and CI is unchanged.
 
 ## 6. Where things live
 
