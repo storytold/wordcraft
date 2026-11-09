@@ -128,6 +128,10 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
         // every field the same width.
         const FIELD: egui::Vec2 = egui::Vec2::new(64.0, 20.0);
         ui.spacing_mut().interact_size.y = FIELD.y;
+        // The fields stay 20 pt tall whatever face draws their text: with the default padding,
+        // Sarabun's taller line (a Thai interface, 1.30 em to Inter's 1.21) made each 21 pt and ran
+        // the group 2 pt into its label. `add_sized` still makes every field 20 pt.
+        ui.spacing_mut().button_padding.y = ui.spacing().button_padding.y.min(1.0);
         // The gap before the Spacing column sits inside its cells: `add_space` in a grid moves the
         // next cell in release builds but trips a debug assertion.
         let spaced = |ui: &mut Ui, text: egui::RichText| {
