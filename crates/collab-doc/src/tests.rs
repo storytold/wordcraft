@@ -1,10 +1,11 @@
 //! Adapter tests: two clients through one room, undo through inverse operations.
 
 use serde_json::json;
+use std::sync::Arc;
 use wordcraft_collab::ids::{NodeIds, NodeKey};
 use wordcraft_collab::room::{Model, Role, Room};
 use wordcraft_collab::wire::{Op, OpId, OpKind, Target};
-use wordcraft_doc::Document;
+use wordcraft_doc::{Block, Cell, CharProps, Document, Path, Pos, StoryRef, Table};
 
 use crate::DocModel;
 
@@ -349,4 +350,290 @@ fn a_nested_transaction_is_refused() {
     let err = crate::apply_delta(&mut doc, &mut ids, &json!({"op": "transaction", "ops": [{"op": "transaction", "ops": []}]}))
         .expect_err("nested transactions are not a wire form");
     assert!(err.contains("nested"), "{err}");
+}
+
+// --- tables: ids for tables, rows, cells and their paragraphs -------------
+
+/// A document whose second block is a `rows × cols` table; every cell reads
+/// `r{row}c{col}`, so a misplaced edit is visible.
+fn table_doc(rows: usize, cols: usize) -> Document {
+    let mut doc = Document::new();
+    let mut table = Table::new(rows, cols, 200.0);
+    for (r, row) in table.rows.iter_mut().enumerate() {
+        for (c, cell) in row.cells.iter_mut().enumerate() {
+            *cell = Cell::with_text(&format!("r{r}c{c}"));
+        }
+    }
+    doc.body.push(Arc::new(Block::Table(table)));
+    doc
+}
+
+const TABLE: u32 = 1;
+
+fn table_id(ids: &NodeIds) -> u32 {
+    ids.get(&NodeKey::new("body", vec![TABLE])).expect("the table has an id").0
+}
+
+fn row_id(ids: &NodeIds, row: u32) -> u32 {
+    ids.get(&NodeKey::new("body", vec![TABLE, row])).expect("the row has an id").0
+}
+
+fn cell_id(ids: &NodeIds, row: u32, cell: u32) -> u32 {
+    ids.get(&NodeKey::new("body", vec![TABLE, row, cell])).expect("the cell has an id").0
+}
+
+fn cell_para_id(ids: &NodeIds, row: u32, cell: u32) -> u32 {
+    ids.get(&NodeKey::new("body", vec![TABLE, row, cell, 0])).expect("the cell paragraph has an id").0
+}
+
+fn cell_pos(row: u32, cell: u32, off: usize) -> Pos {
+    Pos { story: StoryRef::Body, path: Path(vec![TABLE, row, cell, 0]), off }
+}
+
+fn cell_text(doc: &Document, row: u32, cell: u32) -> String {
+    doc.para(StoryRef::Body, &Path(vec![TABLE, row, cell, 0])).map(|para| para.text.clone()).unwrap_or_default()
+}
+
+fn table_rows(doc: &Document) -> usize {
+    doc.table(StoryRef::Body, &Path(vec![TABLE])).map_or(0, |table| table.rows.len())
+}
+
+#[test]
+fn every_table_node_gets_an_id_of_its_own() {
+    let doc = table_doc(2, 3);
+    let mut ids = NodeIds::new();
+    DocModel::new(doc).index_nodes(&mut ids);
+
+    let table = table_id(&ids);
+    assert_ne!(table, row_id(&ids, 0));
+    assert_ne!(row_id(&ids, 0), row_id(&ids, 1));
+    assert_ne!(cell_id(&ids, 0, 0), cell_id(&ids, 0, 1));
+    assert_ne!(cell_id(&ids, 0, 0), cell_para_id(&ids, 0, 0));
+    // The paragraphs of a cell belong to the cell, not to the story's block list.
+    assert_eq!(ids.resolve(wordcraft_collab::NodeId(cell_para_id(&ids, 1, 2))).map(|key| key.path.clone()), Ok(vec![TABLE, 1, 2, 0]));
+    // The block before the table and the table itself are distinct nodes.
+    assert!(ids.get(&NodeKey::new("body", vec![0])).is_some());
+    assert_ne!(ids.get(&NodeKey::new("body", vec![0])).map(|id| id.0), Some(table));
+}
+
+/// Two clients, each with its own replica and map, type in different cells of
+/// one table through the room; both replicas end up with the room's document.
+#[test]
+fn two_replicas_edit_different_cells_of_one_table_and_converge() {
+    let doc = table_doc(2, 2);
+    let mut room = Room::new(DocModel::new(doc.clone()));
+    let _ = room.join(None, false);
+
+    let mut alice = doc.clone();
+    let mut alice_ids = NodeIds::new();
+    DocModel::new(alice.clone()).index_nodes(&mut alice_ids);
+    let mut bob = doc.clone();
+    let mut bob_ids = NodeIds::new();
+    DocModel::new(bob.clone()).index_nodes(&mut bob_ids);
+
+    // Alice types at the end of cell (0, 0); her replica already holds the edit.
+    let alice_cell = cell_para_id(&alice_ids, 0, 0);
+    alice.insert_text(&cell_pos(0, 0, 4), "A", &CharProps::default()).expect("alice types");
+    let accepted = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Primitive, alice_cell, 4, json!({"op": "insert_text", "text": "A"})))
+        .expect("alice's edit lands");
+    if let Some(delta) = &accepted.delta {
+        crate::apply_delta(&mut bob, &mut bob_ids, delta).expect("bob mirrors alice");
+    }
+
+    // Bob answers in another cell, on the version Alice's edit produced.
+    let bob_cell = cell_para_id(&bob_ids, 1, 1);
+    bob.insert_text(&cell_pos(1, 1, 4), "B", &CharProps::default()).expect("bob types");
+    let accepted = room
+        .submit("bob", Role::Editor, op("b", 1, 1, OpKind::Primitive, bob_cell, 4, json!({"op": "insert_text", "text": "B"})))
+        .expect("bob's edit lands");
+    if let Some(delta) = &accepted.delta {
+        crate::apply_delta(&mut alice, &mut alice_ids, delta).expect("alice mirrors bob");
+    }
+
+    assert_eq!(cell_text(&alice, 0, 0), "r0c0A");
+    assert_eq!(cell_text(&alice, 1, 1), "r1c1B");
+    assert_eq!(cell_text(&bob, 0, 0), "r0c0A");
+    assert_eq!(cell_text(&bob, 1, 1), "r1c1B");
+    assert_same(&alice, room.model().document());
+    assert_same(&bob, room.model().document());
+    assert_eq!(room.version(), 2);
+}
+
+#[test]
+fn a_repeated_cell_edit_after_a_reconnect_is_applied_once() {
+    let mut room = Room::new(DocModel::new(table_doc(2, 2)));
+    let _ = room.join(None, false);
+    let cell = cell_para_id(room.ids(), 0, 0);
+    let edit = op("a", 1, 0, OpKind::Primitive, cell, 4, json!({"op": "insert_text", "text": "!"}));
+
+    let first = room.submit("alice", Role::Editor, edit.clone()).expect("the edit lands");
+    // The client never saw the answer and resends the same operation after a
+    // reconnect: the room answers from its `opId` window instead of applying it.
+    let again = room.submit("alice", Role::Editor, edit).expect("the retry is answered from the window");
+
+    assert_eq!(again.version, first.version);
+    assert_eq!(room.version(), 1);
+    assert_eq!(cell_text(room.model().document(), 0, 0), "r0c0!");
+}
+
+#[test]
+fn a_row_insert_moves_the_cell_ids_and_an_active_edit_lands_in_its_own_cell() {
+    let mut room = Room::new(DocModel::new(table_doc(2, 2)));
+    let _ = room.join(None, false);
+
+    // Bob reads the id of his cell before Alice restructures the table.
+    let bob_cell = cell_para_id(room.ids(), 1, 1);
+    let table = table_id(room.ids());
+    let empty_row = json!(Table::new(1, 2, 200.0).rows[0]);
+
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, table, 0, json!({"op": "insert_row", "index": 0, "row": empty_row})))
+        .expect("the row is inserted");
+
+    assert_eq!(table_rows(room.model().document()), 3);
+    // Bob's id moved with his cell: row 1 became row 2, the cell is the same.
+    assert_eq!(room.ids().resolve(wordcraft_collab::NodeId(bob_cell)).map(|key| key.path.clone()), Ok(vec![TABLE, 2, 1, 0]));
+
+    // His edit arrives after the insert and still lands in the cell he was in.
+    room.submit("bob", Role::Editor, op("b", 1, 1, OpKind::Primitive, bob_cell, 4, json!({"op": "insert_text", "text": "!"})))
+        .expect("the stale address still names Bob's cell");
+
+    let doc = room.model().document();
+    assert_eq!(cell_text(doc, 2, 1), "r1c1!");
+    assert_eq!(cell_text(doc, 1, 1), "r0c1", "the shifted row kept its own text");
+    assert_eq!(cell_text(doc, 0, 1), "", "the new row is empty");
+}
+
+#[test]
+fn a_removed_row_tombstones_its_cells_and_a_late_edit_is_gone() {
+    let mut room = Room::new(DocModel::new(table_doc(2, 2)));
+    let _ = room.join(None, false);
+    let table = table_id(room.ids());
+    let doomed = cell_para_id(room.ids(), 0, 1);
+
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, table, 0, json!({"op": "remove_row", "index": 0})))
+        .expect("the row is removed");
+
+    assert_eq!(table_rows(room.model().document()), 1);
+    assert_eq!(cell_text(room.model().document(), 0, 1), "r1c1", "the remaining row moved up");
+    let err = room
+        .submit("bob", Role::Editor, op("b", 1, 1, OpKind::Primitive, doomed, 4, json!({"op": "insert_text", "text": "!"})))
+        .expect_err("the cell is gone");
+    assert_eq!(err.code, wordcraft_collab::RejectCode::Gone);
+}
+
+#[test]
+fn splitting_a_paragraph_inside_a_cell_moves_only_that_cell() {
+    let mut room = Room::new(DocModel::new(table_doc(1, 2)));
+    let _ = room.join(None, false);
+    let in_cell = cell_para_id(room.ids(), 0, 0);
+    let other = cell_para_id(room.ids(), 0, 1);
+
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Primitive, in_cell, 2, json!({"op": "split_para"}))).expect("the cell paragraph splits");
+
+    let doc = room.model().document();
+    assert_eq!(doc.para(StoryRef::Body, &Path(vec![TABLE, 0, 0, 0])).map(|p| p.text.clone()), Some("r0".to_string()));
+    assert_eq!(doc.para(StoryRef::Body, &Path(vec![TABLE, 0, 0, 1])).map(|p| p.text.clone()), Some("c0".to_string()));
+    // The other cell and the story's own blocks did not move.
+    assert_eq!(room.ids().resolve(wordcraft_collab::NodeId(other)).map(|key| key.path.clone()), Ok(vec![TABLE, 0, 1, 0]));
+    assert!(room.ids().get(&NodeKey::new("body", vec![TABLE, 0, 0, 1])).is_some());
+}
+
+#[test]
+fn typing_in_a_cell_diffs_to_a_replace_range() {
+    let before = table_doc(2, 2);
+    let mut after = before.clone();
+    after.insert_text(&cell_pos(1, 0, 4), "!", &CharProps::default()).expect("type in the cell");
+    let applied = diff_and_apply(before, after.clone());
+    assert_same(&applied, &after);
+    assert_eq!(cell_text(&applied, 1, 0), "r1c0!");
+}
+
+#[test]
+fn inserting_a_row_diffs_to_insert_row() {
+    let before = table_doc(2, 2);
+    let mut after = before.clone();
+    after.table_mut(StoryRef::Body, &Path(vec![TABLE])).expect("table").insert_row(1, 0);
+    let applied = diff_and_apply(before, after.clone());
+    assert_same(&applied, &after);
+}
+
+#[test]
+fn deleting_a_row_diffs_to_remove_row() {
+    let before = table_doc(3, 2);
+    let mut after = before.clone();
+    after.table_mut(StoryRef::Body, &Path(vec![TABLE])).expect("table").delete_row(1);
+    let applied = diff_and_apply(before, after.clone());
+    assert_same(&applied, &after);
+}
+
+#[test]
+fn a_column_insert_is_still_reported_as_unsupported() {
+    let before = table_doc(2, 2);
+    let mut after = before.clone();
+    after.table_mut(StoryRef::Body, &Path(vec![TABLE])).expect("table").insert_col(1);
+    let mut ids = NodeIds::new();
+    DocModel::new(before.clone()).index_nodes(&mut ids);
+    assert!(matches!(crate::diff(&before, &after, &ids), Err(crate::DiffError::Unsupported(_))));
+}
+
+#[test]
+fn inserting_a_table_diffs_to_insert_block_and_its_cells_get_ids() {
+    let before = typed("Hello");
+    let mut after = before.clone();
+    let mut table = Table::new(2, 2, 200.0);
+    for (r, row) in table.rows.iter_mut().enumerate() {
+        for (c, cell) in row.cells.iter_mut().enumerate() {
+            *cell = Cell::with_text(&format!("r{r}c{c}"));
+        }
+    }
+    after.insert_block(StoryRef::Body, &Path::top(1), Block::Table(table)).expect("the table is inserted");
+    let applied = diff_and_apply(before, after.clone());
+    assert_same(&applied, &after);
+    // The inserted table is addressable right away, so the next edit in a cell
+    // is a primitive and does not resync.
+    let mut ids = NodeIds::new();
+    DocModel::new(applied.clone()).index_nodes(&mut ids);
+    assert!(ids.get(&NodeKey::new("body", vec![1, 1, 1, 0])).is_some());
+}
+
+#[test]
+fn undo_of_a_row_insert_removes_the_row_again() {
+    let mut room = Room::new(DocModel::new(table_doc(2, 2)));
+    let _ = room.join(None, false);
+    let table = table_id(room.ids());
+    room.submit(
+        "alice",
+        Role::Editor,
+        op("a", 1, 0, OpKind::Structural, table, 0, json!({"op": "insert_row", "index": 1, "row": json!(Table::new(1, 2, 200.0).rows[0])})),
+    )
+    .expect("insert");
+
+    let step = room.undo("alice").expect("undo step");
+    assert_eq!(step.label, "Insert row");
+    let mut undo_op = step.inverse.first().expect("inverse").clone();
+    undo_op.base_version = room.version();
+    room.submit("alice", Role::Editor, undo_op).expect("undo lands");
+
+    assert_eq!(table_rows(room.model().document()), 2);
+    assert_eq!(cell_text(room.model().document(), 1, 0), "r1c0");
+}
+
+#[test]
+fn a_replica_applies_a_row_insert_and_a_row_removal() {
+    let before = table_doc(2, 2);
+    let mut recent = before.clone();
+    recent.table_mut(StoryRef::Body, &Path(vec![TABLE])).expect("table").insert_row(1, 0);
+    let mut replica = before.clone();
+    let mut ids = NodeIds::new();
+    DocModel::new(before).index_nodes(&mut ids);
+
+    let row = serde_json::to_value(&recent.table(StoryRef::Body, &Path(vec![TABLE])).expect("table").rows[1]).expect("row json");
+    let table = table_id(&ids);
+    crate::apply_delta(&mut replica, &mut ids, &json!({"op": "insert_row", "nodeId": table, "index": 1, "row": row}))
+        .expect("the replica inserts the row");
+    assert_same(&replica, &recent);
+
+    crate::apply_delta(&mut replica, &mut ids, &json!({"op": "remove_row", "nodeId": table, "index": 1})).expect("the replica removes it");
+    assert_same(&replica, &table_doc(2, 2));
 }

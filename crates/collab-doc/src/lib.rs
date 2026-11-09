@@ -2,28 +2,40 @@
 //!
 //! The room applies normalized `primitive` and `structural` operations to a
 //! [`wordcraft_doc::Document`] (ADR-0001). Addresses are session node ids
-//! (ADR-0002): the adapter resolves an id to the paragraph path, applies the
-//! edit through the document's own edit primitives (`insert_text`,
-//! `delete_range`, `split_paragraph`, `insert_block`, `remove_block`), and
-//! rebases the id map after a block insertion or removal.
+//! (ADR-0002): the adapter resolves an id to the block path, applies the edit
+//! through the document's own edit primitives (`insert_text`, `delete_range`,
+//! `split_paragraph`, `insert_block`, `remove_block`), and rebases the id map
+//! after a structural edit.
+//!
+//! The id map addresses every block of every container, not only top-level
+//! ones: a table `[block]`, its rows `[block, row]`, its cells
+//! `[block, row, cell]` and the paragraphs inside a cell `[block, row, cell,
+//! block]` each get an id. Typing in a cell is therefore an ordinary
+//! `insert_text`/`replace_range` on that paragraph, not a command that makes
+//! every replica resync.
 //!
 //! Every applied operation produces an [`Effect`] with the inverse operations
 //! the per-user undo stack stores (ADR-0010). Text inverses are exact
-//! insert/delete pairs; structural inverses carry the removed block as JSON, so
-//! undo restores it without a snapshot.
+//! insert/delete pairs; structural inverses carry the removed block or row as
+//! JSON, so undo restores it without a snapshot.
 //!
 //! What this adapter deliberately does not do (v1):
 //! - it does not run `CommandSpec` commands (`kind: "command"` is refused);
 //! - it does not touch styles, numbering, comments or track changes;
-//! - it addresses top-level blocks only, not table cells or text boxes.
+//! - it normalizes block insert/remove, row insert/remove and text; a column
+//!   insert/remove, a cell merge or split and a text box stay commands.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+use std::sync::Arc;
 
 use serde_json::{Value, json};
 use wordcraft_collab::ids::NodeKey;
 use wordcraft_collab::ids::{NodeId, NodeIds};
 use wordcraft_collab::room::{Effect, Model};
 use wordcraft_collab::wire::{Op, OpId, OpKind, Reject, RejectCode, Target};
-use wordcraft_doc::{Block, CharProps, Document, Paragraph, Path, Pos, StoryRef};
+use wordcraft_doc::table::MAX_ROWS;
+use wordcraft_doc::table::MAX_TABLE_DEPTH;
+use wordcraft_doc::{Block, Blocks, CharProps, Document, Paragraph, Path, Pos, Row, StoryRef, Table};
 
 /// Payload key that names the primitive (`insert_text`, `delete_range`, …).
 pub const PAYLOAD_OP: &str = "op";
@@ -68,6 +80,8 @@ impl DocModel {
         match name {
             "insert_block" => self.insert_block(op, ids),
             "remove_block" => self.remove_block(op, ids),
+            "insert_row" => self.insert_row(op, ids),
+            "remove_row" => self.remove_row(op, ids),
             other => Err(invalid(op, format!("unknown structural operation {other:?}"))),
         }
     }
@@ -130,12 +144,14 @@ impl DocModel {
         let (story, path, off) = self.resolve_pos(op, ids)?;
         let pos = Pos { story, path: path.clone(), off };
         self.doc.split_paragraph(&pos).map_err(|err| invalid(op, err.to_string()))?;
-        // The new paragraph sits right after this one: shift every later block.
-        let block = path.0.first().copied().unwrap_or(0) as usize;
-        ids.shift_top_blocks(&story_name(story), block + 1, 1);
+        // The new paragraph sits right after this one in the same container (a
+        // story's block list or a table cell): shift that container only.
+        let container = path.parent().to_vec();
+        let at = path.last() + 1;
+        ids.shift_children(&story_name(story), &container, at, 1);
         // The new paragraph can be edited immediately: give it an id and tell
         // clients about the map (the server broadcasts nodes for this effect).
-        ids.id_for(&NodeKey::new(story_name(story), vec![(block + 1) as u32]));
+        ids.id_for(&NodeKey::new(story_name(story), path.with_last(at).0));
         let inverse = inverse_op(OpKind::Primitive, op, story, op.target.node_id, off, json!({"op": "merge_para"}));
         Ok(Effect {
             delta: Some(json!({"op": "split_para", "nodeId": op.target.node_id, "off": off})),
@@ -177,17 +193,18 @@ impl DocModel {
     /// Join this paragraph with the next one (the inverse of `split_para`).
     fn merge_para(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
         let (story, path, _off) = self.resolve_pos(op, ids)?;
-        let block = path.0.first().copied().unwrap_or(0) as usize;
         let para_len = self.doc.para(story, &path).map_or(0, |p| p.text.len());
-        let next = Path::top(block + 1);
+        let next = path.with_last(path.last() + 1);
         let start = Pos { story, path: path.clone(), off: para_len };
-        let end = Pos { story, path: next, off: 0 };
+        let end = Pos { story, path: next.clone(), off: 0 };
         self.doc.delete_range(&start, &end).map_err(|err| invalid(op, err.to_string()))?;
-        let removed_key = NodeKey::new(story_name(story), vec![(block + 1) as u32]);
-        if let Some(id) = ids.get(&removed_key) {
+        let key = NodeKey::new(story_name(story), next.0.clone());
+        if let Some(id) = ids.get(&key) {
             ids.remove(id, op.base_version);
         }
-        ids.shift_top_blocks(&story_name(story), block + 1, -1);
+        // Everything after the joined paragraph moves one place up, in this
+        // container only: a table cell keeps its own block numbering.
+        ids.shift_children(&story_name(story), path.parent(), next.last(), -1);
         let inverse = inverse_op(OpKind::Primitive, op, story, op.target.node_id, para_len, json!({"op": "split_para"}));
         Ok(Effect {
             delta: Some(json!({"op": "merge_para", "nodeId": op.target.node_id})),
@@ -200,7 +217,7 @@ impl DocModel {
 
     fn insert_block(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
         let story = parse_story(&op.target.story).ok_or_else(|| invalid(op, format!("unknown story {:?}", op.target.story)))?;
-        let index = self.block_index(op, ids, false)?;
+        let (container, index) = self.block_position(op, ids, false)?;
         let block = match op.payload.get("block") {
             Some(value) if !value.is_null() => {
                 serde_json::from_value::<Block>(value.clone()).map_err(|err| invalid(op, format!("bad block: {err}")))?
@@ -208,12 +225,24 @@ impl DocModel {
             _ => Block::Para(Paragraph::new()),
         };
         let block_json = serde_json::to_value(&block).unwrap_or(Value::Null);
-        self.doc.insert_block(story, &Path::top(index), block).map_err(|err| invalid(op, err.to_string()))?;
-        ids.shift_top_blocks(&story_name(story), index, 1);
-        ids.id_for(&NodeKey::new(story_name(story), vec![index as u32]));
-        let inverse = inverse_op(OpKind::Structural, op, story, 0, 0, json!({"op": "remove_block", "index": index}));
+        let target = child_path(&container, index);
+        self.doc.insert_block(story, &target, block).map_err(|err| invalid(op, err.to_string()))?;
+        let name = story_name(story);
+        ids.shift_children(&name, &container, index, 1);
+        // The new block can be edited immediately, and a table brings its rows
+        // and cells: issue their ids and tell clients about the map.
+        if let Some(inserted) = self.doc.block(story, &target) {
+            index_block(ids, &name, &mut container.clone(), index, inserted, 0);
+        }
+        let inverse = inverse_op(OpKind::Structural, op, story, 0, 0, block_payload("remove_block", &container, index, None));
         Ok(Effect {
-            delta: Some(json!({"op": "insert_block", "story": story_name(story), "index": index, "block": block_json})),
+            delta: Some(json!({
+                "op": "insert_block",
+                "story": name,
+                "index": index,
+                "path": container,
+                "block": block_json,
+            })),
             inverse: vec![inverse],
             forward: vec![op.clone()],
             label: "Insert block".into(),
@@ -223,18 +252,18 @@ impl DocModel {
 
     fn remove_block(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
         let story = parse_story(&op.target.story).ok_or_else(|| invalid(op, format!("unknown story {:?}", op.target.story)))?;
-        let index = self.block_index(op, ids, true)?;
-        let removed = self.doc.remove_block(story, &Path::top(index)).map_err(|err| invalid(op, err.to_string()))?;
-        if op.target.node_id != 0 {
-            ids.remove(NodeId(op.target.node_id), op.base_version);
-        } else if let Some(id) = ids.get(&NodeKey::new(story_name(story), vec![index as u32])) {
-            ids.remove(id, op.base_version);
-        }
-        ids.shift_top_blocks(&story_name(story), index + 1, -1);
+        let (container, index) = self.block_position(op, ids, true)?;
+        let target = child_path(&container, index);
+        let removed = self.doc.remove_block(story, &target).map_err(|err| invalid(op, err.to_string()))?;
+        let name = story_name(story);
+        // The block takes everything inside it (a table its rows and cells) out
+        // of the map, so a late edit is refused instead of landing elsewhere.
+        ids.remove_subtree(&name, &target.0, op.base_version);
+        ids.shift_children(&name, &container, index + 1, -1);
         let block = serde_json::to_value(&removed).unwrap_or(Value::Null);
-        let inverse = inverse_op(OpKind::Structural, op, story, 0, 0, json!({"op": "insert_block", "index": index, "block": block}));
+        let inverse = inverse_op(OpKind::Structural, op, story, 0, 0, block_payload("insert_block", &container, index, Some(block)));
         Ok(Effect {
-            delta: Some(json!({"op": "remove_block", "story": story_name(story), "index": index})),
+            delta: Some(json!({"op": "remove_block", "story": name, "index": index, "path": container})),
             inverse: vec![inverse],
             forward: vec![op.clone()],
             label: "Delete block".into(),
@@ -242,16 +271,117 @@ impl DocModel {
         })
     }
 
-    /// The block index an insert/remove addresses: `payload.index` when given,
-    /// otherwise the position of the node (`remove`) or right after it
-    /// (`insert`).
-    fn block_index(&self, op: &Op, ids: &NodeIds, exact_node: bool) -> Result<usize, Reject> {
-        if let Some(index) = op.payload.get("index").and_then(Value::as_u64) {
-            return usize::try_from(index).map_err(|_| invalid(op, "`index` does not fit"));
+    /// Insert a row into the table the operation addresses. `payload.index` is
+    /// the row position and `payload.row` the row itself: the authoritative
+    /// delta and its inverse carry the body, so a replica does not have to
+    /// guess which neighbour the row was copied from.
+    fn insert_row(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
+        let (story, table_path) = self.table_path(op, ids)?;
+        let index = self.row_index(op)?;
+        let row = match op.payload.get("row") {
+            Some(value) if !value.is_null() => serde_json::from_value::<Row>(value.clone()).map_err(|err| invalid(op, format!("bad row: {err}")))?,
+            _ => return Err(invalid(op, "insert_row needs `row`")),
+        };
+        let name = story_name(story);
+        let table = self.doc.table_mut(story, &table_path).map_err(|err| invalid(op, err.to_string()))?;
+        if table.rows.len() >= MAX_ROWS {
+            return Err(invalid(op, "the table is full"));
         }
-        let key = ids.resolve(NodeId(op.target.node_id)).map_err(|_| invalid(op, "insert/remove_block needs `index` or a known node"))?;
-        let block = key.path.first().copied().unwrap_or(0) as usize;
-        Ok(if exact_node { block } else { block + 1 })
+        let at = index.min(table.rows.len());
+        table.rows.insert(at, row.clone());
+        let row_json = serde_json::to_value(&row).unwrap_or(Value::Null);
+        let table_node = ids.id_for(&NodeKey::new(name.clone(), table_path.0.clone()));
+        ids.shift_children(&name, &table_path.0, at, 1);
+        index_row(ids, &name, &mut table_path.0.clone(), at, &row, 0);
+        let inverse = inverse_op(OpKind::Structural, op, story, table_node.0, 0, json!({"op": "remove_row", "index": at}));
+        Ok(Effect {
+            delta: Some(json!({"op": "insert_row", "nodeId": table_node.0, "index": at, "row": row_json})),
+            inverse: vec![inverse],
+            forward: vec![op.clone()],
+            label: "Insert row".into(),
+            nodes_changed: true,
+        })
+    }
+
+    fn remove_row(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
+        let (story, table_path) = self.table_path(op, ids)?;
+        let index = self.row_index(op)?;
+        let name = story_name(story);
+        let table = self.doc.table_mut(story, &table_path).map_err(|err| invalid(op, err.to_string()))?;
+        if index >= table.rows.len() {
+            return Err(invalid(op, "the row does not exist"));
+        }
+        let removed = table.rows.remove(index);
+        let row = serde_json::to_value(&removed).unwrap_or(Value::Null);
+        let gone = child_path(&table_path.0, index);
+        ids.remove_subtree(&name, &gone.0, op.base_version);
+        ids.shift_children(&name, &table_path.0, index + 1, -1);
+        let table_node = ids.id_for(&NodeKey::new(name, table_path.0.clone()));
+        let inverse = inverse_op(OpKind::Structural, op, story, table_node.0, 0, json!({"op": "insert_row", "index": index, "row": row}));
+        Ok(Effect {
+            delta: Some(json!({"op": "remove_row", "nodeId": table_node.0, "index": index})),
+            inverse: vec![inverse],
+            forward: vec![op.clone()],
+            label: "Delete row".into(),
+            nodes_changed: true,
+        })
+    }
+
+    /// The container and the index an insert/remove addresses.
+    ///
+    /// `payload.path` names the container: absent or empty is the story's block
+    /// list, `[b, r, c]` the block list of a cell (a table's row list and a
+    /// row's cell list are not block lists). `payload.index` is the position in
+    /// it. Without an index the target node supplies both: its own container and
+    /// its position (plus one for an insert, so the new block goes after it).
+    fn block_position(&self, op: &Op, ids: &NodeIds, exact_node: bool) -> Result<(Vec<u32>, usize), Reject> {
+        let container = match op.payload.get("path") {
+            Some(Value::Array(items)) => Some(indices(op, items)?),
+            Some(value) if !value.is_null() => return Err(invalid(op, "`path` must be a list of indexes")),
+            _ => None,
+        };
+        if let Some(index) = op.payload.get("index") {
+            let index = usize::try_from(index.as_u64().ok_or_else(|| invalid(op, "`index` must be a number"))?)
+                .map_err(|_| invalid(op, "`index` does not fit"))?;
+            return Ok((container.unwrap_or_default(), index));
+        }
+        if container.is_some() {
+            return Err(invalid(op, "insert/remove_block with `path` needs `index`"));
+        }
+        let Some(key) = ids.resolve(NodeId(op.target.node_id)).ok() else {
+            return Err(invalid(op, "insert/remove_block needs `index` or a known node"));
+        };
+        let container = key.path.get(..key.path.len().saturating_sub(1)).unwrap_or_default().to_vec();
+        let at = key.path.last().copied().unwrap_or(0) as usize;
+        Ok((container, if exact_node { at } else { at + 1 }))
+    }
+
+    /// The table a row operation addresses: the target node is the table itself
+    /// or any node inside one.
+    fn table_path(&self, op: &Op, ids: &NodeIds) -> Result<(StoryRef, Path), Reject> {
+        let key = ids.resolve(NodeId(op.target.node_id)).map_err(|why| match why {
+            wordcraft_collab::ids::Resolve::Gone(version) => {
+                Reject::new(op.op_id.clone(), RejectCode::Gone, format!("node {} was deleted at version {version}", op.target.node_id))
+            }
+            wordcraft_collab::ids::Resolve::Unknown => {
+                Reject::new(op.op_id.clone(), RejectCode::Invalid, format!("unknown node {}", op.target.node_id))
+            }
+        })?;
+        let story = parse_story(&key.story).ok_or_else(|| invalid(op, format!("unknown story {:?}", key.story)))?;
+        let mut path = Path(key.path.clone());
+        for _ in 0..=(MAX_TABLE_DEPTH.saturating_mul(4).saturating_add(4)) {
+            if self.doc.table(story, &path).is_some() {
+                return Ok((story, path));
+            }
+            let Some(parent) = enclosing_table(&path) else { break };
+            path = parent;
+        }
+        Err(invalid(op, "the operation is not addressed at a table or a cell of one"))
+    }
+
+    fn row_index(&self, op: &Op) -> Result<usize, Reject> {
+        let index = op.payload.get("index").and_then(Value::as_u64).ok_or_else(|| invalid(op, "a row operation needs `index`"))?;
+        usize::try_from(index).map_err(|_| invalid(op, "`index` does not fit"))
     }
 }
 
@@ -271,22 +401,96 @@ impl Model for DocModel {
         serde_json::to_vec(&self.doc).unwrap_or_default()
     }
 
-    /// Issue ids for every paragraph of the body and of the secondary stories.
+    /// Issue ids for every block of every container: paragraphs, tables, the
+    /// rows and cells of a table, and the blocks inside each cell.
     fn index_nodes(&self, ids: &mut NodeIds) {
-        for (index, block) in self.doc.body.iter().enumerate() {
-            if block.as_para().is_some() {
-                ids.id_for(&NodeKey::new("body", vec![index as u32]));
-            }
-        }
+        index_blocks(ids, "body", &mut Vec::new(), &self.doc.body, 0);
         for (part, story) in &self.doc.parts {
             let name = format!("part:{part}");
-            for (index, block) in story.blocks.iter().enumerate() {
-                if block.as_para().is_some() {
-                    ids.id_for(&NodeKey::new(name.clone(), vec![index as u32]));
-                }
-            }
+            index_blocks(ids, &name, &mut Vec::new(), &story.blocks, 0);
         }
     }
+}
+
+/// Issue ids for a block list and everything it contains. The walk is bounded
+/// like the document's own paragraph walk, so a hostile snapshot cannot nest
+/// tables without end.
+fn index_blocks(ids: &mut NodeIds, story: &str, prefix: &mut Vec<u32>, blocks: &Blocks, depth: usize) {
+    if depth > MAX_TABLE_DEPTH {
+        return;
+    }
+    for (index, block) in blocks.iter().enumerate() {
+        index_block(ids, story, prefix, index, block, depth);
+    }
+}
+
+fn index_block(ids: &mut NodeIds, story: &str, container: &mut Vec<u32>, index: usize, block: &Block, depth: usize) {
+    container.push(index as u32);
+    ids.id_for(&NodeKey::new(story, container.clone()));
+    if let Block::Table(table) = block {
+        index_table(ids, story, container, table, depth.saturating_add(1));
+    }
+    container.pop();
+}
+
+fn index_table(ids: &mut NodeIds, story: &str, table_path: &mut Vec<u32>, table: &Table, depth: usize) {
+    if depth > MAX_TABLE_DEPTH {
+        return;
+    }
+    for (r, row) in table.rows.iter().enumerate() {
+        index_row(ids, story, table_path, r, row, depth);
+    }
+}
+
+fn index_row(ids: &mut NodeIds, story: &str, table_path: &mut Vec<u32>, index: usize, row: &Row, depth: usize) {
+    table_path.push(index as u32);
+    ids.id_for(&NodeKey::new(story, table_path.clone()));
+    for (c, cell) in row.cells.iter().enumerate() {
+        table_path.push(c as u32);
+        ids.id_for(&NodeKey::new(story, table_path.clone()));
+        index_blocks(ids, story, table_path, &cell.blocks, depth.saturating_add(1));
+        table_path.pop();
+    }
+    table_path.pop();
+}
+
+/// The path of a child of `container` (a block list, a row list or a cell list).
+fn child_path(container: &[u32], index: usize) -> Path {
+    Path(container.iter().copied().chain(std::iter::once(index as u32)).collect())
+}
+
+/// The table that encloses `path`, one level up: a row id `[b, r]` and a cell id
+/// `[b, r, c]` name their table directly, a block inside a cell goes through
+/// the cell's table path.
+fn enclosing_table(path: &Path) -> Option<Path> {
+    let len = path.0.len();
+    match len % 3 {
+        2 => Some(Path(path.0.get(..len.checked_sub(1)?)?.to_vec())),
+        0 if len > 0 => Some(Path(path.0.get(..len.checked_sub(2)?)?.to_vec())),
+        _ => path.cell().map(|(table, _, _)| table),
+    }
+}
+
+fn indices(op: &Op, items: &[Value]) -> Result<Vec<u32>, Reject> {
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let index = item.as_u64().ok_or_else(|| invalid(op, "`path` must be a list of indexes"))?;
+        out.push(u32::try_from(index).map_err(|_| invalid(op, "a `path` index does not fit"))?);
+    }
+    Ok(out)
+}
+
+/// An inverse structural payload; the container travels only when it is not the
+/// story's block list, so a flat document's operations stay as they were.
+fn block_payload(name: &str, container: &[u32], index: usize, block: Option<Value>) -> Value {
+    let mut payload = json!({"op": name, "index": index});
+    if !container.is_empty() {
+        payload["path"] = json!(container);
+    }
+    if let Some(block) = block {
+        payload["block"] = block;
+    }
+    payload
 }
 
 /// Apply the authoritative delta of one operation to a replica's document and
@@ -324,37 +528,82 @@ pub fn apply_delta(doc: &mut Document, ids: &mut NodeIds, delta: &Value) -> Resu
         "split_para" => {
             let (story, path, off) = delta_pos(delta, ids)?;
             doc.split_paragraph(&Pos { story, path: path.clone(), off }).map_err(|err| err.to_string())?;
-            let block = path.0.first().copied().unwrap_or(0) as usize;
-            ids.shift_top_blocks(&story_name(story), block + 1, 1);
+            let container = path.parent().to_vec();
+            ids.shift_children(&story_name(story), &container, path.last() + 1, 1);
         }
         "merge_para" => {
             let (story, path, _) = delta_pos(delta, ids)?;
-            let block = path.0.first().copied().unwrap_or(0) as usize;
             let para_len = doc.para(story, &path).map_or(0, |para| para.text.len());
+            let next = path.with_last(path.last() + 1);
             let start = Pos { story, path: path.clone(), off: para_len };
-            let end = Pos { story, path: Path::top(block + 1), off: 0 };
+            let end = Pos { story, path: next.clone(), off: 0 };
             doc.delete_range(&start, &end).map_err(|err| err.to_string())?;
-            ids.shift_top_blocks(&story_name(story), block + 1, -1);
+            ids.remove_subtree(&story_name(story), &next.0, 0);
+            ids.shift_children(&story_name(story), path.parent(), next.last(), -1);
         }
         "insert_block" => {
             let story =
                 delta.get("story").and_then(Value::as_str).and_then(parse_story).ok_or_else(|| "insert_block has no known `story`".to_string())?;
+            let container = delta_indices(delta)?;
             let index = usize::try_from(delta.get("index").and_then(Value::as_u64).ok_or_else(|| "insert_block has no `index`".to_string())?)
                 .map_err(|_| "`index` does not fit".to_string())?;
             let block = match delta.get("block") {
                 Some(value) if !value.is_null() => serde_json::from_value::<Block>(value.clone()).map_err(|err| format!("bad block: {err}"))?,
                 _ => Block::Para(Paragraph::new()),
             };
-            doc.insert_block(story, &Path::top(index), block).map_err(|err| err.to_string())?;
-            ids.shift_top_blocks(&story_name(story), index, 1);
+            let target = child_path(&container, index);
+            doc.insert_block(story, &target, block).map_err(|err| err.to_string())?;
+            let name = story_name(story);
+            ids.shift_children(&name, &container, index, 1);
+            // A block that allocates ids (a table) gets them here, so the
+            // replica can address what it just drew before the map arrives.
+            if let Some(inserted) = doc.block(story, &target) {
+                index_block(ids, &name, &mut container.clone(), index, inserted, 0);
+            }
         }
         "remove_block" => {
             let story =
                 delta.get("story").and_then(Value::as_str).and_then(parse_story).ok_or_else(|| "remove_block has no known `story`".to_string())?;
+            let container = delta_indices(delta)?;
             let index = usize::try_from(delta.get("index").and_then(Value::as_u64).ok_or_else(|| "remove_block has no `index`".to_string())?)
                 .map_err(|_| "`index` does not fit".to_string())?;
-            doc.remove_block(story, &Path::top(index)).map_err(|err| err.to_string())?;
-            ids.shift_top_blocks(&story_name(story), index + 1, -1);
+            let target = child_path(&container, index);
+            doc.remove_block(story, &target).map_err(|err| err.to_string())?;
+            let name = story_name(story);
+            ids.remove_subtree(&name, &target.0, 0);
+            ids.shift_children(&name, &container, index + 1, -1);
+        }
+        "insert_row" => {
+            let (story, table_path) = delta_table(delta, doc, ids)?;
+            let index = usize::try_from(delta.get("index").and_then(Value::as_u64).ok_or_else(|| "insert_row has no `index`".to_string())?)
+                .map_err(|_| "`index` does not fit".to_string())?;
+            let row = match delta.get("row") {
+                Some(value) if !value.is_null() => serde_json::from_value::<Row>(value.clone()).map_err(|err| format!("bad row: {err}"))?,
+                _ => return Err("insert_row has no `row`".to_string()),
+            };
+            let table = doc.table_mut(story, &table_path).map_err(|err| err.to_string())?;
+            if table.rows.len() >= MAX_ROWS {
+                return Err("the table is full".to_string());
+            }
+            let at = index.min(table.rows.len());
+            table.rows.insert(at, row.clone());
+            let name = story_name(story);
+            ids.shift_children(&name, &table_path.0, at, 1);
+            index_row(ids, &name, &mut table_path.0.clone(), at, &row, 0);
+        }
+        "remove_row" => {
+            let (story, table_path) = delta_table(delta, doc, ids)?;
+            let index = usize::try_from(delta.get("index").and_then(Value::as_u64).ok_or_else(|| "remove_row has no `index`".to_string())?)
+                .map_err(|_| "`index` does not fit".to_string())?;
+            let table = doc.table_mut(story, &table_path).map_err(|err| err.to_string())?;
+            if index >= table.rows.len() {
+                return Err("the row does not exist".to_string());
+            }
+            table.rows.remove(index);
+            let name = story_name(story);
+            let gone = child_path(&table_path.0, index);
+            ids.remove_subtree(&name, &gone.0, 0);
+            ids.shift_children(&name, &table_path.0, index + 1, -1);
         }
         "command" => return Err("a command delta needs a Session, not a bare Document".to_string()),
         // One undo step may change several places; replicas must land all of
@@ -408,17 +657,19 @@ impl std::fmt::Display for DiffError {
     }
 }
 
-/// Turn the difference between `before` and `after` into the primitives the
+/// Turn the difference between `before` and `after` into the operations the
 /// server understands. Cloning a `Document` shares its blocks (`Arc`), so a
-/// command's before-image is cheap and untouched blocks are skipped by
-/// pointer. Table cells, formatting-only changes and multi-block rearrangements
-/// are reported as unsupported.
+/// command's before-image is cheap and untouched blocks are skipped by pointer.
+/// The walk descends into table cells, so typing in a cell is a `replace_range`
+/// on that paragraph's id and a row insert/remove is an `insert_row`/
+/// `remove_row`; formatting-only changes, a cell count or column change and
+/// multi-block rearrangements are reported as unsupported.
 pub fn diff(before: &Document, after: &Document, ids: &NodeIds) -> Result<Vec<LocalChange>, DiffError> {
     let mut changes = Vec::new();
-    diff_story("body", &before.body, &after.body, ids, &mut changes)?;
+    diff_blocks("body", &mut Vec::new(), &before.body, &after.body, ids, &mut changes)?;
     for (part, old) in &before.parts {
         let Some(new) = after.parts.get(part) else { return Err(DiffError::Unsupported(format!("story part:{part} removed"))) };
-        diff_story(&format!("part:{part}"), &old.blocks, &new.blocks, ids, &mut changes)?;
+        diff_blocks(&format!("part:{part}"), &mut Vec::new(), &old.blocks, &new.blocks, ids, &mut changes)?;
     }
     for part in after.parts.keys() {
         if !before.parts.contains_key(part) {
@@ -428,73 +679,190 @@ pub fn diff(before: &Document, after: &Document, ids: &NodeIds) -> Result<Vec<Lo
     Ok(changes)
 }
 
-fn diff_story(
+/// Diff one block list (a story, a table cell, a nested cell).
+fn diff_blocks(
     story: &str,
-    old: &[std::sync::Arc<Block>],
-    new: &[std::sync::Arc<Block>],
+    prefix: &mut Vec<u32>,
+    old: &[Arc<Block>],
+    new: &[Arc<Block>],
     ids: &NodeIds,
     out: &mut Vec<LocalChange>,
 ) -> Result<(), DiffError> {
     if old.len() == new.len() {
         for (block, (a, b)) in old.iter().zip(new).enumerate() {
-            if std::sync::Arc::ptr_eq(a, b) {
+            if Arc::ptr_eq(a, b) {
                 continue;
             }
-            match (a.as_ref(), b.as_ref()) {
-                (Block::Para(before), Block::Para(after)) => {
-                    let Some((off, len, text)) = text_change(&before.text, &after.text) else {
-                        return Err(DiffError::Unsupported(format!("block {block} in {story} changed without text (formatting)")));
-                    };
-                    let id = ids.get(&NodeKey::new(story, vec![block as u32])).ok_or(DiffError::MissingId { story: story.to_string(), block })?;
-                    out.push(LocalChange {
-                        kind: OpKind::Primitive,
-                        target: Target::new(story, id.0, off),
-                        payload: json!({"op": "replace_range", "len": len, "text": text}),
-                    });
-                }
-                _ => return Err(DiffError::Unsupported(format!("block {block} in {story} is a table or changed kind"))),
-            }
+            prefix.push(block as u32);
+            let result = diff_block(story, prefix, a, b, ids, out);
+            prefix.pop();
+            result?;
         }
         return Ok(());
     }
 
+    let where_ = block_where(story, prefix);
+
     if new.len() == old.len() + 1 {
         if let Some(at) = split_point(old, new) {
-            let id = ids.get(&NodeKey::new(story, vec![at as u32])).ok_or(DiffError::MissingId { story: story.to_string(), block: at })?;
+            let id = node_id(ids, story, prefix, at)?;
             let off = new[at].as_para().map(|para| para.text.len()).unwrap_or(0);
-            out.push(LocalChange { kind: OpKind::Primitive, target: Target::new(story, id.0, off), payload: json!({"op": "split_para"}) });
+            out.push(LocalChange { kind: OpKind::Primitive, target: Target::new(story, id, off), payload: json!({"op": "split_para"}) });
             return Ok(());
         }
         let Some(at) = one_insertion(old, new) else {
-            return Err(DiffError::Unsupported(format!("several blocks changed in {story}")));
-        };
-        let Some(Block::Para(_)) = new.get(at).map(|b| b.as_ref()) else {
-            return Err(DiffError::Unsupported(format!("a table was inserted in {story}")));
+            return Err(DiffError::Unsupported(format!("several blocks changed in {where_}")));
         };
         let block = serde_json::to_value(new[at].as_ref()).map_err(|err| DiffError::Unsupported(err.to_string()))?;
         out.push(LocalChange {
             kind: OpKind::Structural,
             target: Target::new(story, 0, 0),
-            payload: json!({"op": "insert_block", "index": at, "block": block}),
+            payload: block_payload("insert_block", prefix, at, Some(block)),
         });
         return Ok(());
     }
 
     if old.len() == new.len() + 1 {
         if let Some(at) = merge_point(old, new) {
-            let id = ids.get(&NodeKey::new(story, vec![at as u32])).ok_or(DiffError::MissingId { story: story.to_string(), block: at })?;
+            let id = node_id(ids, story, prefix, at)?;
             let off = new[at].as_para().map(|para| para.text.len()).unwrap_or(0);
-            out.push(LocalChange { kind: OpKind::Primitive, target: Target::new(story, id.0, off), payload: json!({"op": "merge_para"}) });
+            out.push(LocalChange { kind: OpKind::Primitive, target: Target::new(story, id, off), payload: json!({"op": "merge_para"}) });
             return Ok(());
         }
         let Some(at) = one_removal(old, new) else {
-            return Err(DiffError::Unsupported(format!("several blocks changed in {story}")));
+            return Err(DiffError::Unsupported(format!("several blocks changed in {where_}")));
         };
-        out.push(LocalChange { kind: OpKind::Structural, target: Target::new(story, 0, 0), payload: json!({"op": "remove_block", "index": at}) });
+        out.push(LocalChange {
+            kind: OpKind::Structural,
+            target: Target::new(story, 0, 0),
+            payload: block_payload("remove_block", prefix, at, None),
+        });
         return Ok(());
     }
 
-    Err(DiffError::Unsupported(format!("{} blocks became {} in {story}", old.len(), new.len())))
+    Err(DiffError::Unsupported(format!("{} blocks became {} in {where_}", old.len(), new.len())))
+}
+
+/// Diff one block that changed in place: its text, or everything inside it when
+/// the block is a table.
+fn diff_block(story: &str, path: &[u32], old: &Block, new: &Block, ids: &NodeIds, out: &mut Vec<LocalChange>) -> Result<(), DiffError> {
+    match (old, new) {
+        (Block::Para(before), Block::Para(after)) => {
+            let Some((off, len, text)) = text_change(&before.text, &after.text) else {
+                return Err(DiffError::Unsupported(format!("block {} in {story} changed without text (formatting)", path_text(path))));
+            };
+            let id = ids
+                .get(&NodeKey::new(story, path.to_vec()))
+                .ok_or_else(|| DiffError::MissingId { story: story.to_string(), block: path.last().copied().unwrap_or(0) as usize })?;
+            out.push(LocalChange {
+                kind: OpKind::Primitive,
+                target: Target::new(story, id.0, off),
+                payload: json!({"op": "replace_range", "len": len, "text": text}),
+            });
+            Ok(())
+        }
+        (Block::Table(before), Block::Table(after)) => diff_table(story, path, before, after, ids, out),
+        _ => Err(DiffError::Unsupported(format!("block {} in {story} is a table or changed kind", path_text(path)))),
+    }
+}
+
+/// Diff a table: edits inside its cells paragraph by paragraph, and a row that
+/// was added or removed as `insert_row`/`remove_row`.
+fn diff_table(story: &str, table_path: &[u32], old: &Table, new: &Table, ids: &NodeIds, out: &mut Vec<LocalChange>) -> Result<(), DiffError> {
+    if old.rows.len() == new.rows.len() {
+        for (r, (a, b)) in old.rows.iter().zip(&new.rows).enumerate() {
+            if same_row(a, b) {
+                continue;
+            }
+            if a.cells.len() != b.cells.len() || a.props != b.props || a.controls != b.controls {
+                return Err(DiffError::Unsupported(format!("row {r} of the table at {} changed shape", path_text(table_path))));
+            }
+            for (c, (before, after)) in a.cells.iter().zip(&b.cells).enumerate() {
+                if same_cell(before, after) {
+                    continue;
+                }
+                let mut cell_path = table_path.to_vec();
+                cell_path.push(r as u32);
+                cell_path.push(c as u32);
+                diff_blocks(story, &mut cell_path, &before.blocks, &after.blocks, ids, out)?;
+            }
+        }
+        return Ok(());
+    }
+
+    let where_ = format!("the table at {}", path_text(table_path));
+
+    if new.rows.len() == old.rows.len() + 1 {
+        let Some(at) = one_row_insertion(old, new) else {
+            return Err(DiffError::Unsupported(format!("several rows changed in {where_}")));
+        };
+        let id = node_id(ids, story, table_path, usize::MAX)?;
+        let row = serde_json::to_value(&new.rows[at]).map_err(|err| DiffError::Unsupported(err.to_string()))?;
+        out.push(LocalChange {
+            kind: OpKind::Structural,
+            target: Target::new(story, id, 0),
+            payload: json!({"op": "insert_row", "index": at, "row": row}),
+        });
+        return Ok(());
+    }
+
+    if old.rows.len() == new.rows.len() + 1 {
+        let Some(at) = one_row_removal(old, new) else {
+            return Err(DiffError::Unsupported(format!("several rows changed in {where_}")));
+        };
+        let id = node_id(ids, story, table_path, usize::MAX)?;
+        out.push(LocalChange { kind: OpKind::Structural, target: Target::new(story, id, 0), payload: json!({"op": "remove_row", "index": at}) });
+        return Ok(());
+    }
+
+    Err(DiffError::Unsupported(format!("{} rows became {} in {where_}", old.rows.len(), new.rows.len())))
+}
+
+/// The id of the child at `index` of `prefix`, or of `prefix` itself when
+/// `index` is [`usize::MAX`] (a table, addressed by its own node).
+fn node_id(ids: &NodeIds, story: &str, prefix: &[u32], index: usize) -> Result<u32, DiffError> {
+    let mut path = prefix.to_vec();
+    if index != usize::MAX {
+        path.push(index as u32);
+    }
+    ids.get(&NodeKey::new(story, path))
+        .map(|id| id.0)
+        .ok_or_else(|| DiffError::MissingId { story: story.to_string(), block: prefix.last().copied().unwrap_or(0) as usize })
+}
+
+fn block_where(story: &str, prefix: &[u32]) -> String {
+    if prefix.is_empty() { story.to_string() } else { format!("{} of {story}", path_text(prefix)) }
+}
+
+fn path_text(path: &[u32]) -> String {
+    path.iter().map(ToString::to_string).collect::<Vec<_>>().join("/")
+}
+
+/// Same row, judged without walking its text: props, controls, and the cell
+/// blocks by pointer (an untouched block is shared through `Arc`).
+fn same_row(a: &Row, b: &Row) -> bool {
+    a.props == b.props && a.controls == b.controls && a.cells.len() == b.cells.len() && a.cells.iter().zip(&b.cells).all(|(x, y)| same_cell(x, y))
+}
+
+fn same_cell(a: &wordcraft_doc::Cell, b: &wordcraft_doc::Cell) -> bool {
+    a.props == b.props
+        && a.controls == b.controls
+        && a.blocks.len() == b.blocks.len()
+        && a.blocks.iter().zip(&b.blocks).all(|(x, y)| Arc::ptr_eq(x, y))
+}
+
+fn one_row_insertion(old: &Table, new: &Table) -> Option<usize> {
+    (0..new.rows.len()).find(|&at| {
+        old.rows.iter().take(at).zip(&new.rows).all(|(a, b)| same_row(a, b))
+            && old.rows.iter().skip(at).zip(new.rows.iter().skip(at + 1)).all(|(a, b)| same_row(a, b))
+    })
+}
+
+fn one_row_removal(old: &Table, new: &Table) -> Option<usize> {
+    (0..old.rows.len()).find(|&at| {
+        old.rows.iter().take(at).zip(&new.rows).all(|(a, b)| same_row(a, b))
+            && old.rows.iter().skip(at + 1).zip(new.rows.iter().skip(at)).all(|(a, b)| same_row(a, b))
+    })
 }
 
 /// A paragraph split in two: the neighbours are untouched and the two new
@@ -570,6 +938,37 @@ fn delta_pos(delta: &Value, ids: &NodeIds) -> Result<(StoryRef, Path, usize), St
     let story = parse_story(&key.story).ok_or_else(|| format!("unknown story {:?}", key.story))?;
     let off = usize::try_from(delta.get("off").and_then(Value::as_u64).unwrap_or(0)).map_err(|_| "`off` does not fit".to_string())?;
     Ok((story, Path(key.path.clone()), off))
+}
+
+/// The container a block delta names: an absent or empty `path` is the story's
+/// block list.
+fn delta_indices(delta: &Value) -> Result<Vec<u32>, String> {
+    let Some(items) = delta.get("path").filter(|value| !value.is_null()) else { return Ok(Vec::new()) };
+    let items = items.as_array().ok_or_else(|| "`path` must be a list of indexes".to_string())?;
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let index = item.as_u64().ok_or_else(|| "`path` must be a list of indexes".to_string())?;
+        out.push(u32::try_from(index).map_err(|_| "a `path` index does not fit".to_string())?);
+    }
+    Ok(out)
+}
+
+/// The table a row delta addresses: the delta's node is the table itself or a
+/// cell of it, resolved the same way the server resolved the operation.
+fn delta_table(delta: &Value, doc: &Document, ids: &NodeIds) -> Result<(StoryRef, Path), String> {
+    let node = delta.get("nodeId").and_then(Value::as_u64).ok_or_else(|| "a row delta has no `nodeId`".to_string())?;
+    let node = u32::try_from(node).map_err(|_| "`nodeId` does not fit".to_string())?;
+    let key = ids.resolve(NodeId(node)).map_err(|_| format!("unknown node {node}"))?;
+    let story = parse_story(&key.story).ok_or_else(|| format!("unknown story {:?}", key.story))?;
+    let mut path = Path(key.path.clone());
+    for _ in 0..=(MAX_TABLE_DEPTH.saturating_mul(4).saturating_add(4)) {
+        if doc.table(story, &path).is_some() {
+            return Ok((story, path));
+        }
+        let Some(parent) = enclosing_table(&path) else { break };
+        path = parent;
+    }
+    Err(format!("node {node} is not in a table"))
 }
 
 fn delta_len(delta: &Value) -> Result<usize, String> {

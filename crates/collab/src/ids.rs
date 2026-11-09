@@ -6,6 +6,13 @@
 //! duration of the session. Clients address `(nodeId, off)`; the server
 //! resolves the id back to its current path.
 //!
+//! The key is the whole [`Path`](wordcraft_doc::Path), so the map addresses
+//! blocks of every container, not only top-level ones: a table `[b]`, its rows
+//! `[b, r]`, its cells `[b, r, c]` and the paragraphs inside a cell
+//! `[b, r, c, block]` each get their own id. A structural edit shifts the index
+//! of the container it happened in and leaves every other index alone
+//! ([`NodeIds::shift_children`]); removing a node removes its subtree.
+//!
 //! A deleted id is tombstoned rather than reused: an operation that arrives
 //! late is refused as `Gone` instead of resurrecting a node under a new path.
 
@@ -127,27 +134,58 @@ impl NodeIds {
         self.tombstones.contains_key(&id)
     }
 
-    /// Shift the top-level block index of every node in `story` whose block is
-    /// at or after `at`, after a block was inserted (`delta` > 0) or removed
-    /// (`delta` < 0). Deeper paths (table cells) are not shifted: v1 addresses
-    /// top-level blocks only.
-    pub fn shift_top_blocks(&mut self, story: &str, at: usize, delta: i32) {
+    /// Shift the child index of every node in `story` whose path starts with
+    /// `container`, after a child at `at` was inserted (`delta` > 0) or removed
+    /// (`delta` < 0) in that container.
+    ///
+    /// An empty container is the story's block list; `[b]` is the row list of
+    /// the table at block `b`; `[b, r]` is the cell list of that row; `[b, r, c]`
+    /// is the block list of that cell. Children of the shifted nodes move with
+    /// them, because every path below the container keeps its trailing indexes:
+    /// a row inserted above cell `(2, 1)` moves its id from `[b, 2, 1, …]` to
+    /// `[b, 3, 1, …]` and the cell still names the same content.
+    pub fn shift_children(&mut self, story: &str, container: &[u32], at: usize, delta: i32) {
+        let depth = container.len();
         let moved: Vec<(NodeId, NodeKey)> = self
             .back
             .iter()
-            .filter(|(_, key)| key.story == story && key.path.first().is_some_and(|first| (*first as usize) >= at))
+            .filter(|(_, key)| {
+                key.story == story
+                    && key.path.len() > depth
+                    && key.path.starts_with(container)
+                    && key.path.get(depth).is_some_and(|index| (*index as usize) >= at)
+            })
             .map(|(id, key)| (*id, key.clone()))
             .collect();
         for (id, mut key) in moved {
-            if let Some(first) = key.path.first_mut() {
-                let shifted = i64::from(*first) + i64::from(delta);
-                *first = u32::try_from(shifted.max(0)).unwrap_or(u32::MAX);
+            if let Some(index) = key.path.get_mut(depth) {
+                let shifted = i64::from(*index) + i64::from(delta);
+                *index = u32::try_from(shifted.max(0)).unwrap_or(u32::MAX);
             }
             if let Some(old) = self.back.insert(id, key.clone()) {
                 self.forward.remove(&old);
             }
             self.forward.insert(key, id);
         }
+    }
+
+    /// Delete every id at or below `path` in `story` at version `at`: a removed
+    /// block, row or cell takes the nodes it contains with it. Their ids are
+    /// tombstoned, so a late operation on any of them is refused as `Gone`
+    /// instead of landing on whatever now sits at that path.
+    pub fn remove_subtree(&mut self, story: &str, path: &[u32], at: Version) {
+        let gone: Vec<NodeId> = self.back.iter().filter(|(_, key)| key.story == story && key.path.starts_with(path)).map(|(id, _)| *id).collect();
+        for id in gone {
+            self.remove(id, at);
+        }
+    }
+
+    /// Shift the top-level block index of every node in `story` whose block is
+    /// at or after `at`, after a block was inserted (`delta` > 0) or removed
+    /// (`delta` < 0). Nested nodes move with their block; an edit inside a table
+    /// cell shifts through [`NodeIds::shift_children`] with that cell's path.
+    pub fn shift_top_blocks(&mut self, story: &str, at: usize, delta: i32) {
+        self.shift_children(story, &[], at, delta);
     }
 
     /// Forget tombstones older than `before` (ADR-0003 keeps ids at least as
@@ -213,5 +251,75 @@ mod tests {
         ids.compact(5);
         assert!(!ids.is_tombstoned(old));
         assert!(ids.is_tombstoned(recent));
+    }
+
+    #[test]
+    fn a_row_inserted_above_moves_the_cells_it_does_not_touch() {
+        let mut ids = NodeIds::new();
+        let table = ids.id_for(&NodeKey::new("body", vec![2]));
+        let first_row = ids.id_for(&NodeKey::new("body", vec![2, 0]));
+        let cell = ids.id_for(&NodeKey::new("body", vec![2, 0, 1]));
+        let cell_para = ids.id_for(&NodeKey::new("body", vec![2, 0, 1, 0]));
+        let above = ids.id_for(&NodeKey::new("body", vec![1]));
+
+        ids.shift_children("body", &[2], 0, 1);
+
+        // The table and the block above keep their place; the row, its cell and
+        // the paragraph inside the cell move together.
+        assert_eq!(ids.resolve(table).map(|k| k.path.clone()), Ok(vec![2]));
+        assert_eq!(ids.resolve(above).map(|k| k.path.clone()), Ok(vec![1]));
+        assert_eq!(ids.resolve(first_row).map(|k| k.path.clone()), Ok(vec![2, 1]));
+        assert_eq!(ids.resolve(cell).map(|k| k.path.clone()), Ok(vec![2, 1, 1]));
+        assert_eq!(ids.resolve(cell_para).map(|k| k.path.clone()), Ok(vec![2, 1, 1, 0]));
+        // The map still answers by path: the moved id owns its new key.
+        assert_eq!(ids.get(&NodeKey::new("body", vec![2, 1, 1])), Some(cell));
+    }
+
+    #[test]
+    fn a_row_removed_takes_its_cells_and_the_later_rows_move_up() {
+        let mut ids = NodeIds::new();
+        let removed_row = ids.id_for(&NodeKey::new("body", vec![0, 0]));
+        let removed_cell = ids.id_for(&NodeKey::new("body", vec![0, 0, 0]));
+        let removed_para = ids.id_for(&NodeKey::new("body", vec![0, 0, 0, 0]));
+        let kept = ids.id_for(&NodeKey::new("body", vec![0, 1, 0, 0]));
+
+        ids.remove_subtree("body", &[0, 0], 4);
+        ids.shift_children("body", &[0], 1, -1);
+
+        for id in [removed_row, removed_cell, removed_para] {
+            assert_eq!(ids.resolve(id), Err(Resolve::Gone(4)));
+        }
+        assert_eq!(ids.resolve(kept).map(|k| k.path.clone()), Ok(vec![0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn removing_a_table_block_removes_every_node_below_it() {
+        let mut ids = NodeIds::new();
+        let table = ids.id_for(&NodeKey::new("body", vec![3]));
+        let row = ids.id_for(&NodeKey::new("body", vec![3, 0]));
+        let cell = ids.id_for(&NodeKey::new("body", vec![3, 0, 0]));
+        let other = ids.id_for(&NodeKey::new("body", vec![4]));
+
+        ids.remove_subtree("body", &[3], 2);
+
+        assert!(ids.resolve(table).is_err());
+        assert!(ids.resolve(row).is_err());
+        assert!(ids.resolve(cell).is_err());
+        // A block at a path that merely starts with the same digits stays.
+        assert_eq!(ids.resolve(other).map(|k| k.path.clone()), Ok(vec![4]));
+    }
+
+    #[test]
+    fn a_shift_inside_a_cell_leaves_the_table_and_its_other_cells_alone() {
+        let mut ids = NodeIds::new();
+        let table = ids.id_for(&NodeKey::new("body", vec![1]));
+        let cell_a = ids.id_for(&NodeKey::new("body", vec![1, 0, 0, 0]));
+        let cell_b = ids.id_for(&NodeKey::new("body", vec![1, 0, 1, 0]));
+
+        ids.shift_children("body", &[1, 0, 0], 0, 1);
+
+        assert_eq!(ids.resolve(table).map(|k| k.path.clone()), Ok(vec![1]));
+        assert_eq!(ids.resolve(cell_a).map(|k| k.path.clone()), Ok(vec![1, 0, 0, 1]));
+        assert_eq!(ids.resolve(cell_b).map(|k| k.path.clone()), Ok(vec![1, 0, 1, 0]));
     }
 }

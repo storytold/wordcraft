@@ -8,7 +8,7 @@ use wordcraft_collab::ids::NodeIds;
 use wordcraft_collab::room::{Model, Role, Room};
 use wordcraft_collab::wire::{Op, OpId, OpKind, RejectCode, Target};
 
-use wordcraft_doc::{Block, CharProps, Document, Paragraph};
+use wordcraft_doc::{Block, CharProps, Document, Paragraph, Path, StoryRef};
 use wordcraft_engine::Session;
 
 use crate::SessionModel;
@@ -172,6 +172,64 @@ fn a_primitive_delta_replays_on_a_replica_session() {
     crate::apply_delta(&mut replica, &mut ids, applied.delta.as_ref().expect("a delta")).expect("the replica applies the delta");
     let text = replica.doc.body.first().and_then(|block| block.as_para()).map(|para| para.text.clone()).unwrap_or_default();
     assert_eq!(text, "Hi");
+}
+
+#[test]
+fn a_table_row_insert_lands_through_the_session_adapter_and_moves_cell_ids() {
+    let mut doc = Document::new();
+    let mut table = wordcraft_doc::Table::new(2, 2, 200.0);
+    for (r, row) in table.rows.iter_mut().enumerate() {
+        for (c, cell) in row.cells.iter_mut().enumerate() {
+            *cell = wordcraft_doc::Cell::with_text(&format!("r{r}c{c}"));
+        }
+    }
+    doc.body.push(Arc::new(Block::Table(table)));
+    let mut room = Room::new(SessionModel::from_document(doc));
+    let plan = room.join(None, false);
+    let table_node = plan.nodes.iter().find(|node| node.path == vec![1]).expect("the table has an id").id;
+    let cell_node = plan.nodes.iter().find(|node| node.path == vec![1, 1, 1, 0]).expect("the cell paragraph has an id").id;
+
+    let row = json!(wordcraft_doc::Table::new(1, 2, 200.0).rows[0]);
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, table_node, 0, json!({"op": "insert_row", "index": 0, "row": row})))
+        .expect("the row lands through the session adapter");
+
+    assert_eq!(room.model().session().doc.table(StoryRef::Body, &Path(vec![1])).map_or(0, |t| t.rows.len()), 3);
+    // The client's cell id followed its cell to row 2 instead of naming the new
+    // empty row.
+    let key = room.ids().resolve(wordcraft_collab::NodeId(cell_node)).expect("the id is live");
+    assert_eq!(key.path, vec![1, 2, 1, 0]);
+    assert_eq!(room.model().session().doc.para(StoryRef::Body, &Path(vec![1, 2, 1, 0])).map(|p| p.text.clone()), Some("r1c1".to_string()));
+}
+
+#[test]
+fn a_table_command_retires_the_cell_ids_it_moves() {
+    let mut doc = Document::new();
+    let mut table = wordcraft_doc::Table::new(2, 2, 200.0);
+    for (r, row) in table.rows.iter_mut().enumerate() {
+        for (c, cell) in row.cells.iter_mut().enumerate() {
+            *cell = wordcraft_doc::Cell::with_text(&format!("r{r}c{c}"));
+        }
+    }
+    doc.body.push(Arc::new(Block::Table(table)));
+    let mut room = Room::new(SessionModel::from_document(doc));
+    let plan = room.join(None, false);
+    let stale = plan.nodes.iter().find(|node| node.path == vec![1, 1, 1, 0]).expect("a cell id").id;
+    let caret = plan.nodes.iter().find(|node| node.path == vec![1, 1, 1, 0]).expect("a caret node").id;
+
+    // A command the client could not normalize (a stale client, or track
+    // changes on) inserts a row above; the cell ids of that table move.
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Command, caret, 4, json!({"command": "table.insertRowAbove"})))
+        .expect("the command runs");
+
+    assert_eq!(room.model().session().doc.table(StoryRef::Body, &Path(vec![1])).map_or(0, |t| t.rows.len()), 3);
+    // The id is retired, not re-pointed: an edit that still carries it is
+    // refused instead of landing in another cell.
+    let id = wordcraft_collab::NodeId(stale);
+    assert!(matches!(room.ids().resolve(id), Err(wordcraft_collab::ids::Resolve::Gone(_))));
+    let err = room
+        .submit("bob", Role::Editor, op("b", 1, 1, OpKind::Primitive, stale, 0, json!({"op": "insert_text", "text": "!"})))
+        .expect_err("the stale cell id is refused");
+    assert_eq!(err.code, RejectCode::Gone);
 }
 
 #[test]

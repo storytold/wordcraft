@@ -19,7 +19,8 @@ use wordcraft_collab::room::{Effect, Model};
 use wordcraft_collab::wire::{Op, OpKind, Reject, RejectCode};
 use wordcraft_collab_doc::DocModel;
 use wordcraft_doc::props::CharProps;
-use wordcraft_doc::{Document, Path, Pos, StoryRef};
+use wordcraft_doc::table::MAX_TABLE_DEPTH;
+use wordcraft_doc::{Block, Blocks, Document, Path, Pos, StoryRef};
 use wordcraft_engine::{Selection, Session};
 
 /// Command areas that must never run from a network operation.
@@ -51,7 +52,7 @@ impl SessionModel {
     /// A command operation: `{"command": "format.bold", "params": {...}, "pending": {...}}`
     /// with the caret in `target`. The author is the JWT actor, never the
     /// operation's payload (ADR-0008).
-    fn apply_command(&mut self, actor: &str, op: &Op, ids: &NodeIds) -> Result<Effect, Reject> {
+    fn apply_command(&mut self, actor: &str, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
         let command = op.payload.get("command").and_then(Value::as_str).ok_or_else(|| invalid(op, "a command operation needs `command`"))?;
         if !allowed_command(command) {
             return Err(Reject::new(op.op_id.clone(), RejectCode::Forbidden, format!("command {command} is not available over the network")));
@@ -86,8 +87,27 @@ impl SessionModel {
 
         let params = op.payload.get("params").cloned().unwrap_or(Value::Null);
         let before = doc_shape(&self.session.doc);
+        let tables_before = touch_tables(command).then(|| table_shapes(&self.session.doc));
         self.session.run(command, &params).map_err(|err| invalid(op, err.to_string()))?;
-        let nodes_changed = before != doc_shape(&self.session.doc);
+        let mut nodes_changed = before != doc_shape(&self.session.doc);
+        if let Some(tables_before) = tables_before {
+            let tables_after = table_shapes(&self.session.doc);
+            if tables_before != tables_after {
+                // The command moved rows or cells. Their ids name paths that
+                // mean something else now, so a stale id would edit the wrong
+                // cell; retire the moved tables' ids instead. A client that
+                // still holds one is refused as `Gone` and resyncs, which the
+                // command's node-map broadcast already asks it to do.
+                for shape in tables_before.iter().filter(|old| !tables_after.iter().any(|new| same_shape(old, new))) {
+                    ids.remove_subtree(&shape.story, &shape.path, op.base_version);
+                }
+                for shape in tables_after.iter().filter(|new| !tables_before.iter().any(|old| same_shape(old, new))) {
+                    ids.remove_subtree(&shape.story, &shape.path, op.base_version);
+                }
+                self.index_nodes(ids);
+                nodes_changed = true;
+            }
+        }
 
         // Per-user undo is the protocol's (ADR-0010); the room must not keep a
         // parallel history of full document snapshots for every command.
@@ -120,6 +140,57 @@ impl SessionModel {
 /// ids, so replicas need a fresh node map. Text and formatting leave it equal.
 fn doc_shape(doc: &Document) -> (usize, Vec<(u32, usize)>) {
     (doc.body.len(), doc.parts.iter().map(|(id, part)| (*id, part.blocks.len())).collect())
+}
+
+/// The table structure of a document: for every table, its path and how many
+/// cells each row holds. A command that changes this moves cells, so the ids of
+/// those tables cannot simply be re-indexed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TableShape {
+    story: String,
+    path: Vec<u32>,
+    cells: Vec<usize>,
+}
+
+fn same_shape(a: &TableShape, b: &TableShape) -> bool {
+    a.story == b.story && a.path == b.path && a.cells == b.cells
+}
+
+/// Whether a command can change table structure; the walk below is skipped for
+/// typing and formatting, which are the hot commands.
+fn touch_tables(command: &str) -> bool {
+    command.starts_with("table.") || command.starts_with("insert.")
+}
+
+fn table_shapes(doc: &Document) -> Vec<TableShape> {
+    let mut out = Vec::new();
+    collect_tables("body", &doc.body, &mut Vec::new(), &mut out, 0);
+    for (part, story) in &doc.parts {
+        collect_tables(&format!("part:{part}"), &story.blocks, &mut Vec::new(), &mut out, 0);
+    }
+    out
+}
+
+fn collect_tables(story: &str, blocks: &Blocks, prefix: &mut Vec<u32>, out: &mut Vec<TableShape>, depth: usize) {
+    if depth > MAX_TABLE_DEPTH {
+        return;
+    }
+    for (index, block) in blocks.iter().enumerate() {
+        prefix.push(index as u32);
+        if let Block::Table(table) = &**block {
+            out.push(TableShape { story: story.to_string(), path: prefix.clone(), cells: table.rows.iter().map(|row| row.cells.len()).collect() });
+            for (r, row) in table.rows.iter().enumerate() {
+                for (c, cell) in row.cells.iter().enumerate() {
+                    prefix.push(r as u32);
+                    prefix.push(c as u32);
+                    collect_tables(story, &cell.blocks, prefix, out, depth.saturating_add(1));
+                    prefix.pop();
+                    prefix.pop();
+                }
+            }
+        }
+        prefix.pop();
+    }
 }
 
 /// Apply an authoritative delta to a replica's `Session` (RFC §3.1). Primitive
