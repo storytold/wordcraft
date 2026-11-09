@@ -156,13 +156,14 @@ pub(crate) fn panel(app: &mut WordApp, ctx: &egui::Context) {
             ui.separator();
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
-        if let Some((sha256, warnings, version)) = &last_commit {
+        if let Some(commit) = &last_commit {
             ui.separator();
-            ui.label(format!("committed v{version} · {}", &sha256[..sha256.len().min(12)]));
-            if !warnings.is_empty() {
-                for warning in warnings {
-                    ui.colored_label(ui.visuals().warn_fg_color, warning);
-                }
+            ui.label(format!("committed v{} · {}", commit.version, &commit.sha256[..commit.sha256.len().min(12)]));
+            if let Some(cabinet) = &commit.cabinet {
+                ui.label(format!("cabinet version {} · etag {}", cabinet.version, cabinet.etag));
+            }
+            for warning in &commit.warnings {
+                ui.colored_label(ui.visuals().warn_fg_color, warning);
             }
         }
     });
@@ -171,25 +172,30 @@ pub(crate) fn panel(app: &mut WordApp, ctx: &egui::Context) {
     }
 }
 
-/// Commit: the cabinet owns the stored file when the host bridge opened the
-/// session (`wordcraft:commit`); without a host the sync server writes it and
-/// the answer shows in the panel.
+/// Commit: the room builds the file, and the server publishes it to the cabinet
+/// when it is configured with the commit callback (M87); the answer — the
+/// cabinet's version and etag — shows in the panel. A host bridge that owns the
+/// stored file instead gets `wordcraft:commit` (no `bytes`): that path is used
+/// only when the app has no live session to commit through.
 pub(crate) fn request_commit(app: &mut WordApp) {
-    #[cfg(target_arch = "wasm32")]
-    if let Some(session) = app.host_session.clone()
-        && let Some(commit) = &app.host_commit
+    if let Some(collab) = app.collab.as_mut()
+        && collab.can_commit()
     {
-        // The cabinet assembles/fetches the file itself, so `bytes` is omitted
-        // (the contract's `bytes?` is for a host that does not hold it).
-        let result = commit(session.session_id(), None);
-        match result {
-            Ok(()) => app.status("Committing…"),
-            Err(message) => app.status(format!("Commit failed: {message}")),
-        }
-        return;
-    }
-    if let Some(collab) = app.collab.as_mut() {
         collab.commit();
+    } else {
+        #[cfg(target_arch = "wasm32")]
+        if let Some(session) = app.host_session.clone()
+            && let Some(commit) = &app.host_commit
+        {
+            // The cabinet assembles/fetches the file itself, so `bytes` is
+            // omitted (the contract's `bytes?` is for a host that does not hold
+            // it).
+            let result = commit(session.session_id(), None);
+            match result {
+                Ok(()) => app.status("Committing…"),
+                Err(message) => app.status(format!("Commit failed: {message}")),
+            }
+        }
     }
 }
 

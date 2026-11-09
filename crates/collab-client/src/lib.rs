@@ -12,7 +12,9 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use wordcraft_collab::wire::{Applied, ClientMsg, HistoryAction, Op, OpId, OpKind, Participant, Reject, RejectCode, ServerMsg, Target, Version};
+use wordcraft_collab::wire::{
+    Applied, CabinetCommit, ClientMsg, HistoryAction, Op, OpId, OpKind, Participant, Reject, RejectCode, ServerMsg, Target, Version,
+};
 
 /// An id for one editing session, unique among the windows, tabs and machines
 /// working on the same document.
@@ -96,6 +98,8 @@ pub enum Event {
         version: Version,
         sha256: String,
         warnings: Vec<String>,
+        /// The cabinet's copy, when the room posted the file itself.
+        cabinet: Option<CabinetCommit>,
     },
     /// Nothing for the app to do.
     None,
@@ -283,7 +287,7 @@ impl Client {
                 }
                 Event::Snapshot { version, bytes, last }
             }
-            ServerMsg::Committed { version, sha256, warnings } => Event::Committed { version, sha256, warnings },
+            ServerMsg::Committed { version, sha256, warnings, cabinet } => Event::Committed { version, sha256, warnings, cabinet },
             ServerMsg::Error { code, message, retryable } => {
                 if retryable {
                     self.state = State::Resyncing;

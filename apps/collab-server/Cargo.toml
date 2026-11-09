@@ -20,8 +20,9 @@ wordcraft-docx = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+base64 = { workspace = true }
 log = { workspace = true }
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal", "io-util"] }
 axum = { version = "0.8.9", features = ["ws"] }
 jsonwebtoken = { version = "11.1.0", default-features = false, features = ["rust_crypto", "use_pem"] }
 futures-util = "0.3.34"

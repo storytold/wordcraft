@@ -3,7 +3,7 @@
 use serde_json::json;
 
 use wordcraft_collab::room::{Role, Room};
-use wordcraft_collab::wire::{Applied, ClientMsg, HistoryAction, OpId, OpKind, Reject, RejectCode, ServerMsg, Target, Version};
+use wordcraft_collab::wire::{Applied, CabinetCommit, ClientMsg, HistoryAction, OpId, OpKind, Reject, RejectCode, ServerMsg, Target, Version};
 use wordcraft_collab_doc::DocModel;
 use wordcraft_doc::Document;
 
@@ -273,4 +273,37 @@ fn a_round_trip_through_a_room_applies_the_operation() {
 
     let text = room.model().document().body.first().and_then(|b| b.as_para()).map(|p| p.text.clone()).unwrap_or_default();
     assert_eq!(text, "Hello");
+}
+
+/// The cabinet's copy of a commit (M87) travels in `committed` when the room
+/// published the file itself; an older server's answer, without the field,
+/// still parses as no cabinet copy.
+#[test]
+fn a_commit_answer_carries_the_cabinet_copy_when_the_room_published_it() {
+    let older: ServerMsg = serde_json::from_value(json!({"type": "committed", "version": 3, "sha256": "ab", "warnings": []})).expect("an older wire");
+    let event = Client::new("alice").on(older);
+    match event {
+        Event::Committed { version, cabinet, .. } => {
+            assert_eq!(version, 3);
+            assert_eq!(cabinet, None, "the server only built the file");
+        }
+        other => panic!("expected committed, got {other:?}"),
+    }
+
+    let published: ServerMsg = serde_json::from_value(json!({
+        "type": "committed",
+        "version": 4,
+        "sha256": "cd",
+        "warnings": [],
+        "cabinet": {"version": 1794186677u64, "etag": "1794186677"},
+    }))
+    .expect("the cabinet fields");
+    let event = Client::new("alice").on(published);
+    match event {
+        Event::Committed { version, cabinet, .. } => {
+            assert_eq!(version, 4);
+            assert_eq!(cabinet, Some(CabinetCommit { version: 1_794_186_677, etag: "1794186677".into() }));
+        }
+        other => panic!("expected committed, got {other:?}"),
+    }
 }

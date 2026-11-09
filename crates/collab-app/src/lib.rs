@@ -20,7 +20,7 @@ use wordcraft_collab::ids::{NodeId, NodeIds, NodeKey};
 use wordcraft_collab::room::Role;
 #[cfg(not(target_arch = "wasm32"))]
 use wordcraft_collab::wire::Participant;
-use wordcraft_collab::wire::{Applied, NodeRef, OpKind, Reject, RejectCode, Target, Version};
+use wordcraft_collab::wire::{Applied, CabinetCommit, NodeRef, OpKind, Reject, RejectCode, Target, Version};
 #[cfg(not(target_arch = "wasm32"))]
 use wordcraft_collab_client::Event;
 #[cfg(not(target_arch = "wasm32"))]
@@ -42,6 +42,21 @@ pub enum Status {
     Resyncing,
     Offline,
     Failed(String),
+}
+
+/// The last commit the room accepted, as the panel shows it. `cabinet` is set
+/// when the room posted the file to the cabinet itself (M87): its version and
+/// the etag the next commit is checked against.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Commit {
+    /// The room's document version the commit was taken at.
+    pub version: Version,
+    /// SHA-256 of the built `.docx`.
+    pub sha256: String,
+    /// What the file could not keep (ADR-0011).
+    pub warnings: Vec<String>,
+    /// The cabinet's copy, when the room published the file.
+    pub cabinet: Option<CabinetCommit>,
 }
 
 /// What a refusal means for the session. The room refuses before changing the
@@ -202,7 +217,7 @@ pub struct Collab {
     server: String,
     status: Status,
     participants: Vec<ParticipantView>,
-    commit: Option<(String, Vec<String>, Version)>,
+    commit: Option<Commit>,
     snapshot: Vec<u8>,
     snapshot_version: Version,
     last_presence: Option<Instant>,
@@ -266,7 +281,7 @@ impl Collab {
         &self.participants
     }
 
-    pub fn last_commit(&self) -> Option<&(String, Vec<String>, Version)> {
+    pub fn last_commit(&self) -> Option<&Commit> {
         self.commit.as_ref()
     }
 
@@ -340,9 +355,9 @@ impl Collab {
                     self.last_error = None;
                 }
             }
-            Event::Committed { version, sha256, warnings } => {
+            Event::Committed { version, sha256, warnings, cabinet } => {
                 self.state.version = self.state.version.max(version);
-                self.commit = Some((sha256, warnings, version));
+                self.commit = Some(Commit { version, sha256, warnings, cabinet });
             }
             Event::Resync { reason } => {
                 self.status = Status::Resyncing;

@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 
 use wordcraft_collab::room::Role;
 use wordcraft_collab::wire::{ClientMsg, OpKind, ServerMsg, Target, Version};
-pub use wordcraft_collab_app::{Cursor, ParticipantView, Status};
+pub use wordcraft_collab_app::{Commit, Cursor, ParticipantView, Status};
 use wordcraft_collab_app::{Outcome, SyncState, apply_presence};
 /// An id for one editing session: two apps on the same document must not share
 /// an operation id space (`wordcraft_collab_client::session_client_id`).
@@ -179,7 +179,7 @@ pub struct Collab {
     token: String,
     status: Status,
     participants: Vec<ParticipantView>,
-    commit: Option<(String, Vec<String>, Version)>,
+    commit: Option<Commit>,
     snapshot: Vec<u8>,
     snapshot_version: Version,
     last_presence_ms: f64,
@@ -248,7 +248,7 @@ impl Collab {
         &self.participants
     }
 
-    pub fn last_commit(&self) -> Option<&(String, Vec<String>, Version)> {
+    pub fn last_commit(&self) -> Option<&Commit> {
         self.commit.as_ref()
     }
 
@@ -348,9 +348,9 @@ impl Collab {
                     self.last_error = None;
                 }
             }
-            Event::Committed { version, sha256, warnings } => {
+            Event::Committed { version, sha256, warnings, cabinet } => {
                 self.state.version = self.state.version.max(version);
-                self.commit = Some((sha256, warnings, version));
+                self.commit = Some(Commit { version, sha256, warnings, cabinet });
             }
             Event::Resync { reason } => {
                 self.status = Status::Resyncing;

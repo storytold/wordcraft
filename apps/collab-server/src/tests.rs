@@ -32,7 +32,84 @@ fn token_sid(cfg: &Config, sub: &str, role: &str, app: &str, ttl: i64, sid: &str
 
 fn dev_config() -> Config {
     let dir = std::env::temp_dir().join(format!("wordcraft-collab-test-{}", std::process::id()));
-    Config { bind: "127.0.0.1:0".into(), jwt_secret: Some("test-secret".into()), jwt_pem: None, data_dir: dir, lease_ttl_secs: 120 }
+    Config { bind: "127.0.0.1:0".into(), jwt_secret: Some("test-secret".into()), jwt_pem: None, data_dir: dir, lease_ttl_secs: 120, cabinet: None }
+}
+
+/// A cabinet on loopback: each accepted connection is answered with the next
+/// reply (`None` closes without an answer, a lost response) and its request is
+/// queued for the test. The URL's `{sessionId}` is substituted by the server.
+async fn fake_cabinet(replies: Vec<Option<&'static str>>) -> (String, tokio::sync::mpsc::Receiver<String>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let (sender, receiver) = tokio::sync::mpsc::channel(16);
+    tokio::spawn(async move {
+        for reply in replies {
+            let Ok((mut stream, _)) = listener.accept().await else { return };
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 8192];
+            while let Ok(n) = stream.read(&mut chunk).await {
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..n]);
+                if let Some(split) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&request[..split]).to_ascii_lowercase();
+                    let length = head
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:").map(|value| value.trim().parse::<usize>().unwrap_or(0)))
+                        .unwrap_or(0);
+                    if request.len() >= split + 4 + length {
+                        break;
+                    }
+                }
+            }
+            let _ = sender.send(String::from_utf8_lossy(&request).to_string()).await;
+            if let Some(reply) = reply {
+                let _ = stream.write_all(reply.as_bytes()).await;
+            }
+        }
+    });
+    (format!("http://{address}/api/v1/internal/office/sessions/{{sessionId}}/commit"), receiver)
+}
+
+fn cabinet_reply(body: &'static str) -> &'static str {
+    // `Content-Length` must match the body, so the reply is built once here.
+    Box::leak(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).into_boxed_str())
+}
+
+fn config_with_cabinet(cfg: &Config, url: &str) -> Config {
+    Config {
+        cabinet: Some(crate::cabinet::CabinetConfig {
+            url: url.to_string(),
+            token: "service-token".into(),
+            timeout: Duration::from_secs(5),
+            attempts: 3,
+        }),
+        ..cfg.clone()
+    }
+}
+
+async fn spawn_server_with(cfg: Config) -> String {
+    let state = AppState::new(cfg);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app(state)).await;
+    });
+    format!("ws://{addr}/ws")
+}
+
+async fn next_committed_cabinet(
+    ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+) -> (u64, Option<wordcraft_collab::wire::CabinetCommit>) {
+    loop {
+        match next_msg(ws).await {
+            ServerMsg::Committed { version, cabinet, .. } => return (version, cabinet),
+            ServerMsg::Applied { .. } | ServerMsg::Nodes { .. } | ServerMsg::Presence { .. } | ServerMsg::Left { .. } => continue,
+            other => panic!("expected committed, got {other:?}"),
+        }
+    }
 }
 
 #[test]
@@ -575,7 +652,7 @@ async fn the_committed_docx_opens_in_libreoffice() {
         .expect("commit");
     let committed = loop {
         match next_msg(&mut owner).await {
-            ServerMsg::Committed { version, sha256, warnings } => break (version, sha256, warnings),
+            ServerMsg::Committed { version, sha256, warnings, .. } => break (version, sha256, warnings),
             ServerMsg::Applied { .. } => continue,
             other => panic!("expected committed, got {other:?}"),
         }
@@ -860,4 +937,197 @@ fn a_silent_session_loses_the_lease_after_its_ttl() {
     room.lock().expect("room lock").peers.remove("alice");
     assert!(super::register(&room, "bob", "sid-2", wordcraft_collab::room::Role::Editor, &tx, None).is_ok(), "a stale lease is taken over");
     assert_eq!(room.lock().expect("room lock").session, "sid-2");
+}
+
+/// A fresh data directory per test: rooms are restored from disk, so two tests
+/// sharing `dev_config`'s directory would see each other's snapshots.
+fn config_for(name: &str) -> Config {
+    let dir = std::env::temp_dir().join(format!("wordcraft-collab-test-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    Config { bind: "127.0.0.1:0".into(), jwt_secret: Some("test-secret".into()), jwt_pem: None, data_dir: dir, lease_ttl_secs: 120, cabinet: None }
+}
+
+/// The M87 path with two clients: the room posts the built `.docx` to the
+/// cabinet, and both peers see the cabinet's version and etag, not a local
+/// digest pretending to be a stored version. The second commit carries the
+/// etag the first answer named.
+#[tokio::test]
+async fn a_commit_is_published_to_the_cabinet_and_every_client_sees_its_version() {
+    let first = cabinet_reply(r#"{"version":1794186677,"etag":"1794186677"}"#);
+    let second = cabinet_reply(r#"{"version":1794186678,"etag":"1794186678"}"#);
+    let (cabinet_url, mut requests) = fake_cabinet(vec![Some(first), Some(second)]).await;
+    let cfg = config_with_cabinet(&config_for("cabinet-publish"), &cabinet_url);
+    let url = spawn_server_with(cfg.clone()).await;
+
+    let mut owner = connect(&url, &cfg, "owner", "owner").await;
+    let mut editor = connect(&url, &cfg, "editor", "editor").await;
+    let _ = next_msg(&mut owner).await;
+    let node = node_of(&mut owner).await;
+    let _ = next_msg(&mut editor).await;
+    let _ = node_of(&mut editor).await;
+
+    owner
+        .send(Message::Text(serde_json::to_string(&ClientMsg::Op { op: insert("owner", 1, 0, node, 0, "Cabinet") }).expect("json").into()))
+        .await
+        .expect("insert");
+    let _ = next_msg(&mut owner).await;
+    let _ = next_msg(&mut editor).await;
+
+    owner
+        .send(Message::Text(
+            serde_json::to_string(&ClientMsg::Commit { op_id: OpId::new("owner", 2), expected_version: 1, etag: None }).expect("json").into(),
+        ))
+        .await
+        .expect("commit");
+    let (version, cabinet) = next_committed_cabinet(&mut owner).await;
+    assert_eq!(version, 1, "the room version is unchanged by the publication");
+    assert_eq!(
+        cabinet,
+        Some(wordcraft_collab::wire::CabinetCommit { version: 1_794_186_677, etag: "1794186677".into() }),
+        "the panel shows the cabinet's copy"
+    );
+    let (_, peer) = next_committed_cabinet(&mut editor).await;
+    assert_eq!(peer, cabinet, "every subscriber sees the cabinet's version");
+
+    let request = requests.recv().await.expect("the cabinet was called");
+    assert!(request.starts_with("POST /api/v1/internal/office/sessions/session-1/commit"), "{request}");
+    assert!(request.contains("Authorization: Bearer service-token"), "{request}");
+    assert!(request.contains(r#""fileId":"doc-1""#), "{request}");
+    assert!(request.contains(r#""version":1"#), "{request}");
+    assert!(!request.contains("expectedVersion"), "the first commit of a session expects nothing: {request}");
+
+    owner
+        .send(Message::Text(
+            serde_json::to_string(&ClientMsg::Commit { op_id: OpId::new("owner", 3), expected_version: 1, etag: None }).expect("json").into(),
+        ))
+        .await
+        .expect("commit again");
+    let (_, again) = next_committed_cabinet(&mut owner).await;
+    assert_eq!(again.map(|commit| commit.etag), Some("1794186678".to_string()));
+    let second = requests.recv().await.expect("the cabinet was called again");
+    assert!(second.contains(r#""expectedVersion":"1794186677""#), "the etag of the previous answer is the expectation: {second}");
+    let _ = std::fs::remove_dir_all(&cfg.data_dir);
+}
+
+/// `409`: the file changed outside the session. Both clients resync (a
+/// retryable error), and nothing advances the room's expected etag.
+#[tokio::test]
+async fn a_cabinet_conflict_resyncs_every_client() {
+    let (cabinet_url, mut requests) = fake_cabinet(vec![Some("HTTP/1.1 409 Conflict\r\nContent-Length: 2\r\n\r\n{}")]).await;
+    let cfg = config_with_cabinet(&config_for("cabinet-conflict"), &cabinet_url);
+    let url = spawn_server_with(cfg.clone()).await;
+
+    let mut owner = connect(&url, &cfg, "owner", "owner").await;
+    let mut editor = connect(&url, &cfg, "editor", "editor").await;
+    let _ = next_msg(&mut owner).await;
+    let node = node_of(&mut owner).await;
+    let _ = next_msg(&mut editor).await;
+    let _ = node_of(&mut editor).await;
+    owner
+        .send(Message::Text(serde_json::to_string(&ClientMsg::Op { op: insert("owner", 1, 0, node, 0, "Edited") }).expect("json").into()))
+        .await
+        .expect("insert");
+    let _ = next_msg(&mut owner).await;
+    let _ = next_msg(&mut editor).await;
+
+    owner
+        .send(Message::Text(
+            serde_json::to_string(&ClientMsg::Commit { op_id: OpId::new("owner", 2), expected_version: 1, etag: None }).expect("json").into(),
+        ))
+        .await
+        .expect("commit");
+
+    for socket in [&mut owner, &mut editor] {
+        let notice = loop {
+            match next_msg(socket).await {
+                ServerMsg::Error { code, message, retryable } => break (code, message, retryable),
+                ServerMsg::Applied { .. } | ServerMsg::Nodes { .. } | ServerMsg::Presence { .. } | ServerMsg::Left { .. } => continue,
+                other => panic!("expected a resync notice, got {other:?}"),
+            }
+        };
+        assert_eq!(notice.0, "cabinetConflict");
+        assert!(notice.2, "the client resyncs: {}", notice.1);
+    }
+    let _ = requests.recv().await.expect("one request");
+    assert!(requests.try_recv().is_err(), "409 is not retried");
+    let _ = std::fs::remove_dir_all(&cfg.data_dir);
+}
+
+/// `401`: a deployment error. The owner is told once, without a retry, and no
+/// other peer is disturbed.
+#[tokio::test]
+async fn a_refused_cabinet_token_is_reported_once_without_a_retry() {
+    let (cabinet_url, mut requests) = fake_cabinet(vec![Some("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")]).await;
+    let cfg = config_with_cabinet(&config_for("cabinet-token"), &cabinet_url);
+    let url = spawn_server_with(cfg.clone()).await;
+
+    let mut owner = connect(&url, &cfg, "owner", "owner").await;
+    let _ = next_msg(&mut owner).await;
+    let node = node_of(&mut owner).await;
+    owner
+        .send(Message::Text(serde_json::to_string(&ClientMsg::Op { op: insert("owner", 1, 0, node, 0, "x") }).expect("json").into()))
+        .await
+        .expect("insert");
+    let _ = next_msg(&mut owner).await;
+
+    owner
+        .send(Message::Text(
+            serde_json::to_string(&ClientMsg::Commit { op_id: OpId::new("owner", 2), expected_version: 1, etag: None }).expect("json").into(),
+        ))
+        .await
+        .expect("commit");
+    let reject = loop {
+        match next_msg(&mut owner).await {
+            ServerMsg::Rejected { reject } => break reject,
+            ServerMsg::Applied { .. } => continue,
+            other => panic!("expected a rejection, got {other:?}"),
+        }
+    };
+    assert_eq!(reject.code, wordcraft_collab::wire::RejectCode::Forbidden);
+    assert!(reject.message.contains("token"), "{}", reject.message);
+    let request = requests.recv().await.expect("one request");
+    let request_line = request.lines().next().unwrap_or_default();
+    assert!(!request_line.contains("service-token"), "the token never goes in the URL: {request_line}");
+    assert!(requests.try_recv().is_err(), "401 gets exactly one attempt");
+    let _ = std::fs::remove_dir_all(&cfg.data_dir);
+}
+
+/// A network failure: the first answer is lost, the retry carries the same body
+/// (same `expectedVersion`, same digest) and both clients see the stored copy.
+#[tokio::test]
+async fn a_lost_cabinet_answer_is_retried_with_the_same_body() {
+    let ok = cabinet_reply(r#"{"version":1794186677,"etag":"1794186677"}"#);
+    let (cabinet_url, mut requests) = fake_cabinet(vec![None, Some(ok)]).await;
+    let cfg = config_with_cabinet(&config_for("cabinet-retry"), &cabinet_url);
+    let url = spawn_server_with(cfg.clone()).await;
+
+    let mut owner = connect(&url, &cfg, "owner", "owner").await;
+    let mut editor = connect(&url, &cfg, "editor", "editor").await;
+    let _ = next_msg(&mut owner).await;
+    let node = node_of(&mut owner).await;
+    let _ = next_msg(&mut editor).await;
+    let _ = node_of(&mut editor).await;
+    owner
+        .send(Message::Text(serde_json::to_string(&ClientMsg::Op { op: insert("owner", 1, 0, node, 0, "Retry") }).expect("json").into()))
+        .await
+        .expect("insert");
+    let _ = next_msg(&mut owner).await;
+    let _ = next_msg(&mut editor).await;
+
+    owner
+        .send(Message::Text(
+            serde_json::to_string(&ClientMsg::Commit { op_id: OpId::new("owner", 2), expected_version: 1, etag: None }).expect("json").into(),
+        ))
+        .await
+        .expect("commit");
+    let (_, cabinet) = next_committed_cabinet(&mut owner).await;
+    assert_eq!(cabinet.map(|commit| commit.etag), Some("1794186677".to_string()));
+    let (_, peer) = next_committed_cabinet(&mut editor).await;
+    assert!(peer.is_some(), "the peer sees the stored version");
+
+    let first = requests.recv().await.expect("first attempt");
+    let second = requests.recv().await.expect("second attempt");
+    let body_of = |request: &str| request.split_once("\r\n\r\n").map(|(_, body)| body.to_string()).unwrap_or_default();
+    assert_eq!(body_of(&first), body_of(&second), "a retry is the same body, so it cannot become a second version");
+    let _ = std::fs::remove_dir_all(&cfg.data_dir);
 }

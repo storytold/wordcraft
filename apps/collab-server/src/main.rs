@@ -9,6 +9,11 @@
 //! Endpoints: `GET /healthz`, `GET /metrics`, `GET /ws` (WebSocket).
 //! Tokens: `COLLAB_JWT_SECRET` (HS256, local development) or `COLLAB_JWT_PEM`
 //! (ES256 public key, production — ADR-0008). No token ever reaches the logs.
+//!
+//! The commit callback: `COLLAB_CABINET_URL` (with `{sessionId}`),
+//! `COLLAB_CABINET_TOKEN`, `COLLAB_CABINET_TIMEOUT_MS`,
+//! `COLLAB_CABINET_ATTEMPTS`; without a URL the commit stays server-side and
+//! the host owns the file (`docs/collab/production.md`).
 
 use std::process::ExitCode;
 

@@ -179,6 +179,18 @@ impl Reject {
     }
 }
 
+/// The cabinet's copy of a committed file: the version it stored and the tag
+/// the next commit must send as `expectedVersion` (INTEGRATION.md §5.2, M87).
+/// The room publishes the file itself when the server is configured with the
+/// cabinet callback; without one the commit only builds the file and the host
+/// owns the storage.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CabinetCommit {
+    pub version: u64,
+    pub etag: String,
+}
+
 /// A participant as the UI shows it (ADR-0006).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -287,6 +299,11 @@ pub enum ServerMsg {
         version: Version,
         sha256: String,
         warnings: Vec<String>,
+        /// The cabinet's version and etag when the room posted the file to the
+        /// cabinet itself (`COLLAB_CABINET_URL`). Absent when the server only
+        /// built the file (the host owns the commit) and on an older server.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cabinet: Option<CabinetCommit>,
     },
     Error {
         code: String,

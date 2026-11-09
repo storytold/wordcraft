@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 
 use wordcraft_collab::journal::DedupWindow;
 
+use crate::cabinet::Published;
+
 /// One stored snapshot.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Snapshot {
@@ -24,6 +26,10 @@ pub struct Snapshot {
     /// crosses a restart is answered from here instead of landing twice. It is
     /// server-side state: nothing about it reaches the wire.
     pub dedup: DedupWindow,
+    /// The last commit the cabinet accepted (M87). The etag is what the next
+    /// commit sends as `expectedVersion`, so a restart does not lose the
+    /// conflict check and the next save cannot overwrite an external edit.
+    pub cabinet: Option<Published>,
 }
 
 /// A directory of per-document snapshots.
@@ -48,10 +54,14 @@ impl Store {
         let meta = fs::read_to_string(dir.join("meta")).ok()?;
         let mut version = 0u64;
         let mut epoch = 0u64;
+        let mut cabinet_version = None;
+        let mut cabinet_etag = None;
         for line in meta.lines() {
             match line.split_once('=') {
                 Some(("version", value)) => version = value.parse().unwrap_or(0),
                 Some(("epoch", value)) => epoch = value.parse().unwrap_or(0),
+                Some(("cabinet_version", value)) => cabinet_version = value.parse::<u64>().ok(),
+                Some(("cabinet_etag", value)) => cabinet_etag = Some(value.to_string()),
                 _ => {}
             }
         }
@@ -59,7 +69,8 @@ impl Store {
         // A snapshot written before the window was stored has no `dedup.json`:
         // the room still opens, only without deduplication across the restart.
         let dedup = fs::read(dir.join("dedup.json")).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
-        Some(Snapshot { version, epoch, model, source, dedup })
+        let cabinet = cabinet_version.zip(cabinet_etag).map(|(version, etag)| Published { version, etag });
+        Some(Snapshot { version, epoch, model, source, dedup, cabinet })
     }
 
     /// Write a snapshot and rotate the previous one to `prev/`.
@@ -84,7 +95,10 @@ impl Store {
         let dedup = serde_json::to_vec(&snapshot.dedup).map_err(|err| format!("cannot encode the opId window: {err}"))?;
         write_atomic(&dir.join("dedup.json"), &dedup)?;
         // Metadata last: its presence means the pair is complete.
-        let meta = format!("version={}\nepoch={}\n", snapshot.version, snapshot.epoch);
+        let mut meta = format!("version={}\nepoch={}\n", snapshot.version, snapshot.epoch);
+        if let Some(cabinet) = &snapshot.cabinet {
+            meta.push_str(&format!("cabinet_version={}\ncabinet_etag={}\n", cabinet.version, cabinet.etag));
+        }
         write_atomic(&dir.join("meta"), meta.as_bytes())
     }
 
@@ -139,9 +153,28 @@ mod tests {
                 history: None,
             }],
         };
-        let snapshot = Snapshot { version: 7, epoch: 2, model: b"{\"body\":[]}".to_vec(), source: Some(b"PK\x03\x04".to_vec()), dedup };
+        let snapshot =
+            Snapshot { version: 7, epoch: 2, model: b"{\"body\":[]}".to_vec(), source: Some(b"PK\x03\x04".to_vec()), dedup, cabinet: None };
         store.save("doc-1", &snapshot).expect("save");
         assert_eq!(store.load("doc-1"), Some(snapshot));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_cabinet_etag_survives_a_restart() {
+        let dir = temp_dir("cabinet");
+        let store = Store::new(&dir);
+        let snapshot = Snapshot {
+            version: 4,
+            epoch: 0,
+            model: b"{}".to_vec(),
+            source: None,
+            dedup: DedupWindow::default(),
+            cabinet: Some(Published { version: 42, etag: "1794186677".into() }),
+        };
+        store.save("doc-1", &snapshot).expect("save");
+        let loaded = store.load("doc-1").expect("load");
+        assert_eq!(loaded.cabinet, Some(Published { version: 42, etag: "1794186677".into() }), "the next commit expects the cabinet's etag");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -161,7 +194,9 @@ mod tests {
                 })
                 .collect(),
         };
-        store.save("doc-1", &Snapshot { version: 3, epoch: 0, model: b"{}".to_vec(), source: None, dedup: dedup.clone() }).expect("save");
+        store
+            .save("doc-1", &Snapshot { version: 3, epoch: 0, model: b"{}".to_vec(), source: None, dedup: dedup.clone(), cabinet: None })
+            .expect("save");
         assert_eq!(store.load("doc-1").map(|s| s.dedup), Some(dedup));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -185,7 +220,9 @@ mod tests {
     fn a_corrupt_window_does_not_lose_the_document() {
         let dir = temp_dir("bad-dedup");
         let store = Store::new(&dir);
-        store.save("doc-1", &Snapshot { version: 2, epoch: 0, model: b"{}".to_vec(), source: None, dedup: DedupWindow::default() }).expect("save");
+        store
+            .save("doc-1", &Snapshot { version: 2, epoch: 0, model: b"{}".to_vec(), source: None, dedup: DedupWindow::default(), cabinet: None })
+            .expect("save");
         fs::write(store.doc_dir("doc-1").join("dedup.json"), b"not json").expect("corrupt");
         let snapshot = store.load("doc-1").expect("the document still opens");
         assert_eq!(snapshot.version, 2);
@@ -204,8 +241,12 @@ mod tests {
     fn the_previous_snapshot_is_kept() {
         let dir = temp_dir("rotate");
         let store = Store::new(&dir);
-        store.save("doc-1", &Snapshot { version: 1, epoch: 0, model: b"one".to_vec(), source: None, dedup: DedupWindow::default() }).expect("first");
-        store.save("doc-1", &Snapshot { version: 2, epoch: 0, model: b"two".to_vec(), source: None, dedup: DedupWindow::default() }).expect("second");
+        store
+            .save("doc-1", &Snapshot { version: 1, epoch: 0, model: b"one".to_vec(), source: None, dedup: DedupWindow::default(), cabinet: None })
+            .expect("first");
+        store
+            .save("doc-1", &Snapshot { version: 2, epoch: 0, model: b"two".to_vec(), source: None, dedup: DedupWindow::default(), cabinet: None })
+            .expect("second");
         assert_eq!(store.load("doc-1").map(|s| s.version), Some(2));
         let prev = fs::read(store.doc_dir("doc-1").join("prev/model.json")).expect("previous model");
         assert_eq!(prev, b"one");

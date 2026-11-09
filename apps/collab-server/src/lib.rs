@@ -4,7 +4,8 @@
 //! WebSocket message (ADR-0008), send normalized operations (ADR-0001) and
 //! receive the server's authoritative answer. Presence is ephemeral and never
 //! journaled (ADR-0006). The file is assembled by the server on commit
-//! (ADR-0009).
+//! (ADR-0009) and, when `COLLAB_CABINET_URL` names one, posted to the cabinet
+//! as its next file version (`cabinet.rs`, M87).
 //!
 //! The room logic itself lives in `wordcraft_collab`; this crate is the
 //! transport: WebSocket framing, tokens, rooms, presence fan-out, snapshots,
@@ -27,11 +28,13 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, interval, timeout};
 
+use cabinet::{Cabinet, CabinetConfig, Publication, PublishError, Published};
 use sha2::Digest;
 use wordcraft_collab::room::{Model, Role, Room};
-use wordcraft_collab::wire::{ClientMsg, Participant, Reject, RejectCode, ServerMsg, Version};
+use wordcraft_collab::wire::{CabinetCommit, ClientMsg, Participant, Reject, RejectCode, ServerMsg, Version};
 use wordcraft_collab_engine::SessionModel;
 
+pub mod cabinet;
 pub mod store;
 
 use store::{Snapshot, Store};
@@ -60,6 +63,9 @@ pub struct Config {
     /// How long a cabinet session may be silent before another session may take
     /// the lease (ADR-0008). `0` for tests.
     pub lease_ttl_secs: u64,
+    /// The cabinet commit callback (M87). `None` keeps the commit server-side
+    /// only: the file is built and the host owns the storage.
+    pub cabinet: Option<CabinetConfig>,
 }
 
 impl Config {
@@ -72,8 +78,32 @@ impl Config {
         }
         let data_dir = std::env::var("COLLAB_DATA_DIR").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("collab-data"));
         let lease_ttl_secs = std::env::var("COLLAB_LEASE_TTL_SECS").ok().and_then(|value| value.parse().ok()).unwrap_or(120);
-        Ok(Config { bind, jwt_secret, jwt_pem, data_dir, lease_ttl_secs })
+        let cabinet = cabinet_from_env()?;
+        Ok(Config { bind, jwt_secret, jwt_pem, data_dir, lease_ttl_secs, cabinet })
     }
+}
+
+/// The commit callback from `COLLAB_CABINET_URL` / `COLLAB_CABINET_TOKEN`.
+/// The token is a secret: it is read here, kept in `CabinetConfig` (whose
+/// `Debug` redacts it) and never written to a log, a metric or a URL.
+fn cabinet_from_env() -> Result<Option<CabinetConfig>, String> {
+    let url = std::env::var("COLLAB_CABINET_URL").ok().map(|url| url.trim().to_string()).filter(|url| !url.is_empty());
+    let Some(url) = url else {
+        return Ok(None);
+    };
+    if !url.starts_with("http://") {
+        return Err("COLLAB_CABINET_URL must start with http:// (TLS is terminated by the ingress; https:// is not supported)".into());
+    }
+    if !url.contains("{sessionId}") {
+        return Err("COLLAB_CABINET_URL must contain {sessionId}: the endpoint is /api/v1/internal/office/sessions/{sessionId}/commit".into());
+    }
+    let token = std::env::var("COLLAB_CABINET_TOKEN").ok().map(|token| token.trim().to_string()).filter(|token| !token.is_empty());
+    let Some(token) = token else {
+        return Err("COLLAB_CABINET_TOKEN is required with COLLAB_CABINET_URL".into());
+    };
+    let timeout_ms = std::env::var("COLLAB_CABINET_TIMEOUT_MS").ok().and_then(|value| value.parse().ok()).unwrap_or(cabinet::DEFAULT_TIMEOUT_MS);
+    let attempts = std::env::var("COLLAB_CABINET_ATTEMPTS").ok().and_then(|value| value.parse().ok()).unwrap_or(cabinet::DEFAULT_ATTEMPTS).max(1);
+    Ok(Some(CabinetConfig { url, token, timeout: Duration::from_millis(timeout_ms.max(1)), attempts }))
 }
 
 /// JWT claims the cabinet issues (ADR-0008).
@@ -109,6 +139,10 @@ struct RoomState {
     /// Fixed-window operation counter, so one client cannot flood a room.
     window: std::time::Instant,
     ops_in_window: u32,
+    /// The cabinet's copy of the last accepted commit: the etag the next
+    /// commit is checked against (M87). Stored with the snapshot, so a restart
+    /// keeps the conflict check.
+    published: Option<Published>,
 }
 
 /// Counters for `/metrics`.
@@ -119,6 +153,13 @@ pub struct Metrics {
     rejects: AtomicU64,
     commits: AtomicU64,
     presence: AtomicU64,
+    /// Commits the cabinet accepted (M87).
+    published: AtomicU64,
+    /// Commits the cabinet refused with `409` (the file changed elsewhere).
+    publish_conflicts: AtomicU64,
+    /// Commits not stored by the cabinet: a wrong token, a size refusal, an
+    /// exhausted retry or any other refusal.
+    publish_errors: AtomicU64,
 }
 
 impl Metrics {
@@ -135,6 +176,9 @@ impl Metrics {
             ("rejects_total", self.rejects.load(Ordering::Relaxed)),
             ("commits_total", self.commits.load(Ordering::Relaxed)),
             ("presence_total", self.presence.load(Ordering::Relaxed)),
+            ("cabinet_published_total", self.published.load(Ordering::Relaxed)),
+            ("cabinet_conflicts_total", self.publish_conflicts.load(Ordering::Relaxed)),
+            ("cabinet_errors_total", self.publish_errors.load(Ordering::Relaxed)),
         ] {
             out.push_str(&format!("# TYPE wordcraft_collab_{name} counter\nwordcraft_collab_{name} {value}\n"));
         }
@@ -149,22 +193,26 @@ pub struct AppState {
     rooms: Arc<Mutex<HashMap<String, Arc<Mutex<RoomState>>>>>,
     pub metrics: Arc<Metrics>,
     store: Store,
+    /// The cabinet commit callback, when configured.
+    cabinet: Option<Cabinet>,
 }
 
 impl AppState {
     pub fn new(cfg: Config) -> AppState {
         let store = Store::new(&cfg.data_dir);
-        AppState { cfg: Arc::new(cfg), rooms: Arc::new(Mutex::new(HashMap::new())), metrics: Arc::new(Metrics::default()), store }
+        let cabinet = cfg.cabinet.as_ref().map(Cabinet::new);
+        AppState { cfg: Arc::new(cfg), rooms: Arc::new(Mutex::new(HashMap::new())), metrics: Arc::new(Metrics::default()), store, cabinet }
     }
 
     /// Write the room's snapshot (ADR-0005): model JSON plus the source `.docx`
-    /// when one is known, plus the `opId` window so retries survive a restart.
+    /// when one is known, plus the `opId` window so retries survive a restart,
+    /// plus the cabinet etag when the room published a commit (M87).
     fn persist(&self, doc: &str, room: &Arc<Mutex<RoomState>>, source: Option<Vec<u8>>) -> Result<(), String> {
-        let (version, epoch, model, dedup) = {
+        let (version, epoch, model, dedup, cabinet) = {
             let guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
-            (guard.room.version(), guard.room.epoch(), guard.room.model().snapshot(), guard.room.dedup())
+            (guard.room.version(), guard.room.epoch(), guard.room.model().snapshot(), guard.room.dedup(), guard.published.clone())
         };
-        self.store.save(doc, &Snapshot { version, epoch, model, source, dedup })
+        self.store.save(doc, &Snapshot { version, epoch, model, source, dedup, cabinet })
     }
 
     fn room_for(&self, doc: &str) -> Arc<Mutex<RoomState>> {
@@ -195,6 +243,7 @@ impl AppState {
                         lease_ttl_secs: self.cfg.lease_ttl_secs,
                         window: std::time::Instant::now(),
                         ops_in_window: 0,
+                        published: snapshot.cabinet,
                     })
                 });
                 Arc::new(Mutex::new(restored.unwrap_or_else(|| RoomState {
@@ -205,6 +254,7 @@ impl AppState {
                     lease_ttl_secs: self.cfg.lease_ttl_secs,
                     window: std::time::Instant::now(),
                     ops_in_window: 0,
+                    published: None,
                 })))
             })
             .clone()
@@ -467,7 +517,10 @@ async fn process_frame(
             };
             send_join(sink, claims, role, &plan, peers).await
         }
-        ClientMsg::Commit { op_id, expected_version, .. } => handle_commit(state, room, sink, claims, role, op_id, expected_version).await,
+        ClientMsg::Commit { op_id, expected_version, .. } => {
+            let call = CommitCall { client_id, op_id, expected_version };
+            handle_commit(state, room, sink, claims, role, call).await
+        }
         ClientMsg::Ping { ts } => send(sink, &ServerMsg::Pong { ts }).await.is_ok(),
         ClientMsg::Auth { .. } => {
             let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Invalid, "already authenticated");
@@ -524,15 +577,24 @@ async fn handle_op(
     }
 }
 
+/// One commit frame from the owner: the caller's client id (so the answer
+/// reaches each peer exactly once), the operation id and the room version the
+/// commit was taken at.
+struct CommitCall<'a> {
+    client_id: &'a str,
+    op_id: wordcraft_collab::wire::OpId,
+    expected_version: Version,
+}
+
 async fn handle_commit(
     state: &AppState,
     room: &Arc<Mutex<RoomState>>,
     sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
     claims: &Claims,
     role: Role,
-    op_id: wordcraft_collab::wire::OpId,
-    expected_version: Version,
+    call: CommitCall<'_>,
 ) -> bool {
+    let CommitCall { client_id, op_id, expected_version } = call;
     if !role.can_commit() {
         let reject = Reject::new(op_id, RejectCode::Forbidden, "only the owner commits");
         return send(sink, &ServerMsg::Rejected { reject }).await.is_ok();
@@ -542,24 +604,74 @@ async fn handle_commit(
         let reject = Reject::new(op_id, RejectCode::Conflict, format!("head is version {version}"));
         return send(sink, &ServerMsg::Rejected { reject }).await.is_ok();
     }
-    match build_docx(room) {
-        Ok((bytes, _warnings)) if bytes.len() > MAX_DOCUMENT => {
-            let reject = Reject::new(op_id, RejectCode::TooLarge, format!("the built file is {} bytes", bytes.len()));
-            send(sink, &ServerMsg::Rejected { reject }).await.is_ok()
-        }
-        Ok((bytes, warnings)) => {
-            Metrics::inc(&state.metrics.commits);
-            let sha256 = hex(&sha2::Sha256::digest(&bytes));
-            if let Err(message) = state.persist(&claims.doc, room, Some(bytes)) {
-                log::warn!("snapshot after commit failed: {message}");
-            }
-            send(sink, &ServerMsg::Committed { version, sha256, warnings }).await.is_ok()
-        }
+    let (bytes, warnings) = match build_docx(room) {
+        Ok(built) => built,
         Err(message) => {
             let reject = Reject::new(op_id, RejectCode::Invalid, message);
-            send(sink, &ServerMsg::Rejected { reject }).await.is_ok()
+            return send(sink, &ServerMsg::Rejected { reject }).await.is_ok();
         }
+    };
+    if bytes.len() > MAX_DOCUMENT {
+        let reject = Reject::new(op_id, RejectCode::TooLarge, format!("the built file is {} bytes", bytes.len()));
+        return send(sink, &ServerMsg::Rejected { reject }).await.is_ok();
     }
+    Metrics::inc(&state.metrics.commits);
+    let sha256 = hex(&sha2::Sha256::digest(&bytes));
+
+    // The cabinet owns the stored file: post the built bytes and let it name
+    // the version. Without a callback the host owns the commit and only the
+    // built file's digest travels back (M87).
+    let outcome = match &state.cabinet {
+        Some(cabinet) => {
+            let expected = room.lock().unwrap_or_else(|poison| poison.into_inner()).published.as_ref().map(|published| published.etag.clone());
+            let publication =
+                Publication { session_id: &claims.sid, file_id: &claims.doc, bytes: &bytes, sha256: &sha256, version, expected: expected.as_deref() };
+            Some(cabinet.publish(&publication).await)
+        }
+        None => None,
+    };
+
+    let cabinet = match outcome {
+        Some(Ok(published)) => {
+            Metrics::inc(&state.metrics.published);
+            room.lock().unwrap_or_else(|poison| poison.into_inner()).published = Some(published.clone());
+            Some(CabinetCommit { version: published.version, etag: published.etag })
+        }
+        Some(Err(PublishError::Conflict(message))) => {
+            Metrics::inc(&state.metrics.publish_conflicts);
+            // The file changed outside the session: the room must not
+            // overwrite it, and every replica resyncs so the refusal and the
+            // stale base are visible everywhere.
+            log::warn!("cabinet refused the commit of {} as a conflict: {message}", claims.doc);
+            let notice =
+                ServerMsg::Error { code: "cabinetConflict".into(), message: format!("{message}; reopen the file to continue"), retryable: true };
+            let _ = state.persist(&claims.doc, room, Some(bytes));
+            broadcast(room, client_id, notice, sink).await;
+            return true;
+        }
+        Some(Err(error)) => {
+            Metrics::inc(&state.metrics.publish_errors);
+            // The token and the body stay out of the log; the status does not.
+            log::warn!("cabinet did not store the commit of {}: {error}", claims.doc);
+            let code = match &error {
+                PublishError::Unauthorized(_) => RejectCode::Forbidden,
+                PublishError::TooLarge(_) => RejectCode::TooLarge,
+                PublishError::Unavailable(_) | PublishError::Refused(_) | PublishError::Conflict(_) => RejectCode::Invalid,
+            };
+            let _ = state.persist(&claims.doc, room, Some(bytes));
+            let reject = Reject::new(op_id, code, error.to_string());
+            return send(sink, &ServerMsg::Rejected { reject }).await.is_ok();
+        }
+        None => None,
+    };
+
+    if let Err(message) = state.persist(&claims.doc, room, Some(bytes)) {
+        log::warn!("snapshot after commit failed: {message}");
+    }
+    // The version and etag are the cabinet's; every peer shows them, so the
+    // participants panel never claims a save the cabinet did not take.
+    broadcast(room, client_id, ServerMsg::Committed { version, sha256, warnings, cabinet }, sink).await;
+    true
 }
 
 fn now_secs() -> u64 {
