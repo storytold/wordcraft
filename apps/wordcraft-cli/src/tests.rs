@@ -15,6 +15,22 @@ fn peer_text_stays_on_one_visible_line() {
 }
 
 #[test]
+fn json_from_a_file_is_written_without_raw_terminal_controls() {
+    // DEL, C1 controls and the bidi marks that serde_json leaves as they are become \uXXXX escapes,
+    // which read back as the same string; line breaks of pretty printing and other text stay.
+    let value = json!({"title": "a\u{202e}b\u{2066}c\u{9b}d\u{85}e\u{7f}f\u{2028}g Café 日本"});
+    let pretty = serde_json::to_string_pretty(&value).unwrap();
+    let safe = json_terminal_safe(&pretty);
+    assert!(!safe.chars().any(|c| terminal_unsafe(c) && c != '\n'), "{safe:?}");
+    assert!(safe.contains("\\u202e") && safe.contains("\\u009b") && safe.contains("\\u007f") && safe.contains("Café 日本"), "{safe}");
+    assert!(safe.contains('\n'), "pretty printing keeps its line breaks");
+    assert_eq!(serde_json::from_str::<Value>(&safe).unwrap(), value);
+    assert_eq!(json_terminal_safe("\"\u{202e}x\""), "\"\\u202ex\"");
+    // Nothing to escape: unchanged.
+    assert_eq!(json_terminal_safe("{\"a\": 1}"), "{\"a\": 1}");
+}
+
+#[test]
 fn validators_accept_only_the_documented_options() {
     assert!(validate_options("info", &args(&["file.docx"]), PASSWORD_OPTIONS).is_ok());
     assert!(validate_options("render", &args(&["in.docx", "out.png", "--page", "2", "--scale", "1.5"]), RENDER_OPTIONS).is_ok());
