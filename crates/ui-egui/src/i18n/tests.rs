@@ -1254,7 +1254,7 @@ fn hebrew_lookups_keep_typing_order() {
     let he = fixture_lang(
         "he",
         concat!(
-            "\tTable of Contents\tתוכן העניינים\n",
+            "\tTable of Contents\tתוכן עניינים\n",
             "\tPaste Special…\tהדבקה מיוחדת…\n",
             "\tAbout WordCraft\tאודות WordCraft\n",
             "\tPage {page} of {pages}\tעמוד {page} מתוך {pages}\n",
@@ -1264,13 +1264,13 @@ fn hebrew_lookups_keep_typing_order() {
     );
     set_current(he);
     assert!(he.rtl());
-    assert_eq!(tr(he, "Table of Contents"), "תוכן העניינים");
+    assert_eq!(tr(he, "Table of Contents"), "תוכן עניינים");
     assert_eq!(tr(he, "Paste Special…"), "הדבקה מיוחדת…");
     assert_eq!(tr(he, "About WordCraft"), "אודות WordCraft");
     let page = fmt_plain(tr(he, "Page {page} of {pages}"), &[("page", "3"), ("pages", "9")]);
     assert_eq!(page, "עמוד 3 מתוך 9");
     assert_eq!(location("Home › Font"), "בית ‹ גופן");
-    assert!(lowercase(t("Table of Contents")).contains("תוכן העניינים"));
+    assert!(lowercase(t("Table of Contents")).contains("תוכן עניינים"));
     set_current(Lang::EN);
     assert_eq!(location("Home › Font"), "Home › Font");
 }
