@@ -95,3 +95,19 @@ fn a_cancelled_background_picker_ends_its_request() {
     crate::format_background::forget(&mut a);
     assert!(!a.background_picture_pending);
 }
+
+/// Two pictures of the same encoded length get different thumbnail cache keys: the head of a PNG
+/// is its signature and header, so sampling only the head would show the first one's thumbnail.
+#[test]
+fn same_length_picture_data_gets_a_different_cache_key() {
+    let key = crate::format_background::picture_cache_key;
+    let no_path: Option<String> = None;
+    let no_data: Option<String> = None;
+    let no_media: Option<String> = None;
+    let a = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==".to_string();
+    let b = a.replace("hKmMIQAAAABJRU5ErkJggg", "hKmMIQAAAABJRU5ErkJggH");
+    assert_eq!(a.len(), b.len());
+    assert_ne!(key(&no_path, &Some(a.clone()), &no_media), key(&no_path, &Some(b), &no_media), "the tails differ");
+    assert_eq!(key(&no_path, &Some(a.clone()), &no_media), key(&no_path, &Some(a), &no_media), "the same data keeps its cache");
+    assert_eq!(key(&no_path, &no_data, &Some("m.png".to_string())), Some("media:m.png".to_string()));
+}

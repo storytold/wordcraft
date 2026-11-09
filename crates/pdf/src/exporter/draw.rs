@@ -334,6 +334,13 @@ impl Exporter<'_> {
         }
         let (cols, rows) = ((w / TILE).ceil(), (h / TILE).ceil());
         if !(cols.is_finite() && rows.is_finite()) || cols * rows > MAX_TILES {
+            // Too many tiles to draw: keep the pattern's back colour over the page rather than
+            // losing the background entirely (the page colour is its fallback, not painted).
+            if let Some(back) = rect_path(&Rect::new(0.0, 0.0, w, h)) {
+                s.set_fill(Some(fill(p.back, alpha)));
+                s.draw_path(&back);
+                s.set_fill(None);
+            }
             return;
         }
         let Some(back) = rect_path(&Rect::new(0.0, 0.0, w, h)) else { return };

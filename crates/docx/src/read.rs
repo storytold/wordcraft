@@ -432,10 +432,12 @@ fn link_text_boxes(doc: &mut Document, mut links: Vec<(u32, u32, u32)>) {
 fn read_page_background(r: &mut Reader<'_>, root: &El, rels: &Rels) {
     let background = root.child("w:background");
     let bg_color = background.and_then(|b| b.attr("w:color")).and_then(Rgb::parse);
-    if bg_color.is_some() {
+    // A gradient's `w:color` is its first stop and a pattern's its back colour: the writer derives
+    // it for older readers, so reading it back must not turn it into an explicit page colour.
+    let Some(fill) = background.and_then(|b| b.child("v:background")).and_then(|b| b.child("v:fill")) else {
         r.doc.settings.page_color = bg_color;
-    }
-    let Some(fill) = background.and_then(|b| b.child("v:background")).and_then(|b| b.child("v:fill")) else { return };
+        return;
+    };
     let kind = fill.attr("type").unwrap_or("");
     let transparency = fill.attr("opacity").map_or(0.0, opacity_percent);
     if kind.eq_ignore_ascii_case("gradient") {
@@ -452,6 +454,8 @@ fn read_page_background(r: &mut Reader<'_>, root: &El, rels: &Rels) {
             wordcraft_doc::fill::Fill::Gradient(g) => Some((*g).clone()),
             _ => None,
         });
+        // The fallback colour belongs to the gradient, not to the page.
+        r.doc.settings.page_color = if r.doc.settings.page_gradient.is_some() { None } else { bg_color };
     } else if kind.eq_ignore_ascii_case("pattern") {
         let preset: String = fill.attr("pattern").unwrap_or("").chars().take(64).collect();
         if PagePattern::known(&preset) {
@@ -461,6 +465,10 @@ fn read_page_background(r: &mut Reader<'_>, root: &El, rels: &Rels) {
                 back: fill.attr("color2").and_then(Rgb::parse).unwrap_or(Rgb::WHITE),
                 transparency,
             });
+            // The back colour is the pattern's, not an explicit page colour.
+            r.doc.settings.page_color = None;
+        } else {
+            r.doc.settings.page_color = bg_color;
         }
     } else if let Some(media) =
         fill.attr("r:id").or_else(|| fill.attr("r:embed")).or_else(|| fill.attr("o:relid")).and_then(|id| r.media_for(rels, id))
@@ -471,6 +479,9 @@ fn read_page_background(r: &mut Reader<'_>, root: &El, rels: &Rels) {
             title: fill.attr("o:title").unwrap_or("").chars().take(255).collect(),
             transparency,
         });
+        r.doc.settings.page_color = bg_color;
+    } else {
+        r.doc.settings.page_color = bg_color;
     }
 }
 

@@ -445,16 +445,34 @@ fn paint_draft_fill(app: &WordApp, ui: &Ui, p: &egui::Painter, rect: Rect) {
     }
 }
 
+/// The cache key of the chosen picture: its path, a fingerprint of its `data`, or its media key.
+/// The data fingerprint samples the head, middle and tail: a PNG's head is its signature and
+/// header, the same for every picture of a given length, so the head alone can't tell two apart.
+pub(crate) fn picture_cache_key(path: &Option<String>, data: &Option<String>, media: &Option<String>) -> Option<String> {
+    if let Some(path) = path {
+        return Some(path.clone());
+    }
+    if let Some(d) = data {
+        let part = |r: std::ops::Range<usize>| d.get(r).unwrap_or("");
+        let mid = d.len() / 2;
+        return Some(format!(
+            "data:{}:{}:{}:{}",
+            d.len(),
+            part(0..d.len().min(24)),
+            part(mid..(mid + 24).min(d.len())),
+            part(d.len().saturating_sub(24)..d.len())
+        ));
+    }
+    media.as_ref().map(|m| format!("media:{m}"))
+}
+
 /// The chosen picture's thumbnail, its texture cached by path, data or media key; a dashed frame
 /// when none is chosen or it can't be read.
 fn paint_picture_preview(app: &WordApp, ui: &Ui, p: &egui::Painter, rect: Rect) {
     let DraftFill::Picture { path, media, data, tile, transparency } = &app.background.fill else {
         return;
     };
-    let key = path
-        .clone()
-        .or_else(|| data.as_ref().map(|d| format!("data:{}:{}", d.len(), d.get(..d.len().min(24)).unwrap_or(""))))
-        .or_else(|| media.as_ref().map(|m| format!("media:{m}")));
+    let key = picture_cache_key(path, data, media);
     let Some(key) = key else {
         dashed_frame(p, rect, Tokens::get(ui.ctx()).border_strong);
         return;

@@ -2963,3 +2963,18 @@ fn a_translucent_pattern_fades_its_completed_group() {
     assert!(form.contains("1 1 1 rg") && form.contains("0 0 1 rg"), "the pattern's back and ink are drawn in the group");
     assert!(!form.contains(" gs"), "they are drawn opaque: the group carries the opacity, not each fill");
 }
+
+/// A page too large for the pattern's tiles still shows its back colour: the page colour is the
+/// pattern's fallback, not painted, so bailing out without it would lose the background.
+#[test]
+fn an_over_limit_pattern_keeps_its_back_colour() {
+    let mut d = Document::new();
+    // 24 inches square needs 216 × 216 = 46,656 tiles, past the exporter's 40,000.
+    d.last_section.page_w = 1728.0;
+    d.last_section.page_h = 1728.0;
+    d.settings.page_pattern =
+        Some(wordcraft_doc::PagePattern { preset: "lgCheck".into(), fore: Rgb(0, 0, 255), back: Rgb(0, 255, 0), transparency: 0.0 });
+    let opts = PdfOptions { tagged: false, compress: false, ..Default::default() };
+    let raw = String::from_utf8_lossy(&export(&d, &opts).unwrap()).into_owned();
+    assert!(raw.contains("0 1 0 rg"), "the pattern's back colour fills the page");
+}

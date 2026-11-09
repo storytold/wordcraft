@@ -2834,6 +2834,37 @@ fn page_background_gradient_round_trips() {
     assert!(rt(&r).settings.page_gradient.is_some());
 }
 
+/// A gradient's or pattern's `w:color` is the fallback the writer derives for older readers, so
+/// reading it back must not turn it into an explicit page colour: clearing the fill would then
+/// show a solid colour the user never chose.
+#[test]
+fn a_derived_fill_fallback_is_not_read_as_a_page_color() {
+    use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind};
+    use wordcraft_doc::wordart::GradStop;
+    let mut g = Document::new();
+    g.settings.page_gradient = Some(Gradient {
+        stops: vec![
+            GradStop { pos: 0.0, color: Rgb(0x10, 0x20, 0x30), transparency: 0.0 },
+            GradStop { pos: 100.0, color: Rgb(0xFA, 0xFB, 0xFC), transparency: 0.0 },
+        ],
+        kind: GradientKind::Linear { angle: 135.0, scaled: false },
+        tile: None,
+        rot_with_shape: false,
+        flip: GradientFlip::None,
+    });
+    assert!(g.settings.page_color.is_none(), "the fixture starts with no explicit page colour");
+    let r = rt(&g);
+    assert!(r.settings.page_gradient.is_some());
+    assert_eq!(r.settings.page_color, None, "the gradient's first stop is its fallback, not the page's colour");
+
+    let mut p = Document::new();
+    p.settings.page_pattern =
+        Some(wordcraft_doc::PagePattern { preset: "dkUpDiag".into(), fore: Rgb(0x33, 0x66, 0x99), back: Rgb(0xEE, 0xE8, 0xD8), transparency: 0.0 });
+    let r = rt(&p);
+    assert!(r.settings.page_pattern.is_some());
+    assert_eq!(r.settings.page_color, None, "the pattern's back colour is its fallback, not the page's colour");
+}
+
 /// A pattern page background (`v:background/v:fill type="pattern"`) survives a save with its
 /// preset and two colours.
 #[test]
