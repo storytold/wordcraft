@@ -308,7 +308,7 @@ fails them until the list follows.
 | Fields | listed (the result stays) | kept |
 | Hidden text | listed | kept |
 | Phonetic guides | listed (the base text stays) | kept |
-| Pictures | listed when the writer can't encode them (SVG, a GIF cut short, a bitmap declaring huge dimensions: `rtf::can_write_picture` decodes with the writer's limit); EMF and WMF are written as metafiles (#4259) | kept |
+| Pictures | listed when the writer can't encode them (SVG, a bitmap declaring huge dimensions: `rtf::can_write_picture` reads only the header, as it runs after every edit, so a file cut short after a good header isn't found); EMF and WMF are written as metafiles (#4259) | kept |
 | Embedded objects | listed (the picture stays) | kept when read from an ODF file, otherwise listed (the picture stays) |
 | Macros, custom XML parts | listed | listed |
 | Other content kept only for round trip | listed | listed |

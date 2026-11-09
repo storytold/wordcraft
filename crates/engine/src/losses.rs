@@ -173,11 +173,17 @@ impl Walk<'_> {
 
     fn run(&self) -> BTreeSet<Loss> {
         let (doc, mut found) = (self.doc, BTreeSet::new());
-        // RTF has no headers or footers; ODT writes each master page's, with a control in one as its text.
-        for part in doc.parts.values().filter(|p| matches!(p.kind, PartKind::Header | PartKind::Footer)) {
-            if self.drops(true, false) && has_content(&part.blocks, 0) {
+        // RTF has no headers or footers; ODT writes each master page's. A control in any story is its
+        // text. Notes and comments are written by both, so what they hold is checked like the body.
+        for part in doc.parts.values() {
+            let header = matches!(part.kind, PartKind::Header | PartKind::Footer);
+            if header && self.drops(true, false) && has_content(&part.blocks, 0) {
                 found.insert(Loss::HeadersFooters);
             }
+            if matches!(part.kind, PartKind::TextBox) {
+                continue;
+            }
+            self.blocks(&part.blocks, 0, &mut found);
             wordcraft_doc::control::walk_controls(&part.blocks, &mut |_| {
                 found.insert(Loss::ContentControls);
             });
@@ -406,6 +412,34 @@ mod tests {
         doc
     }
 
+    /// A document whose footnote holds `obj`.
+    fn in_note(obj: InlineObject) -> Document {
+        let mut doc = with(&[("references.footnote", json!({"text": "A note"}))]);
+        for part in doc.parts.values_mut().filter(|p| p.kind == PartKind::Footnote) {
+            for b in part.blocks.iter_mut() {
+                if let Block::Para(p) = std::sync::Arc::make_mut(b) {
+                    p.insert_object(0, obj.clone(), &Default::default()).unwrap();
+                }
+            }
+        }
+        doc
+    }
+
+    /// A document whose header holds a SmartArt diagram (ODT keeps headers, but not this).
+    fn smart_art_in_header() -> Document {
+        let diagram = with(&[("insert.smartArt", json!({"layout": "process"}))]);
+        let obj = diagram.body.iter().find_map(|b| b.as_para()?.objects.iter().find(|o| matches!(o, InlineObject::Graphic { .. })).cloned());
+        let mut doc = with(&[("insert.header", json!({"text": "Head"}))]);
+        for part in doc.parts.values_mut().filter(|p| p.kind == PartKind::Header) {
+            for b in part.blocks.iter_mut() {
+                if let (Block::Para(p), Some(o)) = (std::sync::Arc::make_mut(b), obj.clone()) {
+                    p.insert_object(0, o, &Default::default()).unwrap();
+                }
+            }
+        }
+        doc
+    }
+
     fn with_passthrough(key: &str, bytes: &[u8]) -> Document {
         let mut doc = session().doc;
         doc.passthrough.insert(key.into(), std::sync::Arc::new(bytes.to_vec()));
@@ -458,6 +492,21 @@ mod tests {
             ("shape", Loss::Shapes, with(&[("insert.shape", json!({"kind": "rectangle"}))]), true, false),
             ("text box", Loss::Shapes, with(&[("insert.textBox", json!({"text": "Boxed"}))]), true, false),
             ("field", Loss::Fields, with(&[("insert.field", json!({"instr": "AUTHOR", "result": "Me"}))]), true, false),
+            (
+                "field in a footnote",
+                Loss::Fields,
+                in_note(InlineObject::Field {
+                    instr: "AUTHOR".into(),
+                    result: "Me".into(),
+                    locked: false,
+                    dirty: false,
+                    code: false,
+                    form: String::new(),
+                }),
+                true,
+                false,
+            ),
+            ("smart art in a header", Loss::Charts, smart_art_in_header(), true, true),
             ("hidden text", Loss::HiddenText, with(&[all(), ("format.hidden", json!({"value": true}))]), true, false),
             ("section break", Loss::Sections, with(&[("layout.break", json!({"kind": "nextPage"}))]), false, false),
             ("columns", Loss::Sections, with(&[("layout.columns", json!({"count": 2}))]), false, false),
@@ -589,9 +638,9 @@ mod tests {
             assert_eq!(format_losses(&doc, "p.rtf"), vec![Loss::Pictures], "{key}");
             assert_eq!(format_losses(&doc, "p.odt"), Vec::<Loss>::new(), "{key}: ODT keeps the bytes");
         }
-        // A picture that can be recognised but not read (a GIF cut short, a BMP declaring 100 000 pixels
-        // each way) is left out by the writer too, so it is listed (it was not).
-        let gif = b"GIF89a\x04\x00\x04\x00\xf0\x00\x00".to_vec();
+        // A picture whose header declares more pixels than the writer will decode (a BMP of 100 000
+        // pixels each way) is left out by the writer too, so it is listed. Only the header is read
+        // (the check runs after every edit): a GIF cut short after a good header isn't found.
         let mut bmp = b"BM".to_vec();
         bmp.extend([0u8; 12]);
         bmp.extend([40u8, 0, 0, 0]);
@@ -599,12 +648,10 @@ mod tests {
         bmp.extend(100_000i32.to_le_bytes());
         bmp.extend([1u8, 0, 24, 0]);
         bmp.extend([0u8; 24]);
-        for (key, bytes) in [("media/g.gif", gif), ("media/h.bmp", bmp)] {
-            let doc = picture(key, &bytes);
-            assert!(!crate::io::save_bytes("p.rtf", &doc).unwrap().windows(5).any(|w| w == b"\\pict"), "{key}: the writer drops it");
-            assert_eq!(format_losses(&doc, "p.rtf"), vec![Loss::Pictures], "{key}");
-            assert_eq!(format_losses(&doc, "p.odt"), Vec::<Loss>::new(), "{key}: ODT keeps the bytes");
-        }
+        let (key, doc) = ("media/h.bmp", picture("media/h.bmp", &bmp));
+        assert!(!crate::io::save_bytes("p.rtf", &doc).unwrap().windows(5).any(|w| w == b"\\pict"), "{key}: the writer drops it");
+        assert_eq!(format_losses(&doc, "p.rtf"), vec![Loss::Pictures], "{key}");
+        assert_eq!(format_losses(&doc, "p.odt"), Vec::<Loss>::new(), "{key}: ODT keeps the bytes");
         // PNG goes into RTF as it is.
         let png = [0x89u8, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0];
         assert_eq!(format_losses(&picture("media/d.png", &png), "p.rtf"), Vec::<Loss>::new());
