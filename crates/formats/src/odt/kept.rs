@@ -341,43 +341,59 @@ pub(super) struct PageChange<'a> {
 }
 
 /// The file's page layouts as `changes` change them, by key. `None` when one can't be: a section
-/// names a master page the file doesn't have, or sections sharing a page layout would need it
-/// to differ. A section's master page goes on to its next (a first page's to the pages after it),
-/// which WordCraft reads as one section.
+/// names a master page the file doesn't have, sections sharing a page layout would need it to
+/// differ, or the first pages were read from a master page other than `Standard` the file has
+/// (WordCraft names the first pages' `Standard`, so the change would land on another's). A
+/// section's master page goes on to its next (a first page's to the pages after it), which
+/// WordCraft reads as one section.
 pub(super) fn page_layout_patches(
     defs: &BTreeMap<String, Arc<str>>,
     order: &[String],
     changes: &[PageChange<'_>],
 ) -> Option<BTreeMap<String, String>> {
+    // Each master page read once, however many sections use it (`None`: one with no page layout).
+    let mut masters: BTreeMap<String, Option<Master>> = BTreeMap::new();
+    let mut master = |name: &str| -> Option<Master> {
+        if let Some(m) = masters.get(name) {
+            return m.clone();
+        }
+        let m = defs.get(&format!("master:{name}")).and_then(|xml| read_master(xml));
+        masters.insert(name.to_string(), m.clone());
+        m
+    };
+    // The master page WordCraft reads the first pages from when they name none: the first in the
+    // file with a page layout it has.
+    let mut read_first = None;
+    for name in order.iter().filter_map(|k| k.strip_prefix("master:")) {
+        if master(name).is_some_and(|m| defs.contains_key(&m.layout)) {
+            read_first = Some(name.to_string());
+            break;
+        }
+    }
     let mut wanted: BTreeMap<String, (&str, &str, Place)> = BTreeMap::new();
     for c in changes {
-        let first = match c.master {
-            Some(m) => m.to_string(),
-            None if defs.contains_key("master:Standard") => "Standard".to_string(),
-            None => match order.iter().find_map(|k| k.strip_prefix("master:")) {
-                Some(m) => m.to_string(),
-                // The file has no page definitions to keep: WordCraft's own say it.
-                None => continue,
-            },
+        let first = match (c.master, &read_first) {
+            (Some(m), _) => m.to_string(),
+            (None, Some(m)) if m == "Standard" || !defs.contains_key("master:Standard") => m.clone(),
+            (None, Some(_)) => return None,
+            // The file has no page definitions to keep: WordCraft's own say it.
+            (None, None) => continue,
         };
         let mut name = first;
         let mut seen = BTreeSet::new();
         let mut own = true;
         while seen.insert(name.clone()) && seen.len() <= 64 {
-            let master = defs.get(&format!("master:{name}"))?;
-            let head = head_attrs(master)?;
-            let key = format!("sauto:{}|page-layout", get(&head, "style:page-layout-name")?);
-            let entry = wanted.entry(key).or_insert((c.then, c.now, Place::default()));
+            let m = master(&name)?;
+            let entry = wanted.entry(m.layout).or_insert((c.then, c.now, Place::default()));
             if (entry.0, entry.1) != (c.then, c.now) {
                 return None;
             }
             entry.2.own |= own;
             own = false;
-            let (header, footer) = bands_shown(master);
-            entry.2.header |= header;
-            entry.2.footer |= footer;
-            match get(&head, "style:next-style-name").filter(|n| !n.is_empty()) {
-                Some(next) if defs.contains_key(&format!("master:{next}")) => name = next.to_string(),
+            entry.2.header |= m.header;
+            entry.2.footer |= m.footer;
+            match m.next {
+                Some(next) if defs.contains_key(&format!("master:{next}")) => name = next,
                 _ => break,
             }
         }
@@ -392,32 +408,39 @@ pub(super) fn page_layout_patches(
     Some(out)
 }
 
-/// The attributes of the first element of `xml`.
-fn head_attrs(xml: &str) -> Option<super::xml::Attrs> {
-    let mut head = None;
-    super::xml::events(xml.as_bytes(), |ev| {
-        if head.is_none()
-            && let Ev::Start(_, a) = ev
-        {
-            head = Some(a);
-        }
-    });
-    head
+/// What a master page says of its pages: its page layout (by key), the master page after it, and
+/// whether it shows a header and a footer.
+#[derive(Clone)]
+struct Master {
+    layout: String,
+    next: Option<String>,
+    header: bool,
+    footer: bool,
 }
 
-/// Whether the master page `xml` shows a header and a footer on any of its pages.
-fn bands_shown(xml: &str) -> (bool, bool) {
+/// The master page `xml`, `None` when it names no page layout. A header or footer counts as the
+/// reader counts it: a `style:header` or `style:footer` not hidden (its left and first page
+/// variants don't give the pages their band).
+fn read_master(xml: &str) -> Option<Master> {
+    let mut head: Option<super::xml::Attrs> = None;
     let (mut header, mut footer) = (false, false);
     super::xml::events(xml.as_bytes(), |ev| {
-        if let Ev::Start(q, a) = ev
-            && get(&a, "style:display") != Some("false")
-        {
-            let band = q.strip_prefix("style:").or_else(|| q.strip_prefix("loext:")).unwrap_or("");
-            header |= band.starts_with("header");
-            footer |= band.starts_with("footer");
+        if let Ev::Start(q, a) = ev {
+            if head.is_none() {
+                head = Some(a);
+            } else if get(&a, "style:display") != Some("false") {
+                header |= q == "style:header";
+                footer |= q == "style:footer";
+            }
         }
     });
-    (header, footer)
+    let head = head?;
+    Some(Master {
+        layout: format!("sauto:{}|page-layout", get(&head, "style:page-layout-name")?),
+        next: get(&head, "style:next-style-name").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string),
+        header,
+        footer,
+    })
 }
 
 /// Each element below the root of `xml` by its path (`a/b`), with its attributes.
@@ -501,11 +524,12 @@ fn tag_with(tag: &str, sets: &[(String, Option<String>)]) -> String {
     tag
 }
 
-/// `xml` with `child` the last child of the element at `parent` (before `before`, when it has one).
-fn with_child(xml: &str, parent: &str, child: &str, before: Option<&str>) -> Option<String> {
+/// `xml` with `child` the last child of the element at `parent` (before the first of `before` it
+/// has, when it has one).
+fn with_child(xml: &str, parent: &str, child: &str, before: &[&str]) -> Option<String> {
     let (s, e, end, _) = locate(xml, parent)?;
     let joined = |name: &str| if parent.is_empty() { name.to_string() } else { format!("{parent}/{name}") };
-    if let Some((at, ..)) = before.and_then(|b| locate(xml, &joined(b))) {
+    if let Some((at, ..)) = before.iter().find_map(|b| locate(xml, &joined(b))) {
         return Some(format!("{}{child}{}", xml.get(..at)?, xml.get(at..)?));
     }
     let tag = xml.get(s..e)?;
@@ -525,8 +549,14 @@ fn with_attrs(xml: &str, path: &str, sets: &[(String, Option<String>)]) -> Optio
     let (parent, name) = path.rsplit_once('/').unwrap_or(("", path));
     let xml = if locate(xml, parent).is_some() { xml.to_string() } else { with_attrs(xml, parent, &[])? };
     let child = tag_with(&format!("<{name}/>"), sets);
-    // The elements of a page layout go in this order (§16.5): a header's style before a footer's.
-    with_child(&xml, parent, &child, (name == "style:header-style").then_some("style:footer-style"))
+    // The elements of a page layout go in this order (§16.5): its properties, a header's style,
+    // a footer's.
+    let before: &[&str] = match name {
+        LAYOUT => &["style:header-style", "style:footer-style"],
+        "style:header-style" => &["style:footer-style"],
+        _ => &[],
+    };
+    with_child(&xml, parent, &child, before)
 }
 
 /// The columns of a page layout (`style:columns`, whole), if it has any.
@@ -585,7 +615,7 @@ fn patch_layout(file: &str, then: &str, now: &str, place: Place) -> Option<Strin
             out.replace_range(s..e, "");
         }
         if let Some(columns) = layout_columns(now) {
-            out = with_child(&out, LAYOUT, columns, Some("style:footnote-sep"))?;
+            out = with_child(&out, LAYOUT, columns, &["style:footnote-sep"])?;
         }
     }
     let paths: BTreeSet<&String> = old.keys().chain(new.keys()).filter(|p| !p.starts_with(COLUMNS)).collect();

@@ -79,9 +79,12 @@ a save that doesn't touch it:
 - while no style or list definition changed, the file's own style definitions are written;
 - the file's page layouts and master pages, and each section starts with the master page it started
   with. A change to margins, paper size, columns or page borders changes just those values in the
-  page layout that says them, so the rest stays (a header's background, the footnote line); only
-  a change to what a page is made of (a header added or removed, a new section), to the page
-  colour, the watermark or odd and even pages writes them from the model;
+  page layout that says them, so the rest stays (a header's background, the footnote line). They
+  are written from the model instead after a change to what a page is made of (a header added or
+  removed, a new section), to the page colour, the watermark or odd and even pages, and when the
+  change can't be put in the file's own: a page layout that two sections (or two chains of master
+  pages) share would have to differ, a section names a master page the file lacks, or the first
+  pages were read from a master page listed before `Standard`;
 - named sections around unedited paragraphs, the document properties WordCraft doesn't model,
   the declarations opening the text and the document's scripts.
 

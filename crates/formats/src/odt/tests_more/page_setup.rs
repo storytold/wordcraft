@@ -619,3 +619,90 @@ fn later_pages_with_a_header_follow_a_first_page_without_one() {
     assert!(layout(&s, "pmfirst").contains(r#"style:num-format="I""#), "{s}");
     assert!(layout(&s, "pmnext").contains(r#"style:num-format="I""#), "{s}");
 }
+
+/// A file listing another master page before `Standard`, its first paragraph naming none: WordCraft
+/// reads the first pages from the first one listed, so a change to them is still there when the
+/// saved file is read again.
+#[test]
+fn a_change_to_the_first_pages_lands_on_the_master_page_they_were_read_from() {
+    let layouts = r#"<style:page-layout style:name="pmX"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-left="5cm"/></style:page-layout>"#;
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-left="2cm"/></style:page-layout>{layouts}</office:automatic-styles><office:master-styles><style:master-page style:name="X" style:page-layout-name="pmX"/><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    assert!((d.last_section.margin_left - 5.0 * 72.0 / 2.54).abs() < 0.1, "X's: {}", d.last_section.margin_left);
+    d.last_section.margin_left = 100.0;
+    let back = import(&export(&d).unwrap()).unwrap();
+    assert_eq!(back.last_section.margin_left, 100.0);
+}
+
+/// Many sections using one long chain of master pages with large headers: a page setup change
+/// reads each master page once, not once for every section using it.
+#[test]
+fn a_page_setup_change_reads_each_master_page_once() {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    let header = format!("<style:header>{}</style:header>", "<text:p>h</text:p>".repeat(400));
+    let mut defs: BTreeMap<String, Arc<str>> = BTreeMap::new();
+    let mut order = Vec::new();
+    defs.insert(
+        "sauto:pm1|page-layout".into(),
+        r#"<style:page-layout style:name="pm1"><style:page-layout-properties fo:margin-left="1in"/></style:page-layout>"#.into(),
+    );
+    order.push("sauto:pm1|page-layout".to_string());
+    for i in 0..64 {
+        let next = format!("M{}", (i + 1) % 64);
+        let key = format!("master:M{i}");
+        defs.insert(
+            key.clone(),
+            format!(
+                r#"<style:master-page style:name="M{i}" style:page-layout-name="pm1" style:next-style-name="{next}">{header}</style:master-page>"#
+            )
+            .into(),
+        );
+        order.push(key);
+    }
+    let layout = r#"<style:page-layout style:name="layout"><style:page-layout-properties fo:margin-left="72pt"/></style:page-layout>"#;
+    let changes: Vec<_> = (0..2_000).map(|_| crate::odt::kept::PageChange { master: Some("M0"), then: layout, now: layout }).collect();
+    let t = std::time::Instant::now();
+    assert!(crate::odt::kept::page_layout_patches(&defs, &order, &changes).is_some_and(|p| p.is_empty()));
+    assert!(t.elapsed() < std::time::Duration::from_secs(2), "{:?}", t.elapsed());
+}
+
+/// A page layout with a header's style but no properties of its own: a margin change gives it
+/// them first, where ODF 1.3 §16.5 puts them.
+#[test]
+fn a_page_layouts_new_properties_go_before_its_bands_styles() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pm1"><style:header-style><style:header-footer-properties fo:min-height="1cm"/></style:header-style></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    d.last_section.margin_left = 100.0;
+    let s = crate::odt::tests::styles_of(&export(&d).unwrap());
+    let (props, band) = (s.find("<style:page-layout-properties"), s.find("<style:header-style"));
+    assert!(props.zip(band).is_some_and(|(p, b)| p < b), "{s}");
+}
+
+/// A master page showing only a left pages' header: WordCraft reads its pages as having none, so a
+/// top margin change leaves the header's style alone.
+#[test]
+fn a_left_pages_header_alone_is_no_header_for_a_margin_change() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm"/><style:header-style><style:header-footer-properties fo:min-height="1cm" fo:margin-bottom="0.5cm"/></style:header-style></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header-left><text:p>L</text:p></style:header-left></style:master-page></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    d.last_section.margin_top += 20.0;
+    let s = crate::odt::tests::styles_of(&export(&d).unwrap());
+    assert!(s.contains(r#"fo:min-height="1cm""#) && s.contains(r#"fo:margin-bottom="0.5cm""#), "{s}");
+    let back = import(&export(&d).unwrap()).unwrap().last_section.margin_top;
+    assert!((back - d.last_section.margin_top).abs() < 0.01, "{back}");
+}
