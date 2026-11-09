@@ -1,6 +1,6 @@
 //! An n-ary operator's empty but shown limit survives linear text (#6076): half-typed `∑_` has an
-//! empty lower limit that is shown, and `to_linear` writes it as `_()` rather than leaving it out,
-//! which read back as a hidden limit.
+//! empty lower limit that is shown, and `to_linear` writes it as `_()`. Left out, it reads back as a
+//! hidden limit.
 
 use wordcraft_doc::math::{MNode, MRun, parse_linear, to_linear};
 
