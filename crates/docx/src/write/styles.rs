@@ -140,6 +140,7 @@ fn style_xml(w: &mut W, st: &Style, flagged: &[StyleKind]) {
             let borders = f.borders.filter(|_| part != TablePart::WholeTable);
             let has_tc = f.fill.is_some() || borders.is_some() || f.v_align.is_some();
             if !has_rpr && !has_tc && f.align.is_none() {
+                stated_part_xml(w, t, part);
                 continue;
             }
             w.open("w:tblStylePr", &[("w:type", part.ooxml())]);
@@ -177,6 +178,18 @@ fn style_xml(w: &mut W, st: &Style, flagged: &[StyleKind]) {
         }
     }
     w.close("w:style");
+}
+
+/// A part with nothing we keep but which Word counts for the bands: this keeps it counted and
+/// changes nothing else (measured in Word).
+fn stated_part_xml(w: &mut W, t: &wordcraft_doc::styles::TableStyleParts, part: TablePart) {
+    if t.parts_present.contains(&part) {
+        w.open("w:tblStylePr", &[("w:type", part.ooxml())]);
+        w.open("w:trPr", &[]);
+        w.empty("w:tblHeader", &[("w:val", "0")]);
+        w.close("w:trPr");
+        w.close("w:tblStylePr");
+    }
 }
 
 pub(super) fn numbering_xml(doc: &Document) -> Vec<u8> {

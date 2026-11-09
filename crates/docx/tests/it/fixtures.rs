@@ -4647,6 +4647,48 @@ fn our_banded_table_styles_write_their_band_sizes() {
     assert_eq!(back.styles.table_style("GridTable4AccentBlue").map(|t| t.parts.band_size), Some(Some(1)));
 }
 
+/// What makes Word count a table style part for the table's bands (measured): anything inside its
+/// `w:pPr`, `w:rPr`, `w:trPr` or `w:tcPr`, even what we don't keep, and it stays counted through a
+/// save. An empty one, or only a `w:tblPr`, doesn't count.
+#[test]
+fn a_table_style_part_counts_for_the_bands_when_it_says_something() {
+    use wordcraft_doc::styles::TablePart;
+    let cases = [
+        ("Empty", "", false),
+        ("EmptyTc", "<w:tcPr/>", false),
+        ("EmptyR", "<w:rPr/>", false),
+        ("EmptyP", "<w:pPr/>", false),
+        ("EmptyTr", "<w:trPr/>", false),
+        ("OnlyTbl", r#"<w:tblPr><w:tblInd w:w="100" w:type="dxa"/></w:tblPr>"#, false),
+        ("Mar", r#"<w:tcPr><w:tcMar><w:left w:w="100" w:type="dxa"/></w:tcMar></w:tcPr>"#, true),
+        ("Nil", r#"<w:tcPr><w:shd w:val="nil"/></w:tcPr>"#, true),
+        ("Row", "<w:trPr><w:tblHeader/></w:trPr>", true),
+        ("Keep", r#"<w:pPr><w:keepNext w:val="0"/></w:pPr>"#, true),
+        ("Bold", "<w:rPr><w:b/></w:rPr>", true),
+        ("Mid", r#"<w:tcPr><w:vAlign w:val="center"/></w:tcPr>"#, true),
+    ];
+    let styles: String = cases
+        .iter()
+        .map(|(id, inner, _)| {
+            format!(
+                r#"<w:style w:type="table" w:styleId="{id}"><w:name w:val="{id}"/><w:tblStylePr w:type="firstRow">{inner}</w:tblStylePr></w:style>"#
+            )
+        })
+        .collect();
+    let styles = format!("<w:styles {W_NS}>{styles}</w:styles>");
+    let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)]);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    for (name, doc) in [("read", &d), ("saved", &back)] {
+        for (id, _, counts) in &cases {
+            let has = doc.styles.get(id).and_then(|s| s.table.as_ref()).is_some_and(|t| t.has_part(TablePart::FirstRow));
+            assert_eq!(has, *counts, "{id} {name}");
+        }
+    }
+    let xml = text(&unzip(&wordcraft_docx::write(&d).unwrap()), "word/styles.xml");
+    assert!(xml.contains(r#"<w:tblStylePr w:type="firstRow"><w:trPr><w:tblHeader w:val="0"/></w:trPr></w:tblStylePr>"#), "{xml}");
+}
+
 #[test]
 fn vml_shape_wrap_side_and_anchor_case_insensitivity() {
     let body = r##"<w:p>

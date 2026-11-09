@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::props::{
     Align, Border, BorderStyle, Borders, CharProps, LineSpacing, ParaProps, Rgb, TabAlign, TabLeader, TabStop, TableLook, TextColor, Underline,
@@ -103,6 +103,10 @@ pub struct TableStyleParts {
     /// parts through [`TableStyleParts::part`] / [`TableStyleParts::set_part`].
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub regions: BTreeMap<TablePart, PartFormat>,
+    /// Parts a file states with formatting these fields don't carry (a cell margin, a shading of
+    /// no colour). They paint nothing here, but Word still counts them: see [`TableBands`].
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub parts_present: BTreeSet<TablePart>,
 }
 
 /// A conditional formatting part of a table style (`w:tblStylePr/@w:type`, ECMA-376 §17.7.6).
@@ -125,14 +129,15 @@ pub enum TablePart {
 }
 
 impl TablePart {
-    /// Every part, lowest precedence first (ECMA-376 §17.7.6: whole table, bands, first/last
-    /// column, first/last row, corner cells).
+    /// Every part, lowest precedence first: whole table, row bands, column bands, first/last
+    /// column, first/last row, corner cells. ECMA-376 §17.7.6 puts column bands under row bands;
+    /// Word paints them over, for shading, text, vertical alignment and borders alike.
     pub const ALL: [TablePart; 13] = [
         TablePart::WholeTable,
-        TablePart::Band1Vert,
-        TablePart::Band2Vert,
         TablePart::Band1Horz,
         TablePart::Band2Horz,
+        TablePart::Band1Vert,
+        TablePart::Band2Vert,
         TablePart::FirstCol,
         TablePart::LastCol,
         TablePart::FirstRow,
@@ -178,29 +183,62 @@ impl TablePart {
     }
 }
 
+/// How one table's rows and columns fall into its style's parts, worked out once per table.
+///
+/// Measured in Word (the same in compatibility modes 12, 14 and 15): an option such as Header Row
+/// takes its row or column out of the bands only if the style states that part. A corner cell's
+/// part counts for its row and its column when the other option is on too. With no such part,
+/// the bands start at the table's edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TableBands {
+    /// The table's options, with those whose part the style doesn't state turned off.
+    look: TableLook,
+    /// Rows per row band and columns per column band; zero turns those bands off.
+    sizes: (u32, u32),
+    /// The rows before the row bands start: the first row and the `w:tblHeader` rows right after
+    /// it. They are the header with the option on. With it off, in a style with a first row part
+    /// and a first row marked `w:tblHeader`, they stay out of the count and take the even band.
+    head_rows: usize,
+}
+
+impl TableBands {
+    /// `header_marks` says, from the top, which rows are marked to repeat (`w:tblHeader`).
+    pub fn new(look: &TableLook, parts: Option<&TableStyleParts>, mut header_marks: impl Iterator<Item = bool>) -> TableBands {
+        let has = |p| parts.is_some_and(|t| t.has_part(p));
+        let (top, bottom, left, right) = (look.header_row, look.total_row, look.first_column, look.last_column);
+        let live = TableLook {
+            header_row: top && (has(TablePart::FirstRow) || (left && has(TablePart::NwCell)) || (right && has(TablePart::NeCell))),
+            total_row: bottom && (has(TablePart::LastRow) || (left && has(TablePart::SwCell)) || (right && has(TablePart::SeCell))),
+            first_column: left && (has(TablePart::FirstCol) || (top && has(TablePart::NwCell)) || (bottom && has(TablePart::SwCell))),
+            last_column: right && (has(TablePart::LastCol) || (top && has(TablePart::NeCell)) || (bottom && has(TablePart::SeCell))),
+            ..*look
+        };
+        let first_marked = header_marks.next().unwrap_or(false);
+        let head_rows = if live.header_row || (first_marked && has(TablePart::FirstRow)) { 1 + header_marks.take_while(|m| *m).count() } else { 0 };
+        let sizes = parts.map_or((0, 0), |t| (t.band_size.unwrap_or(0), t.col_band_size.unwrap_or(0)));
+        TableBands { look: live, sizes, head_rows }
+    }
+}
+
 /// The table style parts one cell is in (always the whole table).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PartSet(u16);
 
 impl PartSet {
-    /// The parts of the cell at row `ri` of `nrows`, grid column `g` spanning `span` of `ncols`,
-    /// in a table with options `look`, row bands of `row_size` rows and column bands of
-    /// `col_size` columns (a size of zero turns those bands off, as in Word).
-    pub fn of_cell(
-        look: &TableLook,
-        (row_size, col_size): (u32, u32),
-        (ri, nrows): (usize, usize),
-        (g, span, ncols): (usize, usize, usize),
-    ) -> PartSet {
-        let header = look.header_row && ri == 0;
-        let total = look.total_row && ri + 1 == nrows && nrows > 1;
+    /// The parts of the cell at row `ri` of `nrows`, grid column `g` spanning `span` of `ncols`.
+    pub fn of_cell(bands: &TableBands, (ri, nrows): (usize, usize), (g, span, ncols): (usize, usize, usize)) -> PartSet {
+        let TableBands { look, sizes: (row_size, col_size), head_rows } = *bands;
+        let in_head = ri < head_rows;
+        let header = look.header_row && in_head;
+        // The header wins a row that is both, as in a table of only header rows.
+        let total = look.total_row && ri + 1 == nrows && nrows > 1 && !header;
         let first_col = look.first_column && g == 0;
         let last_col = look.last_column && g.saturating_add(span) >= ncols && ncols > 1;
         let rows = row_size.min(1000) as usize;
         let cols = col_size.min(1000) as usize;
-        let row_band = look.banded_rows && !header && rows > 0;
-        let odd_row = (ri.saturating_sub(usize::from(look.header_row)) / rows.max(1)).is_multiple_of(2);
-        let col_band = look.banded_columns && !first_col && cols > 0;
+        let row_band = look.banded_rows && !header && !total && rows > 0;
+        let odd_row = !in_head && ((ri - head_rows) / rows.max(1)).is_multiple_of(2);
+        let col_band = look.banded_columns && !first_col && !last_col && cols > 0;
         let odd_col = (g.saturating_sub(usize::from(look.first_column)) / cols.max(1)).is_multiple_of(2);
         let mut bits = TablePart::WholeTable.bit();
         for (on, p) in [
@@ -339,6 +377,13 @@ impl TableStyleParts {
         for (k, f) in &patch.regions {
             self.regions.entry(*k).or_default().overlay(f);
         }
+        self.parts_present.extend(&patch.parts_present);
+    }
+
+    /// Whether the style states part `p`, so that it counts for a table's bands. Word doesn't
+    /// count a part that is empty or has only `w:tblPr`.
+    pub fn has_part(&self, p: TablePart) -> bool {
+        self.parts_present.contains(&p) || !self.part(p).is_empty()
     }
 
     /// Part `p`'s formatting. The whole table's text formatting is the style's own
@@ -381,6 +426,7 @@ impl TableStyleParts {
     pub fn set_part(&mut self, p: TablePart, f: PartFormat) {
         let align_only = PartFormat { align: f.align, v_align: f.v_align, ..PartFormat::default() };
         let PartFormat { chr, fill, borders, .. } = f.clone();
+        self.parts_present.remove(&p);
         let rest = match p {
             TablePart::WholeTable => {
                 self.fill = fill;
@@ -1055,10 +1101,14 @@ mod tests {
     /// #3415: a band size of zero (Word's reading of a style without one) turns those bands off.
     #[test]
     fn band_size_zero_turns_bands_off() {
+        // The first row and column options count for nothing here: the style has no such parts.
         let look = crate::props::TableLook { banded_columns: true, ..Default::default() };
-        let parts = |sizes, ri, g| PartSet::of_cell(&look, sizes, (ri, 5), (g, 1, 4));
-        assert!(parts((1, 1), 1, 1).contains(TablePart::Band1Horz) && parts((1, 1), 1, 1).contains(TablePart::Band1Vert));
-        assert!(parts((1, 1), 2, 2).contains(TablePart::Band2Horz) && parts((1, 1), 2, 2).contains(TablePart::Band2Vert));
+        let parts = |(band_size, col_band_size): (u32, u32), ri, g| {
+            let t = TableStyleParts { band_size: Some(band_size), col_band_size: Some(col_band_size), ..Default::default() };
+            PartSet::of_cell(&TableBands::new(&look, Some(&t), std::iter::empty()), (ri, 5), (g, 1, 4))
+        };
+        assert!(parts((1, 1), 0, 0).contains(TablePart::Band1Horz) && parts((1, 1), 0, 0).contains(TablePart::Band1Vert));
+        assert!(parts((1, 1), 1, 1).contains(TablePart::Band2Horz) && parts((1, 1), 1, 1).contains(TablePart::Band2Vert));
         for (ri, g) in [(1, 1), (2, 2)] {
             let p = parts((0, 0), ri, g);
             for band in [TablePart::Band1Horz, TablePart::Band2Horz, TablePart::Band1Vert, TablePart::Band2Vert] {
@@ -1069,6 +1119,120 @@ mod tests {
         let s = StyleSheet::builtin();
         let t = s.table_style("GridTable4AccentBlue").map(|t| t.parts);
         assert_eq!(t.map(|t| (t.band_size, t.col_band_size)), Some((Some(1), Some(1))));
+    }
+
+    /// Which part paints each cell of a 5x5 table, rows apart: `coloured` parts paint (`c`/`y` the
+    /// odd and even bands, `m` first row, `o` last row, `g` first column, `b` last column, `r` a
+    /// corner); `plain` parts are stated but give no colour (`.`).
+    fn painted(coloured: &[TablePart], plain: &[TablePart], sizes: (u32, u32), options: &str, marks: &[usize]) -> String {
+        let on = |o: &str| options.split(' ').any(|x| x == o);
+        let look = TableLook {
+            header_row: on("fr"),
+            total_row: on("lr"),
+            first_column: on("fc"),
+            last_column: on("lc"),
+            banded_rows: on("h"),
+            banded_columns: on("v"),
+        };
+        let mut t = TableStyleParts { band_size: Some(sizes.0), col_band_size: Some(sizes.1), ..Default::default() };
+        for p in coloured {
+            t.set_part(*p, PartFormat { fill: Some(Rgb(1, 2, 3)), ..Default::default() });
+        }
+        for p in plain {
+            t.set_part(*p, PartFormat { chr: CharProps { bold: Some(true), ..chr() }, ..Default::default() });
+        }
+        let bands = TableBands::new(&look, Some(&t), (0..5).map(|r| marks.contains(&r)));
+        let letter = |p: TablePart| match p {
+            TablePart::Band1Horz | TablePart::Band1Vert => 'c',
+            TablePart::Band2Horz | TablePart::Band2Vert => 'y',
+            TablePart::FirstRow => 'm',
+            TablePart::LastRow => 'o',
+            TablePart::FirstCol => 'g',
+            TablePart::LastCol => 'b',
+            _ => 'r',
+        };
+        let row = |ri: usize| -> String {
+            (0..5).map(|g| PartSet::of_cell(&bands, (ri, 5), (g, 1, 5)).iter().filter(|p| coloured.contains(p)).last().map_or('.', letter)).collect()
+        };
+        (0..5).map(row).collect::<Vec<_>>().join(" ")
+    }
+
+    /// Word's own results for these tables, the same in compatibility modes 12, 14 and 15.
+    #[test]
+    fn table_bands_fall_as_in_word() {
+        use TablePart::*;
+        const H: [TablePart; 2] = [Band1Horz, Band2Horz];
+        const V: [TablePart; 2] = [Band1Vert, Band2Vert];
+        let with = |a: &[TablePart], b: [TablePart; 2]| [a, &b[..]].concat();
+        const ROWS: &str = "ccccc yyyyy ccccc yyyyy ccccc";
+        const COLS: &str = "cycyc cycyc cycyc cycyc cycyc";
+        let f = with(&[FirstRow], H);
+        let check = |coloured: &[TablePart], plain: &[TablePart], sizes, options, marks: &[usize], want: &str| {
+            assert_eq!(painted(coloured, plain, sizes, options, marks), want, "{coloured:?} {plain:?} {sizes:?} {options} {marks:?}");
+        };
+        // An option takes its row or column out of the bands only if the style states the part.
+        check(&H, &[], (1, 0), "fr h", &[], ROWS);
+        check(&f, &[], (1, 0), "fr h", &[], "mmmmm ccccc yyyyy ccccc yyyyy");
+        check(&f, &[], (2, 0), "fr h", &[], "mmmmm ccccc ccccc yyyyy yyyyy");
+        check(&f, &[], (1, 0), "h", &[], ROWS);
+        check(&H, &[FirstRow], (1, 0), "fr h", &[], "..... ccccc yyyyy ccccc yyyyy");
+        check(&H, &[], (1, 0), "lr h", &[], ROWS);
+        check(&H, &[LastRow], (1, 0), "lr h", &[], "ccccc yyyyy ccccc yyyyy .....");
+        check(&V, &[], (0, 1), "fc v", &[], COLS);
+        check(&with(&[FirstCol], V), &[], (0, 1), "fc v", &[], "gcycy gcycy gcycy gcycy gcycy");
+        check(&V, &[FirstCol], (0, 1), "fc v", &[], ".cycy .cycy .cycy .cycy .cycy");
+        check(&V, &[], (0, 1), "lc v", &[], COLS);
+        check(&V, &[LastCol], (0, 1), "lc v", &[], "cycy. cycy. cycy. cycy. cycy.");
+        // A row part leaves the column bands alone, and a column part the row bands.
+        check(&V, &[FirstRow], (0, 1), "fr v", &[], COLS);
+        check(&with(&[FirstCol], H), &[], (1, 0), "fc h", &[], "gcccc gyyyy gcccc gyyyy gcccc");
+        // Column bands over row bands.
+        check(&[H, V].concat(), &[], (1, 1), "h v", &[], COLS);
+        // A corner counts for its row and column when both options are on.
+        check(&with(&[NwCell], H), &[], (1, 0), "fr fc h", &[], "r.... ccccc yyyyy ccccc yyyyy");
+        check(&with(&[NwCell], H), &[], (1, 0), "fr h", &[], ROWS);
+        check(&with(&[NwCell], V), &[], (0, 1), "fr fc v", &[], "rcycy .cycy .cycy .cycy .cycy");
+        check(&with(&[NwCell], V), &[], (0, 1), "fc v", &[], COLS);
+        check(&with(&[NeCell], V), &[], (0, 1), "fr lc v", &[], "cycyr cycy. cycy. cycy. cycy.");
+        check(&with(&[SwCell], V), &[], (0, 1), "lr fc v", &[], ".cycy .cycy .cycy .cycy rcycy");
+        check(&with(&[SeCell], H), &[], (1, 0), "lr lc h", &[], "ccccc yyyyy ccccc yyyyy ....r");
+        check(&with(&[SeCell], H), &[], (1, 0), "lr h", &[], ROWS);
+        // Rows marked to repeat right after the first row are header rows too.
+        check(&f, &[], (1, 0), "fr h", &[0, 1], "mmmmm mmmmm ccccc yyyyy ccccc");
+        check(&f, &[], (1, 0), "fr h", &[1], "mmmmm mmmmm ccccc yyyyy ccccc");
+        check(&f, &[], (1, 0), "fr h", &[0, 2], "mmmmm ccccc yyyyy ccccc yyyyy");
+        check(&f, &[], (1, 0), "fr h", &[2], "mmmmm ccccc yyyyy ccccc yyyyy");
+        check(&f, &[], (2, 0), "fr h", &[0, 1, 2], "mmmmm mmmmm mmmmm ccccc ccccc");
+        check(&H, &[], (1, 0), "fr h", &[0, 1], ROWS);
+        check(&with(&[FirstRow, LastRow], H), &[], (1, 0), "fr lr h", &[0, 1, 2, 3, 4], "mmmmm mmmmm mmmmm mmmmm mmmmm");
+        check(&with(&[FirstRow, LastRow], H), &[], (1, 0), "fr lr h", &[0, 1, 2, 3], "mmmmm mmmmm mmmmm mmmmm ooooo");
+        check(&with(&[FirstRow, NwCell], H), &[], (1, 0), "fr fc h", &[0, 1], "rmmmm rmmmm ccccc yyyyy ccccc");
+        // The option off: a first row marked to repeat, and those after it, take the even band.
+        check(&f, &[], (1, 0), "h", &[0], "yyyyy ccccc yyyyy ccccc yyyyy");
+        check(&f, &[], (1, 0), "h", &[0, 1], "yyyyy yyyyy ccccc yyyyy ccccc");
+        check(&f, &[], (2, 0), "h", &[0, 1], "yyyyy yyyyy ccccc ccccc yyyyy");
+        check(&H, &[FirstRow], (1, 0), "h", &[0, 1], "yyyyy yyyyy ccccc yyyyy ccccc");
+        check(&f, &[], (1, 0), "h", &[1], ROWS);
+        check(&H, &[], (1, 0), "h", &[0, 1], ROWS);
+        check(&with(&[NwCell], H), &[], (1, 0), "fc h", &[0, 1], ROWS);
+    }
+
+    /// A part stated with what isn't kept counts until the part is set anew, and a derived style
+    /// inherits it.
+    #[test]
+    fn a_stated_part_counts_and_setting_it_replaces_that() {
+        let mut base = TableStyleParts::default();
+        assert!(!base.has_part(TablePart::FirstRow));
+        base.parts_present.insert(TablePart::FirstRow);
+        assert!(base.has_part(TablePart::FirstRow));
+        let mut derived = base.clone();
+        derived.overlay(&TableStyleParts::default());
+        assert!(derived.has_part(TablePart::FirstRow));
+        let mut merged = TableStyleParts::default();
+        merged.overlay(&base);
+        assert!(merged.has_part(TablePart::FirstRow));
+        base.set_part(TablePart::FirstRow, PartFormat::default());
+        assert!(!base.has_part(TablePart::FirstRow));
     }
 
     /// A table style based on another inherits what it doesn't set itself; borders merge edge by

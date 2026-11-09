@@ -941,7 +941,7 @@ struct StyledCell {
 
 fn styled_cell(t: &Table, style: Option<&wordcraft_doc::styles::TableStyleProps>, (ri, ci): (usize, usize), ncols: usize) -> Option<StyledCell> {
     use wordcraft_doc::props::{Border, BorderStyle, Borders};
-    use wordcraft_doc::styles::{PartSet, TablePart};
+    use wordcraft_doc::styles::{PartSet, TableBands, TablePart};
     let row = t.rows.get(ri)?;
     let cell = row.cells.get(ci)?;
     let nrows = t.rows.len();
@@ -957,8 +957,8 @@ fn styled_cell(t: &Table, style: Option<&wordcraft_doc::styles::TableStyleProps>
     };
     let mut part_borders = Vec::new();
     if let Some(st) = style {
-        let sizes = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
-        for part in PartSet::of_cell(&t.props.look, sizes, (ri, nrows), (g, span, ncols)).iter() {
+        let bands = TableBands::new(&t.props.look, Some(&st.parts), t.rows.iter().map(|r| r.props.header));
+        for part in PartSet::of_cell(&bands, (ri, nrows), (g, span, ncols)).iter() {
             let f = st.part(part);
             out.fill = f.fill.or(out.fill);
             out.v_align = f.v_align.or(out.v_align);

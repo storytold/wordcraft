@@ -5037,6 +5037,28 @@ fn row_bands_shade_only_with_a_band_size() {
         t.band_size = Some(2);
     }
     assert_eq!(shaded_rows(&d), vec![1, 2], "bands of two rows");
+    if let Some(t) = Arc::make_mut(&mut d.styles).get_mut("GridTable4AccentBlue").and_then(|s| s.table.as_mut()) {
+        t.band_size = Some(1);
+    }
+    // Rows marked to repeat after the first row are header rows too, so the bands start below them.
+    let body = |d: &mut Document, rows: &[usize]| {
+        let Some(wordcraft_doc::Block::Table(t)) = d.body.iter_mut().find(|b| matches!(***b, wordcraft_doc::Block::Table(_))).map(Arc::make_mut)
+        else {
+            panic!("a table")
+        };
+        for (i, row) in t.rows.iter_mut().enumerate() {
+            row.props.header = rows.contains(&i);
+        }
+    };
+    body(&mut d, &[0, 1]);
+    assert_eq!(shaded_rows(&d), vec![2, 4], "two header rows");
+    body(&mut d, &[]);
+    // The header option counts only if the style has a first row part: without one, Word starts
+    // the bands at the top.
+    if let Some(s) = Arc::make_mut(&mut d.styles).get_mut("GridTable4AccentBlue") {
+        s.set_table_part(wordcraft_doc::styles::TablePart::FirstRow, Default::default());
+    }
+    assert_eq!(shaded_rows(&d), vec![0, 2, 4], "no first row part");
 }
 
 /// The paragraph's own style (Normal included) and direct formatting beat the table style; the
