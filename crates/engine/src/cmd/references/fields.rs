@@ -274,6 +274,11 @@ fn apply_para_field_updates(
             && let Some((s, story, path)) = &mut sel
         {
             remap_sel_after_field_update(s, *story, path, cs, eo, delta);
+            for pos in [&mut s.anchor, &mut s.focus] {
+                if pos.story == *story && &pos.path == *path {
+                    pos.off = para.clamp(pos.off);
+                }
+            }
         }
     }
     para.touch();

@@ -13274,7 +13274,7 @@ fn range_field_update_preserves_anchors_and_first_run_formatting_and_handles_seq
     assert_eq!(para1.plain_text(), "1Ada");
 
     let para2 = s.doc.body[2].as_para().unwrap();
-    assert!(para2.plain_text().ends_with("Unclosed"), "unclosed range field stays untouched: {}", para2.plain_text());
+    assert_eq!(para2.plain_text(), "NestedUnclosed", "nested and unclosed range fields stay untouched");
 }
 
 #[test]
