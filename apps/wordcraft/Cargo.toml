@@ -52,8 +52,14 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 # inside the AppKit run loop (see `schedule_macos_terminate`).
 dispatch2 = "0.3"
 
-[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))'.dependencies]
 winit = { version = "0.30", default-features = false, features = ["x11"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Retain X11 fallback; draw Wayland client-side controls without bundled title fonts.
+winit = { version = "0.30", default-features = false, features = ["x11", "wayland-csd-adwaita-notitle"] }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 # The desktop's animation setting on Linux and the BSDs, read from the XDG settings portal over
 # D-Bus. Already in the build through AccessKit, at this version; this adds only its blocking API.
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
